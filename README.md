@@ -69,8 +69,8 @@ apps/
   web/        standalone reader (Vite + React) — primary dev/demo surface
   extension/  Chrome MV3 overlay — illustrates any article; same engine + settings
               (API calls proxy through the background worker to bypass page CORS)
-  desktop/    Tauri shell wrapping the web UI — manages a local GPU engine
-              (command surface + wiring in place; engine lifecycle is Phase 3)
+  desktop/    Tauri shell wrapping the web UI — downloads/launches a local GPU
+              engine (ComfyUI portable) and curated models; pending on-device verify
 ```
 
 ### Designed-in seams (so v1 doesn't need rework later)
@@ -94,7 +94,8 @@ apps/
 - **Local engine (your own GPU):** connect to a Stable Diffusion server you run —
   **AUTOMATIC1111** (`/sdapi/v1/*`) or **ComfyUI** (graph API) — from either the
   web app or the desktop app. Free, private, no keys. The desktop app can also
-  auto-manage a bundled engine (lifecycle is the next phase).
+  **auto-manage** the engine: download/launch ComfyUI portable and curated models
+  from the Settings picker (implemented; pending on-device verification).
 - **On-device (stubbed):** WebLLM + ONNX/WebGPU providers implement the same
   interfaces for fully in-browser generation; full implementation is a later phase.
 

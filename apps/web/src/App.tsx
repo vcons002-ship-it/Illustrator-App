@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Automatic1111Backend,
   ComfyUIBackend,
+  LOCAL_IMAGE_MODELS,
   decryptSecrets,
   encryptSecrets,
   resolvePageEntities,
@@ -21,7 +22,14 @@ import {
 } from "@visual-reader/ui";
 import { loadSampleBook } from "./sample.js";
 import { useEngineWorker } from "./useEngineWorker.js";
-import { downloadModel, ensureEngine, isDesktop, listLocalModels } from "./runtime.js";
+import {
+  downloadModel,
+  ensureEngine,
+  isDesktop,
+  listLocalModels,
+  onEngineProgress,
+  onModelProgress,
+} from "./runtime.js";
 
 export function App() {
   const stored = useMemo(loadStoredSettings, []);
@@ -30,6 +38,8 @@ export function App() {
   const [localError, setLocalError] = useState<string>("");
   const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
   const [connectingLocal, setConnectingLocal] = useState(false);
+  const [modelProgress, setModelProgress] = useState<Record<string, number>>({});
+  const [engineStatus, setEngineStatus] = useState("");
   const hydrated = useRef(false);
   const { bible, results, status, openBook: openInWorker, goTo } = useEngineWorker(settings);
   const { registerParagraph, activeParagraphId, passedParagraphIds } = useScrollDepth();
@@ -60,6 +70,21 @@ export function App() {
     if (hydrated.current) void saveSettings(settings);
   }, [settings]);
 
+  // Desktop: subscribe to engine-setup and model-download progress (Rust events).
+  useEffect(() => {
+    if (!isDesktop) return;
+    const unEngine = onEngineProgress((p) => {
+      setEngineStatus(p.phase === "ready" ? "" : p.percent !== undefined ? `${p.message} ${Math.round(p.percent)}%` : p.message);
+    });
+    const unModel = onModelProgress((p) => {
+      setModelProgress((prev) => ({ ...prev, [p.id]: p.percent }));
+    });
+    return () => {
+      void unEngine?.then((fn) => fn());
+      void unModel?.then((fn) => fn());
+    };
+  }, []);
+
   // Desktop: when the local image path is selected, make sure the GPU engine is
   // installed + running (downloads on first use) and learn its base URL + models.
   useEffect(() => {
@@ -67,13 +92,18 @@ export function App() {
     let cancelled = false;
     void (async () => {
       try {
+        setEngineStatus("Setting up the local engine…");
         const baseUrl = await ensureEngine();
         const models = await listLocalModels();
         if (cancelled) return;
+        setEngineStatus("");
         setInstalledModels(models);
         setSettings((s) => ({ ...s, engineBaseUrl: baseUrl }));
       } catch (err) {
-        if (!cancelled) setLocalError(`Local engine setup failed: ${err instanceof Error ? err.message : String(err)}`);
+        if (!cancelled) {
+          setEngineStatus("");
+          setLocalError(`Local engine setup failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
     })();
     return () => {
@@ -82,10 +112,19 @@ export function App() {
   }, [settings.imageProvider, settings.engineBaseUrl]);
 
   const onDownloadModel = useCallback(async (id: string) => {
+    const model = LOCAL_IMAGE_MODELS.find((m) => m.id === id);
+    if (!model) return;
+    setModelProgress((prev) => ({ ...prev, [id]: 0 }));
     try {
-      await downloadModel(id);
+      await downloadModel({ id: model.id, filename: model.filename, url: model.url });
+      setModelProgress((prev) => ({ ...prev, [id]: 100 }));
       setInstalledModels(await listLocalModels());
     } catch (err) {
+      setModelProgress((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
       setLocalError(`Model download failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, []);
@@ -183,6 +222,8 @@ export function App() {
             isDesktop={isDesktop}
             installedModels={installedModels}
             onDownloadModel={onDownloadModel}
+            downloadProgress={modelProgress}
+            engineStatus={engineStatus}
             onConnectLocalServer={onConnectLocalServer}
             connectingLocal={connectingLocal}
           />

@@ -25,10 +25,32 @@ down the engine invisibly — the user only ever picks a model.
 
 ## Status
 
-The command surface, window, and renderer wiring are in place. The heavy lifting
-inside `ensure_engine` / `download_model` (GPU-build detection, portable-ComfyUI
-download with progress, process spawn/health-check/teardown) is marked with TODOs
-and is the remaining Phase 3 work.
+The managed-engine lifecycle is **implemented** in `src-tauri/src/main.rs`:
+
+- `ensure_engine` — reuses an engine already on the port; otherwise (Windows)
+  downloads the official **ComfyUI portable** build (bundled Python), unpacks it,
+  spawns it with `--enable-cors-header` and NVIDIA/CPU auto-detection, and
+  health-checks `/system_stats`. macOS/Linux return a clear "connect your own"
+  message (managed install there is future work).
+- `download_model` — streams a curated checkpoint (from the core catalog) into
+  `models/checkpoints`, emitting `model://progress`.
+- `list_models` — lists the downloaded checkpoints.
+- The spawned child is killed on app exit (`RunEvent::ExitRequested`).
+
+Install/download progress streams to the UI via `engine://progress` /
+`model://progress` (see `apps/web/src/runtime.ts`), and the Settings model picker
+shows per-model progress bars.
+
+> **Compiles (`cargo check` passes); runtime needs on-device verification.**
+> Two things to confirm on a real Windows machine with a GPU:
+> (1) the webview→engine fetch — a Tauri webview may use an `https`/custom origin,
+> so reaching `http://127.0.0.1:8188` could be blocked as mixed content; if so,
+> enable the http scheme for the webview or proxy engine calls through a Tauri
+> command (same pattern the extension uses for its background worker);
+> (2) the exact ComfyUI portable asset name / model URLs (download is resilient
+> and falls back to a clear error).
+> The bundled `icons/icon.png` is a placeholder — run `tauri icon <png>` to
+> generate real multi-format icons before distributing.
 
 ## Build / run
 

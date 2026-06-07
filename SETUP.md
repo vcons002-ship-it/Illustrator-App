@@ -104,6 +104,13 @@ click on Windows.
 To produce an installable build (`.msi` / `.dmg` / AppImage) instead of running
 in dev mode, use `pnpm build:desktop`.
 
+**Local images, fully automatic (Windows):** in the desktop app, open **Settings**,
+set **Images → On my computer**, and just **pick a model** under "Download a model".
+The app downloads the ComfyUI engine (bundled Python — nothing installed
+system-wide) and your chosen checkpoint, shows progress bars, launches it, and
+connects — no separate `comfyui-setup.bat` needed. (macOS/Linux still connect to
+an engine you run yourself; see below.)
+
 ---
 
 ## Run images on your own GPU (AUTOMATIC1111 or ComfyUI)

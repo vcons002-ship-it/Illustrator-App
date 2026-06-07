@@ -7,8 +7,13 @@
  * downloads) so the renderer never deals with processes, ports, or CORS.
  */
 
+type UnlistenFn = () => void;
+
 interface TauriCore {
   core?: { invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> };
+  event?: {
+    listen<T>(event: string, handler: (e: { payload: T }) => void): Promise<UnlistenFn>;
+  };
 }
 
 function tauri(): TauriCore | undefined {
@@ -29,9 +34,32 @@ export interface InstalledModel {
   label: string;
 }
 
+/** A model the desktop app can fetch on demand (resolved from the core catalog). */
+export interface DownloadableModel {
+  id: string;
+  filename: string;
+  url: string;
+}
+
+/** Progress while the engine itself is being installed / launched. */
+export interface EngineProgress {
+  phase: "downloading" | "extracting" | "starting" | "ready" | "error";
+  message: string;
+  /** 0..100 when known. */
+  percent?: number;
+}
+
+/** Progress while a model checkpoint downloads. */
+export interface ModelProgress {
+  id: string;
+  receivedBytes: number;
+  totalBytes: number;
+  percent: number;
+}
+
 /**
  * Ensure the local engine is installed + running (downloads on first use) and
- * return its base URL. Emits progress through Tauri events on the Rust side.
+ * return its base URL. Emits `engine://progress` events on the Rust side.
  */
 export function ensureEngine(): Promise<string> {
   return invoke<string>("ensure_engine");
@@ -41,6 +69,17 @@ export function listLocalModels(): Promise<InstalledModel[]> {
   return invoke<InstalledModel[]>("list_models");
 }
 
-export function downloadModel(id: string): Promise<void> {
-  return invoke<void>("download_model", { id });
+/** Download a curated checkpoint; emits `model://progress` events while it runs. */
+export function downloadModel(model: DownloadableModel): Promise<void> {
+  return invoke<void>("download_model", { model });
+}
+
+/** Subscribe to engine install/launch progress. Returns undefined on the web. */
+export function onEngineProgress(handler: (p: EngineProgress) => void): Promise<UnlistenFn> | undefined {
+  return tauri()?.event?.listen<EngineProgress>("engine://progress", (e) => handler(e.payload));
+}
+
+/** Subscribe to model-download progress. Returns undefined on the web. */
+export function onModelProgress(handler: (p: ModelProgress) => void): Promise<UnlistenFn> | undefined {
+  return tauri()?.event?.listen<ModelProgress>("model://progress", (e) => handler(e.payload));
 }

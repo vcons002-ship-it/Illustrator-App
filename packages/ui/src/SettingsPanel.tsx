@@ -68,6 +68,10 @@ export interface SettingsPanelProps {
   installedModels?: InstalledModel[];
   /** Start downloading a curated model; desktop only. */
   onDownloadModel?: (id: string) => void;
+  /** Download progress 0..100 per catalog model id (desktop). */
+  downloadProgress?: Record<string, number>;
+  /** Status line for the app-managed engine setup (desktop), e.g. "Starting…". */
+  engineStatus?: string;
   /** Connect to a self-hosted engine and load its model list (browser path). */
   onConnectLocalServer?: (backend: LocalBackendId, url: string) => void;
   /** True while a connection attempt is in flight. */
@@ -80,6 +84,8 @@ export function SettingsPanel({
   isDesktop = false,
   installedModels = [],
   onDownloadModel,
+  downloadProgress = {},
+  engineStatus = "",
   onConnectLocalServer,
   connectingLocal = false,
 }: SettingsPanelProps) {
@@ -135,6 +141,8 @@ export function SettingsPanel({
               serverUrl={value.localServerUrl ?? ""}
               selected={value.localModel}
               connecting={connectingLocal}
+              downloadProgress={downloadProgress}
+              engineStatus={engineStatus}
               onSet={set}
               onSelect={(id) => set({ localModel: id })}
               onDownload={onDownloadModel}
@@ -191,6 +199,8 @@ function LocalEngine({
   serverUrl,
   selected,
   connecting,
+  downloadProgress,
+  engineStatus,
   onSet,
   onSelect,
   onDownload,
@@ -202,6 +212,8 @@ function LocalEngine({
   serverUrl: string;
   selected: string | undefined;
   connecting: boolean;
+  downloadProgress: Record<string, number>;
+  engineStatus: string;
   onSet: (patch: Partial<ReaderSettings>) => void;
   onSelect: (id: string) => void;
   onDownload: ((id: string) => void) | undefined;
@@ -210,7 +222,14 @@ function LocalEngine({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {isDesktop && (
-        <ManagedEngine installedModels={installedModels} selected={selected} onSelect={onSelect} onDownload={onDownload} />
+        <ManagedEngine
+          installedModels={installedModels}
+          selected={selected}
+          downloadProgress={downloadProgress}
+          engineStatus={engineStatus}
+          onSelect={onSelect}
+          onDownload={onDownload}
+        />
       )}
 
       <div style={rowStyle}>
@@ -254,34 +273,55 @@ function LocalEngine({
 function ManagedEngine({
   installedModels,
   selected,
+  downloadProgress,
+  engineStatus,
   onSelect,
   onDownload,
 }: {
   installedModels: InstalledModel[];
   selected: string | undefined;
+  downloadProgress: Record<string, number>;
+  engineStatus: string;
   onSelect: (id: string) => void;
   onDownload: ((id: string) => void) | undefined;
 }) {
-  const installedIds = new Set(installedModels.map((m) => m.id));
+  // Installed list reports checkpoint filenames; match the catalog by filename.
+  const installedNames = new Set(installedModels.map((m) => m.id));
   return (
     <div style={rowStyle}>
       <span>Local model (app-managed)</span>
+      {engineStatus && <span style={{ opacity: 0.7, fontSize: 12 }}>{engineStatus}</span>}
       <ModelSelect installedModels={installedModels} selected={selected} onSelect={onSelect} />
-      <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
-        {LOCAL_IMAGE_MODELS.map((m) => (
-          <div key={m.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
-            <span style={{ opacity: 0.85 }}>
-              {m.label} · {m.sizeGB} GB{m.note ? ` · ${m.note}` : ""}
-            </span>
-            {installedIds.has(m.id) ? (
-              <span style={{ opacity: 0.6 }}>Installed</span>
-            ) : (
-              <button style={buttonStyle} onClick={() => onDownload?.(m.id)}>
-                Download
-              </button>
-            )}
-          </div>
-        ))}
+      <span style={{ opacity: 0.7, fontSize: 12, marginTop: 4 }}>Download a model — we set up the engine:</span>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 2 }}>
+        {LOCAL_IMAGE_MODELS.map((m) => {
+          const progress = downloadProgress[m.id];
+          const downloading = progress !== undefined && progress < 100;
+          const installed = installedNames.has(m.filename);
+          return (
+            <div key={m.id} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                <span style={{ opacity: 0.85 }}>
+                  {m.label} · {m.sizeGB} GB{m.note ? ` · ${m.note}` : ""}
+                </span>
+                {installed ? (
+                  <span style={{ color: "#7dd87f" }}>✓ Installed</span>
+                ) : downloading ? (
+                  <span style={{ opacity: 0.7 }}>{Math.round(progress)}%</span>
+                ) : (
+                  <button style={buttonStyle} onClick={() => onDownload?.(m.id)}>
+                    Download
+                  </button>
+                )}
+              </div>
+              {downloading && (
+                <div style={{ height: 4, background: "rgba(255,255,255,0.15)", borderRadius: 2 }}>
+                  <div style={{ width: `${progress}%`, height: "100%", background: "#4663d6", borderRadius: 2 }} />
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

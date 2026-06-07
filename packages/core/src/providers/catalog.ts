@@ -94,17 +94,56 @@ export function getProvider(slot: ProviderSlot, id: string): ProviderInfo | unde
 /**
  * Curated catalog of local image models the desktop app can download on demand.
  * The live "already downloaded" list comes from the running engine; this is the
- * "available to download" half of the model picker.
+ * "available to download" half of the model picker. Each entry is a single-file
+ * checkpoint that ComfyUI loads from `models/checkpoints`.
+ *
+ * `id` is our stable catalog key; `filename` is what's saved on disk and what the
+ * engine reports back as the checkpoint name. URLs point at the canonical
+ * hosting; the desktop downloader streams them with progress and fails
+ * gracefully (the user can always drop a checkpoint in by hand).
  */
 export interface LocalModelCatalogEntry {
   id: string;
   label: string;
   sizeGB: number;
   note?: string;
+  /** Checkpoint filename saved into models/checkpoints (and the engine's name for it). */
+  filename: string;
+  /** Direct download URL for the .safetensors checkpoint. */
+  url: string;
 }
 
 export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
-  { id: "sd-turbo", label: "SD-Turbo", sizeGB: 2, note: "Fastest · lower fidelity" },
-  { id: "sdxl", label: "Stable Diffusion XL", sizeGB: 6.6, note: "Balanced quality" },
-  { id: "flux-schnell", label: "Flux-schnell", sizeGB: 8, note: "Highest quality · needs a strong GPU" },
+  {
+    id: "sd15",
+    label: "Stable Diffusion 1.5",
+    sizeGB: 2,
+    note: "Fastest · runs on modest GPUs",
+    filename: "v1-5-pruned-emaonly-fp16.safetensors",
+    url: "https://huggingface.co/Comfy-Org/stable-diffusion-v1-5-archive/resolve/main/v1-5-pruned-emaonly-fp16.safetensors",
+  },
+  {
+    id: "sdxl",
+    label: "Stable Diffusion XL",
+    sizeGB: 6.6,
+    note: "Balanced quality",
+    filename: "sd_xl_base_1.0.safetensors",
+    url: "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors",
+  },
+  {
+    id: "sdxl-turbo",
+    label: "SDXL-Turbo",
+    sizeGB: 6.9,
+    note: "Fast SDXL · few-step",
+    filename: "sd_xl_turbo_1.0_fp16.safetensors",
+    url: "https://huggingface.co/stabilityai/sdxl-turbo/resolve/main/sd_xl_turbo_1.0_fp16.safetensors",
+  },
+  {
+    id: "flux-schnell",
+    label: "Flux-schnell (fp8)",
+    sizeGB: 12,
+    note: "Highest quality · needs a strong GPU",
+    filename: "flux1-schnell-fp8.safetensors",
+    url: "https://huggingface.co/Comfy-Org/flux1-schnell/resolve/main/flux1-schnell-fp8.safetensors",
+  },
 ];
