@@ -12,7 +12,8 @@ export type MainToWorker =
   | { type: "init"; settings: ReaderSettings }
   | { type: "open"; book: BookSource }
   | { type: "goto"; pageIndex: number }
-  | { type: "idle"; allowed: boolean };
+  | { type: "idle"; allowed: boolean }
+  | { type: "prerenderAll" };
 
 export type WorkerToMain =
   | { type: "status"; message: string }

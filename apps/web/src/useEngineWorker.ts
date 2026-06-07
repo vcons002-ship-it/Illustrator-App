@@ -15,6 +15,7 @@ export interface EngineWorkerApi {
   status: string;
   openBook: (book: BookSource) => void;
   goTo: (pageIndex: number) => void;
+  prerenderAll: () => void;
 }
 
 export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
@@ -73,6 +74,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   );
 
   const goTo = useCallback((pageIndex: number) => send({ type: "goto", pageIndex }), []);
+  const prerenderAll = useCallback(() => send({ type: "prerenderAll" }), []);
 
-  return { bible, results, status, openBook, goTo };
+  return { bible, results, status, openBook, goTo, prerenderAll };
 }

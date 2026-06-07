@@ -32,6 +32,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "idle":
       engine?.setIdleAllowed(msg.allowed);
       break;
+    case "prerenderAll":
+      engine?.prerenderAll();
+      break;
   }
 };
 

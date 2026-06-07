@@ -35,6 +35,7 @@ export class RenderBuffer {
 
   private current = 0;
   private idleAllowed = false;
+  private renderEverything = false;
   private readonly inflight = new Set<number>();
   private readonly results = new Map<number, ImageResult>();
 
@@ -70,6 +71,16 @@ export class RenderBuffer {
     this.pump();
   }
 
+  /**
+   * Render every page now (the optional "pre-render the whole book" action),
+   * ignoring the look-ahead window and idle cap. The current page and look-ahead
+   * still take priority so reading stays responsive while the rest fills in.
+   */
+  renderAll(): void {
+    this.renderEverything = true;
+    this.pump();
+  }
+
   /** Pages, in priority order, that still need rendering. */
   private candidates(): number[] {
     const out: number[] = [];
@@ -77,11 +88,19 @@ export class RenderBuffer {
     const windowEnd = Math.min(last, this.current + this.windowAhead);
     // Highest priority: the current page, then the look-ahead window.
     for (let p = this.current; p <= windowEnd; p++) out.push(p);
-    if (this.idleAllowed) {
+    if (this.renderEverything) {
+      // Whole-book pre-render: every remaining page, after the priority window.
+      for (let p = 0; p <= last; p++) out.push(p);
+    } else if (this.idleAllowed) {
       const prerenderEnd = Math.min(last, this.current + this.maxPrerender);
       for (let p = windowEnd + 1; p <= prerenderEnd; p++) out.push(p);
     }
-    return out.filter((p) => !this.results.has(p) && !this.inflight.has(p));
+    const seen = new Set<number>();
+    return out.filter((p) => {
+      if (seen.has(p) || this.results.has(p) || this.inflight.has(p)) return false;
+      seen.add(p);
+      return true;
+    });
   }
 
   /** Start renders up to the concurrency limit, honouring priority. */

@@ -86,6 +86,24 @@ describe("RenderBuffer", () => {
     expect(started).toHaveLength(6);
   });
 
+  it("renderAll eventually renders every page, current/window first", async () => {
+    const { render, started, finish } = deferredRenderer();
+    const buf = new RenderBuffer({ totalPages: 6, render, windowAhead: 1, maxConcurrent: 2, maxPrerender: 0 });
+
+    buf.setCurrentPage(0);
+    expect(started).toEqual([0, 1]); // priority window first
+
+    buf.renderAll();
+    // Still capped by concurrency until slots free up.
+    expect(started).toEqual([0, 1]);
+
+    for (let p = 0; p < 6; p++) await finish(p);
+
+    // Every page got rendered, none twice.
+    expect([...started].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(new Set(started).size).toBe(6);
+  });
+
   it("notifies onUpdate on start and settle", async () => {
     const { render, finish } = deferredRenderer();
     const onUpdate = vi.fn();

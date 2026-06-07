@@ -94,6 +94,11 @@ export class Engine {
     this.buffer?.setIdleAllowed(allowed);
   }
 
+  /** Pre-render every page of the book now (optional, user-triggered). */
+  prerenderAll(): void {
+    this.buffer?.renderAll();
+  }
+
   resultFor(pageIndex: number): ImageResult | undefined {
     return this.buffer?.resultOf(pageIndex);
   }

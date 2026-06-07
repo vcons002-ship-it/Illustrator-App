@@ -41,7 +41,8 @@ export function App() {
   const [modelProgress, setModelProgress] = useState<Record<string, number>>({});
   const [engineStatus, setEngineStatus] = useState("");
   const hydrated = useRef(false);
-  const { bible, results, status, openBook: openInWorker, goTo } = useEngineWorker(settings);
+  const { bible, results, status, openBook: openInWorker, goTo, prerenderAll } = useEngineWorker(settings);
+  const [prerendering, setPrerendering] = useState(false);
   const { registerParagraph, activeParagraphId, passedParagraphIds } = useScrollDepth();
 
   // Decrypt stored keys after mount, then enable persistence. Persisting is gated
@@ -164,11 +165,17 @@ export function App() {
   const openBook = useCallback(
     (source: BookSource) => {
       setLocalError("");
+      setPrerendering(false);
       setBook(source);
       openInWorker(source);
     },
     [openInWorker],
   );
+
+  const onPrerenderAll = useCallback(() => {
+    setPrerendering(true);
+    prerenderAll();
+  }, [prerenderAll]);
 
   const onUpload = useCallback(
     async (file: File) => {
@@ -198,6 +205,13 @@ export function App() {
   const pageSpoilerIds =
     book && bible && activePage ? resolvePageEntities(bible, activePage).spoilerIds : [];
 
+  const renderedCount = useMemo(
+    () => [...results.values()].filter((r) => r.status === "ready").length,
+    [results],
+  );
+  const totalPages = book?.pages.length ?? 0;
+  const prerenderDone = prerendering && totalPages > 0 && renderedCount >= totalPages;
+
   return (
     <div style={styles.shell}>
       <style>{KEYFRAMES}</style>
@@ -216,6 +230,20 @@ export function App() {
           <button style={styles.button} onClick={() => openBook(loadSampleBook())}>
             Load sample
           </button>
+          {book && (
+            <button
+              style={styles.button}
+              onClick={onPrerenderAll}
+              disabled={prerendering && !prerenderDone}
+              title="Render illustrations for every page now, instead of as you reach them"
+            >
+              {prerenderDone
+                ? "Whole book rendered ✓"
+                : prerendering
+                  ? `Rendering ${renderedCount}/${totalPages}…`
+                  : "Pre-render whole book"}
+            </button>
+          )}
           <SettingsPanel
             value={settings}
             onChange={setSettings}

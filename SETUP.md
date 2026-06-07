@@ -176,6 +176,10 @@ it with its API + CORS enabled, so the browser is allowed to talk to it (the
 2. Or click **Open EPUB** and choose an `.epub` file from your computer.
 3. As you scroll, the illustration for the current page appears beside the text,
    fading in as you arrive. Spoiler imagery stays blurred until you read past it.
+4. Optional: click **Pre-render whole book** in the top bar to generate every
+   page's illustration up front (instead of as you reach them) — the button shows
+   `Rendering N/total…` and the current page still takes priority so you can keep
+   reading. (The Visual Bible is always built for the whole book on open.)
 
 ### Turn on real AI image generation (optional)
 
