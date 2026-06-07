@@ -14,11 +14,13 @@ illustrates any article you read), and a desktop app.
 
 | Version | Double-click | Then |
 |---|---|---|
+| **Everything at once** | **`full-install.bat`** | Sets up all three, then asks which to start. |
 | Web app | **`install.bat`** | Opens in your browser. Use **`run.bat`** next time. |
 | Desktop app | **`desktop.bat`** | Builds + opens the native window. |
 | Chrome extension | **`extension.bat`** | Opens the folder + Chrome to load it. |
 
 Each file installs anything it needs on its own (Node.js, Rust, etc.).
+**`full-install.bat`** is the simplest if you just want everything ready.
 
 **macOS / Linux:** `corepack enable && pnpm install && pnpm dev:web`, then open
 http://localhost:5173. (Desktop: `pnpm dev:desktop`; extension: `pnpm --filter

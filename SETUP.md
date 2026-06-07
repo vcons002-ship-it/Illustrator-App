@@ -7,13 +7,19 @@ version is a single file you double-click. (macOS / Linux steps are further down
 
 | You want… | Double-click | What it does |
 |---|---|---|
+| **Everything, set up at once** | **`full-install.bat`** | Installs the prerequisites for **all** versions (Node.js, pnpm, deps, Rust, build tools, Tauri CLI) and builds the extension, then lets you pick one to launch. |
 | The **web app** (read EPUBs) | **`install.bat`** | Installs everything, then opens the app in your browser. Use **`run.bat`** next time. |
 | The **desktop app** (native window, local GPU) | **`desktop.bat`** | Installs everything (incl. Rust/Tauri), then builds and opens the app window. |
 | The **Chrome extension** (illustrate the web) | **`extension.bat`** | Builds the extension and opens the folder + Chrome so you can load it. |
 
 Each script checks for and installs anything it needs (Node.js, etc.) on its own.
 If a script says it just installed something and asks you to run it again, close
-the window and double-click the same file once more.
+the window and double-click the same file once more. `full-install.bat` does the
+most, so it may ask you to re-run it a couple of times as new toolchains land on
+your PATH.
+
+> Not sure which to use? **`full-install.bat`** is the simplest — it prepares
+> every version and then asks what you'd like to start.
 
 ---
 
