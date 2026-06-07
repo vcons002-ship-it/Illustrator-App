@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Visual Reader",
+  "version": "1.0.0",
+  "description": "Generates contextual illustrations for what you're reading on the page.",
+  "permissions": ["storage", "activeTab", "scripting"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Toggle Visual Reader"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

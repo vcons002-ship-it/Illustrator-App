@@ -1,0 +1,22 @@
+{
+  "name": "@visual-reader/core",
+  "version": "1.0.0",
+  "description": "Provider-agnostic engine: Visual Bible, render pipeline, JIT buffer, provider adapters.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.69.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "@visual-reader/extension",
+  "version": "1.0.0",
+  "description": "Visual Reader Chrome (MV3) extension — overlay reusing the shared engine.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build -c vite.content.config.ts && vite build -c vite.background.config.ts && node scripts/copy-manifest.mjs",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@visual-reader/core": "workspace:*",
+    "@visual-reader/epub": "workspace:*",
+    "@visual-reader/ui": "workspace:*",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11"
+  }
+}
