@@ -14,6 +14,8 @@ export interface TierConfig {
   imageProvider: string;
   /** Image quality hint; cloud favours fidelity, local favours speed. */
   quality: "sketch" | "standard" | "cinematic";
+  /** Art-style id (see catalog `IMAGE_STYLES`); its prompt suffix is appended. */
+  style?: string;
 }
 
 export const DEFAULT_TIER_CONFIG: TierConfig = {
@@ -21,4 +23,5 @@ export const DEFAULT_TIER_CONFIG: TierConfig = {
   llmProvider: "claude",
   imageProvider: "flux",
   quality: "cinematic",
+  style: "auto",
 };

@@ -46,6 +46,7 @@ export function buildProviders(
       llmProvider: llm.id,
       imageProvider: image.id,
       quality: image.id === "mock" ? "sketch" : image.id === "local" ? "standard" : "cinematic",
+      style: settings.imageStyle ?? "auto",
     },
   };
 }

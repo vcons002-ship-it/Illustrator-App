@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   IMAGE_PROVIDERS,
+  IMAGE_STYLES,
   TEXT_PROVIDERS,
   LOCAL_IMAGE_MODELS,
   getProvider,
@@ -37,6 +38,8 @@ export interface ReaderSettings {
   keys: Record<string, string>;
   /** Chosen local image checkpoint. */
   localModel?: string;
+  /** Art style id applied to every illustration (see catalog IMAGE_STYLES). */
+  imageStyle?: string;
   /** Which local engine API to talk to (browser "your own server" path). */
   localBackend?: LocalBackendId;
   /** Base URL of a local engine you run yourself (browser path; persisted). */
@@ -132,6 +135,17 @@ export function SettingsPanel({
             </select>
           </label>
           {imageInfo?.needsKey && <KeyField info={imageInfo} value={value.keys[imageInfo.id] ?? ""} onChange={(k) => setKey(imageInfo.id, k)} />}
+
+          <label style={rowStyle}>
+            <span>Art style</span>
+            <select value={value.imageStyle ?? "auto"} onChange={(e) => set({ imageStyle: e.target.value })}>
+              {IMAGE_STYLES.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </label>
 
           {value.imageProvider === "local" && (
             <LocalEngine

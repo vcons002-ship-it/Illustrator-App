@@ -6,6 +6,7 @@ import type { LLMProvider } from "../providers/llm/llm-provider.js";
 import type { ImageProvider } from "../providers/image/image-provider.js";
 import type { VisualReaderStore } from "../storage/store.js";
 import { resolvePageEntities } from "../visual-bible/bible.js";
+import { getImageStyle } from "../providers/catalog.js";
 
 /**
  * Orchestrates a single page → image. Builds a VisualRequest from the page and
@@ -69,7 +70,9 @@ export class RenderPipeline {
     }
 
     try {
-      const prompt = await this.deps.llm.buildImagePrompt(request, this.deps.bible);
+      const basePrompt = await this.deps.llm.buildImagePrompt(request, this.deps.bible);
+      const styleSuffix = getImageStyle(this.deps.tier.style).promptSuffix;
+      const prompt = styleSuffix ? `${basePrompt}\n\nStyle: ${styleSuffix}` : basePrompt;
       const anchors = this.anchorsFor(request);
       const output = await this.deps.image.generate({
         prompt,

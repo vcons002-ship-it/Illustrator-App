@@ -147,3 +147,69 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
     url: "https://huggingface.co/Comfy-Org/flux1-schnell/resolve/main/flux1-schnell-fp8.safetensors",
   },
 ];
+
+/**
+ * Art-style catalog for the image style selector. The chosen style's
+ * `promptSuffix` is appended to every image prompt (in the render pipeline), so it
+ * applies uniformly across all image providers — cloud APIs, the local engine, and
+ * the mock. "auto" adds nothing (let the passage drive the look).
+ */
+export interface ImageStyle {
+  id: string;
+  label: string;
+  /** Appended to the image prompt; empty for "auto". */
+  promptSuffix: string;
+}
+
+export const IMAGE_STYLES: ImageStyle[] = [
+  { id: "auto", label: "Auto (match the writing)", promptSuffix: "" },
+  {
+    id: "photorealistic",
+    label: "Photorealistic",
+    promptSuffix:
+      "photorealistic, ultra-detailed, natural lighting, sharp focus, professional photography",
+  },
+  {
+    id: "anime",
+    label: "Anime",
+    promptSuffix: "anime illustration, cel shading, clean line art, vibrant colors, expressive",
+  },
+  {
+    id: "manga",
+    label: "Manga (black & white)",
+    promptSuffix: "black-and-white manga, ink linework, screentone shading, dynamic composition",
+  },
+  {
+    id: "animation-3d",
+    label: "Realistic animation (3D)",
+    promptSuffix:
+      "3D animated film still, stylized realism, soft global illumination, subtle subsurface detail",
+  },
+  {
+    id: "watercolor",
+    label: "Watercolor",
+    promptSuffix: "watercolor painting, soft washes, textured paper, painterly, delicate",
+  },
+  {
+    id: "comic",
+    label: "Comic book",
+    promptSuffix: "western comic book art, bold ink outlines, halftone shading, dramatic",
+  },
+  {
+    id: "oil-painting",
+    label: "Oil painting",
+    promptSuffix: "classical oil painting, visible brushstrokes, rich color, chiaroscuro lighting",
+  },
+  {
+    id: "storybook",
+    label: "Storybook",
+    promptSuffix: "children's storybook illustration, soft gouache, warm and whimsical",
+  },
+];
+
+export const DEFAULT_IMAGE_STYLE = "auto";
+
+/** Resolve a style by id, falling back to "auto" (so an unknown/undefined id is safe). */
+export function getImageStyle(id: string | undefined): ImageStyle {
+  return IMAGE_STYLES.find((s) => s.id === id) ?? IMAGE_STYLES[0]!;
+}

@@ -192,7 +192,10 @@ You have two ways to get real art:
    (Flux / Imagen / OpenAI) — they're independent. Each shows a **Get a key ↗**
    link and a one-line reminder of where to find it.
 3. Paste the API key for each one you chose. You'll see **✓ saved** once it's in.
-4. Re-load the book — pages now render with real, character-consistent art.
+4. Optional: pick an **Art style** (Photorealistic, Anime, Manga, Realistic
+   animation, Watercolor, Comic, Oil painting, Storybook, or *Auto*). It applies
+   to every illustration, on any provider — cloud or your own GPU.
+5. Re-load the book — pages now render with real, character-consistent art.
 
 > 🔒 **Your keys are encrypted on your device.** They're sealed with a key that
 > lives in your browser and can never be exported, so they're never written to
