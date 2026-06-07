@@ -11,6 +11,7 @@ version is a single file you double-click. (macOS / Linux steps are further down
 | The **web app** (read EPUBs) | **`install.bat`** | Installs everything, then opens the app in your browser. Use **`run.bat`** next time. |
 | The **desktop app** (native window, local GPU) | **`desktop.bat`** | Installs everything (incl. Rust/Tauri), then builds and opens the app window. |
 | The **Chrome extension** (illustrate the web) | **`extension.bat`** | Builds the extension and opens the folder + Chrome so you can load it. |
+| A **free local image engine** (optional) | **`comfyui-setup.bat`** | Downloads ComfyUI portable + a starter model so you can generate on your own GPU, no API keys. |
 
 Each script checks for and installs anything it needs (Node.js, etc.) on its own.
 If a script says it just installed something and asks you to run it again, close
@@ -110,40 +111,43 @@ This is the path to **free, private, real** image generation today: point Visual
 Reader at a Stable Diffusion server you run yourself. It works in **both the web
 app and the desktop app** — no API keys, nothing leaves your machine.
 
-You'll need one of these already installed, with at least one checkpoint model:
+### Easiest: one-click ComfyUI (Windows)
 
-- **AUTOMATIC1111** — Stable Diffusion web UI
-  (<https://github.com/AUTOMATIC1111/stable-diffusion-webui>)
+Don't have an engine yet? **Double-click `comfyui-setup.bat`.** It downloads the
+official **ComfyUI portable** build (which bundles its own Python — nothing is
+installed system-wide), grabs a starter model, and creates **`run-comfyui.bat`**
+(in `%USERPROFILE%\VisualReader`) that launches it with the right CORS flag.
+Uses your NVIDIA GPU if present, CPU otherwise.
+
+Then: run `run-comfyui.bat`, and in Visual Reader's **Settings** set **Images →
+On my computer → ComfyUI**, leave the URL as the default, and click **Connect**.
+
+> It's a large download (several GB) and resumes if interrupted. AUTOMATIC1111
+> and non-NVIDIA GPUs are set up manually — see below.
+
+### Manual: bring your own engine
+
+If you already run one (or want AUTOMATIC1111), install it from source and start
+it with its API + CORS enabled, so the browser is allowed to talk to it (the
+"origin" is this app's web address, e.g. `http://localhost:5173`):
+
+- **AUTOMATIC1111** (<https://github.com/AUTOMATIC1111/stable-diffusion-webui>)
+  ```bash
+  # macOS / Linux
+  ./webui.sh --api --cors-allow-origins=http://localhost:5173
+  # Windows: add to COMMANDLINE_ARGS in webui-user.bat, then run it:
+  #   --api --cors-allow-origins=http://localhost:5173
+  ```
+  Serves at `http://127.0.0.1:7860`.
 - **ComfyUI** (<https://github.com/comfyanonymous/ComfyUI>)
+  ```bash
+  python main.py --enable-cors-header http://localhost:5173
+  ```
+  Serves at `http://127.0.0.1:8188`.
 
-### 1. Start your engine with its API + CORS enabled
+### Connect Visual Reader to it
 
-The browser will only talk to the engine if it allows this app's web address
-(the "origin", e.g. `http://localhost:5173`).
-
-**AUTOMATIC1111:**
-
-```bash
-# macOS / Linux
-./webui.sh --api --cors-allow-origins=http://localhost:5173
-
-# Windows
-webui-user.bat   # after adding to COMMANDLINE_ARGS:  --api --cors-allow-origins=http://localhost:5173
-```
-
-Leave it running. By default it serves at `http://127.0.0.1:7860`.
-
-**ComfyUI:**
-
-```bash
-python main.py --enable-cors-header http://localhost:5173
-```
-
-By default it serves at `http://127.0.0.1:8188`.
-
-### 2. Connect Visual Reader to it
-
-1. Start Visual Reader (`install.bat` / `pnpm dev:web`, or the desktop app).
+1. Start Visual Reader (`install.bat` / `run.bat`, or the desktop app).
 2. Click **Settings**, set **Images** to **On my computer (free)**.
 3. Choose your engine — **AUTOMATIC1111** or **ComfyUI**.
 4. Enter the server URL (or leave it blank to use the default shown) and click
