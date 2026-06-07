@@ -1,4 +1,5 @@
-import type { ProxyFetchRequest, ProxyFetchResult } from "./message-transport.js";
+import { decryptSecrets, encryptSecrets, type EncryptedSecrets } from "@visual-reader/core";
+import type { CryptoResult, ProxyFetchRequest, ProxyFetchResult } from "./message-transport.js";
 
 /**
  * Service worker. Two jobs:
@@ -18,13 +19,36 @@ chrome.action.onClicked.addListener((tab) => {
   });
 });
 
-chrome.runtime.onMessage.addListener((msg: { type?: string; request?: ProxyFetchRequest }, _sender, sendResponse) => {
+interface BgMessage {
+  type?: string;
+  request?: ProxyFetchRequest;
+  secrets?: Record<string, string>;
+  blob?: EncryptedSecrets;
+}
+
+chrome.runtime.onMessage.addListener((msg: BgMessage, _sender, sendResponse) => {
   if (msg?.type === "vr-fetch" && msg.request) {
     void proxyFetch(msg.request).then(sendResponse);
     return true; // keep the message channel open for the async response
   }
+  if (msg?.type === "vr-encrypt" && msg.secrets) {
+    void settle(encryptSecrets(msg.secrets), sendResponse);
+    return true;
+  }
+  if (msg?.type === "vr-decrypt" && msg.blob) {
+    void settle(decryptSecrets(msg.blob), sendResponse);
+    return true;
+  }
   return undefined;
 });
+
+async function settle<T>(work: Promise<T>, sendResponse: (r: CryptoResult<T>) => void): Promise<void> {
+  try {
+    sendResponse({ ok: true, value: await work });
+  } catch (err) {
+    sendResponse({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
 
 async function proxyFetch(req: ProxyFetchRequest): Promise<ProxyFetchResult> {
   try {

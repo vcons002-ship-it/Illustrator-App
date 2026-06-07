@@ -75,8 +75,10 @@ apps/
 ### Providers
 
 - **Cloud (default):** Claude (`@anthropic-ai/sdk`, structured-output extraction)
-  + a Flux-style diffusion API. Bring-your-own keys, encrypted on-device
-  (`storage/secure-keys.ts`).
+  + a Flux-style diffusion API. Bring-your-own keys, encrypted at rest with a
+    non-extractable WebCrypto key kept in IndexedDB (`storage/key-vault.ts`); in
+    the extension, encryption runs in the background worker so the key lives in
+    the extension's own isolated storage.
 - **Mocks:** network-free LLM + image providers so the whole flow runs with no
   keys — used by tests and the keyless demo.
 - **Local engine (your own GPU):** connect to a Stable Diffusion server you run —

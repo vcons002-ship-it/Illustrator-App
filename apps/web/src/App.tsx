@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Automatic1111Backend,
   ComfyUIBackend,
+  decryptSecrets,
+  encryptSecrets,
   resolvePageEntities,
   type BookSource,
+  type EncryptedSecrets,
 } from "@visual-reader/core";
 import { parseEpub } from "@visual-reader/epub";
 import {
@@ -21,15 +24,41 @@ import { useEngineWorker } from "./useEngineWorker.js";
 import { downloadModel, ensureEngine, isDesktop, listLocalModels } from "./runtime.js";
 
 export function App() {
-  const [settings, setSettings] = useState<ReaderSettings>(loadSettings);
+  const stored = useMemo(loadStoredSettings, []);
+  const [settings, setSettings] = useState<ReaderSettings>(stored.settings);
   const [book, setBook] = useState<BookSource | undefined>();
   const [localError, setLocalError] = useState<string>("");
   const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
   const [connectingLocal, setConnectingLocal] = useState(false);
+  const hydrated = useRef(false);
   const { bible, results, status, openBook: openInWorker, goTo } = useEngineWorker(settings);
   const { registerParagraph, activeParagraphId, passedParagraphIds } = useScrollDepth();
 
-  useEffect(() => saveSettings(settings), [settings]);
+  // Decrypt stored keys after mount, then enable persistence. Persisting is gated
+  // on hydration so the initial empty-keys render can't clobber the saved keys.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      let resolved = stored.settings;
+      if (stored.encrypted) {
+        try {
+          resolved = { ...stored.settings, keys: await decryptSecrets(stored.encrypted) };
+        } catch {
+          /* key vault unavailable / changed — fall back to no keys */
+        }
+        if (!cancelled) setSettings(resolved);
+      }
+      hydrated.current = true;
+      void saveSettings(resolved); // re-persist (migrates any legacy plaintext keys)
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [stored]);
+
+  useEffect(() => {
+    if (hydrated.current) void saveSettings(settings);
+  }, [settings]);
 
   // Desktop: when the local image path is selected, make sure the GPU engine is
   // installed + running (downloads on first use) and learn its base URL + models.
@@ -210,13 +239,26 @@ export function App() {
   );
 }
 
-function loadSettings(): ReaderSettings {
+/**
+ * Read settings synchronously for the first render. API keys are stored
+ * encrypted (`keysEnc`); they can't be decrypted synchronously, so we return
+ * them separately for the caller to decrypt after mount. Legacy plaintext keys
+ * are read inline and re-encrypted on the next save.
+ */
+function loadStoredSettings(): { settings: ReaderSettings; encrypted?: EncryptedSecrets } {
   try {
     const raw = localStorage.getItem("vr-settings");
-    if (!raw) return DEFAULT_SETTINGS;
-    return migrate(JSON.parse(raw) as Record<string, unknown>);
+    if (!raw) return { settings: DEFAULT_SETTINGS };
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const base = migrate(parsed);
+    delete (base as unknown as Record<string, unknown>).keysEnc;
+    const enc = parsed.keysEnc as EncryptedSecrets | undefined;
+    if (enc && Array.isArray(enc.ciphertext) && Array.isArray(enc.iv)) {
+      return { settings: { ...base, keys: {} }, encrypted: enc };
+    }
+    return { settings: base };
   } catch {
-    return DEFAULT_SETTINGS;
+    return { settings: DEFAULT_SETTINGS };
   }
 }
 
@@ -234,14 +276,20 @@ function migrate(raw: Record<string, unknown>): ReaderSettings {
   };
 }
 
-function saveSettings(s: ReaderSettings) {
+async function saveSettings(s: ReaderSettings): Promise<void> {
   try {
-    // engineBaseUrl is transient (re-discovered each run) — don't persist it.
-    const { engineBaseUrl: _drop, ...persist } = s;
-    void _drop;
+    // Drop the transient engine URL and the plaintext keys; persist the keys
+    // only as an encrypted blob (never in plaintext).
+    const { keys, engineBaseUrl: _url, ...rest } = s;
+    void _url;
+    const persist: Record<string, unknown> = { ...rest };
+    delete persist.keysEnc;
+    if (keys && Object.keys(keys).length > 0) {
+      persist.keysEnc = await encryptSecrets(keys);
+    }
     localStorage.setItem("vr-settings", JSON.stringify(persist));
   } catch {
-    /* ignore quota / private-mode errors */
+    /* ignore quota / private-mode / crypto errors */
   }
 }
 

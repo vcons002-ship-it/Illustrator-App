@@ -89,18 +89,24 @@ export function FirstRunWizard({ current, onComplete, isDesktop = false }: First
               </select>
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <span>
-                API key{" "}
-                <a href={getProvider("text", provider)?.keyUrl} target="_blank" rel="noreferrer" style={{ opacity: 0.7 }}>
-                  Where do I get one?
+              <span style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                <span>API key</span>
+                <a href={getProvider("text", provider)?.keyUrl} target="_blank" rel="noreferrer" style={{ color: "#9db4ff" }}>
+                  Get a key ↗
                 </a>
               </span>
               <input
                 type="password"
                 value={key}
                 placeholder={getProvider("text", provider)?.keyHint ?? ""}
+                autoComplete="off"
+                spellCheck={false}
                 onChange={(e) => setKey(e.target.value)}
               />
+              {getProvider("text", provider)?.keyBlurb && (
+                <span style={{ opacity: 0.6, fontSize: 12 }}>{getProvider("text", provider)?.keyBlurb}</span>
+              )}
+              <span style={{ opacity: 0.6, fontSize: 12 }}>Stored encrypted on this device only.</span>
             </label>
             <div style={{ display: "flex", gap: 8, justifyContent: "space-between" }}>
               <button style={linkBtn} onClick={() => setPath("none")}>

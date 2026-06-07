@@ -1,4 +1,4 @@
-import { base64ToBytes } from "@visual-reader/core";
+import { base64ToBytes, type EncryptedSecrets } from "@visual-reader/core";
 
 /**
  * CORS-safe fetch for the content script.
@@ -61,3 +61,26 @@ export const proxyFetch: typeof fetch = async (input, init) => {
     headers: result.headers,
   });
 };
+
+/**
+ * Key encryption runs in the background worker too, so the AES key lives in the
+ * extension's own (page-isolated) IndexedDB rather than a web page's. The content
+ * script only ever holds plaintext keys in memory and the ciphertext blob.
+ */
+export type CryptoResult<T> = { ok: true; value: T } | { ok: false; error: string };
+
+export async function encryptViaBackground(secrets: Record<string, string>): Promise<EncryptedSecrets> {
+  const result = (await chrome.runtime.sendMessage({ type: "vr-encrypt", secrets })) as
+    | CryptoResult<EncryptedSecrets>
+    | undefined;
+  if (!result || !result.ok) throw new Error(result?.error ?? "Encrypt failed");
+  return result.value;
+}
+
+export async function decryptViaBackground(blob: EncryptedSecrets): Promise<Record<string, string>> {
+  const result = (await chrome.runtime.sendMessage({ type: "vr-decrypt", blob })) as
+    | CryptoResult<Record<string, string>>
+    | undefined;
+  if (!result || !result.ok) throw new Error(result?.error ?? "Decrypt failed");
+  return result.value;
+}

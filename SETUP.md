@@ -153,15 +153,29 @@ You have two ways to get real art:
 
 **A) Cloud (bring your own key):**
 
-1. Click **Settings** in the top bar.
+1. Click **Settings** in the top bar (in the extension, open the panel's Settings).
 2. Pick a **Text** provider (Claude / Gemini / OpenAI) and an **Images** provider
-   (Flux / Imagen / OpenAI) — they're independent.
-3. Paste the API key for each one you chose.
-   - Get a Claude key at <https://console.anthropic.com>; Gemini at
-     <https://aistudio.google.com/app/apikey>; OpenAI at
-     <https://platform.openai.com/api-keys>.
-   - Keys are encrypted and stored **only on your device**.
+   (Flux / Imagen / OpenAI) — they're independent. Each shows a **Get a key ↗**
+   link and a one-line reminder of where to find it.
+3. Paste the API key for each one you chose. You'll see **✓ saved** once it's in.
 4. Re-load the book — pages now render with real, character-consistent art.
+
+> 🔒 **Your keys are encrypted on your device.** They're sealed with a key that
+> lives in your browser and can never be exported, so they're never written to
+> disk in plain text — and they're only ever sent to the provider you picked.
+
+#### Where to get each API key
+
+| Provider | Used for | Get your key | Where in the dashboard |
+|---|---|---|---|
+| **Claude** (Anthropic) | Text | <https://console.anthropic.com/settings/keys> | Settings → API Keys → **Create Key** |
+| **Gemini / Imagen** (Google) | Text **and** images (one key) | <https://aistudio.google.com/app/apikey> | **Get API key** → Create API key |
+| **OpenAI** | Text and images (one key) | <https://platform.openai.com/api-keys> | **API keys** → Create new secret key |
+| **Flux** (Black Forest Labs) | Images | <https://api.bfl.ai/auth/profile/keys> | Sign in → **Keys** → Add key |
+
+> A common, cheap combo: one **Gemini** key (or one **OpenAI** key) covers both
+> text and images. Claude has no image model, so pair it with Flux/Imagen/OpenAI
+> for images.
 
 **B) Your own GPU (free, private):** set **Images** to **On my computer** and
 connect a local Stable Diffusion server — see

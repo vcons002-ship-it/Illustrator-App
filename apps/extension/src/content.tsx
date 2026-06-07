@@ -7,6 +7,7 @@ import {
   Engine,
   resolvePageEntities,
   type BookSource,
+  type EncryptedSecrets,
   type ImageResult,
   type VisualBible,
 } from "@visual-reader/core";
@@ -21,7 +22,7 @@ import {
   type ReaderSettings,
 } from "@visual-reader/ui";
 import { extractReadableText } from "./extract.js";
-import { proxyFetch } from "./message-transport.js";
+import { decryptViaBackground, encryptViaBackground, proxyFetch } from "./message-transport.js";
 
 const STORAGE_KEY = "vr-settings";
 
@@ -56,14 +57,48 @@ function Overlay() {
     return () => chrome.runtime.onMessage.removeListener(onMessage);
   }, []);
 
-  // Load persisted settings (then re-save on every change).
+  // Load persisted settings; API keys are stored encrypted (decrypted via the
+  // background worker, where the AES key lives in the extension's own IndexedDB).
   useEffect(() => {
-    void chrome.storage.local.get(STORAGE_KEY).then((stored) => {
-      setSettings({ ...DEFAULT_SETTINGS, ...(stored[STORAGE_KEY] as Partial<ReaderSettings> | undefined) });
-    });
+    void (async () => {
+      const stored = (await chrome.storage.local.get(STORAGE_KEY))[STORAGE_KEY] as
+        | (Partial<ReaderSettings> & { keysEnc?: EncryptedSecrets })
+        | undefined;
+      let keys: Record<string, string> = {};
+      if (stored?.keysEnc) {
+        try {
+          keys = await decryptViaBackground(stored.keysEnc);
+        } catch {
+          /* vault unavailable / changed — start with no keys */
+        }
+      } else if (stored?.keys) {
+        keys = stored.keys; // legacy plaintext — re-encrypted on next save
+      }
+      const { keysEnc: _enc, keys: _k, ...rest } = stored ?? {};
+      void _enc;
+      void _k;
+      setSettings({ ...DEFAULT_SETTINGS, ...rest, keys });
+    })();
   }, []);
+
+  // Persist on change: encrypt the keys, never store them in plaintext.
   useEffect(() => {
-    if (settings) void chrome.storage.local.set({ [STORAGE_KEY]: settings });
+    if (!settings) return;
+    void (async () => {
+      const { keys, engineBaseUrl: _url, ...rest } = settings;
+      void _url;
+      const toStore: Record<string, unknown> = { ...rest };
+      delete toStore.keys;
+      delete toStore.keysEnc;
+      if (keys && Object.keys(keys).length > 0) {
+        try {
+          toStore.keysEnc = await encryptViaBackground(keys);
+        } catch {
+          /* if encryption fails, skip persisting keys rather than store plaintext */
+        }
+      }
+      await chrome.storage.local.set({ [STORAGE_KEY]: toStore });
+    })();
   }, [settings]);
 
   // Extract the article text once.

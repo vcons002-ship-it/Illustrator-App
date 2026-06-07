@@ -152,20 +152,28 @@ export function SettingsPanel({
 }
 
 function KeyField({ info, value, onChange }: { info: ProviderInfo; value: string; onChange: (k: string) => void }) {
+  const saved = value.trim().length > 0;
   return (
     <label style={rowStyle}>
-      <span>
-        {info.label} key
+      <span style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
+        <span>
+          {info.label} key {saved && <span style={{ color: "#7dd87f" }}>✓ saved</span>}
+        </span>
         {info.keyUrl && (
-          <>
-            {" "}
-            <a href={info.keyUrl} target="_blank" rel="noreferrer" style={{ opacity: 0.7 }}>
-              Where do I get a key?
-            </a>
-          </>
+          <a href={info.keyUrl} target="_blank" rel="noreferrer" style={{ color: "#9db4ff" }}>
+            Get a key ↗
+          </a>
         )}
       </span>
-      <input type="password" value={value} placeholder={info.keyHint ?? ""} onChange={(e) => onChange(e.target.value)} />
+      <input
+        type="password"
+        value={value}
+        placeholder={info.keyHint ? `Paste your key (${info.keyHint})` : "Paste your key"}
+        autoComplete="off"
+        spellCheck={false}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {info.keyBlurb && <span style={{ opacity: 0.6, fontSize: 12 }}>{info.keyBlurb}</span>}
     </label>
   );
 }
