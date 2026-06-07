@@ -1,11 +1,23 @@
 # Setup & Usage
 
-Get Visual Reader running locally. The fastest path on Windows is the one-click
-installer; manual steps for every platform are below.
+Get Visual Reader running. On **Windows you never need to type a command** — each
+version is a single file you double-click. (macOS / Linux steps are further down.)
+
+## Windows: just double-click
+
+| You want… | Double-click | What it does |
+|---|---|---|
+| The **web app** (read EPUBs) | **`install.bat`** | Installs everything, then opens the app in your browser. Use **`run.bat`** next time. |
+| The **desktop app** (native window, local GPU) | **`desktop.bat`** | Installs everything (incl. Rust/Tauri), then builds and opens the app window. |
+| The **Chrome extension** (illustrate the web) | **`extension.bat`** | Builds the extension and opens the folder + Chrome so you can load it. |
+
+Each script checks for and installs anything it needs (Node.js, etc.) on its own.
+If a script says it just installed something and asks you to run it again, close
+the window and double-click the same file once more.
 
 ---
 
-## Windows — one click
+## Windows — web app, in detail
 
 1. **Download the project**
    - On the GitHub page, click the green **Code** button → **Download ZIP**, then
@@ -183,7 +195,10 @@ connect a local Stable Diffusion server — see
 
 ---
 
-## Handy commands
+## Handy commands (optional / advanced)
+
+You don't need these for normal use — the double-click files above cover
+everything. They're here for developers and macOS / Linux users.
 
 | Command | What it does |
 |---|---|
@@ -194,27 +209,37 @@ connect a local Stable Diffusion server — see
 | `pnpm -r build` | Build all packages and apps |
 | `pnpm -r typecheck` | Type-check everything |
 
-### Build the Chrome extension
+## Chrome extension
 
-```bash
-pnpm --filter @visual-reader/extension build
-```
+The extension illustrates anything you read **on the web** (web serials,
+fan-fiction, long articles) right on the page.
 
-Then in Chrome go to `chrome://extensions`, enable **Developer mode**, click
-**Load unpacked**, and select the `apps/extension/dist` folder. Click the
-toolbar icon on any article to toggle the overlay.
+### Install it (Windows — no typing)
 
-**What it does:** on the page you're reading, it finds the main article text
-(the densest `article` / `main` / `body` block), runs it through the same engine
-the web app uses, and floats an illustration panel beside it that follows your
-scroll.
+1. **Double-click `extension.bat`.** It builds the extension, then opens the
+   build folder and Chrome's Extensions page for you.
+2. In Chrome, turn on **Developer mode** (toggle, top-right).
+3. Click **Load unpacked** and select the folder that opened
+   (`apps/extension/dist`).
+4. Open any article, click the **Visual Reader** toolbar icon (it's under the
+   puzzle-piece menu — you can pin it), and the panel appears.
 
-**Turn on real generation:** open the panel's **Settings** (same panel as the web
-app):
+> After you change the code, run `extension.bat` again and click the circular
+> **refresh** icon on the Visual Reader card at `chrome://extensions`.
 
-- **Cloud:** pick a Text + Images provider and paste your key(s).
-- **Your own GPU:** set Images to **On my computer**, choose AUTOMATIC1111 or
-  ComfyUI, enter the server URL, and **Connect**.
+*(macOS / Linux, or if you prefer the terminal: `pnpm --filter
+@visual-reader/extension build`, then load `apps/extension/dist` as above.)*
+
+### Use it
+
+- **What it does:** finds the main article text on the page, runs it through the
+  same engine as the web app, and floats an illustration panel beside it that
+  follows your scroll.
+- **Turn on real generation:** open the panel's **Settings** (same panel as the
+  web app):
+  - **Cloud:** pick a Text + Images provider and paste your key(s).
+  - **Your own GPU:** set Images to **On my computer**, choose AUTOMATIC1111 or
+    ComfyUI, enter the server URL, and **Connect**.
 
 Settings are saved in the browser. With nothing configured it uses built-in
 **placeholder art**, so page text stays local. When you add keys or a server,

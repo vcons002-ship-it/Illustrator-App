@@ -10,13 +10,19 @@ illustrates any article you read), and a desktop app.
 
 ## Quick start
 
-- **Windows:** double-click **`install.bat`** — it checks prerequisites,
-  installs everything, and opens the app. (Use **`run.bat`** to launch later.)
-- **macOS / Linux:** `corepack enable && pnpm install && pnpm dev:web`, then open
-  http://localhost:5173.
-- **Native desktop app (optional):** double-click **`desktop.bat`** on Windows
-  (or `pnpm dev:desktop` on macOS/Linux) to run the Tauri desktop build, which can
-  manage a local GPU image engine. See [SETUP.md](./SETUP.md#desktop-app-optional).
+**Windows — no commands, just double-click a file:**
+
+| Version | Double-click | Then |
+|---|---|---|
+| Web app | **`install.bat`** | Opens in your browser. Use **`run.bat`** next time. |
+| Desktop app | **`desktop.bat`** | Builds + opens the native window. |
+| Chrome extension | **`extension.bat`** | Opens the folder + Chrome to load it. |
+
+Each file installs anything it needs on its own (Node.js, Rust, etc.).
+
+**macOS / Linux:** `corepack enable && pnpm install && pnpm dev:web`, then open
+http://localhost:5173. (Desktop: `pnpm dev:desktop`; extension: `pnpm --filter
+@visual-reader/extension build`, then load `apps/extension/dist` unpacked.)
 
 Full, beginner-friendly instructions (and how to add API keys) are in
 **[SETUP.md](./SETUP.md)**. The app works with **no API keys** via built-in
