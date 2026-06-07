@@ -22,6 +22,7 @@ import {
   type ReaderSettings,
 } from "@visual-reader/ui";
 import { extractReadableText } from "./extract.js";
+import { createCacheStore } from "./cache-store.js";
 import { decryptViaBackground, encryptViaBackground, proxyFetch } from "./message-transport.js";
 
 const STORAGE_KEY = "vr-settings";
@@ -120,6 +121,7 @@ function Overlay() {
       llm,
       image,
       tier,
+      store: createCacheStore(),
       onUpdate: (idx, result) => setResults((prev) => new Map(prev).set(idx, result)),
     });
     engineRef.current = engine;
