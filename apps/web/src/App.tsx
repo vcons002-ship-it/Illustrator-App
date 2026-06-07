@@ -3,9 +3,13 @@ import {
   Automatic1111Backend,
   ComfyUIBackend,
   LOCAL_IMAGE_MODELS,
+  computeBloomTarget,
   decryptSecrets,
   encryptSecrets,
+  latestSpoilerParagraphIndex,
+  paragraphIndexFromId,
   resolvePageEntities,
+  spoilerRevealPoint,
   type BookSource,
   type EncryptedSecrets,
 } from "@visual-reader/core";
@@ -43,7 +47,7 @@ export function App() {
   const hydrated = useRef(false);
   const { bible, results, status, openBook: openInWorker, goTo, prerenderAll } = useEngineWorker(settings);
   const [prerendering, setPrerendering] = useState(false);
-  const { registerParagraph, activeParagraphId, passedParagraphIds } = useScrollDepth();
+  const { registerParagraph, activeParagraphId, activeParagraphProgress } = useScrollDepth();
 
   // Decrypt stored keys after mount, then enable persistence. Persisting is gated
   // on hydration so the initial empty-keys render can't clobber the saved keys.
@@ -205,6 +209,26 @@ export function App() {
   const pageSpoilerIds =
     book && bible && activePage ? resolvePageEntities(bible, activePage).spoilerIds : [];
 
+  // Bloom target: reveal the illustration only as the reader progresses through the
+  // page, holding any depicted spoiler until they reach its paragraph (core/reveal).
+  const paraCount = activePage?.paragraphs.length ?? 1;
+  const pageProgress = Math.min(
+    1,
+    Math.max(0, ((paragraphIndexFromId(activeParagraphId) ?? 0) + activeParagraphProgress) / paraCount),
+  );
+  const hasPageSpoiler = pageSpoilerIds.length > 0;
+  const bloom = activePage
+    ? computeBloomTarget(
+        pageProgress,
+        spoilerRevealPoint(
+          latestSpoilerParagraphIndex(activePage, pageSpoilerIds, bible?.spoilers ?? []),
+          hasPageSpoiler,
+          paraCount,
+        ),
+        hasPageSpoiler,
+      )
+    : 0;
+
   const renderedCount = useMemo(
     () => [...results.values()].filter((r) => r.status === "ready").length,
     [results],
@@ -289,13 +313,7 @@ export function App() {
 
           <aside style={styles.aside}>
             <div style={styles.panel}>
-              <ImagePanel
-                result={results.get(activePageIndex)}
-                imageSpoilerIds={pageSpoilerIds}
-                spoilers={bible?.spoilers ?? []}
-                passedParagraphIds={passedParagraphIds}
-                bloom={1}
-              />
+              <ImagePanel result={results.get(activePageIndex)} bloom={bloom} pageKey={activePageIndex} />
               <div style={styles.caption}>
                 Page {activePageIndex + 1} of {book.pages.length}
                 {bible ? ` · ${bible.characters.length} characters tracked` : ""}

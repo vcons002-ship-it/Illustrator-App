@@ -50,7 +50,12 @@ export interface Environment {
 export interface SpoilerEntity {
   id: string;
   label: string;
-  /** Paragraph after which it is safe to reveal. */
+  /**
+   * @deprecated Unused by the current reveal model. Reveal timing is derived from
+   * where the spoiler's `label` appears on the page (see `visual-bible/reveal.ts`),
+   * not from a precomputed paragraph id. Retained for back-compat with cached
+   * Bibles; safe to ignore.
+   */
   revealParagraphId: string;
 }
 

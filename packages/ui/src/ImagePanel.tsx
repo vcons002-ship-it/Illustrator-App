@@ -1,30 +1,26 @@
 import { useEffect, useState } from "react";
-import type { ImageResult, SpoilerEntity } from "@visual-reader/core";
+import type { ImageResult } from "@visual-reader/core";
 import { BloomTransition } from "./BloomTransition.js";
-import { SpoilerGate } from "./SpoilerGate.js";
 
 /**
- * The reading-companion image panel. Composes the bloom reveal and the spoiler
- * gate over the current page's render, and shows status while the JIT buffer is
- * still working so the reader sees progress rather than a blank box.
+ * The reading-companion image panel. The image "blooms" in as the reader
+ * progresses through the page (driven by the `bloom` target, 0..1). Reveal timing
+ * — including holding spoilers until the reader reaches them — is computed by the
+ * caller via the core `reveal` helpers and passed in as `bloom`, so this stays a
+ * pure presentation component.
+ *
+ * `pageKey` remounts the bloom on page change so a freshly-shown page always starts
+ * blurred (a fast scroll to an unread page can never flash its image).
  */
 export interface ImagePanelProps {
   result: ImageResult | undefined;
-  /** Spoiler ids depicted in this image (from the page's VisualRequest). */
-  imageSpoilerIds: string[];
-  spoilers: SpoilerEntity[];
-  passedParagraphIds: ReadonlySet<string>;
-  /** Bloom target 0..1, driven by reading proximity. */
+  /** Bloom target 0..1, driven by reading progress through the current page. */
   bloom: number;
+  /** Changes per page so the bloom resets (starts hidden) on navigation. */
+  pageKey?: string | number;
 }
 
-export function ImagePanel({
-  result,
-  imageSpoilerIds,
-  spoilers,
-  passedParagraphIds,
-  bloom,
-}: ImagePanelProps) {
+export function ImagePanel({ result, bloom, pageKey }: ImagePanelProps) {
   const imageUrl = useObjectUrl(result);
 
   if (!result || result.status === "queued" || result.status === "rendering" || !imageUrl) {
@@ -34,18 +30,12 @@ export function ImagePanel({
     return <Placeholder label="painting this page…" pulse />;
   }
   return (
-    <BloomTransition target={bloom}>
-      <SpoilerGate
-        imageSpoilerIds={imageSpoilerIds}
-        spoilers={spoilers}
-        passedParagraphIds={passedParagraphIds}
-      >
-        <img
-          src={imageUrl}
-          alt="Illustration of the current passage"
-          style={{ display: "block", width: "100%", height: "auto", borderRadius: 8 }}
-        />
-      </SpoilerGate>
+    <BloomTransition key={pageKey} target={bloom}>
+      <img
+        src={imageUrl}
+        alt="Illustration of the current passage"
+        style={{ display: "block", width: "100%", height: "auto", borderRadius: 8 }}
+      />
     </BloomTransition>
   );
 }

@@ -8,10 +8,15 @@ import { useEffect, useRef, useState } from "react";
  * The passed-set drives spoiler reveal; the active paragraph drives which page
  * the engine treats as "current" for the predictive buffer.
  */
+/** Active band line = top 30% of the viewport (matches the observer rootMargin). */
+const ACTIVE_BAND = 0.3;
+
 export interface ScrollDepth {
   /** Ref callback to attach to each paragraph element. */
   registerParagraph: (id: string) => (el: HTMLElement | null) => void;
   activeParagraphId: string | undefined;
+  /** Continuous 0..1 position of the reader through the active paragraph (smooth bloom). */
+  activeParagraphProgress: number;
   passedParagraphIds: ReadonlySet<string>;
 }
 
@@ -19,6 +24,7 @@ export function useScrollDepth(): ScrollDepth {
   const elements = useRef(new Map<string, HTMLElement>());
   const observer = useRef<IntersectionObserver | null>(null);
   const [activeParagraphId, setActive] = useState<string | undefined>(undefined);
+  const [activeParagraphProgress, setProgress] = useState(0);
   const [passedParagraphIds, setPassed] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -42,6 +48,33 @@ export function useScrollDepth(): ScrollDepth {
     return () => observer.current?.disconnect();
   }, []);
 
+  // Continuous progress through the active paragraph: how far its box has scrolled
+  // past the active-band line. rAF-throttled so it's cheap during scroll.
+  useEffect(() => {
+    let raf = 0;
+    const measure = () => {
+      const el = activeParagraphId ? elements.current.get(activeParagraphId) : undefined;
+      if (!el) {
+        setProgress(0);
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      const bandLine = window.innerHeight * ACTIVE_BAND;
+      const height = rect.height || 1;
+      setProgress(Math.max(0, Math.min(1, (bandLine - rect.top) / height)));
+    };
+    const onScroll = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(measure);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    measure();
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      cancelAnimationFrame(raf);
+    };
+  }, [activeParagraphId]);
+
   const registerParagraph = (id: string) => (el: HTMLElement | null) => {
     const existing = elements.current.get(id);
     if (existing && observer.current) observer.current.unobserve(existing);
@@ -54,5 +87,5 @@ export function useScrollDepth(): ScrollDepth {
     }
   };
 
-  return { registerParagraph, activeParagraphId, passedParagraphIds };
+  return { registerParagraph, activeParagraphId, activeParagraphProgress, passedParagraphIds };
 }

@@ -5,7 +5,10 @@ import {
   ComfyUIBackend,
   DirectTransport,
   Engine,
+  computeBloomTarget,
+  latestSpoilerParagraphIndex,
   resolvePageEntities,
+  spoilerRevealPoint,
   type BookSource,
   type EncryptedSecrets,
   type ImageResult,
@@ -43,6 +46,8 @@ function Overlay() {
   const [bible, setBible] = useState<VisualBible | undefined>();
   const [results, setResults] = useState<Map<number, ImageResult>>(new Map());
   const [pageIndex, setPageIndex] = useState(0);
+  // Continuous 0..1 reading position within the current page, from host scroll.
+  const [subPageProgress, setSubPageProgress] = useState(0);
   const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
   const [connectingLocal, setConnectingLocal] = useState(false);
   const [error, setError] = useState("");
@@ -143,7 +148,8 @@ function Overlay() {
     };
   }, [settings]);
 
-  // Scroll-sync: map how far down the page you are to a page index.
+  // Scroll-sync: map host-page scroll to a page index AND a continuous in-page
+  // progress (drives the bloom — fast scrolling keeps progress low → image hidden).
   useEffect(() => {
     if (!book) return;
     let raf = 0;
@@ -152,8 +158,12 @@ function Overlay() {
       raf = requestAnimationFrame(() => {
         const max = document.documentElement.scrollHeight - window.innerHeight;
         const frac = max > 0 ? window.scrollY / max : 0;
-        const idx = Math.round(frac * (book.pages.length - 1));
+        const scaled = frac * (book.pages.length - 1);
+        const idx = Math.min(Math.floor(scaled), book.pages.length - 1);
+        // Fraction within the current page; the last page tracks to full at the bottom.
+        const within = idx >= book.pages.length - 1 ? 1 : Math.max(0, Math.min(1, scaled - idx));
         setPageIndex((p) => (p !== idx ? idx : p));
+        setSubPageProgress(within);
       });
     };
     window.addEventListener("scroll", onScroll, { passive: true });
@@ -199,6 +209,21 @@ function Overlay() {
 
   const page = book?.pages[pageIndex];
   const spoilerIds = bible && page ? resolvePageEntities(bible, page).spoilerIds : [];
+  const paraCount = page?.paragraphs.length ?? 1;
+  const hasSpoiler = spoilerIds.length > 0;
+  // Reveal follows the reader's scroll through the article (fast scroll → hidden),
+  // holding any depicted spoiler until they reach its paragraph.
+  const bloom = page
+    ? computeBloomTarget(
+        subPageProgress,
+        spoilerRevealPoint(
+          latestSpoilerParagraphIndex(page, spoilerIds, bible?.spoilers ?? []),
+          hasSpoiler,
+          paraCount,
+        ),
+        hasSpoiler,
+      )
+    : 0;
 
   return (
     <div style={panel}>
@@ -210,24 +235,11 @@ function Overlay() {
         </button>
       </div>
       {error && <div style={errorBox}>{error}</div>}
-      <ImagePanel
-        result={results.get(pageIndex)}
-        imageSpoilerIds={spoilerIds}
-        spoilers={bible?.spoilers ?? []}
-        passedParagraphIds={new Set(page?.paragraphs.map((p) => p.id) ?? [])}
-        bloom={1}
-      />
+      <ImagePanel result={results.get(pageIndex)} bloom={bloom} pageKey={pageIndex} />
       <div style={nav}>
-        <button style={btn} onClick={() => setPageIndex((i) => Math.max(0, i - 1))}>
-          ‹ Prev
-        </button>
-        <span style={{ fontSize: 12, opacity: 0.7 }}>{book ? `${pageIndex + 1} / ${book.pages.length}` : "…"}</span>
-        <button
-          style={btn}
-          onClick={() => setPageIndex((i) => (book ? Math.min(book.pages.length - 1, i + 1) : i))}
-        >
-          Next ›
-        </button>
+        <span style={{ fontSize: 12, opacity: 0.7 }}>
+          {book ? `Page ${pageIndex + 1} / ${book.pages.length}` : "…"}
+        </span>
       </div>
       <SettingsPanel
         value={settings}
