@@ -40,7 +40,11 @@ export function FirstRunWizard({ current, onComplete, isDesktop = false }: First
       ...current,
       textProvider: "local",
       imageProvider: "local",
-      localModel: current.localModel ?? "sd-turbo",
+      // Desktop auto-manages an engine (curated download); the browser path
+      // connects to a server you run yourself, where you pick the model after.
+      ...(isDesktop
+        ? { localModel: current.localModel ?? "sd-turbo" }
+        : { localBackend: current.localBackend ?? "a1111" }),
       configured: true,
     });
 
@@ -58,12 +62,12 @@ export function FirstRunWizard({ current, onComplete, isDesktop = false }: First
               <strong>Use my AI account</strong>
               <span style={sub}>Paste one key from Google or OpenAI. Works everywhere.</span>
             </button>
-            <button style={choice} onClick={finishLocal} disabled={!isDesktop}>
+            <button style={choice} onClick={finishLocal}>
               <strong>Run on my computer (free &amp; private)</strong>
               <span style={sub}>
                 {isDesktop
                   ? "Uses your GPU. We set everything up — the model downloads on first use."
-                  : "Available in the desktop app. Download it to generate on your own GPU."}
+                  : "Connect your own Stable Diffusion server (AUTOMATIC1111 or ComfyUI) in Settings."}
               </span>
             </button>
             <button style={linkBtn} onClick={finishDemo}>

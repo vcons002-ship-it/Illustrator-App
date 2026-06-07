@@ -1,4 +1,5 @@
 import {
+  Automatic1111Backend,
   ComfyUIBackend,
   MockImageProvider,
   MockLLMProvider,
@@ -6,6 +7,7 @@ import {
   createLLMProvider,
   type ImageProvider,
   type LLMProvider,
+  type LocalEngineBackend,
   type TierConfig,
 } from "@visual-reader/core";
 import type { ReaderSettings } from "@visual-reader/ui";
@@ -52,9 +54,14 @@ function buildLLM(settings: ReaderSettings): LLMProvider {
 function buildImage(settings: ReaderSettings): ImageProvider {
   const id = settings.imageProvider;
   if (id === "local") {
-    // Desktop only: the shell discovers the engine and passes its base URL in.
-    if (!settings.engineBaseUrl || !settings.localModel) return new MockImageProvider();
-    const backend = new ComfyUIBackend({ baseUrl: settings.engineBaseUrl });
+    // Base URL comes from the desktop shell (auto-managed engine) or, in the
+    // browser, from the server the user connected to in Settings.
+    const baseUrl = settings.engineBaseUrl ?? settings.localServerUrl;
+    if (!baseUrl || !settings.localModel) return new MockImageProvider();
+    const backend: LocalEngineBackend =
+      settings.localBackend === "a1111"
+        ? new Automatic1111Backend({ baseUrl })
+        : new ComfyUIBackend({ baseUrl });
     return createImageProvider("local", { engine: { backend, model: settings.localModel } });
   }
   const key = settings.keys[id];

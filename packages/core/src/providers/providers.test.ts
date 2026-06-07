@@ -8,6 +8,7 @@ import { GeminiImageProvider } from "./image/gemini-image-provider.js";
 import { OpenAIImageProvider } from "./image/openai-image-provider.js";
 import { FluxProvider } from "./image/flux-provider.js";
 import { ComfyUIBackend } from "./image/local-engine/comfyui-backend.js";
+import { Automatic1111Backend } from "./image/local-engine/automatic1111-backend.js";
 import { createImageProvider } from "./factory.js";
 import { IMAGE_PROVIDERS, TEXT_PROVIDERS } from "./catalog.js";
 import type { LocalEngineBackend } from "./image/local-engine/backend.js";
@@ -204,6 +205,47 @@ describe("ComfyUIBackend", () => {
     expect(body.prompt["4"]!.inputs.ckpt_name).toBe("sdxl.safetensors");
     expect(transport.requests[3]!.url).toContain("/view?filename=f.png");
     expect(new TextDecoder().decode(out.bytes)).toBe("COMFY");
+  });
+});
+
+describe("Automatic1111Backend", () => {
+  it("lists checkpoints from sd-models", async () => {
+    const transport = new FakeTransport(() => ({
+      json: [
+        { title: "sdxl.safetensors [abc]", model_name: "sdxl" },
+        { title: "dreamshaper.safetensors [def]", model_name: "dreamshaper" },
+      ],
+    }));
+    const backend = new Automatic1111Backend({ baseUrl: "http://127.0.0.1:7860", transport });
+    const models = await backend.listModels();
+    expect(models.map((m) => m.id)).toEqual(["sdxl.safetensors [abc]", "dreamshaper.safetensors [def]"]);
+    expect(models.map((m) => m.label)).toEqual(["sdxl", "dreamshaper"]);
+  });
+
+  it("posts txt2img with the chosen checkpoint and decodes the base64 image", async () => {
+    const transport = new FakeTransport(() => ({ json: { images: [b64("A1111")] } }));
+    const backend = new Automatic1111Backend({ baseUrl: "http://127.0.0.1:7860/", transport });
+    const out = await backend.generate(imageInput, "sdxl.safetensors [abc]");
+
+    expect(transport.requests[0]!.url).toBe("http://127.0.0.1:7860/sdapi/v1/txt2img");
+    const body = transport.requests[0]!.body as { prompt: string; override_settings: { sd_model_checkpoint: string } };
+    expect(body.prompt).toBe("a knight");
+    expect(body.override_settings.sd_model_checkpoint).toBe("sdxl.safetensors [abc]");
+    expect(new TextDecoder().decode(out.bytes)).toBe("A1111");
+  });
+
+  it("omits the checkpoint override when no model is given", async () => {
+    const transport = new FakeTransport(() => ({ json: { images: [b64("X")] } }));
+    const backend = new Automatic1111Backend({ baseUrl: "http://127.0.0.1:7860", transport });
+    await backend.generate(imageInput, "");
+    const body = transport.requests[0]!.body as { override_settings?: unknown };
+    expect(body.override_settings).toBeUndefined();
+  });
+
+  it("throws when the server returns no image", async () => {
+    const transport = new FakeTransport(() => ({ json: { images: [] } }));
+    const backend = new Automatic1111Backend({ baseUrl: "http://127.0.0.1:7860", transport });
+    await expect(backend.generate(imageInput, "m")).rejects.toThrow(/no image/);
   });
 });
 

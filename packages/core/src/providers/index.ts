@@ -16,5 +16,6 @@ export * from "./image/openai-image-provider.js";
 export * from "./image/onnx-provider.js";
 export * from "./image/local-engine/backend.js";
 export * from "./image/local-engine/comfyui-backend.js";
+export * from "./image/local-engine/automatic1111-backend.js";
 export * from "./image/local-engine/managed-engine-provider.js";
 export * from "./factory.js";

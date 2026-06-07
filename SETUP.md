@@ -86,6 +86,58 @@ in dev mode, use `pnpm build:desktop`.
 
 ---
 
+## Run images on your own GPU (AUTOMATIC1111 or ComfyUI)
+
+This is the path to **free, private, real** image generation today: point Visual
+Reader at a Stable Diffusion server you run yourself. It works in **both the web
+app and the desktop app** — no API keys, nothing leaves your machine.
+
+You'll need one of these already installed, with at least one checkpoint model:
+
+- **AUTOMATIC1111** — Stable Diffusion web UI
+  (<https://github.com/AUTOMATIC1111/stable-diffusion-webui>)
+- **ComfyUI** (<https://github.com/comfyanonymous/ComfyUI>)
+
+### 1. Start your engine with its API + CORS enabled
+
+The browser will only talk to the engine if it allows this app's web address
+(the "origin", e.g. `http://localhost:5173`).
+
+**AUTOMATIC1111:**
+
+```bash
+# macOS / Linux
+./webui.sh --api --cors-allow-origins=http://localhost:5173
+
+# Windows
+webui-user.bat   # after adding to COMMANDLINE_ARGS:  --api --cors-allow-origins=http://localhost:5173
+```
+
+Leave it running. By default it serves at `http://127.0.0.1:7860`.
+
+**ComfyUI:**
+
+```bash
+python main.py --enable-cors-header http://localhost:5173
+```
+
+By default it serves at `http://127.0.0.1:8188`.
+
+### 2. Connect Visual Reader to it
+
+1. Start Visual Reader (`install.bat` / `pnpm dev:web`, or the desktop app).
+2. Click **Settings**, set **Images** to **On my computer (free)**.
+3. Choose your engine — **AUTOMATIC1111** or **ComfyUI**.
+4. Enter the server URL (or leave it blank to use the default shown) and click
+   **Connect**. The model dropdown fills with the checkpoints your server has.
+5. Pick a model. Re-load the book — pages now render on your own GPU.
+
+> The chosen engine, server URL, and model are remembered, so next time it just
+> connects. If Connect fails, the most common cause is the CORS flag above not
+> matching the address in your browser's URL bar.
+
+---
+
 ## Using the app
 
 1. Click **Load sample** to start reading immediately — it works with **no API
@@ -97,12 +149,23 @@ in dev mode, use `pnpm build:desktop`.
 
 ### Turn on real AI image generation (optional)
 
+You have two ways to get real art:
+
+**A) Cloud (bring your own key):**
+
 1. Click **Settings** in the top bar.
-2. Keep the tier on **Cloud (Claude + Flux)**.
-3. Paste your **Claude API key** and an **image (Flux) API key**.
-   - Get a Claude key at <https://console.anthropic.com>.
+2. Pick a **Text** provider (Claude / Gemini / OpenAI) and an **Images** provider
+   (Flux / Imagen / OpenAI) — they're independent.
+3. Paste the API key for each one you chose.
+   - Get a Claude key at <https://console.anthropic.com>; Gemini at
+     <https://aistudio.google.com/app/apikey>; OpenAI at
+     <https://platform.openai.com/api-keys>.
    - Keys are encrypted and stored **only on your device**.
 4. Re-load the book — pages now render with real, character-consistent art.
+
+**B) Your own GPU (free, private):** set **Images** to **On my computer** and
+connect a local Stable Diffusion server — see
+[Run images on your own GPU](#run-images-on-your-own-gpu-automatic1111-or-comfyui).
 
 ---
 
@@ -126,6 +189,13 @@ pnpm --filter @visual-reader/extension build
 Then in Chrome go to `chrome://extensions`, enable **Developer mode**, click
 **Load unpacked**, and select the `apps/extension/dist` folder. Click the
 toolbar icon on any article to toggle the overlay.
+
+**What it does:** on the page you're reading, it finds the main article text
+(the densest `article` / `main` / `body` block), runs it through the same engine
+the web app uses, and floats an illustration panel beside it. Today it uses
+built-in **placeholder art**, so page text is read **locally and never leaves the
+browser**. (Wiring your own API keys + scroll-sync is the next step for the
+extension; the web app already supports both cloud keys and a local GPU server.)
 
 ---
 

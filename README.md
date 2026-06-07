@@ -77,8 +77,12 @@ apps/
   (`storage/secure-keys.ts`).
 - **Mocks:** network-free LLM + image providers so the whole flow runs with no
   keys — used by tests and the keyless demo.
-- **Local (opt-in, stubbed):** WebLLM + ONNX/WebGPU providers implement the same
-  interfaces; full implementation is the next phase.
+- **Local engine (your own GPU):** connect to a Stable Diffusion server you run —
+  **AUTOMATIC1111** (`/sdapi/v1/*`) or **ComfyUI** (graph API) — from either the
+  web app or the desktop app. Free, private, no keys. The desktop app can also
+  auto-manage a bundled engine (lifecycle is the next phase).
+- **On-device (stubbed):** WebLLM + ONNX/WebGPU providers implement the same
+  interfaces for fully in-browser generation; full implementation is a later phase.
 
 ## Develop
 

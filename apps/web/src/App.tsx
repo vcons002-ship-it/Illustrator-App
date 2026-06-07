@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { resolvePageEntities, type BookSource } from "@visual-reader/core";
+import {
+  Automatic1111Backend,
+  ComfyUIBackend,
+  resolvePageEntities,
+  type BookSource,
+} from "@visual-reader/core";
 import { parseEpub } from "@visual-reader/epub";
 import {
   DEFAULT_SETTINGS,
@@ -8,6 +13,7 @@ import {
   SettingsPanel,
   useScrollDepth,
   type InstalledModel,
+  type LocalBackendId,
   type ReaderSettings,
 } from "@visual-reader/ui";
 import { loadSampleBook } from "./sample.js";
@@ -19,6 +25,7 @@ export function App() {
   const [book, setBook] = useState<BookSource | undefined>();
   const [localError, setLocalError] = useState<string>("");
   const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
+  const [connectingLocal, setConnectingLocal] = useState(false);
   const { bible, results, status, openBook: openInWorker, goTo } = useEngineWorker(settings);
   const { registerParagraph, activeParagraphId, passedParagraphIds } = useScrollDepth();
 
@@ -51,6 +58,38 @@ export function App() {
       setInstalledModels(await listLocalModels());
     } catch (err) {
       setLocalError(`Model download failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, []);
+
+  // Browser path: connect to a self-hosted engine (AUTOMATIC1111 / ComfyUI),
+  // read its installed checkpoints, and remember the server for next time.
+  const onConnectLocalServer = useCallback(async (backend: LocalBackendId, url: string) => {
+    setLocalError("");
+    setConnectingLocal(true);
+    try {
+      const engine =
+        backend === "a1111" ? new Automatic1111Backend({ baseUrl: url }) : new ComfyUIBackend({ baseUrl: url });
+      const models = await engine.listModels();
+      setInstalledModels(models);
+      setSettings((s) => {
+        const keep = s.localModel && models.some((m) => m.id === s.localModel);
+        const localModel = keep ? s.localModel : models[0]?.id;
+        return {
+          ...s,
+          localBackend: backend,
+          localServerUrl: url,
+          engineBaseUrl: url,
+          ...(localModel ? { localModel } : {}),
+        };
+      });
+    } catch (err) {
+      const name = backend === "a1111" ? "AUTOMATIC1111" : "ComfyUI";
+      setLocalError(
+        `Couldn't reach ${name} at ${url}: ${err instanceof Error ? err.message : String(err)}. ` +
+          `Make sure it's running with its API and CORS enabled for ${location.origin}.`,
+      );
+    } finally {
+      setConnectingLocal(false);
     }
   }, []);
 
@@ -115,6 +154,8 @@ export function App() {
             isDesktop={isDesktop}
             installedModels={installedModels}
             onDownloadModel={onDownloadModel}
+            onConnectLocalServer={onConnectLocalServer}
+            connectingLocal={connectingLocal}
           />
         </div>
       </header>

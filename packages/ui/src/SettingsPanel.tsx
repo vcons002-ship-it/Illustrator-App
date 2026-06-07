@@ -16,17 +16,34 @@ import {
 
 export type TextProviderId = "claude" | "gemini" | "openai" | "local";
 export type ImageProviderId = "flux" | "gemini" | "openai" | "local";
+/** Which local engine HTTP API to speak when the image provider is "local". */
+export type LocalBackendId = "comfyui" | "a1111";
+
+/** Default localhost URL for each local engine, used as the field placeholder. */
+export const LOCAL_ENGINE_DEFAULT_URL: Record<LocalBackendId, string> = {
+  comfyui: "http://127.0.0.1:8188",
+  a1111: "http://127.0.0.1:7860",
+};
+
+const LOCAL_BACKEND_LABEL: Record<LocalBackendId, string> = {
+  a1111: "AUTOMATIC1111",
+  comfyui: "ComfyUI",
+};
 
 export interface ReaderSettings {
   textProvider: TextProviderId;
   imageProvider: ImageProviderId;
   /** Per-provider API keys, keyed by provider id (e.g. keys.claude, keys.flux). */
   keys: Record<string, string>;
-  /** Chosen local image checkpoint (desktop only). */
+  /** Chosen local image checkpoint. */
   localModel?: string;
+  /** Which local engine API to talk to (browser "your own server" path). */
+  localBackend?: LocalBackendId;
+  /** Base URL of a local engine you run yourself (browser path; persisted). */
+  localServerUrl?: string;
   /** True once the first-run wizard has been completed. */
   configured?: boolean;
-  /** Transient: base URL of the app-managed local engine (not persisted). */
+  /** Transient: base URL of the app-managed local engine (desktop; not persisted). */
   engineBaseUrl?: string;
 }
 
@@ -51,6 +68,10 @@ export interface SettingsPanelProps {
   installedModels?: InstalledModel[];
   /** Start downloading a curated model; desktop only. */
   onDownloadModel?: (id: string) => void;
+  /** Connect to a self-hosted engine and load its model list (browser path). */
+  onConnectLocalServer?: (backend: LocalBackendId, url: string) => void;
+  /** True while a connection attempt is in flight. */
+  connectingLocal?: boolean;
 }
 
 export function SettingsPanel({
@@ -59,6 +80,8 @@ export function SettingsPanel({
   isDesktop = false,
   installedModels = [],
   onDownloadModel,
+  onConnectLocalServer,
+  connectingLocal = false,
 }: SettingsPanelProps) {
   const [open, setOpen] = useState(false);
   const set = (patch: Partial<ReaderSettings>) => onChange({ ...value, ...patch });
@@ -105,12 +128,17 @@ export function SettingsPanel({
           {imageInfo?.needsKey && <KeyField info={imageInfo} value={value.keys[imageInfo.id] ?? ""} onChange={(k) => setKey(imageInfo.id, k)} />}
 
           {value.imageProvider === "local" && (
-            <LocalModelPicker
+            <LocalEngine
               isDesktop={isDesktop}
               installedModels={installedModels}
+              backend={value.localBackend ?? "a1111"}
+              serverUrl={value.localServerUrl ?? ""}
               selected={value.localModel}
+              connecting={connectingLocal}
+              onSet={set}
               onSelect={(id) => set({ localModel: id })}
               onDownload={onDownloadModel}
+              onConnect={onConnectLocalServer}
             />
           )}
 
@@ -142,43 +170,95 @@ function KeyField({ info, value, onChange }: { info: ProviderInfo; value: string
   );
 }
 
-function LocalModelPicker({
+/**
+ * Local-engine settings. Two ways to generate on your own hardware:
+ *  - Desktop: the app-managed engine, with a curated one-click model download.
+ *  - Anywhere (incl. the browser): connect to a Stable Diffusion server you run
+ *    yourself — AUTOMATIC1111 or ComfyUI — and pick from its installed models.
+ */
+function LocalEngine({
   isDesktop,
+  installedModels,
+  backend,
+  serverUrl,
+  selected,
+  connecting,
+  onSet,
+  onSelect,
+  onDownload,
+  onConnect,
+}: {
+  isDesktop: boolean;
+  installedModels: InstalledModel[];
+  backend: LocalBackendId;
+  serverUrl: string;
+  selected: string | undefined;
+  connecting: boolean;
+  onSet: (patch: Partial<ReaderSettings>) => void;
+  onSelect: (id: string) => void;
+  onDownload: ((id: string) => void) | undefined;
+  onConnect: ((backend: LocalBackendId, url: string) => void) | undefined;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {isDesktop && (
+        <ManagedEngine installedModels={installedModels} selected={selected} onSelect={onSelect} onDownload={onDownload} />
+      )}
+
+      <div style={rowStyle}>
+        <span>{isDesktop ? "Or use your own server" : "Your Stable Diffusion server"}</span>
+        <select value={backend} onChange={(e) => onSet({ localBackend: e.target.value as LocalBackendId })}>
+          {(["a1111", "comfyui"] as LocalBackendId[]).map((id) => (
+            <option key={id} value={id}>
+              {LOCAL_BACKEND_LABEL[id]}
+            </option>
+          ))}
+        </select>
+        <div style={{ display: "flex", gap: 6 }}>
+          <input
+            style={{ flex: 1 }}
+            value={serverUrl}
+            placeholder={LOCAL_ENGINE_DEFAULT_URL[backend]}
+            onChange={(e) => onSet({ localServerUrl: e.target.value })}
+          />
+          <button
+            style={buttonStyle}
+            disabled={connecting}
+            onClick={() => onConnect?.(backend, serverUrl.trim() || LOCAL_ENGINE_DEFAULT_URL[backend])}
+          >
+            {connecting ? "Connecting…" : "Connect"}
+          </button>
+        </div>
+        <ModelSelect installedModels={installedModels} selected={selected} onSelect={onSelect} />
+        <span style={{ opacity: 0.6, fontSize: 12 }}>
+          Start {LOCAL_BACKEND_LABEL[backend]} with its API and allow this app's origin —
+          {backend === "a1111"
+            ? " e.g. ./webui.sh --api --cors-allow-origins=" + location.origin
+            : " e.g. python main.py --enable-cors-header " + location.origin}
+          .
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/** Desktop app-managed engine: pick a downloaded model or grab a curated one. */
+function ManagedEngine({
   installedModels,
   selected,
   onSelect,
   onDownload,
 }: {
-  isDesktop: boolean;
   installedModels: InstalledModel[];
   selected: string | undefined;
   onSelect: (id: string) => void;
   onDownload: ((id: string) => void) | undefined;
 }) {
-  if (!isDesktop) {
-    return (
-      <p style={{ opacity: 0.7, margin: 0 }}>
-        Running images on your own GPU (SD, SDXL, Flux) needs the desktop app — download it to generate
-        locally, free and offline. In the browser this falls back to demo art.
-      </p>
-    );
-  }
   const installedIds = new Set(installedModels.map((m) => m.id));
   return (
     <div style={rowStyle}>
-      <span>Local model</span>
-      {installedModels.length > 0 && (
-        <select value={selected ?? ""} onChange={(e) => onSelect(e.target.value)}>
-          <option value="" disabled>
-            Choose a downloaded model…
-          </option>
-          {installedModels.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-      )}
+      <span>Local model (app-managed)</span>
+      <ModelSelect installedModels={installedModels} selected={selected} onSelect={onSelect} />
       <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
         {LOCAL_IMAGE_MODELS.map((m) => (
           <div key={m.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
@@ -196,6 +276,35 @@ function LocalModelPicker({
         ))}
       </div>
     </div>
+  );
+}
+
+/** Checkpoint dropdown; always includes the current selection so it survives reloads. */
+function ModelSelect({
+  installedModels,
+  selected,
+  onSelect,
+}: {
+  installedModels: InstalledModel[];
+  selected: string | undefined;
+  onSelect: (id: string) => void;
+}) {
+  const options = [...installedModels];
+  if (selected && !options.some((m) => m.id === selected)) options.unshift({ id: selected, label: selected });
+  if (options.length === 0) {
+    return <span style={{ opacity: 0.6, fontSize: 12 }}>Connect to load the available models.</span>;
+  }
+  return (
+    <select value={selected ?? ""} onChange={(e) => onSelect(e.target.value)}>
+      <option value="" disabled>
+        Choose a model…
+      </option>
+      {options.map((m) => (
+        <option key={m.id} value={m.id}>
+          {m.label}
+        </option>
+      ))}
+    </select>
   );
 }
 
