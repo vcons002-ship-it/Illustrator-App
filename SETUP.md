@@ -227,6 +227,49 @@ aren't blocked by the page's CORS) — your keys go only to the provider you cho
 
 ---
 
+## Example use cases
+
+Not sure which app or which image source fits you? Pick by what you're trying to
+do.
+
+### Which version of the app?
+
+| Version | Best when you want to… | Example |
+|---|---|---|
+| **Web app** | Read EPUBs you own, on any computer, with the least setup | You bought a novel as an `.epub` and want illustrated reading on your laptop in 2 minutes: run `install.bat` (or `pnpm dev:web`), **Open EPUB**, paste one Gemini key, start reading. |
+| **Desktop app** | A native, offline-friendly window that can run image models on your own GPU with no browser tab | You have a gaming PC and want free, private art for a long weekend re-read of a trilogy: launch `desktop.bat`, choose **Run on my computer**, let it use your GPU. |
+| **Chrome extension** | Illustrate things you read **on the web** — web serials, fan-fiction, long articles — right where they are | You're reading a story on Royal Road / AO3: click the toolbar icon and an illustration panel appears beside the page, updating as you scroll. |
+
+### Which image-generation method?
+
+| Method | Best when… | Example |
+|---|---|---|
+| **Demo / placeholder** (no keys) | You just want to see the flow, record a screenshot, or develop | Trying Visual Reader for the first time: **Load sample** → watch the Visual Bible, predictive rendering, bloom reveal, and spoiler gating with built-in art, zero config. |
+| **Gemini** (one key → text + images) | You want the cheapest, simplest *real* cloud setup with a single key | A casual reader illustrating a YA novel: paste one **Gemini** key, set both Text and Images to Gemini, done. |
+| **OpenAI** (one key → text + images) | You already have an OpenAI key and want one-stop setup | You use ChatGPT already: reuse your **OpenAI** key for both story understanding and `gpt-image-1` art. |
+| **Claude + Flux** | You care most about character/setting **continuity** and image quality | Illustrating a sprawling fantasy series where faces and outfits must stay consistent: **Claude** builds the Visual Bible, **Flux** renders cinematic scenes. |
+| **AUTOMATIC1111** (local GPU) | You already run A1111 and want your own checkpoints/LoRAs, free and offline | You have a tuned anime checkpoint in A1111: start it with `--api`, **Connect** Visual Reader to it, and every page renders in your style — no per-image cost, nothing leaves your PC. |
+| **ComfyUI** (local GPU) | You run ComfyUI and want full SDXL/Flux checkpoints on your GPU | You keep SDXL models in ComfyUI: launch it, **Connect**, pick the checkpoint, and read with high-fidelity local art. |
+
+### Worked examples (app + method)
+
+- **Free & private, start to finish — desktop + local GPU.** Install with
+  `desktop.bat`, pick **Run on my computer** in the first-run wizard, choose a
+  model, and read an EPUB entirely offline on your own hardware.
+- **One key, illustrate the web — extension + Gemini.** Build and load the
+  extension, open its **Settings**, paste a Gemini key, then open any web serial;
+  art appears beside the text as you scroll.
+- **Highest continuity for a long series — web + Claude + Flux.** In the web app,
+  set Text to **Claude** and Images to **Flux**, paste both keys, and open the
+  series' EPUBs one after another — the Visual Bible keeps characters consistent
+  across books.
+- **Bring your own Stable Diffusion — web + AUTOMATIC1111.** Start A1111 with
+  `--api --cors-allow-origins=http://localhost:5173`, then in the web app set
+  **Images → On my computer → AUTOMATIC1111**, **Connect**, and pick your
+  checkpoint.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |
