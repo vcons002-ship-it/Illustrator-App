@@ -14,13 +14,15 @@ illustrates any article you read), and a desktop app.
 
 | Version | Double-click | Then |
 |---|---|---|
+| **Start (already installed)** | **`start.bat`** | Menu to launch web / desktop / extension / ComfyUI. |
 | **Everything at once** | **`full-install.bat`** | Sets up all three, then asks which to start. |
-| Web app | **`install.bat`** | Opens in your browser. Use **`run.bat`** next time. |
-| Desktop app | **`desktop.bat`** | Builds + opens the native window. |
-| Chrome extension | **`extension.bat`** | Opens the folder + Chrome to load it. |
+| Web app | **`install.bat`** | Opens in your browser. Start later with **`run.bat`**. |
+| Desktop app | **`desktop.bat`** | Builds + opens the native window. Start later with **`run-desktop.bat`**. |
+| Chrome extension | **`extension.bat`** | Opens the folder + Chrome to load it. Re-open with **`run-extension.bat`**. |
 
 Each file installs anything it needs on its own (Node.js, Rust, etc.).
-**`full-install.bat`** is the simplest if you just want everything ready.
+**`full-install.bat`** is the simplest if you just want everything ready;
+**`start.bat`** is the simplest once things are installed.
 
 **macOS / Linux:** `corepack enable && pnpm install && pnpm dev:web`, then open
 http://localhost:5173. (Desktop: `pnpm dev:desktop`; extension: `pnpm --filter

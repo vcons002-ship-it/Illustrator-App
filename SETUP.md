@@ -7,10 +7,11 @@ version is a single file you double-click. (macOS / Linux steps are further down
 
 | You want… | Double-click | What it does |
 |---|---|---|
+| **Already installed — just start something** | **`start.bat`** | A menu: pick web / desktop / extension / ComfyUI and it launches it. |
 | **Everything, set up at once** | **`full-install.bat`** | Installs the prerequisites for **all** versions (Node.js, pnpm, deps, Rust, build tools, Tauri CLI) and builds the extension, then lets you pick one to launch. |
-| The **web app** (read EPUBs) | **`install.bat`** | Installs everything, then opens the app in your browser. Use **`run.bat`** next time. |
-| The **desktop app** (native window, local GPU) | **`desktop.bat`** | Installs everything (incl. Rust/Tauri), then builds and opens the app window. |
-| The **Chrome extension** (illustrate the web) | **`extension.bat`** | Builds the extension and opens the folder + Chrome so you can load it. |
+| The **web app** (read EPUBs) | **`install.bat`** | Installs everything, then opens the app. Start it later with **`run.bat`**. |
+| The **desktop app** (native window, local GPU) | **`desktop.bat`** | Installs everything (incl. Rust/Tauri), then builds and opens the app. Start it later with **`run-desktop.bat`**. |
+| The **Chrome extension** (illustrate the web) | **`extension.bat`** | Builds the extension and opens the folder + Chrome to load it. Re-open it later with **`run-extension.bat`**. |
 | A **free local image engine** (optional) | **`comfyui-setup.bat`** | Downloads ComfyUI portable + a starter model so you can generate on your own GPU, no API keys. |
 
 Each script checks for and installs anything it needs (Node.js, etc.) on its own.
