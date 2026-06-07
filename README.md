@@ -7,6 +7,17 @@ scene art doesn't drift from page to page.
 This is the v1 implementation: fiction/EPUB **scene illustrations**, with a
 shared engine consumed by two front-ends (a web app and a Chrome extension).
 
+## Quick start
+
+- **Windows:** double-click **`install.bat`** — it checks prerequisites,
+  installs everything, and opens the app. (Use **`run.bat`** to launch later.)
+- **macOS / Linux:** `corepack enable && pnpm install && pnpm dev:web`, then open
+  http://localhost:5173.
+
+Full, beginner-friendly instructions (and how to add API keys) are in
+**[SETUP.md](./SETUP.md)**. The app works with **no API keys** via built-in
+placeholder art so you can see the whole flow.
+
 ## How it works
 
 ```
@@ -24,7 +35,9 @@ EPUB ──▶ segment ──▶ Visual Bible (LLM pre-pass) ──▶ pipeline 
   clothing), environments, and spoilers into a typed JSON object, cached in
   IndexedDB and injected into every image prompt for continuity.
 - **JIT predictive buffer** — renders the current page and pre-renders ahead so
-  you never wait; speculatively pre-renders further when idle/powered.
+  you never wait; speculatively pre-renders further when idle/powered. In the web
+  app the whole engine runs in a **Web Worker**, so extraction and rendering never
+  block the reading UI; image bytes are transferred to the main thread zero-copy.
 - **Gaze-Sync UI** — a "contextual bloom" fade reveals each image as you reach
   it, and a "Fog of War" blur keeps spoiler imagery hidden until you scroll past.
 

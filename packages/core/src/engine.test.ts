@@ -1,16 +1,9 @@
-import { describe, it, expect, beforeAll, vi } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { Engine } from "./engine.js";
 import { MockLLMProvider } from "./providers/llm/mock-llm-provider.js";
 import { MockImageProvider } from "./providers/image/mock-image-provider.js";
 import { InMemoryStore } from "./storage/store.js";
 import type { BookSource } from "./types/book.js";
-
-beforeAll(() => {
-  // The pipeline turns image bytes into object URLs; stub for the node env.
-  (globalThis.URL as unknown as { createObjectURL: () => string }).createObjectURL = vi.fn(
-    () => "blob:mock",
-  );
-});
 
 function sampleBook(): BookSource {
   return {
@@ -70,6 +63,8 @@ describe("Engine", () => {
     await vi.waitFor(() => {
       expect(engine.resultFor(0)?.status).toBe("ready");
     });
+    // Result carries transferable image bytes (no realm-scoped object URL).
+    expect(engine.resultFor(0)?.image?.bytes.byteLength).toBeGreaterThan(0);
     expect(updates).toContain(0);
   });
 

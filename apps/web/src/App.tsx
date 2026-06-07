@@ -1,11 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Engine,
-  resolvePageEntities,
-  type BookSource,
-  type ImageResult,
-  type VisualBible,
-} from "@visual-reader/core";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { resolvePageEntities, type BookSource } from "@visual-reader/core";
 import { parseEpub } from "@visual-reader/epub";
 import {
   ImagePanel,
@@ -13,57 +7,37 @@ import {
   useScrollDepth,
   type ReaderSettings,
 } from "@visual-reader/ui";
-import { buildProviders } from "./providers.js";
 import { loadSampleBook } from "./sample.js";
+import { useEngineWorker } from "./useEngineWorker.js";
 
 const DEFAULT_SETTINGS: ReaderSettings = { tier: "cloud", llmKey: "", imageKey: "" };
 
 export function App() {
   const [settings, setSettings] = useState<ReaderSettings>(loadSettings);
   const [book, setBook] = useState<BookSource | undefined>();
-  const [bible, setBible] = useState<VisualBible | undefined>();
-  const [results, setResults] = useState<Map<number, ImageResult>>(new Map());
-  const [status, setStatus] = useState<string>("");
-  const engineRef = useRef<Engine | undefined>(undefined);
+  const [localError, setLocalError] = useState<string>("");
+  const { bible, results, status, openBook: openInWorker, goTo } = useEngineWorker(settings);
   const { registerParagraph, activeParagraphId, passedParagraphIds } = useScrollDepth();
 
   useEffect(() => saveSettings(settings), [settings]);
 
   const openBook = useCallback(
-    async (source: BookSource) => {
-      setStatus("Building the Visual Bible…");
-      setResults(new Map());
-      const { llm, image, tier } = buildProviders(settings);
-      const engine = new Engine({
-        llm,
-        image,
-        tier,
-        onUpdate: (pageIndex, result) =>
-          setResults((prev) => new Map(prev).set(pageIndex, result)),
-      });
-      try {
-        await engine.openBook(source);
-        engineRef.current = engine;
-        setBible(engine.getBible());
-        setBook(source);
-        engine.setIdleAllowed(true);
-        engine.goToPage(0);
-        setStatus("");
-      } catch (err) {
-        setStatus(`Failed to open book: ${err instanceof Error ? err.message : String(err)}`);
-      }
+    (source: BookSource) => {
+      setLocalError("");
+      setBook(source);
+      openInWorker(source);
     },
-    [settings],
+    [openInWorker],
   );
 
   const onUpload = useCallback(
     async (file: File) => {
-      const data = new Uint8Array(await file.arrayBuffer());
       try {
+        const data = new Uint8Array(await file.arrayBuffer());
         const source = parseEpub(data, `epub-${file.name}-${file.size}`);
-        await openBook(source);
+        openBook(source);
       } catch (err) {
-        setStatus(`Couldn't parse EPUB: ${err instanceof Error ? err.message : String(err)}`);
+        setLocalError(`Couldn't parse EPUB: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
     [openBook],
@@ -77,8 +51,8 @@ export function App() {
   }, [book, activeParagraphId]);
 
   useEffect(() => {
-    engineRef.current?.goToPage(activePageIndex);
-  }, [activePageIndex]);
+    goTo(activePageIndex);
+  }, [activePageIndex, goTo]);
 
   const activePage = book?.pages[activePageIndex];
   const pageSpoilerIds =
@@ -106,9 +80,9 @@ export function App() {
         </div>
       </header>
 
-      {status && <div style={styles.status}>{status}</div>}
+      {(status || localError) && <div style={styles.status}>{localError || status}</div>}
 
-      {!book && !status && (
+      {!book && !status && !localError && (
         <div style={styles.empty}>
           <p>Open an EPUB or load the sample to start reading with live illustrations.</p>
           <p style={{ opacity: 0.6 }}>

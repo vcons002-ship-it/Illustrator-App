@@ -39,12 +39,19 @@ export interface VisualRequest {
 
 export type RenderStatus = "queued" | "prompting" | "rendering" | "ready" | "error";
 
+/** Raw rendered image. Bytes (not realm-scoped object URLs) so a result can be
+ * transferred from a Web Worker to the main thread; the UI makes the URL. */
+export interface ImageBytes {
+  bytes: ArrayBuffer;
+  mimeType: string;
+}
+
 export interface ImageResult {
   requestId: string;
   pageId: string;
   status: RenderStatus;
-  /** Object URL or data URL of the rendered image when status === "ready". */
-  imageUrl?: string;
+  /** Rendered image bytes when status === "ready". */
+  image?: ImageBytes;
   /** The final prompt sent to the image provider (for debugging / caching). */
   prompt?: string;
   error?: string;

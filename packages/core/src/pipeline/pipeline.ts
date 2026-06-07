@@ -56,7 +56,12 @@ export class RenderPipeline {
 
     const cached = await this.deps.store.getImage(requestId);
     if (cached) {
-      return { requestId, pageId: request.pageId, status: "ready", imageUrl: toObjectUrl(cached.bytes, cached.mimeType) };
+      return {
+        requestId,
+        pageId: request.pageId,
+        status: "ready",
+        image: { bytes: cached.bytes, mimeType: cached.mimeType },
+      };
     }
 
     if (request.kind !== "scene_illustration") {
@@ -77,7 +82,7 @@ export class RenderPipeline {
         pageId: request.pageId,
         status: "ready",
         prompt,
-        imageUrl: toObjectUrl(output.bytes, output.mimeType),
+        image: { bytes: output.bytes, mimeType: output.mimeType },
       };
     } catch (err) {
       return {
@@ -94,10 +99,4 @@ export class RenderPipeline {
       .filter((c) => request.characterIds.includes(c.id))
       .map((c) => c.anchor);
   }
-}
-
-function toObjectUrl(bytes: ArrayBuffer, mimeType: string): string {
-  // URL.createObjectURL exists in browser + worker contexts. In Node tests the
-  // pipeline is driven with a store that short-circuits, so this isn't hit.
-  return URL.createObjectURL(new Blob([bytes], { type: mimeType }));
 }

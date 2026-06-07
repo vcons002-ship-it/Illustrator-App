@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { ImageResult, SpoilerEntity } from "@visual-reader/core";
 import { BloomTransition } from "./BloomTransition.js";
 import { SpoilerGate } from "./SpoilerGate.js";
@@ -24,11 +25,13 @@ export function ImagePanel({
   passedParagraphIds,
   bloom,
 }: ImagePanelProps) {
-  if (!result || result.status === "queued" || result.status === "rendering") {
+  const imageUrl = useObjectUrl(result);
+
+  if (!result || result.status === "queued" || result.status === "rendering" || !imageUrl) {
+    if (result?.status === "error") {
+      return <Placeholder label={`couldn't render: ${result.error ?? "unknown error"}`} />;
+    }
     return <Placeholder label="painting this page…" pulse />;
-  }
-  if (result.status === "error") {
-    return <Placeholder label={`couldn't render: ${result.error ?? "unknown error"}`} />;
   }
   return (
     <BloomTransition target={bloom}>
@@ -38,13 +41,29 @@ export function ImagePanel({
         passedParagraphIds={passedParagraphIds}
       >
         <img
-          src={result.imageUrl}
+          src={imageUrl}
           alt="Illustration of the current passage"
           style={{ display: "block", width: "100%", height: "auto", borderRadius: 8 }}
         />
       </SpoilerGate>
     </BloomTransition>
   );
+}
+
+/** Turn the result's image bytes into an object URL, revoking it on change. */
+function useObjectUrl(result: ImageResult | undefined): string | undefined {
+  const [url, setUrl] = useState<string | undefined>(undefined);
+  const image = result?.image;
+  useEffect(() => {
+    if (!image) {
+      setUrl(undefined);
+      return;
+    }
+    const objectUrl = URL.createObjectURL(new Blob([image.bytes], { type: image.mimeType }));
+    setUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [image]);
+  return url;
 }
 
 function Placeholder({ label, pulse }: { label: string; pulse?: boolean }) {
