@@ -1,50 +1,70 @@
-import type { TierConfig } from "../types/tier.js";
 import { ClaudeProvider } from "./llm/claude-provider.js";
+import { GeminiLLMProvider } from "./llm/gemini-provider.js";
+import { OpenAILLMProvider } from "./llm/openai-provider.js";
 import { MockLLMProvider } from "./llm/mock-llm-provider.js";
 import { WebLLMProvider } from "./llm/webllm-provider.js";
 import type { LLMProvider } from "./llm/llm-provider.js";
 import { FluxProvider } from "./image/flux-provider.js";
+import { GeminiImageProvider } from "./image/gemini-image-provider.js";
+import { OpenAIImageProvider } from "./image/openai-image-provider.js";
 import { MockImageProvider } from "./image/mock-image-provider.js";
-import { OnnxDiffusionProvider } from "./image/onnx-provider.js";
+import { ManagedEngineImageProvider } from "./image/local-engine/managed-engine-provider.js";
+import type { LocalEngineBackend } from "./image/local-engine/backend.js";
 import type { ImageProvider } from "./image/image-provider.js";
 
 /**
- * Resolves the concrete LLM + image providers for a tier config. This is the
- * single place that maps a provider key ("claude", "flux", "mock", …) to an
- * implementation, so front-ends select a tier without importing providers
- * directly. Adding a provider = one case here; no pipeline changes.
+ * Resolves the concrete LLM + image providers from a provider id. This is the
+ * single place that maps an id ("claude", "gemini", "flux", "local", …) to an
+ * implementation, so front-ends pick a provider by id and never import providers
+ * directly. Adding a provider = one case here. Callers (see buildProviders) decide
+ * what to do when a key is missing (typically: fall back to the mock).
  */
 
-export interface ProviderKeys {
-  /** API key / token for the selected LLM provider, when it needs one. */
-  llmKey?: string;
-  /** API key / token for the selected image provider, when it needs one. */
-  imageKey?: string;
+export interface LLMProviderOptions {
+  /** API key for the selected provider, when it needs one. */
+  key?: string;
 }
 
-export function createLLMProvider(config: TierConfig, keys: ProviderKeys): LLMProvider {
-  switch (config.llmProvider) {
+export interface ImageProviderOptions {
+  /** API key for the selected provider, when it needs one. */
+  key?: string;
+  /** App-managed local engine + chosen model (required for id === "local"). */
+  engine?: { backend: LocalEngineBackend; model: string };
+}
+
+export function createLLMProvider(id: string, opts: LLMProviderOptions = {}): LLMProvider {
+  switch (id) {
     case "claude":
-      return new ClaudeProvider({ apiKey: requireKey(keys.llmKey, "claude") });
-    case "webllm":
+      return new ClaudeProvider({ apiKey: requireKey(opts.key, "claude") });
+    case "gemini":
+      return new GeminiLLMProvider({ apiKey: requireKey(opts.key, "gemini") });
+    case "openai":
+      return new OpenAILLMProvider({ apiKey: requireKey(opts.key, "openai") });
+    case "local":
       return new WebLLMProvider();
     case "mock":
       return new MockLLMProvider();
     default:
-      throw new Error(`Unknown LLM provider: ${config.llmProvider}`);
+      throw new Error(`Unknown LLM provider: ${id}`);
   }
 }
 
-export function createImageProvider(config: TierConfig, keys: ProviderKeys): ImageProvider {
-  switch (config.imageProvider) {
+export function createImageProvider(id: string, opts: ImageProviderOptions = {}): ImageProvider {
+  switch (id) {
     case "flux":
-      return new FluxProvider({ apiKey: requireKey(keys.imageKey, "flux") });
-    case "onnx-webgpu":
-      return new OnnxDiffusionProvider();
+      return new FluxProvider({ apiKey: requireKey(opts.key, "flux") });
+    case "gemini":
+      return new GeminiImageProvider({ apiKey: requireKey(opts.key, "gemini") });
+    case "openai":
+      return new OpenAIImageProvider({ apiKey: requireKey(opts.key, "openai") });
+    case "local": {
+      if (!opts.engine) throw new Error("Local image provider requires a running engine");
+      return new ManagedEngineImageProvider(opts.engine.backend, opts.engine.model);
+    }
     case "mock":
       return new MockImageProvider();
     default:
-      throw new Error(`Unknown image provider: ${config.imageProvider}`);
+      throw new Error(`Unknown image provider: ${id}`);
   }
 }
 

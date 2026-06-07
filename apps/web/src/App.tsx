@@ -2,24 +2,57 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { resolvePageEntities, type BookSource } from "@visual-reader/core";
 import { parseEpub } from "@visual-reader/epub";
 import {
+  DEFAULT_SETTINGS,
+  FirstRunWizard,
   ImagePanel,
   SettingsPanel,
   useScrollDepth,
+  type InstalledModel,
   type ReaderSettings,
 } from "@visual-reader/ui";
 import { loadSampleBook } from "./sample.js";
 import { useEngineWorker } from "./useEngineWorker.js";
-
-const DEFAULT_SETTINGS: ReaderSettings = { tier: "cloud", llmKey: "", imageKey: "" };
+import { downloadModel, ensureEngine, isDesktop, listLocalModels } from "./runtime.js";
 
 export function App() {
   const [settings, setSettings] = useState<ReaderSettings>(loadSettings);
   const [book, setBook] = useState<BookSource | undefined>();
   const [localError, setLocalError] = useState<string>("");
+  const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
   const { bible, results, status, openBook: openInWorker, goTo } = useEngineWorker(settings);
   const { registerParagraph, activeParagraphId, passedParagraphIds } = useScrollDepth();
 
   useEffect(() => saveSettings(settings), [settings]);
+
+  // Desktop: when the local image path is selected, make sure the GPU engine is
+  // installed + running (downloads on first use) and learn its base URL + models.
+  useEffect(() => {
+    if (!isDesktop || settings.imageProvider !== "local" || settings.engineBaseUrl) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const baseUrl = await ensureEngine();
+        const models = await listLocalModels();
+        if (cancelled) return;
+        setInstalledModels(models);
+        setSettings((s) => ({ ...s, engineBaseUrl: baseUrl }));
+      } catch (err) {
+        if (!cancelled) setLocalError(`Local engine setup failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.imageProvider, settings.engineBaseUrl]);
+
+  const onDownloadModel = useCallback(async (id: string) => {
+    try {
+      await downloadModel(id);
+      setInstalledModels(await listLocalModels());
+    } catch (err) {
+      setLocalError(`Model download failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, []);
 
   const openBook = useCallback(
     (source: BookSource) => {
@@ -76,9 +109,19 @@ export function App() {
           <button style={styles.button} onClick={() => openBook(loadSampleBook())}>
             Load sample
           </button>
-          <SettingsPanel value={settings} onChange={setSettings} />
+          <SettingsPanel
+            value={settings}
+            onChange={setSettings}
+            isDesktop={isDesktop}
+            installedModels={installedModels}
+            onDownloadModel={onDownloadModel}
+          />
         </div>
       </header>
+
+      {!settings.configured && (
+        <FirstRunWizard current={settings} onComplete={setSettings} isDesktop={isDesktop} />
+      )}
 
       {(status || localError) && <div style={styles.status}>{localError || status}</div>}
 
@@ -129,15 +172,33 @@ export function App() {
 function loadSettings(): ReaderSettings {
   try {
     const raw = localStorage.getItem("vr-settings");
-    return raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : DEFAULT_SETTINGS;
+    if (!raw) return DEFAULT_SETTINGS;
+    return migrate(JSON.parse(raw) as Record<string, unknown>);
   } catch {
     return DEFAULT_SETTINGS;
   }
 }
 
+/** Accept the new shape as-is; migrate the v1 `{tier,llmKey,imageKey}` shape. */
+function migrate(raw: Record<string, unknown>): ReaderSettings {
+  if (typeof raw.textProvider === "string") {
+    return { ...DEFAULT_SETTINGS, ...(raw as Partial<ReaderSettings>) };
+  }
+  const llmKey = typeof raw.llmKey === "string" ? raw.llmKey : "";
+  const imageKey = typeof raw.imageKey === "string" ? raw.imageKey : "";
+  return {
+    ...DEFAULT_SETTINGS,
+    keys: { ...(llmKey ? { claude: llmKey } : {}), ...(imageKey ? { flux: imageKey } : {}) },
+    configured: Boolean(llmKey && imageKey),
+  };
+}
+
 function saveSettings(s: ReaderSettings) {
   try {
-    localStorage.setItem("vr-settings", JSON.stringify(s));
+    // engineBaseUrl is transient (re-discovered each run) — don't persist it.
+    const { engineBaseUrl: _drop, ...persist } = s;
+    void _drop;
+    localStorage.setItem("vr-settings", JSON.stringify(persist));
   } catch {
     /* ignore quota / private-mode errors */
   }

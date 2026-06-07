@@ -1,0 +1,13 @@
+[package]
+name = "visual-reader-desktop"
+version = "1.0.0"
+edition = "2021"
+description = "Visual Reader desktop shell — wraps the web UI and manages the local GPU inference engine."
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
