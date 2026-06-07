@@ -32,17 +32,33 @@ and is the remaining Phase 3 work.
 
 ## Build / run
 
-Requires the Rust toolchain and the Tauri CLI (this is intentionally **outside**
-the pnpm workspace so it never affects the JS build/test gate):
+The desktop app is intentionally **outside** the pnpm workspace so it never
+affects the JS build/test gate. It needs Node.js + pnpm (the renderer is the web
+app), the Rust toolchain, the platform C/C++ build tools, and the Tauri CLI.
+
+### Windows — one click
+
+Double-click **`desktop.bat`** in the repo root. It checks every prerequisite
+(Node.js, pnpm, Rust, Visual C++ build tools, the Tauri CLI), installs anything
+missing via `winget`, then builds and opens the desktop window. The first run
+compiles the Rust shell and can take several minutes; later runs are fast.
+
+> If the script installs Node, Rust, or the build tools, it asks you to close the
+> window and run `desktop.bat` again so the updated PATH/toolchain is picked up.
+
+### macOS / Linux (and manual Windows)
 
 ```bash
 # one-time
-cargo install tauri-cli --version "^2"
+cargo install tauri-cli --version "^2" --locked
 
 # dev (builds + serves apps/web, opens the desktop window)
-cd apps/desktop/src-tauri
-cargo tauri dev
+pnpm dev:desktop          # == cd apps/desktop/src-tauri && cargo tauri dev
 
 # production installers (.dmg / .msi / AppImage)
-cargo tauri build
+pnpm build:desktop        # == cd apps/desktop/src-tauri && cargo tauri build
 ```
+
+`pnpm dev:desktop` / `pnpm build:desktop` are convenience wrappers in the root
+`package.json`; they shell out to `cargo tauri` and do **not** make the desktop a
+workspace package.

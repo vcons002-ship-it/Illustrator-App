@@ -10,7 +10,9 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "dev:web": "pnpm --filter @visual-reader/web dev"
+    "dev:web": "pnpm --filter @visual-reader/web dev",
+    "dev:desktop": "cd apps/desktop/src-tauri && cargo tauri dev",
+    "build:desktop": "cd apps/desktop/src-tauri && cargo tauri build"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

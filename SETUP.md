@@ -62,6 +62,30 @@ terminal to stop.
 
 ---
 
+## Desktop app (optional)
+
+Prefer a native window over a browser tab? Visual Reader also ships a desktop app
+(Tauri) that wraps the same UI and can manage a **local GPU image engine** so big
+models run on your own hardware. It needs more than the web app — Rust and the
+platform C/C++ build tools in addition to Node.js — but the setup is still one
+click on Windows.
+
+- **Windows:** double-click **`desktop.bat`**. It checks/installs Node.js, pnpm,
+  Rust, the Visual C++ build tools, and the Tauri CLI, then builds and opens the
+  desktop window. The first build compiles the Rust shell and can take several
+  minutes; later runs are fast.
+  > If it installs Node, Rust, or the build tools, close the window and run
+  > `desktop.bat` again so the new PATH/toolchain is picked up.
+- **macOS / Linux:** install the Tauri CLI once with
+  `cargo install tauri-cli --version "^2" --locked`, then run `pnpm dev:desktop`.
+  (You'll also need Rust — see <https://rustup.rs> — and your platform's WebKit
+  build dependencies, listed at <https://tauri.app/start/prerequisites/>.)
+
+To produce an installable build (`.msi` / `.dmg` / AppImage) instead of running
+in dev mode, use `pnpm build:desktop`.
+
+---
+
 ## Using the app
 
 1. Click **Load sample** to start reading immediately — it works with **no API
@@ -87,6 +111,8 @@ terminal to stop.
 | Command | What it does |
 |---|---|
 | `pnpm dev:web` | Run the reader in development at http://localhost:5173 |
+| `pnpm dev:desktop` | Run the native desktop app (needs Rust + Tauri CLI) |
+| `pnpm build:desktop` | Build a desktop installer (`.msi` / `.dmg` / AppImage) |
 | `pnpm test` | Run the test suite |
 | `pnpm -r build` | Build all packages and apps |
 | `pnpm -r typecheck` | Type-check everything |
@@ -112,3 +138,6 @@ toolbar icon on any article to toggle the overlay.
 | `corepack: command not found` | Your Node.js is too old. Install v20+ from nodejs.org. |
 | Browser opens before the app is ready | Wait a few seconds and refresh — the dev server is still starting. |
 | Port 5173 already in use | Stop the other process, or run `pnpm dev:web -- --port 5174`. |
+| `desktop.bat`: "Rust/build tools just installed… run again" | Close the window and double-click `desktop.bat` again so the new toolchain is on PATH. |
+| Desktop build fails with a linker error | Install the Visual C++ build tools ("Desktop development with C++"): <https://visualstudio.microsoft.com/visual-cpp-build-tools/>. |
+| `cargo: command not found` (macOS/Linux) | Install Rust from <https://rustup.rs>, then `cargo install tauri-cli --version "^2" --locked`. |

@@ -13,6 +13,9 @@ shared engine consumed by two front-ends (a web app and a Chrome extension).
   installs everything, and opens the app. (Use **`run.bat`** to launch later.)
 - **macOS / Linux:** `corepack enable && pnpm install && pnpm dev:web`, then open
   http://localhost:5173.
+- **Native desktop app (optional):** double-click **`desktop.bat`** on Windows
+  (or `pnpm dev:desktop` on macOS/Linux) to run the Tauri desktop build, which can
+  manage a local GPU image engine. See [SETUP.md](./SETUP.md#desktop-app-optional).
 
 Full, beginner-friendly instructions (and how to add API keys) are in
 **[SETUP.md](./SETUP.md)**. The app works with **no API keys** via built-in
@@ -54,6 +57,8 @@ packages/
 apps/
   web/        standalone reader (Vite + React) — primary dev/demo surface
   extension/  Chrome MV3 extension overlay reusing core + ui
+  desktop/    Tauri shell wrapping the web UI — manages a local GPU engine
+              (command surface + wiring in place; engine lifecycle is Phase 3)
 ```
 
 ### Designed-in seams (so v1 doesn't need rework later)
