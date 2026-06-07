@@ -4,3 +4,4 @@ export * from "./SpoilerGate.js";
 export * from "./ImagePanel.js";
 export * from "./SettingsPanel.js";
 export * from "./FirstRunWizard.js";
+export * from "./buildProviders.js";

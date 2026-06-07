@@ -27,8 +27,21 @@ export interface Transport {
   send(request: TransportRequest): Promise<TransportResponse>;
 }
 
-/** Calls the network directly using the platform `fetch`. */
+/**
+ * Calls the network directly using `fetch`. The `fetch` implementation is
+ * injectable so non-page hosts can route requests elsewhere — e.g. the Chrome
+ * extension proxies through its background service worker (which has host
+ * permissions and is not bound by page CORS). Defaults to the platform `fetch`,
+ * wrapped so it is always invoked with the global `this` (avoids "Illegal
+ * invocation" when held on an instance field).
+ */
 export class DirectTransport implements Transport {
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(fetchImpl?: typeof fetch) {
+    this.fetchImpl = fetchImpl ?? ((input, init) => fetch(input, init));
+  }
+
   async send(request: TransportRequest): Promise<TransportResponse> {
     const init: RequestInit = {
       method: request.method ?? "POST",
@@ -40,7 +53,7 @@ export class DirectTransport implements Transport {
     if (request.body !== undefined) {
       init.body = JSON.stringify(request.body);
     }
-    const res = await fetch(request.url, init);
+    const res = await this.fetchImpl(request.url, init);
     return {
       ok: res.ok,
       status: res.status,

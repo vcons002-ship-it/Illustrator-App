@@ -1,7 +1,6 @@
 /// <reference lib="webworker" />
 import { Engine, IndexedDbStore } from "@visual-reader/core";
-import type { ReaderSettings } from "@visual-reader/ui";
-import { buildProviders } from "./providers.js";
+import { buildProviders, type ReaderSettings } from "@visual-reader/ui";
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
 
 /**

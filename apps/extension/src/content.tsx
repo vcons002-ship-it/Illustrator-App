@@ -1,32 +1,53 @@
-import { StrictMode, useEffect, useRef, useState } from "react";
+import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  Automatic1111Backend,
+  ComfyUIBackend,
+  DirectTransport,
   Engine,
-  MockImageProvider,
-  MockLLMProvider,
   resolvePageEntities,
   type BookSource,
   type ImageResult,
   type VisualBible,
 } from "@visual-reader/core";
 import { segmentBook } from "@visual-reader/epub";
-import { ImagePanel } from "@visual-reader/ui";
+import {
+  DEFAULT_SETTINGS,
+  ImagePanel,
+  SettingsPanel,
+  buildProviders,
+  type InstalledModel,
+  type LocalBackendId,
+  type ReaderSettings,
+} from "@visual-reader/ui";
 import { extractReadableText } from "./extract.js";
+import { proxyFetch } from "./message-transport.js";
+
+const STORAGE_KEY = "vr-settings";
 
 /**
  * Content-script overlay. Extracts the page's readable text, runs it through the
  * SAME shared engine the web app uses, and floats an image panel beside the
- * article. v1 uses mock providers + manual page nav; wiring chrome.storage BYO
- * keys and scroll-sync are the documented next steps (the engine seam is ready).
+ * article. Real generation: providers are built from the user's settings (BYO
+ * cloud keys or a connected local Stable Diffusion server), and all network goes
+ * through the background worker (`proxyFetch`) to dodge page CORS. With no keys
+ * it falls back to the built-in placeholder art. Settings persist in
+ * `chrome.storage`; scroll position drives which page is shown.
  */
 function Overlay() {
   const [visible, setVisible] = useState(true);
+  const [settings, setSettings] = useState<ReaderSettings | undefined>(undefined);
   const [book, setBook] = useState<BookSource | undefined>();
   const [bible, setBible] = useState<VisualBible | undefined>();
   const [results, setResults] = useState<Map<number, ImageResult>>(new Map());
   const [pageIndex, setPageIndex] = useState(0);
+  const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
+  const [connectingLocal, setConnectingLocal] = useState(false);
+  const [error, setError] = useState("");
   const engineRef = useRef<Engine | undefined>(undefined);
+  const extractedRef = useRef<{ title: string; text: string } | undefined>(undefined);
 
+  // Toolbar icon toggles the panel.
   useEffect(() => {
     const onMessage = (msg: { type?: string }) => {
       if (msg?.type === "visual-reader/toggle") setVisible((v) => !v);
@@ -35,47 +56,123 @@ function Overlay() {
     return () => chrome.runtime.onMessage.removeListener(onMessage);
   }, []);
 
+  // Load persisted settings (then re-save on every change).
   useEffect(() => {
-    const { title, text } = extractReadableText(document);
-    if (text.trim().length === 0) return;
-    const source = segmentBook(
-      { id: `page-${location.href}`, title },
-      [{ title, text }],
-      { wordsPerPage: 220 },
-    );
-    const engine = new Engine({
-      llm: new MockLLMProvider(),
-      image: new MockImageProvider(),
-      tier: { tier: "cloud", llmProvider: "mock", imageProvider: "mock", quality: "sketch" },
-      onUpdate: (idx, result) => setResults((prev) => new Map(prev).set(idx, result)),
-    });
-    void engine.openBook(source).then(() => {
-      engineRef.current = engine;
-      setBible(engine.getBible());
-      setBook(source);
-      engine.goToPage(0);
+    void chrome.storage.local.get(STORAGE_KEY).then((stored) => {
+      setSettings({ ...DEFAULT_SETTINGS, ...(stored[STORAGE_KEY] as Partial<ReaderSettings> | undefined) });
     });
   }, []);
+  useEffect(() => {
+    if (settings) void chrome.storage.local.set({ [STORAGE_KEY]: settings });
+  }, [settings]);
 
-  if (!visible || !book) return null;
+  // Extract the article text once.
+  useEffect(() => {
+    const { title, text } = extractReadableText(document);
+    if (text.trim().length > 0) extractedRef.current = { title, text };
+  }, []);
 
-  const go = (next: number) => {
-    const clamped = Math.max(0, Math.min(book.pages.length - 1, next));
-    setPageIndex(clamped);
-    engineRef.current?.goToPage(clamped);
-  };
+  // (Re)build the engine whenever settings change so new keys / a connected
+  // server take effect immediately.
+  useEffect(() => {
+    if (!settings || !extractedRef.current) return;
+    const { title, text } = extractedRef.current;
+    const source = segmentBook({ id: `page-${location.href}`, title }, [{ title, text }], { wordsPerPage: 220 });
+    setError("");
+    setResults(new Map());
+    const { llm, image, tier } = buildProviders(settings, { fetch: proxyFetch });
+    const engine = new Engine({
+      llm,
+      image,
+      tier,
+      onUpdate: (idx, result) => setResults((prev) => new Map(prev).set(idx, result)),
+    });
+    engineRef.current = engine;
+    let cancelled = false;
+    void engine
+      .openBook(source)
+      .then(() => {
+        if (cancelled) return;
+        setBible(engine.getBible());
+        setBook(source);
+        engine.setIdleAllowed(true);
+        engine.goToPage(0);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settings]);
 
-  const page = book.pages[pageIndex];
+  // Scroll-sync: map how far down the page you are to a page index.
+  useEffect(() => {
+    if (!book) return;
+    let raf = 0;
+    const onScroll = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const max = document.documentElement.scrollHeight - window.innerHeight;
+        const frac = max > 0 ? window.scrollY / max : 0;
+        const idx = Math.round(frac * (book.pages.length - 1));
+        setPageIndex((p) => (p !== idx ? idx : p));
+      });
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      cancelAnimationFrame(raf);
+    };
+  }, [book]);
+
+  // Steer the predictive buffer to the active page.
+  useEffect(() => {
+    engineRef.current?.goToPage(pageIndex);
+  }, [pageIndex]);
+
+  // Connect to a self-hosted engine (AUTOMATIC1111 / ComfyUI) and load its models.
+  const onConnectLocalServer = useCallback(async (backend: LocalBackendId, url: string) => {
+    setError("");
+    setConnectingLocal(true);
+    try {
+      const transport = new DirectTransport(proxyFetch);
+      const engine =
+        backend === "a1111"
+          ? new Automatic1111Backend({ baseUrl: url, transport })
+          : new ComfyUIBackend({ baseUrl: url, transport });
+      const models = await engine.listModels();
+      setInstalledModels(models);
+      setSettings((s) => {
+        if (!s) return s;
+        const keep = s.localModel && models.some((m) => m.id === s.localModel);
+        const localModel = keep ? s.localModel : models[0]?.id;
+        return { ...s, localBackend: backend, localServerUrl: url, ...(localModel ? { localModel } : {}) };
+      });
+    } catch (err) {
+      const name = backend === "a1111" ? "AUTOMATIC1111" : "ComfyUI";
+      setError(`Couldn't reach ${name} at ${url}: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setConnectingLocal(false);
+    }
+  }, []);
+
+  if (!visible || !settings) return null;
+
+  const page = book?.pages[pageIndex];
   const spoilerIds = bible && page ? resolvePageEntities(bible, page).spoilerIds : [];
 
   return (
     <div style={panel}>
+      <style>{KEYFRAMES}</style>
       <div style={bar}>
         <strong>Visual Reader</strong>
         <button style={btn} onClick={() => setVisible(false)}>
           ✕
         </button>
       </div>
+      {error && <div style={errorBox}>{error}</div>}
       <ImagePanel
         result={results.get(pageIndex)}
         imageSpoilerIds={spoilerIds}
@@ -84,29 +181,41 @@ function Overlay() {
         bloom={1}
       />
       <div style={nav}>
-        <button style={btn} onClick={() => go(pageIndex - 1)}>
+        <button style={btn} onClick={() => setPageIndex((i) => Math.max(0, i - 1))}>
           ‹ Prev
         </button>
-        <span style={{ fontSize: 12, opacity: 0.7 }}>
-          {pageIndex + 1} / {book.pages.length}
-        </span>
-        <button style={btn} onClick={() => go(pageIndex + 1)}>
+        <span style={{ fontSize: 12, opacity: 0.7 }}>{book ? `${pageIndex + 1} / ${book.pages.length}` : "…"}</span>
+        <button
+          style={btn}
+          onClick={() => setPageIndex((i) => (book ? Math.min(book.pages.length - 1, i + 1) : i))}
+        >
           Next ›
         </button>
       </div>
+      <SettingsPanel
+        value={settings}
+        onChange={setSettings}
+        installedModels={installedModels}
+        onConnectLocalServer={onConnectLocalServer}
+        connectingLocal={connectingLocal}
+      />
     </div>
   );
 }
+
+const KEYFRAMES = `@keyframes vr-pulse { 0%,100% { opacity: 0.55 } 50% { opacity: 0.9 } }`;
 
 const panel: React.CSSProperties = {
   position: "fixed",
   top: 16,
   right: 16,
-  width: 300,
+  width: 320,
+  maxHeight: "calc(100vh - 32px)",
+  overflowY: "auto",
   zIndex: 2147483647,
   padding: 12,
   borderRadius: 12,
-  background: "rgba(17,19,26,0.95)",
+  background: "rgba(17,19,26,0.96)",
   color: "#e7e7ee",
   boxShadow: "0 8px 30px rgba(0,0,0,0.4)",
   fontFamily: "system-ui, sans-serif",
@@ -121,7 +230,15 @@ const nav: React.CSSProperties = {
   display: "flex",
   justifyContent: "space-between",
   alignItems: "center",
-  marginTop: 8,
+  margin: "8px 0",
+};
+const errorBox: React.CSSProperties = {
+  background: "rgba(255,90,90,0.15)",
+  border: "1px solid rgba(255,90,90,0.4)",
+  borderRadius: 6,
+  padding: "6px 8px",
+  fontSize: 12,
+  marginBottom: 8,
 };
 const btn: React.CSSProperties = {
   background: "transparent",

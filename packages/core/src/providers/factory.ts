@@ -11,6 +11,7 @@ import { MockImageProvider } from "./image/mock-image-provider.js";
 import { ManagedEngineImageProvider } from "./image/local-engine/managed-engine-provider.js";
 import type { LocalEngineBackend } from "./image/local-engine/backend.js";
 import type { ImageProvider } from "./image/image-provider.js";
+import type { Transport } from "./transport/transport.js";
 
 /**
  * Resolves the concrete LLM + image providers from a provider id. This is the
@@ -18,11 +19,19 @@ import type { ImageProvider } from "./image/image-provider.js";
  * implementation, so front-ends pick a provider by id and never import providers
  * directly. Adding a provider = one case here. Callers (see buildProviders) decide
  * what to do when a key is missing (typically: fall back to the mock).
+ *
+ * `transport` / `fetch` are optional injection points: hosts that cannot call
+ * provider APIs directly (the Chrome extension content script, blocked by page
+ * CORS) pass a transport/fetch that proxies through a privileged context.
  */
 
 export interface LLMProviderOptions {
   /** API key for the selected provider, when it needs one. */
   key?: string;
+  /** Transport for the REST-based providers (Gemini / OpenAI). */
+  transport?: Transport;
+  /** Custom fetch for the SDK-based provider (Claude). */
+  fetch?: typeof fetch;
 }
 
 export interface ImageProviderOptions {
@@ -30,16 +39,22 @@ export interface ImageProviderOptions {
   key?: string;
   /** App-managed local engine + chosen model (required for id === "local"). */
   engine?: { backend: LocalEngineBackend; model: string };
+  /** Transport for the REST-based providers (Flux / Imagen / OpenAI). */
+  transport?: Transport;
 }
 
 export function createLLMProvider(id: string, opts: LLMProviderOptions = {}): LLMProvider {
+  const transport = opts.transport;
   switch (id) {
     case "claude":
-      return new ClaudeProvider({ apiKey: requireKey(opts.key, "claude") });
+      return new ClaudeProvider({
+        apiKey: requireKey(opts.key, "claude"),
+        ...(opts.fetch ? { fetch: opts.fetch } : {}),
+      });
     case "gemini":
-      return new GeminiLLMProvider({ apiKey: requireKey(opts.key, "gemini") });
+      return new GeminiLLMProvider({ apiKey: requireKey(opts.key, "gemini"), ...(transport ? { transport } : {}) });
     case "openai":
-      return new OpenAILLMProvider({ apiKey: requireKey(opts.key, "openai") });
+      return new OpenAILLMProvider({ apiKey: requireKey(opts.key, "openai"), ...(transport ? { transport } : {}) });
     case "local":
       return new WebLLMProvider();
     case "mock":
@@ -50,13 +65,14 @@ export function createLLMProvider(id: string, opts: LLMProviderOptions = {}): LL
 }
 
 export function createImageProvider(id: string, opts: ImageProviderOptions = {}): ImageProvider {
+  const transport = opts.transport;
   switch (id) {
     case "flux":
-      return new FluxProvider({ apiKey: requireKey(opts.key, "flux") });
+      return new FluxProvider({ apiKey: requireKey(opts.key, "flux"), ...(transport ? { transport } : {}) });
     case "gemini":
-      return new GeminiImageProvider({ apiKey: requireKey(opts.key, "gemini") });
+      return new GeminiImageProvider({ apiKey: requireKey(opts.key, "gemini"), ...(transport ? { transport } : {}) });
     case "openai":
-      return new OpenAIImageProvider({ apiKey: requireKey(opts.key, "openai") });
+      return new OpenAIImageProvider({ apiKey: requireKey(opts.key, "openai"), ...(transport ? { transport } : {}) });
     case "local": {
       if (!opts.engine) throw new Error("Local image provider requires a running engine");
       return new ManagedEngineImageProvider(opts.engine.backend, opts.engine.model);

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { DirectTransport } from "./transport/transport.js";
 import type { Transport, TransportRequest, TransportResponse } from "./transport/transport.js";
 import type { VisualBible } from "../types/bible.js";
 import type { ImageGenerationInput } from "./image/image-provider.js";
@@ -53,6 +54,27 @@ describe("catalog", () => {
     expect(IMAGE_PROVIDERS.find((p) => p.id === "claude")).toBeUndefined();
     expect(TEXT_PROVIDERS.find((p) => p.id === "claude")).toBeDefined();
     expect(IMAGE_PROVIDERS.find((p) => p.id === "local")?.local).toBe(true);
+  });
+});
+
+describe("DirectTransport", () => {
+  it("routes requests through an injected fetch (the extension's SW proxy path)", async () => {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const fakeFetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(url), init });
+      return new Response(JSON.stringify({ value: 42 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const transport = new DirectTransport(fakeFetch);
+    const res = await transport.send({ url: "https://example/api", method: "POST", body: { a: 1 } });
+
+    expect(res.ok).toBe(true);
+    expect(await res.json()).toEqual({ value: 42 });
+    expect(calls[0]!.url).toBe("https://example/api");
+    expect(calls[0]!.init!.body).toBe(JSON.stringify({ a: 1 }));
   });
 });
 

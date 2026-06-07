@@ -192,10 +192,24 @@ toolbar icon on any article to toggle the overlay.
 
 **What it does:** on the page you're reading, it finds the main article text
 (the densest `article` / `main` / `body` block), runs it through the same engine
-the web app uses, and floats an illustration panel beside it. Today it uses
-built-in **placeholder art**, so page text is read **locally and never leaves the
-browser**. (Wiring your own API keys + scroll-sync is the next step for the
-extension; the web app already supports both cloud keys and a local GPU server.)
+the web app uses, and floats an illustration panel beside it that follows your
+scroll.
+
+**Turn on real generation:** open the panel's **Settings** (same panel as the web
+app):
+
+- **Cloud:** pick a Text + Images provider and paste your key(s).
+- **Your own GPU:** set Images to **On my computer**, choose AUTOMATIC1111 or
+  ComfyUI, enter the server URL, and **Connect**.
+
+Settings are saved in the browser. With nothing configured it uses built-in
+**placeholder art**, so page text stays local. When you add keys or a server,
+all API calls are routed through the extension's background worker (so they
+aren't blocked by the page's CORS) — your keys go only to the provider you chose.
+
+> Because requests go through the extension's background worker, a **local**
+> AUTOMATIC1111 / ComfyUI server only needs its API enabled — no CORS flags
+> required (unlike the web app).
 
 ---
 

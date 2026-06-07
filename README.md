@@ -5,7 +5,8 @@ AI-generated illustrations for what you read on screen. As you read a novel, a
 scene art doesn't drift from page to page.
 
 This is the v1 implementation: fiction/EPUB **scene illustrations**, with a
-shared engine consumed by two front-ends (a web app and a Chrome extension).
+shared engine consumed by three surfaces — a web app, a Chrome extension (which
+illustrates any article you read), and a desktop app.
 
 ## Quick start
 
@@ -56,7 +57,8 @@ packages/
   ui/     shared React components (ImagePanel, BloomTransition, SpoilerGate, …)
 apps/
   web/        standalone reader (Vite + React) — primary dev/demo surface
-  extension/  Chrome MV3 extension overlay reusing core + ui
+  extension/  Chrome MV3 overlay — illustrates any article; same engine + settings
+              (API calls proxy through the background worker to bypass page CORS)
   desktop/    Tauri shell wrapping the web UI — manages a local GPU engine
               (command surface + wiring in place; engine lifecycle is Phase 3)
 ```
