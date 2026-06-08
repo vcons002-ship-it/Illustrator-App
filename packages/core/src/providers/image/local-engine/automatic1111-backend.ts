@@ -1,6 +1,7 @@
 import { base64ToBytes } from "../base64.js";
 import { DirectTransport, type Transport } from "../../transport/transport.js";
 import type { ImageGenerationInput, ImageGenerationOutput } from "../image-provider.js";
+import { composeSdPositive, resolveModelFamily, resolveNegative } from "../sd-prompt.js";
 import type { LocalEngineBackend, LocalModelDescriptor } from "./backend.js";
 
 /**
@@ -86,13 +87,6 @@ export class Automatic1111Backend implements LocalEngineBackend {
     const steps =
       input.steps ?? (input.quality === "sketch" ? 6 : input.quality === "standard" ? 20 : 35);
 
-    // Style LoRA via A1111's prompt syntax (silently ignored if not installed).
-    let prompt = input.prompt;
-    if (input.styleLora) {
-      const trigger = input.styleLora.trigger ? `${input.styleLora.trigger}, ` : "";
-      prompt = `${trigger}${prompt} <lora:${input.styleLora.name}:${input.styleLora.strength}>`;
-    }
-
     // Style checkpoint override when installed; else keep the user's model.
     let checkpoint = model;
     if (input.styleCheckpoint) {
@@ -100,9 +94,18 @@ export class Automatic1111Backend implements LocalEngineBackend {
       if (resolved) checkpoint = resolved;
     }
 
+    // Format the prompt for the model family: SD models get quality tags + light
+    // identity emphasis + a real negative prompt; Flux gets natural language only.
+    const family = resolveModelFamily(input.modelFamily, checkpoint);
+    let prompt = composeSdPositive(family, input.prompt, input.subjects);
+    if (input.styleLora) {
+      const trigger = input.styleLora.trigger ? `${input.styleLora.trigger}, ` : "";
+      prompt = `${trigger}${prompt} <lora:${input.styleLora.name}:${input.styleLora.strength}>`;
+    }
+
     const body: Record<string, unknown> = {
       prompt,
-      negative_prompt: "",
+      negative_prompt: resolveNegative(family, input.negativePrompt),
       steps,
       cfg_scale: this.cfgScale,
       sampler_name: this.sampler,

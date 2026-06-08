@@ -262,8 +262,15 @@ describe("Automatic1111Backend", () => {
     const out = await backend.generate(imageInput, "sdxl.safetensors [abc]");
 
     expect(transport.requests[0]!.url).toBe("http://127.0.0.1:7860/sdapi/v1/txt2img");
-    const body = transport.requests[0]!.body as { prompt: string; override_settings: { sd_model_checkpoint: string } };
-    expect(body.prompt).toBe("a knight");
+    const body = transport.requests[0]!.body as {
+      prompt: string;
+      negative_prompt: string;
+      override_settings: { sd_model_checkpoint: string };
+    };
+    // SDXL checkpoint → SD formatting: quality preamble + the scene, plus a negative.
+    expect(body.prompt).toContain("a knight");
+    expect(body.prompt).toContain("masterpiece");
+    expect(body.negative_prompt).toContain("bad anatomy");
     expect(body.override_settings.sd_model_checkpoint).toBe("sdxl.safetensors [abc]");
     expect(new TextDecoder().decode(out.bytes)).toBe("A1111");
   });
@@ -589,5 +596,107 @@ describe("createImageProvider local", () => {
     const provider = createImageProvider("local", { engine: { backend, model: "flux-schnell" } });
     await provider.generate(imageInput);
     expect(usedModel).toBe("flux-schnell");
+  });
+});
+
+describe("ComfyUI prompt formatting by family", () => {
+  const png = new TextEncoder().encode("IMG").buffer;
+  function comfyRun() {
+    return new FakeTransport((req) => {
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
+      if (req.url.includes("/history/"))
+        return { json: { p1: { outputs: { "9": { images: [{ filename: "f.png", subfolder: "", type: "output" }] } } } } };
+      return { bytes: png };
+    });
+  }
+  function workflowOf(t: FakeTransport) {
+    const r = t.requests.find((x) => x.url.endsWith("/prompt"))!;
+    return (r.body as { prompt: Record<string, { class_type: string; inputs: Record<string, unknown> }> }).prompt;
+  }
+
+  it("SD checkpoint → quality tags + a real negative prompt", async () => {
+    const t = comfyRun();
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await backend.generate(imageInput, "sd_xl_base_1.0.safetensors");
+    const wf = workflowOf(t);
+    expect(wf["6"]!.inputs.text).toContain("masterpiece");
+    expect(wf["6"]!.inputs.text).toContain("a knight");
+    expect(wf["7"]!.inputs.text).toContain("bad anatomy");
+  });
+
+  it("Flux checkpoint → natural language, empty negative", async () => {
+    const t = comfyRun();
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await backend.generate(imageInput, "flux1-schnell-fp8.safetensors");
+    const wf = workflowOf(t);
+    expect(wf["6"]!.inputs.text).toBe("a knight");
+    expect(wf["7"]!.inputs.text).toBe("");
+  });
+
+  it("modelFamily override forces formatting regardless of the checkpoint name", async () => {
+    const t = comfyRun();
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await backend.generate({ ...imageInput, modelFamily: "sdxl" }, "flux1-schnell-fp8.safetensors");
+    const wf = workflowOf(t);
+    expect(wf["7"]!.inputs.text).toContain("bad anatomy"); // override → treated as SDXL
+  });
+});
+
+describe("ComfyUI IP-Adapter (version-aware, graceful)", () => {
+  const png = new TextEncoder().encode("IMG").buffer;
+  const refInput = {
+    ...imageInput,
+    ipAdapterRefs: [{ bytes: new ArrayBuffer(3), mimeType: "image/png", weight: 0.7 }],
+  };
+  function transportWith(objectInfo: Record<string, unknown>) {
+    return new FakeTransport((req) => {
+      if (req.url.endsWith("/object_info")) return { json: objectInfo };
+      if (req.url.endsWith("/upload/image")) return { json: { name: "vr-ref.png" } };
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
+      if (req.url.includes("/history/"))
+        return { json: { p1: { outputs: { "9": { images: [{ filename: "f.png", subfolder: "", type: "output" }] } } } } };
+      return { bytes: png };
+    });
+  }
+  function workflowOf(t: FakeTransport) {
+    const r = t.requests.find((x) => x.url.endsWith("/prompt"))!;
+    return (r.body as { prompt: Record<string, { class_type: string; inputs: Record<string, unknown> }> }).prompt;
+  }
+
+  it("modern node set → IPAdapterUnifiedLoader + IPAdapterAdvanced wired to the sampler", async () => {
+    const t = transportWith({ IPAdapterAdvanced: { input: {} }, IPAdapterUnifiedLoader: { input: {} } });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await backend.generate(refInput, "sd_xl_base_1.0.safetensors");
+    const wf = workflowOf(t);
+    expect(wf["20"]!.class_type).toBe("IPAdapterUnifiedLoader");
+    expect(wf["22"]!.class_type).toBe("IPAdapterAdvanced");
+    expect(wf["3"]!.inputs.model).toEqual(["22", 0]);
+    expect(t.requests.some((r) => r.url.endsWith("/upload/image"))).toBe(true);
+  });
+
+  it("old node set → IPAdapterModelLoader + CLIPVisionLoader + IPAdapterApply", async () => {
+    const t = transportWith({
+      IPAdapterApply: { input: {} },
+      IPAdapterModelLoader: { input: { required: { ipadapter_file: [["ip-adapter-plus_sd15.safetensors"], {}] } } },
+      CLIPVisionLoader: { input: { required: { clip_name: [["clip_vision_g.safetensors"], {}] } } },
+    });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await backend.generate(refInput, "v1-5-pruned-emaonly-fp16.safetensors");
+    const wf = workflowOf(t);
+    expect(wf["20"]!.class_type).toBe("IPAdapterModelLoader");
+    expect(wf["21"]!.class_type).toBe("CLIPVisionLoader");
+    expect(wf["23"]!.class_type).toBe("IPAdapterApply");
+    expect(wf["3"]!.inputs.model).toEqual(["23", 0]);
+  });
+
+  it("no IP-Adapter nodes installed → seed-only, generation still succeeds", async () => {
+    const t = transportWith({});
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    const out = await backend.generate(refInput, "sd_xl_base_1.0.safetensors");
+    const wf = workflowOf(t);
+    expect(wf["20"]).toBeUndefined(); // no IP-Adapter chain
+    expect(wf["3"]!.inputs.model).toEqual(["4", 0]); // sampler reads the checkpoint directly
+    expect(new TextDecoder().decode(out.bytes)).toBe("IMG");
+    expect(t.requests.some((r) => r.url.endsWith("/upload/image"))).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import type { BookSource } from "./types/book.js";
-import type { CharacterAppearance, VisualBible } from "./types/bible.js";
+import type { CharacterAppearance, IdentityAnchor, VisualBible } from "./types/bible.js";
 import type { ImageResult } from "./types/content.js";
 import type { TierConfig } from "./types/tier.js";
 import { DEFAULT_TIER_CONFIG } from "./types/tier.js";
@@ -97,6 +97,7 @@ export class Engine {
       image: this.opts.image,
       store: this.store,
       tier: this.tier,
+      captureReference: (id, bytes, mimeType) => this.captureCharacterReference(id, bytes, mimeType),
     });
     this.buffer = new RenderBuffer({
       totalPages: book.pages.length,
@@ -229,6 +230,31 @@ export class Engine {
   }
 
   /**
+   * Save a just-rendered solo frame as a character's reference image (for
+   * IP-Adapter), set it on the bible's anchor, and persist. Called by the pipeline
+   * the first time a character appears alone.
+   */
+  private async captureCharacterReference(
+    characterId: string,
+    bytes: ArrayBuffer,
+    mimeType: string,
+  ): Promise<void> {
+    if (!this.book || !this.bible) return;
+    const refId = `${this.book.id}:charref:${characterId}`;
+    await this.store.putImage(refId, bytes, mimeType);
+    this.bible = {
+      ...this.bible,
+      characters: this.bible.characters.map((c) =>
+        c.id === characterId && !c.anchor.referenceImageId
+          ? { ...c, anchor: { ...c.anchor, referenceImageId: refId } }
+          : c,
+      ),
+    };
+    await this.store.putBible(this.bible);
+    this.opts.onBibleUpdate?.(this.bible);
+  }
+
+  /**
    * Apply a user correction to one character in the bible and persist it. This is
    * "save only": cached images are NOT re-rendered — the edit takes effect on the
    * next render (or when the user hits a regenerate button), keeping the user in
@@ -236,6 +262,9 @@ export class Engine {
    */
   async updateCharacter(characterId: string, patch: CharacterPatch): Promise<void> {
     if (!this.bible) return;
+    // A look change makes any captured reference image stale → drop it so a fresh
+    // one is recaptured on the next solo render.
+    const looksChanged = patch.appearance !== undefined || patch.clothing !== undefined;
     const characters = this.bible.characters.map((c) =>
       c.id === characterId
         ? {
@@ -249,6 +278,7 @@ export class Engine {
             ...(patch.appearance !== undefined
               ? { appearance: { ...c.appearance, ...patch.appearance } }
               : {}),
+            ...(looksChanged ? { anchor: dropReference(c.anchor) } : {}),
           }
         : c,
     );
@@ -338,6 +368,12 @@ export class Engine {
   resultFor(pageIndex: number): ImageResult | undefined {
     return this.buffer?.resultOf(pageIndex);
   }
+}
+
+/** An identity anchor with any captured reference image dropped (look changed). */
+function dropReference(anchor: IdentityAnchor): IdentityAnchor {
+  const { referenceImageId: _drop, ...rest } = anchor;
+  return rest;
 }
 
 /** Mark a chapter processed without adding entities (used when extraction fails). */

@@ -63,11 +63,13 @@ export const EXTRACTION_SYSTEM =
 
 export const PROMPT_SYSTEM =
   "You write one vivid, concrete image-generation prompt for a single illustration of a " +
-  "book chapter. Depict the most important action of the supplied passage, framed by the " +
-  "chapter's key moment. Set the image in ONE coherent location — the place where the " +
-  "passage's action occurs; if the chapter or passage moves between places, choose the " +
-  "single location of the depicted moment and NEVER combine two settings into one picture. " +
-  "Keep every character's appearance and OUTFIT, and the setting's look and fashion, " +
+  "book chapter. Write it as a single paragraph of natural, descriptive language (NOT a " +
+  "list of tags, no weighting syntax, no markdown) — lead with the subject and action, " +
+  "then the setting, then mood/lighting. Depict the most important action of the supplied " +
+  "passage, framed by the chapter's key moment. Set the image in ONE coherent location — the " +
+  "place where the passage's action occurs; if the chapter or passage moves between places, " +
+  "choose the single location of the depicted moment and NEVER combine two settings into one " +
+  "picture. Keep every character's appearance and OUTFIT, and the setting's look and fashion, " +
   "consistent with the supplied Visual Bible, and consistent with the story so far. " +
   "Output only the prompt text, no preamble.";
 

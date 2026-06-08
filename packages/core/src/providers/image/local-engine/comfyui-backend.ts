@@ -1,5 +1,6 @@
 import { DirectTransport, type Transport } from "../../transport/transport.js";
 import type { ImageGenerationInput, ImageGenerationOutput } from "../image-provider.js";
+import { composeSdPositive, resolveModelFamily, resolveNegative } from "../sd-prompt.js";
 import type { LocalEngineBackend, LocalModelDescriptor } from "./backend.js";
 
 /**
@@ -32,6 +33,25 @@ interface LoraObjectInfo {
   LoraLoader?: { input?: { required?: { lora_name?: [string[], unknown] } } };
 }
 
+/** What the connected ComfyUI offers for IP-Adapter (null = not usable). */
+interface IpAdapterCaps {
+  /** Which apply node is installed (input keys differ between versions). */
+  apply: "advanced" | "apply";
+  /** Modern path: IPAdapterUnifiedLoader bundles ipadapter + clip-vision. */
+  unified: boolean;
+  /** Classic path needs an explicit ipadapter model + clip-vision model. */
+  ipadapterModel?: string;
+  clipVisionModel?: string;
+}
+
+/** Uploaded reference image, as ComfyUI's LoadImage refers to it. */
+interface UploadedImage {
+  name: string;
+}
+
+type NodeSchema = { input?: { required?: Record<string, unknown> } };
+type ObjectInfoNodes = Record<string, NodeSchema | undefined>;
+
 interface PromptResponse {
   prompt_id: string;
 }
@@ -54,6 +74,8 @@ export class ComfyUIBackend implements LocalEngineBackend {
   private readonly pollIntervalMs: number;
   private readonly maxPolls: number;
   private lorasCache?: Promise<Set<string>>;
+  private ipAdapterCache?: Promise<IpAdapterCaps | null>;
+  private warnedNoIpAdapter = false;
 
   constructor(opts: ComfyUIBackendOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, "");
@@ -94,6 +116,54 @@ export class ComfyUIBackend implements LocalEngineBackend {
     return this.lorasCache;
   }
 
+  /**
+   * Detect IP-Adapter support, tolerating ComfyUI_IPAdapter_plus version drift.
+   * Returns the usable node set (preferring the modern UnifiedLoader/Advanced
+   * path) or null when nothing usable is installed. Cached.
+   */
+  private availableIpAdapter(): Promise<IpAdapterCaps | null> {
+    if (!this.ipAdapterCache) {
+      this.ipAdapterCache = (async () => {
+        try {
+          const res = await this.transport.send({ url: `${this.baseUrl}/object_info`, method: "GET" });
+          if (!res.ok) return null;
+          const nodes = await res.json<ObjectInfoNodes>();
+          const has = (n: string): boolean => Boolean(nodes[n]);
+          const apply: IpAdapterCaps["apply"] | undefined = has("IPAdapterAdvanced")
+            ? "advanced"
+            : has("IPAdapterApply")
+              ? "apply"
+              : undefined;
+          if (!apply) return null;
+          // Modern path: one UnifiedLoader bundles the ipadapter + clip-vision models.
+          if (has("IPAdapterUnifiedLoader")) return { apply, unified: true };
+          // Classic path: needs explicit model loaders + at least one of each model.
+          if (has("IPAdapterModelLoader") && has("CLIPVisionLoader")) {
+            const ip = firstEnum(nodes.IPAdapterModelLoader, "ipadapter_file");
+            const cv = firstEnum(nodes.CLIPVisionLoader, "clip_name");
+            if (ip && cv) return { apply, unified: false, ipadapterModel: ip, clipVisionModel: cv };
+          }
+          return null;
+        } catch {
+          return null;
+        }
+      })();
+    }
+    return this.ipAdapterCache;
+  }
+
+  /** Upload a reference image to ComfyUI's input folder; returns its LoadImage name. */
+  private async uploadReference(bytes: ArrayBuffer, mimeType: string, name: string): Promise<string> {
+    const res = await this.transport.send({
+      url: `${this.baseUrl}/upload/image`,
+      method: "POST",
+      form: { field: "image", bytes, filename: name, contentType: mimeType || "image/png" },
+    });
+    if (!res.ok) throw new Error(`ComfyUI upload failed with status ${res.status}`);
+    const data = await res.json<UploadedImage>();
+    return data.name ?? name;
+  }
+
   async generate(input: ImageGenerationInput, model: string): Promise<ImageGenerationOutput> {
     const seed = input.anchors[0]?.seed ?? Math.floor(Math.random() * 1_000_000_000);
     const steps =
@@ -107,8 +177,13 @@ export class ComfyUIBackend implements LocalEngineBackend {
       if (resolved) checkpoint = resolved;
     }
 
+    // Format for the model family: SD models get quality tags + identity emphasis
+    // + a real negative prompt; Flux gets natural language and no negative.
+    const family = resolveModelFamily(input.modelFamily, checkpoint);
+    let prompt = composeSdPositive(family, input.prompt, input.subjects);
+    const negative = resolveNegative(family, input.negativePrompt);
+
     // Style LoRA (only when installed); prepend any trigger words to the prompt.
-    let prompt = input.prompt;
     let lora: { name: string; strength: number } | undefined;
     if (input.styleLora) {
       const resolved = resolveAssetName(await this.availableLoras(), input.styleLora.name);
@@ -118,14 +193,41 @@ export class ComfyUIBackend implements LocalEngineBackend {
       }
     }
 
+    // IP-Adapter character consistency — only when refs are passed AND the nodes/
+    // models are installed; otherwise render seed-only (graceful, never an error).
+    let ipAdapter: IpAdapterGraph | undefined;
+    if (input.ipAdapterRefs && input.ipAdapterRefs.length > 0) {
+      const caps = await this.availableIpAdapter();
+      if (caps) {
+        try {
+          const refs: { filename: string; weight: number }[] = [];
+          for (let i = 0; i < input.ipAdapterRefs.length; i++) {
+            const ref = input.ipAdapterRefs[i]!;
+            const filename = await this.uploadReference(ref.bytes, ref.mimeType, `vr-ref-${seed}-${i}.png`);
+            refs.push({ filename, weight: ref.weight });
+          }
+          ipAdapter = { caps, refs };
+        } catch {
+          ipAdapter = undefined; // upload failed → fall back to seed-only
+        }
+      } else if (!this.warnedNoIpAdapter) {
+        this.warnedNoIpAdapter = true;
+        console.info(
+          "[visual-reader] ComfyUI IP-Adapter nodes/models not installed — using seed-only character consistency.",
+        );
+      }
+    }
+
     const workflow = buildWorkflow({
       model: checkpoint,
       prompt,
+      negative,
       seed,
       steps,
       width: input.width ?? 1024,
       height: input.height ?? 1024,
       ...(lora ? { lora } : {}),
+      ...(ipAdapter ? { ipAdapter } : {}),
     });
 
     // Best-effort live progress: ComfyUI broadcasts per-step `progress` messages
@@ -218,23 +320,33 @@ export class ComfyUIBackend implements LocalEngineBackend {
   }
 }
 
+/** IP-Adapter inputs for the graph builder (already-uploaded reference filenames). */
+interface IpAdapterGraph {
+  caps: IpAdapterCaps;
+  refs: { filename: string; weight: number }[];
+}
+
 interface WorkflowParams {
   model: string;
   prompt: string;
+  /** Negative prompt (empty for Flux). */
+  negative: string;
   seed: number;
   steps: number;
   width: number;
   height: number;
   /** Optional style LoRA, inserted as a LoraLoader between checkpoint and sampler. */
   lora?: { name: string; strength: number };
+  /** Optional IP-Adapter conditioning (character reference images). */
+  ipAdapter?: IpAdapterGraph;
 }
 
-/** Minimal txt2img ComfyUI graph (checkpoint → [LoRA] → CLIP → sampler → VAE → save). */
+/** Minimal txt2img ComfyUI graph (checkpoint → [LoRA] → [IP-Adapter] → sampler → VAE → save). */
 function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
   // With a LoRA, the sampler model + CLIP encoders read from the LoraLoader ("10")
   // instead of the checkpoint ("4") directly.
-  const modelRef = p.lora ? ["10", 0] : ["4", 0];
-  const clipRef = p.lora ? ["10", 1] : ["4", 1];
+  const modelRef: [string, number] = p.lora ? ["10", 0] : ["4", 0];
+  const clipRef: [string, number] = p.lora ? ["10", 1] : ["4", 1];
   const graph: Record<string, unknown> = {
     "3": {
       class_type: "KSampler",
@@ -257,7 +369,7 @@ function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
       inputs: { width: p.width, height: p.height, batch_size: 1 },
     },
     "6": { class_type: "CLIPTextEncode", inputs: { text: p.prompt, clip: clipRef } },
-    "7": { class_type: "CLIPTextEncode", inputs: { text: "", clip: clipRef } },
+    "7": { class_type: "CLIPTextEncode", inputs: { text: p.negative, clip: clipRef } },
     "8": { class_type: "VAEDecode", inputs: { samples: ["3", 0], vae: ["4", 2] } },
     "9": { class_type: "SaveImage", inputs: { filename_prefix: "visual-reader", images: ["8", 0] } },
   };
@@ -273,7 +385,106 @@ function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
       },
     };
   }
+  if (p.ipAdapter && p.ipAdapter.refs.length > 0) {
+    // Chain one apply node per reference, threading MODEL through; the final
+    // node's MODEL output feeds the sampler. Branch on the detected node version.
+    const ks = graph["3"] as { inputs: Record<string, unknown> };
+    ks.inputs.model = p.ipAdapter.caps.unified
+      ? addUnifiedIpAdapter(graph, p.ipAdapter, modelRef)
+      : addClassicIpAdapter(graph, p.ipAdapter, modelRef);
+  }
   return graph;
+}
+
+/** Modern path: IPAdapterUnifiedLoader (bundles ipadapter + clip-vision) → IPAdapterAdvanced. */
+function addUnifiedIpAdapter(
+  graph: Record<string, unknown>,
+  ip: IpAdapterGraph,
+  baseModel: [string, number],
+): [string, number] {
+  graph["20"] = {
+    class_type: "IPAdapterUnifiedLoader",
+    inputs: { model: baseModel, preset: "PLUS (high strength)" },
+  };
+  let current: [string, number] = ["20", 0];
+  ip.refs.forEach((ref, i) => {
+    const imgId = String(21 + i * 2);
+    const applyId = String(22 + i * 2);
+    graph[imgId] = { class_type: "LoadImage", inputs: { image: ref.filename } };
+    graph[applyId] = {
+      class_type: "IPAdapterAdvanced",
+      inputs: {
+        model: current,
+        ipadapter: ["20", 1],
+        image: [imgId, 0],
+        weight: ref.weight,
+        weight_type: "linear",
+        start_at: 0,
+        end_at: 1,
+      },
+    };
+    current = [applyId, 0];
+  });
+  return current;
+}
+
+/** Classic path: IPAdapterModelLoader + CLIPVisionLoader → IPAdapterApply/Advanced. */
+function addClassicIpAdapter(
+  graph: Record<string, unknown>,
+  ip: IpAdapterGraph,
+  baseModel: [string, number],
+): [string, number] {
+  graph["20"] = {
+    class_type: "IPAdapterModelLoader",
+    inputs: { ipadapter_file: ip.caps.ipadapterModel },
+  };
+  graph["21"] = {
+    class_type: "CLIPVisionLoader",
+    inputs: { clip_name: ip.caps.clipVisionModel },
+  };
+  let current: [string, number] = baseModel;
+  ip.refs.forEach((ref, i) => {
+    const imgId = String(22 + i * 2);
+    const applyId = String(23 + i * 2);
+    graph[imgId] = { class_type: "LoadImage", inputs: { image: ref.filename } };
+    graph[applyId] =
+      ip.caps.apply === "advanced"
+        ? {
+            class_type: "IPAdapterAdvanced",
+            inputs: {
+              model: current,
+              ipadapter: ["20", 0],
+              image: [imgId, 0],
+              clip_vision: ["21", 0],
+              weight: ref.weight,
+              weight_type: "linear",
+              start_at: 0,
+              end_at: 1,
+            },
+          }
+        : {
+            class_type: "IPAdapterApply",
+            inputs: {
+              ipadapter: ["20", 0],
+              clip_vision: ["21", 0],
+              image: [imgId, 0],
+              model: current,
+              weight: ref.weight,
+            },
+          };
+    current = [applyId, 0];
+  });
+  return current;
+}
+
+/** First value of a node's required enum input (e.g. an installed model name). */
+function firstEnum(node: NodeSchema | undefined, key: string): string | undefined {
+  const spec = node?.input?.required?.[key];
+  if (Array.isArray(spec) && Array.isArray(spec[0])) {
+    const first = (spec[0] as unknown[])[0];
+    return typeof first === "string" ? first : undefined;
+  }
+  return undefined;
 }
 
 /** Match a wanted asset (e.g. "anime") against engine names ("anime.safetensors"). */

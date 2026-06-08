@@ -1,5 +1,5 @@
 import type { BookSource, Page } from "../types/book.js";
-import type { VisualBible, IdentityAnchor } from "../types/bible.js";
+import type { Character, VisualBible } from "../types/bible.js";
 import type { ImageResult, VisualRequest } from "../types/content.js";
 import type { TierConfig } from "../types/tier.js";
 import type { LLMProvider } from "../providers/llm/llm-provider.js";
@@ -30,6 +30,12 @@ export interface PipelineDeps {
   image: ImageProvider;
   store: VisualReaderStore;
   tier: TierConfig;
+  /**
+   * Capture a just-rendered solo-character frame as that character's reference
+   * image (for IP-Adapter). Called only when exactly one character is present and
+   * they have no reference yet. The engine persists it onto the bible.
+   */
+  captureReference?: (characterId: string, bytes: ArrayBuffer, mimeType: string) => void | Promise<void>;
 }
 
 export class RenderPipeline {
@@ -109,10 +115,17 @@ export class RenderPipeline {
     }
 
     try {
+      const bible = this.deps.getBible();
       const style = getImageStyle(this.deps.tier.style);
-      const basePrompt = await this.deps.llm.buildImagePrompt(request, this.deps.getBible());
+      const basePrompt = await this.deps.llm.buildImagePrompt(request, bible);
       const prompt = style.promptSuffix ? `${basePrompt}\n\nStyle: ${style.promptSuffix}` : basePrompt;
-      const anchors = this.anchorsFor(request);
+      const present = bible.characters.filter((c) => request.characterIds.includes(c.id));
+      const anchors = present.map((c) => c.anchor);
+      // Identity emphasis (SD-only, applied by the backend) — every present
+      // character, so consistency never depends on having a reference image.
+      const subjects = present.map(buildSubject);
+      // Reference images for IP-Adapter (ComfyUI uses them when installed).
+      const ipAdapterRefs = await this.referenceImagesFor(present);
       // Local engines additionally apply a style LoRA/checkpoint when installed.
       const local = this.deps.tier.tier === "local" ? style.local : undefined;
       // Resolved quality profile → steps + resolution (more pages/image = higher).
@@ -126,9 +139,16 @@ export class RenderPipeline {
         ...(profile ? { steps: profile.steps, width: profile.width, height: profile.height } : {}),
         ...(local?.lora ? { styleLora: local.lora } : {}),
         ...(local?.checkpoint ? { styleCheckpoint: local.checkpoint } : {}),
+        ...(this.deps.tier.imageModelFamily ? { modelFamily: this.deps.tier.imageModelFamily } : {}),
+        ...(subjects.length ? { subjects } : {}),
+        ...(ipAdapterRefs.length ? { ipAdapterRefs } : {}),
         ...(onProgress ? { onProgress } : {}),
       });
       await this.deps.store.putImage(requestId, output.bytes, output.mimeType);
+      // Capture a clean solo frame as this character's reference (first time only).
+      if (this.deps.captureReference && present.length === 1 && !present[0]!.anchor.referenceImageId) {
+        await this.deps.captureReference(present[0]!.id, output.bytes, output.mimeType);
+      }
       return {
         requestId,
         pageId: request.pageId,
@@ -146,10 +166,33 @@ export class RenderPipeline {
     }
   }
 
-  private anchorsFor(request: VisualRequest): IdentityAnchor[] {
-    return this.deps
-      .getBible()
-      .characters.filter((c) => request.characterIds.includes(c.id))
-      .map((c) => c.anchor);
+  /** Resolve stored reference images for characters that have one. */
+  private async referenceImagesFor(
+    present: Character[],
+  ): Promise<{ bytes: ArrayBuffer; mimeType: string; weight: number }[]> {
+    const refs: { bytes: ArrayBuffer; mimeType: string; weight: number }[] = [];
+    for (const c of present) {
+      const id = c.anchor.referenceImageId;
+      if (!id) continue;
+      const img = await this.deps.store.getImage(id);
+      if (img) refs.push({ bytes: img.bytes, mimeType: img.mimeType, weight: 0.7 });
+    }
+    return refs;
   }
+}
+
+/** Structured identity for SD weighting emphasis; never empty (always has a name). */
+function buildSubject(c: Character): { name: string; features: string; outfit: string } {
+  const a = c.appearance;
+  const fields: string[] = [];
+  if (a) {
+    for (const v of [a.gender, a.age, a.hair, a.eyes, a.build, a.height, a.skinTone, a.distinguishingMarks]) {
+      if (v && v.trim()) fields.push(v.trim());
+    }
+  }
+  // Fall back to free-form traits when the text never gave structured appearance.
+  if (fields.length === 0) {
+    for (const t of c.persistentTraits) if (t && t.trim()) fields.push(t.trim());
+  }
+  return { name: c.name, features: fields.join(", "), outfit: c.clothing.join(", ") };
 }

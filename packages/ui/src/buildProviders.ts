@@ -94,6 +94,9 @@ export function buildProviders(
             : "cinematic",
       renderQuality: resolveQuality(settings.imageQuality, settings.pagesPerImage ?? 3),
       style: settings.imageStyle ?? "auto",
+      ...(settings.imageModelFamily && settings.imageModelFamily !== "auto"
+        ? { imageModelFamily: settings.imageModelFamily }
+        : {}),
     },
   };
 }

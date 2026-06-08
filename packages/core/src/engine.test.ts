@@ -311,6 +311,42 @@ describe("Engine", () => {
     const persisted = await store.getBible("book-1");
     expect(persisted!.characters.find((c) => c.id === aria.id)!.appearance.hair).toBe("silver");
   });
+
+  it("captures a solo character's reference image on first render, and clears it on edit", async () => {
+    const store = new InMemoryStore();
+    const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });
+    await engine.openBook(sampleBook()); // page 0 features only "Aria"
+    engine.startGeneration();
+    engine.goToPage(0);
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+
+    // A solo frame became Aria's reference image (stored + recorded on the anchor).
+    let aria: { id: string; anchor: { referenceImageId?: string } } | undefined;
+    await vi.waitFor(() => {
+      aria = engine.getBible()!.characters.find((c) => c.name === "Aria");
+      expect(aria?.anchor.referenceImageId).toBe("book-1:charref:char-aria");
+    });
+    expect(await store.getImage("book-1:charref:char-aria")).toBeDefined();
+
+    // Editing the look drops the now-stale reference.
+    await engine.updateCharacter(aria!.id, { appearance: { hair: "blue" } });
+    expect(
+      engine.getBible()!.characters.find((c) => c.id === aria!.id)!.anchor.referenceImageId,
+    ).toBeUndefined();
+  });
+
+  it("passes a non-empty subject (name fallback) for every present character", async () => {
+    const image = new MockImageProvider();
+    const genSpy = vi.spyOn(image, "generate");
+    const engine = new Engine({ llm: new MockLLMProvider(), image });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    engine.goToPage(0);
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+
+    const call = genSpy.mock.calls.find((c) => (c[0].subjects?.length ?? 0) > 0);
+    expect(call?.[0].subjects?.[0]?.name).toBe("Aria");
+  });
 });
 
 function twoChapterBook(): BookSource {

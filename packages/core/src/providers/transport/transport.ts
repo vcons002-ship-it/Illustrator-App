@@ -13,6 +13,12 @@ export interface TransportRequest {
   headers?: Record<string, string>;
   /** JSON-serialisable body. */
   body?: unknown;
+  /**
+   * Multipart file upload (e.g. ComfyUI `/upload/image`). When set, `body` is
+   * ignored and the request is sent as `multipart/form-data` with this one file
+   * field; `fetch` sets the boundary. Used by the local ComfyUI IP-Adapter path.
+   */
+  form?: { field: string; bytes: ArrayBuffer; filename: string; contentType: string };
 }
 
 export interface TransportResponse {
@@ -43,15 +49,24 @@ export class DirectTransport implements Transport {
   }
 
   async send(request: TransportRequest): Promise<TransportResponse> {
-    const init: RequestInit = {
-      method: request.method ?? "POST",
-      headers: {
-        "content-type": "application/json",
-        ...request.headers,
-      },
-    };
-    if (request.body !== undefined) {
-      init.body = JSON.stringify(request.body);
+    let init: RequestInit;
+    if (request.form) {
+      // Multipart upload: let fetch set the content-type boundary (don't force JSON).
+      const fd = new FormData();
+      fd.append(
+        request.form.field,
+        new Blob([request.form.bytes], { type: request.form.contentType }),
+        request.form.filename,
+      );
+      init = { method: request.method ?? "POST", headers: { ...request.headers }, body: fd };
+    } else {
+      init = {
+        method: request.method ?? "POST",
+        headers: { "content-type": "application/json", ...request.headers },
+      };
+      if (request.body !== undefined) {
+        init.body = JSON.stringify(request.body);
+      }
     }
     const res = await this.fetchImpl(request.url, init);
     return {

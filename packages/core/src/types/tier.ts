@@ -22,6 +22,12 @@ export interface TierConfig {
   renderQuality?: "draft" | "standard" | "high" | "ultra";
   /** Art-style id (see catalog `IMAGE_STYLES`); its prompt suffix is appended. */
   style?: string;
+  /**
+   * Manual image model-family override for SD prompt formatting (Settings). When
+   * unset, the local backends auto-detect from the checkpoint. Cloud providers
+   * ignore it (they always use natural language).
+   */
+  imageModelFamily?: "sd15" | "sdxl" | "flux";
 }
 
 export const DEFAULT_TIER_CONFIG: TierConfig = {

@@ -59,6 +59,12 @@ export interface ReaderSettings {
   /** Art style id applied to every illustration (see catalog IMAGE_STYLES). */
   imageStyle?: string;
   /**
+   * Force the local image model family for prompt formatting when auto-detection
+   * from the checkpoint name is wrong. "auto" (default) detects it. SD families get
+   * quality tags + a negative prompt; Flux gets plain natural language.
+   */
+  imageModelFamily?: "auto" | "sd15" | "sdxl" | "flux";
+  /**
    * How many pages share one illustration: any positive number, or a whole
    * "chapter". A group never crosses a chapter boundary, so a number larger than
    * a chapter's page count just yields one image for that chapter. Fewer pages →
@@ -243,6 +249,24 @@ export function SettingsPanel({
               ))}
             </select>
           </label>
+
+          {value.imageProvider === "local" && (
+            <label style={rowStyle}>
+              <span>Model family (local)</span>
+              <select
+                value={value.imageModelFamily ?? "auto"}
+                onChange={(e) =>
+                  set({ imageModelFamily: e.target.value as "auto" | "sd15" | "sdxl" | "flux" })
+                }
+                title="How prompts are formatted. Auto detects from the checkpoint name. SD1.5/SDXL get quality tags + a negative prompt; Flux gets plain natural language. Override if auto-detection is wrong."
+              >
+                <option value="auto">Auto-detect</option>
+                <option value="sd15">Stable Diffusion 1.5</option>
+                <option value="sdxl">SDXL</option>
+                <option value="flux">Flux</option>
+              </select>
+            </label>
+          )}
 
           <div style={rowStyle}>
             <span>Pages per image</span>

@@ -111,6 +111,8 @@ export interface LocalModelCatalogEntry {
   filename: string;
   /** Direct download URL for the .safetensors checkpoint. */
   url: string;
+  /** Model family — authoritative for prompt formatting (SD tags vs natural language). */
+  family: "sd15" | "sdxl" | "flux";
 }
 
 export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
@@ -121,6 +123,7 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
     note: "Fastest · runs on modest GPUs",
     filename: "v1-5-pruned-emaonly-fp16.safetensors",
     url: "https://huggingface.co/Comfy-Org/stable-diffusion-v1-5-archive/resolve/main/v1-5-pruned-emaonly-fp16.safetensors",
+    family: "sd15",
   },
   {
     id: "sdxl",
@@ -129,6 +132,7 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
     note: "Balanced quality",
     filename: "sd_xl_base_1.0.safetensors",
     url: "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors",
+    family: "sdxl",
   },
   {
     id: "sdxl-turbo",
@@ -137,6 +141,7 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
     note: "Fast SDXL · few-step",
     filename: "sd_xl_turbo_1.0_fp16.safetensors",
     url: "https://huggingface.co/stabilityai/sdxl-turbo/resolve/main/sd_xl_turbo_1.0_fp16.safetensors",
+    family: "sdxl",
   },
   {
     id: "flux-schnell",
@@ -145,8 +150,18 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
     note: "Highest quality · needs a strong GPU",
     filename: "flux1-schnell-fp8.safetensors",
     url: "https://huggingface.co/Comfy-Org/flux1-schnell/resolve/main/flux1-schnell-fp8.safetensors",
+    family: "flux",
   },
 ];
+
+/** Family of a managed catalog model, matched by id or filename (else undefined). */
+export function catalogModelFamily(name: string): "sd15" | "sdxl" | "flux" | undefined {
+  const n = name.toLowerCase();
+  const hit = LOCAL_IMAGE_MODELS.find(
+    (m) => m.id.toLowerCase() === n || m.filename.toLowerCase() === n,
+  );
+  return hit?.family;
+}
 
 /**
  * Art-style catalog for the image style selector. The chosen style's
