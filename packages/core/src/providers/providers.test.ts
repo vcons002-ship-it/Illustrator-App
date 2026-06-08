@@ -407,6 +407,27 @@ describe("WebLLMProvider (injected completion, no WebGPU)", () => {
     expect(prompt).toBe("a vivid scene");
   });
 
+  it("reports live token activity for bible extraction and prompt writing", async () => {
+    const activity: Array<{ phase: string; tokens: number }> = [];
+    const complete = async (
+      _messages: unknown,
+      opts: { json: boolean; onToken?: (n: number) => void },
+    ): Promise<string> => {
+      opts.onToken?.(1);
+      opts.onToken?.(2);
+      opts.onToken?.(3);
+      return JSON.stringify({ characters: [], environments: [], spoilers: [] });
+    };
+    const provider = new WebLLMProvider({ complete, onActivity: (a) => activity.push(a) });
+
+    await provider.extractEntities({ bookId: "b", chapterIndex: 0, chapterText: "x", existing: emptyBible("b") });
+    expect(activity).toContainEqual({ phase: "bible", tokens: 3 });
+
+    activity.length = 0;
+    await provider.buildImagePrompt(req, emptyBible("b"));
+    expect(activity).toContainEqual({ phase: "prompt", tokens: 3 });
+  });
+
   it("degrades to the mock when the model errors (no GPU)", async () => {
     const provider = new WebLLMProvider({
       complete: async () => {

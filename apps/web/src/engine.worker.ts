@@ -33,6 +33,47 @@ function beginGeneration(): void {
   }
 }
 
+// --- Live Visual Bible status ---------------------------------------------
+// A single chapter's extraction is one (slow) LLM call, so without sub-step
+// feedback it looks frozen. We show the chapter, an elapsed-seconds ticker, and
+// the streamed token count so progress (or a stall) is always visible.
+let bibleActive = false;
+let bibleBase = "";
+let bibleTokens = 0;
+let bibleStartMs = 0;
+let bibleTimer: ReturnType<typeof setInterval> | undefined;
+
+function renderBibleStatus(): void {
+  if (!bibleActive) return;
+  const secs = Math.round((Date.now() - bibleStartMs) / 1000);
+  const detail = bibleTokens > 0 ? `${bibleTokens} tokens` : "analyzing";
+  post({ type: "status", message: `${bibleBase} · ${secs}s · ${detail}` });
+}
+
+function stopBibleTimer(): void {
+  if (bibleTimer !== undefined) {
+    clearInterval(bibleTimer);
+    bibleTimer = undefined;
+  }
+}
+
+function setBibleChapter(done: number, total: number): void {
+  if (total <= 0 || done >= total) {
+    bibleActive = false;
+    bibleTokens = 0;
+    stopBibleTimer();
+    post({ type: "status", message: "" });
+    return;
+  }
+  bibleActive = true;
+  bibleBase = `Building the Visual Bible… chapter ${done + 1}/${total} (illustrating as chapters finish)`;
+  bibleTokens = 0;
+  bibleStartMs = Date.now();
+  stopBibleTimer();
+  bibleTimer = setInterval(renderBibleStatus, 1000);
+  renderBibleStatus();
+}
+
 ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
   const msg = event.data;
   switch (msg.type) {
@@ -78,8 +119,21 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     post({ type: "status", message: "" });
     post({ type: "generating", value: false });
     pendingStart = false; // fresh open; the hook re-sends "start" if it should resume
+    bibleActive = false;
+    stopBibleTimer();
     const { llm, image, tier, diagnostics } = buildProviders(settings, {
       onLocalStatus: (message) => post({ type: "status", message: message || "Building the Visual Bible…" }),
+      onLocalActivity: (activity) => {
+        // Live token count during on-device generation. Bible tokens enrich the
+        // bible status line; prompt-writing tokens show only when the bible isn't
+        // claiming the line (so the two never fight over it).
+        if (activity.phase === "bible") {
+          bibleTokens = activity.tokens;
+          renderBibleStatus();
+        } else if (!bibleActive && activity.tokens > 0) {
+          post({ type: "status", message: `Writing the illustration prompt… ${activity.tokens} tokens` });
+        }
+      },
     });
     post({ type: "providers", diagnostics });
     engine = new Engine({
@@ -90,18 +144,17 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
       onUpdate: (pageIndex, result) => {
         const transfer = result.image ? [result.image.bytes] : [];
         post({ type: "update", pageIndex, result }, transfer);
+        // Image generation has begun/finished → the prompt is written; clear the
+        // transient "writing prompt" line (unless the bible owns the status line).
+        if (
+          !bibleActive &&
+          (result.status === "ready" ||
+            (result.status === "rendering" && result.progress !== undefined))
+        ) {
+          post({ type: "status", message: "" });
+        }
       },
-      onBibleProgress: (done, total) => {
-        // Clear the status line once extraction is done (or nothing to do); else
-        // show which chapter is being analyzed. Rendering runs alongside this.
-        post({
-          type: "status",
-          message:
-            total <= 0 || done >= total
-              ? ""
-              : `Building the Visual Bible… chapter ${done + 1}/${total} (illustrating as chapters finish)`,
-        });
-      },
+      onBibleProgress: (done, total) => setBibleChapter(done, total),
       // The bible builds in the background; relay each growth so the UI's
       // character/spoiler context (and the panel) stay current.
       onBibleUpdate: (bible) => post({ type: "opened", bible }),

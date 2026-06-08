@@ -9,6 +9,7 @@ import {
   createImageProvider,
   createLLMProvider,
   getProvider,
+  type GenerationActivity,
   type ImageProvider,
   type LLMProvider,
   type LocalEngineBackend,
@@ -39,6 +40,8 @@ export interface BuildProvidersOptions {
   fetch?: typeof fetch;
   /** Status line for local-model loading (on-device LLM download/progress). */
   onLocalStatus?: (text: string) => void;
+  /** Live token progress during on-device generation (bible/prompt), for the UI. */
+  onLocalActivity?: (activity: GenerationActivity) => void;
 }
 
 /** One slot's resolved state, for the status badge. */
@@ -72,7 +75,7 @@ export function buildProviders(
   opts: BuildProvidersOptions = {},
 ): { llm: LLMProvider; image: ImageProvider; tier: TierConfig; diagnostics: ProvidersDiagnostics } {
   const transport: Transport | undefined = opts.fetch ? new DirectTransport(opts.fetch) : undefined;
-  const llm = buildLLM(settings, transport, opts.fetch, opts.onLocalStatus);
+  const llm = buildLLM(settings, transport, opts.fetch, opts.onLocalStatus, opts.onLocalActivity);
   const image = buildImage(settings, transport);
   return {
     llm: llm.provider,
@@ -100,6 +103,7 @@ function buildLLM(
   transport: Transport | undefined,
   fetchImpl: typeof fetch | undefined,
   onLocalStatus: ((text: string) => void) | undefined,
+  onLocalActivity: ((activity: GenerationActivity) => void) | undefined,
 ): BuiltLLM {
   const id = settings.textProvider;
   if (id === "local") {
@@ -170,6 +174,7 @@ function buildLLM(
                 ),
             }
           : {}),
+        ...(onLocalActivity ? { onActivity: onLocalActivity } : {}),
       }),
       diag: {
         id: "local",

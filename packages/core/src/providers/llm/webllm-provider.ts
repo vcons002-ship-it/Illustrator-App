@@ -31,13 +31,26 @@ export interface ChatMessage {
 }
 
 /** Completion seam: returns the assistant text for the given messages. */
-export type ChatComplete = (messages: ChatMessage[], opts: { json: boolean }) => Promise<string>;
+export type ChatComplete = (
+  messages: ChatMessage[],
+  opts: { json: boolean; onToken?: (count: number) => void },
+) => Promise<string>;
+
+/** Live generation activity, so the UI can show the model is making progress. */
+export interface GenerationActivity {
+  /** Which step is running: Visual Bible extraction, or an image prompt. */
+  phase: "bible" | "prompt";
+  /** Tokens produced so far in the current completion. */
+  tokens: number;
+}
 
 export interface WebLLMProviderOptions {
   /** WebLLM prebuilt model id (see catalog `LOCAL_TEXT_MODELS`). */
   model?: string;
   /** Model download/load progress (0..1 + a status string). */
   onProgress?: (report: { progress: number; text: string }) => void;
+  /** Live token progress during generation (bible extraction / prompt writing). */
+  onActivity?: (activity: GenerationActivity) => void;
   /** Test/override seam: supply a completion fn instead of loading WebLLM. */
   complete?: ChatComplete;
 }
@@ -73,12 +86,14 @@ export class WebLLMProvider implements LLMProvider {
   readonly id = "local";
   private readonly model: string;
   private readonly onProgress: ((r: { progress: number; text: string }) => void) | undefined;
+  private readonly onActivity: ((a: GenerationActivity) => void) | undefined;
   private readonly injected: ChatComplete | undefined;
   private readonly fallback = new MockLLMProvider();
 
   constructor(opts: WebLLMProviderOptions = {}) {
     this.model = opts.model || DEFAULT_LOCAL_TEXT_MODEL;
     this.onProgress = opts.onProgress;
+    this.onActivity = opts.onActivity;
     this.injected = opts.complete;
   }
 
@@ -90,7 +105,7 @@ export class WebLLMProvider implements LLMProvider {
           { role: "system", content: `${EXTRACTION_SYSTEM}\n${EXTRACTION_JSON_INSTRUCTION}` },
           { role: "user", content: extractionUserContent(input.chapterIndex, input.chapterText) },
         ],
-        { json: true },
+        { json: true, onToken: (tokens) => this.onActivity?.({ phase: "bible", tokens }) },
       );
       return mergeExtraction(input.existing, parseExtraction(content), input.chapterIndex);
     } catch {
@@ -107,7 +122,7 @@ export class WebLLMProvider implements LLMProvider {
           { role: "system", content: PROMPT_SYSTEM },
           { role: "user", content: promptUserContent(request, bible) },
         ],
-        { json: false },
+        { json: false, onToken: (tokens) => this.onActivity?.({ phase: "prompt", tokens }) },
       );
       const trimmed = text.trim();
       return trimmed.length > 0 ? trimmed : this.fallback.buildImagePrompt(request, bible);
@@ -121,13 +136,36 @@ export class WebLLMProvider implements LLMProvider {
     const engine = await this.engine();
     return (messages, opts) =>
       runSerial(async () => {
-        const res = await engine.chat.completions.create({
-          stream: false,
-          messages,
-          temperature: opts.json ? 0 : 0.7,
-          ...(opts.json ? { response_format: { type: "json_object" } } : {}),
-        });
-        return res.choices[0]?.message?.content ?? "";
+        const temperature = opts.json ? 0 : 0.7;
+        const responseFormat = opts.json ? ({ type: "json_object" } as const) : undefined;
+        // Stream so callers get live token progress (proof the model is working);
+        // fall back to a single-shot completion if streaming isn't available.
+        try {
+          const stream = await engine.chat.completions.create({
+            stream: true,
+            messages,
+            temperature,
+            ...(responseFormat ? { response_format: responseFormat } : {}),
+          });
+          let text = "";
+          let tokens = 0;
+          for await (const chunk of stream) {
+            const delta = chunk.choices[0]?.delta?.content ?? "";
+            if (delta) {
+              text += delta;
+              opts.onToken?.(++tokens);
+            }
+          }
+          return text;
+        } catch {
+          const res = await engine.chat.completions.create({
+            stream: false,
+            messages,
+            temperature,
+            ...(responseFormat ? { response_format: responseFormat } : {}),
+          });
+          return res.choices[0]?.message?.content ?? "";
+        }
       });
   }
 
