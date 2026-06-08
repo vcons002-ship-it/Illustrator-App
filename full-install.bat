@@ -157,11 +157,11 @@ if not errorlevel 1 (
   exit /b 0
 )
 echo [..] Installing the Tauri CLI ^(cargo install tauri-cli^)... this can take a few minutes.
-call cargo install tauri-cli --version 2 --locked
+cargo install tauri-cli --version "^2" --locked
 call cargo tauri --version >nul 2>nul
 if errorlevel 1 (
   echo [X] Could not install the Tauri CLI automatically.
-  echo     Try manually:  cargo install tauri-cli --version 2 --locked
+  echo     Try manually:  cargo install tauri-cli --version "^2" --locked
   exit /b 1
 )
 echo [OK] Tauri CLI ready
