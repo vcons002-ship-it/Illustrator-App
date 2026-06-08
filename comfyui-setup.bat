@@ -49,8 +49,14 @@ goto :after_install
 
 :upgrade
 echo.
-echo [..] Updating ComfyUI to the latest (downloaded models/loras are preserved)...
+echo [..] Updating ComfyUI to the latest. This is a CLEAN re-install (no stale
+echo      files): your downloaded models/loras are moved aside and restored.
 del "%TMP7Z%" >nul 2>nul
+if exist "%PORTABLE%\ComfyUI\models" (
+  if exist "%ROOT%\models_backup" rmdir /s /q "%ROOT%\models_backup"
+  move "%PORTABLE%\ComfyUI\models" "%ROOT%\models_backup" >nul
+)
+if exist "%PORTABLE%" rmdir /s /q "%PORTABLE%"
 
 :install
 call :get_7zip   || goto :end_fail
@@ -58,6 +64,11 @@ call :download   || goto :end_fail
 call :extract    || goto :end_fail
 
 :after_install
+rem Restore models preserved from a clean upgrade (also recovers a failed one).
+if exist "%ROOT%\models_backup" (
+  if exist "%PORTABLE%\ComfyUI\models" rmdir /s /q "%PORTABLE%\ComfyUI\models"
+  move "%ROOT%\models_backup" "%PORTABLE%\ComfyUI\models" >nul
+)
 call :get_model
 call :write_launcher
 call :finish
