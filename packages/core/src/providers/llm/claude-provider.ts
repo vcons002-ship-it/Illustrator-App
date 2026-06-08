@@ -39,7 +39,13 @@ const ExtractionSchema = z.object({
         notes: z.string(),
       }),
       persistentTraits: z.array(z.string()),
-      clothing: z.array(z.string()),
+      outfits: z.array(
+        z.object({
+          label: z.string(),
+          description: z.string(),
+          context: z.string(),
+        }),
+      ),
     }),
   ),
   glossary: z.array(

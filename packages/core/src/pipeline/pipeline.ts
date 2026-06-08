@@ -200,7 +200,9 @@ function buildSubject(c: Character): { name: string; features: string; outfit: s
   if (fields.length === 0) {
     for (const t of c.persistentTraits) if (t && t.trim()) fields.push(t.trim());
   }
-  return { name: c.name, features: fields.join(", "), outfit: c.clothing.join(", ") };
+  // Outfit is left to the LLM prompt (it picks the scene-appropriate one); the SD
+  // emphasis block reinforces only the persistent identity, not a specific outfit.
+  return { name: c.name, features: fields.join(", "), outfit: "" };
 }
 
 /** A creature as an SD subject: its kind + accumulated description as the features. */

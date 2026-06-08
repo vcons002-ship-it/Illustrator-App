@@ -57,6 +57,21 @@ export function emptyAppearance(): CharacterAppearance {
   };
 }
 
+/**
+ * One context-tagged outfit a character is known to wear. The image-prompt builder
+ * picks the single outfit that fits the current scene rather than mashing them
+ * all together — e.g. "flight leathers" for flying/battle vs. a "court gown" for
+ * formal scenes.
+ */
+export interface Outfit {
+  /** Short label, e.g. "flight leathers". */
+  label: string;
+  /** Detailed look: garments, fabric, colour, accessories. */
+  description: string;
+  /** When the character wears it (context cue), e.g. "flying, battle"; "" if general. */
+  context: string;
+}
+
 export interface Character {
   id: string;
   name: string;
@@ -65,8 +80,11 @@ export interface Character {
   appearance: CharacterAppearance;
   /** Traits that persist across the whole book (build, hair, eyes, scars…). */
   persistentTraits: string[];
-  /** Default/most-recent clothing description. */
+  /** @deprecated Legacy single clothing list; kept for back-compat + as a fallback
+   * when `outfits` is empty. New extractions populate `outfits` instead. */
   clothing: string[];
+  /** Context-tagged outfits the prompt builder picks from per scene. */
+  outfits?: Outfit[];
   anchor: IdentityAnchor;
   /** Index of the chapter where this character is first introduced. */
   firstSeenChapter: number;

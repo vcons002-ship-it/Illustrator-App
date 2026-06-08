@@ -1,4 +1,4 @@
-import type { Character, CharacterAppearance, Creature, VisualBible } from "../../types/bible.js";
+import type { Character, CharacterAppearance, Creature, Outfit, VisualBible } from "../../types/bible.js";
 import { emptyAppearance } from "../../types/bible.js";
 import type { EntityExtractionInput } from "./llm-provider.js";
 import type { VisualRequest } from "../../types/content.js";
@@ -21,7 +21,10 @@ export interface RawExtraction {
     /** Structured physical appearance; optional for back-compat with older mocks. */
     appearance?: Partial<CharacterAppearance>;
     persistentTraits: string[];
-    clothing: string[];
+    /** @deprecated legacy single clothing list; still accepted from old fixtures. */
+    clothing?: string[];
+    /** Context-tagged outfits the character is described wearing. */
+    outfits?: { label: string; description: string; context: string }[];
   }[];
   environments: { name: string; description: string[] }[];
   /** Named/notable non-human creatures (dragons, beasts…). Optional for back-compat. */
@@ -47,8 +50,12 @@ export const EXTRACTION_SYSTEM =
   "description at all. For each character fill the structured 'appearance' fields " +
   "(hair, eyes, gender, build/physique, height, skinTone, age, distinguishingMarks; use " +
   "an empty string for anything the text doesn't state) and put extra persistent details " +
-  "in persistentTraits, plus their clothing/outfits/fashion in detail (garments, fabric, " +
-  "colour, accessories, era/style). Reuse a character's ESTABLISHED name across chapters: if " +
+  "in persistentTraits. Capture each DISTINCT outfit a character is described wearing as a " +
+  "separate entry in 'outfits' — a short 'label', a detailed 'description' (garments, fabric, " +
+  "colour, accessories, era/style), and 'context' = when they wear it (e.g. label 'flight " +
+  "leathers', context 'flying, battle'; label 'court gown', context 'formal events'). Add new " +
+  "outfits as they appear across chapters; do NOT merge different outfits into one. " +
+  "Reuse a character's ESTABLISHED name across chapters: if " +
   "the same person is referred to by a first name, full name, title, or nickname, keep ONE " +
   "entry and put the other forms in 'aliases' — never create a second character for the same " +
   "person (e.g. 'Violet' and 'Violet Sorrengail' are one character). " +
@@ -83,8 +90,10 @@ export const PROMPT_SYSTEM =
   "moment unless this passage is where it occurs. Set the image in ONE coherent location — the " +
   "place where the passage's action occurs; if the chapter or passage moves between places, " +
   "choose the single location of the depicted moment and NEVER combine two settings into one " +
-  "picture. Keep every character's appearance and OUTFIT, and the setting's look and fashion, " +
-  "consistent with the supplied Visual Bible, and consistent with the story so far. " +
+  "picture. Keep every character's appearance consistent with the supplied Visual Bible and " +
+  "the story so far. For each character, choose the SINGLE outfit from their listed options " +
+  "that best fits THIS scene's context (what the passage describes them doing/wearing); depict " +
+  "only that outfit and never combine outfits. " +
   "Output only the prompt text, no preamble.";
 
 /**
@@ -131,9 +140,21 @@ export const EXTRACTION_JSON_SCHEMA = {
             ],
           },
           persistentTraits: { type: "array", items: { type: "string" } },
-          clothing: { type: "array", items: { type: "string" } },
+          outfits: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                label: { type: "string" },
+                description: { type: "string" },
+                context: { type: "string" },
+              },
+              required: ["label", "description", "context"],
+            },
+          },
         },
-        required: ["name", "aliases", "appearance", "persistentTraits", "clothing"],
+        required: ["name", "aliases", "appearance", "persistentTraits", "outfits"],
       },
     },
     glossary: {
@@ -280,7 +301,8 @@ export function mergeExtraction(
         aliases: c.aliases,
         appearance: { ...emptyAppearance(), ...(c.appearance ?? {}) },
         persistentTraits: c.persistentTraits,
-        clothing: c.clothing,
+        clothing: c.clothing ?? [],
+        outfits: dedupeOutfits(c.outfits ?? []),
         anchor: { seed: deterministicSeed(c.name) },
         firstSeenChapter: chapterIndex,
       });
@@ -472,7 +494,13 @@ function describeCharacter(c: Character): string {
     if (t && t.trim()) fields.push(t.trim());
   }
   const appearance = fields.length ? fields.join("; ") : "appearance unspecified";
-  return `${c.name}: ${appearance}; wearing ${c.clothing.join(", ") || "unspecified"}`;
+  const outfits = c.outfits ?? [];
+  const outfitText = outfits.length
+    ? `; outfits to choose from (pick the ONE that fits this scene, don't combine): ${outfits
+        .map((o) => `[${o.label}${o.context ? ` — for ${o.context}` : ""}: ${o.description}]`)
+        .join(" ")}`
+    : `; wearing ${c.clothing.join(", ") || "unspecified"}`;
+  return `${c.name}: ${appearance}${outfitText}`;
 }
 
 // --- Character de-duplication -------------------------------------------------
@@ -504,6 +532,22 @@ function fillAppearance(
   return out;
 }
 
+/** Distinct outfits by (lowercased) label, order preserved, blanks dropped. */
+function dedupeOutfits(list: Outfit[]): Outfit[] {
+  const out: Outfit[] = [];
+  const seen = new Set<string>();
+  for (const o of list) {
+    const label = o.label?.trim();
+    if (!label || seen.has(label.toLowerCase())) continue;
+    seen.add(label.toLowerCase());
+    out.push({ label, description: o.description ?? "", context: o.context ?? "" });
+  }
+  return out;
+}
+function unionOutfits(a: Outfit[] | undefined, b: Outfit[] | undefined): Outfit[] {
+  return dedupeOutfits([...(a ?? []), ...(b ?? [])]);
+}
+
 /** Merge a raw extraction's character into an existing one (same exact name). */
 function mergeRawIntoCharacter(ex: Character, raw: RawExtraction["characters"][number]): Character {
   return {
@@ -513,7 +557,8 @@ function mergeRawIntoCharacter(ex: Character, raw: RawExtraction["characters"][n
     ),
     appearance: fillAppearance(ex.appearance, raw.appearance),
     persistentTraits: unionStrings(ex.persistentTraits, raw.persistentTraits),
-    clothing: unionStrings(ex.clothing, raw.clothing),
+    clothing: unionStrings(ex.clothing, raw.clothing ?? []),
+    outfits: unionOutfits(ex.outfits, (raw.outfits ?? []) as Outfit[]),
   };
 }
 
@@ -527,6 +572,7 @@ function mergeCharacters(canon: Character, other: Character): Character {
     appearance: fillAppearance(canon.appearance, other.appearance),
     persistentTraits: unionStrings(canon.persistentTraits, other.persistentTraits),
     clothing: unionStrings(canon.clothing, other.clothing),
+    outfits: unionOutfits(canon.outfits, other.outfits),
     firstSeenChapter: Math.min(canon.firstSeenChapter, other.firstSeenChapter),
   };
 }

@@ -62,15 +62,17 @@ export const EXTRACTION_JSON_INSTRUCTION =
   '{"characters":[{"name":string,"aliases":string[],' +
   '"appearance":{"hair":string,"eyes":string,"gender":string,"build":string,"height":string,' +
   '"skinTone":string,"age":string,"distinguishingMarks":string,"notes":string},' +
-  '"persistentTraits":string[],"clothing":string[]}],' +
+  '"persistentTraits":string[],' +
+  '"outfits":[{"label":string,"description":string,"context":string}]}],' +
   '"glossary":[{"term":string,"definition":string}],' +
   '"environments":[{"name":string,"description":string[]}],' +
   '"creatures":[{"name":string,"aliases":string[],"kind":string,"description":string[]}],' +
   '"spoilers":[{"label":string,"revealHint":string}],' +
   '"summary":string,"keyMoment":string,"location":string,"locationChange":string}. ' +
   "Include EVERY named character with any appearance description (use empty strings for " +
-  "unknown appearance fields). Put non-human beasts (dragons, monsters, mounts) in " +
-  "'creatures', NOT 'characters'. Set 'location' to where the chapter happens and " +
+  "unknown appearance fields). Capture each distinct outfit a character wears as a separate " +
+  "'outfits' entry (label + description + when worn). Put non-human beasts (dragons, monsters, " +
+  "mounts) in 'creatures', NOT 'characters'. Set 'location' to where the chapter happens and " +
   "'locationChange' to where/when it moves (empty string if it stays in one place).";
 
 // Module-level engine cache so re-created providers reuse a loaded model
@@ -225,7 +227,10 @@ export function parseExtraction(content: string): RawExtraction {
             notes: str(a.notes),
           },
           persistentTraits: strArray(o.persistentTraits),
-          clothing: strArray(o.clothing),
+          outfits: asArray(o.outfits).map((x) => {
+            const ot = x as Record<string, unknown>;
+            return { label: str(ot.label), description: str(ot.description), context: str(ot.context) };
+          }),
         };
       }),
       glossary: asArray(json.glossary).map((g) => {

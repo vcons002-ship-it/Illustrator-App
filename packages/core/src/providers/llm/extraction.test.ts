@@ -333,6 +333,93 @@ describe("character de-duplication", () => {
   });
 });
 
+describe("context-based outfits", () => {
+  it("accumulates distinct outfits and offers them as scene choices in the prompt", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [
+          {
+            name: "Violet",
+            aliases: [],
+            persistentTraits: [],
+            outfits: [{ label: "flight leathers", description: "fitted black hide", context: "flying, battle" }],
+          },
+        ],
+        environments: [],
+        spoilers: [],
+      },
+      0,
+    );
+    // A later chapter adds a different outfit (and repeats the first).
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [
+          {
+            name: "Violet",
+            aliases: [],
+            persistentTraits: [],
+            outfits: [
+              { label: "flight leathers", description: "fitted black hide", context: "flying" },
+              { label: "ball gown", description: "emerald silk", context: "formal events" },
+            ],
+          },
+        ],
+        environments: [],
+        spoilers: [],
+      },
+      3,
+    );
+    const v = bible.characters.find((c) => c.name === "Violet")!;
+    expect(v.outfits?.map((o) => o.label)).toEqual(["flight leathers", "ball gown"]); // deduped by label
+
+    const req: VisualRequest = {
+      kind: "scene_illustration",
+      bookId: "b",
+      pageId: "u-0",
+      pageIndex: 0,
+      chapterIndex: 0,
+      sourceText: "She buckled on her flight leathers.",
+      characterIds: ["char-violet"],
+      environmentIds: [],
+      creatureIds: [],
+      spoilerIds: [],
+    };
+    const prompt = promptUserContent(req, bible);
+    expect(prompt).toContain("outfits to choose from");
+    expect(prompt).toContain("flight leathers");
+    expect(prompt).toContain("ball gown");
+  });
+
+  it("falls back to legacy clothing when a character has no structured outfits", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [{ name: "Ana", aliases: [], persistentTraits: [], clothing: ["red cloak"] }],
+        environments: [],
+        spoilers: [],
+      },
+      0,
+    );
+    const req: VisualRequest = {
+      kind: "scene_illustration",
+      bookId: "b",
+      pageId: "u-0",
+      pageIndex: 0,
+      chapterIndex: 0,
+      sourceText: "Ana walked.",
+      characterIds: ["char-ana"],
+      environmentIds: [],
+      creatureIds: [],
+      spoilerIds: [],
+    };
+    expect(promptUserContent(req, bible)).toContain("wearing red cloak");
+  });
+});
+
 describe("creatures", () => {
   it("captures a creature, accumulates its description, and injects it into the prompt", () => {
     let bible = createEmptyBible("b");
