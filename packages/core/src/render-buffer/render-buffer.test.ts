@@ -104,6 +104,47 @@ describe("RenderBuffer", () => {
     expect(new Set(started).size).toBe(6);
   });
 
+  it("generates strictly in order, not the page being viewed", () => {
+    const { render, started } = deferredRenderer();
+    const buf = new RenderBuffer({ totalPages: 20, render, windowAhead: 2, maxConcurrent: 2, maxPrerender: 50 });
+    buf.setIdleAllowed(true);
+
+    // Reader jumps ahead to page 10, but nothing is rendered yet.
+    buf.setCurrentPage(10);
+
+    // Generation starts at the BEGINNING in order — it does not divert to page 10.
+    expect(started).toEqual([0, 1]);
+    expect(started).not.toContain(10);
+  });
+
+  it("keeps filling in ascending order as slots free, ignoring the viewed page", async () => {
+    const { render, started, finish } = deferredRenderer();
+    const buf = new RenderBuffer({ totalPages: 20, render, windowAhead: 2, maxConcurrent: 2, maxPrerender: 50 });
+    buf.setIdleAllowed(true);
+    buf.setCurrentPage(15); // reader far ahead
+
+    expect(started).toEqual([0, 1]);
+    await finish(0);
+    expect(started).toEqual([0, 1, 2]);
+    await finish(1);
+    expect(started).toEqual([0, 1, 2, 3]);
+  });
+
+  it("prioritize renders the chosen unit next, then returns to in-order", async () => {
+    const { render, started, finish } = deferredRenderer();
+    const buf = new RenderBuffer({ totalPages: 20, render, windowAhead: 0, maxConcurrent: 1, maxPrerender: 50 });
+    buf.setIdleAllowed(true);
+    buf.setCurrentPage(0);
+    expect(started).toEqual([0]); // in order
+
+    buf.prioritize(7); // explicit "regenerate this image" on unit 7
+    await finish(0); // a slot frees
+    expect(started).toEqual([0, 7]); // 7 jumps ahead of 1,2,3…
+
+    await finish(7); // one-shot priority is consumed
+    expect(started).toEqual([0, 7, 1]); // …then strictly in order again
+  });
+
   it("notifies onUpdate on start and settle", async () => {
     const { render, finish } = deferredRenderer();
     const onUpdate = vi.fn();

@@ -81,6 +81,22 @@ export class Engine {
    */
   private biblePaused = false;
   private imagePaused = false;
+  /**
+   * Monotonic token for the active bible-extraction run. Starting a new run (open a
+   * book, resume, regenerate) bumps it; an older in-flight loop sees the mismatch at
+   * its next checkpoint (and after each await) and bails WITHOUT touching shared
+   * state. This guarantees exactly one bible loop is ever live, so a previous book's
+   * background work can't keep running — or clobber the new book's bible — once you
+   * switch books, and a rapid pause→resume can never spawn a duplicate loop.
+   */
+  private bibleRun = 0;
+  /**
+   * Identity token for the active render buffer. A buffer replaced on `openBook`
+   * keeps any in-flight render (≤ maxConcurrent) alive; tagging updates with the
+   * epoch lets us drop late results from a stale buffer so they never leak into the
+   * newly-opened book.
+   */
+  private bufferEpoch = 0;
   private readonly illustrateAfter: "book" | "chapter";
 
   constructor(private opts: EngineOptions) {
@@ -113,6 +129,14 @@ export class Engine {
     this.biblePaused = false;
     this.imagePaused = false;
     this.biblePromise = undefined;
+    // Cancel the previous book's background work: bump the bible run so any in-flight
+    // extraction loop bails at its next checkpoint, and stop the old buffer from
+    // starting new renders (its ≤maxConcurrent in-flight results are dropped below by
+    // the bufferEpoch guard). Result: only the just-opened book ever processes.
+    this.bibleRun++;
+    this.buffer?.setGenerationEnabled(false);
+    const epoch = ++this.bufferEpoch;
+    const onUpdate = this.opts.onUpdate;
 
     this.pipeline = new RenderPipeline({
       book,
@@ -135,7 +159,13 @@ export class Engine {
       shouldSkip: (pageIndex) => !this.isStoryPage(pageIndex),
       // Stay paused until the user begins generating; cached pages still show.
       generationEnabled: false,
-      ...(this.opts.onUpdate ? { onUpdate: this.opts.onUpdate } : {}),
+      // Tag updates with this buffer's epoch and drop any that arrive after the
+      // buffer has been replaced (a late render from a previously-opened book).
+      ...(onUpdate
+        ? { onUpdate: (pageIndex: number, result: ImageResult) => {
+            if (this.bufferEpoch === epoch) onUpdate(pageIndex, result);
+          } }
+        : {}),
     });
 
     // Surface the restored bible + any previously-rendered images right away.
@@ -214,6 +244,15 @@ export class Engine {
    */
   private async buildBibleInBackground(): Promise<void> {
     if (!this.book || !this.bible) return;
+    // Claim this run, cancelling any older loop still in flight (book switch, resume,
+    // regenerate). `myRun` is captured; the loop bails the moment it stops matching.
+    const myRun = ++this.bibleRun;
+    const bookId = this.book.id;
+    // `cancelled`: a newer run/book took over → discard, never touch shared state.
+    // `stop`: also stop when paused, but only when DECIDING to start the next chapter
+    // (an already-completed extraction is still committed so in-flight work isn't wasted).
+    const cancelled = (): boolean => this.bibleRun !== myRun;
+    const stop = (): boolean => this.biblePaused || cancelled();
     const textByChapter = chapterText(this.book); // story chapters only
     const storyIndices = [...textByChapter.keys()];
     const total = storyIndices.length;
@@ -229,30 +268,37 @@ export class Engine {
     // A fully-cached book: nothing pending, but its pages are already renderable.
     if (pending.length === 0) this.buffer?.refresh();
     for (const [chapterIndex, text] of pending) {
-      if (this.biblePaused) return; // setBiblePaused(false) re-invokes this loop for the rest
+      if (stop()) return; // paused, or a newer run/book took over → stop before next chapter
       // Extraction has no timeout (a slow-but-working LLM is never cut off). On a
       // transient failure, retry ONCE; only if it still fails do we mark the
       // chapter processed (so pages aren't gated forever) and surface a note.
-      let extracted = false;
-      for (let attempt = 0; attempt < 2 && !extracted; attempt++) {
-        if (this.biblePaused) return;
+      let next: VisualBible | undefined;
+      for (let attempt = 0; attempt < 2 && !next; attempt++) {
+        if (stop()) return;
         try {
-          this.bible = await this.opts.llm.extractEntities({
-            bookId: this.book.id,
+          next = await this.opts.llm.extractEntities({
+            bookId,
             chapterIndex,
             chapterText: text,
             existing: this.bible,
           });
-          extracted = true;
         } catch {
           /* retry once, then give up on just this chapter */
         }
       }
-      if (!extracted) {
-        this.bible = markChapterProcessed(this.bible, chapterIndex);
+      // A newer run/book may have taken over WHILE we awaited the LLM. Discard before
+      // mutating any shared state so we never clobber the newly-opened book's bible.
+      // (Note: a mere PAUSE does NOT discard — the completed extraction is committed so
+      // in-flight work isn't wasted; the loop then stops at the next iteration's `stop()`.)
+      if (cancelled()) return;
+      if (next) {
+        this.bible = next;
+      } else {
+        this.bible = markChapterProcessed(this.bible!, chapterIndex);
         this.opts.onBibleNote?.(`Chapter ${chapterIndex + 1} analysis failed — continuing.`);
       }
       await this.store.putBible(this.bible);
+      if (cancelled()) return; // re-check after the async persist, before notifying
       this.opts.onBibleProgress?.(++done, total);
       this.opts.onBibleUpdate?.(this.bible);
       // New entities are in the bible → release any pages that were gated on this chapter.
@@ -460,11 +506,11 @@ export class Engine {
     await this.store.deleteImage?.(this.pipeline.requestIdFor(unitIndex));
     this.startGeneration();
     this.resumeGeneration();
-    // Focus the buffer on this unit FIRST so it renders next — ahead of any
-    // predictive prefetch of other units — then drop its cached image so the
-    // re-render targets the page the reader is on, not whatever was mid-flight.
-    this.buffer?.setCurrentPage(unitIndex);
+    // Drop its cached image, then explicitly prioritise THIS unit so it re-renders
+    // next — ahead of the normal in-order schedule. (This is an explicit user action,
+    // unlike passive scrolling, which never jumps the queue.)
     this.buffer?.invalidate(unitIndex);
+    this.buffer?.prioritize(unitIndex);
   }
 
   resultFor(pageIndex: number): ImageResult | undefined {

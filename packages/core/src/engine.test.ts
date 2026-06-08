@@ -332,6 +332,39 @@ describe("Engine", () => {
     await vi.waitFor(() => expect(engine.resultFor(1)?.status).toBe("ready"));
   });
 
+  it("opening another book cancels the previous book's in-flight bible build (no clobber)", async () => {
+    let releaseA: (() => void) | undefined;
+    const llm = new MockLLMProvider();
+    const realExtract = llm.extractEntities.bind(llm);
+    vi.spyOn(llm, "extractEntities").mockImplementation(async (input) => {
+      if (input.bookId === "book-A") await new Promise<void>((r) => (releaseA = r));
+      return realExtract(input);
+    });
+    const engine = new Engine({ llm, image: new MockImageProvider() });
+
+    const bookA: BookSource = { ...sampleBook(), id: "book-A" };
+    await engine.openBook(bookA);
+    engine.startGeneration();
+    await vi.waitFor(() => expect(releaseA).toBeDefined()); // A's chapter 0 extraction is in flight
+
+    // Switch to a different book while A is mid-extraction.
+    const bookB: BookSource = {
+      id: "book-B",
+      title: "B",
+      chapters: [{ id: "cb", index: 0, title: "B0" }],
+      pages: [{ id: "pb", index: 0, chapterId: "cb", paragraphs: [{ id: "pb-0", index: 0, text: "Zorp hummed." }] }],
+    };
+    await engine.openBook(bookB);
+
+    // A's extraction now resolves — it must NOT clobber B's freshly-opened bible.
+    releaseA?.();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(engine.getBible()?.bookId).toBe("book-B");
+    expect(engine.getBible()?.processedChapters).toEqual([]); // B hasn't been generated yet
+    expect(engine.getBible()?.characters).toEqual([]); // A's cast never leaked into B
+  });
+
   it("skips non-story chapters: never extracted, their pages emit 'skipped'", async () => {
     const llm = new MockLLMProvider();
     const spy = vi.spyOn(llm, "extractEntities");

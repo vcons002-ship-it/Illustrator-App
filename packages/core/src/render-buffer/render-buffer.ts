@@ -66,6 +66,13 @@ export class RenderBuffer {
   private idleAllowed = false;
   private renderEverything = false;
   private generationEnabled: boolean;
+  /**
+   * A single unit to render next, ahead of the normal in-order schedule. Set only by
+   * an EXPLICIT user action (regenerate this image) — never by passive scrolling — so
+   * "regenerate" is immediate while ordinary generation stays strictly in order.
+   * Cleared once that unit settles.
+   */
+  private priorityPage: number | undefined;
   private readonly inflight = new Set<number>();
   private readonly results = new Map<number, ImageResult>();
 
@@ -113,6 +120,7 @@ export class RenderBuffer {
   /** Drop every result so the whole book re-renders (regenerate all images). */
   invalidateAll(): void {
     this.results.clear();
+    this.priorityPage = undefined; // back to a clean in-order pass
     this.pump();
   }
 
@@ -133,9 +141,22 @@ export class RenderBuffer {
     this.pump();
   }
 
-  /** Move the reader to a page; renders it and refreshes the look-ahead window. */
+  /**
+   * Move the reader to a page. This advances how far ahead generation may run, but it
+   * does NOT make that page jump the queue — generation stays strictly in order, so
+   * scrolling around never diverts work onto the page you're merely looking at.
+   */
   setCurrentPage(pageIndex: number): void {
     this.current = clamp(pageIndex, 0, this.totalPages - 1);
+    this.pump();
+  }
+
+  /**
+   * Render one unit next, ahead of the in-order schedule — for the explicit
+   * "regenerate this image" action only. Cleared automatically once it settles.
+   */
+  prioritize(pageIndex: number): void {
+    this.priorityPage = clamp(pageIndex, 0, this.totalPages - 1);
     this.pump();
   }
 
@@ -152,26 +173,34 @@ export class RenderBuffer {
   /** Pages, in priority order, that still need rendering. */
   private candidates(): number[] {
     if (!this.generationEnabled) return []; // generation not started → nothing new
-    const out: number[] = [];
     const last = this.totalPages - 1;
-    const windowEnd = Math.min(last, this.current + this.windowAhead);
-    // Highest priority: the current page, then the look-ahead window.
-    for (let p = this.current; p <= windowEnd; p++) out.push(p);
-    if (this.renderEverything) {
-      // Whole-book pre-render: every remaining page, after the priority window.
-      for (let p = 0; p <= last; p++) out.push(p);
-    } else if (this.idleAllowed) {
-      const prerenderEnd = Math.min(last, this.current + this.maxPrerender);
-      for (let p = windowEnd + 1; p <= prerenderEnd; p++) out.push(p);
-    }
-    const seen = new Set<number>();
-    return out.filter((p) => {
-      if (seen.has(p) || this.results.has(p) || this.inflight.has(p)) return false;
+    const want = (p: number): boolean =>
+      p >= 0 &&
+      p <= last &&
+      !this.results.has(p) &&
+      !this.inflight.has(p) &&
       // Hold pages whose chapter isn't ready yet; a later refresh() retries them.
-      if (!this.canRender(p)) return false;
-      seen.add(p);
-      return true;
-    });
+      this.canRender(p);
+
+    const out: number[] = [];
+    // Explicit one-shot priority (regenerate this image) renders first, even if it's
+    // beyond the normal look-ahead bound.
+    if (this.priorityPage !== undefined && want(this.priorityPage)) out.push(this.priorityPage);
+
+    // Strict in-order generation: always fill from the FIRST un-rendered unit forward,
+    // never starting at (or diverting to) the unit the reader is currently viewing.
+    // How far ahead we may run is bounded by the reader's position so battery/thermal
+    // gating still applies; "render everything" lifts the bound to the whole book.
+    const end = this.renderEverything
+      ? last
+      : this.idleAllowed
+        ? Math.min(last, this.current + this.maxPrerender)
+        : Math.min(last, this.current + this.windowAhead);
+    for (let p = 0; p <= end; p++) {
+      if (p === this.priorityPage) continue; // already considered above
+      if (want(p)) out.push(p);
+    }
+    return out;
   }
 
   /** Mark any not-yet-resolved page that should be skipped (front/back matter). */
@@ -231,6 +260,7 @@ export class RenderBuffer {
   private settle(pageIndex: number, result: ImageResult): void {
     this.inflight.delete(pageIndex);
     this.results.set(pageIndex, result);
+    if (pageIndex === this.priorityPage) this.priorityPage = undefined; // one-shot done
     this.onUpdate?.(pageIndex, result);
     // A slot freed up — schedule the next highest-priority page.
     this.pump();
