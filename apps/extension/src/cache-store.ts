@@ -1,6 +1,8 @@
 import {
   IndexedDbStore,
   InMemoryStore,
+  type BookSource,
+  type BookSummary,
   type VisualBible,
   type VisualReaderStore,
 } from "@visual-reader/core";
@@ -48,6 +50,36 @@ export function createCacheStore(): VisualReaderStore {
         await backing.putImage(requestId, bytes, mimeType);
       } catch {
         await fallback.putImage(requestId, bytes, mimeType);
+      }
+    },
+    // Library methods exist to satisfy the store interface; the extension reads
+    // the live page rather than EPUBs, so they're effectively no-ops here.
+    async putBook(book: BookSource): Promise<void> {
+      try {
+        await backing.putBook(book);
+      } catch {
+        await fallback.putBook(book);
+      }
+    },
+    async getBook(id: string): Promise<BookSource | undefined> {
+      try {
+        return await backing.getBook(id);
+      } catch {
+        return fallback.getBook(id);
+      }
+    },
+    async listBooks(): Promise<BookSummary[]> {
+      try {
+        return await backing.listBooks();
+      } catch {
+        return fallback.listBooks();
+      }
+    },
+    async removeBook(id: string): Promise<void> {
+      try {
+        await backing.removeBook(id);
+      } catch {
+        await fallback.removeBook(id);
       }
     },
   };

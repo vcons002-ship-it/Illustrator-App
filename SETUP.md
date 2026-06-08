@@ -242,6 +242,9 @@ Style ids: `photorealistic`, `anime`, `manga`, `animation-3d`, `watercolor`,
    keys**, using built-in placeholder art so you can see the whole flow
    (Visual Bible → predictive rendering → bloom reveal → spoiler gating).
 2. Or click **Open EPUB** and choose an `.epub` file from your computer.
+   Every book you open is remembered in a **Library** dropdown in the top bar —
+   pick a title to switch back to it instantly (its illustrations + Visual Bible
+   are cached, so there's nothing to regenerate).
 3. As you scroll, the illustration for the current page appears beside the text,
    fading in as you arrive. Spoiler imagery stays blurred until you read past it.
 4. Optional: click **Pre-render whole book** in the top bar to generate every

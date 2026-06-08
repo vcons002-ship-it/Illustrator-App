@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Automatic1111Backend,
   ComfyUIBackend,
+  IndexedDbStore,
   LOCAL_IMAGE_MODELS,
   computeBloomTarget,
   decryptSecrets,
@@ -12,6 +13,7 @@ import {
   resolvePageEntities,
   spoilerRevealPoint,
   type BookSource,
+  type BookSummary,
   type EncryptedSecrets,
 } from "@visual-reader/core";
 import { parseEpub } from "@visual-reader/epub";
@@ -48,6 +50,8 @@ export function App() {
   const [modelProgress, setModelProgress] = useState<Record<string, number>>({});
   const [engineStatus, setEngineStatus] = useState("");
   const [installedLoras, setInstalledLoras] = useState<string[]>([]);
+  const [library, setLibrary] = useState<BookSummary[]>([]);
+  const libraryStore = useMemo(() => new IndexedDbStore(), []);
   const hydrated = useRef(false);
   const { bible, results, status, openBook: openInWorker, goTo, prerenderAll } = useEngineWorker(settings);
   const [prerendering, setPrerendering] = useState(false);
@@ -224,8 +228,33 @@ export function App() {
       setPrerendering(false);
       setBook(source);
       openInWorker(source);
+      // Remember it in the library so it can be reopened later (Bible + images
+      // are already cached, so switching back is instant).
+      void libraryStore
+        .putBook(source)
+        .then(() => libraryStore.listBooks())
+        .then(setLibrary)
+        .catch(() => {});
     },
-    [openInWorker],
+    [openInWorker, libraryStore],
+  );
+
+  // Load the library on mount (recent books to switch between).
+  useEffect(() => {
+    void libraryStore.listBooks().then(setLibrary).catch(() => {});
+  }, [libraryStore]);
+
+  const onPickBook = useCallback(
+    async (id: string) => {
+      if (!id || id === book?.id) return;
+      try {
+        const source = await libraryStore.getBook(id);
+        if (source) openBook(source);
+      } catch {
+        /* ignore */
+      }
+    },
+    [book, libraryStore, openBook],
   );
 
   const onPrerenderAll = useCallback(() => {
@@ -294,6 +323,24 @@ export function App() {
       <header style={styles.header}>
         <strong>Visual Reader</strong>
         <div style={styles.headerControls}>
+          {library.length > 0 && (
+            <select
+              style={styles.button}
+              value={book && library.some((b) => b.id === book.id) ? book.id : ""}
+              onChange={(e) => void onPickBook(e.target.value)}
+              title="Switch between books you've opened"
+            >
+              <option value="" disabled>
+                Library ({library.length})…
+              </option>
+              {library.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.title}
+                  {b.author ? ` — ${b.author}` : ""}
+                </option>
+              ))}
+            </select>
+          )}
           <label style={styles.upload}>
             Open EPUB
             <input

@@ -1,14 +1,21 @@
 import type { VisualBible } from "../types/bible.js";
-import type { VisualReaderStore } from "./store.js";
+import type { BookSource } from "../types/book.js";
+import type { BookSummary, VisualReaderStore } from "./store.js";
 
 /**
  * IndexedDB-backed store for the web app: caches the Visual Bible and rendered
- * images so re-reads are instant and continuity survives reloads.
+ * images so re-reads are instant and continuity survives reloads, and keeps a
+ * library of opened books so the reader can switch between them.
  */
 const DB_NAME = "visual-reader";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const BIBLE_STORE = "bibles";
 const IMAGE_STORE = "images";
+const BOOK_STORE = "books";
+
+interface BookRecord extends BookSource {
+  addedAt: number;
+}
 
 export class IndexedDbStore implements VisualReaderStore {
   private dbPromise: Promise<IDBDatabase>;
@@ -33,11 +40,47 @@ export class IndexedDbStore implements VisualReaderStore {
     return this.get(IMAGE_STORE, requestId);
   }
 
+  async putBook(book: BookSource): Promise<void> {
+    const record: BookRecord = { ...book, addedAt: Date.now() };
+    return this.put(BOOK_STORE, book.id, record);
+  }
+
+  async getBook(id: string): Promise<BookSource | undefined> {
+    // BookRecord is a BookSource plus addedAt; the extra field is harmless.
+    return this.get<BookRecord>(BOOK_STORE, id);
+  }
+
+  async listBooks(): Promise<BookSummary[]> {
+    const records = await this.getAll<BookRecord>(BOOK_STORE);
+    return records
+      .sort((a, b) => b.addedAt - a.addedAt)
+      .map((b) => ({ id: b.id, title: b.title, ...(b.author ? { author: b.author } : {}), addedAt: b.addedAt }));
+  }
+
+  async removeBook(id: string): Promise<void> {
+    const db = await this.dbPromise;
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(BOOK_STORE, "readwrite");
+      tx.objectStore(BOOK_STORE).delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
   private async get<T>(store: string, key: string): Promise<T | undefined> {
     const db = await this.dbPromise;
     return new Promise((resolve, reject) => {
       const req = db.transaction(store, "readonly").objectStore(store).get(key);
       req.onsuccess = () => resolve(req.result as T | undefined);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  private async getAll<T>(store: string): Promise<T[]> {
+    const db = await this.dbPromise;
+    return new Promise((resolve, reject) => {
+      const req = db.transaction(store, "readonly").objectStore(store).getAll();
+      req.onsuccess = () => resolve((req.result as T[]) ?? []);
       req.onerror = () => reject(req.error);
     });
   }
@@ -60,6 +103,7 @@ function openDb(): Promise<IDBDatabase> {
       const db = req.result;
       if (!db.objectStoreNames.contains(BIBLE_STORE)) db.createObjectStore(BIBLE_STORE);
       if (!db.objectStoreNames.contains(IMAGE_STORE)) db.createObjectStore(IMAGE_STORE);
+      if (!db.objectStoreNames.contains(BOOK_STORE)) db.createObjectStore(BOOK_STORE);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);

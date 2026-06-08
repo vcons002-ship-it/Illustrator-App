@@ -1,4 +1,14 @@
 import type { VisualBible } from "../types/bible.js";
+import type { BookSource } from "../types/book.js";
+
+/** Lightweight library entry for the "switch between books" picker. */
+export interface BookSummary {
+  id: string;
+  title: string;
+  author?: string;
+  /** When the book was last opened (ms epoch), for recency ordering. */
+  addedAt: number;
+}
 
 /**
  * Persistence seam. The engine depends only on this interface, so each
@@ -12,12 +22,19 @@ export interface VisualReaderStore {
   /** Cache a rendered image, returning nothing. Keyed by request id. */
   putImage(requestId: string, bytes: ArrayBuffer, mimeType: string): Promise<void>;
   getImage(requestId: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined>;
+
+  /** Library: remember opened books so the reader can switch back to them. */
+  putBook(book: BookSource): Promise<void>;
+  getBook(id: string): Promise<BookSource | undefined>;
+  listBooks(): Promise<BookSummary[]>;
+  removeBook(id: string): Promise<void>;
 }
 
 /** In-memory store — used by tests and as a fallback when no persistence exists. */
 export class InMemoryStore implements VisualReaderStore {
   private bibles = new Map<string, VisualBible>();
   private images = new Map<string, { bytes: ArrayBuffer; mimeType: string }>();
+  private books = new Map<string, { book: BookSource; addedAt: number }>();
 
   async getBible(bookId: string): Promise<VisualBible | undefined> {
     return this.bibles.get(bookId);
@@ -30,5 +47,24 @@ export class InMemoryStore implements VisualReaderStore {
   }
   async getImage(requestId: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined> {
     return this.images.get(requestId);
+  }
+  async putBook(book: BookSource): Promise<void> {
+    this.books.set(book.id, { book, addedAt: Date.now() });
+  }
+  async getBook(id: string): Promise<BookSource | undefined> {
+    return this.books.get(id)?.book;
+  }
+  async listBooks(): Promise<BookSummary[]> {
+    return [...this.books.values()]
+      .sort((a, b) => b.addedAt - a.addedAt)
+      .map(({ book, addedAt }) => ({
+        id: book.id,
+        title: book.title,
+        ...(book.author ? { author: book.author } : {}),
+        addedAt,
+      }));
+  }
+  async removeBook(id: string): Promise<void> {
+    this.books.delete(id);
   }
 }
