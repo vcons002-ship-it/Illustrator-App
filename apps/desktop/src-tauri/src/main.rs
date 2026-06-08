@@ -40,6 +40,9 @@ const ENGINE_PORT: u16 = 8188;
 struct EngineState {
     base_url: Mutex<Option<String>>,
     child: Mutex<Option<Child>>,
+    /// Serializes engine setup so concurrent `ensure_engine` calls (e.g. React
+    /// StrictMode double-invoking the effect in dev) never spawn two engines.
+    setup: tauri::async_runtime::Mutex<()>,
 }
 
 #[derive(Serialize, Clone)]
@@ -77,6 +80,12 @@ struct DownloadableModel {
 /// Ensure the local engine is installed and running; return its base URL.
 #[tauri::command]
 async fn ensure_engine(app: AppHandle, state: State<'_, EngineState>) -> Result<String, String> {
+    if let Some(existing) = state.base_url.lock().unwrap().clone() {
+        return Ok(existing);
+    }
+    // Only one setup at a time. A second concurrent call waits here, then finds
+    // base_url already set below and reuses it — so we never spawn twice.
+    let _setup = state.setup.lock().await;
     if let Some(existing) = state.base_url.lock().unwrap().clone() {
         return Ok(existing);
     }
@@ -174,9 +183,32 @@ fn ensure_blocking(app: &AppHandle) -> Result<(String, Option<Child>), String> {
                     ComfyUI or AUTOMATIC1111 yourself and connect to it in Settings."
             .into());
     }
+    // If something already holds the port (a ComfyUI still booting, our own from a
+    // prior run, or another app), do NOT spawn a second — wait for it to answer,
+    // then reuse it; only error if it never does. This avoids two engines fighting
+    // over the port / database.
+    if port_in_use(ENGINE_PORT) {
+        emit_engine(app, "starting", "Waiting for an engine already on the port…", None);
+        for _ in 0..180 {
+            if health_ok(&base) {
+                emit_engine(app, "ready", "Engine ready", Some(100.0));
+                return Ok((base, None));
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        return Err(format!(
+            "Port {ENGINE_PORT} is in use but isn't responding as ComfyUI. Close that program \
+             (or run stop-comfyui.bat), then try again."
+        ));
+    }
     let child = install_and_spawn(app)?;
     emit_engine(app, "ready", "Engine ready", Some(100.0));
     Ok((base, Some(child)))
+}
+
+/// Is something already listening on `127.0.0.1:port`?
+fn port_in_use(port: u16) -> bool {
+    std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
 }
 
 fn install_and_spawn(app: &AppHandle) -> Result<Child, String> {
