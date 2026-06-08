@@ -25,10 +25,11 @@ goto :eof
 :maybe_start_comfyui
 set "COMFYLAUNCHER=%USERPROFILE%\VisualReader\run-comfyui.bat"
 if not exist "%COMFYLAUNCHER%" exit /b 0
-set "RUNNING="
-where curl >nul 2>nul && curl -s -o nul --max-time 2 http://127.0.0.1:8188/system_stats && set "RUNNING=1"
-if defined RUNNING (
-  echo [OK] Local ComfyUI is already running.
+rem Port check catches an instance that's already running OR still booting, so we
+rem never start a second ComfyUI (port 8188 / its database can only have one).
+netstat -ano | findstr ":8188" | findstr "LISTENING" >nul 2>nul
+if not errorlevel 1 (
+  echo [OK] Local ComfyUI is already running on port 8188.
   exit /b 0
 )
 echo [..] Starting local ComfyUI in a separate window ^(first start can take a bit^)...

@@ -196,6 +196,13 @@ exit /b 0
 > "%LAUNCHER%" echo @echo off
 >>"%LAUNCHER%" echo title Visual Reader - ComfyUI
 >>"%LAUNCHER%" echo cd /d "%%~dp0ComfyUI_windows_portable"
+>>"%LAUNCHER%" echo netstat -ano ^| findstr ":8188" ^| findstr "LISTENING" ^>nul 2^>nul
+>>"%LAUNCHER%" echo if not errorlevel 1 (
+>>"%LAUNCHER%" echo   echo ComfyUI already appears to be running at http://127.0.0.1:8188
+>>"%LAUNCHER%" echo   echo Close that window first if you want to restart it.
+>>"%LAUNCHER%" echo   pause
+>>"%LAUNCHER%" echo   exit /b 0
+>>"%LAUNCHER%" echo ^)
 >>"%LAUNCHER%" echo set "GPUARG="
 >>"%LAUNCHER%" echo where nvidia-smi ^>nul 2^>nul ^|^| set "GPUARG=--cpu"
 >>"%LAUNCHER%" echo echo Starting ComfyUI at http://127.0.0.1:8188  ^(keep this window open; Ctrl+C to stop^)
