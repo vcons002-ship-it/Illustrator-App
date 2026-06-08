@@ -1,4 +1,4 @@
-import type { Character, CharacterAppearance, VisualBible } from "../../types/bible.js";
+import type { Character, CharacterAppearance, Creature, VisualBible } from "../../types/bible.js";
 import { emptyAppearance } from "../../types/bible.js";
 import type { EntityExtractionInput } from "./llm-provider.js";
 import type { VisualRequest } from "../../types/content.js";
@@ -24,6 +24,8 @@ export interface RawExtraction {
     clothing: string[];
   }[];
   environments: { name: string; description: string[] }[];
+  /** Named/notable non-human creatures (dragons, beasts…). Optional for back-compat. */
+  creatures?: { name: string; aliases: string[]; kind: string; description: string[] }[];
   spoilers: { label: string; revealHint: string }[];
   /** Recurring world facts/defining context to apply by default in every prompt. */
   glossary?: { term: string; definition: string }[];
@@ -50,6 +52,12 @@ export const EXTRACTION_SYSTEM =
   "description (architecture, materials, layout, lighting, palette, mood) AND its world's " +
   "fashion and aesthetic; when a location you already know recurs, ADD any new detail, and " +
   "always refer to it by its established name. " +
+  "Capture notable non-human 'creatures' — dragons, beasts, monsters, mounts — separately " +
+  "from human characters (do NOT put them in 'characters'). For each give its name (or a " +
+  "descriptive label if unnamed, e.g. 'the black dragon'), any aliases, its 'kind' (dragon, " +
+  "griffin…), and a detailed visual 'description' (size, colour, scales/fur, wings, horns, " +
+  "eyes, distinguishing marks). When a creature you already know recurs, ADD new detail and " +
+  "reuse its established name (e.g. 'Tairn' is a massive midnight-black dragon). " +
   "Build a 'glossary' of recurring world facts / defining context that should be assumed " +
   "by default unless a passage says otherwise — e.g. customary attire ('dragon riders wear " +
   "fitted black flight leathers'), technology level, materials, or social norms; each entry " +
@@ -65,8 +73,10 @@ export const PROMPT_SYSTEM =
   "You write one vivid, concrete image-generation prompt for a single illustration of a " +
   "book chapter. Write it as a single paragraph of natural, descriptive language (NOT a " +
   "list of tags, no weighting syntax, no markdown) — lead with the subject and action, " +
-  "then the setting, then mood/lighting. Depict the most important action of the supplied " +
-  "passage, framed by the chapter's key moment. Set the image in ONE coherent location — the " +
+  "then the setting, then mood/lighting. Depict the single most important action shown in " +
+  "THIS passage specifically — each illustration covers a different stretch of the chapter, " +
+  "so describe what happens in THIS passage and do NOT just repeat the chapter's overall key " +
+  "moment unless this passage is where it occurs. Set the image in ONE coherent location — the " +
   "place where the passage's action occurs; if the chapter or passage moves between places, " +
   "choose the single location of the depicted moment and NEVER combine two settings into one " +
   "picture. Keep every character's appearance and OUTFIT, and the setting's look and fashion, " +
@@ -146,6 +156,20 @@ export const EXTRACTION_JSON_SCHEMA = {
         required: ["name", "description"],
       },
     },
+    creatures: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          name: { type: "string" },
+          aliases: { type: "array", items: { type: "string" } },
+          kind: { type: "string" },
+          description: { type: "array", items: { type: "string" } },
+        },
+        required: ["name", "aliases", "kind", "description"],
+      },
+    },
     spoilers: {
       type: "array",
       items: {
@@ -167,6 +191,7 @@ export const EXTRACTION_JSON_SCHEMA = {
     "characters",
     "glossary",
     "environments",
+    "creatures",
     "spoilers",
     "summary",
     "keyMoment",
@@ -199,7 +224,12 @@ export function extractionUserContent(input: EntityExtractionInput): string {
     .map((e) => `- ${e.name}: ${e.description.join(", ")}`)
     .join("\n");
   const placesSoFar = places ? `Known locations so far:\n${places}\n\n` : "";
-  return `${placesSoFar}${glossarySoFar}${soFar}Chapter ${input.chapterIndex} text:\n\n${input.chapterText}`;
+  // Feed back known creatures so a recurring beast keeps one name + grows its detail.
+  const beasts = (input.existing.creatures ?? [])
+    .map((c) => `- ${c.name} (${c.kind}): ${c.description.join(", ")}`)
+    .join("\n");
+  const beastsSoFar = beasts ? `Known creatures so far:\n${beasts}\n\n` : "";
+  return `${beastsSoFar}${placesSoFar}${glossarySoFar}${soFar}Chapter ${input.chapterIndex} text:\n\n${input.chapterText}`;
 }
 
 /**
@@ -216,6 +246,7 @@ export function mergeExtraction(
     ...existing,
     characters: [...existing.characters],
     environments: [...existing.environments],
+    creatures: [...(existing.creatures ?? [])],
     spoilers: [...existing.spoilers],
     storyboard: [...(existing.storyboard ?? [])],
     glossary: [...(existing.glossary ?? [])],
@@ -272,6 +303,41 @@ export function mergeExtraction(
       });
     }
   }
+  for (const cr of raw.creatures ?? []) {
+    const name = cr.name.trim();
+    if (!name) continue;
+    const key = name.toLowerCase();
+    const at = bible.creatures.findIndex((x) => x.name.toLowerCase() === key);
+    if (at >= 0) {
+      // Known creature → ACCUMULATE description (so a beast named once later still
+      // has its full look, and recurring detail enriches it).
+      const existingCr = bible.creatures[at]!;
+      const have = new Set(existingCr.description.map((d) => d.toLowerCase()));
+      const merged = [...existingCr.description];
+      for (const d of cr.description) {
+        if (d.trim() && !have.has(d.toLowerCase())) {
+          merged.push(d);
+          have.add(d.toLowerCase());
+        }
+      }
+      bible.creatures[at] = {
+        ...existingCr,
+        description: merged,
+        ...(existingCr.kind ? {} : { kind: cr.kind }),
+      };
+    } else {
+      const creature: Creature = {
+        id: `creature-${slug(name)}`,
+        name,
+        aliases: cr.aliases,
+        kind: cr.kind,
+        description: cr.description,
+        anchor: { seed: deterministicSeed(`creature:${name}`) },
+        firstSeenChapter: chapterIndex,
+      };
+      bible.creatures.push(creature);
+    }
+  }
   for (const s of raw.spoilers) {
     bible.spoilers.push({
       id: `spoiler-${slug(s.label)}-${chapterIndex}`,
@@ -306,6 +372,7 @@ export function mergeExtraction(
 export function promptUserContent(request: VisualRequest, bible: VisualBible): string {
   const chars = bible.characters.filter((c) => request.characterIds.includes(c.id));
   const envs = bible.environments.filter((e) => request.environmentIds.includes(e.id));
+  const creatures = (bible.creatures ?? []).filter((c) => request.creatureIds.includes(c.id));
   const storyboard = bible.storyboard ?? [];
   const scene = storyboard.find((s) => s.chapterIndex === request.chapterIndex);
   const soFar = storyboard
@@ -320,12 +387,18 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
           .join("\n")}`
       : "",
     soFar ? `Story so far:\n${soFar}` : "",
-    scene?.summary ? `This chapter:\n${scene.summary}` : "",
-    scene?.keyMoment ? `Key moment to illustrate:\n${scene.keyMoment}` : "",
+    scene?.summary ? `This chapter (context):\n${scene.summary}` : "",
+    scene?.keyMoment ? `Chapter's overall pivotal moment (context only):\n${scene.keyMoment}` : "",
     settingLine(scene, envs, request.sourceText),
+    `Illustrate this specific passage's main action (not necessarily the chapter's pivotal moment).`,
     chars.length
       ? `Characters present (keep appearance + outfit consistent):\n${chars
           .map((c) => `- ${describeCharacter(c)}`)
+          .join("\n")}`
+      : "",
+    creatures.length
+      ? `Creatures present (keep look consistent):\n${creatures
+          .map((c) => `- ${c.name} (${c.kind || "creature"}): ${c.description.join(", ") || "as previously established"}`)
           .join("\n")}`
       : "",
     envs.length

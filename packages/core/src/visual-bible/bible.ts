@@ -2,10 +2,10 @@ import type { VisualBible } from "../types/bible.js";
 import type { Page } from "../types/book.js";
 
 // v2 adds the per-chapter storyboard; v3 adds the world glossary and structured
-// character appearance; v4 adds per-chapter location tracking (ChapterScene
-// location/locationChange). Bibles cached at an older version are rebuilt (see
+// character appearance; v4 adds per-chapter location tracking; v5 adds creatures
+// (named non-human beasts). Bibles cached at an older version are rebuilt (see
 // Engine.openBook) so the new fields are always present.
-export const BIBLE_VERSION = 4;
+export const BIBLE_VERSION = 5;
 
 export function createEmptyBible(bookId: string): VisualBible {
   return {
@@ -13,6 +13,7 @@ export function createEmptyBible(bookId: string): VisualBible {
     version: BIBLE_VERSION,
     characters: [],
     environments: [],
+    creatures: [],
     spoilers: [],
     storyboard: [],
     glossary: [],
@@ -33,7 +34,7 @@ function pageHaystack(page: Page): string {
 export function resolvePageEntities(
   bible: VisualBible,
   page: Page,
-): { characterIds: string[]; environmentIds: string[]; spoilerIds: string[] } {
+): { characterIds: string[]; environmentIds: string[]; creatureIds: string[]; spoilerIds: string[] } {
   const haystack = pageHaystack(page);
   const matches = (names: string[]): boolean =>
     names.some((n) => n.length > 0 && haystack.includes(n.toLowerCase()));
@@ -44,9 +45,12 @@ export function resolvePageEntities(
   const environmentIds = bible.environments
     .filter((e) => matches([e.name]))
     .map((e) => e.id);
+  const creatureIds = (bible.creatures ?? [])
+    .filter((cr) => matches([cr.name, ...cr.aliases]))
+    .map((cr) => cr.id);
   const spoilerIds = bible.spoilers
     .filter((s) => matches([s.label]))
     .map((s) => s.id);
 
-  return { characterIds, environmentIds, spoilerIds };
+  return { characterIds, environmentIds, creatureIds, spoilerIds };
 }

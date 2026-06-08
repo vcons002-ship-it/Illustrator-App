@@ -35,6 +35,8 @@ export interface VisualRequest {
   characterIds: string[];
   /** Ids of Visual Bible environments relevant to this page. */
   environmentIds: string[];
+  /** Ids of Visual Bible creatures (dragons, beasts…) relevant to this page. */
+  creatureIds: string[];
   /** Spoiler entities present in the generated visual, if any. */
   spoilerIds: string[];
 }

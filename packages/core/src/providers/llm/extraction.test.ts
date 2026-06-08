@@ -101,11 +101,13 @@ describe("promptUserContent", () => {
       sourceText: "swords clash",
       characterIds: ["char-ana"],
       environmentIds: [],
+      creatureIds: [],
       spoilerIds: [],
     };
     const text = promptUserContent(req, bible);
-    expect(text).toContain("Key moment to illustrate");
+    expect(text).toContain("pivotal moment");
     expect(text).toContain("The duel.");
+    expect(text).toContain("this specific passage");
     expect(text).toContain("Story so far"); // chapter 0's summary precedes chapter 1
     expect(text).toContain("Ana arrives in the city.");
     expect(text).toContain("red cloak"); // outfit carried into the prompt
@@ -143,6 +145,7 @@ describe("promptUserContent", () => {
       sourceText: "wings beat",
       characterIds: ["char-ana"],
       environmentIds: [],
+      creatureIds: [],
       spoilerIds: [],
     };
     const text = promptUserContent(req, bible);
@@ -208,6 +211,7 @@ describe("environments + location tracking", () => {
       sourceText: "Goblets rose in the Great Hall.",
       characterIds: [],
       environmentIds: ["env-the-great-hall"],
+      creatureIds: [],
       spoilerIds: [],
     };
     const text = promptUserContent(req, bible);
@@ -235,5 +239,65 @@ describe("environments + location tracking", () => {
     });
     expect(text).toContain("Known locations so far");
     expect(text).toContain("the Spire: black basalt");
+  });
+});
+
+describe("creatures", () => {
+  it("captures a creature, accumulates its description, and injects it into the prompt", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [],
+        environments: [],
+        spoilers: [],
+        creatures: [{ name: "Tairn", aliases: [], kind: "dragon", description: ["massive", "midnight black"] }],
+      },
+      0,
+    );
+    expect(bible.creatures).toHaveLength(1);
+    expect(bible.creatures[0]!.kind).toBe("dragon");
+    expect(bible.creatures[0]!.anchor.seed).toBeGreaterThan(0);
+
+    // A later chapter names Tairn again, adding detail (and repeating one line).
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [],
+        environments: [],
+        spoilers: [],
+        creatures: [{ name: "tairn", aliases: [], kind: "dragon", description: ["midnight black", "tail spikes"] }],
+      },
+      2,
+    );
+    expect(bible.creatures).toHaveLength(1); // deduped by name (case-insensitive)
+    expect(bible.creatures[0]!.description).toEqual(["massive", "midnight black", "tail spikes"]);
+
+    // The known-creatures context is fed back for the next chapter.
+    const ctx = extractionUserContent({
+      bookId: "b",
+      chapterIndex: 3,
+      chapterText: "Tairn roared.",
+      existing: bible,
+    });
+    expect(ctx).toContain("Known creatures so far");
+    expect(ctx).toContain("Tairn (dragon)");
+
+    // And a present creature is injected into the image prompt.
+    const req: VisualRequest = {
+      kind: "scene_illustration",
+      bookId: "b",
+      pageId: "u-0",
+      pageIndex: 0,
+      chapterIndex: 0,
+      sourceText: "Tairn beat his wings.",
+      characterIds: [],
+      environmentIds: [],
+      creatureIds: ["creature-tairn"],
+      spoilerIds: [],
+    };
+    const prompt = promptUserContent(req, bible);
+    expect(prompt).toContain("Creatures present");
+    expect(prompt).toContain("Tairn (dragon): massive, midnight black, tail spikes");
   });
 });

@@ -54,6 +54,14 @@ const ExtractionSchema = z.object({
       description: z.array(z.string()),
     }),
   ),
+  creatures: z.array(
+    z.object({
+      name: z.string(),
+      aliases: z.array(z.string()),
+      kind: z.string(),
+      description: z.array(z.string()),
+    }),
+  ),
   spoilers: z.array(
     z.object({
       label: z.string(),

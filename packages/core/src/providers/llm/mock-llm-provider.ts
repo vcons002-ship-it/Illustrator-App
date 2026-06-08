@@ -26,6 +26,7 @@ export class MockLLMProvider implements LLMProvider {
     const bible: VisualBible = {
       ...input.existing,
       characters: [...input.existing.characters],
+      creatures: [...(input.existing.creatures ?? [])],
       storyboard: [...(input.existing.storyboard ?? [])],
       glossary: [...(input.existing.glossary ?? [])],
       processedChapters: [...input.existing.processedChapters],

@@ -65,10 +65,12 @@ export const EXTRACTION_JSON_INSTRUCTION =
   '"persistentTraits":string[],"clothing":string[]}],' +
   '"glossary":[{"term":string,"definition":string}],' +
   '"environments":[{"name":string,"description":string[]}],' +
+  '"creatures":[{"name":string,"aliases":string[],"kind":string,"description":string[]}],' +
   '"spoilers":[{"label":string,"revealHint":string}],' +
   '"summary":string,"keyMoment":string,"location":string,"locationChange":string}. ' +
   "Include EVERY named character with any appearance description (use empty strings for " +
-  "unknown appearance fields). Set 'location' to where the chapter happens and " +
+  "unknown appearance fields). Put non-human beasts (dragons, monsters, mounts) in " +
+  "'creatures', NOT 'characters'. Set 'location' to where the chapter happens and " +
   "'locationChange' to where/when it moves (empty string if it stays in one place).";
 
 // Module-level engine cache so re-created providers reuse a loaded model
@@ -233,6 +235,15 @@ export function parseExtraction(content: string): RawExtraction {
       environments: asArray(json.environments).map((e) => {
         const o = e as Record<string, unknown>;
         return { name: str(o.name), description: strArray(o.description) };
+      }),
+      creatures: asArray(json.creatures).map((c) => {
+        const o = c as Record<string, unknown>;
+        return {
+          name: str(o.name),
+          aliases: strArray(o.aliases),
+          kind: str(o.kind),
+          description: strArray(o.description),
+        };
       }),
       spoilers: asArray(json.spoilers).map((s) => {
         const o = s as Record<string, unknown>;

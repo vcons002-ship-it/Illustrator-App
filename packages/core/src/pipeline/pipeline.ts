@@ -1,5 +1,5 @@
 import type { BookSource, Page } from "../types/book.js";
-import type { Character, VisualBible } from "../types/bible.js";
+import type { Character, Creature, VisualBible } from "../types/bible.js";
 import type { ImageResult, VisualRequest } from "../types/content.js";
 import type { TierConfig } from "../types/tier.js";
 import type { LLMProvider } from "../providers/llm/llm-provider.js";
@@ -42,7 +42,7 @@ export class RenderPipeline {
   constructor(private deps: PipelineDeps) {}
 
   buildRequest(page: Page): VisualRequest {
-    const { characterIds, environmentIds, spoilerIds } = resolvePageEntities(
+    const { characterIds, environmentIds, creatureIds, spoilerIds } = resolvePageEntities(
       this.deps.getBible(),
       page,
     );
@@ -55,6 +55,7 @@ export class RenderPipeline {
       sourceText: page.paragraphs.map((p) => p.text).join("\n\n"),
       characterIds,
       environmentIds,
+      creatureIds,
       spoilerIds,
     };
   }
@@ -120,10 +121,15 @@ export class RenderPipeline {
       const basePrompt = await this.deps.llm.buildImagePrompt(request, bible);
       const prompt = style.promptSuffix ? `${basePrompt}\n\nStyle: ${style.promptSuffix}` : basePrompt;
       const present = bible.characters.filter((c) => request.characterIds.includes(c.id));
-      const anchors = present.map((c) => c.anchor);
+      const presentCreatures = (bible.creatures ?? []).filter((c) =>
+        request.creatureIds.includes(c.id),
+      );
+      // Characters first so the seed anchor (anchors[0]) stays a character when one
+      // is present; a creature-only frame is pinned by the creature's seed.
+      const anchors = [...present.map((c) => c.anchor), ...presentCreatures.map((c) => c.anchor)];
       // Identity emphasis (SD-only, applied by the backend) — every present
-      // character, so consistency never depends on having a reference image.
-      const subjects = present.map(buildSubject);
+      // character AND creature, so consistency never depends on a reference image.
+      const subjects = [...present.map(buildSubject), ...presentCreatures.map(buildCreatureSubject)];
       // Reference images for IP-Adapter (ComfyUI uses them when installed).
       const ipAdapterRefs = await this.referenceImagesFor(present);
       // Local engines additionally apply a style LoRA/checkpoint when installed.
@@ -195,4 +201,10 @@ function buildSubject(c: Character): { name: string; features: string; outfit: s
     for (const t of c.persistentTraits) if (t && t.trim()) fields.push(t.trim());
   }
   return { name: c.name, features: fields.join(", "), outfit: c.clothing.join(", ") };
+}
+
+/** A creature as an SD subject: its kind + accumulated description as the features. */
+function buildCreatureSubject(c: Creature): { name: string; features: string; outfit: string } {
+  const features = [c.kind, ...c.description].filter((t) => t && t.trim()).join(", ");
+  return { name: c.name, features, outfit: "" };
 }

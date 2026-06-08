@@ -81,6 +81,26 @@ export interface Environment {
 }
 
 /**
+ * A named or notable non-human creature/beast (dragon, griffin, direwolf…). Kept
+ * separate from `Character` (which is people, with structured human appearance):
+ * a creature is matched by name/kind in the page text and its accumulated
+ * description is injected so a recurring beast renders consistently. E.g.
+ * "Tairn" / kind "dragon" / description "massive, midnight black, …".
+ */
+export interface Creature {
+  id: string;
+  name: string;
+  aliases: string[];
+  /** Species/kind, e.g. "dragon", "griffin". */
+  kind: string;
+  /** Visual description (size, colour, features), accumulated across the book. */
+  description: string[];
+  /** Deterministic seed so a recurring creature renders consistently. */
+  anchor: IdentityAnchor;
+  firstSeenChapter: number;
+}
+
+/**
  * A reveal that would spoil the narrative if shown too early. The UI keeps any
  * image containing this entity blurred until the reader's scroll depth passes
  * `revealParagraphId` ("Fog of War").
@@ -132,6 +152,8 @@ export interface VisualBible {
   version: number;
   characters: Character[];
   environments: Environment[];
+  /** Named/notable non-human creatures (dragons, beasts…), kept consistent. */
+  creatures: Creature[];
   spoilers: SpoilerEntity[];
   /** Per-chapter storyboard (events + key moment), keyed by chapterIndex. */
   storyboard: ChapterScene[];
