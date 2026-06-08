@@ -146,6 +146,14 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       // images are left as-is until the user re-renders.
       void engine?.updateCharacter(msg.characterId, msg.patch);
       break;
+    case "exportBible":
+      if (engine) post({ type: "export", json: engine.exportBible() });
+      break;
+    case "importBible":
+      void engine?.importBible(msg.json).then((r) =>
+        post({ type: "imported", ok: r.ok, ...(r.stats ? { stats: r.stats } : {}), ...(r.error ? { error: r.error } : {}) }),
+      );
+      break;
     case "goto":
       engine?.goToPage(msg.pageIndex);
       break;

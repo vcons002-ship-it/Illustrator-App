@@ -333,6 +333,43 @@ describe("character de-duplication", () => {
   });
 });
 
+describe("appearance accumulation", () => {
+  it("keeps adding new appearance details across chapters (does not drop them)", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [
+          { name: "Ana", aliases: [], appearance: { hair: "brown" }, persistentTraits: [], clothing: [] },
+        ],
+        environments: [],
+        spoilers: [],
+      },
+      0,
+    );
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [
+          {
+            name: "Ana",
+            aliases: [],
+            appearance: { hair: "fades to silver at the tips", eyes: "green" },
+            persistentTraits: [],
+            clothing: [],
+          },
+        ],
+        environments: [],
+        spoilers: [],
+      },
+      3,
+    );
+    const ana = bible.characters.find((c) => c.name === "Ana")!;
+    expect(ana.appearance.hair).toBe("brown; fades to silver at the tips"); // accumulated
+    expect(ana.appearance.eyes).toBe("green"); // newly filled
+  });
+});
+
 describe("context-based outfits", () => {
   it("accumulates distinct outfits and offers them as scene choices in the prompt", () => {
     let bible = createEmptyBible("b");

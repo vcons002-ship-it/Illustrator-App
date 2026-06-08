@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Character, CharacterAppearance, VisualBible } from "@visual-reader/core";
+import type { Character, CharacterAppearance, Outfit, VisualBible } from "@visual-reader/core";
 
 /**
  * Read + correct the Visual Bible's characters. The LLM fills in each character's
@@ -13,6 +13,14 @@ import type { Character, CharacterAppearance, VisualBible } from "@visual-reader
 export interface CharacterEdit {
   appearance?: Partial<CharacterAppearance>;
   clothing?: string[];
+  outfits?: Outfit[];
+}
+
+/** Seed the outfit editor: existing outfits, else migrate the legacy clothing list. */
+function initialOutfits(c: Character): Outfit[] {
+  if (c.outfits && c.outfits.length > 0) return c.outfits.map((o) => ({ ...o }));
+  if (c.clothing.length > 0) return [{ label: "Default", description: c.clothing.join(", "), context: "" }];
+  return [];
 }
 
 export interface CharacterBibleProps {
@@ -106,27 +114,29 @@ function CharacterCard({
   onSave: (characterId: string, patch: CharacterEdit) => void;
 }) {
   const [appearance, setAppearance] = useState<CharacterAppearance>(character.appearance);
-  const [clothing, setClothing] = useState(character.clothing.join(", "));
+  const [outfits, setOutfits] = useState<Outfit[]>(() => initialOutfits(character));
   const [saved, setSaved] = useState(false);
 
   // Re-sync local edits if the bible changes underneath (e.g. a rebuild).
   useEffect(() => {
     setAppearance(character.appearance);
-    setClothing(character.clothing.join(", "));
+    setOutfits(initialOutfits(character));
   }, [character]);
 
+  const cleanOutfits = outfits
+    .map((o) => ({ label: o.label.trim(), description: o.description.trim(), context: o.context.trim() }))
+    .filter((o) => o.label || o.description);
   const dirty =
     JSON.stringify(appearance) !== JSON.stringify(character.appearance) ||
-    clothing !== character.clothing.join(", ");
+    JSON.stringify(cleanOutfits) !== JSON.stringify(initialOutfits(character));
+
+  const setOutfit = (i: number, patch: Partial<Outfit>) =>
+    setOutfits((list) => list.map((o, k) => (k === i ? { ...o, ...patch } : o)));
+  const addOutfit = () => setOutfits((list) => [...list, { label: "", description: "", context: "" }]);
+  const removeOutfit = (i: number) => setOutfits((list) => list.filter((_, k) => k !== i));
 
   const save = () => {
-    onSave(character.id, {
-      appearance,
-      clothing: clothing
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-    });
+    onSave(character.id, { appearance, outfits: cleanOutfits });
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
   };
@@ -150,15 +160,44 @@ function CharacterCard({
             />
           </label>
         ))}
-        <label style={{ ...fieldStyle, gridColumn: "1 / -1" }}>
-          <span style={labelStyle}>Clothing / outfit</span>
-          <input
-            style={inputStyle}
-            value={clothing}
-            placeholder="comma-separated, e.g. black flight leathers, buckled straps"
-            onChange={(e) => setClothing(e.target.value)}
-          />
-        </label>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={labelStyle}>Outfits (the illustrator picks the one fitting each scene)</span>
+          <button style={smallButtonStyle} onClick={addOutfit}>
+            + Add outfit
+          </button>
+        </div>
+        {outfits.length === 0 && (
+          <span style={{ opacity: 0.5, fontSize: 12 }}>No outfits yet — add one, or they fill in as the book is read.</span>
+        )}
+        {outfits.map((o, i) => (
+          <div key={i} style={outfitRowStyle}>
+            <div style={{ display: "flex", gap: 6 }}>
+              <input
+                style={{ ...inputStyle, flex: "0 0 38%" }}
+                value={o.label}
+                placeholder="label, e.g. flight leathers"
+                onChange={(e) => setOutfit(i, { label: e.target.value })}
+              />
+              <input
+                style={{ ...inputStyle, flex: 1 }}
+                value={o.context}
+                placeholder="when worn, e.g. flying, battle"
+                onChange={(e) => setOutfit(i, { context: e.target.value })}
+              />
+              <button style={smallButtonStyle} title="Remove outfit" onClick={() => removeOutfit(i)}>
+                ✕
+              </button>
+            </div>
+            <input
+              style={inputStyle}
+              value={o.description}
+              placeholder="description: garments, fabric, colour, accessories"
+              onChange={(e) => setOutfit(i, { description: e.target.value })}
+            />
+          </div>
+        ))}
       </div>
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
         {saved && <span style={{ color: "#7dd87f", fontSize: 12 }}>✓ saved</span>}
@@ -244,4 +283,19 @@ const buttonStyle = {
   borderRadius: 6,
   padding: "4px 10px",
   cursor: "pointer",
+} as const;
+
+const smallButtonStyle = {
+  ...buttonStyle,
+  padding: "2px 8px",
+  fontSize: 12,
+} as const;
+
+const outfitRowStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 4,
+  padding: 8,
+  border: "1px solid rgba(255,255,255,0.10)",
+  borderRadius: 6,
 } as const;

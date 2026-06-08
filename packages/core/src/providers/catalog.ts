@@ -144,6 +144,16 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
     family: "sdxl",
   },
   {
+    id: "juggernaut-xl",
+    label: "Juggernaut XL (action / realism)",
+    sizeGB: 7,
+    note: "SDXL · strong dynamic action scenes & anatomy",
+    filename: "juggernaut-xl.safetensors",
+    // Best-effort community mirror; downloads fail gracefully if it moves.
+    url: "https://huggingface.co/RunDiffusion/Juggernaut-XL-v9/resolve/main/Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors",
+    family: "sdxl",
+  },
+  {
     id: "flux-schnell",
     label: "Flux-schnell (fp8)",
     sizeGB: 12,
@@ -214,6 +224,15 @@ export interface ImageStyle {
 
 export const IMAGE_STYLES: ImageStyle[] = [
   { id: "auto", label: "Auto (match the writing)", promptSuffix: "" },
+  {
+    id: "dynamic-action",
+    label: "Dynamic action",
+    promptSuffix:
+      "dynamic action pose, intense motion, sense of speed and impact, cinematic action shot, motion blur on movement",
+    // No bundled download — the prompt emphasis drives it; drop a LoRA named
+    // dynamic-action.safetensors into the engine's loras folder to boost it.
+    local: { lora: { name: "dynamic-action", strength: 0.7, trigger: "dynamic action" } },
+  },
   {
     id: "photorealistic",
     label: "Photorealistic",

@@ -1,4 +1,10 @@
-import type { BookSource, CharacterPatch, ImageResult, VisualBible } from "@visual-reader/core";
+import type {
+  BookSource,
+  CharacterPatch,
+  ImageResult,
+  ImportStats,
+  VisualBible,
+} from "@visual-reader/core";
 import type { ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
 
 /**
@@ -18,6 +24,8 @@ export type MainToWorker =
   | { type: "regenerateAllImages" }
   | { type: "regenerateImage"; unitIndex: number }
   | { type: "updateCharacter"; characterId: string; patch: CharacterPatch }
+  | { type: "exportBible" }
+  | { type: "importBible"; json: string }
   | { type: "goto"; pageIndex: number }
   | { type: "idle"; allowed: boolean }
   | { type: "prerenderAll" };
@@ -29,4 +37,6 @@ export type WorkerToMain =
   | { type: "paused"; value: boolean }
   | { type: "opened"; bible: VisualBible }
   | { type: "update"; pageIndex: number; result: ImageResult }
+  | { type: "export"; json: string }
+  | { type: "imported"; ok: boolean; stats?: ImportStats; error?: string }
   | { type: "error"; message: string };

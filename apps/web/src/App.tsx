@@ -11,6 +11,7 @@ import {
   getImageStyle,
   latestSpoilerParagraphIndex,
   paragraphIndexFromId,
+  parseImportedBible,
   resolvePageEntities,
   spoilerRevealPoint,
   toRenderUnits,
@@ -33,7 +34,7 @@ import {
 } from "@visual-reader/ui";
 import type { LocalTextServerId } from "@visual-reader/core";
 import { loadSampleBook } from "./sample.js";
-import { useEngineWorker } from "./useEngineWorker.js";
+import { useEngineWorker, type ImportResult } from "./useEngineWorker.js";
 import {
   downloadLora,
   downloadModel,
@@ -75,11 +76,16 @@ export function App() {
     regenerateAllImages,
     regenerateImage,
     updateCharacter,
+    exportBible,
+    importBible,
+    importResult,
+    clearImportResult,
     goTo,
     prerenderAll,
   } = useEngineWorker(settings);
   const [prerendering, setPrerendering] = useState(false);
   const [showCharacters, setShowCharacters] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const { registerParagraph, activeParagraphId, activeParagraphProgress } = useScrollDepth();
 
   // Decrypt stored keys after mount, then enable persistence. Persisting is gated
@@ -514,6 +520,24 @@ export function App() {
           {book && (
             <button
               style={styles.button}
+              onClick={exportBible}
+              title="Download the Visual Bible (+ AI rules) as JSON for editing or external analysis"
+            >
+              ⤓ Export bible
+            </button>
+          )}
+          {book && (
+            <button
+              style={styles.button}
+              onClick={() => setShowImport(true)}
+              title="Import a Visual Bible JSON (from an export or an external AI) onto this book"
+            >
+              ⤒ Import bible
+            </button>
+          )}
+          {book && (
+            <button
+              style={styles.button}
               onClick={onPrerenderAll}
               disabled={prerendering && !prerenderDone}
               title="Render illustrations for every page now, instead of as you reach them"
@@ -609,8 +633,8 @@ export function App() {
                 bloom={bloom}
                 pageKey={unitIndex}
                 awaitingStart={!generating}
-                caption={imageCaption}
               />
+              {imageCaption && <div style={styles.imageDescription}>{imageCaption}</div>}
               <div style={styles.caption}>
                 {pagesPerImage === "chapter"
                   ? `Chapter ${unitIndex + 1} of ${totalUnits}`
@@ -631,6 +655,18 @@ export function App() {
           onClose={() => setShowCharacters(false)}
         />
       )}
+
+      {showImport && book && (
+        <ImportBibleModal
+          bookId={book.id}
+          onImport={importBible}
+          result={importResult}
+          onClose={() => {
+            clearImportResult();
+            setShowImport(false);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -642,16 +678,22 @@ export function App() {
  * are read inline and re-encrypted on the next save.
  */
 /**
- * A short, per-image caption from a unit's generated prompt: drop the appended
- * "Style: …" suffix, then take the first sentence (capped). Returns undefined
- * when there's no prompt yet (the caller falls back to the chapter key moment).
+ * A per-image caption from a unit's generated prompt: drop the appended "Style: …"
+ * suffix, then take up to the first two sentences (so it isn't cut off mid-thought),
+ * capped at ~300 chars on a word boundary. Returns undefined when there's no prompt
+ * yet (the caller falls back to the chapter key moment).
  */
 function captionFromPrompt(prompt: string | undefined): string | undefined {
   if (!prompt) return undefined;
   const base = prompt.split(/\n\nStyle:/)[0]!.replace(/\s+/g, " ").trim();
   if (!base) return undefined;
-  const sentence = base.match(/^.*?[.!?](?:\s|$)/)?.[0]?.trim() ?? base;
-  return sentence.length > 160 ? `${sentence.slice(0, 157).trimEnd()}…` : sentence;
+  const sentences = base.match(/[^.!?]+[.!?]+(?:\s|$)/g);
+  let text = sentences ? sentences.slice(0, 2).join(" ").trim() : base;
+  if (text.length > 300) {
+    const cut = text.slice(0, 300);
+    text = `${cut.slice(0, cut.lastIndexOf(" ")).trimEnd() || cut.trimEnd()}…`;
+  }
+  return text;
 }
 
 /** Best-effort filename from a download URL (for pasted checkpoint/LoRA URLs). */
@@ -726,6 +768,83 @@ async function saveSettings(s: ReaderSettings): Promise<void> {
  * painting with no idea what's happening": at a glance you can see "Image: mock —
  * no checkpoint selected" instead of guessing.
  */
+/** Paste/upload a Visual Bible JSON, preview its contents, and import it. */
+function ImportBibleModal({
+  bookId,
+  onImport,
+  result,
+  onClose,
+}: {
+  bookId: string;
+  onImport: (json: string) => void;
+  result: ImportResult | undefined;
+  onClose: () => void;
+}) {
+  const [text, setText] = useState("");
+  const preview = useMemo(() => (text.trim() ? parseImportedBible(text, bookId) : undefined), [text, bookId]);
+
+  const onFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => setText(String(reader.result ?? ""));
+    reader.readAsText(file);
+  };
+
+  return (
+    <div style={styles.modalOverlay} onClick={onClose}>
+      <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <strong>Import Visual Bible</strong>
+          <button style={styles.button} onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <p style={{ opacity: 0.65, fontSize: 12, margin: "0 0 8px" }}>
+          Paste a Visual Bible JSON (or upload a file). It merges onto this book and is saved;
+          existing images are kept.
+        </p>
+        <label style={styles.upload}>
+          Choose .json file
+          <input
+            type="file"
+            accept=".json,application/json"
+            style={{ display: "none" }}
+            onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
+          />
+        </label>
+        <textarea
+          style={styles.importTextarea}
+          value={text}
+          placeholder="…or paste the JSON here"
+          spellCheck={false}
+          onChange={(e) => setText(e.target.value)}
+        />
+        {preview?.error && <div style={{ color: "#ff9b9b", fontSize: 13 }}>{preview.error}</div>}
+        {preview?.stats && (
+          <div style={{ fontSize: 13, opacity: 0.85 }}>
+            Ready to import: {preview.stats.characters} characters · {preview.stats.creatures} creatures ·{" "}
+            {preview.stats.environments} locations · {preview.stats.storyboard} chapters ·{" "}
+            {preview.stats.glossary} glossary
+          </div>
+        )}
+        {result && (
+          <div style={{ color: result.ok ? "#7dd87f" : "#ff9b9b", fontSize: 13 }}>
+            {result.ok ? "Imported ✓ — the Visual Bible has been updated." : result.error}
+          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+          <button
+            style={styles.buttonPrimary}
+            disabled={!preview?.stats}
+            onClick={() => onImport(text)}
+          >
+            Import &amp; merge
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProviderBadges({
   providers,
   engineStatus,
@@ -883,5 +1002,46 @@ const styles: Record<string, React.CSSProperties> = {
   paragraph: { fontSize: 19, lineHeight: 1.8, margin: "0 0 18px" },
   aside: {},
   panel: { position: "sticky", top: 80 },
-  caption: { marginTop: 10, fontSize: 13, opacity: 0.7, fontFamily: "system-ui, sans-serif" },
+  imageDescription: {
+    marginTop: 10,
+    fontSize: 13,
+    lineHeight: 1.4,
+    opacity: 0.9,
+    fontFamily: "system-ui, sans-serif",
+  },
+  caption: { marginTop: 6, fontSize: 12, opacity: 0.6, fontFamily: "system-ui, sans-serif" },
+  modalOverlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,0.5)",
+    display: "flex",
+    alignItems: "flex-start",
+    justifyContent: "center",
+    padding: "8vh 16px",
+    zIndex: 50,
+    overflowY: "auto",
+  },
+  modalPanel: {
+    width: "min(620px, 100%)",
+    background: "#171922",
+    border: "1px solid rgba(255,255,255,0.15)",
+    borderRadius: 12,
+    padding: 16,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    fontFamily: "system-ui, sans-serif",
+  },
+  importTextarea: {
+    width: "100%",
+    boxSizing: "border-box",
+    minHeight: 160,
+    background: "rgba(255,255,255,0.06)",
+    border: "1px solid rgba(255,255,255,0.18)",
+    borderRadius: 8,
+    color: "inherit",
+    padding: 10,
+    fontSize: 12,
+    fontFamily: "monospace",
+  },
 };

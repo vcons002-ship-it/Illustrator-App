@@ -1,6 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { BookSource, CharacterPatch, ImageResult, VisualBible } from "@visual-reader/core";
+import type {
+  BookSource,
+  CharacterPatch,
+  ImageResult,
+  ImportStats,
+  VisualBible,
+} from "@visual-reader/core";
 import type { ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
+
+export interface ImportResult {
+  ok: boolean;
+  stats?: ImportStats;
+  error?: string;
+}
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
 
 /**
@@ -28,6 +40,14 @@ export interface EngineWorkerApi {
   regenerateImage: (unitIndex: number) => void;
   /** Save a user correction to a character (persisted; existing images unchanged). */
   updateCharacter: (characterId: string, patch: CharacterPatch) => void;
+  /** Download the current Visual Bible (+ AI rules) as a JSON file. */
+  exportBible: () => void;
+  /** Import a Visual Bible JSON onto the current book. */
+  importBible: (json: string) => void;
+  /** Result of the last import (success stats or an error), or undefined. */
+  importResult: ImportResult | undefined;
+  /** Clear the last import result (e.g. on closing the import dialog). */
+  clearImportResult: () => void;
   goTo: (pageIndex: number) => void;
   prerenderAll: () => void;
 }
@@ -45,6 +65,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   const [providers, setProviders] = useState<ProvidersDiagnostics | undefined>();
   const [generating, setGenerating] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [importResult, setImportResult] = useState<ImportResult | undefined>();
 
   const send = (msg: MainToWorker, transfer: Transferable[] = []) =>
     workerRef.current?.postMessage(msg, transfer);
@@ -90,6 +111,16 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
           break;
         case "update":
           setResults((prev) => new Map(prev).set(msg.pageIndex, msg.result));
+          break;
+        case "export":
+          downloadJson(msg.json, "visual-bible.json");
+          break;
+        case "imported":
+          setImportResult({
+            ok: msg.ok,
+            ...(msg.stats ? { stats: msg.stats } : {}),
+            ...(msg.error ? { error: msg.error } : {}),
+          });
           break;
         case "error":
           setStatus(`Error: ${msg.message}`);
@@ -149,6 +180,12 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
       send({ type: "updateCharacter", characterId, patch }),
     [],
   );
+  const exportBible = useCallback(() => send({ type: "exportBible" }), []);
+  const importBible = useCallback((json: string) => {
+    setImportResult(undefined);
+    send({ type: "importBible", json });
+  }, []);
+  const clearImportResult = useCallback(() => setImportResult(undefined), []);
   const goTo = useCallback((pageIndex: number) => send({ type: "goto", pageIndex }), []);
   const prerenderAll = useCallback(() => send({ type: "prerenderAll" }), []);
 
@@ -166,8 +203,22 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     regenerateStoryboard,
     regenerateAllImages,
     regenerateImage,
+    exportBible,
+    importBible,
+    importResult,
+    clearImportResult,
     updateCharacter,
     goTo,
     prerenderAll,
   };
+}
+
+/** Trigger a browser download of a JSON string. */
+function downloadJson(json: string, filename: string): void {
+  const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

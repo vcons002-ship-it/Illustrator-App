@@ -47,7 +47,9 @@ export const EXTRACTION_SYSTEM =
   "read it chapter by chapter. Capture EVERY named character who is given any physical " +
   "or appearance description in this chapter — including minor and one-off characters. " +
   "Do NOT limit yourself to the main cast; only skip bare name-drops that carry no " +
-  "description at all. For each character fill the structured 'appearance' fields " +
+  "description at all. A capitalized word used as a person's NAME or nickname is a character " +
+  "(a human), even when it is also a common noun or animal word — e.g. a person called 'Cat', " +
+  "'Hawk', 'Wren', or 'Fox' is a human character, NOT an animal. For each character fill the structured 'appearance' fields " +
   "(hair, eyes, gender, build/physique, height, skinTone, age, distinguishingMarks; use " +
   "an empty string for anything the text doesn't state) and put extra persistent details " +
   "in persistentTraits. Capture each DISTINCT outfit a character is described wearing as a " +
@@ -68,7 +70,9 @@ export const EXTRACTION_SYSTEM =
   "descriptive label if unnamed, e.g. 'the black dragon'), any aliases, its 'kind' (dragon, " +
   "griffin…), and a detailed visual 'description' (size, colour, scales/fur, wings, horns, " +
   "eyes, distinguishing marks). When a creature you already know recurs, ADD new detail and " +
-  "reuse its established name (e.g. 'Tairn' is a massive midnight-black dragon). " +
+  "reuse its established name (e.g. 'Tairn' is a massive midnight-black dragon). NEVER create a " +
+  "creature from a person's name or nickname — only from a LITERAL animal/beast in the text (a " +
+  "character nicknamed 'Cat' is a person, not an animal). " +
   "Build a 'glossary' of recurring world facts / defining context that should be assumed " +
   "by default unless a passage says otherwise — e.g. customary attire ('dragon riders wear " +
   "fitted black flight leathers'), technology level, materials, or social norms; each entry " +
@@ -91,9 +95,12 @@ export const PROMPT_SYSTEM =
   "place where the passage's action occurs; if the chapter or passage moves between places, " +
   "choose the single location of the depicted moment and NEVER combine two settings into one " +
   "picture. Keep every character's appearance consistent with the supplied Visual Bible and " +
-  "the story so far. For each character, choose the SINGLE outfit from their listed options " +
+  "the story so far. The listed characters are PEOPLE — depict them as humans; NEVER render a " +
+  "character as an animal even if their name is also a common word (a person named 'Cat' is a " +
+  "woman, not a cat). For each character, choose the SINGLE outfit from their listed options " +
   "that best fits THIS scene's context (what the passage describes them doing/wearing); depict " +
-  "only that outfit and never combine outfits. " +
+  "only that outfit and never combine outfits. For action scenes, convey dynamic movement — a " +
+  "dynamic pose, motion, energy, a sense of speed or impact. " +
   "Output only the prompt text, no preamble.";
 
 /**
@@ -430,7 +437,7 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
     settingLine(scene, envs, request.sourceText),
     `Illustrate this specific passage's main action (not necessarily the chapter's pivotal moment).`,
     chars.length
-      ? `Characters present (keep appearance + outfit consistent):\n${chars
+      ? `Characters present (these are PEOPLE — render as humans, even if a name is also a common word like 'Cat'; keep appearance consistent and pick one fitting outfit):\n${chars
           .map((c) => `- ${describeCharacter(c)}`)
           .join("\n")}`
       : "",
@@ -519,15 +526,34 @@ function unionStrings(a: string[], b: string[]): string[] {
   return out;
 }
 
-/** Fill any blank appearance field on `base` from `extra` (base wins when set). */
-function fillAppearance(
+/**
+ * Accumulate appearance details: keep adding NEW information per field across
+ * chapters rather than only filling blanks. If `extra` adds detail not already
+ * present, append it ("brown" + "fades to silver at the tips"); if `extra` is a
+ * richer superset of `base`, replace; exact/contained repeats are ignored.
+ */
+function accumulateAppearance(
   base: CharacterAppearance,
   extra: Partial<CharacterAppearance> | undefined,
 ): CharacterAppearance {
   if (!extra) return base;
   const out = { ...base };
   (Object.keys(out) as (keyof CharacterAppearance)[]).forEach((k) => {
-    if (!out[k].trim() && extra[k]?.trim()) out[k] = extra[k]!;
+    const cur = out[k].trim();
+    const add = (extra[k] ?? "").trim();
+    if (!add) return;
+    if (!cur) {
+      out[k] = add;
+      return;
+    }
+    const lc = cur.toLowerCase();
+    const la = add.toLowerCase();
+    if (lc.includes(la)) return; // already have this detail
+    if (la.includes(lc)) {
+      out[k] = add; // new value is a richer superset
+      return;
+    }
+    out[k] = `${cur}; ${add}`; // genuinely new detail → append
   });
   return out;
 }
@@ -555,7 +581,7 @@ function mergeRawIntoCharacter(ex: Character, raw: RawExtraction["characters"][n
     aliases: unionStrings(ex.aliases, [raw.name, ...raw.aliases]).filter(
       (a) => a.toLowerCase() !== ex.name.toLowerCase(),
     ),
-    appearance: fillAppearance(ex.appearance, raw.appearance),
+    appearance: accumulateAppearance(ex.appearance, raw.appearance),
     persistentTraits: unionStrings(ex.persistentTraits, raw.persistentTraits),
     clothing: unionStrings(ex.clothing, raw.clothing ?? []),
     outfits: unionOutfits(ex.outfits, (raw.outfits ?? []) as Outfit[]),
@@ -569,7 +595,7 @@ function mergeCharacters(canon: Character, other: Character): Character {
     aliases: unionStrings([...canon.aliases, other.name, ...other.aliases], []).filter(
       (a) => a.toLowerCase() !== canon.name.toLowerCase(),
     ),
-    appearance: fillAppearance(canon.appearance, other.appearance),
+    appearance: accumulateAppearance(canon.appearance, other.appearance),
     persistentTraits: unionStrings(canon.persistentTraits, other.persistentTraits),
     clothing: unionStrings(canon.clothing, other.clothing),
     outfits: unionOutfits(canon.outfits, other.outfits),

@@ -1,5 +1,5 @@
 import type { BookSource } from "./types/book.js";
-import type { CharacterAppearance, IdentityAnchor, VisualBible } from "./types/bible.js";
+import type { CharacterAppearance, IdentityAnchor, Outfit, VisualBible } from "./types/bible.js";
 import type { ImageResult } from "./types/content.js";
 import type { TierConfig } from "./types/tier.js";
 import { DEFAULT_TIER_CONFIG } from "./types/tier.js";
@@ -10,6 +10,7 @@ import { InMemoryStore } from "./storage/store.js";
 import { RenderPipeline } from "./pipeline/pipeline.js";
 import { RenderBuffer } from "./render-buffer/render-buffer.js";
 import { BIBLE_VERSION, createEmptyBible } from "./visual-bible/bible.js";
+import { exportBible, parseImportedBible, type ImportStats } from "./visual-bible/bible-export.js";
 import { consolidateCharacters } from "./providers/llm/extraction.js";
 
 /**
@@ -51,6 +52,7 @@ export interface CharacterPatch {
   aliases?: string[];
   persistentTraits?: string[];
   clothing?: string[];
+  outfits?: Outfit[];
   appearance?: Partial<CharacterAppearance>;
 }
 
@@ -239,6 +241,27 @@ export class Engine {
     return this.bible;
   }
 
+  /** Serialize the current Visual Bible (+ AI rules) to an export JSON string. */
+  exportBible(): string {
+    return exportBible(this.bible);
+  }
+
+  /**
+   * Import a Visual Bible JSON (from an export or external AI), merging it onto the
+   * current book and persisting. Validates the schema version; does NOT re-render
+   * images (the bible is metadata). Returns stats or an error message.
+   */
+  async importBible(json: string): Promise<{ ok: boolean; stats?: ImportStats; error?: string }> {
+    if (!this.book) return { ok: false, error: "Open a book first." };
+    const result = parseImportedBible(json, this.book.id);
+    if (!result.bible) return { ok: false, ...(result.error ? { error: result.error } : {}) };
+    this.bible = result.bible;
+    await this.store.putBible(this.bible);
+    this.opts.onBibleUpdate?.(this.bible);
+    this.buffer?.refresh();
+    return { ok: true, ...(result.stats ? { stats: result.stats } : {}) };
+  }
+
   /**
    * Save a just-rendered solo frame as a character's reference image (for
    * IP-Adapter), set it on the bible's anchor, and persist. Called by the pipeline
@@ -274,7 +297,8 @@ export class Engine {
     if (!this.bible) return;
     // A look change makes any captured reference image stale → drop it so a fresh
     // one is recaptured on the next solo render.
-    const looksChanged = patch.appearance !== undefined || patch.clothing !== undefined;
+    const looksChanged =
+      patch.appearance !== undefined || patch.clothing !== undefined || patch.outfits !== undefined;
     const characters = this.bible.characters.map((c) =>
       c.id === characterId
         ? {
@@ -285,6 +309,7 @@ export class Engine {
               ? { persistentTraits: patch.persistentTraits }
               : {}),
             ...(patch.clothing !== undefined ? { clothing: patch.clothing } : {}),
+            ...(patch.outfits !== undefined ? { outfits: patch.outfits } : {}),
             ...(patch.appearance !== undefined
               ? { appearance: { ...c.appearance, ...patch.appearance } }
               : {}),

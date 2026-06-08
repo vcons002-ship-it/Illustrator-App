@@ -24,14 +24,9 @@ export interface ImagePanelProps {
    * underway with "painting…".
    */
   awaitingStart?: boolean;
-  /**
-   * Short sentence shown over the image (character names + the chapter's key
-   * action). Fades in with the bloom so it never reveals before the picture.
-   */
-  caption?: string | undefined;
 }
 
-export function ImagePanel({ result, bloom, pageKey, awaitingStart, caption }: ImagePanelProps) {
+export function ImagePanel({ result, bloom, pageKey, awaitingStart }: ImagePanelProps) {
   const imageUrl = useObjectUrl(result);
   // Click-to-reveal: the reader can force the current image fully visible,
   // overriding the progress-driven bloom. Resets on navigation so the next page
@@ -81,29 +76,9 @@ export function ImagePanel({ result, bloom, pageKey, awaitingStart, caption }: I
           }}
         />
       </BloomTransition>
-      {caption && (
-        <div style={{ ...captionOverlayStyle, opacity: Math.max(0, Math.min(1, effectiveBloom)) }}>
-          {caption}
-        </div>
-      )}
     </div>
   );
 }
-
-const captionOverlayStyle = {
-  position: "absolute",
-  left: 0,
-  right: 0,
-  bottom: 0,
-  padding: "20px 12px 10px",
-  borderRadius: "0 0 8px 8px",
-  fontSize: 13,
-  lineHeight: 1.35,
-  color: "#fff",
-  textShadow: "0 1px 3px rgba(0,0,0,0.8)",
-  background: "linear-gradient(to top, rgba(0,0,0,0.72), rgba(0,0,0,0))",
-  pointerEvents: "none",
-} as const;
 
 /** Turn the result's image bytes into an object URL, revoking it on change. */
 function useObjectUrl(result: ImageResult | undefined): string | undefined {

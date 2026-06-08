@@ -347,6 +347,23 @@ describe("Engine", () => {
     const call = genSpy.mock.calls.find((c) => (c[0].subjects?.length ?? 0) > 0);
     expect(call?.[0].subjects?.[0]?.name).toBe("Aria");
   });
+
+  it("updateCharacter applies an edited outfit list and persists it", async () => {
+    const store = new InMemoryStore();
+    const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    await engine.whenBibleReady();
+    const aria = engine.getBible()!.characters.find((c) => c.name === "Aria")!;
+
+    await engine.updateCharacter(aria.id, {
+      outfits: [{ label: "armour", description: "steel plate", context: "battle" }],
+    });
+    const updated = engine.getBible()!.characters.find((c) => c.id === aria.id)!;
+    expect(updated.outfits).toEqual([{ label: "armour", description: "steel plate", context: "battle" }]);
+    const persisted = await store.getBible("book-1");
+    expect(persisted!.characters.find((c) => c.id === aria.id)!.outfits?.[0]?.label).toBe("armour");
+  });
 });
 
 function twoChapterBook(): BookSource {
