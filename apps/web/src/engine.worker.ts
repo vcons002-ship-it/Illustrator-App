@@ -12,9 +12,21 @@ const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
 let settings: ReaderSettings | undefined;
 let engine: Engine | undefined;
+/** A "start" that arrived before the engine existed; applied once it's ready. */
+let pendingStart = false;
 
 function post(message: WorkerToMain, transfer: Transferable[] = []): void {
   ctx.postMessage(message, transfer);
+}
+
+/** Begin generation now if the engine is up, else remember to start on open. */
+function beginGeneration(): void {
+  if (engine) {
+    engine.startGeneration();
+    post({ type: "generating", value: true });
+  } else {
+    pendingStart = true;
+  }
 }
 
 ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
@@ -35,8 +47,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       void handleOpen(msg.book);
       break;
     case "start":
-      engine?.startGeneration();
-      post({ type: "generating", value: true });
+      beginGeneration();
       break;
     case "goto":
       engine?.goToPage(msg.pageIndex);
@@ -59,6 +70,7 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
   try {
     post({ type: "status", message: "" });
     post({ type: "generating", value: false });
+    pendingStart = false; // fresh open; the hook re-sends "start" if it should resume
     const { llm, image, tier, diagnostics } = buildProviders(settings, {
       onLocalStatus: (message) => post({ type: "status", message: message || "Building the Visual Bible…" }),
     });
@@ -91,6 +103,8 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     // user triggers generation via the "start" message ("Begin generating book").
     await engine.openBook(book);
     engine.goToPage(0);
+    // Resume generation if "start" was requested while this open was in flight.
+    if (pendingStart) beginGeneration();
   } catch (err) {
     post({ type: "error", message: err instanceof Error ? err.message : String(err) });
   }

@@ -26,6 +26,10 @@ export interface EngineWorkerApi {
 export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   const workerRef = useRef<Worker | undefined>(undefined);
   const lastBook = useRef<BookSource | undefined>(undefined);
+  // Whether the user has begun generating the current book. Survives the
+  // settings-driven re-open (which builds a fresh engine) so generation resumes
+  // instead of silently reverting to "not started".
+  const generationRequested = useRef(false);
   const [bible, setBible] = useState<VisualBible | undefined>();
   const [results, setResults] = useState<Map<number, ImageResult>>(new Map());
   const [status, setStatus] = useState("");
@@ -66,18 +70,21 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     return () => worker.terminate();
   }, []);
 
-  // Apply settings; re-open the current book so new keys/tier take effect.
+  // Apply settings; re-open the current book so new keys/tier take effect, and
+  // resume generation if it was already running (the re-open built a new engine).
   useEffect(() => {
     send({ type: "init", settings });
     if (lastBook.current) {
       setResults(new Map());
       send({ type: "open", book: lastBook.current });
+      if (generationRequested.current) send({ type: "start" });
     }
   }, [settings]);
 
   const openBook = useCallback(
     (book: BookSource) => {
       lastBook.current = book;
+      generationRequested.current = false; // a new book waits for the button
       setBible(undefined);
       setResults(new Map());
       send({ type: "init", settings });
@@ -86,7 +93,10 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     [settings],
   );
 
-  const startGeneration = useCallback(() => send({ type: "start" }), []);
+  const startGeneration = useCallback(() => {
+    generationRequested.current = true;
+    send({ type: "start" });
+  }, []);
   const goTo = useCallback((pageIndex: number) => send({ type: "goto", pageIndex }), []);
   const prerenderAll = useCallback(() => send({ type: "prerenderAll" }), []);
 
