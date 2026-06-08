@@ -10,6 +10,7 @@ import { InMemoryStore } from "./storage/store.js";
 import { RenderPipeline } from "./pipeline/pipeline.js";
 import { RenderBuffer } from "./render-buffer/render-buffer.js";
 import { BIBLE_VERSION, createEmptyBible } from "./visual-bible/bible.js";
+import { consolidateCharacters } from "./providers/llm/extraction.js";
 
 /**
  * Top-level engine — the single object a front-end constructs. It owns the
@@ -85,6 +86,15 @@ export class Engine {
     // Discard a bible cached at an older schema (e.g. pre-storyboard) so it's rebuilt.
     const stored = await this.store.getBible(book.id);
     this.bible = stored && stored.version === BIBLE_VERSION ? stored : createEmptyBible(book.id);
+    // Collapse duplicate characters left by earlier sessions (e.g. "Violet" +
+    // "Violet Sorrengail") without a full re-analysis; persist if anything merged.
+    if (this.bible.characters.length > 1) {
+      const consolidated = consolidateCharacters(this.bible.characters);
+      if (consolidated.length !== this.bible.characters.length) {
+        this.bible = { ...this.bible, characters: consolidated };
+        await this.store.putBible(this.bible);
+      }
+    }
     this.generationStarted = false;
     this.paused = false;
     this.biblePromise = undefined;

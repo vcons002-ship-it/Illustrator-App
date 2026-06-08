@@ -48,7 +48,11 @@ export const EXTRACTION_SYSTEM =
   "(hair, eyes, gender, build/physique, height, skinTone, age, distinguishingMarks; use " +
   "an empty string for anything the text doesn't state) and put extra persistent details " +
   "in persistentTraits, plus their clothing/outfits/fashion in detail (garments, fabric, " +
-  "colour, accessories, era/style). Capture EVERY named location with a detailed visual " +
+  "colour, accessories, era/style). Reuse a character's ESTABLISHED name across chapters: if " +
+  "the same person is referred to by a first name, full name, title, or nickname, keep ONE " +
+  "entry and put the other forms in 'aliases' — never create a second character for the same " +
+  "person (e.g. 'Violet' and 'Violet Sorrengail' are one character). " +
+  "Capture EVERY named location with a detailed visual " +
   "description (architecture, materials, layout, lighting, palette, mood) AND its world's " +
   "fashion and aesthetic; when a location you already know recurs, ADD any new detail, and " +
   "always refer to it by its established name. " +
@@ -212,6 +216,14 @@ export function extractionUserContent(input: EntityExtractionInput): string {
     .map((s) => `Chapter ${s.chapterIndex}: ${s.summary}`)
     .join("\n");
   const soFar = priorSummaries ? `Story so far:\n${priorSummaries}\n\n` : "";
+  // Feed back the known cast so the model reuses each person's established name
+  // (recording other forms as aliases) instead of creating duplicate characters.
+  const cast = input.existing.characters
+    .map((c) => `- ${c.name}${c.aliases.length ? ` (aka ${c.aliases.join(", ")})` : ""}`)
+    .join("\n");
+  const castSoFar = cast
+    ? `Known characters so far (reuse these exact names; record other forms as aliases; do NOT add a second entry for the same person):\n${cast}\n\n`
+    : "";
   // Feed back the glossary built so far so the model EXTENDS it (adds new world
   // facts) rather than repeating ones already captured.
   const known = (input.existing.glossary ?? [])
@@ -229,7 +241,7 @@ export function extractionUserContent(input: EntityExtractionInput): string {
     .map((c) => `- ${c.name} (${c.kind}): ${c.description.join(", ")}`)
     .join("\n");
   const beastsSoFar = beasts ? `Known creatures so far:\n${beasts}\n\n` : "";
-  return `${beastsSoFar}${placesSoFar}${glossarySoFar}${soFar}Chapter ${input.chapterIndex} text:\n\n${input.chapterText}`;
+  return `${castSoFar}${beastsSoFar}${placesSoFar}${glossarySoFar}${soFar}Chapter ${input.chapterIndex} text:\n\n${input.chapterText}`;
 }
 
 /**
@@ -252,25 +264,29 @@ export function mergeExtraction(
     glossary: [...(existing.glossary ?? [])],
     processedChapters: [...existing.processedChapters],
   };
-  const knownChars = new Set(bible.characters.map((c) => c.name.toLowerCase()));
   const knownEnvs = new Set(bible.environments.map((e) => e.name.toLowerCase()));
   const knownTerms = new Set(bible.glossary.map((g) => g.term.toLowerCase()));
 
   for (const c of raw.characters) {
-    if (knownChars.has(c.name.toLowerCase())) continue;
-    knownChars.add(c.name.toLowerCase());
-    const character: Character = {
-      id: `char-${slug(c.name)}`,
-      name: c.name,
-      aliases: c.aliases,
-      appearance: { ...emptyAppearance(), ...(c.appearance ?? {}) },
-      persistentTraits: c.persistentTraits,
-      clothing: c.clothing,
-      anchor: { seed: deterministicSeed(c.name) },
-      firstSeenChapter: chapterIndex,
-    };
-    bible.characters.push(character);
+    // Upsert by exact name (accumulating aliases/appearance on a re-mention); the
+    // consolidation pass below collapses alias/partial-name duplicates.
+    const at = bible.characters.findIndex((ex) => ex.name.toLowerCase() === c.name.toLowerCase());
+    if (at >= 0) {
+      bible.characters[at] = mergeRawIntoCharacter(bible.characters[at]!, c);
+    } else {
+      bible.characters.push({
+        id: `char-${slug(c.name)}`,
+        name: c.name,
+        aliases: c.aliases,
+        appearance: { ...emptyAppearance(), ...(c.appearance ?? {}) },
+        persistentTraits: c.persistentTraits,
+        clothing: c.clothing,
+        anchor: { seed: deterministicSeed(c.name) },
+        firstSeenChapter: chapterIndex,
+      });
+    }
   }
+  bible.characters = consolidateCharacters(bible.characters);
   for (const g of raw.glossary ?? []) {
     const term = g.term.trim();
     if (!term || knownTerms.has(term.toLowerCase())) continue;
@@ -457,6 +473,131 @@ function describeCharacter(c: Character): string {
   }
   const appearance = fields.length ? fields.join("; ") : "appearance unspecified";
   return `${c.name}: ${appearance}; wearing ${c.clothing.join(", ") || "unspecified"}`;
+}
+
+// --- Character de-duplication -------------------------------------------------
+
+/** Case-insensitive union of two string lists, trimmed, blanks dropped, order kept. */
+function unionStrings(a: string[], b: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const s of [...a, ...b]) {
+    const t = s.trim();
+    if (t && !seen.has(t.toLowerCase())) {
+      seen.add(t.toLowerCase());
+      out.push(t);
+    }
+  }
+  return out;
+}
+
+/** Fill any blank appearance field on `base` from `extra` (base wins when set). */
+function fillAppearance(
+  base: CharacterAppearance,
+  extra: Partial<CharacterAppearance> | undefined,
+): CharacterAppearance {
+  if (!extra) return base;
+  const out = { ...base };
+  (Object.keys(out) as (keyof CharacterAppearance)[]).forEach((k) => {
+    if (!out[k].trim() && extra[k]?.trim()) out[k] = extra[k]!;
+  });
+  return out;
+}
+
+/** Merge a raw extraction's character into an existing one (same exact name). */
+function mergeRawIntoCharacter(ex: Character, raw: RawExtraction["characters"][number]): Character {
+  return {
+    ...ex,
+    aliases: unionStrings(ex.aliases, [raw.name, ...raw.aliases]).filter(
+      (a) => a.toLowerCase() !== ex.name.toLowerCase(),
+    ),
+    appearance: fillAppearance(ex.appearance, raw.appearance),
+    persistentTraits: unionStrings(ex.persistentTraits, raw.persistentTraits),
+    clothing: unionStrings(ex.clothing, raw.clothing),
+  };
+}
+
+/** Merge two known characters into one (keeping `canon` as the canonical entry). */
+function mergeCharacters(canon: Character, other: Character): Character {
+  return {
+    ...canon,
+    aliases: unionStrings([...canon.aliases, other.name, ...other.aliases], []).filter(
+      (a) => a.toLowerCase() !== canon.name.toLowerCase(),
+    ),
+    appearance: fillAppearance(canon.appearance, other.appearance),
+    persistentTraits: unionStrings(canon.persistentTraits, other.persistentTraits),
+    clothing: unionStrings(canon.clothing, other.clothing),
+    firstSeenChapter: Math.min(canon.firstSeenChapter, other.firstSeenChapter),
+  };
+}
+
+/** Lowercased name + aliases. */
+function charKeys(c: Character): Set<string> {
+  return new Set([c.name, ...c.aliases].map((s) => s.trim().toLowerCase()).filter(Boolean));
+}
+function keysIntersect(a: Character, b: Character): boolean {
+  const kb = charKeys(b);
+  for (const k of charKeys(a)) if (kb.has(k)) return true;
+  return false;
+}
+function nameTokens(name: string): Set<string> {
+  return new Set(name.toLowerCase().split(/\s+/).filter(Boolean));
+}
+function isStrictSubset(a: Set<string>, b: Set<string>): boolean {
+  if (a.size === 0 || a.size >= b.size) return false;
+  for (const t of a) if (!b.has(t)) return false;
+  return true;
+}
+/** The fuller name wins (more tokens); ties broken by earliest appearance. */
+function pickCanonical(a: Character, b: Character): [Character, Character] {
+  const ta = nameTokens(a.name).size;
+  const tb = nameTokens(b.name).size;
+  if (ta !== tb) return ta > tb ? [a, b] : [b, a];
+  return a.firstSeenChapter <= b.firstSeenChapter ? [a, b] : [b, a];
+}
+
+/**
+ * Collapse duplicate characters: (1) any whose name/alias sets overlap are the
+ * same person; (2) a partial name is merged into its UNIQUE fuller name
+ * ("Violet" → "Violet Sorrengail"). Ambiguous partials (a bare "Anne" when both
+ * "Anne Boleyn" and "Anne Frank" exist) are left alone. Idempotent.
+ */
+export function consolidateCharacters(list: Character[]): Character[] {
+  let chars = [...list];
+
+  // Pass 1 — overlapping name/alias sets (definitely the same person).
+  for (let again = true; again; ) {
+    again = false;
+    for (let i = 0; i < chars.length && !again; i++) {
+      for (let j = i + 1; j < chars.length; j++) {
+        if (keysIntersect(chars[i]!, chars[j]!)) {
+          const [canon, other] = pickCanonical(chars[i]!, chars[j]!);
+          chars = chars.filter((_, k) => k !== i && k !== j);
+          chars.push(mergeCharacters(canon, other));
+          again = true;
+          break;
+        }
+      }
+    }
+  }
+
+  // Pass 2 — a partial name with exactly one fuller-name superset.
+  for (let again = true; again; ) {
+    again = false;
+    for (let i = 0; i < chars.length && !again; i++) {
+      const partial = chars[i]!;
+      const ti = nameTokens(partial.name);
+      const supers = chars.filter((c) => c !== partial && isStrictSubset(ti, nameTokens(c.name)));
+      if (supers.length === 1) {
+        const sup = supers[0]!;
+        chars = chars.filter((c) => c !== partial && c !== sup);
+        chars.push(mergeCharacters(sup, partial));
+        again = true;
+      }
+    }
+  }
+
+  return chars;
 }
 
 export function slug(s: string): string {

@@ -1,7 +1,27 @@
 import { describe, it, expect } from "vitest";
-import { extractionUserContent, mergeExtraction, promptUserContent } from "./extraction.js";
+import {
+  consolidateCharacters,
+  extractionUserContent,
+  mergeExtraction,
+  promptUserContent,
+} from "./extraction.js";
 import { createEmptyBible } from "../../visual-bible/bible.js";
+import { emptyAppearance, type Character } from "../../types/bible.js";
 import type { VisualRequest } from "../../types/content.js";
+
+function char(name: string, over: Partial<Character> = {}): Character {
+  return {
+    id: `char-${name.toLowerCase().replace(/\s+/g, "-")}`,
+    name,
+    aliases: [],
+    appearance: emptyAppearance(),
+    persistentTraits: [],
+    clothing: [],
+    anchor: { seed: 1 },
+    firstSeenChapter: 0,
+    ...over,
+  };
+}
 
 describe("mergeExtraction storyboard", () => {
   it("upserts a chapter scene and re-running a chapter replaces (not duplicates) it", () => {
@@ -239,6 +259,77 @@ describe("environments + location tracking", () => {
     });
     expect(text).toContain("Known locations so far");
     expect(text).toContain("the Spire: black basalt");
+  });
+});
+
+describe("character de-duplication", () => {
+  it("merges a partial name into its unique fuller name (Violet → Violet Sorrengail)", () => {
+    const out = consolidateCharacters([
+      char("Violet", { appearance: { ...emptyAppearance(), hair: "silver-tipped" } }),
+      char("Violet Sorrengail", { appearance: { ...emptyAppearance(), eyes: "blue" } }),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.name).toBe("Violet Sorrengail"); // fuller name is canonical
+    expect(out[0]!.aliases).toContain("Violet");
+    // Appearance from both is preserved.
+    expect(out[0]!.appearance.hair).toBe("silver-tipped");
+    expect(out[0]!.appearance.eyes).toBe("blue");
+  });
+
+  it("merges when name/alias sets overlap", () => {
+    const out = consolidateCharacters([
+      char("Xaden Riorson", { aliases: ["Xaden"] }),
+      char("Xaden"),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.name).toBe("Xaden Riorson");
+  });
+
+  it("leaves an ambiguous bare name alone (two different full names)", () => {
+    const out = consolidateCharacters([char("Anne Boleyn"), char("Anne Frank"), char("Anne")]);
+    // "Anne" is a subset of BOTH → ambiguous → not merged; all three remain.
+    expect(out.map((c) => c.name).sort()).toEqual(["Anne", "Anne Boleyn", "Anne Frank"]);
+  });
+
+  it("mergeExtraction consolidates across chapters (no duplicate Violet)", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [{ name: "Violet", aliases: [], persistentTraits: [], clothing: [] }],
+        environments: [],
+        spoilers: [],
+      },
+      0,
+    );
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [{ name: "Violet Sorrengail", aliases: [], persistentTraits: [], clothing: [] }],
+        environments: [],
+        spoilers: [],
+      },
+      4,
+    );
+    expect(bible.characters).toHaveLength(1);
+    expect(bible.characters[0]!.name).toBe("Violet Sorrengail");
+    expect(bible.characters[0]!.aliases).toContain("Violet");
+  });
+
+  it("feeds the known cast back into the next chapter's extraction context", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [{ name: "Violet Sorrengail", aliases: ["Vi"], persistentTraits: [], clothing: [] }],
+        environments: [],
+        spoilers: [],
+      },
+      0,
+    );
+    const text = extractionUserContent({ bookId: "b", chapterIndex: 1, chapterText: "x", existing: bible });
+    expect(text).toContain("Known characters so far");
+    expect(text).toContain("Violet Sorrengail (aka Vi)");
   });
 });
 
