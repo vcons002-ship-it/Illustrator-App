@@ -131,20 +131,44 @@ an engine you run yourself; see below.)
 
 ## Run images on your own GPU (AUTOMATIC1111 or ComfyUI)
 
-This is the path to **free, private, real** image generation today: point Visual
-Reader at a Stable Diffusion server you run yourself. It works in **both the web
-app and the desktop app** — no API keys, nothing leaves your machine.
+This is the path to **free, private, real** image generation today — no API keys,
+nothing leaves your machine.
+
+### How it works (web vs desktop) — read this first
+
+There is **one shared ComfyUI install** at `%USERPROFILE%\VisualReader\` —
+whether it's set up by `comfyui-setup.bat` *or* by the desktop app, they use the
+same folder and the same models/loras. How it runs depends on which app you use:
+
+| | Who installs ComfyUI | Who **starts/stops** it | Do you touch `run-comfyui.bat`? |
+|---|---|---|---|
+| **Desktop app** | the app (first use) or the bat | the **desktop app**, automatically | **No** — just pick a model in Settings |
+| **Web app** (browser) | `comfyui-setup.bat` (or BYO) | **`run.bat`** starts it for you, if installed | **No** — `run.bat` launches it; or run it yourself |
+
+Key points:
+- **Desktop app:** fully automatic. Choose **Images → On my computer**, pick a
+  model, and the app downloads/launches/stops ComfyUI itself.
+- **Web app:** a browser can't start a GPU process, so **`run.bat` now starts the
+  local ComfyUI for you** (in its own window) whenever it's installed — then the
+  web app connects to it. ComfyUI must be running while you generate; `run.bat`
+  handles that each session, or you can launch `run-comfyui.bat` yourself.
+- The web app and desktop app are **separate programs** — the browser doesn't run
+  "through" the desktop app. They can, however, share the *same* running engine on
+  `http://127.0.0.1:8188` (whoever starts it first; the other reuses it).
+- **First time only:** open **Settings → Images → On my computer → ComfyUI**,
+  **Connect**, and pick a model. After that it reconnects automatically.
 
 ### Easiest: one-click ComfyUI (Windows)
 
 Don't have an engine yet? **Double-click `comfyui-setup.bat`.** It downloads the
-official **ComfyUI portable** build (which bundles its own Python — nothing is
-installed system-wide), grabs a starter model, and creates **`run-comfyui.bat`**
-(in `%USERPROFILE%\VisualReader`) that launches it with the right CORS flag.
-Uses your NVIDIA GPU if present, CPU otherwise.
+official **ComfyUI portable** build (bundles its own Python — nothing installed
+system-wide), grabs a starter model, and creates **`run-comfyui.bat`** in the
+shared `%USERPROFILE%\VisualReader` folder. Uses your NVIDIA GPU if present, CPU
+otherwise.
 
-Then: run `run-comfyui.bat`, and in Visual Reader's **Settings** set **Images →
-On my computer → ComfyUI**, leave the URL as the default, and click **Connect**.
+After that, **`run.bat` auto-starts it** for the web app — or the desktop app
+starts it on its own. You only need `run-comfyui.bat` directly if you want to run
+the engine without the reader open.
 
 > It's a large download (several GB) and resumes if interrupted. AUTOMATIC1111
 > and non-NVIDIA GPUs are set up manually — see below.

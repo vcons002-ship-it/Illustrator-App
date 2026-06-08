@@ -199,7 +199,7 @@ exit /b 0
 >>"%LAUNCHER%" echo set "GPUARG="
 >>"%LAUNCHER%" echo where nvidia-smi ^>nul 2^>nul ^|^| set "GPUARG=--cpu"
 >>"%LAUNCHER%" echo echo Starting ComfyUI at http://127.0.0.1:8188  ^(keep this window open; Ctrl+C to stop^)
->>"%LAUNCHER%" echo .\python_embeded\python.exe -s ComfyUI\main.py --enable-cors-header http://localhost:5173 %%GPUARG%%
+>>"%LAUNCHER%" echo .\python_embeded\python.exe -s ComfyUI\main.py --enable-cors-header %%GPUARG%%
 >>"%LAUNCHER%" echo pause
 echo [OK] Created launcher: "%LAUNCHER%"
 exit /b 0

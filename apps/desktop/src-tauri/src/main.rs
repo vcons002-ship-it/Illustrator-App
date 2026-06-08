@@ -301,11 +301,13 @@ fn download_model_with_progress(
 // ----------------------------------------------------------------------- helpers
 
 fn engine_root(app: &AppHandle) -> PathBuf {
+    // Shared with comfyui-setup.bat (%USERPROFILE%\VisualReader) so the desktop
+    // app and the .bat use ONE ComfyUI install + models/loras folder.
     let base = app
         .path()
-        .app_data_dir()
+        .home_dir()
         .unwrap_or_else(|_| PathBuf::from("."));
-    base.join("engine")
+    base.join("VisualReader")
 }
 
 fn comfy_models_dir(app: &AppHandle) -> PathBuf {

@@ -78,12 +78,9 @@ exit /b 0
 
 :launch
 echo.
-echo [OK] Setup complete. Starting the app at http://localhost:5173
-echo     A browser tab will open shortly.
-echo     Keep this window open while using the app; press Ctrl+C to stop.
-echo.
-start "" /b cmd /c "timeout /t 5 >nul && start "" http://localhost:5173"
-call pnpm dev:web
+echo [OK] Setup complete. Starting the app...
+rem Delegate to run.bat so the web app + local ComfyUI (if installed) start together.
+call "%~dp0run.bat"
 exit /b 0
 
 :end_fail

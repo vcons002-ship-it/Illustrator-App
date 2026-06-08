@@ -203,11 +203,8 @@ echo Done. Later you can use:  run.bat (web), desktop.bat, or extension.bat.
 exit /b 0
 
 :start_web
-echo.
-echo Starting the web app at http://localhost:5173 ...
-echo Keep this window open while using it; press Ctrl+C to stop.
-start "" /b cmd /c "timeout /t 5 >nul && start "" http://localhost:5173"
-call pnpm dev:web
+rem Delegate to run.bat so the web app + local ComfyUI (if installed) start together.
+call "%~dp0run.bat"
 exit /b 0
 
 :start_desktop
