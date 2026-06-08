@@ -29,9 +29,11 @@ rem Port check catches an instance that's already running OR still booting, so w
 rem never start a second ComfyUI (port 8188 / its database can only have one).
 netstat -ano | findstr ":8188" | findstr "LISTENING" >nul 2>nul
 if not errorlevel 1 (
-  echo [OK] Local ComfyUI is already running on port 8188.
+  echo [OK] A ComfyUI is already running on port 8188 - using that one.
   exit /b 0
 )
-echo [..] Starting local ComfyUI in a separate window ^(first start can take a bit^)...
+echo [..] Starting the app-managed ComfyUI ^(in %USERPROFILE%\VisualReader^) in a
+echo      separate window. Prefer your OWN ComfyUI? Start it first ^(with
+echo      --enable-cors-header^) and this step will use it instead.
 start "Visual Reader - ComfyUI" "%COMFYLAUNCHER%"
 exit /b 0

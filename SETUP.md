@@ -193,6 +193,15 @@ it with its API + CORS enabled, so the browser is allowed to talk to it (the
   ```
   Serves at `http://127.0.0.1:8188`.
 
+> **Already have your own ComfyUI?** Use it instead of the app-managed one — just
+> add **`--enable-cors-header`** to how you launch it (e.g.
+> `.\python_embeded\python.exe -s ComfyUI\main.py --windows-standalone-build --enable-cors-header`).
+> **Only one ComfyUI can use port 8188** — start *yours* before `run.bat` and the
+> app's auto-start will yield to it. If you hit *"Port 8188 already in use"* or a
+> database-lock error, run **`stop-comfyui.bat`** to clear whatever's stuck, then
+> start one. To stop the app from launching its own at all, delete
+> `%USERPROFILE%\VisualReader\run-comfyui.bat`.
+
 ### Connect Visual Reader to it
 
 1. Start Visual Reader (`install.bat` / `run.bat`, or the desktop app).
