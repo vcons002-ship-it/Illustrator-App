@@ -66,9 +66,10 @@ export const EXTRACTION_JSON_INSTRUCTION =
   '"glossary":[{"term":string,"definition":string}],' +
   '"environments":[{"name":string,"description":string[]}],' +
   '"spoilers":[{"label":string,"revealHint":string}],' +
-  '"summary":string,"keyMoment":string}. ' +
+  '"summary":string,"keyMoment":string,"location":string,"locationChange":string}. ' +
   "Include EVERY named character with any appearance description (use empty strings for " +
-  "unknown appearance fields).";
+  "unknown appearance fields). Set 'location' to where the chapter happens and " +
+  "'locationChange' to where/when it moves (empty string if it stays in one place).";
 
 // Module-level engine cache so re-created providers reuse a loaded model
 // (loading is slow; the weights are GB-sized).
@@ -202,6 +203,8 @@ export function parseExtraction(content: string): RawExtraction {
     return {
       summary: str(json.summary),
       keyMoment: str(json.keyMoment),
+      location: str(json.location),
+      locationChange: str(json.locationChange),
       characters: asArray(json.characters).map((c) => {
         const o = c as Record<string, unknown>;
         const a = (o.appearance ?? {}) as Record<string, unknown>;

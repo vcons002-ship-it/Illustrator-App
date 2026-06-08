@@ -45,7 +45,7 @@ class FakeTransport implements Transport {
 function emptyBible(bookId = "book"): VisualBible {
   return {
     bookId,
-    version: 3,
+    version: 4,
     characters: [],
     environments: [],
     spoilers: [],

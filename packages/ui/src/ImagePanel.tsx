@@ -33,6 +33,12 @@ export interface ImagePanelProps {
 
 export function ImagePanel({ result, bloom, pageKey, awaitingStart, caption }: ImagePanelProps) {
   const imageUrl = useObjectUrl(result);
+  // Click-to-reveal: the reader can force the current image fully visible,
+  // overriding the progress-driven bloom. Resets on navigation so the next page
+  // starts blurred again.
+  const [manualReveal, setManualReveal] = useState(false);
+  useEffect(() => setManualReveal(false), [pageKey]);
+  const effectiveBloom = manualReveal ? 1 : bloom;
 
   // Front/back matter (title page, copyright, contents…) is never illustrated.
   if (result?.status === "skipped") {
@@ -55,8 +61,12 @@ export function ImagePanel({ result, bloom, pageKey, awaitingStart, caption }: I
     return <Placeholder label={label} pulse />;
   }
   return (
-    <div style={{ position: "relative" }}>
-      <BloomTransition key={pageKey} target={bloom}>
+    <div
+      style={{ position: "relative", cursor: "pointer" }}
+      onClick={() => setManualReveal((r) => !r)}
+      title={manualReveal ? "Click to follow your reading again" : "Click to reveal the full image"}
+    >
+      <BloomTransition key={pageKey} target={effectiveBloom}>
         <img
           src={imageUrl}
           alt="Illustration of the current passage"
@@ -72,7 +82,7 @@ export function ImagePanel({ result, bloom, pageKey, awaitingStart, caption }: I
         />
       </BloomTransition>
       {caption && (
-        <div style={{ ...captionOverlayStyle, opacity: Math.max(0, Math.min(1, bloom)) }}>
+        <div style={{ ...captionOverlayStyle, opacity: Math.max(0, Math.min(1, effectiveBloom)) }}>
           {caption}
         </div>
       )}

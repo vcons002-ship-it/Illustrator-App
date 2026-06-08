@@ -1,9 +1,4 @@
-import type {
-  Character,
-  CharacterAppearance,
-  Environment,
-  VisualBible,
-} from "../../types/bible.js";
+import type { Character, CharacterAppearance, VisualBible } from "../../types/bible.js";
 import { emptyAppearance } from "../../types/bible.js";
 import type { EntityExtractionInput } from "./llm-provider.js";
 import type { VisualRequest } from "../../types/content.js";
@@ -36,6 +31,10 @@ export interface RawExtraction {
   summary?: string;
   /** The single most important action/moment to illustrate this chapter. */
   keyMoment?: string;
+  /** Where the chapter takes place (by environment name). */
+  location?: string;
+  /** "" if the chapter stays in one place, else where/when the setting shifts. */
+  locationChange?: string;
 }
 
 export const EXTRACTION_SYSTEM =
@@ -47,19 +46,27 @@ export const EXTRACTION_SYSTEM =
   "(hair, eyes, gender, build/physique, height, skinTone, age, distinguishingMarks; use " +
   "an empty string for anything the text doesn't state) and put extra persistent details " +
   "in persistentTraits, plus their clothing/outfits/fashion in detail (garments, fabric, " +
-  "colour, accessories, era/style). For each environment/location capture its look AND its " +
-  "world's fashion and aesthetic (architecture, era, materials, palette) in the description. " +
+  "colour, accessories, era/style). Capture EVERY named location with a detailed visual " +
+  "description (architecture, materials, layout, lighting, palette, mood) AND its world's " +
+  "fashion and aesthetic; when a location you already know recurs, ADD any new detail, and " +
+  "always refer to it by its established name. " +
   "Build a 'glossary' of recurring world facts / defining context that should be assumed " +
   "by default unless a passage says otherwise — e.g. customary attire ('dragon riders wear " +
   "fitted black flight leathers'), technology level, materials, or social norms; each entry " +
   "is a short term and its definition. Flag spoilers that would spoil the plot if shown " +
   "before the reader reaches them. Also write a 'summary' of what happens in THIS chapter, " +
   "and a single 'keyMoment': the most important, most visual action of the chapter to " +
-  "illustrate (one concrete sentence).";
+  "illustrate (one concrete sentence). Determine WHERE the chapter takes place: set " +
+  "'location' to the primary setting (use the established environment name), and keep the " +
+  "keyMoment's place explicit. If the setting moves during the chapter, set 'locationChange' " +
+  "to a short note of where/when it shifts (otherwise an empty string).";
 
 export const PROMPT_SYSTEM =
   "You write one vivid, concrete image-generation prompt for a single illustration of a " +
-  "book chapter. Depict the chapter's single most important action (the 'key moment'). " +
+  "book chapter. Depict the most important action of the supplied passage, framed by the " +
+  "chapter's key moment. Set the image in ONE coherent location — the place where the " +
+  "passage's action occurs; if the chapter or passage moves between places, choose the " +
+  "single location of the depicted moment and NEVER combine two settings into one picture. " +
   "Keep every character's appearance and OUTFIT, and the setting's look and fashion, " +
   "consistent with the supplied Visual Bible, and consistent with the story so far. " +
   "Output only the prompt text, no preamble.";
@@ -151,8 +158,19 @@ export const EXTRACTION_JSON_SCHEMA = {
     },
     summary: { type: "string" },
     keyMoment: { type: "string" },
+    location: { type: "string" },
+    locationChange: { type: "string" },
   },
-  required: ["characters", "glossary", "environments", "spoilers", "summary", "keyMoment"],
+  required: [
+    "characters",
+    "glossary",
+    "environments",
+    "spoilers",
+    "summary",
+    "keyMoment",
+    "location",
+    "locationChange",
+  ],
 } as const;
 
 /**
@@ -173,7 +191,13 @@ export function extractionUserContent(input: EntityExtractionInput): string {
     .map((g) => `- ${g.term}: ${g.definition}`)
     .join("\n");
   const glossarySoFar = known ? `Known world facts so far:\n${known}\n\n` : "";
-  return `${glossarySoFar}${soFar}Chapter ${input.chapterIndex} text:\n\n${input.chapterText}`;
+  // Feed back known locations so the model reuses their names and ADDS detail
+  // instead of re-introducing a place under a slightly different name.
+  const places = input.existing.environments
+    .map((e) => `- ${e.name}: ${e.description.join(", ")}`)
+    .join("\n");
+  const placesSoFar = places ? `Known locations so far:\n${places}\n\n` : "";
+  return `${placesSoFar}${glossarySoFar}${soFar}Chapter ${input.chapterIndex} text:\n\n${input.chapterText}`;
 }
 
 /**
@@ -221,15 +245,30 @@ export function mergeExtraction(
     bible.glossary.push({ term, definition: g.definition });
   }
   for (const e of raw.environments) {
-    if (knownEnvs.has(e.name.toLowerCase())) continue;
-    knownEnvs.add(e.name.toLowerCase());
-    const env: Environment = {
-      id: `env-${slug(e.name)}`,
-      name: e.name,
-      description: e.description,
-      firstSeenChapter: chapterIndex,
-    };
-    bible.environments.push(env);
+    const key = e.name.toLowerCase();
+    const at = bible.environments.findIndex((env) => env.name.toLowerCase() === key);
+    if (at >= 0) {
+      // Known location → ACCUMULATE new description lines (so a chapter that adds
+      // detail enriches it, and a name-only mention later still has the full look).
+      const existingEnv = bible.environments[at]!;
+      const have = new Set(existingEnv.description.map((d) => d.toLowerCase()));
+      const merged = [...existingEnv.description];
+      for (const d of e.description) {
+        if (d.trim() && !have.has(d.toLowerCase())) {
+          merged.push(d);
+          have.add(d.toLowerCase());
+        }
+      }
+      bible.environments[at] = { ...existingEnv, description: merged };
+    } else {
+      knownEnvs.add(key);
+      bible.environments.push({
+        id: `env-${slug(e.name)}`,
+        name: e.name,
+        description: e.description,
+        firstSeenChapter: chapterIndex,
+      });
+    }
   }
   for (const s of raw.spoilers) {
     bible.spoilers.push({
@@ -241,11 +280,13 @@ export function mergeExtraction(
   }
 
   // Upsert this chapter's storyboard scene (idempotent re-run replaces it).
-  if (raw.summary || raw.keyMoment) {
+  if (raw.summary || raw.keyMoment || raw.location) {
     const scene = {
       chapterIndex,
       summary: raw.summary ?? "",
       keyMoment: raw.keyMoment ?? "",
+      location: raw.location ?? "",
+      locationChange: raw.locationChange ?? "",
     };
     const at = bible.storyboard.findIndex((s) => s.chapterIndex === chapterIndex);
     if (at >= 0) bible.storyboard[at] = scene;
@@ -279,18 +320,39 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
     soFar ? `Story so far:\n${soFar}` : "",
     scene?.summary ? `This chapter:\n${scene.summary}` : "",
     scene?.keyMoment ? `Key moment to illustrate:\n${scene.keyMoment}` : "",
+    settingLine(scene, envs, request.sourceText),
     chars.length
       ? `Characters present (keep appearance + outfit consistent):\n${chars
           .map((c) => `- ${describeCharacter(c)}`)
           .join("\n")}`
       : "",
     envs.length
-      ? `Setting (look + world fashion):\n${envs.map((e) => `- ${e.name}: ${e.description.join(", ")}`).join("\n")}`
+      ? `Location details (look + world fashion):\n${envs.map((e) => `- ${e.name}: ${e.description.join(", ")}`).join("\n")}`
       : "",
     `Passage:\n${request.sourceText}`,
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+/**
+ * The single location this image must commit to. Prefers a known environment that
+ * the passage actually names (so a unit that has moved on uses ITS place, not the
+ * chapter's opening place); otherwise falls back to the chapter scene's primary
+ * `location`. `locationChange` is passed as context so the writer knows the
+ * chapter moves and must still pick ONE setting.
+ */
+function settingLine(
+  scene: { location?: string; locationChange?: string } | undefined,
+  envs: { name: string }[],
+  sourceText: string,
+): string {
+  const haystack = sourceText.toLowerCase();
+  const named = envs.find((e) => e.name && haystack.includes(e.name.toLowerCase()));
+  const place = named?.name || scene?.location || "";
+  if (!place) return "";
+  const change = scene?.locationChange ? ` (note: the chapter moves — ${scene.locationChange})` : "";
+  return `Setting for this image (use this ONE location, do not blend places): ${place}${change}`;
 }
 
 /** One-line character description for an image prompt, preferring the structured

@@ -38,7 +38,7 @@ export class MockLLMProvider implements LLMProvider {
     const keyMoment = (snippet.split(/(?<=[.!?])\s/)[0] ?? summary).slice(0, 160);
     bible.storyboard = [
       ...bible.storyboard.filter((s) => s.chapterIndex !== input.chapterIndex),
-      { chapterIndex: input.chapterIndex, summary, keyMoment },
+      { chapterIndex: input.chapterIndex, summary, keyMoment, location: "", locationChange: "" },
     ].sort((a, b) => a.chapterIndex - b.chapterIndex);
 
     for (const [name, count] of counts) {

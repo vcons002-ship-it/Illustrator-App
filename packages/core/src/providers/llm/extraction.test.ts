@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mergeExtraction, promptUserContent } from "./extraction.js";
+import { extractionUserContent, mergeExtraction, promptUserContent } from "./extraction.js";
 import { createEmptyBible } from "../../visual-bible/bible.js";
 import type { VisualRequest } from "../../types/content.js";
 
@@ -11,7 +11,9 @@ describe("mergeExtraction storyboard", () => {
       { characters: [], environments: [], spoilers: [], summary: "Ch0 happens", keyMoment: "A duel" },
       0,
     );
-    expect(bible.storyboard).toEqual([{ chapterIndex: 0, summary: "Ch0 happens", keyMoment: "A duel" }]);
+    expect(bible.storyboard).toEqual([
+      { chapterIndex: 0, summary: "Ch0 happens", keyMoment: "A duel", location: "", locationChange: "" },
+    ]);
 
     // Re-run chapter 0 → replaced, still length 1.
     bible = mergeExtraction(
@@ -149,5 +151,89 @@ describe("promptUserContent", () => {
     // Structured appearance fields render into the character line.
     expect(text).toContain("hair: silver");
     expect(text).toContain("gender: woman");
+  });
+});
+
+describe("environments + location tracking", () => {
+  it("accumulates location descriptions across chapters (no loss, no dup)", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [],
+        environments: [{ name: "The Spire", description: ["black basalt tower", "tall"] }],
+        spoilers: [],
+      },
+      0,
+    );
+    // A later chapter re-describes the same place, adding a detail (and repeating one).
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [],
+        environments: [{ name: "the spire", description: ["tall", "ringed by storm clouds"] }],
+        spoilers: [],
+      },
+      3,
+    );
+    const spire = bible.environments.find((e) => e.name.toLowerCase() === "the spire")!;
+    expect(bible.environments).toHaveLength(1); // not duplicated by case
+    expect(spire.description).toEqual(["black basalt tower", "tall", "ringed by storm clouds"]);
+  });
+
+  it("stores the chapter location and a single-location Setting line in the prompt", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [],
+        environments: [{ name: "the Great Hall", description: ["vaulted", "banners"] }],
+        spoilers: [],
+        summary: "A feast.",
+        keyMoment: "The toast.",
+        location: "the Great Hall",
+        locationChange: "moves to the courtyard at the end",
+      },
+      0,
+    );
+    expect(bible.storyboard[0]!.location).toBe("the Great Hall");
+    expect(bible.storyboard[0]!.locationChange).toContain("courtyard");
+
+    const req: VisualRequest = {
+      kind: "scene_illustration",
+      bookId: "b",
+      pageId: "u-0",
+      pageIndex: 0,
+      chapterIndex: 0,
+      sourceText: "Goblets rose in the Great Hall.",
+      characterIds: [],
+      environmentIds: ["env-the-great-hall"],
+      spoilerIds: [],
+    };
+    const text = promptUserContent(req, bible);
+    expect(text).toContain("Setting for this image");
+    expect(text).toContain("the Great Hall");
+    expect(text).toContain("do not blend places");
+  });
+
+  it("feeds known locations back into the next chapter's extraction context", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [],
+        environments: [{ name: "the Spire", description: ["black basalt"] }],
+        spoilers: [],
+      },
+      0,
+    );
+    const text = extractionUserContent({
+      bookId: "b",
+      chapterIndex: 1,
+      chapterText: "They returned to the Spire.",
+      existing: bible,
+    });
+    expect(text).toContain("Known locations so far");
+    expect(text).toContain("the Spire: black basalt");
   });
 });

@@ -62,6 +62,8 @@ const ExtractionSchema = z.object({
   ),
   summary: z.string(),
   keyMoment: z.string(),
+  location: z.string(),
+  locationChange: z.string(),
 });
 
 export interface ClaudeProviderOptions {

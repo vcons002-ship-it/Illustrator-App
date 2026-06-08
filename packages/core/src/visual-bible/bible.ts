@@ -2,9 +2,10 @@ import type { VisualBible } from "../types/bible.js";
 import type { Page } from "../types/book.js";
 
 // v2 adds the per-chapter storyboard; v3 adds the world glossary and structured
-// character appearance. Bibles cached at an older version are rebuilt (see
+// character appearance; v4 adds per-chapter location tracking (ChapterScene
+// location/locationChange). Bibles cached at an older version are rebuilt (see
 // Engine.openBook) so the new fields are always present.
-export const BIBLE_VERSION = 3;
+export const BIBLE_VERSION = 4;
 
 export function createEmptyBible(bookId: string): VisualBible {
   return {

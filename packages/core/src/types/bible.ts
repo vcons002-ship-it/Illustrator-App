@@ -109,6 +109,10 @@ export interface ChapterScene {
   summary: string;
   /** The single most important action/moment to depict in an illustration. */
   keyMoment: string;
+  /** Where the chapter (and its key moment) takes place, by environment name. */
+  location: string;
+  /** "" if the chapter stays in one place, else a note of where/when it shifts. */
+  locationChange: string;
 }
 
 /**
