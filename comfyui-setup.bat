@@ -15,6 +15,9 @@ echo It is a LARGE download (several GB) and best with an NVIDIA GPU; it will
 echo fall back to CPU (slow) otherwise. No typing required beyond a couple of
 echo yes/no prompts.
 echo.
+echo Already installed? Re-running offers to UPDATE ComfyUI to the latest (your
+echo downloaded models/loras are kept). Pass  --upgrade  to update without asking.
+echo.
 pause
 
 rem ----- where things go (kept out of the project folder) -------------------
@@ -26,14 +29,30 @@ set "MODELNAME=v1-5-pruned-emaonly-fp16.safetensors"
 set "MODELURL=https://huggingface.co/Comfy-Org/stable-diffusion-v1-5-archive/resolve/main/v1-5-pruned-emaonly-fp16.safetensors"
 set "LAUNCHER=%ROOT%\run-comfyui.bat"
 
+set "UPGRADE="
+if /i "%~1"=="--upgrade" set "UPGRADE=1"
+if /i "%~1"=="upgrade" set "UPGRADE=1"
+
 call :check_curl || goto :end_fail
 if not exist "%ROOT%" mkdir "%ROOT%"
 
-if exist "%PORTABLE%\python_embeded\python.exe" (
-  echo [OK] ComfyUI is already installed at "%PORTABLE%". Skipping download.
-  goto :after_install
-)
+if not exist "%PORTABLE%\python_embeded\python.exe" goto :install
+rem --- already installed: keep, or update to latest ---
+if defined UPGRADE goto :upgrade
+echo.
+echo [OK] ComfyUI is already installed at "%PORTABLE%".
+set "ANS="
+set /p "ANS=Update it to the latest now? Your downloaded models are kept. (y/N): "
+if /i "%ANS%"=="y" goto :upgrade
+echo Keeping the current install.
+goto :after_install
 
+:upgrade
+echo.
+echo [..] Updating ComfyUI to the latest (downloaded models/loras are preserved)...
+del "%TMP7Z%" >nul 2>nul
+
+:install
 call :get_7zip   || goto :end_fail
 call :download   || goto :end_fail
 call :extract    || goto :end_fail

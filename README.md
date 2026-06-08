@@ -15,6 +15,7 @@ illustrates any article you read), and a desktop app.
 | Version | Double-click | Then |
 |---|---|---|
 | **Start (already installed)** | **`start.bat`** | Menu to launch web / desktop / extension / ComfyUI. |
+| **Update to latest** | **`update.bat`** | Pulls new code, refreshes deps, rebuilds. |
 | **Everything at once** | **`full-install.bat`** | Sets up all three, then asks which to start. |
 | Web app | **`install.bat`** | Opens in your browser. Start later with **`run.bat`**. |
 | Desktop app | **`desktop.bat`** | Builds + opens the native window. Start later with **`run-desktop.bat`**. |

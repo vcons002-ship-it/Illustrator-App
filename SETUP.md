@@ -8,6 +8,7 @@ version is a single file you double-click. (macOS / Linux steps are further down
 | You want… | Double-click | What it does |
 |---|---|---|
 | **Already installed — just start something** | **`start.bat`** | A menu: pick web / desktop / extension / ComfyUI and it launches it. |
+| **Update to the latest** | **`update.bat`** | Pulls new code, refreshes deps, rebuilds the web app + extension (optional desktop rebuild). |
 | **Everything, set up at once** | **`full-install.bat`** | Installs the prerequisites for **all** versions (Node.js, pnpm, deps, Rust, build tools, Tauri CLI) and builds the extension, then lets you pick one to launch. |
 | The **web app** (read EPUBs) | **`install.bat`** | Installs everything, then opens the app. Start it later with **`run.bat`**. |
 | The **desktop app** (native window, local GPU) | **`desktop.bat`** | Installs everything (incl. Rust/Tauri), then builds and opens the app. Start it later with **`run-desktop.bat`**. |
@@ -22,6 +23,17 @@ your PATH.
 
 > Not sure which to use? **`full-install.bat`** is the simplest — it prepares
 > every version and then asks what you'd like to start.
+
+### Updating later
+
+- **App:** double-click **`update.bat`** — it `git pull`s the latest code,
+  refreshes only changed dependencies, and rebuilds the web app + extension (and
+  optionally the desktop app). Re-running `install.bat`/`desktop.bat`/`extension.bat`
+  only rebuilds the code you already have — they don't fetch new code.
+- **ComfyUI engine:** run **`comfyui-setup.bat`** again — if it's already
+  installed it offers to update to the latest (your downloaded models/loras are
+  kept), or run **`comfyui-setup.bat --upgrade`** to update without prompting.
+- After updating, reload the **extension** at `chrome://extensions` (refresh icon).
 
 ---
 
