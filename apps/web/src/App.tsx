@@ -355,8 +355,12 @@ export function App() {
     book && bible && activePage ? resolvePageEntities(bible, activePage) : undefined;
   const pageSpoilerIds = pageEntities?.spoilerIds ?? [];
 
-  // On-image caption: the character(s) on this page + the chapter's key action.
+  // On-image caption. Prefer a per-image description taken from THIS unit's own
+  // generated prompt (it differs page-group to page-group); fall back to the
+  // chapter's key moment only until the image has been rendered.
   const imageCaption = useMemo(() => {
+    const fromImage = captionFromPrompt(results.get(unitIndex)?.prompt);
+    if (fromImage) return fromImage;
     if (!book || !bible || !activePage) return undefined;
     const chapterIdx = book.chapters.find((c) => c.id === activePage.chapterId)?.index ?? 0;
     const keyMoment = bible.storyboard.find((s) => s.chapterIndex === chapterIdx)?.keyMoment?.trim();
@@ -366,7 +370,7 @@ export function App() {
       .map((c) => c.name)
       .slice(0, 3);
     return names.length ? `${names.join(", ")}: ${keyMoment}` : keyMoment;
-  }, [book, bible, activePage, pageEntities]);
+  }, [results, unitIndex, book, bible, activePage, pageEntities]);
 
   // Bloom target: reveal the illustration only as the reader progresses through the
   // page, holding any depicted spoiler until they reach its paragraph (core/reveal).
@@ -637,6 +641,19 @@ export function App() {
  * them separately for the caller to decrypt after mount. Legacy plaintext keys
  * are read inline and re-encrypted on the next save.
  */
+/**
+ * A short, per-image caption from a unit's generated prompt: drop the appended
+ * "Style: …" suffix, then take the first sentence (capped). Returns undefined
+ * when there's no prompt yet (the caller falls back to the chapter key moment).
+ */
+function captionFromPrompt(prompt: string | undefined): string | undefined {
+  if (!prompt) return undefined;
+  const base = prompt.split(/\n\nStyle:/)[0]!.replace(/\s+/g, " ").trim();
+  if (!base) return undefined;
+  const sentence = base.match(/^.*?[.!?](?:\s|$)/)?.[0]?.trim() ?? base;
+  return sentence.length > 160 ? `${sentence.slice(0, 157).trimEnd()}…` : sentence;
+}
+
 /** Best-effort filename from a download URL (for pasted checkpoint/LoRA URLs). */
 function fileNameFromUrl(url: string): string {
   try {
