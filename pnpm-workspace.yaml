@@ -1,3 +1,8 @@
 packages:
   - "packages/*"
   - "apps/*"
+
+# Allow esbuild (used by Vite) to run its install script. Newer pnpm reads this
+# here, not from the package.json "pnpm" field.
+onlyBuiltDependencies:
+  - esbuild
