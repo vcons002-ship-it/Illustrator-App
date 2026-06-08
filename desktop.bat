@@ -21,6 +21,7 @@ call :install_deps    || goto :end_fail
 call :check_rust      || goto :end_fail
 call :check_buildtools || goto :end_fail
 call :check_tauri_cli || goto :end_fail
+call :check_webview2
 call :launch
 goto :eof
 
@@ -157,6 +158,14 @@ if errorlevel 1 (
   exit /b 1
 )
 echo [OK] Tauri CLI ready
+exit /b 0
+
+:check_webview2
+rem The desktop window needs the Edge WebView2 runtime (preinstalled on Win11).
+reg query "HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" /v pv >nul 2>nul && (echo [OK] WebView2 runtime found & exit /b 0)
+reg query "HKCU\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" /v pv >nul 2>nul && (echo [OK] WebView2 runtime found & exit /b 0)
+echo [..] Installing the Edge WebView2 runtime ^(needed by the desktop window^)...
+where winget >nul 2>nul && winget install -e --id Microsoft.EdgeWebView2Runtime --accept-source-agreements --accept-package-agreements
 exit /b 0
 
 :launch
