@@ -40,6 +40,33 @@ export class IndexedDbStore implements VisualReaderStore {
     return this.get(IMAGE_STORE, requestId);
   }
 
+  async deleteBible(bookId: string): Promise<void> {
+    return this.delete(BIBLE_STORE, bookId);
+  }
+
+  async deleteImage(requestId: string): Promise<void> {
+    return this.delete(IMAGE_STORE, requestId);
+  }
+
+  /** Delete every image whose key starts with `${bookId}:` via a key cursor. */
+  async clearImages(bookId: string): Promise<void> {
+    const db = await this.dbPromise;
+    const range = IDBKeyRange.bound(`${bookId}:`, `${bookId}:￿`);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IMAGE_STORE, "readwrite");
+      const req = tx.objectStore(IMAGE_STORE).openKeyCursor(range);
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (cursor) {
+          tx.objectStore(IMAGE_STORE).delete(cursor.key);
+          cursor.continue();
+        }
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
   async putBook(book: BookSource): Promise<void> {
     const record: BookRecord = { ...book, addedAt: Date.now() };
     return this.put(BOOK_STORE, book.id, record);
@@ -90,6 +117,16 @@ export class IndexedDbStore implements VisualReaderStore {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(store, "readwrite");
       tx.objectStore(store).put(value, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  private async delete(store: string, key: string): Promise<void> {
+    const db = await this.dbPromise;
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(store, "readwrite");
+      tx.objectStore(store).delete(key);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });

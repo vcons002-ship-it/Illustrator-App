@@ -23,6 +23,12 @@ export interface VisualReaderStore {
   putImage(requestId: string, bytes: ArrayBuffer, mimeType: string): Promise<void>;
   getImage(requestId: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined>;
 
+  /** Regeneration support (optional — not every backend implements these). */
+  deleteBible?(bookId: string): Promise<void>;
+  deleteImage?(requestId: string): Promise<void>;
+  /** Drop every cached image for a book (keys prefixed `${bookId}:`). */
+  clearImages?(bookId: string): Promise<void>;
+
   /** Library: remember opened books so the reader can switch back to them. */
   putBook(book: BookSource): Promise<void>;
   getBook(id: string): Promise<BookSource | undefined>;
@@ -47,6 +53,18 @@ export class InMemoryStore implements VisualReaderStore {
   }
   async getImage(requestId: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined> {
     return this.images.get(requestId);
+  }
+  async deleteBible(bookId: string): Promise<void> {
+    this.bibles.delete(bookId);
+  }
+  async deleteImage(requestId: string): Promise<void> {
+    this.images.delete(requestId);
+  }
+  async clearImages(bookId: string): Promise<void> {
+    const prefix = `${bookId}:`;
+    for (const key of [...this.images.keys()]) {
+      if (key.startsWith(prefix)) this.images.delete(key);
+    }
   }
   async putBook(book: BookSource): Promise<void> {
     this.books.set(book.id, { book, addedAt: Date.now() });

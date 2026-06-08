@@ -43,7 +43,15 @@ class FakeTransport implements Transport {
 }
 
 function emptyBible(bookId = "book"): VisualBible {
-  return { bookId, version: 1, characters: [], environments: [], spoilers: [], processedChapters: [] };
+  return {
+    bookId,
+    version: 2,
+    characters: [],
+    environments: [],
+    spoilers: [],
+    storyboard: [],
+    processedChapters: [],
+  };
 }
 
 function b64(s: string): string {
@@ -377,6 +385,7 @@ describe("WebLLMProvider (injected completion, no WebGPU)", () => {
     bookId: "b",
     pageId: "pg-0",
     pageIndex: 0,
+    chapterIndex: 0,
     sourceText: "a quiet room",
     characterIds: [],
     environmentIds: [],
@@ -452,6 +461,7 @@ describe("LocalServerLLMProvider", () => {
     bookId: "b",
     pageId: "pg-0",
     pageIndex: 0,
+    chapterIndex: 0,
     sourceText: "a quiet room",
     characterIds: [],
     environmentIds: [],

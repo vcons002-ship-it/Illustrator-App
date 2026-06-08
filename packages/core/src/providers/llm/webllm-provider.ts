@@ -61,7 +61,8 @@ export const EXTRACTION_JSON_INSTRUCTION =
   "Respond with ONLY a JSON object of this exact shape, no markdown, no prose: " +
   '{"characters":[{"name":string,"aliases":string[],"persistentTraits":string[],"clothing":string[]}],' +
   '"environments":[{"name":string,"description":string[]}],' +
-  '"spoilers":[{"label":string,"revealHint":string}]}';
+  '"spoilers":[{"label":string,"revealHint":string}],' +
+  '"summary":string,"keyMoment":string}';
 
 // Module-level engine cache so re-created providers reuse a loaded model
 // (loading is slow; the weights are GB-sized).
@@ -103,7 +104,7 @@ export class WebLLMProvider implements LLMProvider {
       const content = await complete(
         [
           { role: "system", content: `${EXTRACTION_SYSTEM}\n${EXTRACTION_JSON_INSTRUCTION}` },
-          { role: "user", content: extractionUserContent(input.chapterIndex, input.chapterText) },
+          { role: "user", content: extractionUserContent(input) },
         ],
         { json: true, onToken: (tokens) => this.onActivity?.({ phase: "bible", tokens }) },
       );
@@ -188,6 +189,8 @@ export function parseExtraction(content: string): RawExtraction {
   try {
     const json = JSON.parse(stripFences(content)) as Record<string, unknown>;
     return {
+      summary: str(json.summary),
+      keyMoment: str(json.keyMoment),
       characters: asArray(json.characters).map((c) => {
         const o = c as Record<string, unknown>;
         return {

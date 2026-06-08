@@ -59,6 +59,20 @@ export interface SpoilerEntity {
   revealParagraphId: string;
 }
 
+/**
+ * One chapter's entry in the whole-book storyboard: what happens and the single
+ * most important visual moment to illustrate. Built as the LLM reads the book
+ * (each entry is informed by the "story so far"), then used to drive the image
+ * prompt so illustrations capture the chapter's key action.
+ */
+export interface ChapterScene {
+  chapterIndex: number;
+  /** What occurs in this chapter (a few sentences). */
+  summary: string;
+  /** The single most important action/moment to depict in an illustration. */
+  keyMoment: string;
+}
+
 export interface VisualBible {
   bookId: string;
   /** Schema version, so cached Bibles can be migrated. */
@@ -66,6 +80,8 @@ export interface VisualBible {
   characters: Character[];
   environments: Environment[];
   spoilers: SpoilerEntity[];
+  /** Per-chapter storyboard (events + key moment), keyed by chapterIndex. */
+  storyboard: ChapterScene[];
   /** Chapters already processed by the extraction pass. */
   processedChapters: number[];
 }

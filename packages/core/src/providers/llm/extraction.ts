@@ -1,4 +1,5 @@
 import type { Character, Environment, VisualBible } from "../../types/bible.js";
+import type { EntityExtractionInput } from "./llm-provider.js";
 import type { VisualRequest } from "../../types/content.js";
 import { deterministicSeed } from "./mock-llm-provider.js";
 
@@ -16,19 +17,30 @@ export interface RawExtraction {
   characters: { name: string; aliases: string[]; persistentTraits: string[]; clothing: string[] }[];
   environments: { name: string; description: string[] }[];
   spoilers: { label: string; revealHint: string }[];
+  /** What occurs in this chapter (the storyboard summary). Optional for back-compat. */
+  summary?: string;
+  /** The single most important action/moment to illustrate this chapter. */
+  keyMoment?: string;
 }
 
 export const EXTRACTION_SYSTEM =
-  "You are building a 'Visual Bible' for illustrating a novel. Extract only " +
-  "entities that recur or are visually significant. For characters, capture " +
-  "traits that persist across the book (build, hair, eyes, distinguishing marks) " +
-  "and current clothing. For spoilers, flag reveals that would spoil the plot if " +
-  "shown in an illustration before the reader reaches them.";
+  "You are building a 'Visual Bible' and storyboard for illustrating a novel as you " +
+  "read it chapter by chapter. Extract only entities that recur or are visually " +
+  "significant. For each character capture traits that persist across the book " +
+  "(build, hair, eyes, distinguishing marks) and — importantly — their clothing, " +
+  "outfits, and fashion in detail (garments, fabric, colour, accessories, era/style). " +
+  "For each environment/location capture its look AND its world's fashion and aesthetic " +
+  "(architecture, era, materials, palette) in the description. Flag spoilers that would " +
+  "spoil the plot if shown before the reader reaches them. Also write a 'summary' of " +
+  "what happens in THIS chapter, and a single 'keyMoment': the most important, most " +
+  "visual action of the chapter to illustrate (one concrete sentence).";
 
 export const PROMPT_SYSTEM =
-  "You write vivid, concrete image-generation prompts for a single illustration " +
-  "of the given book passage. Keep character and setting descriptions consistent " +
-  "with the supplied Visual Bible. Output only the prompt text, no preamble.";
+  "You write one vivid, concrete image-generation prompt for a single illustration of a " +
+  "book chapter. Depict the chapter's single most important action (the 'key moment'). " +
+  "Keep every character's appearance and OUTFIT, and the setting's look and fashion, " +
+  "consistent with the supplied Visual Bible, and consistent with the story so far. " +
+  "Output only the prompt text, no preamble.";
 
 /**
  * JSON Schema for the extraction result. Gemini (`responseSchema`) and OpenAI
@@ -77,13 +89,25 @@ export const EXTRACTION_JSON_SCHEMA = {
         required: ["label", "revealHint"],
       },
     },
+    summary: { type: "string" },
+    keyMoment: { type: "string" },
   },
-  required: ["characters", "environments", "spoilers"],
+  required: ["characters", "environments", "spoilers", "summary", "keyMoment"],
 } as const;
 
-/** The user message text for one chapter's extraction. */
-export function extractionUserContent(chapterIndex: number, chapterText: string): string {
-  return `Chapter ${chapterIndex} text:\n\n${chapterText}`;
+/**
+ * The user message for one chapter's extraction. Includes the "story so far"
+ * (prior chapters' summaries from the bible being built) so the model has the
+ * cumulative context when summarising this chapter and picking its key moment.
+ */
+export function extractionUserContent(input: EntityExtractionInput): string {
+  const priorSummaries = [...input.existing.storyboard]
+    .filter((s) => s.chapterIndex < input.chapterIndex)
+    .sort((a, b) => a.chapterIndex - b.chapterIndex)
+    .map((s) => `Chapter ${s.chapterIndex}: ${s.summary}`)
+    .join("\n");
+  const soFar = priorSummaries ? `Story so far:\n${priorSummaries}\n\n` : "";
+  return `${soFar}Chapter ${input.chapterIndex} text:\n\n${input.chapterText}`;
 }
 
 /**
@@ -101,6 +125,7 @@ export function mergeExtraction(
     characters: [...existing.characters],
     environments: [...existing.environments],
     spoilers: [...existing.spoilers],
+    storyboard: [...(existing.storyboard ?? [])],
     processedChapters: [...existing.processedChapters],
   };
   const knownChars = new Set(bible.characters.map((c) => c.name.toLowerCase()));
@@ -140,19 +165,41 @@ export function mergeExtraction(
     });
   }
 
+  // Upsert this chapter's storyboard scene (idempotent re-run replaces it).
+  if (raw.summary || raw.keyMoment) {
+    const scene = {
+      chapterIndex,
+      summary: raw.summary ?? "",
+      keyMoment: raw.keyMoment ?? "",
+    };
+    const at = bible.storyboard.findIndex((s) => s.chapterIndex === chapterIndex);
+    if (at >= 0) bible.storyboard[at] = scene;
+    else bible.storyboard.push(scene);
+    bible.storyboard.sort((a, b) => a.chapterIndex - b.chapterIndex);
+  }
+
   if (!bible.processedChapters.includes(chapterIndex)) {
     bible.processedChapters.push(chapterIndex);
   }
   return bible;
 }
 
-/** The user message text for building one page's image prompt. */
+/** The user message text for building one unit's image prompt. */
 export function promptUserContent(request: VisualRequest, bible: VisualBible): string {
   const chars = bible.characters.filter((c) => request.characterIds.includes(c.id));
   const envs = bible.environments.filter((e) => request.environmentIds.includes(e.id));
+  const storyboard = bible.storyboard ?? [];
+  const scene = storyboard.find((s) => s.chapterIndex === request.chapterIndex);
+  const soFar = storyboard
+    .filter((s) => s.chapterIndex < request.chapterIndex)
+    .map((s) => `Chapter ${s.chapterIndex}: ${s.summary}`)
+    .join("\n");
   return [
+    soFar ? `Story so far:\n${soFar}` : "",
+    scene?.summary ? `This chapter:\n${scene.summary}` : "",
+    scene?.keyMoment ? `Key moment to illustrate:\n${scene.keyMoment}` : "",
     chars.length
-      ? `Characters present:\n${chars
+      ? `Characters present (keep appearance + outfit consistent):\n${chars
           .map(
             (c) =>
               `- ${c.name}: ${c.persistentTraits.join(", ")}; wearing ${c.clothing.join(", ") || "unspecified"}`,
@@ -160,7 +207,7 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
           .join("\n")}`
       : "",
     envs.length
-      ? `Setting:\n${envs.map((e) => `- ${e.name}: ${e.description.join(", ")}`).join("\n")}`
+      ? `Setting (look + world fashion):\n${envs.map((e) => `- ${e.name}: ${e.description.join(", ")}`).join("\n")}`
       : "",
     `Passage:\n${request.sourceText}`,
   ]

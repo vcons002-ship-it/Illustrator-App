@@ -17,8 +17,15 @@ export interface EngineWorkerApi {
   providers: ProvidersDiagnostics | undefined;
   /** Whether generation has been started for the current book. */
   generating: boolean;
+  /** Whether generation is currently paused. */
+  paused: boolean;
   openBook: (book: BookSource) => void;
   startGeneration: () => void;
+  pause: () => void;
+  resume: () => void;
+  regenerateStoryboard: () => void;
+  regenerateAllImages: () => void;
+  regenerateImage: (unitIndex: number) => void;
   goTo: (pageIndex: number) => void;
   prerenderAll: () => void;
 }
@@ -35,6 +42,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   const [status, setStatus] = useState("");
   const [providers, setProviders] = useState<ProvidersDiagnostics | undefined>();
   const [generating, setGenerating] = useState(false);
+  const [paused, setPaused] = useState(false);
 
   const send = (msg: MainToWorker, transfer: Transferable[] = []) =>
     workerRef.current?.postMessage(msg, transfer);
@@ -71,6 +79,9 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
           break;
         case "generating":
           setGenerating(msg.value);
+          break;
+        case "paused":
+          setPaused(msg.value);
           break;
         case "opened":
           setBible(msg.bible);
@@ -114,8 +125,41 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     generationRequested.current = true;
     send({ type: "start" });
   }, []);
+  const pause = useCallback(() => send({ type: "pause" }), []);
+  const resume = useCallback(() => {
+    generationRequested.current = true;
+    send({ type: "resume" });
+  }, []);
+  const regenerateStoryboard = useCallback(() => {
+    generationRequested.current = true;
+    send({ type: "regenerateStoryboard" });
+  }, []);
+  const regenerateAllImages = useCallback(() => {
+    generationRequested.current = true;
+    send({ type: "regenerateAllImages" });
+  }, []);
+  const regenerateImage = useCallback((unitIndex: number) => {
+    generationRequested.current = true;
+    send({ type: "regenerateImage", unitIndex });
+  }, []);
   const goTo = useCallback((pageIndex: number) => send({ type: "goto", pageIndex }), []);
   const prerenderAll = useCallback(() => send({ type: "prerenderAll" }), []);
 
-  return { bible, results, status, providers, generating, openBook, startGeneration, goTo, prerenderAll };
+  return {
+    bible,
+    results,
+    status,
+    providers,
+    generating,
+    paused,
+    openBook,
+    startGeneration,
+    pause,
+    resume,
+    regenerateStoryboard,
+    regenerateAllImages,
+    regenerateImage,
+    goTo,
+    prerenderAll,
+  };
 }

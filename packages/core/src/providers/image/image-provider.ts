@@ -23,6 +23,8 @@ export interface ImageGenerationInput {
   anchors: IdentityAnchor[];
   /** Quality hint from the active tier config. */
   quality: "sketch" | "standard" | "cinematic";
+  /** Explicit sampler steps (from the resolved quality profile); overrides the quality default. */
+  steps?: number;
   width?: number;
   height?: number;
   /** Local-engine style: a LoRA to apply when installed (ignored by cloud providers). */

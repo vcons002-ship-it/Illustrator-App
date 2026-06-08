@@ -12,6 +12,11 @@ export type MainToWorker =
   | { type: "init"; settings: ReaderSettings }
   | { type: "open"; book: BookSource }
   | { type: "start" }
+  | { type: "pause" }
+  | { type: "resume" }
+  | { type: "regenerateStoryboard" }
+  | { type: "regenerateAllImages" }
+  | { type: "regenerateImage"; unitIndex: number }
   | { type: "goto"; pageIndex: number }
   | { type: "idle"; allowed: boolean }
   | { type: "prerenderAll" };
@@ -20,6 +25,7 @@ export type WorkerToMain =
   | { type: "status"; message: string }
   | { type: "providers"; diagnostics: ProvidersDiagnostics }
   | { type: "generating"; value: boolean }
+  | { type: "paused"; value: boolean }
   | { type: "opened"; bible: VisualBible }
   | { type: "update"; pageIndex: number; result: ImageResult }
   | { type: "error"; message: string };

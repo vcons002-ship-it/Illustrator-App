@@ -65,8 +65,14 @@ export function App() {
     status,
     providers,
     generating,
+    paused,
     openBook: openInWorker,
     startGeneration,
+    pause,
+    resume,
+    regenerateStoryboard,
+    regenerateAllImages,
+    regenerateImage,
     goTo,
     prerenderAll,
   } = useEngineWorker(settings);
@@ -327,11 +333,14 @@ export function App() {
     return Math.max(0, book.pages.findIndex((p) => p.id === pageId));
   }, [book, activeParagraphId]);
 
-  // Render units: one illustration per page, or per chapter. The reader still
-  // scrolls the original pages; `pageToUnit` maps the active page to the unit the
-  // engine rendered (must match the worker, hence the shared toRenderUnits).
-  const scope = settings.illustrationScope ?? "page";
-  const units = useMemo(() => (book ? toRenderUnits(book, scope) : undefined), [book, scope]);
+  // Render units: a group of pages (or a whole chapter) shares one illustration.
+  // The reader still scrolls the original pages; `pageToUnit` maps the active page
+  // to the unit the engine rendered (must match the worker — shared toRenderUnits).
+  const pagesPerImage = settings.pagesPerImage ?? 3;
+  const units = useMemo(
+    () => (book ? toRenderUnits(book, pagesPerImage) : undefined),
+    [book, pagesPerImage],
+  );
   const unitIndex = units?.pageToUnit[activePageIndex] ?? activePageIndex;
 
   useEffect(() => {
@@ -351,21 +360,22 @@ export function App() {
   );
   const hasPageSpoiler = pageSpoilerIds.length > 0;
 
-  // In chapter scope the single illustration reveals gradually across the whole
-  // chapter — fully revealed at its end (revealPoint 1) — rather than per page.
-  const chapterProgress = useMemo(() => {
-    if (scope !== "chapter" || !book || !activePage) return 0;
-    const chapterPages = book.pages.filter((p) => p.chapterId === activePage.chapterId);
-    const pos = chapterPages.findIndex((p) => p.id === activePage.id);
-    const count = chapterPages.length || 1;
-    return Math.min(1, Math.max(0, (Math.max(0, pos) + pageProgress) / count));
-  }, [scope, book, activePage, pageProgress]);
+  // For a multi-page (or chapter) unit the single illustration reveals gradually
+  // across the whole unit — fully revealed at its end (revealPoint 1). A 1-page
+  // unit keeps the per-page, spoiler-aware reveal.
+  const singlePage = pagesPerImage === 1;
+  const unitProgress = useMemo(() => {
+    if (singlePage || !units || !book) return pageProgress;
+    const first = units.pageToUnit.indexOf(unitIndex);
+    const count = units.unitPageCount[unitIndex] || 1;
+    const pos = Math.max(0, activePageIndex - Math.max(0, first));
+    return Math.min(1, Math.max(0, (pos + pageProgress) / count));
+  }, [singlePage, units, book, unitIndex, activePageIndex, pageProgress]);
 
   const bloom = !activePage
     ? 0
-    : scope === "chapter"
-      ? computeBloomTarget(chapterProgress, 1, true)
-      : computeBloomTarget(
+    : singlePage
+      ? computeBloomTarget(
           pageProgress,
           spoilerRevealPoint(
             latestSpoilerParagraphIndex(activePage, pageSpoilerIds, bible?.spoilers ?? []),
@@ -373,7 +383,8 @@ export function App() {
             paraCount,
           ),
           hasPageSpoiler,
-        );
+        )
+      : computeBloomTarget(unitProgress, 1, true);
 
   const renderedCount = useMemo(
     () => [...results.values()].filter((r) => r.status === "ready").length,
@@ -418,15 +429,48 @@ export function App() {
           <button style={styles.button} onClick={() => openBook(loadSampleBook())}>
             Load sample
           </button>
-          {book && (
+          {book && !generating && (
             <button
-              style={generating ? styles.button : styles.buttonPrimary}
+              style={styles.buttonPrimary}
               onClick={startGeneration}
-              disabled={generating}
-              title="Start building the Visual Bible and illustrating, reusing anything generated in past sessions"
+              title="Read the book and start illustrating, reusing anything generated in past sessions"
             >
-              {generating ? "Generating…" : "Begin generating book"}
+              Begin generating book
             </button>
+          )}
+          {book && generating && (
+            <button
+              style={styles.button}
+              onClick={paused ? resume : pause}
+              title={paused ? "Resume generation" : "Pause generation (in-flight work finishes)"}
+            >
+              {paused ? "▶ Resume" : "⏸ Pause"}
+            </button>
+          )}
+          {book && generating && (
+            <>
+              <button
+                style={styles.button}
+                onClick={regenerateStoryboard}
+                title="Re-run the LLM analysis (after switching the text model/API in Settings). Images are kept."
+              >
+                ↻ Storyboard
+              </button>
+              <button
+                style={styles.button}
+                onClick={regenerateAllImages}
+                title="Re-render every image (after switching image model/style/quality in Settings)."
+              >
+                ↻ All images
+              </button>
+              <button
+                style={styles.button}
+                onClick={() => regenerateImage(unitIndex)}
+                title="Re-render just the current image (try a different style)."
+              >
+                ↻ This image
+              </button>
+            </>
           )}
           {book && (
             <button
@@ -489,10 +533,12 @@ export function App() {
               const pageUnit = units?.pageToUnit[i] ?? i;
               const isActiveUnit = pageUnit === unitIndex;
               const next = book.pages[i + 1];
-              // "Page N" dividers only in page scope, between pages of the same
-              // chapter (chapter boundaries are marked by the heading instead).
+              // "Page N" dividers between pages of the same chapter (chapter
+              // boundaries are marked by the heading). Hidden in whole-chapter mode.
               const showPageDivider =
-                scope === "page" && next !== undefined && next.chapterId === page.chapterId;
+                pagesPerImage !== "chapter" &&
+                next !== undefined &&
+                next.chapterId === page.chapterId;
               return (
                 <Fragment key={page.id}>
                   {newChapter && (
@@ -526,9 +572,11 @@ export function App() {
                 awaitingStart={!generating}
               />
               <div style={styles.caption}>
-                {scope === "chapter"
+                {pagesPerImage === "chapter"
                   ? `Chapter ${unitIndex + 1} of ${totalUnits}`
-                  : `Page ${activePageIndex + 1} of ${book.pages.length}`}
+                  : `Page ${activePageIndex + 1} of ${book.pages.length}${
+                      singlePage ? "" : ` · image ${unitIndex + 1}/${totalUnits}`
+                    }`}
                 {bible ? ` · ${bible.characters.length} characters tracked` : ""}
               </div>
             </div>
@@ -577,7 +625,13 @@ function loadStoredSettings(): { settings: ReaderSettings; encrypted?: Encrypted
 /** Accept the new shape as-is; migrate the v1 `{tier,llmKey,imageKey}` shape. */
 function migrate(raw: Record<string, unknown>): ReaderSettings {
   if (typeof raw.textProvider === "string") {
-    return { ...DEFAULT_SETTINGS, ...(raw as Partial<ReaderSettings>) };
+    const migrated = { ...DEFAULT_SETTINGS, ...(raw as Partial<ReaderSettings>) };
+    // Legacy `illustrationScope` (page|chapter) → pagesPerImage.
+    if (migrated.pagesPerImage === undefined && typeof raw.illustrationScope === "string") {
+      migrated.pagesPerImage = raw.illustrationScope === "chapter" ? "chapter" : 1;
+    }
+    delete (migrated as Record<string, unknown>).illustrationScope;
+    return migrated;
   }
   const llmKey = typeof raw.llmKey === "string" ? raw.llmKey : "";
   const imageKey = typeof raw.imageKey === "string" ? raw.imageKey : "";

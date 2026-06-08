@@ -43,6 +43,8 @@ const ExtractionSchema = z.object({
       revealHint: z.string(),
     }),
   ),
+  summary: z.string(),
+  keyMoment: z.string(),
 });
 
 export interface ClaudeProviderOptions {
@@ -77,7 +79,7 @@ export class ClaudeProvider implements LLMProvider {
       max_tokens: 4096,
       system: EXTRACTION_SYSTEM,
       messages: [
-        { role: "user", content: extractionUserContent(input.chapterIndex, input.chapterText) },
+        { role: "user", content: extractionUserContent(input) },
       ],
       output_format: betaZodOutputFormat(ExtractionSchema),
     });

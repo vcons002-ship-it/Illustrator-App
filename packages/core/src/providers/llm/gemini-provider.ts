@@ -49,7 +49,7 @@ export class GeminiLLMProvider implements LLMProvider {
   }
 
   async extractEntities(input: EntityExtractionInput): Promise<VisualBible> {
-    const text = await this.generate(extractionUserContent(input.chapterIndex, input.chapterText), {
+    const text = await this.generate(extractionUserContent(input), {
       system: EXTRACTION_SYSTEM,
       json: true,
     });

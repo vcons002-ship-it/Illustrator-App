@@ -27,6 +27,8 @@ export interface VisualRequest {
   bookId: string;
   pageId: string;
   pageIndex: number;
+  /** Index of the chapter this unit belongs to (keys the storyboard scene). */
+  chapterIndex: number;
   /** Source text the visual is derived from. */
   sourceText: string;
   /** Ids of Visual Bible characters relevant to this page. */

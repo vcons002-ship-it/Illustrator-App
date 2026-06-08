@@ -14,6 +14,12 @@ export interface TierConfig {
   imageProvider: string;
   /** Image quality hint; cloud favours fidelity, local favours speed. */
   quality: "sketch" | "standard" | "cinematic";
+  /**
+   * Resolved render quality level (steps + resolution), from the user's quality
+   * setting and pages-per-image. When set, the pipeline passes its profile to the
+   * image provider; when absent, providers use their own defaults.
+   */
+  renderQuality?: "draft" | "standard" | "high" | "ultra";
   /** Art-style id (see catalog `IMAGE_STYLES`); its prompt suffix is appended. */
   style?: string;
 }

@@ -97,6 +97,28 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "start":
       beginGeneration();
       break;
+    case "pause":
+      engine?.pauseGeneration();
+      post({ type: "paused", value: true });
+      break;
+    case "resume":
+      engine?.resumeGeneration();
+      post({ type: "paused", value: false });
+      break;
+    case "regenerateStoryboard":
+      void engine?.regenerateStoryboard();
+      post({ type: "paused", value: false });
+      break;
+    case "regenerateAllImages":
+      void engine?.regenerateAllImages();
+      post({ type: "generating", value: true });
+      post({ type: "paused", value: false });
+      break;
+    case "regenerateImage":
+      void engine?.regenerateCurrentImage(msg.unitIndex);
+      post({ type: "generating", value: true });
+      post({ type: "paused", value: false });
+      break;
     case "goto":
       engine?.goToPage(msg.pageIndex);
       break;
@@ -106,6 +128,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "prerenderAll":
       engine?.prerenderAll();
       post({ type: "generating", value: true });
+      post({ type: "paused", value: false });
       break;
   }
 };
@@ -118,6 +141,7 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
   try {
     post({ type: "status", message: "" });
     post({ type: "generating", value: false });
+    post({ type: "paused", value: false });
     pendingStart = false; // fresh open; the hook re-sends "start" if it should resume
     bibleActive = false;
     stopBibleTimer();
@@ -158,11 +182,12 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
       // The bible builds in the background; relay each growth so the UI's
       // character/spoiler context (and the panel) stay current.
       onBibleUpdate: (bible) => post({ type: "opened", bible }),
+      illustrateAfter: settings.illustrateAfter ?? "book",
     });
     // Re-segment into render units (one image per page, or per chapter) so the
     // engine renders at the chosen granularity. The UI maps the reader's position
     // to the same units via toRenderUnits, so the two never drift.
-    const renderBook = toRenderUnits(book, settings.illustrationScope ?? "page").book;
+    const renderBook = toRenderUnits(book, settings.pagesPerImage ?? 3).book;
     // Loads the book + restores cached bible/images, but does NOT generate. The
     // user triggers generation via the "start" message ("Begin generating book").
     await engine.openBook(renderBook);

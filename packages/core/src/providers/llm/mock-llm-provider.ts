@@ -25,9 +25,19 @@ export class MockLLMProvider implements LLMProvider {
     const bible: VisualBible = {
       ...input.existing,
       characters: [...input.existing.characters],
+      storyboard: [...(input.existing.storyboard ?? [])],
       processedChapters: [...input.existing.processedChapters],
     };
     const known = new Set(bible.characters.map((c) => c.name));
+
+    // Deterministic storyboard scene: chapter summary + first sentence as the moment.
+    const snippet = input.chapterText.replace(/\s+/g, " ").trim();
+    const summary = snippet.slice(0, 160);
+    const keyMoment = (snippet.split(/(?<=[.!?])\s/)[0] ?? summary).slice(0, 160);
+    bible.storyboard = [
+      ...bible.storyboard.filter((s) => s.chapterIndex !== input.chapterIndex),
+      { chapterIndex: input.chapterIndex, summary, keyMoment },
+    ].sort((a, b) => a.chapterIndex - b.chapterIndex);
 
     for (const [name, count] of counts) {
       if (count < 2 || known.has(name)) continue;
@@ -55,11 +65,12 @@ export class MockLLMProvider implements LLMProvider {
     const charDesc = chars
       .map((c) => `${c.name} (${c.persistentTraits.join(", ")})`)
       .join("; ");
+    const scene = (bible.storyboard ?? []).find((s) => s.chapterIndex === request.chapterIndex);
     const snippet = request.sourceText.slice(0, 160).replace(/\s+/g, " ").trim();
     return [
       "Illustration of a book scene.",
       charDesc ? `Characters: ${charDesc}.` : "",
-      `Scene: ${snippet}`,
+      scene?.keyMoment ? `Key moment: ${scene.keyMoment}` : `Scene: ${snippet}`,
     ]
       .filter(Boolean)
       .join(" ");

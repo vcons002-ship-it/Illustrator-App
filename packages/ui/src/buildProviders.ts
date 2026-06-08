@@ -9,6 +9,7 @@ import {
   createImageProvider,
   createLLMProvider,
   getProvider,
+  resolveQuality,
   type GenerationActivity,
   type ImageProvider,
   type LLMProvider,
@@ -91,6 +92,7 @@ export function buildProviders(
           : image.provider.id === "local"
             ? "standard"
             : "cinematic",
+      renderQuality: resolveQuality(settings.imageQuality, settings.pagesPerImage ?? 3),
       style: settings.imageStyle ?? "auto",
     },
   };

@@ -50,7 +50,7 @@ export class OpenAILLMProvider implements LLMProvider {
   async extractEntities(input: EntityExtractionInput): Promise<VisualBible> {
     const text = await this.complete(
       EXTRACTION_SYSTEM,
-      extractionUserContent(input.chapterIndex, input.chapterText),
+      extractionUserContent(input),
       true,
     );
     let raw: RawExtraction = { characters: [], environments: [], spoilers: [] };

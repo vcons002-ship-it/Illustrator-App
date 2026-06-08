@@ -1,7 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { toRenderUnits } from "./render-units.js";
-import type { BookSource } from "./types/book.js";
+import type { BookSource, Page } from "./types/book.js";
 
+function page(id: string, chapterId: string, text: string): Page {
+  return { id, index: 0, chapterId, paragraphs: [{ id: `${id}-0`, index: 0, text }] };
+}
+
+/** c0 has 3 pages, c1 has 1 page. */
 function book(): BookSource {
   return {
     id: "b1",
@@ -11,44 +16,45 @@ function book(): BookSource {
       { id: "c1", index: 1, title: "Two" },
     ],
     pages: [
-      { id: "p0", index: 0, chapterId: "c0", paragraphs: [{ id: "p0-0", index: 0, text: "A" }] },
-      { id: "p1", index: 1, chapterId: "c0", paragraphs: [{ id: "p1-0", index: 0, text: "B" }] },
-      { id: "p2", index: 2, chapterId: "c1", paragraphs: [{ id: "p2-0", index: 0, text: "C" }] },
+      page("p0", "c0", "A"),
+      page("p1", "c0", "B"),
+      page("p2", "c0", "C"),
+      page("p3", "c1", "D"),
     ],
   };
 }
 
 describe("toRenderUnits", () => {
-  it("page scope is identity", () => {
+  it("1 page per image is identity", () => {
     const b = book();
-    const units = toRenderUnits(b, "page");
+    const units = toRenderUnits(b, 1);
     expect(units.book).toBe(b);
-    expect(units.pageToUnit).toEqual([0, 1, 2]);
-    expect(units.unitCount).toBe(3);
+    expect(units.pageToUnit).toEqual([0, 1, 2, 3]);
+    expect(units.unitCount).toBe(4);
+    expect(units.unitPageCount).toEqual([1, 1, 1, 1]);
   });
 
-  it("chapter scope merges each chapter's pages into one unit", () => {
-    const units = toRenderUnits(book(), "chapter");
-    // Two chapters → two units; pages 0,1 → unit 0, page 2 → unit 1.
-    expect(units.unitCount).toBe(2);
-    expect(units.pageToUnit).toEqual([0, 0, 1]);
-    expect(units.book.pages).toHaveLength(2);
-
-    // Unit 0 concatenates chapter c0's paragraphs (A, B), re-indexed.
+  it("groups N pages within a chapter, with a short tail group of its own", () => {
+    const units = toRenderUnits(book(), 2);
+    // c0 (3 pages) → [p0,p1] + [p2 tail]; c1 (1 page) → [p3]. Never crosses chapters.
+    expect(units.unitCount).toBe(3);
+    expect(units.pageToUnit).toEqual([0, 0, 1, 2]);
+    expect(units.unitPageCount).toEqual([2, 1, 1]);
     const u0 = units.book.pages[0]!;
-    expect(u0.id).toBe("chapter-c0");
     expect(u0.chapterId).toBe("c0");
     expect(u0.paragraphs.map((p) => p.text)).toEqual(["A", "B"]);
-    expect(u0.paragraphs.map((p) => p.id)).toEqual(["chapter-c0-0", "chapter-c0-1"]);
-
-    // Chapters are untouched, so bible extraction keys are unchanged.
-    expect(units.book.chapters).toEqual(book().chapters);
   });
 
-  it("uses chapter-scoped ids distinct from page ids (caches don't collide)", () => {
+  it("whole-chapter groups each chapter into one unit", () => {
     const units = toRenderUnits(book(), "chapter");
-    const ids = units.book.pages.map((p) => p.id);
-    expect(ids).toEqual(["chapter-c0", "chapter-c1"]);
-    expect(ids).not.toContain("p0");
+    expect(units.unitCount).toBe(2);
+    expect(units.pageToUnit).toEqual([0, 0, 0, 1]);
+    expect(units.unitPageCount).toEqual([3, 1]);
+    expect(units.book.pages.map((p) => p.id)).toEqual(["chapter-c0", "chapter-c1"]);
+  });
+
+  it("encodes the cadence in unit ids so different cadences cache independently", () => {
+    expect(toRenderUnits(book(), 2).book.pages[0]!.id).toBe("u2-p0");
+    expect(toRenderUnits(book(), "chapter").book.pages[0]!.id).toBe("chapter-c0");
   });
 });

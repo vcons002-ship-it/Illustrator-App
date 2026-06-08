@@ -96,6 +96,18 @@ export class RenderBuffer {
     this.results.set(pageIndex, result);
   }
 
+  /** Drop a page's result so it re-renders (regenerate one image). */
+  invalidate(pageIndex: number): void {
+    this.results.delete(pageIndex);
+    this.pump();
+  }
+
+  /** Drop every result so the whole book re-renders (regenerate all images). */
+  invalidateAll(): void {
+    this.results.clear();
+    this.pump();
+  }
+
   /** Current status of a page (or "queued" if not started). */
   statusOf(pageIndex: number): RenderStatus {
     if (this.results.has(pageIndex)) return this.results.get(pageIndex)!.status;

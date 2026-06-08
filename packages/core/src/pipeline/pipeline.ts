@@ -7,6 +7,7 @@ import type { ImageProvider } from "../providers/image/image-provider.js";
 import type { VisualReaderStore } from "../storage/store.js";
 import { resolvePageEntities } from "../visual-bible/bible.js";
 import { getImageStyle } from "../providers/catalog.js";
+import { qualityProfile } from "../quality.js";
 
 /**
  * Orchestrates a single page → image. Builds a VisualRequest from the page and
@@ -44,11 +45,18 @@ export class RenderPipeline {
       bookId: this.deps.book.id,
       pageId: page.id,
       pageIndex: page.index,
+      chapterIndex: this.deps.book.chapters.find((c) => c.id === page.chapterId)?.index ?? 0,
       sourceText: page.paragraphs.map((p) => p.text).join("\n\n"),
       characterIds,
       environmentIds,
       spoilerIds,
     };
+  }
+
+  /** Stable cache id for a unit's image (`${bookId}:${pageId}`). */
+  requestIdFor(pageIndex: number): string {
+    const page = this.deps.book.pages[pageIndex];
+    return `${this.deps.book.id}:${page?.id ?? `page-${pageIndex}`}`;
   }
 
   /**
@@ -107,10 +115,15 @@ export class RenderPipeline {
       const anchors = this.anchorsFor(request);
       // Local engines additionally apply a style LoRA/checkpoint when installed.
       const local = this.deps.tier.tier === "local" ? style.local : undefined;
+      // Resolved quality profile → steps + resolution (more pages/image = higher).
+      const profile = this.deps.tier.renderQuality
+        ? qualityProfile(this.deps.tier.renderQuality)
+        : undefined;
       const output = await this.deps.image.generate({
         prompt,
         anchors,
         quality: this.deps.tier.quality,
+        ...(profile ? { steps: profile.steps, width: profile.width, height: profile.height } : {}),
         ...(local?.lora ? { styleLora: local.lora } : {}),
         ...(local?.checkpoint ? { styleCheckpoint: local.checkpoint } : {}),
         ...(onProgress ? { onProgress } : {}),

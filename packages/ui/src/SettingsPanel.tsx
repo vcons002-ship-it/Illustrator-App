@@ -59,11 +59,22 @@ export interface ReaderSettings {
   /** Art style id applied to every illustration (see catalog IMAGE_STYLES). */
   imageStyle?: string;
   /**
-   * Illustration granularity: one image per page, or one richer image per
-   * chapter (revealed gradually as the reader moves through the chapter).
-   * Default "page".
+   * How many pages share one illustration: 1/2/3/5, or a whole "chapter".
+   * Fewer pages → frequent, draftier images; more → rarer, higher-quality.
+   * Default 3.
    */
-  illustrationScope?: "page" | "chapter";
+  pagesPerImage?: 1 | 2 | 3 | 5 | "chapter";
+  /**
+   * Image quality: "auto" scales with pagesPerImage; or pick a level explicitly.
+   * Higher levels use more steps + resolution (slower). Default "auto".
+   */
+  imageQuality?: "auto" | "draft" | "standard" | "high" | "ultra";
+  /**
+   * When to start illustrating: "book" reads the whole book first so prompts have
+   * full context (best images, slower start); "chapter" starts as each chapter is
+   * analysed (faster first image). Default "book".
+   */
+  illustrateAfter?: "book" | "chapter";
   /** Which local engine API to talk to (browser "your own server" path). */
   localBackend?: LocalBackendId;
   /** Base URL of a local engine you run yourself (browser path; persisted). */
@@ -233,14 +244,57 @@ export function SettingsPanel({
           </label>
 
           <label style={rowStyle}>
-            <span>Illustrate by</span>
+            <span>Pages per image</span>
             <select
-              value={value.illustrationScope ?? "page"}
-              onChange={(e) => set({ illustrationScope: e.target.value as "page" | "chapter" })}
-              title="Page: one image per page. Chapter: one richer image per chapter, revealed as you read through it."
+              value={String(value.pagesPerImage ?? 3)}
+              onChange={(e) =>
+                set({
+                  pagesPerImage:
+                    e.target.value === "chapter"
+                      ? "chapter"
+                      : (Number(e.target.value) as 1 | 2 | 3 | 5),
+                })
+              }
+              title="How many pages share one illustration. Fewer = frequent/draftier; more = rarer/higher quality."
             >
-              <option value="page">Page (frequent)</option>
-              <option value="chapter">Chapter (fewer, more detailed)</option>
+              <option value="1">1 page (frequent)</option>
+              <option value="2">2 pages</option>
+              <option value="3">3 pages (default)</option>
+              <option value="5">5 pages</option>
+              <option value="chapter">Whole chapter (highest quality)</option>
+            </select>
+          </label>
+
+          <label style={rowStyle}>
+            <span>Image quality</span>
+            <select
+              value={value.imageQuality ?? "auto"}
+              onChange={(e) =>
+                set({
+                  imageQuality: e.target.value as "auto" | "draft" | "standard" | "high" | "ultra",
+                })
+              }
+              title="Auto scales with pages-per-image. Higher levels use more steps + resolution (slower)."
+            >
+              <option value="auto">Auto (scale with frequency)</option>
+              <option value="draft">Draft (fastest)</option>
+              <option value="standard">Standard</option>
+              <option value="high">High</option>
+              <option value="ultra">Ultra (slowest)</option>
+            </select>
+          </label>
+
+          <label style={rowStyle}>
+            <span>Illustrate after</span>
+            <select
+              value={value.illustrateAfter ?? "book"}
+              onChange={(e) =>
+                set({ illustrateAfter: e.target.value as "book" | "chapter" })
+              }
+              title="Whole book: read everything first for the most relevant images. Each chapter: faster first image."
+            >
+              <option value="book">Reading whole book (best context)</option>
+              <option value="chapter">Each chapter done (faster)</option>
             </select>
           </label>
           {isDesktop && value.imageProvider === "local" && (

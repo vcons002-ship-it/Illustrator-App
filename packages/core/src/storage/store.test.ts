@@ -23,4 +23,21 @@ describe("InMemoryStore library", () => {
     expect(await store.getBook("a")).toBeUndefined();
     expect((await store.listBooks()).map((b) => b.id)).toEqual(["b"]);
   });
+
+  it("deletes a bible, a single image, and clears all images for a book", async () => {
+    const store = new InMemoryStore();
+    const bytes = new Uint8Array([1]).buffer;
+    await store.putImage("book1:p0", bytes, "image/png");
+    await store.putImage("book1:p1", bytes, "image/png");
+    await store.putImage("book2:p0", bytes, "image/png");
+
+    await store.deleteImage("book1:p0");
+    expect(await store.getImage("book1:p0")).toBeUndefined();
+    expect(await store.getImage("book1:p1")).toBeDefined();
+
+    await store.clearImages("book1");
+    expect(await store.getImage("book1:p1")).toBeUndefined();
+    // A different book's images are untouched.
+    expect(await store.getImage("book2:p0")).toBeDefined();
+  });
 });

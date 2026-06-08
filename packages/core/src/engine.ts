@@ -9,7 +9,7 @@ import type { VisualReaderStore } from "./storage/store.js";
 import { InMemoryStore } from "./storage/store.js";
 import { RenderPipeline } from "./pipeline/pipeline.js";
 import { RenderBuffer } from "./render-buffer/render-buffer.js";
-import { createEmptyBible } from "./visual-bible/bible.js";
+import { BIBLE_VERSION, createEmptyBible } from "./visual-bible/bible.js";
 
 /**
  * Top-level engine — the single object a front-end constructs. It owns the
@@ -36,6 +36,12 @@ export interface EngineOptions {
    * the UI uses this to keep character/spoiler context current as it fills in.
    */
   onBibleUpdate?: (bible: VisualBible) => void;
+  /**
+   * When to start illustrating: "chapter" renders a unit as soon as its chapter
+   * is analysed (fast first image); "book" waits until the whole book is read so
+   * every prompt has full-book context. Default "chapter".
+   */
+  illustrateAfter?: "book" | "chapter";
 }
 
 export class Engine {
@@ -49,10 +55,14 @@ export class Engine {
   private biblePromise: Promise<void> | undefined;
   /** Whether `startGeneration` has been called for the current book. */
   private generationStarted = false;
+  /** Whether generation is paused (no new chapters extracted / images rendered). */
+  private paused = false;
+  private readonly illustrateAfter: "book" | "chapter";
 
   constructor(private opts: EngineOptions) {
     this.store = opts.store ?? new InMemoryStore();
     this.tier = opts.tier ?? DEFAULT_TIER_CONFIG;
+    this.illustrateAfter = opts.illustrateAfter ?? "chapter";
   }
 
   /**
@@ -63,8 +73,11 @@ export class Engine {
    */
   async openBook(book: BookSource): Promise<void> {
     this.book = book;
-    this.bible = (await this.store.getBible(book.id)) ?? createEmptyBible(book.id);
+    // Discard a bible cached at an older schema (e.g. pre-storyboard) so it's rebuilt.
+    const stored = await this.store.getBible(book.id);
+    this.bible = stored && stored.version === BIBLE_VERSION ? stored : createEmptyBible(book.id);
     this.generationStarted = false;
+    this.paused = false;
     this.biblePromise = undefined;
 
     this.pipeline = new RenderPipeline({
@@ -79,8 +92,10 @@ export class Engine {
     this.buffer = new RenderBuffer({
       totalPages: book.pages.length,
       render: (pageIndex, onProgress) => this.pipeline!.renderPage(pageIndex, onProgress),
-      // Hold a page until its chapter has been processed into the bible.
-      canRender: (pageIndex) => this.isChapterReady(pageIndex),
+      // "book": wait for the whole book to be analysed; "chapter": as soon as the
+      // unit's own chapter is ready.
+      canRender: (pageIndex) =>
+        this.illustrateAfter === "book" ? this.isBibleComplete() : this.isChapterReady(pageIndex),
       // Stay paused until the user begins generating; cached pages still show.
       generationEnabled: false,
       ...(this.opts.onUpdate ? { onUpdate: this.opts.onUpdate } : {}),
@@ -136,6 +151,15 @@ export class Engine {
     return this.bible.processedChapters.includes(chapter?.index ?? 0);
   }
 
+  /** Has every chapter of the book been processed into the bible? */
+  private isBibleComplete(): boolean {
+    if (!this.book || !this.bible) return false;
+    for (const idx of chapterText(this.book).keys()) {
+      if (!this.bible.processedChapters.includes(idx)) return false;
+    }
+    return true;
+  }
+
   /**
    * Extract any chapters not yet in the bible, persisting as we go and letting the
    * buffer start pages whose chapter just became ready. Per-chapter failures are
@@ -155,6 +179,7 @@ export class Engine {
     // A fully-cached book: nothing pending, but its pages are already renderable.
     if (total === 0) this.buffer?.refresh();
     for (const [chapterIndex, text] of pending) {
+      if (this.paused) return; // resume() re-invokes this loop for the rest
       try {
         this.bible = await this.opts.llm.extractEntities({
           bookId: this.book.id,
@@ -192,7 +217,65 @@ export class Engine {
   /** Pre-render every page of the book now (optional, user-triggered). */
   prerenderAll(): void {
     this.startGeneration(); // pre-rendering implies generation is on
+    if (this.paused) this.resumeGeneration();
     this.buffer?.renderAll();
+  }
+
+  /** Pause: stop starting new chapter extractions and image renders. */
+  pauseGeneration(): void {
+    this.paused = true;
+    this.buffer?.setGenerationEnabled(false);
+    this.buffer?.setIdleAllowed(false);
+  }
+
+  /** Resume after a pause; continues the bible build from where it stopped. */
+  resumeGeneration(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    this.buffer?.setGenerationEnabled(true);
+    this.buffer?.setIdleAllowed(true);
+    if (this.generationStarted && !this.isBibleComplete()) {
+      this.biblePromise = this.buildBibleInBackground();
+    }
+  }
+
+  isPaused(): boolean {
+    return this.paused;
+  }
+
+  /**
+   * Re-run the LLM analysis (bible + storyboard) from scratch, e.g. after
+   * switching the text provider/model. Cached images are kept (use
+   * `regenerateAllImages` to re-render them against the new storyboard).
+   */
+  async regenerateStoryboard(): Promise<void> {
+    if (!this.book) return;
+    await this.store.deleteBible?.(this.book.id);
+    this.bible = createEmptyBible(this.book.id);
+    this.opts.onBibleUpdate?.(this.bible);
+    this.paused = false;
+    if (this.generationStarted) {
+      this.buffer?.setGenerationEnabled(true);
+      this.biblePromise = this.buildBibleInBackground();
+    }
+  }
+
+  /** Discard every cached image and re-render the book (e.g. new model/style/quality). */
+  async regenerateAllImages(): Promise<void> {
+    if (!this.book) return;
+    await this.store.clearImages?.(this.book.id);
+    this.startGeneration();
+    if (this.paused) this.resumeGeneration();
+    this.buffer?.invalidateAll();
+  }
+
+  /** Discard one unit's cached image and re-render just it (e.g. to try a style). */
+  async regenerateCurrentImage(unitIndex: number): Promise<void> {
+    if (!this.pipeline) return;
+    await this.store.deleteImage?.(this.pipeline.requestIdFor(unitIndex));
+    this.startGeneration();
+    if (this.paused) this.resumeGeneration();
+    this.buffer?.invalidate(unitIndex);
   }
 
   resultFor(pageIndex: number): ImageResult | undefined {

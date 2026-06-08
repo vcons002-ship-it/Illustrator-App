@@ -199,4 +199,85 @@ describe("Engine", () => {
     // Chapter already processed + cached → no further extraction calls.
     expect(spy.mock.calls.length).toBe(callsAfterFirst);
   });
+
+  it("whole-book mode renders nothing until every chapter is analysed", async () => {
+    let releaseCh1: (() => void) | undefined;
+    const llm = new MockLLMProvider();
+    const realExtract = llm.extractEntities.bind(llm);
+    vi.spyOn(llm, "extractEntities").mockImplementation(async (input) => {
+      if (input.chapterIndex === 1) await new Promise<void>((r) => (releaseCh1 = r));
+      return realExtract(input);
+    });
+
+    const engine = new Engine({ llm, image: new MockImageProvider(), illustrateAfter: "book" });
+    await engine.openBook(twoChapterBook());
+    engine.startGeneration();
+    engine.goToPage(0);
+
+    // Chapter 1 is held → bible incomplete → even chapter 0's page must not render.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(engine.resultFor(0)?.status).not.toBe("ready");
+
+    releaseCh1?.();
+    await engine.whenBibleReady();
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+  });
+
+  it("regenerateCurrentImage clears the cache and re-renders the unit", async () => {
+    const image = new MockImageProvider();
+    const genSpy = vi.spyOn(image, "generate");
+    const engine = new Engine({ llm: new MockLLMProvider(), image });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    engine.goToPage(0);
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+
+    const before = genSpy.mock.calls.length;
+    await engine.regenerateCurrentImage(0);
+    await vi.waitFor(() => expect(genSpy.mock.calls.length).toBeGreaterThan(before));
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+  });
+
+  it("pause stops new renders; resume continues", async () => {
+    let releaseCh1: (() => void) | undefined;
+    const llm = new MockLLMProvider();
+    const realExtract = llm.extractEntities.bind(llm);
+    vi.spyOn(llm, "extractEntities").mockImplementation(async (input) => {
+      if (input.chapterIndex === 1) await new Promise<void>((r) => (releaseCh1 = r));
+      return realExtract(input);
+    });
+    const image = new MockImageProvider();
+    const genSpy = vi.spyOn(image, "generate");
+
+    const engine = new Engine({ llm, image, illustrateAfter: "chapter" });
+    await engine.openBook(twoChapterBook());
+    engine.startGeneration();
+    engine.goToPage(0);
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+
+    engine.pauseGeneration();
+    const callsAtPause = genSpy.mock.calls.length;
+    releaseCh1?.(); // chapter 1 extraction finishes, but paused → its page must not render
+    await new Promise((r) => setTimeout(r, 20));
+    expect(genSpy.mock.calls.length).toBe(callsAtPause);
+    expect(engine.resultFor(1)?.status).not.toBe("ready");
+
+    engine.resumeGeneration();
+    await vi.waitFor(() => expect(engine.resultFor(1)?.status).toBe("ready"));
+  });
 });
+
+function twoChapterBook(): BookSource {
+  return {
+    id: "book-2c",
+    title: "Two",
+    chapters: [
+      { id: "c0", index: 0, title: "Zero" },
+      { id: "c1", index: 1, title: "One" },
+    ],
+    pages: [
+      { id: "p0", index: 0, chapterId: "c0", paragraphs: [{ id: "p0-0", index: 0, text: "Aria walked. Aria smiled." }] },
+      { id: "p1", index: 1, chapterId: "c1", paragraphs: [{ id: "p1-0", index: 0, text: "A later, gated scene." }] },
+    ],
+  };
+}

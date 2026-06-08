@@ -61,7 +61,7 @@ export class LocalServerLLMProvider implements LLMProvider {
   async extractEntities(input: EntityExtractionInput): Promise<VisualBible> {
     const text = await this.complete(
       `${EXTRACTION_SYSTEM}\n${EXTRACTION_JSON_INSTRUCTION}`,
-      extractionUserContent(input.chapterIndex, input.chapterText),
+      extractionUserContent(input),
       true,
     );
     return mergeExtraction(input.existing, parseExtraction(text), input.chapterIndex);
