@@ -305,3 +305,42 @@ export const DEFAULT_IMAGE_STYLE = "auto";
 export function getImageStyle(id: string | undefined): ImageStyle {
   return IMAGE_STYLES.find((s) => s.id === id) ?? IMAGE_STYLES[0]!;
 }
+
+/**
+ * On-device text models (run locally via WebLLM/WebGPU) for the "Text → On my
+ * computer" path. Ids are WebLLM prebuilt model ids; `downloadGB` is the
+ * one-time weight download (cached by the browser afterwards).
+ */
+export interface LocalTextModel {
+  id: string;
+  label: string;
+  downloadGB: number;
+  note?: string;
+}
+
+export const LOCAL_TEXT_MODELS: LocalTextModel[] = [
+  {
+    id: "Llama-3.2-3B-Instruct-q4f16_1-MLC",
+    label: "Llama 3.2 3B",
+    downloadGB: 2.0,
+    note: "Balanced · recommended",
+  },
+  {
+    id: "Qwen2.5-3B-Instruct-q4f16_1-MLC",
+    label: "Qwen2.5 3B",
+    downloadGB: 2.0,
+    note: "Best at structured extraction",
+  },
+  {
+    id: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
+    label: "Llama 3.2 1B",
+    downloadGB: 0.9,
+    note: "Fastest · low VRAM",
+  },
+  {
+    id: "Phi-3.5-mini-instruct-q4f16_1-MLC",
+    label: "Phi-3.5 mini (3.8B)",
+    downloadGB: 2.2,
+    note: "Strong reasoning",
+  },
+];

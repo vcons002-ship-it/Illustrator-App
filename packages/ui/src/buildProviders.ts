@@ -4,6 +4,7 @@ import {
   DirectTransport,
   MockImageProvider,
   MockLLMProvider,
+  WebLLMProvider,
   createImageProvider,
   createLLMProvider,
   type ImageProvider,
@@ -29,6 +30,8 @@ import type { ReaderSettings } from "./SettingsPanel.js";
 export interface BuildProvidersOptions {
   /** Proxy fetch routed through a CORS-exempt context (e.g. an extension SW). */
   fetch?: typeof fetch;
+  /** Status line for local-model loading (on-device LLM download/progress). */
+  onLocalStatus?: (text: string) => void;
 }
 
 export function buildProviders(
@@ -36,7 +39,7 @@ export function buildProviders(
   opts: BuildProvidersOptions = {},
 ): { llm: LLMProvider; image: ImageProvider; tier: TierConfig } {
   const transport: Transport | undefined = opts.fetch ? new DirectTransport(opts.fetch) : undefined;
-  const llm = buildLLM(settings, transport, opts.fetch);
+  const llm = buildLLM(settings, transport, opts.fetch, opts.onLocalStatus);
   const image = buildImage(settings, transport);
   return {
     llm,
@@ -55,11 +58,23 @@ function buildLLM(
   settings: ReaderSettings,
   transport: Transport | undefined,
   fetchImpl: typeof fetch | undefined,
+  onLocalStatus: ((text: string) => void) | undefined,
 ): LLMProvider {
   const id = settings.textProvider;
-  // Local on-device text (WebLLM) is not wired yet — fall back to the mock so the
-  // pipeline keeps working; the seam is ready for it to land.
-  if (id === "local") return new MockLLMProvider();
+  if (id === "local") {
+    // On-device LLM via WebLLM (WebGPU). Falls back to the mock where WebGPU is
+    // unavailable (the provider also self-degrades to the mock on any load error).
+    if (!hasWebGPU()) return new MockLLMProvider();
+    return new WebLLMProvider({
+      ...(settings.localTextModel ? { model: settings.localTextModel } : {}),
+      ...(onLocalStatus
+        ? {
+            onProgress: (r) =>
+              onLocalStatus(r.progress >= 1 ? "" : `Loading local model… ${Math.round(r.progress * 100)}%`),
+          }
+        : {}),
+    });
+  }
   const key = settings.keys[id];
   if (!key) return new MockLLMProvider();
   try {
@@ -93,4 +108,9 @@ function buildImage(settings: ReaderSettings, transport: Transport | undefined):
   } catch {
     return new MockImageProvider();
   }
+}
+
+/** WebGPU available in this context (page or worker)? Gates the on-device LLM. */
+function hasWebGPU(): boolean {
+  return typeof navigator !== "undefined" && "gpu" in navigator;
 }

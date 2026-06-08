@@ -45,7 +45,9 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
   }
   try {
     post({ type: "status", message: "Building the Visual Bible…" });
-    const { llm, image, tier } = buildProviders(settings);
+    const { llm, image, tier } = buildProviders(settings, {
+      onLocalStatus: (message) => post({ type: "status", message: message || "Building the Visual Bible…" }),
+    });
     engine = new Engine({
       llm,
       image,

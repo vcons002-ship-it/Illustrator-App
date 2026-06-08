@@ -10,6 +10,8 @@ import { OpenAIImageProvider } from "./image/openai-image-provider.js";
 import { FluxProvider } from "./image/flux-provider.js";
 import { ComfyUIBackend, resolveAssetName } from "./image/local-engine/comfyui-backend.js";
 import { Automatic1111Backend } from "./image/local-engine/automatic1111-backend.js";
+import { WebLLMProvider, parseExtraction } from "./llm/webllm-provider.js";
+import type { VisualRequest } from "../types/content.js";
 import { createImageProvider } from "./factory.js";
 import { IMAGE_PROVIDERS, TEXT_PROVIDERS, styleLoraDownload } from "./catalog.js";
 import type { LocalEngineBackend } from "./image/local-engine/backend.js";
@@ -341,6 +343,84 @@ describe("style LoRA mapping (local engines)", () => {
     const body = transport.requests[0]!.body as { prompt: string };
     expect(body.prompt).toContain("<lora:anime:0.8>");
     expect(body.prompt).toContain("anime,");
+  });
+});
+
+describe("parseExtraction", () => {
+  it("parses valid JSON into the RawExtraction shape", () => {
+    const raw = parseExtraction(
+      JSON.stringify({
+        characters: [{ name: "Ana", aliases: ["A"], persistentTraits: ["tall"], clothing: ["cloak"] }],
+        environments: [{ name: "Hall", description: ["dim"] }],
+        spoilers: [{ label: "twist", revealHint: "end" }],
+      }),
+    );
+    expect(raw.characters[0]!.name).toBe("Ana");
+    expect(raw.environments[0]!.name).toBe("Hall");
+    expect(raw.spoilers[0]!.label).toBe("twist");
+  });
+  it("strips code fences and tolerates missing fields", () => {
+    const raw = parseExtraction('```json\n{"characters":[{"name":"Bo"}]}\n```');
+    expect(raw.characters[0]!.name).toBe("Bo");
+    expect(raw.characters[0]!.aliases).toEqual([]);
+    expect(raw.environments).toEqual([]);
+  });
+  it("returns empty on invalid JSON", () => {
+    expect(parseExtraction("not json")).toEqual({ characters: [], environments: [], spoilers: [] });
+  });
+});
+
+describe("WebLLMProvider (injected completion, no WebGPU)", () => {
+  const req: VisualRequest = {
+    kind: "scene_illustration",
+    bookId: "b",
+    pageId: "pg-0",
+    pageIndex: 0,
+    sourceText: "a quiet room",
+    characterIds: [],
+    environmentIds: [],
+    spoilerIds: [],
+  };
+
+  it("extracts entities into the Bible", async () => {
+    const complete = async () =>
+      JSON.stringify({
+        characters: [{ name: "Ana", aliases: [], persistentTraits: ["tall"], clothing: [] }],
+        environments: [],
+        spoilers: [],
+      });
+    const bible = await new WebLLMProvider({ complete }).extractEntities({
+      bookId: "b",
+      chapterIndex: 0,
+      chapterText: "…",
+      existing: emptyBible("b"),
+    });
+    expect(bible.characters.map((c) => c.name)).toContain("Ana");
+  });
+
+  it("returns the trimmed prompt text", async () => {
+    const prompt = await new WebLLMProvider({ complete: async () => "  a vivid scene  " }).buildImagePrompt(
+      req,
+      emptyBible("b"),
+    );
+    expect(prompt).toBe("a vivid scene");
+  });
+
+  it("degrades to the mock when the model errors (no GPU)", async () => {
+    const provider = new WebLLMProvider({
+      complete: async () => {
+        throw new Error("no webgpu");
+      },
+    });
+    const bible = await provider.extractEntities({
+      bookId: "b",
+      chapterIndex: 0,
+      chapterText: "x",
+      existing: emptyBible("b"),
+    });
+    expect(bible).toBeDefined();
+    const prompt = await provider.buildImagePrompt(req, emptyBible("b"));
+    expect(prompt.length).toBeGreaterThan(0);
   });
 });
 

@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   IMAGE_PROVIDERS,
   IMAGE_STYLES,
+  LOCAL_TEXT_MODELS,
   TEXT_PROVIDERS,
   LOCAL_IMAGE_MODELS,
   getImageStyle,
@@ -41,6 +42,8 @@ export interface ReaderSettings {
   keys: Record<string, string>;
   /** Chosen local image checkpoint. */
   localModel?: string;
+  /** On-device text model id (WebLLM) when textProvider is "local". */
+  localTextModel?: string;
   /** Art style id applied to every illustration (see catalog IMAGE_STYLES). */
   imageStyle?: string;
   /** Which local engine API to talk to (browser "your own server" path). */
@@ -132,6 +135,26 @@ export function SettingsPanel({
             </select>
           </label>
           {textInfo?.needsKey && <KeyField info={textInfo} value={value.keys[textInfo.id] ?? ""} onChange={(k) => setKey(textInfo.id, k)} />}
+          {value.textProvider === "local" && (
+            <label style={rowStyle}>
+              <span>On-device text model</span>
+              <select
+                value={value.localTextModel ?? LOCAL_TEXT_MODELS[0]!.id}
+                onChange={(e) => set({ localTextModel: e.target.value })}
+              >
+                {LOCAL_TEXT_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label} · {m.downloadGB} GB{m.note ? ` · ${m.note}` : ""}
+                  </option>
+                ))}
+              </select>
+              <span style={{ opacity: 0.6, fontSize: 12 }}>
+                Runs on your GPU (WebGPU); the model downloads once on first use. No
+                WebGPU → falls back to demo text. Tip: keep Text on a cloud key for
+                the best story understanding while images run locally.
+              </span>
+            </label>
+          )}
 
           <label style={rowStyle}>
             <span>Images</span>

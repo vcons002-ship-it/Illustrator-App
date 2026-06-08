@@ -287,6 +287,14 @@ You have two ways to get real art:
 connect a local Stable Diffusion server — see
 [Run images on your own GPU](#run-images-on-your-own-gpu-automatic1111-or-comfyui).
 
+**C) On-device text (no key):** set **Text** to **On my computer** to run the
+story-understanding LLM locally via **WebGPU** (web app + desktop). Pick a model
+(default **Llama 3.2 3B**; **Qwen2.5 3B** is best at structured extraction;
+**Llama 3.2 1B** is fastest). The model downloads once on first use, then runs
+offline. Needs a WebGPU-capable browser/desktop; without one it falls back to the
+demo text. For the strongest character continuity, you can still keep **Text** on
+a cloud key while running **Images** on your own GPU.
+
 ---
 
 ## Handy commands (optional / advanced)

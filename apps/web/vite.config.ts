@@ -20,4 +20,7 @@ const crossOriginIsolation = {
 export default defineConfig({
   plugins: [react(), crossOriginIsolation],
   server: { port: 5173 },
+  // ES-module worker so the engine worker can lazy-load the on-device LLM
+  // (@mlc-ai/web-llm) as a separate chunk (code-splitting needs "es", not iife).
+  worker: { format: "es" },
 });

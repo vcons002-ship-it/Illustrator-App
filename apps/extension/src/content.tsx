@@ -51,6 +51,7 @@ function Overlay() {
   const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
   const [connectingLocal, setConnectingLocal] = useState(false);
   const [error, setError] = useState("");
+  const [status, setStatus] = useState("");
   const engineRef = useRef<Engine | undefined>(undefined);
   const extractedRef = useRef<{ title: string; text: string } | undefined>(undefined);
 
@@ -121,7 +122,7 @@ function Overlay() {
     const source = segmentBook({ id: `page-${location.href}`, title }, [{ title, text }], { wordsPerPage: 220 });
     setError("");
     setResults(new Map());
-    const { llm, image, tier } = buildProviders(settings, { fetch: proxyFetch });
+    const { llm, image, tier } = buildProviders(settings, { fetch: proxyFetch, onLocalStatus: setStatus });
     const engine = new Engine({
       llm,
       image,
@@ -235,6 +236,7 @@ function Overlay() {
         </button>
       </div>
       {error && <div style={errorBox}>{error}</div>}
+      {status && <div style={{ opacity: 0.7, fontSize: 12, marginBottom: 8 }}>{status}</div>}
       <ImagePanel result={results.get(pageIndex)} bloom={bloom} pageKey={pageIndex} />
       <div style={nav}>
         <span style={{ fontSize: 12, opacity: 0.7 }}>

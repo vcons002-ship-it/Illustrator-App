@@ -16,6 +16,9 @@ export default defineConfig({
       name: "VisualReaderContent",
       fileName: () => "content.js",
     },
-    rollupOptions: { output: { extend: true } },
+    // The on-device LLM (@mlc-ai/web-llm) is a web-app/desktop feature; keep it
+    // out of the single-file content script. If local text is selected in the
+    // extension, the dynamic import fails and the provider falls back to the mock.
+    rollupOptions: { external: ["@mlc-ai/web-llm"], output: { extend: true } },
   },
 });
