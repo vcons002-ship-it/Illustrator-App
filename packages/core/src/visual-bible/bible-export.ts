@@ -149,6 +149,22 @@ export function parseImportedBible(json: string, bookId: string): ImportResult {
   return { bible, stats };
 }
 
+/**
+ * Carry a prior book's entities forward into `base` (series continuity): merge
+ * characters (deduped), creatures/environments (accumulating descriptions), and
+ * the glossary. The base book's `storyboard` + `processedChapters` are kept (they
+ * are book-specific) so the new book still gets its own per-chapter analysis.
+ */
+export function mergeCarryOver(base: VisualBible, prior: VisualBible): VisualBible {
+  return {
+    ...base,
+    characters: consolidateCharacters([...prior.characters, ...base.characters]),
+    creatures: dedupeByName([...(prior.creatures ?? []), ...(base.creatures ?? [])]),
+    environments: dedupeByName([...prior.environments, ...base.environments]),
+    glossary: dedupeGlossary([...(prior.glossary ?? []), ...(base.glossary ?? [])]),
+  };
+}
+
 // --- coercion helpers ---------------------------------------------------------
 
 function toCharacter(v: unknown): Character {

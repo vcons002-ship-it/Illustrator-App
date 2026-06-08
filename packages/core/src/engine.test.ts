@@ -364,6 +364,48 @@ describe("Engine", () => {
     const persisted = await store.getBible("book-1");
     expect(persisted!.characters.find((c) => c.id === aria.id)!.outfits?.[0]?.label).toBe("armour");
   });
+
+  it("carries a prior book's bible into the current book (entities; resets storyboard)", async () => {
+    const store = new InMemoryStore();
+    const a = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });
+    await a.openBook(sampleBook()); // book-1, features "Aria"
+    a.startGeneration();
+    await a.whenBibleReady();
+    expect(a.getBible()!.characters.some((c) => c.name === "Aria")).toBe(true);
+    expect(a.getBible()!.storyboard.length).toBeGreaterThan(0);
+
+    const bookB: BookSource = { ...sampleBook(), id: "book-2" };
+    const b = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });
+    await b.openBook(bookB);
+    const r = await b.carryOverBibleFrom("book-1");
+    expect(r.ok).toBe(true);
+    const bible = b.getBible()!;
+    expect(bible.characters.some((c) => c.name === "Aria")).toBe(true); // carried forward
+    expect(bible.storyboard).toEqual([]); // book-specific → reset
+    expect(bible.processedChapters).toEqual([]); // re-read its own chapters
+    expect(bible.bookId).toBe("book-2");
+  });
+
+  it("retries a failed chapter once, then continues with a note", async () => {
+    const llm = new MockLLMProvider();
+    let calls = 0;
+    vi.spyOn(llm, "extractEntities").mockImplementation(async () => {
+      calls++;
+      throw new Error("transient");
+    });
+    const notes: string[] = [];
+    const engine = new Engine({
+      llm,
+      image: new MockImageProvider(),
+      onBibleNote: (m) => notes.push(m),
+    });
+    await engine.openBook(sampleBook()); // 1 story chapter
+    engine.startGeneration();
+    await engine.whenBibleReady();
+    expect(calls).toBe(2); // initial + one retry
+    expect(notes.some((n) => /failed/i.test(n))).toBe(true);
+    expect(engine.getBible()!.processedChapters).toContain(0); // not gated forever
+  });
 });
 
 function twoChapterBook(): BookSource {

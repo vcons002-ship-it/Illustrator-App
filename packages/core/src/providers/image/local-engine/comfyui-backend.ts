@@ -23,6 +23,8 @@ export interface ComfyUIBackendOptions {
   clientId?: string;
   pollIntervalMs?: number;
   maxPolls?: number;
+  /** Fail only after this many ms of NO progress once the render has started. */
+  idleTimeoutMs?: number;
 }
 
 interface ObjectInfoResponse {
@@ -73,6 +75,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
   private readonly clientId: string;
   private readonly pollIntervalMs: number;
   private readonly maxPolls: number;
+  private readonly idleTimeoutMs: number;
   private lorasCache?: Promise<Set<string>>;
   private ipAdapterCache?: Promise<IpAdapterCaps | null>;
   private warnedNoIpAdapter = false;
@@ -83,6 +86,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
     this.clientId = opts.clientId ?? "visual-reader";
     this.pollIntervalMs = opts.pollIntervalMs ?? 1000;
     this.maxPolls = opts.maxPolls ?? 600;
+    this.idleTimeoutMs = opts.idleTimeoutMs ?? 180000; // 3 min of no progress
   }
 
   async listModels(): Promise<LocalModelDescriptor[]> {
@@ -232,10 +236,17 @@ export class ComfyUIBackend implements LocalEngineBackend {
 
     // Best-effort live progress: ComfyUI broadcasts per-step `progress` messages
     // over its websocket to the client with our clientId. Open it *before*
-    // submitting so we don't miss early steps. Completion + image retrieval still
-    // come from /history polling below, so this is a pure side channel (and a
-    // no-op in tests / where WebSocket is unavailable).
-    const socket = input.onProgress ? this.openProgressSocket(input.onProgress) : undefined;
+    // submitting so we don't miss early steps. We also use it to keep the render
+    // alive: as long as ComfyUI reports progress we never time out (a slow-but-
+    // working render must not be killed). Completion + image come from /history
+    // polling below (a no-op socket in tests / where WebSocket is unavailable).
+    const progress = { lastMs: Date.now(), everProgressed: false };
+    const relay = (fraction: number): void => {
+      progress.lastMs = Date.now();
+      progress.everProgressed = true;
+      input.onProgress?.(fraction);
+    };
+    const socket = this.openProgressSocket(relay);
     try {
       const submit = await this.transport.send({
         url: `${this.baseUrl}/prompt`,
@@ -245,7 +256,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
       if (!submit.ok) throw new Error(`ComfyUI prompt failed with status ${submit.status}`);
       const { prompt_id } = await submit.json<PromptResponse>();
 
-      const image = await this.pollForImage(prompt_id);
+      const image = await this.pollForImage(prompt_id, progress);
       const view = await this.transport.send({
         url:
           `${this.baseUrl}/view?filename=${encodeURIComponent(image.filename)}` +
@@ -299,8 +310,15 @@ export class ComfyUIBackend implements LocalEngineBackend {
     }
   }
 
-  private async pollForImage(promptId: string): Promise<HistoryImage> {
-    for (let i = 0; i < this.maxPolls; i++) {
+  private async pollForImage(
+    promptId: string,
+    progress: { lastMs: number; everProgressed: boolean },
+  ): Promise<HistoryImage> {
+    // Two stop conditions: an absolute backstop (`maxPolls`) used when no progress
+    // info is available, and — once the websocket has reported ANY progress — an
+    // idle window: keep polling indefinitely while ComfyUI is still working, only
+    // failing after `idleTimeoutMs` of silence. So a slow render is never killed.
+    for (let i = 0; ; i++) {
       const res = await this.transport.send({
         url: `${this.baseUrl}/history/${encodeURIComponent(promptId)}`,
         method: "GET",
@@ -314,9 +332,15 @@ export class ComfyUIBackend implements LocalEngineBackend {
         if (first) return first;
         throw new Error("ComfyUI finished but produced no image");
       }
+      if (progress.everProgressed) {
+        if (Date.now() - progress.lastMs > this.idleTimeoutMs) {
+          throw new Error("ComfyUI generation stalled (no progress)");
+        }
+      } else if (i >= this.maxPolls) {
+        throw new Error("ComfyUI generation timed out");
+      }
       await delay(this.pollIntervalMs);
     }
-    throw new Error("ComfyUI generation timed out");
   }
 }
 

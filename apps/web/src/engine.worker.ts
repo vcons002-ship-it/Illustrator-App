@@ -45,6 +45,17 @@ let bibleTimer: ReturnType<typeof setInterval> | undefined;
 /** Pages in each STORY chapter, ordered by chapter — for "pages analysed" + %. */
 let storyPageCounts: number[] = [];
 let storyPagesTotal = 0;
+/** Text-LLM label (e.g. "Claude Haiku 4.5"), shown in the persistent bible line. */
+let llmLabel = "";
+/** When the whole bible run started + the done count then, for an ETA. */
+let bibleRunStartMs = 0;
+let bibleRunStartDone = 0;
+
+/** Human "~Xm left" / "~Xs left" from a millisecond estimate. */
+function formatEta(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "";
+  return ms < 60000 ? `~${Math.round(ms / 1000)}s left` : `~${Math.round(ms / 60000)}m left`;
+}
 
 /** Precompute story-chapter page counts from the ORIGINAL (un-grouped) book. */
 function setStoryPageCounts(book: import("@visual-reader/core").BookSource): void {
@@ -59,8 +70,21 @@ function renderBibleStatus(): void {
   if (!bibleActive) return;
   const secs = Math.round((Date.now() - bibleStartMs) / 1000);
   const detail = bibleTokens > 0 ? `${bibleTokens} tokens` : "analyzing";
-  post({ type: "status", message: `${bibleBase} · ${secs}s · ${detail}` });
+  // The persistent bible line carries chapters/%/pages + this chapter's elapsed +
+  // an overall ETA (from the average time per processed chapter so far).
+  post({ type: "bibleStatus", text: `${bibleBase} · ${secs}s · ${detail}${bibleEta()}` });
 }
+
+/** "· ~Xm left" from the average time per chapter processed this run, or "". */
+function bibleEta(): string {
+  const processed = bibleRunDone - bibleRunStartDone;
+  if (processed <= 0 || bibleRunStartMs === 0) return "";
+  const avg = (Date.now() - bibleRunStartMs) / processed;
+  const left = formatEta(avg * (bibleRunTotal - bibleRunDone));
+  return left ? ` · ${left}` : "";
+}
+let bibleRunDone = 0;
+let bibleRunTotal = 0;
 
 function stopBibleTimer(): void {
   if (bibleTimer !== undefined) {
@@ -75,12 +99,25 @@ function stopBibleTimer(): void {
  * "Building the Visual Bible… 3/12 chapters · 24% · pages 40/210".
  */
 function setBibleChapter(done: number, total: number): void {
+  bibleRunDone = done;
+  bibleRunTotal = total;
   if (total <= 0 || done >= total) {
+    // Completed (or nothing to do): keep a PERSISTENT "complete" line — including
+    // the model used — instead of clearing it, so the storyboard/LLM stay visible.
     bibleActive = false;
     bibleTokens = 0;
+    bibleRunStartMs = 0;
     stopBibleTimer();
-    post({ type: "status", message: "" });
+    const model = llmLabel ? ` · ${llmLabel}` : "";
+    post({
+      type: "bibleStatus",
+      text: total > 0 ? `Visual Bible complete · ${total}/${total} chapters${model}` : "",
+    });
     return;
+  }
+  if (bibleRunStartMs === 0) {
+    bibleRunStartMs = Date.now(); // start the ETA clock at the first pending chapter
+    bibleRunStartDone = done;
   }
   bibleActive = true;
   const percent = Math.round((done / total) * 100);
@@ -154,6 +191,14 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
         post({ type: "imported", ok: r.ok, ...(r.stats ? { stats: r.stats } : {}), ...(r.error ? { error: r.error } : {}) }),
       );
       break;
+    case "carryOverBible":
+      void engine?.carryOverBibleFrom(msg.fromBookId).then((r) =>
+        post({
+          type: "status",
+          message: r.ok ? "Carried over the previous book's Visual Bible." : (r.error ?? "Carry-over failed."),
+        }),
+      );
+      break;
     case "goto":
       engine?.goToPage(msg.pageIndex);
       break;
@@ -179,7 +224,9 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     post({ type: "paused", value: false });
     pendingStart = false; // fresh open; the hook re-sends "start" if it should resume
     bibleActive = false;
+    bibleRunStartMs = 0;
     stopBibleTimer();
+    post({ type: "bibleStatus", text: "" }); // reset the persistent line for the new book
     setStoryPageCounts(book); // progress is reported against story pages/chapters
     const { llm, image, tier, diagnostics } = buildProviders(settings, {
       onLocalStatus: (message) => post({ type: "status", message: message || "Building the Visual Bible…" }),
@@ -195,6 +242,7 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
         }
       },
     });
+    llmLabel = diagnostics.llm.label;
     post({ type: "providers", diagnostics });
     engine = new Engine({
       llm,
@@ -218,6 +266,7 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
       // The bible builds in the background; relay each growth so the UI's
       // character/spoiler context (and the panel) stay current.
       onBibleUpdate: (bible) => post({ type: "opened", bible }),
+      onBibleNote: (message) => post({ type: "status", message }),
       illustrateAfter: settings.illustrateAfter ?? "book",
     });
     // Re-segment into render units (one image per page, or per chapter) so the

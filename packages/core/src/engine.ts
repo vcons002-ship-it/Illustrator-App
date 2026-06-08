@@ -10,7 +10,12 @@ import { InMemoryStore } from "./storage/store.js";
 import { RenderPipeline } from "./pipeline/pipeline.js";
 import { RenderBuffer } from "./render-buffer/render-buffer.js";
 import { BIBLE_VERSION, createEmptyBible } from "./visual-bible/bible.js";
-import { exportBible, parseImportedBible, type ImportStats } from "./visual-bible/bible-export.js";
+import {
+  exportBible,
+  mergeCarryOver,
+  parseImportedBible,
+  type ImportStats,
+} from "./visual-bible/bible-export.js";
 import { consolidateCharacters } from "./providers/llm/extraction.js";
 
 /**
@@ -38,6 +43,8 @@ export interface EngineOptions {
    * the UI uses this to keep character/spoiler context current as it fills in.
    */
   onBibleUpdate?: (bible: VisualBible) => void;
+  /** A transient note during bible building (e.g. a chapter that failed twice). */
+  onBibleNote?: (message: string) => void;
   /**
    * When to start illustrating: "chapter" renders a unit as soon as its chapter
    * is analysed (fast first image); "book" waits until the whole book is read so
@@ -217,17 +224,27 @@ export class Engine {
     if (pending.length === 0) this.buffer?.refresh();
     for (const [chapterIndex, text] of pending) {
       if (this.paused) return; // resume() re-invokes this loop for the rest
-      try {
-        this.bible = await this.opts.llm.extractEntities({
-          bookId: this.book.id,
-          chapterIndex,
-          chapterText: text,
-          existing: this.bible,
-        });
-      } catch {
-        // Extraction failed for this chapter — mark it processed anyway so its
-        // pages aren't gated forever; they render with whatever context we have.
+      // Extraction has no timeout (a slow-but-working LLM is never cut off). On a
+      // transient failure, retry ONCE; only if it still fails do we mark the
+      // chapter processed (so pages aren't gated forever) and surface a note.
+      let extracted = false;
+      for (let attempt = 0; attempt < 2 && !extracted; attempt++) {
+        if (this.paused) return;
+        try {
+          this.bible = await this.opts.llm.extractEntities({
+            bookId: this.book.id,
+            chapterIndex,
+            chapterText: text,
+            existing: this.bible,
+          });
+          extracted = true;
+        } catch {
+          /* retry once, then give up on just this chapter */
+        }
+      }
+      if (!extracted) {
         this.bible = markChapterProcessed(this.bible, chapterIndex);
+        this.opts.onBibleNote?.(`Chapter ${chapterIndex + 1} analysis failed — continuing.`);
       }
       await this.store.putBible(this.bible);
       this.opts.onBibleProgress?.(++done, total);
@@ -244,6 +261,24 @@ export class Engine {
   /** Serialize the current Visual Bible (+ AI rules) to an export JSON string. */
   exportBible(): string {
     return exportBible(this.bible);
+  }
+
+  /**
+   * Series continuity: carry a previous book's characters/creatures/locations/
+   * glossary into the current book's bible (the new book keeps its own storyboard
+   * and re-reads its chapters, accumulating any changed descriptions). Persists.
+   */
+  async carryOverBibleFrom(priorBookId: string): Promise<{ ok: boolean; error?: string }> {
+    if (!this.book) return { ok: false, error: "Open a book first." };
+    if (priorBookId === this.book.id) return { ok: false, error: "Pick a different book." };
+    const prior = await this.store.getBible(priorBookId);
+    if (!prior) return { ok: false, error: "That book has no Visual Bible to carry over yet." };
+    const base = this.bible ?? createEmptyBible(this.book.id);
+    this.bible = mergeCarryOver(base, prior);
+    await this.store.putBible(this.bible);
+    this.opts.onBibleUpdate?.(this.bible);
+    this.buffer?.refresh();
+    return { ok: true };
   }
 
   /**

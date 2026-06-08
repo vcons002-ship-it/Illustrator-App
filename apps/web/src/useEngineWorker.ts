@@ -25,6 +25,10 @@ export interface EngineWorkerApi {
   bible: VisualBible | undefined;
   results: Map<number, ImageResult>;
   status: string;
+  /** Persistent Visual-Bible line (building… / complete · model), separate from `status`. */
+  bibleStatus: string;
+  /** Rolling average ms per rendered image (0 until measured), for ETAs. */
+  avgRenderMs: number;
   /** Which providers are live vs. silent mock fallbacks (undefined until first init). */
   providers: ProvidersDiagnostics | undefined;
   /** Whether generation has been started for the current book. */
@@ -44,6 +48,8 @@ export interface EngineWorkerApi {
   exportBible: () => void;
   /** Import a Visual Bible JSON onto the current book. */
   importBible: (json: string) => void;
+  /** Series continuity: carry a prior book's bible into the current book. */
+  carryOverBible: (fromBookId: string) => void;
   /** Result of the last import (success stats or an error), or undefined. */
   importResult: ImportResult | undefined;
   /** Clear the last import result (e.g. on closing the import dialog). */
@@ -62,6 +68,11 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   const [bible, setBible] = useState<VisualBible | undefined>();
   const [results, setResults] = useState<Map<number, ImageResult>>(new Map());
   const [status, setStatus] = useState("");
+  const [bibleStatus, setBibleStatus] = useState("");
+  const [avgRenderMs, setAvgRenderMs] = useState(0);
+  // Per-unit render start times + a rolling average, for image ETAs.
+  const renderStart = useRef<Map<number, number>>(new Map());
+  const renderAvg = useRef<{ avg: number; n: number }>({ avg: 0, n: 0 });
   const [providers, setProviders] = useState<ProvidersDiagnostics | undefined>();
   const [generating, setGenerating] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -111,6 +122,23 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
           break;
         case "update":
           setResults((prev) => new Map(prev).set(msg.pageIndex, msg.result));
+          // Time each image (first "rendering" → "ready") into a rolling average.
+          if (msg.result.status === "rendering" && !renderStart.current.has(msg.pageIndex)) {
+            renderStart.current.set(msg.pageIndex, Date.now());
+          } else if (msg.result.status === "ready") {
+            const startedAt = renderStart.current.get(msg.pageIndex);
+            renderStart.current.delete(msg.pageIndex);
+            if (startedAt) {
+              const dur = Date.now() - startedAt;
+              const a = renderAvg.current;
+              a.avg = (a.avg * a.n + dur) / (a.n + 1);
+              a.n += 1;
+              setAvgRenderMs(a.avg);
+            }
+          }
+          break;
+        case "bibleStatus":
+          setBibleStatus(msg.text);
           break;
         case "export":
           downloadJson(msg.json, "visual-bible.json");
@@ -186,6 +214,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     send({ type: "importBible", json });
   }, []);
   const clearImportResult = useCallback(() => setImportResult(undefined), []);
+  const carryOverBible = useCallback((fromBookId: string) => send({ type: "carryOverBible", fromBookId }), []);
   const goTo = useCallback((pageIndex: number) => send({ type: "goto", pageIndex }), []);
   const prerenderAll = useCallback(() => send({ type: "prerenderAll" }), []);
 
@@ -193,6 +222,8 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     bible,
     results,
     status,
+    bibleStatus,
+    avgRenderMs,
     providers,
     generating,
     paused,
@@ -207,6 +238,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     importBible,
     importResult,
     clearImportResult,
+    carryOverBible,
     updateCharacter,
     goTo,
     prerenderAll,

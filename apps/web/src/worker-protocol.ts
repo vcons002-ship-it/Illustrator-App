@@ -26,6 +26,7 @@ export type MainToWorker =
   | { type: "updateCharacter"; characterId: string; patch: CharacterPatch }
   | { type: "exportBible" }
   | { type: "importBible"; json: string }
+  | { type: "carryOverBible"; fromBookId: string }
   | { type: "goto"; pageIndex: number }
   | { type: "idle"; allowed: boolean }
   | { type: "prerenderAll" };
@@ -37,6 +38,7 @@ export type WorkerToMain =
   | { type: "paused"; value: boolean }
   | { type: "opened"; bible: VisualBible }
   | { type: "update"; pageIndex: number; result: ImageResult }
+  | { type: "bibleStatus"; text: string }
   | { type: "export"; json: string }
   | { type: "imported"; ok: boolean; stats?: ImportStats; error?: string }
   | { type: "error"; message: string };

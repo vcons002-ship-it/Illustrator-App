@@ -105,4 +105,70 @@ describe("parseEpub", () => {
     expect(story("Chapter One")).toBe(true); // story
     expect(story("Epilogue")).toBe(true); // story
   });
+
+  it("EPUB3 nav: splits a single giant document into its TOC chapters", () => {
+    const epub = zipSync({
+      "META-INF/container.xml": strToU8(
+        `<?xml version="1.0"?><container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>`,
+      ),
+      "OEBPS/content.opf": strToU8(
+        `<?xml version="1.0"?><package><metadata><dc:title>Big Book</dc:title></metadata>` +
+          `<manifest>` +
+          `<item id="c" href="book.xhtml"/>` +
+          `<item id="nav" href="nav.xhtml" properties="nav"/>` +
+          `</manifest><spine><itemref idref="c"/></spine></package>`,
+      ),
+      "OEBPS/book.xhtml": strToU8(
+        `<html><body>` +
+          `<section id="ch1"><h1>Chapter One</h1><p>Aria ran.</p></section>` +
+          `<section id="ch2"><h1>Chapter Two</h1><p>The bridge fell.</p></section>` +
+          `</body></html>`,
+      ),
+      "OEBPS/nav.xhtml": strToU8(
+        `<html><body><nav epub:type="toc"><ol>` +
+          `<li><a href="book.xhtml#ch1">Chapter One</a></li>` +
+          `<li><a href="book.xhtml#ch2">Chapter Two</a></li>` +
+          `</ol></nav></body></html>`,
+      ),
+    });
+    const book = parseEpub(epub, "b");
+    expect(book.chapters.map((c) => c.title)).toEqual(["Chapter One", "Chapter Two"]);
+    const text = (chId: string) =>
+      book.pages.filter((p) => p.chapterId === chId).flatMap((p) => p.paragraphs.map((x) => x.text)).join(" ");
+    expect(text("ch-0")).toContain("Aria");
+    expect(text("ch-1")).toContain("bridge");
+  });
+
+  it("EPUB2 NCX: merges un-listed spine docs into the TOC chapter", () => {
+    const epub = zipSync({
+      "META-INF/container.xml": strToU8(
+        `<?xml version="1.0"?><container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>`,
+      ),
+      "OEBPS/content.opf": strToU8(
+        `<?xml version="1.0"?><package><metadata><dc:title>NCX Book</dc:title></metadata>` +
+          `<manifest>` +
+          `<item id="a" href="a.xhtml"/><item id="b" href="b.xhtml"/><item id="c" href="c.xhtml"/>` +
+          `<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>` +
+          `</manifest>` +
+          `<spine toc="ncx"><itemref idref="a"/><itemref idref="b"/><itemref idref="c"/></spine></package>`,
+      ),
+      "OEBPS/a.xhtml": strToU8(`<html><body><p>Aria walked.</p></body></html>`),
+      "OEBPS/b.xhtml": strToU8(`<html><body><p>The corridor stretched.</p></body></html>`),
+      "OEBPS/c.xhtml": strToU8(`<html><body><p>The bridge fell.</p></body></html>`),
+      "OEBPS/toc.ncx": strToU8(
+        `<?xml version="1.0"?><ncx><navMap>` +
+          `<navPoint><navLabel><text>Part One</text></navLabel><content src="a.xhtml"/></navPoint>` +
+          `<navPoint><navLabel><text>Part Two</text></navLabel><content src="c.xhtml"/></navPoint>` +
+          `</navMap></ncx>`,
+      ),
+    });
+    const book = parseEpub(epub, "b");
+    expect(book.chapters.map((c) => c.title)).toEqual(["Part One", "Part Two"]);
+    const text = (chId: string) =>
+      book.pages.filter((p) => p.chapterId === chId).flatMap((p) => p.paragraphs.map((x) => x.text)).join(" ");
+    // b.xhtml (no TOC entry) merged into Part One; c.xhtml is Part Two.
+    expect(text("ch-0")).toContain("Aria walked");
+    expect(text("ch-0")).toContain("corridor");
+    expect(text("ch-1")).toContain("bridge");
+  });
 });

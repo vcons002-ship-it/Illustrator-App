@@ -46,6 +46,7 @@ export class RenderPipeline {
       this.deps.getBible(),
       page,
     );
+    const chapterContext = this.chapterContextFor(page);
     return {
       kind: "scene_illustration",
       bookId: this.deps.book.id,
@@ -53,11 +54,23 @@ export class RenderPipeline {
       pageIndex: page.index,
       chapterIndex: this.deps.book.chapters.find((c) => c.id === page.chapterId)?.index ?? 0,
       sourceText: page.paragraphs.map((p) => p.text).join("\n\n"),
+      ...(chapterContext ? { chapterContext } : {}),
       characterIds,
       environmentIds,
       creatureIds,
       spoilerIds,
     };
+  }
+
+  /** Bounded text of the whole chapter this page belongs to, for continuity. */
+  private chapterContextFor(page: Page): string {
+    const full = this.deps.book.pages
+      .filter((p) => p.chapterId === page.chapterId)
+      .flatMap((p) => p.paragraphs.map((x) => x.text))
+      .join("\n\n")
+      .replace(/\s+/g, " ")
+      .trim();
+    return full.length <= 1500 ? full : `${full.slice(0, 1500).trimEnd()}…`;
   }
 
   /** Stable cache id for a unit's image (`${bookId}:${pageId}`). */

@@ -25,6 +25,7 @@ import {
   DEFAULT_SETTINGS,
   FirstRunWizard,
   ImagePanel,
+  LibraryPanel,
   SettingsPanel,
   useScrollDepth,
   type InstalledModel,
@@ -65,6 +66,8 @@ export function App() {
     bible,
     results,
     status,
+    bibleStatus,
+    avgRenderMs,
     providers,
     generating,
     paused,
@@ -80,12 +83,14 @@ export function App() {
     importBible,
     importResult,
     clearImportResult,
+    carryOverBible,
     goTo,
     prerenderAll,
   } = useEngineWorker(settings);
   const [prerendering, setPrerendering] = useState(false);
   const [showCharacters, setShowCharacters] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showLibrary, setShowLibrary] = useState(false);
   const { registerParagraph, activeParagraphId, activeParagraphProgress } = useScrollDepth();
 
   // Decrypt stored keys after mount, then enable persistence. Persisting is gated
@@ -317,6 +322,17 @@ export function App() {
     [book, libraryStore, openBook],
   );
 
+  const onRemoveBook = useCallback(
+    (id: string) => {
+      void libraryStore
+        .removeBook(id)
+        .then(() => libraryStore.listBooks())
+        .then(setLibrary)
+        .catch(() => {});
+    },
+    [libraryStore],
+  );
+
   const onPrerenderAll = useCallback(() => {
     setPrerendering(true);
     prerenderAll();
@@ -426,6 +442,11 @@ export function App() {
   );
   const totalUnits = units?.unitCount ?? (book?.pages.length ?? 0);
   const prerenderDone = prerendering && totalUnits > 0 && settledCount >= totalUnits;
+  // Rough ETA for the remaining images (two render concurrently in the buffer).
+  const prerenderEta =
+    prerendering && avgRenderMs > 0 && totalUnits > settledCount
+      ? ` · ${formatLeft((avgRenderMs * (totalUnits - settledCount)) / 2)}`
+      : "";
 
   return (
     <div style={styles.shell}>
@@ -434,22 +455,13 @@ export function App() {
         <strong>Visual Reader</strong>
         <div style={styles.headerControls}>
           {library.length > 0 && (
-            <select
+            <button
               style={styles.button}
-              value={book && library.some((b) => b.id === book.id) ? book.id : ""}
-              onChange={(e) => void onPickBook(e.target.value)}
-              title="Switch between books you've opened"
+              onClick={() => setShowLibrary(true)}
+              title="Your opened books — switch, remove, or carry a bible forward for a series"
             >
-              <option value="" disabled>
-                Library ({library.length})…
-              </option>
-              {library.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.title}
-                  {b.author ? ` — ${b.author}` : ""}
-                </option>
-              ))}
-            </select>
+              Library ({library.length})
+            </button>
           )}
           <label style={styles.upload}>
             Open EPUB
@@ -545,7 +557,7 @@ export function App() {
               {prerenderDone
                 ? "Whole book rendered ✓"
                 : prerendering
-                  ? `Rendering ${renderedCount}/${totalUnits}…`
+                  ? `Rendering ${renderedCount}/${totalUnits}…${prerenderEta}`
                   : "Pre-render whole book"}
             </button>
           )}
@@ -574,6 +586,8 @@ export function App() {
       )}
 
       <ProviderBadges providers={providers} engineStatus={engineStatus} />
+
+      {bibleStatus && <div style={styles.bibleStatus}>{bibleStatus}</div>}
 
       {(status || localError) && <div style={styles.status}>{localError || status}</div>}
 
@@ -667,6 +681,23 @@ export function App() {
           }}
         />
       )}
+
+      {showLibrary && (
+        <LibraryPanel
+          books={library}
+          {...(book ? { currentId: book.id } : {})}
+          onOpen={(id) => {
+            void onPickBook(id);
+            setShowLibrary(false);
+          }}
+          onRemove={onRemoveBook}
+          onCarryOver={(fromId) => {
+            carryOverBible(fromId);
+            setShowLibrary(false);
+          }}
+          onClose={() => setShowLibrary(false)}
+        />
+      )}
     </div>
   );
 }
@@ -694,6 +725,12 @@ function captionFromPrompt(prompt: string | undefined): string | undefined {
     text = `${cut.slice(0, cut.lastIndexOf(" ")).trimEnd() || cut.trimEnd()}…`;
   }
   return text;
+}
+
+/** "~Xs left" / "~Xm left" from a millisecond estimate. */
+function formatLeft(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "";
+  return ms < 60000 ? `~${Math.round(ms / 1000)}s left` : `~${Math.round(ms / 60000)}m left`;
 }
 
 /** Best-effort filename from a download URL (for pasted checkpoint/LoRA URLs). */
@@ -926,6 +963,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
   },
   status: { padding: "10px 20px", color: "#ffd479" },
+  bibleStatus: { padding: "4px 20px 0", fontSize: 12, opacity: 0.75, fontFamily: "system-ui, sans-serif" },
   badges: {
     display: "flex",
     flexWrap: "wrap",

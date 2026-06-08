@@ -449,6 +449,9 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
     envs.length
       ? `Location details (look + world fashion):\n${envs.map((e) => `- ${e.name}: ${e.description.join(", ")}`).join("\n")}`
       : "",
+    request.chapterContext
+      ? `Chapter context (surrounding text — for continuity; illustrate the Passage below):\n${request.chapterContext}`
+      : "",
     `Passage:\n${request.sourceText}`,
   ]
     .filter(Boolean)

@@ -133,6 +133,26 @@ describe("promptUserContent", () => {
     expect(text).toContain("red cloak"); // outfit carried into the prompt
   });
 
+  it("includes the bounded chapter context when provided", () => {
+    const bible = createEmptyBible("b");
+    const req: VisualRequest = {
+      kind: "scene_illustration",
+      bookId: "b",
+      pageId: "u-0",
+      pageIndex: 0,
+      chapterIndex: 0,
+      sourceText: "swords clash",
+      chapterContext: "The whole chapter is a long duel in the rain.",
+      characterIds: [],
+      environmentIds: [],
+      creatureIds: [],
+      spoilerIds: [],
+    };
+    const text = promptUserContent(req, bible);
+    expect(text).toContain("Chapter context");
+    expect(text).toContain("long duel in the rain");
+  });
+
   it("injects the world glossary as defaults and structured appearance", () => {
     let bible = createEmptyBible("b");
     bible = mergeExtraction(

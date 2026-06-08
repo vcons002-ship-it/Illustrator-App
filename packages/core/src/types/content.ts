@@ -31,6 +31,11 @@ export interface VisualRequest {
   chapterIndex: number;
   /** Source text the visual is derived from. */
   sourceText: string;
+  /**
+   * Broader chapter text (bounded) for continuity, so a unit whose own passage is
+   * sparse still has surrounding context. Optional.
+   */
+  chapterContext?: string;
   /** Ids of Visual Bible characters relevant to this page. */
   characterIds: string[];
   /** Ids of Visual Bible environments relevant to this page. */
