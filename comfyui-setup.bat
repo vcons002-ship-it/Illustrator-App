@@ -15,8 +15,10 @@ echo It is a LARGE download (several GB) and best with an NVIDIA GPU; it will
 echo fall back to CPU (slow) otherwise. No typing required beyond a couple of
 echo yes/no prompts.
 echo.
-echo Already installed? Re-running offers to UPDATE ComfyUI to the latest (your
-echo downloaded models/loras are kept). Pass  --upgrade  to update without asking.
+echo Already installed? Re-running offers to UPDATE ComfyUI to the latest, in
+echo place — nothing you've added (models, custom_nodes, workflows, settings) is
+echo deleted. Pass  --upgrade  to update without asking, or  --clean  for a
+echo from-scratch engine that still preserves your models and custom_nodes.
 echo.
 pause
 
@@ -30,8 +32,13 @@ set "MODELURL=https://huggingface.co/Comfy-Org/stable-diffusion-v1-5-archive/res
 set "LAUNCHER=%ROOT%\run-comfyui.bat"
 
 set "UPGRADE="
+set "CLEAN="
 if /i "%~1"=="--upgrade" set "UPGRADE=1"
 if /i "%~1"=="upgrade" set "UPGRADE=1"
+if /i "%~1"=="--clean" (
+  set "UPGRADE=1"
+  set "CLEAN=1"
+)
 
 call :check_curl || goto :end_fail
 if not exist "%ROOT%" mkdir "%ROOT%"
@@ -42,21 +49,25 @@ if defined UPGRADE goto :upgrade
 echo.
 echo [OK] ComfyUI is already installed at "%PORTABLE%".
 set "ANS="
-set /p "ANS=Update it to the latest now? Your downloaded models are kept. (y/N): "
+set /p "ANS=Update it to the latest now? Keeps everything you've set up. (y/N): "
 if /i "%ANS%"=="y" goto :upgrade
 echo Keeping the current install.
 goto :after_install
 
 :upgrade
 echo.
-echo [..] Updating ComfyUI to the latest. This is a CLEAN re-install (no stale
-echo      files): your downloaded models/loras are moved aside and restored.
-del "%TMP7Z%" >nul 2>nul
-if exist "%PORTABLE%\ComfyUI\models" (
-  if exist "%ROOT%\models_backup" rmdir /s /q "%ROOT%\models_backup"
-  move "%PORTABLE%\ComfyUI\models" "%ROOT%\models_backup" >nul
+if defined CLEAN (
+  echo [..] CLEAN re-install to the latest. Your models, custom_nodes, saved
+  echo      workflows, inputs/outputs and config are moved aside and restored;
+  echo      only the engine code + bundled Python are replaced.
+  echo      [!] Custom-node Python dependencies may need reinstalling afterwards.
+) else (
+  echo [..] Updating ComfyUI to the latest in place. Nothing is deleted — your
+  echo      models, custom_nodes, workflows and settings are all kept. (For a
+  echo      from-scratch engine, run:  comfyui-setup.bat --clean)
 )
-if exist "%PORTABLE%" rmdir /s /q "%PORTABLE%"
+del "%TMP7Z%" >nul 2>nul
+if defined CLEAN call :preserve_userdata
 
 :install
 call :get_7zip   || goto :end_fail
@@ -64,15 +75,37 @@ call :download   || goto :end_fail
 call :extract    || goto :end_fail
 
 :after_install
-rem Restore models preserved from a clean upgrade (also recovers a failed one).
-if exist "%ROOT%\models_backup" (
-  if exist "%PORTABLE%\ComfyUI\models" rmdir /s /q "%PORTABLE%\ComfyUI\models"
-  move "%ROOT%\models_backup" "%PORTABLE%\ComfyUI\models" >nul
-)
+rem Restore any user data set aside by a --clean run (also recovers a failed one).
+call :restore_userdata
 call :get_model
 call :write_launcher
 call :finish
 goto :eof
+
+rem ----- preserve/restore user data across a --clean re-install ---------------
+:preserve_userdata
+set "BAK=%ROOT%\_userdata_backup"
+if exist "%BAK%" rmdir /s /q "%BAK%"
+mkdir "%BAK%" >nul 2>nul
+for %%D in (models custom_nodes user input output) do (
+  if exist "%PORTABLE%\ComfyUI\%%D" move "%PORTABLE%\ComfyUI\%%D" "%BAK%\%%D" >nul
+)
+if exist "%PORTABLE%\ComfyUI\extra_model_paths.yaml" move "%PORTABLE%\ComfyUI\extra_model_paths.yaml" "%BAK%\extra_model_paths.yaml" >nul
+if exist "%PORTABLE%" rmdir /s /q "%PORTABLE%"
+exit /b 0
+
+:restore_userdata
+set "BAK=%ROOT%\_userdata_backup"
+if not exist "%BAK%" exit /b 0
+for %%D in (models custom_nodes user input output) do (
+  if exist "%BAK%\%%D" (
+    if exist "%PORTABLE%\ComfyUI\%%D" rmdir /s /q "%PORTABLE%\ComfyUI\%%D"
+    move "%BAK%\%%D" "%PORTABLE%\ComfyUI\%%D" >nul
+  )
+)
+if exist "%BAK%\extra_model_paths.yaml" move /y "%BAK%\extra_model_paths.yaml" "%PORTABLE%\ComfyUI\extra_model_paths.yaml" >nul
+rmdir /s /q "%BAK%" 2>nul
+exit /b 0
 
 rem -------------------------------------------------------------------- steps
 

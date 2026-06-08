@@ -31,8 +31,12 @@ your PATH.
   optionally the desktop app). Re-running `install.bat`/`desktop.bat`/`extension.bat`
   only rebuilds the code you already have — they don't fetch new code.
 - **ComfyUI engine:** run **`comfyui-setup.bat`** again — if it's already
-  installed it offers to update to the latest (your downloaded models/loras are
-  kept), or run **`comfyui-setup.bat --upgrade`** to update without prompting.
+  installed it offers to update **in place** to the latest; **nothing you've added
+  is deleted** (models, `custom_nodes`, saved workflows, inputs/outputs, config
+  are all kept). Use **`comfyui-setup.bat --upgrade`** to update without asking,
+  or **`comfyui-setup.bat --clean`** for a from-scratch engine that still
+  preserves your models + custom_nodes (custom-node Python deps may need
+  reinstalling).
 - After updating, reload the **extension** at `chrome://extensions` (refresh icon).
 
 ---
