@@ -3,15 +3,30 @@ import react from "@vitejs/plugin-react";
 
 /**
  * Cross-Origin Isolation (COOP/COEP) is required for the local WebGPU/WASM tier
- * (SharedArrayBuffer, multi-threaded inference). We set it now so the local tier
- * can be enabled later without touching the dev/preview server.
+ * (SharedArrayBuffer, multi-threaded inference). We use `credentialless` (not
+ * `require-corp`) for COEP so the on-device LLM (WebLLM) can still download its
+ * model weights from a cross-origin CDN that doesn't send CORP headers — under
+ * `require-corp` that fetch is blocked and the model never loads. `credentialless`
+ * keeps cross-origin isolation while allowing those no-credentials subresource loads.
  */
+const setIsolationHeaders = (res: { setHeader: (k: string, v: string) => void }) => {
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Embedder-Policy", "credentialless");
+};
+type HeaderServer = {
+  middlewares: { use: (fn: (req: unknown, res: { setHeader: (k: string, v: string) => void }, next: () => void) => void) => void };
+};
 const crossOriginIsolation = {
   name: "cross-origin-isolation",
-  configureServer(server: { middlewares: { use: (fn: (req: unknown, res: { setHeader: (k: string, v: string) => void }, next: () => void) => void) => void } }) {
+  configureServer(server: HeaderServer) {
     server.middlewares.use((_req, res, next) => {
-      res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-      res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
+      setIsolationHeaders(res);
+      next();
+    });
+  },
+  configurePreviewServer(server: HeaderServer) {
+    server.middlewares.use((_req, res, next) => {
+      setIsolationHeaders(res);
       next();
     });
   },

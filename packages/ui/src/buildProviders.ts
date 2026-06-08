@@ -103,6 +103,47 @@ function buildLLM(
 ): BuiltLLM {
   const id = settings.textProvider;
   if (id === "local") {
+    // Local server (Ollama / LM Studio / llama.cpp) — an OpenAI-compatible server
+    // the user runs themselves. Reliable alternative to WebGPU; mock when not set up.
+    if (settings.localTextBackend === "server") {
+      const baseUrl = settings.localServerTextUrl;
+      if (!baseUrl) {
+        return {
+          provider: new MockLLMProvider(),
+          diag: {
+            id: "mock",
+            label: MOCK_LABEL,
+            mock: true,
+            reason: "Local LLM server isn't connected — click Connect in Settings.",
+          },
+        };
+      }
+      const serverModel = settings.localServerTextModel;
+      try {
+        return {
+          provider: createLLMProvider("local-server", {
+            baseUrl,
+            ...(serverModel ? { model: serverModel } : {}),
+            ...(transport ? { transport } : {}),
+          }),
+          diag: {
+            id: "local-server",
+            label: `Local server: ${serverModel ?? "default model"}`,
+            mock: false,
+          },
+        };
+      } catch {
+        return {
+          provider: new MockLLMProvider(),
+          diag: {
+            id: "mock",
+            label: MOCK_LABEL,
+            mock: true,
+            reason: "Couldn't initialise the local LLM server.",
+          },
+        };
+      }
+    }
     // On-device LLM via WebLLM (WebGPU). Falls back to the mock where WebGPU is
     // unavailable (the provider also self-degrades to the mock on any load error).
     if (!hasWebGPU()) {

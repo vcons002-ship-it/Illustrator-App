@@ -3,12 +3,16 @@ import {
   IMAGE_PROVIDERS,
   IMAGE_STYLES,
   LOCAL_TEXT_MODELS,
+  LOCAL_TEXT_SERVER_DEFAULT_URL,
+  LOCAL_TEXT_SERVER_LABEL,
+  DEFAULT_LOCAL_TEXT_SERVER,
   TEXT_PROVIDERS,
   LOCAL_IMAGE_MODELS,
   getImageStyle,
   getProvider,
   resolveAssetName,
   styleLoraDownload,
+  type LocalTextServerId,
   type ProviderInfo,
 } from "@visual-reader/core";
 
@@ -44,6 +48,14 @@ export interface ReaderSettings {
   localModel?: string;
   /** On-device text model id (WebLLM) when textProvider is "local". */
   localTextModel?: string;
+  /** Under textProvider "local": run on-device (WebGPU) or via a local server. */
+  localTextBackend?: "webgpu" | "server";
+  /** Which local LLM server kind (sets the default URL/label), for the server path. */
+  localTextServer?: LocalTextServerId;
+  /** Base URL of the local LLM server you run yourself (persisted). */
+  localServerTextUrl?: string;
+  /** Chosen model id reported by the local LLM server. */
+  localServerTextModel?: string;
   /** Art style id applied to every illustration (see catalog IMAGE_STYLES). */
   imageStyle?: string;
   /** Which local engine API to talk to (browser "your own server" path). */
@@ -91,6 +103,12 @@ export interface SettingsPanelProps {
   onConnectLocalServer?: (backend: LocalBackendId, url: string) => void;
   /** True while a connection attempt is in flight. */
   connectingLocal?: boolean;
+  /** Models reported by the local LLM text server (separate from image models). */
+  textModels?: InstalledModel[];
+  /** Connect to a local LLM server and load its model list. */
+  onConnectLocalTextServer?: (server: LocalTextServerId, url: string) => void;
+  /** True while a local-text-server connection attempt is in flight. */
+  connectingLocalText?: boolean;
 }
 
 export function SettingsPanel({
@@ -106,6 +124,9 @@ export function SettingsPanel({
   onDownloadStyleLora,
   onConnectLocalServer,
   connectingLocal = false,
+  textModels = [],
+  onConnectLocalTextServer,
+  connectingLocalText = false,
 }: SettingsPanelProps) {
   const [open, setOpen] = useState(false);
   const set = (patch: Partial<ReaderSettings>) => onChange({ ...value, ...patch });
@@ -136,24 +157,47 @@ export function SettingsPanel({
           </label>
           {textInfo?.needsKey && <KeyField info={textInfo} value={value.keys[textInfo.id] ?? ""} onChange={(k) => setKey(textInfo.id, k)} />}
           {value.textProvider === "local" && (
-            <label style={rowStyle}>
-              <span>On-device text model</span>
+            <div style={rowStyle}>
+              <span>How to run it</span>
               <select
-                value={value.localTextModel ?? LOCAL_TEXT_MODELS[0]!.id}
-                onChange={(e) => set({ localTextModel: e.target.value })}
+                value={value.localTextBackend ?? "webgpu"}
+                onChange={(e) => set({ localTextBackend: e.target.value as "webgpu" | "server" })}
               >
-                {LOCAL_TEXT_MODELS.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label} · {m.downloadGB} GB{m.note ? ` · ${m.note}` : ""}
-                  </option>
-                ))}
+                <option value="webgpu">On-device (WebGPU, no install)</option>
+                <option value="server">Local server (Ollama / LM Studio / llama.cpp)</option>
               </select>
-              <span style={{ opacity: 0.6, fontSize: 12 }}>
-                Runs on your GPU (WebGPU); the model downloads once on first use. No
-                WebGPU → falls back to demo text. Tip: keep Text on a cloud key for
-                the best story understanding while images run locally.
-              </span>
-            </label>
+              {(value.localTextBackend ?? "webgpu") === "webgpu" ? (
+                <label style={rowStyle}>
+                  <span>On-device text model</span>
+                  <select
+                    value={value.localTextModel ?? LOCAL_TEXT_MODELS[0]!.id}
+                    onChange={(e) => set({ localTextModel: e.target.value })}
+                  >
+                    {LOCAL_TEXT_MODELS.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label} · {m.downloadGB} GB{m.note ? ` · ${m.note}` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <span style={{ opacity: 0.6, fontSize: 12 }}>
+                    Runs on your GPU (WebGPU); the model downloads once on first use. No
+                    WebGPU → falls back to demo text. Tip: keep Text on a cloud key for
+                    the best story understanding while images run locally.
+                  </span>
+                </label>
+              ) : (
+                <LocalTextServer
+                  server={value.localTextServer ?? DEFAULT_LOCAL_TEXT_SERVER}
+                  url={value.localServerTextUrl ?? ""}
+                  selected={value.localServerTextModel}
+                  textModels={textModels}
+                  connecting={connectingLocalText}
+                  onSet={set}
+                  onSelect={(id) => set({ localServerTextModel: id })}
+                  onConnect={onConnectLocalTextServer}
+                />
+              )}
+            </div>
           )}
 
           <label style={rowStyle}>
@@ -478,6 +522,63 @@ function ManagedEngine({
       <PasteUrl placeholder="Paste a .safetensors checkpoint URL" onSubmit={(url) => onDownloadModelUrl?.(url)} />
       <span style={{ opacity: 0.55, fontSize: 11 }}>
         You can also drop a checkpoint into the engine’s models/checkpoints folder.
+      </span>
+    </div>
+  );
+}
+
+/** Connect to an OpenAI-compatible local LLM server and pick one of its models. */
+function LocalTextServer({
+  server,
+  url,
+  selected,
+  textModels,
+  connecting,
+  onSet,
+  onSelect,
+  onConnect,
+}: {
+  server: LocalTextServerId;
+  url: string;
+  selected: string | undefined;
+  textModels: InstalledModel[];
+  connecting: boolean;
+  onSet: (patch: Partial<ReaderSettings>) => void;
+  onSelect: (id: string) => void;
+  onConnect: ((server: LocalTextServerId, url: string) => void) | undefined;
+}) {
+  const placeholder = LOCAL_TEXT_SERVER_DEFAULT_URL[server];
+  return (
+    <div style={rowStyle}>
+      <span>Local LLM server</span>
+      <select value={server} onChange={(e) => onSet({ localTextServer: e.target.value as LocalTextServerId })}>
+        {(Object.keys(LOCAL_TEXT_SERVER_LABEL) as LocalTextServerId[]).map((id) => (
+          <option key={id} value={id}>
+            {LOCAL_TEXT_SERVER_LABEL[id]}
+          </option>
+        ))}
+      </select>
+      <div style={{ display: "flex", gap: 6 }}>
+        <input
+          style={{ flex: 1 }}
+          value={url}
+          placeholder={placeholder}
+          onChange={(e) => onSet({ localServerTextUrl: e.target.value })}
+        />
+        <button
+          style={buttonStyle}
+          disabled={connecting}
+          onClick={() => onConnect?.(server, url.trim() || placeholder)}
+        >
+          {connecting ? "Connecting…" : "Connect"}
+        </button>
+      </div>
+      <ModelSelect installedModels={textModels} selected={selected} onSelect={onSelect} />
+      <span style={{ opacity: 0.6, fontSize: 12 }}>
+        Start {LOCAL_TEXT_SERVER_LABEL[server]} and pull a model (e.g.{" "}
+        <code>ollama pull llama3.2</code>). In a browser, Ollama needs{" "}
+        <code>OLLAMA_ORIGINS={location.origin}</code>; LM Studio / llama.cpp allow it by
+        default.
       </span>
     </div>
   );

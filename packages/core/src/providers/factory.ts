@@ -3,6 +3,8 @@ import { GeminiLLMProvider } from "./llm/gemini-provider.js";
 import { OpenAILLMProvider } from "./llm/openai-provider.js";
 import { MockLLMProvider } from "./llm/mock-llm-provider.js";
 import { WebLLMProvider } from "./llm/webllm-provider.js";
+import { LocalServerLLMProvider } from "./llm/local-server-provider.js";
+import { DEFAULT_LOCAL_SERVER_TEXT_MODEL } from "./catalog.js";
 import type { LLMProvider } from "./llm/llm-provider.js";
 import { FluxProvider } from "./image/flux-provider.js";
 import { GeminiImageProvider } from "./image/gemini-image-provider.js";
@@ -28,10 +30,14 @@ import type { Transport } from "./transport/transport.js";
 export interface LLMProviderOptions {
   /** API key for the selected provider, when it needs one. */
   key?: string;
-  /** Transport for the REST-based providers (Gemini / OpenAI). */
+  /** Transport for the REST-based providers (Gemini / OpenAI / local server). */
   transport?: Transport;
   /** Custom fetch for the SDK-based provider (Claude). */
   fetch?: typeof fetch;
+  /** Base URL for the local LLM server (required for id === "local-server"). */
+  baseUrl?: string;
+  /** Model id for the local LLM server. */
+  model?: string;
 }
 
 export interface ImageProviderOptions {
@@ -57,6 +63,15 @@ export function createLLMProvider(id: string, opts: LLMProviderOptions = {}): LL
       return new OpenAILLMProvider({ apiKey: requireKey(opts.key, "openai"), ...(transport ? { transport } : {}) });
     case "local":
       return new WebLLMProvider();
+    case "local-server": {
+      if (!opts.baseUrl) throw new Error("Local LLM server requires a base URL");
+      return new LocalServerLLMProvider({
+        baseUrl: opts.baseUrl,
+        model: opts.model ?? DEFAULT_LOCAL_SERVER_TEXT_MODEL,
+        ...(opts.key ? { apiKey: opts.key } : {}),
+        ...(transport ? { transport } : {}),
+      });
+    }
     case "mock":
       return new MockLLMProvider();
     default:

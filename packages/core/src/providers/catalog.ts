@@ -318,6 +318,29 @@ export interface LocalTextModel {
   note?: string;
 }
 
+/**
+ * Local LLM **server** kinds for the "Text → On my computer → Local server" path:
+ * an OpenAI-compatible server the user runs themselves (Ollama / LM Studio /
+ * llama.cpp). The default URLs are the conventional ports each exposes at `/v1`.
+ * The app POSTs `/v1/chat/completions` and GETs `/v1/models`.
+ */
+export type LocalTextServerId = "ollama" | "lmstudio" | "llamacpp";
+
+export const LOCAL_TEXT_SERVER_DEFAULT_URL: Record<LocalTextServerId, string> = {
+  ollama: "http://localhost:11434/v1",
+  lmstudio: "http://localhost:1234/v1",
+  llamacpp: "http://localhost:8000/v1",
+};
+
+export const LOCAL_TEXT_SERVER_LABEL: Record<LocalTextServerId, string> = {
+  ollama: "Ollama",
+  lmstudio: "LM Studio",
+  llamacpp: "llama.cpp",
+};
+
+export const DEFAULT_LOCAL_TEXT_SERVER: LocalTextServerId = "ollama";
+export const DEFAULT_LOCAL_SERVER_TEXT_MODEL = "llama3.2";
+
 export const LOCAL_TEXT_MODELS: LocalTextModel[] = [
   {
     id: "Llama-3.2-3B-Instruct-q4f16_1-MLC",

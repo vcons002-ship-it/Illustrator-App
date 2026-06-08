@@ -11,8 +11,9 @@ import { FluxProvider } from "./image/flux-provider.js";
 import { ComfyUIBackend, resolveAssetName } from "./image/local-engine/comfyui-backend.js";
 import { Automatic1111Backend } from "./image/local-engine/automatic1111-backend.js";
 import { WebLLMProvider, parseExtraction } from "./llm/webllm-provider.js";
+import { LocalServerLLMProvider } from "./llm/local-server-provider.js";
 import type { VisualRequest } from "../types/content.js";
-import { createImageProvider } from "./factory.js";
+import { createImageProvider, createLLMProvider } from "./factory.js";
 import { IMAGE_PROVIDERS, TEXT_PROVIDERS, styleLoraDownload } from "./catalog.js";
 import type { LocalEngineBackend } from "./image/local-engine/backend.js";
 
@@ -421,6 +422,118 @@ describe("WebLLMProvider (injected completion, no WebGPU)", () => {
     expect(bible).toBeDefined();
     const prompt = await provider.buildImagePrompt(req, emptyBible("b"));
     expect(prompt.length).toBeGreaterThan(0);
+  });
+});
+
+describe("LocalServerLLMProvider", () => {
+  const sceneReq: VisualRequest = {
+    kind: "scene_illustration",
+    bookId: "b",
+    pageId: "pg-0",
+    pageIndex: 0,
+    sourceText: "a quiet room",
+    characterIds: [],
+    environmentIds: [],
+    spoilerIds: [],
+  };
+
+  it("requests json_object (not json_schema) and parses the Bible", async () => {
+    const transport = new FakeTransport(() => ({
+      json: {
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                characters: [{ name: "Cal", aliases: [], persistentTraits: ["scarred"], clothing: [] }],
+                environments: [],
+                spoilers: [],
+              }),
+            },
+          },
+        ],
+      },
+    }));
+    const provider = new LocalServerLLMProvider({
+      baseUrl: "http://localhost:11434/v1/",
+      model: "llama3.2",
+      transport,
+    });
+    const bible = await provider.extractEntities({
+      bookId: "book",
+      chapterIndex: 0,
+      chapterText: "Cal walked in.",
+      existing: emptyBible(),
+    });
+
+    const req = transport.requests[0]!;
+    expect(req.url).toBe("http://localhost:11434/v1/chat/completions");
+    const body = req.body as { response_format?: { type?: string }; model?: string };
+    expect(body.response_format?.type).toBe("json_object");
+    expect(body.model).toBe("llama3.2");
+    expect(bible.characters[0]?.name).toBe("Cal");
+  });
+
+  it("tolerates code-fenced JSON from a small model", async () => {
+    const transport = new FakeTransport(() => ({
+      json: {
+        choices: [{ message: { content: '```json\n{"characters":[{"name":"Bo"}]}\n```' } }],
+      },
+    }));
+    const provider = new LocalServerLLMProvider({ baseUrl: "http://localhost:1234/v1", model: "m", transport });
+    const bible = await provider.extractEntities({
+      bookId: "book",
+      chapterIndex: 0,
+      chapterText: "Bo waved.",
+      existing: emptyBible(),
+    });
+    expect(bible.characters[0]?.name).toBe("Bo");
+  });
+
+  it("omits the auth header without a key and sends Bearer with one", async () => {
+    const noKey = new FakeTransport(() => ({ json: { choices: [{ message: { content: "{}" } }] } }));
+    await new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", transport: noKey }).extractEntities({
+      bookId: "b",
+      chapterIndex: 0,
+      chapterText: "x",
+      existing: emptyBible(),
+    });
+    expect(noKey.requests[0]!.headers?.authorization).toBeUndefined();
+
+    const withKey = new FakeTransport(() => ({ json: { choices: [{ message: { content: "{}" } }] } }));
+    await new LocalServerLLMProvider({
+      baseUrl: "http://x/v1",
+      model: "m",
+      apiKey: "K",
+      transport: withKey,
+    }).extractEntities({ bookId: "b", chapterIndex: 0, chapterText: "x", existing: emptyBible() });
+    expect(withKey.requests[0]!.headers?.authorization).toBe("Bearer K");
+  });
+
+  it("builds an image prompt without response_format and trims it", async () => {
+    const transport = new FakeTransport(() => ({
+      json: { choices: [{ message: { content: "  a vivid scene  " } }] },
+    }));
+    const provider = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", transport });
+    const prompt = await provider.buildImagePrompt(sceneReq, emptyBible("b"));
+    expect(prompt).toBe("a vivid scene");
+    expect((transport.requests[0]!.body as { response_format?: unknown }).response_format).toBeUndefined();
+  });
+
+  it("lists models from GET /models", async () => {
+    const transport = new FakeTransport(() => ({ json: { data: [{ id: "llama3.2" }, { id: "qwen2.5" }] } }));
+    const models = await LocalServerLLMProvider.listModels("http://localhost:11434/v1/", transport);
+    const req = transport.requests[0]!;
+    expect(req.url).toBe("http://localhost:11434/v1/models");
+    expect(req.method).toBe("GET");
+    expect(models).toEqual([
+      { id: "llama3.2", label: "llama3.2" },
+      { id: "qwen2.5", label: "qwen2.5" },
+    ]);
+  });
+
+  it("factory builds it from a base URL, and throws without one", () => {
+    expect(createLLMProvider("local-server", { baseUrl: "http://x/v1" }).id).toBe("local-server");
+    expect(() => createLLMProvider("local-server", {})).toThrow(/base URL/);
   });
 });
 

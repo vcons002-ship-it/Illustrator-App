@@ -299,13 +299,35 @@ You have two ways to get real art:
 connect a local Stable Diffusion server — see
 [Run images on your own GPU](#run-images-on-your-own-gpu-automatic1111-or-comfyui).
 
-**C) On-device text (no key):** set **Text** to **On my computer** to run the
-story-understanding LLM locally via **WebGPU** (web app + desktop). Pick a model
-(default **Llama 3.2 3B**; **Qwen2.5 3B** is best at structured extraction;
-**Llama 3.2 1B** is fastest). The model downloads once on first use, then runs
-offline. Needs a WebGPU-capable browser/desktop; without one it falls back to the
-demo text. For the strongest character continuity, you can still keep **Text** on
-a cloud key while running **Images** on your own GPU.
+**C) On-device text (no key):** set **Text** to **On my computer**. There are two
+ways to run the story-understanding LLM locally — pick one under **How to run it**:
+
+- **On-device (WebGPU, no install):** runs the model right in the browser/desktop
+  via **WebGPU**. Pick a model (default **Llama 3.2 3B**; **Qwen2.5 3B** is best at
+  structured extraction; **Llama 3.2 1B** is fastest). The model downloads once on
+  first use, then runs offline. Needs a WebGPU-capable browser/desktop; without one
+  it falls back to the demo text.
+
+- **Local server (Ollama / LM Studio / llama.cpp):** the most reliable local option
+  — runs the model as a normal app on your machine and the reader talks to it over
+  an OpenAI-compatible API. Use this if WebGPU won't load. Steps:
+  1. Install and start one of:
+     - **Ollama** — `ollama serve`, then `ollama pull llama3.2` (API at
+       `http://localhost:11434/v1`).
+     - **LM Studio** — load a model and start its **Local Server** (`http://localhost:1234/v1`).
+     - **llama.cpp** — run its server (e.g. `llama-server -m model.gguf --port 8000`,
+       API at `http://localhost:8000/v1`).
+  2. In **Settings → Text → On my computer → Local server**, choose the server,
+     confirm the URL, click **Connect**, then pick a model from the list.
+  - **CORS (web app only):** a browser page calling Ollama needs Ollama started with
+    `OLLAMA_ORIGINS=http://localhost:5173` (or `OLLAMA_ORIGINS=*`); LM Studio and
+    llama.cpp allow cross-origin requests by default. The **Chrome extension** needs
+    no CORS flags — its requests are proxied through the extension's background
+    worker. The server must expose OpenAI-compatible `/v1/chat/completions` and
+    `/v1/models`.
+
+For the strongest character continuity, you can still keep **Text** on a cloud key
+while running **Images** on your own GPU.
 
 ---
 

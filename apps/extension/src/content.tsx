@@ -5,6 +5,7 @@ import {
   ComfyUIBackend,
   DirectTransport,
   Engine,
+  LocalServerLLMProvider,
   computeBloomTarget,
   latestSpoilerParagraphIndex,
   resolvePageEntities,
@@ -12,6 +13,7 @@ import {
   type BookSource,
   type EncryptedSecrets,
   type ImageResult,
+  type LocalTextServerId,
   type VisualBible,
 } from "@visual-reader/core";
 import { segmentBook } from "@visual-reader/epub";
@@ -50,6 +52,8 @@ function Overlay() {
   const [subPageProgress, setSubPageProgress] = useState(0);
   const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
   const [connectingLocal, setConnectingLocal] = useState(false);
+  const [textModels, setTextModels] = useState<InstalledModel[]>([]);
+  const [connectingLocalText, setConnectingLocalText] = useState(false);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const engineRef = useRef<Engine | undefined>(undefined);
@@ -212,6 +216,31 @@ function Overlay() {
     }
   }, []);
 
+  // Connect to a local LLM server through the background proxy (page CORS bypass).
+  const onConnectLocalTextServer = useCallback(async (server: LocalTextServerId, url: string) => {
+    setError("");
+    setConnectingLocalText(true);
+    try {
+      const models = await LocalServerLLMProvider.listModels(url, new DirectTransport(proxyFetch));
+      setTextModels(models);
+      setSettings((s) => {
+        if (!s) return s;
+        const keep = s.localServerTextModel && models.some((m) => m.id === s.localServerTextModel);
+        const localServerTextModel = keep ? s.localServerTextModel : models[0]?.id;
+        return {
+          ...s,
+          localTextServer: server,
+          localServerTextUrl: url,
+          ...(localServerTextModel ? { localServerTextModel } : {}),
+        };
+      });
+    } catch (err) {
+      setError(`Couldn't reach ${server} at ${url}: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setConnectingLocalText(false);
+    }
+  }, []);
+
   if (!visible || !settings) return null;
 
   const page = book?.pages[pageIndex];
@@ -255,6 +284,9 @@ function Overlay() {
         installedModels={installedModels}
         onConnectLocalServer={onConnectLocalServer}
         connectingLocal={connectingLocal}
+        textModels={textModels}
+        onConnectLocalTextServer={onConnectLocalTextServer}
+        connectingLocalText={connectingLocalText}
       />
     </div>
   );

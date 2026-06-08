@@ -3,6 +3,7 @@ import {
   Automatic1111Backend,
   ComfyUIBackend,
   IndexedDbStore,
+  LocalServerLLMProvider,
   LOCAL_IMAGE_MODELS,
   computeBloomTarget,
   decryptSecrets,
@@ -28,6 +29,7 @@ import {
   type ProvidersDiagnostics,
   type ReaderSettings,
 } from "@visual-reader/ui";
+import type { LocalTextServerId } from "@visual-reader/core";
 import { loadSampleBook } from "./sample.js";
 import { useEngineWorker } from "./useEngineWorker.js";
 import {
@@ -48,6 +50,8 @@ export function App() {
   const [localError, setLocalError] = useState<string>("");
   const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
   const [connectingLocal, setConnectingLocal] = useState(false);
+  const [textModels, setTextModels] = useState<InstalledModel[]>([]);
+  const [connectingLocalText, setConnectingLocalText] = useState(false);
   const [modelProgress, setModelProgress] = useState<Record<string, number>>({});
   const [engineStatus, setEngineStatus] = useState("");
   const [installedLoras, setInstalledLoras] = useState<string[]>([]);
@@ -233,6 +237,35 @@ export function App() {
     }
   }, []);
 
+  // Connect to a local LLM server (Ollama / LM Studio / llama.cpp), load its model
+  // list, and remember it for next time. A direct fetch is fine in the web app
+  // (the browser calls localhost); the extension equivalent passes a proxy transport.
+  const onConnectLocalTextServer = useCallback(async (server: LocalTextServerId, url: string) => {
+    setLocalError("");
+    setConnectingLocalText(true);
+    try {
+      const models = await LocalServerLLMProvider.listModels(url);
+      setTextModels(models);
+      setSettings((s) => {
+        const keep = s.localServerTextModel && models.some((m) => m.id === s.localServerTextModel);
+        const localServerTextModel = keep ? s.localServerTextModel : models[0]?.id;
+        return {
+          ...s,
+          localTextServer: server,
+          localServerTextUrl: url,
+          ...(localServerTextModel ? { localServerTextModel } : {}),
+        };
+      });
+    } catch (err) {
+      setLocalError(
+        `Couldn't reach ${server} at ${url}: ${err instanceof Error ? err.message : String(err)}. ` +
+          `Make sure it's running, and (for Ollama in a browser) set OLLAMA_ORIGINS to ${location.origin}.`,
+      );
+    } finally {
+      setConnectingLocalText(false);
+    }
+  }, []);
+
   const openBook = useCallback(
     (source: BookSource) => {
       setLocalError("");
@@ -401,6 +434,9 @@ export function App() {
             onDownloadStyleLora={onDownloadStyleLora}
             onConnectLocalServer={onConnectLocalServer}
             connectingLocal={connectingLocal}
+            textModels={textModels}
+            onConnectLocalTextServer={onConnectLocalTextServer}
+            connectingLocalText={connectingLocalText}
           />
         </div>
       </header>

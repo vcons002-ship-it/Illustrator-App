@@ -44,7 +44,7 @@ export interface WebLLMProviderOptions {
 
 export const DEFAULT_LOCAL_TEXT_MODEL = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
 
-const EXTRACTION_JSON_INSTRUCTION =
+export const EXTRACTION_JSON_INSTRUCTION =
   "Respond with ONLY a JSON object of this exact shape, no markdown, no prose: " +
   '{"characters":[{"name":string,"aliases":string[],"persistentTraits":string[],"clothing":string[]}],' +
   '"environments":[{"name":string,"description":string[]}],' +
