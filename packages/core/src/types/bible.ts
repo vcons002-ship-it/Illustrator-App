@@ -21,10 +21,48 @@ export interface IdentityAnchor {
   loraRef?: string;
 }
 
+/**
+ * A character's physical appearance broken into easy-to-read, individually
+ * editable fields. The LLM fills these in; the user can correct any of them in
+ * the Character Bible UI. Every field is a plain string ("" when unknown) so the
+ * strict provider schemas (OpenAI/Gemini) can mark them all required.
+ */
+export interface CharacterAppearance {
+  hair: string;
+  eyes: string;
+  gender: string;
+  /** Physique/body type, e.g. "slender, athletic". */
+  build: string;
+  height: string;
+  skinTone: string;
+  age: string;
+  /** Scars, tattoos, marks, or other distinguishing features. */
+  distinguishingMarks: string;
+  /** Free-text extras that don't fit the structured fields. */
+  notes: string;
+}
+
+/** A character appearance with no known details (all fields blank). */
+export function emptyAppearance(): CharacterAppearance {
+  return {
+    hair: "",
+    eyes: "",
+    gender: "",
+    build: "",
+    height: "",
+    skinTone: "",
+    age: "",
+    distinguishingMarks: "",
+    notes: "",
+  };
+}
+
 export interface Character {
   id: string;
   name: string;
   aliases: string[];
+  /** Structured, user-editable physical appearance. */
+  appearance: CharacterAppearance;
   /** Traits that persist across the whole book (build, hair, eyes, scars…). */
   persistentTraits: string[];
   /** Default/most-recent clothing description. */
@@ -73,6 +111,17 @@ export interface ChapterScene {
   keyMoment: string;
 }
 
+/**
+ * A recurring world fact / defining context the illustrator should assume by
+ * default — e.g. term "dragon riders", definition "wear fitted black flight
+ * leathers with buckled straps". Injected into every image prompt unless the
+ * passage explicitly contradicts it, keeping the world visually consistent.
+ */
+export interface GlossaryEntry {
+  term: string;
+  definition: string;
+}
+
 export interface VisualBible {
   bookId: string;
   /** Schema version, so cached Bibles can be migrated. */
@@ -82,6 +131,8 @@ export interface VisualBible {
   spoilers: SpoilerEntity[];
   /** Per-chapter storyboard (events + key moment), keyed by chapterIndex. */
   storyboard: ChapterScene[];
+  /** Recurring world facts applied as defaults in every image prompt. */
+  glossary: GlossaryEntry[];
   /** Chapters already processed by the extraction pass. */
   processedChapters: number[];
 }

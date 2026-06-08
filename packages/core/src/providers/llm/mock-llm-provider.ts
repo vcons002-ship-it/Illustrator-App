@@ -1,4 +1,5 @@
 import type { Character, VisualBible } from "../../types/bible.js";
+import { emptyAppearance } from "../../types/bible.js";
 import type { VisualRequest } from "../../types/content.js";
 import type { EntityExtractionInput, LLMProvider } from "./llm-provider.js";
 
@@ -26,6 +27,7 @@ export class MockLLMProvider implements LLMProvider {
       ...input.existing,
       characters: [...input.existing.characters],
       storyboard: [...(input.existing.storyboard ?? [])],
+      glossary: [...(input.existing.glossary ?? [])],
       processedChapters: [...input.existing.processedChapters],
     };
     const known = new Set(bible.characters.map((c) => c.name));
@@ -45,6 +47,7 @@ export class MockLLMProvider implements LLMProvider {
         id: `char-${slug(name)}`,
         name,
         aliases: [],
+        appearance: emptyAppearance(),
         persistentTraits: ["consistent appearance"],
         clothing: [],
         anchor: { seed: deterministicSeed(name) },

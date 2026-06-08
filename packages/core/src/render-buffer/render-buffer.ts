@@ -33,6 +33,12 @@ export interface RenderBufferOptions {
    */
   canRender?: (pageIndex: number) => boolean;
   /**
+   * Pages this returns true for are never rendered — they emit a one-time
+   * `skipped` result instead. Used for front/back matter (non-story pages), which
+   * stay readable but aren't illustrated. Default: nothing is skipped.
+   */
+  shouldSkip?: (pageIndex: number) => boolean;
+  /**
    * Master switch for *new* generation. When false, no fresh renders start
    * (the buffer only serves pages seeded from cache via `seed`), so opening a
    * book can show prior-session images without kicking off generation until the
@@ -53,6 +59,7 @@ export class RenderBuffer {
   private readonly maxConcurrent: number;
   private readonly maxPrerender: number;
   private readonly canRender: (pageIndex: number) => boolean;
+  private readonly shouldSkip: (pageIndex: number) => boolean;
   private readonly onUpdate?: ((pageIndex: number, result: ImageResult) => void) | undefined;
 
   private current = 0;
@@ -69,6 +76,7 @@ export class RenderBuffer {
     this.maxConcurrent = options.maxConcurrent ?? 2;
     this.maxPrerender = options.maxPrerender ?? 50;
     this.canRender = options.canRender ?? (() => true);
+    this.shouldSkip = options.shouldSkip ?? (() => false);
     this.generationEnabled = options.generationEnabled ?? true;
     this.onUpdate = options.onUpdate;
   }
@@ -166,8 +174,24 @@ export class RenderBuffer {
     });
   }
 
+  /** Mark any not-yet-resolved page that should be skipped (front/back matter). */
+  private applySkips(): void {
+    for (let p = 0; p < this.totalPages; p++) {
+      if (this.results.has(p) || this.inflight.has(p)) continue;
+      if (!this.shouldSkip(p)) continue;
+      const result: ImageResult = {
+        requestId: `page-${p}`,
+        pageId: `page-${p}`,
+        status: "skipped",
+      };
+      this.results.set(p, result);
+      this.onUpdate?.(p, result);
+    }
+  }
+
   /** Start renders up to the concurrency limit, honouring priority. */
   private pump(): void {
+    this.applySkips();
     for (const page of this.candidates()) {
       if (this.inflight.size >= this.maxConcurrent) break;
       this.start(page);

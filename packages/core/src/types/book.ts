@@ -25,6 +25,12 @@ export interface Chapter {
   id: string;
   index: number;
   title: string;
+  /**
+   * Whether this chapter is story prose (vs. front/back matter such as the title
+   * page, copyright, table of contents, dedication, index…). `undefined` is
+   * treated as `true`. Non-story chapters are not analysed or illustrated.
+   */
+  isStory?: boolean;
 }
 
 export interface BookSource {

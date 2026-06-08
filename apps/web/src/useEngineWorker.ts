@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { BookSource, ImageResult, VisualBible } from "@visual-reader/core";
+import type { BookSource, CharacterPatch, ImageResult, VisualBible } from "@visual-reader/core";
 import type { ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
 
@@ -26,6 +26,8 @@ export interface EngineWorkerApi {
   regenerateStoryboard: () => void;
   regenerateAllImages: () => void;
   regenerateImage: (unitIndex: number) => void;
+  /** Save a user correction to a character (persisted; existing images unchanged). */
+  updateCharacter: (characterId: string, patch: CharacterPatch) => void;
   goTo: (pageIndex: number) => void;
   prerenderAll: () => void;
 }
@@ -142,6 +144,11 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     generationRequested.current = true;
     send({ type: "regenerateImage", unitIndex });
   }, []);
+  const updateCharacter = useCallback(
+    (characterId: string, patch: CharacterPatch) =>
+      send({ type: "updateCharacter", characterId, patch }),
+    [],
+  );
   const goTo = useCallback((pageIndex: number) => send({ type: "goto", pageIndex }), []);
   const prerenderAll = useCallback(() => send({ type: "prerenderAll" }), []);
 
@@ -159,6 +166,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     regenerateStoryboard,
     regenerateAllImages,
     regenerateImage,
+    updateCharacter,
     goTo,
     prerenderAll,
   };

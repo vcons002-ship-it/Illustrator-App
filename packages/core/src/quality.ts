@@ -42,8 +42,10 @@ export function resolveQuality(
 ): RenderQuality {
   if (setting && setting !== "auto") return setting;
   if (pagesPerImage === "chapter") return "ultra";
+  // The more pages an image covers, the longer the reader spends before reaching
+  // it — so auto-quality climbs with the cadence (and large groups get ultra).
+  if (pagesPerImage >= 8) return "ultra";
   if (pagesPerImage >= 5) return "high";
-  if (pagesPerImage >= 3) return "standard";
   if (pagesPerImage >= 2) return "standard";
   return "draft";
 }

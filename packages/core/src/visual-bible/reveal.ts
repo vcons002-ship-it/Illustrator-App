@@ -19,12 +19,12 @@ import type { SpoilerEntity } from "../types/bible.js";
  * future per-panel image (tagged to a paragraph range) reuses the same math.
  */
 
-/** Full bloom is only permitted once the reader is at least this far through a page. */
-export const READ_THRESHOLD = 0.5;
+/** Full bloom is permitted once the reader is at least this far through a page. */
+export const READ_THRESHOLD = 0.4;
 /** A spoiler-free image may begin blooming this early into the page. */
 export const SPOILER_FREE_REVEAL_POINT = 0.15;
 /** Ease-in exponent: keeps the image dim until near the reveal point (bloom-only leakage guard). */
-export const BLOOM_EASE = 1.6;
+export const BLOOM_EASE = 1.3;
 
 export interface ParagraphRange {
   /** Inclusive start paragraph index. */

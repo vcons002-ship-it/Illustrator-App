@@ -60,4 +60,49 @@ describe("parseEpub", () => {
     expect(book.pages.length).toBeGreaterThanOrEqual(2);
     expect(book.pages.some((p) => p.paragraphs.some((x) => x.text.includes("Aria")))).toBe(true);
   });
+
+  it("flags front/back matter as non-story (by linear=no, nav, title, epub:type) but keeps Prologue/Epilogue", () => {
+    const epub = zipSync({
+      "META-INF/container.xml": strToU8(
+        `<?xml version="1.0"?><container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>`,
+      ),
+      "OEBPS/content.opf": strToU8(
+        `<?xml version="1.0"?><package><metadata><dc:title>My Book</dc:title></metadata>` +
+          `<manifest>` +
+          `<item id="cp" href="copyright.xhtml"/>` +
+          `<item id="toc" href="toc.xhtml" properties="nav"/>` +
+          `<item id="pro" href="prologue.xhtml"/>` +
+          `<item id="c1" href="ch1.xhtml"/>` +
+          `<item id="epi" href="epilogue.xhtml"/>` +
+          `<item id="ab" href="about.xhtml"/>` +
+          `</manifest>` +
+          `<spine>` +
+          `<itemref idref="cp" linear="no"/>` +
+          `<itemref idref="toc"/>` +
+          `<itemref idref="pro"/>` +
+          `<itemref idref="c1"/>` +
+          `<itemref idref="epi"/>` +
+          `<itemref idref="ab"/>` +
+          `</spine></package>`,
+      ),
+      "OEBPS/copyright.xhtml": strToU8(`<html><body><h1>Copyright</h1><p>© 2026.</p></body></html>`),
+      "OEBPS/toc.xhtml": strToU8(`<html><body><h1>Contents</h1><p>Chapter list.</p></body></html>`),
+      "OEBPS/prologue.xhtml": strToU8(`<html><body><h1>Prologue</h1><p>Long ago.</p></body></html>`),
+      "OEBPS/ch1.xhtml": strToU8(`<html><body><h1>Chapter One</h1><p>Aria ran.</p></body></html>`),
+      "OEBPS/epilogue.xhtml": strToU8(`<html><body><h1>Epilogue</h1><p>Years later.</p></body></html>`),
+      "OEBPS/about.xhtml": strToU8(
+        `<html><body epub:type="backmatter"><h1>About the Author</h1><p>Bio.</p></body></html>`,
+      ),
+    });
+
+    const book = parseEpub(epub, "b");
+    const story = (title: string) =>
+      book.chapters.find((c) => c.title === title)?.isStory !== false;
+    expect(story("Copyright")).toBe(false); // linear="no"
+    expect(story("Contents")).toBe(false); // nav property + title
+    expect(story("About the Author")).toBe(false); // epub:type backmatter + title
+    expect(story("Prologue")).toBe(true); // story
+    expect(story("Chapter One")).toBe(true); // story
+    expect(story("Epilogue")).toBe(true); // story
+  });
 });

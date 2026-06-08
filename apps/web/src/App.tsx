@@ -20,6 +20,7 @@ import {
 } from "@visual-reader/core";
 import { parseEpub } from "@visual-reader/epub";
 import {
+  CharacterBible,
   DEFAULT_SETTINGS,
   FirstRunWizard,
   ImagePanel,
@@ -73,10 +74,12 @@ export function App() {
     regenerateStoryboard,
     regenerateAllImages,
     regenerateImage,
+    updateCharacter,
     goTo,
     prerenderAll,
   } = useEngineWorker(settings);
   const [prerendering, setPrerendering] = useState(false);
+  const [showCharacters, setShowCharacters] = useState(false);
   const { registerParagraph, activeParagraphId, activeParagraphProgress } = useScrollDepth();
 
   // Decrypt stored keys after mount, then enable persistence. Persisting is gated
@@ -348,8 +351,22 @@ export function App() {
   }, [unitIndex, goTo]);
 
   const activePage = book?.pages[activePageIndex];
-  const pageSpoilerIds =
-    book && bible && activePage ? resolvePageEntities(bible, activePage).spoilerIds : [];
+  const pageEntities =
+    book && bible && activePage ? resolvePageEntities(bible, activePage) : undefined;
+  const pageSpoilerIds = pageEntities?.spoilerIds ?? [];
+
+  // On-image caption: the character(s) on this page + the chapter's key action.
+  const imageCaption = useMemo(() => {
+    if (!book || !bible || !activePage) return undefined;
+    const chapterIdx = book.chapters.find((c) => c.id === activePage.chapterId)?.index ?? 0;
+    const keyMoment = bible.storyboard.find((s) => s.chapterIndex === chapterIdx)?.keyMoment?.trim();
+    if (!keyMoment) return undefined;
+    const names = bible.characters
+      .filter((c) => pageEntities?.characterIds.includes(c.id))
+      .map((c) => c.name)
+      .slice(0, 3);
+    return names.length ? `${names.join(", ")}: ${keyMoment}` : keyMoment;
+  }, [book, bible, activePage, pageEntities]);
 
   // Bloom target: reveal the illustration only as the reader progresses through the
   // page, holding any depicted spoiler until they reach its paragraph (core/reveal).
@@ -384,14 +401,21 @@ export function App() {
           ),
           hasPageSpoiler,
         )
-      : computeBloomTarget(unitProgress, 1, true);
+      : // Multi-page/chapter unit: reveal across the unit but reach full clarity at
+        // ~80% (not only at the very end) unless this page depicts a spoiler.
+        computeBloomTarget(unitProgress, hasPageSpoiler ? 1 : 0.8, true);
 
   const renderedCount = useMemo(
     () => [...results.values()].filter((r) => r.status === "ready").length,
     [results],
   );
+  // Skipped units (front/back matter) count as "done" for the whole-book progress.
+  const settledCount = useMemo(
+    () => [...results.values()].filter((r) => r.status === "ready" || r.status === "skipped").length,
+    [results],
+  );
   const totalUnits = units?.unitCount ?? (book?.pages.length ?? 0);
-  const prerenderDone = prerendering && totalUnits > 0 && renderedCount >= totalUnits;
+  const prerenderDone = prerendering && totalUnits > 0 && settledCount >= totalUnits;
 
   return (
     <div style={styles.shell}>
@@ -463,14 +487,25 @@ export function App() {
               >
                 ↻ All images
               </button>
-              <button
-                style={styles.button}
-                onClick={() => regenerateImage(unitIndex)}
-                title="Re-render just the current image (try a different style)."
-              >
-                ↻ This image
-              </button>
             </>
+          )}
+          {book && (generating || results.get(unitIndex)?.status === "ready") && (
+            <button
+              style={styles.button}
+              onClick={() => regenerateImage(unitIndex)}
+              title="Re-render the image for the page you're on (try a different style)."
+            >
+              ↻ This image
+            </button>
+          )}
+          {book && (
+            <button
+              style={styles.button}
+              onClick={() => setShowCharacters(true)}
+              title="View and correct each character's appearance in the Visual Bible"
+            >
+              Characters{bible ? ` (${bible.characters.length})` : ""}
+            </button>
           )}
           {book && (
             <button
@@ -570,6 +605,7 @@ export function App() {
                 bloom={bloom}
                 pageKey={unitIndex}
                 awaitingStart={!generating}
+                caption={imageCaption}
               />
               <div style={styles.caption}>
                 {pagesPerImage === "chapter"
@@ -582,6 +618,14 @@ export function App() {
             </div>
           </aside>
         </main>
+      )}
+
+      {showCharacters && (
+        <CharacterBible
+          bible={bible}
+          onSave={(id, patch) => updateCharacter(id, patch)}
+          onClose={() => setShowCharacters(false)}
+        />
       )}
     </div>
   );
@@ -782,10 +826,10 @@ const styles: Record<string, React.CSSProperties> = {
   empty: { padding: 40, maxWidth: 560, lineHeight: 1.6 },
   reader: {
     display: "grid",
-    gridTemplateColumns: "minmax(0, 1fr) minmax(280px, 380px)",
+    gridTemplateColumns: "minmax(0, 1fr) minmax(320px, 520px)",
     gap: 40,
     padding: "32px 20px 50vh",
-    maxWidth: 1200,
+    maxWidth: 1400,
     margin: "0 auto",
   },
   column: { maxWidth: 640 },

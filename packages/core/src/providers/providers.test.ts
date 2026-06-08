@@ -45,11 +45,12 @@ class FakeTransport implements Transport {
 function emptyBible(bookId = "book"): VisualBible {
   return {
     bookId,
-    version: 2,
+    version: 3,
     characters: [],
     environments: [],
     spoilers: [],
     storyboard: [],
+    glossary: [],
     processedChapters: [],
   };
 }
@@ -375,7 +376,12 @@ describe("parseExtraction", () => {
     expect(raw.environments).toEqual([]);
   });
   it("returns empty on invalid JSON", () => {
-    expect(parseExtraction("not json")).toEqual({ characters: [], environments: [], spoilers: [] });
+    expect(parseExtraction("not json")).toEqual({
+      characters: [],
+      glossary: [],
+      environments: [],
+      spoilers: [],
+    });
   });
 });
 

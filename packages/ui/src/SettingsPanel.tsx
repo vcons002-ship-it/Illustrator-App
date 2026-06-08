@@ -59,11 +59,12 @@ export interface ReaderSettings {
   /** Art style id applied to every illustration (see catalog IMAGE_STYLES). */
   imageStyle?: string;
   /**
-   * How many pages share one illustration: 1/2/3/5, or a whole "chapter".
-   * Fewer pages → frequent, draftier images; more → rarer, higher-quality.
-   * Default 3.
+   * How many pages share one illustration: any positive number, or a whole
+   * "chapter". A group never crosses a chapter boundary, so a number larger than
+   * a chapter's page count just yields one image for that chapter. Fewer pages →
+   * frequent, draftier images; more → rarer, higher-quality. Default 3.
    */
-  pagesPerImage?: 1 | 2 | 3 | 5 | "chapter";
+  pagesPerImage?: number | "chapter";
   /**
    * Image quality: "auto" scales with pagesPerImage; or pick a level explicitly.
    * Higher levels use more steps + resolution (slower). Default "auto".
@@ -243,27 +244,32 @@ export function SettingsPanel({
             </select>
           </label>
 
-          <label style={rowStyle}>
+          <div style={rowStyle}>
             <span>Pages per image</span>
-            <select
-              value={String(value.pagesPerImage ?? 3)}
-              onChange={(e) =>
-                set({
-                  pagesPerImage:
-                    e.target.value === "chapter"
-                      ? "chapter"
-                      : (Number(e.target.value) as 1 | 2 | 3 | 5),
-                })
-              }
-              title="How many pages share one illustration. Fewer = frequent/draftier; more = rarer/higher quality."
-            >
-              <option value="1">1 page (frequent)</option>
-              <option value="2">2 pages</option>
-              <option value="3">3 pages (default)</option>
-              <option value="5">5 pages</option>
-              <option value="chapter">Whole chapter (highest quality)</option>
-            </select>
-          </label>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                style={{ width: 80 }}
+                value={value.pagesPerImage === "chapter" ? "" : String(value.pagesPerImage ?? 3)}
+                disabled={value.pagesPerImage === "chapter"}
+                onChange={(e) => {
+                  const n = Math.max(1, Math.floor(Number(e.target.value) || 1));
+                  set({ pagesPerImage: n });
+                }}
+                title="How many pages share one illustration. Fewer = frequent/draftier; more = rarer/higher quality. Never crosses a chapter (a bigger number than the chapter just makes one image for it)."
+              />
+              <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={value.pagesPerImage === "chapter"}
+                  onChange={(e) => set({ pagesPerImage: e.target.checked ? "chapter" : 3 })}
+                />
+                <span>Whole chapter (one image per chapter)</span>
+              </label>
+            </div>
+          </div>
 
           <label style={rowStyle}>
             <span>Image quality</span>

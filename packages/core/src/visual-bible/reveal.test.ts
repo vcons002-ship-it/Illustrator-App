@@ -69,8 +69,8 @@ describe("computeBloomTarget", () => {
   const eased = (linear: number) => Math.pow(linear, BLOOM_EASE);
 
   it("keeps images hidden on a fast scroll (low progress)", () => {
-    // No spoiler, barely onto the page → near zero.
-    expect(computeBloomTarget(0.05, SPOILER_FREE_REVEAL_POINT, false)).toBeLessThan(0.05);
+    // No spoiler, barely onto the page → still mostly hidden.
+    expect(computeBloomTarget(0.05, SPOILER_FREE_REVEAL_POINT, false)).toBeLessThan(0.1);
   });
   it("fully reveals a spoiler-free image by the read threshold", () => {
     expect(computeBloomTarget(READ_THRESHOLD, SPOILER_FREE_REVEAL_POINT, false)).toBeCloseTo(1);

@@ -1,4 +1,4 @@
-import type { BookSource, ImageResult, VisualBible } from "@visual-reader/core";
+import type { BookSource, CharacterPatch, ImageResult, VisualBible } from "@visual-reader/core";
 import type { ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
 
 /**
@@ -17,6 +17,7 @@ export type MainToWorker =
   | { type: "regenerateStoryboard" }
   | { type: "regenerateAllImages" }
   | { type: "regenerateImage"; unitIndex: number }
+  | { type: "updateCharacter"; characterId: string; patch: CharacterPatch }
   | { type: "goto"; pageIndex: number }
   | { type: "idle"; allowed: boolean }
   | { type: "prerenderAll" };

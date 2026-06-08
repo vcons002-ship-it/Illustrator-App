@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createEmptyBible, resolvePageEntities } from "./bible.js";
 import { shouldRevealImage } from "./spoiler.js";
-import type { VisualBible } from "../types/bible.js";
+import { emptyAppearance, type VisualBible } from "../types/bible.js";
 import type { Page } from "../types/book.js";
 
 function page(text: string): Page {
@@ -19,6 +19,7 @@ function bibleWith(): VisualBible {
     id: "char-aria",
     name: "Aria",
     aliases: ["the captain"],
+    appearance: emptyAppearance(),
     persistentTraits: ["tall", "silver hair"],
     clothing: ["red coat"],
     anchor: { seed: 1 },

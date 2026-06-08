@@ -39,7 +39,14 @@ export interface VisualRequest {
   spoilerIds: string[];
 }
 
-export type RenderStatus = "queued" | "prompting" | "rendering" | "ready" | "error";
+export type RenderStatus =
+  | "queued"
+  | "prompting"
+  | "rendering"
+  | "ready"
+  | "error"
+  /** Page is front/back matter (not part of the story): never illustrated. */
+  | "skipped";
 
 /** Raw rendered image. Bytes (not realm-scoped object URLs) so a result can be
  * transferred from a Web Worker to the main thread; the UI makes the URL. */

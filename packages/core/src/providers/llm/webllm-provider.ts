@@ -59,10 +59,16 @@ export const DEFAULT_LOCAL_TEXT_MODEL = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
 
 export const EXTRACTION_JSON_INSTRUCTION =
   "Respond with ONLY a JSON object of this exact shape, no markdown, no prose: " +
-  '{"characters":[{"name":string,"aliases":string[],"persistentTraits":string[],"clothing":string[]}],' +
+  '{"characters":[{"name":string,"aliases":string[],' +
+  '"appearance":{"hair":string,"eyes":string,"gender":string,"build":string,"height":string,' +
+  '"skinTone":string,"age":string,"distinguishingMarks":string,"notes":string},' +
+  '"persistentTraits":string[],"clothing":string[]}],' +
+  '"glossary":[{"term":string,"definition":string}],' +
   '"environments":[{"name":string,"description":string[]}],' +
   '"spoilers":[{"label":string,"revealHint":string}],' +
-  '"summary":string,"keyMoment":string}';
+  '"summary":string,"keyMoment":string}. ' +
+  "Include EVERY named character with any appearance description (use empty strings for " +
+  "unknown appearance fields).";
 
 // Module-level engine cache so re-created providers reuse a loaded model
 // (loading is slow; the weights are GB-sized).
@@ -139,6 +145,9 @@ export class WebLLMProvider implements LLMProvider {
       runSerial(async () => {
         const temperature = opts.json ? 0 : 0.7;
         const responseFormat = opts.json ? ({ type: "json_object" } as const) : undefined;
+        // Extraction can return a long JSON object (every described character +
+        // glossary); give it ample room so the JSON isn't truncated mid-object.
+        const maxTokens = opts.json ? 4096 : 512;
         // Stream so callers get live token progress (proof the model is working);
         // fall back to a single-shot completion if streaming isn't available.
         try {
@@ -146,6 +155,7 @@ export class WebLLMProvider implements LLMProvider {
             stream: true,
             messages,
             temperature,
+            max_tokens: maxTokens,
             ...(responseFormat ? { response_format: responseFormat } : {}),
           });
           let text = "";
@@ -163,6 +173,7 @@ export class WebLLMProvider implements LLMProvider {
             stream: false,
             messages,
             temperature,
+            max_tokens: maxTokens,
             ...(responseFormat ? { response_format: responseFormat } : {}),
           });
           return res.choices[0]?.message?.content ?? "";
@@ -193,12 +204,28 @@ export function parseExtraction(content: string): RawExtraction {
       keyMoment: str(json.keyMoment),
       characters: asArray(json.characters).map((c) => {
         const o = c as Record<string, unknown>;
+        const a = (o.appearance ?? {}) as Record<string, unknown>;
         return {
           name: str(o.name),
           aliases: strArray(o.aliases),
+          appearance: {
+            hair: str(a.hair),
+            eyes: str(a.eyes),
+            gender: str(a.gender),
+            build: str(a.build),
+            height: str(a.height),
+            skinTone: str(a.skinTone),
+            age: str(a.age),
+            distinguishingMarks: str(a.distinguishingMarks),
+            notes: str(a.notes),
+          },
           persistentTraits: strArray(o.persistentTraits),
           clothing: strArray(o.clothing),
         };
+      }),
+      glossary: asArray(json.glossary).map((g) => {
+        const o = g as Record<string, unknown>;
+        return { term: str(o.term), definition: str(o.definition) };
       }),
       environments: asArray(json.environments).map((e) => {
         const o = e as Record<string, unknown>;
@@ -210,7 +237,7 @@ export function parseExtraction(content: string): RawExtraction {
       }),
     };
   } catch {
-    return { characters: [], environments: [], spoilers: [] };
+    return { characters: [], glossary: [], environments: [], spoilers: [] };
   }
 }
 

@@ -1,9 +1,10 @@
 import type { VisualBible } from "../types/bible.js";
 import type { Page } from "../types/book.js";
 
-// v2 adds the per-chapter storyboard; bibles cached at an older version are
-// rebuilt (see Engine.openBook) so storyboard is always present.
-export const BIBLE_VERSION = 2;
+// v2 adds the per-chapter storyboard; v3 adds the world glossary and structured
+// character appearance. Bibles cached at an older version are rebuilt (see
+// Engine.openBook) so the new fields are always present.
+export const BIBLE_VERSION = 3;
 
 export function createEmptyBible(bookId: string): VisualBible {
   return {
@@ -13,6 +14,7 @@ export function createEmptyBible(bookId: string): VisualBible {
     environments: [],
     spoilers: [],
     storyboard: [],
+    glossary: [],
     processedChapters: [],
   };
 }

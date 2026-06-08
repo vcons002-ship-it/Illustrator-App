@@ -1,5 +1,5 @@
 import type { BookSource } from "./types/book.js";
-import type { VisualBible } from "./types/bible.js";
+import type { CharacterAppearance, VisualBible } from "./types/bible.js";
 import type { ImageResult } from "./types/content.js";
 import type { TierConfig } from "./types/tier.js";
 import { DEFAULT_TIER_CONFIG } from "./types/tier.js";
@@ -25,9 +25,9 @@ export interface EngineOptions {
   /** Forwarded to the buffer — fired whenever a page's render status changes. */
   onUpdate?: (pageIndex: number, result: ImageResult) => void;
   /**
-   * Fired during Visual Bible extraction as each chapter is processed
-   * (`done` of `total` chapters). `total` is the count of chapters not already
-   * cached, so a fully-cached re-open reports `(0, 0)`.
+   * Fired during Visual Bible extraction (`done` of `total` **story** chapters).
+   * `total` is every story chapter (front/back matter excluded) and `done` is how
+   * many are processed, so a fully-cached re-open reports `(total, total)` = 100%.
    */
   onBibleProgress?: (done: number, total: number) => void;
   /**
@@ -42,6 +42,15 @@ export interface EngineOptions {
    * every prompt has full-book context. Default "chapter".
    */
   illustrateAfter?: "book" | "chapter";
+}
+
+/** A user correction to a single character (any subset of editable fields). */
+export interface CharacterPatch {
+  name?: string;
+  aliases?: string[];
+  persistentTraits?: string[];
+  clothing?: string[];
+  appearance?: Partial<CharacterAppearance>;
 }
 
 export class Engine {
@@ -96,6 +105,8 @@ export class Engine {
       // unit's own chapter is ready.
       canRender: (pageIndex) =>
         this.illustrateAfter === "book" ? this.isBibleComplete() : this.isChapterReady(pageIndex),
+      // Front/back matter is never illustrated (shows as a text-only page).
+      shouldSkip: (pageIndex) => !this.isStoryPage(pageIndex),
       // Stay paused until the user begins generating; cached pages still show.
       generationEnabled: false,
       ...(this.opts.onUpdate ? { onUpdate: this.opts.onUpdate } : {}),
@@ -142,6 +153,15 @@ export class Engine {
     }
   }
 
+  /** Whether this page belongs to a story chapter (not front/back matter). */
+  private isStoryPage(pageIndex: number): boolean {
+    if (!this.book) return true;
+    const page = this.book.pages[pageIndex];
+    if (!page) return true;
+    const chapter = this.book.chapters.find((c) => c.id === page.chapterId);
+    return chapter?.isStory !== false;
+  }
+
   /** Is the chapter that contains this page already in the bible? */
   private isChapterReady(pageIndex: number): boolean {
     if (!this.book || !this.bible) return false;
@@ -168,16 +188,20 @@ export class Engine {
    */
   private async buildBibleInBackground(): Promise<void> {
     if (!this.book || !this.bible) return;
-    const textByChapter = chapterText(this.book);
-    const pending = [...textByChapter].filter(
-      ([chapterIndex]) => !this.bible!.processedChapters.includes(chapterIndex),
-    );
-    const total = pending.length;
-    let done = 0;
+    const textByChapter = chapterText(this.book); // story chapters only
+    const storyIndices = [...textByChapter.keys()];
+    const total = storyIndices.length;
+    const isProcessed = (i: number): boolean => this.bible!.processedChapters.includes(i);
+    const pending = storyIndices
+      .filter((i) => !isProcessed(i))
+      .map((i) => [i, textByChapter.get(i)!] as [number, string]);
+    // Progress is reported against ALL story chapters (not just pending), so a
+    // fully-cached re-open shows 100% rather than 0/0.
+    let done = total - pending.length;
     this.opts.onBibleProgress?.(done, total);
     this.opts.onBibleUpdate?.(this.bible);
     // A fully-cached book: nothing pending, but its pages are already renderable.
-    if (total === 0) this.buffer?.refresh();
+    if (pending.length === 0) this.buffer?.refresh();
     for (const [chapterIndex, text] of pending) {
       if (this.paused) return; // resume() re-invokes this loop for the rest
       try {
@@ -202,6 +226,35 @@ export class Engine {
 
   getBible(): VisualBible | undefined {
     return this.bible;
+  }
+
+  /**
+   * Apply a user correction to one character in the bible and persist it. This is
+   * "save only": cached images are NOT re-rendered — the edit takes effect on the
+   * next render (or when the user hits a regenerate button), keeping the user in
+   * control of when (potentially expensive) re-illustration happens.
+   */
+  async updateCharacter(characterId: string, patch: CharacterPatch): Promise<void> {
+    if (!this.bible) return;
+    const characters = this.bible.characters.map((c) =>
+      c.id === characterId
+        ? {
+            ...c,
+            ...(patch.name !== undefined ? { name: patch.name } : {}),
+            ...(patch.aliases !== undefined ? { aliases: patch.aliases } : {}),
+            ...(patch.persistentTraits !== undefined
+              ? { persistentTraits: patch.persistentTraits }
+              : {}),
+            ...(patch.clothing !== undefined ? { clothing: patch.clothing } : {}),
+            ...(patch.appearance !== undefined
+              ? { appearance: { ...c.appearance, ...patch.appearance } }
+              : {}),
+          }
+        : c,
+    );
+    this.bible = { ...this.bible, characters };
+    await this.store.putBible(this.bible);
+    this.opts.onBibleUpdate?.(this.bible);
   }
 
   /** Move the reader; refreshes the predictive window. */
@@ -275,6 +328,10 @@ export class Engine {
     await this.store.deleteImage?.(this.pipeline.requestIdFor(unitIndex));
     this.startGeneration();
     if (this.paused) this.resumeGeneration();
+    // Focus the buffer on this unit FIRST so it renders next — ahead of any
+    // predictive prefetch of other units — then drop its cached image so the
+    // re-render targets the page the reader is on, not whatever was mid-flight.
+    this.buffer?.setCurrentPage(unitIndex);
     this.buffer?.invalidate(unitIndex);
   }
 
@@ -289,11 +346,16 @@ function markChapterProcessed(bible: VisualBible, chapterIndex: number): VisualB
   return { ...bible, processedChapters: [...bible.processedChapters, chapterIndex] };
 }
 
-/** Concatenate each chapter's page text, keyed by chapter index. */
+/**
+ * Concatenate each STORY chapter's page text, keyed by chapter index. Front/back
+ * matter (chapter.isStory === false) is omitted entirely, so it's never analysed
+ * and never blocks bible completion.
+ */
 function chapterText(book: BookSource): Map<number, string> {
   const byChapter = new Map<number, string[]>();
   for (const page of book.pages) {
     const chapter = book.chapters.find((c) => c.id === page.chapterId);
+    if (chapter?.isStory === false) continue; // skip non-story matter
     const idx = chapter?.index ?? 0;
     const list = byChapter.get(idx) ?? [];
     list.push(...page.paragraphs.map((p) => p.text));

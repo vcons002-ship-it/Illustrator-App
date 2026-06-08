@@ -11,12 +11,12 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 export interface BloomTransitionProps {
   /** Desired bloom level, 0 (hidden/blurred) → 1 (fully revealed). */
   target: number;
-  /** Easing factor per frame (0..1). Lower = slower bloom. Default 0.08. */
+  /** Easing factor per frame (0..1). Lower = slower bloom. Default 0.12. */
   easing?: number;
   children: ReactNode;
 }
 
-export function BloomTransition({ target, easing = 0.08, children }: BloomTransitionProps) {
+export function BloomTransition({ target, easing = 0.12, children }: BloomTransitionProps) {
   const [value, setValue] = useState(0);
   const valueRef = useRef(0);
   const frame = useRef<number | null>(null);

@@ -5,6 +5,8 @@ export interface RawChapter {
   title: string;
   /** Plain text; paragraphs separated by blank lines. */
   text: string;
+  /** Whether this is story prose (vs. front/back matter). Default true. */
+  isStory?: boolean;
 }
 
 export interface BookMeta {
@@ -36,7 +38,12 @@ export function segmentBook(
 
   rawChapters.forEach((raw, chapterIndex) => {
     const chapterId = `ch-${chapterIndex}`;
-    chapters.push({ id: chapterId, index: chapterIndex, title: raw.title });
+    chapters.push({
+      id: chapterId,
+      index: chapterIndex,
+      title: raw.title,
+      ...(raw.isStory === false ? { isStory: false } : {}),
+    });
 
     const paragraphs = splitParagraphs(raw.text);
     for (const group of groupByWordBudget(paragraphs, wordsPerPage)) {

@@ -15,6 +15,11 @@ describe("resolveQuality", () => {
     expect(resolveQuality("auto", "chapter")).toBe("ultra");
     expect(resolveQuality(undefined, "chapter")).toBe("ultra");
   });
+
+  it("treats large arbitrary page counts as ultra (plenty of reading time)", () => {
+    expect(resolveQuality("auto", 8)).toBe("ultra");
+    expect(resolveQuality("auto", 25)).toBe("ultra");
+  });
 });
 
 describe("qualityProfile", () => {

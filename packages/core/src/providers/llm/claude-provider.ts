@@ -27,8 +27,25 @@ const ExtractionSchema = z.object({
     z.object({
       name: z.string(),
       aliases: z.array(z.string()),
+      appearance: z.object({
+        hair: z.string(),
+        eyes: z.string(),
+        gender: z.string(),
+        build: z.string(),
+        height: z.string(),
+        skinTone: z.string(),
+        age: z.string(),
+        distinguishingMarks: z.string(),
+        notes: z.string(),
+      }),
       persistentTraits: z.array(z.string()),
       clothing: z.array(z.string()),
+    }),
+  ),
+  glossary: z.array(
+    z.object({
+      term: z.string(),
+      definition: z.string(),
     }),
   ),
   environments: z.array(
@@ -88,7 +105,7 @@ export class ClaudeProvider implements LLMProvider {
     if (!parsed) {
       return mergeExtraction(
         input.existing,
-        { characters: [], environments: [], spoilers: [] },
+        { characters: [], glossary: [], environments: [], spoilers: [] },
         input.chapterIndex,
       );
     }

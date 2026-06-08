@@ -147,7 +147,7 @@ describe("Engine", () => {
     await vi.waitFor(() => expect(engine.resultFor(1)?.status).toBe("ready"));
   });
 
-  it("reports bible-build progress per pending chapter, and (0,0) when fully cached", async () => {
+  it("reports bible-build progress against story-chapter totals (100% when cached)", async () => {
     const store = new InMemoryStore();
 
     const first: Array<[number, number]> = [];
@@ -160,13 +160,14 @@ describe("Engine", () => {
     await a.openBook(sampleBook());
     a.startGeneration();
     await a.whenBibleReady();
-    // One chapter to process: an initial (0,1) then a (1,1) on completion.
+    // One story chapter to process: an initial (0,1) then a (1,1) on completion.
     expect(first).toEqual([
       [0, 1],
       [1, 1],
     ]);
 
-    // Reopening the cached book has nothing pending → a single (0,0) report.
+    // Reopening the cached book: nothing pending, but progress is reported against
+    // ALL story chapters, so it shows 100% (1/1) immediately rather than 0/0.
     const second: Array<[number, number]> = [];
     const b = new Engine({
       llm: new MockLLMProvider(),
@@ -177,7 +178,7 @@ describe("Engine", () => {
     await b.openBook(sampleBook());
     b.startGeneration();
     await b.whenBibleReady();
-    expect(second).toEqual([[0, 0]]);
+    expect(second).toEqual([[1, 1]]);
   });
 
   it("does not re-extract chapters when reopening a cached book", async () => {
@@ -264,6 +265,51 @@ describe("Engine", () => {
 
     engine.resumeGeneration();
     await vi.waitFor(() => expect(engine.resultFor(1)?.status).toBe("ready"));
+  });
+
+  it("skips non-story chapters: never extracted, their pages emit 'skipped'", async () => {
+    const llm = new MockLLMProvider();
+    const spy = vi.spyOn(llm, "extractEntities");
+    const book: BookSource = {
+      id: "book-fm",
+      title: "FM",
+      chapters: [
+        { id: "c0", index: 0, title: "Copyright", isStory: false },
+        { id: "c1", index: 1, title: "One" },
+      ],
+      pages: [
+        { id: "p0", index: 0, chapterId: "c0", paragraphs: [{ id: "p0-0", index: 0, text: "© 2026 Someone." }] },
+        { id: "p1", index: 1, chapterId: "c1", paragraphs: [{ id: "p1-0", index: 0, text: "Aria walked. Aria smiled." }] },
+      ],
+    };
+    const engine = new Engine({ llm, image: new MockImageProvider() });
+    await engine.openBook(book);
+    engine.startGeneration();
+    await engine.whenBibleReady();
+
+    // The non-story chapter (index 0) was never sent to the LLM.
+    for (const call of spy.mock.calls) expect(call[0]!.chapterIndex).not.toBe(0);
+    // Its page is skipped (not a fake "rendering"); the story page renders.
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("skipped"));
+    await vi.waitFor(() => expect(engine.resultFor(1)?.status).toBe("ready"));
+  });
+
+  it("updateCharacter applies the edit and persists it to the store", async () => {
+    const store = new InMemoryStore();
+    const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    await engine.whenBibleReady();
+
+    const aria = engine.getBible()!.characters.find((c) => c.name === "Aria")!;
+    await engine.updateCharacter(aria.id, { appearance: { hair: "silver" }, clothing: ["red coat"] });
+
+    const updated = engine.getBible()!.characters.find((c) => c.id === aria.id)!;
+    expect(updated.appearance.hair).toBe("silver");
+    expect(updated.clothing).toEqual(["red coat"]);
+    // Persisted, so a re-open keeps the correction.
+    const persisted = await store.getBible("book-1");
+    expect(persisted!.characters.find((c) => c.id === aria.id)!.appearance.hair).toBe("silver");
   });
 });
 

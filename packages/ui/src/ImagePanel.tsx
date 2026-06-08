@@ -24,10 +24,20 @@ export interface ImagePanelProps {
    * underway with "painting…".
    */
   awaitingStart?: boolean;
+  /**
+   * Short sentence shown over the image (character names + the chapter's key
+   * action). Fades in with the bloom so it never reveals before the picture.
+   */
+  caption?: string | undefined;
 }
 
-export function ImagePanel({ result, bloom, pageKey, awaitingStart }: ImagePanelProps) {
+export function ImagePanel({ result, bloom, pageKey, awaitingStart, caption }: ImagePanelProps) {
   const imageUrl = useObjectUrl(result);
+
+  // Front/back matter (title page, copyright, contents…) is never illustrated.
+  if (result?.status === "skipped") {
+    return <Placeholder label="No illustration — front/end matter" />;
+  }
 
   if (!result || result.status === "queued" || result.status === "rendering" || !imageUrl) {
     if (result?.status === "error") {
@@ -45,15 +55,45 @@ export function ImagePanel({ result, bloom, pageKey, awaitingStart }: ImagePanel
     return <Placeholder label={label} pulse />;
   }
   return (
-    <BloomTransition key={pageKey} target={bloom}>
-      <img
-        src={imageUrl}
-        alt="Illustration of the current passage"
-        style={{ display: "block", width: "100%", height: "auto", borderRadius: 8 }}
-      />
-    </BloomTransition>
+    <div style={{ position: "relative" }}>
+      <BloomTransition key={pageKey} target={bloom}>
+        <img
+          src={imageUrl}
+          alt="Illustration of the current passage"
+          style={{
+            display: "block",
+            width: "100%",
+            height: "auto",
+            maxHeight: "calc(100vh - 120px)",
+            objectFit: "contain",
+            margin: "0 auto",
+            borderRadius: 8,
+          }}
+        />
+      </BloomTransition>
+      {caption && (
+        <div style={{ ...captionOverlayStyle, opacity: Math.max(0, Math.min(1, bloom)) }}>
+          {caption}
+        </div>
+      )}
+    </div>
   );
 }
+
+const captionOverlayStyle = {
+  position: "absolute",
+  left: 0,
+  right: 0,
+  bottom: 0,
+  padding: "20px 12px 10px",
+  borderRadius: "0 0 8px 8px",
+  fontSize: 13,
+  lineHeight: 1.35,
+  color: "#fff",
+  textShadow: "0 1px 3px rgba(0,0,0,0.8)",
+  background: "linear-gradient(to top, rgba(0,0,0,0.72), rgba(0,0,0,0))",
+  pointerEvents: "none",
+} as const;
 
 /** Turn the result's image bytes into an object URL, revoking it on change. */
 function useObjectUrl(result: ImageResult | undefined): string | undefined {

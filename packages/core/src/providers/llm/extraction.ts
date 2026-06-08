@@ -1,4 +1,10 @@
-import type { Character, Environment, VisualBible } from "../../types/bible.js";
+import type {
+  Character,
+  CharacterAppearance,
+  Environment,
+  VisualBible,
+} from "../../types/bible.js";
+import { emptyAppearance } from "../../types/bible.js";
 import type { EntityExtractionInput } from "./llm-provider.js";
 import type { VisualRequest } from "../../types/content.js";
 import { deterministicSeed } from "./mock-llm-provider.js";
@@ -14,9 +20,18 @@ import { deterministicSeed } from "./mock-llm-provider.js";
 
 /** Provider-neutral shape returned by every extraction call before merging. */
 export interface RawExtraction {
-  characters: { name: string; aliases: string[]; persistentTraits: string[]; clothing: string[] }[];
+  characters: {
+    name: string;
+    aliases: string[];
+    /** Structured physical appearance; optional for back-compat with older mocks. */
+    appearance?: Partial<CharacterAppearance>;
+    persistentTraits: string[];
+    clothing: string[];
+  }[];
   environments: { name: string; description: string[] }[];
   spoilers: { label: string; revealHint: string }[];
+  /** Recurring world facts/defining context to apply by default in every prompt. */
+  glossary?: { term: string; definition: string }[];
   /** What occurs in this chapter (the storyboard summary). Optional for back-compat. */
   summary?: string;
   /** The single most important action/moment to illustrate this chapter. */
@@ -25,15 +40,22 @@ export interface RawExtraction {
 
 export const EXTRACTION_SYSTEM =
   "You are building a 'Visual Bible' and storyboard for illustrating a novel as you " +
-  "read it chapter by chapter. Extract only entities that recur or are visually " +
-  "significant. For each character capture traits that persist across the book " +
-  "(build, hair, eyes, distinguishing marks) and — importantly — their clothing, " +
-  "outfits, and fashion in detail (garments, fabric, colour, accessories, era/style). " +
-  "For each environment/location capture its look AND its world's fashion and aesthetic " +
-  "(architecture, era, materials, palette) in the description. Flag spoilers that would " +
-  "spoil the plot if shown before the reader reaches them. Also write a 'summary' of " +
-  "what happens in THIS chapter, and a single 'keyMoment': the most important, most " +
-  "visual action of the chapter to illustrate (one concrete sentence).";
+  "read it chapter by chapter. Capture EVERY named character who is given any physical " +
+  "or appearance description in this chapter — including minor and one-off characters. " +
+  "Do NOT limit yourself to the main cast; only skip bare name-drops that carry no " +
+  "description at all. For each character fill the structured 'appearance' fields " +
+  "(hair, eyes, gender, build/physique, height, skinTone, age, distinguishingMarks; use " +
+  "an empty string for anything the text doesn't state) and put extra persistent details " +
+  "in persistentTraits, plus their clothing/outfits/fashion in detail (garments, fabric, " +
+  "colour, accessories, era/style). For each environment/location capture its look AND its " +
+  "world's fashion and aesthetic (architecture, era, materials, palette) in the description. " +
+  "Build a 'glossary' of recurring world facts / defining context that should be assumed " +
+  "by default unless a passage says otherwise — e.g. customary attire ('dragon riders wear " +
+  "fitted black flight leathers'), technology level, materials, or social norms; each entry " +
+  "is a short term and its definition. Flag spoilers that would spoil the plot if shown " +
+  "before the reader reaches them. Also write a 'summary' of what happens in THIS chapter, " +
+  "and a single 'keyMoment': the most important, most visual action of the chapter to " +
+  "illustrate (one concrete sentence).";
 
 export const PROMPT_SYSTEM =
   "You write one vivid, concrete image-generation prompt for a single illustration of a " +
@@ -59,10 +81,48 @@ export const EXTRACTION_JSON_SCHEMA = {
         properties: {
           name: { type: "string" },
           aliases: { type: "array", items: { type: "string" } },
+          appearance: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              hair: { type: "string" },
+              eyes: { type: "string" },
+              gender: { type: "string" },
+              build: { type: "string" },
+              height: { type: "string" },
+              skinTone: { type: "string" },
+              age: { type: "string" },
+              distinguishingMarks: { type: "string" },
+              notes: { type: "string" },
+            },
+            required: [
+              "hair",
+              "eyes",
+              "gender",
+              "build",
+              "height",
+              "skinTone",
+              "age",
+              "distinguishingMarks",
+              "notes",
+            ],
+          },
           persistentTraits: { type: "array", items: { type: "string" } },
           clothing: { type: "array", items: { type: "string" } },
         },
-        required: ["name", "aliases", "persistentTraits", "clothing"],
+        required: ["name", "aliases", "appearance", "persistentTraits", "clothing"],
+      },
+    },
+    glossary: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          term: { type: "string" },
+          definition: { type: "string" },
+        },
+        required: ["term", "definition"],
       },
     },
     environments: {
@@ -92,7 +152,7 @@ export const EXTRACTION_JSON_SCHEMA = {
     summary: { type: "string" },
     keyMoment: { type: "string" },
   },
-  required: ["characters", "environments", "spoilers", "summary", "keyMoment"],
+  required: ["characters", "glossary", "environments", "spoilers", "summary", "keyMoment"],
 } as const;
 
 /**
@@ -107,7 +167,13 @@ export function extractionUserContent(input: EntityExtractionInput): string {
     .map((s) => `Chapter ${s.chapterIndex}: ${s.summary}`)
     .join("\n");
   const soFar = priorSummaries ? `Story so far:\n${priorSummaries}\n\n` : "";
-  return `${soFar}Chapter ${input.chapterIndex} text:\n\n${input.chapterText}`;
+  // Feed back the glossary built so far so the model EXTENDS it (adds new world
+  // facts) rather than repeating ones already captured.
+  const known = (input.existing.glossary ?? [])
+    .map((g) => `- ${g.term}: ${g.definition}`)
+    .join("\n");
+  const glossarySoFar = known ? `Known world facts so far:\n${known}\n\n` : "";
+  return `${glossarySoFar}${soFar}Chapter ${input.chapterIndex} text:\n\n${input.chapterText}`;
 }
 
 /**
@@ -126,10 +192,12 @@ export function mergeExtraction(
     environments: [...existing.environments],
     spoilers: [...existing.spoilers],
     storyboard: [...(existing.storyboard ?? [])],
+    glossary: [...(existing.glossary ?? [])],
     processedChapters: [...existing.processedChapters],
   };
   const knownChars = new Set(bible.characters.map((c) => c.name.toLowerCase()));
   const knownEnvs = new Set(bible.environments.map((e) => e.name.toLowerCase()));
+  const knownTerms = new Set(bible.glossary.map((g) => g.term.toLowerCase()));
 
   for (const c of raw.characters) {
     if (knownChars.has(c.name.toLowerCase())) continue;
@@ -138,12 +206,19 @@ export function mergeExtraction(
       id: `char-${slug(c.name)}`,
       name: c.name,
       aliases: c.aliases,
+      appearance: { ...emptyAppearance(), ...(c.appearance ?? {}) },
       persistentTraits: c.persistentTraits,
       clothing: c.clothing,
       anchor: { seed: deterministicSeed(c.name) },
       firstSeenChapter: chapterIndex,
     };
     bible.characters.push(character);
+  }
+  for (const g of raw.glossary ?? []) {
+    const term = g.term.trim();
+    if (!term || knownTerms.has(term.toLowerCase())) continue;
+    knownTerms.add(term.toLowerCase());
+    bible.glossary.push({ term, definition: g.definition });
   }
   for (const e of raw.environments) {
     if (knownEnvs.has(e.name.toLowerCase())) continue;
@@ -194,16 +269,19 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
     .filter((s) => s.chapterIndex < request.chapterIndex)
     .map((s) => `Chapter ${s.chapterIndex}: ${s.summary}`)
     .join("\n");
+  const glossary = bible.glossary ?? [];
   return [
+    glossary.length
+      ? `World facts (apply as defaults unless the passage says otherwise):\n${glossary
+          .map((g) => `- ${g.term}: ${g.definition}`)
+          .join("\n")}`
+      : "",
     soFar ? `Story so far:\n${soFar}` : "",
     scene?.summary ? `This chapter:\n${scene.summary}` : "",
     scene?.keyMoment ? `Key moment to illustrate:\n${scene.keyMoment}` : "",
     chars.length
       ? `Characters present (keep appearance + outfit consistent):\n${chars
-          .map(
-            (c) =>
-              `- ${c.name}: ${c.persistentTraits.join(", ")}; wearing ${c.clothing.join(", ") || "unspecified"}`,
-          )
+          .map((c) => `- ${describeCharacter(c)}`)
           .join("\n")}`
       : "",
     envs.length
@@ -213,6 +291,35 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+/** One-line character description for an image prompt, preferring the structured
+ * appearance fields and falling back to free-form persistentTraits. */
+function describeCharacter(c: Character): string {
+  const a = c.appearance;
+  const fields: string[] = [];
+  if (a) {
+    const labelled: Array<[string, string]> = [
+      ["gender", a.gender],
+      ["age", a.age],
+      ["hair", a.hair],
+      ["eyes", a.eyes],
+      ["build", a.build],
+      ["height", a.height],
+      ["skin", a.skinTone],
+      ["marks", a.distinguishingMarks],
+    ];
+    for (const [label, value] of labelled) {
+      if (value && value.trim()) fields.push(`${label}: ${value.trim()}`);
+    }
+    if (a.notes && a.notes.trim()) fields.push(a.notes.trim());
+  }
+  // Fold in any extra persistent traits the structured fields didn't capture.
+  for (const t of c.persistentTraits) {
+    if (t && t.trim()) fields.push(t.trim());
+  }
+  const appearance = fields.length ? fields.join("; ") : "appearance unspecified";
+  return `${c.name}: ${appearance}; wearing ${c.clothing.join(", ") || "unspecified"}`;
 }
 
 export function slug(s: string): string {

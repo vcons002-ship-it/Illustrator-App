@@ -25,14 +25,21 @@ export function parseEpub(
   const spine = readSpine(opfXml);
 
   const rawChapters: RawChapter[] = [];
-  spine.forEach((idref, i) => {
-    const href = manifest.get(idref);
-    if (!href) return;
-    const html = readFileOptional(files, opfDir + href);
+  spine.forEach((item, i) => {
+    const props = manifest.get(item.idref);
+    if (!props) return;
+    const html = readFileOptional(files, opfDir + props.href);
     if (html === undefined) return;
     const text = htmlToText(html);
     if (text.trim().length === 0) return;
-    rawChapters.push({ title: extractTitle(html) ?? `Chapter ${i + 1}`, text });
+    const title = extractTitle(html) ?? `Chapter ${i + 1}`;
+    const isStory = isStoryDocument({
+      title,
+      linear: item.linear,
+      properties: `${item.properties} ${props.properties}`,
+      html,
+    });
+    rawChapters.push({ title, text, ...(isStory ? {} : { isStory: false }) });
   });
 
   return segmentBook(meta, rawChapters, options);
@@ -51,28 +58,79 @@ function readMeta(opfXml: string, id: string): BookMeta {
   return { id, title, ...(author ? { author } : {}) };
 }
 
-function readManifest(opfXml: string): Map<string, string> {
-  const manifest = new Map<string, string>();
+interface ManifestItem {
+  href: string;
+  /** epub3 manifest `properties` (e.g. "nav", "cover-image"). */
+  properties: string;
+}
+
+function readManifest(opfXml: string): Map<string, ManifestItem> {
+  const manifest = new Map<string, ManifestItem>();
   const itemRe = /<item\b[^>]*>/g;
   let m: RegExpExecArray | null;
   while ((m = itemRe.exec(opfXml)) !== null) {
     const tag = m[0];
     const id = attr(tag, "id");
     const href = attr(tag, "href");
-    if (id && href) manifest.set(id, decodeEntities(href));
+    if (id && href) {
+      manifest.set(id, { href: decodeEntities(href), properties: attr(tag, "properties") ?? "" });
+    }
   }
   return manifest;
 }
 
-function readSpine(opfXml: string): string[] {
-  const order: string[] = [];
+interface SpineItem {
+  idref: string;
+  /** itemref `linear`: "no" marks auxiliary/front-matter content. */
+  linear: string;
+  /** itemref `properties` (rare). */
+  properties: string;
+}
+
+function readSpine(opfXml: string): SpineItem[] {
+  const order: SpineItem[] = [];
   const refRe = /<itemref\b[^>]*>/g;
   let m: RegExpExecArray | null;
   while ((m = refRe.exec(opfXml)) !== null) {
     const idref = attr(m[0], "idref");
-    if (idref) order.push(idref);
+    if (idref) {
+      order.push({
+        idref,
+        linear: attr(m[0], "linear") ?? "",
+        properties: attr(m[0], "properties") ?? "",
+      });
+    }
   }
   return order;
+}
+
+/** Titles of non-story front/back matter (never matches Prologue/Epilogue). */
+const NON_STORY_TITLE_RE =
+  /^\s*(cover|title\s*page|copyright|colophon|contents|table of contents|dedication|epigraph|acknowledge?ments?|acknowledgements?|about the author|about the publisher|also by|by the same author|praise for|front\s*matter|back\s*matter|half\s*title|frontispiece|index|bibliography|notes|appendix|glossary|map of)\b/i;
+
+/** epub3 semantic types (in epub:type / properties) that mark non-story matter. */
+const NON_STORY_EPUB_TYPE_RE =
+  /\b(cover|titlepage|frontmatter|backmatter|toc|landmarks|copyright-page|dedication|epigraph|acknowledgments|colophon|index|bibliography|glossary|appendix)\b/i;
+
+/**
+ * Decide whether a spine document is story prose. Non-story when the spine marks
+ * it auxiliary (`linear="no"`), the manifest/spine `properties` or the document's
+ * `epub:type` flag front/back matter, or the title matches a front/back-matter
+ * name — but Prologue/Epilogue and ordinary chapters always count as story.
+ */
+function isStoryDocument(input: {
+  title: string;
+  linear: string;
+  properties: string;
+  html: string;
+}): boolean {
+  if (input.linear.toLowerCase() === "no") return false;
+  if (NON_STORY_EPUB_TYPE_RE.test(input.properties)) return false;
+  // epub:type lives on the body or section elements of the content document.
+  const typeMatch = input.html.match(/epub:type\s*=\s*"([^"]*)"/i);
+  if (typeMatch && NON_STORY_EPUB_TYPE_RE.test(typeMatch[1]!)) return false;
+  if (NON_STORY_TITLE_RE.test(input.title)) return false;
+  return true;
 }
 
 /** Strip an XHTML document down to paragraph-separated plain text. */

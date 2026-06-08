@@ -42,6 +42,18 @@ let bibleBase = "";
 let bibleTokens = 0;
 let bibleStartMs = 0;
 let bibleTimer: ReturnType<typeof setInterval> | undefined;
+/** Pages in each STORY chapter, ordered by chapter — for "pages analysed" + %. */
+let storyPageCounts: number[] = [];
+let storyPagesTotal = 0;
+
+/** Precompute story-chapter page counts from the ORIGINAL (un-grouped) book. */
+function setStoryPageCounts(book: import("@visual-reader/core").BookSource): void {
+  const storyChapters = book.chapters.filter((c) => c.isStory !== false);
+  storyPageCounts = storyChapters.map(
+    (c) => book.pages.filter((p) => p.chapterId === c.id).length,
+  );
+  storyPagesTotal = storyPageCounts.reduce((a, b) => a + b, 0);
+}
 
 function renderBibleStatus(): void {
   if (!bibleActive) return;
@@ -57,6 +69,11 @@ function stopBibleTimer(): void {
   }
 }
 
+/**
+ * `done`/`total` are STORY chapters. We also derive pages-analysed (sum of the
+ * first `done` story chapters' page counts) and a percentage, so the reader sees
+ * "Building the Visual Bible… 3/12 chapters · 24% · pages 40/210".
+ */
 function setBibleChapter(done: number, total: number): void {
   if (total <= 0 || done >= total) {
     bibleActive = false;
@@ -66,7 +83,12 @@ function setBibleChapter(done: number, total: number): void {
     return;
   }
   bibleActive = true;
-  bibleBase = `Building the Visual Bible… chapter ${done + 1}/${total} (illustrating as chapters finish)`;
+  const percent = Math.round((done / total) * 100);
+  const pagesDone = storyPageCounts.slice(0, done).reduce((a, b) => a + b, 0);
+  const pages = storyPagesTotal > 0 ? ` · pages ${pagesDone}/${storyPagesTotal}` : "";
+  bibleBase =
+    `Building the Visual Bible… ${done}/${total} chapters · ${percent}%${pages} ` +
+    `(illustrating as chapters finish)`;
   bibleTokens = 0;
   bibleStartMs = Date.now();
   stopBibleTimer();
@@ -119,6 +141,11 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       post({ type: "generating", value: true });
       post({ type: "paused", value: false });
       break;
+    case "updateCharacter":
+      // Save-only: persists the edit and broadcasts the updated bible; existing
+      // images are left as-is until the user re-renders.
+      void engine?.updateCharacter(msg.characterId, msg.patch);
+      break;
     case "goto":
       engine?.goToPage(msg.pageIndex);
       break;
@@ -145,6 +172,7 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     pendingStart = false; // fresh open; the hook re-sends "start" if it should resume
     bibleActive = false;
     stopBibleTimer();
+    setStoryPageCounts(book); // progress is reported against story pages/chapters
     const { llm, image, tier, diagnostics } = buildProviders(settings, {
       onLocalStatus: (message) => post({ type: "status", message: message || "Building the Visual Bible…" }),
       onLocalActivity: (activity) => {
