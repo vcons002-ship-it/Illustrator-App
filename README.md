@@ -8,6 +8,9 @@ This is the v1 implementation: fiction/EPUB **scene illustrations**, with a
 shared engine consumed by three surfaces — a web app, a Chrome extension (which
 illustrates any article you read), and a desktop app.
 
+> New here? **[FEATURES.md](./FEATURES.md)** is a plain-language tour of what the
+> app does, how it works, and what's on the roadmap.
+
 ## Quick start
 
 **Windows — no commands, just double-click a file:**
