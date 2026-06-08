@@ -25,6 +25,7 @@ import {
   useScrollDepth,
   type InstalledModel,
   type LocalBackendId,
+  type ProvidersDiagnostics,
   type ReaderSettings,
 } from "@visual-reader/ui";
 import { loadSampleBook } from "./sample.js";
@@ -53,7 +54,8 @@ export function App() {
   const [library, setLibrary] = useState<BookSummary[]>([]);
   const libraryStore = useMemo(() => new IndexedDbStore(), []);
   const hydrated = useRef(false);
-  const { bible, results, status, openBook: openInWorker, goTo, prerenderAll } = useEngineWorker(settings);
+  const { bible, results, status, providers, openBook: openInWorker, goTo, prerenderAll } =
+    useEngineWorker(settings);
   const [prerendering, setPrerendering] = useState(false);
   const { registerParagraph, activeParagraphId, activeParagraphProgress } = useScrollDepth();
 
@@ -388,6 +390,8 @@ export function App() {
         <FirstRunWizard current={settings} onComplete={setSettings} isDesktop={isDesktop} />
       )}
 
+      <ProviderBadges providers={providers} engineStatus={engineStatus} />
+
       {(status || localError) && <div style={styles.status}>{localError || status}</div>}
 
       {!book && !status && !localError && (
@@ -494,6 +498,43 @@ async function saveSettings(s: ReaderSettings): Promise<void> {
   }
 }
 
+/**
+ * Status chips showing whether the real LLM / image providers are active or the
+ * app silently fell back to a mock — and why. This is the cure for "endless
+ * painting with no idea what's happening": at a glance you can see "Image: mock —
+ * no checkpoint selected" instead of guessing.
+ */
+function ProviderBadges({
+  providers,
+  engineStatus,
+}: {
+  providers: ProvidersDiagnostics | undefined;
+  engineStatus: string;
+}) {
+  if (!providers && !engineStatus) return null;
+  return (
+    <div style={styles.badges}>
+      {providers && <Badge slot="Text" diag={providers.llm} />}
+      {providers && <Badge slot="Image" diag={providers.image} />}
+      {engineStatus && (
+        <span style={{ ...styles.badge, ...styles.badgeBusy }} title="Local GPU engine status">
+          Engine: {engineStatus}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function Badge({ slot, diag }: { slot: string; diag: ProvidersDiagnostics["llm"] }) {
+  const tone = diag.mock ? styles.badgeWarn : styles.badgeOk;
+  return (
+    <span style={{ ...styles.badge, ...tone }} title={diag.reason ?? ""}>
+      <span aria-hidden style={{ opacity: 0.8 }}>{diag.mock ? "▲" : "●"}</span> {slot}: {diag.label}
+      {diag.mock && diag.reason ? ` — ${diag.reason}` : ""}
+    </span>
+  );
+}
+
 const KEYFRAMES = `@keyframes vr-pulse { 0%,100% { opacity: 0.55 } 50% { opacity: 0.9 } }`;
 
 const styles: Record<string, React.CSSProperties> = {
@@ -534,6 +575,39 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
   },
   status: { padding: "10px 20px", color: "#ffd479" },
+  badges: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 8,
+    padding: "8px 20px 0",
+    fontFamily: "system-ui, sans-serif",
+  },
+  badge: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    fontSize: 12,
+    lineHeight: 1.4,
+    padding: "3px 9px",
+    borderRadius: 999,
+    border: "1px solid transparent",
+    maxWidth: "100%",
+  },
+  badgeOk: {
+    background: "rgba(64,160,96,0.16)",
+    borderColor: "rgba(96,200,128,0.4)",
+    color: "#9be2b4",
+  },
+  badgeWarn: {
+    background: "rgba(200,140,40,0.16)",
+    borderColor: "rgba(230,170,70,0.45)",
+    color: "#ffd479",
+  },
+  badgeBusy: {
+    background: "rgba(90,120,200,0.16)",
+    borderColor: "rgba(120,150,220,0.45)",
+    color: "#bcd0ff",
+  },
   empty: { padding: 40, maxWidth: 560, lineHeight: 1.6 },
   reader: {
     display: "grid",

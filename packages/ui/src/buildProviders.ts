@@ -2,11 +2,13 @@ import {
   Automatic1111Backend,
   ComfyUIBackend,
   DirectTransport,
+  LOCAL_TEXT_MODELS,
   MockImageProvider,
   MockLLMProvider,
   WebLLMProvider,
   createImageProvider,
   createLLMProvider,
+  getProvider,
   type ImageProvider,
   type LLMProvider,
   type LocalEngineBackend,
@@ -26,6 +28,11 @@ import type { ReaderSettings } from "./SettingsPanel.js";
  * directly (the extension content script, blocked by page CORS) pass a fetch that
  * proxies through a privileged context. When omitted, providers use the platform
  * `fetch` directly (the web app's behaviour).
+ *
+ * Alongside the live providers it returns `diagnostics`, describing for each slot
+ * whether the *real* provider is active or it silently fell back to a mock (and
+ * why). The UI surfaces this so a missing key, absent WebGPU, or unselected
+ * checkpoint is visible instead of looking like an endless "painting…".
  */
 export interface BuildProvidersOptions {
   /** Proxy fetch routed through a CORS-exempt context (e.g. an extension SW). */
@@ -34,79 +41,187 @@ export interface BuildProvidersOptions {
   onLocalStatus?: (text: string) => void;
 }
 
+/** One slot's resolved state, for the status badge. */
+export interface SlotDiagnostic {
+  /** Resolved provider id ("local", "claude", … or "mock"). */
+  id: string;
+  /** Human-friendly description, e.g. "ComfyUI" or "On-device: Llama 3.2 3B". */
+  label: string;
+  /** True when this slot silently fell back to the network-free mock. */
+  mock: boolean;
+  /** Why the mock was chosen / extra detail (only set in notable cases). */
+  reason?: string;
+}
+
+export interface ProvidersDiagnostics {
+  llm: SlotDiagnostic;
+  image: SlotDiagnostic;
+}
+
+interface BuiltLLM {
+  provider: LLMProvider;
+  diag: SlotDiagnostic;
+}
+interface BuiltImage {
+  provider: ImageProvider;
+  diag: SlotDiagnostic;
+}
+
 export function buildProviders(
   settings: ReaderSettings,
   opts: BuildProvidersOptions = {},
-): { llm: LLMProvider; image: ImageProvider; tier: TierConfig } {
+): { llm: LLMProvider; image: ImageProvider; tier: TierConfig; diagnostics: ProvidersDiagnostics } {
   const transport: Transport | undefined = opts.fetch ? new DirectTransport(opts.fetch) : undefined;
   const llm = buildLLM(settings, transport, opts.fetch, opts.onLocalStatus);
   const image = buildImage(settings, transport);
   return {
-    llm,
-    image,
+    llm: llm.provider,
+    image: image.provider,
+    diagnostics: { llm: llm.diag, image: image.diag },
     tier: {
       tier: settings.imageProvider === "local" ? "local" : "cloud",
-      llmProvider: llm.id,
-      imageProvider: image.id,
-      quality: image.id === "mock" ? "sketch" : image.id === "local" ? "standard" : "cinematic",
+      llmProvider: llm.provider.id,
+      imageProvider: image.provider.id,
+      quality:
+        image.provider.id === "mock"
+          ? "sketch"
+          : image.provider.id === "local"
+            ? "standard"
+            : "cinematic",
       style: settings.imageStyle ?? "auto",
     },
   };
 }
+
+const MOCK_LABEL = "Mock (placeholder art/text)";
 
 function buildLLM(
   settings: ReaderSettings,
   transport: Transport | undefined,
   fetchImpl: typeof fetch | undefined,
   onLocalStatus: ((text: string) => void) | undefined,
-): LLMProvider {
+): BuiltLLM {
   const id = settings.textProvider;
   if (id === "local") {
     // On-device LLM via WebLLM (WebGPU). Falls back to the mock where WebGPU is
     // unavailable (the provider also self-degrades to the mock on any load error).
-    if (!hasWebGPU()) return new MockLLMProvider();
-    return new WebLLMProvider({
-      ...(settings.localTextModel ? { model: settings.localTextModel } : {}),
-      ...(onLocalStatus
-        ? {
-            onProgress: (r) =>
-              onLocalStatus(r.progress >= 1 ? "" : `Loading local model… ${Math.round(r.progress * 100)}%`),
-          }
-        : {}),
-    });
+    if (!hasWebGPU()) {
+      return {
+        provider: new MockLLMProvider(),
+        diag: {
+          id: "mock",
+          label: MOCK_LABEL,
+          mock: true,
+          reason: "On-device text needs WebGPU, which isn't available here.",
+        },
+      };
+    }
+    const modelId = settings.localTextModel || undefined;
+    const modelLabel = LOCAL_TEXT_MODELS.find((m) => m.id === modelId)?.label ?? "Llama 3.2 3B";
+    return {
+      provider: new WebLLMProvider({
+        ...(modelId ? { model: modelId } : {}),
+        ...(onLocalStatus
+          ? {
+              onProgress: (r) =>
+                onLocalStatus(
+                  r.progress >= 1 ? "" : `Loading local model… ${Math.round(r.progress * 100)}%`,
+                ),
+            }
+          : {}),
+      }),
+      diag: {
+        id: "local",
+        label: `On-device: ${modelLabel}`,
+        mock: false,
+        reason: "Loads on first use; if WebGPU load fails it falls back to mock text.",
+      },
+    };
   }
   const key = settings.keys[id];
-  if (!key) return new MockLLMProvider();
+  const providerLabel = getProvider("text", id)?.label ?? id;
+  if (!key) {
+    return {
+      provider: new MockLLMProvider(),
+      diag: { id: "mock", label: MOCK_LABEL, mock: true, reason: `No API key set for ${providerLabel}.` },
+    };
+  }
   try {
-    return createLLMProvider(id, {
-      key,
-      ...(transport ? { transport } : {}),
-      ...(fetchImpl ? { fetch: fetchImpl } : {}),
-    });
+    return {
+      provider: createLLMProvider(id, {
+        key,
+        ...(transport ? { transport } : {}),
+        ...(fetchImpl ? { fetch: fetchImpl } : {}),
+      }),
+      diag: { id, label: providerLabel, mock: false },
+    };
   } catch {
-    return new MockLLMProvider();
+    return {
+      provider: new MockLLMProvider(),
+      diag: { id: "mock", label: MOCK_LABEL, mock: true, reason: `Couldn't initialise ${providerLabel}.` },
+    };
   }
 }
 
-function buildImage(settings: ReaderSettings, transport: Transport | undefined): ImageProvider {
+function buildImage(settings: ReaderSettings, transport: Transport | undefined): BuiltImage {
   const id = settings.imageProvider;
   if (id === "local") {
     // Base URL comes from the desktop shell (auto-managed engine) or, elsewhere,
     // from the server the user connected to in Settings.
     const baseUrl = settings.engineBaseUrl ?? settings.localServerUrl;
-    if (!baseUrl || !settings.localModel) return new MockImageProvider();
-    const backend: LocalEngineBackend =
-      settings.localBackend === "a1111"
-        ? new Automatic1111Backend({ baseUrl, ...(transport ? { transport } : {}) })
-        : new ComfyUIBackend({ baseUrl, ...(transport ? { transport } : {}) });
-    return createImageProvider("local", { engine: { backend, model: settings.localModel } });
+    if (!baseUrl) {
+      return {
+        provider: new MockImageProvider(),
+        diag: {
+          id: "mock",
+          label: MOCK_LABEL,
+          mock: true,
+          reason: "Local engine isn't connected yet.",
+        },
+      };
+    }
+    if (!settings.localModel) {
+      return {
+        provider: new MockImageProvider(),
+        diag: {
+          id: "mock",
+          label: MOCK_LABEL,
+          mock: true,
+          reason: "No checkpoint selected — pick a model in Settings.",
+        },
+      };
+    }
+    const isA1111 = settings.localBackend === "a1111";
+    const backend: LocalEngineBackend = isA1111
+      ? new Automatic1111Backend({ baseUrl, ...(transport ? { transport } : {}) })
+      : new ComfyUIBackend({ baseUrl, ...(transport ? { transport } : {}) });
+    return {
+      provider: createImageProvider("local", { engine: { backend, model: settings.localModel } }),
+      diag: {
+        id: "local",
+        label: `${isA1111 ? "AUTOMATIC1111" : "ComfyUI"} · ${settings.localModel}`,
+        mock: false,
+      },
+    };
   }
   const key = settings.keys[id];
-  if (!key) return new MockImageProvider();
+  const providerLabel = getProvider("image", id)?.label ?? id;
+  if (!key) {
+    return {
+      provider: new MockImageProvider(),
+      diag: { id: "mock", label: MOCK_LABEL, mock: true, reason: `No API key set for ${providerLabel}.` },
+    };
+  }
   try {
-    return createImageProvider(id, { key, ...(transport ? { transport } : {}) });
+    return {
+      provider: createImageProvider(id, { key, ...(transport ? { transport } : {}) }),
+      diag: { id, label: providerLabel, mock: false },
+    };
   } catch {
-    return new MockImageProvider();
+    return {
+      provider: new MockImageProvider(),
+      diag: { id: "mock", label: MOCK_LABEL, mock: true, reason: `Couldn't initialise ${providerLabel}.` },
+    };
   }
 }
 

@@ -123,20 +123,24 @@ function Overlay() {
     setError("");
     setResults(new Map());
     const { llm, image, tier } = buildProviders(settings, { fetch: proxyFetch, onLocalStatus: setStatus });
+    let cancelled = false;
     const engine = new Engine({
       llm,
       image,
       tier,
       store: createCacheStore(),
       onUpdate: (idx, result) => setResults((prev) => new Map(prev).set(idx, result)),
+      // The bible builds in the background (pages illustrate as their chapter is
+      // ready); keep the UI's character/spoiler context current as it grows.
+      onBibleUpdate: (bible) => {
+        if (!cancelled) setBible(bible);
+      },
     });
     engineRef.current = engine;
-    let cancelled = false;
     void engine
       .openBook(source)
       .then(() => {
         if (cancelled) return;
-        setBible(engine.getBible());
         setBook(source);
         engine.setIdleAllowed(true);
         engine.goToPage(0);

@@ -19,7 +19,12 @@ import { getImageStyle } from "../providers/catalog.js";
  */
 export interface PipelineDeps {
   book: BookSource;
-  bible: VisualBible;
+  /**
+   * Accessor for the current Visual Bible. It's a getter (not a snapshot) because
+   * the bible is built incrementally in the background — a page rendered later
+   * must see the entities extracted since the pipeline was created.
+   */
+  getBible: () => VisualBible;
   llm: LLMProvider;
   image: ImageProvider;
   store: VisualReaderStore;
@@ -31,7 +36,7 @@ export class RenderPipeline {
 
   buildRequest(page: Page): VisualRequest {
     const { characterIds, environmentIds, spoilerIds } = resolvePageEntities(
-      this.deps.bible,
+      this.deps.getBible(),
       page,
     );
     return {
@@ -46,8 +51,14 @@ export class RenderPipeline {
     };
   }
 
-  /** Render a page, using the cache when available. */
-  async renderPage(pageIndex: number): Promise<ImageResult> {
+  /**
+   * Render a page, using the cache when available. `onProgress` (0..1) is an
+   * optional sink for engines that report generation progress (e.g. ComfyUI).
+   */
+  async renderPage(
+    pageIndex: number,
+    onProgress?: (fraction: number) => void,
+  ): Promise<ImageResult> {
     const page = this.deps.book.pages[pageIndex];
     if (!page) {
       return { requestId: `page-${pageIndex}`, pageId: `page-${pageIndex}`, status: "error", error: "Page out of range" };
@@ -71,7 +82,7 @@ export class RenderPipeline {
 
     try {
       const style = getImageStyle(this.deps.tier.style);
-      const basePrompt = await this.deps.llm.buildImagePrompt(request, this.deps.bible);
+      const basePrompt = await this.deps.llm.buildImagePrompt(request, this.deps.getBible());
       const prompt = style.promptSuffix ? `${basePrompt}\n\nStyle: ${style.promptSuffix}` : basePrompt;
       const anchors = this.anchorsFor(request);
       // Local engines additionally apply a style LoRA/checkpoint when installed.
@@ -82,6 +93,7 @@ export class RenderPipeline {
         quality: this.deps.tier.quality,
         ...(local?.lora ? { styleLora: local.lora } : {}),
         ...(local?.checkpoint ? { styleCheckpoint: local.checkpoint } : {}),
+        ...(onProgress ? { onProgress } : {}),
       });
       await this.deps.store.putImage(requestId, output.bytes, output.mimeType);
       return {
@@ -102,8 +114,9 @@ export class RenderPipeline {
   }
 
   private anchorsFor(request: VisualRequest): IdentityAnchor[] {
-    return this.deps.bible.characters
-      .filter((c) => request.characterIds.includes(c.id))
+    return this.deps
+      .getBible()
+      .characters.filter((c) => request.characterIds.includes(c.id))
       .map((c) => c.anchor);
   }
 }

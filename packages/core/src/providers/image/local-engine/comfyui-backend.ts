@@ -127,23 +127,73 @@ export class ComfyUIBackend implements LocalEngineBackend {
       ...(lora ? { lora } : {}),
     });
 
-    const submit = await this.transport.send({
-      url: `${this.baseUrl}/prompt`,
-      method: "POST",
-      body: { prompt: workflow, client_id: this.clientId },
-    });
-    if (!submit.ok) throw new Error(`ComfyUI prompt failed with status ${submit.status}`);
-    const { prompt_id } = await submit.json<PromptResponse>();
+    // Best-effort live progress: ComfyUI broadcasts per-step `progress` messages
+    // over its websocket to the client with our clientId. Open it *before*
+    // submitting so we don't miss early steps. Completion + image retrieval still
+    // come from /history polling below, so this is a pure side channel (and a
+    // no-op in tests / where WebSocket is unavailable).
+    const socket = input.onProgress ? this.openProgressSocket(input.onProgress) : undefined;
+    try {
+      const submit = await this.transport.send({
+        url: `${this.baseUrl}/prompt`,
+        method: "POST",
+        body: { prompt: workflow, client_id: this.clientId },
+      });
+      if (!submit.ok) throw new Error(`ComfyUI prompt failed with status ${submit.status}`);
+      const { prompt_id } = await submit.json<PromptResponse>();
 
-    const image = await this.pollForImage(prompt_id);
-    const view = await this.transport.send({
-      url:
-        `${this.baseUrl}/view?filename=${encodeURIComponent(image.filename)}` +
-        `&subfolder=${encodeURIComponent(image.subfolder)}&type=${encodeURIComponent(image.type)}`,
-      method: "GET",
-    });
-    if (!view.ok) throw new Error(`ComfyUI view failed with status ${view.status}`);
-    return { bytes: await view.arrayBuffer(), mimeType: "image/png" };
+      const image = await this.pollForImage(prompt_id);
+      const view = await this.transport.send({
+        url:
+          `${this.baseUrl}/view?filename=${encodeURIComponent(image.filename)}` +
+          `&subfolder=${encodeURIComponent(image.subfolder)}&type=${encodeURIComponent(image.type)}`,
+        method: "GET",
+      });
+      if (!view.ok) throw new Error(`ComfyUI view failed with status ${view.status}`);
+      input.onProgress?.(1);
+      return { bytes: await view.arrayBuffer(), mimeType: "image/png" };
+    } finally {
+      socket?.close();
+    }
+  }
+
+  /**
+   * Open a websocket to ComfyUI and forward per-step sampling progress (0..1) to
+   * `onProgress`. Returns a closer, or undefined where WebSocket isn't available
+   * (Node/tests) — progress is always optional, never required for correctness.
+   */
+  private openProgressSocket(onProgress: (fraction: number) => void): { close: () => void } | undefined {
+    if (typeof WebSocket === "undefined") return undefined;
+    try {
+      const wsUrl =
+        this.baseUrl.replace(/^http/, "ws") + `/ws?clientId=${encodeURIComponent(this.clientId)}`;
+      const ws = new WebSocket(wsUrl);
+      ws.onmessage = (ev: MessageEvent) => {
+        if (typeof ev.data !== "string") return; // binary frames are preview images
+        try {
+          const msg = JSON.parse(ev.data) as { type?: string; data?: { value?: number; max?: number } };
+          if (msg.type === "progress" && msg.data && typeof msg.data.value === "number" && msg.data.max) {
+            onProgress(Math.max(0, Math.min(1, msg.data.value / msg.data.max)));
+          }
+        } catch {
+          /* ignore malformed frames */
+        }
+      };
+      ws.onerror = () => {
+        /* progress is best-effort; ignore socket errors */
+      };
+      return {
+        close: () => {
+          try {
+            ws.close();
+          } catch {
+            /* ignore */
+          }
+        },
+      };
+    } catch {
+      return undefined;
+    }
   }
 
   private async pollForImage(promptId: string): Promise<HistoryImage> {

@@ -29,6 +29,12 @@ export interface ImageGenerationInput {
   styleLora?: StyleLora;
   /** Local-engine style: prefer this checkpoint when installed (ignored by cloud providers). */
   styleCheckpoint?: string;
+  /**
+   * Optional progress sink (0..1) for engines that can report it (e.g. ComfyUI's
+   * websocket emits per-step progress). Best-effort: providers that can't report
+   * progress simply never call it. Not serialised — set in-process by the pipeline.
+   */
+  onProgress?: (fraction: number) => void;
 }
 
 export interface ImageGenerationOutput {

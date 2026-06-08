@@ -115,4 +115,34 @@ describe("RenderBuffer", () => {
     await finish(0);
     expect(onUpdate).toHaveBeenCalledWith(0, expect.objectContaining({ status: "ready" }));
   });
+
+  it("relays render progress as rendering updates, clamped, and ignores late frames", async () => {
+    let progress: ((f: number) => void) | undefined;
+    let resolve: (() => void) | undefined;
+    const render = (pageIndex: number, onProgress: (f: number) => void): Promise<ImageResult> => {
+      progress = onProgress;
+      return new Promise((r) => {
+        resolve = () => r(ready(pageIndex));
+      });
+    };
+    const onUpdate = vi.fn();
+    const buf = new RenderBuffer({ totalPages: 1, render, windowAhead: 0, maxConcurrent: 1, onUpdate });
+
+    buf.setCurrentPage(0);
+    progress!(0.5);
+    expect(onUpdate).toHaveBeenCalledWith(0, expect.objectContaining({ status: "rendering", progress: 0.5 }));
+
+    progress!(5); // out-of-range values are clamped to 0..1
+    expect(onUpdate).toHaveBeenCalledWith(0, expect.objectContaining({ progress: 1 }));
+
+    resolve!();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(buf.statusOf(0)).toBe("ready");
+
+    // A progress frame arriving after the page settled must not reopen it.
+    onUpdate.mockClear();
+    progress!(0.9);
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
 });

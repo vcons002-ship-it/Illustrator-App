@@ -42,7 +42,7 @@ describe("RenderPipeline style injection", () => {
     const { provider, lastPrompt } = recordingImage();
     const pipeline = new RenderPipeline({
       book,
-      bible: createEmptyBible(book.id),
+      getBible: () => createEmptyBible(book.id),
       llm,
       image: provider,
       store: new InMemoryStore(),
@@ -60,7 +60,7 @@ describe("RenderPipeline style injection", () => {
     const { provider, lastPrompt } = recordingImage();
     const pipeline = new RenderPipeline({
       book,
-      bible: createEmptyBible(book.id),
+      getBible: () => createEmptyBible(book.id),
       llm,
       image: provider,
       store: new InMemoryStore(),

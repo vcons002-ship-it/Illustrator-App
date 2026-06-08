@@ -1,5 +1,5 @@
 import type { BookSource, ImageResult, VisualBible } from "@visual-reader/core";
-import type { ReaderSettings } from "@visual-reader/ui";
+import type { ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
 
 /**
  * Message protocol between the main thread and the engine Web Worker. The engine
@@ -17,6 +17,7 @@ export type MainToWorker =
 
 export type WorkerToMain =
   | { type: "status"; message: string }
+  | { type: "providers"; diagnostics: ProvidersDiagnostics }
   | { type: "opened"; bible: VisualBible }
   | { type: "update"; pageIndex: number; result: ImageResult }
   | { type: "error"; message: string };

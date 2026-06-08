@@ -27,7 +27,12 @@ export function ImagePanel({ result, bloom, pageKey }: ImagePanelProps) {
     if (result?.status === "error") {
       return <Placeholder label={`couldn't render: ${result.error ?? "unknown error"}`} />;
     }
-    return <Placeholder label="painting this page…" pulse />;
+    const pct = result?.progress;
+    const label =
+      typeof pct === "number" && pct > 0 && pct < 1
+        ? `painting this page… ${Math.round(pct * 100)}%`
+        : "painting this page…";
+    return <Placeholder label={label} pulse />;
   }
   return (
     <BloomTransition key={pageKey} target={bloom}>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { BookSource, ImageResult, VisualBible } from "@visual-reader/core";
-import type { ReaderSettings } from "@visual-reader/ui";
+import type { ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
 
 /**
@@ -13,6 +13,8 @@ export interface EngineWorkerApi {
   bible: VisualBible | undefined;
   results: Map<number, ImageResult>;
   status: string;
+  /** Which providers are live vs. silent mock fallbacks (undefined until first init). */
+  providers: ProvidersDiagnostics | undefined;
   openBook: (book: BookSource) => void;
   goTo: (pageIndex: number) => void;
   prerenderAll: () => void;
@@ -24,6 +26,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   const [bible, setBible] = useState<VisualBible | undefined>();
   const [results, setResults] = useState<Map<number, ImageResult>>(new Map());
   const [status, setStatus] = useState("");
+  const [providers, setProviders] = useState<ProvidersDiagnostics | undefined>();
 
   const send = (msg: MainToWorker, transfer: Transferable[] = []) =>
     workerRef.current?.postMessage(msg, transfer);
@@ -37,6 +40,9 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
       switch (msg.type) {
         case "status":
           setStatus(msg.message);
+          break;
+        case "providers":
+          setProviders(msg.diagnostics);
           break;
         case "opened":
           setBible(msg.bible);
@@ -76,5 +82,5 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   const goTo = useCallback((pageIndex: number) => send({ type: "goto", pageIndex }), []);
   const prerenderAll = useCallback(() => send({ type: "prerenderAll" }), []);
 
-  return { bible, results, status, openBook, goTo, prerenderAll };
+  return { bible, results, status, providers, openBook, goTo, prerenderAll };
 }

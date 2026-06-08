@@ -14,23 +14,38 @@ import type { ImageResult, RenderStatus } from "../types/content.js";
  */
 export interface RenderBufferOptions {
   totalPages: number;
-  render: (pageIndex: number) => Promise<ImageResult>;
+  /**
+   * Render one page. `onProgress` (0..1) is passed so the renderer can report
+   * generation progress; the buffer relays it as `rendering` updates with a
+   * `progress` field. Renderers that can't report progress simply ignore it.
+   */
+  render: (pageIndex: number, onProgress: (fraction: number) => void) => Promise<ImageResult>;
   /** Pages ahead of the current page to keep actively rendered. Default 2. */
   windowAhead?: number;
   /** Max simultaneous renders. Default 2. */
   maxConcurrent?: number;
   /** Cap on speculative idle pre-rendering ahead of the window. Default 50. */
   maxPrerender?: number;
+  /**
+   * Gate: may this page be rendered yet? Used to hold pages whose chapter isn't
+   * in the Visual Bible yet (the bible builds in the background). Gated pages stay
+   * `queued` and are retried on the next `refresh()`/`pump()`. Default: always true.
+   */
+  canRender?: (pageIndex: number) => boolean;
   /** Notified whenever a page's status changes. */
   onUpdate?: (pageIndex: number, result: ImageResult) => void;
 }
 
 export class RenderBuffer {
   private readonly totalPages: number;
-  private readonly render: (pageIndex: number) => Promise<ImageResult>;
+  private readonly render: (
+    pageIndex: number,
+    onProgress: (fraction: number) => void,
+  ) => Promise<ImageResult>;
   private readonly windowAhead: number;
   private readonly maxConcurrent: number;
   private readonly maxPrerender: number;
+  private readonly canRender: (pageIndex: number) => boolean;
   private readonly onUpdate?: ((pageIndex: number, result: ImageResult) => void) | undefined;
 
   private current = 0;
@@ -45,7 +60,17 @@ export class RenderBuffer {
     this.windowAhead = options.windowAhead ?? 2;
     this.maxConcurrent = options.maxConcurrent ?? 2;
     this.maxPrerender = options.maxPrerender ?? 50;
+    this.canRender = options.canRender ?? (() => true);
     this.onUpdate = options.onUpdate;
+  }
+
+  /**
+   * Re-evaluate what can render now. Call this when the `canRender` gate may have
+   * changed (e.g. another chapter's bible entries just landed) so pages that were
+   * held start without waiting for the reader to move.
+   */
+  refresh(): void {
+    this.pump();
   }
 
   /** Current status of a page (or "queued" if not started). */
@@ -98,6 +123,8 @@ export class RenderBuffer {
     const seen = new Set<number>();
     return out.filter((p) => {
       if (seen.has(p) || this.results.has(p) || this.inflight.has(p)) return false;
+      // Hold pages whose chapter isn't ready yet; a later refresh() retries them.
+      if (!this.canRender(p)) return false;
       seen.add(p);
       return true;
     });
@@ -118,7 +145,18 @@ export class RenderBuffer {
       pageId: `page-${pageIndex}`,
       status: "rendering",
     });
-    this.render(pageIndex)
+    // Relay generation progress as `rendering` updates, but only while this page
+    // is still in flight (a settled page must never be reopened by a late frame).
+    const onProgress = (fraction: number): void => {
+      if (!this.inflight.has(pageIndex)) return;
+      this.onUpdate?.(pageIndex, {
+        requestId: `page-${pageIndex}`,
+        pageId: `page-${pageIndex}`,
+        status: "rendering",
+        progress: Math.max(0, Math.min(1, fraction)),
+      });
+    };
+    this.render(pageIndex, onProgress)
       .then((result) => this.settle(pageIndex, result))
       .catch((err) =>
         this.settle(pageIndex, {

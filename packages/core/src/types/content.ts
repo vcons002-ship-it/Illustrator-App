@@ -55,4 +55,6 @@ export interface ImageResult {
   /** The final prompt sent to the image provider (for debugging / caching). */
   prompt?: string;
   error?: string;
+  /** Generation progress 0..1 while status === "rendering" (best-effort, engine-reported). */
+  progress?: number;
 }

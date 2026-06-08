@@ -55,6 +55,20 @@ const EXTRACTION_JSON_INSTRUCTION =
 let enginePromise: Promise<MLCEngineInterface> | undefined;
 let engineModel: string | undefined;
 
+// Serialize all on-device completions. A single WebLLM engine can't run two
+// chats at once, and with interleaved rendering the background bible extraction
+// and per-page prompt building now overlap — this queue makes that safe (and
+// avoids GPU contention) by running them one after another.
+let llmQueue: Promise<unknown> = Promise.resolve();
+function runSerial<T>(fn: () => Promise<T>): Promise<T> {
+  const result = llmQueue.then(fn, fn);
+  llmQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
 export class WebLLMProvider implements LLMProvider {
   readonly id = "local";
   private readonly model: string;
@@ -105,15 +119,16 @@ export class WebLLMProvider implements LLMProvider {
   private async completer(): Promise<ChatComplete> {
     if (this.injected) return this.injected;
     const engine = await this.engine();
-    return async (messages, opts) => {
-      const res = await engine.chat.completions.create({
-        stream: false,
-        messages,
-        temperature: opts.json ? 0 : 0.7,
-        ...(opts.json ? { response_format: { type: "json_object" } } : {}),
+    return (messages, opts) =>
+      runSerial(async () => {
+        const res = await engine.chat.completions.create({
+          stream: false,
+          messages,
+          temperature: opts.json ? 0 : 0.7,
+          ...(opts.json ? { response_format: { type: "json_object" } } : {}),
+        });
+        return res.choices[0]?.message?.content ?? "";
       });
-      return res.choices[0]?.message?.content ?? "";
-    };
   }
 
   private engine(): Promise<MLCEngineInterface> {
