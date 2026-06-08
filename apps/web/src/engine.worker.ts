@@ -1,6 +1,10 @@
 /// <reference lib="webworker" />
 import { Engine, IndexedDbStore } from "@visual-reader/core";
-import { buildProviders, type ReaderSettings } from "@visual-reader/ui";
+// Import buildProviders via the React-free subpath: pulling it from the package
+// index would drag the React UI components into the worker, which can crash the
+// worker on load (no `window`/DOM) under dev's cross-origin isolation.
+import { buildProviders } from "@visual-reader/ui/providers";
+import type { ReaderSettings } from "@visual-reader/ui";
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
 
 /**
@@ -39,8 +43,11 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       try {
         const { diagnostics } = buildProviders(settings);
         post({ type: "providers", diagnostics });
-      } catch {
-        /* diagnostics are best-effort */
+      } catch (err) {
+        post({
+          type: "error",
+          message: `Provider setup failed: ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
       break;
     case "open":

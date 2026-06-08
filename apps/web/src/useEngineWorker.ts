@@ -40,9 +40,26 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     workerRef.current?.postMessage(msg, transfer);
 
   useEffect(() => {
-    const worker = new Worker(new URL("./engine.worker.ts", import.meta.url), {
-      type: "module",
-    });
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL("./engine.worker.ts", import.meta.url), {
+        type: "module",
+      });
+    } catch (err) {
+      setStatus(
+        `Error: couldn't start the engine worker — ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    // Surface worker load/runtime crashes instead of failing silently (a dead
+    // worker = no badges, no generation, endless "painting…").
+    worker.onerror = (e: ErrorEvent) => {
+      setStatus(
+        `Error: engine worker crashed — ${e.message || "module failed to load"}` +
+          (e.filename ? ` (${e.filename}:${e.lineno})` : ""),
+      );
+    };
+    worker.onmessageerror = () => setStatus("Error: engine worker sent an undecodable message");
     worker.onmessage = (event: MessageEvent<WorkerToMain>) => {
       const msg = event.data;
       switch (msg.type) {
