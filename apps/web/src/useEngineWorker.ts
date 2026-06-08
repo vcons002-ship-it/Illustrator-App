@@ -15,7 +15,10 @@ export interface EngineWorkerApi {
   status: string;
   /** Which providers are live vs. silent mock fallbacks (undefined until first init). */
   providers: ProvidersDiagnostics | undefined;
+  /** Whether generation has been started for the current book. */
+  generating: boolean;
   openBook: (book: BookSource) => void;
+  startGeneration: () => void;
   goTo: (pageIndex: number) => void;
   prerenderAll: () => void;
 }
@@ -27,6 +30,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   const [results, setResults] = useState<Map<number, ImageResult>>(new Map());
   const [status, setStatus] = useState("");
   const [providers, setProviders] = useState<ProvidersDiagnostics | undefined>();
+  const [generating, setGenerating] = useState(false);
 
   const send = (msg: MainToWorker, transfer: Transferable[] = []) =>
     workerRef.current?.postMessage(msg, transfer);
@@ -43,6 +47,9 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
           break;
         case "providers":
           setProviders(msg.diagnostics);
+          break;
+        case "generating":
+          setGenerating(msg.value);
           break;
         case "opened":
           setBible(msg.bible);
@@ -79,8 +86,9 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     [settings],
   );
 
+  const startGeneration = useCallback(() => send({ type: "start" }), []);
   const goTo = useCallback((pageIndex: number) => send({ type: "goto", pageIndex }), []);
   const prerenderAll = useCallback(() => send({ type: "prerenderAll" }), []);
 
-  return { bible, results, status, providers, openBook, goTo, prerenderAll };
+  return { bible, results, status, providers, generating, openBook, startGeneration, goTo, prerenderAll };
 }

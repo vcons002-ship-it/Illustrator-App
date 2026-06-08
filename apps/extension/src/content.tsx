@@ -142,8 +142,10 @@ function Overlay() {
       .then(() => {
         if (cancelled) return;
         setBook(source);
-        engine.setIdleAllowed(true);
         engine.goToPage(0);
+        // openBook now only loads/restores; kick off generation explicitly so the
+        // extension keeps auto-illustrating as you read (reusing cached work).
+        engine.startGeneration();
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));

@@ -18,14 +18,24 @@ export interface ImagePanelProps {
   bloom: number;
   /** Changes per page so the bloom resets (starts hidden) on navigation. */
   pageKey?: string | number;
+  /**
+   * Generation hasn't been started for this book yet. When there's no cached
+   * image to show, prompt the reader to begin instead of implying work is
+   * underway with "painting…".
+   */
+  awaitingStart?: boolean;
 }
 
-export function ImagePanel({ result, bloom, pageKey }: ImagePanelProps) {
+export function ImagePanel({ result, bloom, pageKey, awaitingStart }: ImagePanelProps) {
   const imageUrl = useObjectUrl(result);
 
   if (!result || result.status === "queued" || result.status === "rendering" || !imageUrl) {
     if (result?.status === "error") {
       return <Placeholder label={`couldn't render: ${result.error ?? "unknown error"}`} />;
+    }
+    // Nothing cached and generation not begun → call to action, not a fake spinner.
+    if (awaitingStart && (!result || result.status === "queued")) {
+      return <Placeholder label={'Press “Begin generating book” to illustrate this page'} />;
     }
     const pct = result?.progress;
     const label =

@@ -46,7 +46,9 @@ export class Engine {
   private pipeline?: RenderPipeline;
   private buffer?: RenderBuffer;
   /** The background bible-extraction run for the current book (awaitable in tests). */
-  private biblePromise?: Promise<void>;
+  private biblePromise: Promise<void> | undefined;
+  /** Whether `startGeneration` has been called for the current book. */
+  private generationStarted = false;
 
   constructor(private opts: EngineOptions) {
     this.store = opts.store ?? new InMemoryStore();
@@ -54,17 +56,16 @@ export class Engine {
   }
 
   /**
-   * Load a book and start rendering immediately. The Visual Bible is built
-   * incrementally in the *background* (chapter by chapter, cached), and each page
-   * is rendered as soon as its chapter's entities exist — so the first
-   * illustration appears after the first chapter instead of after the whole book.
-   *
-   * Returns once the pipeline/buffer are stood up (near-instant); use
-   * `whenBibleReady()` to await full extraction (e.g. in tests).
+   * Load a book *without* generating anything new. Restores the cached Visual
+   * Bible and any images rendered in previous sessions (so the reader shows prior
+   * work immediately), then waits — fresh extraction and image generation only
+   * begin when `startGeneration()` is called (the "Begin generating book" action).
    */
   async openBook(book: BookSource): Promise<void> {
     this.book = book;
     this.bible = (await this.store.getBible(book.id)) ?? createEmptyBible(book.id);
+    this.generationStarted = false;
+    this.biblePromise = undefined;
 
     this.pipeline = new RenderPipeline({
       book,
@@ -80,16 +81,50 @@ export class Engine {
       render: (pageIndex, onProgress) => this.pipeline!.renderPage(pageIndex, onProgress),
       // Hold a page until its chapter has been processed into the bible.
       canRender: (pageIndex) => this.isChapterReady(pageIndex),
+      // Stay paused until the user begins generating; cached pages still show.
+      generationEnabled: false,
       ...(this.opts.onUpdate ? { onUpdate: this.opts.onUpdate } : {}),
     });
 
-    // Build the bible without blocking; poke the buffer as each chapter lands.
+    // Surface the restored bible + any previously-rendered images right away.
+    this.opts.onBibleUpdate?.(this.bible);
+    await this.loadCachedImages();
+  }
+
+  /**
+   * Begin generating: build the Visual Bible in the background (chapter by
+   * chapter, cached) and render pages as soon as their chapter is ready — the
+   * first illustration appears after the first chapter, not the whole book.
+   * Idempotent; cached pages are skipped so only missing work runs.
+   */
+  startGeneration(): void {
+    if (this.generationStarted) return;
+    this.generationStarted = true;
+    this.buffer?.setGenerationEnabled(true);
+    this.buffer?.setIdleAllowed(true);
     this.biblePromise = this.buildBibleInBackground();
+  }
+
+  /** Whether generation has been started for the current book. */
+  isGenerating(): boolean {
+    return this.generationStarted;
   }
 
   /** Resolves when background Visual Bible extraction for the current book is done. */
   whenBibleReady(): Promise<void> {
     return this.biblePromise ?? Promise.resolve();
+  }
+
+  /** Seed the buffer with cached images from previous sessions (no generation). */
+  private async loadCachedImages(): Promise<void> {
+    if (!this.book || !this.pipeline || !this.buffer) return;
+    for (let i = 0; i < this.book.pages.length; i++) {
+      const cached = await this.pipeline.cachedResult(i);
+      if (cached) {
+        this.buffer.seed(i, cached);
+        this.opts.onUpdate?.(i, cached);
+      }
+    }
   }
 
   /** Is the chapter that contains this page already in the bible? */
@@ -156,6 +191,7 @@ export class Engine {
 
   /** Pre-render every page of the book now (optional, user-triggered). */
   prerenderAll(): void {
+    this.startGeneration(); // pre-rendering implies generation is on
     this.buffer?.renderAll();
   }
 

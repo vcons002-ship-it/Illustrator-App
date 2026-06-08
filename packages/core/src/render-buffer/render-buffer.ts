@@ -32,6 +32,13 @@ export interface RenderBufferOptions {
    * `queued` and are retried on the next `refresh()`/`pump()`. Default: always true.
    */
   canRender?: (pageIndex: number) => boolean;
+  /**
+   * Master switch for *new* generation. When false, no fresh renders start
+   * (the buffer only serves pages seeded from cache via `seed`), so opening a
+   * book can show prior-session images without kicking off generation until the
+   * user explicitly begins. Default true.
+   */
+  generationEnabled?: boolean;
   /** Notified whenever a page's status changes. */
   onUpdate?: (pageIndex: number, result: ImageResult) => void;
 }
@@ -51,6 +58,7 @@ export class RenderBuffer {
   private current = 0;
   private idleAllowed = false;
   private renderEverything = false;
+  private generationEnabled: boolean;
   private readonly inflight = new Set<number>();
   private readonly results = new Map<number, ImageResult>();
 
@@ -61,6 +69,7 @@ export class RenderBuffer {
     this.maxConcurrent = options.maxConcurrent ?? 2;
     this.maxPrerender = options.maxPrerender ?? 50;
     this.canRender = options.canRender ?? (() => true);
+    this.generationEnabled = options.generationEnabled ?? true;
     this.onUpdate = options.onUpdate;
   }
 
@@ -71,6 +80,20 @@ export class RenderBuffer {
    */
   refresh(): void {
     this.pump();
+  }
+
+  /** Turn fresh generation on/off (e.g. the "Begin generating book" action). */
+  setGenerationEnabled(enabled: boolean): void {
+    this.generationEnabled = enabled;
+    this.pump();
+  }
+
+  /**
+   * Record a result without rendering — used to surface a page's cached image
+   * from a previous session. Seeded pages count as done, so generation skips them.
+   */
+  seed(pageIndex: number, result: ImageResult): void {
+    this.results.set(pageIndex, result);
   }
 
   /** Current status of a page (or "queued" if not started). */
@@ -108,6 +131,7 @@ export class RenderBuffer {
 
   /** Pages, in priority order, that still need rendering. */
   private candidates(): number[] {
+    if (!this.generationEnabled) return []; // generation not started → nothing new
     const out: number[] = [];
     const last = this.totalPages - 1;
     const windowEnd = Math.min(last, this.current + this.windowAhead);

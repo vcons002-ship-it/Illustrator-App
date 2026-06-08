@@ -11,6 +11,7 @@ import type { ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
 export type MainToWorker =
   | { type: "init"; settings: ReaderSettings }
   | { type: "open"; book: BookSource }
+  | { type: "start" }
   | { type: "goto"; pageIndex: number }
   | { type: "idle"; allowed: boolean }
   | { type: "prerenderAll" };
@@ -18,6 +19,7 @@ export type MainToWorker =
 export type WorkerToMain =
   | { type: "status"; message: string }
   | { type: "providers"; diagnostics: ProvidersDiagnostics }
+  | { type: "generating"; value: boolean }
   | { type: "opened"; bible: VisualBible }
   | { type: "update"; pageIndex: number; result: ImageResult }
   | { type: "error"; message: string };

@@ -54,8 +54,17 @@ export function App() {
   const [library, setLibrary] = useState<BookSummary[]>([]);
   const libraryStore = useMemo(() => new IndexedDbStore(), []);
   const hydrated = useRef(false);
-  const { bible, results, status, providers, openBook: openInWorker, goTo, prerenderAll } =
-    useEngineWorker(settings);
+  const {
+    bible,
+    results,
+    status,
+    providers,
+    generating,
+    openBook: openInWorker,
+    startGeneration,
+    goTo,
+    prerenderAll,
+  } = useEngineWorker(settings);
   const [prerendering, setPrerendering] = useState(false);
   const { registerParagraph, activeParagraphId, activeParagraphProgress } = useScrollDepth();
 
@@ -357,6 +366,16 @@ export function App() {
           </button>
           {book && (
             <button
+              style={generating ? styles.button : styles.buttonPrimary}
+              onClick={startGeneration}
+              disabled={generating}
+              title="Start building the Visual Bible and illustrating, reusing anything generated in past sessions"
+            >
+              {generating ? "Generating…" : "Begin generating book"}
+            </button>
+          )}
+          {book && (
+            <button
               style={styles.button}
               onClick={onPrerenderAll}
               disabled={prerendering && !prerenderDone}
@@ -419,7 +438,12 @@ export function App() {
 
           <aside style={styles.aside}>
             <div style={styles.panel}>
-              <ImagePanel result={results.get(activePageIndex)} bloom={bloom} pageKey={activePageIndex} />
+              <ImagePanel
+                result={results.get(activePageIndex)}
+                bloom={bloom}
+                pageKey={activePageIndex}
+                awaitingStart={!generating}
+              />
               <div style={styles.caption}>
                 Page {activePageIndex + 1} of {book.pages.length}
                 {bible ? ` · ${bible.characters.length} characters tracked` : ""}
@@ -573,6 +597,16 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "4px 10px",
     cursor: "pointer",
     fontSize: 13,
+  },
+  buttonPrimary: {
+    background: "rgba(96,170,255,0.18)",
+    border: "1px solid rgba(120,180,255,0.6)",
+    color: "#cfe2ff",
+    borderRadius: 6,
+    padding: "4px 10px",
+    cursor: "pointer",
+    fontSize: 13,
+    fontWeight: 600,
   },
   status: { padding: "10px 20px", color: "#ffd479" },
   badges: {

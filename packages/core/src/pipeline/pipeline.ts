@@ -52,6 +52,26 @@ export class RenderPipeline {
   }
 
   /**
+   * The page's cached image from a previous session, if any — without calling
+   * the LLM or image provider. Used to populate the reader with prior work on
+   * open, before (or without) starting fresh generation.
+   */
+  async cachedResult(pageIndex: number): Promise<ImageResult | undefined> {
+    const page = this.deps.book.pages[pageIndex];
+    if (!page) return undefined;
+    const request = this.buildRequest(page);
+    const requestId = `${request.bookId}:${request.pageId}`;
+    const cached = await this.deps.store.getImage(requestId);
+    if (!cached) return undefined;
+    return {
+      requestId,
+      pageId: request.pageId,
+      status: "ready",
+      image: { bytes: cached.bytes, mimeType: cached.mimeType },
+    };
+  }
+
+  /**
    * Render a page, using the cache when available. `onProgress` (0..1) is an
    * optional sink for engines that report generation progress (e.g. ComfyUI).
    */

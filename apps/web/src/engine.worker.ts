@@ -34,6 +34,10 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "open":
       void handleOpen(msg.book);
       break;
+    case "start":
+      engine?.startGeneration();
+      post({ type: "generating", value: true });
+      break;
     case "goto":
       engine?.goToPage(msg.pageIndex);
       break;
@@ -42,6 +46,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "prerenderAll":
       engine?.prerenderAll();
+      post({ type: "generating", value: true });
       break;
   }
 };
@@ -52,7 +57,8 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     return;
   }
   try {
-    post({ type: "status", message: "Building the Visual Bible…" });
+    post({ type: "status", message: "" });
+    post({ type: "generating", value: false });
     const { llm, image, tier, diagnostics } = buildProviders(settings, {
       onLocalStatus: (message) => post({ type: "status", message: message || "Building the Visual Bible…" }),
     });
@@ -81,11 +87,9 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
       // character/spoiler context (and the panel) stay current.
       onBibleUpdate: (bible) => post({ type: "opened", bible }),
     });
-    // Returns quickly — the bible builds in the background and pages render as
-    // soon as their chapter is ready, so the first image no longer waits for the
-    // whole book.
+    // Loads the book + restores cached bible/images, but does NOT generate. The
+    // user triggers generation via the "start" message ("Begin generating book").
     await engine.openBook(book);
-    engine.setIdleAllowed(true);
     engine.goToPage(0);
   } catch (err) {
     post({ type: "error", message: err instanceof Error ? err.message : String(err) });

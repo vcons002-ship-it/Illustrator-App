@@ -35,6 +35,7 @@ describe("Engine", () => {
     const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });
 
     await engine.openBook(sampleBook());
+    engine.startGeneration();
     await engine.whenBibleReady();
 
     const bible = engine.getBible();
@@ -58,6 +59,7 @@ describe("Engine", () => {
     });
 
     await engine.openBook(sampleBook());
+    engine.startGeneration();
     engine.goToPage(0);
 
     // Let the async renders settle.
@@ -67,6 +69,38 @@ describe("Engine", () => {
     // Result carries transferable image bytes (no realm-scoped object URL).
     expect(engine.resultFor(0)?.image?.bytes.byteLength).toBeGreaterThan(0);
     expect(updates).toContain(0);
+  });
+
+  it("on open restores cached images and generates nothing until startGeneration", async () => {
+    const store = new InMemoryStore();
+    // A page rendered in a previous session (keyed `${bookId}:${pageId}`).
+    await store.putImage("book-1:pg-0", new Uint8Array([1, 2, 3]).buffer, "image/png");
+
+    const llm = new MockLLMProvider();
+    const extractSpy = vi.spyOn(llm, "extractEntities");
+    const image = new MockImageProvider();
+    const genSpy = vi.spyOn(image, "generate");
+
+    const engine = new Engine({ llm, image, store });
+    await engine.openBook(sampleBook());
+    engine.goToPage(0);
+
+    // The cached page shows immediately; nothing was extracted or generated.
+    expect(engine.isGenerating()).toBe(false);
+    expect(engine.resultFor(0)?.status).toBe("ready");
+    expect(engine.resultFor(0)?.image?.bytes.byteLength).toBe(3);
+    expect(extractSpy).not.toHaveBeenCalled();
+    expect(genSpy).not.toHaveBeenCalled();
+    // The uncached page is held (no fake "rendering").
+    expect(engine.resultFor(1)).toBeUndefined();
+
+    // Begin generating → extraction runs and the uncached page renders; the
+    // cached page is NOT re-generated.
+    engine.startGeneration();
+    await engine.whenBibleReady();
+    expect(extractSpy).toHaveBeenCalled();
+    await vi.waitFor(() => expect(engine.resultFor(1)?.status).toBe("ready"));
+    expect(genSpy).toHaveBeenCalledTimes(1); // only page 1 (page 0 came from cache)
   });
 
   it("renders a page as soon as its chapter is ready, without waiting for later chapters", async () => {
@@ -99,6 +133,7 @@ describe("Engine", () => {
 
     const engine = new Engine({ llm, image: new MockImageProvider() });
     await engine.openBook(book);
+    engine.startGeneration();
     engine.goToPage(0);
 
     // Chapter 0's page renders even though chapter 1 (and thus the full bible) is stuck.
@@ -123,6 +158,7 @@ describe("Engine", () => {
       onBibleProgress: (done, total) => first.push([done, total]),
     });
     await a.openBook(sampleBook());
+    a.startGeneration();
     await a.whenBibleReady();
     // One chapter to process: an initial (0,1) then a (1,1) on completion.
     expect(first).toEqual([
@@ -139,6 +175,7 @@ describe("Engine", () => {
       onBibleProgress: (done, total) => second.push([done, total]),
     });
     await b.openBook(sampleBook());
+    b.startGeneration();
     await b.whenBibleReady();
     expect(second).toEqual([[0, 0]]);
   });
@@ -150,12 +187,14 @@ describe("Engine", () => {
 
     const first = new Engine({ llm, image: new MockImageProvider(), store });
     await first.openBook(sampleBook());
+    first.startGeneration();
     await first.whenBibleReady();
     const callsAfterFirst = spy.mock.calls.length;
     expect(callsAfterFirst).toBeGreaterThan(0);
 
     const second = new Engine({ llm, image: new MockImageProvider(), store });
     await second.openBook(sampleBook());
+    second.startGeneration();
     await second.whenBibleReady();
     // Chapter already processed + cached → no further extraction calls.
     expect(spy.mock.calls.length).toBe(callsAfterFirst);
