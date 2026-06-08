@@ -36,29 +36,45 @@ const APPEARANCE_FIELDS: Array<{ key: keyof CharacterAppearance; label: string }
 
 export function CharacterBible({ bible, onSave, onClose }: CharacterBibleProps) {
   const characters = bible?.characters ?? [];
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const filtered = q ? characters.filter((c) => matchesQuery(c, q)) : characters;
   return (
     <div style={overlayStyle} onClick={onClose}>
       <div style={panelStyle} onClick={(e) => e.stopPropagation()}>
         <div style={headerStyle}>
           <strong>Character bible</strong>
           <span style={{ opacity: 0.6, fontSize: 12 }}>
-            {characters.length} character{characters.length === 1 ? "" : "s"} tracked
+            {q ? `${filtered.length} of ${characters.length}` : characters.length} character
+            {characters.length === 1 ? "" : "s"} tracked
           </span>
           <button style={buttonStyle} onClick={onClose}>
             Close
           </button>
         </div>
         <p style={{ opacity: 0.65, fontSize: 12, margin: "0 0 8px" }}>
-          Fix any wrong detail below. Saved instantly; re-render an image to see the change
-          applied (existing images are kept).
+          Fix any wrong detail below (any field is free text — e.g. “long brown hair that fades
+          to silver at the tips”). Saved instantly; re-render an image to apply it (existing
+          images are kept).
         </p>
+        {characters.length > 0 && (
+          <input
+            style={searchStyle}
+            value={query}
+            placeholder="Search characters by name, alias, or any detail…"
+            autoFocus
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        )}
         {characters.length === 0 ? (
           <p style={{ opacity: 0.7 }}>
             No characters yet — they appear here as the Visual Bible is built.
           </p>
+        ) : filtered.length === 0 ? (
+          <p style={{ opacity: 0.7 }}>No characters match “{query}”.</p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {characters.map((c) => (
+            {filtered.map((c) => (
               <CharacterCard key={c.id} character={c} onSave={onSave} />
             ))}
           </div>
@@ -66,6 +82,20 @@ export function CharacterBible({ bible, onSave, onClose }: CharacterBibleProps) 
       </div>
     </div>
   );
+}
+
+/** Match a character against a lowercased query across name, aliases, and every detail. */
+function matchesQuery(c: Character, q: string): boolean {
+  const haystack = [
+    c.name,
+    ...c.aliases,
+    ...Object.values(c.appearance),
+    ...c.persistentTraits,
+    ...c.clothing,
+  ]
+    .join(" ")
+    .toLowerCase();
+  return haystack.includes(q);
 }
 
 function CharacterCard({
@@ -167,6 +197,18 @@ const headerStyle = {
   alignItems: "center",
   gap: 12,
   marginBottom: 8,
+} as const;
+
+const searchStyle = {
+  width: "100%",
+  boxSizing: "border-box",
+  background: "rgba(255,255,255,0.06)",
+  border: "1px solid rgba(255,255,255,0.18)",
+  borderRadius: 8,
+  color: "inherit",
+  padding: "8px 10px",
+  fontSize: 13,
+  marginBottom: 12,
 } as const;
 
 const cardStyle = {
