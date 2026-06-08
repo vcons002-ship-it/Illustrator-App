@@ -164,6 +164,21 @@ export interface StyleLoraRef {
   name: string;
   strength: number;
   trigger?: string;
+  /**
+   * Direct `.safetensors` download URL so the managed (desktop) engine can fetch
+   * this LoRA on demand. Optional — when absent there's no auto-download (the
+   * style still works via its prompt text, or a LoRA you install yourself).
+   *
+   * NOTE: URLs below are best-effort community sources and are NOT verified in
+   * this environment; downloads fail gracefully, and this is the one place to
+   * fix/add a source. Saved locally as `${name}.safetensors` to match the
+   * by-style-id lookup the backends use.
+   */
+  url?: string;
+  /** Saved filename (defaults to `${name}.safetensors`). */
+  filename?: string;
+  /** Approximate download size in MB, for the UI. */
+  sizeMB?: number;
 }
 
 export interface ImageStyleLocal {
@@ -208,7 +223,16 @@ export const IMAGE_STYLES: ImageStyle[] = [
     label: "Realistic animation (3D)",
     promptSuffix:
       "3D animated film still, stylized realism, soft global illumination, subtle subsurface detail",
-    local: { lora: { name: "animation-3d", strength: 0.8, trigger: "3d render" } },
+    local: {
+      lora: {
+        name: "animation-3d",
+        strength: 0.8,
+        trigger: "3D Render Style, 3DRenderAF",
+        url: "https://huggingface.co/artificialguybr/3DRedmond-V1/resolve/main/3DRedmond-3DRenderStyle-3DRenderAF.safetensors",
+        filename: "animation-3d.safetensors",
+        sizeMB: 170,
+      },
+    },
   },
   {
     id: "watercolor",
@@ -220,7 +244,16 @@ export const IMAGE_STYLES: ImageStyle[] = [
     id: "comic",
     label: "Comic book",
     promptSuffix: "western comic book art, bold ink outlines, halftone shading, dramatic",
-    local: { lora: { name: "comic", strength: 0.8, trigger: "comic book style" } },
+    local: {
+      lora: {
+        name: "comic",
+        strength: 0.8,
+        trigger: "Comic Book",
+        url: "https://huggingface.co/artificialguybr/ComicBookRedmond-V2/resolve/main/ComicBookRedmond-V2-Comic-ComicRedmAF.safetensors",
+        filename: "comic.safetensors",
+        sizeMB: 170,
+      },
+    },
   },
   {
     id: "oil-painting",
@@ -232,9 +265,39 @@ export const IMAGE_STYLES: ImageStyle[] = [
     id: "storybook",
     label: "Storybook",
     promptSuffix: "children's storybook illustration, soft gouache, warm and whimsical",
-    local: { lora: { name: "storybook", strength: 0.8, trigger: "storybook illustration" } },
+    local: {
+      lora: {
+        name: "storybook",
+        strength: 0.8,
+        trigger: "Storybook Redmond",
+        url: "https://huggingface.co/artificialguybr/StoryBookRedmond/resolve/main/StoryBookRedmond.safetensors",
+        filename: "storybook.safetensors",
+        sizeMB: 170,
+      },
+    },
   },
 ];
+
+/** A style LoRA the managed engine can fetch on demand. */
+export interface DownloadableLora {
+  /** Progress key + on-disk LoRA name (matches the style id by convention). */
+  id: string;
+  filename: string;
+  url: string;
+  sizeMB?: number;
+}
+
+/** The downloadable LoRA for a style, or undefined when the style has no source. */
+export function styleLoraDownload(styleId: string | undefined): DownloadableLora | undefined {
+  const lora = getImageStyle(styleId).local?.lora;
+  if (!lora?.url) return undefined;
+  return {
+    id: lora.name,
+    filename: lora.filename ?? `${lora.name}.safetensors`,
+    url: lora.url,
+    ...(lora.sizeMB !== undefined ? { sizeMB: lora.sizeMB } : {}),
+  };
+}
 
 export const DEFAULT_IMAGE_STYLE = "auto";
 

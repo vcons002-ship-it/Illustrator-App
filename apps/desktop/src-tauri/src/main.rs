@@ -125,6 +125,40 @@ async fn download_model(app: AppHandle, model: DownloadableModel) -> Result<(), 
     .map_err(|e| e.to_string())?
 }
 
+/// LoRAs currently installed in the engine's loras dir (style auto-download checks).
+#[tauri::command]
+async fn list_loras(app: AppHandle) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = loras_dir(&app);
+        let mut out = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.ends_with(".safetensors") || name.ends_with(".ckpt") || name.ends_with(".pt") {
+                    out.push(name);
+                }
+            }
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Download a style LoRA into the engine's loras dir, with progress.
+#[tauri::command]
+async fn download_lora(app: AppHandle, model: DownloadableModel) -> Result<(), String> {
+    let app2 = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = loras_dir(&app2);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dest = dir.join(&model.filename);
+        download_model_with_progress(&app2, &model, &dest)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 // --------------------------------------------------------------------- blocking
 
 fn ensure_blocking(app: &AppHandle) -> Result<(String, Option<Child>), String> {
@@ -274,12 +308,19 @@ fn engine_root(app: &AppHandle) -> PathBuf {
     base.join("engine")
 }
 
-fn checkpoints_dir(app: &AppHandle) -> PathBuf {
+fn comfy_models_dir(app: &AppHandle) -> PathBuf {
     engine_root(app)
         .join("ComfyUI_windows_portable")
         .join("ComfyUI")
         .join("models")
-        .join("checkpoints")
+}
+
+fn checkpoints_dir(app: &AppHandle) -> PathBuf {
+    comfy_models_dir(app).join("checkpoints")
+}
+
+fn loras_dir(app: &AppHandle) -> PathBuf {
+    comfy_models_dir(app).join("loras")
 }
 
 fn health_ok(base: &str) -> bool {
@@ -312,7 +353,13 @@ fn emit_engine(app: &AppHandle, phase: &str, message: &str, percent: Option<f64>
 fn main() {
     tauri::Builder::default()
         .manage(EngineState::default())
-        .invoke_handler(tauri::generate_handler![ensure_engine, list_models, download_model])
+        .invoke_handler(tauri::generate_handler![
+            ensure_engine,
+            list_models,
+            download_model,
+            list_loras,
+            download_lora
+        ])
         .build(tauri::generate_context!())
         .expect("error while building Visual Reader")
         .run(|app, event| {

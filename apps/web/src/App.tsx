@@ -10,6 +10,7 @@ import {
   paragraphIndexFromId,
   resolvePageEntities,
   spoilerRevealPoint,
+  styleLoraDownload,
   type BookSource,
   type EncryptedSecrets,
 } from "@visual-reader/core";
@@ -27,10 +28,12 @@ import {
 import { loadSampleBook } from "./sample.js";
 import { useEngineWorker } from "./useEngineWorker.js";
 import {
+  downloadLora,
   downloadModel,
   ensureEngine,
   isDesktop,
   listLocalModels,
+  listLoras,
   onEngineProgress,
   onModelProgress,
 } from "./runtime.js";
@@ -44,6 +47,7 @@ export function App() {
   const [connectingLocal, setConnectingLocal] = useState(false);
   const [modelProgress, setModelProgress] = useState<Record<string, number>>({});
   const [engineStatus, setEngineStatus] = useState("");
+  const [installedLoras, setInstalledLoras] = useState<string[]>([]);
   const hydrated = useRef(false);
   const { bible, results, status, openBook: openInWorker, goTo, prerenderAll } = useEngineWorker(settings);
   const [prerendering, setPrerendering] = useState(false);
@@ -100,9 +104,11 @@ export function App() {
         setEngineStatus("Setting up the local engine…");
         const baseUrl = await ensureEngine();
         const models = await listLocalModels();
+        const loras = await listLoras();
         if (cancelled) return;
         setEngineStatus("");
         setInstalledModels(models);
+        setInstalledLoras(loras);
         setSettings((s) => ({ ...s, engineBaseUrl: baseUrl }));
       } catch (err) {
         if (!cancelled) {
@@ -131,6 +137,27 @@ export function App() {
         return next;
       });
       setLocalError(`Model download failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, []);
+
+  // Auto-download the LoRA that matches a style into the managed engine.
+  const onDownloadStyleLora = useCallback(async (styleId: string) => {
+    const lora = styleLoraDownload(styleId);
+    if (!lora) return;
+    setModelProgress((prev) => ({ ...prev, [lora.id]: 0 }));
+    try {
+      await downloadLora({ id: lora.id, filename: lora.filename, url: lora.url });
+      setModelProgress((prev) => ({ ...prev, [lora.id]: 100 }));
+      setInstalledLoras(await listLoras());
+      // Refresh providers so the engine picks up the new LoRA this session.
+      setSettings((s) => ({ ...s }));
+    } catch (err) {
+      setModelProgress((prev) => {
+        const next = { ...prev };
+        delete next[lora.id];
+        return next;
+      });
+      setLocalError(`Style pack download failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, []);
 
@@ -276,6 +303,8 @@ export function App() {
             onDownloadModel={onDownloadModel}
             downloadProgress={modelProgress}
             engineStatus={engineStatus}
+            installedLoras={installedLoras}
+            onDownloadStyleLora={onDownloadStyleLora}
             onConnectLocalServer={onConnectLocalServer}
             connectingLocal={connectingLocal}
           />

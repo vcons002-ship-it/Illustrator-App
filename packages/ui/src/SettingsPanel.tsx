@@ -4,7 +4,10 @@ import {
   IMAGE_STYLES,
   TEXT_PROVIDERS,
   LOCAL_IMAGE_MODELS,
+  getImageStyle,
   getProvider,
+  resolveAssetName,
+  styleLoraDownload,
   type ProviderInfo,
 } from "@visual-reader/core";
 
@@ -71,10 +74,14 @@ export interface SettingsPanelProps {
   installedModels?: InstalledModel[];
   /** Start downloading a curated model; desktop only. */
   onDownloadModel?: (id: string) => void;
-  /** Download progress 0..100 per catalog model id (desktop). */
+  /** Download progress 0..100 per catalog model/LoRA id (desktop). */
   downloadProgress?: Record<string, number>;
   /** Status line for the app-managed engine setup (desktop), e.g. "Starting…". */
   engineStatus?: string;
+  /** LoRA filenames installed in the managed engine (style auto-download). */
+  installedLoras?: string[];
+  /** Download the matching LoRA for a style into the managed engine. */
+  onDownloadStyleLora?: (styleId: string) => void;
   /** Connect to a self-hosted engine and load its model list (browser path). */
   onConnectLocalServer?: (backend: LocalBackendId, url: string) => void;
   /** True while a connection attempt is in flight. */
@@ -89,6 +96,8 @@ export function SettingsPanel({
   onDownloadModel,
   downloadProgress = {},
   engineStatus = "",
+  installedLoras = [],
+  onDownloadStyleLora,
   onConnectLocalServer,
   connectingLocal = false,
 }: SettingsPanelProps) {
@@ -146,6 +155,14 @@ export function SettingsPanel({
               ))}
             </select>
           </label>
+          {isDesktop && value.imageProvider === "local" && (
+            <StyleLoraRow
+              styleId={value.imageStyle ?? "auto"}
+              installedLoras={installedLoras}
+              progress={downloadProgress}
+              onDownload={onDownloadStyleLora}
+            />
+          )}
 
           {value.imageProvider === "local" && (
             <LocalEngine
@@ -197,6 +214,49 @@ function KeyField({ info, value, onChange }: { info: ProviderInfo; value: string
       />
       {info.keyBlurb && <span style={{ opacity: 0.6, fontSize: 12 }}>{info.keyBlurb}</span>}
     </label>
+  );
+}
+
+/** Desktop: offer to auto-download the LoRA that matches the selected style. */
+function StyleLoraRow({
+  styleId,
+  installedLoras,
+  progress,
+  onDownload,
+}: {
+  styleId: string;
+  installedLoras: string[];
+  progress: Record<string, number>;
+  onDownload: ((styleId: string) => void) | undefined;
+}) {
+  const lora = styleLoraDownload(styleId);
+  if (!lora) return null; // style has no downloadable LoRA source
+  const label = getImageStyle(styleId).label;
+  const installed = resolveAssetName(new Set(installedLoras), lora.id) !== undefined;
+  const pct = progress[lora.id];
+  const downloading = pct !== undefined && pct < 100;
+  return (
+    <div style={rowStyle}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+        <span style={{ opacity: 0.8, fontSize: 12 }}>
+          {label} style pack (LoRA){lora.sizeMB ? ` · ${lora.sizeMB} MB` : ""}
+        </span>
+        {installed ? (
+          <span style={{ color: "#7dd87f" }}>✓ installed</span>
+        ) : downloading ? (
+          <span style={{ opacity: 0.7 }}>{Math.round(pct)}%</span>
+        ) : (
+          <button style={buttonStyle} onClick={() => onDownload?.(styleId)}>
+            Download style pack
+          </button>
+        )}
+      </div>
+      {downloading && (
+        <div style={{ height: 4, background: "rgba(255,255,255,0.15)", borderRadius: 2, marginTop: 4 }}>
+          <div style={{ width: `${pct}%`, height: "100%", background: "#4663d6", borderRadius: 2 }} />
+        </div>
+      )}
+    </div>
   );
 }
 

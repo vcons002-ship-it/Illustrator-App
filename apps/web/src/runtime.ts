@@ -69,9 +69,19 @@ export function listLocalModels(): Promise<InstalledModel[]> {
   return invoke<InstalledModel[]>("list_models");
 }
 
+/** Installed LoRA filenames in the managed engine (for style auto-download checks). */
+export function listLoras(): Promise<string[]> {
+  return invoke<string[]>("list_loras");
+}
+
 /** Download a curated checkpoint; emits `model://progress` events while it runs. */
 export function downloadModel(model: DownloadableModel): Promise<void> {
   return invoke<void>("download_model", { model });
+}
+
+/** Download a style LoRA into the engine's loras dir; emits `model://progress`. */
+export function downloadLora(model: DownloadableModel): Promise<void> {
+  return invoke<void>("download_lora", { model });
 }
 
 /** Subscribe to engine install/launch progress. Returns undefined on the web. */

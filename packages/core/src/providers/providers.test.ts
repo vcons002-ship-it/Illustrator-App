@@ -11,7 +11,7 @@ import { FluxProvider } from "./image/flux-provider.js";
 import { ComfyUIBackend, resolveAssetName } from "./image/local-engine/comfyui-backend.js";
 import { Automatic1111Backend } from "./image/local-engine/automatic1111-backend.js";
 import { createImageProvider } from "./factory.js";
-import { IMAGE_PROVIDERS, TEXT_PROVIDERS } from "./catalog.js";
+import { IMAGE_PROVIDERS, TEXT_PROVIDERS, styleLoraDownload } from "./catalog.js";
 import type { LocalEngineBackend } from "./image/local-engine/backend.js";
 
 interface Scripted {
@@ -268,6 +268,19 @@ describe("Automatic1111Backend", () => {
     const transport = new FakeTransport(() => ({ json: { images: [] } }));
     const backend = new Automatic1111Backend({ baseUrl: "http://127.0.0.1:7860", transport });
     await expect(backend.generate(imageInput, "m")).rejects.toThrow(/no image/);
+  });
+});
+
+describe("styleLoraDownload", () => {
+  it("returns a saved-as-style-id descriptor for styles with a source", () => {
+    const d = styleLoraDownload("animation-3d");
+    expect(d?.id).toBe("animation-3d");
+    expect(d?.filename).toBe("animation-3d.safetensors");
+    expect(d?.url).toMatch(/^https?:\/\//);
+  });
+  it("returns undefined for styles without a download source", () => {
+    expect(styleLoraDownload("auto")).toBeUndefined(); // no LoRA at all
+    expect(styleLoraDownload("anime")).toBeUndefined(); // LoRA mapped but no url
   });
 });
 
