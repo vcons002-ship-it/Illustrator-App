@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import { Engine, IndexedDbStore } from "@visual-reader/core";
+import { Engine, IndexedDbStore, toRenderUnits } from "@visual-reader/core";
 // Import buildProviders via the React-free subpath: pulling it from the package
 // index would drag the React UI components into the worker, which can crash the
 // worker on load (no `window`/DOM) under dev's cross-origin isolation.
@@ -159,9 +159,13 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
       // character/spoiler context (and the panel) stay current.
       onBibleUpdate: (bible) => post({ type: "opened", bible }),
     });
+    // Re-segment into render units (one image per page, or per chapter) so the
+    // engine renders at the chosen granularity. The UI maps the reader's position
+    // to the same units via toRenderUnits, so the two never drift.
+    const renderBook = toRenderUnits(book, settings.illustrationScope ?? "page").book;
     // Loads the book + restores cached bible/images, but does NOT generate. The
     // user triggers generation via the "start" message ("Begin generating book").
-    await engine.openBook(book);
+    await engine.openBook(renderBook);
     engine.goToPage(0);
     // Resume generation if "start" was requested while this open was in flight.
     if (pendingStart) beginGeneration();

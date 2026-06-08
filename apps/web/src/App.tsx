@@ -13,6 +13,7 @@ import {
   paragraphIndexFromId,
   resolvePageEntities,
   spoilerRevealPoint,
+  toRenderUnits,
   type BookSource,
   type BookSummary,
   type EncryptedSecrets,
@@ -326,9 +327,16 @@ export function App() {
     return Math.max(0, book.pages.findIndex((p) => p.id === pageId));
   }, [book, activeParagraphId]);
 
+  // Render units: one illustration per page, or per chapter. The reader still
+  // scrolls the original pages; `pageToUnit` maps the active page to the unit the
+  // engine rendered (must match the worker, hence the shared toRenderUnits).
+  const scope = settings.illustrationScope ?? "page";
+  const units = useMemo(() => (book ? toRenderUnits(book, scope) : undefined), [book, scope]);
+  const unitIndex = units?.pageToUnit[activePageIndex] ?? activePageIndex;
+
   useEffect(() => {
-    goTo(activePageIndex);
-  }, [activePageIndex, goTo]);
+    goTo(unitIndex);
+  }, [unitIndex, goTo]);
 
   const activePage = book?.pages[activePageIndex];
   const pageSpoilerIds =
@@ -342,24 +350,37 @@ export function App() {
     Math.max(0, ((paragraphIndexFromId(activeParagraphId) ?? 0) + activeParagraphProgress) / paraCount),
   );
   const hasPageSpoiler = pageSpoilerIds.length > 0;
-  const bloom = activePage
-    ? computeBloomTarget(
-        pageProgress,
-        spoilerRevealPoint(
-          latestSpoilerParagraphIndex(activePage, pageSpoilerIds, bible?.spoilers ?? []),
+
+  // In chapter scope the single illustration reveals gradually across the whole
+  // chapter — fully revealed at its end (revealPoint 1) — rather than per page.
+  const chapterProgress = useMemo(() => {
+    if (scope !== "chapter" || !book || !activePage) return 0;
+    const chapterPages = book.pages.filter((p) => p.chapterId === activePage.chapterId);
+    const pos = chapterPages.findIndex((p) => p.id === activePage.id);
+    const count = chapterPages.length || 1;
+    return Math.min(1, Math.max(0, (Math.max(0, pos) + pageProgress) / count));
+  }, [scope, book, activePage, pageProgress]);
+
+  const bloom = !activePage
+    ? 0
+    : scope === "chapter"
+      ? computeBloomTarget(chapterProgress, 1, true)
+      : computeBloomTarget(
+          pageProgress,
+          spoilerRevealPoint(
+            latestSpoilerParagraphIndex(activePage, pageSpoilerIds, bible?.spoilers ?? []),
+            hasPageSpoiler,
+            paraCount,
+          ),
           hasPageSpoiler,
-          paraCount,
-        ),
-        hasPageSpoiler,
-      )
-    : 0;
+        );
 
   const renderedCount = useMemo(
     () => [...results.values()].filter((r) => r.status === "ready").length,
     [results],
   );
-  const totalPages = book?.pages.length ?? 0;
-  const prerenderDone = prerendering && totalPages > 0 && renderedCount >= totalPages;
+  const totalUnits = units?.unitCount ?? (book?.pages.length ?? 0);
+  const prerenderDone = prerendering && totalUnits > 0 && renderedCount >= totalUnits;
 
   return (
     <div style={styles.shell}>
@@ -417,7 +438,7 @@ export function App() {
               {prerenderDone
                 ? "Whole book rendered ✓"
                 : prerendering
-                  ? `Rendering ${renderedCount}/${totalPages}…`
+                  ? `Rendering ${renderedCount}/${totalUnits}…`
                   : "Pre-render whole book"}
             </button>
           )}
@@ -475,13 +496,15 @@ export function App() {
           <aside style={styles.aside}>
             <div style={styles.panel}>
               <ImagePanel
-                result={results.get(activePageIndex)}
+                result={results.get(unitIndex)}
                 bloom={bloom}
-                pageKey={activePageIndex}
+                pageKey={unitIndex}
                 awaitingStart={!generating}
               />
               <div style={styles.caption}>
-                Page {activePageIndex + 1} of {book.pages.length}
+                {scope === "chapter"
+                  ? `Chapter ${unitIndex + 1} of ${totalUnits}`
+                  : `Page ${activePageIndex + 1} of ${book.pages.length}`}
                 {bible ? ` · ${bible.characters.length} characters tracked` : ""}
               </div>
             </div>

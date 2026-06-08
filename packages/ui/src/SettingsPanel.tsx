@@ -58,6 +58,12 @@ export interface ReaderSettings {
   localServerTextModel?: string;
   /** Art style id applied to every illustration (see catalog IMAGE_STYLES). */
   imageStyle?: string;
+  /**
+   * Illustration granularity: one image per page, or one richer image per
+   * chapter (revealed gradually as the reader moves through the chapter).
+   * Default "page".
+   */
+  illustrationScope?: "page" | "chapter";
   /** Which local engine API to talk to (browser "your own server" path). */
   localBackend?: LocalBackendId;
   /** Base URL of a local engine you run yourself (browser path; persisted). */
@@ -223,6 +229,18 @@ export function SettingsPanel({
                   {s.label}
                 </option>
               ))}
+            </select>
+          </label>
+
+          <label style={rowStyle}>
+            <span>Illustrate by</span>
+            <select
+              value={value.illustrationScope ?? "page"}
+              onChange={(e) => set({ illustrationScope: e.target.value as "page" | "chapter" })}
+              title="Page: one image per page. Chapter: one richer image per chapter, revealed as you read through it."
+            >
+              <option value="page">Page (frequent)</option>
+              <option value="chapter">Chapter (fewer, more detailed)</option>
             </select>
           </label>
           {isDesktop && value.imageProvider === "local" && (
