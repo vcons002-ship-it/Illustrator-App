@@ -101,3 +101,16 @@ export function computeBloomTarget(progress: number, revealPoint: number, hasSpo
   const linear = clamp01(clamp01(progress) / (divisor > 0 ? divisor : 1));
   return clamp01(Math.pow(linear, BLOOM_EASE));
 }
+
+/**
+ * Make the reveal monotonic: an illustration should only ever reveal MORE as the
+ * reader moves through its unit, never re-blur when they scroll back up. Returns the
+ * max bloom seen so far for the current unit; when `unitChanged` is true the reader
+ * has moved to a new illustration, so it resets to `next` (a fresh page starts
+ * blurred and reveals from there).
+ */
+export function monotonicBloom(prevMax: number, next: number, unitChanged: boolean): number {
+  const n = clamp01(next);
+  if (unitChanged) return n;
+  return Math.max(clamp01(prevMax), n);
+}

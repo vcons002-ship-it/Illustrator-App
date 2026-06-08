@@ -7,6 +7,7 @@ import {
   SPOILER_FREE_REVEAL_POINT,
   computeBloomTarget,
   latestSpoilerParagraphIndex,
+  monotonicBloom,
   paragraphIndexFromId,
   spoilerRevealPoint,
 } from "./reveal.js";
@@ -92,5 +93,31 @@ describe("computeBloomTarget", () => {
   it("clamps out-of-range progress", () => {
     expect(computeBloomTarget(-1, 0.5, false)).toBe(0);
     expect(computeBloomTarget(5, 1, true)).toBeCloseTo(1);
+  });
+});
+
+describe("monotonicBloom", () => {
+  it("never decreases within a unit (scrolling back up keeps the reveal)", () => {
+    // Reveal climbs 0 → 0.6, then the reader scrolls back (raw drops to 0.2).
+    let max = monotonicBloom(0, 0, false);
+    max = monotonicBloom(max, 0.3, false);
+    max = monotonicBloom(max, 0.6, false);
+    expect(max).toBeCloseTo(0.6);
+    // Scrolling back up must NOT re-blur.
+    max = monotonicBloom(max, 0.2, false);
+    expect(max).toBeCloseTo(0.6);
+    // Reading further still reveals more.
+    max = monotonicBloom(max, 0.9, false);
+    expect(max).toBeCloseTo(0.9);
+  });
+
+  it("resets to the new value when the reader moves to a new unit", () => {
+    expect(monotonicBloom(0.9, 0, true)).toBe(0);
+    expect(monotonicBloom(0.9, 0.1, true)).toBeCloseTo(0.1);
+  });
+
+  it("clamps inputs to 0..1", () => {
+    expect(monotonicBloom(2, 0.5, false)).toBeCloseTo(1);
+    expect(monotonicBloom(-1, -1, false)).toBe(0);
   });
 });

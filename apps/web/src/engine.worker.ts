@@ -23,6 +23,15 @@ function post(message: WorkerToMain, transfer: Transferable[] = []): void {
   ctx.postMessage(message, transfer);
 }
 
+/** Broadcast the current (independent) bible/image pause state from the engine. */
+function postPaused(): void {
+  post({
+    type: "paused",
+    bible: engine?.isBiblePaused() ?? false,
+    images: engine?.isImagePaused() ?? false,
+  });
+}
+
 /** Begin generation now if the engine is up, else remember to start on open. */
 function beginGeneration(): void {
   if (engine) {
@@ -158,25 +167,41 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "pause":
       engine?.pauseGeneration();
-      post({ type: "paused", value: true });
+      postPaused();
       break;
     case "resume":
       engine?.resumeGeneration();
-      post({ type: "paused", value: false });
+      postPaused();
+      break;
+    case "pauseBible":
+      engine?.setBiblePaused(true);
+      postPaused();
+      break;
+    case "resumeBible":
+      engine?.setBiblePaused(false);
+      postPaused();
+      break;
+    case "pauseImages":
+      engine?.setImagePaused(true);
+      postPaused();
+      break;
+    case "resumeImages":
+      engine?.setImagePaused(false);
+      postPaused();
       break;
     case "regenerateStoryboard":
       void engine?.regenerateStoryboard();
-      post({ type: "paused", value: false });
+      postPaused();
       break;
     case "regenerateAllImages":
       void engine?.regenerateAllImages();
       post({ type: "generating", value: true });
-      post({ type: "paused", value: false });
+      postPaused();
       break;
     case "regenerateImage":
       void engine?.regenerateCurrentImage(msg.unitIndex);
       post({ type: "generating", value: true });
-      post({ type: "paused", value: false });
+      postPaused();
       break;
     case "updateCharacter":
       // Save-only: persists the edit and broadcasts the updated bible; existing
@@ -208,7 +233,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "prerenderAll":
       engine?.prerenderAll();
       post({ type: "generating", value: true });
-      post({ type: "paused", value: false });
+      postPaused();
       break;
   }
 };
@@ -221,7 +246,7 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
   try {
     post({ type: "status", message: "" });
     post({ type: "generating", value: false });
-    post({ type: "paused", value: false });
+    post({ type: "paused", bible: false, images: false });
     pendingStart = false; // fresh open; the hook re-sends "start" if it should resume
     bibleActive = false;
     bibleRunStartMs = 0;

@@ -84,6 +84,11 @@ export class LocalServerLLMProvider implements LLMProvider {
           { role: "user", content: user },
         ],
         temperature: json ? 0 : 0.7,
+        // Bound the response so a model can't run away generating an enormous JSON
+        // blob (which on a local GPU stalls the whole bible build). The extraction
+        // schema is small; a prompt fits comfortably. There is still NO request
+        // timeout — a slow-but-working model is never cut off.
+        max_tokens: json ? 4096 : 512,
         ...(json ? { response_format: { type: "json_object" } } : {}),
       },
     });

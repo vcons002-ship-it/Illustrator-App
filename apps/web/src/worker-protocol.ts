@@ -20,6 +20,10 @@ export type MainToWorker =
   | { type: "start" }
   | { type: "pause" }
   | { type: "resume" }
+  | { type: "pauseBible" }
+  | { type: "resumeBible" }
+  | { type: "pauseImages" }
+  | { type: "resumeImages" }
   | { type: "regenerateStoryboard" }
   | { type: "regenerateAllImages" }
   | { type: "regenerateImage"; unitIndex: number }
@@ -35,7 +39,7 @@ export type WorkerToMain =
   | { type: "status"; message: string }
   | { type: "providers"; diagnostics: ProvidersDiagnostics }
   | { type: "generating"; value: boolean }
-  | { type: "paused"; value: boolean }
+  | { type: "paused"; bible: boolean; images: boolean }
   | { type: "opened"; bible: VisualBible }
   | { type: "update"; pageIndex: number; result: ImageResult }
   | { type: "bibleStatus"; text: string }

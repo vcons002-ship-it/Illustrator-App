@@ -237,38 +237,64 @@ export const EXTRACTION_JSON_SCHEMA = {
  * (prior chapters' summaries from the bible being built) so the model has the
  * cumulative context when summarising this chapter and picking its key moment.
  */
+/**
+ * The "known so far" context fed back to the model exists only so it REUSES
+ * canonical names (dedup) and EXTENDS detail rather than re-introducing entities.
+ * That job needs names, not the full accumulated descriptions — and those
+ * descriptions grow every chapter (merge appends), so echoing them back made each
+ * chapter's prompt grow ~O(n) → the build crawled on long books. We therefore feed
+ * back **names only**, cap the list length, and keep only the most recent summaries.
+ * Dedup/accumulation are unaffected (mergeExtraction dedups by name regardless).
+ */
+const MAX_CONTEXT_ENTRIES = 40; // names per "known so far" block
+const MAX_PRIOR_SUMMARIES = 8; // most-recent chapter summaries to echo back
+const MAX_SUMMARY_CHARS = 200; // truncate each echoed summary
+
+function cap<T>(list: readonly T[], n: number, render: (item: T) => string): string {
+  const shown = list.slice(0, n).map(render);
+  const extra = list.length - shown.length;
+  if (extra > 0) shown.push(`…(+${extra} more)`);
+  return shown.join("\n");
+}
+
+function truncate(s: string, n: number): string {
+  const t = s.trim();
+  return t.length <= n ? t : `${t.slice(0, n).trimEnd()}…`;
+}
+
 export function extractionUserContent(input: EntityExtractionInput): string {
-  const priorSummaries = [...input.existing.storyboard]
-    .filter((s) => s.chapterIndex < input.chapterIndex)
-    .sort((a, b) => a.chapterIndex - b.chapterIndex)
-    .map((s) => `Chapter ${s.chapterIndex}: ${s.summary}`)
-    .join("\n");
+  // Only the most recent summaries (bounded), each truncated — older context is
+  // already captured in the accumulated entities, so the full history isn't needed.
+  const priorSummaries = cap(
+    [...input.existing.storyboard]
+      .filter((s) => s.chapterIndex < input.chapterIndex)
+      .sort((a, b) => a.chapterIndex - b.chapterIndex)
+      .slice(-MAX_PRIOR_SUMMARIES),
+    MAX_PRIOR_SUMMARIES,
+    (s) => `Chapter ${s.chapterIndex}: ${truncate(s.summary, MAX_SUMMARY_CHARS)}`,
+  );
   const soFar = priorSummaries ? `Story so far:\n${priorSummaries}\n\n` : "";
-  // Feed back the known cast so the model reuses each person's established name
-  // (recording other forms as aliases) instead of creating duplicate characters.
-  const cast = input.existing.characters
-    .map((c) => `- ${c.name}${c.aliases.length ? ` (aka ${c.aliases.join(", ")})` : ""}`)
-    .join("\n");
+  // Feed back the known cast (names + aliases) so the model reuses each person's
+  // established name instead of creating duplicate characters.
+  const cast = cap(
+    input.existing.characters,
+    MAX_CONTEXT_ENTRIES,
+    (c) => `- ${c.name}${c.aliases.length ? ` (aka ${c.aliases.slice(0, 4).join(", ")})` : ""}`,
+  );
   const castSoFar = cast
     ? `Known characters so far (reuse these exact names; record other forms as aliases; do NOT add a second entry for the same person):\n${cast}\n\n`
     : "";
-  // Feed back the glossary built so far so the model EXTENDS it (adds new world
-  // facts) rather than repeating ones already captured.
-  const known = (input.existing.glossary ?? [])
-    .map((g) => `- ${g.term}: ${g.definition}`)
-    .join("\n");
-  const glossarySoFar = known ? `Known world facts so far:\n${known}\n\n` : "";
-  // Feed back known locations so the model reuses their names and ADDS detail
-  // instead of re-introducing a place under a slightly different name.
-  const places = input.existing.environments
-    .map((e) => `- ${e.name}: ${e.description.join(", ")}`)
-    .join("\n");
-  const placesSoFar = places ? `Known locations so far:\n${places}\n\n` : "";
-  // Feed back known creatures so a recurring beast keeps one name + grows its detail.
-  const beasts = (input.existing.creatures ?? [])
-    .map((c) => `- ${c.name} (${c.kind}): ${c.description.join(", ")}`)
-    .join("\n");
-  const beastsSoFar = beasts ? `Known creatures so far:\n${beasts}\n\n` : "";
+  // Glossary terms only — definitions are already stored; we just need the model to
+  // reuse the term and not re-add it.
+  const known = cap(input.existing.glossary ?? [], MAX_CONTEXT_ENTRIES, (g) => `- ${g.term}`);
+  const glossarySoFar = known ? `Known world facts so far (terms — extend, don't repeat):\n${known}\n\n` : "";
+  // Known location NAMES so the model reuses them and adds detail instead of
+  // re-introducing a place under a slightly different name.
+  const places = cap(input.existing.environments, MAX_CONTEXT_ENTRIES, (e) => `- ${e.name}`);
+  const placesSoFar = places ? `Known locations so far (names):\n${places}\n\n` : "";
+  // Known creature NAMES (+ kind) so a recurring beast keeps one name.
+  const beasts = cap(input.existing.creatures ?? [], MAX_CONTEXT_ENTRIES, (c) => `- ${c.name} (${c.kind})`);
+  const beastsSoFar = beasts ? `Known creatures so far (names):\n${beasts}\n\n` : "";
   return `${castSoFar}${beastsSoFar}${placesSoFar}${glossarySoFar}${soFar}Chapter ${input.chapterIndex} text:\n\n${input.chapterText}`;
 }
 

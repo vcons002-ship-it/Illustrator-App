@@ -6,6 +6,7 @@ import {
   LocalServerLLMProvider,
   LOCAL_IMAGE_MODELS,
   computeBloomTarget,
+  monotonicBloom,
   decryptSecrets,
   encryptSecrets,
   getImageStyle,
@@ -75,6 +76,10 @@ export function App() {
     startGeneration,
     pause,
     resume,
+    pauseBible,
+    resumeBible,
+    pauseImages,
+    resumeImages,
     regenerateStoryboard,
     regenerateAllImages,
     regenerateImage,
@@ -415,7 +420,7 @@ export function App() {
     return Math.min(1, Math.max(0, (pos + pageProgress) / count));
   }, [singlePage, units, book, unitIndex, activePageIndex, pageProgress]);
 
-  const bloom = !activePage
+  const rawBloom = !activePage
     ? 0
     : singlePage
       ? computeBloomTarget(
@@ -430,6 +435,14 @@ export function App() {
       : // Multi-page/chapter unit: reveal across the unit but reach full clarity at
         // ~80% (not only at the very end) unless this page depicts a spoiler.
         computeBloomTarget(unitProgress, hasPageSpoiler ? 1 : 0.8, true);
+
+  // Monotonic reveal: an illustration only ever reveals MORE as you read its unit —
+  // scrolling back up must not re-blur it. Ratchet to the max seen for this unit,
+  // resetting when the reader moves to a new unit (so a fresh page starts blurred).
+  const bloomRatchet = useRef({ unit: unitIndex, max: 0 });
+  const unitChanged = bloomRatchet.current.unit !== unitIndex;
+  const bloom = monotonicBloom(bloomRatchet.current.max, rawBloom, unitChanged);
+  bloomRatchet.current = { unit: unitIndex, max: bloom };
 
   const renderedCount = useMemo(
     () => [...results.values()].filter((r) => r.status === "ready").length,
@@ -485,13 +498,41 @@ export function App() {
             </button>
           )}
           {book && generating && (
-            <button
-              style={styles.button}
-              onClick={paused ? resume : pause}
-              title={paused ? "Resume generation" : "Pause generation (in-flight work finishes)"}
-            >
-              {paused ? "▶ Resume" : "⏸ Pause"}
-            </button>
+            <>
+              <button
+                style={styles.button}
+                onClick={paused.bible && paused.images ? resume : pause}
+                title={
+                  paused.bible && paused.images
+                    ? "Resume both the Visual Bible build and image rendering"
+                    : "Pause both (in-flight work finishes)"
+                }
+              >
+                {paused.bible && paused.images ? "▶ Resume all" : "⏸ Pause all"}
+              </button>
+              <button
+                style={styles.button}
+                onClick={paused.bible ? resumeBible : pauseBible}
+                title={
+                  paused.bible
+                    ? "Resume building the Visual Bible"
+                    : "Pause the Visual Bible build — gives the GPU to image rendering"
+                }
+              >
+                {paused.bible ? "▶ Bible" : "⏸ Bible"}
+              </button>
+              <button
+                style={styles.button}
+                onClick={paused.images ? resumeImages : pauseImages}
+                title={
+                  paused.images
+                    ? "Resume rendering images"
+                    : "Pause image rendering — gives the GPU to the Visual Bible build"
+                }
+              >
+                {paused.images ? "▶ Images" : "⏸ Images"}
+              </button>
+            </>
           )}
           {book && generating && (
             <>

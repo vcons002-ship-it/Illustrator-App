@@ -730,9 +730,15 @@ const panelStyle = {
   flexDirection: "column",
   gap: 8,
   padding: 12,
+  paddingRight: 16, // room for the internal scrollbar so it doesn't overlap inputs
   border: "1px solid rgba(255,255,255,0.15)",
   borderRadius: 8,
   maxWidth: 340,
+  // The panel lives in the sticky header; bound its height to the viewport so it
+  // gets its OWN scrollbar instead of overflowing the screen (you no longer have
+  // to scroll the book to the bottom to reach the last settings).
+  maxHeight: "min(70vh, calc(100vh - 96px))",
+  overflowY: "auto",
 } as const;
 
 const rowStyle = {

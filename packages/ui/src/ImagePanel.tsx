@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ImageResult } from "@visual-reader/core";
 import { BloomTransition } from "./BloomTransition.js";
+import { placeholderLabel } from "./imageStatus.js";
 
 /**
  * The reading-companion image panel. The image "blooms" in as the reader
@@ -35,25 +36,9 @@ export function ImagePanel({ result, bloom, pageKey, awaitingStart }: ImagePanel
   useEffect(() => setManualReveal(false), [pageKey]);
   const effectiveBloom = manualReveal ? 1 : bloom;
 
-  // Front/back matter (title page, copyright, contents…) is never illustrated.
-  if (result?.status === "skipped") {
-    return <Placeholder label="No illustration — front/end matter" />;
-  }
-
-  if (!result || result.status === "queued" || result.status === "rendering" || !imageUrl) {
-    if (result?.status === "error") {
-      return <Placeholder label={`couldn't render: ${result.error ?? "unknown error"}`} />;
-    }
-    // Nothing cached and generation not begun → call to action, not a fake spinner.
-    if (awaitingStart && (!result || result.status === "queued")) {
-      return <Placeholder label={'Press “Begin generating book” to illustrate this page'} />;
-    }
-    const pct = result?.progress;
-    const label =
-      typeof pct === "number" && pct > 0 && pct < 1
-        ? `painting this page… ${Math.round(pct * 100)}%`
-        : "painting this page…";
-    return <Placeholder label={label} pulse />;
+  if (!result || result.status !== "ready" || !imageUrl) {
+    const ph = placeholderLabel(result, awaitingStart);
+    return <Placeholder label={ph.label} pulse={ph.pulse} />;
   }
   return (
     <div

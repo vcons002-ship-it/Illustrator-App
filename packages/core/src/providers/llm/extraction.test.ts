@@ -278,7 +278,10 @@ describe("environments + location tracking", () => {
       existing: bible,
     });
     expect(text).toContain("Known locations so far");
-    expect(text).toContain("the Spire: black basalt");
+    expect(text).toContain("the Spire");
+    // Bounded context: only the NAME is echoed back (the accumulated description is
+    // already stored; re-sending it every chapter is what made long books crawl).
+    expect(text).not.toContain("black basalt");
   });
 });
 
@@ -534,5 +537,64 @@ describe("creatures", () => {
     const prompt = promptUserContent(req, bible);
     expect(prompt).toContain("Creatures present");
     expect(prompt).toContain("Tairn (dragon): massive, midnight black, tail spikes");
+  });
+});
+
+describe("extractionUserContent bounding (perf)", () => {
+  it("stays bounded as the bible grows — names only, capped lists, last-K summaries", () => {
+    const bible = createEmptyBible("b");
+    // A big, mature bible: many entities each carrying lots of accumulated detail,
+    // plus a long history of chapter summaries (the O(n) growth that crawled).
+    for (let i = 0; i < 60; i++) {
+      bible.environments.push({
+        id: `env-${i}`,
+        name: `Location ${i}`,
+        description: Array.from({ length: 12 }, (_, k) => `verbose accumulated detail ${i}-${k}`),
+        firstSeenChapter: 0,
+      });
+      bible.creatures.push({
+        id: `cr-${i}`,
+        name: `Beast ${i}`,
+        aliases: [],
+        kind: "dragon",
+        description: Array.from({ length: 12 }, (_, k) => `scale detail ${i}-${k}`),
+        anchor: { seed: i },
+        firstSeenChapter: 0,
+      });
+      bible.glossary.push({ term: `Term ${i}`, definition: `a very long world-fact definition number ${i} `.repeat(4) });
+      bible.storyboard.push({
+        chapterIndex: i,
+        summary: `Chapter ${i} summary `.repeat(40),
+        keyMoment: "x",
+        location: "",
+        locationChange: "",
+      });
+    }
+
+    const text = extractionUserContent({
+      bookId: "b",
+      chapterIndex: 60,
+      chapterText: "THE_CHAPTER_BODY",
+      existing: bible,
+    });
+
+    // Names are still fed back (dedup needs them)…
+    expect(text).toContain("Location 0");
+    expect(text).toContain("Beast 0");
+    // …but the unbounded accumulated descriptions are NOT.
+    expect(text).not.toContain("verbose accumulated detail");
+    expect(text).not.toContain("scale detail");
+    // Lists are capped (40 shown + an overflow marker), not all 60.
+    expect(text).not.toContain("Location 59");
+    expect(text).toContain("more)");
+    // Only the most-recent summaries are echoed (chapter 0's is long gone).
+    expect(text).not.toContain("Chapter 0 summary");
+    expect(text).toContain("Chapter 59:");
+    // The actual chapter body always survives.
+    expect(text).toContain("THE_CHAPTER_BODY");
+
+    // Whole "known so far" preamble (everything before the chapter body) stays small.
+    const preamble = text.slice(0, text.indexOf("THE_CHAPTER_BODY"));
+    expect(preamble.length).toBeLessThan(8000);
   });
 });

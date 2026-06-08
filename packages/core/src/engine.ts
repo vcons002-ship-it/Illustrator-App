@@ -74,8 +74,13 @@ export class Engine {
   private biblePromise: Promise<void> | undefined;
   /** Whether `startGeneration` has been called for the current book. */
   private generationStarted = false;
-  /** Whether generation is paused (no new chapters extracted / images rendered). */
-  private paused = false;
+  /**
+   * Bible extraction and image rendering can be paused INDEPENDENTLY so the user can
+   * give the GPU to one or the other (e.g. pause images to let the bible finish
+   * faster, or pause the bible to finish illustrating the current chapter).
+   */
+  private biblePaused = false;
+  private imagePaused = false;
   private readonly illustrateAfter: "book" | "chapter";
 
   constructor(private opts: EngineOptions) {
@@ -105,7 +110,8 @@ export class Engine {
       }
     }
     this.generationStarted = false;
-    this.paused = false;
+    this.biblePaused = false;
+    this.imagePaused = false;
     this.biblePromise = undefined;
 
     this.pipeline = new RenderPipeline({
@@ -223,13 +229,13 @@ export class Engine {
     // A fully-cached book: nothing pending, but its pages are already renderable.
     if (pending.length === 0) this.buffer?.refresh();
     for (const [chapterIndex, text] of pending) {
-      if (this.paused) return; // resume() re-invokes this loop for the rest
+      if (this.biblePaused) return; // setBiblePaused(false) re-invokes this loop for the rest
       // Extraction has no timeout (a slow-but-working LLM is never cut off). On a
       // transient failure, retry ONCE; only if it still fails do we mark the
       // chapter processed (so pages aren't gated forever) and surface a note.
       let extracted = false;
       for (let attempt = 0; attempt < 2 && !extracted; attempt++) {
-        if (this.paused) return;
+        if (this.biblePaused) return;
         try {
           this.bible = await this.opts.llm.extractEntities({
             bookId: this.book.id,
@@ -370,30 +376,55 @@ export class Engine {
   /** Pre-render every page of the book now (optional, user-triggered). */
   prerenderAll(): void {
     this.startGeneration(); // pre-rendering implies generation is on
-    if (this.paused) this.resumeGeneration();
+    this.resumeGeneration();
     this.buffer?.renderAll();
   }
 
-  /** Pause: stop starting new chapter extractions and image renders. */
-  pauseGeneration(): void {
-    this.paused = true;
-    this.buffer?.setGenerationEnabled(false);
-    this.buffer?.setIdleAllowed(false);
-  }
-
-  /** Resume after a pause; continues the bible build from where it stopped. */
-  resumeGeneration(): void {
-    if (!this.paused) return;
-    this.paused = false;
-    this.buffer?.setGenerationEnabled(true);
-    this.buffer?.setIdleAllowed(true);
-    if (this.generationStarted && !this.isBibleComplete()) {
+  /**
+   * Pause/resume the Visual Bible build independently of image rendering. When
+   * resumed, the background extraction continues from where it stopped. The restart
+   * fires only on the paused→running transition (the equality guard), so it never
+   * double-runs the loop.
+   */
+  setBiblePaused(paused: boolean): void {
+    if (this.biblePaused === paused) return;
+    this.biblePaused = paused;
+    if (!paused && this.generationStarted && !this.isBibleComplete()) {
       this.biblePromise = this.buildBibleInBackground();
     }
   }
 
+  /** Pause/resume image rendering independently of the bible build. */
+  setImagePaused(paused: boolean): void {
+    if (this.imagePaused === paused) return;
+    this.imagePaused = paused;
+    // Only (re-)enable rendering once the user has actually begun generating.
+    this.buffer?.setGenerationEnabled(!paused && this.generationStarted);
+    this.buffer?.setIdleAllowed(!paused && this.generationStarted);
+  }
+
+  /** Pause both pipelines (the combined "Pause" action). */
+  pauseGeneration(): void {
+    this.setBiblePaused(true);
+    this.setImagePaused(true);
+  }
+
+  /** Resume both pipelines; continues the bible build from where it stopped. */
+  resumeGeneration(): void {
+    this.setBiblePaused(false);
+    this.setImagePaused(false);
+  }
+
+  isBiblePaused(): boolean {
+    return this.biblePaused;
+  }
+
+  isImagePaused(): boolean {
+    return this.imagePaused;
+  }
+
   isPaused(): boolean {
-    return this.paused;
+    return this.biblePaused && this.imagePaused;
   }
 
   /**
@@ -406,7 +437,8 @@ export class Engine {
     await this.store.deleteBible?.(this.book.id);
     this.bible = createEmptyBible(this.book.id);
     this.opts.onBibleUpdate?.(this.bible);
-    this.paused = false;
+    this.biblePaused = false;
+    this.imagePaused = false;
     if (this.generationStarted) {
       this.buffer?.setGenerationEnabled(true);
       this.biblePromise = this.buildBibleInBackground();
@@ -418,7 +450,7 @@ export class Engine {
     if (!this.book) return;
     await this.store.clearImages?.(this.book.id);
     this.startGeneration();
-    if (this.paused) this.resumeGeneration();
+    this.resumeGeneration();
     this.buffer?.invalidateAll();
   }
 
@@ -427,7 +459,7 @@ export class Engine {
     if (!this.pipeline) return;
     await this.store.deleteImage?.(this.pipeline.requestIdFor(unitIndex));
     this.startGeneration();
-    if (this.paused) this.resumeGeneration();
+    this.resumeGeneration();
     // Focus the buffer on this unit FIRST so it renders next — ahead of any
     // predictive prefetch of other units — then drop its cached image so the
     // re-render targets the page the reader is on, not whatever was mid-flight.

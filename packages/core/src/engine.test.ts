@@ -267,6 +267,71 @@ describe("Engine", () => {
     await vi.waitFor(() => expect(engine.resultFor(1)?.status).toBe("ready"));
   });
 
+  it("setImagePaused halts new renders while the Visual Bible keeps building", async () => {
+    let releaseCh1: (() => void) | undefined;
+    const llm = new MockLLMProvider();
+    const realExtract = llm.extractEntities.bind(llm);
+    vi.spyOn(llm, "extractEntities").mockImplementation(async (input) => {
+      if (input.chapterIndex === 1) await new Promise<void>((r) => (releaseCh1 = r));
+      return realExtract(input);
+    });
+    const image = new MockImageProvider();
+    const genSpy = vi.spyOn(image, "generate");
+
+    const engine = new Engine({ llm, image, illustrateAfter: "chapter" });
+    await engine.openBook(twoChapterBook());
+    engine.startGeneration();
+    engine.goToPage(0);
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+
+    // Pause IMAGES only — the bible build must continue to completion (GPU balancing).
+    engine.setImagePaused(true);
+    const callsAtPause = genSpy.mock.calls.length;
+    releaseCh1?.(); // chapter 1 extraction proceeds despite images being paused
+    await engine.whenBibleReady();
+    expect(engine.getBible()?.processedChapters).toContain(1); // bible finished while images paused
+    await new Promise((r) => setTimeout(r, 20));
+    expect(genSpy.mock.calls.length).toBe(callsAtPause); // …but no new image was rendered
+    expect(engine.resultFor(1)?.status).not.toBe("ready");
+
+    // Resuming images renders the now-ready chapter.
+    engine.setImagePaused(false);
+    await vi.waitFor(() => expect(engine.resultFor(1)?.status).toBe("ready"));
+  });
+
+  it("setBiblePaused halts extraction while images keep rendering", async () => {
+    let releaseCh0: (() => void) | undefined;
+    const llm = new MockLLMProvider();
+    const realExtract = llm.extractEntities.bind(llm);
+    const extractSpy = vi.spyOn(llm, "extractEntities").mockImplementation(async (input) => {
+      if (input.chapterIndex === 0) await new Promise<void>((r) => (releaseCh0 = r));
+      return realExtract(input);
+    });
+
+    const engine = new Engine({ llm, image: new MockImageProvider(), illustrateAfter: "chapter" });
+    await engine.openBook(twoChapterBook());
+    engine.startGeneration();
+    engine.goToPage(0);
+    // Wait until chapter 0's extraction is in flight (blocked on releaseCh0).
+    await vi.waitFor(() => expect(releaseCh0).toBeDefined());
+
+    // Pause the BIBLE before chapter 0 finishes → the loop stops before chapter 1.
+    engine.setBiblePaused(true);
+    releaseCh0?.();
+    await engine.whenBibleReady(); // the loop returns at the pause checkpoint
+
+    // Chapter 0 still renders (images never paused) but chapter 1 was never extracted.
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+    expect(engine.getBible()?.processedChapters).not.toContain(1);
+    expect(extractSpy.mock.calls.filter((c) => c[0].chapterIndex === 1)).toHaveLength(0);
+    expect(engine.resultFor(1)?.status).not.toBe("ready");
+
+    // Resuming the bible extracts chapter 1, and its page can then render.
+    engine.setBiblePaused(false);
+    await engine.whenBibleReady();
+    await vi.waitFor(() => expect(engine.resultFor(1)?.status).toBe("ready"));
+  });
+
   it("skips non-story chapters: never extracted, their pages emit 'skipped'", async () => {
     const llm = new MockLLMProvider();
     const spy = vi.spyOn(llm, "extractEntities");

@@ -33,12 +33,18 @@ export interface EngineWorkerApi {
   providers: ProvidersDiagnostics | undefined;
   /** Whether generation has been started for the current book. */
   generating: boolean;
-  /** Whether generation is currently paused. */
-  paused: boolean;
+  /** Independent pause state for the bible build vs. image rendering. */
+  paused: { bible: boolean; images: boolean };
   openBook: (book: BookSource) => void;
   startGeneration: () => void;
   pause: () => void;
   resume: () => void;
+  /** Pause/resume the Visual Bible build alone (frees the GPU for images). */
+  pauseBible: () => void;
+  resumeBible: () => void;
+  /** Pause/resume image rendering alone (frees the GPU for the bible build). */
+  pauseImages: () => void;
+  resumeImages: () => void;
   regenerateStoryboard: () => void;
   regenerateAllImages: () => void;
   regenerateImage: (unitIndex: number) => void;
@@ -75,7 +81,10 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   const renderAvg = useRef<{ avg: number; n: number }>({ avg: 0, n: 0 });
   const [providers, setProviders] = useState<ProvidersDiagnostics | undefined>();
   const [generating, setGenerating] = useState(false);
-  const [paused, setPaused] = useState(false);
+  const [paused, setPaused] = useState<{ bible: boolean; images: boolean }>({
+    bible: false,
+    images: false,
+  });
   const [importResult, setImportResult] = useState<ImportResult | undefined>();
 
   const send = (msg: MainToWorker, transfer: Transferable[] = []) =>
@@ -115,7 +124,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
           setGenerating(msg.value);
           break;
         case "paused":
-          setPaused(msg.value);
+          setPaused({ bible: msg.bible, images: msg.images });
           break;
         case "opened":
           setBible(msg.bible);
@@ -191,6 +200,16 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     generationRequested.current = true;
     send({ type: "resume" });
   }, []);
+  const pauseBible = useCallback(() => send({ type: "pauseBible" }), []);
+  const resumeBible = useCallback(() => {
+    generationRequested.current = true;
+    send({ type: "resumeBible" });
+  }, []);
+  const pauseImages = useCallback(() => send({ type: "pauseImages" }), []);
+  const resumeImages = useCallback(() => {
+    generationRequested.current = true;
+    send({ type: "resumeImages" });
+  }, []);
   const regenerateStoryboard = useCallback(() => {
     generationRequested.current = true;
     send({ type: "regenerateStoryboard" });
@@ -231,6 +250,10 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     startGeneration,
     pause,
     resume,
+    pauseBible,
+    resumeBible,
+    pauseImages,
+    resumeImages,
     regenerateStoryboard,
     regenerateAllImages,
     regenerateImage,
