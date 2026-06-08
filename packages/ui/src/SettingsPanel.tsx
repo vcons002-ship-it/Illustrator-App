@@ -74,14 +74,16 @@ export interface SettingsPanelProps {
   installedModels?: InstalledModel[];
   /** Start downloading a curated model; desktop only. */
   onDownloadModel?: (id: string) => void;
+  /** Download a checkpoint from a pasted URL into the managed engine. */
+  onDownloadModelUrl?: (url: string) => void;
   /** Download progress 0..100 per catalog model/LoRA id (desktop). */
   downloadProgress?: Record<string, number>;
   /** Status line for the app-managed engine setup (desktop), e.g. "Starting…". */
   engineStatus?: string;
   /** LoRA filenames installed in the managed engine (style auto-download). */
   installedLoras?: string[];
-  /** Download the matching LoRA for a style into the managed engine. */
-  onDownloadStyleLora?: (styleId: string) => void;
+  /** Download the matching LoRA for a style; optional URL overrides the catalog. */
+  onDownloadStyleLora?: (styleId: string, url?: string) => void;
   /** Connect to a self-hosted engine and load its model list (browser path). */
   onConnectLocalServer?: (backend: LocalBackendId, url: string) => void;
   /** True while a connection attempt is in flight. */
@@ -94,6 +96,7 @@ export function SettingsPanel({
   isDesktop = false,
   installedModels = [],
   onDownloadModel,
+  onDownloadModelUrl,
   downloadProgress = {},
   engineStatus = "",
   installedLoras = [],
@@ -177,6 +180,7 @@ export function SettingsPanel({
               onSet={set}
               onSelect={(id) => set({ localModel: id })}
               onDownload={onDownloadModel}
+              onDownloadModelUrl={onDownloadModelUrl}
               onConnect={onConnectLocalServer}
             />
           )}
@@ -217,7 +221,46 @@ function KeyField({ info, value, onChange }: { info: ProviderInfo; value: string
   );
 }
 
-/** Desktop: offer to auto-download the LoRA that matches the selected style. */
+/** A small "paste a URL and fetch" control, reused for models and LoRAs. */
+function PasteUrl({ placeholder, onSubmit }: { placeholder: string; onSubmit: (url: string) => void }) {
+  const [url, setUrl] = useState("");
+  const go = () => {
+    if (url.trim()) {
+      onSubmit(url.trim());
+      setUrl("");
+    }
+  };
+  return (
+    <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+      <input
+        style={{ flex: 1 }}
+        value={url}
+        placeholder={placeholder}
+        autoComplete="off"
+        spellCheck={false}
+        onChange={(e) => setUrl(e.target.value)}
+      />
+      <button style={buttonStyle} disabled={!url.trim()} onClick={go}>
+        Get
+      </button>
+    </div>
+  );
+}
+
+function ProgressBar({ pct }: { pct: number }) {
+  return (
+    <div style={{ height: 4, background: "rgba(255,255,255,0.15)", borderRadius: 2, marginTop: 4 }}>
+      <div style={{ width: `${pct}%`, height: "100%", background: "#4663d6", borderRadius: 2 }} />
+    </div>
+  );
+}
+
+/**
+ * Desktop: get the LoRA that matches the selected style. Three ways — it shows
+ * "✓ installed" if a matching LoRA is already in the engine's folder; a
+ * "Download style pack" button when the catalog has a source; and always a
+ * paste-a-URL field so any LoRA can be fetched for this style.
+ */
 function StyleLoraRow({
   styleId,
   installedLoras,
@@ -227,35 +270,41 @@ function StyleLoraRow({
   styleId: string;
   installedLoras: string[];
   progress: Record<string, number>;
-  onDownload: ((styleId: string) => void) | undefined;
+  onDownload: ((styleId: string, url?: string) => void) | undefined;
 }) {
-  const lora = styleLoraDownload(styleId);
-  if (!lora) return null; // style has no downloadable LoRA source
+  const lora = getImageStyle(styleId).local?.lora;
+  if (!lora) return null; // style has no LoRA mapping (e.g. "auto")
   const label = getImageStyle(styleId).label;
-  const installed = resolveAssetName(new Set(installedLoras), lora.id) !== undefined;
-  const pct = progress[lora.id];
+  const catalog = styleLoraDownload(styleId); // present when the catalog has a URL
+  const installed = resolveAssetName(new Set(installedLoras), lora.name) !== undefined;
+  const pct = progress[lora.name];
   const downloading = pct !== undefined && pct < 100;
   return (
     <div style={rowStyle}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
         <span style={{ opacity: 0.8, fontSize: 12 }}>
-          {label} style pack (LoRA){lora.sizeMB ? ` · ${lora.sizeMB} MB` : ""}
+          {label} style pack (LoRA){catalog?.sizeMB ? ` · ${catalog.sizeMB} MB` : ""}
         </span>
         {installed ? (
           <span style={{ color: "#7dd87f" }}>✓ installed</span>
         ) : downloading ? (
           <span style={{ opacity: 0.7 }}>{Math.round(pct)}%</span>
-        ) : (
+        ) : catalog ? (
           <button style={buttonStyle} onClick={() => onDownload?.(styleId)}>
             Download style pack
           </button>
-        )}
+        ) : null}
       </div>
-      {downloading && (
-        <div style={{ height: 4, background: "rgba(255,255,255,0.15)", borderRadius: 2, marginTop: 4 }}>
-          <div style={{ width: `${pct}%`, height: "100%", background: "#4663d6", borderRadius: 2 }} />
-        </div>
+      {downloading && <ProgressBar pct={pct} />}
+      {!installed && !downloading && (
+        <PasteUrl
+          placeholder={`Or paste a .safetensors LoRA URL for ${label}`}
+          onSubmit={(url) => onDownload?.(styleId, url)}
+        />
       )}
+      <span style={{ opacity: 0.55, fontSize: 11 }}>
+        Or drop a LoRA named “{lora.name}.safetensors” into the engine’s loras folder.
+      </span>
     </div>
   );
 }
@@ -278,6 +327,7 @@ function LocalEngine({
   onSet,
   onSelect,
   onDownload,
+  onDownloadModelUrl,
   onConnect,
 }: {
   isDesktop: boolean;
@@ -291,6 +341,7 @@ function LocalEngine({
   onSet: (patch: Partial<ReaderSettings>) => void;
   onSelect: (id: string) => void;
   onDownload: ((id: string) => void) | undefined;
+  onDownloadModelUrl: ((url: string) => void) | undefined;
   onConnect: ((backend: LocalBackendId, url: string) => void) | undefined;
 }) {
   return (
@@ -303,6 +354,7 @@ function LocalEngine({
           engineStatus={engineStatus}
           onSelect={onSelect}
           onDownload={onDownload}
+          onDownloadModelUrl={onDownloadModelUrl}
         />
       )}
 
@@ -351,6 +403,7 @@ function ManagedEngine({
   engineStatus,
   onSelect,
   onDownload,
+  onDownloadModelUrl,
 }: {
   installedModels: InstalledModel[];
   selected: string | undefined;
@@ -358,6 +411,7 @@ function ManagedEngine({
   engineStatus: string;
   onSelect: (id: string) => void;
   onDownload: ((id: string) => void) | undefined;
+  onDownloadModelUrl: ((url: string) => void) | undefined;
 }) {
   // Installed list reports checkpoint filenames; match the catalog by filename.
   const installedNames = new Set(installedModels.map((m) => m.id));
@@ -397,6 +451,11 @@ function ManagedEngine({
           );
         })}
       </div>
+      <span style={{ opacity: 0.7, fontSize: 12, marginTop: 4 }}>Or paste a checkpoint URL:</span>
+      <PasteUrl placeholder="Paste a .safetensors checkpoint URL" onSubmit={(url) => onDownloadModelUrl?.(url)} />
+      <span style={{ opacity: 0.55, fontSize: 11 }}>
+        You can also drop a checkpoint into the engine’s models/checkpoints folder.
+      </span>
     </div>
   );
 }

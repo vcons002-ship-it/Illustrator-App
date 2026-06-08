@@ -172,17 +172,27 @@ When you pick an **Art style** on a local engine, the app also applies a **LoRA
 named after the style**, used **only if it's installed** (otherwise it falls back
 to the text style prompt — nothing breaks).
 
-- **Desktop (managed engine):** for styles that have a known source, Settings
-  shows a **“Download style pack”** button (with size + progress); click it and
-  the app fetches the LoRA straight into the engine's `models/loras`, then uses it.
-- **Your own server (BYO):** drop a LoRA named after the style —
-  `anime.safetensors`, `manga.safetensors`, etc. — into `models/loras` (ComfyUI)
-  or `models/Lora` (AUTOMATIC1111). Style ids: `photorealistic`, `anime`, `manga`,
-  `animation-3d`, `watercolor`, `comic`, `oil-painting`, `storybook`.
+There are **three ways** to provide a style's LoRA (and the same applies to
+**models/checkpoints** in the desktop model picker):
 
-> The bundled download URLs are best-effort community LoRAs; to change or add a
-> source, edit the style's `local.lora.url` in
-> `packages/core/src/providers/catalog.ts` (one line per style).
+1. **Built-in download** *(desktop managed engine)* — for styles with a known
+   source, Settings shows a **“Download style pack”** button (size + progress);
+   it fetches the LoRA into the engine's `models/loras` and uses it.
+2. **Paste a URL** *(desktop managed engine)* — paste any `.safetensors` LoRA URL
+   for the selected style (or any checkpoint URL under the model picker) and the
+   app downloads it into the right folder. Great for styles without a built-in
+   source.
+3. **Manual** *(any engine)* — drop a LoRA named after the style —
+   `anime.safetensors`, `manga.safetensors`, etc. — into `models/loras` (ComfyUI)
+   or `models/Lora` (AUTOMATIC1111); drop checkpoints into `models/checkpoints`.
+   The app detects and uses them automatically.
+
+Style ids: `photorealistic`, `anime`, `manga`, `animation-3d`, `watercolor`,
+`comic`, `oil-painting`, `storybook`.
+
+> Built-in download URLs are best-effort community LoRAs; to change or add one,
+> edit the style's `local.lora.url` in
+> `packages/core/src/providers/catalog.ts` — or just paste a URL in the UI.
 
 ---
 

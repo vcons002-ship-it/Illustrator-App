@@ -6,11 +6,11 @@ import {
   computeBloomTarget,
   decryptSecrets,
   encryptSecrets,
+  getImageStyle,
   latestSpoilerParagraphIndex,
   paragraphIndexFromId,
   resolvePageEntities,
   spoilerRevealPoint,
-  styleLoraDownload,
   type BookSource,
   type EncryptedSecrets,
 } from "@visual-reader/core";
@@ -140,24 +140,49 @@ export function App() {
     }
   }, []);
 
-  // Auto-download the LoRA that matches a style into the managed engine.
-  const onDownloadStyleLora = useCallback(async (styleId: string) => {
-    const lora = styleLoraDownload(styleId);
+  // Download the LoRA for a style into the managed engine — from the catalog URL,
+  // or a URL the user pasted (customUrl). Saved as the style's LoRA name.
+  const onDownloadStyleLora = useCallback(async (styleId: string, customUrl?: string) => {
+    const lora = getImageStyle(styleId).local?.lora;
     if (!lora) return;
-    setModelProgress((prev) => ({ ...prev, [lora.id]: 0 }));
+    const url = customUrl?.trim() || lora.url;
+    if (!url) return;
+    const id = lora.name;
+    const filename = lora.filename ?? `${lora.name}.safetensors`;
+    setModelProgress((prev) => ({ ...prev, [id]: 0 }));
     try {
-      await downloadLora({ id: lora.id, filename: lora.filename, url: lora.url });
-      setModelProgress((prev) => ({ ...prev, [lora.id]: 100 }));
+      await downloadLora({ id, filename, url });
+      setModelProgress((prev) => ({ ...prev, [id]: 100 }));
       setInstalledLoras(await listLoras());
-      // Refresh providers so the engine picks up the new LoRA this session.
+      setSettings((s) => ({ ...s })); // refresh providers so the engine picks it up
+    } catch (err) {
+      setModelProgress((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setLocalError(`Style pack download failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, []);
+
+  // Download a checkpoint from a pasted URL into the managed engine.
+  const onDownloadModelUrl = useCallback(async (url: string) => {
+    const clean = url.trim();
+    if (!clean) return;
+    const filename = fileNameFromUrl(clean);
+    setModelProgress((prev) => ({ ...prev, [filename]: 0 }));
+    try {
+      await downloadModel({ id: filename, filename, url: clean });
+      setModelProgress((prev) => ({ ...prev, [filename]: 100 }));
+      setInstalledModels(await listLocalModels());
       setSettings((s) => ({ ...s }));
     } catch (err) {
       setModelProgress((prev) => {
         const next = { ...prev };
-        delete next[lora.id];
+        delete next[filename];
         return next;
       });
-      setLocalError(`Style pack download failed: ${err instanceof Error ? err.message : String(err)}`);
+      setLocalError(`Model download failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, []);
 
@@ -301,6 +326,7 @@ export function App() {
             isDesktop={isDesktop}
             installedModels={installedModels}
             onDownloadModel={onDownloadModel}
+            onDownloadModelUrl={onDownloadModelUrl}
             downloadProgress={modelProgress}
             engineStatus={engineStatus}
             installedLoras={installedLoras}
@@ -361,6 +387,18 @@ export function App() {
  * them separately for the caller to decrypt after mount. Legacy plaintext keys
  * are read inline and re-encrypted on the next save.
  */
+/** Best-effort filename from a download URL (for pasted checkpoint/LoRA URLs). */
+function fileNameFromUrl(url: string): string {
+  try {
+    const base = new URL(url).pathname.split("/").filter(Boolean).pop();
+    const clean = base ? decodeURIComponent(base) : "";
+    if (clean) return /\.(safetensors|ckpt|pt)$/i.test(clean) ? clean : `${clean}.safetensors`;
+  } catch {
+    /* fall through */
+  }
+  return "model.safetensors";
+}
+
 function loadStoredSettings(): { settings: ReaderSettings; encrypted?: EncryptedSecrets } {
   try {
     const raw = localStorage.getItem("vr-settings");
