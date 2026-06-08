@@ -7,6 +7,16 @@ import type { IdentityAnchor } from "../../types/bible.js";
  * character appearance.
  */
 
+/** A LoRA to apply for a chosen art style on a local engine. */
+export interface StyleLora {
+  /** LoRA name (filename, with or without extension) as the engine knows it. */
+  name: string;
+  /** Applied strength (model + clip). */
+  strength: number;
+  /** Optional trigger words prepended to the prompt. */
+  trigger?: string;
+}
+
 export interface ImageGenerationInput {
   prompt: string;
   /** Identity anchors for characters present, for consistency conditioning. */
@@ -15,6 +25,10 @@ export interface ImageGenerationInput {
   quality: "sketch" | "standard" | "cinematic";
   width?: number;
   height?: number;
+  /** Local-engine style: a LoRA to apply when installed (ignored by cloud providers). */
+  styleLora?: StyleLora;
+  /** Local-engine style: prefer this checkpoint when installed (ignored by cloud providers). */
+  styleCheckpoint?: string;
 }
 
 export interface ImageGenerationOutput {

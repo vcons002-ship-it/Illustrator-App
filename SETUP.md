@@ -166,6 +166,16 @@ it with its API + CORS enabled, so the browser is allowed to talk to it (the
 > connects. If Connect fails, the most common cause is the CORS flag above not
 > matching the address in your browser's URL bar.
 
+### Art styles on a local engine (LoRAs)
+
+When you pick an **Art style** and you're on a local engine, the app also applies
+a **LoRA named after the style** — drop `anime.safetensors`, `manga.safetensors`,
+`watercolor.safetensors`, etc. into your engine's `models/loras` (ComfyUI) or
+`models/Lora` (AUTOMATIC1111) folder. The app uses it **only if it's installed**;
+otherwise it falls back to the text style prompt, so nothing breaks if you don't
+have a matching LoRA. (Style ids: `photorealistic`, `anime`, `manga`,
+`animation-3d`, `watercolor`, `comic`, `oil-painting`, `storybook`.)
+
 ---
 
 ## Using the app
@@ -194,7 +204,8 @@ You have two ways to get real art:
 3. Paste the API key for each one you chose. You'll see **✓ saved** once it's in.
 4. Optional: pick an **Art style** (Photorealistic, Anime, Manga, Realistic
    animation, Watercolor, Comic, Oil painting, Storybook, or *Auto*). It applies
-   to every illustration, on any provider — cloud or your own GPU.
+   to every illustration, on any provider — cloud or your own GPU. On a **local
+   engine** it also uses a matching **LoRA/checkpoint when installed** (see below).
 5. Re-load the book — pages now render with real, character-consistent art.
 
 > 🔒 **Your keys are encrypted on your device.** They're sealed with a key that

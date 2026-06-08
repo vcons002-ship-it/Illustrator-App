@@ -28,6 +28,10 @@ interface ObjectInfoResponse {
   CheckpointLoaderSimple?: { input?: { required?: { ckpt_name?: [string[], unknown] } } };
 }
 
+interface LoraObjectInfo {
+  LoraLoader?: { input?: { required?: { lora_name?: [string[], unknown] } } };
+}
+
 interface PromptResponse {
   prompt_id: string;
 }
@@ -49,6 +53,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
   private readonly clientId: string;
   private readonly pollIntervalMs: number;
   private readonly maxPolls: number;
+  private lorasCache?: Promise<Set<string>>;
 
   constructor(opts: ComfyUIBackendOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, "");
@@ -69,16 +74,57 @@ export class ComfyUIBackend implements LocalEngineBackend {
     return names.map((id) => ({ id, label: id, sizeGB: 0 }));
   }
 
+  /** Installed LoRA names (cached). Used to apply a style LoRA only when present. */
+  private availableLoras(): Promise<Set<string>> {
+    if (!this.lorasCache) {
+      this.lorasCache = (async () => {
+        try {
+          const res = await this.transport.send({
+            url: `${this.baseUrl}/object_info/LoraLoader`,
+            method: "GET",
+          });
+          if (!res.ok) return new Set<string>();
+          const data = await res.json<LoraObjectInfo>();
+          return new Set(data.LoraLoader?.input?.required?.lora_name?.[0] ?? []);
+        } catch {
+          return new Set<string>();
+        }
+      })();
+    }
+    return this.lorasCache;
+  }
+
   async generate(input: ImageGenerationInput, model: string): Promise<ImageGenerationOutput> {
     const seed = input.anchors[0]?.seed ?? Math.floor(Math.random() * 1_000_000_000);
     const steps = input.quality === "sketch" ? 6 : input.quality === "standard" ? 20 : 35;
+
+    // Style checkpoint override (only when that checkpoint is installed).
+    let checkpoint = model;
+    if (input.styleCheckpoint) {
+      const installed = new Set((await this.listModels()).map((m) => m.id));
+      const resolved = resolveAssetName(installed, input.styleCheckpoint);
+      if (resolved) checkpoint = resolved;
+    }
+
+    // Style LoRA (only when installed); prepend any trigger words to the prompt.
+    let prompt = input.prompt;
+    let lora: { name: string; strength: number } | undefined;
+    if (input.styleLora) {
+      const resolved = resolveAssetName(await this.availableLoras(), input.styleLora.name);
+      if (resolved) {
+        lora = { name: resolved, strength: input.styleLora.strength };
+        if (input.styleLora.trigger) prompt = `${input.styleLora.trigger}, ${prompt}`;
+      }
+    }
+
     const workflow = buildWorkflow({
-      model,
-      prompt: input.prompt,
+      model: checkpoint,
+      prompt,
       seed,
       steps,
       width: input.width ?? 1024,
       height: input.height ?? 1024,
+      ...(lora ? { lora } : {}),
     });
 
     const submit = await this.transport.send({
@@ -128,11 +174,17 @@ interface WorkflowParams {
   steps: number;
   width: number;
   height: number;
+  /** Optional style LoRA, inserted as a LoraLoader between checkpoint and sampler. */
+  lora?: { name: string; strength: number };
 }
 
-/** Minimal txt2img ComfyUI graph (checkpoint → CLIP → sampler → VAE → save). */
+/** Minimal txt2img ComfyUI graph (checkpoint → [LoRA] → CLIP → sampler → VAE → save). */
 function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
-  return {
+  // With a LoRA, the sampler model + CLIP encoders read from the LoraLoader ("10")
+  // instead of the checkpoint ("4") directly.
+  const modelRef = p.lora ? ["10", 0] : ["4", 0];
+  const clipRef = p.lora ? ["10", 1] : ["4", 1];
+  const graph: Record<string, unknown> = {
     "3": {
       class_type: "KSampler",
       inputs: {
@@ -142,7 +194,7 @@ function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
         sampler_name: "euler",
         scheduler: "normal",
         denoise: 1,
-        model: ["4", 0],
+        model: modelRef,
         positive: ["6", 0],
         negative: ["7", 0],
         latent_image: ["5", 0],
@@ -153,11 +205,35 @@ function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
       class_type: "EmptyLatentImage",
       inputs: { width: p.width, height: p.height, batch_size: 1 },
     },
-    "6": { class_type: "CLIPTextEncode", inputs: { text: p.prompt, clip: ["4", 1] } },
-    "7": { class_type: "CLIPTextEncode", inputs: { text: "", clip: ["4", 1] } },
+    "6": { class_type: "CLIPTextEncode", inputs: { text: p.prompt, clip: clipRef } },
+    "7": { class_type: "CLIPTextEncode", inputs: { text: "", clip: clipRef } },
     "8": { class_type: "VAEDecode", inputs: { samples: ["3", 0], vae: ["4", 2] } },
     "9": { class_type: "SaveImage", inputs: { filename_prefix: "visual-reader", images: ["8", 0] } },
   };
+  if (p.lora) {
+    graph["10"] = {
+      class_type: "LoraLoader",
+      inputs: {
+        lora_name: p.lora.name,
+        strength_model: p.lora.strength,
+        strength_clip: p.lora.strength,
+        model: ["4", 0],
+        clip: ["4", 1],
+      },
+    };
+  }
+  return graph;
+}
+
+/** Match a wanted asset (e.g. "anime") against engine names ("anime.safetensors"). */
+export function resolveAssetName(available: ReadonlySet<string>, wanted: string): string | undefined {
+  if (available.has(wanted)) return wanted;
+  const target = wanted.toLowerCase();
+  for (const name of available) {
+    const base = name.replace(/\.[^./\\]+$/, "").toLowerCase();
+    if (base === target || name.toLowerCase() === target) return name;
+  }
+  return undefined;
 }
 
 function delay(ms: number): Promise<void> {

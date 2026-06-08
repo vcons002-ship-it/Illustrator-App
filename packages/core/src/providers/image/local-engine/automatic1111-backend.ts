@@ -44,12 +44,31 @@ export class Automatic1111Backend implements LocalEngineBackend {
   private readonly transport: Transport;
   private readonly sampler: string;
   private readonly cfgScale: number;
+  private modelsCache?: Promise<LocalModelDescriptor[]>;
 
   constructor(opts: Automatic1111BackendOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, "");
     this.transport = opts.transport ?? new DirectTransport();
     this.sampler = opts.sampler ?? "Euler";
     this.cfgScale = opts.cfgScale ?? 7;
+  }
+
+  /** Resolve a wanted checkpoint to an installed model title, or undefined. */
+  private async resolveCheckpoint(wanted: string): Promise<string | undefined> {
+    try {
+      if (!this.modelsCache) this.modelsCache = this.listModels();
+      const target = wanted.toLowerCase();
+      const hit = (await this.modelsCache).find(
+        (m) =>
+          m.id.toLowerCase() === target ||
+          m.label.toLowerCase() === target ||
+          m.id.toLowerCase().startsWith(target) ||
+          m.label.toLowerCase().startsWith(target),
+      );
+      return hit?.id;
+    } catch {
+      return undefined;
+    }
   }
 
   async listModels(): Promise<LocalModelDescriptor[]> {
@@ -65,8 +84,23 @@ export class Automatic1111Backend implements LocalEngineBackend {
   async generate(input: ImageGenerationInput, model: string): Promise<ImageGenerationOutput> {
     const seed = input.anchors[0]?.seed ?? Math.floor(Math.random() * 1_000_000_000);
     const steps = input.quality === "sketch" ? 6 : input.quality === "standard" ? 20 : 35;
+
+    // Style LoRA via A1111's prompt syntax (silently ignored if not installed).
+    let prompt = input.prompt;
+    if (input.styleLora) {
+      const trigger = input.styleLora.trigger ? `${input.styleLora.trigger}, ` : "";
+      prompt = `${trigger}${prompt} <lora:${input.styleLora.name}:${input.styleLora.strength}>`;
+    }
+
+    // Style checkpoint override when installed; else keep the user's model.
+    let checkpoint = model;
+    if (input.styleCheckpoint) {
+      const resolved = await this.resolveCheckpoint(input.styleCheckpoint);
+      if (resolved) checkpoint = resolved;
+    }
+
     const body: Record<string, unknown> = {
-      prompt: input.prompt,
+      prompt,
       negative_prompt: "",
       steps,
       cfg_scale: this.cfgScale,
@@ -77,7 +111,7 @@ export class Automatic1111Backend implements LocalEngineBackend {
     };
     // Pin a specific checkpoint when one is chosen; otherwise A1111 uses whatever
     // it currently has loaded.
-    if (model) body.override_settings = { sd_model_checkpoint: model };
+    if (checkpoint) body.override_settings = { sd_model_checkpoint: checkpoint };
 
     const res = await this.transport.send({
       url: `${this.baseUrl}/sdapi/v1/txt2img`,

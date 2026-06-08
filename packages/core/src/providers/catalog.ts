@@ -153,12 +153,33 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
  * `promptSuffix` is appended to every image prompt (in the render pipeline), so it
  * applies uniformly across all image providers — cloud APIs, the local engine, and
  * the mock. "auto" adds nothing (let the passage drive the look).
+ *
+ * `local` additionally maps a style to a **LoRA and/or checkpoint** for the local
+ * engine (ComfyUI / AUTOMATIC1111). By convention the LoRA name matches the style
+ * id (drop `<style>.safetensors` into the engine's `loras` folder). The backend
+ * applies it **only when that asset is installed**, falling back to the prompt
+ * style otherwise — so this never breaks generation on an engine that lacks it.
  */
+export interface StyleLoraRef {
+  name: string;
+  strength: number;
+  trigger?: string;
+}
+
+export interface ImageStyleLocal {
+  /** Prefer this checkpoint for the style when installed (else keep the user's model). */
+  checkpoint?: string;
+  /** Apply this LoRA when installed. */
+  lora?: StyleLoraRef;
+}
+
 export interface ImageStyle {
   id: string;
   label: string;
   /** Appended to the image prompt; empty for "auto". */
   promptSuffix: string;
+  /** Optional local-engine LoRA/checkpoint mapping (applied when installed). */
+  local?: ImageStyleLocal;
 }
 
 export const IMAGE_STYLES: ImageStyle[] = [
@@ -168,42 +189,50 @@ export const IMAGE_STYLES: ImageStyle[] = [
     label: "Photorealistic",
     promptSuffix:
       "photorealistic, ultra-detailed, natural lighting, sharp focus, professional photography",
+    local: { lora: { name: "photorealistic", strength: 0.6 } },
   },
   {
     id: "anime",
     label: "Anime",
     promptSuffix: "anime illustration, cel shading, clean line art, vibrant colors, expressive",
+    local: { lora: { name: "anime", strength: 0.8, trigger: "anime" } },
   },
   {
     id: "manga",
     label: "Manga (black & white)",
     promptSuffix: "black-and-white manga, ink linework, screentone shading, dynamic composition",
+    local: { lora: { name: "manga", strength: 0.8, trigger: "manga, monochrome, greyscale" } },
   },
   {
     id: "animation-3d",
     label: "Realistic animation (3D)",
     promptSuffix:
       "3D animated film still, stylized realism, soft global illumination, subtle subsurface detail",
+    local: { lora: { name: "animation-3d", strength: 0.8, trigger: "3d render" } },
   },
   {
     id: "watercolor",
     label: "Watercolor",
     promptSuffix: "watercolor painting, soft washes, textured paper, painterly, delicate",
+    local: { lora: { name: "watercolor", strength: 0.8, trigger: "watercolor" } },
   },
   {
     id: "comic",
     label: "Comic book",
     promptSuffix: "western comic book art, bold ink outlines, halftone shading, dramatic",
+    local: { lora: { name: "comic", strength: 0.8, trigger: "comic book style" } },
   },
   {
     id: "oil-painting",
     label: "Oil painting",
     promptSuffix: "classical oil painting, visible brushstrokes, rich color, chiaroscuro lighting",
+    local: { lora: { name: "oil-painting", strength: 0.8, trigger: "oil painting" } },
   },
   {
     id: "storybook",
     label: "Storybook",
     promptSuffix: "children's storybook illustration, soft gouache, warm and whimsical",
+    local: { lora: { name: "storybook", strength: 0.8, trigger: "storybook illustration" } },
   },
 ];
 

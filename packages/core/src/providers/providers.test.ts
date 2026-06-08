@@ -8,7 +8,7 @@ import { OpenAILLMProvider } from "./llm/openai-provider.js";
 import { GeminiImageProvider } from "./image/gemini-image-provider.js";
 import { OpenAIImageProvider } from "./image/openai-image-provider.js";
 import { FluxProvider } from "./image/flux-provider.js";
-import { ComfyUIBackend } from "./image/local-engine/comfyui-backend.js";
+import { ComfyUIBackend, resolveAssetName } from "./image/local-engine/comfyui-backend.js";
 import { Automatic1111Backend } from "./image/local-engine/automatic1111-backend.js";
 import { createImageProvider } from "./factory.js";
 import { IMAGE_PROVIDERS, TEXT_PROVIDERS } from "./catalog.js";
@@ -268,6 +268,66 @@ describe("Automatic1111Backend", () => {
     const transport = new FakeTransport(() => ({ json: { images: [] } }));
     const backend = new Automatic1111Backend({ baseUrl: "http://127.0.0.1:7860", transport });
     await expect(backend.generate(imageInput, "m")).rejects.toThrow(/no image/);
+  });
+});
+
+describe("resolveAssetName", () => {
+  it("matches exact, base-name, and case-insensitively", () => {
+    const set = new Set(["anime.safetensors", "Oil-Painting.safetensors"]);
+    expect(resolveAssetName(set, "anime.safetensors")).toBe("anime.safetensors");
+    expect(resolveAssetName(set, "anime")).toBe("anime.safetensors");
+    expect(resolveAssetName(set, "oil-painting")).toBe("Oil-Painting.safetensors");
+    expect(resolveAssetName(set, "missing")).toBeUndefined();
+  });
+});
+
+describe("style LoRA mapping (local engines)", () => {
+  const png = new TextEncoder().encode("IMG").buffer;
+  const loraInput = { ...imageInput, styleLora: { name: "anime", strength: 0.8, trigger: "anime" } };
+
+  function comfyTransport(loras: string[]) {
+    return new FakeTransport((req) => {
+      if (req.url.endsWith("/object_info/LoraLoader"))
+        return { json: { LoraLoader: { input: { required: { lora_name: [loras, {}] } } } } };
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
+      if (req.url.includes("/history/"))
+        return { json: { p1: { outputs: { "9": { images: [{ filename: "f.png", subfolder: "", type: "output" }] } } } } };
+      return { bytes: png };
+    });
+  }
+
+  it("ComfyUI: inserts a LoraLoader and prepends the trigger when the LoRA is installed", async () => {
+    const transport = comfyTransport(["anime.safetensors", "other.safetensors"]);
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport, pollIntervalMs: 0 });
+    await backend.generate(loraInput, "sdxl.safetensors");
+
+    const promptReq = transport.requests.find((r) => r.url.endsWith("/prompt"))!;
+    const wf = (promptReq.body as { prompt: Record<string, { class_type: string; inputs: Record<string, unknown> }> }).prompt;
+    expect(wf["10"]!.class_type).toBe("LoraLoader");
+    expect(wf["10"]!.inputs.lora_name).toBe("anime.safetensors");
+    expect(wf["3"]!.inputs.model).toEqual(["10", 0]); // sampler reads model from the LoRA
+    expect(wf["6"]!.inputs.text).toContain("anime,"); // trigger prepended
+  });
+
+  it("ComfyUI: falls back to the plain checkpoint when the LoRA is absent", async () => {
+    const transport = comfyTransport(["other.safetensors"]);
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport, pollIntervalMs: 0 });
+    await backend.generate(loraInput, "sdxl.safetensors");
+
+    const promptReq = transport.requests.find((r) => r.url.endsWith("/prompt"))!;
+    const wf = (promptReq.body as { prompt: Record<string, { inputs: Record<string, unknown> }> }).prompt;
+    expect(wf["10"]).toBeUndefined();
+    expect(wf["3"]!.inputs.model).toEqual(["4", 0]);
+  });
+
+  it("AUTOMATIC1111: adds the LoRA via prompt syntax (graceful if missing)", async () => {
+    const transport = new FakeTransport(() => ({ json: { images: [b64("A")] } }));
+    const backend = new Automatic1111Backend({ baseUrl: "http://127.0.0.1:7860", transport });
+    await backend.generate(loraInput, "");
+
+    const body = transport.requests[0]!.body as { prompt: string };
+    expect(body.prompt).toContain("<lora:anime:0.8>");
+    expect(body.prompt).toContain("anime,");
   });
 });
 

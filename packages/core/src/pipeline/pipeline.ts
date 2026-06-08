@@ -70,14 +70,18 @@ export class RenderPipeline {
     }
 
     try {
+      const style = getImageStyle(this.deps.tier.style);
       const basePrompt = await this.deps.llm.buildImagePrompt(request, this.deps.bible);
-      const styleSuffix = getImageStyle(this.deps.tier.style).promptSuffix;
-      const prompt = styleSuffix ? `${basePrompt}\n\nStyle: ${styleSuffix}` : basePrompt;
+      const prompt = style.promptSuffix ? `${basePrompt}\n\nStyle: ${style.promptSuffix}` : basePrompt;
       const anchors = this.anchorsFor(request);
+      // Local engines additionally apply a style LoRA/checkpoint when installed.
+      const local = this.deps.tier.tier === "local" ? style.local : undefined;
       const output = await this.deps.image.generate({
         prompt,
         anchors,
         quality: this.deps.tier.quality,
+        ...(local?.lora ? { styleLora: local.lora } : {}),
+        ...(local?.checkpoint ? { styleCheckpoint: local.checkpoint } : {}),
       });
       await this.deps.store.putImage(requestId, output.bytes, output.mimeType);
       return {
