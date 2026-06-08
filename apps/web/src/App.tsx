@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Automatic1111Backend,
   ComfyUIBackend,
@@ -482,15 +482,39 @@ export function App() {
       {book && (
         <main style={styles.reader}>
           <article style={styles.column}>
-            {book.pages.map((page) => (
-              <section key={page.id} style={styles.page}>
-                {page.paragraphs.map((para) => (
-                  <p key={para.id} ref={registerParagraph(para.id)} style={styles.paragraph}>
-                    {para.text}
-                  </p>
-                ))}
-              </section>
-            ))}
+            {book.pages.map((page, i) => {
+              const prev = book.pages[i - 1];
+              const newChapter = !prev || prev.chapterId !== page.chapterId;
+              const chapter = book.chapters.find((c) => c.id === page.chapterId);
+              const pageUnit = units?.pageToUnit[i] ?? i;
+              const isActiveUnit = pageUnit === unitIndex;
+              const next = book.pages[i + 1];
+              // "Page N" dividers only in page scope, between pages of the same
+              // chapter (chapter boundaries are marked by the heading instead).
+              const showPageDivider =
+                scope === "page" && next !== undefined && next.chapterId === page.chapterId;
+              return (
+                <Fragment key={page.id}>
+                  {newChapter && (
+                    <h2 style={styles.chapterHeading}>
+                      {chapter?.title || `Chapter ${(chapter?.index ?? 0) + 1}`}
+                    </h2>
+                  )}
+                  <section style={isActiveUnit ? { ...styles.page, ...styles.sectionActive } : styles.page}>
+                    {page.paragraphs.map((para) => (
+                      <p key={para.id} ref={registerParagraph(para.id)} style={styles.paragraph}>
+                        {para.text}
+                      </p>
+                    ))}
+                  </section>
+                  {showPageDivider && (
+                    <div style={styles.pageDivider}>
+                      <span style={styles.pageDividerLabel}>Page {i + 1}</span>
+                    </div>
+                  )}
+                </Fragment>
+              );
+            })}
           </article>
 
           <aside style={styles.aside}>
@@ -711,7 +735,36 @@ const styles: Record<string, React.CSSProperties> = {
     margin: "0 auto",
   },
   column: { maxWidth: 640 },
-  page: { marginBottom: 32 },
+  page: { marginBottom: 32, transition: "border-color 0.4s ease" },
+  sectionActive: {
+    borderLeft: "2px solid rgba(120,180,255,0.6)",
+    paddingLeft: 16,
+    marginLeft: -18,
+  },
+  chapterHeading: {
+    fontSize: 26,
+    fontWeight: 700,
+    margin: "44px 0 20px",
+    paddingTop: 20,
+    borderTop: "1px solid rgba(255,255,255,0.12)",
+    scrollMarginTop: 80,
+  },
+  pageDivider: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    margin: "8px 0 28px",
+    borderTop: "1px dashed rgba(255,255,255,0.12)",
+  },
+  pageDividerLabel: {
+    transform: "translateY(-50%)",
+    background: "#11131a",
+    padding: "0 10px",
+    fontSize: 12,
+    letterSpacing: 0.4,
+    color: "rgba(255,255,255,0.45)",
+    fontFamily: "system-ui, sans-serif",
+  },
   paragraph: { fontSize: 19, lineHeight: 1.8, margin: "0 0 18px" },
   aside: {},
   panel: { position: "sticky", top: 80 },
