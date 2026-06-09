@@ -428,6 +428,20 @@ describe("Engine", () => {
     await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
   });
 
+  it("folds prompts into extraction — no per-unit buildImagePrompt during the build", async () => {
+    const llm = new MockLLMProvider();
+    const promptSpy = vi.spyOn(llm, "buildImagePrompt");
+    const engine = new Engine({ llm, image: new MockImageProvider(), illustrateAfter: "book" });
+    await engine.openBook(twoChapterBook());
+    engine.startGeneration();
+    await engine.whenBibleReady();
+
+    // keyEvents came from the per-chapter extraction call, so the build wrote ZERO
+    // separate prompt calls; every story chapter has its scene prompt.
+    expect(promptSpy).not.toHaveBeenCalled();
+    expect(engine.getBible()!.storyboard.every((s) => (s.keyEvents?.length ?? 0) > 0)).toBe(true);
+  });
+
   it("precomputes illustration prompts into the bible, then renders with the LLM off", async () => {
     const llm = new MockLLMProvider();
     const engine = new Engine({ llm, image: new MockImageProvider(), illustrateAfter: "book" });

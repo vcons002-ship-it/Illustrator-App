@@ -1,6 +1,6 @@
 import { DirectTransport, type Transport } from "../../transport/transport.js";
 import type { ImageGenerationInput, ImageGenerationOutput } from "../image-provider.js";
-import { composeSdPositive, resolveModelFamily, resolveNegative } from "../sd-prompt.js";
+import { composeSdPositive, resolveModelFamily, resolveNegative, type ModelFamily } from "../sd-prompt.js";
 import type { LocalEngineBackend, LocalModelDescriptor } from "./backend.js";
 
 /**
@@ -224,6 +224,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
 
     const workflow = buildWorkflow({
       model: checkpoint,
+      family,
       prompt,
       negative,
       seed,
@@ -374,6 +375,8 @@ interface IpAdapterGraph {
 
 interface WorkflowParams {
   model: string;
+  /** Resolved model family — drives Flux-correct sampler settings (cfg≈1, scheduler). */
+  family: ModelFamily;
   prompt: string;
   /** Negative prompt (empty for Flux). */
   negative: string;
@@ -399,9 +402,11 @@ function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
       inputs: {
         seed: p.seed,
         steps: p.steps,
-        cfg: 7,
+        // Flux is guidance-distilled — it ignores CFG/negative and expects cfg≈1 with
+        // the "simple" scheduler; SD families keep the standard cfg 7 / "normal".
+        cfg: p.family === "flux" ? 1 : 7,
         sampler_name: "euler",
-        scheduler: "normal",
+        scheduler: p.family === "flux" ? "simple" : "normal",
         denoise: 1,
         model: modelRef,
         positive: ["6", 0],

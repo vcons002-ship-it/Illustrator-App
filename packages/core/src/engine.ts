@@ -298,6 +298,9 @@ export class Engine {
             chapterIndex,
             chapterText: text,
             existing: this.bible,
+            // Fold prompt-writing into extraction: the chapter's render-unit ranges let
+            // the model emit one scene prompt per illustration in this single call.
+            unitRanges: this.unitRangesForChapter(chapterIndex),
             signal: ac.signal,
           });
         } catch {
@@ -322,9 +325,20 @@ export class Engine {
       // New entities are in the bible → release any pages that were gated on this chapter.
       this.buffer?.refresh();
     }
-    // Bible extraction is complete → precompute illustration prompts (LLM) so image
-    // generation can later run with the LLM off. Same run token + pause/abort scope.
-    if (!stop()) await this.buildPromptsForUnits(myRun, ac.signal);
+    // NB: illustration prompts are now produced BY extraction (folded into each
+    // chapter's call), so there is no separate precompute pass here. The per-unit
+    // `buildPromptsForUnits` remains for the explicit on-demand "Rebuild prompts".
+  }
+
+  /** The chapter's render-unit page ranges, in reading order (for folded prompts). */
+  private unitRangesForChapter(chapterIndex: number): [number, number][] {
+    if (!this.book) return [];
+    const ranges: [number, number][] = [];
+    for (const page of this.book.pages) {
+      const idx = this.book.chapters.find((c) => c.id === page.chapterId)?.index ?? 0;
+      if (idx === chapterIndex && page.pageRange) ranges.push(page.pageRange);
+    }
+    return ranges;
   }
 
   /**
@@ -384,9 +398,13 @@ export class Engine {
     this.bible = clearKeyEvents(this.bible);
     await this.store.putBible(this.bible);
     this.opts.onBibleUpdate?.(this.bible);
-    // Re-run the LLM phase; extraction is already done, so it goes straight to prompts.
+    // Explicit on-demand rewrite: run the per-unit prompt pass (NOT re-extraction).
     if (this.generationStarted && !this.biblePaused) {
-      this.biblePromise = this.buildBibleInBackground();
+      const myRun = ++this.bibleRun;
+      this.bibleAbort?.abort();
+      const ac = new AbortController();
+      this.bibleAbort = ac;
+      this.biblePromise = this.buildPromptsForUnits(myRun, ac.signal);
     }
   }
 

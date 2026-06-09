@@ -37,9 +37,21 @@ export class MockLLMProvider implements LLMProvider {
     const snippet = input.chapterText.replace(/\s+/g, " ").trim();
     const summary = snippet.slice(0, 160);
     const keyMoment = (snippet.split(/(?<=[.!?])\s/)[0] ?? summary).slice(0, 160);
+    // Fold a heuristic Layer-1 prompt per render unit (mirrors the real extraction).
+    const keyEvents = (input.unitRanges ?? []).map((pageRange, i) => ({
+      pageRange,
+      imagePrompt: { text: `${keyMoment} (scene ${i + 1})` },
+    }));
     bible.storyboard = [
       ...bible.storyboard.filter((s) => s.chapterIndex !== input.chapterIndex),
-      { chapterIndex: input.chapterIndex, summary, keyMoment, location: "", locationChange: "" },
+      {
+        chapterIndex: input.chapterIndex,
+        summary,
+        keyMoment,
+        location: "",
+        locationChange: "",
+        ...(keyEvents.length ? { keyEvents } : {}),
+      },
     ].sort((a, b) => a.chapterIndex - b.chapterIndex);
 
     for (const [name, count] of counts) {

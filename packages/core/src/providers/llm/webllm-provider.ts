@@ -68,12 +68,15 @@ export const EXTRACTION_JSON_INSTRUCTION =
   '"environments":[{"name":string,"description":string[]}],' +
   '"creatures":[{"name":string,"aliases":string[],"kind":string,"description":string[]}],' +
   '"spoilers":[{"label":string,"revealHint":string}],' +
-  '"summary":string,"keyMoment":string,"location":string,"locationChange":string}. ' +
+  '"summary":string,"keyMoment":string,"location":string,"locationChange":string,' +
+  '"keyEvents":[{"subject":string,"action":string,"environment":string,"mood":string,"composition":string}]}. ' +
   "Include EVERY named character with any appearance description (use empty strings for " +
   "unknown appearance fields). Capture each distinct outfit a character wears as a separate " +
   "'outfits' entry (label + description + when worn). Put non-human beasts (dragons, monsters, " +
   "mounts) in 'creatures', NOT 'characters'. Set 'location' to where the chapter happens and " +
-  "'locationChange' to where/when it moves (empty string if it stays in one place).";
+  "'locationChange' to where/when it moves (empty string if it stays in one place). For " +
+  "'keyEvents', produce EXACTLY the requested number of scene prompts in reading order (each a " +
+  "complete scene: subject, action, environment, mood, composition — natural language, no tags).";
 
 // Module-level engine cache so re-created providers reuse a loaded model
 // (loading is slow; the weights are GB-sized).
@@ -123,7 +126,7 @@ export class WebLLMProvider implements LLMProvider {
           ...(input.signal ? { signal: input.signal } : {}),
         },
       );
-      return mergeExtraction(input.existing, parseExtraction(content), input.chapterIndex);
+      return mergeExtraction(input.existing, parseExtraction(content), input.chapterIndex, input.unitRanges);
     } catch {
       // No WebGPU / model failure → behave like the mock so reading continues.
       return this.fallback.extractEntities(input);
@@ -262,6 +265,16 @@ export function parseExtraction(content: string): RawExtraction {
       spoilers: asArray(json.spoilers).map((s) => {
         const o = s as Record<string, unknown>;
         return { label: str(o.label), revealHint: str(o.revealHint) };
+      }),
+      keyEvents: asArray(json.keyEvents).map((e) => {
+        const o = e as Record<string, unknown>;
+        return {
+          subject: str(o.subject),
+          action: str(o.action),
+          environment: str(o.environment),
+          mood: str(o.mood),
+          composition: str(o.composition),
+        };
       }),
     };
   } catch {

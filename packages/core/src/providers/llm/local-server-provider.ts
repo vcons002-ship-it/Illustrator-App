@@ -65,7 +65,7 @@ export class LocalServerLLMProvider implements LLMProvider {
       true,
       input.signal,
     );
-    return mergeExtraction(input.existing, parseExtraction(text), input.chapterIndex);
+    return mergeExtraction(input.existing, parseExtraction(text), input.chapterIndex, input.unitRanges);
   }
 
   async buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string> {
@@ -91,6 +91,10 @@ export class LocalServerLLMProvider implements LLMProvider {
         // schema is small; a prompt fits comfortably. There is still NO request
         // timeout — a slow-but-working model is never cut off.
         max_tokens: json ? 4096 : 512,
+        // Keep the model resident between the many sequential bible calls so the
+        // server doesn't unload/reload it each time (Ollama honours `keep_alive`;
+        // other OpenAI-compatible servers ignore the extra field).
+        keep_alive: "30m",
         ...(json ? { response_format: { type: "json_object" } } : {}),
       },
     });

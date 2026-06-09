@@ -1,4 +1,13 @@
-import type { Character, CharacterAppearance, Creature, Outfit, VisualBible } from "../../types/bible.js";
+import type {
+  Character,
+  CharacterAppearance,
+  ChapterScene,
+  Creature,
+  KeyEvent,
+  Outfit,
+  ScenePrompt,
+  VisualBible,
+} from "../../types/bible.js";
 import { emptyAppearance } from "../../types/bible.js";
 import type { EntityExtractionInput } from "./llm-provider.js";
 import type { VisualRequest } from "../../types/content.js";
@@ -40,6 +49,18 @@ export interface RawExtraction {
   location?: string;
   /** "" if the chapter stays in one place, else where/when the setting shifts. */
   locationChange?: string;
+  /**
+   * Ordered Layer-1 scene prompts — one per illustration the chapter is split into,
+   * in reading order. Produced WITH the extraction (no extra LLM call); the engine
+   * maps them onto the chapter's render units by position. Optional for back-compat.
+   */
+  keyEvents?: {
+    subject: string;
+    action: string;
+    environment: string;
+    mood: string;
+    composition: string;
+  }[];
 }
 
 export const EXTRACTION_SYSTEM =
@@ -82,7 +103,14 @@ export const EXTRACTION_SYSTEM =
   "illustrate (one concrete sentence). Determine WHERE the chapter takes place: set " +
   "'location' to the primary setting (use the established environment name), and keep the " +
   "keyMoment's place explicit. If the setting moves during the chapter, set 'locationChange' " +
-  "to a short note of where/when it shifts (otherwise an empty string).";
+  "to a short note of where/when it shifts (otherwise an empty string). " +
+  "Finally, write 'keyEvents': the chapter is illustrated as a fixed number of images covering " +
+  "consecutive stretches of the chapter in READING ORDER — you are told how many. Produce EXACTLY " +
+  "that many keyEvents, in order, each describing the single most important visual SCENE of its " +
+  "stretch as five natural-language fields: 'subject' (who/what is the focus), 'action' (what they " +
+  "are doing), 'environment' (where/how it looks), 'mood' (tone), 'composition' (camera angle/" +
+  "framing). Describe a scene with the characters acting in their setting — NOT a portrait. Use the " +
+  "characters' exact bible names. No weighting syntax, no tags, just prose; keep each field concise.";
 
 export const PROMPT_SYSTEM =
   "You write one vivid, concrete image-generation prompt for a single illustration of a " +
@@ -221,6 +249,21 @@ export const EXTRACTION_JSON_SCHEMA = {
     keyMoment: { type: "string" },
     location: { type: "string" },
     locationChange: { type: "string" },
+    keyEvents: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          subject: { type: "string" },
+          action: { type: "string" },
+          environment: { type: "string" },
+          mood: { type: "string" },
+          composition: { type: "string" },
+        },
+        required: ["subject", "action", "environment", "mood", "composition"],
+      },
+    },
   },
   required: [
     "characters",
@@ -232,6 +275,7 @@ export const EXTRACTION_JSON_SCHEMA = {
     "keyMoment",
     "location",
     "locationChange",
+    "keyEvents",
   ],
 } as const;
 
@@ -298,7 +342,13 @@ export function extractionUserContent(input: EntityExtractionInput): string {
   // Known creature NAMES (+ kind) so a recurring beast keeps one name.
   const beasts = cap(input.existing.creatures ?? [], MAX_CONTEXT_ENTRIES, (c) => `- ${c.name} (${c.kind})`);
   const beastsSoFar = beasts ? `Known creatures so far (names):\n${beasts}\n\n` : "";
-  return `${castSoFar}${beastsSoFar}${placesSoFar}${glossarySoFar}${soFar}Chapter ${input.chapterIndex} text:\n\n${input.chapterText}`;
+  // Tell the model how many scene prompts to emit (one per illustration of this chapter).
+  const k = input.sceneCount ?? input.unitRanges?.length ?? 0;
+  const scenes = k > 0
+    ? `This chapter is illustrated as ${k} image${k === 1 ? "" : "s"} in reading order — ` +
+      `produce EXACTLY ${k} keyEvents, in order.\n\n`
+    : "";
+  return `${castSoFar}${beastsSoFar}${placesSoFar}${glossarySoFar}${soFar}${scenes}Chapter ${input.chapterIndex} text:\n\n${input.chapterText}`;
 }
 
 /**
@@ -306,10 +356,37 @@ export function extractionUserContent(input: EntityExtractionInput): string {
  * name and assigning each new character a deterministic identity seed. Idempotent
  * per chapter, so re-running a chapter never duplicates entities.
  */
+/**
+ * Map an ordered list of raw scene prompts onto a chapter's render units by position:
+ * `keyEvents[i]` → `unitRanges[i]`. Tolerant of a count mismatch (uses the shorter of
+ * the two), and skips a scene whose five fields are all empty (that unit then falls
+ * back to the live LLM at render).
+ */
+function mapKeyEventsToUnits(
+  events: RawExtraction["keyEvents"],
+  unitRanges: [number, number][] | undefined,
+): KeyEvent[] {
+  if (!events || !unitRanges || unitRanges.length === 0) return [];
+  const out: KeyEvent[] = [];
+  const n = Math.min(events.length, unitRanges.length);
+  for (let i = 0; i < n; i++) {
+    const e = events[i]!;
+    const imagePrompt: ScenePrompt = {};
+    for (const key of ["subject", "action", "environment", "mood", "composition"] as const) {
+      const v = (e[key] ?? "").trim();
+      if (v) imagePrompt[key] = v;
+    }
+    if (Object.keys(imagePrompt).length === 0) continue;
+    out.push({ pageRange: unitRanges[i]!, imagePrompt });
+  }
+  return out;
+}
+
 export function mergeExtraction(
   existing: VisualBible,
   raw: RawExtraction,
   chapterIndex: number,
+  unitRanges?: [number, number][],
 ): VisualBible {
   const bible: VisualBible = {
     ...existing,
@@ -421,16 +498,25 @@ export function mergeExtraction(
     });
   }
 
-  // Upsert this chapter's storyboard scene (idempotent re-run replaces it).
-  if (raw.summary || raw.keyMoment || raw.location) {
-    const scene = {
+  // Upsert this chapter's storyboard scene (idempotent re-run replaces it). Fold in the
+  // per-scene image prompts: map raw.keyEvents[i] → the chapter's unitRanges[i].
+  const incoming = mapKeyEventsToUnits(raw.keyEvents, unitRanges);
+  if (raw.summary || raw.keyMoment || raw.location || incoming.length > 0) {
+    const at = bible.storyboard.findIndex((s) => s.chapterIndex === chapterIndex);
+    const prev = at >= 0 ? bible.storyboard[at] : undefined;
+    const scene: ChapterScene = {
       chapterIndex,
       summary: raw.summary ?? "",
       keyMoment: raw.keyMoment ?? "",
       location: raw.location ?? "",
       locationChange: raw.locationChange ?? "",
+      // Fresh keyEvents win; if none came back this run, keep any prior ones.
+      ...(incoming.length > 0
+        ? { keyEvents: incoming }
+        : prev?.keyEvents
+          ? { keyEvents: prev.keyEvents }
+          : {}),
     };
-    const at = bible.storyboard.findIndex((s) => s.chapterIndex === chapterIndex);
     if (at >= 0) bible.storyboard[at] = scene;
     else bible.storyboard.push(scene);
     bible.storyboard.sort((a, b) => a.chapterIndex - b.chapterIndex);

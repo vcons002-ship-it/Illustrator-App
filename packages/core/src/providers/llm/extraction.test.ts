@@ -23,6 +23,72 @@ function char(name: string, over: Partial<Character> = {}): Character {
   };
 }
 
+describe("mergeExtraction keyEvents (folded prompts)", () => {
+  it("maps ordered keyEvents onto the chapter's unit page ranges", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [],
+        environments: [],
+        spoilers: [],
+        keyEvents: [
+          { subject: "Ana", action: "runs", environment: "hall", mood: "tense", composition: "wide" },
+          { subject: "Bram", action: "waits", environment: "gate", mood: "calm", composition: "close" },
+        ],
+      },
+      0,
+      [
+        [0, 2],
+        [3, 4],
+      ],
+    );
+    const ev = bible.storyboard[0]!.keyEvents!;
+    expect(ev).toHaveLength(2);
+    expect(ev[0]!.pageRange).toEqual([0, 2]);
+    expect(ev[0]!.imagePrompt.subject).toBe("Ana");
+    expect(ev[1]!.pageRange).toEqual([3, 4]);
+    expect(ev[1]!.imagePrompt.composition).toBe("close");
+  });
+
+  it("tolerates more scene prompts than units (uses the shorter count)", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [],
+        environments: [],
+        spoilers: [],
+        keyEvents: [
+          { subject: "A", action: "", environment: "", mood: "", composition: "" },
+          { subject: "B", action: "", environment: "", mood: "", composition: "" },
+          { subject: "C", action: "", environment: "", mood: "", composition: "" },
+        ],
+      },
+      0,
+      [[0, 0]],
+    );
+    expect(bible.storyboard[0]!.keyEvents).toHaveLength(1);
+  });
+
+  it("drops a fully-empty scene so that unit falls back to the live LLM", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [],
+        environments: [],
+        spoilers: [],
+        keyEvents: [{ subject: "", action: "", environment: "", mood: "", composition: "" }],
+      },
+      0,
+      [[0, 0]],
+    );
+    const scene = bible.storyboard.find((s) => s.chapterIndex === 0);
+    expect(scene?.keyEvents ?? []).toHaveLength(0);
+  });
+});
+
 describe("mergeExtraction storyboard", () => {
   it("upserts a chapter scene and re-running a chapter replaces (not duplicates) it", () => {
     let bible = createEmptyBible("b");

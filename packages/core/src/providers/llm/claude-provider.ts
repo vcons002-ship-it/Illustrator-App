@@ -78,6 +78,15 @@ const ExtractionSchema = z.object({
   keyMoment: z.string(),
   location: z.string(),
   locationChange: z.string(),
+  keyEvents: z.array(
+    z.object({
+      subject: z.string(),
+      action: z.string(),
+      environment: z.string(),
+      mood: z.string(),
+      composition: z.string(),
+    }),
+  ),
 });
 
 export interface ClaudeProviderOptions {
@@ -124,9 +133,10 @@ export class ClaudeProvider implements LLMProvider {
         input.existing,
         { characters: [], glossary: [], environments: [], spoilers: [] },
         input.chapterIndex,
+        input.unitRanges,
       );
     }
-    return mergeExtraction(input.existing, parsed, input.chapterIndex);
+    return mergeExtraction(input.existing, parsed, input.chapterIndex, input.unitRanges);
   }
 
   async buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string> {

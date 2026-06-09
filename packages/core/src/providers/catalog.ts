@@ -162,6 +162,16 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
     url: "https://huggingface.co/Comfy-Org/flux1-schnell/resolve/main/flux1-schnell-fp8.safetensors",
     family: "flux",
   },
+  {
+    id: "flux2-klein-9b",
+    label: "Flux 2 Klein 9B (fp8)",
+    sizeGB: 9,
+    note: "Official Flux.2 model — highest quality, needs a strong GPU",
+    filename: "flux-2-klein-9b-fp8.safetensors",
+    // No official download URL yet; drop the checkpoint into ComfyUI/models/checkpoints/ manually.
+    url: "",
+    family: "flux",
+  },
 ];
 
 /** Family of a managed catalog model, matched by id or filename (else undefined). */

@@ -19,6 +19,13 @@ export interface EntityExtractionInput {
   chapterText: string;
   /** Existing Bible to merge into (entities may span chapters). */
   existing: VisualBible;
+  /**
+   * The chapter's render-unit page ranges, in reading order. Lets extraction ALSO emit
+   * one Layer-1 scene prompt per illustration (folded in — no extra LLM call); the merge
+   * maps `keyEvents[i]` onto `unitRanges[i]`. `sceneCount` is `unitRanges.length`.
+   */
+  unitRanges?: [number, number][];
+  sceneCount?: number;
   /** Aborts the in-flight extraction (e.g. when the user pauses the bible build). */
   signal?: AbortSignal;
 }

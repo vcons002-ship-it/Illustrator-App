@@ -60,7 +60,7 @@ export class OpenAILLMProvider implements LLMProvider {
     } catch {
       /* fall through with empty extraction; chapter still marked processed */
     }
-    return mergeExtraction(input.existing, raw, input.chapterIndex);
+    return mergeExtraction(input.existing, raw, input.chapterIndex, input.unitRanges);
   }
 
   async buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string> {

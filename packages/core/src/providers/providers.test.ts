@@ -14,7 +14,13 @@ import { WebLLMProvider, parseExtraction } from "./llm/webllm-provider.js";
 import { LocalServerLLMProvider } from "./llm/local-server-provider.js";
 import type { VisualRequest } from "../types/content.js";
 import { createImageProvider, createLLMProvider } from "./factory.js";
-import { IMAGE_PROVIDERS, TEXT_PROVIDERS, styleLoraDownload } from "./catalog.js";
+import {
+  IMAGE_PROVIDERS,
+  LOCAL_IMAGE_MODELS,
+  TEXT_PROVIDERS,
+  catalogModelFamily,
+  styleLoraDownload,
+} from "./catalog.js";
 import type { LocalEngineBackend } from "./image/local-engine/backend.js";
 
 interface Scripted {
@@ -391,6 +397,24 @@ describe("parseExtraction", () => {
       spoilers: [],
     });
   });
+  it("parses folded keyEvents (scene prompts)", () => {
+    const raw = parseExtraction(
+      JSON.stringify({
+        characters: [],
+        keyEvents: [
+          { subject: "Ana", action: "runs", environment: "hall", mood: "tense", composition: "wide" },
+        ],
+      }),
+    );
+    expect(raw.keyEvents).toHaveLength(1);
+    expect(raw.keyEvents![0]).toEqual({
+      subject: "Ana",
+      action: "runs",
+      environment: "hall",
+      mood: "tense",
+      composition: "wide",
+    });
+  });
 });
 
 describe("WebLLMProvider (injected completion, no WebGPU)", () => {
@@ -514,9 +538,10 @@ describe("LocalServerLLMProvider", () => {
 
     const req = transport.requests[0]!;
     expect(req.url).toBe("http://localhost:11434/v1/chat/completions");
-    const body = req.body as { response_format?: { type?: string }; model?: string };
+    const body = req.body as { response_format?: { type?: string }; model?: string; keep_alive?: string };
     expect(body.response_format?.type).toBe("json_object");
     expect(body.model).toBe("llama3.2");
+    expect(body.keep_alive).toBe("30m"); // keeps the model resident between calls
     expect(bible.characters[0]?.name).toBe("Cal");
   });
 
@@ -625,15 +650,31 @@ describe("ComfyUI prompt formatting by family", () => {
     expect(wf["6"]!.inputs.text).toContain("masterpiece");
     expect(wf["6"]!.inputs.text).toContain("a knight");
     expect(wf["7"]!.inputs.text).toContain("bad anatomy");
+    // SD families keep the standard sampler settings.
+    expect(wf["3"]!.inputs.cfg).toBe(7);
+    expect(wf["3"]!.inputs.scheduler).toBe("normal");
   });
 
-  it("Flux checkpoint → natural language, empty negative", async () => {
+  it("Flux checkpoint → natural language, empty negative, Flux-correct sampler", async () => {
     const t = comfyRun();
     const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
     await backend.generate(imageInput, "flux1-schnell-fp8.safetensors");
     const wf = workflowOf(t);
     expect(wf["6"]!.inputs.text).toBe("a knight");
     expect(wf["7"]!.inputs.text).toBe("");
+    // Flux ignores CFG/negative → cfg≈1 + the "simple" scheduler.
+    expect(wf["3"]!.inputs.cfg).toBe(1);
+    expect(wf["3"]!.inputs.scheduler).toBe("simple");
+  });
+
+  it("Flux 2 Klein checkpoint also gets the Flux-correct sampler", async () => {
+    const t = comfyRun();
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await backend.generate(imageInput, "flux-2-klein-9b-fp8.safetensors");
+    const wf = workflowOf(t);
+    expect(wf["3"]!.inputs.cfg).toBe(1);
+    expect(wf["3"]!.inputs.scheduler).toBe("simple");
+    expect(wf["7"]!.inputs.text).toBe(""); // empty negative
   });
 
   it("modelFamily override forces formatting regardless of the checkpoint name", async () => {
@@ -705,5 +746,17 @@ describe("ComfyUI IP-Adapter (version-aware, graceful)", () => {
     expect(wf["3"]!.inputs.model).toEqual(["4", 0]); // sampler reads the checkpoint directly
     expect(new TextDecoder().decode(out.bytes)).toBe("IMG");
     expect(t.requests.some((r) => r.url.endsWith("/upload/image"))).toBe(false);
+  });
+});
+
+describe("LOCAL_IMAGE_MODELS catalog", () => {
+  it("lists Flux 2 Klein with the flux family", () => {
+    const klein = LOCAL_IMAGE_MODELS.find((m) => m.id === "flux2-klein-9b");
+    expect(klein).toBeDefined();
+    expect(klein!.filename).toBe("flux-2-klein-9b-fp8.safetensors");
+    expect(klein!.family).toBe("flux");
+  });
+  it("resolves the Klein checkpoint's family from its filename", () => {
+    expect(catalogModelFamily("flux-2-klein-9b-fp8.safetensors")).toBe("flux");
   });
 });
