@@ -3,7 +3,9 @@ import type {
   Creature,
   Environment,
   GlossaryEntry,
+  KeyEvent,
   Outfit,
+  ScenePrompt,
   SpoilerEntity,
   ChapterScene,
   VisualBible,
@@ -65,12 +67,28 @@ export const BIBLE_EXPORT_RULES = {
     },
     SpoilerEntity: { label: "string", revealHint: "string — when it's safe to show" },
     GlossaryEntry: { term: "string", definition: "string — how it manifests visually" },
+    ScenePrompt: {
+      subject: "string — who/what is the focus",
+      action: "string — what they are doing",
+      environment: "string — where/how it looks",
+      mood: "string — emotional/atmospheric tone",
+      composition: "string — camera angle, framing, depth of field",
+    },
+    KeyEvent: {
+      pageRange: "[number, number] — inclusive [start,end] ORIGINAL page indices this prompt covers",
+      imagePrompt: "ScenePrompt — natural language only; describe a SCENE (not a portrait)",
+      seed: "number? — optional stable render seed",
+    },
     ChapterScene: {
       chapterIndex: "number — 0-based STORY chapter",
       summary: "string",
       keyMoment: "string — one concrete, visual sentence",
       location: "string — primary setting (use the established environment name)",
       locationChange: "string — where/when the setting shifts, or '' if it stays put",
+      keyEvents:
+        "KeyEvent[] — one per notable beat, covering a page range (~5 pages). The app renders " +
+        "each directly (no further LLM), so write a complete scene; reference characters by their " +
+        "exact bible name so identity is injected.",
     },
   },
   constraints: [
@@ -80,6 +98,8 @@ export const BIBLE_EXPORT_RULES = {
     "Put literal animals/beasts in 'creatures', never people.",
     "Merge repeated location/creature descriptions into one entry; add new detail over time.",
     "Cover EVERY story chapter in 'storyboard' (skip front/back matter).",
+    "keyEvents: pure natural language — NO weighting syntax or booru tags; describe a scene with " +
+      "subject, action, environment, mood, composition; each imagePrompt under ~120 words.",
   ],
 } as const;
 
@@ -231,13 +251,32 @@ function toGlossary(v: unknown): GlossaryEntry {
 
 function toScene(v: unknown): ChapterScene {
   const o = obj(v);
-  return {
+  const scene: ChapterScene = {
     chapterIndex: num(o.chapterIndex),
     summary: str(o.summary),
     keyMoment: str(o.keyMoment),
     location: str(o.location),
     locationChange: str(o.locationChange),
   };
+  const keyEvents = arr(o.keyEvents).map((e) => toKeyEvent(e));
+  if (keyEvents.length > 0) scene.keyEvents = keyEvents;
+  return scene;
+}
+
+function toKeyEvent(v: unknown): KeyEvent {
+  const o = obj(v);
+  const range = arr(o.pageRange).map((n) => Math.round(num(n)));
+  const start = range[0] ?? 0;
+  const end = range[1] ?? start;
+  const ip = obj(o.imagePrompt);
+  const imagePrompt: ScenePrompt = {};
+  for (const k of ["subject", "action", "environment", "mood", "composition", "text"] as const) {
+    const val = str(ip[k]);
+    if (val) imagePrompt[k] = val;
+  }
+  const ev: KeyEvent = { pageRange: [Math.min(start, end), Math.max(start, end)], imagePrompt };
+  if (typeof o.seed === "number") ev.seed = o.seed;
+  return ev;
 }
 
 function dedupeByName<T extends { name: string; description: string[] }>(list: T[]): T[] {

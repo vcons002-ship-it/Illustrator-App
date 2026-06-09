@@ -25,6 +25,7 @@ export type MainToWorker =
   | { type: "pauseImages" }
   | { type: "resumeImages" }
   | { type: "regenerateStoryboard" }
+  | { type: "rebuildPrompts" }
   | { type: "regenerateAllImages" }
   | { type: "regenerateImage"; unitIndex: number }
   | { type: "updateCharacter"; characterId: string; patch: CharacterPatch }

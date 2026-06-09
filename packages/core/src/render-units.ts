@@ -34,7 +34,8 @@ export function toRenderUnits(book: BookSource, grouping: PagesPerImage): Render
 
   if (perUnit === 1) {
     return {
-      book,
+      // Each unit IS one source page → its range is [i, i].
+      book: { ...book, pages: book.pages.map((p, i) => ({ ...p, pageRange: [i, i] as [number, number] })) },
       pageToUnit: book.pages.map((_, i) => i),
       unitCount: book.pages.length,
       unitPageCount: book.pages.map(() => 1),
@@ -53,7 +54,8 @@ export function toRenderUnits(book: BookSource, grouping: PagesPerImage): Render
       curUnit = unitPages.length;
       curChapter = page.chapterId;
       const id = grouping === "chapter" ? `chapter-${page.chapterId}` : `u${perUnit}-${page.id}`;
-      unitPages.push({ id, index: curUnit, chapterId: page.chapterId, paragraphs: [] });
+      // pageRange starts at this page; the end grows as more source pages join.
+      unitPages.push({ id, index: curUnit, chapterId: page.chapterId, paragraphs: [], pageRange: [i, i] });
       unitPageCount[curUnit] = 0;
     }
     const unitPage = unitPages[curUnit]!;
@@ -64,6 +66,7 @@ export function toRenderUnits(book: BookSource, grouping: PagesPerImage): Render
         text: para.text,
       });
     }
+    unitPage.pageRange![1] = i; // extend the unit's range to include this source page
     unitPageCount[curUnit]! += 1;
     pageToUnit[i] = curUnit;
   });

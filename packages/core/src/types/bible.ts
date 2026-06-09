@@ -141,6 +141,40 @@ export interface SpoilerEntity {
  * (each entry is informed by the "story so far"), then used to drive the image
  * prompt so illustrations capture the chapter's key action.
  */
+/**
+ * Layer-1 image prompt for one scene: clean natural language (no model syntax). An
+ * external AI fills the five structured fields; the app's own precompute fills `text`
+ * with a ready paragraph. The pipeline flattens either into the base prompt, then
+ * applies Layer-2 model formatting (quality tags + identity emphasis + IP-Adapter).
+ */
+export interface ScenePrompt {
+  /** Who/what is the focus. */
+  subject?: string;
+  /** What they are doing. */
+  action?: string;
+  /** Where/how it looks. */
+  environment?: string;
+  /** Emotional/atmospheric tone. */
+  mood?: string;
+  /** Camera angle, framing, depth of field. */
+  composition?: string;
+  /** A pre-composed natural-language prompt (the app's own precompute path). */
+  text?: string;
+}
+
+/**
+ * A precomputed/imported illustration prompt covering an inclusive range of ORIGINAL
+ * book pages, so it can be matched to a render unit regardless of the page-grouping.
+ */
+export interface KeyEvent {
+  /** Inclusive [start, end] original page indices this prompt covers. */
+  pageRange: [number, number];
+  /** Layer-1 scene prompt. */
+  imagePrompt: ScenePrompt;
+  /** Optional stable render seed for reproducibility. */
+  seed?: number;
+}
+
 export interface ChapterScene {
   chapterIndex: number;
   /** What occurs in this chapter (a few sentences). */
@@ -151,6 +185,12 @@ export interface ChapterScene {
   location: string;
   /** "" if the chapter stays in one place, else a note of where/when it shifts. */
   locationChange: string;
+  /**
+   * Precomputed/imported Layer-1 prompts for this chapter's page ranges. When a unit
+   * resolves to one, the pipeline renders from it WITHOUT calling the LLM (stored-first,
+   * LLM fallback). Optional/absent for chapters not yet prompt-built.
+   */
+  keyEvents?: KeyEvent[];
 }
 
 /**

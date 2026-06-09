@@ -83,7 +83,7 @@ export class Automatic1111Backend implements LocalEngineBackend {
   }
 
   async generate(input: ImageGenerationInput, model: string): Promise<ImageGenerationOutput> {
-    const seed = input.anchors[0]?.seed ?? Math.floor(Math.random() * 1_000_000_000);
+    const seed = input.seed ?? input.anchors[0]?.seed ?? Math.floor(Math.random() * 1_000_000_000);
     const steps =
       input.steps ?? (input.quality === "sketch" ? 6 : input.quality === "standard" ? 20 : 35);
 

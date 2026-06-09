@@ -3,9 +3,23 @@ import type { Page } from "../types/book.js";
 
 // v2 adds the per-chapter storyboard; v3 adds the world glossary and structured
 // character appearance; v4 adds per-chapter location tracking; v5 adds creatures
-// (named non-human beasts). Bibles cached at an older version are rebuilt (see
-// Engine.openBook) so the new fields are always present.
-export const BIBLE_VERSION = 5;
+// (named non-human beasts); v6 adds storyboard `keyEvents` (precomputed/imported
+// Layer-1 image prompts). Bibles cached at an older version are rebuilt (see
+// Engine.openBook) so the new fields are always present — EXCEPT v5, which is
+// migrated forward in place (see `migrateBible`) so existing analysis isn't lost.
+export const BIBLE_VERSION = 6;
+
+/**
+ * Bring a cached bible up to the current schema WITHOUT losing data, where possible.
+ * v5 → v6 is purely additive (`keyEvents` are optional), so we just re-stamp the
+ * version and keep every character/environment/creature/storyboard entry. Returns
+ * `undefined` for versions too old to migrate cleanly (the caller rebuilds).
+ */
+export function migrateBible(stored: VisualBible): VisualBible | undefined {
+  if (stored.version === BIBLE_VERSION) return stored;
+  if (stored.version === 5) return { ...stored, version: BIBLE_VERSION };
+  return undefined; // older schemas predate fields we can't backfill → rebuild
+}
 
 export function createEmptyBible(bookId: string): VisualBible {
   return {

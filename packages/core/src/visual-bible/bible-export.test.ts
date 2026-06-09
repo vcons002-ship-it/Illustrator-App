@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { exportBible, parseImportedBible } from "./bible-export.js";
-import { BIBLE_VERSION, createEmptyBible } from "./bible.js";
+import { BIBLE_VERSION, createEmptyBible, migrateBible } from "./bible.js";
 import { mergeExtraction } from "../providers/llm/extraction.js";
 
 function sampleBible() {
@@ -74,5 +74,59 @@ describe("exportBible / parseImportedBible", () => {
     const { bible, error } = parseImportedBible(json, "b");
     expect(error).toBeUndefined();
     expect(bible!.characters[0]!.name).toBe("Ana");
+  });
+
+  it("imports storyboard keyEvents (Layer-1 prompts) from an external AI", () => {
+    const json = JSON.stringify({
+      _exportMeta: { schemaVersion: BIBLE_VERSION },
+      data: {
+        schemaVersion: BIBLE_VERSION,
+        storyboard: [
+          {
+            chapterIndex: 0,
+            keyEvents: [
+              {
+                pageRange: [4, 0], // out-of-order → normalized to [0, 4]
+                imagePrompt: { subject: "Elena", action: "flying", environment: "", mood: "", composition: "" },
+                seed: 123,
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const { bible, error } = parseImportedBible(json, "b");
+    expect(error).toBeUndefined();
+    const ev = bible!.storyboard[0]!.keyEvents![0]!;
+    expect(ev.pageRange).toEqual([0, 4]);
+    expect(ev.imagePrompt.subject).toBe("Elena");
+    expect(ev.imagePrompt.environment).toBeUndefined(); // empty strings dropped
+    expect(ev.seed).toBe(123);
+  });
+});
+
+describe("migrateBible", () => {
+  it("upgrades a v5 bible to the current version, keeping its data", () => {
+    const v5 = { ...createEmptyBible("b"), version: 5 };
+    v5.characters.push({
+      id: "char-ana",
+      name: "Ana",
+      aliases: [],
+      appearance: { hair: "", eyes: "", gender: "", build: "", height: "", skinTone: "", age: "", distinguishingMarks: "", notes: "" },
+      persistentTraits: [],
+      clothing: [],
+      outfits: [],
+      anchor: { seed: 1 },
+      firstSeenChapter: 0,
+    });
+    const migrated = migrateBible(v5)!;
+    expect(migrated.version).toBe(BIBLE_VERSION);
+    expect(migrated.characters.map((c) => c.name)).toEqual(["Ana"]); // data preserved
+  });
+
+  it("returns the bible unchanged when already current, and undefined for ancient schemas", () => {
+    const cur = createEmptyBible("b");
+    expect(migrateBible(cur)).toBe(cur);
+    expect(migrateBible({ ...cur, version: 3 })).toBeUndefined();
   });
 });

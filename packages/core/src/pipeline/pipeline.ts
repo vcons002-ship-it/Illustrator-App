@@ -6,6 +6,7 @@ import type { LLMProvider } from "../providers/llm/llm-provider.js";
 import type { ImageProvider } from "../providers/image/image-provider.js";
 import type { VisualReaderStore } from "../storage/store.js";
 import { resolvePageEntities } from "../visual-bible/bible.js";
+import { composeScenePrompt, resolveKeyEvent } from "../visual-bible/key-events.js";
 import { getImageStyle } from "../providers/catalog.js";
 import { qualityProfile } from "../quality.js";
 
@@ -53,6 +54,7 @@ export class RenderPipeline {
       pageId: page.id,
       pageIndex: page.index,
       chapterIndex: this.deps.book.chapters.find((c) => c.id === page.chapterId)?.index ?? 0,
+      ...(page.pageRange ? { pageRange: page.pageRange } : {}),
       sourceText: page.paragraphs.map((p) => p.text).join("\n\n"),
       ...(chapterContext ? { chapterContext } : {}),
       characterIds,
@@ -132,7 +134,11 @@ export class RenderPipeline {
     try {
       const bible = this.deps.getBible();
       const style = getImageStyle(this.deps.tier.style);
-      const basePrompt = await this.deps.llm.buildImagePrompt(request, bible, signal);
+      // Stored-first: use a precomputed/imported Layer-1 prompt for this unit when one
+      // exists (so image generation needs no live LLM); otherwise build it on the fly.
+      const keyEvent = resolveKeyEvent(bible, request.chapterIndex, request.pageRange);
+      const stored = keyEvent ? composeScenePrompt(keyEvent.imagePrompt) : "";
+      const basePrompt = stored || (await this.deps.llm.buildImagePrompt(request, bible, signal));
       const prompt = style.promptSuffix ? `${basePrompt}\n\nStyle: ${style.promptSuffix}` : basePrompt;
       const present = bible.characters.filter((c) => request.characterIds.includes(c.id));
       const presentCreatures = (bible.creatures ?? []).filter((c) =>
@@ -164,6 +170,8 @@ export class RenderPipeline {
         ...(ipAdapterRefs.length ? { ipAdapterRefs } : {}),
         ...(onProgress ? { onProgress } : {}),
         ...(signal ? { signal } : {}),
+        // A keyEvent may pin a reproducible seed (overrides the character anchor seed).
+        ...(typeof keyEvent?.seed === "number" ? { seed: keyEvent.seed } : {}),
       });
       await this.deps.store.putImage(requestId, output.bytes, output.mimeType);
       // Capture a clean solo frame as this character's reference (first time only).

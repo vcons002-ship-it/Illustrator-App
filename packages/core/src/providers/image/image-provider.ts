@@ -25,6 +25,11 @@ export interface ImageGenerationInput {
   quality: "sketch" | "standard" | "cinematic";
   /** Explicit sampler steps (from the resolved quality profile); overrides the quality default. */
   steps?: number;
+  /**
+   * Explicit render seed (e.g. from a keyEvent for reproducibility). Overrides the
+   * character/creature anchor seed when set.
+   */
+  seed?: number;
   width?: number;
   height?: number;
   /** Local-engine style: a LoRA to apply when installed (ignored by cloud providers). */

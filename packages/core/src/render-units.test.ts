@@ -25,13 +25,15 @@ function book(): BookSource {
 }
 
 describe("toRenderUnits", () => {
-  it("1 page per image is identity", () => {
+  it("1 page per image keeps the identity mapping and tags each unit's page range", () => {
     const b = book();
     const units = toRenderUnits(b, 1);
-    expect(units.book).toBe(b);
     expect(units.pageToUnit).toEqual([0, 1, 2, 3]);
     expect(units.unitCount).toBe(4);
     expect(units.unitPageCount).toEqual([1, 1, 1, 1]);
+    expect(units.book.pages.map((p) => p.id)).toEqual(["p0", "p1", "p2", "p3"]);
+    // Each unit is one source page → pageRange [i, i].
+    expect(units.book.pages.map((p) => p.pageRange)).toEqual([[0, 0], [1, 1], [2, 2], [3, 3]]);
   });
 
   it("groups N pages within a chapter, with a short tail group of its own", () => {
@@ -43,6 +45,8 @@ describe("toRenderUnits", () => {
     const u0 = units.book.pages[0]!;
     expect(u0.chapterId).toBe("c0");
     expect(u0.paragraphs.map((p) => p.text)).toEqual(["A", "B"]);
+    // Original page ranges each unit covers.
+    expect(units.book.pages.map((p) => p.pageRange)).toEqual([[0, 1], [2, 2], [3, 3]]);
   });
 
   it("whole-chapter groups each chapter into one unit", () => {
@@ -51,6 +55,7 @@ describe("toRenderUnits", () => {
     expect(units.pageToUnit).toEqual([0, 0, 0, 1]);
     expect(units.unitPageCount).toEqual([3, 1]);
     expect(units.book.pages.map((p) => p.id)).toEqual(["chapter-c0", "chapter-c1"]);
+    expect(units.book.pages.map((p) => p.pageRange)).toEqual([[0, 2], [3, 3]]);
   });
 
   it("encodes the cadence in unit ids so different cadences cache independently", () => {

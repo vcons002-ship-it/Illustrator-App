@@ -9,7 +9,8 @@ import type { VisualReaderStore } from "./storage/store.js";
 import { InMemoryStore } from "./storage/store.js";
 import { RenderPipeline } from "./pipeline/pipeline.js";
 import { RenderBuffer } from "./render-buffer/render-buffer.js";
-import { BIBLE_VERSION, createEmptyBible } from "./visual-bible/bible.js";
+import { createEmptyBible, migrateBible } from "./visual-bible/bible.js";
+import { addKeyEvent, clearKeyEvents, resolveKeyEvent } from "./visual-bible/key-events.js";
 import {
   exportBible,
   mergeCarryOver,
@@ -45,6 +46,12 @@ export interface EngineOptions {
   onBibleUpdate?: (bible: VisualBible) => void;
   /** A transient note during bible building (e.g. a chapter that failed twice). */
   onBibleNote?: (message: string) => void;
+  /**
+   * Fired while precomputing illustration prompts after the bible is built (`done` of
+   * `total` story units). Lets the UI show "Writing illustration prompts… X/Y" and
+   * lets image generation later run with the LLM off (prompts read from the bible).
+   */
+  onPromptProgress?: (done: number, total: number) => void;
   /**
    * When to start illustrating: "chapter" renders a unit as soon as its chapter
    * is analysed (fast first image); "book" waits until the whole book is read so
@@ -115,9 +122,10 @@ export class Engine {
    */
   async openBook(book: BookSource): Promise<void> {
     this.book = book;
-    // Discard a bible cached at an older schema (e.g. pre-storyboard) so it's rebuilt.
+    // Restore the cached bible, migrating it forward where we can (v5→v6 is additive)
+    // so existing analysis survives; only un-migratable older schemas are rebuilt.
     const stored = await this.store.getBible(book.id);
-    this.bible = stored && stored.version === BIBLE_VERSION ? stored : createEmptyBible(book.id);
+    this.bible = (stored && migrateBible(stored)) ?? createEmptyBible(book.id);
     // Collapse duplicate characters left by earlier sessions (e.g. "Violet" +
     // "Violet Sorrengail") without a full re-analysis; persist if anything merged.
     if (this.bible.characters.length > 1) {
@@ -313,6 +321,72 @@ export class Engine {
       this.opts.onBibleUpdate?.(this.bible);
       // New entities are in the bible → release any pages that were gated on this chapter.
       this.buffer?.refresh();
+    }
+    // Bible extraction is complete → precompute illustration prompts (LLM) so image
+    // generation can later run with the LLM off. Same run token + pause/abort scope.
+    if (!stop()) await this.buildPromptsForUnits(myRun, ac.signal);
+  }
+
+  /**
+   * Precompute a Layer-1 image prompt for every story render unit that doesn't already
+   * have one, storing it in the bible's storyboard `keyEvents`. Runs after extraction
+   * (LLM work) under the same pause/abort/run-token as `buildBibleInBackground`, so the
+   * "Pause Visual Bible" control covers it. Image rendering reads these stored prompts
+   * (stored-first), only calling the LLM for units this hasn't reached yet.
+   */
+  private async buildPromptsForUnits(myRun: number, signal: AbortSignal): Promise<void> {
+    if (!this.book || !this.bible || !this.pipeline) return;
+    const stop = (): boolean => this.biblePaused || this.bibleRun !== myRun;
+    const cancelled = (): boolean => this.bibleRun !== myRun;
+    const units = this.book.pages.map((_, i) => i).filter((i) => this.isStoryPage(i));
+    const total = units.length;
+    let done = units.filter((i) => this.hasKeyEvent(i)).length;
+    this.opts.onPromptProgress?.(done, total);
+    for (const i of units) {
+      if (stop()) return;
+      if (this.hasKeyEvent(i)) continue;
+      const page = this.book.pages[i]!;
+      const request = this.pipeline.buildRequest(page);
+      let text: string | undefined;
+      try {
+        text = await this.opts.llm.buildImagePrompt(request, this.bible, signal);
+      } catch {
+        /* abort (pause) or transient failure — leave it; rendering falls back to the LLM */
+      }
+      if (cancelled()) return; // a newer run/book took over → don't touch shared state
+      if (text && text.trim()) {
+        this.bible = addKeyEvent(this.bible, request.chapterIndex, {
+          pageRange: request.pageRange ?? [page.index, page.index],
+          imagePrompt: { text: text.trim() },
+        });
+        await this.store.putBible(this.bible);
+        if (cancelled()) return;
+        this.opts.onBibleUpdate?.(this.bible);
+      }
+      this.opts.onPromptProgress?.(++done, total);
+    }
+  }
+
+  /** Whether this story unit already has a stored keyEvent prompt. */
+  private hasKeyEvent(pageIndex: number): boolean {
+    const page = this.book?.pages[pageIndex];
+    if (!page || !this.bible) return false;
+    const chapterIndex = this.book!.chapters.find((c) => c.id === page.chapterId)?.index ?? 0;
+    return resolveKeyEvent(this.bible, chapterIndex, page.pageRange) !== undefined;
+  }
+
+  /**
+   * Discard every stored illustration prompt and rebuild them from the current bible
+   * (e.g. after editing characters). Cached images are kept; only prompts change.
+   */
+  async rebuildPrompts(): Promise<void> {
+    if (!this.book || !this.bible) return;
+    this.bible = clearKeyEvents(this.bible);
+    await this.store.putBible(this.bible);
+    this.opts.onBibleUpdate?.(this.bible);
+    // Re-run the LLM phase; extraction is already done, so it goes straight to prompts.
+    if (this.generationStarted && !this.biblePaused) {
+      this.biblePromise = this.buildBibleInBackground();
     }
   }
 

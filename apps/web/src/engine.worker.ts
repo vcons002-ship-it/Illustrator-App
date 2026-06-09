@@ -151,6 +151,25 @@ function setBibleChapter(done: number, total: number): void {
   renderBibleStatus();
 }
 
+/**
+ * Precompute progress (after extraction): show a persistent line on the bible status
+ * channel so the user sees prompts being written (and, when done, that image generation
+ * can run without the LLM). Stops the extraction ticker — this is a separate phase.
+ */
+function setPromptProgress(done: number, total: number): void {
+  if (total <= 0) return;
+  bibleActive = false;
+  stopBibleTimer();
+  const model = llmLabel ? ` · ${llmLabel}` : "";
+  post({
+    type: "bibleStatus",
+    text:
+      done >= total
+        ? `Illustration prompts ready · ${total}/${total}${model}`
+        : `Writing illustration prompts… ${done}/${total}`,
+  });
+}
+
 ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
   const msg = event.data;
   switch (msg.type) {
@@ -201,6 +220,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "regenerateStoryboard":
       void engine?.regenerateStoryboard();
       postPaused();
+      break;
+    case "rebuildPrompts":
+      void engine?.rebuildPrompts();
       break;
     case "regenerateAllImages":
       void engine?.regenerateAllImages();
@@ -298,6 +320,7 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
         }
       },
       onBibleProgress: (done, total) => setBibleChapter(done, total),
+      onPromptProgress: (done, total) => setPromptProgress(done, total),
       // The bible builds in the background; relay each growth so the UI's
       // character/spoiler context (and the panel) stay current.
       onBibleUpdate: (bible) => post({ type: "opened", bible }),

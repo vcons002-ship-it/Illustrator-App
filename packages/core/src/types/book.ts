@@ -19,6 +19,12 @@ export interface Page {
   index: number;
   chapterId: string;
   paragraphs: Paragraph[];
+  /**
+   * Inclusive [start, end] ORIGINAL page indices this entry covers. Set on render
+   * units (a unit groups several source pages) so a stored keyEvent prompt can be
+   * matched to it by page-range overlap. Absent on raw source pages.
+   */
+  pageRange?: [number, number];
 }
 
 export interface Chapter {

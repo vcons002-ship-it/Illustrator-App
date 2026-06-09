@@ -72,3 +72,67 @@ describe("RenderPipeline style injection", () => {
     expect(lastPrompt()).toBe("a knight by a window");
   });
 });
+
+describe("RenderPipeline stored-first prompt fetch", () => {
+  function countingLlm(): { provider: LLMProvider; calls: () => number } {
+    let calls = 0;
+    const provider: LLMProvider = {
+      id: "mock",
+      extractEntities: async (i) => i.existing,
+      buildImagePrompt: async () => {
+        calls++;
+        return "LIVE LLM PROMPT";
+      },
+    };
+    return { provider, calls: () => calls };
+  }
+
+  it("renders from a stored keyEvent without calling the LLM", async () => {
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = createEmptyBible(book.id);
+    bible.storyboard.push({
+      chapterIndex: 0,
+      summary: "",
+      keyMoment: "",
+      location: "",
+      locationChange: "",
+      keyEvents: [{ pageRange: [0, 0], imagePrompt: { text: "STORED SCENE PROMPT" } }],
+    });
+    const { provider: img, lastPrompt } = recordingImage();
+    const { provider: spyLlm, calls } = countingLlm();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm: spyLlm,
+      image: img,
+      store: new InMemoryStore(),
+      tier: DEFAULT_TIER_CONFIG,
+    });
+
+    await pipeline.renderPage(0);
+
+    expect(calls()).toBe(0); // LLM untouched — image gen ran offline
+    expect(lastPrompt()).toContain("STORED SCENE PROMPT");
+  });
+
+  it("falls back to the LLM when no keyEvent matches the unit", async () => {
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const { provider: img, lastPrompt } = recordingImage();
+    const { provider: spyLlm, calls } = countingLlm();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => createEmptyBible(book.id), // no keyEvents
+      llm: spyLlm,
+      image: img,
+      store: new InMemoryStore(),
+      tier: DEFAULT_TIER_CONFIG,
+    });
+
+    await pipeline.renderPage(0);
+
+    expect(calls()).toBe(1);
+    expect(lastPrompt()).toContain("LIVE LLM PROMPT");
+  });
+});

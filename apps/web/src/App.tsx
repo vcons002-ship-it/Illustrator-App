@@ -82,6 +82,7 @@ export function App() {
     regenerateStoryboard,
     regenerateAllImages,
     regenerateImage,
+    rebuildPrompts,
     updateCharacter,
     exportBible,
     importBible,
@@ -546,6 +547,13 @@ export function App() {
                 title="Re-render every image (after switching image model/style/quality in Settings)."
               >
                 ↻ All images
+              </button>
+              <button
+                style={styles.button}
+                onClick={rebuildPrompts}
+                title="Discard the stored illustration prompts and rewrite them with the text model (e.g. after editing characters). Images are kept until re-rendered."
+              >
+                ↻ Prompts
               </button>
             </>
           )}

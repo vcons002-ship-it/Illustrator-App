@@ -29,6 +29,11 @@ export interface VisualRequest {
   pageIndex: number;
   /** Index of the chapter this unit belongs to (keys the storyboard scene). */
   chapterIndex: number;
+  /**
+   * Inclusive [start, end] original page indices this unit covers, for matching a
+   * stored keyEvent prompt by page-range overlap. Absent for raw single pages.
+   */
+  pageRange?: [number, number];
   /** Source text the visual is derived from. */
   sourceText: string;
   /**

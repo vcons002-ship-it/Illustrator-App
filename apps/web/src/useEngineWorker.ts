@@ -48,6 +48,8 @@ export interface EngineWorkerApi {
   regenerateStoryboard: () => void;
   regenerateAllImages: () => void;
   regenerateImage: (unitIndex: number) => void;
+  /** Discard stored illustration prompts and rebuild them (LLM); images kept. */
+  rebuildPrompts: () => void;
   /** Save a user correction to a character (persisted; existing images unchanged). */
   updateCharacter: (characterId: string, patch: CharacterPatch) => void;
   /** Download the current Visual Bible (+ AI rules) as a JSON file. */
@@ -214,6 +216,10 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     generationRequested.current = true;
     send({ type: "regenerateStoryboard" });
   }, []);
+  const rebuildPrompts = useCallback(() => {
+    generationRequested.current = true;
+    send({ type: "rebuildPrompts" });
+  }, []);
   const regenerateAllImages = useCallback(() => {
     generationRequested.current = true;
     send({ type: "regenerateAllImages" });
@@ -257,6 +263,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     regenerateStoryboard,
     regenerateAllImages,
     regenerateImage,
+    rebuildPrompts,
     exportBible,
     importBible,
     importResult,

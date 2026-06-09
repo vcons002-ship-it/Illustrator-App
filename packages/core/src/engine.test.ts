@@ -428,6 +428,36 @@ describe("Engine", () => {
     await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
   });
 
+  it("precomputes illustration prompts into the bible, then renders with the LLM off", async () => {
+    const llm = new MockLLMProvider();
+    const engine = new Engine({ llm, image: new MockImageProvider(), illustrateAfter: "book" });
+    await engine.openBook(twoChapterBook());
+    engine.startGeneration();
+    await engine.whenBibleReady(); // extraction THEN prompt precompute (chained)
+
+    // Every story chapter now has a stored keyEvent prompt.
+    const bible = engine.getBible()!;
+    expect(bible.storyboard.filter((s) => (s.keyEvents?.length ?? 0) > 0).length).toBe(2);
+
+    // A fresh render of a precomputed unit must NOT call the LLM (offline-capable).
+    const spy = vi.spyOn(llm, "buildImagePrompt");
+    await engine.regenerateCurrentImage(0);
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("rebuildPrompts clears and repopulates the stored prompts", async () => {
+    const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider() });
+    await engine.openBook(twoChapterBook());
+    engine.startGeneration();
+    await engine.whenBibleReady();
+    expect(engine.getBible()!.storyboard.some((s) => (s.keyEvents?.length ?? 0) > 0)).toBe(true);
+
+    await engine.rebuildPrompts();
+    await engine.whenBibleReady();
+    expect(engine.getBible()!.storyboard.some((s) => (s.keyEvents?.length ?? 0) > 0)).toBe(true);
+  });
+
   it("skips non-story chapters: never extracted, their pages emit 'skipped'", async () => {
     const llm = new MockLLMProvider();
     const spy = vi.spyOn(llm, "extractEntities");
@@ -578,8 +608,8 @@ function twoChapterBook(): BookSource {
       { id: "c1", index: 1, title: "One" },
     ],
     pages: [
-      { id: "p0", index: 0, chapterId: "c0", paragraphs: [{ id: "p0-0", index: 0, text: "Aria walked. Aria smiled." }] },
-      { id: "p1", index: 1, chapterId: "c1", paragraphs: [{ id: "p1-0", index: 0, text: "A later, gated scene." }] },
+      { id: "p0", index: 0, chapterId: "c0", pageRange: [0, 0], paragraphs: [{ id: "p0-0", index: 0, text: "Aria walked. Aria smiled." }] },
+      { id: "p1", index: 1, chapterId: "c1", pageRange: [1, 1], paragraphs: [{ id: "p1-0", index: 0, text: "A later, gated scene." }] },
     ],
   };
 }
