@@ -7,6 +7,11 @@ import react from "@vitejs/plugin-react";
  */
 export default defineConfig({
   plugins: [react()],
+  // Emit the bundle as pure ASCII (non-ASCII chars become \uXXXX escapes). MV3
+  // content scripts must be UTF-8, and an ASCII-only file is valid UTF-8 no
+  // matter how the host toolchain re-encodes it — avoids Chrome's "isn't UTF-8
+  // encoded" load error when multi-byte chars get mangled on checkout.
+  esbuild: { charset: "ascii" },
   build: {
     outDir: "dist",
     emptyOutDir: true,
