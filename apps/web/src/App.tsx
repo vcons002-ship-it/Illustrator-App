@@ -74,7 +74,6 @@ export function App() {
     paused,
     openBook: openInWorker,
     startGeneration,
-    pause,
     resume,
     pauseBible,
     resumeBible,
@@ -497,40 +496,38 @@ export function App() {
               Begin generating book
             </button>
           )}
-          {book && generating && (
+          {book && (generating || paused.bible || paused.images) && (
             <>
+              {(paused.bible || paused.images) && (
+                <button
+                  style={styles.buttonPrimary}
+                  onClick={resume}
+                  title="Resume both the Visual Bible build and image rendering"
+                >
+                  ▶ Resume all
+                </button>
+              )}
               <button
-                style={styles.button}
-                onClick={paused.bible && paused.images ? resume : pause}
-                title={
-                  paused.bible && paused.images
-                    ? "Resume both the Visual Bible build and image rendering"
-                    : "Pause both (in-flight work finishes)"
-                }
-              >
-                {paused.bible && paused.images ? "▶ Resume all" : "⏸ Pause all"}
-              </button>
-              <button
-                style={styles.button}
+                style={paused.bible ? styles.buttonPrimary : styles.button}
                 onClick={paused.bible ? resumeBible : pauseBible}
                 title={
                   paused.bible
                     ? "Resume building the Visual Bible"
-                    : "Pause the Visual Bible build — gives the GPU to image rendering"
+                    : "Pause the Visual Bible build — frees the GPU (cancels the in-flight chapter)"
                 }
               >
-                {paused.bible ? "▶ Bible" : "⏸ Bible"}
+                {paused.bible ? "▶ Resume Visual Bible" : "⏸ Pause Visual Bible"}
               </button>
               <button
-                style={styles.button}
+                style={paused.images ? styles.buttonPrimary : styles.button}
                 onClick={paused.images ? resumeImages : pauseImages}
                 title={
                   paused.images
                     ? "Resume rendering images"
-                    : "Pause image rendering — gives the GPU to the Visual Bible build"
+                    : "Pause image rendering — frees the GPU (cancels the in-flight render)"
                 }
               >
-                {paused.images ? "▶ Images" : "⏸ Images"}
+                {paused.images ? "▶ Resume images" : "⏸ Pause images"}
               </button>
             </>
           )}

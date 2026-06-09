@@ -52,6 +52,7 @@ export class OpenAILLMProvider implements LLMProvider {
       EXTRACTION_SYSTEM,
       extractionUserContent(input),
       true,
+      input.signal,
     );
     let raw: RawExtraction = { characters: [], environments: [], spoilers: [] };
     try {
@@ -62,16 +63,17 @@ export class OpenAILLMProvider implements LLMProvider {
     return mergeExtraction(input.existing, raw, input.chapterIndex);
   }
 
-  async buildImagePrompt(request: VisualRequest, bible: VisualBible): Promise<string> {
-    const text = await this.complete(PROMPT_SYSTEM, promptUserContent(request, bible), false);
+  async buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string> {
+    const text = await this.complete(PROMPT_SYSTEM, promptUserContent(request, bible), false, signal);
     return text.trim();
   }
 
-  private async complete(system: string, user: string, json: boolean): Promise<string> {
+  private async complete(system: string, user: string, json: boolean, signal?: AbortSignal): Promise<string> {
     const res = await this.transport.send({
       url: `${this.baseUrl}/chat/completions`,
       method: "POST",
       headers: { authorization: `Bearer ${this.apiKey}` },
+      ...(signal ? { signal } : {}),
       body: {
         model: this.model,
         messages: [

@@ -19,7 +19,11 @@ export interface RenderBufferOptions {
    * generation progress; the buffer relays it as `rendering` updates with a
    * `progress` field. Renderers that can't report progress simply ignore it.
    */
-  render: (pageIndex: number, onProgress: (fraction: number) => void) => Promise<ImageResult>;
+  render: (
+    pageIndex: number,
+    onProgress: (fraction: number) => void,
+    signal: AbortSignal,
+  ) => Promise<ImageResult>;
   /** Pages ahead of the current page to keep actively rendered. Default 2. */
   windowAhead?: number;
   /** Max simultaneous renders. Default 2. */
@@ -54,6 +58,7 @@ export class RenderBuffer {
   private readonly render: (
     pageIndex: number,
     onProgress: (fraction: number) => void,
+    signal: AbortSignal,
   ) => Promise<ImageResult>;
   private readonly windowAhead: number;
   private readonly maxConcurrent: number;
@@ -74,6 +79,8 @@ export class RenderBuffer {
    */
   private priorityPage: number | undefined;
   private readonly inflight = new Set<number>();
+  /** Abort controller per in-flight render, so a pause can cancel them mid-flight. */
+  private readonly controllers = new Map<number, AbortController>();
   private readonly results = new Map<number, ImageResult>();
 
   constructor(options: RenderBufferOptions) {
@@ -100,6 +107,9 @@ export class RenderBuffer {
   /** Turn fresh generation on/off (e.g. the "Begin generating book" action). */
   setGenerationEnabled(enabled: boolean): void {
     this.generationEnabled = enabled;
+    // Pausing also cancels in-flight renders so the GPU frees immediately; each
+    // aborted page drops back to "queued" and re-renders when generation resumes.
+    if (!enabled) for (const ac of this.controllers.values()) ac.abort();
     this.pump();
   }
 
@@ -229,6 +239,8 @@ export class RenderBuffer {
 
   private start(pageIndex: number): void {
     this.inflight.add(pageIndex);
+    const ac = new AbortController();
+    this.controllers.set(pageIndex, ac);
     this.onUpdate?.(pageIndex, {
       requestId: `page-${pageIndex}`,
       pageId: `page-${pageIndex}`,
@@ -245,16 +257,36 @@ export class RenderBuffer {
         progress: Math.max(0, Math.min(1, fraction)),
       });
     };
-    this.render(pageIndex, onProgress)
+    this.render(pageIndex, onProgress, ac.signal)
       .then((result) => this.settle(pageIndex, result))
-      .catch((err) =>
+      .catch((err) => {
+        // A pause cancelled this render → drop it back to "queued" so it re-renders
+        // on resume (NOT a real error). Distinguish by the controller's signal.
+        if (ac.signal.aborted) {
+          this.dropInflight(pageIndex);
+          return;
+        }
         this.settle(pageIndex, {
           requestId: `page-${pageIndex}`,
           pageId: `page-${pageIndex}`,
           status: "error",
           error: err instanceof Error ? err.message : String(err),
-        }),
-      );
+        });
+      });
+  }
+
+  /** An aborted render: forget it (no result) and report it back to "queued". */
+  private dropInflight(pageIndex: number): void {
+    this.inflight.delete(pageIndex);
+    this.controllers.delete(pageIndex);
+    this.onUpdate?.(pageIndex, {
+      requestId: `page-${pageIndex}`,
+      pageId: `page-${pageIndex}`,
+      status: "queued",
+    });
+    // A slot freed up. If generation is still on (e.g. only ONE page was paused, or
+    // we've since resumed), re-pump so the re-queued page renders without waiting.
+    this.pump();
   }
 
   private settle(pageIndex: number, result: ImageResult): void {

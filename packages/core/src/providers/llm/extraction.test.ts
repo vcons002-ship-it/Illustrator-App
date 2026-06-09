@@ -91,7 +91,7 @@ describe("mergeExtraction glossary + appearance", () => {
 });
 
 describe("promptUserContent", () => {
-  it("includes the key moment, story-so-far, and character outfits", () => {
+  it("leads with THIS passage, omits the chapter pivotal moment, keeps outfits + background", () => {
     let bible = createEmptyBible("b");
     bible = mergeExtraction(
       bible,
@@ -125,12 +125,40 @@ describe("promptUserContent", () => {
       spoilerIds: [],
     };
     const text = promptUserContent(req, bible);
-    expect(text).toContain("pivotal moment");
-    expect(text).toContain("The duel.");
-    expect(text).toContain("this specific passage");
-    expect(text).toContain("Story so far"); // chapter 0's summary precedes chapter 1
+    // The unit's own passage leads, and the chapter's pivotal moment is NOT injected
+    // (that made every unit of a chapter converge on the same beat).
+    expect(text).toContain("Passage:\nswords clash");
+    expect(text).not.toContain("The duel.");
+    expect(text).not.toContain("pivotal moment");
+    expect(text.indexOf("Passage:")).toBeLessThan(text.indexOf("Background")); // passage first
+    // Prior-chapter context is still available, but as labelled background only.
+    expect(text).toContain("Background");
     expect(text).toContain("Ana arrives in the city.");
     expect(text).toContain("red cloak"); // outfit carried into the prompt
+  });
+
+  it("gives two units of the same chapter different content (their own passages)", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      { characters: [], environments: [], spoilers: [], summary: "A long chase.", keyMoment: "The leap." },
+      0,
+    );
+    const base = {
+      kind: "scene_illustration" as const,
+      bookId: "b",
+      chapterIndex: 0,
+      characterIds: [],
+      environmentIds: [],
+      creatureIds: [],
+      spoilerIds: [],
+    };
+    const a = promptUserContent({ ...base, pageId: "u-0", pageIndex: 0, sourceText: "She vaulted the fence." }, bible);
+    const c = promptUserContent({ ...base, pageId: "u-1", pageIndex: 1, sourceText: "He skidded to a halt." }, bible);
+    expect(a).toContain("She vaulted the fence.");
+    expect(c).toContain("He skidded to a halt.");
+    expect(a).not.toEqual(c); // no shared chapter keyMoment forcing them together
+    expect(a).not.toContain("The leap."); // chapter climax is not injected per unit
   });
 
   it("includes the bounded chapter context when provided", () => {

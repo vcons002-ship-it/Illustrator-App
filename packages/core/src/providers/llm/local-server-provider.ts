@@ -63,20 +63,22 @@ export class LocalServerLLMProvider implements LLMProvider {
       `${EXTRACTION_SYSTEM}\n${EXTRACTION_JSON_INSTRUCTION}`,
       extractionUserContent(input),
       true,
+      input.signal,
     );
     return mergeExtraction(input.existing, parseExtraction(text), input.chapterIndex);
   }
 
-  async buildImagePrompt(request: VisualRequest, bible: VisualBible): Promise<string> {
-    const text = await this.complete(PROMPT_SYSTEM, promptUserContent(request, bible), false);
+  async buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string> {
+    const text = await this.complete(PROMPT_SYSTEM, promptUserContent(request, bible), false, signal);
     return text.trim();
   }
 
-  private async complete(system: string, user: string, json: boolean): Promise<string> {
+  private async complete(system: string, user: string, json: boolean, signal?: AbortSignal): Promise<string> {
     const res = await this.transport.send({
       url: `${this.baseUrl}/chat/completions`,
       method: "POST",
       headers: this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
+      ...(signal ? { signal } : {}),
       body: {
         model: this.model,
         messages: [

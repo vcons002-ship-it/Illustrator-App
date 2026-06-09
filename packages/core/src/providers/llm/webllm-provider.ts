@@ -33,7 +33,7 @@ export interface ChatMessage {
 /** Completion seam: returns the assistant text for the given messages. */
 export type ChatComplete = (
   messages: ChatMessage[],
-  opts: { json: boolean; onToken?: (count: number) => void },
+  opts: { json: boolean; onToken?: (count: number) => void; signal?: AbortSignal },
 ) => Promise<string>;
 
 /** Live generation activity, so the UI can show the model is making progress. */
@@ -117,7 +117,11 @@ export class WebLLMProvider implements LLMProvider {
           { role: "system", content: `${EXTRACTION_SYSTEM}\n${EXTRACTION_JSON_INSTRUCTION}` },
           { role: "user", content: extractionUserContent(input) },
         ],
-        { json: true, onToken: (tokens) => this.onActivity?.({ phase: "bible", tokens }) },
+        {
+          json: true,
+          onToken: (tokens) => this.onActivity?.({ phase: "bible", tokens }),
+          ...(input.signal ? { signal: input.signal } : {}),
+        },
       );
       return mergeExtraction(input.existing, parseExtraction(content), input.chapterIndex);
     } catch {
@@ -126,7 +130,7 @@ export class WebLLMProvider implements LLMProvider {
     }
   }
 
-  async buildImagePrompt(request: VisualRequest, bible: VisualBible): Promise<string> {
+  async buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string> {
     try {
       const complete = await this.completer();
       const text = await complete(
@@ -134,7 +138,11 @@ export class WebLLMProvider implements LLMProvider {
           { role: "system", content: PROMPT_SYSTEM },
           { role: "user", content: promptUserContent(request, bible) },
         ],
-        { json: false, onToken: (tokens) => this.onActivity?.({ phase: "prompt", tokens }) },
+        {
+          json: false,
+          onToken: (tokens) => this.onActivity?.({ phase: "prompt", tokens }),
+          ...(signal ? { signal } : {}),
+        },
       );
       const trimmed = text.trim();
       return trimmed.length > 0 ? trimmed : this.fallback.buildImagePrompt(request, bible);
@@ -166,6 +174,7 @@ export class WebLLMProvider implements LLMProvider {
           let text = "";
           let tokens = 0;
           for await (const chunk of stream) {
+            if (opts.signal?.aborted) throw new DOMException("Aborted", "AbortError");
             const delta = chunk.choices[0]?.delta?.content ?? "";
             if (delta) {
               text += delta;

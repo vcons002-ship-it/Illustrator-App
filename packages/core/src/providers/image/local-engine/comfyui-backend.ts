@@ -246,28 +246,47 @@ export class ComfyUIBackend implements LocalEngineBackend {
       progress.everProgressed = true;
       input.onProgress?.(fraction);
     };
+    // Cancellation (user paused images): abort the in-flight HTTP AND tell ComfyUI to
+    // interrupt the running job so the GPU frees immediately, not after it finishes.
+    const signal = input.signal;
+    const onAbort = (): void => {
+      void this.interrupt();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     const socket = this.openProgressSocket(relay);
     try {
       const submit = await this.transport.send({
         url: `${this.baseUrl}/prompt`,
         method: "POST",
         body: { prompt: workflow, client_id: this.clientId },
+        ...(signal ? { signal } : {}),
       });
       if (!submit.ok) throw new Error(`ComfyUI prompt failed with status ${submit.status}`);
       const { prompt_id } = await submit.json<PromptResponse>();
 
-      const image = await this.pollForImage(prompt_id, progress);
+      const image = await this.pollForImage(prompt_id, progress, signal);
       const view = await this.transport.send({
         url:
           `${this.baseUrl}/view?filename=${encodeURIComponent(image.filename)}` +
           `&subfolder=${encodeURIComponent(image.subfolder)}&type=${encodeURIComponent(image.type)}`,
         method: "GET",
+        ...(signal ? { signal } : {}),
       });
       if (!view.ok) throw new Error(`ComfyUI view failed with status ${view.status}`);
       input.onProgress?.(1);
       return { bytes: await view.arrayBuffer(), mimeType: "image/png" };
     } finally {
       socket?.close();
+      signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /** Tell ComfyUI to interrupt the running job (best-effort; ignores errors). */
+  private async interrupt(): Promise<void> {
+    try {
+      await this.transport.send({ url: `${this.baseUrl}/interrupt`, method: "POST", body: {} });
+    } catch {
+      /* best-effort — the HTTP abort already stopped us waiting */
     }
   }
 
@@ -313,15 +332,18 @@ export class ComfyUIBackend implements LocalEngineBackend {
   private async pollForImage(
     promptId: string,
     progress: { lastMs: number; everProgressed: boolean },
+    signal?: AbortSignal,
   ): Promise<HistoryImage> {
     // Two stop conditions: an absolute backstop (`maxPolls`) used when no progress
     // info is available, and — once the websocket has reported ANY progress — an
     // idle window: keep polling indefinitely while ComfyUI is still working, only
     // failing after `idleTimeoutMs` of silence. So a slow render is never killed.
     for (let i = 0; ; i++) {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
       const res = await this.transport.send({
         url: `${this.baseUrl}/history/${encodeURIComponent(promptId)}`,
         method: "GET",
+        ...(signal ? { signal } : {}),
       });
       if (!res.ok) throw new Error(`ComfyUI history failed with status ${res.status}`);
       const history = await res.json<HistoryResponse>();
@@ -428,7 +450,9 @@ function addUnifiedIpAdapter(
 ): [string, number] {
   graph["20"] = {
     class_type: "IPAdapterUnifiedLoader",
-    inputs: { model: baseModel, preset: "PLUS (high strength)" },
+    // STANDARD (not "PLUS (high strength)") so the reference guides identity without
+    // overpowering the composition the prompt describes.
+    inputs: { model: baseModel, preset: "STANDARD" },
   };
   let current: [string, number] = ["20", 0];
   ip.refs.forEach((ref, i) => {
@@ -444,7 +468,9 @@ function addUnifiedIpAdapter(
         weight: ref.weight,
         weight_type: "linear",
         start_at: 0,
-        end_at: 1,
+        // End IP-Adapter partway so early diffusion steps establish the scene/action
+        // composition; identity is refined after, not dictated from step 0 (no portrait).
+        end_at: 0.55,
       },
     };
     current = [applyId, 0];

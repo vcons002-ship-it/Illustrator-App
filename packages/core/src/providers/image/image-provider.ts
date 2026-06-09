@@ -59,6 +59,12 @@ export interface ImageGenerationInput {
    * progress simply never call it. Not serialised — set in-process by the pipeline.
    */
   onProgress?: (fraction: number) => void;
+  /**
+   * Optional cancellation signal. When it aborts (the user paused image generation),
+   * the backend stops the in-flight request — and local backends additionally tell
+   * the engine to interrupt the running job so the GPU frees immediately.
+   */
+  signal?: AbortSignal;
 }
 
 export interface ImageGenerationOutput {

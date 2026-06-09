@@ -90,6 +90,8 @@ export class Engine {
    * switch books, and a rapid pause→resume can never spawn a duplicate loop.
    */
   private bibleRun = 0;
+  /** Aborts the in-flight chapter extraction so a pause/book-switch frees the GPU at once. */
+  private bibleAbort?: AbortController;
   /**
    * Identity token for the active render buffer. A buffer replaced on `openBook`
    * keeps any in-flight render (≤ maxConcurrent) alive; tagging updates with the
@@ -134,6 +136,7 @@ export class Engine {
     // starting new renders (its ≤maxConcurrent in-flight results are dropped below by
     // the bufferEpoch guard). Result: only the just-opened book ever processes.
     this.bibleRun++;
+    this.bibleAbort?.abort(); // cancel the previous book's in-flight extraction
     this.buffer?.setGenerationEnabled(false);
     const epoch = ++this.bufferEpoch;
     const onUpdate = this.opts.onUpdate;
@@ -150,7 +153,8 @@ export class Engine {
     });
     this.buffer = new RenderBuffer({
       totalPages: book.pages.length,
-      render: (pageIndex, onProgress) => this.pipeline!.renderPage(pageIndex, onProgress),
+      render: (pageIndex, onProgress, signal) =>
+        this.pipeline!.renderPage(pageIndex, onProgress, signal),
       // "book": wait for the whole book to be analysed; "chapter": as soon as the
       // unit's own chapter is ready.
       canRender: (pageIndex) =>
@@ -247,6 +251,11 @@ export class Engine {
     // Claim this run, cancelling any older loop still in flight (book switch, resume,
     // regenerate). `myRun` is captured; the loop bails the moment it stops matching.
     const myRun = ++this.bibleRun;
+    // Abort any prior run's in-flight LLM call (book switch / regenerate / resume) and
+    // start a fresh cancellation scope for this run.
+    this.bibleAbort?.abort();
+    const ac = new AbortController();
+    this.bibleAbort = ac;
     const bookId = this.book.id;
     // `cancelled`: a newer run/book took over → discard, never touch shared state.
     // `stop`: also stop when paused, but only when DECIDING to start the next chapter
@@ -281,6 +290,7 @@ export class Engine {
             chapterIndex,
             chapterText: text,
             existing: this.bible,
+            signal: ac.signal,
           });
         } catch {
           /* retry once, then give up on just this chapter */
@@ -435,7 +445,12 @@ export class Engine {
   setBiblePaused(paused: boolean): void {
     if (this.biblePaused === paused) return;
     this.biblePaused = paused;
-    if (!paused && this.generationStarted && !this.isBibleComplete()) {
+    if (paused) {
+      // Cancel the in-flight chapter extraction so the GPU frees promptly (the loop
+      // then bails at its next `stop()` check); the chapter stays unprocessed and is
+      // re-extracted, in order, on resume.
+      this.bibleAbort?.abort();
+    } else if (this.generationStarted && !this.isBibleComplete()) {
       this.biblePromise = this.buildBibleInBackground();
     }
   }

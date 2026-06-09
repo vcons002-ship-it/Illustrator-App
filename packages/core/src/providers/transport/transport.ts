@@ -19,6 +19,12 @@ export interface TransportRequest {
    * field; `fetch` sets the boundary. Used by the local ComfyUI IP-Adapter path.
    */
   form?: { field: string; bytes: ArrayBuffer; filename: string; contentType: string };
+  /**
+   * Optional cancellation signal. When it aborts, the underlying request is
+   * cancelled (fetch rejects with an AbortError). Lets a pause stop in-flight LLM
+   * extraction / image generation promptly instead of waiting it out.
+   */
+  signal?: AbortSignal;
 }
 
 export interface TransportResponse {
@@ -68,6 +74,7 @@ export class DirectTransport implements Transport {
         init.body = JSON.stringify(request.body);
       }
     }
+    if (request.signal) init.signal = request.signal;
     const res = await this.fetchImpl(request.url, init);
     return {
       ok: res.ok,

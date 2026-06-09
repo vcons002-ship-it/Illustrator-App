@@ -106,6 +106,7 @@ export class RenderPipeline {
   async renderPage(
     pageIndex: number,
     onProgress?: (fraction: number) => void,
+    signal?: AbortSignal,
   ): Promise<ImageResult> {
     const page = this.deps.book.pages[pageIndex];
     if (!page) {
@@ -131,7 +132,7 @@ export class RenderPipeline {
     try {
       const bible = this.deps.getBible();
       const style = getImageStyle(this.deps.tier.style);
-      const basePrompt = await this.deps.llm.buildImagePrompt(request, bible);
+      const basePrompt = await this.deps.llm.buildImagePrompt(request, bible, signal);
       const prompt = style.promptSuffix ? `${basePrompt}\n\nStyle: ${style.promptSuffix}` : basePrompt;
       const present = bible.characters.filter((c) => request.characterIds.includes(c.id));
       const presentCreatures = (bible.creatures ?? []).filter((c) =>
@@ -162,6 +163,7 @@ export class RenderPipeline {
         ...(subjects.length ? { subjects } : {}),
         ...(ipAdapterRefs.length ? { ipAdapterRefs } : {}),
         ...(onProgress ? { onProgress } : {}),
+        ...(signal ? { signal } : {}),
       });
       await this.deps.store.putImage(requestId, output.bytes, output.mimeType);
       // Capture a clean solo frame as this character's reference (first time only).
@@ -176,6 +178,9 @@ export class RenderPipeline {
         image: { bytes: output.bytes, mimeType: output.mimeType },
       };
     } catch (err) {
+      // A cancelled render (the user paused images) is NOT a failure — re-throw so the
+      // buffer drops it back to "queued" to re-render on resume, instead of caching an error.
+      if (signal?.aborted) throw err;
       return {
         requestId,
         pageId: request.pageId,
@@ -194,7 +199,10 @@ export class RenderPipeline {
       const id = c.anchor.referenceImageId;
       if (!id) continue;
       const img = await this.deps.store.getImage(id);
-      if (img) refs.push({ bytes: img.bytes, mimeType: img.mimeType, weight: 0.7 });
+      // Moderate weight (not 0.7): the reference keeps the face recognizable without
+      // forcing a portrait — the backend also ends IP-Adapter early so the scene
+      // composition forms first.
+      if (img) refs.push({ bytes: img.bytes, mimeType: img.mimeType, weight: 0.5 });
     }
     return refs;
   }
@@ -205,7 +213,10 @@ function buildSubject(c: Character): { name: string; features: string; outfit: s
   const a = c.appearance;
   const fields: string[] = [];
   if (a) {
-    for (const v of [a.gender, a.age, a.hair, a.eyes, a.build, a.height, a.skinTone, a.distinguishingMarks]) {
+    // Only the most identity-defining fields, in priority order — capped below so the
+    // SD emphasis reinforces WHO the character is without swamping the scene/action the
+    // prompt describes (8 appearance fields used to bias the image toward a portrait).
+    for (const v of [a.gender, a.hair, a.distinguishingMarks, a.eyes, a.build]) {
       if (v && v.trim()) fields.push(v.trim());
     }
   }
@@ -215,7 +226,7 @@ function buildSubject(c: Character): { name: string; features: string; outfit: s
   }
   // Outfit is left to the LLM prompt (it picks the scene-appropriate one); the SD
   // emphasis block reinforces only the persistent identity, not a specific outfit.
-  return { name: c.name, features: fields.join(", "), outfit: "" };
+  return { name: c.name, features: fields.slice(0, 3).join(", "), outfit: "" };
 }
 
 /** A creature as an SD subject: its kind + accumulated description as the features. */

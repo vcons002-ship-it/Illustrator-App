@@ -365,6 +365,69 @@ describe("Engine", () => {
     expect(engine.getBible()?.characters).toEqual([]); // A's cast never leaked into B
   });
 
+  it("pausing the bible aborts the in-flight chapter; resume re-extracts it (in order)", async () => {
+    let calls = 0;
+    const llm = new MockLLMProvider();
+    const real = llm.extractEntities.bind(llm);
+    vi.spyOn(llm, "extractEntities").mockImplementation((input) => {
+      calls++;
+      if (calls === 1) {
+        // First attempt hangs until the pause aborts its signal.
+        return new Promise<never>((_, reject) => {
+          input.signal?.addEventListener("abort", () =>
+            reject(new DOMException("Aborted", "AbortError")),
+          );
+        });
+      }
+      return real(input); // resume → real extraction succeeds
+    });
+
+    const engine = new Engine({ llm, image: new MockImageProvider() });
+    await engine.openBook(sampleBook()); // one story chapter
+    engine.startGeneration();
+    await vi.waitFor(() => expect(calls).toBe(1)); // extraction in flight
+
+    engine.setBiblePaused(true); // aborts the in-flight call → frees the GPU at once
+    await engine.whenBibleReady();
+    expect(engine.getBible()?.processedChapters).not.toContain(0); // NOT marked processed
+
+    engine.setBiblePaused(false); // resume → re-extract the same chapter, in order
+    await engine.whenBibleReady();
+    expect(engine.getBible()?.processedChapters).toContain(0);
+  });
+
+  it("pausing images aborts the in-flight render; the unit re-renders on resume (not an error)", async () => {
+    let started = 0;
+    let aborted = 0;
+    let live = true; // while true, a render hangs until its signal aborts
+    const image = new MockImageProvider();
+    vi.spyOn(image, "generate").mockImplementation((input) => {
+      started++;
+      return live
+        ? new Promise<never>((_, reject) => {
+            input.signal?.addEventListener("abort", () => {
+              aborted++;
+              reject(new DOMException("Aborted", "AbortError"));
+            });
+          })
+        : Promise.resolve({ bytes: new ArrayBuffer(4), mimeType: "image/png" });
+    });
+
+    const engine = new Engine({ llm: new MockLLMProvider(), image, illustrateAfter: "chapter" });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    engine.goToPage(0);
+    await vi.waitFor(() => expect(started).toBeGreaterThan(0)); // a render is in flight
+
+    engine.setImagePaused(true);
+    await vi.waitFor(() => expect(aborted).toBeGreaterThan(0)); // in-flight render cancelled
+    expect(engine.resultFor(0)?.status).not.toBe("error"); // dropped, not failed
+
+    live = false; // re-renders now succeed
+    engine.setImagePaused(false); // resume → the unit renders fresh
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+  });
+
   it("skips non-story chapters: never extracted, their pages emit 'skipped'", async () => {
     const llm = new MockLLMProvider();
     const spy = vi.spyOn(llm, "extractEntities");

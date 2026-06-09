@@ -23,13 +23,22 @@ function post(message: WorkerToMain, transfer: Transferable[] = []): void {
   ctx.postMessage(message, transfer);
 }
 
-/** Broadcast the current (independent) bible/image pause state from the engine. */
+/** Broadcast the current (independent) bible/image pause state + clear status lines. */
 function postPaused(): void {
-  post({
-    type: "paused",
-    bible: engine?.isBiblePaused() ?? false,
-    images: engine?.isImagePaused() ?? false,
-  });
+  const biblePaused = engine?.isBiblePaused() ?? false;
+  const imagesPaused = engine?.isImagePaused() ?? false;
+  post({ type: "paused", bible: biblePaused, images: imagesPaused });
+  // Stop the climbing "Building…" ticker and show a STABLE paused line so the user
+  // can see the pause took effect (the engine has aborted the in-flight chapter).
+  // Only when the bible is mid-build — a complete bible keeps its "complete" line.
+  if (biblePaused && bibleRunTotal > 0 && bibleRunDone < bibleRunTotal) {
+    bibleActive = false;
+    bibleTokens = 0;
+    stopBibleTimer();
+    post({ type: "bibleStatus", text: `Visual Bible paused · ${bibleRunDone}/${bibleRunTotal} chapters` });
+  }
+  // Transient line names image-generation state (the bible owns the persistent line).
+  if (!bibleActive) post({ type: "status", message: imagesPaused ? "Image generation paused" : "" });
 }
 
 /** Begin generation now if the engine is up, else remember to start on open. */
@@ -277,13 +286,14 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
       onUpdate: (pageIndex, result) => {
         const transfer = result.image ? [result.image.bytes] : [];
         post({ type: "update", pageIndex, result }, transfer);
-        // Image generation has begun/finished → the prompt is written; clear the
-        // transient "writing prompt" line (unless the bible owns the status line).
-        if (
-          !bibleActive &&
-          (result.status === "ready" ||
-            (result.status === "rendering" && result.progress !== undefined))
-        ) {
+        // While the bible owns the status line, leave it alone. Otherwise name the
+        // current image phase so the user can see what's happening.
+        if (bibleActive) return;
+        if (result.status === "rendering" && result.progress !== undefined) {
+          // Diffusion is underway (ComfyUI reports per-step progress).
+          post({ type: "status", message: `Rendering an illustration… ${Math.round(result.progress * 100)}%` });
+        } else if (result.status === "ready" || result.status === "error" || result.status === "queued") {
+          // Finished, failed, or cancelled (paused) → clear the transient line.
           post({ type: "status", message: "" });
         }
       },

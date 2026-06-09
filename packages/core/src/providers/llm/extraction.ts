@@ -90,17 +90,20 @@ export const PROMPT_SYSTEM =
   "list of tags, no weighting syntax, no markdown) — lead with the subject and action, " +
   "then the setting, then mood/lighting. Depict the single most important action shown in " +
   "THIS passage specifically — each illustration covers a different stretch of the chapter, " +
-  "so describe what happens in THIS passage and do NOT just repeat the chapter's overall key " +
-  "moment unless this passage is where it occurs. Set the image in ONE coherent location — the " +
-  "place where the passage's action occurs; if the chapter or passage moves between places, " +
-  "choose the single location of the depicted moment and NEVER combine two settings into one " +
-  "picture. Keep every character's appearance consistent with the supplied Visual Bible and " +
-  "the story so far. The listed characters are PEOPLE — depict them as humans; NEVER render a " +
-  "character as an animal even if their name is also a common word (a person named 'Cat' is a " +
-  "woman, not a cat). For each character, choose the SINGLE outfit from their listed options " +
-  "that best fits THIS scene's context (what the passage describes them doing/wearing); depict " +
-  "only that outfit and never combine outfits. For action scenes, convey dynamic movement — a " +
-  "dynamic pose, motion, energy, a sense of speed or impact. " +
+  "so describe what happens in THIS passage and never reuse another illustration's moment or " +
+  "fall back on the chapter's overall climax. Frame it as a SCENE that shows the action and the " +
+  "setting around the characters — a wide or medium shot of the moment, NOT a tight close-up, " +
+  "headshot, or centered character portrait, unless the passage is deliberately intimate. Show " +
+  "what the characters are DOING, with their environment visible. Set the image in ONE coherent " +
+  "location — the place where the passage's action occurs; if the chapter or passage moves " +
+  "between places, choose the single location of the depicted moment and NEVER combine two " +
+  "settings into one picture. Keep every character's appearance consistent with the supplied " +
+  "Visual Bible and the story so far. The listed characters are PEOPLE — depict them as humans; " +
+  "NEVER render a character as an animal even if their name is also a common word (a person " +
+  "named 'Cat' is a woman, not a cat). For each character, choose the SINGLE outfit from their " +
+  "listed options that best fits THIS scene's context (what the passage describes them " +
+  "doing/wearing); depict only that outfit and never combine outfits. For action scenes, convey " +
+  "dynamic movement — a dynamic pose, motion, energy, a sense of speed or impact. " +
   "Output only the prompt text, no preamble.";
 
 /**
@@ -451,17 +454,15 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
     .map((s) => `Chapter ${s.chapterIndex}: ${s.summary}`)
     .join("\n");
   const glossary = bible.glossary ?? [];
+  // Lead with THIS unit's own passage and depict only its action — each unit covers a
+  // different stretch of the chapter, so the chapter-wide pivotal moment is deliberately
+  // NOT fed in (it made every illustration of a chapter converge on the same beat).
   return [
-    glossary.length
-      ? `World facts (apply as defaults unless the passage says otherwise):\n${glossary
-          .map((g) => `- ${g.term}: ${g.definition}`)
-          .join("\n")}`
-      : "",
-    soFar ? `Story so far:\n${soFar}` : "",
-    scene?.summary ? `This chapter (context):\n${scene.summary}` : "",
-    scene?.keyMoment ? `Chapter's overall pivotal moment (context only):\n${scene.keyMoment}` : "",
+    `Illustrate the single most important action in THIS passage (shown below). Each ` +
+      `illustration covers a DIFFERENT stretch of the chapter, so depict ONLY what happens in ` +
+      `THIS passage — not the chapter's overall climax, and not a previous illustration's moment.`,
+    `Passage:\n${request.sourceText}`,
     settingLine(scene, envs, request.sourceText),
-    `Illustrate this specific passage's main action (not necessarily the chapter's pivotal moment).`,
     chars.length
       ? `Characters present (these are PEOPLE — render as humans, even if a name is also a common word like 'Cat'; keep appearance consistent and pick one fitting outfit):\n${chars
           .map((c) => `- ${describeCharacter(c)}`)
@@ -475,10 +476,23 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
     envs.length
       ? `Location details (look + world fashion):\n${envs.map((e) => `- ${e.name}: ${e.description.join(", ")}`).join("\n")}`
       : "",
-    request.chapterContext
-      ? `Chapter context (surrounding text — for continuity; illustrate the Passage below):\n${request.chapterContext}`
+    glossary.length
+      ? `World facts (apply as defaults unless the passage says otherwise):\n${glossary
+          .map((g) => `- ${g.term}: ${g.definition}`)
+          .join("\n")}`
       : "",
-    `Passage:\n${request.sourceText}`,
+    // Background ONLY — for continuity, never to override what the passage depicts.
+    soFar || scene?.summary
+      ? `Background (continuity only — do NOT depict these unless THIS passage is where they happen):\n${[
+          scene?.summary ? `This chapter: ${scene.summary}` : "",
+          soFar,
+        ]
+          .filter(Boolean)
+          .join("\n")}`
+      : "",
+    request.chapterContext
+      ? `Chapter context (surrounding text — continuity only; illustrate the Passage above):\n${request.chapterContext}`
+      : "",
   ]
     .filter(Boolean)
     .join("\n\n");

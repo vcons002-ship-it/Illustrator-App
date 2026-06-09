@@ -19,6 +19,8 @@ export interface EntityExtractionInput {
   chapterText: string;
   /** Existing Bible to merge into (entities may span chapters). */
   existing: VisualBible;
+  /** Aborts the in-flight extraction (e.g. when the user pauses the bible build). */
+  signal?: AbortSignal;
 }
 
 export interface LLMProvider {
@@ -29,6 +31,9 @@ export interface LLMProvider {
    * Must be idempotent per chapter so re-runs do not duplicate entities.
    */
   extractEntities(input: EntityExtractionInput): Promise<VisualBible>;
-  /** Build the final image prompt for a page, injecting Bible continuity. */
-  buildImagePrompt(request: VisualRequest, bible: VisualBible): Promise<string>;
+  /**
+   * Build the final image prompt for a page, injecting Bible continuity.
+   * `signal` aborts the in-flight call (e.g. when the user pauses image generation).
+   */
+  buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string>;
 }

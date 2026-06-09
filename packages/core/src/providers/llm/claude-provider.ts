@@ -107,15 +107,16 @@ export class ClaudeProvider implements LLMProvider {
   }
 
   async extractEntities(input: EntityExtractionInput): Promise<VisualBible> {
-    const response = await this.client.beta.messages.parse({
-      model: this.model,
-      max_tokens: 4096,
-      system: EXTRACTION_SYSTEM,
-      messages: [
-        { role: "user", content: extractionUserContent(input) },
-      ],
-      output_format: betaZodOutputFormat(ExtractionSchema),
-    });
+    const response = await this.client.beta.messages.parse(
+      {
+        model: this.model,
+        max_tokens: 4096,
+        system: EXTRACTION_SYSTEM,
+        messages: [{ role: "user", content: extractionUserContent(input) }],
+        output_format: betaZodOutputFormat(ExtractionSchema),
+      },
+      input.signal ? { signal: input.signal } : undefined,
+    );
 
     const parsed = response.parsed_output;
     if (!parsed) {
@@ -128,13 +129,16 @@ export class ClaudeProvider implements LLMProvider {
     return mergeExtraction(input.existing, parsed, input.chapterIndex);
   }
 
-  async buildImagePrompt(request: VisualRequest, bible: VisualBible): Promise<string> {
-    const response = await this.client.messages.create({
-      model: this.model,
-      max_tokens: 512,
-      system: PROMPT_SYSTEM,
-      messages: [{ role: "user", content: promptUserContent(request, bible) }],
-    });
+  async buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string> {
+    const response = await this.client.messages.create(
+      {
+        model: this.model,
+        max_tokens: 512,
+        system: PROMPT_SYSTEM,
+        messages: [{ role: "user", content: promptUserContent(request, bible) }],
+      },
+      signal ? { signal } : undefined,
+    );
 
     return response.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")

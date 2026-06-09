@@ -117,17 +117,38 @@ export class Automatic1111Backend implements LocalEngineBackend {
     // it currently has loaded.
     if (checkpoint) body.override_settings = { sd_model_checkpoint: checkpoint };
 
-    const res = await this.transport.send({
-      url: `${this.baseUrl}/sdapi/v1/txt2img`,
-      method: "POST",
-      body,
-    });
-    if (!res.ok) throw new Error(`Automatic1111 txt2img failed with status ${res.status}`);
-    const data = await res.json<Txt2ImgResponse>();
-    const b64 = data.images?.[0];
-    if (!b64) throw new Error("Automatic1111 returned no image");
-    // Some builds prefix with "data:image/png;base64,"; strip it if present.
-    const clean = b64.includes(",") ? b64.slice(b64.indexOf(",") + 1) : b64;
-    return { bytes: base64ToBytes(clean), mimeType: "image/png" };
+    // Cancellation (user paused images): abort the HTTP AND tell A1111 to interrupt
+    // the running job so the GPU frees immediately.
+    const signal = input.signal;
+    const onAbort = (): void => {
+      void this.interrupt();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      const res = await this.transport.send({
+        url: `${this.baseUrl}/sdapi/v1/txt2img`,
+        method: "POST",
+        body,
+        ...(signal ? { signal } : {}),
+      });
+      if (!res.ok) throw new Error(`Automatic1111 txt2img failed with status ${res.status}`);
+      const data = await res.json<Txt2ImgResponse>();
+      const b64 = data.images?.[0];
+      if (!b64) throw new Error("Automatic1111 returned no image");
+      // Some builds prefix with "data:image/png;base64,"; strip it if present.
+      const clean = b64.includes(",") ? b64.slice(b64.indexOf(",") + 1) : b64;
+      return { bytes: base64ToBytes(clean), mimeType: "image/png" };
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /** Tell A1111 to interrupt the running job (best-effort; ignores errors). */
+  private async interrupt(): Promise<void> {
+    try {
+      await this.transport.send({ url: `${this.baseUrl}/sdapi/v1/interrupt`, method: "POST", body: {} });
+    } catch {
+      /* best-effort — the HTTP abort already stopped us waiting */
+    }
   }
 }

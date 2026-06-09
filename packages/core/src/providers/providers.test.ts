@@ -675,6 +675,10 @@ describe("ComfyUI IP-Adapter (version-aware, graceful)", () => {
     expect(wf["22"]!.class_type).toBe("IPAdapterAdvanced");
     expect(wf["3"]!.inputs.model).toEqual(["22", 0]);
     expect(t.requests.some((r) => r.url.endsWith("/upload/image"))).toBe(true);
+    // Scene-focused tuning: STANDARD preset (not high-strength) and IP-Adapter ends
+    // partway so composition forms before identity is refined (no portrait bias).
+    expect(wf["20"]!.inputs.preset).toBe("STANDARD");
+    expect(wf["22"]!.inputs.end_at).toBeLessThan(1);
   });
 
   it("old node set → IPAdapterModelLoader + CLIPVisionLoader + IPAdapterApply", async () => {
