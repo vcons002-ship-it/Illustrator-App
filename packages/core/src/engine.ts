@@ -554,10 +554,10 @@ export class Engine {
    */
   async updateCharacter(characterId: string, patch: CharacterPatch): Promise<void> {
     if (!this.bible) return;
-    // A look change makes any captured reference image stale → drop it so a fresh
-    // one is recaptured on the next solo render.
-    const looksChanged =
-      patch.appearance !== undefined || patch.clothing !== undefined || patch.outfits !== undefined;
+    // A reference image is now a deliberate USER upload (auto-capture was removed), so
+    // it is NOT discarded when the text appearance is edited: the upload is the user's
+    // ground-truth likeness and refining the description shouldn't throw it away. (Use
+    // the Character Bible's "Remove" to clear it.)
     const characters = this.bible.characters.map((c) =>
       c.id === characterId
         ? {
@@ -572,7 +572,6 @@ export class Engine {
             ...(patch.appearance !== undefined
               ? { appearance: { ...c.appearance, ...patch.appearance } }
               : {}),
-            ...(looksChanged ? { anchor: dropReference(c.anchor) } : {}),
           }
         : c,
     );
@@ -696,7 +695,7 @@ export class Engine {
   }
 }
 
-/** An identity anchor with any captured reference image dropped (look changed). */
+/** An identity anchor with its reference image cleared (e.g. the user's Remove). */
 function dropReference(anchor: IdentityAnchor): IdentityAnchor {
   const { referenceImageId: _drop, ...rest } = anchor;
   return rest;

@@ -587,6 +587,31 @@ describe("Engine", () => {
     ).toBeUndefined();
   });
 
+  it("keeps a user-uploaded reference image when the character's looks are edited", async () => {
+    const store = new InMemoryStore();
+    const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    await vi.waitFor(() => expect(engine.getBible()!.characters.some((c) => c.name === "Aria")).toBe(true));
+    const aria = engine.getBible()!.characters.find((c) => c.name === "Aria")!;
+    await engine.setCharacterReference(aria.id, { bytes: new Uint8Array([7]).buffer, mimeType: "image/png" });
+    const refId = "book-1:charref:char-aria";
+
+    // Editing the text appearance/clothing/outfits must NOT discard the manual upload —
+    // it's the user's ground-truth likeness (auto-capture, which justified dropping it,
+    // is gone). Only the explicit "Remove" clears it.
+    await engine.updateCharacter(aria.id, {
+      appearance: { hair: "auburn" },
+      clothing: ["green cloak"],
+      outfits: [{ label: "travel", description: "worn leather", context: "" }],
+    });
+
+    const after = engine.getBible()!.characters.find((c) => c.id === aria.id)!;
+    expect(after.appearance.hair).toBe("auburn"); // edit applied
+    expect(after.anchor.referenceImageId).toBe(refId); // reference survived
+    expect(await store.getImage(refId)).toBeDefined(); // bytes still stored
+  });
+
   it("passes bible terms (name + descriptor) for every present character to the backend", async () => {
     const image = new MockImageProvider();
     const genSpy = vi.spyOn(image, "generate");
