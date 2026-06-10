@@ -83,6 +83,7 @@ const ExtractionSchema = z.object({
       environment: z.string(),
       mood: z.string(),
       composition: z.string(),
+      location: z.string(),
     }),
   ),
 });

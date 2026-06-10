@@ -33,8 +33,8 @@ describe("mergeExtraction keyEvents (folded prompts)", () => {
         environments: [],
         spoilers: [],
         keyEvents: [
-          { subject: "Ana", action: "runs", environment: "hall", mood: "tense", composition: "wide" },
-          { subject: "Bram", action: "waits", environment: "gate", mood: "calm", composition: "close" },
+          { subject: "Ana", action: "runs", environment: "hall", mood: "tense", composition: "wide", location: "the Hall" },
+          { subject: "Bram", action: "waits", environment: "gate", mood: "calm", composition: "close", location: "the Gate" },
         ],
       },
       0,
@@ -49,6 +49,25 @@ describe("mergeExtraction keyEvents (folded prompts)", () => {
     expect(ev[0]!.imagePrompt.subject).toBe("Ana");
     expect(ev[1]!.pageRange).toEqual([3, 4]);
     expect(ev[1]!.imagePrompt.composition).toBe("close");
+    // Beat-level locations ride along, one per image, tracking the mid-chapter move.
+    expect(ev[0]!.location).toBe("the Hall");
+    expect(ev[1]!.location).toBe("the Gate");
+  });
+
+  it("omits a blank beat location (falls back to chapter-level at render)", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [],
+        environments: [],
+        spoilers: [],
+        keyEvents: [{ subject: "Ana", action: "runs", environment: "hall", mood: "", composition: "", location: "  " }],
+      },
+      0,
+      [[0, 0]],
+    );
+    expect(bible.storyboard[0]!.keyEvents![0]!.location).toBeUndefined();
   });
 
   it("tolerates more scene prompts than units (uses the shorter count)", () => {
@@ -406,6 +425,50 @@ describe("environments + location tracking", () => {
     expect(text).toContain("Setting for this image");
     expect(text).toContain("the Great Hall");
     expect(text).toContain("do not blend places");
+  });
+
+  it("prefers the unit's beat-level location over passage matches and the chapter location", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [],
+        environments: [
+          { name: "the Great Hall", description: ["vaulted"] },
+          { name: "the Courtyard", description: ["cobbled"] },
+        ],
+        spoilers: [],
+        summary: "A feast, then a duel outside.",
+        keyMoment: "The duel.",
+        location: "the Great Hall",
+        locationChange: "moves to the courtyard midway",
+        keyEvents: [
+          { subject: "Ana", action: "toasts", environment: "feast", mood: "warm", composition: "wide", location: "the Great Hall" },
+          { subject: "Ana", action: "duels", environment: "open air", mood: "tense", composition: "wide", location: "the Courtyard" },
+        ],
+      },
+      0,
+      [
+        [0, 4],
+        [5, 9],
+      ],
+    );
+    const req: VisualRequest = {
+      kind: "scene_illustration",
+      bookId: "b",
+      pageId: "u-1",
+      pageIndex: 1,
+      chapterIndex: 0,
+      // The passage still NAMES the Great Hall (a memory) — the beat location must win.
+      pageRange: [5, 9],
+      sourceText: "Far from the Great Hall now, blades crossed.",
+      characterIds: [],
+      environmentIds: ["env-the-great-hall", "env-the-courtyard"],
+      creatureIds: [],
+      spoilerIds: [],
+    };
+    const text = promptUserContent(req, bible);
+    expect(text).toContain("Setting for this image (use this ONE location, do not blend places): the Courtyard");
   });
 
   it("feeds known locations back into the next chapter's extraction context", () => {

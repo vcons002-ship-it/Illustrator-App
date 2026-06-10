@@ -400,12 +400,12 @@ describe("parseExtraction", () => {
       spoilers: [],
     });
   });
-  it("parses folded keyEvents (scene prompts)", () => {
+  it("parses folded keyEvents (scene prompts) with their beat-level location", () => {
     const raw = parseExtraction(
       JSON.stringify({
         characters: [],
         keyEvents: [
-          { subject: "Ana", action: "runs", environment: "hall", mood: "tense", composition: "wide" },
+          { subject: "Ana", action: "runs", environment: "hall", mood: "tense", composition: "wide", location: "the Hall" },
         ],
       }),
     );
@@ -416,6 +416,7 @@ describe("parseExtraction", () => {
       environment: "hall",
       mood: "tense",
       composition: "wide",
+      location: "the Hall",
     });
   });
 });

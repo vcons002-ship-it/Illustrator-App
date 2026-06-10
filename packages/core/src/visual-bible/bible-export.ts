@@ -76,6 +76,9 @@ export const BIBLE_EXPORT_RULES = {
     KeyEvent: {
       pageRange: "[number, number] — inclusive [start,end] ORIGINAL page indices this prompt covers",
       imagePrompt: "ScenePrompt — natural language only; describe a SCENE (not a portrait)",
+      location:
+        "string? — the ONE established location NAME where THIS scene happens (beat-level: " +
+        "when the chapter moves, consecutive events change location with it)",
       seed: "number? — optional stable render seed",
     },
     ChapterScene: {
@@ -288,6 +291,8 @@ function toKeyEvent(v: unknown): KeyEvent {
     if (val) imagePrompt[k] = val;
   }
   const ev: KeyEvent = { pageRange: [Math.min(start, end), Math.max(start, end)], imagePrompt };
+  const location = str(o.location).trim();
+  if (location) ev.location = location;
   if (typeof o.seed === "number") ev.seed = o.seed;
   return ev;
 }

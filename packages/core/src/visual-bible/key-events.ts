@@ -79,3 +79,16 @@ export function composeScenePrompt(p: ScenePrompt): string {
   if (structured.length > 0) return structured.join(". ");
   return (p.text ?? "").trim();
 }
+
+/**
+ * Commit a base prompt to the keyEvent's beat-level location ("one picture, one
+ * place"). Appends an explicit setting clause when the prompt doesn't already name
+ * the place — naming it also lets bible-term injection expand it into the location's
+ * full visual description. No-op when the event has no location (older Bibles) or
+ * the prompt names it already.
+ */
+export function anchorSetting(prompt: string, location: string | undefined): string {
+  const place = (location ?? "").trim();
+  if (!prompt || !place || prompt.toLowerCase().includes(place.toLowerCase())) return prompt;
+  return `${prompt.replace(/[\s.]+$/, "")}. Setting: ${place}.`;
+}

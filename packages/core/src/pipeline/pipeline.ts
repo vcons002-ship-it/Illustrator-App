@@ -6,7 +6,7 @@ import type { LLMProvider } from "../providers/llm/llm-provider.js";
 import type { ImageProvider } from "../providers/image/image-provider.js";
 import type { VisualReaderStore } from "../storage/store.js";
 import { resolvePageEntities } from "../visual-bible/bible.js";
-import { composeScenePrompt, resolveKeyEvent } from "../visual-bible/key-events.js";
+import { anchorSetting, composeScenePrompt, resolveKeyEvent } from "../visual-bible/key-events.js";
 import { expandPrompt, findBibleTermsInText } from "../providers/image/bible-injection.js";
 import { getImageStyle } from "../providers/catalog.js";
 import { qualityProfile } from "../quality.js";
@@ -136,7 +136,10 @@ export class RenderPipeline {
       // gate (canRender = hasKeyEvent) means a renderable unit always has one, so this never
       // falls back to a live LLM call; the guard below is purely defensive.
       const keyEvent = resolveKeyEvent(bible, request.chapterIndex, request.pageRange);
-      const stored = keyEvent ? composeScenePrompt(keyEvent.imagePrompt) : "";
+      // Pin the prompt to the unit's beat-level location (exact even mid-chapter).
+      const stored = keyEvent
+        ? anchorSetting(composeScenePrompt(keyEvent.imagePrompt), keyEvent.location)
+        : "";
       if (!stored) {
         return {
           requestId,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { addKeyEvent, clearKeyEvents, composeScenePrompt, resolveKeyEvent } from "./key-events.js";
+import { addKeyEvent, anchorSetting, clearKeyEvents, composeScenePrompt, resolveKeyEvent } from "./key-events.js";
 import { createEmptyBible } from "./bible.js";
 import type { KeyEvent } from "../types/bible.js";
 
@@ -40,6 +40,27 @@ describe("composeScenePrompt", () => {
   });
   it("prefers structured over text", () => {
     expect(composeScenePrompt({ subject: "Elena", text: "ignored" })).toBe("Elena");
+  });
+});
+
+describe("anchorSetting", () => {
+  it("appends an explicit setting clause when the prompt doesn't name the place", () => {
+    expect(anchorSetting("Ana runs. tense. wide shot", "the Great Hall")).toBe(
+      "Ana runs. tense. wide shot. Setting: the Great Hall.",
+    );
+  });
+  it("leaves the prompt alone when it already names the place (any case)", () => {
+    expect(anchorSetting("Ana runs through the great hall", "the Great Hall")).toBe(
+      "Ana runs through the great hall",
+    );
+  });
+  it("no-ops without a location or without a prompt", () => {
+    expect(anchorSetting("Ana runs", undefined)).toBe("Ana runs");
+    expect(anchorSetting("Ana runs", "  ")).toBe("Ana runs");
+    expect(anchorSetting("", "the Hall")).toBe("");
+  });
+  it("doesn't double the sentence break on a trailing period", () => {
+    expect(anchorSetting("Ana runs.", "the Hall")).toBe("Ana runs. Setting: the Hall.");
   });
 });
 

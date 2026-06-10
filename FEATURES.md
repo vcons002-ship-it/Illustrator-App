@@ -38,7 +38,8 @@ The app builds a structured memory of the book so art stays consistent:
 - **Locations** captured by name with detailed descriptions that **grow over the book** —
   so a place described once still looks right when a later chapter only mentions it.
 - **Per-chapter storyboard** — what happens, the single key moment to illustrate, and
-  **where** it happens (so an image never blends two different places).
+  **where** it happens — tracked **per image**, beat by beat, so even when a chapter
+  moves between places each illustration knows the one place its own moment happens.
 - **World glossary** — recurring world rules ("riders wear flight leathers", tech level,
   materials) applied as defaults in every picture.
 - **World style** — one auto-derived genre/art-direction line for the whole book
@@ -97,7 +98,7 @@ The app builds a structured memory of the book so art stays consistent:
  LLM pre-pass  ──►  VISUAL BIBLE  (cached on your device)
     reads the book      • characters (appearance + outfits)
     chapter by chapter  • locations (detailed, accumulated by name)
-                        • storyboard (what happens · key moment · where)
+                        • storyboard (what happens · key moment · where, per image)
                         • world glossary · world style · spoilers
                         • one scene prompt per page-group (written as it reads —
                           stored, so rendering never calls the AI again)
@@ -121,8 +122,9 @@ The app builds a structured memory of the book so art stays consistent:
 - **Whole-book vs. each-chapter** — by default the app reads the *whole* book first so
   every prompt has full context (best art). You can switch to "each chapter" for a faster
   first image.
-- **One picture, one place** — each image commits to the single location its pages
-  describe, so actions from different settings never get mashed into one frame.
+- **One picture, one place** — the setting is tracked beat by beat, and each image
+  commits to the single location where its own moment happens — even mid-chapter — so
+  actions from different settings never get mashed into one frame.
 - **Consistency** — characters get a stable identity seed, and their names in every
   prompt are expanded into their Bible appearance at render time (image models can't
   picture a name) — so they don't drift from page to page. You can also upload a
@@ -141,8 +143,6 @@ The app builds a structured memory of the book so art stays consistent:
   them in. The risk is **spoilers**, so the planned shape is an **opt-in, cloud-only**
   lookup limited to what you've already read. (Today the app stays fully offline-capable
   and spoiler-safe.)
-- **Exact mid-chapter location changes per image** — finer "beat"-level location tracking
-  so very long page-groups that move between places split cleanly.
 - **Per-character LoRA styles** — pin a character with a dedicated LoRA for even tighter
   consistency (reference-image upload is in; the LoRA slot already exists).
 - **One-API "native" mode** — when the same cloud provider serves text **and** images
@@ -158,6 +158,10 @@ The app builds a structured memory of the book so art stays consistent:
 - **Hosted option** — an optional managed backend so you don't need your own keys/GPU.
 
 **Done recently**
+- **Exact mid-chapter location changes per image** — the setting is now tracked beat by
+  beat: every illustration records the ONE place its own moment happens (not just the
+  chapter's main location), so when a chapter moves (tavern → road → castle) each image
+  commits to the right place, and the picture is pinned to it at render.
 - **One-click local model downloads** — curated image models (incl. Z-Image Turbo,
   Flux.2 Klein, Qwen-Image) and Ollama text models download straight from Settings with
   a live progress bar; split-file models fetch every component (resumable) — no terminal.

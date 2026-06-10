@@ -75,7 +75,7 @@ export const EXTRACTION_JSON_INSTRUCTION =
   '"creatures":[{"name":string,"aliases":string[],"kind":string,"description":string[]}],' +
   '"spoilers":[{"label":string}],' +
   '"summary":string,"keyMoment":string,"location":string,"locationChange":string,' +
-  '"keyEvents":[{"subject":string,"action":string,"environment":string,"mood":string,"composition":string}]}. ' +
+  '"keyEvents":[{"subject":string,"action":string,"environment":string,"mood":string,"composition":string,"location":string}]}. ' +
   "Include each NEW named character with an appearance description (use empty strings for " +
   "unknown appearance fields). Capture each distinct outfit a character wears as a separate " +
   "'outfits' entry (label + description). Put non-human beasts (dragons, monsters, mounts) in " +
@@ -84,7 +84,8 @@ export const EXTRACTION_JSON_INSTRUCTION =
   "(it is remembered). Set 'location' to where the chapter happens and 'locationChange' to " +
   "where/when it moves (empty string if it stays in one place). For 'keyEvents', produce EXACTLY " +
   "the requested number of scene prompts in reading order (each a complete scene: subject, " +
-  "action, environment, mood, composition — natural language, no tags).";
+  "action, environment, mood, composition — natural language, no tags). Each keyEvent's " +
+  "'location' is the ONE location name where ITS scene happens (track moves beat by beat).";
 
 // Module-level engine cache so re-created providers reuse a loaded model
 // (loading is slow; the weights are GB-sized).
@@ -339,6 +340,7 @@ export function parseExtraction(content: string): RawExtraction {
           environment: str(o.environment),
           mood: str(o.mood),
           composition: str(o.composition),
+          location: str(o.location),
         };
       }),
     };

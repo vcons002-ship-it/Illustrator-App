@@ -134,6 +134,35 @@ describe("RenderPipeline stored-first prompt fetch", () => {
     expect(lastPrompt()).toContain("STORED SCENE PROMPT");
   });
 
+  it("pins the prompt to the keyEvent's beat-level location", async () => {
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = createEmptyBible(book.id);
+    bible.storyboard.push({
+      chapterIndex: 0,
+      summary: "",
+      keyMoment: "",
+      location: "the Great Hall", // chapter-level place differs — the beat must win
+      locationChange: "moves to the courtyard",
+      keyEvents: [{ pageRange: [0, 0], imagePrompt: { text: "blades crossed" }, location: "the Courtyard" }],
+    });
+    const { provider: img, lastPrompt } = recordingImage();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: img,
+      store: new InMemoryStore(),
+      tier: DEFAULT_TIER_CONFIG,
+    });
+
+    await pipeline.renderPage(0);
+
+    expect(lastPrompt()).toContain("blades crossed");
+    expect(lastPrompt()).toContain("Setting: the Courtyard.");
+    expect(lastPrompt()).not.toContain("Great Hall");
+  });
+
   it("never calls the LLM at render time — holds (errors) when no prompt is stored", async () => {
     const book = oneParagraphBook();
     book.pages[0]!.pageRange = [0, 0];

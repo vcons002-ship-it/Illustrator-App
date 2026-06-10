@@ -12,6 +12,7 @@ import { emptyAppearance } from "../../types/bible.js";
 import type { EntityExtractionInput } from "./llm-provider.js";
 import type { VisualRequest } from "../../types/content.js";
 import { deterministicSeed } from "./mock-llm-provider.js";
+import { resolveKeyEvent } from "../../visual-bible/key-events.js";
 
 /**
  * Shared building blocks for the cloud LLM providers (Claude / Gemini / OpenAI).
@@ -60,6 +61,8 @@ export interface RawExtraction {
     environment: string;
     mood: string;
     composition: string;
+    /** Beat-level setting: the ONE location name where this scene happens. */
+    location?: string;
   }[];
   /** One concise genre/art-direction line for the whole book, applied to every prompt. */
   worldStyle?: string;
@@ -120,7 +123,12 @@ export const EXTRACTION_SYSTEM =
   "that many keyEvents, in order, each describing the single most important visual SCENE of its " +
   "stretch as five natural-language fields: 'subject' (who/what is the focus), 'action' (what they " +
   "are doing), 'environment' (where/how it looks), 'mood' (tone), 'composition' (camera angle/" +
-  "framing). Describe a scene with the characters acting in their setting — NOT a portrait. Refer to " +
+  "framing) — plus 'location': the established location NAME where THAT scene's moment happens. " +
+  "Track the setting beat by beat: each keyEvent gets ITS OWN location, so when the chapter moves " +
+  "(tavern → road → castle) consecutive keyEvents change location accordingly. EXACTLY one place " +
+  "per keyEvent — if a stretch itself moves between places, use the place of the depicted moment " +
+  "(empty string only if genuinely unknowable). " +
+  "Describe a scene with the characters acting in their setting — NOT a portrait. Refer to " +
   "characters/creatures by their EXACT bible name, to clothing by its outfit LABEL, and to a place " +
   "by its location NAME (the app expands each into its visual description), so do NOT describe their " +
   "permanent looks. No weighting syntax, no tags, just prose; keep each field concise. " +
@@ -280,8 +288,9 @@ export const EXTRACTION_JSON_SCHEMA = {
           environment: { type: "string" },
           mood: { type: "string" },
           composition: { type: "string" },
+          location: { type: "string" },
         },
-        required: ["subject", "action", "environment", "mood", "composition"],
+        required: ["subject", "action", "environment", "mood", "composition", "location"],
       },
     },
     worldStyle: { type: "string" },
@@ -405,7 +414,8 @@ function mapKeyEventsToUnits(
       if (v) imagePrompt[key] = v;
     }
     if (Object.keys(imagePrompt).length === 0) continue;
-    out.push({ pageRange: unitRanges[i]!, imagePrompt });
+    const location = (e.location ?? "").trim();
+    out.push({ pageRange: unitRanges[i]!, imagePrompt, ...(location ? { location } : {}) });
   }
   return out;
 }
@@ -575,13 +585,16 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
   const envs = bible.environments.filter((e) => request.environmentIds.includes(e.id));
   const creatures = (bible.creatures ?? []).filter((c) => request.creatureIds.includes(c.id));
   const scene = (bible.storyboard ?? []).find((s) => s.chapterIndex === request.chapterIndex);
+  // Beat-level setting: this unit's stored keyEvent (if any) knows where ITS moment
+  // happens — more exact than the chapter's single location when the chapter moves.
+  const beatLocation = resolveKeyEvent(bible, request.chapterIndex, request.pageRange)?.location;
   return [
     request.bookTitle ? `Book: ${request.bookTitle}.` : "",
     `Illustrate the single most important action in THIS passage (below). Each illustration ` +
       `covers a DIFFERENT stretch of the chapter, so depict ONLY what happens in THIS passage — ` +
       `not the chapter's overall climax, and not a previous illustration's moment.`,
     `Passage:\n${request.sourceText}`,
-    settingLine(scene, envs, request.sourceText),
+    settingLine(scene, envs, request.sourceText, beatLocation),
     chars.length
       ? `Characters present — refer to each by their EXACT name; do NOT describe their looks ` +
         `(auto-applied). They are PEOPLE (a name like 'Cat' is a person). Where a character has ` +
@@ -621,20 +634,21 @@ function characterNameLine(c: Character): string {
 }
 
 /**
- * The single location this image must commit to. Prefers a known environment that
- * the passage actually names (so a unit that has moved on uses ITS place, not the
- * chapter's opening place); otherwise falls back to the chapter scene's primary
- * `location`. `locationChange` is passed as context so the writer knows the
- * chapter moves and must still pick ONE setting.
+ * The single location this image must commit to, by preference: (1) the unit's
+ * beat-level location from its stored keyEvent (exact, tracked per image even
+ * when the chapter moves); (2) a known environment the passage actually names;
+ * (3) the chapter scene's primary `location`. `locationChange` is passed as
+ * context so the writer knows the chapter moves and must still pick ONE setting.
  */
 function settingLine(
   scene: { location?: string; locationChange?: string } | undefined,
   envs: { name: string }[],
   sourceText: string,
+  beatLocation?: string,
 ): string {
   const haystack = sourceText.toLowerCase();
   const named = envs.find((e) => e.name && haystack.includes(e.name.toLowerCase()));
-  const place = named?.name || scene?.location || "";
+  const place = (beatLocation ?? "").trim() || named?.name || scene?.location || "";
   if (!place) return "";
   const change = scene?.locationChange ? ` (note: the chapter moves — ${scene.locationChange})` : "";
   return `Setting for this image (use this ONE location, do not blend places): ${place}${change}`;

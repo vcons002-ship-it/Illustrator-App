@@ -171,6 +171,13 @@ export interface KeyEvent {
   pageRange: [number, number];
   /** Layer-1 scene prompt. */
   imagePrompt: ScenePrompt;
+  /**
+   * Beat-level setting: the established location NAME where THIS image's moment
+   * happens — exactly one place, even when the chapter (or this stretch) moves.
+   * Finer-grained than the chapter scene's `location`; "" / absent when unknown
+   * (older cached Bibles), in which case rendering falls back to chapter level.
+   */
+  location?: string;
   /** Optional stable render seed for reproducibility. */
   seed?: number;
 }
