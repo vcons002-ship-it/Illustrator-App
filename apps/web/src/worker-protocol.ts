@@ -33,9 +33,8 @@ export type MainToWorker =
   | { type: "exportBible" }
   | { type: "importBible"; json: string }
   | { type: "carryOverBible"; fromBookId: string }
-  | { type: "goto"; pageIndex: number }
-  | { type: "idle"; allowed: boolean }
-  | { type: "prerenderAll" };
+  /** Repaint from this unit to the end with current settings; earlier units kept. */
+  | { type: "paintForward"; fromUnit: number };
 
 export type WorkerToMain =
   | { type: "status"; message: string }

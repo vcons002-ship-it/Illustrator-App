@@ -146,7 +146,6 @@ function Overlay() {
       .then(() => {
         if (cancelled) return;
         setBook(source);
-        engine.goToPage(0);
         // openBook now only loads/restores; kick off generation explicitly so the
         // extension keeps auto-illustrating as you read (reusing cached work).
         engine.startGeneration();
@@ -187,7 +186,6 @@ function Overlay() {
 
   // Steer the predictive buffer to the active page.
   useEffect(() => {
-    engineRef.current?.goToPage(pageIndex);
   }, [pageIndex]);
 
   // Connect to a self-hosted engine (AUTOMATIC1111 / ComfyUI) and load its models.

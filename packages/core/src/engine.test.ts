@@ -61,7 +61,6 @@ describe("Engine", () => {
 
     await engine.openBook(sampleBook());
     engine.startGeneration();
-    engine.goToPage(0);
 
     // Let the async renders settle.
     await vi.waitFor(() => {
@@ -84,7 +83,6 @@ describe("Engine", () => {
 
     const engine = new Engine({ llm, image, store });
     await engine.openBook(sampleBook());
-    engine.goToPage(0);
 
     // The cached page shows immediately; nothing was extracted or generated.
     expect(engine.isGenerating()).toBe(false);
@@ -135,7 +133,6 @@ describe("Engine", () => {
     const engine = new Engine({ llm, image: new MockImageProvider() });
     await engine.openBook(book);
     engine.startGeneration();
-    engine.goToPage(0);
 
     // Chapter 0's page renders even though chapter 1 (and thus the full bible) is stuck.
     await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
@@ -214,7 +211,6 @@ describe("Engine", () => {
     const engine = new Engine({ llm, image: new MockImageProvider(), illustrateAfter: "book" });
     await engine.openBook(twoChapterBook());
     engine.startGeneration();
-    engine.goToPage(0);
 
     // Chapter 1 is held → bible incomplete → even chapter 0's page must not render.
     await new Promise((r) => setTimeout(r, 20));
@@ -231,7 +227,6 @@ describe("Engine", () => {
     const engine = new Engine({ llm: new MockLLMProvider(), image });
     await engine.openBook(sampleBook());
     engine.startGeneration();
-    engine.goToPage(0);
     await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
 
     const before = genSpy.mock.calls.length;
@@ -254,7 +249,6 @@ describe("Engine", () => {
     const engine = new Engine({ llm, image, illustrateAfter: "chapter" });
     await engine.openBook(twoChapterBook());
     engine.startGeneration();
-    engine.goToPage(0);
     await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
 
     engine.pauseGeneration();
@@ -282,7 +276,6 @@ describe("Engine", () => {
     const engine = new Engine({ llm, image, illustrateAfter: "chapter" });
     await engine.openBook(twoChapterBook());
     engine.startGeneration();
-    engine.goToPage(0);
     await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
 
     // Pause IMAGES only — the bible build must continue to completion (GPU balancing).
@@ -312,7 +305,6 @@ describe("Engine", () => {
     const engine = new Engine({ llm, image: new MockImageProvider(), illustrateAfter: "chapter" });
     await engine.openBook(twoChapterBook());
     engine.startGeneration();
-    engine.goToPage(0);
     // Chapter 0 extracts, gets its prompt, and renders (images are never paused here).
     await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
 
@@ -417,7 +409,6 @@ describe("Engine", () => {
     const engine = new Engine({ llm: new MockLLMProvider(), image, illustrateAfter: "chapter" });
     await engine.openBook(sampleBook());
     engine.startGeneration();
-    engine.goToPage(0);
     await vi.waitFor(() => expect(started).toBeGreaterThan(0)); // a render is in flight
 
     engine.setImagePaused(true);
@@ -498,6 +489,24 @@ describe("Engine", () => {
     await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
   });
 
+  it("paintForward repaints from the chosen unit onward, keeping earlier images", async () => {
+    const image = new MockImageProvider();
+    const genSpy = vi.spyOn(image, "generate");
+    const engine = new Engine({ llm: new MockLLMProvider(), image });
+    await engine.openBook(sampleBook()); // 2 units
+    engine.startGeneration();
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+    await vi.waitFor(() => expect(engine.resultFor(1)?.status).toBe("ready"));
+    const callsBefore = genSpy.mock.calls.length;
+    const firstImage = engine.resultFor(0)?.image;
+
+    // Repaint from unit 1 onward: unit 0's image is untouched, unit 1 re-renders.
+    await engine.paintForward(1);
+    await vi.waitFor(() => expect(engine.resultFor(1)?.status).toBe("ready"));
+    expect(genSpy.mock.calls.length).toBe(callsBefore + 1); // exactly one repaint
+    expect(engine.resultFor(0)?.image).toBe(firstImage); // earlier unit kept as-is
+  });
+
   it("rebuildPrompts clears and repopulates the stored prompts", async () => {
     const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider() });
     await engine.openBook(twoChapterBook());
@@ -560,7 +569,6 @@ describe("Engine", () => {
     const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });
     await engine.openBook(sampleBook()); // page 0 features only "Aria"
     engine.startGeneration();
-    engine.goToPage(0);
     await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
 
     // Auto-capture was removed — rendering never pins a reference image.
@@ -589,7 +597,6 @@ describe("Engine", () => {
     });
     await engine.openBook(sampleBook());
     engine.startGeneration();
-    engine.goToPage(0);
     await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
 
     // The mock prompt names "Aria", so the term scan finds her and passes a descriptor term.

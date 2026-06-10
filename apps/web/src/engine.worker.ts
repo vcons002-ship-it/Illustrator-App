@@ -271,14 +271,8 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
         }),
       );
       break;
-    case "goto":
-      engine?.goToPage(msg.pageIndex);
-      break;
-    case "idle":
-      engine?.setIdleAllowed(msg.allowed);
-      break;
-    case "prerenderAll":
-      engine?.prerenderAll();
+    case "paintForward":
+      void engine?.paintForward(msg.fromUnit);
       post({ type: "generating", value: true });
       postPaused();
       break;
@@ -355,7 +349,6 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     // Loads the book + restores cached bible/images, but does NOT generate. The
     // user triggers generation via the "start" message ("Begin generating book").
     await engine.openBook(renderBook);
-    engine.goToPage(0);
     // Resume generation if "start" was requested while this open was in flight.
     if (pendingStart) beginGeneration();
   } catch (err) {

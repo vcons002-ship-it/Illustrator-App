@@ -66,8 +66,8 @@ export interface EngineWorkerApi {
   importResult: ImportResult | undefined;
   /** Clear the last import result (e.g. on closing the import dialog). */
   clearImportResult: () => void;
-  goTo: (pageIndex: number) => void;
-  prerenderAll: () => void;
+  /** Repaint from a unit to the end with current settings (earlier units kept). */
+  paintForward: (fromUnit: number) => void;
 }
 
 export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
@@ -263,8 +263,10 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   }, []);
   const clearImportResult = useCallback(() => setImportResult(undefined), []);
   const carryOverBible = useCallback((fromBookId: string) => send({ type: "carryOverBible", fromBookId }), []);
-  const goTo = useCallback((pageIndex: number) => send({ type: "goto", pageIndex }), []);
-  const prerenderAll = useCallback(() => send({ type: "prerenderAll" }), []);
+  const paintForward = useCallback(
+    (fromUnit: number) => send({ type: "paintForward", fromUnit }),
+    [],
+  );
 
   return {
     bible,
@@ -295,8 +297,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     carryOverBible,
     updateCharacter,
     setCharacterReference,
-    goTo,
-    prerenderAll,
+    paintForward,
   };
 }
 

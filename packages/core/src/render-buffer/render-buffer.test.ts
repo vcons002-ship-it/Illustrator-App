@@ -26,102 +26,51 @@ function deferredRenderer() {
 }
 
 describe("RenderBuffer", () => {
-  it("renders the current page and look-ahead window within the concurrency limit", () => {
+  it("renders from the start of the book within the concurrency limit", () => {
     const { render, started } = deferredRenderer();
-    const buf = new RenderBuffer({ totalPages: 10, render, windowAhead: 2, maxConcurrent: 2 });
+    const buf = new RenderBuffer({ totalPages: 10, render, maxConcurrent: 2 });
 
-    buf.setCurrentPage(0);
+    buf.refresh();
 
-    // Only maxConcurrent renders start at once; current page is highest priority.
+    // Only maxConcurrent renders start at once, strictly from page 0.
     expect(started).toEqual([0, 1]);
     expect(buf.statusOf(0)).toBe("rendering");
     expect(buf.statusOf(2)).toBe("queued");
   });
 
-  it("advances the window and fills freed slots as renders settle", async () => {
+  it("fills freed slots in order until the whole book is rendered", async () => {
     const { render, started, finish } = deferredRenderer();
-    const buf = new RenderBuffer({ totalPages: 10, render, windowAhead: 2, maxConcurrent: 2 });
+    const buf = new RenderBuffer({ totalPages: 4, render, maxConcurrent: 2 });
 
-    buf.setCurrentPage(0);
+    buf.refresh();
     expect(started).toEqual([0, 1]);
 
     await finish(0);
-    // A slot freed → next window page (2) starts.
-    expect(started).toEqual([0, 1, 2]);
+    expect(started).toEqual([0, 1, 2]); // a slot freed → next page in order
     expect(buf.statusOf(0)).toBe("ready");
-  });
 
-  it("does not pre-render beyond the window unless idle is allowed", async () => {
-    const { render, started, finish } = deferredRenderer();
-    const buf = new RenderBuffer({ totalPages: 100, render, windowAhead: 1, maxConcurrent: 4, maxPrerender: 50 });
-
-    buf.setCurrentPage(0);
-    // Window is current + 1 = pages 0,1 only.
-    expect(started).toEqual([0, 1]);
-
-    await finish(0);
     await finish(1);
-    // Nothing past the window starts while idle is disallowed.
-    expect(started).toEqual([0, 1]);
-
-    buf.setIdleAllowed(true);
-    expect(started).toContain(2);
+    await finish(2);
+    await finish(3);
+    // Every page got rendered, none twice — no reader position needed.
+    expect([...started].sort((a, b) => a - b)).toEqual([0, 1, 2, 3]);
+    expect(new Set(started).size).toBe(4);
   });
 
-  it("caps speculative pre-rendering at maxPrerender", () => {
+  it("generation is independent of the reader's position (no scroll coupling)", () => {
     const { render, started } = deferredRenderer();
-    const buf = new RenderBuffer({
-      totalPages: 1000,
-      render,
-      windowAhead: 0,
-      maxConcurrent: 1000,
-      maxPrerender: 5,
-    });
+    const buf = new RenderBuffer({ totalPages: 20, render, maxConcurrent: 2 });
 
-    buf.setIdleAllowed(true);
-    buf.setCurrentPage(0);
-
-    // current (0) + 5 prerender = pages 0..5
-    expect(Math.max(...started)).toBe(5);
-    expect(started).toHaveLength(6);
-  });
-
-  it("renderAll eventually renders every page, current/window first", async () => {
-    const { render, started, finish } = deferredRenderer();
-    const buf = new RenderBuffer({ totalPages: 6, render, windowAhead: 1, maxConcurrent: 2, maxPrerender: 0 });
-
-    buf.setCurrentPage(0);
-    expect(started).toEqual([0, 1]); // priority window first
-
-    buf.renderAll();
-    // Still capped by concurrency until slots free up.
+    // There is no position input at all — generation simply starts at the
+    // beginning; the reveal (scroll) is handled entirely in the UI.
+    buf.refresh();
     expect(started).toEqual([0, 1]);
-
-    for (let p = 0; p < 6; p++) await finish(p);
-
-    // Every page got rendered, none twice.
-    expect([...started].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5]);
-    expect(new Set(started).size).toBe(6);
   });
 
-  it("generates strictly in order, not the page being viewed", () => {
-    const { render, started } = deferredRenderer();
-    const buf = new RenderBuffer({ totalPages: 20, render, windowAhead: 2, maxConcurrent: 2, maxPrerender: 50 });
-    buf.setIdleAllowed(true);
-
-    // Reader jumps ahead to page 10, but nothing is rendered yet.
-    buf.setCurrentPage(10);
-
-    // Generation starts at the BEGINNING in order — it does not divert to page 10.
-    expect(started).toEqual([0, 1]);
-    expect(started).not.toContain(10);
-  });
-
-  it("keeps filling in ascending order as slots free, ignoring the viewed page", async () => {
+  it("keeps filling in ascending order as slots free", async () => {
     const { render, started, finish } = deferredRenderer();
-    const buf = new RenderBuffer({ totalPages: 20, render, windowAhead: 2, maxConcurrent: 2, maxPrerender: 50 });
-    buf.setIdleAllowed(true);
-    buf.setCurrentPage(15); // reader far ahead
+    const buf = new RenderBuffer({ totalPages: 20, render, maxConcurrent: 2 });
+    buf.refresh();
 
     expect(started).toEqual([0, 1]);
     await finish(0);
@@ -132,9 +81,8 @@ describe("RenderBuffer", () => {
 
   it("prioritize renders the chosen unit next, then returns to in-order", async () => {
     const { render, started, finish } = deferredRenderer();
-    const buf = new RenderBuffer({ totalPages: 20, render, windowAhead: 0, maxConcurrent: 1, maxPrerender: 50 });
-    buf.setIdleAllowed(true);
-    buf.setCurrentPage(0);
+    const buf = new RenderBuffer({ totalPages: 20, render, maxConcurrent: 1 });
+    buf.refresh();
     expect(started).toEqual([0]); // in order
 
     buf.prioritize(7); // explicit "regenerate this image" on unit 7
@@ -145,12 +93,26 @@ describe("RenderBuffer", () => {
     expect(started).toEqual([0, 7, 1]); // …then strictly in order again
   });
 
+  it("invalidate re-queues a settled page (the 'paint forward' building block)", async () => {
+    const { render, started, finish } = deferredRenderer();
+    const buf = new RenderBuffer({ totalPages: 2, render, maxConcurrent: 2 });
+    buf.refresh();
+    await finish(0);
+    await finish(1);
+    expect(buf.statusOf(1)).toBe("ready");
+
+    // Discard page 1's result → it repaints; page 0 is untouched.
+    buf.invalidate(1);
+    expect(started).toEqual([0, 1, 1]);
+    expect(buf.statusOf(0)).toBe("ready");
+  });
+
   it("notifies onUpdate on start and settle", async () => {
     const { render, finish } = deferredRenderer();
     const onUpdate = vi.fn();
-    const buf = new RenderBuffer({ totalPages: 3, render, windowAhead: 0, maxConcurrent: 1, onUpdate });
+    const buf = new RenderBuffer({ totalPages: 3, render, maxConcurrent: 1, onUpdate });
 
-    buf.setCurrentPage(0);
+    buf.refresh();
     expect(onUpdate).toHaveBeenCalledWith(0, expect.objectContaining({ status: "rendering" }));
 
     await finish(0);
@@ -167,9 +129,9 @@ describe("RenderBuffer", () => {
       });
     };
     const onUpdate = vi.fn();
-    const buf = new RenderBuffer({ totalPages: 1, render, windowAhead: 0, maxConcurrent: 1, onUpdate });
+    const buf = new RenderBuffer({ totalPages: 1, render, maxConcurrent: 1, onUpdate });
 
-    buf.setCurrentPage(0);
+    buf.refresh();
     progress!(0.5);
     expect(onUpdate).toHaveBeenCalledWith(0, expect.objectContaining({ status: "rendering", progress: 0.5 }));
 

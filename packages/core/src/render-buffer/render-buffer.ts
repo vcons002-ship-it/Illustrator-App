@@ -1,12 +1,13 @@
 import type { ImageResult, RenderStatus } from "../types/content.js";
 
 /**
- * Just-In-Time predictive render buffer (spec Module 2).
+ * In-order render buffer (spec Module 2, simplified).
  *
- * Maintains a sliding window ahead of the reader so an image is essentially
- * never awaited: the current page is rendered, the next pages are pre-rendered,
- * and — when the device is idle/powered — pages further ahead are speculatively
- * rendered up to a cap.
+ * Generation works through the book strictly FRONT TO BACK — the reader's scroll
+ * position never reorders or bounds it (position only drives the reveal, in the
+ * UI). Staying ahead of the reader falls out naturally: the engine starts at
+ * page one and keeps going, pacing only on the concurrency limit and the
+ * `canRender` gate (a unit renders once its stored prompt exists).
  *
  * The actual render is injected (`render`), so this scheduler is pure logic and
  * unit-testable without providers, workers, or `URL.createObjectURL`. The web
@@ -24,16 +25,13 @@ export interface RenderBufferOptions {
     onProgress: (fraction: number) => void,
     signal: AbortSignal,
   ) => Promise<ImageResult>;
-  /** Pages ahead of the current page to keep actively rendered. Default 2. */
-  windowAhead?: number;
   /** Max simultaneous renders. Default 2. */
   maxConcurrent?: number;
-  /** Cap on speculative idle pre-rendering ahead of the window. Default 50. */
-  maxPrerender?: number;
   /**
-   * Gate: may this page be rendered yet? Used to hold pages whose chapter isn't
-   * in the Visual Bible yet (the bible builds in the background). Gated pages stay
-   * `queued` and are retried on the next `refresh()`/`pump()`. Default: always true.
+   * Gate: may this page be rendered yet? Used to hold pages whose illustration
+   * prompt isn't in the Visual Bible yet (the bible builds in the background).
+   * Gated pages stay `queued` and are retried on the next `refresh()`/`pump()`.
+   * Default: always true.
    */
   canRender?: (pageIndex: number) => boolean;
   /**
@@ -60,16 +58,11 @@ export class RenderBuffer {
     onProgress: (fraction: number) => void,
     signal: AbortSignal,
   ) => Promise<ImageResult>;
-  private readonly windowAhead: number;
   private readonly maxConcurrent: number;
-  private readonly maxPrerender: number;
   private readonly canRender: (pageIndex: number) => boolean;
   private readonly shouldSkip: (pageIndex: number) => boolean;
   private readonly onUpdate?: ((pageIndex: number, result: ImageResult) => void) | undefined;
 
-  private current = 0;
-  private idleAllowed = false;
-  private renderEverything = false;
   private generationEnabled: boolean;
   /**
    * A single unit to render next, ahead of the normal in-order schedule. Set only by
@@ -86,9 +79,7 @@ export class RenderBuffer {
   constructor(options: RenderBufferOptions) {
     this.totalPages = options.totalPages;
     this.render = options.render;
-    this.windowAhead = options.windowAhead ?? 2;
     this.maxConcurrent = options.maxConcurrent ?? 2;
-    this.maxPrerender = options.maxPrerender ?? 50;
     this.canRender = options.canRender ?? (() => true);
     this.shouldSkip = options.shouldSkip ?? (() => false);
     this.generationEnabled = options.generationEnabled ?? true;
@@ -145,38 +136,12 @@ export class RenderBuffer {
     return this.results.get(pageIndex);
   }
 
-  /** Whether speculative pre-rendering beyond the window is permitted. */
-  setIdleAllowed(allowed: boolean): void {
-    this.idleAllowed = allowed;
-    this.pump();
-  }
-
-  /**
-   * Move the reader to a page. This advances how far ahead generation may run, but it
-   * does NOT make that page jump the queue — generation stays strictly in order, so
-   * scrolling around never diverts work onto the page you're merely looking at.
-   */
-  setCurrentPage(pageIndex: number): void {
-    this.current = clamp(pageIndex, 0, this.totalPages - 1);
-    this.pump();
-  }
-
   /**
    * Render one unit next, ahead of the in-order schedule — for the explicit
    * "regenerate this image" action only. Cleared automatically once it settles.
    */
   prioritize(pageIndex: number): void {
     this.priorityPage = clamp(pageIndex, 0, this.totalPages - 1);
-    this.pump();
-  }
-
-  /**
-   * Render every page now (the optional "pre-render the whole book" action),
-   * ignoring the look-ahead window and idle cap. The current page and look-ahead
-   * still take priority so reading stays responsive while the rest fills in.
-   */
-  renderAll(): void {
-    this.renderEverything = true;
     this.pump();
   }
 
@@ -189,24 +154,18 @@ export class RenderBuffer {
       p <= last &&
       !this.results.has(p) &&
       !this.inflight.has(p) &&
-      // Hold pages whose chapter isn't ready yet; a later refresh() retries them.
+      // Hold pages whose prompt isn't ready yet; a later refresh() retries them.
       this.canRender(p);
 
     const out: number[] = [];
-    // Explicit one-shot priority (regenerate this image) renders first, even if it's
-    // beyond the normal look-ahead bound.
+    // Explicit one-shot priority (regenerate this image) renders first.
     if (this.priorityPage !== undefined && want(this.priorityPage)) out.push(this.priorityPage);
 
-    // Strict in-order generation: always fill from the FIRST un-rendered unit forward,
-    // never starting at (or diverting to) the unit the reader is currently viewing.
-    // How far ahead we may run is bounded by the reader's position so battery/thermal
-    // gating still applies; "render everything" lifts the bound to the whole book.
-    const end = this.renderEverything
-      ? last
-      : this.idleAllowed
-        ? Math.min(last, this.current + this.maxPrerender)
-        : Math.min(last, this.current + this.windowAhead);
-    for (let p = 0; p <= end; p++) {
+    // Strict in-order generation, front to back through the whole book: always fill
+    // from the FIRST un-rendered unit forward. The reader's position never reorders
+    // or bounds this (scrolling only affects the reveal) — staying ahead of the
+    // reader falls out of simply starting at page one and not stopping.
+    for (let p = 0; p <= last; p++) {
       if (p === this.priorityPage) continue; // already considered above
       if (want(p)) out.push(p);
     }

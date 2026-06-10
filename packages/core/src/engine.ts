@@ -201,7 +201,6 @@ export class Engine {
     if (this.generationStarted) return;
     this.generationStarted = true;
     this.buffer?.setGenerationEnabled(true);
-    this.buffer?.setIdleAllowed(true);
     this.biblePromise = this.buildBibleInBackground();
   }
 
@@ -582,21 +581,21 @@ export class Engine {
     this.opts.onBibleUpdate?.(this.bible);
   }
 
-  /** Move the reader; refreshes the predictive window. */
-  goToPage(pageIndex: number): void {
-    this.buffer?.setCurrentPage(pageIndex);
-  }
-
-  /** Allow/forbid speculative idle pre-rendering (gate on battery/thermal). */
-  setIdleAllowed(allowed: boolean): void {
-    this.buffer?.setIdleAllowed(allowed);
-  }
-
-  /** Pre-render every page of the book now (optional, user-triggered). */
-  prerenderAll(): void {
-    this.startGeneration(); // pre-rendering implies generation is on
+  /**
+   * "Paint forward": repaint the book FROM a unit onward with the current settings,
+   * keeping everything before it. Discards the cached image of every story unit at
+   * or after `fromUnit`; the in-order buffer then repaints them front to back.
+   * (Use `regenerateAllImages` to redo the whole book including earlier pages.)
+   */
+  async paintForward(fromUnit: number): Promise<void> {
+    if (!this.book || !this.pipeline) return;
+    this.startGeneration();
     this.resumeGeneration();
-    this.buffer?.renderAll();
+    for (let i = Math.max(0, fromUnit); i < this.book.pages.length; i++) {
+      if (!this.isStoryPage(i)) continue;
+      await this.store.deleteImage?.(this.pipeline.requestIdFor(i));
+      this.buffer?.invalidate(i);
+    }
   }
 
   /**
@@ -626,7 +625,6 @@ export class Engine {
     this.imagePaused = paused;
     // Only (re-)enable rendering once the user has actually begun generating.
     this.buffer?.setGenerationEnabled(!paused && this.generationStarted);
-    this.buffer?.setIdleAllowed(!paused && this.generationStarted);
   }
 
   /** Pause both pipelines (the combined "Pause" action). */

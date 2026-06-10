@@ -91,10 +91,8 @@ export function App() {
     importResult,
     clearImportResult,
     carryOverBible,
-    goTo,
-    prerenderAll,
+    paintForward,
   } = useEngineWorker(settings);
-  const [prerendering, setPrerendering] = useState(false);
   const [showCharacters, setShowCharacters] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
@@ -297,7 +295,6 @@ export function App() {
   const openBook = useCallback(
     (source: BookSource) => {
       setLocalError("");
-      setPrerendering(false);
       setBook(source);
       openInWorker(source);
       // Remember it in the library so it can be reopened later (Bible + images
@@ -340,11 +337,6 @@ export function App() {
     [libraryStore],
   );
 
-  const onPrerenderAll = useCallback(() => {
-    setPrerendering(true);
-    prerenderAll();
-  }, [prerenderAll]);
-
   const onUpload = useCallback(
     async (file: File) => {
       try {
@@ -374,10 +366,8 @@ export function App() {
     [book, pagesPerImage],
   );
   const unitIndex = units?.pageToUnit[activePageIndex] ?? activePageIndex;
-
-  useEffect(() => {
-    goTo(unitIndex);
-  }, [unitIndex, goTo]);
+  // NOTE: the reader's position is deliberately NOT fed to the engine — generation
+  // runs front-to-back on its own; scrolling only drives the reveal (bloom).
 
   const activePage = book?.pages[activePageIndex];
   const pageEntities =
@@ -446,21 +436,16 @@ export function App() {
   const bloom = monotonicBloom(bloomRatchet.current.max, rawBloom, unitChanged);
   bloomRatchet.current = { unit: unitIndex, max: bloom };
 
-  const renderedCount = useMemo(
-    () => [...results.values()].filter((r) => r.status === "ready").length,
-    [results],
-  );
   // Skipped units (front/back matter) count as "done" for the whole-book progress.
   const settledCount = useMemo(
     () => [...results.values()].filter((r) => r.status === "ready" || r.status === "skipped").length,
     [results],
   );
   const totalUnits = units?.unitCount ?? (book?.pages.length ?? 0);
-  const prerenderDone = prerendering && totalUnits > 0 && settledCount >= totalUnits;
   // Rough ETA for the remaining images (two render concurrently in the buffer).
-  const prerenderEta =
-    prerendering && avgRenderMs > 0 && totalUnits > settledCount
-      ? ` · ${formatLeft((avgRenderMs * (totalUnits - settledCount)) / 2)}`
+  const remainingEta =
+    avgRenderMs > 0 && totalUnits > settledCount
+      ? ` (${formatLeft((avgRenderMs * (totalUnits - settledCount)) / 2)})`
       : "";
 
   // ---- Workflow bar: what the app is working on right now (always visible) ----
@@ -477,6 +462,29 @@ export function App() {
   const closeRedoMenu = useCallback(() => {
     if (redoMenuRef.current) redoMenuRef.current.open = false;
   }, []);
+
+  // "Paint forward": ask which page to start from, then repaint from there to the
+  // end with the CURRENT settings — everything before the chosen page is kept.
+  const onPaintForward = useCallback(() => {
+    if (!book || !units) return;
+    const suggested = activePageIndex + 1; // 1-based, default to where the reader is
+    const answer = prompt(
+      `Repaint from which page to the end, using the current image settings?\n\n` +
+        `Pages before it are KEPT as they are. (1–${book.pages.length})`,
+      String(suggested),
+    );
+    if (answer === null) return;
+    const pageNum = Math.floor(Number(answer));
+    if (!Number.isFinite(pageNum) || pageNum < 1 || pageNum > book.pages.length) {
+      noteAction(`✗ "${answer}" isn't a page number between 1 and ${book.pages.length}.`);
+      return;
+    }
+    const fromUnit = units.pageToUnit[pageNum - 1] ?? 0;
+    paintForward(fromUnit);
+    noteAction(
+      `✓ Painting forward from page ${pageNum} — earlier pages kept; the rest repaints with the current settings${remainingEta}.`,
+    );
+  }, [book, units, activePageIndex, paintForward, noteAction, remainingEta]);
 
   // The unit currently being painted (lowest in-flight index), with its progress.
   const painting = useMemo(() => {
@@ -670,18 +678,15 @@ export function App() {
                 </button>
                 <button
                   style={styles.menuItem}
-                  disabled={prerendering && !prerenderDone}
                   onClick={() => {
                     closeRedoMenu();
-                    onPrerenderAll();
-                    noteAction("✓ Painting the whole book ahead — progress shows in the bar above.");
+                    onPaintForward();
                   }}
                 >
-                  <b>{prerenderDone ? "Whole book painted ✓" : "Paint whole book now"}</b>
+                  <b>Paint forward…</b>
                   <small>
-                    {prerendering && !prerenderDone
-                      ? `Painting ${renderedCount}/${totalUnits}…${prerenderEta}`
-                      : "Render every missing illustration now instead of as you read."}
+                    Repaint from a page you choose to the end with the current settings — everything
+                    before it is kept. (For new settings without redoing finished pages.)
                   </small>
                 </button>
               </div>
