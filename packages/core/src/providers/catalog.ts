@@ -94,25 +94,62 @@ export function getProvider(slot: ProviderSlot, id: string): ProviderInfo | unde
 /**
  * Curated catalog of local image models the desktop app can download on demand.
  * The live "already downloaded" list comes from the running engine; this is the
- * "available to download" half of the model picker. Each entry is a single-file
- * checkpoint that ComfyUI loads from `models/checkpoints`.
+ * "available to download" half of the model picker.
  *
- * `id` is our stable catalog key; `filename` is what's saved on disk and what the
- * engine reports back as the checkpoint name. URLs point at the canonical
- * hosting; the desktop downloader streams them with progress and fails
- * gracefully (the user can always drop a checkpoint in by hand).
+ * Two shapes:
+ *  - **single-file** (SD / SDXL / Flux.1): just `url` — one checkpoint into
+ *    `models/checkpoints`.
+ *  - **split-file** (the current generation: Z-Image, Flux.2, Qwen-Image): `files`
+ *    lists every component (diffusion model + text encoder + VAE) with the ComfyUI
+ *    models subfolder each belongs in; the desktop downloader fetches them all.
+ *
+ * `id` is our stable catalog key; `filename` is the main (diffusion/checkpoint)
+ * file on disk — what the engine reports and what `localModel` selects. URLs point
+ * at the canonical hosting (taken from the official Comfy-Org workflow templates);
+ * downloads fail gracefully (files can always be dropped in by hand).
  */
+export type ModelFileFolder = "checkpoints" | "diffusion_models" | "text_encoders" | "vae";
+
+export interface ModelComponentFile {
+  url: string;
+  filename: string;
+  /** ComfyUI models subfolder this file belongs in. */
+  folder: ModelFileFolder;
+  /** Approximate size, for the UI. */
+  sizeGB?: number;
+}
+
+export type CatalogModelFamily = "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage";
+
 export interface LocalModelCatalogEntry {
   id: string;
   label: string;
+  /** Approximate TOTAL download size (all files). */
   sizeGB: number;
   note?: string;
-  /** Checkpoint filename saved into models/checkpoints (and the engine's name for it). */
+  /** Main model filename (checkpoint or diffusion model) — the engine's name for it. */
   filename: string;
-  /** Direct download URL for the .safetensors checkpoint. */
+  /** Direct download URL for the main file ("" = no hosted source). */
   url: string;
   /** Model family — authoritative for prompt formatting (SD tags vs natural language). */
-  family: "sd15" | "sdxl" | "flux";
+  family: CatalogModelFamily;
+  /** All component files for a split-file model (includes the main file). */
+  files?: ModelComponentFile[];
+  /** CLIPLoader `type` for the separate text encoder (split-file models). */
+  clipType?: string;
+  /**
+   * Sampler settings override for THIS model when its family's defaults don't fit
+   * (e.g. Flux.2 Klein base uses real CFG 5, unlike guidance-distilled Flux.2-dev).
+   * Shape matches sd-prompt's SamplerSettings.
+   */
+  sampler?: {
+    cfg: number;
+    sampler: string;
+    scheduler: string;
+    steps: number;
+    guidance?: number;
+    shift?: number;
+  };
 }
 
 export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
@@ -162,25 +199,116 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
     url: "https://huggingface.co/Comfy-Org/flux1-schnell/resolve/main/flux1-schnell-fp8.safetensors",
     family: "flux",
   },
+  // --- Split-file models (the current generation). Filenames, URLs, clip types and
+  // sampler settings are taken from the official Comfy-Org workflow templates
+  // (github.com/Comfy-Org/workflow_templates: image_z_image_turbo,
+  // image_flux2_text_to_image_9b, image_qwen_image). Sizes are approximate.
+  {
+    id: "z-image-turbo",
+    label: "Z-Image Turbo",
+    sizeGB: 20.5,
+    note: "Recommended · top quality in seconds (8-step turbo)",
+    filename: "z_image_turbo_bf16.safetensors",
+    url: "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/diffusion_models/z_image_turbo_bf16.safetensors",
+    family: "zimage",
+    clipType: "lumina2",
+    files: [
+      {
+        filename: "z_image_turbo_bf16.safetensors",
+        folder: "diffusion_models",
+        url: "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/diffusion_models/z_image_turbo_bf16.safetensors",
+        sizeGB: 12.3,
+      },
+      {
+        filename: "qwen_3_4b.safetensors",
+        folder: "text_encoders",
+        url: "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors",
+        sizeGB: 7.9,
+      },
+      {
+        filename: "ae.safetensors",
+        folder: "vae",
+        url: "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors",
+        sizeGB: 0.4,
+      },
+    ],
+  },
   {
     id: "flux2-klein-9b",
-    label: "Flux 2 Klein 9B (fp8)",
-    sizeGB: 9,
-    note: "Official Flux.2 model — highest quality, needs a strong GPU",
-    filename: "flux-2-klein-9b-fp8.safetensors",
-    // No official download URL yet; drop the checkpoint into ComfyUI/models/checkpoints/ manually.
-    url: "",
-    family: "flux",
+    label: "Flux.2 Klein 9B (fp8)",
+    sizeGB: 19.5,
+    note: "Official open Flux.2 — excellent quality, strong GPU",
+    filename: "flux-2-klein-base-9b-fp8.safetensors",
+    url: "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/resolve/main/flux-2-klein-base-9b-fp8.safetensors",
+    family: "flux2",
+    clipType: "flux2",
+    // Klein base is NOT guidance-distilled (unlike Flux.2-dev): real CFG 5, no
+    // FluxGuidance node — per the official image_flux2_text_to_image_9b template.
+    sampler: { cfg: 5, sampler: "euler", scheduler: "simple", steps: 20 },
+    files: [
+      {
+        filename: "flux-2-klein-base-9b-fp8.safetensors",
+        folder: "diffusion_models",
+        url: "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/resolve/main/flux-2-klein-base-9b-fp8.safetensors",
+        sizeGB: 9.7,
+      },
+      {
+        filename: "qwen_3_8b_fp8mixed.safetensors",
+        folder: "text_encoders",
+        url: "https://huggingface.co/Comfy-Org/flux2-klein-9B/resolve/main/split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors",
+        sizeGB: 9.1,
+      },
+      {
+        filename: "full_encoder_small_decoder.safetensors",
+        folder: "vae",
+        url: "https://huggingface.co/black-forest-labs/FLUX.2-small-decoder/resolve/main/full_encoder_small_decoder.safetensors",
+        sizeGB: 0.7,
+      },
+    ],
+  },
+  {
+    id: "qwen-image",
+    label: "Qwen-Image (fp8)",
+    sizeGB: 30,
+    note: "Best detail & in-image text · biggest download",
+    filename: "qwen_image_fp8_e4m3fn.safetensors",
+    url: "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_fp8_e4m3fn.safetensors",
+    family: "qwenimage",
+    clipType: "qwen_image",
+    files: [
+      {
+        filename: "qwen_image_fp8_e4m3fn.safetensors",
+        folder: "diffusion_models",
+        url: "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_fp8_e4m3fn.safetensors",
+        sizeGB: 20.4,
+      },
+      {
+        filename: "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        folder: "text_encoders",
+        url: "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        sizeGB: 9.4,
+      },
+      {
+        filename: "qwen_image_vae.safetensors",
+        folder: "vae",
+        url: "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+        sizeGB: 0.25,
+      },
+    ],
   },
 ];
 
-/** Family of a managed catalog model, matched by id or filename (else undefined). */
-export function catalogModelFamily(name: string): "sd15" | "sdxl" | "flux" | undefined {
+/** The catalog entry for a model, matched by id or main filename (else undefined). */
+export function catalogEntryForModel(name: string): LocalModelCatalogEntry | undefined {
   const n = name.toLowerCase();
-  const hit = LOCAL_IMAGE_MODELS.find(
+  return LOCAL_IMAGE_MODELS.find(
     (m) => m.id.toLowerCase() === n || m.filename.toLowerCase() === n,
   );
-  return hit?.family;
+}
+
+/** Family of a managed catalog model, matched by id or filename (else undefined). */
+export function catalogModelFamily(name: string): CatalogModelFamily | undefined {
+  return catalogEntryForModel(name)?.family;
 }
 
 /**
@@ -384,6 +512,41 @@ export const LOCAL_TEXT_SERVER_LABEL: Record<LocalTextServerId, string> = {
 
 export const DEFAULT_LOCAL_TEXT_SERVER: LocalTextServerId = "ollama";
 export const DEFAULT_LOCAL_SERVER_TEXT_MODEL = "llama3.2";
+
+/**
+ * Curated text models the app can pull INTO Ollama on demand (via `POST
+ * /api/pull` — see `LocalServerLLMProvider.pullModel`), so no terminal `ollama
+ * pull` is needed. Ids are Ollama model:tag names; sizes are the download size.
+ */
+export interface OllamaTextModel {
+  id: string;
+  label: string;
+  sizeGB: number;
+  note?: string;
+}
+
+export const OLLAMA_TEXT_MODELS: OllamaTextModel[] = [
+  {
+    id: "qwen3:8b",
+    label: "Qwen 3 8B",
+    sizeGB: 5.2,
+    note: "Recommended · best extraction for the size",
+  },
+  { id: "qwen3:14b", label: "Qwen 3 14B", sizeGB: 9.3, note: "Higher quality · needs ~12 GB VRAM" },
+  { id: "gemma3:12b", label: "Gemma 3 12B", sizeGB: 8.1, note: "Strong prose understanding" },
+  { id: "llama3.2:3b", label: "Llama 3.2 3B", sizeGB: 2.0, note: "Fastest · modest hardware" },
+];
+
+/**
+ * Does a server-reported model id satisfy a catalog id? Ollama reports exact
+ * `name:tag` ids, but tolerate a bare-name match ("llama3.2" ⊇ "llama3.2:3b" is
+ * NOT assumed — only exact, `:latest`, or the same untagged name).
+ */
+export function ollamaModelMatches(installedId: string, wantedId: string): boolean {
+  const a = installedId.toLowerCase();
+  const b = wantedId.toLowerCase();
+  return a === b || a === `${b}:latest` || a.split(":")[0] === b;
+}
 
 export const LOCAL_TEXT_MODELS: LocalTextModel[] = [
   {

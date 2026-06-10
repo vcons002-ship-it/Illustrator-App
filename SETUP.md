@@ -14,6 +14,7 @@ version is a single file you double-click. (macOS / Linux steps are further down
 | The **desktop app** (native window, local GPU) | **`desktop.bat`** | Installs everything (incl. Rust/Tauri), then builds and opens the app. Start it later with **`run-desktop.bat`**. |
 | The **Chrome extension** (illustrate the web) | **`extension.bat`** | Builds the extension and opens the folder + Chrome to load it. Re-open it later with **`run-extension.bat`**. |
 | A **free local image engine** (optional) | **`comfyui-setup.bat`** | Downloads ComfyUI portable + a starter model so you can generate on your own GPU, no API keys. |
+| A **free local text engine** (optional) | **`ollama-setup.bat`** | Installs Ollama (story analysis + prompt writing on your machine, no API key). Text models are then downloaded from inside the app — Settings → Text. |
 
 Each script checks for and installs anything it needs (Node.js, etc.) on its own.
 If a script says it just installed something and asks you to run it again, close
@@ -217,29 +218,39 @@ it with its API + CORS enabled, so the browser is allowed to talk to it (the
 
 ### Picking a model — what works best
 
-- **All-in-one checkpoints just work.** Any **SD 1.5** or **SDXL** `.safetensors`
-  checkpoint, an **all-in-one Flux.1 fp8** checkpoint, or the **Flux.2 Klein**
-  all-in-one checkpoint bundles the text encoder + VAE and renders out of the box
-  (the app probes ComfyUI to see how a file must be loaded). **SDXL or SD-Turbo are
-  the best fit for reading** — seconds per image, where Flux can take a minute or more.
-- **`clip input is invalid: None`?** You selected a **diffusion-only** model (a bare
-  Flux.1, a GGUF, or a **Flux.2 dev** file). Those ship the UNET separately from the
-  text encoder + VAE. Visual Reader now handles them: set **Settings → Images → Model
-  family** to **Flux.2** (or **Flux.1**) and it builds the correct separate-loader graph.
-- **Flux.2 dev** (the separate-component distribution) additionally needs its
-  **Mistral-3 text encoder** (`models/text_encoders`) and the **Flux.2 VAE**
-  (`models/vae`) installed in ComfyUI — the app auto-discovers them, and tells you
-  exactly what's missing if they aren't there. (Klein, being all-in-one, needs neither.)
-  Flux.2 is **ComfyUI only** (not AUTOMATIC1111) and is **VRAM-heavy** — a high-VRAM
-  GPU is recommended.
+Every model in the desktop picker is one click: the app downloads **all** the files a
+model needs (the newest models ship as **split files** — diffusion model + text encoder
++ VAE — which land in the right ComfyUI folders automatically) and selects it when done.
+Downloads **resume** if interrupted; retrying skips files that finished.
+
+- **Z-Image Turbo — the recommended default for reading.** Current-generation quality
+  at **8 steps** (a few seconds per image on a decent GPU), prompts in natural
+  language, ~20 GB download.
+- **Flux.2 Klein 9B (fp8)** — the official open Flux.2; excellent quality, ~20 GB,
+  slower than Z-Image (real CFG, 20 steps). Needs a strong GPU.
+- **Qwen-Image (fp8)** — best fine detail and in-image text; the biggest download
+  (~30 GB) and VRAM-heaviest.
+- **SD 1.5 / SDXL / SDXL-Turbo / Flux.1** — the classic single-file checkpoints;
+  smaller and fine on modest GPUs (SD 1.5 runs almost anywhere).
+
+Notes for **manually installed** files (everything above is automatic):
+
+- **All-in-one checkpoints just work** (SD 1.5 / SDXL / Flux.1 fp8) — the app probes
+  ComfyUI to see how a file must be loaded.
+- **`clip input is invalid: None`?** You selected a **diffusion-only** file whose
+  text encoder + VAE aren't installed. For catalog models the error tells you the
+  exact missing filenames (the Download button fetches them); for other files set
+  **Settings → Images → Model family** and install the encoder/VAE it names.
+- The split-file families (**Flux.2 / Z-Image / Qwen-Image**) are **ComfyUI only**
+  (not AUTOMATIC1111).
 
 ### Local text model (prompt quality)
 
 Illustration **prompts** are written by your text LLM, and the prompt is the ceiling on
-image quality. **`llama3.2` (3B) works but is basic** — if your machine can spare the
-VRAM alongside the image model, an **≥8B model** (e.g. `llama3.1:8b` or `qwen2.5:14b` in
-Ollama) writes noticeably better scene prompts. Pick it under **Settings → Text → On my
-computer → Local server**.
+image quality. Under **Settings → Text → On my computer → Local server** you can now
+**download text models into Ollama from the menu** (live progress bar, no terminal):
+**Qwen 3 8B** is the recommended default; **Qwen 3 14B** or **Gemma 3 12B** write even
+better prompts if your VRAM allows; **Llama 3.2 3B** is the lightweight fallback.
 
 ### Coming later: one-API native mode
 
@@ -344,20 +355,24 @@ ways to run the story-understanding LLM locally — pick one under **How to run 
 - **Local server (Ollama / LM Studio / llama.cpp):** the most reliable local option
   — runs the model as a normal app on your machine and the reader talks to it over
   an OpenAI-compatible API. Use this if WebGPU won't load. Steps:
-  1. Install and start one of:
-     - **Ollama** — `ollama serve`, then `ollama pull llama3.2` (API at
-       `http://localhost:11434/v1`).
+  1. Install + start a server. **Ollama (recommended): double-click
+     `ollama-setup.bat`** — it installs Ollama, allows browser access, and starts it
+     (API at `http://localhost:11434/v1`). Alternatives:
      - **LM Studio** — load a model and start its **Local Server** (`http://localhost:1234/v1`).
      - **llama.cpp** — run its server (e.g. `llama-server -m model.gguf --port 8000`,
        API at `http://localhost:8000/v1`).
   2. In **Settings → Text → On my computer → Local server**, choose the server,
-     confirm the URL, click **Connect**, then pick a model from the list.
-  - **CORS (web app only):** a browser page calling Ollama needs Ollama started with
-    `OLLAMA_ORIGINS=http://localhost:5173` (or `OLLAMA_ORIGINS=*`); LM Studio and
-    llama.cpp allow cross-origin requests by default. The **Chrome extension** needs
-    no CORS flags — its requests are proxied through the extension's background
-    worker. The server must expose OpenAI-compatible `/v1/chat/completions` and
-    `/v1/models`.
+     confirm the URL, click **Connect**.
+  3. **Ollama: download a model from the menu** — pick one (Qwen 3 8B is the
+     recommended default) and click **Download**; a progress bar runs and the model
+     is selected when done. No `ollama pull`, no terminal. For LM Studio /
+     llama.cpp, pick from the models the server reports.
+  - **CORS (web app only):** a browser page calling Ollama needs `OLLAMA_ORIGINS`
+    set (`ollama-setup.bat` does this; manually: `OLLAMA_ORIGINS=*` or your app's
+    origin); LM Studio and llama.cpp allow cross-origin requests by default. The
+    **Chrome extension** needs no CORS flags — its requests are proxied through the
+    extension's background worker. The server must expose OpenAI-compatible
+    `/v1/chat/completions` and `/v1/models`.
 
 For the strongest character continuity, you can still keep **Text** on a cloud key
 while running **Images** on your own GPU.

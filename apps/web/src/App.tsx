@@ -2,9 +2,12 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import {
   Automatic1111Backend,
   ComfyUIBackend,
+  DEFAULT_LOCAL_TEXT_SERVER,
   IndexedDbStore,
   LocalServerLLMProvider,
   LOCAL_IMAGE_MODELS,
+  LOCAL_TEXT_SERVER_DEFAULT_URL,
+  ollamaModelMatches,
   computeBloomTarget,
   monotonicBloom,
   decryptSecrets,
@@ -58,6 +61,11 @@ export function App() {
   const [textModels, setTextModels] = useState<InstalledModel[]>([]);
   const [connectingLocalText, setConnectingLocalText] = useState(false);
   const [modelProgress, setModelProgress] = useState<Record<string, number>>({});
+  // Which component file of a split-file model is downloading ("file 2/3: …").
+  const [downloadStage, setDownloadStage] = useState<Record<string, string>>({});
+  // Per-entry file position, to fold per-file Rust progress into one combined bar.
+  const multiFile = useRef<Record<string, { index: number; count: number }>>({});
+  const [pullProgress, setPullProgress] = useState<Record<string, { status: string; percent?: number }>>({});
   const [engineStatus, setEngineStatus] = useState("");
   const [installedLoras, setInstalledLoras] = useState<string[]>([]);
   const [library, setLibrary] = useState<BookSummary[]>([]);
@@ -131,7 +139,11 @@ export function App() {
       setEngineStatus(p.phase === "ready" ? "" : p.percent !== undefined ? `${p.message} ${Math.round(p.percent)}%` : p.message);
     });
     const unModel = onModelProgress((p) => {
-      setModelProgress((prev) => ({ ...prev, [p.id]: p.percent }));
+      // A split-file model reports per-file percent under one id; fold it into the
+      // entry's combined 0..100 using the current file position.
+      const mf = multiFile.current[p.id];
+      const pct = mf ? ((mf.index + p.percent / 100) / mf.count) * 100 : p.percent;
+      setModelProgress((prev) => ({ ...prev, [p.id]: pct }));
     });
     return () => {
       void unEngine?.then((fn) => fn());
@@ -167,23 +179,82 @@ export function App() {
     };
   }, [settings.imageProvider, settings.engineBaseUrl]);
 
+  // Download a catalog model: every component file of a split-file model (diffusion
+  // model + text encoder + VAE, each into its ComfyUI subfolder), or the single
+  // checkpoint. Sequential, with one combined progress bar; already-present files
+  // are skipped on the Rust side, so a retry resumes where it failed. On success
+  // the model is auto-selected so it "just works".
   const onDownloadModel = useCallback(async (id: string) => {
     const model = LOCAL_IMAGE_MODELS.find((m) => m.id === id);
     if (!model) return;
+    const files = model.files ?? [{ filename: model.filename, url: model.url, folder: "checkpoints" as const }];
     setModelProgress((prev) => ({ ...prev, [id]: 0 }));
+    let currentFile = files[0]!.filename;
     try {
-      await downloadModel({ id: model.id, filename: model.filename, url: model.url });
-      setModelProgress((prev) => ({ ...prev, [id]: 100 }));
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i]!;
+        currentFile = f.filename;
+        multiFile.current[id] = { index: i, count: files.length };
+        if (files.length > 1) {
+          setDownloadStage((prev) => ({ ...prev, [id]: `file ${i + 1}/${files.length}: ${f.filename}` }));
+        }
+        await downloadModel({ id, filename: f.filename, url: f.url, folder: f.folder });
+        setModelProgress((prev) => ({ ...prev, [id]: ((i + 1) / files.length) * 100 }));
+      }
       setInstalledModels(await listLocalModels());
+      setSettings((s) => ({ ...s, localModel: model.filename }));
     } catch (err) {
       setModelProgress((prev) => {
         const next = { ...prev };
         delete next[id];
         return next;
       });
-      setLocalError(`Model download failed: ${err instanceof Error ? err.message : String(err)}`);
+      setLocalError(
+        `Model download failed at ${currentFile}: ${err instanceof Error ? err.message : String(err)}. ` +
+          `Retrying skips files that finished.`,
+      );
+    } finally {
+      delete multiFile.current[id];
+      setDownloadStage((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
     }
   }, []);
+
+  // Download a text model INTO Ollama from the Settings menu (no terminal needed),
+  // with live progress; on success refresh the model list and auto-select it.
+  const onPullTextModel = useCallback(
+    async (model: string) => {
+      const url =
+        settings.localServerTextUrl?.trim() ||
+        LOCAL_TEXT_SERVER_DEFAULT_URL[settings.localTextServer ?? DEFAULT_LOCAL_TEXT_SERVER];
+      setLocalError("");
+      setPullProgress((prev) => ({ ...prev, [model]: { status: "starting…" } }));
+      try {
+        await LocalServerLLMProvider.pullModel(url, model, (p) =>
+          setPullProgress((prev) => ({ ...prev, [model]: p })),
+        );
+        const models = await LocalServerLLMProvider.listModels(url);
+        setTextModels(models);
+        const installed = models.find((m) => ollamaModelMatches(m.id, model))?.id ?? model;
+        setSettings((s) => ({ ...s, localServerTextUrl: url, localServerTextModel: installed }));
+      } catch (err) {
+        setLocalError(
+          `Couldn't download ${model}: ${err instanceof Error ? err.message : String(err)}. ` +
+            `Make sure Ollama is running (it resumes where it left off).`,
+        );
+      } finally {
+        setPullProgress((prev) => {
+          const next = { ...prev };
+          delete next[model];
+          return next;
+        });
+      }
+    },
+    [settings.localServerTextUrl, settings.localTextServer],
+  );
 
   // Download the LoRA for a style into the managed engine — from the catalog URL,
   // or a URL the user pasted (customUrl). Saved as the style's LoRA name.
@@ -727,6 +798,7 @@ export function App() {
             onDownloadModel={onDownloadModel}
             onDownloadModelUrl={onDownloadModelUrl}
             downloadProgress={modelProgress}
+            downloadStage={downloadStage}
             engineStatus={engineStatus}
             installedLoras={installedLoras}
             onDownloadStyleLora={onDownloadStyleLora}
@@ -735,6 +807,8 @@ export function App() {
             textModels={textModels}
             onConnectLocalTextServer={onConnectLocalTextServer}
             connectingLocalText={connectingLocalText}
+            onPullTextModel={onPullTextModel}
+            pullProgress={pullProgress}
           />
         </div>
         </div>

@@ -17,8 +17,11 @@ import { createImageProvider, createLLMProvider } from "./factory.js";
 import {
   IMAGE_PROVIDERS,
   LOCAL_IMAGE_MODELS,
+  OLLAMA_TEXT_MODELS,
   TEXT_PROVIDERS,
+  catalogEntryForModel,
   catalogModelFamily,
+  ollamaModelMatches,
   styleLoraDownload,
 } from "./catalog.js";
 import type { LocalEngineBackend } from "./image/local-engine/backend.js";
@@ -613,6 +616,49 @@ describe("LocalServerLLMProvider", () => {
     expect(createLLMProvider("local-server", { baseUrl: "http://x/v1" }).id).toBe("local-server");
     expect(() => createLLMProvider("local-server", {})).toThrow(/base URL/);
   });
+
+  it("pullModel streams NDJSON progress from {root}/api/pull (strips /v1)", async () => {
+    const lines = [
+      JSON.stringify({ status: "pulling manifest" }),
+      JSON.stringify({ status: "downloading", total: 200, completed: 100 }),
+      JSON.stringify({ status: "success" }),
+    ].join("\n");
+    let url = "";
+    let body: unknown;
+    const fakeFetch = (async (u: RequestInfo | URL, init?: RequestInit) => {
+      url = String(u);
+      body = JSON.parse(String(init?.body));
+      return new Response(lines, { status: 200 });
+    }) as typeof fetch;
+    const progress: { status: string; percent?: number }[] = [];
+    await LocalServerLLMProvider.pullModel(
+      "http://localhost:11434/v1",
+      "qwen3:8b",
+      (p) => progress.push(p),
+      fakeFetch,
+    );
+    expect(url).toBe("http://localhost:11434/api/pull");
+    expect(body).toEqual({ model: "qwen3:8b", stream: true });
+    expect(progress.some((p) => p.status === "downloading" && p.percent === 50)).toBe(true);
+    expect(progress.at(-1)?.status).toBe("success");
+  });
+
+  it("pullModel surfaces an Ollama error line as a rejection", async () => {
+    const fakeFetch = (async () =>
+      new Response(JSON.stringify({ error: "pull model manifest: file does not exist" }), {
+        status: 200,
+      })) as typeof fetch;
+    await expect(
+      LocalServerLLMProvider.pullModel("http://x/v1", "nope", undefined, fakeFetch),
+    ).rejects.toThrow(/does not exist/);
+  });
+
+  it("pullModelViaTransport posts stream:false through the Transport proxy", async () => {
+    const t = new FakeTransport(() => ({ json: { status: "success" } }));
+    await LocalServerLLMProvider.pullModelViaTransport("http://localhost:11434/v1/", "qwen3:8b", t);
+    expect(t.requests[0]!.url).toBe("http://localhost:11434/api/pull");
+    expect(t.requests[0]!.body).toEqual({ model: "qwen3:8b", stream: false });
+  });
 });
 
 describe("createImageProvider local", () => {
@@ -673,14 +719,81 @@ describe("ComfyUI prompt formatting by family", () => {
     expect(wf["3"]!.inputs.scheduler).toBe("simple");
   });
 
-  it("Flux 2 Klein checkpoint also gets the Flux-correct sampler", async () => {
-    const t = comfyRun();
+  it("Flux.2 Klein (catalog) → separate loaders from its exact files + real CFG 5", async () => {
+    const t = new FakeTransport((req) => {
+      if (req.url.endsWith("/object_info/CLIPLoader"))
+        return { json: { CLIPLoader: { input: { required: { clip_name: [["qwen_3_8b_fp8mixed.safetensors"]] } } } } };
+      if (req.url.endsWith("/object_info/VAELoader"))
+        return { json: { VAELoader: { input: { required: { vae_name: [["full_encoder_small_decoder.safetensors"]] } } } } };
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
+      if (req.url.includes("/history/"))
+        return { json: { p1: { outputs: { "9": { images: [{ filename: "f.png", subfolder: "", type: "output" }] } } } } };
+      return { bytes: png };
+    });
     const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
-    await backend.generate(imageInput, "flux-2-klein-9b-fp8.safetensors");
+    await backend.generate(imageInput, "flux-2-klein-base-9b-fp8.safetensors");
     const wf = workflowOf(t);
-    expect(wf["3"]!.inputs.cfg).toBe(1);
-    expect(wf["3"]!.inputs.scheduler).toBe("simple");
+    expect(wf["4"]!.class_type).toBe("UNETLoader");
+    expect(wf["12"]!.inputs).toMatchObject({ clip_name: "qwen_3_8b_fp8mixed.safetensors", type: "flux2" });
+    expect(wf["13"]!.inputs.vae_name).toBe("full_encoder_small_decoder.safetensors");
+    // Klein base is NOT guidance-distilled: real CFG 5, 20 steps, no FluxGuidance.
+    expect(wf["3"]!.inputs.cfg).toBe(5);
+    expect(wf["3"]!.inputs.steps).toBe(20);
+    expect(wf["14"]).toBeUndefined();
+    expect(wf["3"]!.inputs.positive).toEqual(["6", 0]);
     expect(wf["7"]!.inputs.text).toBe(""); // empty negative
+  });
+
+  it("Z-Image Turbo (catalog) → lumina2 encoder, AuraFlow shift, 8-step turbo sampler", async () => {
+    const t = new FakeTransport((req) => {
+      if (req.url.endsWith("/object_info/CLIPLoader"))
+        return { json: { CLIPLoader: { input: { required: { clip_name: [["qwen_3_4b.safetensors"]] } } } } };
+      if (req.url.endsWith("/object_info/VAELoader"))
+        return { json: { VAELoader: { input: { required: { vae_name: [["ae.safetensors"]] } } } } };
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
+      if (req.url.includes("/history/"))
+        return { json: { p1: { outputs: { "9": { images: [{ filename: "f.png", subfolder: "", type: "output" }] } } } } };
+      return { bytes: png };
+    });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await backend.generate(imageInput, "z_image_turbo_bf16.safetensors");
+    const wf = workflowOf(t);
+    expect(wf["4"]!.class_type).toBe("UNETLoader");
+    expect(wf["12"]!.inputs).toMatchObject({ clip_name: "qwen_3_4b.safetensors", type: "lumina2" });
+    expect(wf["13"]!.inputs.vae_name).toBe("ae.safetensors");
+    expect(wf["3"]!.inputs).toMatchObject({ cfg: 1, steps: 8, sampler_name: "res_multistep" });
+    // Sigma shift node wraps the model feeding the sampler.
+    expect(wf["15"]!.class_type).toBe("ModelSamplingAuraFlow");
+    expect(wf["15"]!.inputs.shift).toBe(3);
+    expect(wf["3"]!.inputs.model).toEqual(["15", 0]);
+    expect(wf["6"]!.inputs.text).toBe("a knight"); // natural language, no SD tags
+    expect(wf["7"]!.inputs.text).toBe("");
+  });
+
+  it("a catalog model with components missing names the exact files + the Download button", async () => {
+    const t = new FakeTransport(() => ({ json: {} })); // nothing installed
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await expect(backend.generate(imageInput, "z_image_turbo_bf16.safetensors")).rejects.toThrow(
+      /qwen_3_4b\.safetensors.*ae\.safetensors.*Download button/s,
+    );
+  });
+
+  it("a non-catalog Klein file falls back to the Qwen-aware Flux.2 heuristic", async () => {
+    const t = new FakeTransport((req) => {
+      if (req.url.endsWith("/object_info/CLIPLoader"))
+        return { json: { CLIPLoader: { input: { required: { clip_name: [["qwen_3_4b.safetensors"]] } } } } };
+      if (req.url.endsWith("/object_info/VAELoader"))
+        return { json: { VAELoader: { input: { required: { vae_name: [["flux2-vae.safetensors"]] } } } } };
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
+      if (req.url.includes("/history/"))
+        return { json: { p1: { outputs: { "9": { images: [{ filename: "f.png", subfolder: "", type: "output" }] } } } } };
+      return { bytes: png };
+    });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await backend.generate(imageInput, "flux-2-klein-4b.safetensors");
+    const wf = workflowOf(t);
+    expect(wf["12"]!.inputs).toMatchObject({ clip_name: "qwen_3_4b.safetensors", type: "flux2" });
+    expect(wf["13"]!.inputs.vae_name).toBe("flux2-vae.safetensors");
   });
 
   it("modelFamily override forces formatting regardless of the checkpoint name", async () => {
@@ -833,13 +946,54 @@ describe("ComfyUI IP-Adapter (version-aware, graceful)", () => {
 });
 
 describe("LOCAL_IMAGE_MODELS catalog", () => {
-  it("lists Flux 2 Klein with the flux family", () => {
-    const klein = LOCAL_IMAGE_MODELS.find((m) => m.id === "flux2-klein-9b");
-    expect(klein).toBeDefined();
-    expect(klein!.filename).toBe("flux-2-klein-9b-fp8.safetensors");
-    expect(klein!.family).toBe("flux");
+  it("split-file entries are complete: valid URLs, all three components, sizes", () => {
+    const splitIds = ["z-image-turbo", "flux2-klein-9b", "qwen-image"];
+    for (const id of splitIds) {
+      const entry = LOCAL_IMAGE_MODELS.find((m) => m.id === id)!;
+      expect(entry, id).toBeDefined();
+      expect(entry.files!.length).toBeGreaterThanOrEqual(3);
+      expect(entry.clipType).toBeTruthy();
+      expect(entry.sizeGB).toBeGreaterThan(0);
+      const folders = entry.files!.map((f) => f.folder);
+      expect(folders).toContain("diffusion_models");
+      expect(folders).toContain("text_encoders");
+      expect(folders).toContain("vae");
+      for (const f of entry.files!) {
+        expect(f.url, `${id}/${f.filename}`).toMatch(/^https:\/\/huggingface\.co\/.+\.safetensors$/);
+        expect(f.filename).toMatch(/\.safetensors$/);
+      }
+      // The main filename is the diffusion model — what the engine lists/selects.
+      expect(entry.files!.find((f) => f.folder === "diffusion_models")!.filename).toBe(entry.filename);
+      expect(entry.url).toBeTruthy();
+    }
   });
-  it("resolves the Klein checkpoint's family from its filename", () => {
-    expect(catalogModelFamily("flux-2-klein-9b-fp8.safetensors")).toBe("flux");
+  it("resolves entries and families by id and by main filename", () => {
+    expect(catalogEntryForModel("z-image-turbo")?.id).toBe("z-image-turbo");
+    expect(catalogEntryForModel("z_image_turbo_bf16.safetensors")?.id).toBe("z-image-turbo");
+    expect(catalogModelFamily("z_image_turbo_bf16.safetensors")).toBe("zimage");
+    expect(catalogModelFamily("flux-2-klein-base-9b-fp8.safetensors")).toBe("flux2");
+    expect(catalogModelFamily("qwen_image_fp8_e4m3fn.safetensors")).toBe("qwenimage");
+    expect(catalogEntryForModel("nope.safetensors")).toBeUndefined();
+  });
+  it("Klein base carries a real-CFG sampler override (it is not guidance-distilled)", () => {
+    const klein = LOCAL_IMAGE_MODELS.find((m) => m.id === "flux2-klein-9b")!;
+    expect(klein.sampler).toMatchObject({ cfg: 5, steps: 20 });
+    expect(klein.sampler!.guidance).toBeUndefined();
+  });
+});
+
+describe("OLLAMA_TEXT_MODELS catalog", () => {
+  it("offers the curated pull menu with a recommended default first", () => {
+    expect(OLLAMA_TEXT_MODELS[0]!.id).toBe("qwen3:8b");
+    for (const m of OLLAMA_TEXT_MODELS) {
+      expect(m.id).toMatch(/^[\w.-]+:[\w.-]+$/); // name:tag
+      expect(m.sizeGB).toBeGreaterThan(0);
+    }
+  });
+  it("matches server-reported ids exactly, by :latest, or by bare name", () => {
+    expect(ollamaModelMatches("qwen3:8b", "qwen3:8b")).toBe(true);
+    expect(ollamaModelMatches("qwen3:latest", "qwen3")).toBe(true);
+    expect(ollamaModelMatches("qwen3:14b", "qwen3")).toBe(true);
+    expect(ollamaModelMatches("qwen3:14b", "qwen3:8b")).toBe(false);
   });
 });

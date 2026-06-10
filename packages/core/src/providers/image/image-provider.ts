@@ -41,7 +41,7 @@ export interface ImageGenerationInput {
    * local SD backends format for this family instead of guessing from the
    * checkpoint name. Ignored by cloud providers (they always use natural language).
    */
-  modelFamily?: "sd15" | "sdxl" | "flux" | "flux2";
+  modelFamily?: "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage";
   /**
    * Visual-Bible terms (characters/creatures/outfits/locations) that appear in the
    * prompt, each with a visual `descriptor`. The local backends expand them per the

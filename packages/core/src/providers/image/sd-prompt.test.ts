@@ -17,6 +17,8 @@ describe("detectModelFamily", () => {
     expect(detectModelFamily("flux1-schnell-fp8.safetensors")).toBe("flux");
     expect(detectModelFamily("flux2-dev.safetensors")).toBe("flux2"); // flux2 before generic flux
     expect(detectModelFamily("FLUX.2-dev-fp8.safetensors")).toBe("flux2");
+    expect(detectModelFamily("z_image_turbo_bf16.safetensors")).toBe("zimage");
+    expect(detectModelFamily("qwen_image_fp8_e4m3fn.safetensors")).toBe("qwenimage");
     expect(detectModelFamily("sd_xl_base_1.0.safetensors")).toBe("sdxl");
     expect(detectModelFamily("realvisxl_v4.safetensors")).toBe("sdxl"); // tricky: looks XL
     expect(detectModelFamily("v1-5-pruned-emaonly-fp16.safetensors")).toBe("sd15");
@@ -33,14 +35,21 @@ describe("samplerFor", () => {
     expect(samplerFor("flux")).toMatchObject({ cfg: 1, scheduler: "simple", guidance: 3.5 });
     expect(samplerFor("flux2")).toMatchObject({ cfg: 1, scheduler: "simple", guidance: 4.0 });
   });
+  it("uses the official template settings for Z-Image and Qwen-Image", () => {
+    expect(samplerFor("zimage")).toMatchObject({ cfg: 1, sampler: "res_multistep", steps: 8, shift: 3 });
+    expect(samplerFor("zimage").guidance).toBeUndefined(); // no FluxGuidance node
+    expect(samplerFor("qwenimage")).toMatchObject({ cfg: 4, sampler: "euler", steps: 20, shift: 3.1 });
+  });
 });
 
 describe("nameHandlingFor", () => {
-  it("injects for CLIP/T5 families and references for the LLM-grade Flux.2 encoder", () => {
+  it("injects for CLIP/T5 families and references for LLM-grade encoders", () => {
     expect(nameHandlingFor("sd15")).toBe("inject");
     expect(nameHandlingFor("sdxl")).toBe("inject");
     expect(nameHandlingFor("flux")).toBe("inject");
     expect(nameHandlingFor("flux2")).toBe("reference");
+    expect(nameHandlingFor("zimage")).toBe("reference");
+    expect(nameHandlingFor("qwenimage")).toBe("reference");
   });
 });
 
@@ -66,11 +75,13 @@ describe("resolveModelFamily", () => {
 });
 
 describe("formatting by family", () => {
-  it("gives SD families a negative + quality tags, and Flux none", () => {
+  it("gives SD families a negative + quality tags, and natural-language models none", () => {
     expect(negativeFor("sd15")).toContain("bad anatomy");
     expect(negativeFor("sdxl")).toContain("bad anatomy");
     expect(negativeFor("unknown")).toContain("bad anatomy"); // conservative: still safe
     expect(negativeFor("flux")).toBe("");
+    expect(negativeFor("zimage")).toBe("");
+    expect(negativeFor("qwenimage")).toBe("");
 
     expect(qualityPreamble("sdxl")).toContain("masterpiece");
     expect(qualityPreamble("flux")).toBe("");

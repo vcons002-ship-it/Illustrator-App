@@ -1,11 +1,12 @@
 import { DirectTransport, type Transport } from "../../transport/transport.js";
+import { catalogEntryForModel } from "../../catalog.js";
 import type { ImageGenerationInput, ImageGenerationOutput } from "../image-provider.js";
 import {
   type ModelFamily,
   type SamplerSettings,
   clampResolution,
   composeSdPositive,
-  isFlux,
+  isNaturalLanguage,
   nameHandlingFor,
   resolveModelFamily,
   resolveNegative,
@@ -137,52 +138,91 @@ export class ComfyUIBackend implements LocalEngineBackend {
 
   /**
    * Decide how a model must be loaded. SD1.5/SDXL are always all-in-one (no probe — keeps
-   * the common path request-free). Flux files vary: Flux.2 Klein and Flux.1 fp8 ship as
-   * all-in-one checkpoints, while Flux.2 dev and UNET-only Flux.1 are diffusion-only — so
-   * for either Flux family, ask ComfyUI which list the file is actually in. A Flux file in
-   * neither list defaults by family: Flux.2 → "diffusion" (its common distribution),
-   * Flux.1 → "checkpoint".
+   * the common path request-free). The natural-language families vary: Flux.1 fp8 ships
+   * as an all-in-one checkpoint, while Flux.2 / Z-Image / Qwen-Image / UNET-only Flux.1
+   * are diffusion-only — so for those families, ask ComfyUI which list the file is
+   * actually in. A file in neither list defaults by family: Flux.1 → "checkpoint",
+   * the rest → "diffusion" (their only distribution).
    */
   private async resolveLoadKind(
     model: string,
     family: ModelFamily,
   ): Promise<"checkpoint" | "diffusion"> {
-    if (!isFlux(family)) return "checkpoint";
+    if (!isNaturalLanguage(family)) return "checkpoint";
     const checkpoints = new Set(
       (await this.enumValues("CheckpointLoaderSimple", "ckpt_name")).map((n) => n.toLowerCase()),
     );
     if (checkpoints.has(model.toLowerCase())) return "checkpoint";
     const unets = new Set((await this.enumValues("UNETLoader", "unet_name")).map((n) => n.toLowerCase()));
     if (unets.has(model.toLowerCase())) return "diffusion";
-    return family === "flux2" ? "diffusion" : "checkpoint";
+    return family === "flux" ? "checkpoint" : "diffusion";
   }
 
   /**
-   * Auto-discover the text encoder + VAE for a separate-component model from ComfyUI's
-   * enums. Flux.1 (UNET-only) needs DualCLIPLoader (t5xxl + clip_l, type "flux"); Flux.2
-   * needs its Mistral-3 encoder via CLIPLoader (type "flux2"). Throws an actionable error
-   * when the required files aren't installed instead of letting the graph fail cryptically.
-   *
-   * NOTE: ComfyUI's Flux.2 node/type names are newer than the rest of this backend; the
-   * strings below are centralised here so they're easy to confirm against your install.
+   * Resolve the text encoder + VAE for a separate-component model. **Catalog-first**:
+   * when the chosen model is a catalog entry with `files`, use its exact encoder/VAE
+   * filenames and CLIPLoader `type` — no guessing. Otherwise auto-discover from
+   * ComfyUI's enums per family: Flux.1 (UNET-only) needs DualCLIPLoader (t5xxl +
+   * clip_l, type "flux"); Flux.2 its Mistral-3/Qwen-3 encoder (type "flux2"); Z-Image
+   * its Qwen-3-4B encoder (type "lumina2"); Qwen-Image its Qwen-2.5-VL encoder (type
+   * "qwen_image"). Throws an actionable error when the required files aren't installed
+   * instead of letting the graph fail cryptically.
    */
-  private async resolveComponents(family: ModelFamily): Promise<DiffusionComponents> {
+  private async resolveComponents(family: ModelFamily, model: string): Promise<DiffusionComponents> {
     const vaes = await this.enumValues("VAELoader", "vae_name");
     const pickVae = (...hints: string[]): string | undefined =>
       vaes.find((v) => hints.some((h) => v.toLowerCase().includes(h)));
 
-    if (family === "flux2") {
+    // Catalog-first: the entry knows its exact component files + clip type.
+    const entry = catalogEntryForModel(model);
+    const wantedEncoder = entry?.files?.find((f) => f.folder === "text_encoders");
+    const wantedVae = entry?.files?.find((f) => f.folder === "vae");
+    if (entry?.clipType && wantedEncoder && wantedVae) {
       const clips = await this.enumValues("CLIPLoader", "clip_name");
-      const encoder = clips.find((c) => /mistral|flux.?2/i.test(c));
-      const vae = pickVae("flux2", "flux.2") ?? pickVae("flux");
+      const byName = (names: string[], wanted: string): string | undefined =>
+        names.find((n) => n.toLowerCase() === wanted.toLowerCase());
+      const encoder = byName(clips, wantedEncoder.filename);
+      const vae = byName(vaes, wantedVae.filename);
       if (!encoder || !vae) {
+        const missing = [
+          ...(encoder ? [] : [`${wantedEncoder.filename} (models/text_encoders)`]),
+          ...(vae ? [] : [`${wantedVae.filename} (models/vae)`]),
+        ].join(" and ");
         throw new Error(
-          "Flux.2 needs its Mistral text encoder and Flux.2 VAE installed in ComfyUI " +
-            "(models/text_encoders and models/vae). Download them, or pick an all-in-one SD/SDXL checkpoint.",
+          `${entry.label} also needs ${missing}. Use the Download button in Settings → ` +
+            "Local model to fetch all its files (if you just downloaded them, restart the engine).",
         );
       }
       return {
-        textEncoder: { class_type: "CLIPLoader", inputs: { clip_name: encoder, type: "flux2" } },
+        textEncoder: { class_type: "CLIPLoader", inputs: { clip_name: encoder, type: entry.clipType } },
+        vaeName: vae,
+        weightDtype: "default",
+      };
+    }
+
+    if (family === "flux2" || family === "zimage" || family === "qwenimage") {
+      const clips = await this.enumValues("CLIPLoader", "clip_name");
+      const heuristics: Record<
+        string,
+        { clip: RegExp; vae: string[]; type: string; what: string }
+      > = {
+        // Flux.2-dev ships a Mistral-3 encoder; Klein a Qwen-3 one — accept both.
+        flux2: { clip: /mistral|flux.?2|qwen.?3/i, vae: ["flux2", "flux.2", "flux", "encoder"], type: "flux2", what: "Flux.2" },
+        zimage: { clip: /qwen.?3|qwen/i, vae: ["ae.", "z_image", "z-image"], type: "lumina2", what: "Z-Image" },
+        qwenimage: { clip: /qwen.?2\.5|qwen.*vl|qwen/i, vae: ["qwen"], type: "qwen_image", what: "Qwen-Image" },
+      };
+      const h = heuristics[family]!;
+      const encoder = clips.find((c) => h.clip.test(c));
+      const vae = pickVae(...h.vae);
+      if (!encoder || !vae) {
+        throw new Error(
+          `${h.what} needs its text encoder and VAE installed in ComfyUI ` +
+            "(models/text_encoders and models/vae). Use the Download button in Settings → " +
+            "Local model to fetch all its files, or pick an all-in-one SD/SDXL checkpoint.",
+        );
+      }
+      return {
+        textEncoder: { class_type: "CLIPLoader", inputs: { clip_name: encoder, type: h.type } },
         vaeName: vae,
         weightDtype: "default",
       };
@@ -288,12 +328,13 @@ export class ComfyUIBackend implements LocalEngineBackend {
       if (resolved) checkpoint = resolved;
     }
 
-    // Resolve the model family and how it should be sampled/loaded. Flux uses
-    // embedded guidance (cfg≈1) + the `simple` scheduler and ignores the
-    // quality-profile step count (more steps don't help, just cost time).
+    // Resolve the model family and how it should be sampled/loaded. A catalog
+    // entry's own sampler settings win over the family defaults (e.g. Flux.2 Klein
+    // base needs real CFG 5, unlike guidance-distilled Flux.2-dev). Natural-language
+    // models ignore the quality-profile step count (more steps don't help).
     const family = resolveModelFamily(input.modelFamily, checkpoint);
-    const sampler = samplerFor(family);
-    const steps = isFlux(family)
+    const sampler = catalogEntryForModel(checkpoint)?.sampler ?? samplerFor(family);
+    const steps = isNaturalLanguage(family)
       ? sampler.steps
       : (input.steps ?? (input.quality === "sketch" ? 6 : input.quality === "standard" ? 20 : 35));
     const { width, height } = clampResolution(family, input.width ?? 1024, input.height ?? 1024);
@@ -349,10 +390,12 @@ export class ComfyUIBackend implements LocalEngineBackend {
       }
     }
 
-    // For a separate-component model (Flux.2 / UNET-only), discover the text encoder
-    // + VAE from the engine; if they're missing, fail with an actionable message
-    // instead of the cryptic "clip input is invalid: None".
-    const components = loadKind === "diffusion" ? await this.resolveComponents(family) : undefined;
+    // For a separate-component model (Flux.2 / Z-Image / Qwen-Image / UNET-only
+    // Flux.1), resolve the text encoder + VAE (catalog-first, else discovered from
+    // the engine); if they're missing, fail with an actionable message instead of
+    // the cryptic "clip input is invalid: None".
+    const components =
+      loadKind === "diffusion" ? await this.resolveComponents(family, checkpoint) : undefined;
 
     const workflow = buildWorkflow({
       model: checkpoint,
@@ -631,6 +674,15 @@ function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
     ks.inputs.model = p.ipAdapter.caps.unified
       ? addUnifiedIpAdapter(graph, p.ipAdapter, modelRef)
       : addClassicIpAdapter(graph, p.ipAdapter, modelRef);
+  }
+  if (p.sampler.shift !== undefined) {
+    // Z-Image / Qwen-Image sigma shift — wrap whatever model ref feeds the sampler.
+    const ks = graph["3"] as { inputs: Record<string, unknown> };
+    graph["15"] = {
+      class_type: "ModelSamplingAuraFlow",
+      inputs: { shift: p.sampler.shift, model: ks.inputs.model },
+    };
+    ks.inputs.model = ["15", 0];
   }
   return graph;
 }

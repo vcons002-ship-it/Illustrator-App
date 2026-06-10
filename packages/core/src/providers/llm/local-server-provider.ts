@@ -118,4 +118,94 @@ export class LocalServerLLMProvider implements LLMProvider {
     const data = await res.json<ModelsResponse>();
     return (data.data ?? []).map((m) => ({ id: m.id, label: m.id }));
   }
+
+  /**
+   * Download a model INTO Ollama (`POST /api/pull`, an Ollama-native endpoint below
+   * the OpenAI-compatible `/v1`), streaming NDJSON progress so the Settings menu can
+   * show a live bar — no terminal `ollama pull` needed. Server-side the pull is
+   * resumable: re-calling after an interruption continues where it left off.
+   *
+   * Uses a raw `fetch` (injectable for tests) rather than the `Transport` seam
+   * because Transport buffers whole responses — no streaming. Hosts that can't
+   * stream (the extension's proxy) use `pullModelViaTransport` instead.
+   */
+  static async pullModel(
+    baseUrl: string,
+    model: string,
+    onProgress?: (p: OllamaPullProgress) => void,
+    fetchImpl: typeof fetch = fetch,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const res = await fetchImpl(`${ollamaRoot(baseUrl)}/api/pull`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model, stream: true }),
+      ...(signal ? { signal } : {}),
+    });
+    if (!res.ok) throw new Error(`Ollama pull failed with status ${res.status}`);
+    const emit = (line: string): void => {
+      if (!line.trim()) return;
+      let msg: { status?: string; error?: string; total?: number; completed?: number };
+      try {
+        msg = JSON.parse(line) as typeof msg;
+      } catch {
+        return; // tolerate partial/malformed frames
+      }
+      if (msg.error) throw new Error(msg.error);
+      onProgress?.({
+        status: msg.status ?? "downloading",
+        ...(msg.total ? { percent: ((msg.completed ?? 0) / msg.total) * 100 } : {}),
+      });
+    };
+    if (!res.body) {
+      // No streaming support — fall back to parsing the buffered NDJSON at the end.
+      (await res.text()).split("\n").forEach(emit);
+      return;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      lines.forEach(emit);
+    }
+    emit(buffer);
+  }
+
+  /**
+   * Non-streaming pull (`stream: false` — the response arrives once the model is
+   * fully downloaded) for hosts whose network goes through a buffering `Transport`
+   * proxy (the extension). No live progress; the caller shows an indeterminate state.
+   */
+  static async pullModelViaTransport(
+    baseUrl: string,
+    model: string,
+    transport: Transport,
+  ): Promise<void> {
+    const res = await transport.send({
+      url: `${ollamaRoot(baseUrl)}/api/pull`,
+      method: "POST",
+      body: { model, stream: false },
+    });
+    if (!res.ok) throw new Error(`Ollama pull failed with status ${res.status}`);
+    const data = await res.json<{ status?: string; error?: string }>();
+    if (data.error) throw new Error(data.error);
+  }
+}
+
+/** Live progress for an Ollama model pull. */
+export interface OllamaPullProgress {
+  /** Ollama's phase text, e.g. "pulling manifest", "downloading", "success". */
+  status: string;
+  /** 0..100 when the current layer reports sizes. */
+  percent?: number;
+}
+
+/** Ollama's API root from a configured base URL (strips the OpenAI-compat `/v1`). */
+function ollamaRoot(baseUrl: string): string {
+  return baseUrl.replace(/\/$/, "").replace(/\/v1$/, "");
 }

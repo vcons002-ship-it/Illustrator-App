@@ -13,23 +13,26 @@ echo    [1] Web app           (opens in your browser)
 echo    [2] Desktop app       (native window)
 echo    [3] Chrome extension  (opens the folder + Chrome)
 echo    [4] Local ComfyUI     (your own GPU image engine)
-echo    [5] Exit
+echo    [5] Local Ollama      (your own text engine - free, no API key)
+echo    [6] Exit
 echo.
 echo  First time? Use the matching installer instead:
 echo    web/all = install.bat or full-install.bat,  desktop = desktop.bat,
-echo    extension = extension.bat,  ComfyUI = comfyui-setup.bat
+echo    extension = extension.bat,  ComfyUI = comfyui-setup.bat,
+echo    Ollama = ollama-setup.bat
 echo.
 set "choice="
-set /p "choice=Type 1-5 and press Enter: "
+set /p "choice=Type 1-6 and press Enter: "
 
 if "%choice%"=="1" goto :web
 if "%choice%"=="2" goto :desktop
 if "%choice%"=="3" goto :ext
 if "%choice%"=="4" goto :comfyui
-if "%choice%"=="5" goto :eof
+if "%choice%"=="5" goto :ollama
+if "%choice%"=="6" goto :eof
 
 echo.
-echo Please type a number from 1 to 5.
+echo Please type a number from 1 to 6.
 timeout /t 2 >nul
 goto :menu
 
@@ -55,4 +58,18 @@ if exist "%COMFY%" (
   echo.
   pause
 )
+goto :eof
+
+:ollama
+where ollama >nul 2>nul
+if errorlevel 1 if not exist "%LocalAppData%\Programs\Ollama\ollama.exe" (
+  echo Ollama isn't installed yet. Double-click  ollama-setup.bat  first.
+  echo.
+  pause
+  goto :eof
+)
+echo Starting Ollama ^(text models are downloaded from the app's Settings^)...
+set "OLLAMA_EXE=ollama"
+if exist "%LocalAppData%\Programs\Ollama\ollama.exe" set "OLLAMA_EXE=%LocalAppData%\Programs\Ollama\ollama.exe"
+start "" /min "%OLLAMA_EXE%" serve
 goto :eof

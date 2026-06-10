@@ -8,8 +8,10 @@ import {
   DEFAULT_LOCAL_TEXT_SERVER,
   TEXT_PROVIDERS,
   LOCAL_IMAGE_MODELS,
+  OLLAMA_TEXT_MODELS,
   getImageStyle,
   getProvider,
+  ollamaModelMatches,
   resolveAssetName,
   styleLoraDownload,
   type LocalTextServerId,
@@ -63,7 +65,7 @@ export interface ReaderSettings {
    * from the checkpoint name is wrong. "auto" (default) detects it. SD families get
    * quality tags + a negative prompt; Flux gets plain natural language.
    */
-  imageModelFamily?: "auto" | "sd15" | "sdxl" | "flux" | "flux2";
+  imageModelFamily?: "auto" | "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage";
   /**
    * How many pages share one illustration: any positive number, or a whole
    * "chapter". A group never crosses a chapter boundary, so a number larger than
@@ -117,6 +119,8 @@ export interface SettingsPanelProps {
   onDownloadModelUrl?: (url: string) => void;
   /** Download progress 0..100 per catalog model/LoRA id (desktop). */
   downloadProgress?: Record<string, number>;
+  /** Which component file of a split-file model is downloading (per catalog id). */
+  downloadStage?: Record<string, string>;
   /** Status line for the app-managed engine setup (desktop), e.g. "Starting…". */
   engineStatus?: string;
   /** LoRA filenames installed in the managed engine (style auto-download). */
@@ -133,6 +137,10 @@ export interface SettingsPanelProps {
   onConnectLocalTextServer?: (server: LocalTextServerId, url: string) => void;
   /** True while a local-text-server connection attempt is in flight. */
   connectingLocalText?: boolean;
+  /** Download a text model INTO Ollama (`/api/pull`) — no terminal needed. */
+  onPullTextModel?: (model: string) => void;
+  /** Live pull progress per Ollama model id. */
+  pullProgress?: Record<string, { status: string; percent?: number }>;
 }
 
 export function SettingsPanel({
@@ -143,6 +151,7 @@ export function SettingsPanel({
   onDownloadModel,
   onDownloadModelUrl,
   downloadProgress = {},
+  downloadStage = {},
   engineStatus = "",
   installedLoras = [],
   onDownloadStyleLora,
@@ -151,6 +160,8 @@ export function SettingsPanel({
   textModels = [],
   onConnectLocalTextServer,
   connectingLocalText = false,
+  onPullTextModel,
+  pullProgress = {},
 }: SettingsPanelProps) {
   const [open, setOpen] = useState(false);
   const set = (patch: Partial<ReaderSettings>) => onChange({ ...value, ...patch });
@@ -226,6 +237,8 @@ export function SettingsPanel({
                   onSet={set}
                   onSelect={(id) => set({ localServerTextModel: id })}
                   onConnect={onConnectLocalTextServer}
+                  onPull={onPullTextModel}
+                  pullProgress={pullProgress}
                 />
               )}
             </div>
@@ -284,15 +297,26 @@ export function SettingsPanel({
               <select
                 value={value.imageModelFamily ?? "auto"}
                 onChange={(e) =>
-                  set({ imageModelFamily: e.target.value as "auto" | "sd15" | "sdxl" | "flux" | "flux2" })
+                  set({
+                    imageModelFamily: e.target.value as
+                      | "auto"
+                      | "sd15"
+                      | "sdxl"
+                      | "flux"
+                      | "flux2"
+                      | "zimage"
+                      | "qwenimage",
+                  })
                 }
-                title="How prompts are formatted and the model is loaded. Auto detects from the checkpoint name. SD1.5/SDXL get quality tags + a negative prompt; Flux gets plain natural language. Flux.2 loads via its separate text encoder + VAE (ComfyUI only). Override if auto-detection is wrong."
+                title="How prompts are formatted and the model is loaded. Auto detects from the checkpoint name. SD1.5/SDXL get quality tags + a negative prompt; the newer families get plain natural language. Flux.2 / Z-Image / Qwen-Image load via their separate text encoder + VAE (ComfyUI only). Override if auto-detection is wrong."
               >
                 <option value="auto">Auto-detect</option>
                 <option value="sd15">Stable Diffusion 1.5</option>
                 <option value="sdxl">SDXL</option>
                 <option value="flux">Flux.1</option>
                 <option value="flux2">Flux.2</option>
+                <option value="zimage">Z-Image</option>
+                <option value="qwenimage">Qwen-Image</option>
               </select>
             </label>
           )}
@@ -361,6 +385,7 @@ export function SettingsPanel({
               selected={value.localModel}
               connecting={connectingLocal}
               downloadProgress={downloadProgress}
+              downloadStage={downloadStage}
               engineStatus={engineStatus}
               onSet={set}
               onSelect={(id) => set({ localModel: id })}
@@ -508,6 +533,7 @@ function LocalEngine({
   selected,
   connecting,
   downloadProgress,
+  downloadStage,
   engineStatus,
   onSet,
   onSelect,
@@ -522,6 +548,7 @@ function LocalEngine({
   selected: string | undefined;
   connecting: boolean;
   downloadProgress: Record<string, number>;
+  downloadStage: Record<string, string>;
   engineStatus: string;
   onSet: (patch: Partial<ReaderSettings>) => void;
   onSelect: (id: string) => void;
@@ -536,6 +563,7 @@ function LocalEngine({
           installedModels={installedModels}
           selected={selected}
           downloadProgress={downloadProgress}
+          downloadStage={downloadStage}
           engineStatus={engineStatus}
           onSelect={onSelect}
           onDownload={onDownload}
@@ -585,6 +613,7 @@ function ManagedEngine({
   installedModels,
   selected,
   downloadProgress,
+  downloadStage,
   engineStatus,
   onSelect,
   onDownload,
@@ -593,12 +622,13 @@ function ManagedEngine({
   installedModels: InstalledModel[];
   selected: string | undefined;
   downloadProgress: Record<string, number>;
+  downloadStage: Record<string, string>;
   engineStatus: string;
   onSelect: (id: string) => void;
   onDownload: ((id: string) => void) | undefined;
   onDownloadModelUrl: ((url: string) => void) | undefined;
 }) {
-  // Installed list reports checkpoint filenames; match the catalog by filename.
+  // Installed list reports model filenames; match the catalog by (main) filename.
   const installedNames = new Set(installedModels.map((m) => m.id));
   return (
     <div style={rowStyle}>
@@ -633,9 +663,14 @@ function ManagedEngine({
                 )}
               </div>
               {downloading && (
-                <div style={{ height: 4, background: "rgba(255,255,255,0.15)", borderRadius: 2 }}>
-                  <div style={{ width: `${progress}%`, height: "100%", background: "#4663d6", borderRadius: 2 }} />
-                </div>
+                <>
+                  {downloadStage[m.id] && (
+                    <span style={{ opacity: 0.6, fontSize: 11 }}>{downloadStage[m.id]}</span>
+                  )}
+                  <div style={{ height: 4, background: "rgba(255,255,255,0.15)", borderRadius: 2 }}>
+                    <div style={{ width: `${progress}%`, height: "100%", background: "#4663d6", borderRadius: 2 }} />
+                  </div>
+                </>
               )}
             </div>
           );
@@ -660,6 +695,8 @@ function LocalTextServer({
   onSet,
   onSelect,
   onConnect,
+  onPull,
+  pullProgress,
 }: {
   server: LocalTextServerId;
   url: string;
@@ -669,6 +706,8 @@ function LocalTextServer({
   onSet: (patch: Partial<ReaderSettings>) => void;
   onSelect: (id: string) => void;
   onConnect: ((server: LocalTextServerId, url: string) => void) | undefined;
+  onPull: ((model: string) => void) | undefined;
+  pullProgress: Record<string, { status: string; percent?: number }>;
 }) {
   const placeholder = LOCAL_TEXT_SERVER_DEFAULT_URL[server];
   return (
@@ -697,13 +736,73 @@ function LocalTextServer({
         </button>
       </div>
       <ModelSelect installedModels={textModels} selected={selected} onSelect={onSelect} />
+      {server === "ollama" && onPull && (
+        <OllamaModelMenu textModels={textModels} pullProgress={pullProgress} onPull={onPull} />
+      )}
       <span style={{ opacity: 0.6, fontSize: 12 }}>
-        Start {LOCAL_TEXT_SERVER_LABEL[server]} and pull a model (e.g.{" "}
-        <code>ollama pull llama3.2</code>). In a browser, Ollama needs{" "}
-        <code>OLLAMA_ORIGINS={location.origin}</code>; LM Studio / llama.cpp allow it by
-        default.
+        {server === "ollama" ? (
+          <>
+            First time? Run <code>ollama-setup.bat</code> (Windows) or install Ollama from
+            ollama.com, then download a model above. In a browser, Ollama needs{" "}
+            <code>OLLAMA_ORIGINS={location.origin}</code> (the setup script sets it).
+          </>
+        ) : (
+          <>
+            Start {LOCAL_TEXT_SERVER_LABEL[server]} with a model loaded; it allows browser
+            requests by default.
+          </>
+        )}
       </span>
     </div>
+  );
+}
+
+/**
+ * Curated one-click text-model downloads INTO Ollama (`/api/pull` — server-side
+ * resumable, so re-clicking after an interruption continues). Plus a free-text
+ * field for any other model name from ollama.com/library.
+ */
+function OllamaModelMenu({
+  textModels,
+  pullProgress,
+  onPull,
+}: {
+  textModels: InstalledModel[];
+  pullProgress: Record<string, { status: string; percent?: number }>;
+  onPull: (model: string) => void;
+}) {
+  return (
+    <>
+      <span style={{ opacity: 0.7, fontSize: 12, marginTop: 4 }}>Download a text model:</span>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 2 }}>
+        {OLLAMA_TEXT_MODELS.map((m) => {
+          const installed = textModels.some((t) => ollamaModelMatches(t.id, m.id));
+          const pull = pullProgress[m.id];
+          return (
+            <div key={m.id} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                <span style={{ opacity: 0.85 }}>
+                  {m.label} · {m.sizeGB} GB{m.note ? ` · ${m.note}` : ""}
+                </span>
+                {installed ? (
+                  <span style={{ color: "#7dd87f" }}>✓ Installed</span>
+                ) : pull ? (
+                  <span style={{ opacity: 0.7 }}>
+                    {pull.percent !== undefined ? `${Math.round(pull.percent)}%` : pull.status}
+                  </span>
+                ) : (
+                  <button style={buttonStyle} onClick={() => onPull(m.id)}>
+                    Download
+                  </button>
+                )}
+              </div>
+              {pull?.percent !== undefined && <ProgressBar pct={pull.percent} />}
+            </div>
+          );
+        })}
+      </div>
+      <PasteUrl placeholder="Or any model name from ollama.com/library" onSubmit={onPull} />
+    </>
   );
 }
 

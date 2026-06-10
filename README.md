@@ -101,13 +101,15 @@ apps/
 - **Local engine (your own GPU):** connect to a Stable Diffusion server you run —
   **AUTOMATIC1111** (`/sdapi/v1/*`) or **ComfyUI** (graph API) — from either the
   web app or the desktop app. Free, private, no keys. Family-aware rendering:
-  SD 1.5 / SDXL / Flux.1, plus **Flux.2** on ComfyUI (Klein all-in-one, or dev via
-  its auto-discovered Mistral encoder + VAE). The desktop app can also
-  **auto-manage** the engine: download/launch ComfyUI portable and curated models
-  from the Settings picker (implemented; pending on-device verification).
+  SD 1.5 / SDXL / Flux.1, plus the split-file generation on ComfyUI — **Z-Image
+  Turbo** (recommended), **Flux.2 Klein**, **Qwen-Image**. The desktop app
+  **auto-manages** the engine: it downloads/launches ComfyUI portable and fetches
+  every file a catalog model needs (diffusion model + text encoder + VAE, with
+  resume) from the Settings picker (implemented; pending on-device verification).
 - **Local text:** WebLLM (on-device WebGPU) or an OpenAI-compatible local server
-  (Ollama / LM Studio / llama.cpp). The ONNX/WebGPU **image** provider remains a
-  stub for a later phase.
+  (Ollama / LM Studio / llama.cpp); `ollama-setup.bat` installs Ollama and text
+  models download from the Settings menu with live progress. The ONNX/WebGPU
+  **image** provider remains a stub for a later phase.
 
 ## Develop
 

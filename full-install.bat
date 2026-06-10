@@ -11,8 +11,9 @@ echo This sets up EVERYTHING for the web app, the desktop app, and the Chrome
 echo extension: Node.js, pnpm, dependencies, Rust, the Visual C++ build tools,
 echo the Tauri CLI, and a built extension. No typing required.
 echo.
-echo (It does NOT install AUTOMATIC1111 / ComfyUI — those are optional and set up
-echo  separately. See SETUP.md.)
+echo (It does NOT install the optional local AI engines — set those up separately:
+echo  comfyui-setup.bat for local images, ollama-setup.bat for local text.
+echo  See SETUP.md.)
 echo.
 echo Some toolchains need a fresh window after install. If this script says it
 echo just installed something and asks you to run it again, CLOSE this window and

@@ -68,11 +68,12 @@ The app builds a structured memory of the book so art stays consistent:
 ### 🔌 Providers & privacy (bring your own, or run local)
 - **Text (story understanding):** Claude, Gemini, or OpenAI with your key — **or local**:
   on-device (WebGPU, no key, nothing leaves your machine) or your own local LLM server
-  (Ollama / LM Studio / llama.cpp).
+  (Ollama / LM Studio / llama.cpp). **Ollama models download from the Settings menu**
+  with a live progress bar — no terminal.
 - **Images:** a Flux-style API, Gemini, or OpenAI with your key — **or local** on your
-  own GPU via ComfyUI or AUTOMATIC1111 (SD 1.5 / SDXL / Flux.1, plus **Flux.2** on
-  ComfyUI). The **desktop app can auto-manage** ComfyUI and download curated models
-  for you.
+  own GPU via ComfyUI or AUTOMATIC1111 (SD 1.5 / SDXL / Flux.1, plus **Z-Image Turbo**,
+  **Flux.2 Klein** and **Qwen-Image** on ComfyUI). The **desktop app can auto-manage**
+  ComfyUI and downloads every file a model needs (split files included, resumable).
 - **No keys? Still works** — built-in placeholder art shows the whole flow.
 - **Keys are encrypted** on your device; local/on-device options keep everything private.
 
@@ -163,9 +164,10 @@ The app builds a structured memory of the book so art stays consistent:
   their Bible names, expanded into full visual descriptions per image model at render.
 - **World style** — an auto-derived genre/art-direction line applied to every image.
 - **User-uploaded character reference images** (IP-Adapter), replacing auto-capture.
-- **Flux-correct rendering** — Flux.1/Flux.2 sampler settings (cfg 1, embedded
-  guidance) and **Flux.2** support (Klein all-in-one, or dev via its separate
-  Mistral encoder + VAE on ComfyUI), with per-family resolution limits.
+- **Family-correct rendering** — per-family sampler settings (Flux embedded guidance,
+  Z-Image 8-step turbo, Qwen-Image CFG/shift) and separate-loader graphs for the
+  split-file generation (Flux.2 / Z-Image / Qwen-Image) with catalog-exact text
+  encoder + VAE resolution, plus per-family resolution limits.
 - Whole-book storyboard with action-driven, location-aware prompts.
 - Structured, **editable** character appearance + world glossary.
 - Detailed, accumulating location descriptions; skip non-story pages.

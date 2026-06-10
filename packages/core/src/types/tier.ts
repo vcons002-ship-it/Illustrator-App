@@ -27,7 +27,7 @@ export interface TierConfig {
    * unset, the local backends auto-detect from the checkpoint. Cloud providers
    * ignore it (they always use natural language).
    */
-  imageModelFamily?: "sd15" | "sdxl" | "flux" | "flux2";
+  imageModelFamily?: "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage";
   /**
    * True when the SAME cloud vendor + key serves both the text and image slots (e.g.
    * both Gemini). A future "native" mode can then let that one API read a chapter and

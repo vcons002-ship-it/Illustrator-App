@@ -34,11 +34,13 @@ export interface InstalledModel {
   label: string;
 }
 
-/** A model the desktop app can fetch on demand (resolved from the core catalog). */
+/** A model file the desktop app can fetch on demand (resolved from the core catalog). */
 export interface DownloadableModel {
   id: string;
   filename: string;
   url: string;
+  /** ComfyUI models subfolder for split-file components (default "checkpoints"). */
+  folder?: "checkpoints" | "diffusion_models" | "text_encoders" | "vae";
 }
 
 /** Progress while the engine itself is being installed / launched. */

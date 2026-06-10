@@ -10,26 +10,37 @@ import { catalogModelFamily } from "../catalog.js";
  * a negative prompt (always safe) but no tags or weighting.
  */
 
-export type ModelFamily = "sd15" | "sdxl" | "flux" | "flux2" | "unknown";
+export type ModelFamily = "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage" | "unknown";
 
 /** Flux.1 or Flux.2 — natural-language prompts, no negatives, no SD tags. */
 export function isFlux(family: ModelFamily): boolean {
   return family === "flux" || family === "flux2";
 }
 
+/**
+ * Natural-language families (Flux, Z-Image, Qwen-Image): plain prose prompts, no
+ * SD tags/weighting, no negative, and a fixed model-recommended step count.
+ */
+export function isNaturalLanguage(family: ModelFamily): boolean {
+  return isFlux(family) || family === "zimage" || family === "qwenimage";
+}
+
 /** Sampler settings for a family. Flux uses embedded guidance (cfg≈1) + the `simple`
- * scheduler; at SD's cfg 7 it washes out and runs a wasted second pass. */
+ * scheduler; at SD's cfg 7 it washes out and runs a wasted second pass. Z-Image /
+ * Qwen-Image values come from the official Comfy-Org workflow templates. */
 export interface SamplerSettings {
   cfg: number;
   sampler: string;
   scheduler: string;
-  /** Recommended step count (Flux ignores the quality-profile steps — more don't help). */
+  /** Recommended step count (natural-language models ignore the quality-profile steps). */
   steps: number;
   /**
    * Flux embedded-guidance value (set via a FluxGuidance node, with KSampler cfg=1).
    * Undefined for SD families, which use real CFG instead.
    */
   guidance?: number;
+  /** ModelSamplingAuraFlow shift (Z-Image / Qwen-Image); undefined = no node. */
+  shift?: number;
 }
 
 export function samplerFor(family: ModelFamily): SamplerSettings {
@@ -38,6 +49,10 @@ export function samplerFor(family: ModelFamily): SamplerSettings {
       return { cfg: 1, sampler: "euler", scheduler: "simple", steps: 20, guidance: 3.5 };
     case "flux2":
       return { cfg: 1, sampler: "euler", scheduler: "simple", steps: 24, guidance: 4.0 };
+    case "zimage": // 8-step turbo: cfg 1, res_multistep, AuraFlow shift 3
+      return { cfg: 1, sampler: "res_multistep", scheduler: "simple", steps: 8, shift: 3 };
+    case "qwenimage": // real CFG 4, AuraFlow shift 3.1
+      return { cfg: 4, sampler: "euler", scheduler: "simple", steps: 20, shift: 3.1 };
     default: // sd15 / sdxl / unknown
       return { cfg: 7, sampler: "euler", scheduler: "normal", steps: 28 };
   }
@@ -46,10 +61,13 @@ export function samplerFor(family: ModelFamily): SamplerSettings {
 /**
  * How a target expands bible terms, by text-encoder grade:
  *  - CLIP/T5 (SD1.5, SDXL, Flux.1) can't read a name → **inject** the descriptor in place.
- *  - LLM-grade (Flux.2/Mistral) tracks a name↔description glossary → **reference** block.
+ *  - LLM-grade (Flux.2/Mistral·Qwen, Z-Image/Qwen3, Qwen-Image/Qwen2.5-VL) tracks a
+ *    name↔description glossary → **reference** block.
  */
 export function nameHandlingFor(family: ModelFamily): "inject" | "reference" {
-  return family === "flux2" ? "reference" : "inject";
+  return family === "flux2" || family === "zimage" || family === "qwenimage"
+    ? "reference"
+    : "inject";
 }
 
 /** Largest square dimension a family handles well (bounds time + SD1.5 artifacts). */
@@ -83,6 +101,8 @@ export interface PromptSubject {
  */
 export function detectModelFamily(name: string): ModelFamily {
   const n = (name || "").toLowerCase();
+  if (/z[\s._-]?image/.test(n)) return "zimage"; // z_image_turbo, z-image, …
+  if (/qwen[\s._-]?image/.test(n)) return "qwenimage"; // qwen_image, qwen-image, …
   if (/flux[\s._-]?2/.test(n)) return "flux2"; // flux2, flux.2, flux-2, flux_2 — before generic flux
   if (n.includes("flux")) return "flux";
   if (n.includes("xl")) return "sdxl"; // sdxl, sd_xl, realvisxl, juggernautxl, …
@@ -113,9 +133,9 @@ export const DEFAULT_NEGATIVE =
   "blurry, watermark, signature, text, jpeg artifacts, cropped, out of frame, " +
   "portrait, headshot, close-up, simple background";
 
-/** Negative prompt for a family ("" for Flux — its negatives are ignored/harmful). */
+/** Negative prompt for a family ("" for natural-language models — ignored/harmful). */
 export function negativeFor(family: ModelFamily): string {
-  return isFlux(family) ? "" : DEFAULT_NEGATIVE;
+  return isNaturalLanguage(family) ? "" : DEFAULT_NEGATIVE;
 }
 
 /** Quality tag preamble for SD families; empty for flux/unknown. */
@@ -157,9 +177,9 @@ export function composeSdPositive(
 
 /**
  * The negative prompt to send for this generation: an explicit override wins for
- * SD families; flux always gets "" regardless of any override.
+ * SD families; natural-language models always get "" regardless of any override.
  */
 export function resolveNegative(family: ModelFamily, override: string | undefined): string {
-  if (isFlux(family)) return "";
+  if (isNaturalLanguage(family)) return "";
   return override && override.trim() ? override : DEFAULT_NEGATIVE;
 }

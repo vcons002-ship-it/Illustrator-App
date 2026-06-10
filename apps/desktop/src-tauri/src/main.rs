@@ -73,6 +73,10 @@ struct DownloadableModel {
     id: String,
     filename: String,
     url: String,
+    /// ComfyUI models subfolder (split-file models): "checkpoints" (default),
+    /// "diffusion_models", "text_encoders" or "vae".
+    #[serde(default)]
+    folder: Option<String>,
 }
 
 // --------------------------------------------------------------------- commands
@@ -100,17 +104,22 @@ async fn ensure_engine(app: AppHandle, state: State<'_, EngineState>) -> Result<
     Ok(base)
 }
 
-/// Checkpoints currently downloaded (the Settings model picker reads this).
+/// Models currently downloaded (the Settings model picker reads this). Lists both
+/// all-in-one checkpoints and split-file diffusion models.
 #[tauri::command]
 async fn list_models(app: AppHandle) -> Result<Vec<InstalledModel>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let dir = checkpoints_dir(&app);
         let mut out = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.ends_with(".safetensors") || name.ends_with(".ckpt") {
-                    out.push(InstalledModel { id: name.clone(), label: name });
+        let mut seen = std::collections::HashSet::new();
+        for dir in [checkpoints_dir(&app), comfy_models_dir(&app).join("diffusion_models")] {
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if (name.ends_with(".safetensors") || name.ends_with(".ckpt"))
+                        && seen.insert(name.to_lowercase())
+                    {
+                        out.push(InstalledModel { id: name.clone(), label: name });
+                    }
                 }
             }
         }
@@ -120,12 +129,19 @@ async fn list_models(app: AppHandle) -> Result<Vec<InstalledModel>, String> {
     .map_err(|e| e.to_string())?
 }
 
-/// Download a curated checkpoint into the engine's models dir, with progress.
+/// Download a curated model file into the engine's models dir, with progress.
+/// `folder` routes split-file components (diffusion model / text encoder / VAE).
 #[tauri::command]
 async fn download_model(app: AppHandle, model: DownloadableModel) -> Result<(), String> {
     let app2 = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let dir = checkpoints_dir(&app2);
+        let dir = match model.folder.as_deref() {
+            None | Some("checkpoints") => checkpoints_dir(&app2),
+            Some(f @ ("diffusion_models" | "text_encoders" | "vae")) => {
+                comfy_models_dir(&app2).join(f)
+            }
+            Some(other) => return Err(format!("Unknown model folder \"{other}\".")),
+        };
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         let dest = dir.join(&model.filename);
         download_model_with_progress(&app2, &model, &dest)
@@ -290,20 +306,56 @@ fn download_to_file(
     Ok(())
 }
 
-/// Like `download_to_file` but emits `model://progress` keyed by model id.
+/// Like `download_to_file` but emits `model://progress` keyed by model id, and is
+/// built for the 9–20 GB split-file era:
+///  - **idempotent** — an already-complete file returns immediately (so a multi-file
+///    retry skips what's done);
+///  - **resumable** — streams into `<name>.part` and continues it with an HTTP Range
+///    request after an interruption, renaming to the real name only when complete;
+///  - **untimed** — no overall request timeout (a multi-hour download must not be cut).
 fn download_model_with_progress(
     app: &AppHandle,
     model: &DownloadableModel,
     dest: &Path,
 ) -> Result<(), String> {
-    let mut resp = reqwest::blocking::get(&model.url).map_err(|e| e.to_string())?;
+    if dest.exists() {
+        let _ = app.emit(
+            "model://progress",
+            ModelProgress { id: model.id.clone(), received_bytes: 0, total_bytes: 0, percent: 100.0 },
+        );
+        return Ok(());
+    }
+    let part = dest.with_file_name(format!("{}.part", model.filename));
+    let mut offset = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(None)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut req = client.get(&model.url);
+    if offset > 0 {
+        req = req.header(reqwest::header::RANGE, format!("bytes={offset}-"));
+    }
+    let mut resp = req.send().map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("Download failed ({}).", resp.status()));
     }
-    let total = resp.content_length().unwrap_or(0);
-    let mut file = std::fs::File::create(dest).map_err(|e| e.to_string())?;
+    // 206 → the server honours the Range and we append; anything else (200, or we
+    // asked from 0) → start the .part over from scratch.
+    let resume = offset > 0 && resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+    if !resume {
+        offset = 0;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(resume)
+        .write(true)
+        .truncate(!resume)
+        .open(&part)
+        .map_err(|e| e.to_string())?;
+    let total = offset + resp.content_length().unwrap_or(0);
     let mut buf = [0u8; 1 << 16];
-    let mut received: u64 = 0;
+    let mut received: u64 = offset;
     let mut last_pct: i64 = -1;
     loop {
         let n = resp.read(&mut buf).map_err(|e| e.to_string())?;
@@ -327,6 +379,8 @@ fn download_model_with_progress(
             );
         }
     }
+    drop(file);
+    std::fs::rename(&part, dest).map_err(|e| e.to_string())?;
     Ok(())
 }
 

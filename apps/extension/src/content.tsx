@@ -5,9 +5,11 @@ import {
   ComfyUIBackend,
   DirectTransport,
   Engine,
+  LOCAL_TEXT_SERVER_DEFAULT_URL,
   LocalServerLLMProvider,
   computeBloomTarget,
   latestSpoilerParagraphIndex,
+  ollamaModelMatches,
   resolvePageEntities,
   spoilerRevealPoint,
   type BookSource,
@@ -54,6 +56,7 @@ function Overlay() {
   const [connectingLocal, setConnectingLocal] = useState(false);
   const [textModels, setTextModels] = useState<InstalledModel[]>([]);
   const [connectingLocalText, setConnectingLocalText] = useState(false);
+  const [pullProgress, setPullProgress] = useState<Record<string, { status: string; percent?: number }>>({});
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const engineRef = useRef<Engine | undefined>(undefined);
@@ -239,6 +242,35 @@ function Overlay() {
     }
   }, []);
 
+  // The pull callback reads the latest URL without re-creating itself per keystroke.
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+
+  // Download a text model INTO Ollama through the background proxy. The proxy
+  // buffers responses (no streaming), so this uses the non-streaming pull and
+  // shows an indeterminate "downloading…" until Ollama finishes.
+  const onPullTextModel = useCallback(async (model: string) => {
+    setError("");
+    setPullProgress((prev) => ({ ...prev, [model]: { status: "downloading… (can take a while)" } }));
+    try {
+      const transport = new DirectTransport(proxyFetch);
+      const url = settingsRef.current?.localServerTextUrl?.trim() || LOCAL_TEXT_SERVER_DEFAULT_URL.ollama;
+      await LocalServerLLMProvider.pullModelViaTransport(url, model, transport);
+      const models = await LocalServerLLMProvider.listModels(url, transport);
+      setTextModels(models);
+      const installed = models.find((m) => ollamaModelMatches(m.id, model))?.id ?? model;
+      setSettings((s) => (s ? { ...s, localServerTextUrl: url, localServerTextModel: installed } : s));
+    } catch (err) {
+      setError(`Couldn't download ${model}: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setPullProgress((prev) => {
+        const next = { ...prev };
+        delete next[model];
+        return next;
+      });
+    }
+  }, []);
+
   if (!visible || !settings) return null;
 
   const page = book?.pages[pageIndex];
@@ -285,6 +317,8 @@ function Overlay() {
         textModels={textModels}
         onConnectLocalTextServer={onConnectLocalTextServer}
         connectingLocalText={connectingLocalText}
+        onPullTextModel={(m) => void onPullTextModel(m)}
+        pullProgress={pullProgress}
       />
     </div>
   );
