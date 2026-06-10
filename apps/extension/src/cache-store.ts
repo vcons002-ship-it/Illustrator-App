@@ -82,5 +82,29 @@ export function createCacheStore(): VisualReaderStore {
         await fallback.removeBook(id);
       }
     },
+    // Optional ops (regeneration / reference cleanup): both core stores implement
+    // them, so forward rather than omit — otherwise the engine's feature-detection
+    // (`store.deleteImage?.(…)`) silently no-ops behind this wrapper.
+    async deleteBible(bookId: string): Promise<void> {
+      try {
+        await backing.deleteBible?.(bookId);
+      } catch {
+        await fallback.deleteBible?.(bookId);
+      }
+    },
+    async deleteImage(requestId: string): Promise<void> {
+      try {
+        await backing.deleteImage?.(requestId);
+      } catch {
+        await fallback.deleteImage?.(requestId);
+      }
+    },
+    async clearImages(bookId: string): Promise<void> {
+      try {
+        await backing.clearImages?.(bookId);
+      } catch {
+        await fallback.clearImages?.(bookId);
+      }
+    },
   };
 }
