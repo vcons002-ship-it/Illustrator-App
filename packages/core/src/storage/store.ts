@@ -83,6 +83,11 @@ export class InMemoryStore implements VisualReaderStore {
       }));
   }
   async removeBook(id: string): Promise<void> {
+    // Deleting a book reclaims everything it owns — its cached images (including any
+    // character reference uploads, keyed `${id}:charref:…`) and its Visual Bible —
+    // so removed books don't leak storage.
     this.books.delete(id);
+    this.bibles.delete(id);
+    await this.clearImages(id);
   }
 }

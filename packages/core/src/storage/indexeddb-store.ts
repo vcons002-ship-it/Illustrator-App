@@ -85,13 +85,18 @@ export class IndexedDbStore implements VisualReaderStore {
   }
 
   async removeBook(id: string): Promise<void> {
+    // Reclaim everything the book owns so a removed book leaks no storage: its cached
+    // images (including character reference uploads keyed `${id}:charref:…`) and its
+    // Visual Bible, alongside the library record.
     const db = await this.dbPromise;
-    return new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(BOOK_STORE, "readwrite");
       tx.objectStore(BOOK_STORE).delete(id);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
+    await this.delete(BIBLE_STORE, id);
+    await this.clearImages(id);
   }
 
   private async get<T>(store: string, key: string): Promise<T | undefined> {
