@@ -1,5 +1,6 @@
 import type { BookSource } from "./types/book.js";
 import type { CharacterAppearance, IdentityAnchor, Outfit, VisualBible } from "./types/bible.js";
+import { MAX_CHARACTER_REFS, referenceIdsOf } from "./types/bible.js";
 import type { ImageResult } from "./types/content.js";
 import type { TierConfig } from "./types/tier.js";
 import { DEFAULT_TIER_CONFIG } from "./types/tier.js";
@@ -521,25 +522,53 @@ export class Engine {
   }
 
   /**
-   * Set (or clear) a user-uploaded reference image for a character — fed to IP-Adapter
-   * when the ComfyUI nodes are installed. Auto-capture was removed (it biased every image
-   * toward a portrait); consistency now comes from bible-term injection + the per-character
-   * seed, with this as an optional, deliberate override.
+   * Add a user-uploaded reference image for a character — fed to IP-Adapter when the
+   * ComfyUI nodes are installed. Multi-view: up to MAX_CHARACTER_REFS uploads per
+   * character (ideally different ANGLES of the same face) condition each render
+   * together for a more robust likeness. Silently a no-op at the cap (the UI hides
+   * "Add" there). Auto-capture was removed (it biased every image toward a portrait);
+   * references are deliberate user uploads only.
    */
-  async setCharacterReference(
+  async addCharacterReference(
     characterId: string,
-    image: { bytes: ArrayBuffer; mimeType: string } | undefined,
+    image: { bytes: ArrayBuffer; mimeType: string },
   ): Promise<void> {
     if (!this.book || !this.bible) return;
-    const refId = `${this.book.id}:charref:${characterId}`;
-    if (image) await this.store.putImage(refId, image.bytes, image.mimeType);
-    else await this.store.deleteImage?.(refId);
+    const character = this.bible.characters.find((c) => c.id === characterId);
+    if (!character) return;
+    const ids = referenceIdsOf(character.anchor);
+    if (ids.length >= MAX_CHARACTER_REFS) return;
+    const refId = `${this.book.id}:charref:${characterId}:${nextRefSlot(ids)}`;
+    await this.store.putImage(refId, image.bytes, image.mimeType);
+    await this.setAnchorReferences(characterId, [...ids, refId]);
+  }
+
+  /** Remove one of a character's reference images, deleting its stored bytes. */
+  async removeCharacterReference(characterId: string, refId: string): Promise<void> {
+    if (!this.bible) return;
+    const character = this.bible.characters.find((c) => c.id === characterId);
+    if (!character) return;
+    const ids = referenceIdsOf(character.anchor);
+    if (!ids.includes(refId)) return;
+    await this.store.deleteImage?.(refId);
+    await this.setAnchorReferences(characterId, ids.filter((id) => id !== refId));
+  }
+
+  /** A stored reference image's bytes (UI thumbnails). Scoped to this book's refs. */
+  async getCharacterReference(
+    refId: string,
+  ): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined> {
+    if (!this.book || !refId.startsWith(`${this.book.id}:charref:`)) return undefined;
+    return this.store.getImage(refId);
+  }
+
+  /** Persist a character's reference ids (always the array form — legacy id folded in). */
+  private async setAnchorReferences(characterId: string, ids: string[]): Promise<void> {
+    if (!this.bible) return;
     this.bible = {
       ...this.bible,
       characters: this.bible.characters.map((c) =>
-        c.id === characterId
-          ? { ...c, anchor: setReference(c.anchor, image ? refId : undefined) }
-          : c,
+        c.id === characterId ? { ...c, anchor: withReferenceIds(c.anchor, ids) } : c,
       ),
     };
     await this.store.putBible(this.bible);
@@ -695,16 +724,21 @@ export class Engine {
   }
 }
 
-/** An identity anchor with its reference image cleared (e.g. the user's Remove). */
-function dropReference(anchor: IdentityAnchor): IdentityAnchor {
-  const { referenceImageId: _drop, ...rest } = anchor;
-  return rest;
+/** The anchor rewritten to the array reference form (legacy single id folded away). */
+function withReferenceIds(anchor: IdentityAnchor, ids: string[]): IdentityAnchor {
+  const { referenceImageId: _legacy, referenceImageIds: _old, ...rest } = anchor;
+  return ids.length > 0 ? { ...rest, referenceImageIds: ids } : rest;
 }
 
-/** Set or clear an anchor's reference image id. */
-function setReference(anchor: IdentityAnchor, refId: string | undefined): IdentityAnchor {
-  if (!refId) return dropReference(anchor);
-  return { ...anchor, referenceImageId: refId };
+/** Next free numeric slot for a new reference id. New ids end `:n`; the legacy
+ * un-suffixed id never matches, so it simply keeps its place in the array. */
+function nextRefSlot(ids: string[]): number {
+  let max = -1;
+  for (const id of ids) {
+    const m = /:(\d+)$/.exec(id);
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return max + 1;
 }
 
 /** Mark a chapter processed without adding entities (used when extraction fails). */

@@ -29,7 +29,10 @@ export type MainToWorker =
   | { type: "regenerateAllImages" }
   | { type: "regenerateImage"; unitIndex: number }
   | { type: "updateCharacter"; characterId: string; patch: CharacterPatch }
-  | { type: "setCharacterReference"; characterId: string; image?: { bytes: ArrayBuffer; mimeType: string } }
+  | { type: "addCharacterReference"; characterId: string; image: { bytes: ArrayBuffer; mimeType: string } }
+  | { type: "removeCharacterReference"; characterId: string; refId: string }
+  /** Fetch a reference image's bytes for a UI thumbnail (answered by `characterReference`). */
+  | { type: "getCharacterReference"; refId: string; requestId: number }
   | { type: "exportBible" }
   | { type: "importBible"; json: string }
   | { type: "carryOverBible"; fromBookId: string }
@@ -48,4 +51,6 @@ export type WorkerToMain =
   | { type: "bibleStatus"; text: string }
   | { type: "export"; json: string }
   | { type: "imported"; ok: boolean; stats?: ImportStats; error?: string }
+  /** Reply to `getCharacterReference`; `image` is absent when the ref doesn't exist. */
+  | { type: "characterReference"; requestId: number; image?: { bytes: ArrayBuffer; mimeType: string } }
   | { type: "error"; message: string };

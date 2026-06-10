@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Character, CharacterAppearance, Outfit, VisualBible } from "@visual-reader/core";
+import { MAX_CHARACTER_REFS, referenceIdsOf } from "@visual-reader/core";
 
 /**
  * Read + correct the Visual Bible's characters. The LLM fills in each character's
@@ -26,8 +27,12 @@ function initialOutfits(c: Character): Outfit[] {
 export interface CharacterBibleProps {
   bible: VisualBible | undefined;
   onSave: (characterId: string, patch: CharacterEdit) => void;
-  /** Set (or clear, with no image) a character's reference image for IP-Adapter. */
-  onSetReference?: (characterId: string, image?: { bytes: ArrayBuffer; mimeType: string }) => void;
+  /** Add a reference image for IP-Adapter (multi-view; capped per character). */
+  onAddReference?: (characterId: string, image: { bytes: ArrayBuffer; mimeType: string }) => void;
+  /** Remove one of a character's reference images. */
+  onRemoveReference?: (characterId: string, refId: string) => void;
+  /** Fetch a reference image's bytes for its thumbnail. */
+  getReferenceImage?: (refId: string) => Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined>;
   onClose: () => void;
 }
 
@@ -44,7 +49,14 @@ const APPEARANCE_FIELDS: Array<{ key: keyof CharacterAppearance; label: string }
   { key: "notes", label: "Notes" },
 ];
 
-export function CharacterBible({ bible, onSave, onSetReference, onClose }: CharacterBibleProps) {
+export function CharacterBible({
+  bible,
+  onSave,
+  onAddReference,
+  onRemoveReference,
+  getReferenceImage,
+  onClose,
+}: CharacterBibleProps) {
   const characters = bible?.characters ?? [];
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
@@ -85,7 +97,14 @@ export function CharacterBible({ bible, onSave, onSetReference, onClose }: Chara
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {filtered.map((c) => (
-              <CharacterCard key={c.id} character={c} onSave={onSave} {...(onSetReference ? { onSetReference } : {})} />
+              <CharacterCard
+                key={c.id}
+                character={c}
+                onSave={onSave}
+                {...(onAddReference ? { onAddReference } : {})}
+                {...(onRemoveReference ? { onRemoveReference } : {})}
+                {...(getReferenceImage ? { getReferenceImage } : {})}
+              />
             ))}
           </div>
         )}
@@ -111,11 +130,15 @@ function matchesQuery(c: Character, q: string): boolean {
 function CharacterCard({
   character,
   onSave,
-  onSetReference,
+  onAddReference,
+  onRemoveReference,
+  getReferenceImage,
 }: {
   character: Character;
   onSave: (characterId: string, patch: CharacterEdit) => void;
-  onSetReference?: (characterId: string, image?: { bytes: ArrayBuffer; mimeType: string }) => void;
+  onAddReference?: (characterId: string, image: { bytes: ArrayBuffer; mimeType: string }) => void;
+  onRemoveReference?: (characterId: string, refId: string) => void;
+  getReferenceImage?: (refId: string) => Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined>;
 }) {
   const [appearance, setAppearance] = useState<CharacterAppearance>(character.appearance);
   const [outfits, setOutfits] = useState<Outfit[]>(() => initialOutfits(character));
@@ -203,35 +226,13 @@ function CharacterCard({
           </div>
         ))}
       </div>
-      {onSetReference && (
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
-          <span style={{ fontSize: 12, opacity: 0.7 }}>
-            Reference image{character.anchor.referenceImageId ? " ✓" : ""}
-          </span>
-          <label style={{ ...buttonStyle, cursor: "pointer", fontSize: 12 }}>
-            {character.anchor.referenceImageId ? "Replace" : "Upload"}
-            <input
-              type="file"
-              accept="image/*"
-              style={{ display: "none" }}
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                if (!file) return;
-                const bytes = await file.arrayBuffer();
-                onSetReference(character.id, { bytes, mimeType: file.type || "image/png" });
-                e.target.value = ""; // allow re-selecting the same file later
-              }}
-            />
-          </label>
-          {character.anchor.referenceImageId && (
-            <button
-              style={{ ...buttonStyle, fontSize: 12 }}
-              onClick={() => onSetReference(character.id, undefined)}
-            >
-              Remove
-            </button>
-          )}
-        </div>
+      {onAddReference && (
+        <ReferenceGallery
+          character={character}
+          onAddReference={onAddReference}
+          {...(onRemoveReference ? { onRemoveReference } : {})}
+          {...(getReferenceImage ? { getReferenceImage } : {})}
+        />
       )}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
         {saved && <span style={{ color: "#7dd87f", fontSize: 12 }}>✓ saved</span>}
@@ -240,6 +241,103 @@ function CharacterCard({
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Up to MAX_CHARACTER_REFS uploaded reference photos per character (ideally different
+ * angles of the same face), shown as removable thumbnails. Used by the local ComfyUI
+ * engine via IP-Adapter; other image providers ignore them.
+ */
+function ReferenceGallery({
+  character,
+  onAddReference,
+  onRemoveReference,
+  getReferenceImage,
+}: {
+  character: Character;
+  onAddReference: (characterId: string, image: { bytes: ArrayBuffer; mimeType: string }) => void;
+  onRemoveReference?: (characterId: string, refId: string) => void;
+  getReferenceImage?: (refId: string) => Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined>;
+}) {
+  const refIds = referenceIdsOf(character.anchor);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 4 }}>
+      <span style={labelStyle}>
+        Reference images ({refIds.length}/{MAX_CHARACTER_REFS})
+      </span>
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        {refIds.map((refId) => (
+          <ReferenceThumb
+            key={refId}
+            refId={refId}
+            {...(getReferenceImage ? { getReferenceImage } : {})}
+            {...(onRemoveReference ? { onRemove: () => onRemoveReference(character.id, refId) } : {})}
+          />
+        ))}
+        {refIds.length < MAX_CHARACTER_REFS && (
+          <label style={{ ...buttonStyle, cursor: "pointer", fontSize: 12 }}>
+            + Add
+            <input
+              type="file"
+              accept="image/*"
+              style={{ display: "none" }}
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const bytes = await file.arrayBuffer();
+                onAddReference(character.id, { bytes, mimeType: file.type || "image/png" });
+                e.target.value = ""; // allow re-selecting the same file later
+              }}
+            />
+          </label>
+        )}
+      </div>
+      <span style={{ opacity: 0.5, fontSize: 11 }}>
+        Used by the local ComfyUI engine (IP-Adapter). 2–3 angles of the same face work best.
+      </span>
+    </div>
+  );
+}
+
+/** One reference thumbnail (bytes fetched lazily) with its remove button. */
+function ReferenceThumb({
+  refId,
+  getReferenceImage,
+  onRemove,
+}: {
+  refId: string;
+  getReferenceImage?: (refId: string) => Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined>;
+  onRemove?: () => void;
+}) {
+  const [url, setUrl] = useState<string | undefined>();
+  useEffect(() => {
+    if (!getReferenceImage) return;
+    let objectUrl: string | undefined;
+    let cancelled = false;
+    void getReferenceImage(refId).then((img) => {
+      if (!img || cancelled) return;
+      objectUrl = URL.createObjectURL(new Blob([img.bytes], { type: img.mimeType }));
+      setUrl(objectUrl);
+    });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [refId, getReferenceImage]);
+  return (
+    <span style={thumbStyle}>
+      {url ? (
+        <img src={url} alt="character reference" style={thumbImgStyle} />
+      ) : (
+        <span style={{ opacity: 0.4, fontSize: 11 }}>…</span>
+      )}
+      {onRemove && (
+        <button style={thumbRemoveStyle} title="Remove this reference" onClick={onRemove}>
+          ✕
+        </button>
+      )}
+    </span>
   );
 }
 
@@ -323,6 +421,41 @@ const smallButtonStyle = {
   ...buttonStyle,
   padding: "2px 8px",
   fontSize: 12,
+} as const;
+
+const thumbStyle = {
+  position: "relative",
+  width: 56,
+  height: 56,
+  borderRadius: 6,
+  border: "1px solid rgba(255,255,255,0.18)",
+  background: "rgba(255,255,255,0.04)",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  overflow: "hidden",
+} as const;
+
+const thumbImgStyle = {
+  width: "100%",
+  height: "100%",
+  objectFit: "cover",
+} as const;
+
+const thumbRemoveStyle = {
+  position: "absolute",
+  top: 1,
+  right: 1,
+  background: "rgba(0,0,0,0.55)",
+  border: "none",
+  color: "#fff",
+  borderRadius: 4,
+  fontSize: 10,
+  lineHeight: "14px",
+  width: 16,
+  height: 16,
+  padding: 0,
+  cursor: "pointer",
 } as const;
 
 const outfitRowStyle = {

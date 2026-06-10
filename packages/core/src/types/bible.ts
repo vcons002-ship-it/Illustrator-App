@@ -15,10 +15,28 @@
 export interface IdentityAnchor {
   /** Deterministic seed so the same character renders consistently. */
   seed: number;
-  /** Reserved: id of a stored reference image for IP-Adapter conditioning. */
+  /**
+   * @deprecated Single reference image (pre-multi-view). Read via `referenceIdsOf`
+   * as the sole entry when `referenceImageIds` is absent; rewritten to the array
+   * form by the next reference add/remove. New code should not write this.
+   */
   referenceImageId?: string;
+  /**
+   * User-uploaded reference images for IP-Adapter conditioning — multiple ANGLES of
+   * the SAME character (front / three-quarter / profile) for a more robust likeness,
+   * capped at `MAX_CHARACTER_REFS`.
+   */
+  referenceImageIds?: string[];
   /** Reserved: identifier of a per-character LoRA, when the tier supports it. */
   loraRef?: string;
+}
+
+/** Most reference images (angles of the same face) one character can hold. */
+export const MAX_CHARACTER_REFS = 3;
+
+/** An anchor's reference-image ids, reading the legacy single-id form too. */
+export function referenceIdsOf(anchor: IdentityAnchor): string[] {
+  return anchor.referenceImageIds ?? (anchor.referenceImageId ? [anchor.referenceImageId] : []);
 }
 
 /**

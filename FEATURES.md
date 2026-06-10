@@ -127,9 +127,10 @@ The app builds a structured memory of the book so art stays consistent:
   actions from different settings never get mashed into one frame.
 - **Consistency** — characters get a stable identity seed, and their names in every
   prompt are expanded into their Bible appearance at render time (image models can't
-  picture a name) — so they don't drift from page to page. You can also upload a
-  **reference image** per character in the Character Bible for even tighter likeness
-  (used by ComfyUI's IP-Adapter when installed).
+  picture a name) — so they don't drift from page to page. You can also upload up to
+  **three reference photos** per character in the Character Bible — different angles
+  of the same face work best — for even tighter likeness (used by ComfyUI's
+  IP-Adapter when installed).
 - **It stays out of your way** — in the web app the whole engine runs in a background
   worker, so reading never stutters while art is generated.
 
@@ -158,6 +159,10 @@ The app builds a structured memory of the book so art stays consistent:
 - **Hosted option** — an optional managed backend so you don't need your own keys/GPU.
 
 **Done recently**
+- **Multi-view character references** — upload up to three photos per character
+  (different angles of the same face); they condition each image together for a more
+  robust likeness, with thumbnails and per-photo remove in the Character Bible.
+  Crowded scenes auto-throttle so several characters' references never blur together.
 - **Exact mid-chapter location changes per image** — the setting is now tracked beat by
   beat: every illustration records the ONE place its own moment happens (not just the
   chapter's main location), so when a chapter moves (tavern → road → castle) each image

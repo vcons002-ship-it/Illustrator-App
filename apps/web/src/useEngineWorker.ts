@@ -54,8 +54,12 @@ export interface EngineWorkerApi {
   rebuildPrompts: () => void;
   /** Save a user correction to a character (persisted; existing images unchanged). */
   updateCharacter: (characterId: string, patch: CharacterPatch) => void;
-  /** Set (or clear, with no image) a character's user-uploaded IP-Adapter reference image. */
-  setCharacterReference: (characterId: string, image?: { bytes: ArrayBuffer; mimeType: string }) => void;
+  /** Add a user-uploaded IP-Adapter reference image (multi-view, capped per character). */
+  addCharacterReference: (characterId: string, image: { bytes: ArrayBuffer; mimeType: string }) => void;
+  /** Remove one of a character's reference images (deletes its stored bytes). */
+  removeCharacterReference: (characterId: string, refId: string) => void;
+  /** Fetch a reference image's bytes for a thumbnail (undefined when missing). */
+  getCharacterReference: (refId: string) => Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined>;
   /** Download the current Visual Bible (+ AI rules) as a JSON file. */
   exportBible: () => void;
   /** Import a Visual Bible JSON onto the current book. */
@@ -98,6 +102,11 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     images: false,
   });
   const [importResult, setImportResult] = useState<ImportResult | undefined>();
+  // In-flight getCharacterReference requests, resolved by `characterReference` replies.
+  const refRequests = useRef<
+    Map<number, (image: { bytes: ArrayBuffer; mimeType: string } | undefined) => void>
+  >(new Map());
+  const nextRefRequestId = useRef(1);
 
   const send = (msg: MainToWorker, transfer: Transferable[] = []) =>
     workerRef.current?.postMessage(msg, transfer);
@@ -179,6 +188,12 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
             ...(msg.error ? { error: msg.error } : {}),
           });
           break;
+        case "characterReference": {
+          const resolve = refRequests.current.get(msg.requestId);
+          refRequests.current.delete(msg.requestId);
+          resolve?.(msg.image);
+          break;
+        }
         case "error":
           setStatus(`Error: ${msg.message}`);
           break;
@@ -251,9 +266,23 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
       send({ type: "updateCharacter", characterId, patch }),
     [],
   );
-  const setCharacterReference = useCallback(
-    (characterId: string, image?: { bytes: ArrayBuffer; mimeType: string }) =>
-      send({ type: "setCharacterReference", characterId, ...(image ? { image } : {}) }),
+  const addCharacterReference = useCallback(
+    (characterId: string, image: { bytes: ArrayBuffer; mimeType: string }) =>
+      send({ type: "addCharacterReference", characterId, image }),
+    [],
+  );
+  const removeCharacterReference = useCallback(
+    (characterId: string, refId: string) =>
+      send({ type: "removeCharacterReference", characterId, refId }),
+    [],
+  );
+  const getCharacterReference = useCallback(
+    (refId: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        refRequests.current.set(requestId, resolve);
+        send({ type: "getCharacterReference", refId, requestId });
+      }),
     [],
   );
   const exportBible = useCallback(() => send({ type: "exportBible" }), []);
@@ -296,7 +325,9 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     clearImportResult,
     carryOverBible,
     updateCharacter,
-    setCharacterReference,
+    addCharacterReference,
+    removeCharacterReference,
+    getCharacterReference,
     paintForward,
   };
 }

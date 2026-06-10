@@ -93,7 +93,9 @@ export function App() {
     regenerateImage,
     rebuildPrompts,
     updateCharacter,
-    setCharacterReference,
+    addCharacterReference,
+    removeCharacterReference,
+    getCharacterReference,
     exportBible,
     importBible,
     importResult,
@@ -913,7 +915,9 @@ export function App() {
         <CharacterBible
           bible={bible}
           onSave={(id, patch) => updateCharacter(id, patch)}
-          onSetReference={setCharacterReference}
+          onAddReference={addCharacterReference}
+          onRemoveReference={removeCharacterReference}
+          getReferenceImage={getCharacterReference}
           onClose={() => setShowCharacters(false)}
         />
       )}

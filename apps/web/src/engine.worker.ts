@@ -251,9 +251,22 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       // images are left as-is until the user re-renders.
       void engine?.updateCharacter(msg.characterId, msg.patch);
       break;
-    case "setCharacterReference":
-      // User-uploaded IP-Adapter reference (or undefined to clear it).
-      void engine?.setCharacterReference(msg.characterId, msg.image);
+    case "addCharacterReference":
+      // User-uploaded IP-Adapter reference (multi-view; the engine enforces the cap).
+      void engine?.addCharacterReference(msg.characterId, msg.image);
+      break;
+    case "removeCharacterReference":
+      void engine?.removeCharacterReference(msg.characterId, msg.refId);
+      break;
+    case "getCharacterReference":
+      void (async () => {
+        const image = await engine?.getCharacterReference(msg.refId);
+        // Transfer the bytes (thumbnail-sized payloads, but zero-copy is free).
+        post(
+          { type: "characterReference", requestId: msg.requestId, ...(image ? { image } : {}) },
+          image ? [image.bytes] : [],
+        );
+      })();
       break;
     case "exportBible":
       if (engine) post({ type: "export", json: engine.exportBible() });

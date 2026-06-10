@@ -1,5 +1,6 @@
 import type { BookSource, Page } from "../types/book.js";
 import type { Character, VisualBible } from "../types/bible.js";
+import { referenceIdsOf } from "../types/bible.js";
 import type { ImageResult, VisualRequest } from "../types/content.js";
 import type { TierConfig } from "../types/tier.js";
 import type { LLMProvider } from "../providers/llm/llm-provider.js";
@@ -33,6 +34,13 @@ export interface PipelineDeps {
   store: VisualReaderStore;
   tier: TierConfig;
 }
+
+/**
+ * Most IP-Adapter conditioning images per frame. Stacking many refs (e.g. several
+ * characters × several views) blends identities and muddies the scene, so a crowded
+ * frame is throttled — solo frames get the full multi-view benefit.
+ */
+const MAX_FRAME_REFS = 4;
 
 export class RenderPipeline {
   constructor(private deps: PipelineDeps) {}
@@ -216,19 +224,41 @@ export class RenderPipeline {
     }
   }
 
-  /** Resolve stored reference images for characters that have one. */
+  /**
+   * Resolve stored reference images for the characters in this frame. A character may
+   * have several uploads (angles of the same face) — they condition together, with the
+   * 0.5 total weight split across them so one character's pull on the image stays
+   * where it's tuned regardless of how many views they have. Across characters, the
+   * frame is capped at MAX_FRAME_REFS conditioning images, allocated round-robin (one
+   * view per character first) so a crowded scene degrades to one ref each instead of
+   * the first character monopolising the budget.
+   */
   private async referenceImagesFor(
     present: Character[],
   ): Promise<{ bytes: ArrayBuffer; mimeType: string; weight: number }[]> {
+    // Round-robin allocation of each character's ref ids into the frame budget.
+    const perChar: string[][] = present.map((c) => referenceIdsOf(c.anchor));
+    const chosen: { id: string; charIndex: number }[] = [];
+    for (let round = 0; chosen.length < MAX_FRAME_REFS; round++) {
+      const before = chosen.length;
+      for (let i = 0; i < perChar.length && chosen.length < MAX_FRAME_REFS; i++) {
+        const id = perChar[i]![round];
+        if (id) chosen.push({ id, charIndex: i });
+      }
+      if (chosen.length === before) break; // every character exhausted
+    }
+    // Per-character weight: split the tuned 0.5 across the views actually used.
+    const usedCount = new Map<number, number>();
+    for (const c of chosen) usedCount.set(c.charIndex, (usedCount.get(c.charIndex) ?? 0) + 1);
     const refs: { bytes: ArrayBuffer; mimeType: string; weight: number }[] = [];
-    for (const c of present) {
-      const id = c.anchor.referenceImageId;
-      if (!id) continue;
+    for (const { id, charIndex } of chosen) {
       const img = await this.deps.store.getImage(id);
-      // Moderate weight (not 0.7): the reference keeps the face recognizable without
+      // Moderate total (not 0.7): the reference keeps the face recognizable without
       // forcing a portrait — the backend also ends IP-Adapter early so the scene
       // composition forms first.
-      if (img) refs.push({ bytes: img.bytes, mimeType: img.mimeType, weight: 0.5 });
+      if (img) {
+        refs.push({ bytes: img.bytes, mimeType: img.mimeType, weight: 0.5 / usedCount.get(charIndex)! });
+      }
     }
     return refs;
   }

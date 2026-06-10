@@ -4,6 +4,7 @@ import { MockLLMProvider } from "./providers/llm/mock-llm-provider.js";
 import { MockImageProvider } from "./providers/image/mock-image-provider.js";
 import { InMemoryStore } from "./storage/store.js";
 import { DEFAULT_TIER_CONFIG } from "./types/tier.js";
+import { referenceIdsOf } from "./types/bible.js";
 import type { BookSource } from "./types/book.js";
 
 function sampleBook(): BookSource {
@@ -564,7 +565,7 @@ describe("Engine", () => {
     expect(persisted!.characters.find((c) => c.id === aria.id)!.appearance.hair).toBe("silver");
   });
 
-  it("does NOT auto-capture a reference image; a user upload sets/clears one", async () => {
+  it("does NOT auto-capture a reference image; user uploads add/remove them", async () => {
     const store = new InMemoryStore();
     const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });
     await engine.openBook(sampleBook()); // page 0 features only "Aria"
@@ -573,29 +574,72 @@ describe("Engine", () => {
 
     // Auto-capture was removed — rendering never pins a reference image.
     const aria = engine.getBible()!.characters.find((c) => c.name === "Aria")!;
-    expect(aria.anchor.referenceImageId).toBeUndefined();
+    expect(referenceIdsOf(aria.anchor)).toEqual([]);
 
-    // A deliberate user upload sets it; passing undefined clears it.
-    await engine.setCharacterReference(aria.id, { bytes: new Uint8Array([9, 9]).buffer, mimeType: "image/png" });
-    const withRef = engine.getBible()!.characters.find((c) => c.id === aria.id)!;
-    expect(withRef.anchor.referenceImageId).toBe("book-1:charref:char-aria");
-    expect(await store.getImage("book-1:charref:char-aria")).toBeDefined();
+    // Deliberate user uploads append (multi-view), capped at MAX_CHARACTER_REFS.
+    const png = (n: number) => ({ bytes: new Uint8Array([n]).buffer, mimeType: "image/png" });
+    await engine.addCharacterReference(aria.id, png(1));
+    await engine.addCharacterReference(aria.id, png(2));
+    await engine.addCharacterReference(aria.id, png(3));
+    await engine.addCharacterReference(aria.id, png(4)); // over the cap → ignored
+    const ids = referenceIdsOf(engine.getBible()!.characters.find((c) => c.id === aria.id)!.anchor);
+    expect(ids).toEqual([
+      "book-1:charref:char-aria:0",
+      "book-1:charref:char-aria:1",
+      "book-1:charref:char-aria:2",
+    ]);
+    for (const id of ids) expect(await store.getImage(id)).toBeDefined();
+    expect(await engine.getCharacterReference(ids[1]!)).toBeDefined();
 
-    await engine.setCharacterReference(aria.id, undefined);
+    // Removing one deletes its bytes and keeps the others; a re-add gets a fresh slot.
+    await engine.removeCharacterReference(aria.id, ids[1]!);
+    expect(await store.getImage(ids[1]!)).toBeUndefined();
+    await engine.addCharacterReference(aria.id, png(5));
     expect(
-      engine.getBible()!.characters.find((c) => c.id === aria.id)!.anchor.referenceImageId,
-    ).toBeUndefined();
+      referenceIdsOf(engine.getBible()!.characters.find((c) => c.id === aria.id)!.anchor),
+    ).toEqual([
+      "book-1:charref:char-aria:0",
+      "book-1:charref:char-aria:2",
+      "book-1:charref:char-aria:3", // max existing slot (2) + 1 — never collides
+    ]);
   });
 
-  it("keeps a user-uploaded reference image when the character's looks are edited", async () => {
+  it("folds a legacy single referenceImageId into the array form on the next change", async () => {
     const store = new InMemoryStore();
     const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });
     await engine.openBook(sampleBook());
     engine.startGeneration();
     await vi.waitFor(() => expect(engine.getBible()!.characters.some((c) => c.name === "Aria")).toBe(true));
     const aria = engine.getBible()!.characters.find((c) => c.name === "Aria")!;
-    await engine.setCharacterReference(aria.id, { bytes: new Uint8Array([7]).buffer, mimeType: "image/png" });
-    const refId = "book-1:charref:char-aria";
+    // Simulate a pre-multi-view cached bible: the old single-id field, no array.
+    const legacyId = "book-1:charref:char-aria";
+    await store.putImage(legacyId, new Uint8Array([1]).buffer, "image/png");
+    const bible = engine.getBible()!;
+    await store.putBible({
+      ...bible,
+      characters: bible.characters.map((c) =>
+        c.id === aria.id ? { ...c, anchor: { ...c.anchor, referenceImageId: legacyId } } : c,
+      ),
+    });
+    await engine.openBook(sampleBook()); // restore the legacy-shaped bible from cache
+
+    const before = engine.getBible()!.characters.find((c) => c.id === aria.id)!.anchor;
+    expect(referenceIdsOf(before)).toEqual([legacyId]); // legacy form readable as one ref
+    await engine.addCharacterReference(aria.id, { bytes: new Uint8Array([2]).buffer, mimeType: "image/png" });
+    const anchor = engine.getBible()!.characters.find((c) => c.id === aria.id)!.anchor;
+    expect(anchor.referenceImageId).toBeUndefined(); // legacy field rewritten away
+    expect(anchor.referenceImageIds).toEqual([legacyId, "book-1:charref:char-aria:0"]);
+  });
+
+  it("keeps user-uploaded reference images when the character's looks are edited", async () => {
+    const store = new InMemoryStore();
+    const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    await vi.waitFor(() => expect(engine.getBible()!.characters.some((c) => c.name === "Aria")).toBe(true));
+    const aria = engine.getBible()!.characters.find((c) => c.name === "Aria")!;
+    await engine.addCharacterReference(aria.id, { bytes: new Uint8Array([7]).buffer, mimeType: "image/png" });
+    const refId = "book-1:charref:char-aria:0";
 
     // Editing the text appearance/clothing/outfits must NOT discard the manual upload —
     // it's the user's ground-truth likeness (auto-capture, which justified dropping it,
@@ -608,7 +652,7 @@ describe("Engine", () => {
 
     const after = engine.getBible()!.characters.find((c) => c.id === aria.id)!;
     expect(after.appearance.hair).toBe("auburn"); // edit applied
-    expect(after.anchor.referenceImageId).toBe(refId); // reference survived
+    expect(referenceIdsOf(after.anchor)).toEqual([refId]); // reference survived
     expect(await store.getImage(refId)).toBeDefined(); // bytes still stored
   });
 

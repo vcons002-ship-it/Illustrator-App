@@ -3,8 +3,9 @@ import { RenderPipeline } from "./pipeline.js";
 import { InMemoryStore } from "../storage/store.js";
 import { createEmptyBible } from "../visual-bible/bible.js";
 import { DEFAULT_TIER_CONFIG } from "../types/tier.js";
+import { emptyAppearance } from "../types/bible.js";
 import type { BookSource } from "../types/book.js";
-import type { VisualBible } from "../types/bible.js";
+import type { Character, VisualBible } from "../types/bible.js";
 import type { LLMProvider } from "../providers/llm/llm-provider.js";
 import type { ImageGenerationInput, ImageGenerationOutput, ImageProvider } from "../providers/image/image-provider.js";
 
@@ -184,5 +185,103 @@ describe("RenderPipeline stored-first prompt fetch", () => {
     expect(calls()).toBe(0);
     expect(result.status).toBe("error");
     expect(lastPrompt()).toBe(""); // image.generate was never called
+  });
+});
+
+describe("RenderPipeline reference images (IP-Adapter)", () => {
+  function character(name: string, refIds: string[]): Character {
+    return {
+      id: `char-${name.toLowerCase()}`,
+      name,
+      aliases: [],
+      appearance: emptyAppearance(),
+      persistentTraits: [],
+      clothing: [],
+      anchor: { seed: 1, ...(refIds.length ? { referenceImageIds: refIds } : {}) },
+      firstSeenChapter: 0,
+    };
+  }
+
+  /** Image provider that records the full generation input. */
+  function inputRecordingImage(): { provider: ImageProvider; lastInput: () => ImageGenerationInput } {
+    let seen: ImageGenerationInput | undefined;
+    const provider: ImageProvider = {
+      id: "mock",
+      generate: async (input: ImageGenerationInput): Promise<ImageGenerationOutput> => {
+        seen = input;
+        return { bytes: new ArrayBuffer(1), mimeType: "image/png" };
+      },
+    };
+    return { provider, lastInput: () => seen! };
+  }
+
+  async function renderWith(chars: Character[], pageText: string) {
+    const book = oneParagraphBook(pageText);
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a scene");
+    bible.characters.push(...chars);
+    const store = new InMemoryStore();
+    for (const c of chars) {
+      for (const id of c.anchor.referenceImageIds ?? []) {
+        await store.putImage(id, new Uint8Array([1]).buffer, "image/png");
+      }
+    }
+    const { provider, lastInput } = inputRecordingImage();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store,
+      tier: DEFAULT_TIER_CONFIG,
+    });
+    await pipeline.renderPage(0);
+    return lastInput();
+  }
+
+  it("splits one character's tuned 0.5 weight across their views", async () => {
+    const input = await renderWith(
+      [character("Ana", ["b:charref:char-ana:0", "b:charref:char-ana:1", "b:charref:char-ana:2"])],
+      "Ana stood alone.",
+    );
+    expect(input.ipAdapterRefs).toHaveLength(3);
+    for (const ref of input.ipAdapterRefs!) expect(ref.weight).toBeCloseTo(0.5 / 3);
+  });
+
+  it("caps a multi-character frame at 4 refs, round-robin, with per-character weights", async () => {
+    const input = await renderWith(
+      [
+        character("Ana", ["b:charref:char-ana:0", "b:charref:char-ana:1", "b:charref:char-ana:2"]),
+        character("Bram", ["b:charref:char-bram:0", "b:charref:char-bram:1", "b:charref:char-bram:2"]),
+      ],
+      "Ana and Bram crossed blades.",
+    );
+    // Round-robin allocation: each character keeps 2 of their 3 views (never one
+    // character monopolising the budget), each weighted 0.5/2.
+    expect(input.ipAdapterRefs).toHaveLength(4);
+    for (const ref of input.ipAdapterRefs!) expect(ref.weight).toBeCloseTo(0.25);
+  });
+
+  it("a single legacy referenceImageId still conditions at the tuned 0.5", async () => {
+    const book = oneParagraphBook("Ana stood alone.");
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a scene");
+    const legacy = character("Ana", []);
+    legacy.anchor.referenceImageId = "b:charref:char-ana"; // pre-multi-view shape
+    bible.characters.push(legacy);
+    const store = new InMemoryStore();
+    await store.putImage("b:charref:char-ana", new Uint8Array([1]).buffer, "image/png");
+    const { provider, lastInput } = inputRecordingImage();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store,
+      tier: DEFAULT_TIER_CONFIG,
+    });
+    await pipeline.renderPage(0);
+    expect(lastInput().ipAdapterRefs).toHaveLength(1);
+    expect(lastInput().ipAdapterRefs![0]!.weight).toBeCloseTo(0.5);
   });
 });
