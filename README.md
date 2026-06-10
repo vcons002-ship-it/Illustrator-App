@@ -50,8 +50,11 @@ EPUB ──▶ segment ──▶ Visual Bible (LLM pre-pass) ──▶ pipeline 
 ```
 
 - **Visual Bible** — an LLM extracts recurring characters (persistent traits,
-  clothing), environments, and spoilers into a typed JSON object, cached in
-  IndexedDB and injected into every image prompt for continuity.
+  outfits), environments, a world style, and spoilers into a typed JSON object —
+  and writes each chapter's scene prompts in the same pass (stored as storyboard
+  `keyEvents`). Cached in IndexedDB; at render time the stored prompt's character/
+  outfit/location names are expanded into their Bible descriptions per the image
+  model's family, so rendering never calls the LLM.
 - **JIT predictive buffer** — renders the current page and pre-renders ahead so
   you never wait; speculatively pre-renders further when idle/powered. In the web
   app the whole engine runs in a **Web Worker**, so extraction and rendering never
@@ -97,11 +100,14 @@ apps/
   keys — used by tests and the keyless demo.
 - **Local engine (your own GPU):** connect to a Stable Diffusion server you run —
   **AUTOMATIC1111** (`/sdapi/v1/*`) or **ComfyUI** (graph API) — from either the
-  web app or the desktop app. Free, private, no keys. The desktop app can also
+  web app or the desktop app. Free, private, no keys. Family-aware rendering:
+  SD 1.5 / SDXL / Flux.1, plus **Flux.2** on ComfyUI (Klein all-in-one, or dev via
+  its auto-discovered Mistral encoder + VAE). The desktop app can also
   **auto-manage** the engine: download/launch ComfyUI portable and curated models
   from the Settings picker (implemented; pending on-device verification).
-- **On-device (stubbed):** WebLLM + ONNX/WebGPU providers implement the same
-  interfaces for fully in-browser generation; full implementation is a later phase.
+- **Local text:** WebLLM (on-device WebGPU) or an OpenAI-compatible local server
+  (Ollama / LM Studio / llama.cpp). The ONNX/WebGPU **image** provider remains a
+  stub for a later phase.
 
 ## Develop
 

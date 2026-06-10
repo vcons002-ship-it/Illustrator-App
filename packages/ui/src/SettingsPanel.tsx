@@ -606,10 +606,15 @@ function ManagedEngine({
                   <span style={{ color: "#7dd87f" }}>✓ Installed</span>
                 ) : downloading ? (
                   <span style={{ opacity: 0.7 }}>{Math.round(progress)}%</span>
-                ) : (
+                ) : m.url ? (
                   <button style={buttonStyle} onClick={() => onDownload?.(m.id)}>
                     Download
                   </button>
+                ) : (
+                  // No hosted URL for this one — paste a URL below or drop the file in manually.
+                  <span style={{ opacity: 0.6, fontSize: 12 }} title={`Get ${m.filename} yourself and paste its URL below, or drop it into models/checkpoints.`}>
+                    manual install
+                  </span>
                 )}
               </div>
               {downloading && (

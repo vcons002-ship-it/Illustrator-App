@@ -41,6 +41,12 @@ The app builds a structured memory of the book so art stays consistent:
   **where** it happens (so an image never blends two different places).
 - **World glossary** — recurring world rules ("riders wear flight leathers", tech level,
   materials) applied as defaults in every picture.
+- **World style** — one auto-derived genre/art-direction line for the whole book
+  (e.g. "high-fantasy military academy, dark, painterly") applied to **every**
+  illustration, so even a scene with no stated clothing or setting stays in-genre.
+- **Illustration prompts written as it reads** — each chapter's analysis also produces
+  that chapter's scene prompts (stored in the Bible), so images render from stored
+  prompts and never wait on the AI mid-read.
 - **Spoilers** flagged so their imagery stays hidden until you reach them.
 - **Skips non-story pages** — title page, copyright, table of contents, dedication,
   "about the author", etc. are read past, not illustrated.
@@ -63,9 +69,10 @@ The app builds a structured memory of the book so art stays consistent:
 - **Text (story understanding):** Claude, Gemini, or OpenAI with your key — **or local**:
   on-device (WebGPU, no key, nothing leaves your machine) or your own local LLM server
   (Ollama / LM Studio / llama.cpp).
-- **Images:** a Flux-style API, Gemini, or OpenAI with your key — **or local** Stable
-  Diffusion (ComfyUI or AUTOMATIC1111). The **desktop app can auto-manage** ComfyUI and
-  download curated models for you.
+- **Images:** a Flux-style API, Gemini, or OpenAI with your key — **or local** on your
+  own GPU via ComfyUI or AUTOMATIC1111 (SD 1.5 / SDXL / Flux.1, plus **Flux.2** on
+  ComfyUI). The **desktop app can auto-manage** ComfyUI and download curated models
+  for you.
 - **No keys? Still works** — built-in placeholder art shows the whole flow.
 - **Keys are encrypted** on your device; local/on-device options keep everything private.
 
@@ -90,12 +97,15 @@ The app builds a structured memory of the book so art stays consistent:
     reads the book      • characters (appearance + outfits)
     chapter by chapter  • locations (detailed, accumulated by name)
                         • storyboard (what happens · key moment · where)
-                        • world glossary · spoilers
+                        • world glossary · world style · spoilers
+                        • one scene prompt per page-group (written as it reads —
+                          stored, so rendering never calls the AI again)
     │
     ▼
- For each page-group, build an image prompt from the Bible:
-    characters + outfits · the ONE location of this passage · key moment ·
-    world glossary · story-so-far · the actual text on these pages
+ At render time, expand each stored prompt from the Bible:
+    names → looks ("Violet rides Tairn" becomes the characters' actual appearance,
+    outfit labels become garments, places get their architecture) · world style ·
+    formatted for the image model's family (SD vs Flux vs Flux.2 / cloud)
     │
     ▼
  Image provider paints it  ──►  JIT buffer renders the current page-group and a few
@@ -112,8 +122,11 @@ The app builds a structured memory of the book so art stays consistent:
   first image.
 - **One picture, one place** — each image commits to the single location its pages
   describe, so actions from different settings never get mashed into one frame.
-- **Consistency** — characters get a stable identity seed and their Bible description in
-  every prompt, so they don't drift from page to page.
+- **Consistency** — characters get a stable identity seed, and their names in every
+  prompt are expanded into their Bible appearance at render time (image models can't
+  picture a name) — so they don't drift from page to page. You can also upload a
+  **reference image** per character in the Character Bible for even tighter likeness
+  (used by ComfyUI's IP-Adapter when installed).
 - **It stays out of your way** — in the web app the whole engine runs in a background
   worker, so reading never stutters while art is generated.
 
@@ -129,8 +142,11 @@ The app builds a structured memory of the book so art stays consistent:
   and spoiler-safe.)
 - **Exact mid-chapter location changes per image** — finer "beat"-level location tracking
   so very long page-groups that move between places split cleanly.
-- **Character reference images / per-character style** — pin a character's look with a
-  reference image or LoRA for even tighter consistency (the data slot already exists).
+- **Per-character LoRA styles** — pin a character with a dedicated LoRA for even tighter
+  consistency (reference-image upload is in; the LoRA slot already exists).
+- **One-API "native" mode** — when the same cloud provider serves text **and** images
+  (e.g. Gemini for both), let that one API read a chapter and emit illustrations
+  directly (the app already detects and flags this configuration).
 - **Bring the newest reader UI to the Chrome extension** — bigger image, caption, and the
   Character Bible editor are in the web/desktop reader first.
 
@@ -141,6 +157,15 @@ The app builds a structured memory of the book so art stays consistent:
 - **Hosted option** — an optional managed backend so you don't need your own keys/GPU.
 
 **Done recently**
+- **Read-ahead prompts** — scene prompts are written with each chapter's analysis and
+  stored; images render purely from stored prompts (no AI call at render time).
+- **Name → appearance expansion** — prompts reference characters/outfits/places by
+  their Bible names, expanded into full visual descriptions per image model at render.
+- **World style** — an auto-derived genre/art-direction line applied to every image.
+- **User-uploaded character reference images** (IP-Adapter), replacing auto-capture.
+- **Flux-correct rendering** — Flux.1/Flux.2 sampler settings (cfg 1, embedded
+  guidance) and **Flux.2** support (Klein all-in-one, or dev via its separate
+  Mistral encoder + VAE on ComfyUI), with per-family resolution limits.
 - Whole-book storyboard with action-driven, location-aware prompts.
 - Structured, **editable** character appearance + world glossary.
 - Detailed, accumulating location descriptions; skip non-story pages.

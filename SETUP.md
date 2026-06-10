@@ -218,18 +218,20 @@ it with its API + CORS enabled, so the browser is allowed to talk to it (the
 ### Picking a model — what works best
 
 - **All-in-one checkpoints just work.** Any **SD 1.5** or **SDXL** `.safetensors`
-  checkpoint, or an **all-in-one Flux.1 fp8** checkpoint, bundles the text encoder +
-  VAE and renders out of the box. **SDXL or SD-Turbo are the best fit for reading** —
-  seconds per image, where Flux can take a minute or more.
+  checkpoint, an **all-in-one Flux.1 fp8** checkpoint, or the **Flux.2 Klein**
+  all-in-one checkpoint bundles the text encoder + VAE and renders out of the box
+  (the app probes ComfyUI to see how a file must be loaded). **SDXL or SD-Turbo are
+  the best fit for reading** — seconds per image, where Flux can take a minute or more.
 - **`clip input is invalid: None`?** You selected a **diffusion-only** model (a bare
-  Flux.1, a GGUF, or any **Flux.2** file). Those ship the UNET separately from the text
-  encoder + VAE. Visual Reader now handles them: set **Settings → Images → Model family**
-  to **Flux.2** (or **Flux.1**) and it builds the correct separate-loader graph.
-- **Flux.2** additionally needs its **Mistral-3 text encoder** (`models/text_encoders`)
-  and the **Flux.2 VAE** (`models/vae`) installed in ComfyUI — the app auto-discovers
-  them, and tells you exactly what's missing if they aren't there. Flux.2 is **ComfyUI
-  only** (not AUTOMATIC1111) and is **VRAM-heavy** (the Mistral encoder is large — a
-  high-VRAM GPU is recommended).
+  Flux.1, a GGUF, or a **Flux.2 dev** file). Those ship the UNET separately from the
+  text encoder + VAE. Visual Reader now handles them: set **Settings → Images → Model
+  family** to **Flux.2** (or **Flux.1**) and it builds the correct separate-loader graph.
+- **Flux.2 dev** (the separate-component distribution) additionally needs its
+  **Mistral-3 text encoder** (`models/text_encoders`) and the **Flux.2 VAE**
+  (`models/vae`) installed in ComfyUI — the app auto-discovers them, and tells you
+  exactly what's missing if they aren't there. (Klein, being all-in-one, needs neither.)
+  Flux.2 is **ComfyUI only** (not AUTOMATIC1111) and is **VRAM-heavy** — a high-VRAM
+  GPU is recommended.
 
 ### Local text model (prompt quality)
 

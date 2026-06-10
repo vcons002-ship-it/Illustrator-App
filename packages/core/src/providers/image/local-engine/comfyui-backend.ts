@@ -136,24 +136,25 @@ export class ComfyUIBackend implements LocalEngineBackend {
   }
 
   /**
-   * Decide how a model must be loaded. Flux.2 is never an all-in-one checkpoint; otherwise
-   * a model in ComfyUI's UNET list (and not the checkpoint list) is diffusion-only. Defaults
-   * to "checkpoint" (the common SD / Flux.1 all-in-one case).
+   * Decide how a model must be loaded. SD1.5/SDXL are always all-in-one (no probe — keeps
+   * the common path request-free). Flux files vary: Flux.2 Klein and Flux.1 fp8 ship as
+   * all-in-one checkpoints, while Flux.2 dev and UNET-only Flux.1 are diffusion-only — so
+   * for either Flux family, ask ComfyUI which list the file is actually in. A Flux file in
+   * neither list defaults by family: Flux.2 → "diffusion" (its common distribution),
+   * Flux.1 → "checkpoint".
    */
   private async resolveLoadKind(
     model: string,
     family: ModelFamily,
   ): Promise<"checkpoint" | "diffusion"> {
-    if (family === "flux2") return "diffusion"; // never an all-in-one checkpoint
-    // SD1.5 / SDXL are always all-in-one — no probe needed (also keeps the common path
-    // request-free). Only Flux.1 may ship as a UNET-only file, so probe just for it.
-    if (family !== "flux") return "checkpoint";
+    if (!isFlux(family)) return "checkpoint";
     const checkpoints = new Set(
       (await this.enumValues("CheckpointLoaderSimple", "ckpt_name")).map((n) => n.toLowerCase()),
     );
     if (checkpoints.has(model.toLowerCase())) return "checkpoint";
     const unets = new Set((await this.enumValues("UNETLoader", "unet_name")).map((n) => n.toLowerCase()));
-    return unets.has(model.toLowerCase()) ? "diffusion" : "checkpoint";
+    if (unets.has(model.toLowerCase())) return "diffusion";
+    return family === "flux2" ? "diffusion" : "checkpoint";
   }
 
   /**

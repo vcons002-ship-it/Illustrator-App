@@ -739,6 +739,28 @@ describe("ComfyUI prompt formatting by family", () => {
       /Flux\.2 needs/i,
     );
   });
+
+  it("an all-in-one Flux.2 checkpoint (Klein) loads via CheckpointLoaderSimple with Flux sampling", async () => {
+    const t = new FakeTransport((req) => {
+      // The Klein file IS in ComfyUI's checkpoint list → all-in-one, no separate loaders.
+      if (req.url.endsWith("/object_info/CheckpointLoaderSimple"))
+        return {
+          json: {
+            CheckpointLoaderSimple: { input: { required: { ckpt_name: [["flux2-klein-9b-fp8.safetensors"]] } } },
+          },
+        };
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
+      if (req.url.includes("/history/"))
+        return { json: { p1: { outputs: { "9": { images: [{ filename: "f.png", subfolder: "", type: "output" }] } } } } };
+      return { bytes: new TextEncoder().encode("IMG").buffer };
+    });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await backend.generate({ ...imageInput, modelFamily: "flux2" }, "flux2-klein-9b-fp8.safetensors");
+    const wf = workflowOf(t);
+    expect(wf["4"]!.class_type).toBe("CheckpointLoaderSimple");
+    expect(wf["3"]!.inputs.cfg).toBe(1); // still Flux sampling
+    expect(wf["14"]!.class_type).toBe("FluxGuidance");
+  });
 });
 
 describe("ComfyUI IP-Adapter (version-aware, graceful)", () => {
