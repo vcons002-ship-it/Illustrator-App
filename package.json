@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "Project Visual Reader — AI-generated illustrations for what you read on screen.",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "pnpm -r run build",
