@@ -32,7 +32,7 @@ export interface ExportMeta {
   schemaVersion: number;
 }
 
-/** AI-facing schema + instructions embedded in every export (current = v5). */
+/** AI-facing schema + instructions embedded in every export (version = BIBLE_VERSION). */
 export const BIBLE_EXPORT_RULES = {
   instructions:
     "Read the provided book text and extract a Visual Bible as strict JSON matching the " +
