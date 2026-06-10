@@ -43,7 +43,7 @@ export function FirstRunWizard({ current, onComplete, isDesktop = false }: First
       // Desktop auto-manages an engine (curated download); the browser path
       // connects to a server you run yourself, where you pick the model after.
       ...(isDesktop
-        ? { localModel: current.localModel ?? "sd-turbo" }
+        ? { localModel: current.localModel ?? "z-image-turbo" }
         : { localBackend: current.localBackend ?? "a1111" }),
       configured: true,
     });

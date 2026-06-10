@@ -158,6 +158,9 @@ The app builds a structured memory of the book so art stays consistent:
 - **Hosted option** — an optional managed backend so you don't need your own keys/GPU.
 
 **Done recently**
+- **One-click local model downloads** — curated image models (incl. Z-Image Turbo,
+  Flux.2 Klein, Qwen-Image) and Ollama text models download straight from Settings with
+  a live progress bar; split-file models fetch every component (resumable) — no terminal.
 - **Read-ahead prompts** — scene prompts are written with each chapter's analysis and
   stored; images render purely from stored prompts (no AI call at render time).
 - **Name → appearance expansion** — prompts reference characters/outfits/places by
