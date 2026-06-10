@@ -9,12 +9,12 @@ function sampleBible() {
     b,
     {
       characters: [
-        { name: "Violet Sorrengail", aliases: ["Violet"], appearance: { hair: "silver" }, persistentTraits: [], clothing: [], outfits: [{ label: "flight leathers", description: "black hide", context: "flying" }] },
+        { name: "Violet Sorrengail", aliases: ["Violet"], appearance: { hair: "silver" }, persistentTraits: [], clothing: [], outfits: [{ label: "flight leathers", description: "black hide" }] },
       ],
       environments: [{ name: "The Spire", description: ["black basalt"] }],
       creatures: [{ name: "Tairn", aliases: [], kind: "dragon", description: ["massive", "black"] }],
       glossary: [{ term: "riders", definition: "wear flight leathers" }],
-      spoilers: [{ label: "the rebellion", revealHint: "late" }],
+      spoilers: [{ label: "the rebellion" }],
       summary: "Ch0",
       keyMoment: "A duel",
       location: "The Spire",

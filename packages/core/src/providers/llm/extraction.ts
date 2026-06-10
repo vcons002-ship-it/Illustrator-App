@@ -32,13 +32,13 @@ export interface RawExtraction {
     persistentTraits: string[];
     /** @deprecated legacy single clothing list; still accepted from old fixtures. */
     clothing?: string[];
-    /** Context-tagged outfits the character is described wearing. */
-    outfits?: { label: string; description: string; context: string }[];
+    /** Distinct outfits the character is described wearing. */
+    outfits?: { label: string; description: string }[];
   }[];
   environments: { name: string; description: string[] }[];
   /** Named/notable non-human creatures (dragons, beasts…). Optional for back-compat. */
   creatures?: { name: string; aliases: string[]; kind: string; description: string[] }[];
-  spoilers: { label: string; revealHint: string }[];
+  spoilers: { label: string }[];
   /** Recurring world facts/defining context to apply by default in every prompt. */
   glossary?: { term: string; definition: string }[];
   /** What occurs in this chapter (the storyboard summary). Optional for back-compat. */
@@ -67,8 +67,11 @@ export interface RawExtraction {
 
 export const EXTRACTION_SYSTEM =
   "You are building a 'Visual Bible' and storyboard for illustrating a novel as you " +
-  "read it chapter by chapter. Capture EVERY named character who is given any physical " +
-  "or appearance description in this chapter — including minor and one-off characters. " +
+  "read it chapter by chapter. You are given the characters, creatures, and locations " +
+  "already recorded from earlier chapters. Work INCREMENTALLY: capture what THIS chapter " +
+  "adds, and do NOT repeat what is already recorded. " +
+  "Capture EVERY named character who is given a physical or appearance description here " +
+  "that is NOT already recorded — including minor and one-off characters. " +
   "Do NOT limit yourself to the main cast; only skip bare name-drops that carry no " +
   "description at all. A capitalized word used as a person's NAME or nickname is a character " +
   "(a human), even when it is also a common noun or animal word — e.g. a person called 'Cat', " +
@@ -76,31 +79,37 @@ export const EXTRACTION_SYSTEM =
   "(hair, eyes, gender, build/physique, height, skinTone, age, distinguishingMarks; use " +
   "an empty string for anything the text doesn't state) and put extra persistent details " +
   "in persistentTraits. Capture each DISTINCT outfit a character is described wearing as a " +
-  "separate entry in 'outfits' — a short 'label', a detailed 'description' (garments, fabric, " +
-  "colour, accessories, era/style), and 'context' = when they wear it (e.g. label 'flight " +
-  "leathers', context 'flying, battle'; label 'court gown', context 'formal events'). Add new " +
-  "outfits as they appear across chapters; do NOT merge different outfits into one. " +
+  "separate entry in 'outfits' — a short 'label' and a detailed 'description' (garments, fabric, " +
+  "colour, accessories, era/style), e.g. label 'flight leathers', description 'fitted black hide " +
+  "with buckled straps'. Add new outfits as they appear across chapters; do NOT merge different " +
+  "outfits into one. " +
   "Reuse a character's ESTABLISHED name across chapters: if " +
   "the same person is referred to by a first name, full name, title, or nickname, keep ONE " +
   "entry and put the other forms in 'aliases' — never create a second character for the same " +
   "person (e.g. 'Violet' and 'Violet Sorrengail' are one character). " +
   "Capture EVERY named location with a detailed visual " +
   "description (architecture, materials, layout, lighting, palette, mood) AND its world's " +
-  "fashion and aesthetic; when a location you already know recurs, ADD any new detail, and " +
-  "always refer to it by its established name. " +
+  "fashion and aesthetic; always refer to a location you already know by its established name. " +
   "Capture notable non-human 'creatures' — dragons, beasts, monsters, mounts — separately " +
   "from human characters (do NOT put them in 'characters'). For each give its name (or a " +
   "descriptive label if unnamed, e.g. 'the black dragon'), any aliases, its 'kind' (dragon, " +
   "griffin…), and a detailed visual 'description' (size, colour, scales/fur, wings, horns, " +
-  "eyes, distinguishing marks). When a creature you already know recurs, ADD new detail and " +
-  "reuse its established name (e.g. 'Tairn' is a massive midnight-black dragon). NEVER create a " +
+  "eyes, distinguishing marks). Reuse an established creature's name (e.g. 'Tairn' is a massive " +
+  "midnight-black dragon). NEVER create a " +
   "creature from a person's name or nickname — only from a LITERAL animal/beast in the text (a " +
   "character nicknamed 'Cat' is a person, not an animal). " +
+  "INCREMENTAL RULE (important — keeps your output small): for a character, creature, or " +
+  "location that is ALREADY in the known lists, only include it if THIS chapter reveals " +
+  "genuinely NEW visual detail (a newly-described feature, a new outfit, a new aspect of a " +
+  "place) — and then include ONLY that new detail. OMIT every already-known entity that this " +
+  "chapter adds nothing new about (it is already remembered and will be kept automatically). " +
+  "Output brand-NEW entities in full; never repeat an entity just to restate what's known. " +
   "Build a 'glossary' of recurring world facts / defining context that should be assumed " +
   "by default unless a passage says otherwise — e.g. customary attire ('dragon riders wear " +
-  "fitted black flight leathers'), technology level, materials, or social norms; each entry " +
-  "is a short term and its definition. Flag spoilers that would spoil the plot if shown " +
-  "before the reader reaches them. Also write a 'summary' of what happens in THIS chapter, " +
+  "fitted black flight leathers'), technology level, materials, or social norms; each NEW entry " +
+  "is a short term and its definition (omit terms already listed). Flag any NEW spoilers that " +
+  "would spoil the plot if shown before the reader reaches them (a short label each). " +
+  "Also write a 'summary' of what happens in THIS chapter, " +
   "and a single 'keyMoment': the most important, most visual action of the chapter to " +
   "illustrate (one concrete sentence). Determine WHERE the chapter takes place: set " +
   "'location' to the primary setting (use the established environment name), and keep the " +
@@ -199,9 +208,8 @@ export const EXTRACTION_JSON_SCHEMA = {
               properties: {
                 label: { type: "string" },
                 description: { type: "string" },
-                context: { type: "string" },
               },
-              required: ["label", "description", "context"],
+              required: ["label", "description"],
             },
           },
         },
@@ -253,9 +261,8 @@ export const EXTRACTION_JSON_SCHEMA = {
         additionalProperties: false,
         properties: {
           label: { type: "string" },
-          revealHint: { type: "string" },
         },
-        required: ["label", "revealHint"],
+        required: ["label"],
       },
     },
     summary: { type: "string" },
@@ -344,19 +351,25 @@ export function extractionUserContent(input: EntityExtractionInput): string {
     (c) => `- ${c.name}${c.aliases.length ? ` (aka ${c.aliases.slice(0, 4).join(", ")})` : ""}`,
   );
   const castSoFar = cast
-    ? `Known characters so far (reuse these exact names; record other forms as aliases; do NOT add a second entry for the same person):\n${cast}\n\n`
+    ? `Known characters (already recorded — reuse these exact names; record other forms as ` +
+      `aliases; do NOT re-output one unless this chapter adds NEW visual detail, and never add ` +
+      `a second entry for the same person):\n${cast}\n\n`
     : "";
   // Glossary terms only — definitions are already stored; we just need the model to
   // reuse the term and not re-add it.
   const known = cap(input.existing.glossary ?? [], MAX_CONTEXT_ENTRIES, (g) => `- ${g.term}`);
-  const glossarySoFar = known ? `Known world facts so far (terms — extend, don't repeat):\n${known}\n\n` : "";
+  const glossarySoFar = known ? `Known world facts (terms — add only NEW ones, don't repeat):\n${known}\n\n` : "";
   // Known location NAMES so the model reuses them and adds detail instead of
   // re-introducing a place under a slightly different name.
   const places = cap(input.existing.environments, MAX_CONTEXT_ENTRIES, (e) => `- ${e.name}`);
-  const placesSoFar = places ? `Known locations so far (names):\n${places}\n\n` : "";
+  const placesSoFar = places
+    ? `Known locations (reuse these names; re-output one only with NEW visual detail):\n${places}\n\n`
+    : "";
   // Known creature NAMES (+ kind) so a recurring beast keeps one name.
   const beasts = cap(input.existing.creatures ?? [], MAX_CONTEXT_ENTRIES, (c) => `- ${c.name} (${c.kind})`);
-  const beastsSoFar = beasts ? `Known creatures so far (names):\n${beasts}\n\n` : "";
+  const beastsSoFar = beasts
+    ? `Known creatures (reuse these names; re-output one only with NEW visual detail):\n${beasts}\n\n`
+    : "";
   // Tell the model how many scene prompts to emit (one per illustration of this chapter).
   const k = input.sceneCount ?? input.unitRanges?.length ?? 0;
   const scenes = k > 0
@@ -508,8 +521,9 @@ export function mergeExtraction(
     bible.spoilers.push({
       id: `spoiler-${slug(s.label)}-${chapterIndex}`,
       label: s.label,
-      // The pipeline resolves the hint to a concrete paragraph id later.
-      revealParagraphId: s.revealHint,
+      // Deprecated: reveal timing is derived from where the label appears on the page
+      // (see visual-bible/reveal.ts), not a precomputed id. Kept "" for the cached shape.
+      revealParagraphId: "",
     });
   }
 
@@ -674,8 +688,12 @@ function accumulateAppearance(
   return out;
 }
 
-/** Distinct outfits by (lowercased) label, order preserved, blanks dropped. */
-function dedupeOutfits(list: Outfit[]): Outfit[] {
+/** An outfit as it may arrive (extraction no longer sends `context`; cached data may). */
+type PartialOutfit = { label?: string; description?: string; context?: string };
+
+/** Distinct outfits by (lowercased) label, order preserved, blanks dropped. `context`
+ * is no longer extracted (unused at render) but kept on the stored shape for back-compat. */
+function dedupeOutfits(list: readonly PartialOutfit[]): Outfit[] {
   const out: Outfit[] = [];
   const seen = new Set<string>();
   for (const o of list) {
@@ -686,7 +704,7 @@ function dedupeOutfits(list: Outfit[]): Outfit[] {
   }
   return out;
 }
-function unionOutfits(a: Outfit[] | undefined, b: Outfit[] | undefined): Outfit[] {
+function unionOutfits(a: readonly PartialOutfit[] | undefined, b: readonly PartialOutfit[] | undefined): Outfit[] {
   return dedupeOutfits([...(a ?? []), ...(b ?? [])]);
 }
 
@@ -700,7 +718,7 @@ function mergeRawIntoCharacter(ex: Character, raw: RawExtraction["characters"][n
     appearance: accumulateAppearance(ex.appearance, raw.appearance),
     persistentTraits: unionStrings(ex.persistentTraits, raw.persistentTraits),
     clothing: unionStrings(ex.clothing, raw.clothing ?? []),
-    outfits: unionOutfits(ex.outfits, (raw.outfits ?? []) as Outfit[]),
+    outfits: unionOutfits(ex.outfits, raw.outfits ?? []),
   };
 }
 

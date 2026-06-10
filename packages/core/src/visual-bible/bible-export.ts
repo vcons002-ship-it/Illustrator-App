@@ -54,9 +54,8 @@ export const BIBLE_EXPORT_RULES = {
       },
       persistentTraits: "string[] — recurring non-appearance details (habits, accessories)",
       outfits:
-        "{ label: string; description: string; context: string }[] — each DISTINCT outfit, " +
-        "with 'context' = when it's worn (e.g. 'flying, battle'). The illustrator picks the one " +
-        "fitting each scene; never merge outfits.",
+        "{ label: string; description: string }[] — each DISTINCT outfit (the illustrator " +
+        "picks the label that fits each scene); never merge outfits.",
     },
     Environment: { name: "string", description: "string[] — distinct visual observations" },
     Creature: {
@@ -65,7 +64,7 @@ export const BIBLE_EXPORT_RULES = {
       kind: "string — e.g. 'dragon'",
       description: "string[] — size, colour, features",
     },
-    SpoilerEntity: { label: "string", revealHint: "string — when it's safe to show" },
+    SpoilerEntity: { label: "string — a thing whose imagery would spoil the plot if shown early" },
     GlossaryEntry: { term: "string", definition: "string — how it manifests visually" },
     ScenePrompt: {
       subject: "string — who/what is the focus",

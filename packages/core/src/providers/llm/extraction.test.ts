@@ -112,6 +112,55 @@ describe("mergeExtraction storyboard", () => {
   });
 });
 
+describe("mergeExtraction delta (incremental) safety", () => {
+  it("keeps a known entity when a later chapter OMITS it (nothing re-output)", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [{ name: "Ana", aliases: [], appearance: { hair: "silver" }, persistentTraits: [], clothing: [] }],
+        environments: [{ name: "The Spire", description: ["black basalt"] }],
+        creatures: [{ name: "Tairn", aliases: [], kind: "dragon", description: ["massive"] }],
+        spoilers: [],
+      },
+      0,
+    );
+    // Chapter 1 adds nothing about them (delta: omitted entirely).
+    bible = mergeExtraction(bible, { characters: [], environments: [], spoilers: [] }, 1);
+
+    expect(bible.characters.find((c) => c.name === "Ana")?.appearance.hair).toBe("silver");
+    expect(bible.environments.find((e) => e.name === "The Spire")?.description).toEqual(["black basalt"]);
+    expect(bible.creatures.find((c) => c.name === "Tairn")?.description).toEqual(["massive"]);
+  });
+
+  it("re-emitting a known character with only NEW detail accumulates (no duplicate)", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [{ name: "Ana", aliases: [], appearance: { hair: "silver" }, persistentTraits: [], clothing: [], outfits: [{ label: "cloak", description: "grey wool" }] }],
+        environments: [],
+        spoilers: [],
+      },
+      0,
+    );
+    // Chapter 1: same character, only the NEW outfit (appearance left blank).
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [{ name: "Ana", aliases: [], appearance: {}, persistentTraits: [], clothing: [], outfits: [{ label: "armour", description: "steel plate" }] }],
+        environments: [],
+        spoilers: [],
+      },
+      1,
+    );
+    const ana = bible.characters.filter((c) => c.name === "Ana");
+    expect(ana).toHaveLength(1); // not duplicated
+    expect(ana[0]!.appearance.hair).toBe("silver"); // kept
+    expect(ana[0]!.outfits?.map((o) => o.label)).toEqual(["cloak", "armour"]); // unioned
+  });
+});
+
 describe("mergeExtraction glossary + appearance", () => {
   it("upserts glossary entries (deduped by term) and stores structured appearance", () => {
     let bible = createEmptyBible("b");
@@ -376,7 +425,7 @@ describe("environments + location tracking", () => {
       chapterText: "They returned to the Spire.",
       existing: bible,
     });
-    expect(text).toContain("Known locations so far");
+    expect(text).toContain("Known locations");
     expect(text).toContain("the Spire");
     // Bounded context: only the NAME is echoed back (the accumulated description is
     // already stored; re-sending it every chapter is what made long books crawl).
@@ -450,7 +499,7 @@ describe("character de-duplication", () => {
       0,
     );
     const text = extractionUserContent({ bookId: "b", chapterIndex: 1, chapterText: "x", existing: bible });
-    expect(text).toContain("Known characters so far");
+    expect(text).toContain("Known characters");
     expect(text).toContain("Violet Sorrengail (aka Vi)");
   });
 });
@@ -503,7 +552,7 @@ describe("context-based outfits", () => {
             name: "Violet",
             aliases: [],
             persistentTraits: [],
-            outfits: [{ label: "flight leathers", description: "fitted black hide", context: "flying, battle" }],
+            outfits: [{ label: "flight leathers", description: "fitted black hide" }],
           },
         ],
         environments: [],
@@ -521,8 +570,8 @@ describe("context-based outfits", () => {
             aliases: [],
             persistentTraits: [],
             outfits: [
-              { label: "flight leathers", description: "fitted black hide", context: "flying" },
-              { label: "ball gown", description: "emerald silk", context: "formal events" },
+              { label: "flight leathers", description: "fitted black hide" },
+              { label: "ball gown", description: "emerald silk" },
             ],
           },
         ],
@@ -621,7 +670,7 @@ describe("creatures", () => {
       chapterText: "Tairn roared.",
       existing: bible,
     });
-    expect(ctx).toContain("Known creatures so far");
+    expect(ctx).toContain("Known creatures");
     expect(ctx).toContain("Tairn (dragon)");
 
     // And a present creature is injected into the image prompt.

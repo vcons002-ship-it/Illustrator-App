@@ -69,20 +69,22 @@ export const EXTRACTION_JSON_INSTRUCTION =
   '"appearance":{"hair":string,"eyes":string,"gender":string,"build":string,"height":string,' +
   '"skinTone":string,"age":string,"distinguishingMarks":string,"notes":string},' +
   '"persistentTraits":string[],' +
-  '"outfits":[{"label":string,"description":string,"context":string}]}],' +
+  '"outfits":[{"label":string,"description":string}]}],' +
   '"glossary":[{"term":string,"definition":string}],' +
   '"environments":[{"name":string,"description":string[]}],' +
   '"creatures":[{"name":string,"aliases":string[],"kind":string,"description":string[]}],' +
-  '"spoilers":[{"label":string,"revealHint":string}],' +
+  '"spoilers":[{"label":string}],' +
   '"summary":string,"keyMoment":string,"location":string,"locationChange":string,' +
   '"keyEvents":[{"subject":string,"action":string,"environment":string,"mood":string,"composition":string}]}. ' +
-  "Include EVERY named character with any appearance description (use empty strings for " +
+  "Include each NEW named character with an appearance description (use empty strings for " +
   "unknown appearance fields). Capture each distinct outfit a character wears as a separate " +
-  "'outfits' entry (label + description + when worn). Put non-human beasts (dragons, monsters, " +
-  "mounts) in 'creatures', NOT 'characters'. Set 'location' to where the chapter happens and " +
-  "'locationChange' to where/when it moves (empty string if it stays in one place). For " +
-  "'keyEvents', produce EXACTLY the requested number of scene prompts in reading order (each a " +
-  "complete scene: subject, action, environment, mood, composition — natural language, no tags).";
+  "'outfits' entry (label + description). Put non-human beasts (dragons, monsters, mounts) in " +
+  "'creatures', NOT 'characters'. IMPORTANT: do NOT re-output a character/creature/location " +
+  "already in the 'known' lists unless this chapter adds NEW visual detail — omit it otherwise " +
+  "(it is remembered). Set 'location' to where the chapter happens and 'locationChange' to " +
+  "where/when it moves (empty string if it stays in one place). For 'keyEvents', produce EXACTLY " +
+  "the requested number of scene prompts in reading order (each a complete scene: subject, " +
+  "action, environment, mood, composition — natural language, no tags).";
 
 // Module-level engine cache so re-created providers reuse a loaded model
 // (loading is slow; the weights are GB-sized).
@@ -304,7 +306,7 @@ export function parseExtraction(content: string): RawExtraction {
           persistentTraits: strArray(o.persistentTraits),
           outfits: asArray(o.outfits).map((x) => {
             const ot = x as Record<string, unknown>;
-            return { label: str(ot.label), description: str(ot.description), context: str(ot.context) };
+            return { label: str(ot.label), description: str(ot.description) };
           }),
         };
       }),
@@ -327,7 +329,7 @@ export function parseExtraction(content: string): RawExtraction {
       }),
       spoilers: asArray(json.spoilers).map((s) => {
         const o = s as Record<string, unknown>;
-        return { label: str(o.label), revealHint: str(o.revealHint) };
+        return { label: str(o.label) };
       }),
       keyEvents: asArray(json.keyEvents).map((e) => {
         const o = e as Record<string, unknown>;

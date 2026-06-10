@@ -43,7 +43,6 @@ const ExtractionSchema = z.object({
         z.object({
           label: z.string(),
           description: z.string(),
-          context: z.string(),
         }),
       ),
     }),
@@ -71,7 +70,6 @@ const ExtractionSchema = z.object({
   spoilers: z.array(
     z.object({
       label: z.string(),
-      revealHint: z.string(),
     }),
   ),
   summary: z.string(),
