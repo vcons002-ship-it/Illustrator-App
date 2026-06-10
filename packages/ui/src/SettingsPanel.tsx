@@ -166,6 +166,13 @@ export function SettingsPanel({
       </button>
       {open && (
         <div style={panelStyle}>
+          <div style={sectionHeaderStyle}>
+            <span>1 · Read &amp; analyse — text model</span>
+            <span style={sectionHintStyle}>
+              Reads the book, learns characters/places, writes the illustration prompts. Changes
+              apply via ↻ Redo → Story analysis (or → Prompts).
+            </span>
+          </div>
           <label style={rowStyle}>
             <span>Text (story understanding)</span>
             <select
@@ -224,6 +231,27 @@ export function SettingsPanel({
             </div>
           )}
 
+          <label style={rowStyle}>
+            <span>Illustrate after</span>
+            <select
+              value={value.illustrateAfter ?? "book"}
+              onChange={(e) =>
+                set({ illustrateAfter: e.target.value as "book" | "chapter" })
+              }
+              title="Whole book: read everything first for the most relevant images. Each chapter: faster first image."
+            >
+              <option value="book">Reading whole book (best context)</option>
+              <option value="chapter">Each chapter done (faster)</option>
+            </select>
+          </label>
+
+          <div style={sectionHeaderStyle}>
+            <span>2 · Paint — image model</span>
+            <span style={sectionHintStyle}>
+              New paintings always use these settings. Apply them to already-painted pictures
+              with ↻ Redo → All images (or → This image).
+            </span>
+          </div>
           <label style={rowStyle}>
             <span>Images</span>
             <select
@@ -315,19 +343,6 @@ export function SettingsPanel({
             </select>
           </label>
 
-          <label style={rowStyle}>
-            <span>Illustrate after</span>
-            <select
-              value={value.illustrateAfter ?? "book"}
-              onChange={(e) =>
-                set({ illustrateAfter: e.target.value as "book" | "chapter" })
-              }
-              title="Whole book: read everything first for the most relevant images. Each chapter: faster first image."
-            >
-              <option value="book">Reading whole book (best context)</option>
-              <option value="chapter">Each chapter done (faster)</option>
-            </select>
-          </label>
           {isDesktop && value.imageProvider === "local" && (
             <StyleLoraRow
               styleId={value.imageStyle ?? "auto"}
@@ -751,4 +766,21 @@ const rowStyle = {
   display: "flex",
   flexDirection: "column",
   gap: 4,
+} as const;
+
+/** Workflow-stage section header (matches the header bar: 1 Read → 2 Paint). */
+const sectionHeaderStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+  marginTop: 6,
+  paddingTop: 8,
+  borderTop: "1px solid rgba(255,255,255,0.12)",
+  fontWeight: 600,
+} as const;
+
+const sectionHintStyle = {
+  fontWeight: 400,
+  fontSize: 11,
+  opacity: 0.6,
 } as const;

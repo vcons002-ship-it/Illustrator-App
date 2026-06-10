@@ -119,6 +119,9 @@ function stopBibleTimer(): void {
 function setBibleChapter(done: number, total: number): void {
   bibleRunDone = done;
   bibleRunTotal = total;
+  workflow.bibleDone = done;
+  workflow.bibleTotal = total;
+  postWorkflow();
   if (total <= 0 || done >= total) {
     // Completed (or nothing to do): keep a PERSISTENT "complete" line — including
     // the model used — instead of clearing it, so the storyboard/LLM stay visible.
@@ -160,6 +163,9 @@ function setPromptProgress(done: number, total: number): void {
   if (total <= 0) return;
   bibleActive = false;
   stopBibleTimer();
+  workflow.promptsDone = done;
+  workflow.promptsTotal = total;
+  postWorkflow();
   const model = llmLabel ? ` · ${llmLabel}` : "";
   post({
     type: "bibleStatus",
@@ -168,6 +174,12 @@ function setPromptProgress(done: number, total: number): void {
         ? `Illustration prompts ready · ${total}/${total}${model}`
         : `Writing illustration prompts… ${done}/${total}`,
   });
+}
+
+/** Structured chapter/prompt progress for the always-visible workflow bar. */
+const workflow = { bibleDone: 0, bibleTotal: 0, promptsDone: 0, promptsTotal: 0 };
+function postWorkflow(): void {
+  post({ type: "workflow", ...workflow });
 }
 
 ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
@@ -286,6 +298,11 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     bibleActive = false;
     bibleRunStartMs = 0;
     stopBibleTimer();
+    workflow.bibleDone = 0;
+    workflow.bibleTotal = 0;
+    workflow.promptsDone = 0;
+    workflow.promptsTotal = 0;
+    postWorkflow();
     post({ type: "bibleStatus", text: "" }); // reset the persistent line for the new book
     setStoryPageCounts(book); // progress is reported against story pages/chapters
     const { llm, image, tier, diagnostics } = buildProviders(settings, {

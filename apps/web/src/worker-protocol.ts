@@ -42,6 +42,8 @@ export type WorkerToMain =
   | { type: "providers"; diagnostics: ProvidersDiagnostics }
   | { type: "generating"; value: boolean }
   | { type: "paused"; bible: boolean; images: boolean }
+  /** Structured workflow progress (chapters read / prompts written), for the status bar. */
+  | { type: "workflow"; bibleDone: number; bibleTotal: number; promptsDone: number; promptsTotal: number }
   | { type: "opened"; bible: VisualBible }
   | { type: "update"; pageIndex: number; result: ImageResult }
   | { type: "bibleStatus"; text: string }

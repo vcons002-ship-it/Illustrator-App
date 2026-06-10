@@ -27,6 +27,8 @@ export interface EngineWorkerApi {
   status: string;
   /** Persistent Visual-Bible line (building… / complete · model), separate from `status`. */
   bibleStatus: string;
+  /** Structured chapter/prompt progress (for the always-visible workflow bar). */
+  workflow: { bibleDone: number; bibleTotal: number; promptsDone: number; promptsTotal: number };
   /** Rolling average ms per rendered image (0 until measured), for ETAs. */
   avgRenderMs: number;
   /** Which providers are live vs. silent mock fallbacks (undefined until first init). */
@@ -79,6 +81,12 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   const [results, setResults] = useState<Map<number, ImageResult>>(new Map());
   const [status, setStatus] = useState("");
   const [bibleStatus, setBibleStatus] = useState("");
+  const [workflow, setWorkflow] = useState({
+    bibleDone: 0,
+    bibleTotal: 0,
+    promptsDone: 0,
+    promptsTotal: 0,
+  });
   const [avgRenderMs, setAvgRenderMs] = useState(0);
   // Per-unit render start times + a rolling average, for image ETAs.
   const renderStart = useRef<Map<number, number>>(new Map());
@@ -152,6 +160,14 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
           break;
         case "bibleStatus":
           setBibleStatus(msg.text);
+          break;
+        case "workflow":
+          setWorkflow({
+            bibleDone: msg.bibleDone,
+            bibleTotal: msg.bibleTotal,
+            promptsDone: msg.promptsDone,
+            promptsTotal: msg.promptsTotal,
+          });
           break;
         case "export":
           downloadJson(msg.json, "visual-bible.json");
@@ -255,6 +271,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     results,
     status,
     bibleStatus,
+    workflow,
     avgRenderMs,
     providers,
     generating,

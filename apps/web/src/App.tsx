@@ -68,6 +68,7 @@ export function App() {
     results,
     status,
     bibleStatus,
+    workflow,
     avgRenderMs,
     providers,
     generating,
@@ -462,10 +463,70 @@ export function App() {
       ? ` · ${formatLeft((avgRenderMs * (totalUnits - settledCount)) / 2)}`
       : "";
 
+  // ---- Workflow bar: what the app is working on right now (always visible) ----
+  // Transient "✓ your click did X" feedback, so a Redo press is never ambiguous.
+  const [actionNote, setActionNote] = useState("");
+  const actionNoteTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const noteAction = useCallback((text: string) => {
+    setActionNote(text);
+    if (actionNoteTimer.current) clearTimeout(actionNoteTimer.current);
+    actionNoteTimer.current = setTimeout(() => setActionNote(""), 8000);
+  }, []);
+  // The "Redo…" dropdown (a native <details>); close it after picking an item.
+  const redoMenuRef = useRef<HTMLDetailsElement | null>(null);
+  const closeRedoMenu = useCallback(() => {
+    if (redoMenuRef.current) redoMenuRef.current.open = false;
+  }, []);
+
+  // The unit currently being painted (lowest in-flight index), with its progress.
+  const painting = useMemo(() => {
+    let best: { unit: number; progress?: number } | undefined;
+    for (const [idx, r] of results) {
+      if (r.status !== "rendering") continue;
+      if (!best || idx < best.unit) {
+        best = { unit: idx, ...(r.progress !== undefined ? { progress: r.progress } : {}) };
+      }
+    }
+    return best;
+  }, [results]);
+  // Where that unit lives: its chapter title + original page range.
+  const paintingWhere = useMemo(() => {
+    if (!painting || !units || !book) return "";
+    const unitPage = units.book.pages[painting.unit];
+    if (!unitPage) return "";
+    const chapter = book.chapters.find((c) => c.id === unitPage.chapterId);
+    const range = unitPage.pageRange;
+    const pages = range ? (range[0] === range[1] ? `p. ${range[0] + 1}` : `p. ${range[0] + 1}–${range[1] + 1}`) : "";
+    return [chapter?.title, pages].filter(Boolean).join(" · ");
+  }, [painting, units, book]);
+  // The chapter currently being read/analysed (story chapters only, in order).
+  const readingChapter = useMemo(() => {
+    if (!book || workflow.bibleTotal === 0 || workflow.bibleDone >= workflow.bibleTotal) return "";
+    const storyChapters = book.chapters.filter((c) => c.isStory !== false);
+    return storyChapters[workflow.bibleDone]?.title ?? "";
+  }, [book, workflow]);
+
+  const readDone = workflow.bibleTotal > 0 && workflow.bibleDone >= workflow.bibleTotal;
+  const promptsDone =
+    readDone && (workflow.promptsTotal === 0 || workflow.promptsDone >= workflow.promptsTotal);
+  const paintDone = totalUnits > 0 && settledCount >= totalUnits;
+  // Which stage is ACTIVE right now (one at a time; painting overlaps reading, so
+  // prefer showing the earliest unfinished stage the engine is actually inside).
+  const stage: "read" | "prompts" | "paint" | "done" | "idle" = !generating
+    ? "idle"
+    : !readDone
+      ? "read"
+      : !promptsDone
+        ? "prompts"
+        : painting || !paintDone
+          ? "paint"
+          : "done";
+
   return (
     <div style={styles.shell}>
       <style>{KEYFRAMES}</style>
       <header style={styles.header}>
+        <div style={styles.headerRow}>
         <strong>Visual Reader</strong>
         <div style={styles.headerControls}>
           {library.length > 0 && (
@@ -492,10 +553,13 @@ export function App() {
           {book && !generating && (
             <button
               style={styles.buttonPrimary}
-              onClick={startGeneration}
-              title="Read the book and start illustrating, reusing anything generated in past sessions"
+              onClick={() => {
+                startGeneration();
+                noteAction("✓ Started — reading the book, then writing prompts, then painting. Anything from past sessions is reused.");
+              }}
+              title="Read the book, write its illustration prompts, and start painting — reusing anything generated in past sessions"
             >
-              Begin generating book
+              ▶ Start illustrating
             </button>
           )}
           {book && (generating || paused.bible || paused.images) && (
@@ -503,69 +567,125 @@ export function App() {
               {(paused.bible || paused.images) && (
                 <button
                   style={styles.buttonPrimary}
-                  onClick={resume}
-                  title="Resume both the Visual Bible build and image rendering"
+                  onClick={() => {
+                    resume();
+                    noteAction("✓ Resumed reading and painting.");
+                  }}
+                  title="Resume both reading (analysis + prompts) and painting"
                 >
                   ▶ Resume all
                 </button>
               )}
               <button
                 style={paused.bible ? styles.buttonPrimary : styles.button}
-                onClick={paused.bible ? resumeBible : pauseBible}
+                onClick={() => {
+                  if (paused.bible) {
+                    resumeBible();
+                    noteAction("✓ Resumed reading (analysis + prompts).");
+                  } else {
+                    pauseBible();
+                    noteAction("⏸ Reading paused — painting continues. Frees the text model/GPU.");
+                  }
+                }}
                 title={
                   paused.bible
-                    ? "Resume building the Visual Bible"
-                    : "Pause the Visual Bible build — frees the GPU (cancels the in-flight chapter)"
+                    ? "Resume reading the book (analysis + prompt writing)"
+                    : "Pause reading (analysis + prompt writing) — frees the GPU; painting continues"
                 }
               >
-                {paused.bible ? "▶ Resume Visual Bible" : "⏸ Pause Visual Bible"}
+                {paused.bible ? "▶ Reading" : "⏸ Reading"}
               </button>
               <button
                 style={paused.images ? styles.buttonPrimary : styles.button}
-                onClick={paused.images ? resumeImages : pauseImages}
+                onClick={() => {
+                  if (paused.images) {
+                    resumeImages();
+                    noteAction("✓ Resumed painting.");
+                  } else {
+                    pauseImages();
+                    noteAction("⏸ Painting paused — reading continues. Frees the image GPU.");
+                  }
+                }}
                 title={
                   paused.images
-                    ? "Resume rendering images"
-                    : "Pause image rendering — frees the GPU (cancels the in-flight render)"
+                    ? "Resume painting illustrations"
+                    : "Pause painting — frees the GPU (cancels the in-flight image); reading continues"
                 }
               >
-                {paused.images ? "▶ Resume images" : "⏸ Pause images"}
-              </button>
-            </>
-          )}
-          {book && generating && (
-            <>
-              <button
-                style={styles.button}
-                onClick={regenerateStoryboard}
-                title="Re-run the LLM analysis (after switching the text model/API in Settings). Images are kept."
-              >
-                ↻ Storyboard
-              </button>
-              <button
-                style={styles.button}
-                onClick={regenerateAllImages}
-                title="Re-render every image (after switching image model/style/quality in Settings)."
-              >
-                ↻ All images
-              </button>
-              <button
-                style={styles.button}
-                onClick={rebuildPrompts}
-                title="Discard the stored illustration prompts and rewrite them with the text model (e.g. after editing characters). Images are kept until re-rendered."
-              >
-                ↻ Prompts
+                {paused.images ? "▶ Painting" : "⏸ Painting"}
               </button>
             </>
           )}
           {book && (generating || results.get(unitIndex)?.status === "ready") && (
-            <button
-              style={styles.button}
-              onClick={() => regenerateImage(unitIndex)}
-              title="Re-render the image for the page you're on (try a different style)."
-            >
-              ↻ This image
-            </button>
+            <details style={styles.menu} ref={redoMenuRef}>
+              <summary style={styles.menuSummary} title="Redo part of the workflow — each option says exactly what it redoes and what it keeps">
+                ↻ Redo…
+              </summary>
+              <div style={styles.menuList}>
+                <button
+                  style={styles.menuItem}
+                  onClick={() => {
+                    closeRedoMenu();
+                    regenerateImage(unitIndex);
+                    noteAction(`✓ Repainting this illustration (image ${unitIndex + 1}) — everything else untouched.`);
+                  }}
+                >
+                  <b>This image</b>
+                  <small>Repaint only the illustration you’re on. Keeps everything else.</small>
+                </button>
+                <button
+                  style={styles.menuItem}
+                  onClick={() => {
+                    if (!confirm("Repaint EVERY illustration in the book?\n\nKeeps: story analysis + prompts.\nRedoes: all images (uses the current image model/style/quality).")) return;
+                    closeRedoMenu();
+                    regenerateAllImages();
+                    noteAction("✓ Repainting all illustrations — story analysis and prompts kept.");
+                  }}
+                >
+                  <b>All images</b>
+                  <small>Repaint every illustration with the current image settings. Keeps analysis + prompts.</small>
+                </button>
+                <button
+                  style={styles.menuItem}
+                  onClick={() => {
+                    closeRedoMenu();
+                    rebuildPrompts();
+                    noteAction("✓ Rewriting illustration prompts — analysis kept; images stay until repainted.");
+                  }}
+                >
+                  <b>Prompts</b>
+                  <small>Rewrite the illustration prompts (e.g. after editing characters). Keeps analysis; images stay until repainted.</small>
+                </button>
+                <button
+                  style={styles.menuItem}
+                  onClick={() => {
+                    if (!confirm("Re-read the WHOLE book?\n\nKeeps: existing images (until you repaint).\nRedoes: story analysis (characters, places, world style) AND all prompts — uses the current text model.")) return;
+                    closeRedoMenu();
+                    regenerateStoryboard();
+                    noteAction("✓ Re-reading the book — analysis and prompts rebuilt; images kept until repainted.");
+                  }}
+                >
+                  <b>Story analysis (re-read book)</b>
+                  <small>Re-run the whole text analysis + prompts with the current text model. Keeps images.</small>
+                </button>
+                <button
+                  style={styles.menuItem}
+                  disabled={prerendering && !prerenderDone}
+                  onClick={() => {
+                    closeRedoMenu();
+                    onPrerenderAll();
+                    noteAction("✓ Painting the whole book ahead — progress shows in the bar above.");
+                  }}
+                >
+                  <b>{prerenderDone ? "Whole book painted ✓" : "Paint whole book now"}</b>
+                  <small>
+                    {prerendering && !prerenderDone
+                      ? `Painting ${renderedCount}/${totalUnits}…${prerenderEta}`
+                      : "Render every missing illustration now instead of as you read."}
+                  </small>
+                </button>
+              </div>
+            </details>
           )}
           {book && (
             <button
@@ -594,20 +714,6 @@ export function App() {
               ⤒ Import bible
             </button>
           )}
-          {book && (
-            <button
-              style={styles.button}
-              onClick={onPrerenderAll}
-              disabled={prerendering && !prerenderDone}
-              title="Render illustrations for every page now, instead of as you reach them"
-            >
-              {prerenderDone
-                ? "Whole book rendered ✓"
-                : prerendering
-                  ? `Rendering ${renderedCount}/${totalUnits}…${prerenderEta}`
-                  : "Pre-render whole book"}
-            </button>
-          )}
           <SettingsPanel
             value={settings}
             onChange={setSettings}
@@ -626,6 +732,21 @@ export function App() {
             connectingLocalText={connectingLocalText}
           />
         </div>
+        </div>
+        {book && (
+          <WorkflowBar
+            stage={stage}
+            paused={paused}
+            workflow={workflow}
+            readingChapter={readingChapter}
+            painting={painting}
+            paintingWhere={paintingWhere}
+            settledCount={settledCount}
+            totalUnits={totalUnits}
+            actionNote={actionNote}
+            detail={localError || status || bibleStatus}
+          />
+        )}
       </header>
 
       {!settings.configured && (
@@ -634,9 +755,9 @@ export function App() {
 
       <ProviderBadges providers={providers} engineStatus={engineStatus} />
 
-      {bibleStatus && <div style={styles.bibleStatus}>{bibleStatus}</div>}
-
-      {(status || localError) && <div style={styles.status}>{localError || status}</div>}
+      {!book && (status || localError) && (
+        <div style={styles.status}>{localError || status}</div>
+      )}
 
       {!book && !status && !localError && (
         <div style={styles.empty}>
@@ -961,7 +1082,125 @@ function Badge({ slot, diag }: { slot: string; diag: ProvidersDiagnostics["llm"]
   );
 }
 
-const KEYFRAMES = `@keyframes vr-pulse { 0%,100% { opacity: 0.55 } 50% { opacity: 0.9 } }`;
+/**
+ * Always-visible workflow strip (inside the sticky header): which stage the engine
+ * is in (read → prompts → paint), exactly which chapter/page it's working on, and a
+ * transient "✓ your click did X" note so Redo presses are never ambiguous.
+ */
+function WorkflowBar({
+  stage,
+  paused,
+  workflow,
+  readingChapter,
+  painting,
+  paintingWhere,
+  settledCount,
+  totalUnits,
+  actionNote,
+  detail,
+}: {
+  stage: "read" | "prompts" | "paint" | "done" | "idle";
+  paused: { bible: boolean; images: boolean };
+  workflow: { bibleDone: number; bibleTotal: number; promptsDone: number; promptsTotal: number };
+  readingChapter: string;
+  painting: { unit: number; progress?: number } | undefined;
+  paintingWhere: string;
+  settledCount: number;
+  totalUnits: number;
+  actionNote: string;
+  detail: string;
+}) {
+  const chip = (
+    label: string,
+    state: "todo" | "active" | "paused" | "done",
+    count: string,
+  ): React.ReactNode => (
+    <span
+      key={label}
+      style={{
+        ...styles.stageChip,
+        ...(state === "active" ? styles.stageChipActive : {}),
+        ...(state === "done" ? styles.stageChipDone : {}),
+        ...(state === "paused" ? styles.stageChipPaused : {}),
+      }}
+    >
+      {state === "done" ? "✓ " : state === "paused" ? "⏸ " : ""}
+      {label}
+      {count ? <span style={{ opacity: 0.75 }}> {count}</span> : null}
+    </span>
+  );
+
+  const readState =
+    paused.bible && stage !== "done" && stage !== "idle"
+      ? "paused"
+      : workflow.bibleTotal > 0 && workflow.bibleDone >= workflow.bibleTotal
+        ? "done"
+        : stage === "read"
+          ? "active"
+          : "todo";
+  const promptState =
+    paused.bible && stage === "prompts"
+      ? "paused"
+      : readState === "done" && (workflow.promptsTotal === 0 || workflow.promptsDone >= workflow.promptsTotal)
+        ? "done"
+        : stage === "prompts"
+          ? "active"
+          : "todo";
+  const paintState =
+    paused.images && stage !== "idle"
+      ? "paused"
+      : totalUnits > 0 && settledCount >= totalUnits
+        ? "done"
+        : stage === "paint"
+          ? "active"
+          : "todo";
+
+  // The single most useful sentence about what's happening RIGHT NOW. Reading and
+  // painting can overlap (chapter mode) — show both when they do.
+  const paintingNow = painting
+    ? `painting image ${painting.unit + 1}/${totalUnits}` +
+      (paintingWhere ? ` (${paintingWhere})` : "") +
+      (painting.progress !== undefined ? ` · ${Math.round(painting.progress * 100)}%` : "")
+    : "";
+  const now =
+    stage === "idle"
+      ? "Press ▶ Start illustrating to begin."
+      : paused.bible && paused.images
+        ? "Paused."
+        : stage === "read"
+          ? `Reading chapter ${Math.min(workflow.bibleDone + 1, workflow.bibleTotal)}/${workflow.bibleTotal}` +
+            (readingChapter ? ` — “${readingChapter}”` : "") +
+            (paintingNow ? ` · ${paintingNow}` : "")
+          : stage === "prompts"
+            ? `Writing illustration prompts ${workflow.promptsDone}/${workflow.promptsTotal}` +
+              (paintingNow ? ` · ${paintingNow}` : "")
+            : stage === "paint"
+              ? paintingNow
+                ? paintingNow.charAt(0).toUpperCase() + paintingNow.slice(1)
+                : `Painting — ${settledCount}/${totalUnits} done`
+              : "All illustrations ready ✓";
+
+  return (
+    <div style={styles.workflowBar} aria-live="polite">
+      <div style={styles.workflowChips}>
+        {chip("1 Read", readState, workflow.bibleTotal ? `${Math.min(workflow.bibleDone, workflow.bibleTotal)}/${workflow.bibleTotal}` : "")}
+        <span style={styles.stageArrow}>→</span>
+        {chip("2 Prompts", promptState, workflow.promptsTotal ? `${workflow.promptsDone}/${workflow.promptsTotal}` : "")}
+        <span style={styles.stageArrow}>→</span>
+        {chip("3 Paint", paintState, totalUnits ? `${settledCount}/${totalUnits}` : "")}
+        <span style={styles.workflowNow}>{now}</span>
+        {actionNote && <span style={styles.actionNote}>{actionNote}</span>}
+      </div>
+      {detail && <div style={styles.workflowDetail}>{detail}</div>}
+    </div>
+  );
+}
+
+const KEYFRAMES =
+  `@keyframes vr-pulse { 0%,100% { opacity: 0.55 } 50% { opacity: 0.9 } }\n` +
+  // The "Redo…" dropdown uses a native <details>; hide its default triangle marker.
+  `details > summary { list-style: none; }\n` +
+  `details > summary::-webkit-details-marker { display: none; }`;
 
 const styles: Record<string, React.CSSProperties> = {
   shell: {
@@ -975,15 +1214,88 @@ const styles: Record<string, React.CSSProperties> = {
     top: 0,
     zIndex: 10,
     display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: 16,
-    padding: "12px 20px",
+    flexDirection: "column",
+    gap: 6,
+    padding: "12px 20px 8px",
     background: "rgba(17,19,26,0.92)",
     borderBottom: "1px solid rgba(255,255,255,0.08)",
     backdropFilter: "blur(8px)",
   },
-  headerControls: { display: "flex", gap: 10, alignItems: "flex-start" },
+  headerRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 16,
+  },
+  headerControls: { display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" },
+  // --- always-visible workflow strip (inside the sticky header) ---
+  workflowBar: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+    fontFamily: "system-ui, sans-serif",
+  },
+  workflowChips: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", fontSize: 12 },
+  stageChip: {
+    padding: "2px 8px",
+    borderRadius: 10,
+    border: "1px solid rgba(255,255,255,0.18)",
+    opacity: 0.55,
+    whiteSpace: "nowrap",
+  },
+  stageChipActive: {
+    opacity: 1,
+    border: "1px solid rgba(120,180,255,0.7)",
+    background: "rgba(96,170,255,0.15)",
+    color: "#cfe2ff",
+    animation: "vr-pulse 2s ease-in-out infinite",
+  },
+  stageChipDone: { opacity: 0.85, border: "1px solid rgba(125,216,127,0.5)", color: "#9fdfa1" },
+  stageChipPaused: { opacity: 0.9, border: "1px solid rgba(255,212,121,0.6)", color: "#ffd479" },
+  stageArrow: { opacity: 0.35 },
+  workflowNow: { marginLeft: 8, opacity: 0.9 },
+  actionNote: { marginLeft: "auto", color: "#9fdfa1", fontSize: 12 },
+  workflowDetail: { fontSize: 11, opacity: 0.6 },
+  // --- the "Redo…" dropdown ---
+  menu: { position: "relative" },
+  menuSummary: {
+    listStyle: "none",
+    border: "1px solid rgba(255,255,255,0.3)",
+    borderRadius: 6,
+    padding: "4px 10px",
+    cursor: "pointer",
+    fontSize: 13,
+    userSelect: "none",
+  },
+  menuList: {
+    position: "absolute",
+    right: 0,
+    top: "calc(100% + 4px)",
+    zIndex: 30,
+    display: "flex",
+    flexDirection: "column",
+    minWidth: 320,
+    background: "#1b1e2a",
+    border: "1px solid rgba(255,255,255,0.15)",
+    borderRadius: 8,
+    boxShadow: "0 8px 30px rgba(0,0,0,0.5)",
+    overflow: "hidden",
+  },
+  menuItem: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    gap: 2,
+    padding: "8px 12px",
+    background: "transparent",
+    border: "none",
+    borderBottom: "1px solid rgba(255,255,255,0.07)",
+    color: "inherit",
+    cursor: "pointer",
+    textAlign: "left",
+    fontSize: 13,
+    fontFamily: "system-ui, sans-serif",
+  },
   upload: {
     border: "1px solid rgba(255,255,255,0.3)",
     borderRadius: 6,
