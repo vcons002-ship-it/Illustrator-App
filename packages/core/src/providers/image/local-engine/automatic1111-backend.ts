@@ -1,7 +1,16 @@
 import { base64ToBytes } from "../base64.js";
 import { DirectTransport, type Transport } from "../../transport/transport.js";
 import type { ImageGenerationInput, ImageGenerationOutput } from "../image-provider.js";
-import { composeSdPositive, resolveModelFamily, resolveNegative } from "../sd-prompt.js";
+import {
+  clampResolution,
+  composeSdPositive,
+  isFlux,
+  nameHandlingFor,
+  resolveModelFamily,
+  resolveNegative,
+  samplerFor,
+} from "../sd-prompt.js";
+import { expandPrompt } from "../bible-injection.js";
 import type { LocalEngineBackend, LocalModelDescriptor } from "./backend.js";
 
 /**
@@ -84,8 +93,6 @@ export class Automatic1111Backend implements LocalEngineBackend {
 
   async generate(input: ImageGenerationInput, model: string): Promise<ImageGenerationOutput> {
     const seed = input.seed ?? input.anchors[0]?.seed ?? Math.floor(Math.random() * 1_000_000_000);
-    const steps =
-      input.steps ?? (input.quality === "sketch" ? 6 : input.quality === "standard" ? 20 : 35);
 
     // Style checkpoint override when installed; else keep the user's model.
     let checkpoint = model;
@@ -94,10 +101,28 @@ export class Automatic1111Backend implements LocalEngineBackend {
       if (resolved) checkpoint = resolved;
     }
 
-    // Format the prompt for the model family: SD models get quality tags + light
-    // identity emphasis + a real negative prompt; Flux gets natural language only.
     const family = resolveModelFamily(input.modelFamily, checkpoint);
-    let prompt = composeSdPositive(family, input.prompt, input.subjects);
+    // Flux.2's separate Mistral encoder + VAE have no AUTOMATIC1111 equivalent here.
+    if (family === "flux2") {
+      throw new Error("Flux.2 isn't supported on the AUTOMATIC1111 engine — use the ComfyUI engine for Flux.2.");
+    }
+    // Family-aware sampler: Flux uses embedded guidance (cfg≈1) + its own step count;
+    // SD keeps the configured sampler/cfg and the quality-profile steps.
+    const sampler = samplerFor(family);
+    const steps = isFlux(family)
+      ? sampler.steps
+      : (input.steps ?? (input.quality === "sketch" ? 6 : input.quality === "standard" ? 20 : 35));
+    const { width, height } = clampResolution(family, input.width ?? 1024, input.height ?? 1024);
+
+    // Expand bible terms (inject descriptors for CLIP/T5 families), then SD tags/negative.
+    const expanded = expandPrompt(
+      input.prompt,
+      input.terms ?? [],
+      nameHandlingFor(family),
+      input.worldStyle,
+      input.bookTitle,
+    );
+    let prompt = composeSdPositive(family, expanded, input.subjects);
     if (input.styleLora) {
       const trigger = input.styleLora.trigger ? `${input.styleLora.trigger}, ` : "";
       prompt = `${trigger}${prompt} <lora:${input.styleLora.name}:${input.styleLora.strength}>`;
@@ -107,11 +132,11 @@ export class Automatic1111Backend implements LocalEngineBackend {
       prompt,
       negative_prompt: resolveNegative(family, input.negativePrompt),
       steps,
-      cfg_scale: this.cfgScale,
+      cfg_scale: isFlux(family) ? sampler.cfg : this.cfgScale,
       sampler_name: this.sampler,
       seed,
-      width: input.width ?? 1024,
-      height: input.height ?? 1024,
+      width,
+      height,
     };
     // Pin a specific checkpoint when one is chosen; otherwise A1111 uses whatever
     // it currently has loaded.

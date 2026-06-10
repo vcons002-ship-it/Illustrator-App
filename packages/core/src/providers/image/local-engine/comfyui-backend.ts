@@ -1,6 +1,17 @@
 import { DirectTransport, type Transport } from "../../transport/transport.js";
 import type { ImageGenerationInput, ImageGenerationOutput } from "../image-provider.js";
-import { composeSdPositive, resolveModelFamily, resolveNegative, type ModelFamily } from "../sd-prompt.js";
+import {
+  type ModelFamily,
+  type SamplerSettings,
+  clampResolution,
+  composeSdPositive,
+  isFlux,
+  nameHandlingFor,
+  resolveModelFamily,
+  resolveNegative,
+  samplerFor,
+} from "../sd-prompt.js";
+import { expandPrompt } from "../bible-injection.js";
 import type { LocalEngineBackend, LocalModelDescriptor } from "./backend.js";
 
 /**
@@ -96,8 +107,105 @@ export class ComfyUIBackend implements LocalEngineBackend {
     });
     if (!res.ok) throw new Error(`ComfyUI listModels failed with status ${res.status}`);
     const data = await res.json<ObjectInfoResponse>();
-    const names = data.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0] ?? [];
+    const checkpoints = data.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0] ?? [];
+    // Also surface diffusion-only models (Flux.2 / UNET-only Flux.1) so they appear in the
+    // picker and route to the separate-component graph. Best-effort: ignore if absent.
+    const unets = await this.enumValues("UNETLoader", "unet_name");
+    const seen = new Set(checkpoints.map((n) => n.toLowerCase()));
+    const names = [...checkpoints];
+    for (const u of unets) {
+      if (!seen.has(u.toLowerCase())) {
+        seen.add(u.toLowerCase());
+        names.push(u);
+      }
+    }
     return names.map((id) => ({ id, label: id, sizeGB: 0 }));
+  }
+
+  /** Read a node's required-input enum (e.g. UNETLoader.unet_name); [] if unavailable. */
+  private async enumValues(node: string, key: string): Promise<string[]> {
+    try {
+      const res = await this.transport.send({ url: `${this.baseUrl}/object_info/${node}`, method: "GET" });
+      if (!res.ok) return [];
+      const data = (await res.json<Record<string, NodeSchema>>())[node];
+      const enumVal = data?.input?.required?.[key];
+      return Array.isArray(enumVal) && Array.isArray(enumVal[0]) ? (enumVal[0] as string[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Decide how a model must be loaded. Flux.2 is never an all-in-one checkpoint; otherwise
+   * a model in ComfyUI's UNET list (and not the checkpoint list) is diffusion-only. Defaults
+   * to "checkpoint" (the common SD / Flux.1 all-in-one case).
+   */
+  private async resolveLoadKind(
+    model: string,
+    family: ModelFamily,
+  ): Promise<"checkpoint" | "diffusion"> {
+    if (family === "flux2") return "diffusion"; // never an all-in-one checkpoint
+    // SD1.5 / SDXL are always all-in-one — no probe needed (also keeps the common path
+    // request-free). Only Flux.1 may ship as a UNET-only file, so probe just for it.
+    if (family !== "flux") return "checkpoint";
+    const checkpoints = new Set(
+      (await this.enumValues("CheckpointLoaderSimple", "ckpt_name")).map((n) => n.toLowerCase()),
+    );
+    if (checkpoints.has(model.toLowerCase())) return "checkpoint";
+    const unets = new Set((await this.enumValues("UNETLoader", "unet_name")).map((n) => n.toLowerCase()));
+    return unets.has(model.toLowerCase()) ? "diffusion" : "checkpoint";
+  }
+
+  /**
+   * Auto-discover the text encoder + VAE for a separate-component model from ComfyUI's
+   * enums. Flux.1 (UNET-only) needs DualCLIPLoader (t5xxl + clip_l, type "flux"); Flux.2
+   * needs its Mistral-3 encoder via CLIPLoader (type "flux2"). Throws an actionable error
+   * when the required files aren't installed instead of letting the graph fail cryptically.
+   *
+   * NOTE: ComfyUI's Flux.2 node/type names are newer than the rest of this backend; the
+   * strings below are centralised here so they're easy to confirm against your install.
+   */
+  private async resolveComponents(family: ModelFamily): Promise<DiffusionComponents> {
+    const vaes = await this.enumValues("VAELoader", "vae_name");
+    const pickVae = (...hints: string[]): string | undefined =>
+      vaes.find((v) => hints.some((h) => v.toLowerCase().includes(h)));
+
+    if (family === "flux2") {
+      const clips = await this.enumValues("CLIPLoader", "clip_name");
+      const encoder = clips.find((c) => /mistral|flux.?2/i.test(c));
+      const vae = pickVae("flux2", "flux.2") ?? pickVae("flux");
+      if (!encoder || !vae) {
+        throw new Error(
+          "Flux.2 needs its Mistral text encoder and Flux.2 VAE installed in ComfyUI " +
+            "(models/text_encoders and models/vae). Download them, or pick an all-in-one SD/SDXL checkpoint.",
+        );
+      }
+      return {
+        textEncoder: { class_type: "CLIPLoader", inputs: { clip_name: encoder, type: "flux2" } },
+        vaeName: vae,
+        weightDtype: "default",
+      };
+    }
+
+    // Flux.1 UNET-only: DualCLIPLoader (t5xxl + clip_l) + the ae.safetensors VAE.
+    const clips = await this.enumValues("DualCLIPLoader", "clip_name1");
+    const t5 = clips.find((c) => /t5/i.test(c));
+    const clipL = clips.find((c) => /clip[_-]?l/i.test(c)) ?? clips.find((c) => /clip/i.test(c) && !/t5/i.test(c));
+    const vae = pickVae("ae", "flux");
+    if (!t5 || !clipL || !vae) {
+      throw new Error(
+        "This Flux model is diffusion-only and needs t5xxl + clip_l text encoders and the " +
+          "Flux VAE (ae.safetensors) installed in ComfyUI, or use an all-in-one Flux checkpoint.",
+      );
+    }
+    return {
+      textEncoder: {
+        class_type: "DualCLIPLoader",
+        inputs: { clip_name1: t5, clip_name2: clipL, type: "flux" },
+      },
+      vaeName: vae,
+      weightDtype: "default",
+    };
   }
 
   /** Installed LoRA names (cached). Used to apply a style LoRA only when present. */
@@ -170,8 +278,6 @@ export class ComfyUIBackend implements LocalEngineBackend {
 
   async generate(input: ImageGenerationInput, model: string): Promise<ImageGenerationOutput> {
     const seed = input.seed ?? input.anchors[0]?.seed ?? Math.floor(Math.random() * 1_000_000_000);
-    const steps =
-      input.steps ?? (input.quality === "sketch" ? 6 : input.quality === "standard" ? 20 : 35);
 
     // Style checkpoint override (only when that checkpoint is installed).
     let checkpoint = model;
@@ -181,11 +287,31 @@ export class ComfyUIBackend implements LocalEngineBackend {
       if (resolved) checkpoint = resolved;
     }
 
-    // Format for the model family: SD models get quality tags + identity emphasis
-    // + a real negative prompt; Flux gets natural language and no negative.
+    // Resolve the model family and how it should be sampled/loaded. Flux uses
+    // embedded guidance (cfg≈1) + the `simple` scheduler and ignores the
+    // quality-profile step count (more steps don't help, just cost time).
     const family = resolveModelFamily(input.modelFamily, checkpoint);
-    let prompt = composeSdPositive(family, input.prompt, input.subjects);
+    const sampler = samplerFor(family);
+    const steps = isFlux(family)
+      ? sampler.steps
+      : (input.steps ?? (input.quality === "sketch" ? 6 : input.quality === "standard" ? 20 : 35));
+    const { width, height } = clampResolution(family, input.width ?? 1024, input.height ?? 1024);
+
+    // Expand bible terms per the target's text-encoder grade: CLIP/T5 (SD/Flux.1) inject
+    // descriptors in place; LLM-grade (Flux.2/Mistral) keep names + a reference block. Then
+    // SD families get quality tags + a real negative; Flux gets natural language and none.
+    const expanded = expandPrompt(
+      input.prompt,
+      input.terms ?? [],
+      nameHandlingFor(family),
+      input.worldStyle,
+      input.bookTitle,
+    );
+    let prompt = composeSdPositive(family, expanded, input.subjects);
     const negative = resolveNegative(family, input.negativePrompt);
+    // Flux.2 (and any UNET-only diffusion file) can't load via CheckpointLoaderSimple —
+    // it needs a separate text-encoder + VAE; pick the load kind once here.
+    const loadKind = await this.resolveLoadKind(checkpoint, family);
 
     // Style LoRA (only when installed); prepend any trigger words to the prompt.
     let lora: { name: string; strength: number } | undefined;
@@ -222,15 +348,23 @@ export class ComfyUIBackend implements LocalEngineBackend {
       }
     }
 
+    // For a separate-component model (Flux.2 / UNET-only), discover the text encoder
+    // + VAE from the engine; if they're missing, fail with an actionable message
+    // instead of the cryptic "clip input is invalid: None".
+    const components = loadKind === "diffusion" ? await this.resolveComponents(family) : undefined;
+
     const workflow = buildWorkflow({
       model: checkpoint,
-      family,
       prompt,
       negative,
       seed,
       steps,
-      width: input.width ?? 1024,
-      height: input.height ?? 1024,
+      width,
+      height,
+      family,
+      sampler,
+      loadKind,
+      ...(components ? { components } : {}),
       ...(lora ? { lora } : {}),
       ...(ipAdapter ? { ipAdapter } : {}),
     });
@@ -254,7 +388,11 @@ export class ComfyUIBackend implements LocalEngineBackend {
       void this.interrupt();
     };
     signal?.addEventListener("abort", onAbort, { once: true });
-    const socket = this.openProgressSocket(relay);
+    // Filter websocket progress to THIS job's prompt_id (the clientId is shared across
+    // concurrent renders, so unfiltered we'd receive a sibling render's progress and could
+    // keep a genuinely-stalled job's idle timer alive). Set once submit returns the id.
+    const job: { promptId?: string } = {};
+    const socket = this.openProgressSocket(relay, job);
     try {
       const submit = await this.transport.send({
         url: `${this.baseUrl}/prompt`,
@@ -264,6 +402,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
       });
       if (!submit.ok) throw new Error(`ComfyUI prompt failed with status ${submit.status}`);
       const { prompt_id } = await submit.json<PromptResponse>();
+      job.promptId = prompt_id;
 
       const image = await this.pollForImage(prompt_id, progress, signal);
       const view = await this.transport.send({
@@ -296,7 +435,10 @@ export class ComfyUIBackend implements LocalEngineBackend {
    * `onProgress`. Returns a closer, or undefined where WebSocket isn't available
    * (Node/tests) — progress is always optional, never required for correctness.
    */
-  private openProgressSocket(onProgress: (fraction: number) => void): { close: () => void } | undefined {
+  private openProgressSocket(
+    onProgress: (fraction: number) => void,
+    job: { promptId?: string },
+  ): { close: () => void } | undefined {
     if (typeof WebSocket === "undefined") return undefined;
     try {
       const wsUrl =
@@ -305,7 +447,12 @@ export class ComfyUIBackend implements LocalEngineBackend {
       ws.onmessage = (ev: MessageEvent) => {
         if (typeof ev.data !== "string") return; // binary frames are preview images
         try {
-          const msg = JSON.parse(ev.data) as { type?: string; data?: { value?: number; max?: number } };
+          const msg = JSON.parse(ev.data) as {
+            type?: string;
+            data?: { value?: number; max?: number; prompt_id?: string };
+          };
+          // Ignore another concurrent render's progress (shared clientId).
+          if (msg.data?.prompt_id && job.promptId && msg.data.prompt_id !== job.promptId) return;
           if (msg.type === "progress" && msg.data && typeof msg.data.value === "number" && msg.data.max) {
             onProgress(Math.max(0, Math.min(1, msg.data.value / msg.data.max)));
           }
@@ -373,10 +520,18 @@ interface IpAdapterGraph {
   refs: { filename: string; weight: number }[];
 }
 
+/** Loaders + filenames for a separate-component (Flux.2 / UNET-only) model. */
+interface DiffusionComponents {
+  /** Text-encoder loader node (DualCLIPLoader for Flux.1; a single CLIPLoader for Flux.2). */
+  textEncoder: { class_type: string; inputs: Record<string, unknown> };
+  /** VAE filename for VAELoader. */
+  vaeName: string;
+  /** UNETLoader weight dtype, e.g. "default" / "fp8_e4m3fn". */
+  weightDtype: string;
+}
+
 interface WorkflowParams {
   model: string;
-  /** Resolved model family — drives Flux-correct sampler settings (cfg≈1, scheduler). */
-  family: ModelFamily;
   prompt: string;
   /** Negative prompt (empty for Flux). */
   negative: string;
@@ -384,47 +539,79 @@ interface WorkflowParams {
   steps: number;
   width: number;
   height: number;
+  family: ModelFamily;
+  sampler: SamplerSettings;
+  /** "checkpoint" = all-in-one CheckpointLoaderSimple; "diffusion" = UNET + encoder + VAE. */
+  loadKind: "checkpoint" | "diffusion";
+  /** Required when loadKind === "diffusion". */
+  components?: DiffusionComponents;
   /** Optional style LoRA, inserted as a LoraLoader between checkpoint and sampler. */
   lora?: { name: string; strength: number };
   /** Optional IP-Adapter conditioning (character reference images). */
   ipAdapter?: IpAdapterGraph;
 }
 
-/** Minimal txt2img ComfyUI graph (checkpoint → [LoRA] → [IP-Adapter] → sampler → VAE → save). */
+/**
+ * txt2img ComfyUI graph. Two shapes:
+ *  - **checkpoint:** CheckpointLoaderSimple → [LoRA] → [IP-Adapter] → sampler → VAE → save
+ *    (SD / Flux.1 all-in-one).
+ *  - **diffusion:** UNETLoader + text-encoder loader + VAELoader → sampler → save
+ *    (Flux.2, and any UNET-only Flux.1 file — fixes "clip input is invalid: None").
+ * Flux families also get a FluxGuidance node (embedded guidance) with KSampler cfg=1.
+ */
 function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
-  // With a LoRA, the sampler model + CLIP encoders read from the LoraLoader ("10")
-  // instead of the checkpoint ("4") directly.
-  const modelRef: [string, number] = p.lora ? ["10", 0] : ["4", 0];
-  const clipRef: [string, number] = p.lora ? ["10", 1] : ["4", 1];
+  const diffusion = p.loadKind === "diffusion";
+  // Source refs for model / clip / vae, depending on the load shape. LoRA (an SD-style
+  // feature) is only wired into the checkpoint path.
+  const modelRef: [string, number] = diffusion ? ["4", 0] : p.lora ? ["10", 0] : ["4", 0];
+  const clipRef: [string, number] = diffusion ? ["12", 0] : p.lora ? ["10", 1] : ["4", 1];
+  const vaeRef: [string, number] = diffusion ? ["13", 0] : ["4", 2];
+  // Positive conditioning: Flux routes through a FluxGuidance node ("14").
+  const positiveRef: [string, number] = p.sampler.guidance !== undefined ? ["14", 0] : ["6", 0];
   const graph: Record<string, unknown> = {
     "3": {
       class_type: "KSampler",
       inputs: {
         seed: p.seed,
         steps: p.steps,
-        // Flux is guidance-distilled — it ignores CFG/negative and expects cfg≈1 with
-        // the "simple" scheduler; SD families keep the standard cfg 7 / "normal".
-        cfg: p.family === "flux" ? 1 : 7,
-        sampler_name: "euler",
-        scheduler: p.family === "flux" ? "simple" : "normal",
+        cfg: p.sampler.cfg,
+        sampler_name: p.sampler.sampler,
+        scheduler: p.sampler.scheduler,
         denoise: 1,
         model: modelRef,
-        positive: ["6", 0],
+        positive: positiveRef,
         negative: ["7", 0],
         latent_image: ["5", 0],
       },
     },
-    "4": { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: p.model } },
     "5": {
       class_type: "EmptyLatentImage",
       inputs: { width: p.width, height: p.height, batch_size: 1 },
     },
     "6": { class_type: "CLIPTextEncode", inputs: { text: p.prompt, clip: clipRef } },
     "7": { class_type: "CLIPTextEncode", inputs: { text: p.negative, clip: clipRef } },
-    "8": { class_type: "VAEDecode", inputs: { samples: ["3", 0], vae: ["4", 2] } },
+    "8": { class_type: "VAEDecode", inputs: { samples: ["3", 0], vae: vaeRef } },
     "9": { class_type: "SaveImage", inputs: { filename_prefix: "visual-reader", images: ["8", 0] } },
   };
-  if (p.lora) {
+  if (diffusion) {
+    const c = p.components!;
+    // Separate-component loaders (Flux.2 / UNET-only Flux.1).
+    graph["4"] = { class_type: "UNETLoader", inputs: { unet_name: p.model, weight_dtype: c.weightDtype } };
+    graph["12"] = c.textEncoder;
+    graph["13"] = { class_type: "VAELoader", inputs: { vae_name: c.vaeName } };
+  } else {
+    graph["4"] = { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: p.model } };
+  }
+  if (p.sampler.guidance !== undefined) {
+    // Flux embedded guidance — conditioning passes through FluxGuidance before the sampler.
+    graph["14"] = {
+      class_type: "FluxGuidance",
+      inputs: { conditioning: ["6", 0], guidance: p.sampler.guidance },
+    };
+  }
+  if (p.lora && !diffusion) {
+    // LoRA is an SD-style feature wired into the all-in-one checkpoint path only (a
+    // UNETLoader has no clip output to thread through).
     graph["10"] = {
       class_type: "LoraLoader",
       inputs: {

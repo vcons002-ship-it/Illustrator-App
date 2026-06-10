@@ -10,7 +10,63 @@ import { catalogModelFamily } from "../catalog.js";
  * a negative prompt (always safe) but no tags or weighting.
  */
 
-export type ModelFamily = "sd15" | "sdxl" | "flux" | "unknown";
+export type ModelFamily = "sd15" | "sdxl" | "flux" | "flux2" | "unknown";
+
+/** Flux.1 or Flux.2 — natural-language prompts, no negatives, no SD tags. */
+export function isFlux(family: ModelFamily): boolean {
+  return family === "flux" || family === "flux2";
+}
+
+/** Sampler settings for a family. Flux uses embedded guidance (cfg≈1) + the `simple`
+ * scheduler; at SD's cfg 7 it washes out and runs a wasted second pass. */
+export interface SamplerSettings {
+  cfg: number;
+  sampler: string;
+  scheduler: string;
+  /** Recommended step count (Flux ignores the quality-profile steps — more don't help). */
+  steps: number;
+  /**
+   * Flux embedded-guidance value (set via a FluxGuidance node, with KSampler cfg=1).
+   * Undefined for SD families, which use real CFG instead.
+   */
+  guidance?: number;
+}
+
+export function samplerFor(family: ModelFamily): SamplerSettings {
+  switch (family) {
+    case "flux":
+      return { cfg: 1, sampler: "euler", scheduler: "simple", steps: 20, guidance: 3.5 };
+    case "flux2":
+      return { cfg: 1, sampler: "euler", scheduler: "simple", steps: 24, guidance: 4.0 };
+    default: // sd15 / sdxl / unknown
+      return { cfg: 7, sampler: "euler", scheduler: "normal", steps: 28 };
+  }
+}
+
+/**
+ * How a target expands bible terms, by text-encoder grade:
+ *  - CLIP/T5 (SD1.5, SDXL, Flux.1) can't read a name → **inject** the descriptor in place.
+ *  - LLM-grade (Flux.2/Mistral) tracks a name↔description glossary → **reference** block.
+ */
+export function nameHandlingFor(family: ModelFamily): "inject" | "reference" {
+  return family === "flux2" ? "reference" : "inject";
+}
+
+/** Largest square dimension a family handles well (bounds time + SD1.5 artifacts). */
+export function familyMaxDimension(family: ModelFamily): number {
+  return family === "sd15" ? 768 : 1024;
+}
+
+/** Clamp a requested resolution to the family's sweet spot, rounded to a /8 multiple. */
+export function clampResolution(
+  family: ModelFamily,
+  width: number,
+  height: number,
+): { width: number; height: number } {
+  const max = familyMaxDimension(family);
+  const fit = (n: number): number => Math.max(512, Math.round(Math.min(n, max) / 8) * 8);
+  return { width: fit(width), height: fit(height) };
+}
 
 /** A character's identity, for optional SD weighting emphasis. */
 export interface PromptSubject {
@@ -27,6 +83,7 @@ export interface PromptSubject {
  */
 export function detectModelFamily(name: string): ModelFamily {
   const n = (name || "").toLowerCase();
+  if (/flux[\s._-]?2/.test(n)) return "flux2"; // flux2, flux.2, flux-2, flux_2 — before generic flux
   if (n.includes("flux")) return "flux";
   if (n.includes("xl")) return "sdxl"; // sdxl, sd_xl, realvisxl, juggernautxl, …
   if (/(^|[^0-9])1[._-]?5|v1-5|sd15|sd1\.5/.test(n)) return "sd15";
@@ -53,11 +110,12 @@ function isSd(family: ModelFamily): boolean {
 export const DEFAULT_NEGATIVE =
   "lowres, worst quality, low quality, bad anatomy, bad hands, missing fingers, " +
   "extra fingers, extra limbs, fused fingers, deformed, mutated, disfigured, " +
-  "blurry, watermark, signature, text, jpeg artifacts, cropped, out of frame";
+  "blurry, watermark, signature, text, jpeg artifacts, cropped, out of frame, " +
+  "portrait, headshot, close-up, simple background";
 
-/** Negative prompt for a family ("" for flux — its negatives are ignored/harmful). */
+/** Negative prompt for a family ("" for Flux — its negatives are ignored/harmful). */
 export function negativeFor(family: ModelFamily): string {
-  return family === "flux" ? "" : DEFAULT_NEGATIVE;
+  return isFlux(family) ? "" : DEFAULT_NEGATIVE;
 }
 
 /** Quality tag preamble for SD families; empty for flux/unknown. */
@@ -102,6 +160,6 @@ export function composeSdPositive(
  * SD families; flux always gets "" regardless of any override.
  */
 export function resolveNegative(family: ModelFamily, override: string | undefined): string {
-  if (family === "flux") return "";
+  if (isFlux(family)) return "";
   return override && override.trim() ? override : DEFAULT_NEGATIVE;
 }

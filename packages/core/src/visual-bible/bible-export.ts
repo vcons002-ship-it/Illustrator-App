@@ -87,9 +87,14 @@ export const BIBLE_EXPORT_RULES = {
       locationChange: "string — where/when the setting shifts, or '' if it stays put",
       keyEvents:
         "KeyEvent[] — one per notable beat, covering a page range (~5 pages). The app renders " +
-        "each directly (no further LLM), so write a complete scene; reference characters by their " +
-        "exact bible name so identity is injected.",
+        "each directly (no further LLM), so write a complete scene. Reference every character/" +
+        "creature by their EXACT bible name, clothing by its outfit LABEL, and a place by its " +
+        "location NAME — the app expands each into its visual description automatically, so do " +
+        "NOT describe looks, garments, or architecture; just name them and describe the action.",
     },
+    worldStyle:
+      "string — one concise genre + art-direction line for the WHOLE book, applied to every " +
+      "illustration (e.g. 'high-fantasy military academy, dark, painterly'). Top-level field.",
   },
   constraints: [
     "Output valid JSON only; use '' for unknown string fields (never invent).",
@@ -139,7 +144,9 @@ export function parseImportedBible(json: string, bookId: string): ImportResult {
   const meta = raw._exportMeta as ExportMeta | undefined;
   const data = (isObject(raw.data) ? raw.data : raw) as Record<string, unknown>;
   const version = num(meta?.schemaVersion ?? data.schemaVersion ?? data.version);
-  if (version !== BIBLE_VERSION) {
+  // Accept the current schema, or one version back (migrate-on-import): a v6 export still
+  // loads, with its inline-style prompts cleared so the prompt pass rewrites them.
+  if (version !== BIBLE_VERSION && version !== BIBLE_VERSION - 1) {
     return {
       error: `This file is schema v${version || "?"}, but the app uses v${BIBLE_VERSION}. Re-export from the current version or update the file.`,
     };
@@ -151,12 +158,17 @@ export function parseImportedBible(json: string, bookId: string): ImportResult {
   bible.environments = dedupeByName(arr(data.environments).map((e) => toEnvironment(e)));
   bible.spoilers = arr(data.spoilers).map((s, i) => toSpoiler(s, i));
   bible.glossary = dedupeGlossary(arr(data.glossary).map((g) => toGlossary(g)));
+  bible.worldStyle = str(data.worldStyle);
   bible.storyboard = arr(data.storyboard)
     .map((s) => toScene(s))
     .sort((a, b) => a.chapterIndex - b.chapterIndex);
   bible.processedChapters = arr(data.processedChapters)
     .map((n) => num(n))
     .filter((n) => Number.isFinite(n));
+  // A one-version-back import: clear any imported (old-style) prompts so they're rewritten.
+  if (version === BIBLE_VERSION - 1) {
+    bible.storyboard = bible.storyboard.map(({ keyEvents: _drop, ...scene }) => scene);
+  }
 
   const stats: ImportStats = {
     characters: bible.characters.length,
@@ -182,6 +194,8 @@ export function mergeCarryOver(base: VisualBible, prior: VisualBible): VisualBib
     creatures: dedupeByName([...(prior.creatures ?? []), ...(base.creatures ?? [])]),
     environments: dedupeByName([...prior.environments, ...base.environments]),
     glossary: dedupeGlossary([...(prior.glossary ?? []), ...(base.glossary ?? [])]),
+    // A series shares one world style — carry the prior book's when this one has none yet.
+    worldStyle: (base.worldStyle ?? "").trim() || prior.worldStyle || "",
   };
 }
 

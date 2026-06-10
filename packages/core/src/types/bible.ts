@@ -217,6 +217,13 @@ export interface VisualBible {
   storyboard: ChapterScene[];
   /** Recurring world facts applied as defaults in every image prompt. */
   glossary: GlossaryEntry[];
+  /**
+   * One concise genre/art-style line for the whole book (e.g. "high-fantasy military
+   * academy, dark, painterly"), auto-derived during analysis and applied to EVERY image
+   * prompt so a scene with no stated clothing/setting still renders in-genre. "" until
+   * derived. Refined across chapters (keep the most specific).
+   */
+  worldStyle?: string;
   /** Chapters already processed by the extraction pass. */
   processedChapters: number[];
 }

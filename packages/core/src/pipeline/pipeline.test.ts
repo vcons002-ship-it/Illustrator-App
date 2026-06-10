@@ -36,13 +36,29 @@ function recordingImage(): { provider: ImageProvider; lastPrompt: () => string }
   return { provider, lastPrompt: () => seen };
 }
 
+/** A bible carrying one stored Layer-1 prompt for page range [0,0]. */
+function bibleWithPrompt(bookId: string, text: string) {
+  const bible = createEmptyBible(bookId);
+  bible.storyboard.push({
+    chapterIndex: 0,
+    summary: "",
+    keyMoment: "",
+    location: "",
+    locationChange: "",
+    keyEvents: [{ pageRange: [0, 0], imagePrompt: { text } }],
+  });
+  return bible;
+}
+
 describe("RenderPipeline style injection", () => {
   it("appends the selected style's prompt suffix", async () => {
     const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a knight by a window");
     const { provider, lastPrompt } = recordingImage();
     const pipeline = new RenderPipeline({
       book,
-      getBible: () => createEmptyBible(book.id),
+      getBible: () => bible,
       llm,
       image: provider,
       store: new InMemoryStore(),
@@ -57,10 +73,12 @@ describe("RenderPipeline style injection", () => {
 
   it("adds nothing for the 'auto' style", async () => {
     const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a knight by a window");
     const { provider, lastPrompt } = recordingImage();
     const pipeline = new RenderPipeline({
       book,
-      getBible: () => createEmptyBible(book.id),
+      getBible: () => bible,
       llm,
       image: provider,
       store: new InMemoryStore(),
@@ -116,7 +134,7 @@ describe("RenderPipeline stored-first prompt fetch", () => {
     expect(lastPrompt()).toContain("STORED SCENE PROMPT");
   });
 
-  it("falls back to the LLM when no keyEvent matches the unit", async () => {
+  it("never calls the LLM at render time — holds (errors) when no prompt is stored", async () => {
     const book = oneParagraphBook();
     book.pages[0]!.pageRange = [0, 0];
     const { provider: img, lastPrompt } = recordingImage();
@@ -130,9 +148,12 @@ describe("RenderPipeline stored-first prompt fetch", () => {
       tier: DEFAULT_TIER_CONFIG,
     });
 
-    await pipeline.renderPage(0);
+    const result = await pipeline.renderPage(0);
 
-    expect(calls()).toBe(1);
-    expect(lastPrompt()).toContain("LIVE LLM PROMPT");
+    // Stored-only: the LLM is never reached and no image is generated (the buffer's gate
+    // means this is unreachable in practice; here it surfaces as a defensive error).
+    expect(calls()).toBe(0);
+    expect(result.status).toBe("error");
+    expect(lastPrompt()).toBe(""); // image.generate was never called
   });
 });

@@ -27,7 +27,14 @@ export interface TierConfig {
    * unset, the local backends auto-detect from the checkpoint. Cloud providers
    * ignore it (they always use natural language).
    */
-  imageModelFamily?: "sd15" | "sdxl" | "flux";
+  imageModelFamily?: "sd15" | "sdxl" | "flux" | "flux2";
+  /**
+   * True when the SAME cloud vendor + key serves both the text and image slots (e.g.
+   * both Gemini). A future "native" mode can then let that one API read a chapter and
+   * emit illustrations directly (epub-chapter-in → images-out) instead of the split
+   * extract→prompt→image path. Seam only today — the pipeline still uses the split path.
+   */
+  nativeIllustration?: boolean;
 }
 
 export const DEFAULT_TIER_CONFIG: TierConfig = {

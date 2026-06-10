@@ -239,6 +239,10 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       // images are left as-is until the user re-renders.
       void engine?.updateCharacter(msg.characterId, msg.patch);
       break;
+    case "setCharacterReference":
+      // User-uploaded IP-Adapter reference (or undefined to clear it).
+      void engine?.setCharacterReference(msg.characterId, msg.image);
+      break;
     case "exportBible":
       if (engine) post({ type: "export", json: engine.exportBible() });
       break;

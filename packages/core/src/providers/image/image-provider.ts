@@ -41,7 +41,21 @@ export interface ImageGenerationInput {
    * local SD backends format for this family instead of guessing from the
    * checkpoint name. Ignored by cloud providers (they always use natural language).
    */
-  modelFamily?: "sd15" | "sdxl" | "flux";
+  modelFamily?: "sd15" | "sdxl" | "flux" | "flux2";
+  /**
+   * Visual-Bible terms (characters/creatures/outfits/locations) that appear in the
+   * prompt, each with a visual `descriptor`. The local backends expand them per the
+   * target's text-encoder grade: CLIP/T5 (SD/Flux.1) inject `(descriptor)` in place;
+   * LLM-grade (Flux.2/Mistral) keep the name + a reference block. The pipeline
+   * pre-expands cloud prompts, so cloud providers ignore this.
+   */
+  terms?: { names: string[]; descriptor: string; kind: "character" | "creature" | "outfit" | "location" }[];
+  /** How a local backend should expand `terms` (resolved from the model family). */
+  nameHandling?: "inject" | "reference";
+  /** Always-applied world-style/genre anchor (from the bible), added to every prompt. */
+  worldStyle?: string;
+  /** Book title, for the reference-block header on LLM-grade targets. */
+  bookTitle?: string;
   /**
    * Optional negative-prompt override for SD backends. When absent they use a
    * sensible default (and Flux always sends none). Ignored by cloud providers.

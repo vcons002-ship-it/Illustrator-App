@@ -97,8 +97,30 @@ export function buildProviders(
       ...(settings.imageModelFamily && settings.imageModelFamily !== "auto"
         ? { imageModelFamily: settings.imageModelFamily }
         : {}),
+      // Seam for a future single-API "native" illustration mode (chapter-in → images-out).
+      ...(isNativeIllustration(settings, llm.provider.id, image.provider.id)
+        ? { nativeIllustration: true }
+        : {}),
     },
   };
+}
+
+/**
+ * True when the SAME cloud vendor + key drives both slots (e.g. text=gemini AND
+ * image=gemini, with a key present). The pipeline still uses the split path today; this
+ * flag just marks where a one-call native mode could engage later.
+ */
+function isNativeIllustration(
+  settings: ReaderSettings,
+  llmId: string,
+  imageId: string,
+): boolean {
+  const NATIVE_VENDORS = new Set(["gemini", "openai"]);
+  return (
+    llmId === imageId &&
+    NATIVE_VENDORS.has(llmId) &&
+    Boolean(settings.keys[llmId])
+  );
 }
 
 const MOCK_LABEL = "Mock (placeholder art/text)";

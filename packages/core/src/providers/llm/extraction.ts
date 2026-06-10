@@ -61,6 +61,8 @@ export interface RawExtraction {
     mood: string;
     composition: string;
   }[];
+  /** One concise genre/art-direction line for the whole book, applied to every prompt. */
+  worldStyle?: string;
 }
 
 export const EXTRACTION_SYSTEM =
@@ -104,13 +106,20 @@ export const EXTRACTION_SYSTEM =
   "'location' to the primary setting (use the established environment name), and keep the " +
   "keyMoment's place explicit. If the setting moves during the chapter, set 'locationChange' " +
   "to a short note of where/when it shifts (otherwise an empty string). " +
-  "Finally, write 'keyEvents': the chapter is illustrated as a fixed number of images covering " +
+  "Write 'keyEvents': the chapter is illustrated as a fixed number of images covering " +
   "consecutive stretches of the chapter in READING ORDER — you are told how many. Produce EXACTLY " +
   "that many keyEvents, in order, each describing the single most important visual SCENE of its " +
   "stretch as five natural-language fields: 'subject' (who/what is the focus), 'action' (what they " +
   "are doing), 'environment' (where/how it looks), 'mood' (tone), 'composition' (camera angle/" +
-  "framing). Describe a scene with the characters acting in their setting — NOT a portrait. Use the " +
-  "characters' exact bible names. No weighting syntax, no tags, just prose; keep each field concise.";
+  "framing). Describe a scene with the characters acting in their setting — NOT a portrait. Refer to " +
+  "characters/creatures by their EXACT bible name, to clothing by its outfit LABEL, and to a place " +
+  "by its location NAME (the app expands each into its visual description), so do NOT describe their " +
+  "permanent looks. No weighting syntax, no tags, just prose; keep each field concise. " +
+  "Finally, set 'worldStyle': one concise line capturing the book's overall genre and visual " +
+  "art direction to apply to EVERY illustration — e.g. 'high-fantasy military academy, dark, " +
+  "painterly, dramatic lighting' or 'cosy contemporary romance, warm, soft watercolour'. Cover " +
+  "genre, era/setting, mood, and a rendering style. Refine it as the book reveals more (keep the " +
+  "most specific version).";
 
 export const PROMPT_SYSTEM =
   "You write one vivid, concrete image-generation prompt for a single illustration of a " +
@@ -125,14 +134,18 @@ export const PROMPT_SYSTEM =
   "what the characters are DOING, with their environment visible. Set the image in ONE coherent " +
   "location — the place where the passage's action occurs; if the chapter or passage moves " +
   "between places, choose the single location of the depicted moment and NEVER combine two " +
-  "settings into one picture. Keep every character's appearance consistent with the supplied " +
-  "Visual Bible and the story so far. The listed characters are PEOPLE — depict them as humans; " +
-  "NEVER render a character as an animal even if their name is also a common word (a person " +
-  "named 'Cat' is a woman, not a cat). For each character, choose the SINGLE outfit from their " +
-  "listed options that best fits THIS scene's context (what the passage describes them " +
-  "doing/wearing); depict only that outfit and never combine outfits. For action scenes, convey " +
-  "dynamic movement — a dynamic pose, motion, energy, a sense of speed or impact. " +
-  "Output only the prompt text, no preamble.";
+  "settings into one picture. " +
+  "IMPORTANT — refer to each character and creature by their EXACT name from the supplied " +
+  "Visual Bible, to clothing by its exact outfit LABEL, and to a place by its exact location " +
+  "NAME; the app expands each of those into the correct visual description automatically, so do " +
+  "NOT describe a character's permanent physical features (hair, eyes, build, face, scars), the " +
+  "full details of a garment, or a location's architecture yourself — just name them and " +
+  "describe what is happening, their pose, expression, and the composition. The listed characters " +
+  "are PEOPLE — depict them as humans; NEVER render a character as an animal even if their name " +
+  "is also a common word (a person named 'Cat' is a woman, not a cat). For each character, pick " +
+  "the SINGLE outfit LABEL from their listed options that best fits this scene and name only that " +
+  "label (never combine outfits). For action scenes, convey dynamic movement — a dynamic pose, " +
+  "motion, energy, a sense of speed or impact. Output only the prompt text, no preamble.";
 
 /**
  * JSON Schema for the extraction result. Gemini (`responseSchema`) and OpenAI
@@ -264,6 +277,7 @@ export const EXTRACTION_JSON_SCHEMA = {
         required: ["subject", "action", "environment", "mood", "composition"],
       },
     },
+    worldStyle: { type: "string" },
   },
   required: [
     "characters",
@@ -276,6 +290,7 @@ export const EXTRACTION_JSON_SCHEMA = {
     "location",
     "locationChange",
     "keyEvents",
+    "worldStyle",
   ],
 } as const;
 
@@ -522,66 +537,73 @@ export function mergeExtraction(
     bible.storyboard.sort((a, b) => a.chapterIndex - b.chapterIndex);
   }
 
+  // World style: adopt it, preferring the most specific (longest) version seen so far so
+  // a later chapter can enrich it but a terse mention never overwrites a richer one.
+  const newStyle = (raw.worldStyle ?? "").trim();
+  if (newStyle && newStyle.length > (bible.worldStyle ?? "").trim().length) {
+    bible.worldStyle = newStyle;
+  }
+
   if (!bible.processedChapters.includes(chapterIndex)) {
     bible.processedChapters.push(chapterIndex);
   }
   return bible;
 }
 
-/** The user message text for building one unit's image prompt. */
+/**
+ * The user message for building one unit's image prompt. Scoped to THIS chapter: the
+ * bible already encodes accumulated state, so prior chapters are not dumped in. Names
+ * (not descriptions) are listed — the writer refers to characters/creatures/outfits/
+ * locations by name, and the app expands those into visual descriptors at render time.
+ */
 export function promptUserContent(request: VisualRequest, bible: VisualBible): string {
   const chars = bible.characters.filter((c) => request.characterIds.includes(c.id));
   const envs = bible.environments.filter((e) => request.environmentIds.includes(e.id));
   const creatures = (bible.creatures ?? []).filter((c) => request.creatureIds.includes(c.id));
-  const storyboard = bible.storyboard ?? [];
-  const scene = storyboard.find((s) => s.chapterIndex === request.chapterIndex);
-  const soFar = storyboard
-    .filter((s) => s.chapterIndex < request.chapterIndex)
-    .map((s) => `Chapter ${s.chapterIndex}: ${s.summary}`)
-    .join("\n");
-  const glossary = bible.glossary ?? [];
-  // Lead with THIS unit's own passage and depict only its action — each unit covers a
-  // different stretch of the chapter, so the chapter-wide pivotal moment is deliberately
-  // NOT fed in (it made every illustration of a chapter converge on the same beat).
+  const scene = (bible.storyboard ?? []).find((s) => s.chapterIndex === request.chapterIndex);
   return [
-    `Illustrate the single most important action in THIS passage (shown below). Each ` +
-      `illustration covers a DIFFERENT stretch of the chapter, so depict ONLY what happens in ` +
-      `THIS passage — not the chapter's overall climax, and not a previous illustration's moment.`,
+    request.bookTitle ? `Book: ${request.bookTitle}.` : "",
+    `Illustrate the single most important action in THIS passage (below). Each illustration ` +
+      `covers a DIFFERENT stretch of the chapter, so depict ONLY what happens in THIS passage — ` +
+      `not the chapter's overall climax, and not a previous illustration's moment.`,
     `Passage:\n${request.sourceText}`,
     settingLine(scene, envs, request.sourceText),
     chars.length
-      ? `Characters present (these are PEOPLE — render as humans, even if a name is also a common word like 'Cat'; keep appearance consistent and pick one fitting outfit):\n${chars
-          .map((c) => `- ${describeCharacter(c)}`)
+      ? `Characters present — refer to each by their EXACT name; do NOT describe their looks ` +
+        `(auto-applied). They are PEOPLE (a name like 'Cat' is a person). Where a character has ` +
+        `outfit options, name the ONE label that fits this scene:\n${chars
+          .map((c) => `- ${characterNameLine(c)}`)
           .join("\n")}`
       : "",
     creatures.length
-      ? `Creatures present (keep look consistent):\n${creatures
-          .map((c) => `- ${c.name} (${c.kind || "creature"}): ${c.description.join(", ") || "as previously established"}`)
+      ? `Creatures present — refer to each by their EXACT name (look auto-applied):\n${creatures
+          .map((c) => `- ${c.name}${c.kind ? ` (${c.kind})` : ""}`)
           .join("\n")}`
       : "",
     envs.length
-      ? `Location details (look + world fashion):\n${envs.map((e) => `- ${e.name}: ${e.description.join(", ")}`).join("\n")}`
+      ? `Locations available — refer to a place by its EXACT name (look auto-applied):\n${envs
+          .map((e) => `- ${e.name}`)
+          .join("\n")}`
       : "",
-    glossary.length
-      ? `World facts (apply as defaults unless the passage says otherwise):\n${glossary
+    (bible.glossary ?? []).length
+      ? `World facts (apply as defaults unless the passage says otherwise):\n${(bible.glossary ?? [])
           .map((g) => `- ${g.term}: ${g.definition}`)
           .join("\n")}`
       : "",
-    // Background ONLY — for continuity, never to override what the passage depicts.
-    soFar || scene?.summary
-      ? `Background (continuity only — do NOT depict these unless THIS passage is where they happen):\n${[
-          scene?.summary ? `This chapter: ${scene.summary}` : "",
-          soFar,
-        ]
-          .filter(Boolean)
-          .join("\n")}`
-      : "",
-    request.chapterContext
-      ? `Chapter context (surrounding text — continuity only; illustrate the Passage above):\n${request.chapterContext}`
+    scene?.summary
+      ? `This chapter (continuity only — illustrate the passage, not this): ${scene.summary}`
       : "",
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+/** A present-character line for the prompt context: name + alias hint + outfit LABELS only. */
+function characterNameLine(c: Character): string {
+  const aka = c.aliases.length ? ` (aka ${c.aliases.slice(0, 3).join(", ")})` : "";
+  const labels = (c.outfits ?? []).map((o) => o.label).filter(Boolean);
+  const outfits = labels.length ? ` — outfit labels: ${labels.join(", ")}` : "";
+  return `${c.name}${aka}${outfits}`;
 }
 
 /**
@@ -602,41 +624,6 @@ function settingLine(
   if (!place) return "";
   const change = scene?.locationChange ? ` (note: the chapter moves — ${scene.locationChange})` : "";
   return `Setting for this image (use this ONE location, do not blend places): ${place}${change}`;
-}
-
-/** One-line character description for an image prompt, preferring the structured
- * appearance fields and falling back to free-form persistentTraits. */
-function describeCharacter(c: Character): string {
-  const a = c.appearance;
-  const fields: string[] = [];
-  if (a) {
-    const labelled: Array<[string, string]> = [
-      ["gender", a.gender],
-      ["age", a.age],
-      ["hair", a.hair],
-      ["eyes", a.eyes],
-      ["build", a.build],
-      ["height", a.height],
-      ["skin", a.skinTone],
-      ["marks", a.distinguishingMarks],
-    ];
-    for (const [label, value] of labelled) {
-      if (value && value.trim()) fields.push(`${label}: ${value.trim()}`);
-    }
-    if (a.notes && a.notes.trim()) fields.push(a.notes.trim());
-  }
-  // Fold in any extra persistent traits the structured fields didn't capture.
-  for (const t of c.persistentTraits) {
-    if (t && t.trim()) fields.push(t.trim());
-  }
-  const appearance = fields.length ? fields.join("; ") : "appearance unspecified";
-  const outfits = c.outfits ?? [];
-  const outfitText = outfits.length
-    ? `; outfits to choose from (pick the ONE that fits this scene, don't combine): ${outfits
-        .map((o) => `[${o.label}${o.context ? ` — for ${o.context}` : ""}: ${o.description}]`)
-        .join(" ")}`
-    : `; wearing ${c.clothing.join(", ") || "unspecified"}`;
-  return `${c.name}: ${appearance}${outfitText}`;
 }
 
 // --- Character de-duplication -------------------------------------------------

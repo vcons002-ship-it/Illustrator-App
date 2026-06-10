@@ -157,16 +157,22 @@ export class Engine {
       image: this.opts.image,
       store: this.store,
       tier: this.tier,
-      captureReference: (id, bytes, mimeType) => this.captureCharacterReference(id, bytes, mimeType),
     });
     this.buffer = new RenderBuffer({
       totalPages: book.pages.length,
+      // A local engine (ComfyUI) serialises GPU jobs anyway, and two renders sharing one
+      // websocket clientId cross-feed progress — so render one at a time locally; cloud
+      // APIs parallelise fine.
+      maxConcurrent: this.tier.tier === "local" ? 1 : 2,
       render: (pageIndex, onProgress, signal) =>
         this.pipeline!.renderPage(pageIndex, onProgress, signal),
-      // "book": wait for the whole book to be analysed; "chapter": as soon as the
-      // unit's own chapter is ready.
+      // A unit is renderable once its OWN illustration prompt exists (extraction folds the
+      // chapter's prompts in, so this is true right after its chapter is analysed). Image
+      // generation reads that stored prompt and never calls the LLM. In "book" mode we also
+      // wait for the whole LLM phase, so every image is held until the full book is analysed.
       canRender: (pageIndex) =>
-        this.illustrateAfter === "book" ? this.isBibleComplete() : this.isChapterReady(pageIndex),
+        this.hasKeyEvent(pageIndex) &&
+        (this.illustrateAfter !== "book" || this.isLlmPhaseComplete()),
       // Front/back matter is never illustrated (shows as a text-only page).
       shouldSkip: (pageIndex) => !this.isStoryPage(pageIndex),
       // Stay paused until the user begins generating; cached pages still show.
@@ -230,14 +236,6 @@ export class Engine {
     return chapter?.isStory !== false;
   }
 
-  /** Is the chapter that contains this page already in the bible? */
-  private isChapterReady(pageIndex: number): boolean {
-    if (!this.book || !this.bible) return false;
-    const page = this.book.pages[pageIndex];
-    if (!page) return true; // out of range — let renderPage return its own error
-    const chapter = this.book.chapters.find((c) => c.id === page.chapterId);
-    return this.bible.processedChapters.includes(chapter?.index ?? 0);
-  }
 
   /** Has every chapter of the book been processed into the bible? */
   private isBibleComplete(): boolean {
@@ -246,6 +244,20 @@ export class Engine {
       if (!this.bible.processedChapters.includes(idx)) return false;
     }
     return true;
+  }
+
+  /** Has every story unit had its illustration prompt written? */
+  private arePromptsComplete(): boolean {
+    if (!this.book) return false;
+    for (let i = 0; i < this.book.pages.length; i++) {
+      if (this.isStoryPage(i) && !this.hasKeyEvent(i)) return false;
+    }
+    return true;
+  }
+
+  /** The whole LLM phase (extraction + prompts) is done — nothing left to resume. */
+  private isLlmPhaseComplete(): boolean {
+    return this.isBibleComplete() && this.arePromptsComplete();
   }
 
   /**
@@ -322,41 +334,61 @@ export class Engine {
       if (cancelled()) return; // re-check after the async persist, before notifying
       this.opts.onBibleProgress?.(++done, total);
       this.opts.onBibleUpdate?.(this.bible);
-      // New entities are in the bible → release any pages that were gated on this chapter.
+      // Extraction folded this chapter's illustration prompts into the bible (keyEvents),
+      // so its units are already renderable — release any that were gated on this chapter.
+      // Image generation then runs purely from those stored prompts (no LLM at render).
       this.buffer?.refresh();
     }
-    // NB: illustration prompts are now produced BY extraction (folded into each
-    // chapter's call), so there is no separate precompute pass here. The per-unit
-    // `buildPromptsForUnits` remains for the explicit on-demand "Rebuild prompts".
+    // Illustration prompts are produced BY extraction (folded into each chapter's call).
+    // A final sweep writes a prompt for any unit the extraction didn't emit (a count
+    // mismatch / gap) so no story unit is left un-illustratable; it skips units that
+    // already have one, so it's a cheap no-op when extraction covered everything.
+    if (!stop()) await this.buildPromptsForUnits(myRun, ac.signal);
   }
 
-  /** The chapter's render-unit page ranges, in reading order (for folded prompts). */
+  /** The chapter's render-unit page ranges, in reading order (for folded prompts). A raw
+   * single page (no explicit range) is its own unit at [index, index] — matching
+   * buildRequest/hasKeyEvent so the folded keyEvents line up with the render units. */
   private unitRangesForChapter(chapterIndex: number): [number, number][] {
     if (!this.book) return [];
     const ranges: [number, number][] = [];
     for (const page of this.book.pages) {
       const idx = this.book.chapters.find((c) => c.id === page.chapterId)?.index ?? 0;
-      if (idx === chapterIndex && page.pageRange) ranges.push(page.pageRange);
+      if (idx === chapterIndex) ranges.push(page.pageRange ?? [page.index, page.index]);
     }
     return ranges;
   }
 
   /**
-   * Precompute a Layer-1 image prompt for every story render unit that doesn't already
-   * have one, storing it in the bible's storyboard `keyEvents`. Runs after extraction
-   * (LLM work) under the same pause/abort/run-token as `buildBibleInBackground`, so the
-   * "Pause Visual Bible" control covers it. Image rendering reads these stored prompts
-   * (stored-first), only calling the LLM for units this hasn't reached yet.
+   * Write a Layer-1 image prompt for every story render unit that doesn't already have one
+   * (the whole-book sweep). Reuses `writePromptsForUnits`, so it's the catch-all after the
+   * folded-in extraction prompts (fills any gap) and for the on-demand "Rebuild prompts".
    */
   private async buildPromptsForUnits(myRun: number, signal: AbortSignal): Promise<void> {
+    if (!this.book) return;
+    const units = this.book.pages.map((_, i) => i).filter((i) => this.isStoryPage(i));
+    await this.writePromptsForUnits(units, myRun, signal);
+  }
+
+  /**
+   * Write a stored Layer-1 prompt for each given unit that lacks one, under the same
+   * pause/abort/run-token as `buildBibleInBackground`. Progress is reported against ALL
+   * story units so the bar is stable whether called per-chapter or as the final sweep.
+   */
+  private async writePromptsForUnits(
+    unitIndices: number[],
+    myRun: number,
+    signal: AbortSignal,
+  ): Promise<void> {
     if (!this.book || !this.bible || !this.pipeline) return;
     const stop = (): boolean => this.biblePaused || this.bibleRun !== myRun;
     const cancelled = (): boolean => this.bibleRun !== myRun;
-    const units = this.book.pages.map((_, i) => i).filter((i) => this.isStoryPage(i));
-    const total = units.length;
-    let done = units.filter((i) => this.hasKeyEvent(i)).length;
-    this.opts.onPromptProgress?.(done, total);
-    for (const i of units) {
+    const allUnits = this.book.pages.map((_, i) => i).filter((i) => this.isStoryPage(i));
+    const total = allUnits.length;
+    const reportProgress = (): void =>
+      this.opts.onPromptProgress?.(allUnits.filter((i) => this.hasKeyEvent(i)).length, total);
+    reportProgress();
+    for (const i of unitIndices) {
       if (stop()) return;
       if (this.hasKeyEvent(i)) continue;
       const page = this.book.pages[i]!;
@@ -365,7 +397,7 @@ export class Engine {
       try {
         text = await this.opts.llm.buildImagePrompt(request, this.bible, signal);
       } catch {
-        /* abort (pause) or transient failure — leave it; rendering falls back to the LLM */
+        /* abort (pause) or transient failure — leave it; the unit holds until retried */
       }
       if (cancelled()) return; // a newer run/book took over → don't touch shared state
       if (text && text.trim()) {
@@ -376,8 +408,10 @@ export class Engine {
         await this.store.putBible(this.bible);
         if (cancelled()) return;
         this.opts.onBibleUpdate?.(this.bible);
+        // Releasing each unit as its prompt lands keeps the first image prompt-and renders.
+        this.buffer?.refresh();
       }
-      this.opts.onPromptProgress?.(++done, total);
+      reportProgress();
     }
   }
 
@@ -386,7 +420,9 @@ export class Engine {
     const page = this.book?.pages[pageIndex];
     if (!page || !this.bible) return false;
     const chapterIndex = this.book!.chapters.find((c) => c.id === page.chapterId)?.index ?? 0;
-    return resolveKeyEvent(this.bible, chapterIndex, page.pageRange) !== undefined;
+    // Match the range buildRequest/writePromptsForUnits store under (raw page → [i, i]).
+    const range = page.pageRange ?? ([page.index, page.index] as [number, number]);
+    return resolveKeyEvent(this.bible, chapterIndex, range) !== undefined;
   }
 
   /**
@@ -452,23 +488,24 @@ export class Engine {
   }
 
   /**
-   * Save a just-rendered solo frame as a character's reference image (for
-   * IP-Adapter), set it on the bible's anchor, and persist. Called by the pipeline
-   * the first time a character appears alone.
+   * Set (or clear) a user-uploaded reference image for a character — fed to IP-Adapter
+   * when the ComfyUI nodes are installed. Auto-capture was removed (it biased every image
+   * toward a portrait); consistency now comes from bible-term injection + the per-character
+   * seed, with this as an optional, deliberate override.
    */
-  private async captureCharacterReference(
+  async setCharacterReference(
     characterId: string,
-    bytes: ArrayBuffer,
-    mimeType: string,
+    image: { bytes: ArrayBuffer; mimeType: string } | undefined,
   ): Promise<void> {
     if (!this.book || !this.bible) return;
     const refId = `${this.book.id}:charref:${characterId}`;
-    await this.store.putImage(refId, bytes, mimeType);
+    if (image) await this.store.putImage(refId, image.bytes, image.mimeType);
+    else await this.store.deleteImage?.(refId);
     this.bible = {
       ...this.bible,
       characters: this.bible.characters.map((c) =>
-        c.id === characterId && !c.anchor.referenceImageId
-          ? { ...c, anchor: { ...c.anchor, referenceImageId: refId } }
+        c.id === characterId
+          ? { ...c, anchor: setReference(c.anchor, image ? refId : undefined) }
           : c,
       ),
     };
@@ -542,7 +579,9 @@ export class Engine {
       // then bails at its next `stop()` check); the chapter stays unprocessed and is
       // re-extracted, in order, on resume.
       this.bibleAbort?.abort();
-    } else if (this.generationStarted && !this.isBibleComplete()) {
+    } else if (this.generationStarted && !this.isLlmPhaseComplete()) {
+      // Resume the LLM phase if EITHER extraction or prompt-writing is unfinished (a pause
+      // can stop the prompt pass after all chapters are extracted).
       this.biblePromise = this.buildBibleInBackground();
     }
   }
@@ -629,6 +668,12 @@ export class Engine {
 function dropReference(anchor: IdentityAnchor): IdentityAnchor {
   const { referenceImageId: _drop, ...rest } = anchor;
   return rest;
+}
+
+/** Set or clear an anchor's reference image id. */
+function setReference(anchor: IdentityAnchor, refId: string | undefined): IdentityAnchor {
+  if (!refId) return dropReference(anchor);
+  return { ...anchor, referenceImageId: refId };
 }
 
 /** Mark a chapter processed without adding entities (used when extraction fails). */

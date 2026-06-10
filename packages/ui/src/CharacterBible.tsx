@@ -26,6 +26,8 @@ function initialOutfits(c: Character): Outfit[] {
 export interface CharacterBibleProps {
   bible: VisualBible | undefined;
   onSave: (characterId: string, patch: CharacterEdit) => void;
+  /** Set (or clear, with no image) a character's reference image for IP-Adapter. */
+  onSetReference?: (characterId: string, image?: { bytes: ArrayBuffer; mimeType: string }) => void;
   onClose: () => void;
 }
 
@@ -42,7 +44,7 @@ const APPEARANCE_FIELDS: Array<{ key: keyof CharacterAppearance; label: string }
   { key: "notes", label: "Notes" },
 ];
 
-export function CharacterBible({ bible, onSave, onClose }: CharacterBibleProps) {
+export function CharacterBible({ bible, onSave, onSetReference, onClose }: CharacterBibleProps) {
   const characters = bible?.characters ?? [];
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
@@ -83,7 +85,7 @@ export function CharacterBible({ bible, onSave, onClose }: CharacterBibleProps) 
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {filtered.map((c) => (
-              <CharacterCard key={c.id} character={c} onSave={onSave} />
+              <CharacterCard key={c.id} character={c} onSave={onSave} {...(onSetReference ? { onSetReference } : {})} />
             ))}
           </div>
         )}
@@ -109,9 +111,11 @@ function matchesQuery(c: Character, q: string): boolean {
 function CharacterCard({
   character,
   onSave,
+  onSetReference,
 }: {
   character: Character;
   onSave: (characterId: string, patch: CharacterEdit) => void;
+  onSetReference?: (characterId: string, image?: { bytes: ArrayBuffer; mimeType: string }) => void;
 }) {
   const [appearance, setAppearance] = useState<CharacterAppearance>(character.appearance);
   const [outfits, setOutfits] = useState<Outfit[]>(() => initialOutfits(character));
@@ -199,6 +203,36 @@ function CharacterCard({
           </div>
         ))}
       </div>
+      {onSetReference && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
+          <span style={{ fontSize: 12, opacity: 0.7 }}>
+            Reference image{character.anchor.referenceImageId ? " ✓" : ""}
+          </span>
+          <label style={{ ...buttonStyle, cursor: "pointer", fontSize: 12 }}>
+            {character.anchor.referenceImageId ? "Replace" : "Upload"}
+            <input
+              type="file"
+              accept="image/*"
+              style={{ display: "none" }}
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const bytes = await file.arrayBuffer();
+                onSetReference(character.id, { bytes, mimeType: file.type || "image/png" });
+                e.target.value = ""; // allow re-selecting the same file later
+              }}
+            />
+          </label>
+          {character.anchor.referenceImageId && (
+            <button
+              style={{ ...buttonStyle, fontSize: 12 }}
+              onClick={() => onSetReference(character.id, undefined)}
+            >
+              Remove
+            </button>
+          )}
+        </div>
+      )}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
         {saved && <span style={{ color: "#7dd87f", fontSize: 12 }}>✓ saved</span>}
         <button style={buttonStyle} disabled={!dirty} onClick={save}>

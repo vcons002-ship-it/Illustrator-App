@@ -1,21 +1,55 @@
 import { describe, it, expect } from "vitest";
 import {
+  clampResolution,
   composeSdPositive,
   detectModelFamily,
   emphasizeSubjects,
+  nameHandlingFor,
   negativeFor,
   qualityPreamble,
   resolveModelFamily,
   resolveNegative,
+  samplerFor,
 } from "./sd-prompt.js";
 
 describe("detectModelFamily", () => {
   it("classifies by filename, leniently", () => {
     expect(detectModelFamily("flux1-schnell-fp8.safetensors")).toBe("flux");
+    expect(detectModelFamily("flux2-dev.safetensors")).toBe("flux2"); // flux2 before generic flux
+    expect(detectModelFamily("FLUX.2-dev-fp8.safetensors")).toBe("flux2");
     expect(detectModelFamily("sd_xl_base_1.0.safetensors")).toBe("sdxl");
     expect(detectModelFamily("realvisxl_v4.safetensors")).toBe("sdxl"); // tricky: looks XL
     expect(detectModelFamily("v1-5-pruned-emaonly-fp16.safetensors")).toBe("sd15");
     expect(detectModelFamily("some-random-checkpoint.safetensors")).toBe("unknown");
+  });
+});
+
+describe("samplerFor", () => {
+  it("uses SD cfg/sampler/scheduler for SD families", () => {
+    expect(samplerFor("sdxl")).toMatchObject({ cfg: 7, sampler: "euler", scheduler: "normal" });
+    expect(samplerFor("sdxl").guidance).toBeUndefined();
+  });
+  it("uses Flux embedded guidance (cfg 1, simple) for Flux.1 and Flux.2", () => {
+    expect(samplerFor("flux")).toMatchObject({ cfg: 1, scheduler: "simple", guidance: 3.5 });
+    expect(samplerFor("flux2")).toMatchObject({ cfg: 1, scheduler: "simple", guidance: 4.0 });
+  });
+});
+
+describe("nameHandlingFor", () => {
+  it("injects for CLIP/T5 families and references for the LLM-grade Flux.2 encoder", () => {
+    expect(nameHandlingFor("sd15")).toBe("inject");
+    expect(nameHandlingFor("sdxl")).toBe("inject");
+    expect(nameHandlingFor("flux")).toBe("inject");
+    expect(nameHandlingFor("flux2")).toBe("reference");
+  });
+});
+
+describe("clampResolution", () => {
+  it("caps SD1.5 at 768 and others at 1024, rounded to /8", () => {
+    expect(clampResolution("sd15", 1536, 1536)).toEqual({ width: 768, height: 768 });
+    expect(clampResolution("sdxl", 1536, 1536)).toEqual({ width: 1024, height: 1024 });
+    expect(clampResolution("flux2", 1280, 1280)).toEqual({ width: 1024, height: 1024 });
+    expect(clampResolution("sdxl", 1000, 1000)).toEqual({ width: 1000, height: 1000 }); // already fine
   });
 });
 

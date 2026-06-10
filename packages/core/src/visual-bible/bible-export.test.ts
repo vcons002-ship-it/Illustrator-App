@@ -129,4 +129,59 @@ describe("migrateBible", () => {
     expect(migrateBible(cur)).toBe(cur);
     expect(migrateBible({ ...cur, version: 3 })).toBeUndefined();
   });
+
+  it("v6 → v7 keeps entities but clears old prompts, drops auto-refs, defaults worldStyle", () => {
+    const v6 = { ...createEmptyBible("b"), version: 6 };
+    v6.characters.push({
+      id: "char-ana",
+      name: "Ana",
+      aliases: [],
+      appearance: { hair: "silver", eyes: "", gender: "", build: "", height: "", skinTone: "", age: "", distinguishingMarks: "", notes: "" },
+      persistentTraits: [],
+      clothing: [],
+      outfits: [],
+      anchor: { seed: 1, referenceImageId: "b:charref:char-ana" }, // an auto-captured reference
+      firstSeenChapter: 0,
+    });
+    v6.storyboard.push({
+      chapterIndex: 0,
+      summary: "s",
+      keyMoment: "k",
+      location: "",
+      locationChange: "",
+      keyEvents: [{ pageRange: [0, 0], imagePrompt: { text: "old inline-style prompt" } }],
+    });
+
+    const m = migrateBible(v6)!;
+    expect(m.version).toBe(BIBLE_VERSION);
+    expect(m.characters[0]!.name).toBe("Ana"); // entity kept
+    expect(m.characters[0]!.appearance.hair).toBe("silver"); // appearance kept
+    expect(m.characters[0]!.anchor.referenceImageId).toBeUndefined(); // auto-ref dropped
+    expect(m.storyboard[0]!.keyEvents).toBeUndefined(); // old prompt cleared for rewrite
+    expect(m.storyboard[0]!.summary).toBe("s"); // summary kept
+    expect(m.worldStyle).toBe("");
+  });
+});
+
+describe("worldStyle round-trips and carries over", () => {
+  it("export → import preserves worldStyle", () => {
+    const b = createEmptyBible("book-1");
+    b.worldStyle = "high-fantasy military academy, dark, painterly";
+    const back = parseImportedBible(exportBible(b), "book-1").bible!;
+    expect(back.worldStyle).toBe("high-fantasy military academy, dark, painterly");
+  });
+
+  it("accepts a one-version-back (v6) export, clearing its prompts", () => {
+    const json = JSON.stringify({
+      _exportMeta: { schemaVersion: BIBLE_VERSION - 1 },
+      data: {
+        schemaVersion: BIBLE_VERSION - 1,
+        characters: [{ name: "Ana" }],
+        storyboard: [{ chapterIndex: 0, summary: "s", keyEvents: [{ pageRange: [0, 0], imagePrompt: { text: "old" } }] }],
+      },
+    });
+    const res = parseImportedBible(json, "book-1");
+    expect(res.bible).toBeDefined();
+    expect(res.bible!.storyboard[0]!.keyEvents).toBeUndefined();
+  });
 });

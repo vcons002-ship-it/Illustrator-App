@@ -196,11 +196,11 @@ describe("promptUserContent", () => {
     expect(text).toContain("Passage:\nswords clash");
     expect(text).not.toContain("The duel.");
     expect(text).not.toContain("pivotal moment");
-    expect(text.indexOf("Passage:")).toBeLessThan(text.indexOf("Background")); // passage first
-    // Prior-chapter context is still available, but as labelled background only.
-    expect(text).toContain("Background");
-    expect(text).toContain("Ana arrives in the city.");
-    expect(text).toContain("red cloak"); // outfit carried into the prompt
+    // Name-anchored: the character is named, not described; prior chapters aren't dumped in.
+    expect(text).toContain("Ana");
+    expect(text).not.toContain("Ana arrives in the city."); // prior-chapter summary not dumped
+    // This chapter's own summary is offered as continuity only.
+    expect(text).toContain("Ana fights.");
   });
 
   it("gives two units of the same chapter different content (their own passages)", () => {
@@ -227,11 +227,12 @@ describe("promptUserContent", () => {
     expect(a).not.toContain("The leap."); // chapter climax is not injected per unit
   });
 
-  it("includes the bounded chapter context when provided", () => {
+  it("leads with the book title and keeps the prompt scoped to this passage", () => {
     const bible = createEmptyBible("b");
     const req: VisualRequest = {
       kind: "scene_illustration",
       bookId: "b",
+      bookTitle: "The Empyrean",
       pageId: "u-0",
       pageIndex: 0,
       chapterIndex: 0,
@@ -243,11 +244,13 @@ describe("promptUserContent", () => {
       spoilerIds: [],
     };
     const text = promptUserContent(req, bible);
-    expect(text).toContain("Chapter context");
-    expect(text).toContain("long duel in the rain");
+    expect(text).toContain("Book: The Empyrean.");
+    expect(text).toContain("swords clash");
+    // The broad chapter-context blob is no longer dumped in (kept the prompt tight).
+    expect(text).not.toContain("long duel in the rain");
   });
 
-  it("injects the world glossary as defaults and structured appearance", () => {
+  it("injects the world glossary as defaults but only NAMES characters (no appearance)", () => {
     let bible = createEmptyBible("b");
     bible = mergeExtraction(
       bible,
@@ -285,9 +288,11 @@ describe("promptUserContent", () => {
     const text = promptUserContent(req, bible);
     expect(text).toContain("World facts");
     expect(text).toContain("dragon riders: wear black flight leathers");
-    // Structured appearance fields render into the character line.
-    expect(text).toContain("hair: silver");
-    expect(text).toContain("gender: woman");
+    // Name-anchored: the character is named, but appearance is NOT described in the prompt
+    // (the bible injects it at render time).
+    expect(text).toContain("Ana");
+    expect(text).not.toContain("hair: silver");
+    expect(text).not.toContain("gender: woman");
   });
 });
 
@@ -542,12 +547,14 @@ describe("context-based outfits", () => {
       spoilerIds: [],
     };
     const prompt = promptUserContent(req, bible);
-    expect(prompt).toContain("outfits to choose from");
+    // The writer is offered the outfit LABELS to choose from (the bible expands the chosen
+    // label into its description at render time).
+    expect(prompt).toContain("outfit labels:");
     expect(prompt).toContain("flight leathers");
     expect(prompt).toContain("ball gown");
   });
 
-  it("falls back to legacy clothing when a character has no structured outfits", () => {
+  it("names a character with no structured outfits (no appearance/clothing dumped)", () => {
     let bible = createEmptyBible("b");
     bible = mergeExtraction(
       bible,
@@ -570,7 +577,9 @@ describe("context-based outfits", () => {
       creatureIds: [],
       spoilerIds: [],
     };
-    expect(promptUserContent(req, bible)).toContain("wearing red cloak");
+    const prompt = promptUserContent(req, bible);
+    expect(prompt).toContain("Ana"); // named, not described
+    expect(prompt).not.toContain("red cloak");
   });
 });
 
@@ -630,7 +639,9 @@ describe("creatures", () => {
     };
     const prompt = promptUserContent(req, bible);
     expect(prompt).toContain("Creatures present");
-    expect(prompt).toContain("Tairn (dragon): massive, midnight black, tail spikes");
+    // Named, not described — the bible injects the look at render time.
+    expect(prompt).toContain("Tairn (dragon)");
+    expect(prompt).not.toContain("midnight black");
   });
 });
 

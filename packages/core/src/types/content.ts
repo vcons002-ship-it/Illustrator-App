@@ -25,6 +25,8 @@ export interface VisualRequest {
   /** Discriminates which Renderer strategy handles this request. */
   kind: ContentKind;
   bookId: string;
+  /** Title of the book, for genre/continuity context in prompt-writing. */
+  bookTitle?: string;
   pageId: string;
   pageIndex: number;
   /** Index of the chapter this unit belongs to (keys the storyboard scene). */

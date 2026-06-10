@@ -52,6 +52,8 @@ export interface EngineWorkerApi {
   rebuildPrompts: () => void;
   /** Save a user correction to a character (persisted; existing images unchanged). */
   updateCharacter: (characterId: string, patch: CharacterPatch) => void;
+  /** Set (or clear, with no image) a character's user-uploaded IP-Adapter reference image. */
+  setCharacterReference: (characterId: string, image?: { bytes: ArrayBuffer; mimeType: string }) => void;
   /** Download the current Visual Bible (+ AI rules) as a JSON file. */
   exportBible: () => void;
   /** Import a Visual Bible JSON onto the current book. */
@@ -233,6 +235,11 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
       send({ type: "updateCharacter", characterId, patch }),
     [],
   );
+  const setCharacterReference = useCallback(
+    (characterId: string, image?: { bytes: ArrayBuffer; mimeType: string }) =>
+      send({ type: "setCharacterReference", characterId, ...(image ? { image } : {}) }),
+    [],
+  );
   const exportBible = useCallback(() => send({ type: "exportBible" }), []);
   const importBible = useCallback((json: string) => {
     setImportResult(undefined);
@@ -270,6 +277,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     clearImportResult,
     carryOverBible,
     updateCharacter,
+    setCharacterReference,
     goTo,
     prerenderAll,
   };

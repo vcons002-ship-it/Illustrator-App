@@ -29,6 +29,7 @@ export type MainToWorker =
   | { type: "regenerateAllImages" }
   | { type: "regenerateImage"; unitIndex: number }
   | { type: "updateCharacter"; characterId: string; patch: CharacterPatch }
+  | { type: "setCharacterReference"; characterId: string; image?: { bytes: ArrayBuffer; mimeType: string } }
   | { type: "exportBible" }
   | { type: "importBible"; json: string }
   | { type: "carryOverBible"; fromBookId: string }

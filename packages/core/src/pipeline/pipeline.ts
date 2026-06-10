@@ -1,5 +1,5 @@
 import type { BookSource, Page } from "../types/book.js";
-import type { Character, Creature, VisualBible } from "../types/bible.js";
+import type { Character, VisualBible } from "../types/bible.js";
 import type { ImageResult, VisualRequest } from "../types/content.js";
 import type { TierConfig } from "../types/tier.js";
 import type { LLMProvider } from "../providers/llm/llm-provider.js";
@@ -7,6 +7,7 @@ import type { ImageProvider } from "../providers/image/image-provider.js";
 import type { VisualReaderStore } from "../storage/store.js";
 import { resolvePageEntities } from "../visual-bible/bible.js";
 import { composeScenePrompt, resolveKeyEvent } from "../visual-bible/key-events.js";
+import { expandPrompt, findBibleTermsInText } from "../providers/image/bible-injection.js";
 import { getImageStyle } from "../providers/catalog.js";
 import { qualityProfile } from "../quality.js";
 
@@ -31,12 +32,6 @@ export interface PipelineDeps {
   image: ImageProvider;
   store: VisualReaderStore;
   tier: TierConfig;
-  /**
-   * Capture a just-rendered solo-character frame as that character's reference
-   * image (for IP-Adapter). Called only when exactly one character is present and
-   * they have no reference yet. The engine persists it onto the bible.
-   */
-  captureReference?: (characterId: string, bytes: ArrayBuffer, mimeType: string) => void | Promise<void>;
 }
 
 export class RenderPipeline {
@@ -51,10 +46,13 @@ export class RenderPipeline {
     return {
       kind: "scene_illustration",
       bookId: this.deps.book.id,
+      ...(this.deps.book.title ? { bookTitle: this.deps.book.title } : {}),
       pageId: page.id,
       pageIndex: page.index,
       chapterIndex: this.deps.book.chapters.find((c) => c.id === page.chapterId)?.index ?? 0,
-      ...(page.pageRange ? { pageRange: page.pageRange } : {}),
+      // Always carry a range so a stored prompt can be matched by overlap (a raw single
+      // page is [index, index]); keeps buildRequest, hasKeyEvent, and renderPage aligned.
+      pageRange: page.pageRange ?? [page.index, page.index],
       sourceText: page.paragraphs.map((p) => p.text).join("\n\n"),
       ...(chapterContext ? { chapterContext } : {}),
       characterIds,
@@ -134,12 +132,20 @@ export class RenderPipeline {
     try {
       const bible = this.deps.getBible();
       const style = getImageStyle(this.deps.tier.style);
-      // Stored-first: use a precomputed/imported Layer-1 prompt for this unit when one
-      // exists (so image generation needs no live LLM); otherwise build it on the fly.
+      // Stored-only: render from the precomputed Layer-1 prompt for this unit. The buffer's
+      // gate (canRender = hasKeyEvent) means a renderable unit always has one, so this never
+      // falls back to a live LLM call; the guard below is purely defensive.
       const keyEvent = resolveKeyEvent(bible, request.chapterIndex, request.pageRange);
       const stored = keyEvent ? composeScenePrompt(keyEvent.imagePrompt) : "";
-      const basePrompt = stored || (await this.deps.llm.buildImagePrompt(request, bible, signal));
-      const prompt = style.promptSuffix ? `${basePrompt}\n\nStyle: ${style.promptSuffix}` : basePrompt;
+      if (!stored) {
+        return {
+          requestId,
+          pageId: request.pageId,
+          status: "error",
+          error: "No illustration prompt for this unit yet.",
+        };
+      }
+      const basePrompt = style.promptSuffix ? `${stored}\n\nStyle: ${style.promptSuffix}` : stored;
       const present = bible.characters.filter((c) => request.characterIds.includes(c.id));
       const presentCreatures = (bible.creatures ?? []).filter((c) =>
         request.creatureIds.includes(c.id),
@@ -147,13 +153,23 @@ export class RenderPipeline {
       // Characters first so the seed anchor (anchors[0]) stays a character when one
       // is present; a creature-only frame is pinned by the creature's seed.
       const anchors = [...present.map((c) => c.anchor), ...presentCreatures.map((c) => c.anchor)];
-      // Identity emphasis (SD-only, applied by the backend) — every present
-      // character AND creature, so consistency never depends on a reference image.
-      const subjects = [...present.map(buildSubject), ...presentCreatures.map(buildCreatureSubject)];
-      // Reference images for IP-Adapter (ComfyUI uses them when installed).
+      // Bible terms mentioned in the prompt (names → descriptors). Local backends expand them
+      // family-aware; for cloud we pre-expand here (cloud providers don't know the bible).
+      const terms = findBibleTermsInText(basePrompt, bible);
+      const isLocal = this.deps.tier.tier === "local";
+      const prompt = isLocal
+        ? basePrompt
+        : expandPrompt(
+            basePrompt,
+            terms,
+            cloudNameHandling(this.deps.image.id),
+            bible.worldStyle,
+            request.bookTitle,
+          );
+      // Reference images for IP-Adapter — user-uploaded only (auto-capture removed).
       const ipAdapterRefs = await this.referenceImagesFor(present);
       // Local engines additionally apply a style LoRA/checkpoint when installed.
-      const local = this.deps.tier.tier === "local" ? style.local : undefined;
+      const local = isLocal ? style.local : undefined;
       // Resolved quality profile → steps + resolution (more pages/image = higher).
       const profile = this.deps.tier.renderQuality
         ? qualityProfile(this.deps.tier.renderQuality)
@@ -166,7 +182,10 @@ export class RenderPipeline {
         ...(local?.lora ? { styleLora: local.lora } : {}),
         ...(local?.checkpoint ? { styleCheckpoint: local.checkpoint } : {}),
         ...(this.deps.tier.imageModelFamily ? { modelFamily: this.deps.tier.imageModelFamily } : {}),
-        ...(subjects.length ? { subjects } : {}),
+        // Local backends expand bible terms themselves (family-aware); cloud got them above.
+        ...(isLocal && terms.length ? { terms } : {}),
+        ...(isLocal && bible.worldStyle ? { worldStyle: bible.worldStyle } : {}),
+        ...(isLocal && request.bookTitle ? { bookTitle: request.bookTitle } : {}),
         ...(ipAdapterRefs.length ? { ipAdapterRefs } : {}),
         ...(onProgress ? { onProgress } : {}),
         ...(signal ? { signal } : {}),
@@ -174,10 +193,6 @@ export class RenderPipeline {
         ...(typeof keyEvent?.seed === "number" ? { seed: keyEvent.seed } : {}),
       });
       await this.deps.store.putImage(requestId, output.bytes, output.mimeType);
-      // Capture a clean solo frame as this character's reference (first time only).
-      if (this.deps.captureReference && present.length === 1 && !present[0]!.anchor.referenceImageId) {
-        await this.deps.captureReference(present[0]!.id, output.bytes, output.mimeType);
-      }
       return {
         requestId,
         pageId: request.pageId,
@@ -216,29 +231,12 @@ export class RenderPipeline {
   }
 }
 
-/** Structured identity for SD weighting emphasis; never empty (always has a name). */
-function buildSubject(c: Character): { name: string; features: string; outfit: string } {
-  const a = c.appearance;
-  const fields: string[] = [];
-  if (a) {
-    // Only the most identity-defining fields, in priority order — capped below so the
-    // SD emphasis reinforces WHO the character is without swamping the scene/action the
-    // prompt describes (8 appearance fields used to bias the image toward a portrait).
-    for (const v of [a.gender, a.hair, a.distinguishingMarks, a.eyes, a.build]) {
-      if (v && v.trim()) fields.push(v.trim());
-    }
-  }
-  // Fall back to free-form traits when the text never gave structured appearance.
-  if (fields.length === 0) {
-    for (const t of c.persistentTraits) if (t && t.trim()) fields.push(t.trim());
-  }
-  // Outfit is left to the LLM prompt (it picks the scene-appropriate one); the SD
-  // emphasis block reinforces only the persistent identity, not a specific outfit.
-  return { name: c.name, features: fields.slice(0, 3).join(", "), outfit: "" };
-}
-
-/** A creature as an SD subject: its kind + accumulated description as the features. */
-function buildCreatureSubject(c: Creature): { name: string; features: string; outfit: string } {
-  const features = [c.kind, ...c.description].filter((t) => t && t.trim()).join(", ");
-  return { name: c.name, features, outfit: "" };
+/**
+ * How a CLOUD image provider handles character names: the BFL Flux API uses the same
+ * CLIP/T5 encoder as local Flux (names are meaningless → inject descriptors), while
+ * Gemini/OpenAI are LLM-grade (keep names + a reference block). Local backends decide
+ * this themselves from the resolved model family.
+ */
+function cloudNameHandling(imageProviderId: string): "inject" | "reference" {
+  return imageProviderId === "flux" ? "inject" : "reference";
 }

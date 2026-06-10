@@ -684,6 +684,61 @@ describe("ComfyUI prompt formatting by family", () => {
     const wf = workflowOf(t);
     expect(wf["7"]!.inputs.text).toContain("bad anatomy"); // override → treated as SDXL
   });
+
+  it("SD uses cfg 7; Flux uses cfg 1 + a FluxGuidance node", async () => {
+    const sd = comfyRun();
+    await new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: sd, pollIntervalMs: 0 }).generate(
+      imageInput,
+      "sd_xl_base_1.0.safetensors",
+    );
+    const sdwf = workflowOf(sd);
+    expect(sdwf["3"]!.inputs.cfg).toBe(7);
+    expect(sdwf["14"]).toBeUndefined(); // no FluxGuidance for SD
+    expect(sdwf["3"]!.inputs.positive).toEqual(["6", 0]);
+
+    const flux = comfyRun();
+    await new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: flux, pollIntervalMs: 0 }).generate(
+      imageInput,
+      "flux1-schnell-fp8.safetensors",
+    );
+    const fwf = workflowOf(flux);
+    expect(fwf["3"]!.inputs.cfg).toBe(1);
+    expect(fwf["14"]!.class_type).toBe("FluxGuidance"); // embedded guidance
+    expect(fwf["3"]!.inputs.positive).toEqual(["14", 0]); // sampler reads guided conditioning
+  });
+
+  it("Flux.2 builds a separate-loader graph (UNET + CLIP encoder + VAE), not CheckpointLoaderSimple", async () => {
+    const t = new FakeTransport((req) => {
+      if (req.url.endsWith("/object_info/VAELoader"))
+        return { json: { VAELoader: { input: { required: { vae_name: [["flux2-vae.safetensors"]] } } } } };
+      if (req.url.endsWith("/object_info/CLIPLoader"))
+        return { json: { CLIPLoader: { input: { required: { clip_name: [["mistral3-fp8.safetensors"]] } } } } };
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
+      if (req.url.includes("/history/"))
+        return { json: { p1: { outputs: { "9": { images: [{ filename: "f.png", subfolder: "", type: "output" }] } } } } };
+      return { bytes: new TextEncoder().encode("IMG").buffer };
+    });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await backend.generate({ ...imageInput, modelFamily: "flux2" }, "flux2-dev.safetensors");
+    const wf = workflowOf(t);
+    expect(wf["4"]!.class_type).toBe("UNETLoader");
+    expect(wf["4"]!.inputs.unet_name).toBe("flux2-dev.safetensors");
+    expect(wf["12"]!.class_type).toBe("CLIPLoader");
+    expect(wf["12"]!.inputs.clip_name).toBe("mistral3-fp8.safetensors");
+    expect(wf["13"]!.class_type).toBe("VAELoader");
+    expect(wf["13"]!.inputs.vae_name).toBe("flux2-vae.safetensors");
+    // CLIP + VAE come from the separate loaders, not a checkpoint.
+    expect(wf["6"]!.inputs.clip).toEqual(["12", 0]);
+    expect(wf["8"]!.inputs.vae).toEqual(["13", 0]);
+  });
+
+  it("Flux.2 with no Mistral encoder / VAE installed throws an actionable error", async () => {
+    const t = new FakeTransport(() => ({ json: {} })); // no enums available
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await expect(backend.generate({ ...imageInput, modelFamily: "flux2" }, "flux2-dev.safetensors")).rejects.toThrow(
+      /Flux\.2 needs/i,
+    );
+  });
 });
 
 describe("ComfyUI IP-Adapter (version-aware, graceful)", () => {

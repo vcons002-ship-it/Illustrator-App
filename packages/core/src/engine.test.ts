@@ -3,6 +3,7 @@ import { Engine } from "./engine.js";
 import { MockLLMProvider } from "./providers/llm/mock-llm-provider.js";
 import { MockImageProvider } from "./providers/image/mock-image-provider.js";
 import { InMemoryStore } from "./storage/store.js";
+import { DEFAULT_TIER_CONFIG } from "./types/tier.js";
 import type { BookSource } from "./types/book.js";
 
 function sampleBook(): BookSource {
@@ -299,12 +300,12 @@ describe("Engine", () => {
     await vi.waitFor(() => expect(engine.resultFor(1)?.status).toBe("ready"));
   });
 
-  it("setBiblePaused halts extraction while images keep rendering", async () => {
-    let releaseCh0: (() => void) | undefined;
+  it("setBiblePaused halts the LLM phase; an already-prompted image keeps its render", async () => {
+    let releaseCh1: (() => void) | undefined;
     const llm = new MockLLMProvider();
     const realExtract = llm.extractEntities.bind(llm);
-    const extractSpy = vi.spyOn(llm, "extractEntities").mockImplementation(async (input) => {
-      if (input.chapterIndex === 0) await new Promise<void>((r) => (releaseCh0 = r));
+    vi.spyOn(llm, "extractEntities").mockImplementation(async (input) => {
+      if (input.chapterIndex === 1) await new Promise<void>((r) => (releaseCh1 = r));
       return realExtract(input);
     });
 
@@ -312,21 +313,21 @@ describe("Engine", () => {
     await engine.openBook(twoChapterBook());
     engine.startGeneration();
     engine.goToPage(0);
-    // Wait until chapter 0's extraction is in flight (blocked on releaseCh0).
-    await vi.waitFor(() => expect(releaseCh0).toBeDefined());
-
-    // Pause the BIBLE before chapter 0 finishes → the loop stops before chapter 1.
-    engine.setBiblePaused(true);
-    releaseCh0?.();
-    await engine.whenBibleReady(); // the loop returns at the pause checkpoint
-
-    // Chapter 0 still renders (images never paused) but chapter 1 was never extracted.
+    // Chapter 0 extracts, gets its prompt, and renders (images are never paused here).
     await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
-    expect(engine.getBible()?.processedChapters).not.toContain(1);
-    expect(extractSpy.mock.calls.filter((c) => c[0].chapterIndex === 1)).toHaveLength(0);
+
+    // Pause the BIBLE while chapter 1's extraction is in flight.
+    await vi.waitFor(() => expect(releaseCh1).toBeDefined());
+    engine.setBiblePaused(true);
+    releaseCh1?.();
+    await engine.whenBibleReady(); // the LLM phase stops at the pause checkpoint
+
+    // Chapter 0's image stands (images weren't paused); chapter 1's prompt wasn't written
+    // while the bible was paused, so its page holds.
+    expect(engine.resultFor(0)?.status).toBe("ready");
     expect(engine.resultFor(1)?.status).not.toBe("ready");
 
-    // Resuming the bible extracts chapter 1, and its page can then render.
+    // Resuming the bible writes chapter 1's prompt, and its page then renders.
     engine.setBiblePaused(false);
     await engine.whenBibleReady();
     await vi.waitFor(() => expect(engine.resultFor(1)?.status).toBe("ready"));
@@ -517,7 +518,7 @@ describe("Engine", () => {
     expect(persisted!.characters.find((c) => c.id === aria.id)!.appearance.hair).toBe("silver");
   });
 
-  it("captures a solo character's reference image on first render, and clears it on edit", async () => {
+  it("does NOT auto-capture a reference image; a user upload sets/clears one", async () => {
     const store = new InMemoryStore();
     const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });
     await engine.openBook(sampleBook()); // page 0 features only "Aria"
@@ -525,32 +526,40 @@ describe("Engine", () => {
     engine.goToPage(0);
     await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
 
-    // A solo frame became Aria's reference image (stored + recorded on the anchor).
-    let aria: { id: string; anchor: { referenceImageId?: string } } | undefined;
-    await vi.waitFor(() => {
-      aria = engine.getBible()!.characters.find((c) => c.name === "Aria");
-      expect(aria?.anchor.referenceImageId).toBe("book-1:charref:char-aria");
-    });
+    // Auto-capture was removed — rendering never pins a reference image.
+    const aria = engine.getBible()!.characters.find((c) => c.name === "Aria")!;
+    expect(aria.anchor.referenceImageId).toBeUndefined();
+
+    // A deliberate user upload sets it; passing undefined clears it.
+    await engine.setCharacterReference(aria.id, { bytes: new Uint8Array([9, 9]).buffer, mimeType: "image/png" });
+    const withRef = engine.getBible()!.characters.find((c) => c.id === aria.id)!;
+    expect(withRef.anchor.referenceImageId).toBe("book-1:charref:char-aria");
     expect(await store.getImage("book-1:charref:char-aria")).toBeDefined();
 
-    // Editing the look drops the now-stale reference.
-    await engine.updateCharacter(aria!.id, { appearance: { hair: "blue" } });
+    await engine.setCharacterReference(aria.id, undefined);
     expect(
-      engine.getBible()!.characters.find((c) => c.id === aria!.id)!.anchor.referenceImageId,
+      engine.getBible()!.characters.find((c) => c.id === aria.id)!.anchor.referenceImageId,
     ).toBeUndefined();
   });
 
-  it("passes a non-empty subject (name fallback) for every present character", async () => {
+  it("passes bible terms (name + descriptor) for every present character to the backend", async () => {
     const image = new MockImageProvider();
     const genSpy = vi.spyOn(image, "generate");
-    const engine = new Engine({ llm: new MockLLMProvider(), image });
+    const engine = new Engine({
+      llm: new MockLLMProvider(),
+      image,
+      tier: { ...DEFAULT_TIER_CONFIG, tier: "local" }, // local → terms passed for backend injection
+    });
     await engine.openBook(sampleBook());
     engine.startGeneration();
     engine.goToPage(0);
     await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
 
-    const call = genSpy.mock.calls.find((c) => (c[0].subjects?.length ?? 0) > 0);
-    expect(call?.[0].subjects?.[0]?.name).toBe("Aria");
+    // The mock prompt names "Aria", so the term scan finds her and passes a descriptor term.
+    const call = genSpy.mock.calls.find((c) =>
+      (c[0].terms ?? []).some((t) => t.kind === "character" && t.names.includes("Aria")),
+    );
+    expect(call).toBeDefined();
   });
 
   it("updateCharacter applies an edited outfit list and persists it", async () => {

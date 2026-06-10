@@ -63,7 +63,7 @@ export interface ReaderSettings {
    * from the checkpoint name is wrong. "auto" (default) detects it. SD families get
    * quality tags + a negative prompt; Flux gets plain natural language.
    */
-  imageModelFamily?: "auto" | "sd15" | "sdxl" | "flux";
+  imageModelFamily?: "auto" | "sd15" | "sdxl" | "flux" | "flux2";
   /**
    * How many pages share one illustration: any positive number, or a whole
    * "chapter". A group never crosses a chapter boundary, so a number larger than
@@ -256,14 +256,15 @@ export function SettingsPanel({
               <select
                 value={value.imageModelFamily ?? "auto"}
                 onChange={(e) =>
-                  set({ imageModelFamily: e.target.value as "auto" | "sd15" | "sdxl" | "flux" })
+                  set({ imageModelFamily: e.target.value as "auto" | "sd15" | "sdxl" | "flux" | "flux2" })
                 }
-                title="How prompts are formatted. Auto detects from the checkpoint name. SD1.5/SDXL get quality tags + a negative prompt; Flux gets plain natural language. Override if auto-detection is wrong."
+                title="How prompts are formatted and the model is loaded. Auto detects from the checkpoint name. SD1.5/SDXL get quality tags + a negative prompt; Flux gets plain natural language. Flux.2 loads via its separate text encoder + VAE (ComfyUI only). Override if auto-detection is wrong."
               >
                 <option value="auto">Auto-detect</option>
                 <option value="sd15">Stable Diffusion 1.5</option>
                 <option value="sdxl">SDXL</option>
-                <option value="flux">Flux</option>
+                <option value="flux">Flux.1</option>
+                <option value="flux2">Flux.2</option>
               </select>
             </label>
           )}
