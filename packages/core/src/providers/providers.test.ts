@@ -476,11 +476,13 @@ describe("WebLLMProvider (injected completion, no WebGPU)", () => {
     expect(activity).toContainEqual({ phase: "prompt", tokens: 3 });
   });
 
-  it("degrades to the mock when the model errors (no GPU)", async () => {
+  it("degrades to the mock when the model errors (no GPU) — and says so via onFallback", async () => {
+    const reasons: string[] = [];
     const provider = new WebLLMProvider({
       complete: async () => {
         throw new Error("no webgpu");
       },
+      onFallback: (reason) => reasons.push(reason),
     });
     const bible = await provider.extractEntities({
       bookId: "b",
@@ -491,6 +493,10 @@ describe("WebLLMProvider (injected completion, no WebGPU)", () => {
     expect(bible).toBeDefined();
     const prompt = await provider.buildImagePrompt(req, emptyBible("b"));
     expect(prompt.length).toBeGreaterThan(0);
+    // The degradation is loud: both calls reported the failure (with the cause).
+    expect(reasons.length).toBe(2);
+    expect(reasons[0]).toMatch(/unavailable/i);
+    expect(reasons[0]).toContain("no webgpu");
   });
 });
 

@@ -51,6 +51,12 @@ export interface WebLLMProviderOptions {
   onProgress?: (report: { progress: number; text: string }) => void;
   /** Live token progress during generation (bible extraction / prompt writing). */
   onActivity?: (activity: GenerationActivity) => void;
+  /**
+   * Fired when the on-device model can't be used (no WebGPU, a failed or stalled
+   * load) and this call degraded to the mock. Lets the UI say so out loud instead
+   * of silently producing placeholder analysis.
+   */
+  onFallback?: (reason: string) => void;
   /** Test/override seam: supply a completion fn instead of loading WebLLM. */
   complete?: ChatComplete;
 }
@@ -102,6 +108,7 @@ export class WebLLMProvider implements LLMProvider {
   private readonly model: string;
   private readonly onProgress: ((r: { progress: number; text: string }) => void) | undefined;
   private readonly onActivity: ((a: GenerationActivity) => void) | undefined;
+  private readonly onFallback: ((reason: string) => void) | undefined;
   private readonly injected: ChatComplete | undefined;
   private readonly fallback = new MockLLMProvider();
 
@@ -109,7 +116,17 @@ export class WebLLMProvider implements LLMProvider {
     this.model = opts.model || DEFAULT_LOCAL_TEXT_MODEL;
     this.onProgress = opts.onProgress;
     this.onActivity = opts.onActivity;
+    this.onFallback = opts.onFallback;
     this.injected = opts.complete;
+  }
+
+  /** Degrade to the mock — loudly, so a failed on-device model never looks like success. */
+  private degrade(err: unknown): void {
+    const detail = err instanceof Error && err.message ? ` (${err.message})` : "";
+    this.onFallback?.(
+      `On-device text model unavailable${detail} — using placeholder analysis. ` +
+        `Switch to a Local server (Ollama) or a cloud key in Settings → Text.`,
+    );
   }
 
   async extractEntities(input: EntityExtractionInput): Promise<VisualBible> {
@@ -127,8 +144,10 @@ export class WebLLMProvider implements LLMProvider {
         },
       );
       return mergeExtraction(input.existing, parseExtraction(content), input.chapterIndex, input.unitRanges);
-    } catch {
-      // No WebGPU / model failure → behave like the mock so reading continues.
+    } catch (err) {
+      // No WebGPU / failed or stalled model load → behave like the mock so reading
+      // continues, but TELL the UI (a silent junk bible looks like an app bug).
+      this.degrade(err);
       return this.fallback.extractEntities(input);
     }
   }
@@ -149,7 +168,8 @@ export class WebLLMProvider implements LLMProvider {
       );
       const trimmed = text.trim();
       return trimmed.length > 0 ? trimmed : this.fallback.buildImagePrompt(request, bible);
-    } catch {
+    } catch (err) {
+      this.degrade(err);
       return this.fallback.buildImagePrompt(request, bible);
     }
   }
@@ -201,16 +221,59 @@ export class WebLLMProvider implements LLMProvider {
   private engine(): Promise<MLCEngineInterface> {
     if (enginePromise && engineModel === this.model) return enginePromise;
     engineModel = this.model;
-    enginePromise = (async () => {
+    const load = (async () => {
       const webllm = await import("@mlc-ai/web-llm");
-      return webllm.CreateMLCEngine(this.model, {
-        initProgressCallback: (report: InitProgressReport) =>
-          this.onProgress?.({ progress: report.progress, text: report.text }),
+      // Stall watchdog: the weight download / WebGPU init can hang forever in some
+      // webviews (no rejection, no progress) — which froze the whole bible build with
+      // no way out. Progress events keep the load alive indefinitely (a slow download
+      // is never killed); only total SILENCE for ENGINE_STALL_MS fails it, so the
+      // caller can degrade to the mock and say so.
+      let lastProgressMs = Date.now();
+      const create = webllm.CreateMLCEngine(this.model, {
+        initProgressCallback: (report: InitProgressReport) => {
+          lastProgressMs = Date.now();
+          this.onProgress?.({ progress: report.progress, text: report.text });
+        },
+      });
+      return await new Promise<MLCEngineInterface>((resolve, reject) => {
+        const watchdog = setInterval(() => {
+          if (Date.now() - lastProgressMs > ENGINE_STALL_MS) {
+            clearInterval(watchdog);
+            reject(
+              new Error(
+                "on-device model load stalled — no download/setup progress for " +
+                  `${Math.round(ENGINE_STALL_MS / 1000)}s`,
+              ),
+            );
+          }
+        }, 5_000);
+        create.then(
+          (engine) => {
+            clearInterval(watchdog);
+            resolve(engine);
+          },
+          (err) => {
+            clearInterval(watchdog);
+            reject(err instanceof Error ? err : new Error(String(err)));
+          },
+        );
       });
     })();
-    return enginePromise;
+    // Cache only a SUCCESSFUL load. A cached rejection used to wedge the provider
+    // into silent-mock mode forever; clearing it lets a later call retry.
+    enginePromise = load;
+    load.catch(() => {
+      if (enginePromise === load) {
+        enginePromise = undefined;
+        engineModel = undefined;
+      }
+    });
+    return load;
   }
 }
+
+/** Fail an engine load only after this long with NO progress events (ms). */
+const ENGINE_STALL_MS = 60_000;
 
 /** Tolerant parse of the model's JSON into the shared RawExtraction shape. */
 export function parseExtraction(content: string): RawExtraction {

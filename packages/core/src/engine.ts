@@ -344,6 +344,38 @@ export class Engine {
     // mismatch / gap) so no story unit is left un-illustratable; it skips units that
     // already have one, so it's a cheap no-op when extraction covered everything.
     if (!stop()) await this.buildPromptsForUnits(myRun, ac.signal);
+    // The LLM phase is over. A unit STILL without a prompt (its prompt write failed)
+    // would otherwise sit silently queued forever behind the canRender gate — surface
+    // an explicit, regenerable error instead so the failure is visible.
+    if (!stop()) this.failUnpromptedUnits();
+  }
+
+  /** Mark every story unit that never got a prompt as an error (visible + actionable). */
+  private failUnpromptedUnits(): void {
+    if (!this.book || !this.buffer) return;
+    let failed = 0;
+    for (let i = 0; i < this.book.pages.length; i++) {
+      if (!this.isStoryPage(i) || this.hasKeyEvent(i)) continue;
+      if (this.buffer.resultOf(i)) continue; // already has a result (cached/skip/error)
+      failed++;
+      const page = this.book.pages[i]!;
+      const result: ImageResult = {
+        requestId: `page-${i}`,
+        pageId: page.id,
+        status: "error",
+        error:
+          "Couldn't write this unit's illustration prompt — check the text model in " +
+          "Settings, then use “↻ Prompts” to retry.",
+      };
+      this.buffer.seed(i, result);
+      this.opts.onUpdate?.(i, result);
+    }
+    if (failed > 0) {
+      this.opts.onBibleNote?.(
+        `${failed} illustration prompt${failed === 1 ? "" : "s"} couldn't be written — ` +
+          `check the text model in Settings, then use “↻ Prompts”.`,
+      );
+    }
   }
 
   /** The chapter's render-unit page ranges, in reading order (for folded prompts). A raw
@@ -408,6 +440,8 @@ export class Engine {
         await this.store.putBible(this.bible);
         if (cancelled()) return;
         this.opts.onBibleUpdate?.(this.bible);
+        // A unit previously failed as "no prompt" can render now — clear the error.
+        if (this.buffer?.resultOf(i)?.status === "error") this.buffer.invalidate(i);
         // Releasing each unit as its prompt lands keeps the first image prompt-and renders.
         this.buffer?.refresh();
       }

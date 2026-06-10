@@ -199,6 +199,9 @@ function buildLLM(
                 onLocalStatus(
                   r.progress >= 1 ? "" : `Loading local model… ${Math.round(r.progress * 100)}%`,
                 ),
+              // A failed/stalled on-device model degrades to the mock — say so in the
+              // status line instead of silently producing placeholder analysis.
+              onFallback: (reason) => onLocalStatus(`⚠ ${reason}`),
             }
           : {}),
         ...(onLocalActivity ? { onActivity: onLocalActivity } : {}),

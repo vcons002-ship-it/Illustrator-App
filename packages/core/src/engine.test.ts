@@ -461,6 +461,43 @@ describe("Engine", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  it("a unit whose prompt can't be written errors VISIBLY, and ↻ Prompts recovers it", async () => {
+    // The LLM yields no keyEvents AND fails the per-unit sweep → in the old code the
+    // unit sat silently queued forever behind the canRender gate.
+    const llm = new MockLLMProvider();
+    vi.spyOn(llm, "extractEntities").mockImplementation(async (input) => {
+      // Entities only — no folded keyEvents (e.g. a small model ignoring the field).
+      const { unitRanges: _drop, ...rest } = input;
+      void _drop;
+      return MockLLMProvider.prototype.extractEntities.call(new MockLLMProvider(), rest);
+    });
+    let promptsFail = true;
+    vi.spyOn(llm, "buildImagePrompt").mockImplementation(async () => {
+      if (promptsFail) throw new Error("model offline");
+      return "a recovered scene prompt";
+    });
+    const notes: string[] = [];
+    const engine = new Engine({
+      llm,
+      image: new MockImageProvider(),
+      onBibleNote: (m) => notes.push(m),
+    });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    await engine.whenBibleReady();
+
+    // Visible failure, not a silent forever-queue.
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("error"));
+    expect(engine.resultFor(0)?.error).toMatch(/prompt/i);
+    expect(notes.some((n) => /prompt/i.test(n))).toBe(true);
+
+    // The model comes back → ↻ Prompts rewrites them and the unit renders.
+    promptsFail = false;
+    await engine.rebuildPrompts();
+    await engine.whenBibleReady();
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+  });
+
   it("rebuildPrompts clears and repopulates the stored prompts", async () => {
     const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider() });
     await engine.openBook(twoChapterBook());
