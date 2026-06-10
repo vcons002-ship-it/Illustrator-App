@@ -11,6 +11,7 @@ import type {
   VisualBible,
 } from "../types/bible.js";
 import { emptyAppearance } from "../types/bible.js";
+import { referenceIdsOf } from "../types/bible.js";
 import { BIBLE_VERSION, createEmptyBible } from "./bible.js";
 import { consolidateCharacters, slug } from "../providers/llm/extraction.js";
 import { deterministicSeed } from "../providers/llm/mock-llm-provider.js";
@@ -110,10 +111,49 @@ export const BIBLE_EXPORT_RULES = {
   ],
 } as const;
 
-/** Serialize a bible to the export JSON (rules + data). `data` may be empty `{}`. */
+/** Serialize a bible to the export JSON (rules + data). `data` may be empty `{}`.
+ * Reference-image ids are stripped: they key into THIS device's store (the bytes
+ * don't travel with the file), so they'd be meaningless noise to the importer. */
 export function exportBible(bible: VisualBible | undefined): string {
   const meta: ExportMeta = { app: "Illustrator-App", schemaVersion: BIBLE_VERSION };
-  return JSON.stringify({ _exportMeta: meta, rules: BIBLE_EXPORT_RULES, data: bible ?? {} }, null, 2);
+  const data = bible
+    ? {
+        ...bible,
+        characters: bible.characters.map((c) => {
+          const { referenceImageId: _a, referenceImageIds: _b, ...anchor } = c.anchor;
+          return { ...c, anchor };
+        }),
+      }
+    : {};
+  return JSON.stringify({ _exportMeta: meta, rules: BIBLE_EXPORT_RULES, data }, null, 2);
+}
+
+/**
+ * Re-attach the device-stored reference images after an import replaces the bible:
+ * an imported file never carries them (the bytes live only in this device's store),
+ * so without this every uploaded likeness would be silently dropped. Characters are
+ * matched by id, name, or alias (case-insensitive).
+ */
+export function carryReferenceImages(prev: VisualBible, next: VisualBible): VisualBible {
+  const byKey = new Map<string, string[]>();
+  for (const c of prev.characters) {
+    const ids = referenceIdsOf(c.anchor);
+    if (ids.length === 0) continue;
+    for (const k of [c.id, c.name, ...c.aliases]) {
+      const key = k.trim().toLowerCase();
+      if (key && !byKey.has(key)) byKey.set(key, ids);
+    }
+  }
+  if (byKey.size === 0) return next;
+  return {
+    ...next,
+    characters: next.characters.map((c) => {
+      const ids = [c.id, c.name, ...c.aliases]
+        .map((k) => byKey.get(k.trim().toLowerCase()))
+        .find(Boolean);
+      return ids ? { ...c, anchor: { ...c.anchor, referenceImageIds: ids } } : c;
+    }),
+  };
 }
 
 export interface ImportStats {

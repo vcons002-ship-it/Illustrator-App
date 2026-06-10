@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { exportBible, parseImportedBible } from "./bible-export.js";
+import { carryReferenceImages, exportBible, parseImportedBible } from "./bible-export.js";
 import { BIBLE_VERSION, createEmptyBible, migrateBible } from "./bible.js";
 import { mergeExtraction } from "../providers/llm/extraction.js";
+import { referenceIdsOf } from "../types/bible.js";
 
 function sampleBible() {
   let b = createEmptyBible("book-1");
@@ -74,6 +75,36 @@ describe("exportBible / parseImportedBible", () => {
     const { bible, error } = parseImportedBible(json, "b");
     expect(error).toBeUndefined();
     expect(bible!.characters[0]!.name).toBe("Ana");
+  });
+
+  it("strips device-local reference-image ids from the export", () => {
+    const bible = sampleBible();
+    bible.characters[0]!.anchor.referenceImageIds = ["book-1:charref:char-violet-sorrengail:0"];
+    const exported = JSON.parse(exportBible(bible)) as {
+      data: { characters: { anchor: Record<string, unknown> }[] };
+    };
+    // The ids key into THIS device's store; the bytes don't travel with the file.
+    expect(exported.data.characters[0]!.anchor.referenceImageIds).toBeUndefined();
+    expect(exported.data.characters[0]!.anchor.referenceImageId).toBeUndefined();
+    expect(exported.data.characters[0]!.anchor.seed).toBeDefined(); // seed still travels
+  });
+
+  it("carryReferenceImages re-attaches stored uploads to imported characters by name/alias", () => {
+    const prev = sampleBible();
+    prev.characters[0]!.anchor.referenceImageIds = ["book-1:charref:char-violet-sorrengail:0"];
+    // The imported file names her differently (an alias) and carries no refs.
+    const next = parseImportedBible(
+      JSON.stringify({
+        _exportMeta: { schemaVersion: BIBLE_VERSION },
+        data: { schemaVersion: BIBLE_VERSION, characters: [{ name: "Violet" }, { name: "Dain" }] },
+      }),
+      "book-1",
+    ).bible!;
+    const out = carryReferenceImages(prev, next);
+    const violet = out.characters.find((c) => /violet/i.test(c.name))!;
+    expect(referenceIdsOf(violet.anchor)).toEqual(["book-1:charref:char-violet-sorrengail:0"]);
+    const dain = out.characters.find((c) => c.name === "Dain")!;
+    expect(referenceIdsOf(dain.anchor)).toEqual([]); // no prior upload → untouched
   });
 
   it("imports storyboard keyEvents (Layer-1 prompts) from an external AI", () => {

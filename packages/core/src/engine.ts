@@ -13,6 +13,7 @@ import { RenderBuffer } from "./render-buffer/render-buffer.js";
 import { createEmptyBible, migrateBible } from "./visual-bible/bible.js";
 import { addKeyEvent, clearKeyEvents, resolveKeyEvent } from "./visual-bible/key-events.js";
 import {
+  carryReferenceImages,
   exportBible,
   mergeCarryOver,
   parseImportedBible,
@@ -499,6 +500,10 @@ export class Engine {
     if (!prior) return { ok: false, error: "That book has no Visual Bible to carry over yet." };
     const base = this.bible ?? createEmptyBible(this.book.id);
     this.bible = mergeCarryOver(base, prior);
+    // Carried characters point at the PRIOR book's reference images — copy the bytes
+    // into this book's keys so each book stays self-contained (deleting the prior
+    // book, which clears its images, must not break this one).
+    await this.localizeReferenceImages();
     await this.store.putBible(this.bible);
     this.opts.onBibleUpdate?.(this.bible);
     this.buffer?.refresh();
@@ -514,7 +519,11 @@ export class Engine {
     if (!this.book) return { ok: false, error: "Open a book first." };
     const result = parseImportedBible(json, this.book.id);
     if (!result.bible) return { ok: false, ...(result.error ? { error: result.error } : {}) };
-    this.bible = result.bible;
+    // An imported file never carries reference images (the bytes live only in this
+    // device's store) — re-attach the current bible's uploads by character name so
+    // an import doesn't silently discard the user's likeness photos.
+    this.bible = this.bible ? carryReferenceImages(this.bible, result.bible) : result.bible;
+    await this.localizeReferenceImages();
     await this.store.putBible(this.bible);
     this.opts.onBibleUpdate?.(this.bible);
     this.buffer?.refresh();
@@ -560,6 +569,37 @@ export class Engine {
   ): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined> {
     if (!this.book || !refId.startsWith(`${this.book.id}:charref:`)) return undefined;
     return this.store.getImage(refId);
+  }
+
+  /**
+   * Re-key reference images that point into ANOTHER book's store namespace (after a
+   * series carry-over): copy the bytes under this book's keys and rewrite the ids.
+   * Keeps every book self-contained — deleting the source book (which clears its
+   * images) can't dangle this one, thumbnails resolve, and removing a reference here
+   * never deletes the other book's copy. Ids whose bytes are already gone are dropped.
+   */
+  private async localizeReferenceImages(): Promise<void> {
+    if (!this.book || !this.bible) return;
+    const prefix = `${this.book.id}:charref:`;
+    let changed = false;
+    const characters = [...this.bible.characters];
+    for (let i = 0; i < characters.length; i++) {
+      const c = characters[i]!;
+      const ids = referenceIdsOf(c.anchor);
+      if (ids.length === 0 || ids.every((id) => id.startsWith(prefix))) continue;
+      const local = ids.filter((id) => id.startsWith(prefix));
+      for (const id of ids) {
+        if (id.startsWith(prefix) || local.length >= MAX_CHARACTER_REFS) continue;
+        const img = await this.store.getImage(id);
+        if (!img) continue; // source ref no longer stored → drop it
+        const newId = `${prefix}${c.id}:${nextRefSlot(local)}`;
+        await this.store.putImage(newId, img.bytes, img.mimeType);
+        local.push(newId);
+      }
+      characters[i] = { ...c, anchor: withReferenceIds(c.anchor, local) };
+      changed = true;
+    }
+    if (changed) this.bible = { ...this.bible, characters };
   }
 
   /** Persist a character's reference ids (always the array form — legacy id folded in). */

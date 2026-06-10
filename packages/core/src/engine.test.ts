@@ -656,6 +656,51 @@ describe("Engine", () => {
     expect(await store.getImage(refId)).toBeDefined(); // bytes still stored
   });
 
+  it("export → import keeps the user's uploaded reference images (re-attached by name)", async () => {
+    const store = new InMemoryStore();
+    const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    await vi.waitFor(() => expect(engine.getBible()!.characters.some((c) => c.name === "Aria")).toBe(true));
+    const aria = engine.getBible()!.characters.find((c) => c.name === "Aria")!;
+    await engine.addCharacterReference(aria.id, { bytes: new Uint8Array([7]).buffer, mimeType: "image/png" });
+
+    const json = engine.exportBible();
+    // The portable file itself carries no device-local ref ids…
+    expect(json).not.toContain("charref");
+    // …but importing it back re-attaches the stored uploads to the matching character.
+    const r = await engine.importBible(json);
+    expect(r.ok).toBe(true);
+    const after = engine.getBible()!.characters.find((c) => c.name === "Aria")!;
+    expect(referenceIdsOf(after.anchor)).toEqual(["book-1:charref:char-aria:0"]);
+    expect(await store.getImage("book-1:charref:char-aria:0")).toBeDefined();
+  });
+
+  it("carry-over copies reference images into the new book's namespace", async () => {
+    const store = new InMemoryStore();
+    const a = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });
+    await a.openBook(sampleBook());
+    a.startGeneration();
+    await a.whenBibleReady();
+    const ariaA = a.getBible()!.characters.find((c) => c.name === "Aria")!;
+    await a.addCharacterReference(ariaA.id, { bytes: new Uint8Array([7]).buffer, mimeType: "image/png" });
+
+    const bookB: BookSource = { ...sampleBook(), id: "book-2" };
+    const b = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });
+    await b.openBook(bookB);
+    expect((await b.carryOverBibleFrom("book-1")).ok).toBe(true);
+
+    // The carried character's refs are re-keyed (bytes COPIED) into book-2's namespace,
+    // so deleting book-1 — which clears its images — can't dangle book-2's bible.
+    const ariaB = b.getBible()!.characters.find((c) => c.name === "Aria")!;
+    expect(referenceIdsOf(ariaB.anchor)).toEqual(["book-2:charref:char-aria:0"]);
+    expect(await store.getImage("book-2:charref:char-aria:0")).toBeDefined();
+    expect(await store.getImage("book-1:charref:char-aria:0")).toBeDefined(); // original kept
+
+    await store.removeBook("book-1");
+    expect(await store.getImage("book-2:charref:char-aria:0")).toBeDefined(); // survives
+  });
+
   it("passes bible terms (name + descriptor) for every present character to the backend", async () => {
     const image = new MockImageProvider();
     const genSpy = vi.spyOn(image, "generate");
