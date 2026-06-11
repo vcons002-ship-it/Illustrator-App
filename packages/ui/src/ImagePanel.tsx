@@ -30,6 +30,9 @@ export interface ImagePanelProps {
 
 export function ImagePanel({ result, bloom, pageKey, awaitingStart }: ImagePanelProps) {
   const imageUrl = useObjectUrl(result);
+  // A retrieved figure may be hotlink-only (no downloadable bytes): display it
+  // straight from its source URL — an <img src> renders inline regardless of CORS.
+  const displaySrc = imageUrl ?? result?.sourceUrl;
   // Click-to-reveal: the reader can force the current image fully visible,
   // overriding the progress-driven bloom. Resets on navigation so the next page
   // starts blurred again.
@@ -37,7 +40,7 @@ export function ImagePanel({ result, bloom, pageKey, awaitingStart }: ImagePanel
   useEffect(() => setManualReveal(false), [pageKey]);
   const effectiveBloom = manualReveal ? 1 : bloom;
 
-  if (!result || result.status !== "ready" || !imageUrl) {
+  if (!result || result.status !== "ready" || !displaySrc) {
     const ph = placeholderLabel(result, awaitingStart);
     return <Placeholder label={ph.label} pulse={ph.pulse} />;
   }
@@ -49,7 +52,7 @@ export function ImagePanel({ result, bloom, pageKey, awaitingStart }: ImagePanel
     >
       <BloomTransition key={pageKey} target={effectiveBloom}>
         <img
-          src={imageUrl}
+          src={displaySrc}
           alt="Illustration of the current passage"
           style={{
             display: "block",

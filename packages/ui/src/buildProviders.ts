@@ -2,6 +2,7 @@ import {
   Automatic1111Backend,
   ComfyUIBackend,
   DirectTransport,
+  GoogleImageSearch,
   LOCAL_TEXT_MODELS,
   MockImageProvider,
   MockLLMProvider,
@@ -75,16 +76,34 @@ interface BuiltImage {
 export function buildProviders(
   settings: ReaderSettings,
   opts: BuildProvidersOptions = {},
-): { llm: LLMProvider; image: ImageProvider; tier: TierConfig; diagnostics: ProvidersDiagnostics } {
+): {
+  llm: LLMProvider;
+  image: ImageProvider;
+  tier: TierConfig;
+  diagnostics: ProvidersDiagnostics;
+  /** Real-figure retrieval for technical books; present when both credentials are set. */
+  imageSearch?: GoogleImageSearch;
+} {
   const transport: Transport | undefined = opts.fetch ? new DirectTransport(opts.fetch) : undefined;
   const llm = buildLLM(settings, transport, opts.fetch, opts.onLocalStatus, opts.onLocalActivity);
   // "One API" native mode needs to know it BEFORE building the image slot (it picks the
   // multimodal provider variant). It depends only on settings (same vendor + key + opt-in).
   const native = isNativeIllustration(settings);
   const image = buildImage(settings, transport, native);
+  // Scientific sources: real-figure retrieval needs BOTH the Custom Search key and the
+  // Programmable Search Engine id; absent either, technical books just generate.
+  const imageSearch =
+    settings.keys.search && settings.searchEngineId
+      ? new GoogleImageSearch({
+          apiKey: settings.keys.search,
+          engineId: settings.searchEngineId,
+          ...(transport ? { transport } : {}),
+        })
+      : undefined;
   return {
     llm: llm.provider,
     image: image.provider,
+    ...(imageSearch ? { imageSearch } : {}),
     diagnostics: { llm: llm.diag, image: image.diag },
     tier: {
       tier: settings.imageProvider === "local" ? "local" : "cloud",
@@ -267,6 +286,8 @@ function buildLLM(
         key,
         ...(transport ? { transport } : {}),
         ...(fetchImpl ? { fetch: fetchImpl } : {}),
+        // Gemini only: ground technical analysis in Google Search (same Gemini key).
+        ...(id === "gemini" && settings.groundFacts ? { ground: true } : {}),
       }),
       diag: { id, label: providerLabel, mock: false },
     };

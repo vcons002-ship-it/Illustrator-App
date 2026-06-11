@@ -145,6 +145,70 @@ describe("GeminiLLMProvider", () => {
     expect(bible.characters[0]?.name).toBe("Aria");
     expect(bible.processedChapters).toContain(0);
   });
+
+  it("grounds TECHNICAL extraction in Google Search and folds sources into the glossary", async () => {
+    const emptyExtraction = JSON.stringify({ characters: [], environments: [], spoilers: [] });
+    const transport = new FakeTransport(() => ({
+      json: {
+        candidates: [
+          {
+            content: { parts: [{ text: emptyExtraction }] },
+            groundingMetadata: {
+              groundingChunks: [
+                { web: { uri: "https://nature.com/krebs", title: "Nature" } },
+                { web: { uri: "https://nature.com/krebs" } }, // duplicate de-duped
+                { web: { uri: "https://nih.gov/atp" } },
+              ],
+            },
+          },
+        ],
+      },
+    }));
+    const provider = new GeminiLLMProvider({ apiKey: "KEY", transport, ground: true });
+    const bible = await provider.extractEntities({
+      bookId: "book",
+      chapterIndex: 0,
+      chapterText: "The Krebs cycle…",
+      existing: emptyBible(),
+      contentMode: "technical",
+    });
+
+    // The per-request google_search tool rides along (same Gemini key — no extra key).
+    expect((transport.requests[0]!.body as { tools?: unknown[] }).tools).toEqual([{ google_search: {} }]);
+    // Cited sources land in the glossary as a per-chapter References entry.
+    const refs = bible.glossary.find((g) => g.term.startsWith("References"));
+    expect(refs?.definition).toContain("https://nature.com/krebs");
+    expect(refs?.definition).toContain("https://nih.gov/atp");
+    expect(refs?.definition.match(/nature\.com/g)).toHaveLength(1); // de-duplicated
+  });
+
+  it("ground=true never sends tools for FICTION, and retries ungrounded if the grounded call is rejected", async () => {
+    const emptyExtraction = JSON.stringify({ characters: [], environments: [], spoilers: [] });
+    const fiction = new FakeTransport(() => ({
+      json: { candidates: [{ content: { parts: [{ text: emptyExtraction }] } }] },
+    }));
+    const p1 = new GeminiLLMProvider({ apiKey: "KEY", transport: fiction, ground: true });
+    await p1.extractEntities({ bookId: "b", chapterIndex: 0, chapterText: "x", existing: emptyBible() });
+    expect((fiction.requests[0]!.body as { tools?: unknown[] }).tools).toBeUndefined();
+
+    // Grounded technical call rejected (tool/JSON-mode combos vary) → plain retry succeeds.
+    const flaky = new FakeTransport((_req, i) =>
+      i === 0
+        ? { ok: false, status: 400 }
+        : { json: { candidates: [{ content: { parts: [{ text: emptyExtraction }] } }] } },
+    );
+    const p2 = new GeminiLLMProvider({ apiKey: "KEY", transport: flaky, ground: true });
+    const bible = await p2.extractEntities({
+      bookId: "b",
+      chapterIndex: 0,
+      chapterText: "x",
+      existing: emptyBible(),
+      contentMode: "technical",
+    });
+    expect(flaky.requests).toHaveLength(2);
+    expect((flaky.requests[1]!.body as { tools?: unknown[] }).tools).toBeUndefined();
+    expect(bible.processedChapters).toContain(0); // analysis survived the rejection
+  });
 });
 
 describe("OpenAILLMProvider", () => {

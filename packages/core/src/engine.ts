@@ -6,6 +6,7 @@ import type { TierConfig } from "./types/tier.js";
 import { DEFAULT_TIER_CONFIG } from "./types/tier.js";
 import type { LLMProvider } from "./providers/llm/llm-provider.js";
 import type { ImageProvider } from "./providers/image/image-provider.js";
+import type { RetrievedImage } from "./providers/image/image-search.js";
 import type { VisualReaderStore } from "./storage/store.js";
 import { InMemoryStore } from "./storage/store.js";
 import { RenderPipeline } from "./pipeline/pipeline.js";
@@ -32,6 +33,8 @@ export interface EngineOptions {
   image: ImageProvider;
   store?: VisualReaderStore;
   tier?: TierConfig;
+  /** Real-figure retrieval for technical books (see PipelineDeps.imageSearch). */
+  imageSearch?: { retrieve(query: string): Promise<RetrievedImage | undefined> };
   /** Forwarded to the buffer — fired whenever a page's render status changes. */
   onUpdate?: (pageIndex: number, result: ImageResult) => void;
   /**
@@ -183,6 +186,7 @@ export class Engine {
       image: this.opts.image,
       store: this.store,
       tier: this.tier,
+      ...(this.opts.imageSearch ? { imageSearch: this.opts.imageSearch } : {}),
     });
     this.buffer = new RenderBuffer({
       totalPages: book.pages.length,

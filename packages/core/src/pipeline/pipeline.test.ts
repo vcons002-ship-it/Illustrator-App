@@ -129,6 +129,127 @@ describe("RenderPipeline technical content mode", () => {
   });
 });
 
+describe("RenderPipeline technical figure retrieval", () => {
+  const png = new TextEncoder().encode("REAL_FIGURE").buffer;
+
+  function technicalSetup(retrieve: (q: string) => Promise<import("../providers/image/image-search.js").RetrievedImage | undefined>) {
+    const book = oneParagraphBook("The Krebs cycle has eight steps.");
+    book.contentMode = "technical";
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = createEmptyBible(book.id);
+    bible.storyboard.push({
+      chapterIndex: 0,
+      summary: "",
+      keyMoment: "",
+      location: "",
+      locationChange: "",
+      keyEvents: [
+        {
+          pageRange: [0, 0],
+          imagePrompt: {
+            subject: "the Krebs cycle",
+            action: "shows the eight steps in order",
+            environment: "step-by-step process diagram",
+            mood: "clean",
+            composition: "left to right",
+          },
+        },
+      ],
+    });
+    let generated = 0;
+    const provider: ImageProvider = {
+      id: "mock",
+      generate: async (): Promise<ImageGenerationOutput> => {
+        generated++;
+        return { bytes: new ArrayBuffer(1), mimeType: "image/png" };
+      },
+    };
+    const queries: string[] = [];
+    const store = new InMemoryStore();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store,
+      tier: DEFAULT_TIER_CONFIG,
+      imageSearch: {
+        retrieve: (q: string) => {
+          queries.push(q);
+          return retrieve(q);
+        },
+      },
+    });
+    return { pipeline, store, queries, generatedCount: () => generated };
+  }
+
+  it("retrieves a REAL figure first (cached like a generated image; no generation)", async () => {
+    const { pipeline, store, queries, generatedCount } = technicalSetup(async () => ({
+      bytes: { bytes: png, mimeType: "image/png" },
+      contextLink: "https://example.org/krebs",
+      title: "The Krebs cycle",
+    }));
+
+    const result = await pipeline.renderPage(0);
+
+    expect(queries[0]).toBe("the Krebs cycle step-by-step process diagram"); // LLM plan drives the query
+    expect(generatedCount()).toBe(0); // the AI image model was never called
+    expect(result.status).toBe("ready");
+    expect(new TextDecoder().decode(result.image!.bytes)).toBe("REAL_FIGURE");
+    expect(result.prompt).toContain("Retrieved figure");
+    expect(result.prompt).toContain("https://example.org/krebs"); // attribution in the caption
+    expect(await store.getImage(result.requestId)).toBeDefined(); // persisted like any render
+  });
+
+  it("hotlink-only figures display via sourceUrl (not persisted; re-resolved next session)", async () => {
+    const { pipeline, store, generatedCount } = technicalSetup(async () => ({
+      sourceUrl: "https://tbn.gstatic.com/k1",
+    }));
+    const result = await pipeline.renderPage(0);
+    expect(result.status).toBe("ready");
+    expect(result.sourceUrl).toBe("https://tbn.gstatic.com/k1");
+    expect(result.image).toBeUndefined();
+    expect(generatedCount()).toBe(0);
+    expect(await store.getImage(result.requestId)).toBeUndefined();
+  });
+
+  it("falls back to AI generation when nothing is found or search fails", async () => {
+    const { pipeline, generatedCount } = technicalSetup(async () => undefined);
+    expect((await pipeline.renderPage(0)).status).toBe("ready");
+    expect(generatedCount()).toBe(1);
+
+    const failing = technicalSetup(async () => {
+      throw new Error("quota exceeded");
+    });
+    expect((await failing.pipeline.renderPage(0)).status).toBe("ready");
+    expect(failing.generatedCount()).toBe(1);
+  });
+
+  it("fiction books never search — retrieval is technical-only", async () => {
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a knight by a window");
+    const { provider } = recordingImage();
+    let searched = 0;
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: DEFAULT_TIER_CONFIG,
+      imageSearch: {
+        retrieve: async () => {
+          searched++;
+          return undefined;
+        },
+      },
+    });
+    await pipeline.renderPage(0);
+    expect(searched).toBe(0);
+  });
+});
+
 describe("RenderPipeline world style vs explicit art style", () => {
   async function renderWithStyle(styleId: string) {
     const book = oneParagraphBook();

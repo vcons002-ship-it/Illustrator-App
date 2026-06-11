@@ -137,6 +137,14 @@ export interface ReaderSettings {
    * persisted). Caps Auto image-quality to a canvas the card can render.
    */
   gpuVramMb?: number;
+  /**
+   * Scientific sources (technical books). `searchEngineId` is the Programmable Search
+   * Engine id ("cx") paired with a Custom Search API key stored as `keys.search`;
+   * together they enable retrieving REAL figures/diagrams before generating one.
+   * `groundFacts` grounds Gemini's technical analysis in Google Search (same Gemini key).
+   */
+  searchEngineId?: string;
+  groundFacts?: boolean;
   /** Which local engine API to talk to (browser "your own server" path). */
   localBackend?: LocalBackendId;
   /** Base URL of a local engine you run yourself (browser path; persisted). */
@@ -507,6 +515,48 @@ export function SettingsPanel({
               </span>
             </label>
           )}
+
+          <details style={rowStyle}>
+            <summary style={{ cursor: "pointer", fontSize: 13, opacity: 0.85 }}>
+              Scientific sources (technical books)
+            </summary>
+            <p style={{ opacity: 0.6, fontSize: 11, margin: "4px 0 8px" }}>
+              For books imported as <em>technical</em>: retrieve REAL figures/diagrams (correct
+              labels and data) before generating one, and ground the analysis in Google Search.
+              Image retrieval needs a <b>Custom Search API key</b> (Google Cloud console →
+              enable “Custom Search API” → credentials) and a <b>Programmable Search Engine
+              id</b> (programmablesearchengine.google.com → create an engine → enable “Image
+              search” + “Search the entire web” → copy its ID). Free tier: 100 searches/day.
+            </p>
+            <label style={rowStyle}>
+              <span>Custom Search API key</span>
+              <input
+                type="password"
+                value={value.keys.search ?? ""}
+                placeholder="AIza… (Google Cloud key with Custom Search API enabled)"
+                onChange={(e) => setKey("search", e.target.value.trim())}
+              />
+            </label>
+            <label style={rowStyle}>
+              <span>Search engine ID (cx)</span>
+              <input
+                value={value.searchEngineId ?? ""}
+                placeholder="e.g. a1b2c3d4e5f6g7h8i"
+                onChange={(e) => set({ searchEngineId: e.target.value.trim() })}
+              />
+            </label>
+            <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13 }}>
+              <input
+                type="checkbox"
+                checked={value.groundFacts ?? false}
+                onChange={(e) => set({ groundFacts: e.target.checked })}
+              />
+              <span>
+                Ground analysis in Google Search (Gemini text provider only — uses your
+                existing Gemini key; cited sources are saved into the book’s glossary)
+              </span>
+            </label>
+          </details>
 
           {sameVendorNative(value) && <NativeModeRow value={value} set={set} />}
 

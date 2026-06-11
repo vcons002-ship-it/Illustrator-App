@@ -15,6 +15,7 @@ import { resolvePageEntities } from "../visual-bible/bible.js";
 import { anchorSetting, composeScenePrompt, resolveKeyEvent } from "../visual-bible/key-events.js";
 import { expandPrompt, findBibleTermsInText } from "../providers/image/bible-injection.js";
 import { getImageStyle } from "../providers/catalog.js";
+import { buildFigureQuery, type RetrievedImage } from "../providers/image/image-search.js";
 import { profileDimensions, qualityProfile } from "../quality.js";
 
 /**
@@ -38,6 +39,12 @@ export interface PipelineDeps {
   image: ImageProvider;
   store: VisualReaderStore;
   tier: TierConfig;
+  /**
+   * Optional real-figure retrieval (technical books): when set, a technical unit first
+   * looks for an EXISTING diagram of its keyEvent's subject (authoritative labels/data
+   * beat a generated picture); AI generation remains the fallback.
+   */
+  imageSearch?: { retrieve(query: string): Promise<RetrievedImage | undefined> };
 }
 
 /**
@@ -173,6 +180,39 @@ export class RenderPipeline {
           error: "No illustration prompt for this unit yet.",
         };
       }
+      // Technical books, retrieval-first: an EXISTING figure (correct labels, correct
+      // data) beats a generated one. The LLM's visualization plan supplies the query
+      // (subject + visual form); any failure falls through to AI generation below.
+      if (request.kind === "technical_illustration" && this.deps.imageSearch && keyEvent?.imagePrompt.subject) {
+        const query = buildFigureQuery(keyEvent.imagePrompt.subject, keyEvent.imagePrompt.environment);
+        try {
+          const found = await this.deps.imageSearch.retrieve(query);
+          if (found?.bytes) {
+            const caption = retrievedCaption(query, found);
+            await this.deps.store.putImage(requestId, found.bytes.bytes, found.bytes.mimeType, caption);
+            return {
+              requestId,
+              pageId: request.pageId,
+              status: "ready",
+              prompt: caption,
+              image: { bytes: found.bytes.bytes, mimeType: found.bytes.mimeType },
+            };
+          }
+          if (found?.sourceUrl) {
+            // Hotlink-only (the host blocked downloads): displayable but not cacheable,
+            // so it re-resolves next session instead of being persisted.
+            return {
+              requestId,
+              pageId: request.pageId,
+              status: "ready",
+              prompt: retrievedCaption(query, found),
+              sourceUrl: found.sourceUrl,
+            };
+          }
+        } catch {
+          /* quota/network/no results — generate instead */
+        }
+      }
       const styled = style.promptSuffix ? `${stored}\n\nStyle: ${style.promptSuffix}` : stored;
       // Multi-panel comic page (opt-in, comic/manga only): ask for a SINGLE image laid
       // out as a comic page of sequential panels. Works best on natural-language/cloud
@@ -245,7 +285,7 @@ export class RenderPipeline {
       };
       // Quality level → steps + aspect-aware resolution (more pages/image = higher
       // quality; the canvas orientation comes from the user's aspect setting).
-      const renderAt = (lvl: typeof this.deps.tier.renderQuality): Promise<ImageGenerationOutput> => {
+      const renderAt = (lvl: RenderQuality | undefined): Promise<ImageGenerationOutput> => {
         const dims = lvl ? profileDimensions(lvl, this.deps.tier.aspectRatio) : undefined;
         return this.deps.image.generate({
           ...baseInput,
@@ -336,6 +376,12 @@ export class RenderPipeline {
  * multimodal model reads the scene and depicts it directly. Character names in the
  * prose are still expanded into their Bible descriptors by the caller's term pass.
  */
+/** Caption for a retrieved figure: what was searched + where it came from. */
+function retrievedCaption(query: string, found: RetrievedImage): string {
+  const source = found.contextLink ? `\n\nSource: ${found.title ? `${found.title} — ` : ""}${found.contextLink}` : "";
+  return `Retrieved figure for “${query}”${source}`;
+}
+
 /** The next-lower render-quality level, or undefined when already at the floor (draft). */
 function oneLevelDown(level: RenderQuality): RenderQuality | undefined {
   const order: RenderQuality[] = ["draft", "standard", "high", "ultra"];
