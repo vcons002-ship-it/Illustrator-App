@@ -39,7 +39,7 @@ export class GeminiImageProvider implements ImageProvider {
       method: "POST",
       body: {
         instances: [{ prompt: input.prompt }],
-        parameters: { sampleCount: 1, aspectRatio: "1:1" },
+        parameters: { sampleCount: 1, aspectRatio: imagenAspectRatio(input.width, input.height) },
       },
     });
     if (!res.ok) throw new Error(`Gemini image request failed with status ${res.status}`);
@@ -53,4 +53,17 @@ export class GeminiImageProvider implements ImageProvider {
       mimeType: prediction.mimeType ?? "image/png",
     };
   }
+}
+
+/**
+ * Map requested pixel dimensions to the nearest aspect ratio Imagen supports
+ * ("1:1" / "3:4" portrait / "4:3" landscape). Our portrait/landscape canvases are 2:3
+ * / 3:2, which Imagen doesn't offer exactly, so the closest supported orientation is used.
+ */
+function imagenAspectRatio(width?: number, height?: number): string {
+  const w = width ?? 1024;
+  const h = height ?? 1024;
+  if (h > w) return "3:4";
+  if (w > h) return "4:3";
+  return "1:1";
 }
