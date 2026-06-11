@@ -17,24 +17,26 @@ function settings(overrides: Partial<ReaderSettings>): ReaderSettings {
 }
 
 describe("buildProviders search credentials", () => {
-  it("activates search with the dedicated key + engine id", () => {
+  it("activates Google search with the dedicated key + engine id", () => {
     const built = buildProviders(settings({ keys: { search: "k" }, searchEngineId: "cx" }));
-    expect(built.imageSearch).toBeDefined();
+    expect(built.searchBackend).toBe("google");
   });
 
   it("falls back to the Gemini key when the search key is blank", () => {
     const built = buildProviders(settings({ keys: { gemini: "g" }, searchEngineId: "cx" }));
-    expect(built.imageSearch).toBeDefined();
+    expect(built.searchBackend).toBe("google");
   });
 
-  it("still requires the engine id (cx) with the Gemini-key fallback", () => {
+  it("uses the keyless backend when the engine id (cx) is missing", () => {
     const built = buildProviders(settings({ keys: { gemini: "g" } }));
-    expect(built.imageSearch).toBeUndefined();
+    expect(built.searchBackend).toBe("wikipedia");
+    expect(built.imageSearch.id).toBe("wiki-search");
   });
 
-  it("stays inactive with no key at all", () => {
+  it("uses the keyless backend with no key at all (search always available)", () => {
     const built = buildProviders(settings({ searchEngineId: "cx" }));
-    expect(built.imageSearch).toBeUndefined();
+    expect(built.searchBackend).toBe("wikipedia");
+    expect(built.imageSearch).toBeDefined();
   });
 
   it("grounds a non-Gemini reader through the fallback-keyed search", () => {
@@ -45,6 +47,12 @@ describe("buildProviders search credentials", () => {
     );
     expect(built.webSearch).toBeDefined();
     expect(built.webSearch).toBe(built.imageSearch);
+  });
+
+  it("grounds keylessly through Wikipedia when grounding is on with no creds", () => {
+    const built = buildProviders(settings({ groundFacts: true }));
+    expect(built.webSearch).toBeDefined();
+    expect(built.webSearch!.id).toBe("wiki-search");
   });
 
   it("leaves external grounding off for the Gemini reader (grounds in-call)", () => {

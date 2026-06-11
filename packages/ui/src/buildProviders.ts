@@ -3,6 +3,7 @@ import {
   ComfyUIBackend,
   DirectTransport,
   GoogleImageSearch,
+  WikiSearch,
   LOCAL_TEXT_MODELS,
   MockImageProvider,
   MockLLMProvider,
@@ -12,6 +13,7 @@ import {
   createLLMProvider,
   getProvider,
   resolveQuality,
+  type FigureSearch,
   type GenerationActivity,
   type ImageProvider,
   type LLMProvider,
@@ -81,14 +83,19 @@ export function buildProviders(
   image: ImageProvider;
   tier: TierConfig;
   diagnostics: ProvidersDiagnostics;
-  /** Real-figure retrieval for technical books; present when both credentials are set. */
-  imageSearch?: GoogleImageSearch;
   /**
-   * Provider-agnostic grounding source for technical books: present when grounding is on,
-   * the search credentials are set, AND the reader isn't Gemini (which grounds in-call).
-   * Lets a local/Claude/OpenAI reader still produce sourced facts.
+   * Real-figure retrieval for technical books — ALWAYS present: Google Custom Search
+   * when credentials are set, else the keyless Wikipedia/Wikimedia backend.
    */
-  webSearch?: GoogleImageSearch;
+  imageSearch: FigureSearch;
+  /** Which backend `imageSearch` resolved to, for the Settings status line. */
+  searchBackend: "google" | "wikipedia";
+  /**
+   * Provider-agnostic grounding source for technical books: present when grounding is
+   * on AND the reader isn't Gemini (which grounds in-call). Lets a local/Claude/OpenAI
+   * reader still produce sourced facts — keylessly via Wikipedia when no Google creds.
+   */
+  webSearch?: FigureSearch;
 } {
   const transport: Transport | undefined = opts.fetch ? new DirectTransport(opts.fetch) : undefined;
   const llm = buildLLM(settings, transport, opts.fetch, opts.onLocalStatus, opts.onLocalActivity);
@@ -102,7 +109,7 @@ export function buildProviders(
   // project, and a 403 from an un-enabled project degrades silently like every other
   // search failure (the pipeline/engine wrap search calls in try/catch).
   const searchKey = settings.keys.search || settings.keys.gemini;
-  const imageSearch =
+  const google =
     searchKey && settings.searchEngineId
       ? new GoogleImageSearch({
           apiKey: searchKey,
@@ -110,14 +117,18 @@ export function buildProviders(
           ...(transport ? { transport } : {}),
         })
       : undefined;
+  // No Google credentials → the keyless Wikipedia/Wikimedia backend, so figure
+  // retrieval and grounding work out of the box (narrower sources, zero setup).
+  const imageSearch: FigureSearch = google ?? new WikiSearch(transport ? { transport } : {});
   // External grounding runs for every reader EXCEPT Gemini (which grounds in-call via its
   // own google_search tool). So a local/Claude/OpenAI reader still gets sourced facts.
   const webSearch =
-    imageSearch && settings.groundFacts && llm.provider.id !== "gemini" ? imageSearch : undefined;
+    settings.groundFacts && llm.provider.id !== "gemini" ? imageSearch : undefined;
   return {
     llm: llm.provider,
     image: image.provider,
-    ...(imageSearch ? { imageSearch } : {}),
+    imageSearch,
+    searchBackend: google ? "google" : "wikipedia",
     ...(webSearch ? { webSearch } : {}),
     diagnostics: { llm: llm.diag, image: image.diag },
     tier: {

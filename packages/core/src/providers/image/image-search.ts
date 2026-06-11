@@ -70,7 +70,20 @@ export interface RetrievedImage {
   title?: string;
 }
 
-export class GoogleImageSearch {
+/**
+ * What the engine, pipeline and chat need from a search backend — satisfied by the
+ * keyed GoogleImageSearch and the keyless WikiSearch (free-search.ts), so callers
+ * never care which credentials (if any) are behind it.
+ */
+export interface FigureSearch {
+  /** Stable backend id ("google-image-search" / "wiki-search"), for diagnostics. */
+  readonly id: string;
+  searchWeb(query: string, count?: number): Promise<WebSearchHit[]>;
+  search(query: string, count?: number): Promise<ImageSearchHit[]>;
+  retrieve(query: string): Promise<RetrievedImage | undefined>;
+}
+
+export class GoogleImageSearch implements FigureSearch {
   readonly id = "google-image-search";
   private readonly apiKey: string;
   private readonly engineId: string;
@@ -133,41 +146,56 @@ export class GoogleImageSearch {
    * returns nothing usable.
    */
   async retrieve(query: string): Promise<RetrievedImage | undefined> {
-    const hits = await this.search(query);
-    if (hits.length === 0) return undefined;
-    for (const hit of hits.slice(0, 3)) {
-      for (const url of [hit.link, hit.thumbnailLink]) {
-        if (!url) continue;
-        const bytes = await this.fetchImageBytes(url);
-        if (bytes) {
-          return {
-            bytes,
-            ...(hit.contextLink ? { contextLink: hit.contextLink } : {}),
-            ...(hit.title ? { title: hit.title } : {}),
-          };
-        }
+    return retrieveFromHits(this.transport, await this.search(query));
+  }
+}
+
+/**
+ * The bytes-then-thumbnail-then-hotlink ladder over ranked image hits, shared by
+ * every search backend: bytes are persistable/cacheable (the goal), the thumbnail
+ * host is the most fetch-tolerant fallback, and a URL-only result still displays
+ * via <img src> when every byte-fetch is blocked. Undefined when there are no hits.
+ */
+export async function retrieveFromHits(
+  transport: Transport,
+  hits: readonly ImageSearchHit[],
+): Promise<RetrievedImage | undefined> {
+  if (hits.length === 0) return undefined;
+  for (const hit of hits.slice(0, 3)) {
+    for (const url of [hit.link, hit.thumbnailLink]) {
+      if (!url) continue;
+      const bytes = await fetchImageBytes(transport, url);
+      if (bytes) {
+        return {
+          bytes,
+          ...(hit.contextLink ? { contextLink: hit.contextLink } : {}),
+          ...(hit.title ? { title: hit.title } : {}),
+        };
       }
     }
-    // Nothing downloadable — hotlink the best hit (its thumbnail is the safest src).
-    const best = hits[0]!;
-    return {
-      sourceUrl: best.thumbnailLink ?? best.link,
-      ...(best.contextLink ? { contextLink: best.contextLink } : {}),
-      ...(best.title ? { title: best.title } : {}),
-    };
   }
+  // Nothing downloadable — hotlink the best hit (its thumbnail is the safest src).
+  const best = hits[0]!;
+  return {
+    sourceUrl: best.thumbnailLink ?? best.link,
+    ...(best.contextLink ? { contextLink: best.contextLink } : {}),
+    ...(best.title ? { title: best.title } : {}),
+  };
+}
 
-  /** Download an image's bytes; undefined on any failure or a non-image response. */
-  private async fetchImageBytes(url: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined> {
-    try {
-      const res = await this.transport.send({ url, method: "GET" });
-      if (!res.ok) return undefined;
-      const bytes = await res.arrayBuffer();
-      if (!bytes || bytes.byteLength === 0) return undefined;
-      return { bytes, mimeType: guessMime(url) };
-    } catch {
-      return undefined;
-    }
+/** Download an image's bytes; undefined on any failure or a non-image response. */
+async function fetchImageBytes(
+  transport: Transport,
+  url: string,
+): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined> {
+  try {
+    const res = await transport.send({ url, method: "GET" });
+    if (!res.ok) return undefined;
+    const bytes = await res.arrayBuffer();
+    if (!bytes || bytes.byteLength === 0) return undefined;
+    return { bytes, mimeType: guessMime(url) };
+  } catch {
+    return undefined;
   }
 }
 

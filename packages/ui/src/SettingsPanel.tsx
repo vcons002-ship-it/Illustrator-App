@@ -531,6 +531,11 @@ export function SettingsPanel({
               Search API” on that key’s Google Cloud project and leave the key field blank.
               The engine ID (cx) is still required either way.
             </p>
+            <p style={{ opacity: 0.75, fontSize: 11, margin: "0 0 8px" }}>
+              {(value.keys.search || value.keys.gemini) && value.searchEngineId
+                ? "Active backend: Google Custom Search (whole-web figures + grounding)."
+                : "Active backend: free Wikipedia/Wikimedia search — keyless and automatic. Add a Custom Search key + engine ID for whole-web results."}
+            </p>
             <label style={rowStyle}>
               <span>Custom Search API key</span>
               <input

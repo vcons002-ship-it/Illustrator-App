@@ -11,6 +11,7 @@ import {
   pickBestGeminiImageModel,
 } from "./image/gemini-native-image-provider.js";
 import { DirectTransport } from "./transport/transport.js";
+import { WikiSearch } from "./image/free-search.js";
 import { IMAGE_STYLES, LOCAL_IMAGE_MODELS, styleLoraDownload } from "./catalog.js";
 import type { VisualBible } from "../types/bible.js";
 
@@ -27,6 +28,7 @@ import type { VisualBible } from "../types/bible.js";
  *   GEMINI_API_KEY          AI Studio key (text + image + in-call grounding)
  *   GEMINI_MODEL            optional reader-model override (defaults to the provider default)
  *   VALIDATE_DOWNLOAD_URLS  any value — HEAD-check every catalog model/LoRA URL (no key needed)
+ *   VALIDATE_FREE_SEARCH    any value — live-check the keyless Wikipedia/Commons backend (no key needed)
  *
  * Run: GOOGLE_SEARCH_API_KEY=… GOOGLE_SEARCH_ENGINE_ID=… GEMINI_API_KEY=… pnpm test live-validation
  */
@@ -102,6 +104,38 @@ describe.runIf(SEARCH_KEY && SEARCH_CX)("LIVE Custom Search", () => {
       expect(sources.length).toBeGreaterThan(0);
     },
     NET,
+  );
+});
+
+describe.runIf(process.env["VALIDATE_FREE_SEARCH"])("LIVE keyless Wikipedia/Commons search", () => {
+  const wiki = new WikiSearch();
+
+  // retry: Wikimedia throttles datacenter IPs (where CI/dev containers live)
+  // aggressively; a transient 429 is not a shape failure.
+  it(
+    "Wikipedia web mode returns snippets that build a grounding context",
+    { timeout: NET, retry: 2 },
+    async () => {
+      const hits = await wiki.searchWeb(groundingQuery("The Krebs Cycle", "", "Cell Biology"), 5);
+      expect(hits.length).toBeGreaterThan(0);
+      for (const hit of hits) expect(hit.link).toMatch(/^https:\/\/en\.wikipedia\.org\/wiki\//);
+      const { context, sources } = formatGroundingContext(hits);
+      expect(context).toContain("[1]");
+      expect(sources.length).toBeGreaterThan(0);
+    },
+  );
+
+  it(
+    "Commons figure mode retrieves bytes or a hotlinkable URL",
+    { timeout: NET, retry: 2 },
+    async () => {
+      const hits = await wiki.search(TOPIC_QUERY, 5);
+      expect(hits.length).toBeGreaterThan(0);
+      expect(hits[0]!.link).toMatch(/^https:\/\/upload\.wikimedia\.org\//);
+      const figure = await wiki.retrieve(TOPIC_QUERY);
+      expect(figure).toBeDefined();
+      expect(Boolean(figure!.bytes) || Boolean(figure!.sourceUrl)).toBe(true);
+    },
   );
 });
 
