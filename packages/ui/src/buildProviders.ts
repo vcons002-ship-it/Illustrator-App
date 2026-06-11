@@ -96,12 +96,16 @@ export function buildProviders(
   // multimodal provider variant). It depends only on settings (same vendor + key + opt-in).
   const native = isNativeIllustration(settings);
   const image = buildImage(settings, transport, native);
-  // Scientific sources: real-figure retrieval needs BOTH the Custom Search key and the
-  // Programmable Search Engine id; absent either, technical books just generate.
+  // Scientific sources: real-figure retrieval needs a Google API key AND the Programmable
+  // Search Engine id. The dedicated Custom Search key wins; absent it, the Gemini key is
+  // tried — the same Google Cloud key serves Custom Search when that API is enabled on its
+  // project, and a 403 from an un-enabled project degrades silently like every other
+  // search failure (the pipeline/engine wrap search calls in try/catch).
+  const searchKey = settings.keys.search || settings.keys.gemini;
   const imageSearch =
-    settings.keys.search && settings.searchEngineId
+    searchKey && settings.searchEngineId
       ? new GoogleImageSearch({
-          apiKey: settings.keys.search,
+          apiKey: searchKey,
           engineId: settings.searchEngineId,
           ...(transport ? { transport } : {}),
         })

@@ -527,13 +527,16 @@ export function SettingsPanel({
               enable “Custom Search API” → credentials) and a <b>Programmable Search Engine
               id</b> (programmablesearchengine.google.com → create an engine → enable “Image
               search” + “Search the entire web” → copy its ID). Free tier: 100 searches/day.
+              Already using a Gemini key? It can double as the search key — enable “Custom
+              Search API” on that key’s Google Cloud project and leave the key field blank.
+              The engine ID (cx) is still required either way.
             </p>
             <label style={rowStyle}>
               <span>Custom Search API key</span>
               <input
                 type="password"
                 value={value.keys.search ?? ""}
-                placeholder="AIza… (Google Cloud key with Custom Search API enabled)"
+                placeholder="AIza… (blank = reuse the Gemini key, if Custom Search API is enabled on it)"
                 onChange={(e) => setKey("search", e.target.value.trim())}
               />
             </label>
