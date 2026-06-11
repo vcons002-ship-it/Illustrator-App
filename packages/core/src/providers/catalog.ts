@@ -349,6 +349,14 @@ export interface StyleLoraRef {
   filename?: string;
   /** Approximate download size in MB, for the UI. */
   sizeMB?: number;
+  /**
+   * The model family this curated download is BUILT FOR. A LoRA only loads on its own
+   * architecture (an SDXL LoRA can't run on Flux/Z-Image), so the UI offers the one-click
+   * download only when the active model matches — and points other families to the
+   * manual override / paste-a-URL path instead. Undefined = architecture-agnostic prompt
+   * helper (no real constraint).
+   */
+  family?: CatalogModelFamily;
 }
 
 export interface ImageStyleLocal {
@@ -448,6 +456,7 @@ export const IMAGE_STYLES: ImageStyle[] = [
         url: "https://huggingface.co/artificialguybr/ComicBookRedmond-V2/resolve/main/ComicBookRedmond-V2-Comic-ComicRedmAF.safetensors",
         filename: "comic.safetensors",
         sizeMB: 170,
+        family: "sdxl",
       },
     },
   },
@@ -465,6 +474,7 @@ export const IMAGE_STYLES: ImageStyle[] = [
         url: "https://huggingface.co/artificialguybr/3DRedmond-V1/resolve/main/3DRedmond-3DRenderStyle-3DRenderAF.safetensors",
         filename: "animation-3d.safetensors",
         sizeMB: 170,
+        family: "sdxl",
       },
     },
   },
@@ -514,6 +524,7 @@ export const IMAGE_STYLES: ImageStyle[] = [
         url: "https://huggingface.co/artificialguybr/StoryBookRedmond/resolve/main/StoryBookRedmond.safetensors",
         filename: "storybook.safetensors",
         sizeMB: 170,
+        family: "sdxl",
       },
     },
   },

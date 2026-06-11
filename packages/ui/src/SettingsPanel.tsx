@@ -510,6 +510,7 @@ export function SettingsPanel({
           {isDesktop && value.imageProvider === "local" && (
             <StyleLoraRow
               styleId={value.imageStyle ?? "auto"}
+              family={localFamily}
               installedLoras={installedLoras}
               progress={downloadProgress}
               onDownload={onDownloadStyleLora}
@@ -797,11 +798,14 @@ function NativeModeRow({
 
 function StyleLoraRow({
   styleId,
+  family,
   installedLoras,
   progress,
   onDownload,
 }: {
   styleId: string;
+  /** The active model's family, so an architecture-incompatible pack isn't offered. */
+  family?: string;
   installedLoras: string[];
   progress: Record<string, number>;
   onDownload: ((styleId: string, url?: string) => void) | undefined;
@@ -810,6 +814,11 @@ function StyleLoraRow({
   if (!lora) return null; // style has no LoRA mapping (e.g. "auto")
   const label = getImageStyle(styleId).label;
   const catalog = styleLoraDownload(styleId); // present when the catalog has a URL
+  // A curated pack only loads on its own architecture. Offer the one-click download
+  // when the active model matches (or we can't tell); otherwise the pack is for a
+  // different family — point the user to the override dropdown / paste-a-URL path.
+  const packFamily = lora.family;
+  const compatible = !packFamily || !family || family === "unknown" || family === packFamily;
   const installed = resolveAssetName(new Set(installedLoras), lora.name) !== undefined;
   const pct = progress[lora.name];
   const downloading = pct !== undefined && pct < 100;
@@ -823,13 +832,20 @@ function StyleLoraRow({
           <span style={{ color: "#7dd87f" }}>✓ installed</span>
         ) : downloading ? (
           <span style={{ opacity: 0.7 }}>{Math.round(pct)}%</span>
-        ) : catalog ? (
+        ) : catalog && compatible ? (
           <button style={buttonStyle} onClick={() => onDownload?.(styleId)}>
             Download style pack
           </button>
         ) : null}
       </div>
       {downloading && <ProgressBar pct={pct} />}
+      {!installed && catalog && !compatible && (
+        <span style={{ opacity: 0.7, fontSize: 11, color: "#e0b870" }}>
+          The bundled {label} pack is built for {packFamily!.toUpperCase()} and won’t load on your{" "}
+          {family!.toUpperCase()} model. Install a {family!.toUpperCase()}-compatible LoRA below (paste a
+          URL or drop the file in), then pick it under “Style LoRA (override)”.
+        </span>
+      )}
       {!installed && !downloading && (
         <PasteUrl
           placeholder={`Or paste a .safetensors LoRA URL for ${label}`}
