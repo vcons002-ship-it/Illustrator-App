@@ -72,6 +72,8 @@ export class RenderBuffer {
    * entry is removed once its render settles.
    */
   private readonly priorityQueue: number[] = [];
+  /** Whether the one-time front/back-matter skip pass has run (re-run after invalidation). */
+  private skipsApplied = false;
   private readonly inflight = new Set<number>();
   /** Abort controller per in-flight render, so a pause can cancel them mid-flight. */
   private readonly controllers = new Map<number, AbortController>();
@@ -116,6 +118,7 @@ export class RenderBuffer {
   /** Drop a page's result so it re-renders (regenerate one image). */
   invalidate(pageIndex: number): void {
     this.results.delete(pageIndex);
+    this.skipsApplied = false; // an invalidated non-story page must re-mark as skipped
     this.pump();
   }
 
@@ -123,6 +126,7 @@ export class RenderBuffer {
   invalidateAll(): void {
     this.results.clear();
     this.priorityQueue.length = 0; // back to a clean in-order pass
+    this.skipsApplied = false;
     this.pump();
   }
 
@@ -149,9 +153,14 @@ export class RenderBuffer {
     this.pump();
   }
 
-  /** Pages, in priority order, that still need rendering. */
-  private candidates(): number[] {
-    if (!this.generationEnabled) return []; // generation not started → nothing new
+  /**
+   * Up to `limit` pages, in priority order, that still need rendering. The pump
+   * only ever starts `maxConcurrent − inflight` renders, so the scan stops as
+   * soon as that many candidates are found instead of gating every page in the
+   * book on each pump (the `canRender` gate isn't free).
+   */
+  private candidates(limit: number): number[] {
+    if (!this.generationEnabled || limit <= 0) return []; // generation not started → nothing new
     const last = this.totalPages - 1;
     const want = (p: number): boolean =>
       p >= 0 &&
@@ -163,14 +172,18 @@ export class RenderBuffer {
 
     const out: number[] = [];
     // Explicit redo requests render first, in the ORDER they were clicked.
-    for (const p of this.priorityQueue) if (want(p)) out.push(p);
+    for (const p of this.priorityQueue) {
+      if (out.length >= limit) return out;
+      if (want(p)) out.push(p);
+    }
 
     // Strict in-order generation, front to back through the whole book: always fill
     // from the FIRST un-rendered unit forward. The reader's position never reorders
     // or bounds this (scrolling only affects the reveal) — staying ahead of the
     // reader falls out of simply starting at page one and not stopping.
-    for (let p = 0; p <= last; p++) {
-      if (this.priorityQueue.includes(p)) continue; // already considered above
+    const queued = new Set(this.priorityQueue);
+    for (let p = 0; p <= last && out.length < limit; p++) {
+      if (queued.has(p)) continue; // already considered above
       if (want(p)) out.push(p);
     }
     return out;
@@ -193,9 +206,12 @@ export class RenderBuffer {
 
   /** Start renders up to the concurrency limit, honouring priority. */
   private pump(): void {
-    this.applySkips();
-    for (const page of this.candidates()) {
-      if (this.inflight.size >= this.maxConcurrent) break;
+    // Front/back matter never changes, so the skip pass runs once — not per pump.
+    if (!this.skipsApplied) {
+      this.applySkips();
+      this.skipsApplied = true;
+    }
+    for (const page of this.candidates(this.maxConcurrent - this.inflight.size)) {
       this.start(page);
     }
   }

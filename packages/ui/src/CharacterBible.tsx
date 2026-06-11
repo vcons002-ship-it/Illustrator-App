@@ -329,7 +329,7 @@ function ReferenceThumb({
   return (
     <span style={thumbStyle}>
       {url ? (
-        <img src={url} alt="character reference" style={thumbImgStyle} />
+        <img src={url} alt="character reference" decoding="async" style={thumbImgStyle} />
       ) : (
         <span style={{ opacity: 0.4, fontSize: 11 }}>…</span>
       )}

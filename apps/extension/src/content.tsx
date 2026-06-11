@@ -24,6 +24,8 @@ import {
   ImagePanel,
   SettingsPanel,
   buildProviders,
+  identitySettingsKey,
+  tuningSettingsKey,
   type InstalledModel,
   type LocalBackendId,
   type ReaderSettings,
@@ -95,24 +97,29 @@ function Overlay() {
     })();
   }, []);
 
-  // Persist on change: encrypt the keys, never store them in plaintext.
+  // Persist on change: encrypt the keys, never store them in plaintext. Debounced —
+  // each persist is an encrypt round-trip through the background worker plus a
+  // storage write, so per-keystroke edits must coalesce into one.
   useEffect(() => {
     if (!settings) return;
-    void (async () => {
-      const { keys, engineBaseUrl: _url, ...rest } = settings;
-      void _url;
-      const toStore: Record<string, unknown> = { ...rest };
-      delete toStore.keys;
-      delete toStore.keysEnc;
-      if (keys && Object.keys(keys).length > 0) {
-        try {
-          toStore.keysEnc = await encryptViaBackground(keys);
-        } catch {
-          /* if encryption fails, skip persisting keys rather than store plaintext */
+    const timer = setTimeout(() => {
+      void (async () => {
+        const { keys, engineBaseUrl: _url, ...rest } = settings;
+        void _url;
+        const toStore: Record<string, unknown> = { ...rest };
+        delete toStore.keys;
+        delete toStore.keysEnc;
+        if (keys && Object.keys(keys).length > 0) {
+          try {
+            toStore.keysEnc = await encryptViaBackground(keys);
+          } catch {
+            /* if encryption fails, skip persisting keys rather than store plaintext */
+          }
         }
-      }
-      await chrome.storage.local.set({ [STORAGE_KEY]: toStore });
-    })();
+        await chrome.storage.local.set({ [STORAGE_KEY]: toStore });
+      })();
+    }, 500);
+    return () => clearTimeout(timer);
   }, [settings]);
 
   // Extract the article text once.
@@ -121,50 +128,75 @@ function Overlay() {
     if (text.trim().length > 0) extractedRef.current = { title, text };
   }, []);
 
-  // (Re)build the engine whenever settings change so new keys / a connected
-  // server take effect immediately.
+  // The effects below read the latest settings without re-running per keystroke.
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+
+  // Settings changes split into the same two paths as the web app (settingsKeys):
+  // IDENTITY changes (providers/keys/models/URLs) rebuild the engine — debounced,
+  // so typing a key coalesces into ONE rebuild instead of one per keystroke —
+  // while TUNING changes (style/quality/aspect…) only swap the live tier in place.
+  const identityKey = settings ? identitySettingsKey(settings) : "";
+  const tuningKey = settings ? tuningSettingsKey(settings) : "";
+
   useEffect(() => {
-    if (!settings || !extractedRef.current) return;
-    const { title, text } = extractedRef.current;
-    const source = segmentBook({ id: `page-${location.href}`, title }, [{ title, text }], { wordsPerPage: 220 });
-    setError("");
-    setResults(new Map());
-    const { llm, image, tier } = buildProviders(settings, { fetch: proxyFetch, onLocalStatus: setStatus });
+    if (!identityKey || !extractedRef.current) return;
     let cancelled = false;
-    const engine = new Engine({
-      llm,
-      image,
-      tier,
-      store: createCacheStore(),
-      onUpdate: (idx, result) => {
-        if (!cancelled) setResults((prev) => new Map(prev).set(idx, result));
-      },
-      // The bible builds in the background (pages illustrate as their chapter is
-      // ready); keep the UI's character/spoiler context current as it grows.
-      onBibleUpdate: (bible) => {
-        if (!cancelled) setBible(bible);
-      },
-    });
-    engineRef.current = engine;
-    void engine
-      .openBook(source)
-      .then(() => {
-        if (cancelled) return;
-        setBook(source);
-        // openBook now only loads/restores; kick off generation explicitly so the
-        // extension keeps auto-illustrating as you read (reusing cached work).
-        engine.startGeneration();
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+    let engine: Engine | undefined;
+    const build = (): void => {
+      const s = settingsRef.current!;
+      const { title, text } = extractedRef.current!;
+      const source = segmentBook({ id: `page-${location.href}`, title }, [{ title, text }], { wordsPerPage: 220 });
+      setError("");
+      setResults(new Map());
+      const { llm, image, tier } = buildProviders(s, { fetch: proxyFetch, onLocalStatus: setStatus });
+      engine = new Engine({
+        llm,
+        image,
+        tier,
+        store: createCacheStore(),
+        onUpdate: (idx, result) => {
+          if (!cancelled) setResults((prev) => new Map(prev).set(idx, result));
+        },
+        // The bible builds in the background (pages illustrate as their chapter is
+        // ready); keep the UI's character/spoiler context current as it grows.
+        onBibleUpdate: (bible) => {
+          if (!cancelled) setBible(bible);
+        },
       });
+      engineRef.current = engine;
+      void engine
+        .openBook(source)
+        .then(() => {
+          if (cancelled) return;
+          setBook(source);
+          // openBook now only loads/restores; kick off generation explicitly so the
+          // extension keeps auto-illustrating as you read (reusing cached work).
+          engine!.startGeneration();
+        })
+        .catch((err) => {
+          if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        });
+    };
+    // First build runs at once (page load); rebuilds wait out the typing burst.
+    const timer = setTimeout(build, engineRef.current ? 400 : 0);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
       // Stop the replaced engine's background work (bible build + renders) — the
       // settings change builds a fresh engine, and two must never run at once.
-      engine.dispose();
+      engine?.dispose();
     };
-  }, [settings]);
+  }, [identityKey]);
+
+  // Tuning-only change: future renders pick the new tier up; nothing is disposed,
+  // in-flight extraction/renders continue, finished images stay.
+  useEffect(() => {
+    const s = settingsRef.current;
+    if (s && engineRef.current) {
+      engineRef.current.updateTier(buildProviders(s, { fetch: proxyFetch }).tier);
+    }
+  }, [tuningKey]);
 
   // Scroll-sync: map host-page scroll to a page index AND a continuous in-page
   // progress (drives the bloom — fast scrolling keeps progress low → image hidden).
@@ -246,10 +278,6 @@ function Overlay() {
       setConnectingLocalText(false);
     }
   }, []);
-
-  // The pull callback reads the latest URL without re-creating itself per keystroke.
-  const settingsRef = useRef(settings);
-  settingsRef.current = settings;
 
   // Download a text model INTO Ollama through the background proxy. The proxy
   // buffers responses (no streaming), so this uses the non-streaming pull and
