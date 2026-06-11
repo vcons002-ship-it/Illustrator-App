@@ -8,6 +8,7 @@ import {
   extractionUserContent,
   mergeExtraction,
   promptUserContent,
+  stripThink,
   type RawExtraction,
 } from "./extraction.js";
 import type { MLCEngineInterface, InitProgressReport } from "@mlc-ai/web-llm";
@@ -169,7 +170,7 @@ export class WebLLMProvider implements LLMProvider {
           ...(signal ? { signal } : {}),
         },
       );
-      const trimmed = text.trim();
+      const trimmed = stripThink(text).trim();
       return trimmed.length > 0 ? trimmed : this.fallback.buildImagePrompt(request, bible);
     } catch (err) {
       this.degrade(err);
@@ -281,7 +282,7 @@ const ENGINE_STALL_MS = 60_000;
 /** Tolerant parse of the model's JSON into the shared RawExtraction shape. */
 export function parseExtraction(content: string): RawExtraction {
   try {
-    const json = JSON.parse(stripFences(content)) as Record<string, unknown>;
+    const json = JSON.parse(stripFences(stripThink(content))) as Record<string, unknown>;
     return {
       summary: str(json.summary),
       keyMoment: str(json.keyMoment),

@@ -7,6 +7,7 @@ import {
   extractionUserContent,
   mergeExtraction,
   promptUserContent,
+  stripThink,
 } from "./extraction.js";
 import { EXTRACTION_JSON_INSTRUCTION, parseExtraction } from "./webllm-provider.js";
 import type { EntityExtractionInput, LLMProvider } from "./llm-provider.js";
@@ -70,7 +71,7 @@ export class LocalServerLLMProvider implements LLMProvider {
 
   async buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string> {
     const text = await this.complete(PROMPT_SYSTEM, promptUserContent(request, bible), false, signal);
-    return text.trim();
+    return stripThink(text).trim();
   }
 
   private async complete(system: string, user: string, json: boolean, signal?: AbortSignal): Promise<string> {

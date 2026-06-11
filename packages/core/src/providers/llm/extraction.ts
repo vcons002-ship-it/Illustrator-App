@@ -823,3 +823,18 @@ export function consolidateCharacters(list: Character[]): Character[] {
 export function slug(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
+
+/**
+ * Strip a reasoning model's chain-of-thought preamble before parsing its answer.
+ * Hybrid "thinking" models (e.g. Qwen 3, with thinking on) emit a `<think>…</think>`
+ * (or `<thinking>…</thinking>`) block first; left in, it inflates output, breaks the
+ * JSON parse, and can leak reasoning into an image prompt. A non-thinking model has no
+ * such tags, so this is a no-op for them. Handles a paired block and the truncated
+ * case where the opening tag is missing but a stray `</think>` precedes the answer.
+ */
+export function stripThink(s: string): string {
+  return s
+    .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "") // paired reasoning blocks
+    .replace(/^[\s\S]*?<\/think(?:ing)?>/i, "") // opener-omitted leading reasoning, up to its close
+    .trim();
+}

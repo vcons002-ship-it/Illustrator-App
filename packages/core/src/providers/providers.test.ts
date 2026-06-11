@@ -466,6 +466,12 @@ describe("parseExtraction", () => {
     expect(raw.characters[0]!.aliases).toEqual([]);
     expect(raw.environments).toEqual([]);
   });
+  it("strips a thinking model's <think> preamble before parsing (Qwen 3 etc.)", () => {
+    const raw = parseExtraction(
+      '<think>The chapter introduces Bo, who has red hair...</think>\n```json\n{"characters":[{"name":"Bo"}]}\n```',
+    );
+    expect(raw.characters[0]!.name).toBe("Bo"); // reasoning ignored, JSON still parsed
+  });
   it("returns empty on invalid JSON", () => {
     expect(parseExtraction("not json")).toEqual({
       characters: [],

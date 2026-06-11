@@ -4,6 +4,7 @@ import {
   extractionUserContent,
   mergeExtraction,
   promptUserContent,
+  stripThink,
 } from "./extraction.js";
 import { createEmptyBible } from "../../visual-bible/bible.js";
 import { emptyAppearance, type Character } from "../../types/bible.js";
@@ -22,6 +23,20 @@ function char(name: string, over: Partial<Character> = {}): Character {
     ...over,
   };
 }
+
+describe("stripThink", () => {
+  it("removes a paired <think> block, keeping the answer", () => {
+    expect(stripThink("<think>let me reason\nabout this</think>\nthe answer")).toBe("the answer");
+  });
+  it("handles <thinking> and an opener-omitted stray close tag", () => {
+    expect(stripThink("<thinking>reasoning</thinking>X")).toBe("X");
+    expect(stripThink("dangling reasoning</think>\n{\"a\":1}")).toBe('{"a":1}');
+  });
+  it("is a no-op for a non-thinking model's output", () => {
+    expect(stripThink('{"characters":[]}')).toBe('{"characters":[]}');
+    expect(stripThink("a vivid wide shot of a duel")).toBe("a vivid wide shot of a duel");
+  });
+});
 
 describe("mergeExtraction keyEvents (folded prompts)", () => {
   it("maps ordered keyEvents onto the chapter's unit page ranges", () => {
