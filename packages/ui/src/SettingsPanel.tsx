@@ -190,6 +190,8 @@ export interface SettingsPanelProps {
   engineStatus?: string;
   /** LoRA filenames installed in the managed engine (style auto-download). */
   installedLoras?: string[];
+  /** Detected base-model family per installed LoRA filename (desktop), for mismatch flags. */
+  loraFamilies?: Record<string, string>;
   /** Download the matching LoRA for a style; optional URL overrides the catalog. */
   onDownloadStyleLora?: (styleId: string, url?: string) => void;
   /** Connect to a self-hosted engine and load its model list (browser path). */
@@ -219,6 +221,7 @@ export function SettingsPanel({
   downloadStage = {},
   engineStatus = "",
   installedLoras = [],
+  loraFamilies = {},
   onDownloadStyleLora,
   onConnectLocalServer,
   connectingLocal = false,
@@ -518,26 +521,48 @@ export function SettingsPanel({
           )}
 
           {value.imageProvider === "local" && installedLoras.length > 0 && (
-            <label style={rowStyle}>
-              <span>Style LoRA (override)</span>
-              <select
-                value={value.styleLoraOverride ?? ""}
-                onChange={(e) => set({ styleLoraOverride: e.target.value })}
-                title="Pick any LoRA installed in the engine's loras folder to use with the current style, or turn LoRAs off. Overrides the style's automatic pack."
-              >
-                <option value="">Automatic (match the art style)</option>
-                <option value="none">None — prompt-only styling</option>
-                {installedLoras.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
-              <span style={{ opacity: 0.55, fontSize: 11 }}>
-                The LoRA must match your model's family (an SDXL LoRA won't load on Flux/Z-Image).
-                The art-style prompt is always applied regardless.
-              </span>
-            </label>
+            (() => {
+              // Flag a chosen LoRA whose detected base architecture differs from the active
+              // model — it won't load. (Detection reads the LoRA's safetensors header; an
+              // unknown/undetected LoRA is never flagged.)
+              const chosen = value.styleLoraOverride;
+              const chosenFamily = chosen ? loraFamilies[chosen] : undefined;
+              const mismatch =
+                chosenFamily && localFamily !== "unknown" && chosenFamily !== localFamily;
+              const fam = (name: string): string =>
+                loraFamilies[name] ? ` · ${loraFamilies[name]!.toUpperCase()}` : "";
+              return (
+                <label style={rowStyle}>
+                  <span>Style LoRA (override)</span>
+                  <select
+                    value={value.styleLoraOverride ?? ""}
+                    onChange={(e) => set({ styleLoraOverride: e.target.value })}
+                    title="Pick any LoRA installed in the engine's loras folder to use with the current style, or turn LoRAs off. Overrides the style's automatic pack. The tag shows each LoRA's detected base model."
+                  >
+                    <option value="">Automatic (match the art style)</option>
+                    <option value="none">None — prompt-only styling</option>
+                    {installedLoras.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                        {fam(name)}
+                      </option>
+                    ))}
+                  </select>
+                  {mismatch ? (
+                    <span style={{ opacity: 0.85, fontSize: 11, color: "#e0716f" }}>
+                      ⚠ This LoRA is {chosenFamily!.toUpperCase()} but your model is{" "}
+                      {localFamily.toUpperCase()} — it won’t load. Pick a {localFamily.toUpperCase()}
+                      -compatible LoRA, or the prompt style alone will be used.
+                    </span>
+                  ) : (
+                    <span style={{ opacity: 0.55, fontSize: 11 }}>
+                      A LoRA must match your model’s family (the tag shows each one’s detected base
+                      model). The art-style prompt is always applied regardless.
+                    </span>
+                  )}
+                </label>
+              );
+            })()
           )}
 
           {value.imageProvider === "local" && (

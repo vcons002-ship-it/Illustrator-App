@@ -193,6 +193,55 @@ fn nvidia_vram_mb() -> Option<u64> {
     text.lines().next()?.trim().parse::<u64>().ok()
 }
 
+/// One installed LoRA's name + the leading JSON header of its safetensors file (training
+/// metadata + tensor names), so the UI can detect which base model it was trained for.
+#[derive(Serialize)]
+struct LoraHeader {
+    name: String,
+    /// The safetensors JSON header, or "" when unreadable / not a safetensors file.
+    header: String,
+}
+
+/// Read each LoRA's safetensors header (a few KB at the FRONT of the file — never the
+/// multi-GB of weights) so the renderer can classify its base architecture.
+#[tauri::command]
+async fn lora_headers(app: AppHandle) -> Result<Vec<LoraHeader>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = loras_dir(&app);
+        let mut out = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                // Only safetensors carry a readable header; .ckpt/.pt are opaque pickles.
+                if !(name.ends_with(".safetensors") || name.ends_with(".sft")) {
+                    continue;
+                }
+                let header = read_safetensors_header(&entry.path()).unwrap_or_default();
+                out.push(LoraHeader { name, header });
+            }
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Read only the JSON header of a safetensors file: first 8 bytes are the header length
+/// (u64 little-endian), followed by that many bytes of JSON. Bounded so a corrupt length
+/// can never allocate wildly. None on any read/parse failure.
+fn read_safetensors_header(path: &Path) -> Option<String> {
+    let mut f = std::fs::File::open(path).ok()?;
+    let mut len_buf = [0u8; 8];
+    f.read_exact(&mut len_buf).ok()?;
+    let len = u64::from_le_bytes(len_buf);
+    if len == 0 || len > 32 * 1024 * 1024 {
+        return None; // a sane LoRA header is tens of KB, never >32 MB
+    }
+    let mut buf = vec![0u8; len as usize];
+    f.read_exact(&mut buf).ok()?;
+    String::from_utf8(buf).ok()
+}
+
 /// Download a style LoRA into the engine's loras dir, with progress.
 #[tauri::command]
 async fn download_lora(app: AppHandle, model: DownloadableModel) -> Result<(), String> {
@@ -487,6 +536,7 @@ fn main() {
             list_models,
             download_model,
             list_loras,
+            lora_headers,
             download_lora,
             gpu_info
         ])

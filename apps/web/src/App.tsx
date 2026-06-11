@@ -52,6 +52,7 @@ import {
   isDesktop,
   listLocalModels,
   listLoras,
+  loraFamilies,
   onEngineProgress,
   onModelProgress,
 } from "./runtime.js";
@@ -73,6 +74,7 @@ export function App() {
   const [pullProgress, setPullProgress] = useState<Record<string, { status: string; percent?: number }>>({});
   const [engineStatus, setEngineStatus] = useState("");
   const [installedLoras, setInstalledLoras] = useState<string[]>([]);
+  const [loraFamilyMap, setLoraFamilyMap] = useState<Record<string, string>>({});
   const [library, setLibrary] = useState<BookSummary[]>([]);
   const libraryStore = useMemo(() => new IndexedDbStore(), []);
   const hydrated = useRef(false);
@@ -170,6 +172,9 @@ export function App() {
         const baseUrl = await ensureEngine();
         const models = await listLocalModels();
         const loras = await listLoras();
+        // Detect each LoRA's base architecture (reads only the safetensors header) so the
+        // UI can flag one that won't load on the active model.
+        const families = await loraFamilies();
         if (cancelled) return;
         // Detect VRAM once so Auto-quality stays within what the card can render
         // (best-effort; undefined on non-NVIDIA GPUs leaves Auto uncapped).
@@ -178,6 +183,7 @@ export function App() {
         setEngineStatus("");
         setInstalledModels(models);
         setInstalledLoras(loras);
+        setLoraFamilyMap(families);
         setSettings((s) => ({ ...s, engineBaseUrl: baseUrl, ...(vram ? { gpuVramMb: vram } : {}) }));
       } catch (err) {
         if (!cancelled) {
@@ -282,6 +288,7 @@ export function App() {
       await downloadLora({ id, filename, url });
       setModelProgress((prev) => ({ ...prev, [id]: 100 }));
       setInstalledLoras(await listLoras());
+      setLoraFamilyMap(await loraFamilies());
       setSettings((s) => ({ ...s })); // refresh providers so the engine picks it up
     } catch (err) {
       setModelProgress((prev) => {
@@ -848,6 +855,7 @@ export function App() {
             downloadStage={downloadStage}
             engineStatus={engineStatus}
             installedLoras={installedLoras}
+            loraFamilies={loraFamilyMap}
             onDownloadStyleLora={onDownloadStyleLora}
             onConnectLocalServer={onConnectLocalServer}
             connectingLocal={connectingLocal}
