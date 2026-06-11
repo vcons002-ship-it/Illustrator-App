@@ -203,6 +203,8 @@ export class RenderPipeline {
         ...(local?.lora ? { styleLora: local.lora } : {}),
         ...(local?.checkpoint ? { styleCheckpoint: local.checkpoint } : {}),
         ...(this.deps.tier.imageModelFamily ? { modelFamily: this.deps.tier.imageModelFamily } : {}),
+        ...(isLocal && this.deps.tier.localTextEncoder ? { textEncoder: this.deps.tier.localTextEncoder } : {}),
+        ...(isLocal && this.deps.tier.localVae ? { vae: this.deps.tier.localVae } : {}),
         // Local backends expand bible terms themselves (family-aware); cloud got them above.
         ...(isLocal && terms.length ? { terms } : {}),
         ...(isLocal && bible.worldStyle ? { worldStyle: bible.worldStyle } : {}),

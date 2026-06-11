@@ -100,6 +100,10 @@ export function buildProviders(
       ...(settings.imageModelFamily && settings.imageModelFamily !== "auto"
         ? { imageModelFamily: settings.imageModelFamily }
         : {}),
+      ...(settings.imageProvider === "local" && settings.localTextEncoder
+        ? { localTextEncoder: settings.localTextEncoder }
+        : {}),
+      ...(settings.imageProvider === "local" && settings.localVae ? { localVae: settings.localVae } : {}),
       // "One API" native mode: the image slot used the vendor's multimodal endpoint, so
       // mark the tier (and carry the experimental one-shot sub-mode, only when native).
       ...(native && !image.diag.mock ? { nativeIllustration: true } : {}),

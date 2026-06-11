@@ -168,7 +168,11 @@ export class ComfyUIBackend implements LocalEngineBackend {
    * Qwen-2.5-VL encoder (type "qwen_image"). Throws an actionable error when nothing
    * compatible is installed, instead of letting the graph fail cryptically.
    */
-  private async resolveComponents(family: ModelFamily, model: string): Promise<DiffusionComponents> {
+  private async resolveComponents(
+    family: ModelFamily,
+    model: string,
+    overrides?: { textEncoder?: string; vae?: string },
+  ): Promise<DiffusionComponents> {
     const vaes = await this.enumValues("VAELoader", "vae_name");
 
     // Flux.1 UNET-only (not a split-file catalog family): DualCLIPLoader (t5xxl + clip_l).
@@ -176,7 +180,9 @@ export class ComfyUIBackend implements LocalEngineBackend {
       const clips = await this.enumValues("DualCLIPLoader", "clip_name1");
       const t5 = clips.find((c) => /t5/i.test(c));
       const clipL = clips.find((c) => /clip[_-]?l/i.test(c)) ?? clips.find((c) => /clip/i.test(c) && !/t5/i.test(c));
-      const vae = pickComponentAsset(vaes, undefined, [], ["ae", "flux"]);
+      // A manual VAE override wins (a UNET-only Flux.1 has two encoders, so we don't
+      // override those — pick an all-in-one checkpoint if auto-detection is wrong there).
+      const vae = pickComponentAsset(vaes, overrides?.vae, [], ["ae", "flux"]);
       if (!t5 || !clipL || !vae) {
         throw new Error(
           "This Flux model is diffusion-only and needs t5xxl + clip_l text encoders and the " +
@@ -198,8 +204,10 @@ export class ComfyUIBackend implements LocalEngineBackend {
     const wantedVae = entry?.files?.find((f) => f.folder === "vae")?.filename;
     const h = SPLIT_FILE_HEURISTICS[family]!;
     const clipType = entry?.clipType ?? h.type;
-    const encoder = pickComponentAsset(clips, wantedEncoder, [h.clip], []);
-    const vae = pickComponentAsset(vaes, wantedVae, [], h.vae);
+    // A manual override (the user picked the exact file) takes precedence over the
+    // catalog's wanted name; the family pattern/hints still backstop a near miss.
+    const encoder = pickComponentAsset(clips, overrides?.textEncoder ?? wantedEncoder, [h.clip], []);
+    const vae = pickComponentAsset(vaes, overrides?.vae ?? wantedVae, [], h.vae);
     if (!encoder || !vae) {
       const what = entry?.label ?? h.what;
       const hint = [
@@ -365,7 +373,12 @@ export class ComfyUIBackend implements LocalEngineBackend {
     // the engine); if they're missing, fail with an actionable message instead of
     // the cryptic "clip input is invalid: None".
     const components =
-      loadKind === "diffusion" ? await this.resolveComponents(family, checkpoint) : undefined;
+      loadKind === "diffusion"
+        ? await this.resolveComponents(family, checkpoint, {
+            ...(input.textEncoder ? { textEncoder: input.textEncoder } : {}),
+            ...(input.vae ? { vae: input.vae } : {}),
+          })
+        : undefined;
 
     const workflow = buildWorkflow({
       model: checkpoint,

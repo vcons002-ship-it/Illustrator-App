@@ -1076,6 +1076,29 @@ describe("ComfyUI prompt formatting by family", () => {
     expect(wf["13"]!.inputs.vae_name).toBe("flux2_full_encoder.safetensors"); // variant VAE accepted
   });
 
+  it("Flux.2 honours a manual text-encoder / VAE override over auto-detection", async () => {
+    // Two encoders + two VAEs installed; auto-detect would pick by heuristic, but the
+    // user pinned the exact files they know work (input.textEncoder / input.vae).
+    const t = new FakeTransport((req) => {
+      if (req.url.endsWith("/object_info/VAELoader"))
+        return { json: { VAELoader: { input: { required: { vae_name: [["flux2-vae.safetensors", "my-vae.safetensors"]] } } } } };
+      if (req.url.endsWith("/object_info/CLIPLoader"))
+        return { json: { CLIPLoader: { input: { required: { clip_name: [["mistral3-fp8.safetensors", "my-encoder.safetensors"]] } } } } };
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
+      if (req.url.includes("/history/"))
+        return { json: { p1: { outputs: { "9": { images: [{ filename: "f.png", subfolder: "", type: "output" }] } } } } };
+      return { bytes: new TextEncoder().encode("IMG").buffer };
+    });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await backend.generate(
+      { ...imageInput, modelFamily: "flux2", textEncoder: "my-encoder.safetensors", vae: "my-vae.safetensors" },
+      "flux2-dev.safetensors",
+    );
+    const wf = workflowOf(t);
+    expect(wf["12"]!.inputs.clip_name).toBe("my-encoder.safetensors"); // override, not the mistral heuristic
+    expect(wf["13"]!.inputs.vae_name).toBe("my-vae.safetensors");
+  });
+
   it("an all-in-one Flux.2 checkpoint (Klein) loads via CheckpointLoaderSimple with Flux sampling", async () => {
     const t = new FakeTransport((req) => {
       // The Klein file IS in ComfyUI's checkpoint list → all-in-one, no separate loaders.

@@ -52,6 +52,13 @@ export interface ImageGenerationInput {
   terms?: { names: string[]; descriptor: string; kind: "character" | "creature" | "outfit" | "location" }[];
   /** How a local backend should expand `terms` (resolved from the model family). */
   nameHandling?: "inject" | "reference";
+  /**
+   * Manual overrides for a split-file model's components (Flux.2 / Z-Image / Qwen-Image)
+   * when auto-detection picks the wrong file: the exact text-encoder and/or VAE filename
+   * as ComfyUI lists them. Empty/unset = auto-resolve. Ignored by cloud providers.
+   */
+  textEncoder?: string;
+  vae?: string;
   /** Always-applied world-style/genre anchor (from the bible), added to every prompt. */
   worldStyle?: string;
   /** Book title, for the reference-block header on LLM-grade targets. */

@@ -29,6 +29,13 @@ export interface TierConfig {
    */
   imageModelFamily?: "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage";
   /**
+   * Manual component overrides for split-file local models (Flux.2 / Z-Image / Qwen-Image)
+   * when auto-detection of the text encoder / VAE picks the wrong file. Exact filenames as
+   * ComfyUI lists them; unset = auto-resolve. Cloud providers ignore these.
+   */
+  localTextEncoder?: string;
+  localVae?: string;
+  /**
    * "One API" native mode: the SAME cloud vendor + key serves both slots (e.g. both
    * Gemini), and the image slot uses the vendor's MULTIMODAL endpoint — which accepts
    * the character reference photos inline, giving cloud renders the consistency
