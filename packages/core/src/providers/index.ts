@@ -15,7 +15,6 @@ export * from "./image/bible-injection.js";
 export * from "./image/base64.js";
 export * from "./image/mock-image-provider.js";
 export * from "./image/flux-provider.js";
-export * from "./image/gemini-image-provider.js";
 export * from "./image/gemini-native-image-provider.js";
 export * from "./image/openai-image-provider.js";
 export * from "./image/openai-native-image-provider.js";

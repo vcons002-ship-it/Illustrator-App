@@ -68,7 +68,7 @@ export const IMAGE_PROVIDERS: ProviderInfo[] = [
   },
   {
     id: "gemini",
-    label: "Imagen (Google)",
+    label: "Google Gemini (Nano Banana / Flash)",
     slot: "image",
     needsKey: true,
     keyUrl: "https://aistudio.google.com/app/apikey",

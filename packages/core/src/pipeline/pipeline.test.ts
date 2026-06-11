@@ -92,6 +92,36 @@ describe("RenderPipeline style injection", () => {
   });
 });
 
+describe("RenderPipeline world style vs explicit art style", () => {
+  async function renderWithStyle(styleId: string) {
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a knight by a window");
+    bible.worldStyle = "grim dark fantasy world";
+    const { provider, lastPrompt } = recordingImage();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: { ...DEFAULT_TIER_CONFIG, style: styleId }, // cloud tier → reference expansion
+    });
+    await pipeline.renderPage(0);
+    return lastPrompt();
+  }
+
+  it("auto style: the bible's world style rides along in the reference block", async () => {
+    expect(await renderWithStyle("auto")).toContain("grim dark fantasy world");
+  });
+
+  it("explicit style WINS: the world style is omitted so two Style directives never compete", async () => {
+    const prompt = await renderWithStyle("watercolor");
+    expect(prompt).not.toContain("grim dark fantasy world");
+    expect(prompt).toContain("watercolor painting"); // the chosen style's suffix is there
+  });
+});
+
 describe("RenderPipeline style LoRA override", () => {
   function inputRecorder(): { provider: ImageProvider; last: () => ImageGenerationInput } {
     let seen: ImageGenerationInput | undefined;

@@ -191,13 +191,16 @@ export class RenderPipeline {
       // family-aware; for cloud we pre-expand here (cloud providers don't know the bible).
       const terms = findBibleTermsInText(basePrompt, bible);
       const isLocal = this.deps.tier.tier === "local";
+      // The bible's world style only rides along for the "auto" art style — an explicitly
+      // chosen style WINS, instead of the prompt carrying two competing "Style:" directives.
+      const worldStyle = this.deps.tier.style && this.deps.tier.style !== "auto" ? undefined : bible.worldStyle;
       const prompt = isLocal
         ? basePrompt
         : expandPrompt(
             basePrompt,
             terms,
             cloudNameHandling(this.deps.image.id),
-            bible.worldStyle,
+            worldStyle,
             request.bookTitle,
           );
       // Reference images for IP-Adapter — user-uploaded only (auto-capture removed).
@@ -230,7 +233,7 @@ export class RenderPipeline {
         ...(isLocal && this.deps.tier.localCfg !== undefined ? { cfgOverride: this.deps.tier.localCfg } : {}),
         // Local backends expand bible terms themselves (family-aware); cloud got them above.
         ...(isLocal && terms.length ? { terms } : {}),
-        ...(isLocal && bible.worldStyle ? { worldStyle: bible.worldStyle } : {}),
+        ...(isLocal && worldStyle ? { worldStyle } : {}),
         ...(isLocal && request.bookTitle ? { bookTitle: request.bookTitle } : {}),
         ...(ipAdapterRefs.length ? { ipAdapterRefs } : {}),
         ...(onProgress ? { onProgress } : {}),

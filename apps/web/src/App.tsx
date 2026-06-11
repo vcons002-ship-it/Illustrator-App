@@ -14,6 +14,7 @@ import {
   decryptSecrets,
   encryptSecrets,
   getImageStyle,
+  displayCaption,
   latestSpoilerParagraphIndex,
   panelGroup,
   paragraphIndexFromId,
@@ -964,7 +965,19 @@ export function App() {
                   awaitingStart={!generating}
                 />
               )}
-              {imageCaption && <div style={styles.imageDescription}>{imageCaption}</div>}
+              {imageCaption && (
+                <div style={styles.imageDescription}>
+                  {displayCaption(imageCaption)}
+                  {displayCaption(imageCaption) !== imageCaption && (
+                    <details style={{ marginTop: 4 }}>
+                      <summary style={{ cursor: "pointer", fontSize: 11, opacity: 0.6 }}>
+                        Full prompt (as sent to the model)
+                      </summary>
+                      <div style={{ fontSize: 11, opacity: 0.7 }}>{imageCaption}</div>
+                    </details>
+                  )}
+                </div>
+              )}
               <div style={styles.caption}>
                 {pagesPerImage === "chapter"
                   ? `Chapter ${unitIndex + 1} of ${totalUnits}`

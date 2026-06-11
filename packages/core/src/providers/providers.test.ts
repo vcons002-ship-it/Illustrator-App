@@ -5,7 +5,6 @@ import type { VisualBible } from "../types/bible.js";
 import type { ImageGenerationInput } from "./image/image-provider.js";
 import { GeminiLLMProvider } from "./llm/gemini-provider.js";
 import { OpenAILLMProvider } from "./llm/openai-provider.js";
-import { GeminiImageProvider } from "./image/gemini-image-provider.js";
 import { GeminiNativeImageProvider, pickBestGeminiImageModel } from "./image/gemini-native-image-provider.js";
 import { OpenAIImageProvider } from "./image/openai-image-provider.js";
 import { OpenAINativeImageProvider } from "./image/openai-native-image-provider.js";
@@ -182,18 +181,6 @@ describe("OpenAILLMProvider", () => {
   });
 });
 
-describe("GeminiImageProvider", () => {
-  it("decodes the inline base64 prediction", async () => {
-    const transport = new FakeTransport(() => ({
-      json: { predictions: [{ bytesBase64Encoded: b64("PNGDATA"), mimeType: "image/png" }] },
-    }));
-    const provider = new GeminiImageProvider({ apiKey: "KEY", transport });
-    const out = await provider.generate(imageInput);
-    expect(new TextDecoder().decode(out.bytes)).toBe("PNGDATA");
-    expect(transport.requests[0]!.url).toContain(":predict?key=KEY");
-  });
-});
-
 describe("OpenAIImageProvider", () => {
   it("maps size and decodes b64_json", async () => {
     const transport = new FakeTransport(() => ({ json: { data: [{ b64_json: b64("IMG") }] } }));
@@ -234,6 +221,22 @@ describe("GeminiNativeImageProvider (one-API multimodal)", () => {
     const body = transport.requests[0]!.body as { contents: { parts: unknown[] }[] };
     expect(body.contents[0]!.parts).toHaveLength(1); // prompt only
     expect(out.mimeType).toBe("image/jpeg");
+  });
+
+  it("passes the canvas orientation as imageConfig.aspectRatio (the API takes a ratio)", async () => {
+    const transport = new FakeTransport(() => ({
+      json: { candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: b64("I") } }] } }] },
+    }));
+    const provider = new GeminiNativeImageProvider({ ...pinned, transport });
+    await provider.generate({ ...imageInput, width: 832, height: 1248 }); // portrait
+    type Body = { generationConfig: { imageConfig: { aspectRatio: string } } };
+    expect((transport.requests[0]!.body as Body).generationConfig.imageConfig.aspectRatio).toBe("2:3");
+
+    await provider.generate({ ...imageInput, width: 1248, height: 832 }); // landscape
+    expect((transport.requests[1]!.body as Body).generationConfig.imageConfig.aspectRatio).toBe("3:2");
+
+    await provider.generate(imageInput); // default square
+    expect((transport.requests[2]!.body as Body).generationConfig.imageConfig.aspectRatio).toBe("1:1");
   });
 
   it("throws when the response has no image part", async () => {

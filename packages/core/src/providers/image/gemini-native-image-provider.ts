@@ -103,7 +103,11 @@ export class GeminiNativeImageProvider implements ImageProvider {
       body: {
         contents: [{ role: "user", parts }],
         // Ask for an image back; some models also emit a stray text part — we ignore it.
-        generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
+        // imageConfig carries the canvas orientation (the API takes a ratio, not pixels).
+        generationConfig: {
+          responseModalities: ["TEXT", "IMAGE"],
+          imageConfig: { aspectRatio: geminiAspectRatio(input.width, input.height) },
+        },
       },
       ...(input.signal ? { signal: input.signal } : {}),
     });
@@ -120,6 +124,19 @@ export class GeminiNativeImageProvider implements ImageProvider {
     }
     throw new Error("Gemini native image response contained no image data");
   }
+}
+
+/**
+ * Map requested pixel dimensions to the closest aspect ratio the generateContent
+ * imageConfig supports. Our portrait/landscape canvases are 2:3 / 3:2, which the API
+ * offers directly; square stays 1:1.
+ */
+export function geminiAspectRatio(width?: number, height?: number): string {
+  const w = width ?? 1024;
+  const h = height ?? 1024;
+  if (h > w) return "2:3";
+  if (w > h) return "3:2";
+  return "1:1";
 }
 
 /**

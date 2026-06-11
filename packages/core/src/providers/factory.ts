@@ -46,7 +46,7 @@ export interface ImageProviderOptions {
   key?: string;
   /** App-managed local engine + chosen model (required for id === "local"). */
   engine?: { backend: LocalEngineBackend; model: string };
-  /** Transport for the REST-based providers (Flux / Imagen / OpenAI). */
+  /** Transport for the REST-based providers (Flux / Gemini / OpenAI). */
   transport?: Transport;
   /**
    * "One API" native mode: use the same vendor's MULTIMODAL image endpoint (which
