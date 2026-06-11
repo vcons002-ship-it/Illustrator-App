@@ -10,7 +10,14 @@ import { GeminiNativeImageProvider, pickBestGeminiImageModel } from "./image/gem
 import { OpenAIImageProvider } from "./image/openai-image-provider.js";
 import { OpenAINativeImageProvider } from "./image/openai-native-image-provider.js";
 import { FluxProvider } from "./image/flux-provider.js";
-import { ComfyUIBackend, assetStem, pickComponentAsset, resolveAssetName } from "./image/local-engine/comfyui-backend.js";
+import {
+  ComfyUIBackend,
+  assetStem,
+  comfyExecutionError,
+  flux2EncoderPatterns,
+  pickComponentAsset,
+  resolveAssetName,
+} from "./image/local-engine/comfyui-backend.js";
 import { Automatic1111Backend } from "./image/local-engine/automatic1111-backend.js";
 import { WebLLMProvider, parseExtraction } from "./llm/webllm-provider.js";
 import { LocalServerLLMProvider } from "./llm/local-server-provider.js";
@@ -856,6 +863,42 @@ describe("assetStem / pickComponentAsset (split-file variant matching)", () => {
   });
 });
 
+describe("comfyExecutionError + flux2EncoderPatterns (encoder/model mismatch)", () => {
+  it("translates a shape-mismatch into an encoder↔model guidance message", () => {
+    const status = {
+      status_str: "error",
+      messages: [
+        ["execution_start", {}],
+        ["execution_error", { exception_message: "mat1 and mat2 shapes cannot be multiplied (512x12288 and 15360x6144)" }],
+      ] as [string, Record<string, unknown>][],
+    };
+    const msg = comfyExecutionError(status)!;
+    expect(msg).toMatch(/text encoder doesn't match/i);
+    expect(msg).toMatch(/Mistral-Small/);
+    expect(msg).toMatch(/Advanced: split-file/);
+    expect(msg).toContain("15360x6144"); // raw kept for reference
+  });
+  it("passes a non-cryptic error through, and returns undefined for success", () => {
+    expect(
+      comfyExecutionError({ status_str: "error", messages: [["execution_error", { exception_message: "Out of memory" }]] }),
+    ).toBe("ComfyUI: Out of memory");
+    expect(comfyExecutionError({ status_str: "success", messages: [] })).toBeUndefined();
+    expect(comfyExecutionError(undefined)).toBeUndefined();
+  });
+  it("orders Flux.2 encoders by the model name (Klein→Qwen, dev→Mistral)", () => {
+    const tryNames = (model: string, names: string[]) => {
+      for (const re of flux2EncoderPatterns(model)) {
+        const hit = names.find((n) => re.test(n));
+        if (hit) return hit;
+      }
+      return undefined;
+    };
+    const both = ["mistral3-fp8.safetensors", "qwen_3_8b.safetensors"];
+    expect(tryNames("flux2-klein-9b.safetensors", both)).toBe("qwen_3_8b.safetensors");
+    expect(tryNames("flux2-dev.safetensors", both)).toBe("mistral3-fp8.safetensors");
+  });
+});
+
 describe("createImageProvider local", () => {
   it("requires an engine, then delegates to the backend with the chosen model", async () => {
     expect(() => createImageProvider("local")).toThrow(/running engine/);
@@ -1051,6 +1094,33 @@ describe("ComfyUI prompt formatting by family", () => {
     const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
     await expect(backend.generate({ ...imageInput, modelFamily: "flux2" }, "flux2-dev.safetensors")).rejects.toThrow(
       /Flux\.2 needs/i,
+    );
+  });
+
+  it("surfaces ComfyUI's real execution error (encoder/model mismatch), not 'no image'", async () => {
+    const t = new FakeTransport((req) => {
+      if (req.url.endsWith("/object_info/VAELoader"))
+        return { json: { VAELoader: { input: { required: { vae_name: [["flux2-vae.safetensors"]] } } } } };
+      if (req.url.endsWith("/object_info/CLIPLoader"))
+        return { json: { CLIPLoader: { input: { required: { clip_name: [["qwen_3_8b.safetensors"]] } } } } };
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
+      if (req.url.includes("/history/"))
+        return {
+          json: {
+            p1: {
+              outputs: {}, // failed → no image
+              status: {
+                status_str: "error",
+                messages: [["execution_error", { exception_message: "mat1 and mat2 shapes cannot be multiplied (512x12288 and 15360x6144)" }]],
+              },
+            },
+          },
+        };
+      return { bytes: new ArrayBuffer(0) };
+    });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await expect(backend.generate({ ...imageInput, modelFamily: "flux2" }, "flux2-dev.safetensors")).rejects.toThrow(
+      /text encoder doesn't match/i,
     );
   });
 

@@ -78,7 +78,14 @@ interface HistoryImage {
 
 type HistoryResponse = Record<
   string,
-  { outputs?: Record<string, { images?: HistoryImage[] }> }
+  {
+    outputs?: Record<string, { images?: HistoryImage[] }>;
+    /** Execution status; `messages` carries an `execution_error` with the real cause. */
+    status?: {
+      status_str?: string;
+      messages?: [string, Record<string, unknown>][];
+    };
+  }
 >;
 
 export class ComfyUIBackend implements LocalEngineBackend {
@@ -204,9 +211,13 @@ export class ComfyUIBackend implements LocalEngineBackend {
     const wantedVae = entry?.files?.find((f) => f.folder === "vae")?.filename;
     const h = SPLIT_FILE_HEURISTICS[family]!;
     const clipType = entry?.clipType ?? h.type;
+    // Flux.2 has TWO encoder families that aren't interchangeable: dev uses Mistral-Small,
+    // Klein uses Qwen-3-8B (a mismatch → "shapes cannot be multiplied"). Order the patterns
+    // by the diffusion model's name so the right one is auto-picked when both are installed.
+    const encoderPatterns = family === "flux2" ? flux2EncoderPatterns(model) : [h.clip];
     // A manual override (the user picked the exact file) takes precedence over the
     // catalog's wanted name; the family pattern/hints still backstop a near miss.
-    const encoder = pickComponentAsset(clips, overrides?.textEncoder ?? wantedEncoder, [h.clip], []);
+    const encoder = pickComponentAsset(clips, overrides?.textEncoder ?? wantedEncoder, encoderPatterns, []);
     const vae = pickComponentAsset(vaes, overrides?.vae ?? wantedVae, [], h.vae);
     if (!encoder || !vae) {
       const what = entry?.label ?? h.what;
@@ -527,7 +538,8 @@ export class ComfyUIBackend implements LocalEngineBackend {
         const images = Object.values(entry.outputs ?? {}).flatMap((o) => o.images ?? []);
         const first = images[0];
         if (first) return first;
-        throw new Error("ComfyUI finished but produced no image");
+        // No image: surface ComfyUI's REAL execution error (otherwise it's a mystery).
+        throw new Error(comfyExecutionError(entry.status) ?? "ComfyUI finished but produced no image");
       }
       if (progress.everProgressed) {
         if (Date.now() - progress.lastMs > this.idleTimeoutMs) {
@@ -780,6 +792,31 @@ function delay(ms: number): Promise<void> {
   return ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve();
 }
 
+/**
+ * Extract ComfyUI's real execution error from a history entry's status messages, and
+ * translate the cryptic ones. The flagship case: a "mat1 and mat2 shapes cannot be
+ * multiplied" inside the diffusion model means the TEXT ENCODER doesn't match the
+ * model — Flux.2-dev needs the Mistral-Small encoder, Flux.2 Klein the Qwen-3-8B one —
+ * so we say that instead of a linear-algebra dump. Returns undefined when the status
+ * carries no error.
+ */
+export function comfyExecutionError(status: HistoryResponse[string]["status"]): string | undefined {
+  const errMsg = status?.messages?.find(([type]) => type === "execution_error")?.[1];
+  const raw = typeof errMsg?.exception_message === "string" ? errMsg.exception_message : undefined;
+  if (!raw) {
+    return status?.status_str === "error" ? "ComfyUI reported an execution error." : undefined;
+  }
+  if (/shapes cannot be multiplied/i.test(raw)) {
+    return (
+      "The text encoder doesn't match this model. A split-file model needs its OWN encoder " +
+      "(Flux.2-dev → Mistral-Small-3.1; Flux.2 Klein → Qwen-3-8B; Z-Image → Qwen-3-4B). Install " +
+      "the matching one and pick it under Settings → Advanced: split-file components. " +
+      `(ComfyUI: ${raw})`
+    );
+  }
+  return `ComfyUI: ${raw}`;
+}
+
 /** Per-family encoder/VAE matching for split-file models (Flux.2 / Z-Image / Qwen-Image).
  * `clip` matches the text-encoder name; `vae` are VAE name-substring hints; `type` is the
  * CLIPLoader type; `what` names it in errors. Flux.2-dev ships a Mistral-3 encoder, Klein
@@ -792,6 +829,19 @@ export const SPLIT_FILE_HEURISTICS: Record<
   zimage: { clip: /qwen.?3|qwen/i, vae: ["ae.", "z_image", "z-image"], type: "lumina2", what: "Z-Image" },
   qwenimage: { clip: /qwen.?2\.5|qwen.*vl|qwen/i, vae: ["qwen"], type: "qwen_image", what: "Qwen-Image" },
 };
+
+/** Flux.2 encoder-name patterns ordered by the diffusion model's name: Klein → Qwen-3
+ * first, dev/pro → Mistral first; otherwise the combined pattern. Picks the right one when
+ * both a Mistral and a Qwen encoder are installed (they're NOT interchangeable). */
+export function flux2EncoderPatterns(model: string): RegExp[] {
+  const m = model.toLowerCase();
+  const qwen = /qwen.?3/i;
+  const mistral = /mistral/i;
+  const both = SPLIT_FILE_HEURISTICS.flux2!.clip;
+  if (/klein/.test(m)) return [qwen, mistral, both];
+  if (/dev|pro/.test(m)) return [mistral, qwen, both];
+  return [both];
+}
 
 /**
  * The model "stem": filename minus its extension and trailing precision/quant qualifiers
