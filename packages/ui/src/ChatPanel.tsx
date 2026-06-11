@@ -162,7 +162,7 @@ function MessageBubble({ message }: { message: ChatMessageVM }) {
     >
       {message.text ? <div style={{ whiteSpace: "pre-wrap" }}>{message.text}</div> : null}
       {url ? (
-        <img src={url} alt="Chat image" style={{ maxWidth: "100%", borderRadius: 6, marginTop: message.text ? 6 : 0 }} />
+        <img src={url} alt="Chat image" decoding="async" style={{ maxWidth: "100%", borderRadius: 6, marginTop: message.text ? 6 : 0 }} />
       ) : null}
       {message.links?.length ? (
         <ol style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 11 }}>

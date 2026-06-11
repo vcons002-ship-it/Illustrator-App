@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * Scroll-depth tracking (spec Module 3). Watches paragraph elements with an
@@ -10,6 +10,15 @@ import { useEffect, useRef, useState } from "react";
  */
 /** Active band line = top 30% of the viewport (matches the observer rootMargin). */
 const ACTIVE_BAND = 0.3;
+
+/**
+ * Progress is quantized to this step before it becomes state. The raw ratio
+ * differs on essentially every scroll frame, and this hook sits at the app
+ * root — unquantized, every frame re-rendered the whole reader. A ~1.5% step
+ * is invisible (BloomTransition eases toward the target anyway) but lets
+ * React's same-value bailout skip most frames.
+ */
+const PROGRESS_STEP = 1 / 64;
 
 export interface ScrollDepth {
   /** Ref callback to attach to each paragraph element. */
@@ -61,7 +70,8 @@ export function useScrollDepth(): ScrollDepth {
       const rect = el.getBoundingClientRect();
       const bandLine = window.innerHeight * ACTIVE_BAND;
       const height = rect.height || 1;
-      setProgress(Math.max(0, Math.min(1, (bandLine - rect.top) / height)));
+      const raw = Math.max(0, Math.min(1, (bandLine - rect.top) / height));
+      setProgress(Math.round(raw / PROGRESS_STEP) * PROGRESS_STEP);
     };
     const onScroll = () => {
       cancelAnimationFrame(raf);
@@ -75,17 +85,29 @@ export function useScrollDepth(): ScrollDepth {
     };
   }, [activeParagraphId]);
 
-  const registerParagraph = (id: string) => (el: HTMLElement | null) => {
-    const existing = elements.current.get(id);
-    if (existing && observer.current) observer.current.unobserve(existing);
-    if (el) {
-      el.setAttribute("data-paragraph-id", id);
-      elements.current.set(id, el);
-      observer.current?.observe(el);
-    } else {
-      elements.current.delete(id);
+  // One STABLE ref callback per paragraph id. A fresh callback per render makes
+  // React detach + reattach every paragraph's ref (and the observer) on every
+  // render of the consumer — for a whole book's paragraphs. Cached, the callbacks
+  // only fire on real mount/unmount.
+  const refCallbacks = useRef(new Map<string, (el: HTMLElement | null) => void>());
+  const registerParagraph = useCallback((id: string) => {
+    let cb = refCallbacks.current.get(id);
+    if (!cb) {
+      cb = (el: HTMLElement | null) => {
+        const existing = elements.current.get(id);
+        if (existing && observer.current) observer.current.unobserve(existing);
+        if (el) {
+          el.setAttribute("data-paragraph-id", id);
+          elements.current.set(id, el);
+          observer.current?.observe(el);
+        } else {
+          elements.current.delete(id);
+        }
+      };
+      refCallbacks.current.set(id, cb);
     }
-  };
+    return cb;
+  }, []);
 
   return { registerParagraph, activeParagraphId, activeParagraphProgress, passedParagraphIds };
 }

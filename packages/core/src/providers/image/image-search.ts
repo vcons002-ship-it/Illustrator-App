@@ -183,13 +183,21 @@ export async function retrieveFromHits(
   };
 }
 
+/**
+ * Cap on each third-party image download. These are arbitrary hosts from search
+ * results — the least reliable endpoints we talk to, and some hotlink-blockers
+ * blackhole instead of refusing — so without a deadline one dead host would
+ * stall the render pipeline indefinitely (fetch has no default timeout).
+ */
+const IMAGE_FETCH_TIMEOUT_MS = 10_000;
+
 /** Download an image's bytes; undefined on any failure or a non-image response. */
 async function fetchImageBytes(
   transport: Transport,
   url: string,
 ): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined> {
   try {
-    const res = await transport.send({ url, method: "GET" });
+    const res = await transport.send({ url, method: "GET", signal: AbortSignal.timeout(IMAGE_FETCH_TIMEOUT_MS) });
     if (!res.ok) return undefined;
     const bytes = await res.arrayBuffer();
     if (!bytes || bytes.byteLength === 0) return undefined;

@@ -84,15 +84,24 @@ export class RenderPipeline {
     };
   }
 
+  /** Bounded chapter context per chapterId — the book is immutable for this
+   * pipeline's lifetime, and `buildRequest` runs per unit on both the prompt
+   * pass and the render path, so the chapter join must not be repeated. */
+  private readonly chapterContextCache = new Map<string, string>();
+
   /** Bounded text of the whole chapter this page belongs to, for continuity. */
   private chapterContextFor(page: Page): string {
+    const cached = this.chapterContextCache.get(page.chapterId);
+    if (cached !== undefined) return cached;
     const full = this.deps.book.pages
       .filter((p) => p.chapterId === page.chapterId)
       .flatMap((p) => p.paragraphs.map((x) => x.text))
       .join("\n\n")
       .replace(/\s+/g, " ")
       .trim();
-    return full.length <= 1500 ? full : `${full.slice(0, 1500).trimEnd()}…`;
+    const bounded = full.length <= 1500 ? full : `${full.slice(0, 1500).trimEnd()}…`;
+    this.chapterContextCache.set(page.chapterId, bounded);
+    return bounded;
   }
 
   /** Stable cache id for a unit's image (`${bookId}:${pageId}`). */
@@ -109,13 +118,15 @@ export class RenderPipeline {
   async cachedResult(pageIndex: number): Promise<ImageResult | undefined> {
     const page = this.deps.book.pages[pageIndex];
     if (!page) return undefined;
-    const request = this.buildRequest(page);
-    const requestId = `${request.bookId}:${request.pageId}`;
+    // The cache id depends only on the page (same as `requestIdFor`) — building a
+    // full VisualRequest here made every book open pay an entity+context scan per
+    // page just to derive it.
+    const requestId = `${this.deps.book.id}:${page.id}`;
     const cached = await this.deps.store.getImage(requestId);
     if (!cached) return undefined;
     return {
       requestId,
-      pageId: request.pageId,
+      pageId: page.id,
       status: "ready",
       // The prompt this image was actually rendered from (persisted with it), so the
       // UI's per-image description stays STABLE across sessions instead of being

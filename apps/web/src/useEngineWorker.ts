@@ -10,7 +10,12 @@ import type {
   VisualBible,
   WebSearchHit,
 } from "@visual-reader/core";
-import type { ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
+import {
+  identitySettingsKey,
+  tuningSettingsKey,
+  type ProvidersDiagnostics,
+  type ReaderSettings,
+} from "@visual-reader/ui";
 
 export interface ImportResult {
   ok: boolean;
@@ -334,13 +339,27 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   const identityKey = identitySettingsKey(settings);
   const tuningKey = tuningSettingsKey(settings);
 
+  const identityApplied = useRef(false);
   useEffect(() => {
-    send({ type: "init", settings: settingsRef.current });
-    if (lastBook.current) {
-      setResults(new Map());
-      send({ type: "open", book: lastBook.current });
-      if (generationRequested.current) send({ type: "start" });
+    const apply = (): void => {
+      send({ type: "init", settings: settingsRef.current });
+      if (lastBook.current) {
+        setResults(new Map());
+        send({ type: "open", book: lastBook.current });
+        if (generationRequested.current) send({ type: "start" });
+      }
+    };
+    // First run initialises the worker immediately. LATER identity changes are
+    // debounced: an identity re-open clones the whole book to the worker and
+    // rebuilds the engine (aborting in-flight work), so typing an API key must
+    // coalesce into one rebuild — not one per keystroke.
+    if (!identityApplied.current) {
+      identityApplied.current = true;
+      apply();
+      return;
     }
+    const timer = setTimeout(apply, 400);
+    return () => clearTimeout(timer);
   }, [identityKey]); // deliberately keyed on the identity FIELDS, not the settings object
 
   useEffect(() => {
@@ -523,53 +542,6 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     chatTool,
     chatCancel,
   };
-}
-
-/**
- * Settings that only tune HOW future images render (style/quality/aspect/sampler…).
- * Changing one updates the live engine via "tune" — no rebuild, nothing aborted.
- */
-const TUNING_FIELDS = [
-  "imageStyle",
-  "imageQuality",
-  "aspectRatio",
-  "drawAsComicPage",
-  "imageModelFamily",
-  "localSteps",
-  "localCfg",
-  "localSampler",
-  "localScheduler",
-  "localTextEncoder",
-  "localVae",
-  "styleLoraOverride",
-  "gpuVramMb",
-  // Chat-only provider overrides: read by the worker AT CHAT TIME (its settings are
-  // refreshed by "tune"), so changing them must not dispose the engine mid-book.
-  "chatTextProvider",
-  "chatLocalModel",
-  "chatImageProvider",
-] as const satisfies readonly (keyof ReaderSettings)[];
-
-/** Settings the worker never needs at all (pure presentation). */
-const UI_ONLY_FIELDS = ["panelsPerView"] as const satisfies readonly (keyof ReaderSettings)[];
-
-/** Dependency key over just the tuning fields. */
-function tuningSettingsKey(s: ReaderSettings): string {
-  return JSON.stringify(TUNING_FIELDS.map((k) => s[k]));
-}
-
-/**
- * Dependency key over everything EXCEPT tuning + UI-only fields — providers, keys,
- * models, pages-per-image, server URLs… A field added to ReaderSettings later lands
- * here by default (full rebuild: always correct, just not maximally cheap).
- */
-function identitySettingsKey(s: ReaderSettings): string {
-  const skip = new Set<string>([...TUNING_FIELDS, ...UI_ONLY_FIELDS]);
-  const rest: Record<string, unknown> = {};
-  for (const k of Object.keys(s).sort()) {
-    if (!skip.has(k)) rest[k] = (s as unknown as Record<string, unknown>)[k];
-  }
-  return JSON.stringify(rest);
 }
 
 /** Trigger a browser download of a JSON string. */

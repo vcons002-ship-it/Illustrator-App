@@ -217,6 +217,17 @@ function setPromptProgress(done: number, total: number): void {
   });
 }
 
+/**
+ * Last forwarded whole-percent render progress per page. ComfyUI reports every
+ * diffusion step; forwarding each one posts a message (and a main-thread React
+ * render) per step for the whole generation run. The UI only ever shows whole
+ * percents, so steps that don't change the rounded percent are dropped here.
+ */
+const lastProgressPct = new Map<number, number>();
+
+/** Last time a prompt-writing token count was posted (throttled to 2/s). */
+let lastPromptTokenPostMs = 0;
+
 /** Structured chapter/prompt progress for the always-visible workflow bar. */
 const workflow = { bibleDone: 0, bibleTotal: 0, promptsDone: 0, promptsTotal: 0 };
 function postWorkflow(): void {
@@ -644,6 +655,7 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     post({ type: "generating", value: false });
     post({ type: "paused", bible: false, images: false });
     pendingStart = false; // fresh open; the hook re-sends "start" if it should resume
+    lastProgressPct.clear(); // page indices are book-relative
     bibleActive = false;
     bibleRunStartMs = 0;
     bibleCharacters = 0; // fresh book; the restored bible's onBibleUpdate re-fills it
@@ -662,10 +674,15 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
         // bible status line; prompt-writing tokens show only when the bible isn't
         // claiming the line (so the two never fight over it).
         if (activity.phase === "bible") {
+          // Record only — the 1s bible ticker renders the line. Posting here too
+          // sent a message (and a full UI re-render) per streamed token.
           bibleTokens = activity.tokens;
-          renderBibleStatus();
         } else if (!bibleActive && activity.tokens > 0) {
-          post({ type: "status", message: `Writing the illustration prompt… ${activity.tokens} tokens` });
+          const now = Date.now();
+          if (now - lastPromptTokenPostMs >= 500) {
+            lastPromptTokenPostMs = now;
+            post({ type: "status", message: `Writing the illustration prompt… ${activity.tokens} tokens` });
+          }
         }
       },
     });
@@ -691,6 +708,15 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
       ...(webSearch ? { webSearch } : {}),
       store: new IndexedDbStore(),
       onUpdate: (pageIndex, result) => {
+        // Per-step progress: forward only when the whole percent moves (that's all
+        // the UI displays) — otherwise every diffusion step crosses the boundary.
+        if (result.status === "rendering" && result.progress !== undefined) {
+          const pct = Math.round(result.progress * 100);
+          if (lastProgressPct.get(pageIndex) === pct) return;
+          lastProgressPct.set(pageIndex, pct);
+        } else {
+          lastProgressPct.delete(pageIndex);
+        }
         const transfer = result.image ? [result.image.bytes] : [];
         post({ type: "update", pageIndex, result }, transfer);
         // While the bible owns the status line, leave it alone. Otherwise name the

@@ -54,6 +54,7 @@ export function ImagePanel({ result, bloom, pageKey, awaitingStart }: ImagePanel
         <img
           src={displaySrc}
           alt="Illustration of the current passage"
+          decoding="async"
           style={{
             display: "block",
             width: "100%",

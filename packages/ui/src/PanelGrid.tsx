@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { ImageResult } from "@visual-reader/core";
 import { BloomTransition } from "./BloomTransition.js";
 import { useObjectUrl } from "./imageObjectUrl.js";
@@ -61,7 +62,10 @@ export function PanelGrid({ panels, currentUnit, bloom, direction, pageKey }: Pa
   );
 }
 
-function Panel({
+// Memoized: `bloom` changes on virtually every scroll frame while reading, but
+// only the CURRENT panel's `target` actually changes — the other panels' props
+// are primitives/stable refs, so they skip re-rendering their image subtrees.
+const Panel = memo(function Panel({
   result,
   target,
   highlight,
@@ -96,10 +100,11 @@ function Panel({
           <img
             src={imageUrl}
             alt="Comic panel"
+            decoding="async"
             style={{ display: "block", width: "100%", height: "100%", objectFit: "cover" }}
           />
         </BloomTransition>
       ) : null}
     </div>
   );
-}
+});

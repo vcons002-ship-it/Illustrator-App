@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Automatic1111Backend,
   ComfyUIBackend,
@@ -1108,43 +1108,13 @@ export function App() {
 
       {book && (
         <main style={styles.reader}>
-          <article style={styles.column}>
-            {book.pages.map((page, i) => {
-              const prev = book.pages[i - 1];
-              const newChapter = !prev || prev.chapterId !== page.chapterId;
-              const chapter = book.chapters.find((c) => c.id === page.chapterId);
-              const pageUnit = units?.pageToUnit[i] ?? i;
-              const isActiveUnit = pageUnit === unitIndex;
-              const next = book.pages[i + 1];
-              // "Page N" dividers between pages of the same chapter (chapter
-              // boundaries are marked by the heading). Hidden in whole-chapter mode.
-              const showPageDivider =
-                pagesPerImage !== "chapter" &&
-                next !== undefined &&
-                next.chapterId === page.chapterId;
-              return (
-                <Fragment key={page.id}>
-                  {newChapter && (
-                    <h2 style={styles.chapterHeading}>
-                      {chapter?.title || `Chapter ${(chapter?.index ?? 0) + 1}`}
-                    </h2>
-                  )}
-                  <section style={isActiveUnit ? { ...styles.page, ...styles.sectionActive } : styles.page}>
-                    {page.paragraphs.map((para) => (
-                      <p key={para.id} ref={registerParagraph(para.id)} style={styles.paragraph}>
-                        {para.text}
-                      </p>
-                    ))}
-                  </section>
-                  {showPageDivider && (
-                    <div style={styles.pageDivider}>
-                      <span style={styles.pageDividerLabel}>Page {i + 1}</span>
-                    </div>
-                  )}
-                </Fragment>
-              );
-            })}
-          </article>
+          <ReaderColumn
+            book={book}
+            pageToUnit={units?.pageToUnit}
+            unitIndex={unitIndex}
+            pagesPerImage={pagesPerImage}
+            registerParagraph={registerParagraph}
+          />
 
           <aside style={styles.aside}>
             <div style={styles.panel}>
@@ -1301,6 +1271,66 @@ export function App() {
  * are read inline and re-encrypted on the next save.
  */
 /** "~Xs left" / "~Xm left" from a millisecond estimate. */
+/**
+ * The full book text column. Memoized so it only re-renders when the reader
+ * crosses into a new unit (or the book/layout changes) — NOT on every bloom
+ * tick, chat token, or status update. The app root re-renders on every scroll
+ * frame (reading progress is state there), and reconciling every paragraph of
+ * a whole book per frame was the single biggest main-thread cost while reading.
+ */
+const ReaderColumn = memo(function ReaderColumn({
+  book,
+  pageToUnit,
+  unitIndex,
+  pagesPerImage,
+  registerParagraph,
+}: {
+  book: BookSource;
+  pageToUnit: number[] | undefined;
+  unitIndex: number;
+  pagesPerImage: number | "chapter";
+  registerParagraph: (id: string) => (el: HTMLElement | null) => void;
+}) {
+  const chaptersById = useMemo(() => new Map(book.chapters.map((c) => [c.id, c])), [book]);
+  return (
+    <article style={styles.column}>
+      {book.pages.map((page, i) => {
+        const prev = book.pages[i - 1];
+        const newChapter = !prev || prev.chapterId !== page.chapterId;
+        const chapter = chaptersById.get(page.chapterId);
+        const pageUnit = pageToUnit?.[i] ?? i;
+        const isActiveUnit = pageUnit === unitIndex;
+        const next = book.pages[i + 1];
+        // "Page N" dividers between pages of the same chapter (chapter
+        // boundaries are marked by the heading). Hidden in whole-chapter mode.
+        const showPageDivider =
+          pagesPerImage !== "chapter" && next !== undefined && next.chapterId === page.chapterId;
+        return (
+          <Fragment key={page.id}>
+            {newChapter && (
+              <h2 style={styles.chapterHeading}>
+                {chapter?.title || `Chapter ${(chapter?.index ?? 0) + 1}`}
+              </h2>
+            )}
+            <section style={isActiveUnit ? { ...styles.page, ...styles.sectionActive } : styles.page}>
+              {page.paragraphs.map((para) => (
+                <p key={para.id} ref={registerParagraph(para.id)} style={styles.paragraph}>
+                  {para.text}
+                </p>
+              ))}
+            </section>
+            {showPageDivider && (
+              <div style={styles.pageDivider}>
+                <span style={styles.pageDividerLabel}>Page {i + 1}</span>
+              </div>
+            )}
+          </Fragment>
+        );
+      })}
+    </article>
+  );
+});
+
 function formatLeft(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "";
   return ms < 60000 ? `~${Math.round(ms / 1000)}s left` : `~${Math.round(ms / 60000)}m left`;

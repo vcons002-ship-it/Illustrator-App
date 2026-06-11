@@ -1,9 +1,43 @@
-# Session hand-off — `claude/visual-content-generator-BLJks`
+# Session hand-off — `claude/chat-context-pull-2l6pkv`
 
 Paste-in pointer for a fresh session:
-> Continue the work on branch `claude/visual-content-generator-BLJks`. Read `HANDOFF.md`
-> first. Priority: live-validate the Google Custom Search (figure retrieval) + grounding
-> calls now that the environment has network access.
+> Continue the work on branch `claude/chat-context-pull-2l6pkv` (continues
+> `claude/visual-content-generator-BLJks`). Read `HANDOFF.md` first. Priority:
+> live-validate the Google Custom Search (figure retrieval) + grounding calls
+> now that the environment has network access.
+
+## Latest session: performance pass (no behavior changes)
+
+A full-codebase performance audit, then the high-leverage batch implemented:
+
+- **core/engine** — per-book lookup tables built once on `openBook` (`indexBook()`:
+  chapter index + story flag per page, units/ranges per chapter); storyboard scene
+  lookup + `isLlmPhaseComplete` memoized per bible object; prompt progress counted
+  incrementally; `chapterText()` memoized per book (WeakMap); cached images loaded
+  in parallel chunks of 24.
+- **core/render-buffer** — skip pass runs once (re-armed on invalidate); the
+  candidate scan stops once `maxConcurrent − inflight` pages are found.
+- **core/pipeline** — `cachedResult` no longer builds a full `VisualRequest` per
+  page on open; chapter context memoized per chapter.
+- **core/image-search** — 10s `AbortSignal.timeout` on third-party figure
+  downloads (a blackholing host can no longer hang a render).
+- **ui** — `useScrollDepth` quantizes progress (1/64) and returns stable per-id
+  ref callbacks; `PanelGrid`'s `Panel` memoized; `decoding="async"` on image tags.
+- **apps/web** — book column extracted into memoized `ReaderColumn` (whole-book
+  paragraphs no longer reconcile per scroll frame); worker drops per-step render
+  progress that doesn't change the whole percent and per-token bible status posts
+  (1s ticker owns the line); identity settings changes debounced 400ms.
+- **apps/extension** — same identity/tuning split as the web app (shared
+  `packages/ui/src/settingsKeys.ts`): tuning edits call `updateTier` instead of
+  rebuilding the engine; rebuilds + settings persistence debounced.
+
+Remaining audit findings (not yet implemented, in priority order): render-buffer
+retains all image bytes in worker memory (LRU/lazy-fetch opportunity); ChatPanel/
+CharacterBible/DataChart memoization; Claude prompt caching (`cache_control` on the
+extraction system prompt); Gemini grounded-call fallback retries non-400s; EPUB
+parse on the main thread; extension cache unbounded + URL-keyed with tracking
+params; ComfyUI re-uploads reference photos per render + uncached `/object_info`;
+Flux provider ignores `input.signal`; bible persisted per prompt write.
 
 **PR:** #1 (`vcons002-ship-it/illustrator-app`), base `main`, head
 `claude/visual-content-generator-BLJks`. Everything below is committed + pushed (13 commits
