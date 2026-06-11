@@ -3,7 +3,7 @@ import type { VisualBible } from "../../types/bible.js";
 import type { VisualRequest } from "../../types/content.js";
 import {
   EXTRACTION_JSON_SCHEMA,
-  EXTRACTION_SYSTEM,
+  extractionSystemFor,
   promptSystemFor,
   type RawExtraction,
   extractionUserContent,
@@ -49,7 +49,7 @@ export class OpenAILLMProvider implements LLMProvider {
 
   async extractEntities(input: EntityExtractionInput): Promise<VisualBible> {
     const text = await this.complete(
-      EXTRACTION_SYSTEM,
+      extractionSystemFor(input.contentMode),
       extractionUserContent(input),
       true,
       input.signal,

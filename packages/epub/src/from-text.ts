@@ -14,11 +14,16 @@ export function bookFromText(
   title: string,
   text: string,
   contentMode?: "fiction" | "technical",
+  /** Shown in the library as provenance (e.g. "Pasted text", "Imported file"). */
+  author?: string,
 ): BookSource {
   const body = text.replace(/\r\n?/g, "\n").trim();
   if (!body) throw new Error("There's no text to import.");
   const id = `text-${contentHash(`${title}\n${body}`)}`;
-  const book = segmentBook({ id, title: title.trim() || "Pasted text" }, splitChapters(title, body));
+  const book = segmentBook(
+    { id, title: title.trim() || "Pasted text", ...(author ? { author } : {}) },
+    splitChapters(title, body),
+  );
   return contentMode === "technical" ? { ...book, contentMode } : book;
 }
 

@@ -3,7 +3,7 @@ import type { VisualBible } from "../../types/bible.js";
 import type { VisualRequest } from "../../types/content.js";
 import {
   EXTRACTION_JSON_SCHEMA,
-  EXTRACTION_SYSTEM,
+  extractionSystemFor,
   promptSystemFor,
   type RawExtraction,
   extractionUserContent,
@@ -50,7 +50,7 @@ export class GeminiLLMProvider implements LLMProvider {
 
   async extractEntities(input: EntityExtractionInput): Promise<VisualBible> {
     const text = await this.generate(extractionUserContent(input), {
-      system: EXTRACTION_SYSTEM,
+      system: extractionSystemFor(input.contentMode),
       json: true,
     });
     let raw: RawExtraction = { characters: [], environments: [], spoilers: [] };

@@ -236,6 +236,26 @@ describe("Engine", () => {
     await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
   });
 
+  it("a technical book's extraction calls carry contentMode (Visual-Atlas prompt)", async () => {
+    const llm = new MockLLMProvider();
+    const extractSpy = vi.spyOn(llm, "extractEntities");
+    const engine = new Engine({ llm, image: new MockImageProvider() });
+    await engine.openBook({ ...sampleBook(), contentMode: "technical" });
+    engine.startGeneration();
+    await engine.whenBibleReady();
+    expect(extractSpy).toHaveBeenCalled();
+    expect(extractSpy.mock.calls[0]![0].contentMode).toBe("technical");
+
+    // A fiction book (no mode) sends none — providers fall back to the fiction prompt.
+    const llm2 = new MockLLMProvider();
+    const extractSpy2 = vi.spyOn(llm2, "extractEntities");
+    const engine2 = new Engine({ llm: llm2, image: new MockImageProvider() });
+    await engine2.openBook(sampleBook());
+    engine2.startGeneration();
+    await engine2.whenBibleReady();
+    expect(extractSpy2.mock.calls[0]![0].contentMode).toBeUndefined();
+  });
+
   it("updateTier restyles FUTURE renders in place (no engine rebuild needed)", async () => {
     const image = new MockImageProvider();
     const genSpy = vi.spyOn(image, "generate");

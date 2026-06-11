@@ -1010,7 +1010,11 @@ export function App() {
                   : `Page ${activePageIndex + 1} of ${book.pages.length}${
                       singlePage ? "" : ` · image ${unitIndex + 1}/${totalUnits}`
                     }`}
-                {bible ? ` · ${bible.characters.length} characters tracked` : ""}
+                {bible
+                  ? book.contentMode === "technical"
+                    ? ` · ${bible.glossary.length} concepts · ${bible.environments.length} structures tracked`
+                    : ` · ${bible.characters.length} characters tracked`
+                  : ""}
               </div>
             </div>
           </aside>
@@ -1049,7 +1053,8 @@ export function App() {
           initial={pasteInitial}
           onCreate={(title, text, mode) => {
             try {
-              openBook(bookFromText(title, text, mode));
+              // Library provenance: did this text come from a file or a raw paste?
+              openBook(bookFromText(title, text, mode, pasteInitial ? "Imported file" : "Pasted text"));
               setShowPasteText(false);
               setPasteInitial(undefined);
             } catch (err) {

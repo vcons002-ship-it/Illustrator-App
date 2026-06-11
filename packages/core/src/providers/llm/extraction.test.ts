@@ -1,12 +1,15 @@
 import { describe, it, expect } from "vitest";
 import {
   consolidateCharacters,
+  EXTRACTION_SYSTEM,
+  extractionSystemFor,
   extractionUserContent,
   mergeExtraction,
   promptSystemFor,
   promptUserContent,
   PROMPT_SYSTEM,
   stripThink,
+  TECHNICAL_EXTRACTION_SYSTEM,
   TECHNICAL_PROMPT_SYSTEM,
 } from "./extraction.js";
 import { createEmptyBible } from "../../visual-bible/bible.js";
@@ -872,5 +875,26 @@ describe("promptSystemFor", () => {
   it("the technical template explains concepts, not story scenes", () => {
     expect(TECHNICAL_PROMPT_SYSTEM).toMatch(/concept|mechanism|process/i);
     expect(TECHNICAL_PROMPT_SYSTEM).not.toMatch(/Visual Bible/);
+  });
+});
+
+describe("extractionSystemFor", () => {
+  it("picks the Visual-Atlas template for technical books, the Visual Bible otherwise", () => {
+    expect(extractionSystemFor("technical")).toBe(TECHNICAL_EXTRACTION_SYSTEM);
+    expect(extractionSystemFor("fiction")).toBe(EXTRACTION_SYSTEM);
+    expect(extractionSystemFor(undefined)).toBe(EXTRACTION_SYSTEM);
+  });
+
+  it("the technical template remaps the schema: structures + data, no characters", () => {
+    // Recurring structures/systems land in 'environments' (so name→descriptor injection works)…
+    expect(TECHNICAL_EXTRACTION_SYSTEM).toMatch(/STRUCTURE, SYSTEM/);
+    // …key information/data lands in the glossary…
+    expect(TECHNICAL_EXTRACTION_SYSTEM).toMatch(/quantities\/data points/);
+    // …keyEvents become a visualization plan with a priority for what's worth drawing…
+    expect(TECHNICAL_EXTRACTION_SYSTEM).toMatch(/VISUALIZATION PLAN/);
+    expect(TECHNICAL_EXTRACTION_SYSTEM).toMatch(/quantitative result/);
+    expect(TECHNICAL_EXTRACTION_SYSTEM).toMatch(/visual metaphor/);
+    // …and people are explicitly out.
+    expect(TECHNICAL_EXTRACTION_SYSTEM).toMatch(/'characters', 'creatures', and 'spoilers' as EMPTY/);
   });
 });

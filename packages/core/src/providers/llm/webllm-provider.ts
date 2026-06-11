@@ -3,7 +3,7 @@ import type { VisualRequest } from "../../types/content.js";
 import type { EntityExtractionInput, LLMProvider } from "./llm-provider.js";
 import { MockLLMProvider } from "./mock-llm-provider.js";
 import {
-  EXTRACTION_SYSTEM,
+  extractionSystemFor,
   promptSystemFor,
   extractionUserContent,
   mergeExtraction,
@@ -138,7 +138,7 @@ export class WebLLMProvider implements LLMProvider {
       const complete = await this.completer();
       const content = await complete(
         [
-          { role: "system", content: `${EXTRACTION_SYSTEM}\n${EXTRACTION_JSON_INSTRUCTION}` },
+          { role: "system", content: `${extractionSystemFor(input.contentMode)}\n${EXTRACTION_JSON_INSTRUCTION}` },
           { role: "user", content: extractionUserContent(input) },
         ],
         {

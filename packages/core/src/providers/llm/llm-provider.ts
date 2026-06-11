@@ -26,6 +26,12 @@ export interface EntityExtractionInput {
    */
   unitRanges?: [number, number][];
   sceneCount?: number;
+  /**
+   * The book's content mode: "technical" routes extraction through the Visual-Atlas
+   * system prompt (structures/data/visualization plan) instead of the fiction Visual
+   * Bible (characters/outfits/scenes). Absent = fiction.
+   */
+  contentMode?: "fiction" | "technical";
   /** Aborts the in-flight extraction (e.g. when the user pauses the bible build). */
   signal?: AbortSignal;
 }

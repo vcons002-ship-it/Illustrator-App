@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { VisualBible } from "../../types/bible.js";
 import type { VisualRequest } from "../../types/content.js";
 import {
-  EXTRACTION_SYSTEM,
+  extractionSystemFor,
   promptSystemFor,
   extractionUserContent,
   mergeExtraction,
@@ -119,7 +119,7 @@ export class ClaudeProvider implements LLMProvider {
       {
         model: this.model,
         max_tokens: 4096,
-        system: EXTRACTION_SYSTEM,
+        system: extractionSystemFor(input.contentMode),
         messages: [{ role: "user", content: extractionUserContent(input) }],
         output_format: betaZodOutputFormat(ExtractionSchema),
       },

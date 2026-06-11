@@ -138,6 +138,61 @@ export const EXTRACTION_SYSTEM =
   "genre, era/setting, mood, and a rendering style. Refine it as the book reveals more (keep the " +
   "most specific version).";
 
+/**
+ * Extraction system prompt for TECHNICAL / non-fiction books (papers, textbooks,
+ * articles). Reuses the SAME output schema as fiction, remapped: 'environments' hold
+ * recurring STRUCTURES/SYSTEMS (so naming one in a prompt injects its visual
+ * description), 'glossary' holds key terms/data/findings, and 'keyEvents' become a
+ * per-stretch VISUALIZATION PLAN — the creative pass that decides what's worth
+ * drawing and how. Characters/creatures/outfits/spoilers stay empty.
+ */
+export const TECHNICAL_EXTRACTION_SYSTEM =
+  "You are building a 'Visual Atlas' for illustrating a NON-FICTION text (a paper, " +
+  "textbook, or article) as it is read, chapter by chapter. You are given what was " +
+  "already recorded from earlier chapters. Work INCREMENTALLY: capture what THIS chapter " +
+  "adds and do NOT repeat what is already recorded. " +
+  "This is not a story: leave 'characters', 'creatures', and 'spoilers' as EMPTY lists " +
+  "(do not invent people), and give characters no outfits. Instead: " +
+  "Use 'environments' for every recurring STRUCTURE, SYSTEM, APPARATUS, ORGANISM, or " +
+  "PLACE the text describes (a mitochondrion, a transformer architecture, a reactor " +
+  "core, a trial cohort…) — name it by its established term and give a detailed VISUAL " +
+  "description (shape, parts, scale, materials, spatial arrangement, what it connects " +
+  "to), so later illustrations of it stay consistent. Reuse established names; only add " +
+  "NEW detail for known entries. " +
+  "Build the 'glossary' as the chapter's key INFORMATION: definitions of essential " +
+  "terms, important quantities/data points with their values and units, named methods, " +
+  "and central findings — each as a short term plus a precise definition (omit entries " +
+  "already listed). " +
+  "Write a 'summary' of what THIS chapter explains, and a 'keyMoment': the single most " +
+  "important idea of the chapter stated as one concrete, visualizable sentence. Set " +
+  "'location' to the chapter's primary subject system (established environment name) " +
+  "and 'locationChange' to '' unless the subject shifts mid-chapter. " +
+  "Write 'keyEvents' as the chapter's VISUALIZATION PLAN: the chapter is illustrated as " +
+  "a fixed number of images covering consecutive stretches in READING ORDER — you are " +
+  "told how many. For each stretch, choose the ONE most illustration-worthy item, in " +
+  "this priority: (1) a quantitative result, trend, or comparison — show magnitude and " +
+  "relationship visually (relative sizes, before/after, side-by-side); (2) a mechanism " +
+  "or process — show its stages flowing left-to-right or top-to-bottom; (3) a structure " +
+  "— show a cutaway, cross-section, or exploded view; (4) an abstract concept — invent " +
+  "ONE concrete visual metaphor that makes it tangible. Fill the five fields: 'subject' " +
+  "(the concept/data/structure being shown), 'action' (what the visual demonstrates — " +
+  "the change, flow, comparison, or relationship), 'environment' (the visual FORM: " +
+  "cutaway diagram, step-by-step process view, scale comparison, annotated-style " +
+  "scene…), 'mood' (palette and clarity, e.g. 'clean, high-contrast, neutral " +
+  "background'), 'composition' (layout/viewpoint) — plus 'location': the established " +
+  "system/structure name this stretch concerns (empty if none). Never request rendered " +
+  "text or labels — image models draw text poorly; the imagery itself must carry the " +
+  "meaning. " +
+  "Finally set 'worldStyle': one concise art-direction line applied to EVERY " +
+  "illustration of this text — e.g. 'clean modern scientific illustration, precise " +
+  "linework, soft studio lighting, neutral background, restrained technical palette'. " +
+  "Keep it consistent with the field (medicine, astronomy, engineering…).";
+
+/** The entity-extraction system prompt for a book's content mode. */
+export function extractionSystemFor(contentMode?: string): string {
+  return contentMode === "technical" ? TECHNICAL_EXTRACTION_SYSTEM : EXTRACTION_SYSTEM;
+}
+
 export const PROMPT_SYSTEM =
   "You write one vivid, concrete image-generation prompt for a single illustration of a " +
   "book chapter. Write it as a single paragraph of natural, descriptive language (NOT a " +

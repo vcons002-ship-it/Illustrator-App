@@ -2,7 +2,7 @@ import { DirectTransport, type Transport } from "../transport/transport.js";
 import type { VisualBible } from "../../types/bible.js";
 import type { VisualRequest } from "../../types/content.js";
 import {
-  EXTRACTION_SYSTEM,
+  extractionSystemFor,
   promptSystemFor,
   extractionUserContent,
   isEmptyExtraction,
@@ -62,7 +62,7 @@ export class LocalServerLLMProvider implements LLMProvider {
 
   async extractEntities(input: EntityExtractionInput): Promise<VisualBible> {
     const text = await this.complete(
-      `${EXTRACTION_SYSTEM}\n${EXTRACTION_JSON_INSTRUCTION}`,
+      `${extractionSystemFor(input.contentMode)}\n${EXTRACTION_JSON_INSTRUCTION}`,
       extractionUserContent(input),
       true,
       input.signal,

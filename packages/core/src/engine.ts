@@ -354,6 +354,8 @@ export class Engine {
             // Fold prompt-writing into extraction: the chapter's render-unit ranges let
             // the model emit one scene prompt per illustration in this single call.
             unitRanges: this.unitRangesForChapter(chapterIndex),
+            // Technical books (papers/textbooks) use the Visual-Atlas extraction prompt.
+            ...(this.book?.contentMode ? { contentMode: this.book.contentMode } : {}),
             signal: ac.signal,
           });
         } catch {
