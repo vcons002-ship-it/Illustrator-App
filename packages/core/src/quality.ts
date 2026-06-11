@@ -86,6 +86,23 @@ export function profileDimensions(
 /** User's quality choice: an explicit level, or "auto" (scale with cadence). */
 export type ImageQualitySetting = "auto" | RenderQuality;
 
+/**
+ * Cap an AUTO-resolved quality level so its canvas fits the GPU's VRAM, preventing
+ * out-of-memory failures on smaller cards: < 8 GB → ≤1024px (Standard), 8–12 GB →
+ * ≤1280px (High), more → uncapped. No-op when VRAM is unknown (web / non-NVIDIA).
+ * Only apply to AUTO — an explicitly chosen level is the user's call and never capped.
+ */
+export function capQualityForVram(level: RenderQuality, vramMb: number | undefined): RenderQuality {
+  if (!vramMb || vramMb <= 0) return level;
+  const maxWidth = vramMb < 8192 ? 1024 : vramMb <= 12288 ? 1280 : Infinity;
+  const order: RenderQuality[] = ["draft", "standard", "high", "ultra"];
+  let capped = level;
+  while (order.indexOf(capped) > 0 && PROFILES[capped].width > maxWidth) {
+    capped = order[order.indexOf(capped) - 1]!;
+  }
+  return capped;
+}
+
 /** Pages-per-image cadence: a fixed group size, or a whole chapter. */
 export type PagesPerImage = number | "chapter";
 

@@ -2,6 +2,8 @@ export * from "./useScrollDepth.js";
 export * from "./BloomTransition.js";
 export * from "./SpoilerGate.js";
 export * from "./ImagePanel.js";
+export * from "./PanelGrid.js";
+export * from "./imageObjectUrl.js";
 export * from "./imageStatus.js";
 export * from "./CharacterBible.js";
 export * from "./LibraryPanel.js";

@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { profileDimensions, qualityProfile, resolveQuality, scaleSteps } from "./quality.js";
+import {
+  capQualityForVram,
+  profileDimensions,
+  qualityProfile,
+  resolveQuality,
+  scaleSteps,
+} from "./quality.js";
 
 describe("resolveQuality", () => {
   it("honours an explicit level over the cadence", () => {
@@ -48,6 +54,23 @@ describe("scaleSteps", () => {
     expect(scaleSteps(8, "ultra")).toBe(8); // Z-Image 8-step turbo
     expect(scaleSteps(6, "high")).toBe(6); // SDXL-Turbo
     expect(scaleSteps(10, "ultra")).toBe(10);
+  });
+});
+
+describe("capQualityForVram", () => {
+  it("caps Auto-resolved quality to a canvas the GPU can render", () => {
+    // < 8 GB → ≤1024px (Standard).
+    expect(capQualityForVram("ultra", 6144)).toBe("standard");
+    // 8–12 GB → ≤1280px (High).
+    expect(capQualityForVram("ultra", 10240)).toBe("high");
+    // Plenty of VRAM → uncapped.
+    expect(capQualityForVram("ultra", 24576)).toBe("ultra");
+  });
+
+  it("never raises a level, and is a no-op when VRAM is unknown", () => {
+    expect(capQualityForVram("draft", 6144)).toBe("draft");
+    expect(capQualityForVram("ultra", undefined)).toBe("ultra");
+    expect(capQualityForVram("high", 0)).toBe("high");
   });
 });
 

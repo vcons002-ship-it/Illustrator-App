@@ -71,6 +71,18 @@ export function listLocalModels(): Promise<InstalledModel[]> {
   return invoke<InstalledModel[]>("list_models");
 }
 
+/**
+ * Total VRAM of the primary GPU in MB, or undefined when unknown (web, or no NVIDIA
+ * GPU). Used to keep Auto image-quality within what the card can render. Best-effort:
+ * resolves undefined rather than rejecting.
+ */
+export function gpuVramMb(): Promise<number | undefined> {
+  if (!isDesktop) return Promise.resolve(undefined);
+  return invoke<number | null>("gpu_info")
+    .then((mb) => mb ?? undefined)
+    .catch(() => undefined);
+}
+
 /** Installed LoRA filenames in the managed engine (for style auto-download checks). */
 export function listLoras(): Promise<string[]> {
   return invoke<string[]>("list_loras");

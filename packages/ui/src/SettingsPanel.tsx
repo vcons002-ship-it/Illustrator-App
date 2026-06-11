@@ -2,6 +2,9 @@ import { useState } from "react";
 import {
   IMAGE_PROVIDERS,
   IMAGE_STYLES,
+  catalogEntryForModel,
+  resolveModelFamily,
+  samplerFor,
   LOCAL_TEXT_MODELS,
   LOCAL_TEXT_SERVER_DEFAULT_URL,
   LOCAL_TEXT_SERVER_LABEL,
@@ -43,6 +46,17 @@ const LOCAL_BACKEND_LABEL: Record<LocalBackendId, string> = {
   comfyui: "ComfyUI",
 };
 
+/** ComfyUI sampler / scheduler choices offered in Advanced (blank = per-model default). */
+const SAMPLER_OPTIONS = [
+  "euler",
+  "euler_ancestral",
+  "dpmpp_2m",
+  "dpmpp_2m_sde",
+  "res_multistep",
+  "uni_pc",
+] as const;
+const SCHEDULER_OPTIONS = ["simple", "normal", "karras", "sgm_uniform", "beta"] as const;
+
 export interface ReaderSettings {
   textProvider: TextProviderId;
   imageProvider: ImageProviderId;
@@ -81,6 +95,21 @@ export interface ReaderSettings {
    */
   imageQuality?: "auto" | "draft" | "standard" | "high" | "ultra";
   /**
+   * Canvas orientation: "square" (1:1, default), "portrait" (2:3), or "landscape" (3:2).
+   * Portrait/landscape keep the same pixel area as the square at that quality level.
+   */
+  aspectRatio?: "square" | "portrait" | "landscape";
+  /**
+   * Reader-only multi-panel comic view: compose this many consecutive unit images into
+   * one comic-page grid (chapter-aware). 1 (default) = today's single image; 4/6/9 grids.
+   */
+  panelsPerView?: 1 | 4 | 6 | 9;
+  /**
+   * Prompt the model to draw a SINGLE image laid out as a multi-panel comic page (comic/
+   * manga styles only). Independent of `panelsPerView`. Off by default.
+   */
+  drawAsComicPage?: boolean;
+  /**
    * When to start illustrating: "book" reads the whole book first so prompts have
    * full context (best images, slower start); "chapter" starts as each chapter is
    * analysed (faster first image). Default "book".
@@ -94,6 +123,14 @@ export interface ReaderSettings {
    * scale. Unset/undefined = the family/catalog default. */
   localSteps?: number | undefined;
   localCfg?: number | undefined;
+  /** Advanced manual sampler / scheduler choice for local ComfyUI; "" = per-model default. */
+  localSampler?: string;
+  localScheduler?: string;
+  /**
+   * Detected primary-GPU VRAM in MB (desktop only; transient — set at runtime, not
+   * persisted). Caps Auto image-quality to a canvas the card can render.
+   */
+  gpuVramMb?: number;
   /** Which local engine API to talk to (browser "your own server" path). */
   localBackend?: LocalBackendId;
   /** Base URL of a local engine you run yourself (browser path; persisted). */
@@ -191,6 +228,16 @@ export function SettingsPanel({
 
   const textInfo = getProvider("text", value.textProvider);
   const imageInfo = getProvider("image", value.imageProvider);
+
+  // Resolved per-model sampler defaults, surfaced in the Advanced "auto = …" placeholders
+  // so the user can see what blank actually does (mirrors the backend's resolution order:
+  // catalog entry's own sampler → family default).
+  const localFamily = resolveModelFamily(
+    value.imageModelFamily && value.imageModelFamily !== "auto" ? value.imageModelFamily : undefined,
+    value.localModel ?? "",
+  );
+  const localBaseSampler = catalogEntryForModel(value.localModel ?? "")?.sampler ?? samplerFor(localFamily);
+  const defaultCfg = localBaseSampler.guidance ?? localBaseSampler.cfg;
 
   return (
     <div style={{ fontSize: 13 }}>
@@ -397,6 +444,58 @@ export function SettingsPanel({
             </span>
           </label>
 
+          <label style={rowStyle}>
+            <span>Aspect ratio</span>
+            <select
+              value={value.aspectRatio ?? "square"}
+              onChange={(e) =>
+                set({ aspectRatio: e.target.value as "square" | "portrait" | "landscape" })
+              }
+              title="Canvas shape. Portrait/landscape keep the same pixel area (and render time) as the square at the same quality level."
+            >
+              <option value="square">Square · 1:1</option>
+              <option value="portrait">Portrait · 2:3 (tall)</option>
+              <option value="landscape">Landscape · 3:2 (wide)</option>
+            </select>
+          </label>
+
+          <label style={rowStyle}>
+            <span>Comic panels per view</span>
+            <select
+              value={String(value.panelsPerView ?? 1)}
+              onChange={(e) =>
+                set({ panelsPerView: Number(e.target.value) as 1 | 4 | 6 | 9 })
+              }
+              title="Show several consecutive illustrations together as one comic page (a 2×2 / 2×3 / 3×3 grid). Each panel is still its own image — grids never cross a chapter, and the current panel highlights as you read. Manga style reads right-to-left."
+            >
+              <option value="1">Single image (off)</option>
+              <option value="4">4 panels · 2×2</option>
+              <option value="6">6 panels · 2×3</option>
+              <option value="9">9 panels · 3×3</option>
+            </select>
+            <span style={{ opacity: 0.55, fontSize: 11 }}>
+              A reading view only — composes images you already render into a comic page.
+              Works with every model and keeps characters consistent panel-to-panel.
+            </span>
+          </label>
+
+          {(value.imageStyle === "comic" || value.imageStyle === "manga") && (
+            <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={value.drawAsComicPage ?? false}
+                onChange={(e) => set({ drawAsComicPage: e.target.checked })}
+              />
+              <span>
+                Draw each image as a multi-panel comic page
+                <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                  Asks the model to lay out one image as several panels with gutters. Best on
+                  natural-language / cloud models; results vary on SD checkpoints.
+                </span>
+              </span>
+            </label>
+          )}
+
           {sameVendorNative(value) && <NativeModeRow value={value} set={set} />}
 
           {isDesktop && value.imageProvider === "local" && (
@@ -461,7 +560,7 @@ export function SettingsPanel({
                   min={1}
                   step={1}
                   value={value.localSteps ?? ""}
-                  placeholder="auto (per model)"
+                  placeholder={`auto = ${localBaseSampler.steps} steps (per model)`}
                   onChange={(e) =>
                     set({ localSteps: e.target.value === "" ? undefined : Math.max(1, Math.floor(Number(e.target.value) || 1)) })
                   }
@@ -478,7 +577,7 @@ export function SettingsPanel({
                   min={0}
                   step={0.5}
                   value={value.localCfg ?? ""}
-                  placeholder="auto (per model)"
+                  placeholder={`auto = ${defaultCfg} (per model)`}
                   onChange={(e) => set({ localCfg: e.target.value === "" ? undefined : Math.max(0, Number(e.target.value) || 0) })}
                 />
                 <span style={{ opacity: 0.55, fontSize: 11 }}>
@@ -486,6 +585,36 @@ export function SettingsPanel({
                   over-cooked; lower = looser/softer. Flux/Flux.2-dev use embedded guidance ≈ 3–5;
                   Klein/SDXL use real CFG ≈ 4–7. This sets whichever your model uses.
                 </span>
+              </label>
+              <label style={rowStyle}>
+                <span>Sampler</span>
+                <select
+                  value={value.localSampler ?? ""}
+                  onChange={(e) => set({ localSampler: e.target.value })}
+                  title="The denoising algorithm. Blank uses the per-model default. dpmpp_2m / dpmpp_2m_sde are strong all-rounders; euler is the safe baseline."
+                >
+                  <option value="">auto = {localBaseSampler.sampler} (per model)</option>
+                  {SAMPLER_OPTIONS.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={rowStyle}>
+                <span>Scheduler</span>
+                <select
+                  value={value.localScheduler ?? ""}
+                  onChange={(e) => set({ localScheduler: e.target.value })}
+                  title="How the noise level steps down. Blank uses the per-model default. karras is a common choice for SD; flux/turbo models prefer simple."
+                >
+                  <option value="">auto = {localBaseSampler.scheduler} (per model)</option>
+                  {SCHEDULER_OPTIONS.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
               </label>
             </details>
           )}

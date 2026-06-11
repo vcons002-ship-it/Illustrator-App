@@ -7,6 +7,7 @@ import {
   MockLLMProvider,
   WebLLMProvider,
   createImageProvider,
+  capQualityForVram,
   createLLMProvider,
   getProvider,
   resolveQuality,
@@ -95,8 +96,26 @@ export function buildProviders(
           : image.provider.id === "local"
             ? "standard"
             : "cinematic",
-      renderQuality: resolveQuality(settings.imageQuality, settings.pagesPerImage ?? 3),
+      // Auto-quality is additionally capped to the GPU's VRAM (desktop local engine) so a
+      // smaller card doesn't pick a canvas it can't render; an explicit level is untouched.
+      renderQuality:
+        !settings.imageQuality || settings.imageQuality === "auto"
+          ? capQualityForVram(
+              resolveQuality("auto", settings.pagesPerImage ?? 3),
+              settings.imageProvider === "local" ? settings.gpuVramMb : undefined,
+            )
+          : resolveQuality(settings.imageQuality, settings.pagesPerImage ?? 3),
+      ...(settings.aspectRatio && settings.aspectRatio !== "square"
+        ? { aspectRatio: settings.aspectRatio }
+        : {}),
       style: settings.imageStyle ?? "auto",
+      ...(settings.imageProvider === "local" && settings.localSampler
+        ? { localSampler: settings.localSampler }
+        : {}),
+      ...(settings.imageProvider === "local" && settings.localScheduler
+        ? { localScheduler: settings.localScheduler }
+        : {}),
+      ...(settings.drawAsComicPage ? { drawAsComicPage: true } : {}),
       ...(settings.imageModelFamily && settings.imageModelFamily !== "auto"
         ? { imageModelFamily: settings.imageModelFamily }
         : {}),
