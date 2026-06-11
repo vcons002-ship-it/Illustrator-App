@@ -1,5 +1,6 @@
 import { DirectTransport, type Transport } from "../../transport/transport.js";
 import { catalogEntryForModel } from "../../catalog.js";
+import { scaleSteps } from "../../../quality.js";
 import type { ImageGenerationInput, ImageGenerationOutput } from "../image-provider.js";
 import {
   type ModelFamily,
@@ -323,20 +324,29 @@ export class ComfyUIBackend implements LocalEngineBackend {
     // models ignore the quality-profile step count (more steps don't help).
     const family = resolveModelFamily(input.modelFamily, checkpoint);
     const baseSampler = catalogEntryForModel(checkpoint)?.sampler ?? samplerFor(family);
-    // Steps: natural-language families use their fixed recommended count; SD families scale
-    // with quality. A manual override (Advanced settings) wins for EVERY family.
-    let steps = isNaturalLanguage(family)
-      ? baseSampler.steps
-      : (input.steps ?? (input.quality === "sketch" ? 6 : input.quality === "standard" ? 20 : 35));
+    // Steps: distilled few-step models (turbo) never scale — extra steps hurt them.
+    // Natural-language families scale their recommended count by the quality level;
+    // SD families follow the profile step ladder. A manual override wins for EVERY family.
+    const recommended = baseSampler.steps;
+    const level = input.renderQuality ?? "standard";
+    let steps =
+      recommended <= 10
+        ? recommended
+        : isNaturalLanguage(family)
+          ? scaleSteps(recommended, level)
+          : (input.steps ?? (input.quality === "sketch" ? 6 : input.quality === "standard" ? 20 : 35));
     if (input.stepsOverride && input.stepsOverride > 0) steps = Math.round(input.stepsOverride);
     // CFG override: for guidance-distilled Flux the tunable knob is the embedded GUIDANCE
     // value (KSampler cfg stays 1); for everything else it's the real CFG scale.
-    const sampler =
+    let sampler =
       input.cfgOverride !== undefined && input.cfgOverride >= 0
         ? baseSampler.guidance !== undefined
           ? { ...baseSampler, guidance: input.cfgOverride }
           : { ...baseSampler, cfg: input.cfgOverride }
         : baseSampler;
+    // Advanced sampler/scheduler overrides (blank = keep the family/catalog default).
+    if (input.localSampler) sampler = { ...sampler, sampler: input.localSampler };
+    if (input.localScheduler) sampler = { ...sampler, scheduler: input.localScheduler };
     const { width, height } = clampResolution(family, input.width ?? 1024, input.height ?? 1024);
 
     // Expand bible terms per the target's text-encoder grade: CLIP/T5 (SD/Flux.1) inject
@@ -349,7 +359,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
       input.worldStyle,
       input.bookTitle,
     );
-    let prompt = composeSdPositive(family, expanded, input.subjects);
+    let prompt = composeSdPositive(family, expanded);
     const negative = resolveNegative(family, input.negativePrompt);
     // Flux.2 (and any UNET-only diffusion file) can't load via CheckpointLoaderSimple —
     // it needs a separate text-encoder + VAE; pick the load kind once here.

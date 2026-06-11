@@ -1,10 +1,12 @@
 import { base64ToBytes } from "../base64.js";
 import { DirectTransport, type Transport } from "../../transport/transport.js";
+import { scaleSteps } from "../../../quality.js";
 import type { ImageGenerationInput, ImageGenerationOutput } from "../image-provider.js";
 import {
   clampResolution,
   composeSdPositive,
   isFlux,
+  isNaturalLanguage,
   nameHandlingFor,
   resolveModelFamily,
   resolveNegative,
@@ -107,11 +109,16 @@ export class Automatic1111Backend implements LocalEngineBackend {
       throw new Error("Flux.2 isn't supported on the AUTOMATIC1111 engine — use the ComfyUI engine for Flux.2.");
     }
     // Family-aware sampler: Flux uses embedded guidance (cfg≈1) + its own step count;
-    // SD keeps the configured sampler/cfg and the quality-profile steps.
+    // SD keeps the configured sampler/cfg and the quality-profile steps. Distilled
+    // few-step models (recommended ≤ 10) never scale; NL families scale by level.
     const sampler = samplerFor(family);
-    const steps = isFlux(family)
-      ? sampler.steps
-      : (input.steps ?? (input.quality === "sketch" ? 6 : input.quality === "standard" ? 20 : 35));
+    const level = input.renderQuality ?? "standard";
+    const steps =
+      sampler.steps <= 10
+        ? sampler.steps
+        : isNaturalLanguage(family)
+          ? scaleSteps(sampler.steps, level)
+          : (input.steps ?? (input.quality === "sketch" ? 6 : input.quality === "standard" ? 20 : 35));
     const { width, height } = clampResolution(family, input.width ?? 1024, input.height ?? 1024);
 
     // Expand bible terms (inject descriptors for CLIP/T5 families), then SD tags/negative.
@@ -122,7 +129,7 @@ export class Automatic1111Backend implements LocalEngineBackend {
       input.worldStyle,
       input.bookTitle,
     );
-    let prompt = composeSdPositive(family, expanded, input.subjects);
+    let prompt = composeSdPositive(family, expanded);
     if (input.styleLora) {
       const trigger = input.styleLora.trigger ? `${input.styleLora.trigger}, ` : "";
       prompt = `${trigger}${prompt} <lora:${input.styleLora.name}:${input.styleLora.strength}>`;

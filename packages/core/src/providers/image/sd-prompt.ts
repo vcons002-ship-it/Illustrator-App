@@ -89,24 +89,21 @@ export function familyMaxDimension(family: ModelFamily): number {
   }
 }
 
-/** Clamp a requested resolution to the family's sweet spot, rounded to a /8 multiple. */
+/**
+ * Clamp a requested resolution to the family's sweet spot, rounded to a /8 multiple.
+ * The cap applies to the LONGEST side and both axes scale together, so a portrait/
+ * landscape canvas keeps its aspect ratio instead of being squashed toward square.
+ */
 export function clampResolution(
   family: ModelFamily,
   width: number,
   height: number,
 ): { width: number; height: number } {
   const max = familyMaxDimension(family);
-  const fit = (n: number): number => Math.max(512, Math.round(Math.min(n, max) / 8) * 8);
+  const longest = Math.max(width, height);
+  const scale = longest > max ? max / longest : 1;
+  const fit = (n: number): number => Math.max(512, Math.round((n * scale) / 8) * 8);
   return { width: fit(width), height: fit(height) };
-}
-
-/** A character's identity, for optional SD weighting emphasis. */
-export interface PromptSubject {
-  name: string;
-  /** Comma-joined appearance descriptors (may be empty). */
-  features: string;
-  /** Comma-joined clothing/outfit (may be empty). */
-  outfit: string;
 }
 
 /**
@@ -157,34 +154,14 @@ export function qualityPreamble(family: ModelFamily): string {
   return isSd(family) ? "highly detailed, sharp focus, masterpiece, best quality" : "";
 }
 
-/** Light, SD-only identity emphasis blocks like `(Ana: silver hair, wearing red cloak:1.1)`. */
-export function emphasizeSubjects(
-  subjects: PromptSubject[] | undefined,
-  family: ModelFamily,
-): string {
-  if (!isSd(family) || !subjects?.length) return "";
-  const blocks = subjects
-    .map((s) => {
-      const head = [s.name?.trim(), s.features?.trim()].filter(Boolean).join(": ");
-      const outfit = s.outfit?.trim() ? `, wearing ${s.outfit.trim()}` : "";
-      const body = `${head}${outfit}`.trim();
-      return body ? `(${body}:1.1)` : "";
-    })
-    .filter(Boolean);
-  return blocks.join(", ");
-}
-
 /**
- * Compose the final SD positive prompt for a family: quality tags + the scene +
- * identity emphasis. For flux/unknown this returns the base prompt unchanged
- * (natural language), since the tag/emphasis pieces are empty.
+ * Compose the final SD positive prompt for a family: quality tags + the scene. For
+ * flux/unknown this returns the base prompt unchanged (natural language), since the
+ * tag piece is empty. (Per-character `(name:1.1)` weighting was removed — with a
+ * multi-character cast it bled attributes between subjects more than it helped.)
  */
-export function composeSdPositive(
-  family: ModelFamily,
-  basePrompt: string,
-  subjects: PromptSubject[] | undefined,
-): string {
-  return [qualityPreamble(family), basePrompt.trim(), emphasizeSubjects(subjects, family)]
+export function composeSdPositive(family: ModelFamily, basePrompt: string): string {
+  return [qualityPreamble(family), basePrompt.trim()]
     .filter((p) => p && p.length > 0)
     .join(", ");
 }

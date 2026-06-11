@@ -29,6 +29,39 @@ export interface RenderUnits {
  * so different cadences cache independently. Pure and deterministic, so the worker
  * (rendering) and the UI (mapping) can never drift.
  */
+/**
+ * The render-unit indices that share one comic-page "view" with `unitIndex`, for the
+ * reader's multi-panel grid. Chapter-aware: a view only ever contains units from the
+ * SAME chapter, chunked in groups of `perView` from the chapter's first unit — so a
+ * chapter's last view shows fewer panels and a grid never crosses a chapter boundary.
+ *
+ * `unitChapterIds[i]` is unit i's chapter id (units of a chapter are contiguous, the way
+ * `toRenderUnits` builds them). Returns the contiguous ascending unit indices of the
+ * group (reading order); the UI reverses the visual order for right-to-left manga.
+ */
+export function panelGroup(
+  unitChapterIds: (string | undefined)[],
+  unitIndex: number,
+  perView: number,
+): number[] {
+  const n = unitChapterIds.length;
+  if (n === 0 || unitIndex < 0 || unitIndex >= n) return [];
+  const size = Math.max(1, Math.floor(perView));
+  const chapter = unitChapterIds[unitIndex];
+  // The chapter's contiguous unit range [first, last].
+  let first = unitIndex;
+  while (first - 1 >= 0 && unitChapterIds[first - 1] === chapter) first--;
+  let last = unitIndex;
+  while (last + 1 < n && unitChapterIds[last + 1] === chapter) last++;
+  // Chunk that range in groups of `size`, starting at the chapter's first unit.
+  const posInChapter = unitIndex - first;
+  const groupStart = first + Math.floor(posInChapter / size) * size;
+  const groupEnd = Math.min(last, groupStart + size - 1);
+  const out: number[] = [];
+  for (let u = groupStart; u <= groupEnd; u++) out.push(u);
+  return out;
+}
+
 export function toRenderUnits(book: BookSource, grouping: PagesPerImage): RenderUnits {
   const perUnit = grouping === "chapter" ? Infinity : Math.max(1, Math.floor(grouping));
 

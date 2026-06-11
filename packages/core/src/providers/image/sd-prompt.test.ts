@@ -3,7 +3,6 @@ import {
   clampResolution,
   composeSdPositive,
   detectModelFamily,
-  emphasizeSubjects,
   nameHandlingFor,
   negativeFor,
   qualityPreamble,
@@ -64,6 +63,16 @@ describe("clampResolution", () => {
     expect(clampResolution("zimage", 1536, 1536)).toEqual({ width: 1280, height: 1280 }); // turbo cap
     expect(clampResolution("sdxl", 1000, 1000)).toEqual({ width: 1000, height: 1000 }); // already fine
   });
+
+  it("preserves aspect ratio when capping (the LONG side hits the cap, not each axis)", () => {
+    // A portrait canvas over the SDXL cap scales BOTH axes by the same factor — the
+    // long side lands on 1024 and the short side stays proportional (not squashed to square).
+    const { width, height } = clampResolution("sdxl", 1248, 1872); // 2:3-ish, over cap
+    expect(height).toBe(1024); // long side capped
+    expect(width).toBeLessThan(height); // still portrait
+    // Ratio preserved within rounding (~0.667).
+    expect(Math.abs(width / height - 1248 / 1872)).toBeLessThan(0.02);
+  });
 });
 
 describe("resolveModelFamily", () => {
@@ -93,21 +102,12 @@ describe("formatting by family", () => {
   });
 
   it("composeSdPositive wraps SD prompts but leaves Flux/unknown natural", () => {
-    const subjects = [{ name: "Ana", features: "silver hair, green eyes", outfit: "red cloak" }];
-    const sd = composeSdPositive("sdxl", "a duel at dawn", subjects);
+    const sd = composeSdPositive("sdxl", "a duel at dawn");
     expect(sd).toContain("masterpiece");
     expect(sd).toContain("a duel at dawn");
-    expect(sd).toContain("(Ana: silver hair, green eyes, wearing red cloak:1.1)");
 
-    expect(composeSdPositive("flux", "a duel at dawn", subjects)).toBe("a duel at dawn");
-    expect(composeSdPositive("unknown", "a duel at dawn", subjects)).toBe("a duel at dawn");
-  });
-
-  it("emphasizeSubjects keeps a name even when features/outfit are blank (no loss)", () => {
-    const out = emphasizeSubjects([{ name: "Bram", features: "", outfit: "" }], "sd15");
-    expect(out).toBe("(Bram:1.1)");
-    // Flux gets no emphasis at all.
-    expect(emphasizeSubjects([{ name: "Bram", features: "", outfit: "" }], "flux")).toBe("");
+    expect(composeSdPositive("flux", "a duel at dawn")).toBe("a duel at dawn");
+    expect(composeSdPositive("unknown", "a duel at dawn")).toBe("a duel at dawn");
   });
 
   it("resolveNegative lets SD override but forces Flux empty", () => {

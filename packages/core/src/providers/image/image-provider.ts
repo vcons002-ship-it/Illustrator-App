@@ -26,6 +26,12 @@ export interface ImageGenerationInput {
   /** Explicit sampler steps (from the resolved quality profile); overrides the quality default. */
   steps?: number;
   /**
+   * Resolved render-quality level. Natural-language families scale their own recommended
+   * step count by this (SD families use `steps` from the profile ladder instead). Unset =
+   * "standard".
+   */
+  renderQuality?: "draft" | "standard" | "high" | "ultra";
+  /**
    * Explicit render seed (e.g. from a keyEvent for reproducibility). Overrides the
    * character/creature anchor seed when set.
    */
@@ -67,6 +73,13 @@ export interface ImageGenerationInput {
    */
   stepsOverride?: number;
   cfgOverride?: number;
+  /**
+   * Advanced manual sampler/scheduler choice (local ComfyUI only), overriding the
+   * family/catalog default (e.g. "dpmpp_2m" / "karras"). Unset = the default. Ignored
+   * by cloud providers.
+   */
+  localSampler?: string;
+  localScheduler?: string;
   /** Always-applied world-style/genre anchor (from the bible), added to every prompt. */
   worldStyle?: string;
   /** Book title, for the reference-block header on LLM-grade targets. */
@@ -76,11 +89,6 @@ export interface ImageGenerationInput {
    * sensible default (and Flux always sends none). Ignored by cloud providers.
    */
   negativePrompt?: string;
-  /**
-   * Structured identities of the characters present, for light SD-only weighting
-   * emphasis (e.g. `(Ana: silver hair:1.1)`). Ignored by Flux/cloud providers.
-   */
-  subjects?: { name: string; features: string; outfit: string }[];
   /**
    * Per-character reference images for IP-Adapter conditioning (ComfyUI only, when
    * the IPAdapter nodes/models are installed). Resolved bytes, not ids. Ignored by

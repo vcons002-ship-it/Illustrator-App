@@ -236,6 +236,27 @@ describe("Engine", () => {
     await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
   });
 
+  it("regenerateCurrentImage re-rolls the seed so a redo isn't the identical image", async () => {
+    const image = new MockImageProvider();
+    const genSpy = vi.spyOn(image, "generate");
+    const engine = new Engine({ llm: new MockLLMProvider(), image });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+
+    // First redo pins a fresh random seed into the unit's keyEvent.
+    await engine.regenerateCurrentImage(0);
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+    const firstReroll = genSpy.mock.calls.at(-1)![0].seed;
+    expect(typeof firstReroll).toBe("number");
+
+    // A second redo re-rolls again → a different seed (so a different image).
+    await engine.regenerateCurrentImage(0);
+    await vi.waitFor(() =>
+      expect(genSpy.mock.calls.at(-1)![0].seed).not.toBe(firstReroll),
+    );
+  });
+
   it("pause stops new renders; resume continues", async () => {
     let releaseCh1: (() => void) | undefined;
     const llm = new MockLLMProvider();
