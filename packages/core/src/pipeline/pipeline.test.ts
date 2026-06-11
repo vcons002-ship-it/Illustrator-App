@@ -92,6 +92,50 @@ describe("RenderPipeline style injection", () => {
   });
 });
 
+describe("RenderPipeline style LoRA override", () => {
+  function inputRecorder(): { provider: ImageProvider; last: () => ImageGenerationInput } {
+    let seen: ImageGenerationInput | undefined;
+    const provider: ImageProvider = {
+      id: "mock",
+      generate: async (input): Promise<ImageGenerationOutput> => {
+        seen = input;
+        return { bytes: new ArrayBuffer(1), mimeType: "image/png" };
+      },
+    };
+    return { provider, last: () => seen! };
+  }
+
+  async function renderWithTier(tier: Partial<typeof DEFAULT_TIER_CONFIG>) {
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a knight by a window");
+    const { provider, last } = inputRecorder();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: { ...DEFAULT_TIER_CONFIG, tier: "local", style: "anime", ...tier },
+    });
+    await pipeline.renderPage(0);
+    return last();
+  }
+
+  it("uses the style's automatic LoRA by default", async () => {
+    expect((await renderWithTier({})).styleLora?.name).toBe("anime");
+  });
+
+  it("a manual override forces any installed LoRA over the style mapping", async () => {
+    const input = await renderWithTier({ styleLoraOverride: "my-custom-lora.safetensors" });
+    expect(input.styleLora?.name).toBe("my-custom-lora.safetensors");
+  });
+
+  it("disableStyleLora renders prompt-only (no LoRA)", async () => {
+    expect((await renderWithTier({ disableStyleLora: true })).styleLora).toBeUndefined();
+  });
+});
+
 describe("RenderPipeline stored-first prompt fetch", () => {
   function countingLlm(): { provider: LLMProvider; calls: () => number } {
     let calls = 0;

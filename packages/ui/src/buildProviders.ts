@@ -109,6 +109,13 @@ export function buildProviders(
         ? { aspectRatio: settings.aspectRatio }
         : {}),
       style: settings.imageStyle ?? "auto",
+      // Manual style-LoRA override (local engine): a specific installed LoRA, or "none"
+      // to render prompt-only. Anything else falls back to the style's automatic mapping.
+      ...(settings.imageProvider === "local" && settings.styleLoraOverride === "none"
+        ? { disableStyleLora: true }
+        : settings.imageProvider === "local" && settings.styleLoraOverride
+          ? { styleLoraOverride: settings.styleLoraOverride }
+          : {}),
       ...(settings.imageProvider === "local" && settings.localSampler
         ? { localSampler: settings.localSampler }
         : {}),

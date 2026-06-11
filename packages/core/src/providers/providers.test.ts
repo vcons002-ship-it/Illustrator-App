@@ -1141,6 +1141,33 @@ describe("ComfyUI prompt formatting by family", () => {
     expect(wf["8"]!.inputs.vae).toEqual(["13", 0]);
   });
 
+  it("Flux.2 (diffusion path): applies a style LoRA via LoraLoaderModelOnly", async () => {
+    const t = new FakeTransport((req) => {
+      if (req.url.endsWith("/object_info/VAELoader"))
+        return { json: { VAELoader: { input: { required: { vae_name: [["flux2-vae.safetensors"]] } } } } };
+      if (req.url.endsWith("/object_info/CLIPLoader"))
+        return { json: { CLIPLoader: { input: { required: { clip_name: [["mistral3-fp8.safetensors"]] } } } } };
+      if (req.url.endsWith("/object_info/LoraLoader"))
+        return { json: { LoraLoader: { input: { required: { lora_name: [["anime.safetensors"]] } } } } };
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
+      if (req.url.includes("/history/"))
+        return { json: { p1: { outputs: { "9": { images: [{ filename: "f.png", subfolder: "", type: "output" }] } } } } };
+      return { bytes: new TextEncoder().encode("IMG").buffer };
+    });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await backend.generate(
+      { ...imageInput, modelFamily: "flux2", styleLora: { name: "anime", strength: 0.8, trigger: "anime" } },
+      "flux2-dev.safetensors",
+    );
+    const wf = workflowOf(t);
+    // A UNET-only model gets a model-only LoRA (no clip output to thread through).
+    expect(wf["11"]!.class_type).toBe("LoraLoaderModelOnly");
+    expect(wf["11"]!.inputs.lora_name).toBe("anime.safetensors");
+    expect(wf["11"]!.inputs.model).toEqual(["4", 0]); // wraps the UNET
+    expect(wf["3"]!.inputs.model).toEqual(["11", 0]); // sampler reads the LoRA'd model
+    expect(wf["6"]!.inputs.text).toContain("anime,"); // trigger still prepended
+  });
+
   it("Flux.2 with no Mistral encoder / VAE installed throws an actionable error", async () => {
     const t = new FakeTransport(() => ({ json: {} })); // no enums available
     const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });

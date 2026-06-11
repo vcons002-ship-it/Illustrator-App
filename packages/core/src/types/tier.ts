@@ -28,6 +28,14 @@ export interface TierConfig {
   /** Art-style id (see catalog `IMAGE_STYLES`); its prompt suffix is appended. */
   style?: string;
   /**
+   * Manual style-LoRA override for the local engine. When set, this installed LoRA
+   * filename is applied instead of the style's automatic mapping (so any LoRA in the
+   * engine's folder can be used with any style). `disableStyleLora` turns the LoRA off
+   * entirely (prompt-only styling). Unset = the style's default mapping. Cloud ignores.
+   */
+  styleLoraOverride?: string;
+  disableStyleLora?: boolean;
+  /**
    * Advanced manual sampler/scheduler choice for local ComfyUI (e.g. "dpmpp_2m" /
    * "karras"). Unset = the family/catalog default. Cloud providers ignore these.
    */

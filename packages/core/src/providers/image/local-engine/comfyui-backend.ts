@@ -615,15 +615,26 @@ interface WorkflowParams {
  * txt2img ComfyUI graph. Two shapes:
  *  - **checkpoint:** CheckpointLoaderSimple → [LoRA] → [IP-Adapter] → sampler → VAE → save
  *    (SD / Flux.1 all-in-one).
- *  - **diffusion:** UNETLoader + text-encoder loader + VAELoader → sampler → save
+ *  - **diffusion:** UNETLoader + text-encoder loader + VAELoader → [LoRA] → sampler → save
  *    (Flux.2, and any UNET-only Flux.1 file — fixes "clip input is invalid: None").
  * Flux families also get a FluxGuidance node (embedded guidance) with KSampler cfg=1.
+ *
+ * A style LoRA threads through BOTH shapes: the checkpoint path uses LoraLoader (model +
+ * clip); the diffusion path uses LoraLoaderModelOnly (a UNETLoader has no clip output), so
+ * LoRAs apply to Flux.2 / Z-Image / Qwen-Image too — not just SD checkpoints.
  */
 function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
   const diffusion = p.loadKind === "diffusion";
-  // Source refs for model / clip / vae, depending on the load shape. LoRA (an SD-style
-  // feature) is only wired into the checkpoint path.
-  const modelRef: [string, number] = diffusion ? ["4", 0] : p.lora ? ["10", 0] : ["4", 0];
+  // Source refs for model / clip / vae, depending on the load shape. A LoRA wraps the
+  // model output: node "10" (LoraLoader) on the checkpoint path, "11" (LoraLoaderModelOnly)
+  // on the diffusion path.
+  const modelRef: [string, number] = diffusion
+    ? p.lora
+      ? ["11", 0]
+      : ["4", 0]
+    : p.lora
+      ? ["10", 0]
+      : ["4", 0];
   const clipRef: [string, number] = diffusion ? ["12", 0] : p.lora ? ["10", 1] : ["4", 1];
   const vaeRef: [string, number] = diffusion ? ["13", 0] : ["4", 2];
   // Positive conditioning: Flux routes through a FluxGuidance node ("14").
@@ -669,19 +680,27 @@ function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
       inputs: { conditioning: ["6", 0], guidance: p.sampler.guidance },
     };
   }
-  if (p.lora && !diffusion) {
-    // LoRA is an SD-style feature wired into the all-in-one checkpoint path only (a
-    // UNETLoader has no clip output to thread through).
-    graph["10"] = {
-      class_type: "LoraLoader",
-      inputs: {
-        lora_name: p.lora.name,
-        strength_model: p.lora.strength,
-        strength_clip: p.lora.strength,
-        model: ["4", 0],
-        clip: ["4", 1],
-      },
-    };
+  if (p.lora) {
+    if (diffusion) {
+      // UNET-only models: model-only LoRA (no clip output to thread through). The
+      // trigger words, if any, are already prepended to the prompt by the caller.
+      graph["11"] = {
+        class_type: "LoraLoaderModelOnly",
+        inputs: { lora_name: p.lora.name, strength_model: p.lora.strength, model: ["4", 0] },
+      };
+    } else {
+      // All-in-one checkpoint: standard LoRA over both model and clip.
+      graph["10"] = {
+        class_type: "LoraLoader",
+        inputs: {
+          lora_name: p.lora.name,
+          strength_model: p.lora.strength,
+          strength_clip: p.lora.strength,
+          model: ["4", 0],
+          clip: ["4", 1],
+        },
+      };
+    }
   }
   if (p.ipAdapter && p.ipAdapter.refs.length > 0) {
     // Chain one apply node per reference, threading MODEL through; the final

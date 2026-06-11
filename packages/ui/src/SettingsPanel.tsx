@@ -77,6 +77,12 @@ export interface ReaderSettings {
   /** Art style id applied to every illustration (see catalog IMAGE_STYLES). */
   imageStyle?: string;
   /**
+   * Manual style-LoRA choice for the local engine, overriding the style's automatic
+   * mapping: "" / undefined = automatic, "none" = prompt-only (no LoRA), or an installed
+   * LoRA filename to force that one. Lets you use any LoRA in the engine's folder.
+   */
+  styleLoraOverride?: string;
+  /**
    * Force the local image model family for prompt formatting when auto-detection
    * from the checkpoint name is wrong. "auto" (default) detects it. SD families get
    * quality tags + a negative prompt; Flux gets plain natural language.
@@ -508,6 +514,29 @@ export function SettingsPanel({
               progress={downloadProgress}
               onDownload={onDownloadStyleLora}
             />
+          )}
+
+          {value.imageProvider === "local" && installedLoras.length > 0 && (
+            <label style={rowStyle}>
+              <span>Style LoRA (override)</span>
+              <select
+                value={value.styleLoraOverride ?? ""}
+                onChange={(e) => set({ styleLoraOverride: e.target.value })}
+                title="Pick any LoRA installed in the engine's loras folder to use with the current style, or turn LoRAs off. Overrides the style's automatic pack."
+              >
+                <option value="">Automatic (match the art style)</option>
+                <option value="none">None — prompt-only styling</option>
+                {installedLoras.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+              <span style={{ opacity: 0.55, fontSize: 11 }}>
+                The LoRA must match your model's family (an SDXL LoRA won't load on Flux/Z-Image).
+                The art-style prompt is always applied regardless.
+              </span>
+            </label>
           )}
 
           {value.imageProvider === "local" && (

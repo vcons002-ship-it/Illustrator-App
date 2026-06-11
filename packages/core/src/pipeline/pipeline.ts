@@ -202,8 +202,17 @@ export class RenderPipeline {
           );
       // Reference images for IP-Adapter — user-uploaded only (auto-capture removed).
       const ipAdapterRefs = await this.referenceImagesFor(present);
-      // Local engines additionally apply a style LoRA/checkpoint when installed.
+      // Local engines additionally apply a style LoRA/checkpoint when installed. A manual
+      // override (Settings) picks any installed LoRA over the style's automatic mapping —
+      // or turns it off — so users aren't limited to the curated, model-specific packs.
       const local = isLocal ? style.local : undefined;
+      const styleLora = !isLocal
+        ? undefined
+        : this.deps.tier.disableStyleLora
+          ? undefined
+          : this.deps.tier.styleLoraOverride
+            ? { name: this.deps.tier.styleLoraOverride, strength: 0.8 }
+            : local?.lora;
       // Everything about the render except the quality-level-dependent steps + canvas,
       // which are filled per-attempt so an out-of-memory failure can retry one level down.
       const baseInput: ImageGenerationInput = {
@@ -212,7 +221,7 @@ export class RenderPipeline {
         quality: this.deps.tier.quality,
         ...(isLocal && this.deps.tier.localSampler ? { localSampler: this.deps.tier.localSampler } : {}),
         ...(isLocal && this.deps.tier.localScheduler ? { localScheduler: this.deps.tier.localScheduler } : {}),
-        ...(local?.lora ? { styleLora: local.lora } : {}),
+        ...(styleLora ? { styleLora } : {}),
         ...(local?.checkpoint ? { styleCheckpoint: local.checkpoint } : {}),
         ...(this.deps.tier.imageModelFamily ? { modelFamily: this.deps.tier.imageModelFamily } : {}),
         ...(isLocal && this.deps.tier.localTextEncoder ? { textEncoder: this.deps.tier.localTextEncoder } : {}),
