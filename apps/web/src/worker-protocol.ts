@@ -45,7 +45,12 @@ export type MainToWorker =
   | { type: "importBible"; json: string }
   | { type: "carryOverBible"; fromBookId: string }
   /** Repaint from this unit to the end with current settings; earlier units kept. */
-  | { type: "paintForward"; fromUnit: number };
+  | { type: "paintForward"; fromUnit: number }
+  /**
+   * Freeform playground: render ONE image straight from the given text with the current
+   * provider/style/quality — no bible, no LLM, no cache. Answered by `testRendered`.
+   */
+  | { type: "testRender"; requestId: number; text: string };
 
 export type WorkerToMain =
   | { type: "status"; message: string }
@@ -61,4 +66,13 @@ export type WorkerToMain =
   | { type: "imported"; ok: boolean; stats?: ImportStats; error?: string }
   /** Reply to `getCharacterReference`; `image` is absent when the ref doesn't exist. */
   | { type: "characterReference"; requestId: number; image?: { bytes: ArrayBuffer; mimeType: string } }
+  /** Reply to `testRender`: the rendered bytes + the exact prompt used, or the error. */
+  | {
+      type: "testRendered";
+      requestId: number;
+      ok: boolean;
+      image?: { bytes: ArrayBuffer; mimeType: string };
+      prompt?: string;
+      error?: string;
+    }
   | { type: "error"; message: string };

@@ -92,6 +92,43 @@ describe("RenderPipeline style injection", () => {
   });
 });
 
+describe("RenderPipeline technical content mode", () => {
+  it("a technical book's requests carry the technical_illustration kind and still render", async () => {
+    const book = oneParagraphBook("Mitochondria convert glucose into ATP.");
+    book.contentMode = "technical";
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a cutaway view of a mitochondrion");
+    const { provider, lastPrompt } = recordingImage();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: DEFAULT_TIER_CONFIG,
+    });
+
+    expect(pipeline.buildRequest(book.pages[0]!).kind).toBe("technical_illustration");
+    const result = await pipeline.renderPage(0);
+    expect(result.status).toBe("ready"); // the kind is supported end-to-end
+    expect(lastPrompt()).toContain("cutaway view");
+  });
+
+  it("a fiction book keeps scene_illustration", () => {
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => createEmptyBible(book.id),
+      llm,
+      image: recordingImage().provider,
+      store: new InMemoryStore(),
+      tier: DEFAULT_TIER_CONFIG,
+    });
+    expect(pipeline.buildRequest(book.pages[0]!).kind).toBe("scene_illustration");
+  });
+});
+
 describe("RenderPipeline world style vs explicit art style", () => {
   async function renderWithStyle(styleId: string) {
     const book = oneParagraphBook();

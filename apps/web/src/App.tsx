@@ -27,7 +27,8 @@ import {
   type BookSummary,
   type EncryptedSecrets,
 } from "@visual-reader/core";
-import { parseEpub } from "@visual-reader/epub";
+import { bookFromText } from "@visual-reader/epub";
+import { IMPORT_ACCEPT, importBookFile } from "./import-file.js";
 import {
   CharacterBible,
   DEFAULT_SETTINGS,
@@ -44,7 +45,7 @@ import {
 } from "@visual-reader/ui";
 import type { LocalTextServerId } from "@visual-reader/core";
 import { loadSampleBook } from "./sample.js";
-import { useEngineWorker, type ImportResult } from "./useEngineWorker.js";
+import { useEngineWorker, type ImportResult, type TestRenderResult } from "./useEngineWorker.js";
 import {
   downloadLora,
   downloadModel,
@@ -111,9 +112,14 @@ export function App() {
     clearImportResult,
     carryOverBible,
     paintForward,
+    testRender,
   } = useEngineWorker(settings);
   const [showCharacters, setShowCharacters] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showPasteText, setShowPasteText] = useState(false);
+  const [showTestImage, setShowTestImage] = useState(false);
+  // Prefill for the paste modal when a text-bearing FILE (txt/md/html/pdf) was opened.
+  const [pasteInitial, setPasteInitial] = useState<{ title: string; text: string } | undefined>();
   const [showLibrary, setShowLibrary] = useState(false);
   const { registerParagraph, activeParagraphId, activeParagraphProgress } = useScrollDepth();
 
@@ -431,11 +437,17 @@ export function App() {
   const onUpload = useCallback(
     async (file: File) => {
       try {
-        const data = new Uint8Array(await file.arrayBuffer());
-        const source = parseEpub(data, `epub-${file.name}-${file.size}`);
-        openBook(source);
+        const imported = await importBookFile(file);
+        if (imported.kind === "book") {
+          openBook(imported.book);
+        } else {
+          // Extracted text (txt/md/html/pdf): confirm in the paste modal so the user can
+          // fix the title and mark technical content before the book is created.
+          setPasteInitial({ title: imported.title, text: imported.text });
+          setShowPasteText(true);
+        }
       } catch (err) {
-        setLocalError(`Couldn't parse EPUB: ${err instanceof Error ? err.message : String(err)}`);
+        setLocalError(`Couldn't import ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
     [openBook],
@@ -656,17 +668,31 @@ export function App() {
               Library ({library.length})
             </button>
           )}
-          <label style={styles.upload}>
-            Open EPUB
+          <label style={styles.upload} title="EPUB, TXT, Markdown, HTML, or PDF">
+            Open book…
             <input
               type="file"
-              accept=".epub"
+              accept={IMPORT_ACCEPT}
               style={{ display: "none" }}
               onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])}
             />
           </label>
+          <button
+            style={styles.button}
+            onClick={() => setShowPasteText(true)}
+            title="Paste any text (an article, a chapter, a paper) and read/illustrate it like a book"
+          >
+            Paste text
+          </button>
           <button style={styles.button} onClick={() => openBook(loadSampleBook())}>
             Load sample
+          </button>
+          <button
+            style={styles.button}
+            onClick={() => setShowTestImage(true)}
+            title="Type anything and render one image with the current model + style — a quick way to test providers, styles, and LoRAs"
+          >
+            Test image
           </button>
           {book && !generating && (
             <button
@@ -1014,6 +1040,29 @@ export function App() {
         />
       )}
 
+      {showTestImage && (
+        <TestImageModal onRender={testRender} onClose={() => setShowTestImage(false)} />
+      )}
+
+      {showPasteText && (
+        <PasteTextModal
+          initial={pasteInitial}
+          onCreate={(title, text, mode) => {
+            try {
+              openBook(bookFromText(title, text, mode));
+              setShowPasteText(false);
+              setPasteInitial(undefined);
+            } catch (err) {
+              setLocalError(err instanceof Error ? err.message : String(err));
+            }
+          }}
+          onClose={() => {
+            setShowPasteText(false);
+            setPasteInitial(undefined);
+          }}
+        />
+      )}
+
       {showLibrary && (
         <LibraryPanel
           books={library}
@@ -1191,6 +1240,156 @@ function ImportBibleModal({
             Import &amp; merge
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Paste any raw text (an article, a chapter, a paper) and read/illustrate it like a
+ * book. "Technical" marks non-fiction so illustration prompts use the concept/diagram
+ * template instead of fiction scenes. The book id is a hash of the content, so pasting
+ * the same text again reopens the same book with its bible and images intact.
+ */
+function PasteTextModal({
+  initial,
+  onCreate,
+  onClose,
+}: {
+  /** Prefill when the text came from an opened file (txt/md/html/pdf). */
+  initial?: { title: string; text: string } | undefined;
+  onCreate: (title: string, text: string, mode: "fiction" | "technical") => void;
+  onClose: () => void;
+}) {
+  const [title, setTitle] = useState(initial?.title ?? "");
+  const [text, setText] = useState(initial?.text ?? "");
+  const [mode, setMode] = useState<"fiction" | "technical">("fiction");
+  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+  return (
+    <div style={styles.modalOverlay} onClick={onClose}>
+      <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <strong>Read pasted text</strong>
+          <button style={styles.button} onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <p style={{ opacity: 0.65, fontSize: 12, margin: "0 0 8px" }}>
+          Paste anything — it becomes a book you can read and illustrate. Chapter headings
+          (Markdown #, “Chapter N”) are detected automatically.
+        </p>
+        <input
+          style={{ width: "100%", marginBottom: 8, boxSizing: "border-box" }}
+          value={title}
+          placeholder="Title (optional)"
+          onChange={(e) => setTitle(e.target.value)}
+        />
+        <textarea
+          style={styles.importTextarea}
+          value={text}
+          placeholder="Paste the text here…"
+          spellCheck={false}
+          onChange={(e) => setText(e.target.value)}
+        />
+        <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, margin: "6px 0" }}>
+          <input
+            type="checkbox"
+            checked={mode === "technical"}
+            onChange={(e) => setMode(e.target.checked ? "technical" : "fiction")}
+          />
+          <span>
+            Technical / non-fiction (papers, textbooks) — illustrate concepts and diagrams
+            instead of story scenes <em style={{ opacity: 0.6 }}>(experimental)</em>
+          </span>
+        </label>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+          <span style={{ opacity: 0.6, fontSize: 12 }}>{words ? `${words} words` : ""}</span>
+          <button
+            style={styles.buttonPrimary}
+            disabled={!text.trim()}
+            onClick={() => onCreate(title.trim() || "Pasted text", text, mode)}
+          >
+            Read it
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Freeform playground: type anything → one image with the current provider/style/
+ * quality (no bible, no LLM, no cache). The fastest way to test a model, an art style,
+ * or a LoRA before committing to a whole book.
+ */
+function TestImageModal({
+  onRender,
+  onClose,
+}: {
+  onRender: (text: string) => Promise<TestRenderResult>;
+  onClose: () => void;
+}) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<TestRenderResult | undefined>();
+  const [imageUrl, setImageUrl] = useState<string | undefined>();
+  useEffect(() => () => {
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
+  }, [imageUrl]);
+
+  const run = async () => {
+    setBusy(true);
+    setResult(undefined);
+    const r = await onRender(text);
+    setBusy(false);
+    setResult(r);
+    if (r.image) {
+      setImageUrl(URL.createObjectURL(new Blob([r.image.bytes], { type: r.image.mimeType })));
+    }
+  };
+
+  return (
+    <div style={styles.modalOverlay} onClick={onClose}>
+      <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <strong>Test an image</strong>
+          <button style={styles.button} onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <p style={{ opacity: 0.65, fontSize: 12, margin: "0 0 8px" }}>
+          Renders one image from your text with the current model, art style, quality and
+          aspect settings — nothing is analysed or saved. Great for testing styles and LoRAs.
+        </p>
+        <textarea
+          style={{ ...styles.importTextarea, minHeight: 70 }}
+          value={text}
+          placeholder="e.g. A lighthouse keeper rowing out into a storm at dusk"
+          spellCheck={false}
+          onChange={(e) => setText(e.target.value)}
+        />
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+          <button style={styles.buttonPrimary} disabled={busy || !text.trim()} onClick={() => void run()}>
+            {busy ? "Rendering…" : "Render"}
+          </button>
+        </div>
+        {result?.error && (
+          <div style={{ color: "#ff9b9b", fontSize: 13, whiteSpace: "pre-wrap" }}>{result.error}</div>
+        )}
+        {result?.ok && imageUrl && (
+          <>
+            <img
+              src={imageUrl}
+              alt="Test render"
+              style={{ display: "block", width: "100%", height: "auto", borderRadius: 8, marginTop: 8 }}
+            />
+            {result.prompt && (
+              <div style={{ opacity: 0.6, fontSize: 11, marginTop: 6, whiteSpace: "pre-wrap" }}>
+                {result.prompt}
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

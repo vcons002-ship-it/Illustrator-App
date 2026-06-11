@@ -3,8 +3,11 @@ import {
   consolidateCharacters,
   extractionUserContent,
   mergeExtraction,
+  promptSystemFor,
   promptUserContent,
+  PROMPT_SYSTEM,
   stripThink,
+  TECHNICAL_PROMPT_SYSTEM,
 } from "./extraction.js";
 import { createEmptyBible } from "../../visual-bible/bible.js";
 import { emptyAppearance, type Character } from "../../types/bible.js";
@@ -857,5 +860,17 @@ describe("extractionUserContent bounding (perf)", () => {
     // Whole "known so far" preamble (everything before the chapter body) stays small.
     const preamble = text.slice(0, text.indexOf("THE_CHAPTER_BODY"));
     expect(preamble.length).toBeLessThan(8000);
+  });
+});
+
+describe("promptSystemFor", () => {
+  it("picks the technical (concept/diagram) template for technical_illustration", () => {
+    expect(promptSystemFor("technical_illustration")).toBe(TECHNICAL_PROMPT_SYSTEM);
+    expect(promptSystemFor("scene_illustration")).toBe(PROMPT_SYSTEM);
+  });
+
+  it("the technical template explains concepts, not story scenes", () => {
+    expect(TECHNICAL_PROMPT_SYSTEM).toMatch(/concept|mechanism|process/i);
+    expect(TECHNICAL_PROMPT_SYSTEM).not.toMatch(/Visual Bible/);
   });
 });

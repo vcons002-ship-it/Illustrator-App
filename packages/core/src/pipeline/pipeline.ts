@@ -1,7 +1,7 @@
 import type { BookSource, Page } from "../types/book.js";
 import type { Character, VisualBible } from "../types/bible.js";
 import { referenceIdsOf } from "../types/bible.js";
-import type { ImageResult, VisualRequest } from "../types/content.js";
+import { isSupportedKind, type ImageResult, type VisualRequest } from "../types/content.js";
 import type { TierConfig } from "../types/tier.js";
 import type { LLMProvider } from "../providers/llm/llm-provider.js";
 import type {
@@ -57,7 +57,9 @@ export class RenderPipeline {
     );
     const chapterContext = this.chapterContextFor(page);
     return {
-      kind: "scene_illustration",
+      // Technical books (papers/textbooks, chosen at import) illustrate the passage's
+      // CONCEPT instead of a story scene — the LLM picks its prompt template by kind.
+      kind: this.deps.book.contentMode === "technical" ? "technical_illustration" : "scene_illustration",
       bookId: this.deps.book.id,
       ...(this.deps.book.title ? { bookTitle: this.deps.book.title } : {}),
       pageId: page.id,
@@ -143,7 +145,7 @@ export class RenderPipeline {
       };
     }
 
-    if (request.kind !== "scene_illustration") {
+    if (!isSupportedKind(request.kind)) {
       return { requestId, pageId: request.pageId, status: "error", error: `Unsupported content kind: ${request.kind}` };
     }
 

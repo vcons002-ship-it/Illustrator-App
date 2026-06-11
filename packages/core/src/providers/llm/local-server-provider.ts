@@ -3,7 +3,7 @@ import type { VisualBible } from "../../types/bible.js";
 import type { VisualRequest } from "../../types/content.js";
 import {
   EXTRACTION_SYSTEM,
-  PROMPT_SYSTEM,
+  promptSystemFor,
   extractionUserContent,
   isEmptyExtraction,
   mergeExtraction,
@@ -79,7 +79,7 @@ export class LocalServerLLMProvider implements LLMProvider {
   }
 
   async buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string> {
-    const text = await this.complete(PROMPT_SYSTEM, promptUserContent(request, bible), false, signal);
+    const text = await this.complete(promptSystemFor(request.kind), promptUserContent(request, bible), false, signal);
     return stripThink(text).trim();
   }
 

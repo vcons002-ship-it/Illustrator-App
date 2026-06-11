@@ -74,6 +74,16 @@ export interface EngineWorkerApi {
   clearImportResult: () => void;
   /** Repaint from a unit to the end with current settings (earlier units kept). */
   paintForward: (fromUnit: number) => void;
+  /** Playground: render ONE image straight from text (no bible/LLM/cache). */
+  testRender: (text: string) => Promise<TestRenderResult>;
+}
+
+export interface TestRenderResult {
+  ok: boolean;
+  image?: { bytes: ArrayBuffer; mimeType: string };
+  /** The exact prompt sent (the text + the active style suffix). */
+  prompt?: string;
+  error?: string;
 }
 
 export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
@@ -109,6 +119,8 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     Map<number, (image: { bytes: ArrayBuffer; mimeType: string } | undefined) => void>
   >(new Map());
   const nextRefRequestId = useRef(1);
+  // In-flight playground renders, resolved by `testRendered` replies.
+  const testRequests = useRef<Map<number, (result: TestRenderResult) => void>>(new Map());
 
   const send = (msg: MainToWorker, transfer: Transferable[] = []) =>
     workerRef.current?.postMessage(msg, transfer);
@@ -194,6 +206,17 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
           const resolve = refRequests.current.get(msg.requestId);
           refRequests.current.delete(msg.requestId);
           resolve?.(msg.image);
+          break;
+        }
+        case "testRendered": {
+          const resolve = testRequests.current.get(msg.requestId);
+          testRequests.current.delete(msg.requestId);
+          resolve?.({
+            ok: msg.ok,
+            ...(msg.image ? { image: msg.image } : {}),
+            ...(msg.prompt ? { prompt: msg.prompt } : {}),
+            ...(msg.error ? { error: msg.error } : {}),
+          });
           break;
         }
         case "error":
@@ -317,6 +340,15 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     (fromUnit: number) => send({ type: "paintForward", fromUnit }),
     [],
   );
+  const testRender = useCallback(
+    (text: string): Promise<TestRenderResult> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        testRequests.current.set(requestId, resolve);
+        send({ type: "testRender", requestId, text });
+      }),
+    [],
+  );
 
   return {
     bible,
@@ -351,6 +383,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     removeCharacterReference,
     getCharacterReference,
     paintForward,
+    testRender,
   };
 }
 

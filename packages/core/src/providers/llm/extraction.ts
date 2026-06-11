@@ -165,6 +165,32 @@ export const PROMPT_SYSTEM =
   "motion, energy, a sense of speed or impact. Output only the prompt text, no preamble.";
 
 /**
+ * Image-prompt system prompt for TECHNICAL / non-fiction content (papers, textbooks,
+ * articles): illustrate the passage's central CONCEPT, mechanism, or process as a clean
+ * explanatory visual instead of a story scene. Experimental — entity extraction still
+ * runs the fiction pass (its character/outfit fields are simply sparse for non-fiction).
+ */
+export const TECHNICAL_PROMPT_SYSTEM =
+  "You write one clear, concrete image-generation prompt for a single EXPLANATORY " +
+  "illustration of a non-fiction passage (a paper, textbook, or article). Write a single " +
+  "paragraph of natural, descriptive language (NOT a list of tags, no weighting syntax, no " +
+  "markdown). Depict the single most important concept, mechanism, structure, or process " +
+  "in THIS passage — each illustration covers a different stretch of the text, so depict " +
+  "what THIS passage explains, never repeating another illustration's subject. Prefer a " +
+  "clean scientific/technical illustration: a clear focal subject, simple uncluttered " +
+  "composition, neutral background, accurate proportions and spatial relationships — like " +
+  "a high-quality textbook figure or museum exhibit visual. For a process, show its stages " +
+  "or flow visually (left to right or top to bottom); for a structure, show a clear " +
+  "cutaway, cross-section, or labeled-style view (but do NOT ask for rendered text or " +
+  "labels — image models draw text poorly; convey meaning through the imagery itself). " +
+  "No people unless the passage is about people. Output only the prompt text, no preamble.";
+
+/** The image-prompt system prompt for a request's content kind. */
+export function promptSystemFor(kind: string): string {
+  return kind === "technical_illustration" ? TECHNICAL_PROMPT_SYSTEM : PROMPT_SYSTEM;
+}
+
+/**
  * JSON Schema for the extraction result. Gemini (`responseSchema`) and OpenAI
  * (`response_format: json_schema`) both consume this so the model returns
  * validated JSON; Claude expresses the same shape via its Zod helper.

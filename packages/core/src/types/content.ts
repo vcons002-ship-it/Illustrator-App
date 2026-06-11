@@ -9,12 +9,17 @@
  */
 export type ContentKind =
   | "scene_illustration"
+  /** Non-fiction (papers, textbooks): illustrate the CONCEPT/process, not a story scene. */
+  | "technical_illustration"
   // --- deferred (info-graphics), declared for forward-compatibility ---
   | "diagram"
   | "flowchart"
   | "summary";
 
-export const SUPPORTED_KINDS: readonly ContentKind[] = ["scene_illustration"];
+export const SUPPORTED_KINDS: readonly ContentKind[] = [
+  "scene_illustration",
+  "technical_illustration",
+];
 
 export function isSupportedKind(kind: ContentKind): boolean {
   return SUPPORTED_KINDS.includes(kind);

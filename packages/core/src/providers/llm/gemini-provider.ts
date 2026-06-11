@@ -4,7 +4,7 @@ import type { VisualRequest } from "../../types/content.js";
 import {
   EXTRACTION_JSON_SCHEMA,
   EXTRACTION_SYSTEM,
-  PROMPT_SYSTEM,
+  promptSystemFor,
   type RawExtraction,
   extractionUserContent,
   mergeExtraction,
@@ -63,7 +63,7 @@ export class GeminiLLMProvider implements LLMProvider {
   }
 
   async buildImagePrompt(request: VisualRequest, bible: VisualBible): Promise<string> {
-    const text = await this.generate(promptUserContent(request, bible), { system: PROMPT_SYSTEM });
+    const text = await this.generate(promptUserContent(request, bible), { system: promptSystemFor(request.kind) });
     return text.trim();
   }
 

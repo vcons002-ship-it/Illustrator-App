@@ -1,5 +1,12 @@
 /// <reference lib="webworker" />
-import { Engine, IndexedDbStore, toRenderUnits } from "@visual-reader/core";
+import {
+  Engine,
+  IndexedDbStore,
+  getImageStyle,
+  profileDimensions,
+  qualityProfile,
+  toRenderUnits,
+} from "@visual-reader/core";
 // Import buildProviders via the React-free subpath: pulling it from the package
 // index would drag the React UI components into the worker, which can crash the
 // worker on load (no `window`/DOM) under dev's cross-origin isolation.
@@ -321,8 +328,67 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       post({ type: "generating", value: true });
       postPaused();
       break;
+    case "testRender":
+      void handleTestRender(msg.requestId, msg.text);
+      break;
   }
 };
+
+/**
+ * Freeform playground render: text → one image with the CURRENT provider, style,
+ * quality, aspect and sampler settings — no bible, no LLM, no cache. A fast way to
+ * try out models/styles/LoRAs without opening a book.
+ */
+async function handleTestRender(requestId: number, text: string): Promise<void> {
+  try {
+    if (!settings) throw new Error("Settings not initialised yet.");
+    const { image, tier } = buildProviders(settings);
+    const style = getImageStyle(tier.style);
+    const prompt = style.promptSuffix ? `${text.trim()}\n\nStyle: ${style.promptSuffix}` : text.trim();
+    const level = tier.renderQuality;
+    const dims = level ? profileDimensions(level, tier.aspectRatio) : undefined;
+    const isLocal = tier.tier === "local";
+    const styleLora = !isLocal
+      ? undefined
+      : tier.disableStyleLora
+        ? undefined
+        : tier.styleLoraOverride
+          ? { name: tier.styleLoraOverride, strength: 0.8 }
+          : style.local?.lora;
+    const out = await image.generate({
+      prompt,
+      anchors: [],
+      quality: tier.quality,
+      ...(level ? { renderQuality: level, steps: qualityProfile(level).steps } : {}),
+      ...(dims ? { width: dims.width, height: dims.height } : {}),
+      ...(styleLora ? { styleLora } : {}),
+      ...(tier.imageModelFamily ? { modelFamily: tier.imageModelFamily } : {}),
+      ...(isLocal && tier.localTextEncoder ? { textEncoder: tier.localTextEncoder } : {}),
+      ...(isLocal && tier.localVae ? { vae: tier.localVae } : {}),
+      ...(isLocal && tier.localSteps ? { stepsOverride: tier.localSteps } : {}),
+      ...(isLocal && tier.localCfg !== undefined ? { cfgOverride: tier.localCfg } : {}),
+      ...(isLocal && tier.localSampler ? { localSampler: tier.localSampler } : {}),
+      ...(isLocal && tier.localScheduler ? { localScheduler: tier.localScheduler } : {}),
+    });
+    post(
+      {
+        type: "testRendered",
+        requestId,
+        ok: true,
+        image: { bytes: out.bytes, mimeType: out.mimeType },
+        prompt,
+      },
+      [out.bytes],
+    );
+  } catch (err) {
+    post({
+      type: "testRendered",
+      requestId,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
 
 async function handleOpen(book: import("@visual-reader/core").BookSource): Promise<void> {
   if (!settings) {

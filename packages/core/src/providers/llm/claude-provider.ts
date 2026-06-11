@@ -5,7 +5,7 @@ import type { VisualBible } from "../../types/bible.js";
 import type { VisualRequest } from "../../types/content.js";
 import {
   EXTRACTION_SYSTEM,
-  PROMPT_SYSTEM,
+  promptSystemFor,
   extractionUserContent,
   mergeExtraction,
   promptUserContent,
@@ -143,7 +143,7 @@ export class ClaudeProvider implements LLMProvider {
       {
         model: this.model,
         max_tokens: 512,
-        system: PROMPT_SYSTEM,
+        system: promptSystemFor(request.kind),
         messages: [{ role: "user", content: promptUserContent(request, bible) }],
       },
       signal ? { signal } : undefined,

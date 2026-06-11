@@ -4,7 +4,7 @@ import type { EntityExtractionInput, LLMProvider } from "./llm-provider.js";
 import { MockLLMProvider } from "./mock-llm-provider.js";
 import {
   EXTRACTION_SYSTEM,
-  PROMPT_SYSTEM,
+  promptSystemFor,
   extractionUserContent,
   mergeExtraction,
   promptUserContent,
@@ -161,7 +161,7 @@ export class WebLLMProvider implements LLMProvider {
       const complete = await this.completer();
       const text = await complete(
         [
-          { role: "system", content: PROMPT_SYSTEM },
+          { role: "system", content: promptSystemFor(request.kind) },
           { role: "user", content: promptUserContent(request, bible) },
         ],
         {

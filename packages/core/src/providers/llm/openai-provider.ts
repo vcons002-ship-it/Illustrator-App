@@ -4,7 +4,7 @@ import type { VisualRequest } from "../../types/content.js";
 import {
   EXTRACTION_JSON_SCHEMA,
   EXTRACTION_SYSTEM,
-  PROMPT_SYSTEM,
+  promptSystemFor,
   type RawExtraction,
   extractionUserContent,
   mergeExtraction,
@@ -64,7 +64,7 @@ export class OpenAILLMProvider implements LLMProvider {
   }
 
   async buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string> {
-    const text = await this.complete(PROMPT_SYSTEM, promptUserContent(request, bible), false, signal);
+    const text = await this.complete(promptSystemFor(request.kind), promptUserContent(request, bible), false, signal);
     return text.trim();
   }
 
