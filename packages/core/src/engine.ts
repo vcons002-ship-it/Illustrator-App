@@ -129,12 +129,18 @@ export class Engine {
     const stored = await this.store.getBible(book.id);
     this.bible = (stored && migrateBible(stored)) ?? createEmptyBible(book.id);
     // Collapse duplicate characters left by earlier sessions (e.g. "Violet" +
-    // "Violet Sorrengail") without a full re-analysis; persist if anything merged.
+    // "Violet Sorrengail") without a full re-analysis; persist if anything merged —
+    // and SAY so, because a silent shrink here looks like the bible losing people.
     if (this.bible.characters.length > 1) {
+      const before = this.bible.characters.length;
       const consolidated = consolidateCharacters(this.bible.characters);
-      if (consolidated.length !== this.bible.characters.length) {
+      if (consolidated.length !== before) {
         this.bible = { ...this.bible, characters: consolidated };
         await this.store.putBible(this.bible);
+        const merged = before - consolidated.length;
+        this.opts.onBibleNote?.(
+          `Merged ${merged} duplicate character entr${merged === 1 ? "y" : "ies"} (same person under different names).`,
+        );
       }
     }
     this.generationStarted = false;

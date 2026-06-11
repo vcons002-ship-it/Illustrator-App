@@ -755,10 +755,19 @@ function mergeCharacters(canon: Character, other: Character): Character {
 function charKeys(c: Character): Set<string> {
   return new Set([c.name, ...c.aliases].map((s) => s.trim().toLowerCase()).filter(Boolean));
 }
-function keysIntersect(a: Character, b: Character): boolean {
-  const kb = charKeys(b);
-  for (const k of charKeys(a)) if (kb.has(k)) return true;
-  return false;
+/**
+ * Same person only when one character's primary NAME appears in the other's
+ * name/alias set. A mere alias↔alias overlap is deliberately NOT enough: models
+ * hand out the same generic alias ("the rider", "her brother", "the lieutenant")
+ * to several people, and treating that as identity chain-merged whole casts into
+ * one entry (each merge unions the alias sets, intersecting ever more characters).
+ * A primary name is the specific, deliberate form — safe to merge on.
+ */
+function sameNamedPerson(a: Character, b: Character): boolean {
+  const an = a.name.trim().toLowerCase();
+  const bn = b.name.trim().toLowerCase();
+  if (!an || !bn) return false;
+  return charKeys(b).has(an) || charKeys(a).has(bn);
 }
 function nameTokens(name: string): Set<string> {
   return new Set(name.toLowerCase().split(/\s+/).filter(Boolean));
@@ -777,20 +786,21 @@ function pickCanonical(a: Character, b: Character): [Character, Character] {
 }
 
 /**
- * Collapse duplicate characters: (1) any whose name/alias sets overlap are the
- * same person; (2) a partial name is merged into its UNIQUE fuller name
+ * Collapse duplicate characters: (1) one's primary NAME appears in the other's
+ * name/alias set (alias↔alias overlap alone is NOT identity — see
+ * `sameNamedPerson`); (2) a partial name is merged into its UNIQUE fuller name
  * ("Violet" → "Violet Sorrengail"). Ambiguous partials (a bare "Anne" when both
  * "Anne Boleyn" and "Anne Frank" exist) are left alone. Idempotent.
  */
 export function consolidateCharacters(list: Character[]): Character[] {
   let chars = [...list];
 
-  // Pass 1 — overlapping name/alias sets (definitely the same person).
+  // Pass 1 — a primary name matching the other's name/alias set (same person).
   for (let again = true; again; ) {
     again = false;
     for (let i = 0; i < chars.length && !again; i++) {
       for (let j = i + 1; j < chars.length; j++) {
-        if (keysIntersect(chars[i]!, chars[j]!)) {
+        if (sameNamedPerson(chars[i]!, chars[j]!)) {
           const [canon, other] = pickCanonical(chars[i]!, chars[j]!);
           chars = chars.filter((_, k) => k !== i && k !== j);
           chars.push(mergeCharacters(canon, other));

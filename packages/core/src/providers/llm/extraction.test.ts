@@ -540,6 +540,35 @@ describe("character de-duplication", () => {
     expect(out.map((c) => c.name).sort()).toEqual(["Anne", "Anne Boleyn", "Anne Frank"]);
   });
 
+  it("does NOT merge distinct characters that merely share a generic alias", () => {
+    // Models hand the same descriptive alias to several people; that is not identity.
+    const out = consolidateCharacters([
+      char("Xaden Riorson", { aliases: ["the wingleader"] }),
+      char("Garrick Tavis", { aliases: ["the wingleader"] }),
+    ]);
+    expect(out.map((c) => c.name).sort()).toEqual(["Garrick Tavis", "Xaden Riorson"]);
+  });
+
+  it("does NOT chain-merge a cast through shared generic aliases", () => {
+    // The catastrophic case: A~B and B~C via generic aliases used to union alias sets
+    // and swallow the whole chain into one entry ("lost lots of characters").
+    const out = consolidateCharacters([
+      char("Violet Sorrengail", { aliases: ["the rider"] }),
+      char("Ridoc Gamlyn", { aliases: ["the rider", "her friend"] }),
+      char("Sawyer", { aliases: ["her friend"] }),
+    ]);
+    expect(out).toHaveLength(3);
+  });
+
+  it("still merges when one character's primary NAME is the other's alias", () => {
+    const out = consolidateCharacters([
+      char("Dain Aetos", { aliases: ["Dain", "the squad leader"] }),
+      char("Dain", { aliases: ["the squad leader"] }),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]!.name).toBe("Dain Aetos");
+  });
+
   it("mergeExtraction consolidates across chapters (no duplicate Violet)", () => {
     let bible = createEmptyBible("b");
     bible = mergeExtraction(

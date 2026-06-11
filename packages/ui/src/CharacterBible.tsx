@@ -121,6 +121,7 @@ function matchesQuery(c: Character, q: string): boolean {
     ...Object.values(c.appearance),
     ...c.persistentTraits,
     ...c.clothing,
+    ...(c.outfits ?? []).flatMap((o) => [o.label, o.description, o.context]),
   ]
     .join(" ")
     .toLowerCase();
