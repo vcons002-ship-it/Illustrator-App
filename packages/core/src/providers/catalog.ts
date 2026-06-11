@@ -239,7 +239,10 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
     sizeGB: 19.5,
     note: "Official open Flux.2 — excellent quality, strong GPU",
     filename: "flux-2-klein-base-9b-fp8.safetensors",
-    url: "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/resolve/main/flux-2-klein-base-9b-fp8.safetensors",
+    // Comfy-Org's repack mirror — the black-forest-labs repos are GATED on Hugging
+    // Face (401 without an accepted license + login), which the app's keyless
+    // downloader can't satisfy. Same files, ungated host.
+    url: "https://huggingface.co/Comfy-Org/flux2-klein-9B/resolve/main/split_files/diffusion_models/flux-2-klein-base-9b-fp8.safetensors",
     family: "flux2",
     clipType: "flux2",
     // Klein base is NOT guidance-distilled (unlike Flux.2-dev): real CFG 5, no
@@ -249,7 +252,7 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
       {
         filename: "flux-2-klein-base-9b-fp8.safetensors",
         folder: "diffusion_models",
-        url: "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/resolve/main/flux-2-klein-base-9b-fp8.safetensors",
+        url: "https://huggingface.co/Comfy-Org/flux2-klein-9B/resolve/main/split_files/diffusion_models/flux-2-klein-base-9b-fp8.safetensors",
         sizeGB: 9.7,
       },
       {
@@ -261,7 +264,7 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
       {
         filename: "full_encoder_small_decoder.safetensors",
         folder: "vae",
-        url: "https://huggingface.co/black-forest-labs/FLUX.2-small-decoder/resolve/main/full_encoder_small_decoder.safetensors",
+        url: "https://huggingface.co/Comfy-Org/flux2-klein-9B/resolve/main/split_files/vae/full_encoder_small_decoder.safetensors",
         sizeGB: 0.7,
       },
     ],

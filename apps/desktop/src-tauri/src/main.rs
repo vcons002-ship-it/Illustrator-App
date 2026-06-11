@@ -347,7 +347,16 @@ fn download_model_with_progress(
         resp = client.get(&model.url).send().map_err(|e| e.to_string())?;
     }
     if !resp.status().is_success() {
-        return Err(format!("Download of {} failed ({}).", model.filename, resp.status()));
+        // Gated repos (e.g. some Hugging Face hosts) answer 401/403 without a logged-in
+        // license acceptance — something this keyless downloader can never satisfy. Say
+        // so, instead of leaving the user retrying a download that can't succeed.
+        let hint = match resp.status().as_u16() {
+            401 | 403 => " The host requires a login/license for this file — download it in \
+                          your browser and place it in the engine's models folder, or paste \
+                          an alternative URL in Settings.",
+            _ => "",
+        };
+        return Err(format!("Download of {} failed ({}).{hint}", model.filename, resp.status()));
     }
     // 206 → the server honours the Range and we append; anything else (200, or we
     // asked from 0) → start the .part over from scratch.
