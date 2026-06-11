@@ -353,11 +353,14 @@ export function SettingsPanel({
             <span>Art style</span>
             <select value={value.imageStyle ?? "auto"} onChange={(e) => set({ imageStyle: e.target.value })}>
               {IMAGE_STYLES.map((s) => (
-                <option key={s.id} value={s.id}>
+                <option key={s.id} value={s.id} title={s.description}>
                   {s.label}
                 </option>
               ))}
             </select>
+            <span style={{ opacity: 0.55, fontSize: 11 }}>
+              {getImageStyle(value.imageStyle).description}
+            </span>
           </label>
 
           {value.imageProvider === "local" && (

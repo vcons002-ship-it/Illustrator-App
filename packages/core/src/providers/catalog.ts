@@ -361,19 +361,35 @@ export interface ImageStyleLocal {
 export interface ImageStyle {
   id: string;
   label: string;
+  /** One-line "what it looks like + what it suits", shown in the style picker. */
+  description: string;
   /** Appended to the image prompt; empty for "auto". */
   promptSuffix: string;
   /** Optional local-engine LoRA/checkpoint mapping (applied when installed). */
   local?: ImageStyleLocal;
 }
 
+/**
+ * The art-style catalog. Each style is primarily PROMPT-driven (the suffix steers any
+ * model, cloud or local); `local.lora` additionally applies a LoRA of that name when one
+ * is installed in the engine (only the entries with a `url` are downloadable in-app —
+ * for the rest, drop a matching `<name>.safetensors` into the engine's loras folder).
+ * Suffixes name a medium + technique + palette/lighting rather than artists, which
+ * steers reliably across SD, Flux and the cloud models alike.
+ */
 export const IMAGE_STYLES: ImageStyle[] = [
-  { id: "auto", label: "Auto (match the writing)", promptSuffix: "" },
+  {
+    id: "auto",
+    label: "Auto (match the writing)",
+    description: "No style is forced — the scene prompt and the book's own genre decide the look.",
+    promptSuffix: "",
+  },
   {
     id: "dynamic-action",
     label: "Dynamic action",
+    description: "High-energy cinematic shots with motion and impact — thrillers, battles, sports.",
     promptSuffix:
-      "dynamic action pose, intense motion, sense of speed and impact, cinematic action shot, motion blur on movement",
+      "dynamic action pose, intense motion, sense of speed and impact, cinematic action shot, motion blur on movement, dramatic low camera angle",
     // No bundled download — the prompt emphasis drives it; drop a LoRA named
     // dynamic-action.safetensors into the engine's loras folder to boost it.
     local: { lora: { name: "dynamic-action", strength: 0.7, trigger: "dynamic action" } },
@@ -381,27 +397,66 @@ export const IMAGE_STYLES: ImageStyle[] = [
   {
     id: "photorealistic",
     label: "Photorealistic",
+    description: "Looks like a photograph — contemporary fiction, memoirs, true stories.",
     promptSuffix:
-      "photorealistic, ultra-detailed, natural lighting, sharp focus, professional photography",
+      "photorealistic, ultra-detailed, natural lighting, sharp focus, realistic materials and skin texture, professional photography",
     local: { lora: { name: "photorealistic", strength: 0.6 } },
+  },
+  {
+    id: "cinematic",
+    label: "Cinematic film still",
+    description: "A frame from a movie — moody color grading and shallow focus; fits most novels.",
+    promptSuffix:
+      "cinematic film still, dramatic lighting, shallow depth of field, moody color grading, anamorphic framing, subtle film grain",
+    local: { lora: { name: "cinematic", strength: 0.7 } },
   },
   {
     id: "anime",
     label: "Anime",
-    promptSuffix: "anime illustration, cel shading, clean line art, vibrant colors, expressive",
+    description: "Crisp cel-shaded anime with vivid colors — light novels, YA, adventure.",
+    promptSuffix:
+      "anime illustration, cel shading, clean line art, vibrant colors, expressive characters, detailed scenery",
     local: { lora: { name: "anime", strength: 0.8, trigger: "anime" } },
+  },
+  {
+    id: "anime-film",
+    label: "Anime film (painterly)",
+    description: "Soft, hand-painted animation backgrounds and gentle light — cozy or wistful stories.",
+    promptSuffix:
+      "painterly anime film still, soft watercolor-tinted backgrounds, warm natural light, gentle pastel palette, hand-painted scenery, nostalgic atmosphere",
+    local: { lora: { name: "anime-film", strength: 0.7 } },
   },
   {
     id: "manga",
     label: "Manga (black & white)",
-    promptSuffix: "black-and-white manga, ink linework, screentone shading, dynamic composition",
+    description: "Inked black-and-white manga with screentones — pairs with the comic-panel view, right-to-left.",
+    promptSuffix:
+      "black-and-white manga, ink linework, screentone shading, high contrast, speed lines, dynamic composition",
     local: { lora: { name: "manga", strength: 0.8, trigger: "manga, monochrome, greyscale" } },
+  },
+  {
+    id: "comic",
+    label: "Comic book",
+    description: "Bold western comic art with inked outlines and halftones — pairs with the comic-panel view.",
+    promptSuffix:
+      "western comic book art, bold ink outlines, halftone shading, saturated flat colors, dramatic framing",
+    local: {
+      lora: {
+        name: "comic",
+        strength: 0.8,
+        trigger: "Comic Book",
+        url: "https://huggingface.co/artificialguybr/ComicBookRedmond-V2/resolve/main/ComicBookRedmond-V2-Comic-ComicRedmAF.safetensors",
+        filename: "comic.safetensors",
+        sizeMB: 170,
+      },
+    },
   },
   {
     id: "animation-3d",
     label: "Realistic animation (3D)",
+    description: "Modern 3D-animated-film look with soft lighting — family stories and adventures.",
     promptSuffix:
-      "3D animated film still, stylized realism, soft global illumination, subtle subsurface detail",
+      "3D animated film still, stylized realism, soft global illumination, subtle subsurface detail, expressive characters",
     local: {
       lora: {
         name: "animation-3d",
@@ -416,34 +471,41 @@ export const IMAGE_STYLES: ImageStyle[] = [
   {
     id: "watercolor",
     label: "Watercolor",
-    promptSuffix: "watercolor painting, soft washes, textured paper, painterly, delicate",
+    description: "Soft translucent washes on textured paper — literary fiction, poetry, quiet drama.",
+    promptSuffix:
+      "watercolor painting, soft translucent washes, textured paper, loose expressive brushwork, delicate color bleeds, painterly",
     local: { lora: { name: "watercolor", strength: 0.8, trigger: "watercolor" } },
-  },
-  {
-    id: "comic",
-    label: "Comic book",
-    promptSuffix: "western comic book art, bold ink outlines, halftone shading, dramatic",
-    local: {
-      lora: {
-        name: "comic",
-        strength: 0.8,
-        trigger: "Comic Book",
-        url: "https://huggingface.co/artificialguybr/ComicBookRedmond-V2/resolve/main/ComicBookRedmond-V2-Comic-ComicRedmAF.safetensors",
-        filename: "comic.safetensors",
-        sizeMB: 170,
-      },
-    },
   },
   {
     id: "oil-painting",
     label: "Oil painting",
-    promptSuffix: "classical oil painting, visible brushstrokes, rich color, chiaroscuro lighting",
+    description: "Classical canvas with rich color and dramatic light — historical fiction and epics.",
+    promptSuffix:
+      "classical oil painting, visible impasto brushstrokes, rich color, chiaroscuro lighting, canvas texture, old-master composition",
     local: { lora: { name: "oil-painting", strength: 0.8, trigger: "oil painting" } },
+  },
+  {
+    id: "pencil-sketch",
+    label: "Pencil sketch",
+    description: "Hand-drawn graphite with crosshatching — a classic illustrated-novel feel.",
+    promptSuffix:
+      "detailed graphite pencil sketch, hand-drawn linework, crosshatching and soft smudged shading, monochrome, sketchbook illustration",
+    local: { lora: { name: "pencil-sketch", strength: 0.8, trigger: "pencil sketch" } },
+  },
+  {
+    id: "vintage-engraving",
+    label: "Vintage engraving",
+    description: "19th-century etched book plates, fine parallel lines — classics, gothic tales, fables.",
+    promptSuffix:
+      "antique book-plate engraving, fine etched parallel linework, woodcut hatching, monochrome ink, dramatic shading, 19th-century illustration",
+    local: { lora: { name: "vintage-engraving", strength: 0.8 } },
   },
   {
     id: "storybook",
     label: "Storybook",
-    promptSuffix: "children's storybook illustration, soft gouache, warm and whimsical",
+    description: "Warm, whimsical gouache for all ages — children's books and gentle fantasy.",
+    promptSuffix:
+      "children's storybook illustration, soft gouache, warm and whimsical, friendly rounded shapes, cozy colors",
     local: {
       lora: {
         name: "storybook",
@@ -454,6 +516,38 @@ export const IMAGE_STYLES: ImageStyle[] = [
         sizeMB: 170,
       },
     },
+  },
+  {
+    id: "art-nouveau",
+    label: "Art nouveau",
+    description: "Ornate flowing lines and decorative borders in muted gold — fairy tales, romance, myth.",
+    promptSuffix:
+      "art nouveau illustration, ornate flowing linework, decorative floral framing, flat muted gold and jewel tones, elegant poster composition",
+    local: { lora: { name: "art-nouveau", strength: 0.8, trigger: "art nouveau" } },
+  },
+  {
+    id: "dark-fantasy",
+    label: "Dark fantasy",
+    description: "Grim, shadowy painted fantasy with a desaturated palette — grimdark, horror, gothic.",
+    promptSuffix:
+      "dark fantasy painting, grim foreboding atmosphere, deep ominous shadows, desaturated muted palette, intricate gothic detail, faint cold rim light",
+    local: { lora: { name: "dark-fantasy", strength: 0.8, trigger: "dark fantasy" } },
+  },
+  {
+    id: "noir",
+    label: "Film noir",
+    description: "High-contrast black & white, hard shadows and silhouettes — mysteries and crime.",
+    promptSuffix:
+      "film noir style, high-contrast black and white, hard dramatic shadows, venetian-blind and street-lamp lighting, silhouettes, moody atmosphere",
+    local: { lora: { name: "noir", strength: 0.8, trigger: "film noir" } },
+  },
+  {
+    id: "pixel-art",
+    label: "Pixel art",
+    description: "Retro 16-bit game scenes with a limited palette — a playful take on any story.",
+    promptSuffix:
+      "detailed pixel art, 16-bit retro video game scene, limited color palette, crisp clean pixels, atmospheric dithering",
+    local: { lora: { name: "pixel-art", strength: 0.8, trigger: "pixel art" } },
   },
 ];
 
