@@ -93,6 +93,7 @@ export function App() {
     regenerateStoryboard,
     regenerateAllImages,
     regenerateImage,
+    completeBook,
     rebuildPrompts,
     updateCharacter,
     addCharacterReference,
@@ -560,6 +561,25 @@ export function App() {
     );
   }, [book, units, activePageIndex, paintForward, noteAction, remainingEta]);
 
+  // Gaps to fill = story units whose illustration failed or never finished. (Pages with
+  // a ready or skipped result, or one still rendering, don't count.) Drives the
+  // "Complete book" button's badge.
+  const gapCount = useMemo(() => {
+    if (!units || !book) return 0;
+    let n = 0;
+    for (let u = 0; u < totalUnits; u++) {
+      const chapterId = units.book.pages[u]?.chapterId;
+      const isStory = chapterId ? book.chapters.find((c) => c.id === chapterId)?.isStory !== false : true;
+      if (!isStory) continue;
+      const status = results.get(u)?.status;
+      // A failed illustration is always a gap. An un-started one counts only when
+      // generation isn't running (otherwise it's just not its turn yet).
+      if (status === "error") n++;
+      else if (!generating && (status === undefined || status === "queued")) n++;
+    }
+    return n;
+  }, [results, units, book, totalUnits, generating]);
+
   // The unit currently being painted (lowest in-flight index), with its progress.
   const painting = useMemo(() => {
     let best: { unit: number; progress?: number } | undefined;
@@ -642,6 +662,22 @@ export function App() {
               title="Read the book, write its illustration prompts, and start painting — reusing anything generated in past sessions"
             >
               ▶ Start illustrating
+            </button>
+          )}
+          {book && (generating || results.size > 0) && (
+            <button
+              style={gapCount > 0 ? styles.buttonPrimary : styles.button}
+              onClick={() => {
+                completeBook();
+                noteAction(
+                  gapCount > 0
+                    ? `✓ Completing the book — filling ${gapCount} unfinished illustration${gapCount === 1 ? "" : "s"} (plus any missing analysis/prompts). Finished images are kept.`
+                    : "✓ Completing the book — filling any missing analysis, prompts, or illustrations. Finished images are kept.",
+                );
+              }}
+              title="Fill the gaps: chapters not yet analysed, missing prompts, and failed or unfinished illustrations — without redoing finished images."
+            >
+              ⤢ Complete book{gapCount > 0 ? ` (${gapCount})` : ""}
             </button>
           )}
           {book && (generating || paused.bible || paused.images) && (

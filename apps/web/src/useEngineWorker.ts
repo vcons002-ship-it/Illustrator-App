@@ -50,6 +50,8 @@ export interface EngineWorkerApi {
   regenerateStoryboard: () => void;
   regenerateAllImages: () => void;
   regenerateImage: (unitIndex: number) => void;
+  /** Fill gaps (missing prompts + failed/un-rendered units); finished images are kept. */
+  completeBook: () => void;
   /** Discard stored illustration prompts and rebuild them (LLM); images kept. */
   rebuildPrompts: () => void;
   /** Save a user correction to a character (persisted; existing images unchanged). */
@@ -261,6 +263,10 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     generationRequested.current = true;
     send({ type: "regenerateImage", unitIndex });
   }, []);
+  const completeBook = useCallback(() => {
+    generationRequested.current = true;
+    send({ type: "completeBook" });
+  }, []);
   const updateCharacter = useCallback(
     (characterId: string, patch: CharacterPatch) =>
       send({ type: "updateCharacter", characterId, patch }),
@@ -318,6 +324,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     regenerateStoryboard,
     regenerateAllImages,
     regenerateImage,
+    completeBook,
     rebuildPrompts,
     exportBible,
     importBible,

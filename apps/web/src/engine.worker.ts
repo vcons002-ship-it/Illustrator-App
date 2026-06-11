@@ -256,6 +256,11 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       post({ type: "generating", value: true });
       postPaused();
       break;
+    case "completeBook":
+      void engine?.completeBook();
+      post({ type: "generating", value: true });
+      postPaused();
+      break;
     case "updateCharacter":
       // Save-only: persists the edit and broadcasts the updated bible; existing
       // images are left as-is until the user re-renders.

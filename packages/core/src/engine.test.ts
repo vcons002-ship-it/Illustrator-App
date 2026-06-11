@@ -836,6 +836,38 @@ describe("Engine", () => {
     expect(await store.getImage(refId)).toBeDefined();
   });
 
+  it("completeBook retries only failed units, keeping finished images", async () => {
+    // An image provider that throws on its FIRST call, then succeeds — so exactly one
+    // unit ends up errored after the initial pass.
+    let calls = 0;
+    const image = new MockImageProvider();
+    vi.spyOn(image, "generate").mockImplementation(async () => {
+      calls++;
+      if (calls === 1) throw new Error("transient render failure");
+      return { bytes: new ArrayBuffer(1), mimeType: "image/png" };
+    });
+    const engine = new Engine({ llm: new MockLLMProvider(), image });
+    await engine.openBook(twoChapterBook());
+    engine.startGeneration();
+    // Both units settle: one errored, one ready.
+    await vi.waitFor(() => {
+      const a = engine.resultFor(0)?.status;
+      const b = engine.resultFor(1)?.status;
+      expect(a === "error" || b === "error").toBe(true);
+      expect(a === "ready" || b === "ready").toBe(true);
+    });
+    const failed = engine.resultFor(0)?.status === "error" ? 0 : 1;
+    const kept = failed === 0 ? 1 : 0;
+    const callsBefore = calls;
+
+    await engine.completeBook();
+
+    // The failed unit re-renders and succeeds; the finished one is NOT re-rendered.
+    await vi.waitFor(() => expect(engine.resultFor(failed)?.status).toBe("ready"));
+    expect(engine.resultFor(kept)?.status).toBe("ready");
+    expect(calls).toBe(callsBefore + 1); // only the one gap was repainted
+  });
+
   it("updateCharacter applies an edited outfit list and persists it", async () => {
     const store = new InMemoryStore();
     const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });

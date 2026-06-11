@@ -28,6 +28,8 @@ export type MainToWorker =
   | { type: "rebuildPrompts" }
   | { type: "regenerateAllImages" }
   | { type: "regenerateImage"; unitIndex: number }
+  /** Fill gaps (missing prompts + failed/un-rendered units) without discarding finished images. */
+  | { type: "completeBook" }
   | { type: "updateCharacter"; characterId: string; patch: CharacterPatch }
   | { type: "addCharacterReference"; characterId: string; image: { bytes: ArrayBuffer; mimeType: string } }
   | { type: "removeCharacterReference"; characterId: string; refId: string }

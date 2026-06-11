@@ -799,6 +799,32 @@ export class Engine {
   resultFor(pageIndex: number): ImageResult | undefined {
     return this.buffer?.resultOf(pageIndex);
   }
+
+  /**
+   * Fill in the gaps without a full restart: re-run anything still missing — chapters
+   * not yet analysed, story units without a prompt, and illustrations that failed —
+   * while KEEPING every image already rendered. Cheap when little is missing (processed
+   * chapters and ready images are skipped). Use this to "finish the book" after a pause,
+   * a transient model failure, or a few errored units, instead of `regenerateAllImages`
+   * (which discards everything) or scrubbing to each gap by hand.
+   */
+  async completeBook(): Promise<void> {
+    if (!this.book) return;
+    this.startGeneration();
+    // Unpause + re-enable rendering, and restart the LLM phase if any prompt is still
+    // missing (a missing prompt makes isLlmPhaseComplete() false → the sweep re-runs).
+    this.resumeGeneration();
+    // Retry only the FAILED units (their error result blocks auto-retry); ready images
+    // are kept, and never-attempted units render on their own once generation is on.
+    if (this.buffer) {
+      for (let i = 0; i < this.book.pages.length; i++) {
+        if (this.isStoryPage(i) && this.buffer.resultOf(i)?.status === "error") {
+          this.buffer.invalidate(i);
+        }
+      }
+      this.buffer.refresh();
+    }
+  }
 }
 
 /** The anchor rewritten to the array reference form (legacy single id folded away). */
