@@ -297,7 +297,12 @@ function buildImage(
   }
   try {
     return {
-      provider: createImageProvider(id, { key, ...(transport ? { transport } : {}), ...(native ? { native: true } : {}) }),
+      provider: createImageProvider(id, {
+        key,
+        ...(transport ? { transport } : {}),
+        ...(native ? { native: true } : {}),
+        ...(settings.imageModel ? { model: settings.imageModel } : {}),
+      }),
       diag: {
         id,
         label: native ? `${providerLabel} (native, one API)` : providerLabel,

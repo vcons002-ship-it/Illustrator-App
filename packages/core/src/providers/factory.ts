@@ -54,6 +54,9 @@ export interface ImageProviderOptions {
    * Only gemini/openai have a native variant; ignored for other ids.
    */
   native?: boolean;
+  /** Pin a specific cloud model id (advanced). When unset, Gemini auto-selects the
+   * best image model the key can access; other providers use their default. */
+  model?: string;
 }
 
 export function createLLMProvider(id: string, opts: LLMProviderOptions = {}): LLMProvider {
@@ -92,10 +95,15 @@ export function createImageProvider(id: string, opts: ImageProviderOptions = {})
     case "flux":
       return new FluxProvider({ apiKey: requireKey(opts.key, "flux"), ...(transport ? { transport } : {}) });
     case "gemini":
-      // Always the multimodal generateContent model (gemini-2.5-flash-image): it works on a
-      // standard key AND accepts character reference photos. The Imagen :predict provider is
-      // paid-tier only and 404s for most keys, so it is no longer wired as a default.
-      return new GeminiNativeImageProvider({ apiKey: requireKey(opts.key, "gemini"), ...(transport ? { transport } : {}) });
+      // Multimodal generateContent (auto-selects the best image model the key can access —
+      // Nano Banana Pro if available, else Flash): works on a standard key AND accepts
+      // character reference photos. The Imagen :predict path is paid-tier only and 404s for
+      // most keys, so it is no longer wired as a default.
+      return new GeminiNativeImageProvider({
+        apiKey: requireKey(opts.key, "gemini"),
+        ...(opts.model ? { model: opts.model } : {}),
+        ...(transport ? { transport } : {}),
+      });
     case "openai":
       return opts.native
         ? new OpenAINativeImageProvider({ apiKey: requireKey(opts.key, "openai"), ...(transport ? { transport } : {}) })

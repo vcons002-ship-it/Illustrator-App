@@ -97,6 +97,9 @@ export interface ReaderSettings {
   /** Experimental: under native mode, let the model read the passage and draw it in one
    * step (passage text → image) instead of rendering the pre-written scene prompt. */
   nativeOneShot?: boolean;
+  /** Advanced: pin a specific cloud image model id (e.g. a newer Gemini image model).
+   * Empty/unset = auto-select the best model the key can access. */
+  imageModel?: string;
   /** True once the first-run wizard has been completed. */
   configured?: boolean;
   /** Transient: base URL of the app-managed local engine (desktop; not persisted). */

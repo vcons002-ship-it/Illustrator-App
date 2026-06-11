@@ -6,7 +6,7 @@ import type { ImageGenerationInput } from "./image/image-provider.js";
 import { GeminiLLMProvider } from "./llm/gemini-provider.js";
 import { OpenAILLMProvider } from "./llm/openai-provider.js";
 import { GeminiImageProvider } from "./image/gemini-image-provider.js";
-import { GeminiNativeImageProvider } from "./image/gemini-native-image-provider.js";
+import { GeminiNativeImageProvider, pickBestGeminiImageModel } from "./image/gemini-native-image-provider.js";
 import { OpenAIImageProvider } from "./image/openai-image-provider.js";
 import { OpenAINativeImageProvider } from "./image/openai-native-image-provider.js";
 import { FluxProvider } from "./image/flux-provider.js";
@@ -199,12 +199,14 @@ describe("OpenAIImageProvider", () => {
 
 describe("GeminiNativeImageProvider (one-API multimodal)", () => {
   const ref = { bytes: new TextEncoder().encode("REFBYTES").buffer, mimeType: "image/png", weight: 0.5 };
+  // Pin a model so these test request SHAPING, not discovery (covered separately).
+  const pinned = { apiKey: "KEY", model: "gemini-2.5-flash-image" };
 
   it("sends prompt + reference photos inline and decodes the returned image part", async () => {
     const transport = new FakeTransport(() => ({
       json: { candidates: [{ content: { parts: [{ text: "ok" }, { inlineData: { mimeType: "image/png", data: b64("DRAWN") } }] } }] },
     }));
-    const provider = new GeminiNativeImageProvider({ apiKey: "KEY", transport });
+    const provider = new GeminiNativeImageProvider({ ...pinned, transport });
     const out = await provider.generate({ ...imageInput, ipAdapterRefs: [ref] });
 
     const body = transport.requests[0]!.body as { contents: { parts: Record<string, unknown>[] }[] };
@@ -212,7 +214,7 @@ describe("GeminiNativeImageProvider (one-API multimodal)", () => {
     expect(parts[0]).toEqual({ text: "a knight" });
     // The reference photo rides along as an inline image part (character conditioning).
     expect((parts[1]!.inline_data as { data: string }).data).toBe(b64("REFBYTES"));
-    expect(transport.requests[0]!.url).toContain(":generateContent?key=KEY");
+    expect(transport.requests[0]!.url).toContain("gemini-2.5-flash-image:generateContent?key=KEY");
     expect(new TextDecoder().decode(out.bytes)).toBe("DRAWN");
   });
 
@@ -220,7 +222,7 @@ describe("GeminiNativeImageProvider (one-API multimodal)", () => {
     const transport = new FakeTransport(() => ({
       json: { candidates: [{ content: { parts: [{ inline_data: { mime_type: "image/jpeg", data: b64("J") } }] } }] },
     }));
-    const provider = new GeminiNativeImageProvider({ apiKey: "KEY", transport });
+    const provider = new GeminiNativeImageProvider({ ...pinned, transport });
     const out = await provider.generate(imageInput);
     const body = transport.requests[0]!.body as { contents: { parts: unknown[] }[] };
     expect(body.contents[0]!.parts).toHaveLength(1); // prompt only
@@ -229,8 +231,58 @@ describe("GeminiNativeImageProvider (one-API multimodal)", () => {
 
   it("throws when the response has no image part", async () => {
     const transport = new FakeTransport(() => ({ json: { candidates: [{ content: { parts: [{ text: "no image" }] } }] } }));
-    const provider = new GeminiNativeImageProvider({ apiKey: "KEY", transport });
+    const provider = new GeminiNativeImageProvider({ ...pinned, transport });
     await expect(provider.generate(imageInput)).rejects.toThrow(/no image data/);
+  });
+
+  it("auto-discovers the best image model the key can access (Pro > Flash), once", async () => {
+    const transport = new FakeTransport((req, i) => {
+      if (i === 0) {
+        expect(req.url).toContain("/models?key=KEY"); // models.list
+        return {
+          json: {
+            models: [
+              { name: "models/gemini-2.5-flash", supportedGenerationMethods: ["generateContent"] },
+              { name: "models/gemini-2.5-flash-image", supportedGenerationMethods: ["generateContent"] },
+              { name: "models/gemini-3-pro-image-preview", supportedGenerationMethods: ["generateContent"] },
+              { name: "models/imagen-3.0-generate-002", supportedGenerationMethods: ["predict"] },
+            ],
+          },
+        };
+      }
+      return { json: { candidates: [{ content: { parts: [{ inlineData: { data: b64("X") } }] } }] } };
+    });
+    const provider = new GeminiNativeImageProvider({ apiKey: "KEY", transport }); // no pinned model
+    await provider.generate(imageInput);
+    await provider.generate(imageInput);
+    // Picked the Pro image model (not Flash, not the predict-only Imagen)…
+    expect(transport.requests[1]!.url).toContain("gemini-3-pro-image-preview:generateContent");
+    // …and discovery ran ONCE (req0 list, req1+req2 generate — no second list).
+    expect(transport.requests.filter((r) => r.url.includes("/models?key=")).length).toBe(1);
+  });
+
+  it("falls back to the default model when discovery fails", async () => {
+    const transport = new FakeTransport((_req, i) => {
+      if (i === 0) return { ok: false, status: 403 }; // models.list denied
+      return { json: { candidates: [{ content: { parts: [{ inlineData: { data: b64("X") } }] } }] } };
+    });
+    const provider = new GeminiNativeImageProvider({ apiKey: "KEY", transport });
+    await provider.generate(imageInput);
+    expect(transport.requests[1]!.url).toContain("gemini-2.5-flash-image:generateContent");
+  });
+
+  it("pickBestGeminiImageModel ranks Pro over Flash and excludes Imagen/vision", () => {
+    expect(
+      pickBestGeminiImageModel([
+        { name: "models/gemini-2.5-flash-image" },
+        { name: "models/gemini-3-pro-image-preview" },
+        { name: "models/imagen-4.0-generate" },
+        { name: "models/gemini-pro-vision" },
+      ]),
+    ).toBe("gemini-3-pro-image-preview");
+    // A key with only Flash image picks Flash; a key with no Gemini image model → undefined.
+    expect(pickBestGeminiImageModel([{ name: "models/gemini-2.5-flash-image" }])).toBe("gemini-2.5-flash-image");
+    expect(pickBestGeminiImageModel([{ name: "models/gemini-2.5-flash" }])).toBeUndefined();
   });
 });
 

@@ -5,22 +5,30 @@ import type { ImageGenerationInput, ImageGenerationOutput, ImageProvider } from 
 /**
  * Native multimodal image provider for Gemini ("one API" mode): the SAME vendor
  * that read the book also draws it, via the multimodal `generateContent` endpoint
- * (gemini-2.5-flash-image, aka "Nano Banana") instead of the text-only Imagen
- * `:predict` path. Its advantage is image INPUTS — the user's uploaded character
- * reference photos are sent inline, so cloud renders get the character-consistency
- * conditioning that previously needed a local ComfyUI + IP-Adapter setup.
+ * instead of the text-only Imagen `:predict` path. Its advantage is image INPUTS —
+ * the user's uploaded character reference photos are sent inline, so cloud renders
+ * get the character-consistency conditioning that previously needed a local ComfyUI
+ * + IP-Adapter setup. Falls back to plain text-to-image when no reference photos are
+ * present, so it degrades cleanly.
  *
- * Engages only when the user runs Gemini for both text and images (see
- * buildProviders' native detection). Falls back to plain text-to-image when no
- * reference photos are present, so it degrades cleanly.
+ * Model selection is AUTOMATIC so any Google key "just works": on first use it lists
+ * the models the key can actually access and picks the best image-capable Gemini one
+ * (preferring "Pro" — Nano Banana Pro — over "Flash" — Nano Banana). This avoids
+ * hardcoding a model id a given key/project may not be entitled to. An explicit
+ * `model` option pins one and skips discovery; if discovery fails, a safe default is
+ * used.
  */
 
 export interface GeminiNativeImageProviderOptions {
   apiKey: string;
+  /** Pin a specific model (skips auto-discovery). */
   model?: string;
   baseUrl?: string;
   transport?: Transport;
 }
+
+/** Used when discovery fails AND no model was pinned — broadly available on a standard key. */
+export const DEFAULT_GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image";
 
 interface GenerateContentResponse {
   candidates?: {
@@ -34,21 +42,53 @@ interface GenerateContentResponse {
   }[];
 }
 
+interface ModelsListResponse {
+  models?: { name?: string; supportedGenerationMethods?: string[] }[];
+}
+
 export class GeminiNativeImageProvider implements ImageProvider {
   readonly id = "gemini";
   private readonly transport: Transport;
-  private readonly model: string;
+  private readonly explicitModel: string | undefined;
   private readonly baseUrl: string;
   private readonly apiKey: string;
+  /** Memoised model resolution (discovery runs once, then is reused). */
+  private modelPromise: Promise<string> | undefined;
 
   constructor(opts: GeminiNativeImageProviderOptions) {
     this.transport = opts.transport ?? new DirectTransport();
-    this.model = opts.model ?? "gemini-2.5-flash-image";
+    this.explicitModel = opts.model;
     this.baseUrl = opts.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta";
     this.apiKey = opts.apiKey;
   }
 
+  /** The image model to use — a pinned one, or the best the key can access (cached). */
+  private resolveModel(): Promise<string> {
+    if (this.explicitModel) return Promise.resolve(this.explicitModel);
+    // Assign the promise synchronously so concurrent first renders share one discovery.
+    if (!this.modelPromise) this.modelPromise = this.discoverModel();
+    return this.modelPromise;
+  }
+
+  private async discoverModel(): Promise<string> {
+    try {
+      const res = await this.transport.send({
+        url: `${this.baseUrl}/models?key=${this.apiKey}&pageSize=1000`,
+        method: "GET",
+      });
+      if (res.ok) {
+        const data = await res.json<ModelsListResponse>();
+        const best = pickBestGeminiImageModel(data.models ?? []);
+        if (best) return best;
+      }
+    } catch {
+      /* network/parse failure → fall back to the default below */
+    }
+    return DEFAULT_GEMINI_IMAGE_MODEL;
+  }
+
   async generate(input: ImageGenerationInput): Promise<ImageGenerationOutput> {
+    const model = await this.resolveModel();
     // The prompt text, then each reference photo as an inline image part — the model
     // treats them as "make the character look like this" conditioning.
     const parts: Record<string, unknown>[] = [{ text: input.prompt }];
@@ -58,7 +98,7 @@ export class GeminiNativeImageProvider implements ImageProvider {
       });
     }
     const res = await this.transport.send({
-      url: `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`,
+      url: `${this.baseUrl}/models/${model}:generateContent?key=${this.apiKey}`,
       method: "POST",
       body: {
         contents: [{ role: "user", parts }],
@@ -80,4 +120,34 @@ export class GeminiNativeImageProvider implements ImageProvider {
     }
     throw new Error("Gemini native image response contained no image data");
   }
+}
+
+/**
+ * From a `models.list` response, pick the best Gemini IMAGE model the key can use.
+ * Ranked by capability so any key auto-selects the best it's entitled to:
+ *   Pro (Nano Banana Pro) > Flash (Nano Banana), then higher version, stable over preview.
+ * Matched by NAME (the stable field) rather than capability flags whose shape varies.
+ * Imagen (a `:predict` model, not `generateContent`) is excluded — this provider only
+ * speaks generateContent. Returns undefined when the key exposes no Gemini image model.
+ */
+export function pickBestGeminiImageModel(
+  models: { name?: string; supportedGenerationMethods?: string[] }[],
+): string | undefined {
+  const candidates = models
+    .map((m) => ({ name: (m.name ?? "").replace(/^models\//, ""), methods: m.supportedGenerationMethods }))
+    .filter((m) => /gemini/i.test(m.name) && /image/i.test(m.name) && !/vision/i.test(m.name))
+    // If the API reports methods, require generateContent; if it doesn't, keep it (tolerant).
+    .filter((m) => !m.methods || m.methods.some((x) => /generatecontent/i.test(x)));
+  if (candidates.length === 0) return undefined;
+  return candidates.map((m) => m.name).sort((a, b) => scoreModel(b) - scoreModel(a))[0];
+}
+
+function scoreModel(name: string): number {
+  let s = 0;
+  if (/\bpro\b|-pro/i.test(name)) s += 1000;
+  else if (/flash/i.test(name)) s += 500;
+  const version = name.match(/gemini-(\d+(?:\.\d+)?)/i);
+  if (version) s += parseFloat(version[1]!) * 10;
+  if (/preview|exp\b/i.test(name)) s -= 1; // prefer a stable id when both exist
+  return s;
 }
