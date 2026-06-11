@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ImageResult } from "@visual-reader/core";
 import { BloomTransition } from "./BloomTransition.js";
+import { useObjectUrl } from "./imageObjectUrl.js";
 import { placeholderLabel } from "./imageStatus.js";
 
 /**
@@ -63,22 +64,6 @@ export function ImagePanel({ result, bloom, pageKey, awaitingStart }: ImagePanel
       </BloomTransition>
     </div>
   );
-}
-
-/** Turn the result's image bytes into an object URL, revoking it on change. */
-function useObjectUrl(result: ImageResult | undefined): string | undefined {
-  const [url, setUrl] = useState<string | undefined>(undefined);
-  const image = result?.image;
-  useEffect(() => {
-    if (!image) {
-      setUrl(undefined);
-      return;
-    }
-    const objectUrl = URL.createObjectURL(new Blob([image.bytes], { type: image.mimeType }));
-    setUrl(objectUrl);
-    return () => URL.revokeObjectURL(objectUrl);
-  }, [image]);
-  return url;
 }
 
 function Placeholder({ label, pulse }: { label: string; pulse?: boolean }) {

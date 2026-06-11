@@ -20,8 +20,25 @@ export interface TierConfig {
    * image provider; when absent, providers use their own defaults.
    */
   renderQuality?: "draft" | "standard" | "high" | "ultra";
+  /**
+   * Canvas orientation. "square" (default) renders 1:1; portrait/landscape keep the
+   * same pixel area at a 2:3 / 3:2 ratio. The pipeline resolves this to width/height.
+   */
+  aspectRatio?: "square" | "portrait" | "landscape";
   /** Art-style id (see catalog `IMAGE_STYLES`); its prompt suffix is appended. */
   style?: string;
+  /**
+   * Advanced manual sampler/scheduler choice for local ComfyUI (e.g. "dpmpp_2m" /
+   * "karras"). Unset = the family/catalog default. Cloud providers ignore these.
+   */
+  localSampler?: string;
+  localScheduler?: string;
+  /**
+   * Multi-panel comic page: append a "single image laid out as a comic page" directive
+   * to the prompt when the chosen style is comic/manga. Off by default. (The reader's
+   * panel-grid view — composing several unit images — is a separate, UI-only feature.)
+   */
+  drawAsComicPage?: boolean;
   /**
    * Manual image model-family override for SD prompt formatting (Settings). When
    * unset, the local backends auto-detect from the checkpoint. Cloud providers

@@ -179,6 +179,10 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
     filename: "sd_xl_turbo_1.0_fp16.safetensors",
     url: "https://huggingface.co/stabilityai/sdxl-turbo/resolve/main/sd_xl_turbo_1.0_fp16.safetensors",
     family: "sdxl",
+    // Distilled turbo: ~6 steps, CFG 1 (no classifier-free guidance). The explicit
+    // low step count trips the backend's turbo guard so the SD step ladder never
+    // pushes it to 40 (which would waste time and degrade the image).
+    sampler: { cfg: 1, sampler: "euler", scheduler: "normal", steps: 6 },
   },
   {
     id: "juggernaut-xl",

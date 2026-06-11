@@ -789,9 +789,14 @@ export class Engine {
     this.buffer?.invalidateAll();
   }
 
-  /** Discard one unit's cached image and re-render just it (e.g. to try a style). */
+  /** Discard one unit's cached image and re-render just it as a genuine re-roll. */
   async regenerateCurrentImage(unitIndex: number): Promise<void> {
     if (!this.pipeline) return;
+    // Re-roll the seed first: re-rendering the SAME prompt with the SAME seed reproduces
+    // the identical image on a local engine, so a plain "redo" would look like a no-op.
+    // Writing a fresh random seed into the unit's stored keyEvent makes each redo a real
+    // re-roll, while normal front-to-back renders stay reproducible.
+    await this.rerollUnitSeed(unitIndex);
     await this.store.deleteImage?.(this.pipeline.requestIdFor(unitIndex));
     this.startGeneration();
     this.resumeGeneration();
@@ -800,6 +805,25 @@ export class Engine {
     // unlike passive scrolling, which never jumps the queue.)
     this.buffer?.invalidate(unitIndex);
     this.buffer?.prioritize(unitIndex);
+  }
+
+  /**
+   * Write a fresh random seed into a unit's stored keyEvent (upsert, keeping the prompt),
+   * so the next render of that unit differs from the cached image. No-op when the unit has
+   * no stored prompt yet (its render seed still comes from the character anchor / random).
+   */
+  private async rerollUnitSeed(unitIndex: number): Promise<void> {
+    if (!this.book || !this.bible) return;
+    const page = this.book.pages[unitIndex];
+    if (!page) return;
+    const chapterIndex = this.book.chapters.find((c) => c.id === page.chapterId)?.index ?? 0;
+    const range = page.pageRange ?? ([page.index, page.index] as [number, number]);
+    const ev = resolveKeyEvent(this.bible, chapterIndex, range);
+    if (!ev) return;
+    const seed = Math.floor(Math.random() * 1_000_000_000);
+    this.bible = addKeyEvent(this.bible, chapterIndex, { ...ev, seed });
+    await this.store.putBible(this.bible);
+    this.opts.onBibleUpdate?.(this.bible);
   }
 
   resultFor(pageIndex: number): ImageResult | undefined {

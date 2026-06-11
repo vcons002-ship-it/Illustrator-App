@@ -16,8 +16,11 @@ export interface QualityProfile {
 }
 
 const PROFILES: Record<RenderQuality, QualityProfile> = {
-  draft: { steps: 12, width: 768, height: 768 },
-  standard: { steps: 22, width: 1024, height: 1024 },
+  // SD-family step ladder: 10 is the minimum representative for Euler, 40 the most
+  // that still helps it. Natural-language families don't use these step counts —
+  // they scale their own model-recommended count via `scaleSteps` (see below).
+  draft: { steps: 10, width: 768, height: 768 },
+  standard: { steps: 20, width: 1024, height: 1024 },
   high: { steps: 30, width: 1280, height: 1280 },
   ultra: { steps: 40, width: 1536, height: 1536 },
 };
@@ -26,8 +29,79 @@ export function qualityProfile(q: RenderQuality): QualityProfile {
   return PROFILES[q];
 }
 
+/** Per-level multiplier for a natural-language model's recommended step count. */
+const STEP_MULTIPLIER: Record<RenderQuality, number> = {
+  draft: 0.6,
+  standard: 1.0,
+  high: 1.33,
+  ultra: 1.67,
+};
+
+/**
+ * Scale a model's recommended step count by the quality level, for natural-language
+ * families (Flux/Qwen-Image) that don't follow the SD step ladder. Clamped to a sane
+ * [4, 40] window. **Turbo guard:** distilled few-step models (recommended ≤ 10, e.g.
+ * Z-Image's 8 steps, SDXL-Turbo) are returned unchanged — extra steps actively hurt
+ * them — so the caller can run this on every family unconditionally.
+ *
+ * e.g. Flux.2 (24): draft 14 / standard 24 / high 32 / ultra 40.
+ */
+export function scaleSteps(recommended: number, level: RenderQuality): number {
+  if (recommended <= 10) return recommended;
+  const scaled = Math.round(recommended * STEP_MULTIPLIER[level]);
+  return Math.min(40, Math.max(4, scaled));
+}
+
+/** Canvas orientation. The profile resolution is square; portrait/landscape keep the
+ * same pixel area at a 2:3 / 3:2 ratio so render time is comparable across shapes. */
+export type AspectRatio = "square" | "portrait" | "landscape";
+
+/** Round to the nearest multiple of 8 (image engines require /8 dimensions). */
+function round8(n: number): number {
+  return Math.max(512, Math.round(n / 8) * 8);
+}
+
+/**
+ * The width/height for a quality level at the chosen aspect ratio. "square" is the
+ * profile's native NxN; portrait/landscape preserve the profile's pixel AREA at a 2:3
+ * (short:long) ratio, so a portrait Standard is ≈832×1256 — same cost as 1024² but
+ * taller. Both axes are /8-rounded. The per-family cap is applied later by
+ * `clampResolution` (to the long side, ratio-preserving).
+ */
+export function profileDimensions(
+  level: RenderQuality,
+  aspect: AspectRatio = "square",
+): { width: number; height: number } {
+  const { width, height } = PROFILES[level];
+  if (aspect === "square") return { width, height };
+  const area = width * height;
+  const ratio = 2 / 3; // short:long
+  const longSide = round8(Math.sqrt(area / ratio));
+  const shortSide = round8(Math.sqrt(area * ratio));
+  return aspect === "portrait"
+    ? { width: shortSide, height: longSide }
+    : { width: longSide, height: shortSide };
+}
+
 /** User's quality choice: an explicit level, or "auto" (scale with cadence). */
 export type ImageQualitySetting = "auto" | RenderQuality;
+
+/**
+ * Cap an AUTO-resolved quality level so its canvas fits the GPU's VRAM, preventing
+ * out-of-memory failures on smaller cards: < 8 GB → ≤1024px (Standard), 8–12 GB →
+ * ≤1280px (High), more → uncapped. No-op when VRAM is unknown (web / non-NVIDIA).
+ * Only apply to AUTO — an explicitly chosen level is the user's call and never capped.
+ */
+export function capQualityForVram(level: RenderQuality, vramMb: number | undefined): RenderQuality {
+  if (!vramMb || vramMb <= 0) return level;
+  const maxWidth = vramMb < 8192 ? 1024 : vramMb <= 12288 ? 1280 : Infinity;
+  const order: RenderQuality[] = ["draft", "standard", "high", "ultra"];
+  let capped = level;
+  while (order.indexOf(capped) > 0 && PROFILES[capped].width > maxWidth) {
+    capped = order[order.indexOf(capped) - 1]!;
+  }
+  return capped;
+}
 
 /** Pages-per-image cadence: a fixed group size, or a whole chapter. */
 export type PagesPerImage = number | "chapter";

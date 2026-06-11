@@ -4,13 +4,18 @@ import { referenceIdsOf } from "../types/bible.js";
 import type { ImageResult, VisualRequest } from "../types/content.js";
 import type { TierConfig } from "../types/tier.js";
 import type { LLMProvider } from "../providers/llm/llm-provider.js";
-import type { ImageProvider } from "../providers/image/image-provider.js";
+import type {
+  ImageGenerationInput,
+  ImageGenerationOutput,
+  ImageProvider,
+} from "../providers/image/image-provider.js";
+import type { RenderQuality } from "../quality.js";
 import type { VisualReaderStore } from "../storage/store.js";
 import { resolvePageEntities } from "../visual-bible/bible.js";
 import { anchorSetting, composeScenePrompt, resolveKeyEvent } from "../visual-bible/key-events.js";
 import { expandPrompt, findBibleTermsInText } from "../providers/image/bible-injection.js";
 import { getImageStyle } from "../providers/catalog.js";
-import { qualityProfile } from "../quality.js";
+import { profileDimensions, qualityProfile } from "../quality.js";
 
 /**
  * Orchestrates a single page → image. Builds a VisualRequest from the page and
@@ -166,7 +171,15 @@ export class RenderPipeline {
           error: "No illustration prompt for this unit yet.",
         };
       }
-      const basePrompt = style.promptSuffix ? `${stored}\n\nStyle: ${style.promptSuffix}` : stored;
+      const styled = style.promptSuffix ? `${stored}\n\nStyle: ${style.promptSuffix}` : stored;
+      // Multi-panel comic page (opt-in, comic/manga only): ask for a SINGLE image laid
+      // out as a comic page of sequential panels. Works best on natural-language/cloud
+      // models. The reader's panel-grid view is separate (it composes per-unit images).
+      const comicPage =
+        this.deps.tier.drawAsComicPage && (this.deps.tier.style === "comic" || this.deps.tier.style === "manga");
+      const basePrompt = comicPage
+        ? `${styled}\n\nLayout: a single comic page composed of 4–6 sequential panels with clear gutters between them, telling this moment in order.`
+        : styled;
       const present = bible.characters.filter((c) => request.characterIds.includes(c.id));
       const presentCreatures = (bible.creatures ?? []).filter((c) =>
         request.creatureIds.includes(c.id),
@@ -191,15 +204,14 @@ export class RenderPipeline {
       const ipAdapterRefs = await this.referenceImagesFor(present);
       // Local engines additionally apply a style LoRA/checkpoint when installed.
       const local = isLocal ? style.local : undefined;
-      // Resolved quality profile → steps + resolution (more pages/image = higher).
-      const profile = this.deps.tier.renderQuality
-        ? qualityProfile(this.deps.tier.renderQuality)
-        : undefined;
-      const output = await this.deps.image.generate({
+      // Everything about the render except the quality-level-dependent steps + canvas,
+      // which are filled per-attempt so an out-of-memory failure can retry one level down.
+      const baseInput: ImageGenerationInput = {
         prompt,
         anchors,
         quality: this.deps.tier.quality,
-        ...(profile ? { steps: profile.steps, width: profile.width, height: profile.height } : {}),
+        ...(isLocal && this.deps.tier.localSampler ? { localSampler: this.deps.tier.localSampler } : {}),
+        ...(isLocal && this.deps.tier.localScheduler ? { localScheduler: this.deps.tier.localScheduler } : {}),
         ...(local?.lora ? { styleLora: local.lora } : {}),
         ...(local?.checkpoint ? { styleCheckpoint: local.checkpoint } : {}),
         ...(this.deps.tier.imageModelFamily ? { modelFamily: this.deps.tier.imageModelFamily } : {}),
@@ -216,7 +228,34 @@ export class RenderPipeline {
         ...(signal ? { signal } : {}),
         // A keyEvent may pin a reproducible seed (overrides the character anchor seed).
         ...(typeof keyEvent?.seed === "number" ? { seed: keyEvent.seed } : {}),
-      });
+      };
+      // Quality level → steps + aspect-aware resolution (more pages/image = higher
+      // quality; the canvas orientation comes from the user's aspect setting).
+      const renderAt = (lvl: typeof this.deps.tier.renderQuality): Promise<ImageGenerationOutput> => {
+        const dims = lvl ? profileDimensions(lvl, this.deps.tier.aspectRatio) : undefined;
+        return this.deps.image.generate({
+          ...baseInput,
+          ...(lvl ? { renderQuality: lvl, steps: qualityProfile(lvl).steps } : {}),
+          ...(dims ? { width: dims.width, height: dims.height } : {}),
+        });
+      };
+      const level = this.deps.tier.renderQuality;
+      let output: ImageGenerationOutput;
+      try {
+        output = await renderAt(level);
+      } catch (err) {
+        // Out-of-memory safety net: a too-large canvas can exhaust VRAM. Retry ONCE one
+        // level down (smaller canvas + fewer steps) before giving up — but never on a
+        // user cancellation, and only when there's a lower level to drop to.
+        const down = !signal?.aborted && level ? oneLevelDown(level) : undefined;
+        if (!down || !isOutOfMemoryError(err)) throw err;
+        try {
+          output = await renderAt(down);
+        } catch (retryErr) {
+          const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          throw new Error(`${msg} (already retried at lower "${down}" quality after running out of GPU memory)`);
+        }
+      }
       await this.deps.store.putImage(requestId, output.bytes, output.mimeType, prompt);
       return {
         requestId,
@@ -283,6 +322,19 @@ export class RenderPipeline {
  * multimodal model reads the scene and depicts it directly. Character names in the
  * prose are still expanded into their Bible descriptors by the caller's term pass.
  */
+/** The next-lower render-quality level, or undefined when already at the floor (draft). */
+function oneLevelDown(level: RenderQuality): RenderQuality | undefined {
+  const order: RenderQuality[] = ["draft", "standard", "high", "ultra"];
+  const i = order.indexOf(level);
+  return i > 0 ? order[i - 1] : undefined;
+}
+
+/** Heuristic: does this error look like a GPU out-of-memory / allocation failure? */
+function isOutOfMemoryError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /out of memory|cuda|alloc|vram|oom/i.test(msg);
+}
+
 function oneShotPrompt(sourceText: string): string {
   const passage = sourceText.replace(/\s+/g, " ").trim().slice(0, 1200);
   return (

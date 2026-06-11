@@ -214,6 +214,104 @@ describe("RenderPipeline stored-first prompt fetch", () => {
   });
 });
 
+describe("RenderPipeline OOM fallback", () => {
+  it("retries ONCE one quality level down after an out-of-memory error", async () => {
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a knight by a window");
+    const attempts: { steps: number | undefined; width: number | undefined }[] = [];
+    const provider: ImageProvider = {
+      id: "mock",
+      generate: async (input: ImageGenerationInput): Promise<ImageGenerationOutput> => {
+        attempts.push({ steps: input.steps, width: input.width });
+        if (attempts.length === 1) throw new Error("CUDA out of memory: tried to allocate 2GB");
+        return { bytes: new ArrayBuffer(1), mimeType: "image/png" };
+      },
+    };
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: { ...DEFAULT_TIER_CONFIG, renderQuality: "ultra" },
+    });
+
+    const result = await pipeline.renderPage(0);
+
+    expect(result.status).toBe("ready");
+    expect(attempts).toHaveLength(2);
+    // The retry dropped to a smaller canvas + fewer steps (ultra → high).
+    expect(attempts[1]!.steps).toBeLessThan(attempts[0]!.steps!);
+    expect(attempts[1]!.width).toBeLessThan(attempts[0]!.width!);
+  });
+
+  it("does not retry on a non-OOM error", async () => {
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a knight by a window");
+    let calls = 0;
+    const provider: ImageProvider = {
+      id: "mock",
+      generate: async (): Promise<ImageGenerationOutput> => {
+        calls++;
+        throw new Error("model not found");
+      },
+    };
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: { ...DEFAULT_TIER_CONFIG, renderQuality: "ultra" },
+    });
+
+    const result = await pipeline.renderPage(0);
+    expect(result.status).toBe("error");
+    expect(calls).toBe(1); // tried once, surfaced the error
+  });
+});
+
+describe("RenderPipeline comic-page directive", () => {
+  it("appends a multi-panel page directive only for comic/manga when opted in", async () => {
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a knight by a window");
+    const { provider, lastPrompt } = recordingImage();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: { ...DEFAULT_TIER_CONFIG, style: "comic", drawAsComicPage: true },
+    });
+
+    await pipeline.renderPage(0);
+    expect(lastPrompt()).toContain("comic page");
+    expect(lastPrompt()).toContain("panels");
+  });
+
+  it("adds no comic-page directive for a non-comic style", async () => {
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a knight by a window");
+    const { provider, lastPrompt } = recordingImage();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: { ...DEFAULT_TIER_CONFIG, style: "anime", drawAsComicPage: true },
+    });
+
+    await pipeline.renderPage(0);
+    expect(lastPrompt()).not.toContain("comic page");
+  });
+});
+
 describe("RenderPipeline reference images (IP-Adapter)", () => {
   function character(name: string, refIds: string[]): Character {
     return {

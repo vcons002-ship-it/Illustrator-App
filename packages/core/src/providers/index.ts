@@ -9,6 +9,7 @@ export * from "./llm/openai-provider.js";
 export * from "./llm/webllm-provider.js";
 export * from "./llm/local-server-provider.js";
 export * from "./image/image-provider.js";
+export * from "./image/sd-prompt.js";
 export * from "./image/bible-injection.js";
 export * from "./image/base64.js";
 export * from "./image/mock-image-provider.js";

@@ -170,6 +170,29 @@ async fn list_loras(app: AppHandle) -> Result<Vec<String>, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// Total VRAM of the primary GPU in MB, or `None` when it can't be determined
+/// (no NVIDIA GPU / `nvidia-smi` absent). Used to keep Auto-quality within what the
+/// card can render without running out of memory. Best-effort and never an error.
+#[tauri::command]
+async fn gpu_info() -> Result<Option<u64>, String> {
+    Ok(tauri::async_runtime::spawn_blocking(nvidia_vram_mb)
+        .await
+        .unwrap_or(None))
+}
+
+/// Query `nvidia-smi` for the first GPU's total memory in MB. None on any failure.
+fn nvidia_vram_mb() -> Option<u64> {
+    let out = Command::new("nvidia-smi")
+        .args(["--query-gpu=memory.total", "--format=csv,noheader,nounits"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines().next()?.trim().parse::<u64>().ok()
+}
+
 /// Download a style LoRA into the engine's loras dir, with progress.
 #[tauri::command]
 async fn download_lora(app: AppHandle, model: DownloadableModel) -> Result<(), String> {
@@ -464,7 +487,8 @@ fn main() {
             list_models,
             download_model,
             list_loras,
-            download_lora
+            download_lora,
+            gpu_info
         ])
         .build(tauri::generate_context!())
         .expect("error while building Visual Reader")

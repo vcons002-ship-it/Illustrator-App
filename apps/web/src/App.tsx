@@ -15,6 +15,7 @@ import {
   encryptSecrets,
   getImageStyle,
   latestSpoilerParagraphIndex,
+  panelGroup,
   paragraphIndexFromId,
   parseImportedBible,
   resolveKeyEvent,
@@ -31,6 +32,7 @@ import {
   DEFAULT_SETTINGS,
   FirstRunWizard,
   ImagePanel,
+  PanelGrid,
   LibraryPanel,
   SettingsPanel,
   useScrollDepth,
@@ -46,6 +48,7 @@ import {
   downloadLora,
   downloadModel,
   ensureEngine,
+  gpuVramMb,
   isDesktop,
   listLocalModels,
   listLoras,
@@ -168,10 +171,14 @@ export function App() {
         const models = await listLocalModels();
         const loras = await listLoras();
         if (cancelled) return;
+        // Detect VRAM once so Auto-quality stays within what the card can render
+        // (best-effort; undefined on non-NVIDIA GPUs leaves Auto uncapped).
+        const vram = await gpuVramMb();
+        if (cancelled) return;
         setEngineStatus("");
         setInstalledModels(models);
         setInstalledLoras(loras);
-        setSettings((s) => ({ ...s, engineBaseUrl: baseUrl }));
+        setSettings((s) => ({ ...s, engineBaseUrl: baseUrl, ...(vram ? { gpuVramMb: vram } : {}) }));
       } catch (err) {
         if (!cancelled) {
           setEngineStatus("");
@@ -437,6 +444,7 @@ export function App() {
   // The reader still scrolls the original pages; `pageToUnit` maps the active page
   // to the unit the engine rendered (must match the worker — shared toRenderUnits).
   const pagesPerImage = settings.pagesPerImage ?? 3;
+  const panelsPerView = settings.panelsPerView ?? 1;
   const units = useMemo(
     () => (book ? toRenderUnits(book, pagesPerImage) : undefined),
     [book, pagesPerImage],
@@ -928,12 +936,26 @@ export function App() {
 
           <aside style={styles.aside}>
             <div style={styles.panel}>
-              <ImagePanel
-                result={results.get(unitIndex)}
-                bloom={bloom}
-                pageKey={unitIndex}
-                awaitingStart={!generating}
-              />
+              {panelsPerView > 1 && units ? (
+                <PanelGrid
+                  panels={panelGroup(
+                    units.book.pages.map((p) => p.chapterId),
+                    unitIndex,
+                    panelsPerView,
+                  ).map((u) => ({ unitIndex: u, result: results.get(u) }))}
+                  currentUnit={unitIndex}
+                  bloom={bloom}
+                  direction={settings.imageStyle === "manga" ? "rtl" : "ltr"}
+                  pageKey={unitIndex}
+                />
+              ) : (
+                <ImagePanel
+                  result={results.get(unitIndex)}
+                  bloom={bloom}
+                  pageKey={unitIndex}
+                  awaitingStart={!generating}
+                />
+              )}
               {imageCaption && <div style={styles.imageDescription}>{imageCaption}</div>}
               <div style={styles.caption}>
                 {pagesPerImage === "chapter"
@@ -1054,10 +1076,11 @@ function migrate(raw: Record<string, unknown>): ReaderSettings {
 
 async function saveSettings(s: ReaderSettings): Promise<void> {
   try {
-    // Drop the transient engine URL and the plaintext keys; persist the keys
-    // only as an encrypted blob (never in plaintext).
-    const { keys, engineBaseUrl: _url, ...rest } = s;
+    // Drop the transient engine URL + detected VRAM and the plaintext keys; persist
+    // the keys only as an encrypted blob (never in plaintext).
+    const { keys, engineBaseUrl: _url, gpuVramMb: _vram, ...rest } = s;
     void _url;
+    void _vram;
     const persist: Record<string, unknown> = { ...rest };
     delete persist.keysEnc;
     if (keys && Object.keys(keys).length > 0) {
