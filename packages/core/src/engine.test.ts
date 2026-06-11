@@ -256,6 +256,37 @@ describe("Engine", () => {
     expect(extractSpy2.mock.calls[0]![0].contentMode).toBeUndefined();
   });
 
+  it("grounds a technical book's analysis via web search for ANY reader (local-LLM path)", async () => {
+    const llm = new MockLLMProvider();
+    const extractSpy = vi.spyOn(llm, "extractEntities");
+    const webSearch = {
+      searchWeb: vi.fn(async () => [
+        { link: "https://nih.gov/atp", title: "NIH", snippet: "ATP is the cell's energy currency." },
+      ]),
+    };
+    const engine = new Engine({ llm, image: new MockImageProvider(), webSearch });
+    await engine.openBook({ ...sampleBook(), title: "Cell Biology", contentMode: "technical" });
+    engine.startGeneration();
+    await engine.whenBibleReady();
+
+    // The chapter topic was searched and the snippets injected into the reader's prompt.
+    expect(webSearch.searchWeb).toHaveBeenCalled();
+    expect(extractSpy.mock.calls[0]![0].groundingContext).toContain("ATP is the cell's energy currency.");
+    // The sources are cited in the glossary (the local-reader analogue of Gemini grounding).
+    const refs = engine.getBible()!.glossary.find((g) => g.term.startsWith("References"));
+    expect(refs?.definition).toContain("https://nih.gov/atp");
+  });
+
+  it("never web-grounds a fiction book", async () => {
+    const llm = new MockLLMProvider();
+    const webSearch = { searchWeb: vi.fn(async () => []) };
+    const engine = new Engine({ llm, image: new MockImageProvider(), webSearch });
+    await engine.openBook(sampleBook()); // no contentMode
+    engine.startGeneration();
+    await engine.whenBibleReady();
+    expect(webSearch.searchWeb).not.toHaveBeenCalled();
+  });
+
   it("updateTier restyles FUTURE renders in place (no engine rebuild needed)", async () => {
     const image = new MockImageProvider();
     const genSpy = vi.spyOn(image, "generate");

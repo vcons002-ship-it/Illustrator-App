@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { GoogleImageSearch, buildFigureQuery } from "./image-search.js";
+import {
+  GoogleImageSearch,
+  buildFigureQuery,
+  formatGroundingContext,
+  groundingQuery,
+} from "./image-search.js";
 import type { Transport, TransportRequest, TransportResponse } from "../transport/transport.js";
 
 interface Scripted {
@@ -103,6 +108,66 @@ describe("GoogleImageSearch.retrieve", () => {
     const t = new FakeTransport(() => ({ json: { items: [] } }));
     const s = new GoogleImageSearch({ apiKey: "K", engineId: "CX", transport: t });
     expect(await s.retrieve("xyzzy")).toBeUndefined();
+  });
+});
+
+describe("GoogleImageSearch.searchWeb (grounding)", () => {
+  it("queries the Custom Search API in WEB mode (no searchType=image) and maps snippets", async () => {
+    const t = new FakeTransport(() => ({
+      json: {
+        items: [
+          { link: "https://nih.gov/atp", title: "ATP", snippet: "Adenosine triphosphate is the energy currency." },
+          { link: "https://x.org/none" }, // no snippet → filtered by formatGroundingContext, kept here
+        ],
+      },
+    }));
+    const s = new GoogleImageSearch({ apiKey: "K", engineId: "CX", transport: t });
+    const hits = await s.searchWeb("ATP energy");
+    expect(t.requests[0]!.url).not.toContain("searchType=image");
+    expect(t.requests[0]!.url).toContain("q=ATP%20energy");
+    expect(hits[0]).toEqual({
+      link: "https://nih.gov/atp",
+      title: "ATP",
+      snippet: "Adenosine triphosphate is the energy currency.",
+    });
+  });
+});
+
+describe("groundingQuery", () => {
+  it("uses a topical chapter heading as the query", () => {
+    expect(groundingQuery("The Krebs Cycle", "Some body text.", "Cell Biology")).toBe("The Krebs Cycle");
+  });
+
+  it("falls back to the opening sentence for a generic heading", () => {
+    const q = groundingQuery("Chapter 3", "Photosynthesis converts light into chemical energy. More text.", "Botany");
+    expect(q).toBe("Photosynthesis converts light into chemical energy.");
+  });
+
+  it("scopes a very short topic with the book title for precision", () => {
+    expect(groundingQuery("ATP", "x", "Cell Biology")).toBe("ATP (Cell Biology)");
+  });
+
+  it("returns empty when there's nothing to search", () => {
+    expect(groundingQuery("Chapter 1", "   ")).toBe("");
+  });
+});
+
+describe("formatGroundingContext", () => {
+  it("builds an injectable block + de-duplicated sources, ignoring snippet-less hits", () => {
+    const { context, sources } = formatGroundingContext([
+      { link: "https://a.org", title: "A", snippet: "Fact one." },
+      { link: "https://b.org", snippet: "Fact two." },
+      { link: "https://a.org", snippet: "Fact one." }, // dup link
+      { link: "https://c.org" }, // no snippet → dropped
+    ]);
+    expect(context).toMatch(/ground definitions, quantities/i);
+    expect(context).toContain("[1] A: Fact one.");
+    expect(context).toContain("[2] Fact two.");
+    expect(sources).toEqual(["https://a.org", "https://b.org"]);
+  });
+
+  it("is empty when no hit has a snippet", () => {
+    expect(formatGroundingContext([{ link: "https://a.org" }])).toEqual({ context: "", sources: [] });
   });
 });
 

@@ -32,6 +32,13 @@ export interface EntityExtractionInput {
    * Bible (characters/outfits/scenes). Absent = fiction.
    */
   contentMode?: "fiction" | "technical";
+  /**
+   * Provider-agnostic grounding (technical books): web-search reference snippets for this
+   * chapter's topic, injected into the prompt so ANY reader — local LLM included — grounds
+   * its definitions/quantities in real sources. The Gemini in-call `google_search` tool is
+   * the alternative path (used when Gemini is the reader); only one is ever set.
+   */
+  groundingContext?: string;
   /** Aborts the in-flight extraction (e.g. when the user pauses the bible build). */
   signal?: AbortSignal;
 }

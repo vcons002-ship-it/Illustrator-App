@@ -466,7 +466,11 @@ export function extractionUserContent(input: EntityExtractionInput): string {
     ? `This chapter is illustrated as ${k} image${k === 1 ? "" : "s"} in reading order — ` +
       `produce EXACTLY ${k} keyEvents, in order.\n\n`
     : "";
-  return `${castSoFar}${beastsSoFar}${placesSoFar}${glossarySoFar}${soFar}${scenes}Chapter ${input.chapterIndex} text:\n\n${input.chapterText}`;
+  // Provider-agnostic grounding: web-search snippets fetched for THIS chapter's topic
+  // (any text provider, incl. local). Placed last, just before the chapter text, so the
+  // model leans on these real sources for definitions/quantities over its recollection.
+  const grounding = input.groundingContext?.trim() ? `${input.groundingContext.trim()}\n\n` : "";
+  return `${castSoFar}${beastsSoFar}${placesSoFar}${glossarySoFar}${soFar}${scenes}${grounding}Chapter ${input.chapterIndex} text:\n\n${input.chapterText}`;
 }
 
 /**

@@ -415,7 +415,7 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     postWorkflow();
     post({ type: "bibleStatus", text: "" }); // reset the persistent line for the new book
     setStoryPageCounts(book); // progress is reported against story pages/chapters
-    const { llm, image, tier, diagnostics, imageSearch } = buildProviders(settings, {
+    const { llm, image, tier, diagnostics, imageSearch, webSearch } = buildProviders(settings, {
       onLocalStatus: (message) => post({ type: "status", message: message || "Building the Visual Bible…" }),
       onLocalActivity: (activity) => {
         // Live token count during on-device generation. Bible tokens enrich the
@@ -436,6 +436,7 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
       image,
       tier,
       ...(imageSearch ? { imageSearch } : {}),
+      ...(webSearch ? { webSearch } : {}),
       store: new IndexedDbStore(),
       onUpdate: (pageIndex, result) => {
         const transfer = result.image ? [result.image.bytes] : [];

@@ -6,7 +6,12 @@ import type { TierConfig } from "./types/tier.js";
 import { DEFAULT_TIER_CONFIG } from "./types/tier.js";
 import type { LLMProvider } from "./providers/llm/llm-provider.js";
 import type { ImageProvider } from "./providers/image/image-provider.js";
-import type { RetrievedImage } from "./providers/image/image-search.js";
+import {
+  formatGroundingContext,
+  groundingQuery,
+  type RetrievedImage,
+  type WebSearchHit,
+} from "./providers/image/image-search.js";
 import type { VisualReaderStore } from "./storage/store.js";
 import { InMemoryStore } from "./storage/store.js";
 import { RenderPipeline } from "./pipeline/pipeline.js";
@@ -35,6 +40,13 @@ export interface EngineOptions {
   tier?: TierConfig;
   /** Real-figure retrieval for technical books (see PipelineDeps.imageSearch). */
   imageSearch?: { retrieve(query: string): Promise<RetrievedImage | undefined> };
+  /**
+   * Provider-agnostic grounding for technical books: when set, each chapter's analysis is
+   * grounded in a web search (snippets injected into the reader's prompt; sources cited in
+   * the glossary). Lets a LOCAL LLM produce sourced facts. Absent for Gemini-in-call
+   * grounding or when no search credentials are configured.
+   */
+  webSearch?: { searchWeb(query: string): Promise<WebSearchHit[]> };
   /** Forwarded to the buffer — fired whenever a page's render status changes. */
   onUpdate?: (pageIndex: number, result: ImageResult) => void;
   /**
@@ -343,6 +355,23 @@ export class Engine {
     if (pending.length === 0) this.buffer?.refresh();
     for (const [chapterIndex, text] of pending) {
       if (stop()) return; // paused, or a newer run/book took over → stop before next chapter
+      // Provider-agnostic grounding (technical books): web-search this chapter's topic and
+      // inject the snippets so ANY reader — local LLM included — grounds its facts; the
+      // sources are cited in the glossary below. Best-effort: any failure just skips it.
+      let groundingContext = "";
+      let groundingSources: string[] = [];
+      if (this.opts.webSearch && this.book?.contentMode === "technical") {
+        const query = groundingQuery(this.book.chapters[chapterIndex]?.title, text, this.book.title);
+        if (query) {
+          try {
+            const hits = await this.opts.webSearch.searchWeb(query);
+            ({ context: groundingContext, sources: groundingSources } = formatGroundingContext(hits));
+          } catch {
+            /* search unavailable / over quota → analyse ungrounded */
+          }
+        }
+      }
+      if (cancelled()) return;
       // Extraction has no timeout (a slow-but-working LLM is never cut off). On a
       // transient failure, retry ONCE; only if it still fails do we mark the
       // chapter processed (so pages aren't gated forever) and surface a note.
@@ -360,11 +389,23 @@ export class Engine {
             unitRanges: this.unitRangesForChapter(chapterIndex),
             // Technical books (papers/textbooks) use the Visual-Atlas extraction prompt.
             ...(this.book?.contentMode ? { contentMode: this.book.contentMode } : {}),
+            ...(groundingContext ? { groundingContext } : {}),
             signal: ac.signal,
           });
         } catch {
           /* retry once, then give up on just this chapter */
         }
+      }
+      // Cite the grounding sources in the glossary (the local-reader analogue of the
+      // Gemini in-call grounding's References entry).
+      if (next && groundingSources.length > 0) {
+        next = {
+          ...next,
+          glossary: [
+            ...next.glossary,
+            { term: `References (chapter ${chapterIndex + 1})`, definition: groundingSources.join(" · ") },
+          ],
+        };
       }
       // A newer run/book may have taken over WHILE we awaited the LLM. Discard before
       // mutating any shared state so we never clobber the newly-opened book's bible.

@@ -1,12 +1,14 @@
 import { DirectTransport, type Transport } from "../transport/transport.js";
 
 /**
- * Real-image retrieval for technical books, via Google's Programmable Search Engine
- * (Custom Search JSON API with `searchType=image`). The LLM's visualization plan
- * decides WHAT to look for (the keyEvent's subject/form); this module finds an
- * EXISTING figure for it — an authoritative diagram beats a generated one for
- * labeled scientific content. AI generation remains the fallback when nothing
- * suitable exists or can't be fetched.
+ * Google Programmable Search Engine access for technical books (Custom Search JSON API),
+ * in two modes off the SAME credentials:
+ *  - **image** (`searchType=image`) → retrieve an EXISTING figure for the LLM's
+ *    visualization plan; an authoritative diagram beats a generated one for labeled
+ *    scientific content.
+ *  - **web** (no `searchType`) → fetch reference snippets + source URLs to GROUND the
+ *    analysis. Provider-agnostic: the snippets are injected into whatever LLM is reading
+ *    (a local model included), so grounded facts don't require Gemini as the reader.
  *
  * Requires two credentials (both free-tier friendly):
  *  - an API key with the "Custom Search API" enabled (Google Cloud console),
@@ -39,6 +41,7 @@ interface CustomSearchResponse {
   items?: {
     link?: string;
     title?: string;
+    snippet?: string;
     mime?: string;
     image?: {
       contextLink?: string;
@@ -47,6 +50,13 @@ interface CustomSearchResponse {
       height?: number;
     };
   }[];
+}
+
+/** One web-search result, for grounding the analysis. */
+export interface WebSearchHit {
+  link: string;
+  title?: string;
+  snippet?: string;
 }
 
 /** A retrieved figure ready for the reader: bytes when fetchable, else a hotlink URL. */
@@ -74,12 +84,32 @@ export class GoogleImageSearch {
     this.transport = opts.transport ?? new DirectTransport();
   }
 
+  /** Build a Custom Search request URL (web mode, or image mode when `image` is set). */
+  private queryUrl(query: string, count: number, image: boolean): string {
+    return (
+      `${this.baseUrl}?key=${encodeURIComponent(this.apiKey)}&cx=${encodeURIComponent(this.engineId)}` +
+      `&q=${encodeURIComponent(query)}&num=${Math.min(10, Math.max(1, count))}&safe=active` +
+      (image ? "&searchType=image" : "")
+    );
+  }
+
+  /** Top WEB results for a query (for grounding). Throws on a non-OK response. */
+  async searchWeb(query: string, count = 5): Promise<WebSearchHit[]> {
+    const res = await this.transport.send({ url: this.queryUrl(query, count, false), method: "GET" });
+    if (!res.ok) throw new Error(`Web search failed with status ${res.status}`);
+    const data = await res.json<CustomSearchResponse>();
+    return (data.items ?? [])
+      .filter((i) => i.link)
+      .map((i) => ({
+        link: i.link!,
+        ...(i.title ? { title: i.title } : {}),
+        ...(i.snippet ? { snippet: i.snippet } : {}),
+      }));
+  }
+
   /** Top image hits for a query (API ranking order). Throws on a non-OK response. */
   async search(query: string, count = 5): Promise<ImageSearchHit[]> {
-    const url =
-      `${this.baseUrl}?key=${encodeURIComponent(this.apiKey)}&cx=${encodeURIComponent(this.engineId)}` +
-      `&q=${encodeURIComponent(query)}&searchType=image&num=${Math.min(10, Math.max(1, count))}&safe=active`;
-    const res = await this.transport.send({ url, method: "GET" });
+    const res = await this.transport.send({ url: this.queryUrl(query, count, true), method: "GET" });
     if (!res.ok) throw new Error(`Image search failed with status ${res.status}`);
     const data = await res.json<CustomSearchResponse>();
     return (data.items ?? [])
@@ -161,4 +191,46 @@ export function buildFigureQuery(subject: string | undefined, environment: strin
   const base = [s, form].filter(Boolean).join(" ");
   // Ensure the query asks for a FIGURE, not photos of the topic.
   return /diagram|chart|figure|illustration|schematic|graph/i.test(base) ? base : `${base} diagram`.trim();
+}
+
+/** Generic chapter/section headings that don't name a topic to search for. */
+const GENERIC_HEADING = /^(chapter|part|section|unit|appendix|introduction|conclusion|abstract|references)\b/i;
+
+/**
+ * The web-search query to GROUND a chapter: its heading when that names a real topic
+ * (e.g. "The Krebs Cycle", "Backpropagation"), else the opening sentence of the text —
+ * optionally scoped by the book title for disambiguation. Empty when there's nothing.
+ */
+export function groundingQuery(
+  chapterTitle: string | undefined,
+  chapterText: string,
+  bookTitle?: string,
+): string {
+  const title = (chapterTitle ?? "").trim();
+  const useTitle = title && !GENERIC_HEADING.test(title) && title !== (bookTitle ?? "").trim();
+  const base = useTitle
+    ? title
+    : (chapterText.trim().split(/(?<=[.?!])\s/)[0] ?? "").trim().split(/\s+/).slice(0, 14).join(" ");
+  if (!base) return "";
+  // A very short topic gains precision from the book title (e.g. "ATP" + "Cell Biology");
+  // a multi-word heading like "The Krebs Cycle" is already specific enough on its own.
+  const bt = (bookTitle ?? "").trim();
+  return bt && base.split(/\s+/).length <= 2 && !base.includes(bt) ? `${base} (${bt})` : base;
+}
+
+/**
+ * Turn web hits into an injectable grounding block + a de-duplicated source list. The
+ * block instructs the reader to prefer these real sources over recollection; the sources
+ * are folded into the book's glossary as citations. Empty when no hit carries a snippet.
+ */
+export function formatGroundingContext(hits: readonly WebSearchHit[]): { context: string; sources: string[] } {
+  const usable = hits.filter((h) => h.snippet?.trim()).slice(0, 5);
+  if (usable.length === 0) return { context: "", sources: [] };
+  const lines = usable.map((h, i) => `[${i + 1}] ${h.title ? `${h.title}: ` : ""}${h.snippet!.trim()}`);
+  const context =
+    "Reference sources from a web search on this chapter's topic — use them to ground " +
+    "definitions, quantities, units, and facts, preferring them over recollection:\n" +
+    lines.join("\n");
+  const sources = usable.map((h) => h.link).filter((u, i, all) => all.indexOf(u) === i);
+  return { context, sources };
 }

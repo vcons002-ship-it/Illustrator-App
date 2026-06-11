@@ -83,6 +83,12 @@ export function buildProviders(
   diagnostics: ProvidersDiagnostics;
   /** Real-figure retrieval for technical books; present when both credentials are set. */
   imageSearch?: GoogleImageSearch;
+  /**
+   * Provider-agnostic grounding source for technical books: present when grounding is on,
+   * the search credentials are set, AND the reader isn't Gemini (which grounds in-call).
+   * Lets a local/Claude/OpenAI reader still produce sourced facts.
+   */
+  webSearch?: GoogleImageSearch;
 } {
   const transport: Transport | undefined = opts.fetch ? new DirectTransport(opts.fetch) : undefined;
   const llm = buildLLM(settings, transport, opts.fetch, opts.onLocalStatus, opts.onLocalActivity);
@@ -100,10 +106,15 @@ export function buildProviders(
           ...(transport ? { transport } : {}),
         })
       : undefined;
+  // External grounding runs for every reader EXCEPT Gemini (which grounds in-call via its
+  // own google_search tool). So a local/Claude/OpenAI reader still gets sourced facts.
+  const webSearch =
+    imageSearch && settings.groundFacts && llm.provider.id !== "gemini" ? imageSearch : undefined;
   return {
     llm: llm.provider,
     image: image.provider,
     ...(imageSearch ? { imageSearch } : {}),
+    ...(webSearch ? { webSearch } : {}),
     diagnostics: { llm: llm.diag, image: image.diag },
     tier: {
       tier: settings.imageProvider === "local" ? "local" : "cloud",

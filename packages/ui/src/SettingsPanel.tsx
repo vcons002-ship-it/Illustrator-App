@@ -552,8 +552,10 @@ export function SettingsPanel({
                 onChange={(e) => set({ groundFacts: e.target.checked })}
               />
               <span>
-                Ground analysis in Google Search (Gemini text provider only — uses your
-                existing Gemini key; cited sources are saved into the book’s glossary)
+                Ground analysis in real sources (cited in the book’s glossary). With the
+                Gemini text provider this uses its built-in Google Search; with any other
+                reader — including a local LLM — it uses the Search engine above, so the
+                facts are sourced regardless of which model reads the book.
               </span>
             </label>
           </details>
