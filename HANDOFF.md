@@ -78,10 +78,21 @@ breaking. **First job in the networked environment: validate these for real.**
 - **Gemini native image** — `generationConfig.imageConfig.aspectRatio` accepted (1:1/2:3/3:2).
 
 ### Quick harness
-A unit test with a real transport, or a throwaway script under `apps/web`, hitting the
-endpoints with the user's keys. Don't commit keys. If a shape is wrong, fix the provider —
-the graceful fallbacks mean a wrong shape currently fails *silently*, so test the happy path
-explicitly.
+**Built** (`packages/core/src/providers/live-validation.test.ts`): env-gated vitest suite
+exercising the real providers live. Run with
+`GOOGLE_SEARCH_API_KEY=… GOOGLE_SEARCH_ENGINE_ID=… GEMINI_API_KEY=… pnpm test live-validation`
+(skips, keeping CI green, when keys are absent). Don't commit keys. If a shape is wrong,
+fix the provider — the graceful fallbacks mean a wrong shape currently fails *silently*,
+so the suite tests the happy paths explicitly.
+
+**Docs cross-check done (2026-06-11), live run still pending keys:** Custom Search params
+(`searchType=image`, `num`, `safe`) + `items[].image.{contextLink,thumbnailLink,width,height}`
+and Gemini `tools:[{google_search:{}}]` + `groundingMetadata.groundingChunks[].web.uri`
+all match the code. One open question: the image-generation docs may now spell the aspect
+field `generationConfig.responseFormat.image.aspectRatio` instead of our
+`generationConfig.imageConfig.aspectRatio` — unconfirmed; the live render test will 400 if
+ours is rejected. JSON-mode + search-tool compatibility is undocumented; the strict
+grounded-extraction test answers it empirically.
 
 ---
 
