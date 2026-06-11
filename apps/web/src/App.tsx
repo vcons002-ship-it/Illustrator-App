@@ -23,14 +23,19 @@ import {
   resolvePageEntities,
   spoilerRevealPoint,
   toRenderUnits,
+  formatToolResult,
   type BookSource,
   type BookSummary,
+  type ChatTurn,
   type EncryptedSecrets,
+  type StoredChatMessage,
+  type ToolCall,
 } from "@visual-reader/core";
 import { bookFromText } from "@visual-reader/epub";
 import { IMPORT_ACCEPT, importBookFile } from "./import-file.js";
 import {
   CharacterBible,
+  ChatPanel,
   DataSection,
   DEFAULT_SETTINGS,
   FirstRunWizard,
@@ -114,6 +119,9 @@ export function App() {
     carryOverBible,
     paintForward,
     testRender,
+    chat,
+    chatTool,
+    chatCancel,
   } = useEngineWorker(settings);
   const [showCharacters, setShowCharacters] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -122,6 +130,17 @@ export function App() {
   // Prefill for the paste modal when a text-bearing FILE (txt/md/html/pdf) was opened.
   const [pasteInitial, setPasteInitial] = useState<{ title: string; text: string } | undefined>();
   const [showLibrary, setShowLibrary] = useState(false);
+  // Reading-companion chat (per book; persisted in IndexedDB).
+  const [showChat, setShowChat] = useState(false);
+  const [chatMessages, setChatMessages] = useState<StoredChatMessage[]>([]);
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatStreaming, setChatStreaming] = useState("");
+  const [chatActivity, setChatActivity] = useState("");
+  const [chatPendingTool, setChatPendingTool] = useState<ToolCall | undefined>();
+  const [allowSpoilers, setAllowSpoilers] = useState(false);
+  // The pending generate_image's transcript (assistant JSON turn), folded into the
+  // history only when the user approves — a dismissed call never reaches the model.
+  const pendingTranscript = useRef<ChatTurn[]>([]);
   const { registerParagraph, activeParagraphId, activeParagraphProgress } = useScrollDepth();
 
   // Decrypt stored keys after mount, then enable persistence. Persisting is gated
@@ -492,6 +511,141 @@ export function App() {
     [book, bible, activeChapterIndex],
   );
 
+  // --- Reading-companion chat ------------------------------------------------
+  const isTechnical = book?.contentMode === "technical";
+  // Load this book's chat history; reset transient chat state on book change.
+  useEffect(() => {
+    setChatMessages([]);
+    setChatPendingTool(undefined);
+    setChatStreaming("");
+    setChatActivity("");
+    if (!book) return;
+    let cancelled = false;
+    void libraryStore.getChatHistory?.(book.id).then((stored) => {
+      if (!cancelled && stored) setChatMessages(stored);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [book, libraryStore]);
+  // Persist (debounced) — image bytes ride along so generated pictures survive reload.
+  useEffect(() => {
+    if (!book || chatMessages.length === 0) return;
+    const t = setTimeout(() => void libraryStore.putChatHistory?.(book.id, chatMessages), 500);
+    return () => clearTimeout(t);
+  }, [book, chatMessages, libraryStore]);
+
+  /** Model-facing history: each stored message contributes its explicit turns
+   * (tool messages) or maps 1:1 (plain user/assistant prose). */
+  const chatTurnsOf = (messages: StoredChatMessage[]): ChatTurn[] =>
+    messages.flatMap((m): ChatTurn[] => {
+      if (m.turns) return m.turns;
+      if (m.role === "tool") return [];
+      return m.text ? [{ role: m.role, content: m.text }] : [];
+    });
+
+  const appendChat = (msg: Omit<StoredChatMessage, "at">) =>
+    setChatMessages((prev) => [...prev, { ...msg, at: Date.now() }]);
+
+  const onChatSend = useCallback(
+    async (text: string) => {
+      if (!book) return;
+      const history = chatTurnsOf(chatMessages);
+      appendChat({ role: "user", text });
+      setChatBusy(true);
+      setChatStreaming("");
+      setChatActivity("");
+      setChatPendingTool(undefined);
+      const paragraphIndex = paragraphIndexFromId(activeParagraphId ?? "") ?? 0;
+      const res = await chat(
+        history,
+        text,
+        { pageIndex: activePageIndex, paragraphIndex },
+        isTechnical || allowSpoilers,
+        (e) => {
+          if (e.kind === "token") setChatStreaming((prev) => prev + e.text);
+          else if (e.kind === "tool")
+            setChatActivity(
+              e.call.tool === "search_web"
+                ? `Searching the web for “${e.call.query}”…`
+                : e.call.tool === "search_images"
+                  ? `Looking for images of “${e.call.query}”…`
+                  : "Preparing an image…",
+            );
+          else {
+            setChatActivity("");
+            // Inline search results: links for web hits, a hotlinked figure for images.
+            if (e.hits?.length) {
+              appendChat({
+                role: "tool",
+                text: `Web results for “${"query" in e.call ? e.call.query : ""}”:`,
+                links: e.hits.map((h) => ({ url: h.link, ...(h.title ? { title: h.title } : {}) })),
+              });
+            } else if (e.imageHits?.length) {
+              const best = e.imageHits[0]!;
+              appendChat({
+                role: "tool",
+                text: `Found: ${best.title ?? "image"}`,
+                image: { sourceUrl: best.thumbnailLink ?? best.link },
+                links: e.imageHits
+                  .slice(0, 3)
+                  .map((h) => ({ url: h.contextLink ?? h.link, ...(h.title ? { title: h.title } : {}) })),
+              });
+            }
+          }
+        },
+      );
+      setChatBusy(false);
+      setChatStreaming("");
+      setChatActivity("");
+      if (res.error) {
+        appendChat({ role: "tool", text: `⚠ ${res.error}`, turns: [] });
+        return;
+      }
+      if (res.pendingTool) {
+        pendingTranscript.current = [{ role: "user", content: text }, ...res.transcript];
+        setChatPendingTool(res.pendingTool);
+        return;
+      }
+      if (res.text) {
+        // The transcript carries the model-facing turns (incl. any tool rounds).
+        appendChat({
+          role: "assistant",
+          text: res.text,
+          turns: [{ role: "user", content: text }, ...res.transcript],
+        });
+      }
+    },
+    [book, chatMessages, chat, activePageIndex, activeParagraphId, isTechnical, allowSpoilers],
+  );
+
+  const onApproveChatTool = useCallback(async () => {
+    const call = chatPendingTool;
+    if (!call || call.tool !== "generate_image") return;
+    setChatPendingTool(undefined);
+    setChatBusy(true);
+    setChatActivity("Generating the image…");
+    const out = await chatTool(call);
+    setChatBusy(false);
+    setChatActivity("");
+    const feedback = formatToolResult(call, {
+      image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
+    });
+    appendChat({
+      role: "tool",
+      text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
+      ...(out.image ? { image: out.image } : {}),
+      turns: [...pendingTranscript.current, { role: "user", content: feedback }],
+    });
+    pendingTranscript.current = [];
+  }, [chatPendingTool, chatTool]);
+
+  const onClearChat = useCallback(() => {
+    setChatMessages([]);
+    setChatPendingTool(undefined);
+    if (book) void libraryStore.deleteChatHistory?.(book.id);
+  }, [book, libraryStore]);
+
   // On-image description: the EXACT prompt the image was rendered from (persisted
   // with it, so it never shifts as the bible grows — and doubles as prompt
   // troubleshooting). Until the render lands, fall back to the unit's STORED scene
@@ -708,6 +862,15 @@ export function App() {
           >
             Test image
           </button>
+          {book && (
+            <button
+              style={styles.button}
+              onClick={() => setShowChat(true)}
+              title="Chat about what you're reading — it knows the book (spoiler-safely), can search the web, and can generate images"
+            >
+              Chat
+            </button>
+          )}
           {book && !generating && (
             <button
               style={styles.buttonPrimary}
@@ -1061,6 +1224,34 @@ export function App() {
 
       {showTestImage && (
         <TestImageModal onRender={testRender} onClose={() => setShowTestImage(false)} />
+      )}
+
+      {showChat && book && (
+        <ChatPanel
+          title={book.title}
+          messages={chatMessages.map((m) => ({
+            role: m.role,
+            text: m.text,
+            ...(m.image ? { image: m.image } : {}),
+            ...(m.links ? { links: m.links } : {}),
+          }))}
+          {...(chatStreaming ? { streamingText: chatStreaming } : {})}
+          busy={chatBusy}
+          {...(chatActivity ? { activity: chatActivity } : {})}
+          {...(chatPendingTool ? { pendingTool: chatPendingTool } : {})}
+          allowSpoilers={isTechnical || allowSpoilers}
+          technical={isTechnical}
+          onSend={(text) => void onChatSend(text)}
+          onApprovePendingTool={() => void onApproveChatTool()}
+          onDismissPendingTool={() => {
+            setChatPendingTool(undefined);
+            pendingTranscript.current = [];
+          }}
+          onToggleSpoilers={setAllowSpoilers}
+          onCancel={chatCancel}
+          onClose={() => setShowChat(false)}
+          onClearHistory={onClearChat}
+        />
       )}
 
       {showPasteText && (

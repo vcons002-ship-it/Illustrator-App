@@ -10,6 +10,27 @@ export interface BookSummary {
   addedAt: number;
 }
 
+/** One persisted reading-companion chat message (per book). Image bytes are kept
+ * so a generated/retrieved picture survives reload; `links` keep search sources. */
+export interface StoredChatMessage {
+  role: "user" | "assistant" | "tool";
+  /** Display text (what the panel shows). */
+  text: string;
+  /** ms epoch. */
+  at: number;
+  image?: { bytes: ArrayBuffer; mimeType: string } | { sourceUrl: string };
+  links?: { url: string; title?: string }[];
+  /**
+   * The MODEL-FACING turns this message represents (tool messages carry the model's
+   * JSON call + the formatted result; plain messages omit this and map 1:1). Keeps
+   * the rebuilt conversation identical to what the model actually saw.
+   */
+  turns?: { role: "system" | "user" | "assistant"; content: string }[];
+}
+
+/** Persisted chat history is trimmed to this many most-recent messages per book. */
+export const MAX_CHAT_HISTORY = 200;
+
 /**
  * Persistence seam. The engine depends only on this interface, so each
  * front-end supplies its own backing store: the web app uses IndexedDB; the
@@ -38,6 +59,11 @@ export interface VisualReaderStore {
   getBook(id: string): Promise<BookSource | undefined>;
   listBooks(): Promise<BookSummary[]>;
   removeBook(id: string): Promise<void>;
+
+  /** Reading-companion chat history per book (optional — older backends lack it). */
+  getChatHistory?(bookId: string): Promise<StoredChatMessage[] | undefined>;
+  putChatHistory?(bookId: string, messages: StoredChatMessage[]): Promise<void>;
+  deleteChatHistory?(bookId: string): Promise<void>;
 }
 
 /** In-memory store — used by tests and as a fallback when no persistence exists. */
@@ -45,6 +71,7 @@ export class InMemoryStore implements VisualReaderStore {
   private bibles = new Map<string, VisualBible>();
   private images = new Map<string, { bytes: ArrayBuffer; mimeType: string; prompt?: string }>();
   private books = new Map<string, { book: BookSource; addedAt: number }>();
+  private chats = new Map<string, StoredChatMessage[]>();
 
   async getBible(bookId: string): Promise<VisualBible | undefined> {
     return this.bibles.get(bookId);
@@ -90,10 +117,21 @@ export class InMemoryStore implements VisualReaderStore {
   }
   async removeBook(id: string): Promise<void> {
     // Deleting a book reclaims everything it owns — its cached images (including any
-    // character reference uploads, keyed `${id}:charref:…`) and its Visual Bible —
-    // so removed books don't leak storage.
+    // character reference uploads, keyed `${id}:charref:…`), its Visual Bible, and
+    // its chat history — so removed books don't leak storage.
     this.books.delete(id);
     this.bibles.delete(id);
+    this.chats.delete(id);
     await this.clearImages(id);
+  }
+
+  async getChatHistory(bookId: string): Promise<StoredChatMessage[] | undefined> {
+    return this.chats.get(bookId);
+  }
+  async putChatHistory(bookId: string, messages: StoredChatMessage[]): Promise<void> {
+    this.chats.set(bookId, messages.slice(-MAX_CHAT_HISTORY));
+  }
+  async deleteChatHistory(bookId: string): Promise<void> {
+    this.chats.delete(bookId);
   }
 }

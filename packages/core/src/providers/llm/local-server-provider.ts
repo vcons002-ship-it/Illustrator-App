@@ -12,6 +12,12 @@ import {
 } from "./extraction.js";
 import { EXTRACTION_JSON_INSTRUCTION, parseExtraction } from "./webllm-provider.js";
 import type { EntityExtractionInput, LLMProvider } from "./llm-provider.js";
+import {
+  DEFAULT_CHAT_MAX_TOKENS,
+  type ChatCapable,
+  type ChatOptions,
+  type ChatTurn,
+} from "./chat.js";
 
 /**
  * Local LLM server provider — talks to an OpenAI-compatible server running on the
@@ -46,7 +52,7 @@ interface ModelsResponse {
   data?: { id: string }[];
 }
 
-export class LocalServerLLMProvider implements LLMProvider {
+export class LocalServerLLMProvider implements LLMProvider, ChatCapable {
   readonly id = "local-server";
   private readonly transport: Transport;
   private readonly baseUrl: string;
@@ -62,10 +68,14 @@ export class LocalServerLLMProvider implements LLMProvider {
 
   async extractEntities(input: EntityExtractionInput): Promise<VisualBible> {
     const text = await this.complete(
-      `${extractionSystemFor(input.contentMode)}\n${EXTRACTION_JSON_INSTRUCTION}`,
-      extractionUserContent(input),
-      true,
-      input.signal,
+      [
+        {
+          role: "system",
+          content: `${extractionSystemFor(input.contentMode)}\n${EXTRACTION_JSON_INSTRUCTION}`,
+        },
+        { role: "user", content: extractionUserContent(input) },
+      ],
+      { json: true, ...(input.signal ? { signal: input.signal } : {}) },
     );
     const raw = parseExtraction(text);
     // The model responded but nothing parsed (truncated/malformed JSON, or a thinking
@@ -79,22 +89,39 @@ export class LocalServerLLMProvider implements LLMProvider {
   }
 
   async buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string> {
-    const text = await this.complete(promptSystemFor(request.kind), promptUserContent(request, bible), false, signal);
+    const text = await this.complete(
+      [
+        { role: "system", content: promptSystemFor(request.kind) },
+        { role: "user", content: promptUserContent(request, bible) },
+      ],
+      { json: false, ...(signal ? { signal } : {}) },
+    );
     return stripThink(text).trim();
   }
 
-  private async complete(system: string, user: string, json: boolean, signal?: AbortSignal): Promise<string> {
+  /** Reading-companion chat (buffered; thinking-model preambles stripped). */
+  async chat(messages: ChatTurn[], opts: ChatOptions = {}): Promise<string> {
+    const text = await this.complete(messages, {
+      json: false,
+      maxTokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
+    return stripThink(text).trim();
+  }
+
+  private async complete(
+    messages: { role: "system" | "user" | "assistant"; content: string }[],
+    opts: { json: boolean; signal?: AbortSignal; maxTokens?: number },
+  ): Promise<string> {
+    const json = opts.json;
     const res = await this.transport.send({
       url: `${this.baseUrl}/chat/completions`,
       method: "POST",
       headers: this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
-      ...(signal ? { signal } : {}),
+      ...(opts.signal ? { signal: opts.signal } : {}),
       body: {
         model: this.model,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
+        messages,
         temperature: json ? 0 : 0.7,
         // Bound the response so a model can't run away (which on a local GPU stalls
         // the whole bible build) — but with real headroom: a long chapter's extraction
@@ -103,7 +130,7 @@ export class LocalServerLLMProvider implements LLMProvider {
         // parses to nothing, leaving the chapter with no prompts. A prompt fits
         // comfortably. There is still NO request timeout — a slow-but-working model
         // is never cut off.
-        max_tokens: json ? 12288 : 512,
+        max_tokens: opts.maxTokens ?? (json ? 12288 : 512),
         // Keep the model resident between the many sequential bible calls so the
         // server doesn't unload/reload it each time (Ollama honours `keep_alive`;
         // other OpenAI-compatible servers ignore the extra field).

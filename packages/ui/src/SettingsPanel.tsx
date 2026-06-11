@@ -145,6 +145,16 @@ export interface ReaderSettings {
    */
   searchEngineId?: string;
   groundFacts?: boolean;
+  /**
+   * Reading-companion chat overrides — the chat can run on a DIFFERENT provider than
+   * the book analysis. Default "local" (free, private); "default" follows the book's
+   * text/image provider. When a chat override isn't usable (local server not
+   * connected, no key), the chat falls back to the book's provider rather than mock.
+   */
+  chatTextProvider?: "default" | TextProviderId;
+  /** Chat-only local model (Ollama id or WebLLM id, per the active local backend). */
+  chatLocalModel?: string;
+  chatImageProvider?: "default" | ImageProviderId;
   /** Which local engine API to talk to (browser "your own server" path). */
   localBackend?: LocalBackendId;
   /** Base URL of a local engine you run yourself (browser path; persisted). */
@@ -565,6 +575,75 @@ export function SettingsPanel({
                 reader — including a local LLM — it uses the Search engine above, so the
                 facts are sourced regardless of which model reads the book.
               </span>
+            </label>
+          </details>
+
+          <details style={rowStyle}>
+            <summary style={{ cursor: "pointer", fontSize: 13, opacity: 0.85 }}>
+              Book chat (reading companion)
+            </summary>
+            <p style={{ opacity: 0.6, fontSize: 11, margin: "4px 0 8px" }}>
+              The chat panel can run on a different model than the book analysis. Defaults to
+              local (free &amp; private); when the local option isn’t connected it falls back to
+              the book’s provider. You can also ask for render settings IN the chat (“draw a
+              truck, 20 steps, flux 2”) — named models must already be downloaded.
+            </p>
+            <label style={rowStyle}>
+              <span>Chat model</span>
+              <select
+                value={value.chatTextProvider ?? "local"}
+                onChange={(e) =>
+                  set({ chatTextProvider: e.target.value as "default" | TextProviderId })
+                }
+              >
+                <option value="local">Local (on-device / local server)</option>
+                <option value="default">Same as book analysis</option>
+                {TEXT_PROVIDERS.filter((p) => p.id !== "local").map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {(value.chatTextProvider ?? "local") === "local" && (
+              <label style={rowStyle}>
+                <span>Chat local model</span>
+                <select
+                  value={value.chatLocalModel ?? ""}
+                  onChange={(e) => set({ chatLocalModel: e.target.value })}
+                >
+                  <option value="">Same as the book’s local model</option>
+                  {((value.localTextBackend ?? "webgpu") === "server"
+                    ? textModels.map((m) => ({ id: m.id, label: m.label }))
+                    : LOCAL_TEXT_MODELS.map((m) => ({ id: m.id, label: m.label }))
+                  ).map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+                <span style={{ opacity: 0.6, fontSize: 12 }}>
+                  Downloaded models from your local setup (connect the server in section 1 to
+                  list more).
+                </span>
+              </label>
+            )}
+            <label style={rowStyle}>
+              <span>Chat image generation</span>
+              <select
+                value={value.chatImageProvider ?? "local"}
+                onChange={(e) =>
+                  set({ chatImageProvider: e.target.value as "default" | ImageProviderId })
+                }
+              >
+                <option value="local">Local engine (free)</option>
+                <option value="default">Same as book illustrations</option>
+                {IMAGE_PROVIDERS.filter((p) => p.id !== "local").map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
             </label>
           </details>
 

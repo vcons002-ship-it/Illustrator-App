@@ -325,6 +325,47 @@ export function catalogModelFamily(name: string): CatalogModelFamily | undefined
   return catalogEntryForModel(name)?.family;
 }
 
+/** Squashed lowercase alphanumerics ("Flux 2 Klein.safetensors" → "flux2klein"). */
+function normalizeModelName(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\.(safetensors|ckpt|gguf)$/i, "")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+/**
+ * Resolve a model the user NAMED IN CHAT ("flux 2", "z image", "juggernaut") to an
+ * actually-installed file: exact normalized match first, then substring. Installed
+ * names only — a model that isn't downloaded can't render, so a miss returns
+ * undefined and the caller keeps the current model instead of failing the render.
+ */
+export function resolveModelRequest(
+  query: string,
+  installed: readonly string[],
+): string | undefined {
+  const nq = normalizeModelName(query);
+  if (!nq) return undefined;
+  return (
+    installed.find((m) => normalizeModelName(m) === nq) ??
+    installed.find((m) => normalizeModelName(m).includes(nq))
+  );
+}
+
+/**
+ * Resolve an art style the user named in chat ("oil painting", "noir") to a style id
+ * from IMAGE_STYLES (exact id, then label/id substring). Undefined when nothing fits.
+ */
+export function resolveStyleRequest(query: string): string | undefined {
+  const nq = normalizeModelName(query);
+  if (!nq) return undefined;
+  const match =
+    IMAGE_STYLES.find((s) => normalizeModelName(s.id) === nq) ??
+    IMAGE_STYLES.find(
+      (s) => normalizeModelName(s.label).includes(nq) || normalizeModelName(s.id).includes(nq),
+    );
+  return match && match.id !== "auto" ? match.id : undefined;
+}
+
 /**
  * Art-style catalog for the image style selector. The chosen style's
  * `promptSuffix` is appended to every image prompt (in the render pipeline), so it

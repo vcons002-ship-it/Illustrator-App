@@ -948,9 +948,10 @@ function markChapterProcessed(bible: VisualBible, chapterIndex: number): VisualB
 /**
  * Concatenate each STORY chapter's page text, keyed by chapter index. Front/back
  * matter (chapter.isStory === false) is omitted entirely, so it's never analysed
- * and never blocks bible completion.
+ * and never blocks bible completion. Exported: the chat builds its book context
+ * from the SAME segmentation so chapter indices/offsets line up with the bible.
  */
-function chapterText(book: BookSource): Map<number, string> {
+export function chapterText(book: BookSource): Map<number, string> {
   const byChapter = new Map<number, string[]>();
   for (const page of book.pages) {
     const chapter = book.chapters.find((c) => c.id === page.chapterId);

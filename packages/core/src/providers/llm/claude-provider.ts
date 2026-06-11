@@ -11,6 +11,13 @@ import {
   promptUserContent,
 } from "./extraction.js";
 import type { EntityExtractionInput, LLMProvider } from "./llm-provider.js";
+import {
+  DEFAULT_CHAT_MAX_TOKENS,
+  splitSystem,
+  type ChatCapable,
+  type ChatOptions,
+  type ChatTurn,
+} from "./chat.js";
 
 /**
  * Cloud LLM provider backed by Claude (the default cloud tier).
@@ -118,7 +125,7 @@ export interface ClaudeProviderOptions {
   fetch?: typeof fetch;
 }
 
-export class ClaudeProvider implements LLMProvider {
+export class ClaudeProvider implements LLMProvider, ChatCapable {
   readonly id = "claude";
   private readonly client: Anthropic;
   private readonly model: string;
@@ -156,6 +163,25 @@ export class ClaudeProvider implements LLMProvider {
       );
     }
     return mergeExtraction(input.existing, parsed, input.chapterIndex, input.unitRanges);
+  }
+
+  /** Reading-companion chat (buffered; `onToken` unused — the seam allows that). */
+  async chat(messages: ChatTurn[], opts: ChatOptions = {}): Promise<string> {
+    const { system, turns } = splitSystem(messages);
+    const response = await this.client.messages.create(
+      {
+        model: this.model,
+        max_tokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
+        ...(system ? { system } : {}),
+        messages: turns,
+      },
+      opts.signal ? { signal: opts.signal } : undefined,
+    );
+    return response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("")
+      .trim();
   }
 
   async buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string> {

@@ -1,9 +1,13 @@
 import type {
   BookSource,
   CharacterPatch,
+  ChatTurn,
   ImageResult,
+  ImageSearchHit,
   ImportStats,
+  ToolCall,
   VisualBible,
+  WebSearchHit,
 } from "@visual-reader/core";
 import type { ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
 
@@ -50,7 +54,23 @@ export type MainToWorker =
    * Freeform playground: render ONE image straight from the given text with the current
    * provider/style/quality — no bible, no LLM, no cache. Answered by `testRendered`.
    */
-  | { type: "testRender"; requestId: number; text: string };
+  | { type: "testRender"; requestId: number; text: string }
+  /**
+   * Reading-companion chat: one user message. `history` is the prior transcript
+   * (model-facing turns), `position` the reader's place (for spoiler-safe context).
+   * Streams `chatToken`/`chatTool`/`chatToolResult`, finishes with `chatDone`/`chatError`.
+   */
+  | {
+      type: "chat";
+      requestId: number;
+      history: ChatTurn[];
+      userText: string;
+      position: { pageIndex: number; paragraphIndex: number };
+      allowSpoilers: boolean;
+    }
+  /** Run a user-APPROVED generate_image tool call (answered by `chatToolResult`). */
+  | { type: "chatTool"; requestId: number; call: ToolCall }
+  | { type: "chatCancel"; requestId: number };
 
 export type WorkerToMain =
   | { type: "status"; message: string }
@@ -75,4 +95,27 @@ export type WorkerToMain =
       prompt?: string;
       error?: string;
     }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  /** Incremental assistant text (streaming providers only). */
+  | { type: "chatToken"; requestId: number; text: string }
+  /** The model called a tool (so the panel can show "searching…"). */
+  | { type: "chatTool"; requestId: number; round: number; call: ToolCall }
+  /** A tool finished: search hits for inline rendering, or generated image bytes. */
+  | {
+      type: "chatToolResult";
+      requestId: number;
+      call: ToolCall;
+      hits?: WebSearchHit[];
+      imageHits?: ImageSearchHit[];
+      image?: { bytes: ArrayBuffer; mimeType: string };
+      error?: string;
+    }
+  /** Chat round complete: final prose + the turns to append to the stored history. */
+  | {
+      type: "chatDone";
+      requestId: number;
+      text: string;
+      transcript: ChatTurn[];
+      pendingTool?: ToolCall;
+    }
+  | { type: "chatError"; requestId: number; message: string };

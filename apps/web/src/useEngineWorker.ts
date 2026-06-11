@@ -2,9 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   BookSource,
   CharacterPatch,
+  ChatTurn,
   ImageResult,
+  ImageSearchHit,
   ImportStats,
+  ToolCall,
   VisualBible,
+  WebSearchHit,
 } from "@visual-reader/core";
 import type { ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
 
@@ -76,6 +80,42 @@ export interface EngineWorkerApi {
   paintForward: (fromUnit: number) => void;
   /** Playground: render ONE image straight from text (no bible/LLM/cache). */
   testRender: (text: string) => Promise<TestRenderResult>;
+  /** Reading-companion chat: one user message (streams via `onEvent`). */
+  chat: (
+    history: ChatTurn[],
+    userText: string,
+    position: { pageIndex: number; paragraphIndex: number },
+    allowSpoilers: boolean,
+    onEvent: (e: ChatStreamEvent) => void,
+  ) => Promise<ChatDoneResult>;
+  /** Run a user-approved generate_image tool call. */
+  chatTool: (call: ToolCall) => Promise<ChatToolRender>;
+  /** Abort the in-flight chat round, if any. */
+  chatCancel: () => void;
+}
+
+export type ChatStreamEvent =
+  | { kind: "token"; text: string }
+  | { kind: "tool"; call: ToolCall }
+  | {
+      kind: "toolResult";
+      call: ToolCall;
+      hits?: WebSearchHit[];
+      imageHits?: ImageSearchHit[];
+      error?: string;
+    };
+
+export interface ChatDoneResult {
+  text: string;
+  /** Turns to append to the stored history (assistant + tool feedback). */
+  transcript: ChatTurn[];
+  pendingTool?: ToolCall;
+  error?: string;
+}
+
+export interface ChatToolRender {
+  image?: { bytes: ArrayBuffer; mimeType: string };
+  error?: string;
 }
 
 export interface TestRenderResult {
@@ -121,6 +161,13 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   const nextRefRequestId = useRef(1);
   // In-flight playground renders, resolved by `testRendered` replies.
   const testRequests = useRef<Map<number, (result: TestRenderResult) => void>>(new Map());
+  // In-flight chat rounds: streaming events + the final resolve, keyed by requestId.
+  const chatRequests = useRef<
+    Map<number, { onEvent: (e: ChatStreamEvent) => void; resolve: (r: ChatDoneResult) => void }>
+  >(new Map());
+  // In-flight approved tool renders (chatTool), resolved by `chatToolResult`.
+  const chatToolRequests = useRef<Map<number, (r: ChatToolRender) => void>>(new Map());
+  const activeChatRequestId = useRef<number | undefined>(undefined);
 
   const send = (msg: MainToWorker, transfer: Transferable[] = []) =>
     workerRef.current?.postMessage(msg, transfer);
@@ -217,6 +264,52 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
             ...(msg.prompt ? { prompt: msg.prompt } : {}),
             ...(msg.error ? { error: msg.error } : {}),
           });
+          break;
+        }
+        case "chatToken": {
+          chatRequests.current.get(msg.requestId)?.onEvent({ kind: "token", text: msg.text });
+          break;
+        }
+        case "chatTool": {
+          chatRequests.current.get(msg.requestId)?.onEvent({ kind: "tool", call: msg.call });
+          break;
+        }
+        case "chatToolResult": {
+          // Either an approved tool render's reply, or a mid-chat search result.
+          const toolResolve = chatToolRequests.current.get(msg.requestId);
+          if (toolResolve) {
+            chatToolRequests.current.delete(msg.requestId);
+            toolResolve({
+              ...(msg.image ? { image: msg.image } : {}),
+              ...(msg.error ? { error: msg.error } : {}),
+            });
+            break;
+          }
+          chatRequests.current.get(msg.requestId)?.onEvent({
+            kind: "toolResult",
+            call: msg.call,
+            ...(msg.hits ? { hits: msg.hits } : {}),
+            ...(msg.imageHits ? { imageHits: msg.imageHits } : {}),
+            ...(msg.error ? { error: msg.error } : {}),
+          });
+          break;
+        }
+        case "chatDone": {
+          const req = chatRequests.current.get(msg.requestId);
+          chatRequests.current.delete(msg.requestId);
+          if (activeChatRequestId.current === msg.requestId) activeChatRequestId.current = undefined;
+          req?.resolve({
+            text: msg.text,
+            transcript: msg.transcript,
+            ...(msg.pendingTool ? { pendingTool: msg.pendingTool } : {}),
+          });
+          break;
+        }
+        case "chatError": {
+          const req = chatRequests.current.get(msg.requestId);
+          chatRequests.current.delete(msg.requestId);
+          if (activeChatRequestId.current === msg.requestId) activeChatRequestId.current = undefined;
+          req?.resolve({ text: "", transcript: [], error: msg.message });
           break;
         }
         case "error":
@@ -349,6 +442,48 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
       }),
     [],
   );
+  const chat = useCallback(
+    (
+      history: ChatTurn[],
+      userText: string,
+      position: { pageIndex: number; paragraphIndex: number },
+      allowSpoilers: boolean,
+      onEvent: (e: ChatStreamEvent) => void,
+    ): Promise<ChatDoneResult> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        activeChatRequestId.current = requestId;
+        // A stale worker (dev/HMR) drops unknown messages silently — surface a
+        // timeout as a visible error rather than a forever-spinning panel.
+        const timeout = setTimeout(() => {
+          if (chatRequests.current.delete(requestId)) {
+            resolve({ text: "", transcript: [], error: "The chat timed out — try again." });
+          }
+        }, 180_000);
+        chatRequests.current.set(requestId, {
+          onEvent,
+          resolve: (r) => {
+            clearTimeout(timeout);
+            resolve(r);
+          },
+        });
+        send({ type: "chat", requestId, history, userText, position, allowSpoilers });
+      }),
+    [],
+  );
+  const chatTool = useCallback(
+    (call: ToolCall): Promise<ChatToolRender> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        chatToolRequests.current.set(requestId, resolve);
+        send({ type: "chatTool", requestId, call });
+      }),
+    [],
+  );
+  const chatCancel = useCallback(() => {
+    const id = activeChatRequestId.current;
+    if (id !== undefined) send({ type: "chatCancel", requestId: id });
+  }, []);
 
   return {
     bible,
@@ -384,6 +519,9 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     getCharacterReference,
     paintForward,
     testRender,
+    chat,
+    chatTool,
+    chatCancel,
   };
 }
 
@@ -405,6 +543,11 @@ const TUNING_FIELDS = [
   "localVae",
   "styleLoraOverride",
   "gpuVramMb",
+  // Chat-only provider overrides: read by the worker AT CHAT TIME (its settings are
+  // refreshed by "tune"), so changing them must not dispose the engine mid-book.
+  "chatTextProvider",
+  "chatLocalModel",
+  "chatImageProvider",
 ] as const satisfies readonly (keyof ReaderSettings)[];
 
 /** Settings the worker never needs at all (pure presentation). */

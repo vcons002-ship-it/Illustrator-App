@@ -11,6 +11,12 @@ import {
   promptUserContent,
 } from "./extraction.js";
 import type { EntityExtractionInput, LLMProvider } from "./llm-provider.js";
+import {
+  DEFAULT_CHAT_MAX_TOKENS,
+  type ChatCapable,
+  type ChatOptions,
+  type ChatTurn,
+} from "./chat.js";
 
 /**
  * Cloud LLM provider backed by OpenAI, for users who bring an OpenAI key.
@@ -33,7 +39,7 @@ interface ChatResponse {
   choices?: { message?: { content?: string } }[];
 }
 
-export class OpenAILLMProvider implements LLMProvider {
+export class OpenAILLMProvider implements LLMProvider, ChatCapable {
   readonly id = "openai";
   private readonly transport: Transport;
   private readonly model: string;
@@ -49,10 +55,11 @@ export class OpenAILLMProvider implements LLMProvider {
 
   async extractEntities(input: EntityExtractionInput): Promise<VisualBible> {
     const text = await this.complete(
-      extractionSystemFor(input.contentMode),
-      extractionUserContent(input),
-      true,
-      input.signal,
+      [
+        { role: "system", content: extractionSystemFor(input.contentMode) },
+        { role: "user", content: extractionUserContent(input) },
+      ],
+      { json: true, ...(input.signal ? { signal: input.signal } : {}) },
     );
     let raw: RawExtraction = { characters: [], environments: [], spoilers: [] };
     try {
@@ -64,23 +71,40 @@ export class OpenAILLMProvider implements LLMProvider {
   }
 
   async buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string> {
-    const text = await this.complete(promptSystemFor(request.kind), promptUserContent(request, bible), false, signal);
+    const text = await this.complete(
+      [
+        { role: "system", content: promptSystemFor(request.kind) },
+        { role: "user", content: promptUserContent(request, bible) },
+      ],
+      { json: false, ...(signal ? { signal } : {}) },
+    );
     return text.trim();
   }
 
-  private async complete(system: string, user: string, json: boolean, signal?: AbortSignal): Promise<string> {
+  /** Reading-companion chat (buffered) — the same completion seam, multi-turn. */
+  async chat(messages: ChatTurn[], opts: ChatOptions = {}): Promise<string> {
+    const text = await this.complete(messages, {
+      json: false,
+      maxTokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
+    return text.trim();
+  }
+
+  private async complete(
+    messages: { role: "system" | "user" | "assistant"; content: string }[],
+    opts: { json: boolean; signal?: AbortSignal; maxTokens?: number },
+  ): Promise<string> {
     const res = await this.transport.send({
       url: `${this.baseUrl}/chat/completions`,
       method: "POST",
       headers: { authorization: `Bearer ${this.apiKey}` },
-      ...(signal ? { signal } : {}),
+      ...(opts.signal ? { signal: opts.signal } : {}),
       body: {
         model: this.model,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        ...(json
+        messages,
+        ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),
+        ...(opts.json
           ? {
               response_format: {
                 type: "json_schema",

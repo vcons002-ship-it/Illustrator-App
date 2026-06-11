@@ -1,6 +1,12 @@
 import type { VisualBible } from "../../types/bible.js";
 import type { VisualRequest } from "../../types/content.js";
 import type { EntityExtractionInput, LLMProvider } from "./llm-provider.js";
+import {
+  DEFAULT_CHAT_MAX_TOKENS,
+  type ChatCapable,
+  type ChatOptions,
+  type ChatTurn,
+} from "./chat.js";
 import { MockLLMProvider } from "./mock-llm-provider.js";
 import {
   extractionSystemFor,
@@ -31,10 +37,18 @@ export interface ChatMessage {
   content: string;
 }
 
-/** Completion seam: returns the assistant text for the given messages. */
+/** Completion seam: returns the assistant text for the given messages.
+ * `onText` (text deltas, for chat streaming) and `maxTokens` are additive —
+ * existing injected fakes that ignore them keep working. */
 export type ChatComplete = (
   messages: ChatMessage[],
-  opts: { json: boolean; onToken?: (count: number) => void; signal?: AbortSignal },
+  opts: {
+    json: boolean;
+    onToken?: (count: number) => void;
+    onText?: (delta: string) => void;
+    signal?: AbortSignal;
+    maxTokens?: number;
+  },
 ) => Promise<string>;
 
 /** Live generation activity, so the UI can show the model is making progress. */
@@ -114,7 +128,7 @@ function runSerial<T>(fn: () => Promise<T>): Promise<T> {
   return result;
 }
 
-export class WebLLMProvider implements LLMProvider {
+export class WebLLMProvider implements LLMProvider, ChatCapable {
   readonly id = "local";
   private readonly model: string;
   private readonly onProgress: ((r: { progress: number; text: string }) => void) | undefined;
@@ -163,6 +177,23 @@ export class WebLLMProvider implements LLMProvider {
     }
   }
 
+  /**
+   * Reading-companion chat — token-streamed (the one provider that streams today).
+   * Unlike extraction this does NOT degrade to the mock: a chat answer from the
+   * placeholder model would read as a real answer, so the failure surfaces instead.
+   * Inherits `runSerial`, so a chat sent mid-extraction queues behind the chapter.
+   */
+  async chat(messages: ChatTurn[], opts: ChatOptions = {}): Promise<string> {
+    const complete = await this.completer();
+    const text = await complete(messages, {
+      json: false,
+      maxTokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
+      ...(opts.onToken ? { onText: opts.onToken } : {}),
+      ...(opts.signal ? { signal: opts.signal } : {}),
+    });
+    return stripThink(text).trim();
+  }
+
   async buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string> {
     try {
       const complete = await this.completer();
@@ -194,7 +225,7 @@ export class WebLLMProvider implements LLMProvider {
         const responseFormat = opts.json ? ({ type: "json_object" } as const) : undefined;
         // Extraction can return a long JSON object (every described character +
         // glossary); give it ample room so the JSON isn't truncated mid-object.
-        const maxTokens = opts.json ? 4096 : 512;
+        const maxTokens = opts.maxTokens ?? (opts.json ? 4096 : 512);
         // Stream so callers get live token progress (proof the model is working);
         // fall back to a single-shot completion if streaming isn't available.
         try {
@@ -213,6 +244,7 @@ export class WebLLMProvider implements LLMProvider {
             if (delta) {
               text += delta;
               opts.onToken?.(++tokens);
+              opts.onText?.(delta);
             }
           }
           return text;

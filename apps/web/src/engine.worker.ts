@@ -2,10 +2,25 @@
 import {
   Engine,
   IndexedDbStore,
+  buildChatSystemPrompt,
+  chapterText,
   getImageStyle,
   profileDimensions,
   qualityProfile,
+  resolveModelRequest,
+  resolveStyleRequest,
+  runChatTurn,
+  supportsChat,
   toRenderUnits,
+  ComfyUIBackend,
+  Automatic1111Backend,
+  type BookSource,
+  type FigureSearch,
+  type ImageProvider,
+  type LLMProvider,
+  type TierConfig,
+  type ToolCall,
+  type VisualBible,
 } from "@visual-reader/core";
 // Import buildProviders via the React-free subpath: pulling it from the package
 // index would drag the React UI components into the worker, which can crash the
@@ -25,6 +40,15 @@ let settings: ReaderSettings | undefined;
 let engine: Engine | undefined;
 /** A "start" that arrived before the engine existed; applied once it's ready. */
 let pendingStart = false;
+/** The ORIGINAL (un-grouped) open book + its live bible, for the chat's context. */
+let currentBook: BookSource | undefined;
+let currentBible: VisualBible | undefined;
+/** The book's built providers, reused by chat when no chat override applies. */
+let bookProviders:
+  | { llm: LLMProvider; image: ImageProvider; tier: TierConfig; imageSearch: FigureSearch; llmMock: boolean; imageMock: boolean }
+  | undefined;
+/** In-flight chat rounds, aborted by `chatCancel`. */
+const chatAborts = new Map<number, AbortController>();
 
 function post(message: WorkerToMain, transfer: Transferable[] = []): void {
   ctx.postMessage(message, transfer);
@@ -331,6 +355,16 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "testRender":
       void handleTestRender(msg.requestId, msg.text);
       break;
+    case "chat":
+      void handleChat(msg);
+      break;
+    case "chatTool":
+      void handleChatTool(msg.requestId, msg.call);
+      break;
+    case "chatCancel":
+      chatAborts.get(msg.requestId)?.abort();
+      chatAborts.delete(msg.requestId);
+      break;
   }
 };
 
@@ -343,40 +377,14 @@ async function handleTestRender(requestId: number, text: string): Promise<void> 
   try {
     if (!settings) throw new Error("Settings not initialised yet.");
     const { image, tier } = buildProviders(settings);
-    const style = getImageStyle(tier.style);
-    const prompt = style.promptSuffix ? `${text.trim()}\n\nStyle: ${style.promptSuffix}` : text.trim();
-    const level = tier.renderQuality;
-    const dims = level ? profileDimensions(level, tier.aspectRatio) : undefined;
-    const isLocal = tier.tier === "local";
-    const styleLora = !isLocal
-      ? undefined
-      : tier.disableStyleLora
-        ? undefined
-        : tier.styleLoraOverride
-          ? { name: tier.styleLoraOverride, strength: 0.8 }
-          : style.local?.lora;
-    const out = await image.generate({
-      prompt,
-      anchors: [],
-      quality: tier.quality,
-      ...(level ? { renderQuality: level, steps: qualityProfile(level).steps } : {}),
-      ...(dims ? { width: dims.width, height: dims.height } : {}),
-      ...(styleLora ? { styleLora } : {}),
-      ...(tier.imageModelFamily ? { modelFamily: tier.imageModelFamily } : {}),
-      ...(isLocal && tier.localTextEncoder ? { textEncoder: tier.localTextEncoder } : {}),
-      ...(isLocal && tier.localVae ? { vae: tier.localVae } : {}),
-      ...(isLocal && tier.localSteps ? { stepsOverride: tier.localSteps } : {}),
-      ...(isLocal && tier.localCfg !== undefined ? { cfgOverride: tier.localCfg } : {}),
-      ...(isLocal && tier.localSampler ? { localSampler: tier.localSampler } : {}),
-      ...(isLocal && tier.localScheduler ? { localScheduler: tier.localScheduler } : {}),
-    });
+    const out = await renderFromText(image, tier, text);
     post(
       {
         type: "testRendered",
         requestId,
         ok: true,
         image: { bytes: out.bytes, mimeType: out.mimeType },
-        prompt,
+        prompt: out.prompt,
       },
       [out.bytes],
     );
@@ -387,6 +395,238 @@ async function handleTestRender(requestId: number, text: string): Promise<void> 
       ok: false,
       error: err instanceof Error ? err.message : String(err),
     });
+  }
+}
+
+/** Render ONE image straight from text with a built provider/tier (shared by the
+ * playground and the chat's generate_image tool). `stepsOverride` wins over the
+ * tier's step settings (the chat lets the user ask for a step count inline). */
+async function renderFromText(
+  image: ImageProvider,
+  tier: TierConfig,
+  text: string,
+  stepsOverride?: number,
+): Promise<{ bytes: ArrayBuffer; mimeType: string; prompt: string }> {
+  const style = getImageStyle(tier.style);
+  const prompt = style.promptSuffix ? `${text.trim()}\n\nStyle: ${style.promptSuffix}` : text.trim();
+  const level = tier.renderQuality;
+  const dims = level ? profileDimensions(level, tier.aspectRatio) : undefined;
+  const isLocal = tier.tier === "local";
+  const styleLora = !isLocal
+    ? undefined
+    : tier.disableStyleLora
+      ? undefined
+      : tier.styleLoraOverride
+        ? { name: tier.styleLoraOverride, strength: 0.8 }
+        : style.local?.lora;
+  const steps = stepsOverride ?? (isLocal ? tier.localSteps : undefined);
+  const out = await image.generate({
+    prompt,
+    anchors: [],
+    quality: tier.quality,
+    ...(level ? { renderQuality: level, steps: stepsOverride ?? qualityProfile(level).steps } : {}),
+    ...(dims ? { width: dims.width, height: dims.height } : {}),
+    ...(styleLora ? { styleLora } : {}),
+    ...(tier.imageModelFamily ? { modelFamily: tier.imageModelFamily } : {}),
+    ...(isLocal && tier.localTextEncoder ? { textEncoder: tier.localTextEncoder } : {}),
+    ...(isLocal && tier.localVae ? { vae: tier.localVae } : {}),
+    ...(isLocal && steps ? { stepsOverride: steps } : {}),
+    ...(isLocal && tier.localCfg !== undefined ? { cfgOverride: tier.localCfg } : {}),
+    ...(isLocal && tier.localSampler ? { localSampler: tier.localSampler } : {}),
+    ...(isLocal && tier.localScheduler ? { localScheduler: tier.localScheduler } : {}),
+  });
+  return { bytes: out.bytes, mimeType: out.mimeType, prompt };
+}
+
+// --- Reading-companion chat -------------------------------------------------
+
+/**
+ * Settings as the CHAT sees them: the chat's own provider choices (default: local
+ * text + local image — free and private) override the book's. "default" follows
+ * the book's providers unchanged.
+ */
+function chatSettingsOf(s: ReaderSettings): ReaderSettings {
+  const text = s.chatTextProvider ?? "local";
+  const image = s.chatImageProvider ?? "local";
+  return {
+    ...s,
+    ...(text !== "default" ? { textProvider: text } : {}),
+    // The chat-only local model applies to whichever local backend is active.
+    ...(text === "local" && s.chatLocalModel
+      ? { localServerTextModel: s.chatLocalModel, localTextModel: s.chatLocalModel }
+      : {}),
+    ...(image !== "default" ? { imageProvider: image } : {}),
+  };
+}
+
+/**
+ * The chat's providers: built from the chat overrides, falling back PER SLOT to the
+ * book's provider when an override resolves to the mock but the book's is real —
+ * "default to local" must not mean placeholder answers when local isn't set up.
+ */
+function chatProviders(): { llm: LLMProvider; image: ImageProvider; tier: TierConfig; imageSearch: FigureSearch } {
+  if (!settings) throw new Error("Settings not initialised yet.");
+  const built = buildProviders(chatSettingsOf(settings));
+  const llm =
+    built.diagnostics.llm.mock && bookProviders && !bookProviders.llmMock
+      ? bookProviders.llm
+      : built.llm;
+  const image =
+    built.diagnostics.image.mock && bookProviders && !bookProviders.imageMock
+      ? bookProviders.image
+      : built.image;
+  const tier =
+    built.diagnostics.image.mock && bookProviders && !bookProviders.imageMock
+      ? bookProviders.tier
+      : built.tier;
+  return { llm, image, tier, imageSearch: built.imageSearch };
+}
+
+/** Map the reader's page/paragraph position to (chapterIndex, char offset) in the
+ * SAME chapter-text segmentation the chat context is built from. */
+function chatPosition(
+  book: BookSource,
+  pos: { pageIndex: number; paragraphIndex: number },
+): { chapterIndex: number; charOffsetInChapter: number } {
+  const page = book.pages[pos.pageIndex];
+  const chapterId = page?.chapterId;
+  const chapterIndex = book.chapters.find((c) => c.id === chapterId)?.index ?? 0;
+  let offset = 0;
+  for (const p of book.pages) {
+    if (p === page) break;
+    if (p.chapterId === chapterId) {
+      // +2 mirrors the "\n\n" joiner in chapterText.
+      offset += p.paragraphs.reduce((a, q) => a + q.text.length + 2, 0);
+    }
+  }
+  const upTo = Math.min(pos.paragraphIndex, page?.paragraphs.length ?? 0);
+  for (let i = 0; i < upTo; i++) offset += page!.paragraphs[i]!.text.length + 2;
+  return { chapterIndex, charOffsetInChapter: offset };
+}
+
+async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise<void> {
+  const ac = new AbortController();
+  chatAborts.set(msg.requestId, ac);
+  try {
+    if (!currentBook) throw new Error("Open a book first — the chat discusses the current book.");
+    const { llm, imageSearch } = chatProviders();
+    if (!supportsChat(llm)) {
+      throw new Error(`The "${llm.id}" text provider doesn't support chat yet.`);
+    }
+    const book = currentBook;
+    const chapters = [...chapterText(book)]
+      .map(([index, text]) => ({
+        index,
+        title: book.chapters.find((c) => c.index === index)?.title ?? "",
+        text,
+      }))
+      .sort((a, b) => a.index - b.index);
+    const system = buildChatSystemPrompt({
+      bookTitle: book.title,
+      contentMode: book.contentMode ?? "fiction",
+      chapters,
+      ...(currentBible ? { bible: currentBible } : {}),
+      position: chatPosition(book, msg.position),
+      allowSpoilers: msg.allowSpoilers,
+    });
+    const outcome = await runChatTurn({
+      llm,
+      system,
+      history: [...msg.history, { role: "user", content: msg.userText }],
+      tools: {
+        searchWeb: (q) => imageSearch.searchWeb(q),
+        searchImages: (q) => imageSearch.search(q),
+      },
+      onEvent: (e) => {
+        if (e.kind === "token") post({ type: "chatToken", requestId: msg.requestId, text: e.text });
+        else if (e.kind === "tool") post({ type: "chatTool", requestId: msg.requestId, round: e.round, call: e.call });
+        else
+          post({
+            type: "chatToolResult",
+            requestId: msg.requestId,
+            call: e.call,
+            ...(e.result.hits ? { hits: e.result.hits } : {}),
+            ...(e.result.imageHits ? { imageHits: e.result.imageHits } : {}),
+            ...(e.result.error ? { error: e.result.error } : {}),
+          });
+      },
+      signal: ac.signal,
+    });
+    post({
+      type: "chatDone",
+      requestId: msg.requestId,
+      text: outcome.text,
+      transcript: outcome.transcript,
+      ...(outcome.pendingTool ? { pendingTool: outcome.pendingTool } : {}),
+    });
+  } catch (err) {
+    post({
+      type: "chatError",
+      requestId: msg.requestId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  } finally {
+    chatAborts.delete(msg.requestId);
+  }
+}
+
+/**
+ * A user-APPROVED generate_image tool call. In-chat render overrides apply here:
+ * a named model resolves against the engine's INSTALLED models (a model that
+ * isn't downloaded silently keeps the current one), a named style against the
+ * style catalog, and a step count rides the render directly.
+ */
+async function handleChatTool(requestId: number, call: ToolCall): Promise<void> {
+  try {
+    if (call.tool !== "generate_image") throw new Error("Only generate_image needs approval.");
+    if (!settings) throw new Error("Settings not initialised yet.");
+    let cs = chatSettingsOf(settings);
+    if (call.style) {
+      const styleId = resolveStyleRequest(call.style);
+      if (styleId) cs = { ...cs, imageStyle: styleId };
+    }
+    if (call.model && cs.imageProvider === "local") {
+      const resolved = resolveModelRequest(call.model, await installedModelNames(cs));
+      if (resolved) cs = { ...cs, localModel: resolved };
+    }
+    const built = buildProviders(cs);
+    // Same per-slot fallback as chat text: a mock chat-image slot (local engine not
+    // connected) falls back to the book's real provider rather than placeholder art.
+    const useBook = built.diagnostics.image.mock && bookProviders && !bookProviders.imageMock;
+    const image = useBook ? bookProviders!.image : built.image;
+    const tier = useBook ? bookProviders!.tier : built.tier;
+    const out = await renderFromText(image, tier, call.prompt, call.steps);
+    post(
+      {
+        type: "chatToolResult",
+        requestId,
+        call,
+        image: { bytes: out.bytes, mimeType: out.mimeType },
+      },
+      [out.bytes],
+    );
+  } catch (err) {
+    post({
+      type: "chatToolResult",
+      requestId,
+      call,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/** The local engine's installed model names (checkpoints + diffusion models), or []. */
+async function installedModelNames(s: ReaderSettings): Promise<string[]> {
+  const baseUrl = s.engineBaseUrl ?? s.localServerUrl;
+  if (!baseUrl) return [];
+  try {
+    const backend =
+      s.localBackend === "a1111"
+        ? new Automatic1111Backend({ baseUrl })
+        : new ComfyUIBackend({ baseUrl });
+    return (await backend.listModels()).map((m) => m.id);
+  } catch {
+    return [];
   }
 }
 
@@ -431,6 +671,18 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     });
     llmLabel = diagnostics.llm.label;
     post({ type: "providers", diagnostics });
+    // Retain the ORIGINAL book + the live providers for the chat (it reuses them
+    // when no chat override applies, and reads the same chapter segmentation).
+    currentBook = book;
+    currentBible = undefined;
+    bookProviders = {
+      llm,
+      image,
+      tier,
+      imageSearch,
+      llmMock: diagnostics.llm.mock,
+      imageMock: diagnostics.image.mock,
+    };
     engine = new Engine({
       llm,
       image,
@@ -459,6 +711,7 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
       // live status line so the character count grows in real time.
       onBibleUpdate: (bible) => {
         bibleCharacters = bible.characters.length;
+        currentBible = bible; // the chat reads the live bible
         post({ type: "opened", bible });
         renderBibleStatus();
       },

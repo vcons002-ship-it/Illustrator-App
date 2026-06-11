@@ -11,6 +11,13 @@ import {
   promptUserContent,
 } from "./extraction.js";
 import type { EntityExtractionInput, LLMProvider } from "./llm-provider.js";
+import {
+  DEFAULT_CHAT_MAX_TOKENS,
+  splitSystem,
+  type ChatCapable,
+  type ChatOptions,
+  type ChatTurn,
+} from "./chat.js";
 
 /**
  * Cloud LLM provider backed by Google Gemini, for users who bring a Gemini key.
@@ -47,7 +54,7 @@ interface GeminiResponse {
   }[];
 }
 
-export class GeminiLLMProvider implements LLMProvider {
+export class GeminiLLMProvider implements LLMProvider, ChatCapable {
   readonly id = "gemini";
   private readonly transport: Transport;
   private readonly model: string;
@@ -95,6 +102,32 @@ export class GeminiLLMProvider implements LLMProvider {
       ground: this.ground && request.kind === "technical_illustration",
     });
     return text.trim();
+  }
+
+  /**
+   * Reading-companion chat (buffered). Multi-turn: assistant turns map to the
+   * API's "model" role, system turns to `systemInstruction`. The chat's own
+   * provider-agnostic tool protocol replaces in-call grounding here, so no
+   * google_search tool is attached.
+   */
+  async chat(messages: ChatTurn[], opts: ChatOptions = {}): Promise<string> {
+    const { system, turns } = splitSystem(messages);
+    const res = await this.transport.send({
+      url: `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`,
+      method: "POST",
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      body: {
+        ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
+        contents: turns.map((t) => ({
+          role: t.role === "assistant" ? "model" : "user",
+          parts: [{ text: t.content }],
+        })),
+        generationConfig: { maxOutputTokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS },
+      },
+    });
+    if (!res.ok) throw new Error(`Gemini chat request failed with status ${res.status}`);
+    const data = await res.json<GeminiResponse>();
+    return (data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? "").join("").trim();
   }
 
   private async generate(

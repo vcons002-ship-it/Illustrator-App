@@ -1,6 +1,6 @@
 import type { VisualBible } from "../types/bible.js";
 import type { BookSource } from "../types/book.js";
-import type { BookSummary, VisualReaderStore } from "./store.js";
+import { MAX_CHAT_HISTORY, type BookSummary, type StoredChatMessage, type VisualReaderStore } from "./store.js";
 
 /**
  * IndexedDB-backed store for the web app: caches the Visual Bible and rendered
@@ -8,10 +8,12 @@ import type { BookSummary, VisualReaderStore } from "./store.js";
  * library of opened books so the reader can switch between them.
  */
 const DB_NAME = "visual-reader";
-const DB_VERSION = 2;
+// v3 adds the per-book chat-history store (additive upgrade — existing stores untouched).
+const DB_VERSION = 3;
 const BIBLE_STORE = "bibles";
 const IMAGE_STORE = "images";
 const BOOK_STORE = "books";
+const CHAT_STORE = "chats";
 
 interface BookRecord extends BookSource {
   addedAt: number;
@@ -100,6 +102,19 @@ export class IndexedDbStore implements VisualReaderStore {
     });
     await this.delete(BIBLE_STORE, id);
     await this.clearImages(id);
+    await this.deleteChatHistory(id);
+  }
+
+  async getChatHistory(bookId: string): Promise<StoredChatMessage[] | undefined> {
+    return this.get<StoredChatMessage[]>(CHAT_STORE, bookId);
+  }
+
+  async putChatHistory(bookId: string, messages: StoredChatMessage[]): Promise<void> {
+    return this.put(CHAT_STORE, bookId, messages.slice(-MAX_CHAT_HISTORY));
+  }
+
+  async deleteChatHistory(bookId: string): Promise<void> {
+    return this.delete(CHAT_STORE, bookId);
   }
 
   private async get<T>(store: string, key: string): Promise<T | undefined> {
@@ -149,6 +164,7 @@ function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(BIBLE_STORE)) db.createObjectStore(BIBLE_STORE);
       if (!db.objectStoreNames.contains(IMAGE_STORE)) db.createObjectStore(IMAGE_STORE);
       if (!db.objectStoreNames.contains(BOOK_STORE)) db.createObjectStore(BOOK_STORE);
+      if (!db.objectStoreNames.contains(CHAT_STORE)) db.createObjectStore(CHAT_STORE);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);

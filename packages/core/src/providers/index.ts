@@ -1,6 +1,7 @@
 export * from "./transport/transport.js";
 export * from "./catalog.js";
 export * from "./llm/llm-provider.js";
+export * from "./llm/chat.js";
 export * from "./llm/extraction.js";
 export * from "./llm/mock-llm-provider.js";
 export * from "./llm/claude-provider.js";
