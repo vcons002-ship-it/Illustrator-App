@@ -141,6 +141,29 @@ grounded-extraction test answers it empirically.
 - Commit/push only to `claude/visual-content-generator-BLJks`. Don't open a new PR (PR #1
   exists). Don't commit secrets.
 
+## Session 3 additions (all committed + pushed, newest first)
+1. **Reading-companion chat** (`e758fb5`) — ChatCapable seam on all six LLM providers
+   (`packages/core/src/providers/llm/chat.ts`), provider-agnostic JSON tool protocol +
+   context builder + tool loop (`packages/core/src/chat/`), worker `chat`/`chatTool`/
+   `chatCancel` messages, `ChatPanel` (packages/ui), per-book history (IndexedDB v3
+   `chats` store). Chat-only provider overrides in Settings (`chatTextProvider` /
+   `chatLocalModel` / `chatImageProvider`, default local, per-slot fallback to the book's
+   providers). In-chat render overrides resolve via `resolveModelRequest`/`resolveStyleRequest`
+   (catalog.ts). generate_image needs explicit approval (injection guard).
+2. **Computed charts** (`b751aee`) — bible **v8** (`datasets`), all four extraction-schema
+   mirrors + parity test (fixed latent bug: Claude/local never returned `worldStyle`),
+   pure stats/SVG geometry (`packages/core/src/charts/`), `DataChart`/`DataSection` (ui),
+   aside wiring in App.tsx.
+3. **Keyless search** (`de6e140`) — `WikiSearch` (Wikipedia grounding + Commons figures,
+   CORS-open `origin=*`, `Api-User-Agent` header) behind the shared `FigureSearch`
+   interface; buildProviders chains Google→Wikipedia so search/grounding always exist;
+   live-validated (`VALIDATE_FREE_SEARCH=1 pnpm test live-validation`).
+4. **Gemini-key fallback for Custom Search** (`e65b667`) — blank search key reuses the
+   Gemini key (same GCP key works when Custom Search API is enabled on its project).
+
+Still pending: the keyed live validation (Custom Search + Gemini grounding/native image)
+— waiting on the user's GEMINI_API_KEY / GOOGLE_SEARCH_API_KEY / GOOGLE_SEARCH_ENGINE_ID.
+
 ## Possible next steps (not yet built)
 - Two-pass technical extraction (extract terms → grounded re-pass) for deeper accuracy.
 - Surface retrieved-figure attribution/“open source” link in the reader caption UI.

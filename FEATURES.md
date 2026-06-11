@@ -66,12 +66,36 @@ switches from a story Visual Bible to a **Visual Atlas**:
   findings are captured as a glossary.
 - **A visualization plan** decides what's worth drawing per passage (quantitative results
   and comparisons → mechanisms/processes → structures → a visual metaphor for abstractions).
-- **Real figures first** *(optional, needs a Google Programmable Search key)* — fetches an
-  authoritative existing diagram before generating one; falls back to AI generation.
-- **Sourced facts** *(optional)* — grounds the analysis in a web search and cites the
-  sources in the glossary. Works with the Gemini reader (built-in grounding) **or** any
-  other reader, including a local LLM (via the same search engine). See SETUP.md →
-  *Scientific sources*.
+- **Real figures first** — fetches an authoritative existing diagram before generating
+  one; falls back to AI generation. Works with **zero setup** via free Wikimedia Commons
+  search; add a Google Programmable Search key for whole-web figures (your Gemini key can
+  double as the search key — enable Custom Search API on its project).
+- **Sourced facts** — grounds the analysis in a web search and cites the sources in the
+  glossary. Keyless via free Wikipedia search, or whole-web with a Custom Search key.
+  Works with the Gemini reader (built-in grounding) **or** any other reader, including a
+  local LLM. See SETUP.md → *Scientific sources*.
+- **Computed charts & statistics** — when a chapter states a real numeric series (a
+  table, results, a comparison), the analysis captures it and the reader shows a true
+  bar/line/scatter chart drawn by the app (exact axes and values — never an AI's
+  imagined numbers) plus min/max/mean/median and the trend, in a collapsible **Data**
+  section under the illustration.
+
+### 💬 Book chat (reading companion)
+Open **Chat** while reading to discuss the book with an AI that actually knows it:
+- **Spoiler-safe by default** (fiction) — the chat only sees the book up to your current
+  position and says so if you ask about later events; an *allow spoilers* toggle unlocks
+  the whole book. Technical books are always fully visible.
+- **Knows the app's analysis** — the glossary, structures/locations, chapter summaries,
+  the actual image prompts, and any extracted datasets (the "technical bible").
+- **Can use the app's tools**: search the web for sources, find real images/diagrams
+  (shown inline with links), and **generate images** with your image models — image
+  generation always asks for your approval first.
+- **Ask for render settings in plain chat** — "draw a truck, 20 steps, flux 2" picks the
+  named *installed* model, step count, and style for that one render. No settings digging.
+- **Its own model choice** — the chat defaults to a local model (free & private) and can
+  use any downloaded Ollama/WebLLM model independently of the book reader, or an API
+  provider; image generation likewise defaults to the local engine (Settings → *Book chat*).
+- **Per-book history** that survives reloads (clearable in the panel).
 
 ### ✏️ Control & correction
 - **Begin generating** button — start illustrating when you're ready; reuses anything
