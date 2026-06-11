@@ -136,7 +136,9 @@ function Overlay() {
       image,
       tier,
       store: createCacheStore(),
-      onUpdate: (idx, result) => setResults((prev) => new Map(prev).set(idx, result)),
+      onUpdate: (idx, result) => {
+        if (!cancelled) setResults((prev) => new Map(prev).set(idx, result));
+      },
       // The bible builds in the background (pages illustrate as their chapter is
       // ready); keep the UI's character/spoiler context current as it grows.
       onBibleUpdate: (bible) => {
@@ -158,6 +160,9 @@ function Overlay() {
       });
     return () => {
       cancelled = true;
+      // Stop the replaced engine's background work (bible build + renders) — the
+      // settings change builds a fresh engine, and two must never run at once.
+      engine.dispose();
     };
   }, [settings]);
 

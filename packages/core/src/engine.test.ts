@@ -435,6 +435,39 @@ describe("Engine", () => {
     expect(engine.getBible()!.storyboard.every((s) => (s.keyEvents?.length ?? 0) > 0)).toBe(true);
   });
 
+  it("dispose() stops the background build — no further work or callbacks (book switch)", async () => {
+    const llm = new MockLLMProvider();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const realExtract = llm.extractEntities.bind(llm);
+    let calls = 0;
+    vi.spyOn(llm, "extractEntities").mockImplementation(async (input) => {
+      calls++;
+      await gate; // hold chapter 0's extraction in flight
+      return realExtract(input);
+    });
+    let updates = 0;
+    const engine = new Engine({
+      llm,
+      image: new MockImageProvider(),
+      onBibleUpdate: () => updates++,
+    });
+    await engine.openBook(twoChapterBook());
+    engine.startGeneration();
+    await vi.waitFor(() => expect(calls).toBe(1)); // chapter 0's call is in flight
+
+    // The host opened ANOTHER book (it builds a new engine per book) — this one must
+    // go quiet: no further chapters, no bible updates mingling into the new book's UI.
+    engine.dispose();
+    const updatesAtDispose = updates;
+    release(); // the held LLM call now resolves…
+    await engine.whenBibleReady();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(calls).toBe(1); // …but chapter 1 was never started
+    expect(updates).toBe(updatesAtDispose); // and no late bible update leaked out
+  });
+
   it("reports prompt progress per chapter, not only after the whole book", async () => {
     const events: { kind: "bible" | "prompts"; done: number }[] = [];
     const engine = new Engine({

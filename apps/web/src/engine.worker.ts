@@ -308,6 +308,10 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     return;
   }
   try {
+    // A NEW engine is built per book — stop the previous one FIRST, or its bible loop
+    // and renders keep running and its callbacks mingle the old book's characters and
+    // status lines into the new book's UI.
+    engine?.dispose();
     post({ type: "status", message: "" });
     post({ type: "generating", value: false });
     post({ type: "paused", bible: false, images: false });

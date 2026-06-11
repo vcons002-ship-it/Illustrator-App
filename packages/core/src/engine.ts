@@ -211,6 +211,22 @@ export class Engine {
     return this.generationStarted;
   }
 
+  /**
+   * Stop ALL of this instance's background work, permanently: the bible/prompt loop
+   * (its in-flight LLM call is aborted at the next checkpoint) and image generation
+   * (in-flight renders aborted; late results dropped by the epoch guard). Hosts that
+   * build a NEW engine per opened book MUST dispose the old one first — otherwise its
+   * loops keep running (competing for the GPU/API) and its callbacks keep firing into
+   * the UI alongside the new book's, mingling status lines and character lists.
+   */
+  dispose(): void {
+    this.bibleRun++; // every loop checkpoint now reads "cancelled" → exits silently
+    this.bibleAbort?.abort(); // cut any in-flight LLM call immediately
+    this.bufferEpoch++; // late render/abort updates are dropped, not surfaced
+    this.buffer?.setGenerationEnabled(false); // abort in-flight renders, start no new ones
+    this.generationStarted = false;
+  }
+
   /** Resolves when background Visual Bible extraction for the current book is done. */
   whenBibleReady(): Promise<void> {
     return this.biblePromise ?? Promise.resolve();
