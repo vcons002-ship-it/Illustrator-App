@@ -64,7 +64,8 @@ The app builds a structured memory of the book so art stays consistent:
 - **Pick frequency & quality** — pages-per-image, and Auto/Draft/Standard/High/Ultra
   (Auto scales quality up as pages-per-image grows).
 - **Progress you can see** — "Building the Visual Bible… 3/12 chapters · 24% · pages
-  40/210", plus live token/percent feedback.
+  40/210 · 23 characters", plus live token/percent feedback; illustration prompts
+  advance chapter by chapter as the book is read.
 
 ### 🔌 Providers & privacy (bring your own, or run local)
 - **Text (story understanding):** Claude, Gemini, or OpenAI with your key — **or local**:

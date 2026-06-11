@@ -435,6 +435,57 @@ describe("Engine", () => {
     expect(engine.getBible()!.storyboard.every((s) => (s.keyEvents?.length ?? 0) > 0)).toBe(true);
   });
 
+  it("reports prompt progress per chapter, not only after the whole book", async () => {
+    const events: { kind: "bible" | "prompts"; done: number }[] = [];
+    const engine = new Engine({
+      llm: new MockLLMProvider(),
+      image: new MockImageProvider(),
+      illustrateAfter: "chapter",
+      onBibleProgress: (done) => events.push({ kind: "bible", done }),
+      onPromptProgress: (done) => events.push({ kind: "prompts", done }),
+    });
+    await engine.openBook(twoChapterBook());
+    engine.startGeneration();
+    await engine.whenBibleReady();
+
+    // Prompts visibly advanced (done > 0) BEFORE the last chapter finished extracting —
+    // the workflow bar must not sit at zero prompts while the book is being read.
+    const lastBible = events.map((e) => e.kind).lastIndexOf("bible");
+    const firstPromptsWritten = events.findIndex((e) => e.kind === "prompts" && e.done > 0);
+    expect(firstPromptsWritten).toBeGreaterThan(-1);
+    expect(firstPromptsWritten).toBeLessThan(lastBible);
+  });
+
+  it("gap-fills a chapter's missing prompts before reading the next chapter", async () => {
+    const llm = new MockLLMProvider();
+    const order: string[] = [];
+    const realExtract = llm.extractEntities.bind(llm);
+    vi.spyOn(llm, "extractEntities").mockImplementation(async (input) => {
+      order.push(`extract:${input.chapterIndex}`);
+      const bible = await realExtract(input);
+      // Simulate the model under-delivering: extraction returns NO folded keyEvents.
+      return {
+        ...bible,
+        storyboard: bible.storyboard.map(({ keyEvents: _drop, ...scene }) => scene),
+      };
+    });
+    vi.spyOn(llm, "buildImagePrompt").mockImplementation(async () => {
+      order.push("prompt");
+      return "a scene";
+    });
+
+    const engine = new Engine({ llm, image: new MockImageProvider(), illustrateAfter: "chapter" });
+    await engine.openBook(twoChapterBook());
+    engine.startGeneration();
+    await engine.whenBibleReady();
+
+    // Chapter 0's prompts were written right after IT was read — before chapter 1's
+    // extraction — so chapter mode renders early instead of waiting for the book's end.
+    const firstPrompt = order.indexOf("prompt");
+    expect(firstPrompt).toBeGreaterThan(order.indexOf("extract:0"));
+    expect(firstPrompt).toBeLessThan(order.indexOf("extract:1"));
+  });
+
   it("precomputes illustration prompts into the bible, then renders with the LLM off", async () => {
     const llm = new MockLLMProvider();
     const engine = new Engine({ llm, image: new MockImageProvider(), illustrateAfter: "book" });

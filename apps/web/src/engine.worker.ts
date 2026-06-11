@@ -88,9 +88,12 @@ function renderBibleStatus(): void {
   if (!bibleActive) return;
   const secs = Math.round((Date.now() - bibleStartMs) / 1000);
   const detail = bibleTokens > 0 ? `${bibleTokens} tokens` : "analyzing";
-  // The persistent bible line carries chapters/%/pages + this chapter's elapsed +
-  // an overall ETA (from the average time per processed chapter so far).
-  post({ type: "bibleStatus", text: `${bibleBase} · ${secs}s · ${detail}${bibleEta()}` });
+  // Live character count (from each chapter's committed bible) so the cast visibly
+  // grows as the book is read.
+  const chars = bibleCharacters > 0 ? ` · ${bibleCharacters} character${bibleCharacters === 1 ? "" : "s"}` : "";
+  // The persistent bible line carries chapters/%/pages + the cast so far + this
+  // chapter's elapsed + an overall ETA (average time per processed chapter so far).
+  post({ type: "bibleStatus", text: `${bibleBase}${chars} · ${secs}s · ${detail}${bibleEta()}` });
 }
 
 /** "· ~Xm left" from the average time per chapter processed this run, or "". */
@@ -103,6 +106,8 @@ function bibleEta(): string {
 }
 let bibleRunDone = 0;
 let bibleRunTotal = 0;
+/** Characters in the bible so far (updated on every bible commit), for the live line. */
+let bibleCharacters = 0;
 
 function stopBibleTimer(): void {
   if (bibleTimer !== undefined) {
@@ -144,9 +149,13 @@ function setBibleChapter(done: number, total: number): void {
   const percent = Math.round((done / total) * 100);
   const pagesDone = storyPageCounts.slice(0, done).reduce((a, b) => a + b, 0);
   const pages = storyPagesTotal > 0 ? ` · pages ${pagesDone}/${storyPagesTotal}` : "";
-  bibleBase =
-    `Building the Visual Bible… ${done}/${total} chapters · ${percent}%${pages} ` +
-    `(illustrating as chapters finish)`;
+  // Say what the mode actually does: chapter mode paints as it reads; book mode
+  // holds every image until the whole book is analysed (best art).
+  const when =
+    (settings?.illustrateAfter ?? "book") === "chapter"
+      ? "(illustrating as chapters finish)"
+      : "(images start after the whole book is read)";
+  bibleBase = `Building the Visual Bible… ${done}/${total} chapters · ${percent}%${pages} ${when}`;
   bibleTokens = 0;
   bibleStartMs = Date.now();
   stopBibleTimer();
@@ -155,17 +164,18 @@ function setBibleChapter(done: number, total: number): void {
 }
 
 /**
- * Precompute progress (after extraction): show a persistent line on the bible status
- * channel so the user sees prompts being written (and, when done, that image generation
- * can run without the LLM). Stops the extraction ticker — this is a separate phase.
+ * Prompt progress. Prompts are folded into each chapter's extraction, so this now
+ * arrives DURING the bible build (per chapter) as well as from the final gap-fill
+ * sweep. Mid-extraction it only advances the workflow bar — the live bible line
+ * keeps its ticker; once extraction is done, it owns the persistent line.
  */
 function setPromptProgress(done: number, total: number): void {
   if (total <= 0) return;
-  bibleActive = false;
-  stopBibleTimer();
   workflow.promptsDone = done;
   workflow.promptsTotal = total;
   postWorkflow();
+  if (bibleActive) return; // extraction still running — its live line stays up
+  stopBibleTimer();
   const model = llmLabel ? ` · ${llmLabel}` : "";
   post({
     type: "bibleStatus",
@@ -304,6 +314,7 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     pendingStart = false; // fresh open; the hook re-sends "start" if it should resume
     bibleActive = false;
     bibleRunStartMs = 0;
+    bibleCharacters = 0; // fresh book; the restored bible's onBibleUpdate re-fills it
     stopBibleTimer();
     workflow.bibleDone = 0;
     workflow.bibleTotal = 0;
@@ -350,8 +361,13 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
       onBibleProgress: (done, total) => setBibleChapter(done, total),
       onPromptProgress: (done, total) => setPromptProgress(done, total),
       // The bible builds in the background; relay each growth so the UI's
-      // character/spoiler context (and the panel) stay current.
-      onBibleUpdate: (bible) => post({ type: "opened", bible }),
+      // character/spoiler context (and the panel) stay current — and refresh the
+      // live status line so the character count grows in real time.
+      onBibleUpdate: (bible) => {
+        bibleCharacters = bible.characters.length;
+        post({ type: "opened", bible });
+        renderBibleStatus();
+      },
       onBibleNote: (message) => post({ type: "status", message }),
       illustrateAfter: settings.illustrateAfter ?? "book",
     });

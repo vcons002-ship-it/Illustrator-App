@@ -339,6 +339,11 @@ export class Engine {
       // so its units are already renderable — release any that were gated on this chapter.
       // Image generation then runs purely from those stored prompts (no LLM at render).
       this.buffer?.refresh();
+      // Gap-fill THIS chapter's prompts now (a no-op when the folded extraction covered
+      // every unit) and report prompt progress — so prompts visibly advance with each
+      // chapter, and in "chapter" mode a under-delivered chapter renders without
+      // waiting for the rest of the book.
+      if (!stop()) await this.writePromptsForUnits(this.unitIndicesForChapter(chapterIndex), myRun, ac.signal);
     }
     // Illustration prompts are produced BY extraction (folded into each chapter's call).
     // A final sweep writes a prompt for any unit the extraction didn't emit (a count
@@ -377,6 +382,18 @@ export class Engine {
           `check the text model in Settings, then use “↻ Prompts”.`,
       );
     }
+  }
+
+  /** Indices of this chapter's STORY render units, in reading order (per-chapter
+   * prompt gap-fill). */
+  private unitIndicesForChapter(chapterIndex: number): number[] {
+    if (!this.book) return [];
+    const out: number[] = [];
+    this.book.pages.forEach((page, i) => {
+      const idx = this.book!.chapters.find((c) => c.id === page.chapterId)?.index ?? 0;
+      if (idx === chapterIndex && this.isStoryPage(i)) out.push(i);
+    });
+    return out;
   }
 
   /** The chapter's render-unit page ranges, in reading order (for folded prompts). A raw
