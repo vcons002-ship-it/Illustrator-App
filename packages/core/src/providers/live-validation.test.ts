@@ -11,6 +11,7 @@ import {
   pickBestGeminiImageModel,
 } from "./image/gemini-native-image-provider.js";
 import { DirectTransport } from "./transport/transport.js";
+import { IMAGE_STYLES, LOCAL_IMAGE_MODELS, styleLoraDownload } from "./catalog.js";
 import type { VisualBible } from "../types/bible.js";
 
 /**
@@ -25,6 +26,7 @@ import type { VisualBible } from "../types/bible.js";
  *   GOOGLE_SEARCH_ENGINE_ID Programmable Search Engine id ("cx")
  *   GEMINI_API_KEY          AI Studio key (text + image + in-call grounding)
  *   GEMINI_MODEL            optional reader-model override (defaults to the provider default)
+ *   VALIDATE_DOWNLOAD_URLS  any value — HEAD-check every catalog model/LoRA URL (no key needed)
  *
  * Run: GOOGLE_SEARCH_API_KEY=… GOOGLE_SEARCH_ENGINE_ID=… GEMINI_API_KEY=… pnpm test live-validation
  */
@@ -174,6 +176,51 @@ describe.runIf(GEMINI_KEY)("LIVE Gemini grounding", () => {
       const refs = bible.glossary.find((g) => /^References \(chapter 1\)/.test(g.term));
       expect(refs, "no References glossary entry — grounded JSON call likely fell back ungrounded").toBeDefined();
       expect(refs!.definition).toMatch(/^https?:\/\//);
+    },
+    NET * 2,
+  );
+});
+
+describe.runIf(process.env["VALIDATE_DOWNLOAD_URLS"])("LIVE catalog download URLs", () => {
+  // The desktop downloader is keyless, so a gated host can never auto-download:
+  // these URLs are EXPECTED to demand a login (the catalog entry says so and the
+  // downloader's 401/403 message walks the user through a browser download).
+  const KNOWN_GATED = new Set([
+    "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/resolve/main/flux-2-klein-base-9b-fp8.safetensors",
+  ]);
+
+  async function expectDownloadable(url: string, what: string): Promise<void> {
+    const res = await fetch(url, { method: "HEAD", redirect: "follow" });
+    if (KNOWN_GATED.has(url)) {
+      expect([200, 401, 403], `${what}: gated URL vanished (${res.status})`).toContain(res.status);
+      return;
+    }
+    expect(res.status, `${what}: ${url} → ${res.status}`).toBe(200);
+    // Hosts that drop Content-Length would break the downloader's progress bar —
+    // worth knowing, but a redirect chain's final hop always carries it on HF today.
+    expect(Number(res.headers.get("content-length") ?? "0"), `${what}: empty body`).toBeGreaterThan(0);
+  }
+
+  it(
+    "every local-model component URL answers an anonymous HEAD",
+    async () => {
+      for (const model of LOCAL_IMAGE_MODELS) {
+        const files = model.files ?? [{ url: model.url, filename: model.filename, folder: "checkpoints" as const }];
+        for (const f of files) {
+          if (f.url) await expectDownloadable(f.url, `${model.id} / ${f.filename}`);
+        }
+      }
+    },
+    NET * 3,
+  );
+
+  it(
+    "every style-LoRA download URL answers an anonymous HEAD",
+    async () => {
+      for (const style of IMAGE_STYLES) {
+        const d = styleLoraDownload(style.id);
+        if (d) await expectDownloadable(d.url, `style ${style.id} / ${d.filename}`);
+      }
     },
     NET * 2,
   );

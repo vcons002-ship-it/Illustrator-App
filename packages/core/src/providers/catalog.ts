@@ -197,7 +197,7 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
   {
     id: "flux-schnell",
     label: "Flux-schnell (fp8)",
-    sizeGB: 12,
+    sizeGB: 17.2,
     note: "Highest quality · needs a strong GPU",
     filename: "flux1-schnell-fp8.safetensors",
     url: "https://huggingface.co/Comfy-Org/flux1-schnell/resolve/main/flux1-schnell-fp8.safetensors",
@@ -240,36 +240,43 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
   {
     id: "flux2-klein-9b",
     label: "Flux.2 Klein 9B (fp8)",
-    sizeGB: 19.5,
-    note: "Official open Flux.2 — excellent quality, strong GPU",
+    sizeGB: 18.5,
+    note: "Official open Flux.2 — last file needs a free Hugging Face sign-in (browser download)",
     filename: "flux-2-klein-base-9b-fp8.safetensors",
-    // Comfy-Org's repack mirror — the black-forest-labs repos are GATED on Hugging
-    // Face (401 without an accepted license + login), which the app's keyless
-    // downloader can't satisfy. Same files, ungated host.
-    url: "https://huggingface.co/Comfy-Org/flux2-klein-9B/resolve/main/split_files/diffusion_models/flux-2-klein-base-9b-fp8.safetensors",
+    // Comfy-Org's repack repo no longer hosts the Klein DIFFUSION weights (it was
+    // renamed to vae-text-encorder-for-flux-klein-9b and stripped to encoder+VAE);
+    // the only canonical source is black-forest-labs, which is gated (401 without a
+    // logged-in license acceptance). The ungated mirrors are zero-download personal
+    // repos — not something an auto-downloader should trust. URLs below match the
+    // current official image_flux2_text_to_image_9b template (verified 2026-06-11).
+    url: "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/resolve/main/flux-2-klein-base-9b-fp8.safetensors",
     family: "flux2",
     clipType: "flux2",
     // Klein base is NOT guidance-distilled (unlike Flux.2-dev): real CFG 5, no
     // FluxGuidance node — per the official image_flux2_text_to_image_9b template.
     sampler: { cfg: 5, sampler: "euler", scheduler: "simple", steps: 20 },
+    // The gated diffusion file goes LAST: the ungated encoder + VAE download
+    // unattended first, so after it fails with the "download it in your browser"
+    // hint, dropping that one file into diffusion_models completes the model
+    // (the downloader skips finished files on retry).
     files: [
-      {
-        filename: "flux-2-klein-base-9b-fp8.safetensors",
-        folder: "diffusion_models",
-        url: "https://huggingface.co/Comfy-Org/flux2-klein-9B/resolve/main/split_files/diffusion_models/flux-2-klein-base-9b-fp8.safetensors",
-        sizeGB: 9.7,
-      },
       {
         filename: "qwen_3_8b_fp8mixed.safetensors",
         folder: "text_encoders",
-        url: "https://huggingface.co/Comfy-Org/flux2-klein-9B/resolve/main/split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors",
-        sizeGB: 9.1,
+        url: "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/resolve/main/split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors",
+        sizeGB: 8.7,
       },
       {
         filename: "full_encoder_small_decoder.safetensors",
         folder: "vae",
-        url: "https://huggingface.co/Comfy-Org/flux2-klein-9B/resolve/main/split_files/vae/full_encoder_small_decoder.safetensors",
-        sizeGB: 0.7,
+        url: "https://huggingface.co/black-forest-labs/FLUX.2-small-decoder/resolve/main/full_encoder_small_decoder.safetensors",
+        sizeGB: 0.25,
+      },
+      {
+        filename: "flux-2-klein-base-9b-fp8.safetensors",
+        folder: "diffusion_models",
+        url: "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/resolve/main/flux-2-klein-base-9b-fp8.safetensors",
+        sizeGB: 9.6,
       },
     ],
   },
@@ -339,10 +346,10 @@ export interface StyleLoraRef {
    * this LoRA on demand. Optional — when absent there's no auto-download (the
    * style still works via its prompt text, or a LoRA you install yourself).
    *
-   * NOTE: URLs below are best-effort community sources and are NOT verified in
-   * this environment; downloads fail gracefully, and this is the one place to
-   * fix/add a source. Saved locally as `${name}.safetensors` to match the
-   * by-style-id lookup the backends use.
+   * NOTE: URLs below are best-effort community sources, live-verified 2026-06-11
+   * (HEAD 200, anonymous); downloads fail gracefully if a host moves, and this is
+   * the one place to fix/add a source. Saved locally as `${name}.safetensors` to
+   * match the by-style-id lookup the backends use.
    */
   url?: string;
   /** Saved filename (defaults to `${name}.safetensors`). */
@@ -448,17 +455,11 @@ export const IMAGE_STYLES: ImageStyle[] = [
     description: "Bold western comic art with inked outlines and halftones — pairs with the comic-panel view.",
     promptSuffix:
       "western comic book art, bold ink outlines, halftone shading, saturated flat colors, dramatic framing",
-    local: {
-      lora: {
-        name: "comic",
-        strength: 0.8,
-        trigger: "Comic Book",
-        url: "https://huggingface.co/artificialguybr/ComicBookRedmond-V2/resolve/main/ComicBookRedmond-V2-Comic-ComicRedmAF.safetensors",
-        filename: "comic.safetensors",
-        sizeMB: 170,
-        family: "sdxl",
-      },
-    },
+    // No bundled download since 2026-06: the ComicBookRedmond repos went private on
+    // Hugging Face (anonymous fetch now 401s) and no reputable ungated SDXL comic
+    // LoRA replaces them — the prompt suffix carries the style; drop a LoRA named
+    // comic.safetensors into the engine's loras folder to boost it.
+    local: { lora: { name: "comic", strength: 0.8, trigger: "Comic Book" } },
   },
   {
     id: "animation-3d",
@@ -520,10 +521,12 @@ export const IMAGE_STYLES: ImageStyle[] = [
       lora: {
         name: "storybook",
         strength: 0.8,
-        trigger: "Storybook Redmond",
-        url: "https://huggingface.co/artificialguybr/StoryBookRedmond/resolve/main/StoryBookRedmond.safetensors",
+        // V2 of the Redmond storybook LoRA (V1's published filename changed); the
+        // trigger is the model's actual training tag, from the repo's README.
+        trigger: "KidsRedmAF, Kids Book",
+        url: "https://huggingface.co/artificialguybr/StoryBookRedmond-V2/resolve/main/StorybookRedmondV2-KidsBook-KidsRedmAF.safetensors",
         filename: "storybook.safetensors",
-        sizeMB: 170,
+        sizeMB: 163,
         family: "sdxl",
       },
     },

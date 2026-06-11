@@ -94,6 +94,19 @@ field `generationConfig.responseFormat.image.aspectRatio` instead of our
 ours is rejected. JSON-mode + search-tool compatibility is undocumented; the strict
 grounded-extraction test answers it empirically.
 
+**Catalog download URLs live-validated (2026-06-11)** — run any time with
+`VALIDATE_DOWNLOAD_URLS=1 pnpm test live-validation` (no keys needed). Fixed that day:
+- **Flux.2 Klein 9B**: `Comfy-Org/flux2-klein-9B` was renamed/stripped to
+  `vae-text-encorder-for-flux-klein-9b` (encoder+VAE only) — the diffusion fp8 now only
+  exists on gated `black-forest-labs/FLUX.2-klein-base-9b-fp8` (anonymous 401). Catalog now
+  downloads encoder+VAE first (VAE moved to ungated `black-forest-labs/FLUX.2-small-decoder`)
+  and fails last on the gated file with the downloader's browser-download hint. The ungated
+  mirrors on HF are zero-download personal repos — rejected as an auto-download source.
+- **comic LoRA**: ComicBookRedmond repos went private → URL dropped (style is prompt-only now).
+- **storybook LoRA**: repointed to StoryBookRedmond-V2 (V1 filename changed); trigger fixed
+  to the real training tag `KidsRedmAF, Kids Book`.
+- **flux-schnell**: size corrected 12 → 17.2 GB (actual file).
+
 ---
 
 ## Credentials + environment setup the user is doing
