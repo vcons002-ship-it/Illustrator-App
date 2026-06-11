@@ -337,8 +337,17 @@ fn download_model_with_progress(
         req = req.header(reqwest::header::RANGE, format!("bytes={offset}-"));
     }
     let mut resp = req.send().map_err(|e| e.to_string())?;
+    // 416 → our .part is at/beyond the file's full size (a stale partial from an
+    // earlier run, or clobbered by manual file moves in the models folder). It can
+    // never resume — discard it and restart this download from zero, instead of
+    // failing every retry forever.
+    if offset > 0 && resp.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+        let _ = std::fs::remove_file(&part);
+        offset = 0;
+        resp = client.get(&model.url).send().map_err(|e| e.to_string())?;
+    }
     if !resp.status().is_success() {
-        return Err(format!("Download failed ({}).", resp.status()));
+        return Err(format!("Download of {} failed ({}).", model.filename, resp.status()));
     }
     // 206 → the server honours the Range and we append; anything else (200, or we
     // asked from 0) → start the .part over from scratch.
