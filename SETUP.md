@@ -352,6 +352,31 @@ You have two ways to get real art:
 connect a local Stable Diffusion server — see
 [Run images on your own GPU](#run-images-on-your-own-gpu-automatic1111-or-comfyui).
 
+### Scientific sources (technical books — optional)
+
+For a book imported as **technical**, the app can pull in **real figures** and **sourced
+facts** instead of (or before) generating. Both are optional and live under **Settings →
+Scientific sources**. They use Google's Programmable Search Engine, which needs **two**
+credentials (separate from your Gemini key):
+
+1. **Search engine ID (`cx`)** — create a free engine at
+   <https://programmablesearchengine.google.com> → enable **Image search** and **Search the
+   entire web** → copy its **Search engine ID**.
+2. **Custom Search API key** — in the Google Cloud console
+   (<https://console.cloud.google.com>): pick/create a project → **APIs & Services → Library**
+   → enable **Custom Search API** → **Credentials → Create credentials → API key**.
+
+Free tier: ~100 searches/day. Then:
+
+- **Real figures** — each technical illustration first searches for an existing diagram of
+  the concept; if found it's shown (with source attribution) and cached, otherwise the app
+  generates one.
+- **Ground analysis in real sources** *(checkbox)* — definitions/quantities are grounded in
+  a web search and the sources are cited in the book's glossary. With the **Gemini** text
+  provider this uses its built-in Google Search (your Gemini key); with **any other** reader
+  — including a **local LLM** — it uses the search engine above. So a fully local read can
+  still produce sourced facts.
+
 **C) On-device text (no key):** set **Text** to **On my computer**. There are two
 ways to run the story-understanding LLM locally — pick one under **How to run it**:
 

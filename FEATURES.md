@@ -7,17 +7,22 @@ see **[SETUP.md](./SETUP.md)**; for the technical architecture, see **[README.md
 
 ## What it is
 
-**Visual Reader illustrates a book as you read it.** You open an EPUB, and the app
-quietly reads the story, learns the characters and places, and paints a picture for
-each stretch of pages — keeping everyone looking consistent and never spoiling what's
-ahead. It runs on your own machine and can work fully offline.
+**Visual Reader illustrates a book as you read it.** You open a book — an EPUB, a text
+or Markdown file, a PDF, or text you paste in — and the app quietly reads the story,
+learns the characters and places, and paints a picture for each stretch of pages —
+keeping everyone looking consistent and never spoiling what's ahead. It runs on your own
+machine and can work fully offline. Non-fiction (papers, textbooks) can be read in a
+**technical mode** that illustrates concepts and diagrams instead of story scenes.
 
 ---
 
 ## Feature list
 
 ### 📖 Reading & illustrations
-- **Open any EPUB** (or click *Load sample* to try it instantly).
+- **Open any book** — EPUB, plain text (`.txt`), Markdown, HTML, or PDF; or **Paste text**
+  to read/illustrate any article or excerpt. (Or click *Load sample* to try it instantly.)
+- **Test image** — type any prompt and render one image with the current model/style to
+  quickly try providers, styles, and LoRAs without opening a book.
 - **Clean reader** with chapter headings and page dividers.
 - **One illustration per page-group** — you choose how many pages share an image
   (any number), or one image per chapter. Fewer pages = more frequent, quicker art;
@@ -52,6 +57,21 @@ The app builds a structured memory of the book so art stays consistent:
 - **Spoilers** flagged so their imagery stays hidden until you reach them.
 - **Skips non-story pages** — title page, copyright, table of contents, dedication,
   "about the author", etc. are read past, not illustrated.
+
+### 🔬 Technical / scientific mode (non-fiction)
+Import a book as **technical** (a toggle on the Paste-text / file flow) and the app
+switches from a story Visual Bible to a **Visual Atlas**:
+- **Tracks structures, systems, and data** instead of characters/outfits — recurring
+  apparatus get consistent visual descriptions, and key definitions, quantities, and
+  findings are captured as a glossary.
+- **A visualization plan** decides what's worth drawing per passage (quantitative results
+  and comparisons → mechanisms/processes → structures → a visual metaphor for abstractions).
+- **Real figures first** *(optional, needs a Google Programmable Search key)* — fetches an
+  authoritative existing diagram before generating one; falls back to AI generation.
+- **Sourced facts** *(optional)* — grounds the analysis in a web search and cites the
+  sources in the glossary. Works with the Gemini reader (built-in grounding) **or** any
+  other reader, including a local LLM (via the same search engine). See SETUP.md →
+  *Scientific sources*.
 
 ### ✏️ Control & correction
 - **Begin generating** button — start illustrating when you're ready; reuses anything
