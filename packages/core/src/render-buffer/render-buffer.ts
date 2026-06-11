@@ -65,12 +65,13 @@ export class RenderBuffer {
 
   private generationEnabled: boolean;
   /**
-   * A single unit to render next, ahead of the normal in-order schedule. Set only by
-   * an EXPLICIT user action (regenerate this image) — never by passive scrolling — so
-   * "regenerate" is immediate while ordinary generation stays strictly in order.
-   * Cleared once that unit settles.
+   * Units to render next, ahead of the in-order schedule, in REQUEST order (FIFO).
+   * Pushed only by EXPLICIT user actions (regenerate this image) — never by passive
+   * scrolling — so clicking several redos renders them one after another in the order
+   * clicked (bounded by `maxConcurrent`), not all at once or last-click-first. Each
+   * entry is removed once its render settles.
    */
-  private priorityPage: number | undefined;
+  private readonly priorityQueue: number[] = [];
   private readonly inflight = new Set<number>();
   /** Abort controller per in-flight render, so a pause can cancel them mid-flight. */
   private readonly controllers = new Map<number, AbortController>();
@@ -121,7 +122,7 @@ export class RenderBuffer {
   /** Drop every result so the whole book re-renders (regenerate all images). */
   invalidateAll(): void {
     this.results.clear();
-    this.priorityPage = undefined; // back to a clean in-order pass
+    this.priorityQueue.length = 0; // back to a clean in-order pass
     this.pump();
   }
 
@@ -137,11 +138,14 @@ export class RenderBuffer {
   }
 
   /**
-   * Render one unit next, ahead of the in-order schedule — for the explicit
-   * "regenerate this image" action only. Cleared automatically once it settles.
+   * Queue one unit to render ahead of the in-order schedule — for the explicit
+   * "regenerate this image" action only. Multiple calls form a FIFO queue, so several
+   * redos render in the order requested; each entry clears once it settles. A unit
+   * already queued isn't added twice (a double-click is a no-op).
    */
   prioritize(pageIndex: number): void {
-    this.priorityPage = clamp(pageIndex, 0, this.totalPages - 1);
+    const p = clamp(pageIndex, 0, this.totalPages - 1);
+    if (!this.priorityQueue.includes(p)) this.priorityQueue.push(p);
     this.pump();
   }
 
@@ -158,15 +162,15 @@ export class RenderBuffer {
       this.canRender(p);
 
     const out: number[] = [];
-    // Explicit one-shot priority (regenerate this image) renders first.
-    if (this.priorityPage !== undefined && want(this.priorityPage)) out.push(this.priorityPage);
+    // Explicit redo requests render first, in the ORDER they were clicked.
+    for (const p of this.priorityQueue) if (want(p)) out.push(p);
 
     // Strict in-order generation, front to back through the whole book: always fill
     // from the FIRST un-rendered unit forward. The reader's position never reorders
     // or bounds this (scrolling only affects the reveal) — staying ahead of the
     // reader falls out of simply starting at page one and not stopping.
     for (let p = 0; p <= last; p++) {
-      if (p === this.priorityPage) continue; // already considered above
+      if (this.priorityQueue.includes(p)) continue; // already considered above
       if (want(p)) out.push(p);
     }
     return out;
@@ -251,7 +255,8 @@ export class RenderBuffer {
   private settle(pageIndex: number, result: ImageResult): void {
     this.inflight.delete(pageIndex);
     this.results.set(pageIndex, result);
-    if (pageIndex === this.priorityPage) this.priorityPage = undefined; // one-shot done
+    const qi = this.priorityQueue.indexOf(pageIndex);
+    if (qi >= 0) this.priorityQueue.splice(qi, 1); // this redo is done; the rest keep their order
     this.onUpdate?.(pageIndex, result);
     // A slot freed up — schedule the next highest-priority page.
     this.pump();

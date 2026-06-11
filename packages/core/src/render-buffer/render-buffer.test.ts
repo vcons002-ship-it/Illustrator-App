@@ -93,6 +93,41 @@ describe("RenderBuffer", () => {
     expect(started).toEqual([0, 7, 1]); // …then strictly in order again
   });
 
+  it("multiple redos render in the order clicked, one at a time (FIFO, not all at once)", async () => {
+    const { render, started, finish } = deferredRenderer();
+    // Local-engine style: one render at a time. The classic "redo 12, then 10, then 11"
+    // must replay in CLICK order — not last-click-first, and not all at once.
+    const buf = new RenderBuffer({ totalPages: 20, render, maxConcurrent: 1 });
+    // Seed everything so only explicit redos drive rendering (no in-order backfill).
+    for (let p = 0; p < 20; p++) buf.seed(p, ready(p));
+
+    buf.prioritize(12);
+    buf.prioritize(10);
+    buf.prioritize(11);
+    buf.invalidate(12); // each redo drops the cached image…
+    buf.invalidate(10);
+    buf.invalidate(11);
+
+    expect(started).toEqual([12]); // only ONE in flight, the first clicked
+    await finish(12);
+    expect(started).toEqual([12, 10]); // then the second clicked
+    await finish(10);
+    expect(started).toEqual([12, 10, 11]); // then the third — strict request order
+  });
+
+  it("a double-click on the same redo doesn't queue it twice", async () => {
+    const { render, started, finish } = deferredRenderer();
+    const buf = new RenderBuffer({ totalPages: 20, render, maxConcurrent: 1 });
+    for (let p = 0; p < 20; p++) buf.seed(p, ready(p));
+
+    buf.invalidate(5);
+    buf.prioritize(5);
+    buf.prioritize(5); // double-click
+    expect(started).toEqual([5]);
+    await finish(5);
+    expect(started).toEqual([5]); // not rendered again
+  });
+
   it("invalidate re-queues a settled page (the 'paint forward' building block)", async () => {
     const { render, started, finish } = deferredRenderer();
     const buf = new RenderBuffer({ totalPages: 2, render, maxConcurrent: 2 });
