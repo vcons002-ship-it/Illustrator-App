@@ -12,7 +12,9 @@ import {
   getImageStyle,
   getProvider,
   ollamaModelMatches,
+  qualityProfile,
   resolveAssetName,
+  resolveQuality,
   styleLoraDownload,
   type LocalTextServerId,
   type ProviderInfo,
@@ -377,14 +379,22 @@ export function SettingsPanel({
                   imageQuality: e.target.value as "auto" | "draft" | "standard" | "high" | "ultra",
                 })
               }
-              title="Auto scales with pages-per-image. Higher levels use more steps + resolution (slower)."
+              title="Auto scales with pages-per-image. Higher levels use more steps + a larger canvas (slower, more VRAM). Override to save time or fit your GPU."
             >
-              <option value="auto">Auto (scale with frequency)</option>
-              <option value="draft">Draft (fastest)</option>
-              <option value="standard">Standard</option>
-              <option value="high">High</option>
-              <option value="ultra">Ultra (slowest)</option>
+              <option value="auto">
+                Auto → {autoQualityLabel(value.pagesPerImage ?? 3)} (scales with pages-per-image)
+              </option>
+              <option value="draft">Draft · {qualityProfile("draft").width}px · fastest</option>
+              <option value="standard">Standard · {qualityProfile("standard").width}px</option>
+              <option value="high">High · {qualityProfile("high").width}px</option>
+              <option value="ultra">Ultra · {qualityProfile("ultra").width}px · slowest</option>
             </select>
+            <span style={{ opacity: 0.55, fontSize: 11 }}>
+              Auto by pages-per-image: 1 → Draft, 2–4 → Standard, 5–7 → High, 8+ or whole chapter →
+              Ultra. Pick a fixed level to render faster or if a big canvas is too much for your GPU.
+              Local models cap the canvas to what they handle well (Flux/Flux.2/Qwen ≤ 1536, Z-Image
+              ≤ 1280, SDXL ≤ 1024, SD1.5 ≤ 768).
+            </span>
           </label>
 
           {sameVendorNative(value) && <NativeModeRow value={value} set={set} />}
@@ -556,6 +566,13 @@ function ProgressBar({ pct }: { pct: number }) {
  * "Download style pack" button when the catalog has a source; and always a
  * paste-a-URL field so any LoRA can be fetched for this style.
  */
+/** What "Auto" image quality resolves to at the given cadence, e.g. "Ultra (1536px)". */
+function autoQualityLabel(pagesPerImage: number | "chapter"): string {
+  const level = resolveQuality("auto", pagesPerImage);
+  const name = level.charAt(0).toUpperCase() + level.slice(1);
+  return `${name} (${qualityProfile(level).width}px)`;
+}
+
 /** True when one vendor (Gemini/OpenAI) drives BOTH text and images with a key set —
  * the only situation where "one API" native mode can engage. */
 function sameVendorNative(v: ReaderSettings): boolean {

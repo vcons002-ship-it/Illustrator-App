@@ -63,7 +63,10 @@ The app builds a structured memory of the book so art stays consistent:
   switching models), **all images**, or just **this image** (re-roll the one you're on).
 - **Pre-render the whole book** in one go.
 - **Pick frequency & quality** — pages-per-image, and Auto/Draft/Standard/High/Ultra
-  (Auto scales quality up as pages-per-image grows).
+  (Auto scales quality up as pages-per-image grows: 1→Draft, 2–4→Standard, 5–7→High,
+  8+/whole-chapter→Ultra). The picker shows what Auto resolves to and each level's
+  canvas size, so you can drop to a faster level or one your GPU can handle; advanced
+  users can also override sampler steps and CFG/guidance on a local engine.
 - **Progress you can see** — "Building the Visual Bible… 3/12 chapters · 24% · pages
   40/210 · 23 characters", plus live token/percent feedback; illustration prompts
   advance chapter by chapter as the book is read.
