@@ -804,6 +804,38 @@ describe("Engine", () => {
     expect(call).toBeDefined();
   });
 
+  it("keeps a reference image uploaded WHILE a later chapter is being extracted", async () => {
+    const llm = new MockLLMProvider();
+    const store = new InMemoryStore();
+    let releaseCh1!: () => void;
+    const ch1Gate = new Promise<void>((r) => (releaseCh1 = r));
+    const realExtract = llm.extractEntities.bind(llm);
+    vi.spyOn(llm, "extractEntities").mockImplementation(async (input) => {
+      if (input.chapterIndex === 1) await ch1Gate; // hold chapter 1's long extraction
+      return realExtract(input);
+    });
+    const engine = new Engine({ llm, image: new MockImageProvider(), store });
+    await engine.openBook(twoChapterBook());
+    engine.startGeneration();
+
+    // Chapter 0 has committed (Aria exists); chapter 1's extraction is now in flight.
+    await vi.waitFor(() => expect(engine.getBible()!.characters.some((c) => c.name === "Aria")).toBe(true));
+    const aria = engine.getBible()!.characters.find((c) => c.name === "Aria")!;
+
+    // Upload a reference mid-extraction — the snapshot chapter 1 was built from predates it.
+    await engine.addCharacterReference(aria.id, { bytes: new Uint8Array([7]).buffer, mimeType: "image/png" });
+    const refId = "book-2c:charref:char-aria:0";
+    expect(referenceIdsOf(engine.getBible()!.characters.find((c) => c.id === aria.id)!.anchor)).toEqual([refId]);
+
+    releaseCh1(); // chapter 1's extraction commits its (pre-upload) snapshot…
+    await engine.whenBibleReady();
+
+    // …but the upload must survive — not be clobbered by the stale extraction result.
+    const after = engine.getBible()!.characters.find((c) => c.id === aria.id)!;
+    expect(referenceIdsOf(after.anchor)).toEqual([refId]);
+    expect(await store.getImage(refId)).toBeDefined();
+  });
+
   it("updateCharacter applies an edited outfit list and persists it", async () => {
     const store = new InMemoryStore();
     const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });

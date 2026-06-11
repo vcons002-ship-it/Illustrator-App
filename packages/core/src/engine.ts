@@ -342,7 +342,11 @@ export class Engine {
       // in-flight work isn't wasted; the loop then stops at the next iteration's `stop()`.)
       if (cancelled()) return;
       if (next) {
-        this.bible = next;
+        // `next` was derived from the bible SNAPSHOT taken before this (long) LLM call —
+        // so a reference image the user uploaded mid-extraction would be clobbered here.
+        // Extraction never owns reference images, so re-apply the CURRENT bible's uploads
+        // onto the result (matched by id/name/alias, surviving any consolidate/rename).
+        this.bible = carryReferenceImages(this.bible!, next);
       } else {
         this.bible = markChapterProcessed(this.bible!, chapterIndex);
         this.opts.onBibleNote?.(`Chapter ${chapterIndex + 1} analysis failed — continuing.`);
