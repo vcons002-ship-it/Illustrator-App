@@ -10,7 +10,7 @@ import { GeminiNativeImageProvider, pickBestGeminiImageModel } from "./image/gem
 import { OpenAIImageProvider } from "./image/openai-image-provider.js";
 import { OpenAINativeImageProvider } from "./image/openai-native-image-provider.js";
 import { FluxProvider } from "./image/flux-provider.js";
-import { ComfyUIBackend, resolveAssetName } from "./image/local-engine/comfyui-backend.js";
+import { ComfyUIBackend, assetStem, pickComponentAsset, resolveAssetName } from "./image/local-engine/comfyui-backend.js";
 import { Automatic1111Backend } from "./image/local-engine/automatic1111-backend.js";
 import { WebLLMProvider, parseExtraction } from "./llm/webllm-provider.js";
 import { LocalServerLLMProvider } from "./llm/local-server-provider.js";
@@ -831,6 +831,31 @@ describe("LocalServerLLMProvider", () => {
   });
 });
 
+describe("assetStem / pickComponentAsset (split-file variant matching)", () => {
+  it("strips precision/quant qualifiers so variants share a stem", () => {
+    expect(assetStem("qwen_3_8b_fp8mixed.safetensors")).toBe("qwen-3-8b");
+    expect(assetStem("qwen_3_8b.safetensors")).toBe("qwen-3-8b"); // same component, no quant
+    expect(assetStem("flux-2-klein-base-9b-fp8.safetensors")).toBe("flux-2-klein-base-9b");
+    expect(assetStem("flux-2-klein-base-9b-fp16.safetensors")).toBe("flux-2-klein-base-9b");
+    expect(assetStem("model-Q4_K_M.gguf")).toBe("model");
+  });
+
+  it("matches exact, then a same-stem variant, then a family pattern", () => {
+    const installed = ["qwen_3_8b.safetensors", "clip_l.safetensors"];
+    // No exact `_fp8mixed`, but the same-stem variant is accepted.
+    expect(pickComponentAsset(installed, "qwen_3_8b_fp8mixed.safetensors", [/qwen.?3/i])).toBe("qwen_3_8b.safetensors");
+    // Nothing matching the wanted name → fall back to the family regex.
+    expect(pickComponentAsset(["mistral3-fp8.safetensors"], "qwen_3_8b_fp8mixed.safetensors", [/mistral/i])).toBe(
+      "mistral3-fp8.safetensors",
+    );
+    // VAE by name hint when no exact/variant.
+    expect(pickComponentAsset(["flux2_full_encoder.safetensors"], "full_encoder_small_decoder.safetensors", [], ["encoder"])).toBe(
+      "flux2_full_encoder.safetensors",
+    );
+    expect(pickComponentAsset(["unrelated.safetensors"], "qwen_3_8b.safetensors", [/qwen/i])).toBeUndefined();
+  });
+});
+
 describe("createImageProvider local", () => {
   it("requires an engine, then delegates to the backend with the chosen model", async () => {
     expect(() => createImageProvider("local")).toThrow(/running engine/);
@@ -1027,6 +1052,28 @@ describe("ComfyUI prompt formatting by family", () => {
     await expect(backend.generate({ ...imageInput, modelFamily: "flux2" }, "flux2-dev.safetensors")).rejects.toThrow(
       /Flux\.2 needs/i,
     );
+  });
+
+  it("Flux.2 Klein resolves a same-family VARIANT encoder/VAE (different quant / naming)", async () => {
+    // The user dropped in differently-named-but-compatible files: the Qwen-3 encoder
+    // WITHOUT the catalog's `_fp8mixed` suffix, and a Flux.2 VAE under another name.
+    const t = new FakeTransport((req) => {
+      if (req.url.endsWith("/object_info/VAELoader"))
+        return { json: { VAELoader: { input: { required: { vae_name: [["flux2_full_encoder.safetensors"]] } } } } };
+      if (req.url.endsWith("/object_info/CLIPLoader"))
+        return { json: { CLIPLoader: { input: { required: { clip_name: [["qwen_3_8b.safetensors"]] } } } } };
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
+      if (req.url.includes("/history/"))
+        return { json: { p1: { outputs: { "9": { images: [{ filename: "f.png", subfolder: "", type: "output" }] } } } } };
+      return { bytes: new TextEncoder().encode("IMG").buffer };
+    });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    // The catalog Klein filename → catalog-first wants qwen_3_8b_fp8mixed + full_encoder_small_decoder.
+    await backend.generate({ ...imageInput, modelFamily: "flux2" }, "flux-2-klein-base-9b-fp8.safetensors");
+    const wf = workflowOf(t);
+    expect(wf["12"]!.inputs.clip_name).toBe("qwen_3_8b.safetensors"); // variant encoder accepted
+    expect(wf["12"]!.inputs.type).toBe("flux2"); // catalog clip type still applied
+    expect(wf["13"]!.inputs.vae_name).toBe("flux2_full_encoder.safetensors"); // variant VAE accepted
   });
 
   it("an all-in-one Flux.2 checkpoint (Klein) loads via CheckpointLoaderSimple with Flux sampling", async () => {

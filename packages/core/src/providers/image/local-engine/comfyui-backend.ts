@@ -159,91 +159,61 @@ export class ComfyUIBackend implements LocalEngineBackend {
   }
 
   /**
-   * Resolve the text encoder + VAE for a separate-component model. **Catalog-first**:
-   * when the chosen model is a catalog entry with `files`, use its exact encoder/VAE
-   * filenames and CLIPLoader `type` — no guessing. Otherwise auto-discover from
-   * ComfyUI's enums per family: Flux.1 (UNET-only) needs DualCLIPLoader (t5xxl +
-   * clip_l, type "flux"); Flux.2 its Mistral-3/Qwen-3 encoder (type "flux2"); Z-Image
-   * its Qwen-3-4B encoder (type "lumina2"); Qwen-Image its Qwen-2.5-VL encoder (type
-   * "qwen_image"). Throws an actionable error when the required files aren't installed
-   * instead of letting the graph fail cryptically.
+   * Resolve the text encoder + VAE for a separate-component model, accepting same-family
+   * VARIANTS so a differently-named/quantised file still runs. Resolution order per
+   * component: exact catalog filename → variant by stem (ignoring fp8/fp16/Q4… + extension)
+   * → family heuristic (encoder by CLIP-type regex, VAE by name hints). Families: Flux.1
+   * (UNET-only) uses DualCLIPLoader (t5xxl + clip_l, type "flux"); Flux.2 a Mistral-3/Qwen-3
+   * encoder (type "flux2"); Z-Image a Qwen-3 encoder (type "lumina2"); Qwen-Image a
+   * Qwen-2.5-VL encoder (type "qwen_image"). Throws an actionable error when nothing
+   * compatible is installed, instead of letting the graph fail cryptically.
    */
   private async resolveComponents(family: ModelFamily, model: string): Promise<DiffusionComponents> {
     const vaes = await this.enumValues("VAELoader", "vae_name");
-    const pickVae = (...hints: string[]): string | undefined =>
-      vaes.find((v) => hints.some((h) => v.toLowerCase().includes(h)));
 
-    // Catalog-first: the entry knows its exact component files + clip type.
+    // Flux.1 UNET-only (not a split-file catalog family): DualCLIPLoader (t5xxl + clip_l).
+    if (family !== "flux2" && family !== "zimage" && family !== "qwenimage") {
+      const clips = await this.enumValues("DualCLIPLoader", "clip_name1");
+      const t5 = clips.find((c) => /t5/i.test(c));
+      const clipL = clips.find((c) => /clip[_-]?l/i.test(c)) ?? clips.find((c) => /clip/i.test(c) && !/t5/i.test(c));
+      const vae = pickComponentAsset(vaes, undefined, [], ["ae", "flux"]);
+      if (!t5 || !clipL || !vae) {
+        throw new Error(
+          "This Flux model is diffusion-only and needs t5xxl + clip_l text encoders and the " +
+            "Flux VAE (ae.safetensors) installed in ComfyUI, or use an all-in-one Flux checkpoint.",
+        );
+      }
+      return {
+        textEncoder: { class_type: "DualCLIPLoader", inputs: { clip_name1: t5, clip_name2: clipL, type: "flux" } },
+        vaeName: vae,
+        weightDtype: "default",
+      };
+    }
+
+    // Split-file families. The catalog entry (when the chosen model is one) supplies the
+    // exact wanted filenames + CLIPLoader `type`; otherwise the family heuristic does.
+    const clips = await this.enumValues("CLIPLoader", "clip_name");
     const entry = catalogEntryForModel(model);
-    const wantedEncoder = entry?.files?.find((f) => f.folder === "text_encoders");
-    const wantedVae = entry?.files?.find((f) => f.folder === "vae");
-    if (entry?.clipType && wantedEncoder && wantedVae) {
-      const clips = await this.enumValues("CLIPLoader", "clip_name");
-      const byName = (names: string[], wanted: string): string | undefined =>
-        names.find((n) => n.toLowerCase() === wanted.toLowerCase());
-      const encoder = byName(clips, wantedEncoder.filename);
-      const vae = byName(vaes, wantedVae.filename);
-      if (!encoder || !vae) {
-        const missing = [
-          ...(encoder ? [] : [`${wantedEncoder.filename} (models/text_encoders)`]),
-          ...(vae ? [] : [`${wantedVae.filename} (models/vae)`]),
-        ].join(" and ");
-        throw new Error(
-          `${entry.label} also needs ${missing}. Use the Download button in Settings → ` +
-            "Local model to fetch all its files (if you just downloaded them, restart the engine).",
-        );
-      }
-      return {
-        textEncoder: { class_type: "CLIPLoader", inputs: { clip_name: encoder, type: entry.clipType } },
-        vaeName: vae,
-        weightDtype: "default",
-      };
-    }
-
-    if (family === "flux2" || family === "zimage" || family === "qwenimage") {
-      const clips = await this.enumValues("CLIPLoader", "clip_name");
-      const heuristics: Record<
-        string,
-        { clip: RegExp; vae: string[]; type: string; what: string }
-      > = {
-        // Flux.2-dev ships a Mistral-3 encoder; Klein a Qwen-3 one — accept both.
-        flux2: { clip: /mistral|flux.?2|qwen.?3/i, vae: ["flux2", "flux.2", "flux", "encoder"], type: "flux2", what: "Flux.2" },
-        zimage: { clip: /qwen.?3|qwen/i, vae: ["ae.", "z_image", "z-image"], type: "lumina2", what: "Z-Image" },
-        qwenimage: { clip: /qwen.?2\.5|qwen.*vl|qwen/i, vae: ["qwen"], type: "qwen_image", what: "Qwen-Image" },
-      };
-      const h = heuristics[family]!;
-      const encoder = clips.find((c) => h.clip.test(c));
-      const vae = pickVae(...h.vae);
-      if (!encoder || !vae) {
-        throw new Error(
-          `${h.what} needs its text encoder and VAE installed in ComfyUI ` +
-            "(models/text_encoders and models/vae). Use the Download button in Settings → " +
-            "Local model to fetch all its files, or pick an all-in-one SD/SDXL checkpoint.",
-        );
-      }
-      return {
-        textEncoder: { class_type: "CLIPLoader", inputs: { clip_name: encoder, type: h.type } },
-        vaeName: vae,
-        weightDtype: "default",
-      };
-    }
-
-    // Flux.1 UNET-only: DualCLIPLoader (t5xxl + clip_l) + the ae.safetensors VAE.
-    const clips = await this.enumValues("DualCLIPLoader", "clip_name1");
-    const t5 = clips.find((c) => /t5/i.test(c));
-    const clipL = clips.find((c) => /clip[_-]?l/i.test(c)) ?? clips.find((c) => /clip/i.test(c) && !/t5/i.test(c));
-    const vae = pickVae("ae", "flux");
-    if (!t5 || !clipL || !vae) {
+    const wantedEncoder = entry?.files?.find((f) => f.folder === "text_encoders")?.filename;
+    const wantedVae = entry?.files?.find((f) => f.folder === "vae")?.filename;
+    const h = SPLIT_FILE_HEURISTICS[family]!;
+    const clipType = entry?.clipType ?? h.type;
+    const encoder = pickComponentAsset(clips, wantedEncoder, [h.clip], []);
+    const vae = pickComponentAsset(vaes, wantedVae, [], h.vae);
+    if (!encoder || !vae) {
+      const what = entry?.label ?? h.what;
+      const hint = [
+        ...(encoder ? [] : [`a text encoder${wantedEncoder ? ` like ${wantedEncoder}` : ""} (models/text_encoders)`]),
+        ...(vae ? [] : [`a VAE${wantedVae ? ` like ${wantedVae}` : ""} (models/vae)`]),
+      ].join(" and ");
       throw new Error(
-        "This Flux model is diffusion-only and needs t5xxl + clip_l text encoders and the " +
-          "Flux VAE (ae.safetensors) installed in ComfyUI, or use an all-in-one Flux checkpoint.",
+        `${what} needs ${hint} installed in ComfyUI (a same-family variant filename is fine). ` +
+          "Use the Download button in Settings → Local model to fetch all its files, or pick an " +
+          "all-in-one SD/SDXL checkpoint. (If you just added the files, restart the engine.)",
       );
     }
     return {
-      textEncoder: {
-        class_type: "DualCLIPLoader",
-        inputs: { clip_name1: t5, clip_name2: clipL, type: "flux" },
-      },
+      textEncoder: { class_type: "CLIPLoader", inputs: { clip_name: encoder, type: clipType } },
       vaeName: vae,
       weightDtype: "default",
     };
@@ -795,4 +765,69 @@ export function resolveAssetName(available: ReadonlySet<string>, wanted: string)
 
 function delay(ms: number): Promise<void> {
   return ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve();
+}
+
+/** Per-family encoder/VAE matching for split-file models (Flux.2 / Z-Image / Qwen-Image).
+ * `clip` matches the text-encoder name; `vae` are VAE name-substring hints; `type` is the
+ * CLIPLoader type; `what` names it in errors. Flux.2-dev ships a Mistral-3 encoder, Klein
+ * a Qwen-3 one — both accepted. */
+export const SPLIT_FILE_HEURISTICS: Record<
+  string,
+  { clip: RegExp; vae: string[]; type: string; what: string }
+> = {
+  flux2: { clip: /mistral|flux.?2|qwen.?3/i, vae: ["flux2", "flux.2", "flux", "encoder"], type: "flux2", what: "Flux.2" },
+  zimage: { clip: /qwen.?3|qwen/i, vae: ["ae.", "z_image", "z-image"], type: "lumina2", what: "Z-Image" },
+  qwenimage: { clip: /qwen.?2\.5|qwen.*vl|qwen/i, vae: ["qwen"], type: "qwen_image", what: "Qwen-Image" },
+};
+
+/**
+ * The model "stem": filename minus its extension and trailing precision/quant qualifiers
+ * (fp8, fp16, bf16, Q4_K_M, e4m3fn, mixed, scaled, gguf, pruned, emaonly…), separators
+ * normalised. So `qwen_3_8b_fp8mixed.safetensors` and `qwen_3_8b.safetensors` share the
+ * stem `qwen-3-8b` — i.e. they're recognised as the SAME component in a different variant.
+ */
+export function assetStem(name: string): string {
+  let s = name.toLowerCase().replace(/\.(safetensors|ckpt|pt|gguf|bin|sft|pth)$/i, "");
+  let prev = "";
+  while (prev !== s) {
+    prev = s;
+    s = s.replace(/[._-](fp\d+\w*|bf\d+\w*|f\d+|q\d+\w*|k[_-]?[ms]|int\d+|e\dm\d\w*|gguf|mixed|scaled|pruned|emaonly|fixed)$/i, "");
+  }
+  return s.replace(/[._-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Pick an installed file for a component, tolerating same-family variants:
+ *   1. exact wanted filename (case-insensitive)
+ *   2. a variant with the same stem (different quant/precision/naming)
+ *   3. a family pattern (e.g. the encoder's CLIP-type regex)
+ *   4. a name-substring hint (e.g. the VAE hints)
+ * Returns undefined when nothing compatible is installed.
+ */
+export function pickComponentAsset(
+  available: readonly string[],
+  wantedExact: string | undefined,
+  patterns: readonly RegExp[] = [],
+  hints: readonly string[] = [],
+): string | undefined {
+  if (wantedExact) {
+    const w = wantedExact.toLowerCase();
+    const exact = available.find((a) => a.toLowerCase() === w);
+    if (exact) return exact;
+    const ws = assetStem(wantedExact);
+    const stemMatch = available.find((a) => {
+      const s = assetStem(a);
+      return s === ws || s.startsWith(`${ws}-`) || ws.startsWith(`${s}-`);
+    });
+    if (stemMatch) return stemMatch;
+  }
+  for (const re of patterns) {
+    const m = available.find((a) => re.test(a));
+    if (m) return m;
+  }
+  if (hints.length) {
+    const hit = available.find((a) => hints.some((h) => a.toLowerCase().includes(h)));
+    if (hit) return hit;
+  }
+  return undefined;
 }
