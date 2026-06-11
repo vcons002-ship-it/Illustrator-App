@@ -5,6 +5,8 @@ export * from "./ImagePanel.js";
 export * from "./PanelGrid.js";
 export * from "./imageObjectUrl.js";
 export * from "./imageStatus.js";
+export * from "./DataChart.js";
+export * from "./DataSection.js";
 export * from "./CharacterBible.js";
 export * from "./LibraryPanel.js";
 export * from "./SettingsPanel.js";

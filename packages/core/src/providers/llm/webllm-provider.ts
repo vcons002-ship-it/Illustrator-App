@@ -76,7 +76,10 @@ export const EXTRACTION_JSON_INSTRUCTION =
   '"creatures":[{"name":string,"aliases":string[],"kind":string,"description":string[]}],' +
   '"spoilers":[{"label":string}],' +
   '"summary":string,"keyMoment":string,"location":string,"locationChange":string,' +
-  '"keyEvents":[{"subject":string,"action":string,"environment":string,"mood":string,"composition":string,"location":string}]}. ' +
+  '"keyEvents":[{"subject":string,"action":string,"environment":string,"mood":string,"composition":string,"location":string}],' +
+  '"worldStyle":string,' +
+  '"datasets":[{"title":string,"unit":string,"xLabel":string,"yLabel":string,"kind":"bar"|"line"|"scatter",' +
+  '"points":[{"label":string,"x":number,"y":number}],"source":string}]}. ' +
   "Include each NEW named character with an appearance description (use empty strings for " +
   "unknown appearance fields). Capture each distinct outfit a character wears as a separate " +
   "'outfits' entry (label + description). Put non-human beasts (dragons, monsters, mounts) in " +
@@ -86,7 +89,11 @@ export const EXTRACTION_JSON_INSTRUCTION =
   "where/when it moves (empty string if it stays in one place). For 'keyEvents', produce EXACTLY " +
   "the requested number of scene prompts in reading order (each a complete scene: subject, " +
   "action, environment, mood, composition — natural language, no tags). Each keyEvent's " +
-  "'location' is the ONE location name where ITS scene happens (track moves beat by beat).";
+  "'location' is the ONE location name where ITS scene happens (track moves beat by beat). " +
+  "Set 'worldStyle' to one concise genre + art-direction line for the whole book. " +
+  "'datasets' is for NON-FICTION numeric series actually stated in the text (3+ related " +
+  "values, consistent units, never invented; a point's 'x' repeats its index unless the " +
+  "text gives a real numeric x) — emit [] for fiction or when there is no clean series.";
 
 // Module-level engine cache so re-created providers reuse a loaded model
 // (loading is slow; the weights are GB-sized).
@@ -344,10 +351,38 @@ export function parseExtraction(content: string): RawExtraction {
           location: str(o.location),
         };
       }),
+      worldStyle: str(json.worldStyle),
+      datasets: asArray(json.datasets).map((d) => {
+        const o = d as Record<string, unknown>;
+        return {
+          title: str(o.title),
+          unit: str(o.unit),
+          xLabel: str(o.xLabel),
+          yLabel: str(o.yLabel),
+          kind: str(o.kind),
+          points: asArray(o.points).map((p) => {
+            const po = p as Record<string, unknown>;
+            const x = num(po.x);
+            return {
+              label: str(po.label),
+              y: num(po.y) ?? NaN,
+              ...(x !== undefined ? { x } : {}),
+            };
+          }),
+          source: str(o.source),
+        };
+      }),
     };
   } catch {
     return { characters: [], glossary: [], environments: [], spoilers: [] };
   }
+}
+
+/** Tolerant numeric coercion: a real number passes, a numeric string converts, else undefined. */
+function num(v: unknown): number | undefined {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return Number(v);
+  return undefined;
 }
 
 function stripFences(s: string): string {

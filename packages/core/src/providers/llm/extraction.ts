@@ -1,4 +1,5 @@
 import type {
+  ChapterDataset,
   Character,
   CharacterAppearance,
   ChapterScene,
@@ -66,6 +67,22 @@ export interface RawExtraction {
   }[];
   /** One concise genre/art-direction line for the whole book, applied to every prompt. */
   worldStyle?: string;
+  /**
+   * Numeric series stated in THIS chapter's text (technical books) — real values only,
+   * never invented. The app renders these itself as computed SVG charts, so unlike a
+   * generated image the axes and numbers are exact. Optional for back-compat; fiction
+   * extraction leaves it empty.
+   */
+  datasets?: {
+    title: string;
+    unit: string;
+    xLabel: string;
+    yLabel: string;
+    /** Suggested chart form; validated at merge (unknown values coerce to "bar"). */
+    kind: string;
+    points: { label: string; x?: number; y: number }[];
+    source?: string;
+  }[];
 }
 
 export const EXTRACTION_SYSTEM =
@@ -136,7 +153,7 @@ export const EXTRACTION_SYSTEM =
   "art direction to apply to EVERY illustration — e.g. 'high-fantasy military academy, dark, " +
   "painterly, dramatic lighting' or 'cosy contemporary romance, warm, soft watercolour'. Cover " +
   "genre, era/setting, mood, and a rendering style. Refine it as the book reveals more (keep the " +
-  "most specific version).";
+  "most specific version). Leave 'datasets' as an empty list (it is for non-fiction data only).";
 
 /**
  * Extraction system prompt for TECHNICAL / non-fiction books (papers, textbooks,
@@ -183,6 +200,16 @@ export const TECHNICAL_EXTRACTION_SYSTEM =
   "system/structure name this stretch concerns (empty if none). Never request rendered " +
   "text or labels — image models draw text poorly; the imagery itself must carry the " +
   "meaning. " +
+  "Capture 'datasets': every coherent numeric SERIES this chapter's text actually " +
+  "states — a table, a results list, a comparison of 3+ related values with consistent " +
+  "units (e.g. measurements across conditions, quantities over years). For each give a " +
+  "'title', the y 'unit' ('' if unitless), 'xLabel'/'yLabel', a suggested 'kind' (bar | " +
+  "line | scatter), the 'points' (each a short 'label' and its numeric 'y'; set 'x' ONLY " +
+  "when the text gives a real numeric x like a year — repeat the point's position index " +
+  "otherwise), and 'source' (a short locating quote). STRICT RULES: use ONLY numbers " +
+  "stated in the text — never invent, estimate, or interpolate values; at most ~20 points " +
+  "per dataset; emit an EMPTY list when the chapter has no clean numeric series (most " +
+  "chapters don't — an empty list is the normal answer). " +
   "Finally set 'worldStyle': one concise art-direction line applied to EVERY " +
   "illustration of this text — e.g. 'clean modern scientific illustration, precise " +
   "linework, soft studio lighting, neutral background, restrained technical palette'. " +
@@ -375,6 +402,38 @@ export const EXTRACTION_JSON_SCHEMA = {
       },
     },
     worldStyle: { type: "string" },
+    datasets: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          title: { type: "string" },
+          unit: { type: "string" },
+          xLabel: { type: "string" },
+          yLabel: { type: "string" },
+          kind: { type: "string" },
+          points: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                label: { type: "string" },
+                // Strict schemas (OpenAI/Gemini) require every property, so `x` is
+                // always present: the model repeats the point's index when the text
+                // gives no real numeric x, and the merge treats x===index as positional.
+                x: { type: "number" },
+                y: { type: "number" },
+              },
+              required: ["label", "x", "y"],
+            },
+          },
+          source: { type: "string" },
+        },
+        required: ["title", "unit", "xLabel", "yLabel", "kind", "points", "source"],
+      },
+    },
   },
   required: [
     "characters",
@@ -388,6 +447,7 @@ export const EXTRACTION_JSON_SCHEMA = {
     "locationChange",
     "keyEvents",
     "worldStyle",
+    "datasets",
   ],
 } as const;
 
@@ -505,6 +565,48 @@ function mapKeyEventsToUnits(
   return out;
 }
 
+/**
+ * Validate one chapter's raw datasets into the stored shape: real series only
+ * (≥ 2 finite points), unknown chart kinds coerced to "bar", point count capped,
+ * and an `x` that just repeats the point's index dropped — strict JSON schemas
+ * force the model to always emit `x`, so a positional echo isn't a real axis.
+ */
+function sanitizeDatasets(
+  raw: RawExtraction["datasets"],
+  chapterIndex: number,
+): ChapterDataset[] {
+  const MAX_DATASETS = 10;
+  const MAX_POINTS = 100;
+  const out: ChapterDataset[] = [];
+  for (const d of (raw ?? []).slice(0, MAX_DATASETS)) {
+    const title = (d.title ?? "").trim();
+    if (!title) continue;
+    const rawPoints = (d.points ?? []).slice(0, MAX_POINTS);
+    const positionalX = rawPoints.every((p, i) => p.x === undefined || p.x === i);
+    const points = rawPoints
+      .filter((p) => Number.isFinite(p.y))
+      .map((p) => ({
+        label: (p.label ?? "").trim(),
+        y: p.y,
+        ...(!positionalX && typeof p.x === "number" && Number.isFinite(p.x) ? { x: p.x } : {}),
+      }));
+    if (points.length < 2) continue;
+    const kind = d.kind === "line" || d.kind === "scatter" ? d.kind : "bar";
+    out.push({
+      id: `data-${chapterIndex}-${slug(title) || out.length}`,
+      chapterIndex,
+      title,
+      unit: (d.unit ?? "").trim(),
+      xLabel: (d.xLabel ?? "").trim(),
+      yLabel: (d.yLabel ?? "").trim(),
+      kind,
+      points,
+      source: (d.source ?? "").trim(),
+    });
+  }
+  return out;
+}
+
 export function mergeExtraction(
   existing: VisualBible,
   raw: RawExtraction,
@@ -519,6 +621,7 @@ export function mergeExtraction(
     spoilers: [...existing.spoilers],
     storyboard: [...(existing.storyboard ?? [])],
     glossary: [...(existing.glossary ?? [])],
+    datasets: [...(existing.datasets ?? [])],
     processedChapters: [...existing.processedChapters],
   };
   const knownEnvs = new Set(bible.environments.map((e) => e.name.toLowerCase()));
@@ -644,6 +747,16 @@ export function mergeExtraction(
     if (at >= 0) bible.storyboard[at] = scene;
     else bible.storyboard.push(scene);
     bible.storyboard.sort((a, b) => a.chapterIndex - b.chapterIndex);
+  }
+
+  // Datasets: upsert per chapter, mirroring the storyboard — a re-run REPLACES this
+  // chapter's series (idempotent) but keeps nothing stale when the re-run finds none.
+  const incomingData = sanitizeDatasets(raw.datasets, chapterIndex);
+  if (incomingData.length > 0 || (raw.datasets?.length ?? 0) > 0) {
+    bible.datasets = [
+      ...(bible.datasets ?? []).filter((d) => d.chapterIndex !== chapterIndex),
+      ...incomingData,
+    ].sort((a, b) => a.chapterIndex - b.chapterIndex);
   }
 
   // World style: adopt it, preferring the most specific (longest) version seen so far so

@@ -22,7 +22,9 @@ import type { EntityExtractionInput, LLMProvider } from "./llm-provider.js";
  *   without touching this class — the Transport seam, expressed through the SDK.
  */
 
-const ExtractionSchema = z.object({
+/** Exported so tests can assert key parity with EXTRACTION_JSON_SCHEMA (the two
+ * schemas describe the SAME shape for different providers and must not drift). */
+export const CLAUDE_EXTRACTION_SCHEMA = z.object({
   characters: z.array(
     z.object({
       name: z.string(),
@@ -86,6 +88,24 @@ const ExtractionSchema = z.object({
       location: z.string(),
     }),
   ),
+  worldStyle: z.string(),
+  datasets: z.array(
+    z.object({
+      title: z.string(),
+      unit: z.string(),
+      xLabel: z.string(),
+      yLabel: z.string(),
+      kind: z.string(),
+      points: z.array(
+        z.object({
+          label: z.string(),
+          x: z.number(),
+          y: z.number(),
+        }),
+      ),
+      source: z.string(),
+    }),
+  ),
 });
 
 export interface ClaudeProviderOptions {
@@ -121,7 +141,7 @@ export class ClaudeProvider implements LLMProvider {
         max_tokens: 4096,
         system: extractionSystemFor(input.contentMode),
         messages: [{ role: "user", content: extractionUserContent(input) }],
-        output_format: betaZodOutputFormat(ExtractionSchema),
+        output_format: betaZodOutputFormat(CLAUDE_EXTRACTION_SCHEMA),
       },
       input.signal ? { signal: input.signal } : undefined,
     );

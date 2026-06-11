@@ -31,6 +31,7 @@ import { bookFromText } from "@visual-reader/epub";
 import { IMPORT_ACCEPT, importBookFile } from "./import-file.js";
 import {
   CharacterBible,
+  DataSection,
   DEFAULT_SETTINGS,
   FirstRunWizard,
   ImagePanel,
@@ -477,6 +478,19 @@ export function App() {
   const pageEntities =
     book && bible && activePage ? resolvePageEntities(bible, activePage) : undefined;
   const pageSpoilerIds = pageEntities?.spoilerIds ?? [];
+  // The story-chapter index of the page being read (keys the bible's per-chapter
+  // storyboard/datasets) — same mapping the engine uses.
+  const activeChapterIndex = useMemo(
+    () => book?.chapters.find((c) => c.id === activePage?.chapterId)?.index ?? 0,
+    [book, activePage],
+  );
+  const activeDatasets = useMemo(
+    () =>
+      book?.contentMode === "technical" && bible?.datasets
+        ? bible.datasets.filter((d) => d.chapterIndex === activeChapterIndex)
+        : [],
+    [book, bible, activeChapterIndex],
+  );
 
   // On-image description: the EXACT prompt the image was rendered from (persisted
   // with it, so it never shifts as the bible grows — and doubles as prompt
@@ -1004,6 +1018,7 @@ export function App() {
                   )}
                 </div>
               )}
+              <DataSection datasets={activeDatasets} />
               <div style={styles.caption}>
                 {pagesPerImage === "chapter"
                   ? `Chapter ${unitIndex + 1} of ${totalUnits}`
