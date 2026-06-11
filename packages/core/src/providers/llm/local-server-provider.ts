@@ -5,6 +5,7 @@ import {
   EXTRACTION_SYSTEM,
   PROMPT_SYSTEM,
   extractionUserContent,
+  isEmptyExtraction,
   mergeExtraction,
   promptUserContent,
   stripThink,
@@ -38,7 +39,7 @@ export interface LocalServerProviderOptions {
 }
 
 interface ChatResponse {
-  choices?: { message?: { content?: string } }[];
+  choices?: { message?: { content?: string }; finish_reason?: string }[];
 }
 
 interface ModelsResponse {
@@ -66,7 +67,15 @@ export class LocalServerLLMProvider implements LLMProvider {
       true,
       input.signal,
     );
-    return mergeExtraction(input.existing, parseExtraction(text), input.chapterIndex, input.unitRanges);
+    const raw = parseExtraction(text);
+    // The model responded but nothing parsed (truncated/malformed JSON, or a thinking
+    // preamble that ate the whole budget). Committing an "empty" chapter would leave
+    // its units with no scene prompts — stuck at "waiting to be illustrated" — so FAIL
+    // instead: the engine retries once, then the per-chapter prompt pass covers it.
+    if (text.trim() && isEmptyExtraction(raw)) {
+      throw new Error("Local LLM extraction response was not parseable JSON (likely truncated).");
+    }
+    return mergeExtraction(input.existing, raw, input.chapterIndex, input.unitRanges);
   }
 
   async buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string> {
@@ -87,11 +96,14 @@ export class LocalServerLLMProvider implements LLMProvider {
           { role: "user", content: user },
         ],
         temperature: json ? 0 : 0.7,
-        // Bound the response so a model can't run away generating an enormous JSON
-        // blob (which on a local GPU stalls the whole bible build). The extraction
-        // schema is small; a prompt fits comfortably. There is still NO request
-        // timeout — a slow-but-working model is never cut off.
-        max_tokens: json ? 4096 : 512,
+        // Bound the response so a model can't run away (which on a local GPU stalls
+        // the whole bible build) — but with real headroom: a long chapter's extraction
+        // carries one folded scene prompt PER render unit plus new entities (and a
+        // thinking model spends tokens before the JSON), and a truncated response
+        // parses to nothing, leaving the chapter with no prompts. A prompt fits
+        // comfortably. There is still NO request timeout — a slow-but-working model
+        // is never cut off.
+        max_tokens: json ? 12288 : 512,
         // Keep the model resident between the many sequential bible calls so the
         // server doesn't unload/reload it each time (Ollama honours `keep_alive`;
         // other OpenAI-compatible servers ignore the extra field).
@@ -101,7 +113,16 @@ export class LocalServerLLMProvider implements LLMProvider {
     });
     if (!res.ok) throw new Error(`Local LLM server request failed with status ${res.status}`);
     const data = await res.json<ChatResponse>();
-    return data.choices?.[0]?.message?.content ?? "";
+    const choice = data.choices?.[0];
+    // The server cut the response at max_tokens. For the JSON path that means a
+    // truncated, unparseable extraction — fail loudly (the engine retries / the
+    // prompt pass recovers) rather than silently committing an empty chapter.
+    if (json && choice?.finish_reason === "length") {
+      throw new Error(
+        "Local LLM extraction was truncated at the response limit — the chapter will be retried.",
+      );
+    }
+    return choice?.message?.content ?? "";
   }
 
   /**

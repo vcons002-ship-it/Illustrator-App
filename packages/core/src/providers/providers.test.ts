@@ -652,7 +652,8 @@ describe("LocalServerLLMProvider", () => {
   });
 
   it("omits the auth header without a key and sends Bearer with one", async () => {
-    const noKey = new FakeTransport(() => ({ json: { choices: [{ message: { content: "{}" } }] } }));
+    const minimal = '{"characters":[],"environments":[],"spoilers":[],"summary":"s"}';
+    const noKey = new FakeTransport(() => ({ json: { choices: [{ message: { content: minimal } }] } }));
     await new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", transport: noKey }).extractEntities({
       bookId: "b",
       chapterIndex: 0,
@@ -661,7 +662,7 @@ describe("LocalServerLLMProvider", () => {
     });
     expect(noKey.requests[0]!.headers?.authorization).toBeUndefined();
 
-    const withKey = new FakeTransport(() => ({ json: { choices: [{ message: { content: "{}" } }] } }));
+    const withKey = new FakeTransport(() => ({ json: { choices: [{ message: { content: minimal } }] } }));
     await new LocalServerLLMProvider({
       baseUrl: "http://x/v1",
       model: "m",
@@ -669,6 +670,38 @@ describe("LocalServerLLMProvider", () => {
       transport: withKey,
     }).extractEntities({ bookId: "b", chapterIndex: 0, chapterText: "x", existing: emptyBible() });
     expect(withKey.requests[0]!.headers?.authorization).toBe("Bearer K");
+  });
+
+  it("fails (for retry) when the extraction was truncated at the response limit", async () => {
+    // OpenAI-compatible servers report finish_reason "length" when max_tokens cut
+    // the response — the JSON is unusable, so the chapter must NOT silently commit
+    // empty (that's how a chapter ends up stuck at 'waiting to be illustrated').
+    const transport = new FakeTransport(() => ({
+      json: { choices: [{ message: { content: '{"characters":[{"name":"Vio' }, finish_reason: "length" }] },
+    }));
+    const provider = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", transport });
+    await expect(
+      provider.extractEntities({ bookId: "b", chapterIndex: 9, chapterText: "long chapter", existing: emptyBible() }),
+    ).rejects.toThrow(/truncated/);
+  });
+
+  it("fails (for retry) when the response parses to a completely empty extraction", async () => {
+    const transport = new FakeTransport(() => ({
+      json: { choices: [{ message: { content: "Sorry, here is my analysis: the chapter..." }, finish_reason: "stop" }] },
+    }));
+    const provider = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", transport });
+    await expect(
+      provider.extractEntities({ bookId: "b", chapterIndex: 9, chapterText: "x", existing: emptyBible() }),
+    ).rejects.toThrow(/not parseable/);
+  });
+
+  it("raises the extraction response bound (folded scene prompts need headroom)", async () => {
+    const transport = new FakeTransport(() => ({
+      json: { choices: [{ message: { content: '{"summary":"s"}' } }] },
+    }));
+    const provider = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", transport });
+    await provider.extractEntities({ bookId: "b", chapterIndex: 0, chapterText: "x", existing: emptyBible() });
+    expect((transport.requests[0]!.body as { max_tokens?: number }).max_tokens).toBe(12288);
   });
 
   it("builds an image prompt without response_format and trims it", async () => {

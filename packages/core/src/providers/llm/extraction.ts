@@ -825,6 +825,27 @@ export function slug(s: string): string {
 }
 
 /**
+ * True when an extraction carries no signal at all — no entities, no storyboard
+ * fields, no scene prompts. A REAL chapter never extracts to this (the schema
+ * requires at least a summary/keyMoment/keyEvents even when every entity is
+ * already known), so it means the model's response didn't parse (truncated or
+ * malformed JSON). Callers treat it as a failure so the chapter is retried
+ * instead of silently committed with nothing to render from.
+ */
+export function isEmptyExtraction(raw: RawExtraction): boolean {
+  return (
+    raw.characters.length === 0 &&
+    raw.environments.length === 0 &&
+    (raw.creatures?.length ?? 0) === 0 &&
+    raw.spoilers.length === 0 &&
+    (raw.glossary?.length ?? 0) === 0 &&
+    !(raw.summary ?? "").trim() &&
+    !(raw.keyMoment ?? "").trim() &&
+    (raw.keyEvents?.length ?? 0) === 0
+  );
+}
+
+/**
  * Strip a reasoning model's chain-of-thought preamble before parsing its answer.
  * Hybrid "thinking" models (e.g. Qwen 3, with thinking on) emit a `<think>…</think>`
  * (or `<thinking>…</thinking>`) block first; left in, it inflates output, breaks the
