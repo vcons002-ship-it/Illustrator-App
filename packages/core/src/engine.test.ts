@@ -236,6 +236,45 @@ describe("Engine", () => {
     await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
   });
 
+  it("updateTier restyles FUTURE renders in place (no engine rebuild needed)", async () => {
+    const image = new MockImageProvider();
+    const genSpy = vi.spyOn(image, "generate");
+    const engine = new Engine({ llm: new MockLLMProvider(), image });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+    expect(genSpy.mock.calls.at(-1)![0].prompt).not.toContain("watercolor painting");
+
+    engine.updateTier({ ...DEFAULT_TIER_CONFIG, style: "watercolor" });
+    await engine.regenerateCurrentImage(0);
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+    expect(genSpy.mock.calls.at(-1)![0].prompt).toContain("watercolor painting");
+  });
+
+  it("updateTier never aborts an in-flight render (a style tweak mustn't interrupt work)", async () => {
+    // An image provider that hangs until released, exposing each render's abort signal
+    // (the cloud buffer runs up to two renders concurrently — hold them all).
+    const releases: (() => void)[] = [];
+    const signals: (AbortSignal | undefined)[] = [];
+    const image = new MockImageProvider();
+    const real = image.generate.bind(image);
+    vi.spyOn(image, "generate").mockImplementation(async (input) => {
+      signals.push(input.signal);
+      await new Promise<void>((r) => releases.push(r));
+      return real(input);
+    });
+    const engine = new Engine({ llm: new MockLLMProvider(), image });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    await vi.waitFor(() => expect(signals.length).toBeGreaterThan(0));
+
+    engine.updateTier({ ...DEFAULT_TIER_CONFIG, style: "anime" });
+    for (const s of signals) expect(s?.aborted ?? false).toBe(false); // nothing cancelled
+
+    for (const r of releases) r();
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+  });
+
   it("regenerateCurrentImage re-rolls the seed so a redo isn't the identical image", async () => {
     const image = new MockImageProvider();
     const genSpy = vi.spyOn(image, "generate");

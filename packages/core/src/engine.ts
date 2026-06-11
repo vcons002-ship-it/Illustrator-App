@@ -112,8 +112,26 @@ export class Engine {
 
   constructor(private opts: EngineOptions) {
     this.store = opts.store ?? new InMemoryStore();
-    this.tier = opts.tier ?? DEFAULT_TIER_CONFIG;
+    // Own copy: `updateTier` swaps this object's contents in place (the pipeline shares
+    // the reference), which must never mutate the caller's object or the module default.
+    this.tier = { ...(opts.tier ?? DEFAULT_TIER_CONFIG) };
     this.illustrateAfter = opts.illustrateAfter ?? "chapter";
+  }
+
+  /**
+   * Apply new render TUNING (style, quality, aspect, sampler overrides…) to the live
+   * engine. The pipeline and buffer hold the SAME tier object, so its contents are
+   * swapped in place: future renders pick the changes up immediately while nothing is
+   * disposed, aborted, or re-analysed — in-flight LLM extraction and image renders run
+   * to completion, and finished images are untouched. Identity changes (different
+   * providers/keys/models, pages-per-image) still need a full reopen, which the host
+   * decides; this method assumes the providers themselves are unchanged.
+   */
+  updateTier(next: TierConfig): void {
+    for (const k of Object.keys(this.tier)) {
+      delete (this.tier as unknown as Record<string, unknown>)[k];
+    }
+    Object.assign(this.tier, next);
   }
 
   /**

@@ -209,6 +209,23 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
         });
       }
       break;
+    case "tune":
+      // Tuning-only change: swap the live engine's tier (future renders use it) without
+      // disposing anything — in-flight extraction/renders continue uninterrupted. The
+      // providers themselves are unchanged for tune-eligible fields, so the freshly
+      // built ones are discarded; only the tier they computed is applied.
+      settings = msg.settings;
+      if (engine) {
+        try {
+          engine.updateTier(buildProviders(settings).tier);
+        } catch (err) {
+          post({
+            type: "error",
+            message: `Settings update failed: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      }
+      break;
     case "open":
       void handleOpen(msg.book);
       break;

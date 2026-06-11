@@ -16,6 +16,12 @@ import type { ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
 
 export type MainToWorker =
   | { type: "init"; settings: ReaderSettings }
+  /**
+   * Render-tuning change only (style/quality/aspect/sampler…): update the LIVE engine's
+   * tier so future renders use it — without disposing the engine, aborting in-flight
+   * work, or re-opening the book (which `init`+`open` do for identity changes).
+   */
+  | { type: "tune"; settings: ReaderSettings }
   | { type: "open"; book: BookSource }
   | { type: "start" }
   | { type: "pause" }

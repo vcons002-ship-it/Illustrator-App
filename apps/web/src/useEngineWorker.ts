@@ -205,16 +205,31 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     return () => worker.terminate();
   }, []);
 
-  // Apply settings; re-open the current book so new keys/tier take effect, and
-  // resume generation if it was already running (the re-open built a new engine).
+  // Settings changes take two paths so a style tweak never interrupts running work:
+  //  - IDENTITY changes (providers, keys, models, pages-per-image, …) rebuild the
+  //    providers and re-open the book — the old engine is disposed (aborting its
+  //    in-flight work) because the providers themselves are different now.
+  //  - TUNING changes (style, quality, aspect, sampler overrides, …) only affect how
+  //    FUTURE renders are made: a light "tune" message updates the live engine's tier
+  //    in place. Nothing is aborted, results stay, the bible build keeps running.
+  // `panelsPerView` is pure UI and reaches neither path.
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const identityKey = identitySettingsKey(settings);
+  const tuningKey = tuningSettingsKey(settings);
+
   useEffect(() => {
-    send({ type: "init", settings });
+    send({ type: "init", settings: settingsRef.current });
     if (lastBook.current) {
       setResults(new Map());
       send({ type: "open", book: lastBook.current });
       if (generationRequested.current) send({ type: "start" });
     }
-  }, [settings]);
+  }, [identityKey]); // deliberately keyed on the identity FIELDS, not the settings object
+
+  useEffect(() => {
+    send({ type: "tune", settings: settingsRef.current });
+  }, [tuningKey]); // deliberately keyed on the tuning FIELDS, not the settings object
 
   const openBook = useCallback(
     (book: BookSource) => {
@@ -337,6 +352,48 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     getCharacterReference,
     paintForward,
   };
+}
+
+/**
+ * Settings that only tune HOW future images render (style/quality/aspect/sampler…).
+ * Changing one updates the live engine via "tune" — no rebuild, nothing aborted.
+ */
+const TUNING_FIELDS = [
+  "imageStyle",
+  "imageQuality",
+  "aspectRatio",
+  "drawAsComicPage",
+  "imageModelFamily",
+  "localSteps",
+  "localCfg",
+  "localSampler",
+  "localScheduler",
+  "localTextEncoder",
+  "localVae",
+  "styleLoraOverride",
+  "gpuVramMb",
+] as const satisfies readonly (keyof ReaderSettings)[];
+
+/** Settings the worker never needs at all (pure presentation). */
+const UI_ONLY_FIELDS = ["panelsPerView"] as const satisfies readonly (keyof ReaderSettings)[];
+
+/** Dependency key over just the tuning fields. */
+function tuningSettingsKey(s: ReaderSettings): string {
+  return JSON.stringify(TUNING_FIELDS.map((k) => s[k]));
+}
+
+/**
+ * Dependency key over everything EXCEPT tuning + UI-only fields — providers, keys,
+ * models, pages-per-image, server URLs… A field added to ReaderSettings later lands
+ * here by default (full rebuild: always correct, just not maximally cheap).
+ */
+function identitySettingsKey(s: ReaderSettings): string {
+  const skip = new Set<string>([...TUNING_FIELDS, ...UI_ONLY_FIELDS]);
+  const rest: Record<string, unknown> = {};
+  for (const k of Object.keys(s).sort()) {
+    if (!skip.has(k)) rest[k] = (s as unknown as Record<string, unknown>)[k];
+  }
+  return JSON.stringify(rest);
 }
 
 /** Trigger a browser download of a JSON string. */
