@@ -77,7 +77,10 @@ export function buildProviders(
 ): { llm: LLMProvider; image: ImageProvider; tier: TierConfig; diagnostics: ProvidersDiagnostics } {
   const transport: Transport | undefined = opts.fetch ? new DirectTransport(opts.fetch) : undefined;
   const llm = buildLLM(settings, transport, opts.fetch, opts.onLocalStatus, opts.onLocalActivity);
-  const image = buildImage(settings, transport);
+  // "One API" native mode needs to know it BEFORE building the image slot (it picks the
+  // multimodal provider variant). It depends only on settings (same vendor + key + opt-in).
+  const native = isNativeIllustration(settings);
+  const image = buildImage(settings, transport, native);
   return {
     llm: llm.provider,
     image: image.provider,
@@ -97,29 +100,29 @@ export function buildProviders(
       ...(settings.imageModelFamily && settings.imageModelFamily !== "auto"
         ? { imageModelFamily: settings.imageModelFamily }
         : {}),
-      // Seam for a future single-API "native" illustration mode (chapter-in → images-out).
-      ...(isNativeIllustration(settings, llm.provider.id, image.provider.id)
-        ? { nativeIllustration: true }
-        : {}),
+      // "One API" native mode: the image slot used the vendor's multimodal endpoint, so
+      // mark the tier (and carry the experimental one-shot sub-mode, only when native).
+      ...(native && !image.diag.mock ? { nativeIllustration: true } : {}),
+      ...(native && !image.diag.mock && settings.nativeOneShot ? { nativeOneShot: true } : {}),
     },
   };
 }
 
+/** Cloud vendors whose single API serves text AND has a multimodal image endpoint. */
+const NATIVE_VENDORS = new Set(["gemini", "openai"]);
+
 /**
- * True when the SAME cloud vendor + key drives both slots (e.g. text=gemini AND
- * image=gemini, with a key present). The pipeline still uses the split path today; this
- * flag just marks where a one-call native mode could engage later.
+ * True when "one API" native mode should engage: the user opted in AND the SAME native
+ * vendor drives both the text and image slots with a key present (e.g. text=gemini,
+ * image=gemini). Opt-in (not automatic) because it switches the image MODEL — different
+ * cost/quality than the plain text-to-image path.
  */
-function isNativeIllustration(
-  settings: ReaderSettings,
-  llmId: string,
-  imageId: string,
-): boolean {
-  const NATIVE_VENDORS = new Set(["gemini", "openai"]);
+function isNativeIllustration(settings: ReaderSettings): boolean {
   return (
-    llmId === imageId &&
-    NATIVE_VENDORS.has(llmId) &&
-    Boolean(settings.keys[llmId])
+    settings.nativeIllustration === true &&
+    settings.textProvider === settings.imageProvider &&
+    NATIVE_VENDORS.has(settings.imageProvider) &&
+    Boolean(settings.keys[settings.imageProvider])
   );
 }
 
@@ -239,7 +242,11 @@ function buildLLM(
   }
 }
 
-function buildImage(settings: ReaderSettings, transport: Transport | undefined): BuiltImage {
+function buildImage(
+  settings: ReaderSettings,
+  transport: Transport | undefined,
+  native: boolean,
+): BuiltImage {
   const id = settings.imageProvider;
   if (id === "local") {
     // Base URL comes from the desktop shell (auto-managed engine) or, elsewhere,
@@ -290,8 +297,12 @@ function buildImage(settings: ReaderSettings, transport: Transport | undefined):
   }
   try {
     return {
-      provider: createImageProvider(id, { key, ...(transport ? { transport } : {}) }),
-      diag: { id, label: providerLabel, mock: false },
+      provider: createImageProvider(id, { key, ...(transport ? { transport } : {}), ...(native ? { native: true } : {}) }),
+      diag: {
+        id,
+        label: native ? `${providerLabel} (native, one API)` : providerLabel,
+        mock: false,
+      },
     };
   } catch {
     return {

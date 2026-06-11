@@ -262,6 +262,25 @@ describe("RenderPipeline reference images (IP-Adapter)", () => {
     for (const ref of input.ipAdapterRefs!) expect(ref.weight).toBeCloseTo(0.25);
   });
 
+  it("one-shot native mode renders from the passage text, not the stored scene prompt", async () => {
+    const book = oneParagraphBook("Ana drew her blade as the gate shuddered open.");
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "STORED SCENE PROMPT");
+    const { provider, lastInput } = inputRecordingImage();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: { ...DEFAULT_TIER_CONFIG, nativeIllustration: true, nativeOneShot: true },
+    });
+    await pipeline.renderPage(0);
+    const prompt = lastInput().prompt;
+    expect(prompt).toContain("Ana drew her blade"); // the passage drives the image
+    expect(prompt).not.toContain("STORED SCENE PROMPT"); // the pre-written prompt is bypassed
+  });
+
   it("a single legacy referenceImageId still conditions at the tuned 0.5", async () => {
     const book = oneParagraphBook("Ana stood alone.");
     book.pages[0]!.pageRange = [0, 0];

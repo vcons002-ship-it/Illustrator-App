@@ -20,6 +20,15 @@ export interface TransportRequest {
    */
   form?: { field: string; bytes: ArrayBuffer; filename: string; contentType: string };
   /**
+   * Multipart upload with multiple files and/or text fields (e.g. OpenAI's
+   * `/images/edits`, which takes `image[]` references plus `prompt`/`model`/`size`).
+   * When set, `body` and `form` are ignored and the request is `multipart/form-data`.
+   */
+  multipart?: {
+    fields?: Record<string, string>;
+    files?: { field: string; bytes: ArrayBuffer; filename: string; contentType: string }[];
+  };
+  /**
    * Optional cancellation signal. When it aborts, the underlying request is
    * cancelled (fetch rejects with an AbortError). Lets a pause stop in-flight LLM
    * extraction / image generation promptly instead of waiting it out.
@@ -56,7 +65,15 @@ export class DirectTransport implements Transport {
 
   async send(request: TransportRequest): Promise<TransportResponse> {
     let init: RequestInit;
-    if (request.form) {
+    if (request.multipart) {
+      // Multi-file + text-field multipart (let fetch set the boundary).
+      const fd = new FormData();
+      for (const [k, v] of Object.entries(request.multipart.fields ?? {})) fd.append(k, v);
+      for (const f of request.multipart.files ?? []) {
+        fd.append(f.field, new Blob([f.bytes], { type: f.contentType }), f.filename);
+      }
+      init = { method: request.method ?? "POST", headers: { ...request.headers }, body: fd };
+    } else if (request.form) {
       // Multipart upload: let fetch set the content-type boundary (don't force JSON).
       const fd = new FormData();
       fd.append(

@@ -144,10 +144,15 @@ export class RenderPipeline {
       // gate (canRender = hasKeyEvent) means a renderable unit always has one, so this never
       // falls back to a live LLM call; the guard below is purely defensive.
       const keyEvent = resolveKeyEvent(bible, request.chapterIndex, request.pageRange);
-      // Pin the prompt to the unit's beat-level location (exact even mid-chapter).
-      const stored = keyEvent
-        ? anchorSetting(composeScenePrompt(keyEvent.imagePrompt), keyEvent.location)
-        : "";
+      // One-shot native mode: the multimodal model reads the passage and draws it itself,
+      // so the base is the passage text (its character names still resolve to Bible
+      // descriptors below). Otherwise render the pre-written, beat-located scene prompt.
+      // Either way a keyEvent must exist — it's what gates a unit as renderable.
+      const stored = !keyEvent
+        ? ""
+        : this.deps.tier.nativeOneShot
+          ? oneShotPrompt(request.sourceText)
+          : anchorSetting(composeScenePrompt(keyEvent.imagePrompt), keyEvent.location);
       if (!stored) {
         return {
           requestId,
@@ -262,6 +267,20 @@ export class RenderPipeline {
     }
     return refs;
   }
+}
+
+/**
+ * One-shot native prompt: a short directive plus the book passage itself, so the
+ * multimodal model reads the scene and depicts it directly. Character names in the
+ * prose are still expanded into their Bible descriptors by the caller's term pass.
+ */
+function oneShotPrompt(sourceText: string): string {
+  const passage = sourceText.replace(/\s+/g, " ").trim().slice(0, 1200);
+  return (
+    "Illustrate the single most important moment of this book passage as one scene — " +
+    "a wide or medium shot showing the characters acting in their setting, not a portrait. " +
+    `Passage: ${passage}`
+  );
 }
 
 /**

@@ -252,12 +252,20 @@ image quality. Under **Settings → Text → On my computer → Local server** y
 **Qwen 3 8B** is the recommended default; **Qwen 3 14B** or **Gemma 3 12B** write even
 better prompts if your VRAM allows; **Llama 3.2 3B** is the lightweight fallback.
 
-### Coming later: one-API native mode
+### One-API native mode (Gemini / OpenAI)
 
 When you use the **same cloud provider for both text and images** (e.g. Gemini for both,
-one key), Visual Reader flags a future **native** mode where that one API reads a chapter
-and returns illustrations directly. The split extract → prompt → image path is used today;
-the native path is a planned optimisation.
+one key), a **Native “one API” mode** toggle appears under the image settings. Turn it on
+and renders go through that vendor’s **multimodal** image model (Gemini 2.5 Flash Image, or
+OpenAI `gpt-image-1`), which accepts your **uploaded character reference photos** inline —
+so cloud renders get the character-consistency conditioning that otherwise needs a local
+ComfyUI + IP-Adapter setup. It’s opt-in because it uses a different image model than the
+default text-to-image path.
+
+There’s also an experimental **one-shot** sub-toggle: instead of rendering the pre-written
+scene prompt, the model reads each passage and draws it directly (fewer steps, less control
+over the exact moment). The Visual Bible still supplies character context and reference
+photos either way.
 
 ### Art styles on a local engine (LoRAs)
 

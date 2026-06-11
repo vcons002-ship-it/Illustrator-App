@@ -29,12 +29,20 @@ export interface TierConfig {
    */
   imageModelFamily?: "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage";
   /**
-   * True when the SAME cloud vendor + key serves both the text and image slots (e.g.
-   * both Gemini). A future "native" mode can then let that one API read a chapter and
-   * emit illustrations directly (epub-chapter-in → images-out) instead of the split
-   * extract→prompt→image path. Seam only today — the pipeline still uses the split path.
+   * "One API" native mode: the SAME cloud vendor + key serves both slots (e.g. both
+   * Gemini), and the image slot uses the vendor's MULTIMODAL endpoint — which accepts
+   * the character reference photos inline, giving cloud renders the consistency
+   * conditioning that previously needed a local ComfyUI + IP-Adapter. The render
+   * pipeline is otherwise unchanged (it still writes the per-image scene prompt).
    */
   nativeIllustration?: boolean;
+  /**
+   * Experimental sub-mode of `nativeIllustration`: feed the chapter PASSAGE text to the
+   * multimodal model directly (it reads + draws in one step) instead of the pre-written
+   * scene prompt. The Visual Bible still gates rendering and supplies reference photos /
+   * world style; only the prompt TEXT is swapped. Off unless the user opts in.
+   */
+  nativeOneShot?: boolean;
 }
 
 export const DEFAULT_TIER_CONFIG: TierConfig = {

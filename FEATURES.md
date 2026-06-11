@@ -75,6 +75,9 @@ The app builds a structured memory of the book so art stays consistent:
   own GPU via ComfyUI or AUTOMATIC1111 (SD 1.5 / SDXL / Flux.1, plus **Z-Image Turbo**,
   **Flux.2 Klein** and **Qwen-Image** on ComfyUI). The **desktop app can auto-manage**
   ComfyUI and downloads every file a model needs (split files included, resumable).
+- **One-API native mode:** when the same vendor (Gemini/OpenAI) runs text **and** images,
+  opt into its **multimodal** image model so your uploaded character reference photos guide
+  cloud renders — the consistency a local IP-Adapter gives, with just a key.
 - **No keys? Still works** — built-in placeholder art shows the whole flow.
 - **Keys are encrypted** on your device; local/on-device options keep everything private.
 
@@ -146,9 +149,6 @@ The app builds a structured memory of the book so art stays consistent:
   and spoiler-safe.)
 - **Per-character LoRA styles** — pin a character with a dedicated LoRA for even tighter
   consistency (reference-image upload is in; the LoRA slot already exists).
-- **One-API "native" mode** — when the same cloud provider serves text **and** images
-  (e.g. Gemini for both), let that one API read a chapter and emit illustrations
-  directly (the app already detects and flags this configuration).
 - **Bring the newest reader UI to the Chrome extension** — bigger image, caption, and the
   Character Bible editor are in the web/desktop reader first.
 
@@ -159,6 +159,11 @@ The app builds a structured memory of the book so art stays consistent:
 - **Hosted option** — an optional managed backend so you don't need your own keys/GPU.
 
 **Done recently**
+- **One-API "native" mode** — when the same vendor (Gemini or OpenAI) serves text **and**
+  images, opt into rendering through that vendor's **multimodal** model, which takes your
+  uploaded character reference photos inline — cloud character-consistency without a local
+  IP-Adapter. Includes an experimental **one-shot** sub-mode where the model reads each
+  passage and draws it directly.
 - **Multi-view character references** — upload up to three photos per character
   (different angles of the same face); they condition each image together for a more
   robust likeness, with thumbnails and per-photo remove in the Character Bible.

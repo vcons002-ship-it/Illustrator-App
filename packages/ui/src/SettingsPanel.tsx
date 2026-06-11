@@ -88,6 +88,15 @@ export interface ReaderSettings {
   localBackend?: LocalBackendId;
   /** Base URL of a local engine you run yourself (browser path; persisted). */
   localServerUrl?: string;
+  /**
+   * "One API" native mode (opt-in): when the same vendor (Gemini/OpenAI) drives both
+   * text and images, render through that vendor's MULTIMODAL endpoint so character
+   * reference photos condition cloud renders. Only takes effect when the slots match.
+   */
+  nativeIllustration?: boolean;
+  /** Experimental: under native mode, let the model read the passage and draw it in one
+   * step (passage text → image) instead of rendering the pre-written scene prompt. */
+  nativeOneShot?: boolean;
   /** True once the first-run wizard has been completed. */
   configured?: boolean;
   /** Transient: base URL of the app-managed local engine (desktop; not persisted). */
@@ -367,6 +376,8 @@ export function SettingsPanel({
             </select>
           </label>
 
+          {sameVendorNative(value) && <NativeModeRow value={value} set={set} />}
+
           {isDesktop && value.imageProvider === "local" && (
             <StyleLoraRow
               styleId={value.imageStyle ?? "auto"}
@@ -471,6 +482,67 @@ function ProgressBar({ pct }: { pct: number }) {
  * "Download style pack" button when the catalog has a source; and always a
  * paste-a-URL field so any LoRA can be fetched for this style.
  */
+/** True when one vendor (Gemini/OpenAI) drives BOTH text and images with a key set —
+ * the only situation where "one API" native mode can engage. */
+function sameVendorNative(v: ReaderSettings): boolean {
+  return (
+    v.textProvider === v.imageProvider &&
+    (v.imageProvider === "gemini" || v.imageProvider === "openai") &&
+    Boolean(v.keys[v.imageProvider])
+  );
+}
+
+/**
+ * "One API" native mode controls, shown only when the same vendor serves text + images.
+ * Opt-in because it switches the image MODEL to the vendor's multimodal endpoint (which
+ * accepts character reference photos). The experimental one-shot sub-toggle appears once
+ * native is on.
+ */
+function NativeModeRow({
+  value,
+  set,
+}: {
+  value: ReaderSettings;
+  set: (patch: Partial<ReaderSettings>) => void;
+}) {
+  const vendor = getProvider("image", value.imageProvider)?.label ?? value.imageProvider;
+  return (
+    <div style={rowStyle}>
+      <label style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+        <input
+          type="checkbox"
+          checked={value.nativeIllustration === true}
+          onChange={(e) => set({ nativeIllustration: e.target.checked })}
+        />
+        <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <span>Native “one API” mode</span>
+          <span style={{ opacity: 0.6, fontSize: 11 }}>
+            Render through {vendor}’s multimodal model so your uploaded character reference
+            photos guide the art (cloud equivalent of local IP-Adapter). Uses a different
+            image model than the default.
+          </span>
+        </span>
+      </label>
+      {value.nativeIllustration === true && (
+        <label style={{ display: "flex", gap: 8, alignItems: "flex-start", marginLeft: 24 }}>
+          <input
+            type="checkbox"
+            checked={value.nativeOneShot === true}
+            onChange={(e) => set({ nativeOneShot: e.target.checked })}
+          />
+          <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <span>One-shot drawing (experimental)</span>
+            <span style={{ opacity: 0.6, fontSize: 11 }}>
+              Let the model read each passage and draw it directly, instead of rendering the
+              pre-written scene prompt. Fewer steps, less control over the exact moment.
+            </span>
+          </span>
+        </label>
+      )}
+    </div>
+  );
+}
+
 function StyleLoraRow({
   styleId,
   installedLoras,

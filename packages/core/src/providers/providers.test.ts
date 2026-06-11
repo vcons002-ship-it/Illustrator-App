@@ -6,7 +6,9 @@ import type { ImageGenerationInput } from "./image/image-provider.js";
 import { GeminiLLMProvider } from "./llm/gemini-provider.js";
 import { OpenAILLMProvider } from "./llm/openai-provider.js";
 import { GeminiImageProvider } from "./image/gemini-image-provider.js";
+import { GeminiNativeImageProvider } from "./image/gemini-native-image-provider.js";
 import { OpenAIImageProvider } from "./image/openai-image-provider.js";
+import { OpenAINativeImageProvider } from "./image/openai-native-image-provider.js";
 import { FluxProvider } from "./image/flux-provider.js";
 import { ComfyUIBackend, resolveAssetName } from "./image/local-engine/comfyui-backend.js";
 import { Automatic1111Backend } from "./image/local-engine/automatic1111-backend.js";
@@ -192,6 +194,78 @@ describe("OpenAIImageProvider", () => {
     const out = await provider.generate({ ...imageInput, width: 1600, height: 900 });
     expect((transport.requests[0]!.body as { size?: string }).size).toBe("1536x1024");
     expect(new TextDecoder().decode(out.bytes)).toBe("IMG");
+  });
+});
+
+describe("GeminiNativeImageProvider (one-API multimodal)", () => {
+  const ref = { bytes: new TextEncoder().encode("REFBYTES").buffer, mimeType: "image/png", weight: 0.5 };
+
+  it("sends prompt + reference photos inline and decodes the returned image part", async () => {
+    const transport = new FakeTransport(() => ({
+      json: { candidates: [{ content: { parts: [{ text: "ok" }, { inlineData: { mimeType: "image/png", data: b64("DRAWN") } }] } }] },
+    }));
+    const provider = new GeminiNativeImageProvider({ apiKey: "KEY", transport });
+    const out = await provider.generate({ ...imageInput, ipAdapterRefs: [ref] });
+
+    const body = transport.requests[0]!.body as { contents: { parts: Record<string, unknown>[] }[] };
+    const parts = body.contents[0]!.parts;
+    expect(parts[0]).toEqual({ text: "a knight" });
+    // The reference photo rides along as an inline image part (character conditioning).
+    expect((parts[1]!.inline_data as { data: string }).data).toBe(b64("REFBYTES"));
+    expect(transport.requests[0]!.url).toContain(":generateContent?key=KEY");
+    expect(new TextDecoder().decode(out.bytes)).toBe("DRAWN");
+  });
+
+  it("works with no references (plain text-to-image) and tolerates snake_case parts", async () => {
+    const transport = new FakeTransport(() => ({
+      json: { candidates: [{ content: { parts: [{ inline_data: { mime_type: "image/jpeg", data: b64("J") } }] } }] },
+    }));
+    const provider = new GeminiNativeImageProvider({ apiKey: "KEY", transport });
+    const out = await provider.generate(imageInput);
+    const body = transport.requests[0]!.body as { contents: { parts: unknown[] }[] };
+    expect(body.contents[0]!.parts).toHaveLength(1); // prompt only
+    expect(out.mimeType).toBe("image/jpeg");
+  });
+
+  it("throws when the response has no image part", async () => {
+    const transport = new FakeTransport(() => ({ json: { candidates: [{ content: { parts: [{ text: "no image" }] } }] } }));
+    const provider = new GeminiNativeImageProvider({ apiKey: "KEY", transport });
+    await expect(provider.generate(imageInput)).rejects.toThrow(/no image data/);
+  });
+});
+
+describe("OpenAINativeImageProvider (one-API)", () => {
+  const ref = { bytes: new TextEncoder().encode("R").buffer, mimeType: "image/png", weight: 0.5 };
+
+  it("uses /images/edits with the reference photos as multipart files", async () => {
+    const transport = new FakeTransport(() => ({ json: { data: [{ b64_json: b64("EDITED") }] } }));
+    const provider = new OpenAINativeImageProvider({ apiKey: "KEY", transport });
+    const out = await provider.generate({ ...imageInput, ipAdapterRefs: [ref, ref] });
+
+    const req = transport.requests[0]!;
+    expect(req.url).toContain("/images/edits");
+    expect(req.multipart!.fields!.prompt).toBe("a knight");
+    expect(req.multipart!.files).toHaveLength(2);
+    expect(req.multipart!.files![0]!.field).toBe("image[]");
+    expect(new TextDecoder().decode(out.bytes)).toBe("EDITED");
+  });
+
+  it("falls back to /images/generations with no references", async () => {
+    const transport = new FakeTransport(() => ({ json: { data: [{ b64_json: b64("GEN") }] } }));
+    const provider = new OpenAINativeImageProvider({ apiKey: "KEY", transport });
+    await provider.generate(imageInput);
+    expect(transport.requests[0]!.url).toContain("/images/generations");
+    expect(transport.requests[0]!.multipart).toBeUndefined();
+  });
+});
+
+describe("createImageProvider native variants", () => {
+  it("returns the native multimodal provider only when native is requested", () => {
+    expect(createImageProvider("gemini", { key: "K" }).id).toBe("gemini");
+    expect(createImageProvider("gemini", { key: "K", native: true })).toBeInstanceOf(GeminiNativeImageProvider);
+    expect(createImageProvider("openai", { key: "K", native: true })).toBeInstanceOf(OpenAINativeImageProvider);
+    // A non-native vendor ignores the flag (Flux has no multimodal variant).
+    expect(createImageProvider("flux", { key: "K", native: true }).id).toBe("flux");
   });
 });
 
