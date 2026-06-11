@@ -26,8 +26,9 @@ ahead. It runs on your own machine and can work fully offline.
   its pages, so the image arrives with the moment.
 - **Click to reveal** — click any illustration to show it in full immediately; click
   again to hand control back to your reading. (Resets when you turn the page.)
-- **On-image caption** — a short line names the characters shown and the chapter's key
-  action, fading in with the picture.
+- **On-image description** — each illustration shows the exact prompt it was rendered
+  from (stored with the image, so it never changes afterwards — and doubles as prompt
+  troubleshooting). Until it renders, the unit's pre-written scene prompt shows instead.
 - **Bigger image panel** sized to your window.
 
 ### 🧠 Understanding the story (the "Visual Bible")

@@ -103,6 +103,10 @@ export class RenderPipeline {
       requestId,
       pageId: request.pageId,
       status: "ready",
+      // The prompt this image was actually rendered from (persisted with it), so the
+      // UI's per-image description stays STABLE across sessions instead of being
+      // re-derived from the live (still-growing) bible.
+      ...(cached.prompt ? { prompt: cached.prompt } : {}),
       image: { bytes: cached.bytes, mimeType: cached.mimeType },
     };
   }
@@ -129,6 +133,7 @@ export class RenderPipeline {
         requestId,
         pageId: request.pageId,
         status: "ready",
+        ...(cached.prompt ? { prompt: cached.prompt } : {}),
         image: { bytes: cached.bytes, mimeType: cached.mimeType },
       };
     }
@@ -208,7 +213,7 @@ export class RenderPipeline {
         // A keyEvent may pin a reproducible seed (overrides the character anchor seed).
         ...(typeof keyEvent?.seed === "number" ? { seed: keyEvent.seed } : {}),
       });
-      await this.deps.store.putImage(requestId, output.bytes, output.mimeType);
+      await this.deps.store.putImage(requestId, output.bytes, output.mimeType, prompt);
       return {
         requestId,
         pageId: request.pageId,

@@ -38,18 +38,20 @@ export function createCacheStore(): VisualReaderStore {
         await fallback.putBible(bible);
       }
     },
-    async getImage(requestId: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined> {
+    async getImage(
+      requestId: string,
+    ): Promise<{ bytes: ArrayBuffer; mimeType: string; prompt?: string } | undefined> {
       try {
         return await backing.getImage(requestId);
       } catch {
         return fallback.getImage(requestId);
       }
     },
-    async putImage(requestId: string, bytes: ArrayBuffer, mimeType: string): Promise<void> {
+    async putImage(requestId: string, bytes: ArrayBuffer, mimeType: string, prompt?: string): Promise<void> {
       try {
-        await backing.putImage(requestId, bytes, mimeType);
+        await backing.putImage(requestId, bytes, mimeType, prompt);
       } catch {
-        await fallback.putImage(requestId, bytes, mimeType);
+        await fallback.putImage(requestId, bytes, mimeType, prompt);
       }
     },
     // Library methods exist to satisfy the store interface; the extension reads

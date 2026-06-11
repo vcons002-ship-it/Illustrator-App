@@ -9,6 +9,7 @@ import {
   LOCAL_TEXT_SERVER_DEFAULT_URL,
   ollamaModelMatches,
   computeBloomTarget,
+  composeScenePrompt,
   monotonicBloom,
   decryptSecrets,
   encryptSecrets,
@@ -16,6 +17,7 @@ import {
   latestSpoilerParagraphIndex,
   paragraphIndexFromId,
   parseImportedBible,
+  resolveKeyEvent,
   resolvePageEntities,
   spoilerRevealPoint,
   toRenderUnits,
@@ -447,22 +449,21 @@ export function App() {
     book && bible && activePage ? resolvePageEntities(bible, activePage) : undefined;
   const pageSpoilerIds = pageEntities?.spoilerIds ?? [];
 
-  // On-image caption. Prefer a per-image description taken from THIS unit's own
-  // generated prompt (it differs page-group to page-group); fall back to the
-  // chapter's key moment only until the image has been rendered.
+  // On-image description: the EXACT prompt the image was rendered from (persisted
+  // with it, so it never shifts as the bible grows — and doubles as prompt
+  // troubleshooting). Until the render lands, fall back to the unit's STORED scene
+  // prompt from the bible — also static once written. Never live-resolved names.
   const imageCaption = useMemo(() => {
-    const fromImage = captionFromPrompt(results.get(unitIndex)?.prompt);
-    if (fromImage) return fromImage;
-    if (!book || !bible || !activePage) return undefined;
-    const chapterIdx = book.chapters.find((c) => c.id === activePage.chapterId)?.index ?? 0;
-    const keyMoment = bible.storyboard.find((s) => s.chapterIndex === chapterIdx)?.keyMoment?.trim();
-    if (!keyMoment) return undefined;
-    const names = bible.characters
-      .filter((c) => pageEntities?.characterIds.includes(c.id))
-      .map((c) => c.name)
-      .slice(0, 3);
-    return names.length ? `${names.join(", ")}: ${keyMoment}` : keyMoment;
-  }, [results, unitIndex, book, bible, activePage, pageEntities]);
+    const rendered = results.get(unitIndex)?.prompt?.trim();
+    if (rendered) return rendered;
+    if (!bible || !units || !book) return undefined;
+    const unitPage = units.book.pages[unitIndex];
+    if (!unitPage) return undefined;
+    const chapterIdx = book.chapters.find((c) => c.id === unitPage.chapterId)?.index ?? 0;
+    const ev = resolveKeyEvent(bible, chapterIdx, unitPage.pageRange ?? [unitIndex, unitIndex]);
+    const stored = ev ? composeScenePrompt(ev.imagePrompt) : "";
+    return stored || undefined;
+  }, [results, unitIndex, book, bible, units]);
 
   // Bloom target: reveal the illustration only as the reader progresses through the
   // page, holding any depicted spoiler until they reach its paragraph (core/reveal).
@@ -960,25 +961,6 @@ export function App() {
  * them separately for the caller to decrypt after mount. Legacy plaintext keys
  * are read inline and re-encrypted on the next save.
  */
-/**
- * A per-image caption from a unit's generated prompt: drop the appended "Style: …"
- * suffix, then take up to the first two sentences (so it isn't cut off mid-thought),
- * capped at ~300 chars on a word boundary. Returns undefined when there's no prompt
- * yet (the caller falls back to the chapter key moment).
- */
-function captionFromPrompt(prompt: string | undefined): string | undefined {
-  if (!prompt) return undefined;
-  const base = prompt.split(/\n\nStyle:/)[0]!.replace(/\s+/g, " ").trim();
-  if (!base) return undefined;
-  const sentences = base.match(/[^.!?]+[.!?]+(?:\s|$)/g);
-  let text = sentences ? sentences.slice(0, 2).join(" ").trim() : base;
-  if (text.length > 300) {
-    const cut = text.slice(0, 300);
-    text = `${cut.slice(0, cut.lastIndexOf(" ")).trimEnd() || cut.trimEnd()}…`;
-  }
-  return text;
-}
-
 /** "~Xs left" / "~Xm left" from a millisecond estimate. */
 function formatLeft(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "";
@@ -1489,6 +1471,11 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.4,
     opacity: 0.9,
     fontFamily: "system-ui, sans-serif",
+    // The description is the image's full prompt (it can be long, especially with a
+    // reference block) — keep it scrollable instead of swallowing the panel.
+    maxHeight: "9em",
+    overflowY: "auto",
+    whiteSpace: "pre-wrap",
   },
   caption: { marginTop: 6, fontSize: 12, opacity: 0.6, fontFamily: "system-ui, sans-serif" },
   modalOverlay: {

@@ -19,9 +19,13 @@ export interface VisualReaderStore {
   getBible(bookId: string): Promise<VisualBible | undefined>;
   putBible(bible: VisualBible): Promise<void>;
 
-  /** Cache a rendered image, returning nothing. Keyed by request id. */
-  putImage(requestId: string, bytes: ArrayBuffer, mimeType: string): Promise<void>;
-  getImage(requestId: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined>;
+  /** Cache a rendered image (optionally with the exact prompt it was rendered
+   * from, so the UI can show a STABLE per-image description across sessions).
+   * Keyed by request id. */
+  putImage(requestId: string, bytes: ArrayBuffer, mimeType: string, prompt?: string): Promise<void>;
+  getImage(
+    requestId: string,
+  ): Promise<{ bytes: ArrayBuffer; mimeType: string; prompt?: string } | undefined>;
 
   /** Regeneration support (optional — not every backend implements these). */
   deleteBible?(bookId: string): Promise<void>;
@@ -39,7 +43,7 @@ export interface VisualReaderStore {
 /** In-memory store — used by tests and as a fallback when no persistence exists. */
 export class InMemoryStore implements VisualReaderStore {
   private bibles = new Map<string, VisualBible>();
-  private images = new Map<string, { bytes: ArrayBuffer; mimeType: string }>();
+  private images = new Map<string, { bytes: ArrayBuffer; mimeType: string; prompt?: string }>();
   private books = new Map<string, { book: BookSource; addedAt: number }>();
 
   async getBible(bookId: string): Promise<VisualBible | undefined> {
@@ -48,10 +52,12 @@ export class InMemoryStore implements VisualReaderStore {
   async putBible(bible: VisualBible): Promise<void> {
     this.bibles.set(bible.bookId, bible);
   }
-  async putImage(requestId: string, bytes: ArrayBuffer, mimeType: string): Promise<void> {
-    this.images.set(requestId, { bytes, mimeType });
+  async putImage(requestId: string, bytes: ArrayBuffer, mimeType: string, prompt?: string): Promise<void> {
+    this.images.set(requestId, { bytes, mimeType, ...(prompt ? { prompt } : {}) });
   }
-  async getImage(requestId: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined> {
+  async getImage(
+    requestId: string,
+  ): Promise<{ bytes: ArrayBuffer; mimeType: string; prompt?: string } | undefined> {
     return this.images.get(requestId);
   }
   async deleteBible(bookId: string): Promise<void> {

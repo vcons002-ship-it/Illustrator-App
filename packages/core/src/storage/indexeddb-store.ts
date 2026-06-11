@@ -32,11 +32,14 @@ export class IndexedDbStore implements VisualReaderStore {
     return this.put(BIBLE_STORE, bible.bookId, bible);
   }
 
-  async putImage(requestId: string, bytes: ArrayBuffer, mimeType: string): Promise<void> {
-    return this.put(IMAGE_STORE, requestId, { bytes, mimeType });
+  async putImage(requestId: string, bytes: ArrayBuffer, mimeType: string, prompt?: string): Promise<void> {
+    // `prompt` is additive on the stored record — old records simply lack it.
+    return this.put(IMAGE_STORE, requestId, { bytes, mimeType, ...(prompt ? { prompt } : {}) });
   }
 
-  async getImage(requestId: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined> {
+  async getImage(
+    requestId: string,
+  ): Promise<{ bytes: ArrayBuffer; mimeType: string; prompt?: string } | undefined> {
     return this.get(IMAGE_STORE, requestId);
   }
 

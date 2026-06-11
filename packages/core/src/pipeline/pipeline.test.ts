@@ -164,6 +164,32 @@ describe("RenderPipeline stored-first prompt fetch", () => {
     expect(lastPrompt()).not.toContain("Great Hall");
   });
 
+  it("persists the rendered prompt with the image and serves it from cache (stable caption)", async () => {
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a knight by a window");
+    const { provider } = recordingImage();
+    const store = new InMemoryStore();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store,
+      tier: DEFAULT_TIER_CONFIG,
+    });
+
+    const fresh = await pipeline.renderPage(0);
+    expect(fresh.prompt).toContain("a knight by a window");
+
+    // Both cached paths return the EXACT prompt the image was rendered from — the
+    // UI's description must not be re-derived from the live (still-growing) bible.
+    const cached = await pipeline.renderPage(0);
+    expect(cached.prompt).toBe(fresh.prompt);
+    const restored = await pipeline.cachedResult(0);
+    expect(restored?.prompt).toBe(fresh.prompt);
+  });
+
   it("never calls the LLM at render time — holds (errors) when no prompt is stored", async () => {
     const book = oneParagraphBook();
     book.pages[0]!.pageRange = [0, 0];
