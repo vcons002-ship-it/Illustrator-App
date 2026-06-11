@@ -982,6 +982,58 @@ describe("ComfyUI prompt formatting by family", () => {
     expect(wf["7"]!.inputs.text).toBe(""); // empty negative
   });
 
+  // All-in-one checkpoint transport (lists the model so it loads via CheckpointLoaderSimple,
+  // skipping split-file component resolution — sampler/resolution don't depend on load kind).
+  const comfyCkpt = (name: string) =>
+    new FakeTransport((req) => {
+      if (req.url.endsWith("/object_info/CheckpointLoaderSimple"))
+        return { json: { CheckpointLoaderSimple: { input: { required: { ckpt_name: [[name]] } } } } };
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
+      if (req.url.includes("/history/"))
+        return { json: { p1: { outputs: { "9": { images: [{ filename: "f.png", subfolder: "", type: "output" }] } } } } };
+      return { bytes: png };
+    });
+
+  it("manual steps/CFG overrides win — CFG routes to real cfg on Klein (non-distilled)", async () => {
+    const t = comfyCkpt("flux-2-klein-base-9b-fp8.safetensors");
+    await new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 }).generate(
+      { ...imageInput, modelFamily: "flux2", stepsOverride: 30, cfgOverride: 6.5 },
+      "flux-2-klein-base-9b-fp8.safetensors",
+    );
+    const wf = workflowOf(t);
+    expect(wf["3"]!.inputs.steps).toBe(30); // override beats the natural-language fixed 20
+    expect(wf["3"]!.inputs.cfg).toBe(6.5); // Klein has no guidance node → real CFG
+    expect(wf["14"]).toBeUndefined();
+  });
+
+  it("a CFG override on a guidance-distilled Flux routes to the FluxGuidance node, cfg stays 1", async () => {
+    const t = comfyCkpt("flux1-schnell-fp8.safetensors");
+    await new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 }).generate(
+      { ...imageInput, modelFamily: "flux", cfgOverride: 2.5, stepsOverride: 18 },
+      "flux1-schnell-fp8.safetensors",
+    );
+    const wf = workflowOf(t);
+    expect(wf["3"]!.inputs.cfg).toBe(1); // KSampler cfg stays 1 for distilled Flux
+    expect(wf["14"]!.inputs.guidance).toBe(2.5); // the CFG knob set embedded guidance
+    expect(wf["3"]!.inputs.steps).toBe(18);
+  });
+
+  it("High/Ultra reach a larger canvas on Flux.2, but SDXL is still capped at 1024", async () => {
+    const flux = comfyCkpt("flux2-dev.safetensors");
+    await new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: flux, pollIntervalMs: 0 }).generate(
+      { ...imageInput, modelFamily: "flux2", width: 1536, height: 1536 },
+      "flux2-dev.safetensors",
+    );
+    expect((workflowOf(flux)["5"]!.inputs as { width: number }).width).toBe(1536);
+
+    const sdxl = comfyCkpt("sd_xl_base_1.0.safetensors");
+    await new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: sdxl, pollIntervalMs: 0 }).generate(
+      { ...imageInput, modelFamily: "sdxl", width: 1536, height: 1536 },
+      "sd_xl_base_1.0.safetensors",
+    );
+    expect((workflowOf(sdxl)["5"]!.inputs as { width: number }).width).toBe(1024); // clamped
+  });
+
   it("Z-Image Turbo (catalog) → lumina2 encoder, AuraFlow shift, 8-step turbo sampler", async () => {
     const t = new FakeTransport((req) => {
       if (req.url.endsWith("/object_info/CLIPLoader"))

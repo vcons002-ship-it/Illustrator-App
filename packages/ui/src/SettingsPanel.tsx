@@ -88,6 +88,10 @@ export interface ReaderSettings {
    * auto-detection picks the wrong one. Exact filename as the engine lists it; "" = auto. */
   localTextEncoder?: string;
   localVae?: string;
+  /** Advanced manual sampler overrides for local ComfyUI: step count and CFG/guidance
+   * scale. Unset/undefined = the family/catalog default. */
+  localSteps?: number | undefined;
+  localCfg?: number | undefined;
   /** Which local engine API to talk to (browser "your own server" path). */
   localBackend?: LocalBackendId;
   /** Base URL of a local engine you run yourself (browser path; persisted). */
@@ -416,13 +420,13 @@ export function SettingsPanel({
           {value.imageProvider === "local" && (
             <details style={rowStyle}>
               <summary style={{ cursor: "pointer", fontSize: 13, opacity: 0.85 }}>
-                Advanced: split-file components (Flux.2 / Z-Image / Qwen-Image)
+                Advanced: model files &amp; sampler (local engine)
               </summary>
               <p style={{ opacity: 0.6, fontSize: 11, margin: "4px 0 8px" }}>
-                These models load a separate text encoder + VAE. The app auto-detects them; if it
-                picks the wrong file, set the exact filename here (as ComfyUI lists it in
-                <code> models/text_encoders</code> and <code> models/vae</code>). Leave blank to
-                auto-detect.
+                Split-file models (Flux.2 / Z-Image / Qwen-Image) load a separate text encoder +
+                VAE — the app auto-detects them, but you can pin the exact filename (as ComfyUI
+                lists it in <code>models/text_encoders</code> / <code>models/vae</code>). The
+                sampler fields override the per-model defaults. Leave any field blank to auto.
               </p>
               <label style={rowStyle}>
                 <span>Text encoder file</span>
@@ -439,6 +443,39 @@ export function SettingsPanel({
                   placeholder="auto — e.g. full_encoder_small_decoder.safetensors"
                   onChange={(e) => set({ localVae: e.target.value.trim() })}
                 />
+              </label>
+              <label style={rowStyle}>
+                <span>Sampler steps</span>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={value.localSteps ?? ""}
+                  placeholder="auto (per model)"
+                  onChange={(e) =>
+                    set({ localSteps: e.target.value === "" ? undefined : Math.max(1, Math.floor(Number(e.target.value) || 1)) })
+                  }
+                />
+                <span style={{ opacity: 0.55, fontSize: 11 }}>
+                  How many denoising passes. More = more detail/coherence but slower; too many
+                  rarely helps. Flux ≈ 20–28, SDXL ≈ 25–35, turbo models ≈ 6–10.
+                </span>
+              </label>
+              <label style={rowStyle}>
+                <span>CFG / guidance</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={value.localCfg ?? ""}
+                  placeholder="auto (per model)"
+                  onChange={(e) => set({ localCfg: e.target.value === "" ? undefined : Math.max(0, Number(e.target.value) || 0) })}
+                />
+                <span style={{ opacity: 0.55, fontSize: 11 }}>
+                  How strictly the image follows the prompt. Higher = more literal but can look
+                  over-cooked; lower = looser/softer. Flux/Flux.2-dev use embedded guidance ≈ 3–5;
+                  Klein/SDXL use real CFG ≈ 4–7. This sets whichever your model uses.
+                </span>
               </label>
             </details>
           )}

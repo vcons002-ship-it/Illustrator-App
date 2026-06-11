@@ -322,10 +322,21 @@ export class ComfyUIBackend implements LocalEngineBackend {
     // base needs real CFG 5, unlike guidance-distilled Flux.2-dev). Natural-language
     // models ignore the quality-profile step count (more steps don't help).
     const family = resolveModelFamily(input.modelFamily, checkpoint);
-    const sampler = catalogEntryForModel(checkpoint)?.sampler ?? samplerFor(family);
-    const steps = isNaturalLanguage(family)
-      ? sampler.steps
+    const baseSampler = catalogEntryForModel(checkpoint)?.sampler ?? samplerFor(family);
+    // Steps: natural-language families use their fixed recommended count; SD families scale
+    // with quality. A manual override (Advanced settings) wins for EVERY family.
+    let steps = isNaturalLanguage(family)
+      ? baseSampler.steps
       : (input.steps ?? (input.quality === "sketch" ? 6 : input.quality === "standard" ? 20 : 35));
+    if (input.stepsOverride && input.stepsOverride > 0) steps = Math.round(input.stepsOverride);
+    // CFG override: for guidance-distilled Flux the tunable knob is the embedded GUIDANCE
+    // value (KSampler cfg stays 1); for everything else it's the real CFG scale.
+    const sampler =
+      input.cfgOverride !== undefined && input.cfgOverride >= 0
+        ? baseSampler.guidance !== undefined
+          ? { ...baseSampler, guidance: input.cfgOverride }
+          : { ...baseSampler, cfg: input.cfgOverride }
+        : baseSampler;
     const { width, height } = clampResolution(family, input.width ?? 1024, input.height ?? 1024);
 
     // Expand bible terms per the target's text-encoder grade: CLIP/T5 (SD/Flux.1) inject

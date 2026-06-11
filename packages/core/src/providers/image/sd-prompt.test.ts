@@ -54,10 +54,14 @@ describe("nameHandlingFor", () => {
 });
 
 describe("clampResolution", () => {
-  it("caps SD1.5 at 768 and others at 1024, rounded to /8", () => {
+  it("caps per family — NL models reach 1280/1536, SDXL 1024, SD1.5 768 (rounded /8)", () => {
     expect(clampResolution("sd15", 1536, 1536)).toEqual({ width: 768, height: 768 });
     expect(clampResolution("sdxl", 1536, 1536)).toEqual({ width: 1024, height: 1024 });
-    expect(clampResolution("flux2", 1280, 1280)).toEqual({ width: 1024, height: 1024 });
+    // Natural-language families now reach the larger High/Ultra canvases.
+    expect(clampResolution("flux2", 1536, 1536)).toEqual({ width: 1536, height: 1536 });
+    expect(clampResolution("flux", 1280, 1280)).toEqual({ width: 1280, height: 1280 });
+    expect(clampResolution("qwenimage", 1536, 1536)).toEqual({ width: 1536, height: 1536 });
+    expect(clampResolution("zimage", 1536, 1536)).toEqual({ width: 1280, height: 1280 }); // turbo cap
     expect(clampResolution("sdxl", 1000, 1000)).toEqual({ width: 1000, height: 1000 }); // already fine
   });
 });

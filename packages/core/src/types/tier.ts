@@ -35,6 +35,10 @@ export interface TierConfig {
    */
   localTextEncoder?: string;
   localVae?: string;
+  /** Advanced manual sampler overrides for local ComfyUI: step count (any family) and the
+   * CFG/guidance scale. Unset = the family/catalog default. Cloud providers ignore these. */
+  localSteps?: number;
+  localCfg?: number;
   /**
    * "One API" native mode: the SAME cloud vendor + key serves both slots (e.g. both
    * Gemini), and the image slot uses the vendor's MULTIMODAL endpoint — which accepts

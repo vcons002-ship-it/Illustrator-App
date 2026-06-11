@@ -70,9 +70,23 @@ export function nameHandlingFor(family: ModelFamily): "inject" | "reference" {
     : "inject";
 }
 
-/** Largest square dimension a family handles well (bounds time + SD1.5 artifacts). */
+/** Largest square dimension a family handles well (bounds time + artifacts). The
+ * natural-language families (Flux, Flux.2, Qwen-Image) stay coherent at large canvases,
+ * so High/Ultra can reach 1280/1536 there; SDXL duplicates/degrades above ~1024 and
+ * SD1.5 above ~768; Z-Image (turbo) is happiest up to ~1280. */
 export function familyMaxDimension(family: ModelFamily): number {
-  return family === "sd15" ? 768 : 1024;
+  switch (family) {
+    case "flux":
+    case "flux2":
+    case "qwenimage":
+      return 1536;
+    case "zimage":
+      return 1280;
+    case "sd15":
+      return 768;
+    default: // sdxl + unknown — conservative
+      return 1024;
+  }
 }
 
 /** Clamp a requested resolution to the family's sweet spot, rounded to a /8 multiple. */

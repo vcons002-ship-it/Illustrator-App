@@ -59,6 +59,14 @@ export interface ImageGenerationInput {
    */
   textEncoder?: string;
   vae?: string;
+  /**
+   * Advanced manual sampler overrides (local ComfyUI only). `stepsOverride` sets the
+   * sampler step count for ANY family (natural-language families otherwise use their
+   * fixed recommended count). `cfgOverride` sets the embedded GUIDANCE value for
+   * guidance-distilled Flux, else the real CFG scale. Unset = the family/catalog default.
+   */
+  stepsOverride?: number;
+  cfgOverride?: number;
   /** Always-applied world-style/genre anchor (from the bible), added to every prompt. */
   worldStyle?: string;
   /** Book title, for the reference-block header on LLM-grade targets. */
