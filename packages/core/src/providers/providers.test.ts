@@ -259,10 +259,14 @@ describe("OpenAINativeImageProvider (one-API)", () => {
   });
 });
 
-describe("createImageProvider native variants", () => {
-  it("returns the native multimodal provider only when native is requested", () => {
-    expect(createImageProvider("gemini", { key: "K" }).id).toBe("gemini");
+describe("createImageProvider image variants", () => {
+  it("routes Gemini images through the multimodal provider (avoids Imagen's 404)", () => {
+    // Imagen :predict 404s for most keys, so Gemini always uses generateContent now.
+    expect(createImageProvider("gemini", { key: "K" })).toBeInstanceOf(GeminiNativeImageProvider);
     expect(createImageProvider("gemini", { key: "K", native: true })).toBeInstanceOf(GeminiNativeImageProvider);
+  });
+  it("uses OpenAI's multimodal (edits) variant only when native is requested", () => {
+    expect(createImageProvider("openai", { key: "K" })).toBeInstanceOf(OpenAIImageProvider);
     expect(createImageProvider("openai", { key: "K", native: true })).toBeInstanceOf(OpenAINativeImageProvider);
     // A non-native vendor ignores the flag (Flux has no multimodal variant).
     expect(createImageProvider("flux", { key: "K", native: true }).id).toBe("flux");

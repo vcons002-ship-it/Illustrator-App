@@ -7,7 +7,6 @@ import { LocalServerLLMProvider } from "./llm/local-server-provider.js";
 import { DEFAULT_LOCAL_SERVER_TEXT_MODEL } from "./catalog.js";
 import type { LLMProvider } from "./llm/llm-provider.js";
 import { FluxProvider } from "./image/flux-provider.js";
-import { GeminiImageProvider } from "./image/gemini-image-provider.js";
 import { GeminiNativeImageProvider } from "./image/gemini-native-image-provider.js";
 import { OpenAIImageProvider } from "./image/openai-image-provider.js";
 import { OpenAINativeImageProvider } from "./image/openai-native-image-provider.js";
@@ -93,9 +92,10 @@ export function createImageProvider(id: string, opts: ImageProviderOptions = {})
     case "flux":
       return new FluxProvider({ apiKey: requireKey(opts.key, "flux"), ...(transport ? { transport } : {}) });
     case "gemini":
-      return opts.native
-        ? new GeminiNativeImageProvider({ apiKey: requireKey(opts.key, "gemini"), ...(transport ? { transport } : {}) })
-        : new GeminiImageProvider({ apiKey: requireKey(opts.key, "gemini"), ...(transport ? { transport } : {}) });
+      // Always the multimodal generateContent model (gemini-2.5-flash-image): it works on a
+      // standard key AND accepts character reference photos. The Imagen :predict provider is
+      // paid-tier only and 404s for most keys, so it is no longer wired as a default.
+      return new GeminiNativeImageProvider({ apiKey: requireKey(opts.key, "gemini"), ...(transport ? { transport } : {}) });
     case "openai":
       return opts.native
         ? new OpenAINativeImageProvider({ apiKey: requireKey(opts.key, "openai"), ...(transport ? { transport } : {}) })

@@ -321,7 +321,7 @@ You have two ways to get real art:
 
 1. Click **Settings** in the top bar (in the extension, open the panel's Settings).
 2. Pick a **Text** provider (Claude / Gemini / OpenAI) and an **Images** provider
-   (Flux / Imagen / OpenAI) — they're independent. Each shows a **Get a key ↗**
+   (Flux / Gemini / OpenAI) — they're independent. Each shows a **Get a key ↗**
    link and a one-line reminder of where to find it.
 3. Paste the API key for each one you chose. You'll see **✓ saved** once it's in.
 4. Optional: pick an **Art style** (Photorealistic, Anime, Manga, Realistic
@@ -339,13 +339,14 @@ You have two ways to get real art:
 | Provider | Used for | Get your key | Where in the dashboard |
 |---|---|---|---|
 | **Claude** (Anthropic) | Text | <https://console.anthropic.com/settings/keys> | Settings → API Keys → **Create Key** |
-| **Gemini / Imagen** (Google) | Text **and** images (one key) | <https://aistudio.google.com/app/apikey> | **Get API key** → Create API key |
+| **Gemini** (Google) | Text **and** images (one key) | <https://aistudio.google.com/app/apikey> | **Get API key** → Create API key |
 | **OpenAI** | Text and images (one key) | <https://platform.openai.com/api-keys> | **API keys** → Create new secret key |
 | **Flux** (Black Forest Labs) | Images | <https://api.bfl.ai/auth/profile/keys> | Sign in → **Keys** → Add key |
 
 > A common, cheap combo: one **Gemini** key (or one **OpenAI** key) covers both
-> text and images. Claude has no image model, so pair it with Flux/Imagen/OpenAI
-> for images.
+> text and images. Claude has no image model, so pair it with Flux/Gemini/OpenAI
+> for images. (Gemini images use its multimodal model, which works on a standard
+> key — no separate Imagen/paid tier needed.)
 
 **B) Your own GPU (free, private):** set **Images** to **On my computer** and
 connect a local Stable Diffusion server — see
