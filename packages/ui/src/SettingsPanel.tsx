@@ -275,7 +275,7 @@ export function SettingsPanel({
   const defaultCfg = localBaseSampler.guidance ?? localBaseSampler.cfg;
 
   return (
-    <div style={{ fontSize: 13 }}>
+    <div style={{ fontSize: 13, position: "relative" }}>
       <button onClick={() => setOpen((o) => !o)} style={buttonStyle}>
         {open ? "Hide settings" : "Settings"}
       </button>
@@ -1401,19 +1401,25 @@ const buttonStyle = {
 } as const;
 
 const panelStyle = {
-  marginTop: 8,
+  // Floats OVER the page (anchored under the Settings button) instead of pushing
+  // the header/reader down when opened.
+  position: "absolute",
+  top: "calc(100% + 6px)",
+  right: 0,
+  zIndex: 60,
   display: "flex",
   flexDirection: "column",
   gap: 8,
   padding: 12,
   paddingRight: 16, // room for the internal scrollbar so it doesn't overlap inputs
-  border: "1px solid rgba(255,255,255,0.15)",
+  border: "1px solid rgba(255,255,255,0.18)",
   borderRadius: 8,
-  maxWidth: 340,
-  // The panel lives in the sticky header; bound its height to the viewport so it
-  // gets its OWN scrollbar instead of overflowing the screen (you no longer have
-  // to scroll the book to the bottom to reach the last settings).
-  maxHeight: "min(70vh, calc(100vh - 96px))",
+  width: "min(340px, 92vw)",
+  background: "#16181d",
+  boxShadow: "0 12px 40px rgba(0,0,0,0.55)",
+  // Bound the height to the viewport so the panel gets its OWN scrollbar instead
+  // of overflowing the screen.
+  maxHeight: "min(80vh, calc(100vh - 96px))",
   overflowY: "auto",
 } as const;
 

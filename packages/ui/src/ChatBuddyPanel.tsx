@@ -167,10 +167,10 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
 });
 
 // Full-window landing experience: the chat IS the home screen, so it takes the
-// viewport (minus the header area) rather than floating as a small card.
+// viewport (minus the slimmed header/intro) rather than floating as a small card.
 const panelStyle = {
   width: "min(1100px, 96vw)",
-  height: "max(440px, calc(100vh - 290px))",
+  height: "max(480px, calc(100vh - 188px))",
   background: "#16181d",
   color: "#e6e6e6",
   border: "1px solid rgba(255,255,255,0.12)",

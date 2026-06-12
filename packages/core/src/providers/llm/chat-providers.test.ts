@@ -45,6 +45,43 @@ describe("Gemini mature-mode safetySettings", () => {
   });
 });
 
+describe("LocalServerLLMProvider chat errors", () => {
+  /** Transport that fails with a status + body, to exercise error surfacing. */
+  class FailTransport implements Transport {
+    readonly requests: TransportRequest[] = [];
+    constructor(
+      private readonly status: number,
+      private readonly body: string,
+    ) {}
+    send(request: TransportRequest): Promise<TransportResponse> {
+      this.requests.push(request);
+      return Promise.resolve({
+        ok: false,
+        status: this.status,
+        json: <T>() => Promise.reject(new Error("not json")) as Promise<T>,
+        arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+        text: () => Promise.resolve(this.body),
+      });
+    }
+  }
+
+  it("surfaces Ollama's error message and a 500 hint", async () => {
+    const t = new FailTransport(500, '{"error":"model requires more system memory than is available"}');
+    const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "llama3.2", transport: t });
+    await expect(p.chat([{ role: "user", content: "hi" }])).rejects.toThrow(
+      /status 500: model requires more system memory/,
+    );
+    await expect(p.chat([{ role: "user", content: "hi" }])).rejects.toThrow(/enough memory/);
+  });
+
+  it("adds a model-name hint on 404", async () => {
+    const t = new FailTransport(404, "model 'llama3.2' not found");
+    const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "llama3.2", transport: t });
+    await expect(p.chat([{ role: "user", content: "hi" }])).rejects.toThrow(/status 404.*not found/s);
+    await expect(p.chat([{ role: "user", content: "hi" }])).rejects.toThrow(/model id in Settings/);
+  });
+});
+
 describe("LocalServerLLMProvider.contextLength", () => {
   it("reads the architecture-prefixed context_length from /api/show", async () => {
     const t = new FakeTransport({ model_info: { "llama.context_length": 131072, "llama.block_count": 32 } });
