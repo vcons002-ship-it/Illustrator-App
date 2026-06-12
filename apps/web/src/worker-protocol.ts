@@ -37,6 +37,8 @@ export type MainToWorker =
    */
   | { type: "tune"; settings: ReaderSettings }
   | { type: "open"; book: BookSource }
+  /** Exit the current book to the landing page: dispose the engine, drop the book. */
+  | { type: "close" }
   | { type: "start" }
   | { type: "pause" }
   | { type: "resume" }

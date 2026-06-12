@@ -5,3 +5,4 @@ export * from "./buddy-tools.js";
 export * from "./buddy-session.js";
 export * from "./calculator.js";
 export * from "./context-usage.js";
+export * from "./book-passage-search.js";

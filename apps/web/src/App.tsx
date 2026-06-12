@@ -104,6 +104,7 @@ export function App() {
     generating,
     paused,
     openBook: openInWorker,
+    closeBook,
     startGeneration,
     resume,
     pauseBible,
@@ -450,6 +451,15 @@ export function App() {
     [openInWorker, libraryStore],
   );
 
+  // Exit the current book back to the landing page (the buddy/home screen). The
+  // book stays in the library; this just closes the reader and stops generation.
+  const onExitBook = useCallback(() => {
+    setShowChat(false);
+    setShowCharacters(false);
+    setBook(undefined);
+    closeBook();
+  }, [closeBook]);
+
   // Load the library on mount (recent books to switch between).
   useEffect(() => {
     void libraryStore.listBooks().then(setLibrary).catch(() => {});
@@ -627,7 +637,9 @@ export function App() {
                 ? `Searching the web for “${e.call.query}”…`
                 : e.call.tool === "search_images"
                   ? `Looking for images of “${e.call.query}”…`
-                  : "Preparing an image…",
+                  : e.call.tool === "search_book"
+                    ? `Looking in the book for “${e.call.query}”…`
+                    : "Preparing an image…",
             );
           else {
             setChatActivity("");
@@ -1149,6 +1161,15 @@ export function App() {
         <div style={styles.headerRow}>
         <strong>Visual Reader</strong>
         <div style={styles.headerControls}>
+          {book && (
+            <button
+              style={styles.button}
+              onClick={onExitBook}
+              title="Close this book and return to the home screen (the book stays in your library)"
+            >
+              ← Exit book
+            </button>
+          )}
           {library.length > 0 && (
             <button
               style={styles.button}

@@ -9,6 +9,7 @@ import {
   bytesToBase64,
   chatContextSections,
   measureContextUsage,
+  searchBookPassages,
   trimChatHistory,
   CHARS_PER_TOKEN,
   CHAT_CONTEXT_BUDGET_CHARS,
@@ -348,6 +349,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "open":
       void handleOpen(msg.book);
       break;
+    case "close":
+      handleClose();
+      break;
     case "start":
       beginGeneration();
       break;
@@ -619,7 +623,10 @@ const SAFE_LOCAL_CONTEXT_TOKENS = 8192;
  */
 function contextBudgets(llmId: string, ctxTokens?: number): ContextBudgets {
   if (CLOUD_LLM_IDS.has(llmId)) {
-    return { book: 400_000, history: 80_000, ...(CLOUD_MAX_TOKENS[llmId] ? { maxTokens: CLOUD_MAX_TOKENS[llmId] } : {}) };
+    // The book section is now a RECENT window only (the model pulls the rest on
+    // demand via search_book), so it stays small even on huge cloud contexts —
+    // a simple request no longer pays to re-read the whole book every turn.
+    return { book: 24_000, history: 60_000, ...(CLOUD_MAX_TOKENS[llmId] ? { maxTokens: CLOUD_MAX_TOKENS[llmId] } : {}) };
   }
   if (ctxTokens && ctxTokens > 0) {
     const usable = Math.min(ctxTokens, SAFE_LOCAL_CONTEXT_TOKENS);
@@ -733,12 +740,25 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       .sort((a, b) => a.index - b.index);
     const note = await renderDefaultsNote();
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
+    const pos = chatPosition(book, msg.position);
+    const fullView = (book.contentMode ?? "fiction") === "technical" || msg.allowSpoilers;
+    // Spoiler-gated chapters the search_book tool may reach: everything up to the
+    // reader's position (current chapter cut at the offset) unless spoilers are on.
+    const searchableChapters = fullView
+      ? chapters
+      : chapters
+          .filter((c) => c.index <= pos.chapterIndex)
+          .map((c) =>
+            c.index === pos.chapterIndex
+              ? { ...c, text: c.text.slice(0, Math.max(0, pos.charOffsetInChapter)) }
+              : c,
+          );
     const sections = chatContextSections({
       bookTitle: book.title,
       contentMode: book.contentMode ?? "fiction",
       chapters,
       ...(currentBible ? { bible: currentBible } : {}),
-      position: chatPosition(book, msg.position),
+      position: pos,
       allowSpoilers: msg.allowSpoilers,
       ...(settings?.allowMature ? { allowMature: true } : {}),
       budgetChars: budgets.book,
@@ -779,6 +799,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       tools: {
         searchWeb: (q) => imageSearch.searchWeb(q),
         searchImages: (q) => imageSearch.search(q),
+        searchBook: (q) => searchBookPassages(searchableChapters, q),
       },
       onEvent: (e) => {
         if (e.kind === "token") post({ type: "chatToken", requestId: msg.requestId, text: e.text });
@@ -1089,6 +1110,33 @@ async function installedModelNames(s: ReaderSettings): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+/**
+ * Exit the current book back to the landing page: dispose the engine (stops its
+ * bible loop + renders), and clear the retained book/bible/providers so nothing
+ * keeps running or leaks into the next book. The main thread clears its own view.
+ */
+function handleClose(): void {
+  engine?.dispose();
+  engine = undefined;
+  currentBook = undefined;
+  currentBible = undefined;
+  bookProviders = undefined;
+  pendingStart = false;
+  bibleActive = false;
+  bibleRunStartMs = 0;
+  bibleCharacters = 0;
+  stopBibleTimer();
+  workflow.bibleDone = 0;
+  workflow.bibleTotal = 0;
+  workflow.promptsDone = 0;
+  workflow.promptsTotal = 0;
+  postWorkflow();
+  post({ type: "generating", value: false });
+  post({ type: "paused", bible: false, images: false });
+  post({ type: "status", message: "" });
+  post({ type: "bibleStatus", text: "" });
 }
 
 async function handleOpen(book: import("@visual-reader/core").BookSource): Promise<void> {
