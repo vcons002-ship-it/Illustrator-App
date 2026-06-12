@@ -17,8 +17,17 @@ down the engine invisibly — the user only ever picks a model.
 - **Renderer:** `apps/web` build is loaded directly (`tauri.conf.json` →
   `frontendDist: ../../web/dist`). `withGlobalTauri: true` exposes `window.__TAURI__`,
   which `apps/web/src/runtime.ts` detects (`isDesktop`) to enable the local path.
-- **Commands (Rust → renderer):** `ensure_engine`, `list_models`, `download_model`
-  (see `src-tauri/src/main.rs`). The renderer calls these from `runtime.ts`.
+- **Commands (Rust → renderer):** `ensure_engine`, `list_models`, `download_model`,
+  `download_lora`, `lora_headers`, `gpu_info`, and `http_fetch` (see
+  `src-tauri/src/main.rs`). The renderer calls these from `runtime.ts`.
+- **`http_fetch` — CORS-free web access:** the desktop twin of the extension's
+  background-worker proxy. The webview is a browser and enforces CORS like one;
+  this native command (reqwest, 60s timeout, 32 MB cap, http(s)-only, base64
+  bodies, no cookies/ambient auth) is what lets the chat buddy's keyless
+  DuckDuckGo search and "open this URL" reach sites that block cross-origin
+  requests. The engine worker can't reach the Tauri bridge directly, so requests
+  relay through the main thread (`corsFetch`/`corsFetchResult` in
+  `apps/web/src/worker-protocol.ts`).
 - **Generation:** the engine's HTTP API is driven by the engine-agnostic
   `ComfyUIBackend` in `packages/core` (transport-injected, unit-tested), so the
   same code path runs in tests and in production.
@@ -57,6 +66,11 @@ shows per-model progress bars.
 The desktop app is intentionally **outside** the pnpm workspace so it never
 affects the JS build/test gate. It needs Node.js + pnpm (the renderer is the web
 app), the Rust toolchain, the platform C/C++ build tools, and the Tauri CLI.
+
+> **Toolchain note:** `Cargo.toml` ceiling-pins `time < 0.3.48` — 0.3.48's new
+> impls collide with `tauri-utils 2.9.2` under recent rustc coherence rules
+> (E0119) and break fresh clones on up-to-date toolchains. Drop the pin once
+> tauri-utils ships a fix.
 
 ### Windows — one click
 

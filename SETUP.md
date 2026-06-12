@@ -299,13 +299,21 @@ Style ids: `photorealistic`, `anime`, `manga`, `animation-3d`, `watercolor`,
 
 ## Using the app
 
+The home screen is a **chat assistant** — you can simply tell it what you want:
+*"open Frankenstein and illustrate it in oil painting style"*, *"find me an
+article on the citric acid cycle"*, *"generate a picture of an apple"*, or just
+chat. It can open books from your library, fetch public-domain classics from
+Project Gutenberg, open web articles, change the art style, and start
+illustrating — all from the conversation. Or drive everything by hand:
+
 1. Click **Load sample** to start reading immediately — it works with **no API
    keys**, using built-in placeholder art so you can see the whole flow
    (Visual Bible → predictive rendering → bloom reveal → spoiler gating).
-2. Or click **Open EPUB** and choose an `.epub` file from your computer.
+2. Or click **Open book…** and choose an `.epub` (or txt/md/html/pdf) file.
    Every book you open is remembered in a **Library** dropdown in the top bar —
    pick a title to switch back to it instantly (its illustrations + Visual Bible
-   are cached, so there's nothing to regenerate).
+   are cached, so there's nothing to regenerate). **← Exit book** returns to the
+   home screen anytime.
 3. As you scroll, the illustration for the current page appears beside the text,
    fading in as you arrive. Spoiler imagery stays blurred until you read past it.
 4. Optional: click **Pre-render whole book** in the top bar to generate every
@@ -351,6 +359,19 @@ You have two ways to get real art:
 **B) Your own GPU (free, private):** set **Images** to **On my computer** and
 connect a local Stable Diffusion server — see
 [Run images on your own GPU](#run-images-on-your-own-gpu-automatic1111-or-comfyui).
+
+### Mature mode (adults only — optional)
+
+Reading intentionally adult fiction? Settings has a **"Mature mode (adults
+only)"** checkbox (off by default). It turns off the app's content filtering so
+explicit or violent source material is illustrated and discussed faithfully:
+it relaxes the adjustable safety filters on **Gemini** (text + image) and
+**Flux**, and instructs the models not to sanitise. **Claude and OpenAI** have
+no such control and apply their own policies regardless — for the most
+permissive results use Gemini, Flux, or a fully local model + local image
+engine (which have no external filter at all). Toggling it rebuilds the
+providers; if a book's analysis was already done with filtering, use
+**↻ Redo → Story analysis** to re-extract.
 
 ### Scientific sources (technical books — optional)
 

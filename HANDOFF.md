@@ -1,12 +1,65 @@
 # Session hand-off — `claude/chat-context-pull-2l6pkv`
 
 Paste-in pointer for a fresh session:
-> Continue the work on branch `claude/chat-context-pull-2l6pkv` (continues
-> `claude/visual-content-generator-BLJks`). Read `HANDOFF.md` first. Priority:
-> live-validate the Google Custom Search (figure retrieval) + grounding calls
-> now that the environment has network access.
+> Continue the work on branch `claude/chat-context-pull-2l6pkv`. The repo's
+> DEFAULT branch is `claude/visual-content-generator-BLJks` — develop on the
+> work branch, then PR + merge into the default branch (the user's installers
+> and `git pull` track it; `main` was deleted). Read `HANDOFF.md` first.
 
-## Latest session: performance pass (no behavior changes)
+## Latest session: the conversational layer (chat buddy) + follow-ups
+
+The landing page is now a full-window **chat buddy** that drives the whole app;
+plus context-window management, mature mode, and a batch of user-reported fixes.
+All merged to the default branch via PRs #6–#14. Key pieces:
+
+- **Buddy** (`packages/core/src/chat/buddy-tools.ts` / `buddy-session.ts`) — a
+  second provider-agnostic JSON tool protocol (separate union from the in-book
+  chat's, deliberately): search_books (Gutendex) / random_books / search_web /
+  search_images / calculate / open_library_book / open_web_text /
+  open_pasted_text / remove_library_book / set_visual_style / generate_image
+  (approval-gated, shared shape with the book chat so the worker render path
+  serves both). Three personas, freeform = default; opens hand the conversation
+  off into the book chat (`buddyHandoff` ref in App.tsx, consumed by the
+  chat-history load effect). Worker: `handleBuddyChat` + `buddyOpened`/
+  `buddySettings`/`buddyLibraryChanged` messages.
+- **Keyless search stack** — `KeylessSearch` (`providers/image/ddg-search.ts`):
+  DuckDuckGo Lite HTML parse through CORS-exempt transports only (extension
+  proxy / desktop `http_fetch`), session-sticky fallback to `WikiSearch`;
+  `GutenbergSearch` (`providers/book-search.ts`, subjects + deterministic
+  `random()`); `fetchPageText` (`providers/page-text.ts`, Wikipedia extracts API
+  special case + regex HTML→text).
+- **Desktop CORS proxy** — Rust `http_fetch` command (`apps/desktop`), worker↔
+  main `corsFetch` relay (workers can't reach `window.__TAURI__`), selective
+  routing: ONLY keyless search + page fetch ride it (provider APIs keep native
+  fetch/streaming). `Cargo.toml` ceiling-pins `time <0.3.48` (tauri-utils E0119
+  on new rustc; Cargo.lock is gitignored so the pin must live in the manifest).
+- **Context management** — provider-aware budgets in `engine.worker.ts`
+  (`contextBudgets`): cloud fixed; local sized to the model's real window via
+  Ollama `/api/show` (`LocalServerLLMProvider.contextLength`), CAPPED at
+  `SAFE_LOCAL_CONTEXT_TOKENS = 8192` because /api/show reports the architectural
+  max, not what Ollama loads (uncapped budgeting 500'd llama 3.2). The book
+  section is a small recent window; a `search_book` tool (spoiler-gated keyword
+  scan, `chat/book-passage-search.ts`) reaches the rest on demand. `Compact`
+  (worker `summarize`) + per-message delete in both panels. Usage donut:
+  `chat/context-usage.ts` + `charts/pie-geometry.ts` + `ContextUsageDonut`.
+- **Mature mode** (`ReaderSettings.allowMature`, adults-only toggle, off by
+  default) — Gemini `safetySettings: BLOCK_NONE` (LLM + native image), Flux
+  `safety_tolerance: 6`, faithful-depiction notes threaded through extraction /
+  prompt-writing (`MATURE_CONTENT_NOTE`) and chat/buddy prompts
+  (`MATURE_CHAT_NOTE`). Claude/OpenAI have no knob (documented in the UI).
+- **Misc fixes** — environment aliases ("the fortress" → Basgiliath) through
+  extraction schema/merge/`findBibleTermsInText`; token-fallback model
+  resolution + loud errors listing installed models; local-server error bodies
+  surfaced (500/404 hints); scroll-settle correction in `useScrollDepth` + hold
+  last page in App; Settings panel floats as an overlay; `← Exit book` (worker
+  `close` message); calculator (`chat/calculator.ts`, no eval).
+
+Pending / known limitations: WebLLM + LM Studio report no context length (only
+Ollama does); DDG search inert in the plain web app (CORS, by design); desktop
+`http_fetch` + managed-engine runtime still need on-device verification; mature
+mode unverified against live provider APIs.
+
+## Previous session: performance pass (no behavior changes)
 
 A full-codebase performance audit, then the high-leverage batch implemented:
 
