@@ -28,8 +28,10 @@ export interface StoredChatMessage {
   turns?: { role: "system" | "user" | "assistant"; content: string }[];
 }
 
-/** Persisted chat history is trimmed to this many most-recent messages per book. */
-export const MAX_CHAT_HISTORY = 200;
+/** Persisted chat history is trimmed to this many most-recent messages per book.
+ * Generous on purpose — the MODEL-facing window is budgeted separately (and per
+ * provider) via `trimChatHistory`; this only bounds what IndexedDB holds. */
+export const MAX_CHAT_HISTORY = 500;
 
 /**
  * Persistence seam. The engine depends only on this interface, so each

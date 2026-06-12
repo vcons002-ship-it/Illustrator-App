@@ -94,6 +94,17 @@ describe("chat render-override resolvers", () => {
     expect(resolveModelRequest("flux 2", [])).toBeUndefined();
   });
 
+  it("falls back to token matching when words aren't contiguous in the filename", () => {
+    const withDev = ["FLUX.2-dev.safetensors", ...installed];
+    // "fluxdev" isn't a contiguous substring of "flux2dev" — tokens still match.
+    expect(resolveModelRequest("flux dev", withDev)).toBe("FLUX.2-dev.safetensors");
+    expect(resolveModelRequest("dev flux", withDev)).toBe("FLUX.2-dev.safetensors"); // order-free
+    expect(resolveModelRequest("flux 2 dev", withDev)).toBe("FLUX.2-dev.safetensors");
+    // Ambiguous tokens pick the shortest (least-decorated) candidate.
+    expect(resolveModelRequest("flux 2", withDev)).toBe("FLUX.2-dev.safetensors");
+    expect(resolveModelRequest("flux pro", withDev)).toBeUndefined(); // no candidate has "pro"
+  });
+
   it("resolves style names to catalog style ids (never 'auto')", () => {
     expect(resolveStyleRequest("oil painting")).toBe("oil-painting");
     expect(resolveStyleRequest("noir")).toBe("noir");

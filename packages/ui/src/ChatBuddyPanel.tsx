@@ -28,6 +28,8 @@ export interface ChatBuddyPanelProps {
   onClearHistory: () => void;
   /** Delete one message by index (must be referentially stable — see MessageBubble). */
   onDeleteMessage?: (index: number) => void;
+  /** Compact the conversation into a summary (frees the model's context window). */
+  onCompact?: () => void;
 }
 
 export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanelProps) {
@@ -68,6 +70,16 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             {personaButton("entertainment", "Entertainment", "Stories, novels, fun reads — a book-club voice")}
             {personaButton("technical", "Technical", "Articles, papers, study material — a research voice")}
           </span>
+          {props.onCompact && props.messages.length > 4 && (
+            <button
+              style={smallButtonStyle}
+              onClick={props.onCompact}
+              disabled={props.busy}
+              title="Summarize the conversation so far and continue from the summary (frees the model's memory)"
+            >
+              Compact
+            </button>
+          )}
           {props.messages.length > 0 && (
             <button style={smallButtonStyle} onClick={props.onClearHistory} title="Clear the buddy conversation">
               Clear

@@ -335,9 +335,11 @@ function normalizeModelName(s: string): string {
 
 /**
  * Resolve a model the user NAMED IN CHAT ("flux 2", "z image", "juggernaut") to an
- * actually-installed file: exact normalized match first, then substring. Installed
- * names only — a model that isn't downloaded can't render, so a miss returns
- * undefined and the caller keeps the current model instead of failing the render.
+ * actually-installed file: exact normalized match, then substring, then a token
+ * fallback (every word of the request appears somewhere in the name — "flux dev"
+ * matches "FLUX.2-dev" even though "fluxdev" isn't contiguous). Installed names
+ * only — a model that isn't downloaded can't render; a miss returns undefined and
+ * the CALLER decides whether to keep the current model or surface the failure.
  */
 export function resolveModelRequest(
   query: string,
@@ -345,10 +347,23 @@ export function resolveModelRequest(
 ): string | undefined {
   const nq = normalizeModelName(query);
   if (!nq) return undefined;
-  return (
-    installed.find((m) => normalizeModelName(m) === nq) ??
-    installed.find((m) => normalizeModelName(m).includes(nq))
-  );
+  const exact = installed.find((m) => normalizeModelName(m) === nq);
+  if (exact) return exact;
+  const substring = installed.find((m) => normalizeModelName(m).includes(nq));
+  if (substring) return substring;
+  const tokens = query
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .map((t) => normalizeModelName(t))
+    .filter(Boolean);
+  if (tokens.length < 2) return undefined; // single tokens had their substring shot
+  // Shortest candidate wins — the least-decorated name is the least surprising.
+  return installed
+    .filter((m) => {
+      const nm = normalizeModelName(m);
+      return tokens.every((t) => nm.includes(t));
+    })
+    .sort((a, b) => a.length - b.length)[0];
 }
 
 /**
