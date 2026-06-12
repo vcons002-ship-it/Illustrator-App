@@ -65,6 +65,8 @@ export async function runBuddyTurn(opts: {
   /** Prior turns + the new user message (caller appends it before calling). */
   history: ChatTurn[];
   deps: BuddyDeps;
+  /** Response budget (tokens); unset = the provider's default. */
+  maxTokens?: number;
   onEvent?: (e: BuddyTurnEvent) => void;
   signal?: AbortSignal;
 }): Promise<BuddyTurnOutcome> {
@@ -76,6 +78,7 @@ export async function runBuddyTurn(opts: {
     const reply = await opts.llm.chat(messages, {
       ...(opts.onEvent ? { onToken: (text: string) => opts.onEvent?.({ kind: "token", text }) } : {}),
       ...(opts.signal ? { signal: opts.signal } : {}),
+      ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
     });
     const call = round < MAX_BUDDY_TOOL_ROUNDS ? parseBuddyToolCall(reply) : undefined;
     if (!call) {

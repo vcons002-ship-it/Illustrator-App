@@ -32,6 +32,24 @@ describe("runChatTurn", () => {
     expect(out.toolResults).toEqual([]);
   });
 
+  it("forwards the response budget (maxTokens) to the provider", async () => {
+    let seen: number | undefined;
+    const llm: ChatCapable = {
+      async chat(_messages, opts) {
+        seen = opts?.maxTokens;
+        return "ok";
+      },
+    };
+    await runChatTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "hi" }],
+      tools: {},
+      maxTokens: 4096,
+    });
+    expect(seen).toBe(4096); // without this, providers cap replies at their 1024 default
+  });
+
   it("executes a search call, feeds the result back, and returns the follow-up", async () => {
     const llm = new FakeChat([SEARCH, "Per [1], it's the citric acid cycle."]);
     const out = await runChatTurn({
