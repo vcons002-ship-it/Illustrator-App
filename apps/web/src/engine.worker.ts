@@ -617,6 +617,9 @@ const CLOUD_MAX_TOKENS: Record<string, number> = { claude: 200_000, gemini: 1_00
 interface ContextBudgets {
   book: number;
   history: number;
+  /** Response budget (tokens) — replies were capping at the provider default
+   * (1024) and cutting off mid-message on longer answers. */
+  reply: number;
   /** The model's context window in tokens, when known. */
   maxTokens?: number;
 }
@@ -649,14 +652,26 @@ function contextBudgets(llmId: string, ctxTokens?: number): ContextBudgets {
     // The book section is now a RECENT window only (the model pulls the rest on
     // demand via search_book), so it stays small even on huge cloud contexts —
     // a simple request no longer pays to re-read the whole book every turn.
-    return { book: 24_000, history: 60_000, ...(CLOUD_MAX_TOKENS[llmId] ? { maxTokens: CLOUD_MAX_TOKENS[llmId] } : {}) };
+    return {
+      book: 24_000,
+      history: 60_000,
+      reply: 4096,
+      ...(CLOUD_MAX_TOKENS[llmId] ? { maxTokens: CLOUD_MAX_TOKENS[llmId] } : {}),
+    };
   }
   if (ctxTokens && ctxTokens > 0) {
     const usable = Math.min(ctxTokens, MAX_TRUSTED_CONTEXT_TOKENS);
     const inputChars = Math.min(Math.floor(usable * CHARS_PER_TOKEN * 0.45), MAX_LOCAL_INPUT_CHARS);
-    return { book: Math.floor(inputChars * 0.7), history: Math.floor(inputChars * 0.3), maxTokens: usable };
+    return {
+      book: Math.floor(inputChars * 0.7),
+      history: Math.floor(inputChars * 0.3),
+      // ~25% of the window for the reply (the input formula reserves it), with a
+      // floor so tiny windows still answer and a cap so huge ones don't ramble.
+      reply: Math.min(4096, Math.max(512, Math.floor(usable * 0.25))),
+      maxTokens: usable,
+    };
   }
-  return { book: CHAT_CONTEXT_BUDGET_CHARS, history: 8_000 };
+  return { book: CHAT_CONTEXT_BUDGET_CHARS, history: 8_000, reply: 1024 };
 }
 
 /**
@@ -829,6 +844,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       llm,
       system,
       history,
+      maxTokens: budgets.reply,
       tools: {
         searchWeb: (q) => imageSearch.searchWeb(q),
         searchImages: (q) => imageSearch.search(q),
@@ -974,6 +990,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       llm,
       system: setup,
       history,
+      maxTokens: budgets.reply,
       deps: {
         searchWeb: (q) => imageSearch.searchWeb(q),
         searchBooks: (q) => books.search(q),

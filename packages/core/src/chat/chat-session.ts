@@ -68,6 +68,8 @@ export async function runChatTurn(opts: {
   /** Prior turns + the new user message (caller appends it before calling). */
   history: ChatTurn[];
   tools: ChatToolDeps;
+  /** Response budget (tokens); unset = the provider's default. */
+  maxTokens?: number;
   onEvent?: (e: ChatTurnEvent) => void;
   signal?: AbortSignal;
 }): Promise<ChatTurnOutcome> {
@@ -79,6 +81,7 @@ export async function runChatTurn(opts: {
     const reply = await opts.llm.chat(messages, {
       ...(opts.onEvent ? { onToken: (text: string) => opts.onEvent?.({ kind: "token", text }) } : {}),
       ...(opts.signal ? { signal: opts.signal } : {}),
+      ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
     });
     const call = round < MAX_TOOL_ROUNDS ? parseToolCall(reply) : undefined;
     if (!call) {

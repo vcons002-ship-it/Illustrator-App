@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatToolResult, parseToolCall } from "./chat-tools.js";
+import { CHAT_TOOLS_SYSTEM, formatToolResult, parseToolCall } from "./chat-tools.js";
 import { resolveModelRequest, resolveStyleRequest } from "../providers/catalog.js";
 
 describe("parseToolCall", () => {
@@ -74,6 +74,14 @@ describe("formatToolResult", () => {
     expect(
       formatToolResult({ tool: "generate_image", prompt: "p" }, { image: { ok: false, error: "no engine" } }),
     ).toContain("no engine");
+  });
+});
+
+describe("CHAT_TOOLS_SYSTEM image-tool disambiguation", () => {
+  it("tells the model show-me = search_images, generate = generate_image", () => {
+    expect(CHAT_TOOLS_SYSTEM).toContain("PICKING THE IMAGE TOOL");
+    expect(CHAT_TOOLS_SYSTEM).toContain("REAL image");
+    expect(CHAT_TOOLS_SYSTEM).toContain("NEW art");
   });
 });
 
