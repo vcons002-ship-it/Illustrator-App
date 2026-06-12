@@ -544,6 +544,109 @@ describe("RenderPipeline comic-page directive", () => {
   });
 });
 
+describe("RenderPipeline shared-keyEvent differentiation", () => {
+  /** Two grouped units whose ranges both fall inside ONE stored keyEvent ([0,5]) —
+   * the stale-grouping / under-produced-model case that rendered identical panels. */
+  function twoUnitBook(): BookSource {
+    return {
+      id: "book-1",
+      title: "Test",
+      chapters: [{ id: "ch-0", index: 0, title: "I" }],
+      pages: [
+        { id: "u-0", index: 0, chapterId: "ch-0", pageRange: [0, 2], paragraphs: [{ id: "u-0-0", index: 0, text: "Knight fights" }] },
+        { id: "u-1", index: 1, chapterId: "ch-0", pageRange: [3, 5], paragraphs: [{ id: "u-1-0", index: 0, text: "Knight rests" }] },
+      ],
+    };
+  }
+
+  it("varies the prompt (beat cue) and seed per unit when units share one keyEvent", async () => {
+    const book = twoUnitBook();
+    const bible = createEmptyBible(book.id);
+    bible.storyboard.push({
+      chapterIndex: 0,
+      summary: "",
+      keyMoment: "",
+      location: "",
+      locationChange: "",
+      keyEvents: [{ pageRange: [0, 5], imagePrompt: { text: "ONE SHARED SCENE" } }],
+    });
+    bible.characters.push({
+      id: "char-knight",
+      name: "Knight",
+      aliases: [],
+      appearance: emptyAppearance(),
+      persistentTraits: [],
+      clothing: [],
+      anchor: { seed: 100 },
+      firstSeenChapter: 0,
+    });
+    const inputs: ImageGenerationInput[] = [];
+    const provider: ImageProvider = {
+      id: "mock",
+      generate: async (input) => {
+        inputs.push(input);
+        return { bytes: new ArrayBuffer(1), mimeType: "image/png" };
+      },
+    };
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: DEFAULT_TIER_CONFIG,
+    });
+    await pipeline.renderPage(0);
+    await pipeline.renderPage(1);
+    expect(inputs).toHaveLength(2);
+    // Unit 0 IS the event's start: unchanged prompt + the character's true seed.
+    expect(inputs[0]!.prompt).toContain("ONE SHARED SCENE");
+    expect(inputs[0]!.prompt).not.toContain("LATER beat");
+    expect(inputs[0]!.anchors[0]!.seed).toBe(100);
+    // Unit 1 shares the event from offset 3 → beat cue + nudged seed.
+    expect(inputs[1]!.prompt).toContain("ONE SHARED SCENE");
+    expect(inputs[1]!.prompt).toContain("LATER beat");
+    expect(inputs[1]!.anchors[0]!.seed).toBe(103);
+    // The two renders can no longer be pixel-identical.
+    expect(inputs[0]!.prompt).not.toBe(inputs[1]!.prompt);
+  });
+
+  it("leaves an exactly-matching keyEvent untouched (no cue, true seed)", async () => {
+    const book = oneParagraphBook("Knight stands");
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "EXACT SCENE");
+    bible.characters.push({
+      id: "char-knight",
+      name: "Knight",
+      aliases: [],
+      appearance: emptyAppearance(),
+      persistentTraits: [],
+      clothing: [],
+      anchor: { seed: 7 },
+      firstSeenChapter: 0,
+    });
+    const inputs: ImageGenerationInput[] = [];
+    const provider: ImageProvider = {
+      id: "mock",
+      generate: async (input) => {
+        inputs.push(input);
+        return { bytes: new ArrayBuffer(1), mimeType: "image/png" };
+      },
+    };
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: DEFAULT_TIER_CONFIG,
+    });
+    await pipeline.renderPage(0);
+    expect(inputs[0]!.prompt).not.toContain("LATER beat");
+    expect(inputs[0]!.anchors[0]!.seed).toBe(7);
+  });
+});
+
 describe("RenderPipeline reference images (IP-Adapter)", () => {
   function character(name: string, refIds: string[]): Character {
     return {
