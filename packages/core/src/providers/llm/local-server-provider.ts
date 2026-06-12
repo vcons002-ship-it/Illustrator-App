@@ -52,6 +52,19 @@ interface ModelsResponse {
   data?: { id: string }[];
 }
 
+/** Subset of Ollama `/api/show` we use — the context window lives under
+ * `model_info` as "<arch>.context_length" (e.g. "llama.context_length"). */
+interface OllamaShowResponse {
+  model_info?: Record<string, unknown>;
+}
+
+/** One installed local model + its context window in tokens when discoverable. */
+export interface LocalModelInfo {
+  id: string;
+  label: string;
+  contextLength?: number;
+}
+
 export class LocalServerLLMProvider implements LLMProvider, ChatCapable {
   readonly id = "local-server";
   private readonly transport: Transport;
@@ -166,6 +179,40 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable {
     if (!res.ok) throw new Error(`Local LLM server listModels failed with status ${res.status}`);
     const data = await res.json<ModelsResponse>();
     return (data.data ?? []).map((m) => ({ id: m.id, label: m.id }));
+  }
+
+  /**
+   * One model's context window in tokens via Ollama's `/api/show` — the only
+   * place a local server reliably reports it. Best-effort: returns undefined for
+   * non-Ollama servers (no such endpoint) or any failure, so callers degrade to
+   * a conservative default rather than erroring.
+   */
+  static async contextLength(
+    baseUrl: string,
+    model: string,
+    transport?: Transport,
+  ): Promise<number | undefined> {
+    const t = transport ?? new DirectTransport();
+    try {
+      const res = await t.send({
+        url: `${ollamaRoot(baseUrl)}/api/show`,
+        method: "POST",
+        body: { model },
+      });
+      if (!res.ok) return undefined;
+      const data = await res.json<OllamaShowResponse>();
+      const info = data.model_info ?? {};
+      // The key is architecture-prefixed ("llama.context_length",
+      // "qwen2.context_length", …) — take the first *.context_length number.
+      for (const [key, value] of Object.entries(info)) {
+        if (key.endsWith(".context_length") && typeof value === "number" && value > 0) {
+          return value;
+        }
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /**

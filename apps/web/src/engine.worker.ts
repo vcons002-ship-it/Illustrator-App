@@ -7,10 +7,13 @@ import {
   IndexedDbStore,
   base64ToBytes,
   bytesToBase64,
+  chatContextSections,
+  measureContextUsage,
   trimChatHistory,
+  CHARS_PER_TOKEN,
   CHAT_CONTEXT_BUDGET_CHARS,
+  LocalServerLLMProvider,
   buildBuddySystemPrompt,
-  buildChatSystemPrompt,
   chapterText,
   fetchPageText,
   getImageStyle,
@@ -586,11 +589,57 @@ function chatProviders(): { llm: LLMProvider; image: ImageProvider; tier: TierCo
  * 90% of what they could read. Local/on-device models keep the small budgets.
  */
 const CLOUD_LLM_IDS = new Set(["claude", "gemini", "openai"]);
-function bookContextBudget(llmId: string): number {
-  return CLOUD_LLM_IDS.has(llmId) ? 400_000 : CHAT_CONTEXT_BUDGET_CHARS;
+/** Approximate context windows (tokens) for the donut's "X / Y" readout — cloud
+ * models don't report it; these are the families' standard sizes. */
+const CLOUD_MAX_TOKENS: Record<string, number> = { claude: 200_000, gemini: 1_000_000, openai: 128_000 };
+
+interface ContextBudgets {
+  book: number;
+  history: number;
+  /** The model's context window in tokens, when known. */
+  maxTokens?: number;
 }
-function historyBudget(llmId: string): number {
-  return CLOUD_LLM_IDS.has(llmId) ? 80_000 : 8_000;
+
+/**
+ * Split the model's context window into book + history char budgets. Cloud models
+ * get generous fixed budgets. Local models are sized to their ACTUAL window when
+ * known (Ollama reports it): ~70% of the window for input — reserving the rest for
+ * the reply and the always-present tool/settings instructions — split 70/30 book/
+ * history. A 128k local model now gets a large budget; a 4k one stays small (no
+ * over-stuffing). Unknown window → the conservative 8k-class defaults.
+ */
+function contextBudgets(llmId: string, ctxTokens?: number): ContextBudgets {
+  if (CLOUD_LLM_IDS.has(llmId)) {
+    return { book: 400_000, history: 80_000, ...(CLOUD_MAX_TOKENS[llmId] ? { maxTokens: CLOUD_MAX_TOKENS[llmId] } : {}) };
+  }
+  if (ctxTokens && ctxTokens > 0) {
+    const usableChars = Math.floor(ctxTokens * CHARS_PER_TOKEN * 0.7);
+    return { book: Math.floor(usableChars * 0.7), history: Math.floor(usableChars * 0.3), maxTokens: ctxTokens };
+  }
+  return { book: CHAT_CONTEXT_BUDGET_CHARS, history: 8_000 };
+}
+
+/** The chat LLM's context window in tokens, cached. Only local-server (Ollama)
+ * reports it; cloud is fixed and WebLLM has no API, so both return undefined. */
+let localCtxCache: { key: string; ctx: number | undefined; at: number } | undefined;
+async function localContextTokens(llmId: string): Promise<number | undefined> {
+  if (!settings || llmId !== "local-server") return undefined;
+  const cs = chatSettingsOf(settings);
+  const url = cs.localServerTextUrl ?? settings.localServerTextUrl;
+  const model = cs.localServerTextModel ?? settings.localServerTextModel;
+  if (!url || !model) return undefined;
+  const key = `${url}::${model}`;
+  if (localCtxCache && localCtxCache.key === key && Date.now() - localCtxCache.at < 300_000) {
+    return localCtxCache.ctx;
+  }
+  const cf = corsFetch();
+  const ctx = await LocalServerLLMProvider.contextLength(
+    url,
+    model,
+    cf ? new DirectTransport(cf) : undefined,
+  );
+  localCtxCache = { key, ctx, at: Date.now() };
+  return ctx;
 }
 
 /** The local image engine's installed model names, cached briefly (each chat
@@ -671,23 +720,49 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       }))
       .sort((a, b) => a.index - b.index);
     const note = await renderDefaultsNote();
+    const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
+    const sections = chatContextSections({
+      bookTitle: book.title,
+      contentMode: book.contentMode ?? "fiction",
+      chapters,
+      ...(currentBible ? { bible: currentBible } : {}),
+      position: chatPosition(book, msg.position),
+      allowSpoilers: msg.allowSpoilers,
+      budgetChars: budgets.book,
+    });
+    const sec = (key: string) => sections.find((s) => s.key === key)?.text ?? "";
     const system =
-      buildChatSystemPrompt({
-        bookTitle: book.title,
-        contentMode: book.contentMode ?? "fiction",
-        chapters,
-        ...(currentBible ? { bible: currentBible } : {}),
-        position: chatPosition(book, msg.position),
-        allowSpoilers: msg.allowSpoilers,
-        budgetChars: bookContextBudget(llm.id),
-      }) + (note ? `\n\n${note}` : "");
+      sections
+        .map((s) => s.text)
+        .filter(Boolean)
+        .join("\n\n") + (note ? `\n\n${note}` : "");
+    const history = trimChatHistory(
+      [...msg.history, { role: "user", content: msg.userText }],
+      budgets.history,
+    );
+    // Where the context is going, for the usage donut — posted before the turn.
+    post({
+      type: "chatContextUsage",
+      requestId: msg.requestId,
+      usage: measureContextUsage(
+        [
+          { key: "book", label: "Book text", text: sec("book") },
+          { key: "bible", label: "Visual bible", text: sec("bible") },
+          {
+            key: "instructions",
+            label: "Instructions & tools",
+            text: [sec("role"), sec("tools"), sec("guard"), note].filter(Boolean).join("\n\n"),
+          },
+          { key: "history", label: "Chat history", text: history.slice(0, -1).map((t) => t.content).join("\n") },
+          { key: "message", label: "Your message", text: msg.userText },
+        ],
+        { budgetChars: budgets.book, ...(budgets.maxTokens ? { maxTokens: budgets.maxTokens } : {}) },
+      ),
+    });
     const outcome = await runChatTurn({
       llm,
       system,
-      history: trimChatHistory(
-        [...msg.history, { role: "user", content: msg.userText }],
-        historyBudget(llm.id),
-      ),
+      history,
       tools: {
         searchWeb: (q) => imageSearch.searchWeb(q),
         searchImages: (q) => imageSearch.search(q),
@@ -795,15 +870,30 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       return { title: book.title, chapters: book.chapters.length, pages: book.pages.length, visuals };
     };
     const note = await renderDefaultsNote();
+    const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
+    const setup =
+      buildBuddySystemPrompt({ persona: msg.persona, library: msg.library }) +
+      (note ? `\n\n${note}` : "");
+    const history = trimChatHistory(
+      [...msg.history, { role: "user", content: msg.userText }],
+      budgets.history,
+    );
+    post({
+      type: "chatContextUsage",
+      requestId: msg.requestId,
+      usage: measureContextUsage(
+        [
+          { key: "instructions", label: "Assistant setup & tools", text: setup },
+          { key: "history", label: "Chat history", text: history.slice(0, -1).map((t) => t.content).join("\n") },
+          { key: "message", label: "Your message", text: msg.userText },
+        ],
+        { budgetChars: budgets.book, ...(budgets.maxTokens ? { maxTokens: budgets.maxTokens } : {}) },
+      ),
+    });
     const outcome = await runBuddyTurn({
       llm,
-      system:
-        buildBuddySystemPrompt({ persona: msg.persona, library: msg.library }) +
-        (note ? `\n\n${note}` : ""),
-      history: trimChatHistory(
-        [...msg.history, { role: "user", content: msg.userText }],
-        historyBudget(llm.id),
-      ),
+      system: setup,
+      history,
       deps: {
         searchWeb: (q) => imageSearch.searchWeb(q),
         searchBooks: (q) => books.search(q),

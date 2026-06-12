@@ -29,6 +29,7 @@ import {
   type BuddyPersona,
   type BuddyToolCall,
   type ChatTurn,
+  type ContextUsage,
   type EncryptedSecrets,
   type StoredChatMessage,
   type ToolCall,
@@ -146,6 +147,7 @@ export function App() {
   const [chatStreaming, setChatStreaming] = useState("");
   const [chatActivity, setChatActivity] = useState("");
   const [chatPendingTool, setChatPendingTool] = useState<ToolCall | undefined>();
+  const [chatUsage, setChatUsage] = useState<ContextUsage | undefined>();
   const [allowSpoilers, setAllowSpoilers] = useState(false);
   // The pending generate_image's transcript (assistant JSON turn), folded into the
   // history only when the user approves — a dismissed call never reaches the model.
@@ -157,6 +159,7 @@ export function App() {
   const [buddyActivity, setBuddyActivity] = useState("");
   const [buddyPersona, setBuddyPersona] = useState<BuddyPersona>("freeform");
   const [buddyPendingTool, setBuddyPendingTool] = useState<BuddyToolCall | undefined>();
+  const [buddyUsage, setBuddyUsage] = useState<ContextUsage | undefined>();
   // The pending generate_image's transcript, folded in only on approval (same
   // injection guard as the book chat's pendingTranscript).
   const pendingBuddyTranscript = useRef<ChatTurn[]>([]);
@@ -559,6 +562,7 @@ export function App() {
     setChatPendingTool(undefined);
     setChatStreaming("");
     setChatActivity("");
+    setChatUsage(undefined);
     if (!book) return;
     let cancelled = false;
     void libraryStore.getChatHistory?.(book.id).then((stored) => {
@@ -616,6 +620,7 @@ export function App() {
         isTechnical || allowSpoilers,
         (e) => {
           if (e.kind === "token") setChatStreaming((prev) => prev + e.text);
+          else if (e.kind === "usage") setChatUsage(e.usage);
           else if (e.kind === "tool")
             setChatActivity(
               e.call.tool === "search_web"
@@ -758,6 +763,7 @@ export function App() {
       let openedBook = false;
       const res = await buddyChat(history, text, buddyPersona, library, (e) => {
         if (e.kind === "token") setBuddyStreaming((prev) => prev + e.text);
+        else if (e.kind === "usage") setBuddyUsage(e.usage);
         else if (e.kind === "tool") {
           setBuddyActivity(
             e.call.tool === "search_books"
@@ -1442,6 +1448,7 @@ export function App() {
             onClearHistory={onClearBuddy}
             onDeleteMessage={onDeleteBuddyMessage}
             onCompact={onCompactBuddyClick}
+            {...(buddyUsage ? { contextUsage: buddyUsage } : {})}
           />
         </section>
       )}
@@ -1555,6 +1562,7 @@ export function App() {
           onClearHistory={onClearChat}
           onDeleteMessage={onDeleteChatMessage}
           onCompact={onCompactChatClick}
+          {...(chatUsage ? { contextUsage: chatUsage } : {})}
         />
       )}
 

@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
-import type { ToolCall } from "@visual-reader/core";
+import type { ContextUsage, ToolCall } from "@visual-reader/core";
+import { ContextUsageDonut } from "./ContextUsageDonut.js";
 
 /**
  * The reading-companion chat panel. Pure presentation: messages, a streaming
@@ -41,6 +42,8 @@ export interface ChatPanelProps {
   onDeleteMessage?: (index: number) => void;
   /** Compact the conversation into a summary (frees the model's context window). */
   onCompact?: () => void;
+  /** Latest context-usage breakdown (for the usage donut). */
+  contextUsage?: ContextUsage;
 }
 
 export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
@@ -93,6 +96,8 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
             </button>
           </span>
         </div>
+
+        {props.contextUsage && <UsageDisclosure usage={props.contextUsage} />}
 
         <div ref={scrollRef} style={scrollStyle}>
           {props.messages.length === 0 && !props.streamingText && (
@@ -162,6 +167,35 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
     </div>
   );
 });
+
+/** Collapsible context-usage readout — a one-line summary that expands to the
+ * donut + legend. Shared by both chat panels. */
+export const UsageDisclosure = memo(function UsageDisclosure({ usage }: { usage: ContextUsage }) {
+  const pct =
+    usage.maxTokens !== undefined
+      ? ` · ${Math.min(100, Math.round((usage.approxTokens / usage.maxTokens) * 100))}% of window`
+      : "";
+  const used = usage.approxTokens >= 1000 ? `${(usage.approxTokens / 1000).toFixed(1)}k` : usage.approxTokens;
+  return (
+    <details style={usageDetailsStyle}>
+      <summary style={usageSummaryStyle}>
+        Context: ~{used} tokens{pct} — see breakdown
+      </summary>
+      <div style={{ padding: "6px 10px 10px" }}>
+        <ContextUsageDonut usage={usage} />
+      </div>
+    </details>
+  );
+});
+
+const usageDetailsStyle = { borderBottom: "1px solid rgba(255,255,255,0.08)" } as const;
+const usageSummaryStyle = {
+  cursor: "pointer",
+  fontSize: 11,
+  opacity: 0.7,
+  padding: "6px 12px",
+  listStyle: "revert",
+} as const;
 
 // Memoised: every keystroke in the draft (panel-local state) and every streamed
 // token re-renders the panel — settled bubbles (which can hold images and link

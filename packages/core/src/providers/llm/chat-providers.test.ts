@@ -29,6 +29,21 @@ const turns: ChatTurn[] = [
   { role: "user", content: "what now?" },
 ];
 
+describe("LocalServerLLMProvider.contextLength", () => {
+  it("reads the architecture-prefixed context_length from /api/show", async () => {
+    const t = new FakeTransport({ model_info: { "llama.context_length": 131072, "llama.block_count": 32 } });
+    const ctx = await LocalServerLLMProvider.contextLength("http://localhost:11434/v1", "llama3.2", t);
+    expect(ctx).toBe(131072);
+    expect(t.requests[0]!.url).toContain("/api/show");
+    expect((t.requests[0]!.body as { model: string }).model).toBe("llama3.2");
+  });
+
+  it("returns undefined when no context_length key is present", async () => {
+    const t = new FakeTransport({ model_info: { "qwen2.block_count": 28 } });
+    expect(await LocalServerLLMProvider.contextLength("http://x/v1", "qwen2", t)).toBeUndefined();
+  });
+});
+
 describe("provider chat()", () => {
   it("openai maps the turns 1:1 onto chat/completions", async () => {
     const t = new FakeTransport({ choices: [{ message: { content: " answer " } }] });

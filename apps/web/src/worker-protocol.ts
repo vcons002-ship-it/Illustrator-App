@@ -6,6 +6,7 @@ import type {
   BuddyToolCall,
   CharacterPatch,
   ChatTurn,
+  ContextUsage,
   ImageResult,
   ImageSearchHit,
   ImportStats,
@@ -163,6 +164,8 @@ export type WorkerToMain =
       pendingTool?: ToolCall;
     }
   | { type: "chatError"; requestId: number; message: string }
+  /** Context-usage breakdown for the chat/buddy panel donut (posted before the turn). */
+  | { type: "chatContextUsage"; requestId: number; usage: ContextUsage }
   /** Incremental buddy text (streaming providers only). */
   | { type: "buddyToken"; requestId: number; text: string }
   | { type: "buddyTool"; requestId: number; round: number; call: BuddyToolCall }

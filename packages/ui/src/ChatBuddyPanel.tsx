@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { MessageBubble, type ChatMessageVM } from "./ChatPanel.js";
-import type { BuddyPersona, BuddyToolCall } from "@visual-reader/core";
+import { MessageBubble, UsageDisclosure, type ChatMessageVM } from "./ChatPanel.js";
+import type { BuddyPersona, BuddyToolCall, ContextUsage } from "@visual-reader/core";
 
 /**
  * The landing-page chat buddy. Pure presentation, like ChatPanel — but rendered
@@ -30,6 +30,8 @@ export interface ChatBuddyPanelProps {
   onDeleteMessage?: (index: number) => void;
   /** Compact the conversation into a summary (frees the model's context window). */
   onCompact?: () => void;
+  /** Latest context-usage breakdown (for the usage donut). */
+  contextUsage?: ContextUsage;
 }
 
 export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanelProps) {
@@ -87,6 +89,8 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           )}
         </span>
       </div>
+
+      {props.contextUsage && <UsageDisclosure usage={props.contextUsage} />}
 
       <div ref={scrollRef} style={scrollStyle}>
         {props.messages.length === 0 && !props.streamingText && (
