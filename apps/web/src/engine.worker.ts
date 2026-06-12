@@ -622,21 +622,27 @@ interface ContextBudgets {
 }
 
 /**
- * Local servers report the model's ARCHITECTURAL max (llama-3.2 = 131072), NOT
- * the context they actually loaded — Ollama defaults to a few thousand tokens and
- * the OpenAI-compatible endpoint can't raise it. Budgeting to 70% of 131072 sent
- * ~90k tokens into a ~4k window, which 500s the server. So cap the window we
- * budget against to a value a default local setup can realistically hold, and
- * reserve generous headroom (the system prompt + reply also live in the window).
+ * What Ollama LOADS when nothing says otherwise (its built-in default is
+ * VRAM-dynamic but ~4096 for typical machines). Models report a huge
+ * ARCHITECTURAL max (llama-3.2 = 131072, Qwen 1M variants = 1048576) that is NOT
+ * what's loaded — budgeting to it overflows/truncates a default setup (and once
+ * 500'd the server). So the arch max is only trusted DOWN to this assumption;
+ * an explicit signal (the Settings override, or a Modelfile `num_ctx` — recent
+ * library models ship one, e.g. qwen3 = 40960) is trusted as-is.
  */
-const SAFE_LOCAL_CONTEXT_TOKENS = 8192;
+const OLLAMA_DEFAULT_LOADED_TOKENS = 4096;
+/** Sanity clamp for trusted windows (Qwen's 1M variants are today's ceiling). */
+const MAX_TRUSTED_CONTEXT_TOKENS = 1_048_576;
+/** Even with a giant window, bound the input we build — prefill on a local GPU
+ * is slow, and the lazy book/bible tools fetch the rest on demand anyway. */
+const MAX_LOCAL_INPUT_CHARS = 480_000;
 
 /**
  * Split the model's context window into book + history char budgets. Cloud models
- * get generous fixed budgets. Local models are sized to their reported window,
- * capped (see SAFE_LOCAL_CONTEXT_TOKENS) and budgeted conservatively — a smaller
- * local model still gets sized DOWN; a huge one is held to the safe ceiling.
- * Unknown window → the conservative 8k-class defaults.
+ * get generous fixed budgets. Local models are sized to their RESOLVED window
+ * (override > Modelfile num_ctx > arch max capped at the Ollama default), 45% of
+ * it for input — the rest holds the system prompt and the reply — split 70/30
+ * book/history. Unknown window → the conservative 8k-class defaults.
  */
 function contextBudgets(llmId: string, ctxTokens?: number): ContextBudgets {
   if (CLOUD_LLM_IDS.has(llmId)) {
@@ -646,20 +652,28 @@ function contextBudgets(llmId: string, ctxTokens?: number): ContextBudgets {
     return { book: 24_000, history: 60_000, ...(CLOUD_MAX_TOKENS[llmId] ? { maxTokens: CLOUD_MAX_TOKENS[llmId] } : {}) };
   }
   if (ctxTokens && ctxTokens > 0) {
-    const usable = Math.min(ctxTokens, SAFE_LOCAL_CONTEXT_TOKENS);
-    // 45% of the window for book+history: the rest holds the system prompt (role +
-    // bible + tools + settings note) and the model's reply, all in the same window.
-    const inputChars = Math.floor(usable * CHARS_PER_TOKEN * 0.45);
+    const usable = Math.min(ctxTokens, MAX_TRUSTED_CONTEXT_TOKENS);
+    const inputChars = Math.min(Math.floor(usable * CHARS_PER_TOKEN * 0.45), MAX_LOCAL_INPUT_CHARS);
     return { book: Math.floor(inputChars * 0.7), history: Math.floor(inputChars * 0.3), maxTokens: usable };
   }
   return { book: CHAT_CONTEXT_BUDGET_CHARS, history: 8_000 };
 }
 
-/** The chat LLM's context window in tokens, cached. Only local-server (Ollama)
- * reports it; cloud is fixed and WebLLM has no API, so both return undefined. */
+/**
+ * The chat LLM's RESOLVED context window in tokens. Trust order:
+ *  1. the Settings override (`localContextTokens`) — the user knows what their
+ *     server loads (OLLAMA_CONTEXT_LENGTH isn't visible through any API);
+ *  2. the model's Modelfile `num_ctx` from Ollama /api/show — what Ollama loads;
+ *  3. the architectural max, capped at Ollama's typical default (4096) — a model
+ *     that COULD do 131k/1M is still loaded small unless something says otherwise.
+ * Cloud is fixed; LM Studio/WebLLM have no query API (override still applies).
+ */
 let localCtxCache: { key: string; ctx: number | undefined; at: number } | undefined;
 async function localContextTokens(llmId: string): Promise<number | undefined> {
-  if (!settings || llmId !== "local-server") return undefined;
+  if (!settings || CLOUD_LLM_IDS.has(llmId)) return undefined;
+  const override = settings.localContextTokens;
+  if (override && override > 0) return Math.min(override, MAX_TRUSTED_CONTEXT_TOKENS);
+  if (llmId !== "local-server") return undefined; // only Ollama can be queried
   const cs = chatSettingsOf(settings);
   const url = cs.localServerTextUrl ?? settings.localServerTextUrl;
   const model = cs.localServerTextModel ?? settings.localServerTextModel;
@@ -669,11 +683,13 @@ async function localContextTokens(llmId: string): Promise<number | undefined> {
     return localCtxCache.ctx;
   }
   const cf = corsFetch();
-  const ctx = await LocalServerLLMProvider.contextLength(
+  const info = await LocalServerLLMProvider.contextLength(
     url,
     model,
     cf ? new DirectTransport(cf) : undefined,
   );
+  const ctx =
+    info?.loaded ?? (info?.max ? Math.min(info.max, OLLAMA_DEFAULT_LOADED_TOKENS) : undefined);
   localCtxCache = { key, ctx, at: Date.now() };
   return ctx;
 }

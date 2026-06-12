@@ -52,10 +52,21 @@ interface ModelsResponse {
   data?: { id: string }[];
 }
 
-/** Subset of Ollama `/api/show` we use — the context window lives under
- * `model_info` as "<arch>.context_length" (e.g. "llama.context_length"). */
+/** Subset of Ollama `/api/show` we use: `model_info` carries the ARCHITECTURAL
+ * max ("<arch>.context_length"); `parameters` is the Modelfile parameter dump
+ * ("num_ctx 40960\n…") — when present, num_ctx is what Ollama actually LOADS. */
 interface OllamaShowResponse {
   model_info?: Record<string, unknown>;
+  parameters?: string;
+}
+
+/** A local model's context window, as well as it can be known. */
+export interface LocalContextInfo {
+  /** The context Ollama actually loads (Modelfile `num_ctx`) — trustworthy. */
+  loaded?: number;
+  /** The architecture's maximum (e.g. llama 3.2 = 131072) — what the model COULD
+   * do, NOT what's loaded; budgeting to this overflows a default setup. */
+  max?: number;
 }
 
 /** One installed local model + its context window in tokens when discoverable. */
@@ -204,16 +215,17 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable {
   }
 
   /**
-   * One model's context window in tokens via Ollama's `/api/show` — the only
-   * place a local server reliably reports it. Best-effort: returns undefined for
-   * non-Ollama servers (no such endpoint) or any failure, so callers degrade to
-   * a conservative default rather than erroring.
+   * One model's context window via Ollama's `/api/show` — the only place a local
+   * server reports it. Returns BOTH signals when present: the Modelfile `num_ctx`
+   * (what Ollama actually loads — many recent library models ship one, e.g. qwen3
+   * = 40960) and the architectural max. Best-effort: undefined for non-Ollama
+   * servers (no such endpoint) or any failure, so callers degrade gracefully.
    */
   static async contextLength(
     baseUrl: string,
     model: string,
     transport?: Transport,
-  ): Promise<number | undefined> {
+  ): Promise<LocalContextInfo | undefined> {
     const t = transport ?? new DirectTransport();
     try {
       const res = await t.send({
@@ -226,15 +238,19 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable {
       });
       if (!res.ok) return undefined;
       const data = await res.json<OllamaShowResponse>();
+      const out: LocalContextInfo = {};
+      // Modelfile parameter dump: "num_ctx 40960" on its own line when set.
+      const numCtx = /(?:^|\n)\s*num_ctx\s+(\d+)/.exec(data.parameters ?? "")?.[1];
+      if (numCtx) out.loaded = Number(numCtx);
+      // Architecture-prefixed key ("llama.context_length", "qwen3.context_length"…).
       const info = data.model_info ?? {};
-      // The key is architecture-prefixed ("llama.context_length",
-      // "qwen2.context_length", …) — take the first *.context_length number.
       for (const [key, value] of Object.entries(info)) {
         if (key.endsWith(".context_length") && typeof value === "number" && value > 0) {
-          return value;
+          out.max = value;
+          break;
         }
       }
-      return undefined;
+      return out.loaded || out.max ? out : undefined;
     } catch {
       return undefined;
     }
