@@ -740,9 +740,13 @@ export function App() {
                       ? "Updating the visual settings…"
                       : e.call.tool === "open_library_book"
                         ? "Opening from your library…"
-                        : e.call.tool === "generate_image"
-                          ? "Preparing an image…"
-                          : "Fetching the text and opening it…",
+                        : e.call.tool === "open_pasted_text"
+                          ? "Opening your text…"
+                          : e.call.tool === "remove_library_book"
+                            ? "Removing from your library…"
+                            : e.call.tool === "generate_image"
+                              ? "Preparing an image…"
+                              : "Fetching the text and opening it…",
           );
         } else if (e.kind === "settings") {
           // The buddy resolved a settings change against the catalog; commit it
@@ -751,14 +755,22 @@ export function App() {
             ...s,
             ...(e.style ? { imageStyle: e.style.id } : {}),
             ...(e.pagesPerImage !== undefined ? { pagesPerImage: e.pagesPerImage } : {}),
+            ...(e.illustrateAfter !== undefined ? { illustrateAfter: e.illustrateAfter } : {}),
           }));
           const parts = [
             ...(e.style ? [`art style: ${e.style.label}`] : []),
             ...(e.pagesPerImage !== undefined
               ? [e.pagesPerImage === "chapter" ? "one image per chapter" : `one image per ${e.pagesPerImage} page(s)`]
               : []),
+            ...(e.illustrateAfter !== undefined
+              ? [e.illustrateAfter === "chapter" ? "illustrate as you read" : "illustrate after the whole book"]
+              : []),
           ];
           appendBuddy({ role: "tool", text: `🎨 ${parts.join(" · ")}` });
+        } else if (e.kind === "libraryChanged") {
+          // A book was removed from IndexedDB — refresh the library list (the
+          // tool's prose confirmation handles user-facing acknowledgement).
+          void libraryStore.listBooks().then(setLibrary).catch(() => {});
         } else if (e.kind === "opened") {
           // Hand the VISIBLE conversation off into the book chat (model-facing
           // `turns` are stripped — the book chat has different tools/context),
@@ -827,7 +839,7 @@ export function App() {
         if (openedBook) appendChat({ role: "assistant", text: res.text });
       }
     },
-    [buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration],
+    [buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration, libraryStore],
   );
   const onBuddySendText = useCallback((text: string) => void onBuddySend(text), [onBuddySend]);
   // Approved buddy render: the worker's chatTool path serves both chats (the

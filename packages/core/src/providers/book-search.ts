@@ -16,6 +16,9 @@ export interface BookSearchHit {
   textUrl: string;
   /** Human catalog page, for attribution links in the chat. */
   pageUrl?: string;
+  /** A few catalog subjects ("Science fiction", "Horror tales") so the buddy can
+   * describe a book and match it to a request without opening it. */
+  subjects?: string[];
 }
 
 interface GutendexResponse {
@@ -23,6 +26,8 @@ interface GutendexResponse {
     id?: number;
     title?: string;
     authors?: { name?: string }[];
+    subjects?: string[];
+    bookshelves?: string[];
     /** mime-type → URL ("text/plain; charset=utf-8", "application/zip", …). */
     formats?: Record<string, string>;
   }[];
@@ -75,11 +80,13 @@ export class GutenbergSearch {
       const textUrl = pickTextUrl(r.formats ?? {});
       if (!r.title || !textUrl) continue;
       const author = r.authors?.[0]?.name;
+      const subjects = topSubjects(r.subjects, r.bookshelves);
       hits.push({
         title: r.title,
         ...(author ? { author: flipName(author) } : {}),
         textUrl,
         ...(r.id !== undefined ? { pageUrl: `https://www.gutenberg.org/ebooks/${r.id}` } : {}),
+        ...(subjects.length ? { subjects } : {}),
       });
     }
     return hits;
@@ -99,6 +106,26 @@ function pickTextUrl(formats: Record<string, string>): string | undefined {
     if (url) return url;
   }
   return undefined;
+}
+
+/**
+ * A few short, human topic labels. Gutendex `subjects` are Library-of-Congress
+ * strings ("Science fiction -- History and criticism") often with "--" facets;
+ * keep the lead facet, drop overlong/administrative ones, fall back to the
+ * curated `bookshelves`. Capped at three so the result feedback stays compact.
+ */
+function topSubjects(subjects?: string[], bookshelves?: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of [...(subjects ?? []), ...(bookshelves ?? [])]) {
+    const label = raw.split("--")[0]!.trim();
+    const key = label.toLowerCase();
+    if (!label || label.length > 40 || seen.has(key)) continue;
+    seen.add(key);
+    out.push(label);
+    if (out.length >= 3) break;
+  }
+  return out;
 }
 
 /** Gutendex names are catalog-style ("Shelley, Mary") — flip to reading order. */

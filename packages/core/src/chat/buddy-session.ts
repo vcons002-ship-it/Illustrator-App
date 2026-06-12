@@ -31,10 +31,16 @@ export interface BuddyDeps {
   openLibraryBook: (call: Extract<BuddyToolCall, { tool: "open_library_book" }>) => Promise<BuddyOpenedInfo>;
   /** Fetch a URL's text, build a BookSource, and open it (host-side). */
   openWebText: (call: Extract<BuddyToolCall, { tool: "open_web_text" }>) => Promise<BuddyOpenedInfo>;
-  /** Apply art style / pages-per-image; returns what was ACTUALLY applied. */
+  /** Build a BookSource from chat-pasted text and open it (host-side). */
+  openPastedText: (call: Extract<BuddyToolCall, { tool: "open_pasted_text" }>) => Promise<BuddyOpenedInfo>;
+  /** Remove a library book by id; returns its title (undefined when absent). */
+  removeLibraryBook: (
+    call: Extract<BuddyToolCall, { tool: "remove_library_book" }>,
+  ) => Promise<{ removed?: string }>;
+  /** Apply art style / cadence; returns what was ACTUALLY applied. */
   setVisualStyle: (
     call: Extract<BuddyToolCall, { tool: "set_visual_style" }>,
-  ) => Promise<{ style?: string; pagesPerImage?: number | "chapter" }>;
+  ) => Promise<{ style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" }>;
 }
 
 export type BuddyTurnEvent =
@@ -114,6 +120,10 @@ async function runBuddyTool(
         return { opened: await deps.openLibraryBook(call) };
       case "open_web_text":
         return { opened: await deps.openWebText(call) };
+      case "open_pasted_text":
+        return { opened: await deps.openPastedText(call) };
+      case "remove_library_book":
+        return await deps.removeLibraryBook(call);
       case "set_visual_style":
         return { applied: await deps.setVisualStyle(call) };
     }

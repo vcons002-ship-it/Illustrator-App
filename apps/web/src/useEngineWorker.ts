@@ -123,13 +123,21 @@ export type BuddyStreamEvent =
       hits?: WebSearchHit[];
       books?: BookSearchHit[];
       imageHits?: ImageSearchHit[];
-      applied?: { style?: string; pagesPerImage?: number | "chapter" };
+      applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
+      removed?: string;
       error?: string;
     }
   /** A buddy tool opened a book — the app should open it (and start visuals). */
   | { kind: "opened"; book: BookSource; visuals: boolean }
+  /** remove_library_book deleted a book — the app should refresh its library. */
+  | { kind: "libraryChanged" }
   /** set_visual_style resolved — the app (settings owner) should commit it. */
-  | { kind: "settings"; style?: { id: string; label: string }; pagesPerImage?: number | "chapter" };
+  | {
+      kind: "settings";
+      style?: { id: string; label: string };
+      pagesPerImage?: number | "chapter";
+      illustrateAfter?: "chapter" | "book";
+    };
 
 export interface BuddyDoneResult {
   text: string;
@@ -379,6 +387,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
             ...(msg.books ? { books: msg.books } : {}),
             ...(msg.imageHits ? { imageHits: msg.imageHits } : {}),
             ...(msg.applied ? { applied: msg.applied } : {}),
+            ...(msg.removed ? { removed: msg.removed } : {}),
             ...(msg.error ? { error: msg.error } : {}),
           });
           break;
@@ -389,11 +398,16 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
             ?.onEvent({ kind: "opened", book: msg.book, visuals: msg.visuals });
           break;
         }
+        case "buddyLibraryChanged": {
+          buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "libraryChanged" });
+          break;
+        }
         case "buddySettings": {
           buddyRequests.current.get(msg.requestId)?.onEvent({
             kind: "settings",
             ...(msg.style ? { style: msg.style } : {}),
             ...(msg.pagesPerImage !== undefined ? { pagesPerImage: msg.pagesPerImage } : {}),
+            ...(msg.illustrateAfter !== undefined ? { illustrateAfter: msg.illustrateAfter } : {}),
           });
           break;
         }

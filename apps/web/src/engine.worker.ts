@@ -639,6 +639,15 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           const title = call.title ?? page.title ?? call.url;
           return opened(bookFromText(title, page.text, call.mode, "Chat buddy"), call.visuals);
         },
+        openPastedText: async (call) =>
+          opened(bookFromText(call.title, call.text, call.mode, "Pasted in chat"), call.visuals),
+        removeLibraryBook: async (call) => {
+          const book = await store.getBook(call.id);
+          if (!book) return {};
+          await store.removeBook(call.id);
+          post({ type: "buddyLibraryChanged", requestId: msg.requestId });
+          return { removed: book.title };
+        },
         setVisualStyle: async (call) => {
           // Resolve against the real catalog so only known styles ever apply; the
           // main thread owns settings, so it gets the resolved values to commit.
@@ -654,10 +663,12 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             requestId: msg.requestId,
             ...(style ? { style: { id: style.id, label: style.label } } : {}),
             ...(call.pagesPerImage !== undefined ? { pagesPerImage: call.pagesPerImage } : {}),
+            ...(call.illustrateAfter !== undefined ? { illustrateAfter: call.illustrateAfter } : {}),
           });
           return {
             ...(style ? { style: style.label } : {}),
             ...(call.pagesPerImage !== undefined ? { pagesPerImage: call.pagesPerImage } : {}),
+            ...(call.illustrateAfter !== undefined ? { illustrateAfter: call.illustrateAfter } : {}),
           };
         },
       },
@@ -673,6 +684,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             ...(e.result.books ? { books: e.result.books } : {}),
             ...(e.result.imageHits ? { imageHits: e.result.imageHits } : {}),
             ...(e.result.applied ? { applied: e.result.applied } : {}),
+            ...(e.result.removed ? { removed: e.result.removed } : {}),
             ...(e.result.error ? { error: e.result.error } : {}),
           });
       },

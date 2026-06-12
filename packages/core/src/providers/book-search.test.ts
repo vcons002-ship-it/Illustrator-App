@@ -25,6 +25,13 @@ const gutendex = {
       id: 84,
       title: "Frankenstein; Or, The Modern Prometheus",
       authors: [{ name: "Shelley, Mary Wollstonecraft" }],
+      subjects: [
+        "Science fiction",
+        "Horror tales",
+        "Frankenstein's monster (Fictitious character) -- Fiction",
+        "Monsters -- Fiction",
+      ],
+      bookshelves: ["Gothic Fiction"],
       formats: {
         "application/epub+zip": "https://www.gutenberg.org/ebooks/84.epub",
         "text/plain; charset=us-ascii": "https://www.gutenberg.org/files/84/84-0.txt",
@@ -58,6 +65,9 @@ describe("GutenbergSearch", () => {
         author: "Mary Wollstonecraft Shelley",
         textUrl: "https://www.gutenberg.org/files/84/84-0.txt",
         pageUrl: "https://www.gutenberg.org/ebooks/84",
+        // Lead facet kept, "-- Fiction" stripped, the >40-char label dropped,
+        // deduped, capped at 3.
+        subjects: ["Science fiction", "Horror tales", "Monsters"],
       },
       {
         title: "HTML Fallback",

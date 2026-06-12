@@ -148,12 +148,15 @@ export type WorkerToMain =
       hits?: WebSearchHit[];
       books?: BookSearchHit[];
       imageHits?: ImageSearchHit[];
-      applied?: { style?: string; pagesPerImage?: number | "chapter" };
+      applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
+      removed?: string;
       error?: string;
     }
   /** A buddy tool resolved a full BookSource — the main thread opens it (and
    * starts generation when `visuals` was requested). Arrives mid-turn. */
   | { type: "buddyOpened"; requestId: number; book: BookSource; visuals: boolean }
+  /** remove_library_book deleted a book — the main thread refreshes its library list. */
+  | { type: "buddyLibraryChanged"; requestId: number }
   /** set_visual_style resolved against the catalog — the main thread (settings
    * owner) commits it. Arrives mid-turn, before the tool result. */
   | {
@@ -161,6 +164,7 @@ export type WorkerToMain =
       requestId: number;
       style?: { id: string; label: string };
       pagesPerImage?: number | "chapter";
+      illustrateAfter?: "chapter" | "book";
     }
   | {
       type: "buddyDone";

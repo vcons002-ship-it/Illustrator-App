@@ -31,6 +31,8 @@ describe("runBuddyTurn", () => {
         openWebText: async () => {
           throw new Error("must not be called");
         },
+        openPastedText: async (call) => opened(call.title),
+        removeLibraryBook: async () => ({ removed: "x" }),
         setVisualStyle: async () => ({}),
       },
     });
@@ -64,6 +66,8 @@ describe("runBuddyTurn", () => {
           expect(call.visuals).toBe(true);
           return opened(call.title ?? "?");
         },
+        openPastedText: async (call) => opened(call.title),
+        removeLibraryBook: async () => ({ removed: "x" }),
         setVisualStyle: async () => ({}),
       },
       onEvent: (e) => events.push(e),
@@ -97,6 +101,8 @@ describe("runBuddyTurn", () => {
           throw new Error("that id isn't in the library");
         },
         openWebText: async () => opened("?"),
+        openPastedText: async (call) => opened(call.title),
+        removeLibraryBook: async () => ({ removed: "x" }),
         setVisualStyle: async () => ({}),
       },
     });
@@ -115,6 +121,8 @@ describe("runBuddyTurn", () => {
       deps: {
         openLibraryBook: async () => opened("?"),
         openWebText: async () => opened("?"),
+        openPastedText: async (call) => opened(call.title),
+        removeLibraryBook: async () => ({ removed: "x" }),
         setVisualStyle: async () => ({}),
       },
     });
@@ -144,6 +152,8 @@ describe("runBuddyTurn", () => {
         randomBooks: async () => [{ title: "Dracula", textUrl: "https://g.test/345.txt" }],
         openLibraryBook: async () => opened("?"),
         openWebText: async (call) => opened(call.title ?? "?"),
+        openPastedText: async (call) => opened(call.title),
+        removeLibraryBook: async () => ({ removed: "x" }),
         setVisualStyle: async (call) => {
           applied.push(call.style ?? "");
           return { style: "Oil painting" };
@@ -159,6 +169,60 @@ describe("runBuddyTurn", () => {
     expect(outcome.text).toContain("Dracula");
   });
 
+  it("opens chat-pasted text directly (no fetch)", async () => {
+    const llm = scriptedLlm([
+      '{"tool":"open_pasted_text","text":"Two roads diverged in a yellow wood","title":"The Road Not Taken","mode":"fiction","visuals":true}',
+      "Opened your poem — illustrating it now.",
+    ]);
+    let pasted = "";
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "illustrate this poem: Two roads diverged in a yellow wood" }],
+      deps: {
+        openLibraryBook: async () => opened("?"),
+        openWebText: async () => {
+          throw new Error("should not fetch");
+        },
+        openPastedText: async (call) => {
+          pasted = call.text;
+          return opened(call.title);
+        },
+        removeLibraryBook: async () => ({ removed: "x" }),
+        setVisualStyle: async () => ({}),
+      },
+    });
+    expect(pasted).toBe("Two roads diverged in a yellow wood");
+    expect(outcome.toolResults[0]!.call.tool).toBe("open_pasted_text");
+    expect(outcome.text).toContain("poem");
+  });
+
+  it("removes a library book and reports the title", async () => {
+    const llm = scriptedLlm([
+      '{"tool":"remove_library_book","id":"text-dune"}',
+      "Done — Dune is off your shelf.",
+    ]);
+    const removedIds: string[] = [];
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "remove Dune from my library" }],
+      deps: {
+        openLibraryBook: async () => opened("?"),
+        openWebText: async () => opened("?"),
+        openPastedText: async (call) => opened(call.title),
+        removeLibraryBook: async (call) => {
+          removedIds.push(call.id);
+          return { removed: "Dune" };
+        },
+        setVisualStyle: async () => ({}),
+      },
+    });
+    expect(removedIds).toEqual(["text-dune"]);
+    expect(outcome.toolResults[0]!.result.removed).toBe("Dune");
+    expect(outcome.text).toContain("Dune");
+  });
+
   it("stops tool-looping after MAX_BUDDY_TOOL_ROUNDS", async () => {
     const llm = scriptedLlm(['{"tool":"search_web","query":"loop"}']);
     const outcome = await runBuddyTurn({
@@ -169,6 +233,8 @@ describe("runBuddyTurn", () => {
         searchWeb: async () => [],
         openLibraryBook: async () => opened("?"),
         openWebText: async () => opened("?"),
+        openPastedText: async (call) => opened(call.title),
+        removeLibraryBook: async () => ({ removed: "x" }),
         setVisualStyle: async () => ({}),
       },
     });
