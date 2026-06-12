@@ -29,13 +29,13 @@ describe("buildProviders search credentials", () => {
 
   it("uses the keyless backend when the engine id (cx) is missing", () => {
     const built = buildProviders(settings({ keys: { gemini: "g" } }));
-    expect(built.searchBackend).toBe("wikipedia");
-    expect(built.imageSearch.id).toBe("wiki-search");
+    expect(built.searchBackend).toBe("keyless");
+    expect(built.imageSearch.id).toBe("keyless-search");
   });
 
   it("uses the keyless backend with no key at all (search always available)", () => {
     const built = buildProviders(settings({ searchEngineId: "cx" }));
-    expect(built.searchBackend).toBe("wikipedia");
+    expect(built.searchBackend).toBe("keyless");
     expect(built.imageSearch).toBeDefined();
   });
 
@@ -52,7 +52,7 @@ describe("buildProviders search credentials", () => {
   it("grounds keylessly through Wikipedia when grounding is on with no creds", () => {
     const built = buildProviders(settings({ groundFacts: true }));
     expect(built.webSearch).toBeDefined();
-    expect(built.webSearch!.id).toBe("wiki-search");
+    expect(built.webSearch!.id).toBe("keyless-search");
   });
 
   it("leaves external grounding off for the Gemini reader (grounds in-call)", () => {

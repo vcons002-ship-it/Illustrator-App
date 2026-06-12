@@ -1,20 +1,26 @@
 /// <reference lib="webworker" />
 import {
   Engine,
+  GutenbergSearch,
+  IMAGE_STYLES,
   IndexedDbStore,
+  buildBuddySystemPrompt,
   buildChatSystemPrompt,
   chapterText,
+  fetchPageText,
   getImageStyle,
   profileDimensions,
   qualityProfile,
   resolveModelRequest,
   resolveStyleRequest,
+  runBuddyTurn,
   runChatTurn,
   supportsChat,
   toRenderUnits,
   ComfyUIBackend,
   Automatic1111Backend,
   type BookSource,
+  type BuddyOpenedInfo,
   type FigureSearch,
   type ImageProvider,
   type LLMProvider,
@@ -22,6 +28,7 @@ import {
   type ToolCall,
   type VisualBible,
 } from "@visual-reader/core";
+import { bookFromText } from "@visual-reader/epub";
 // Import buildProviders via the React-free subpath: pulling it from the package
 // index would drag the React UI components into the worker, which can crash the
 // worker on load (no `window`/DOM) under dev's cross-origin isolation.
@@ -369,6 +376,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "chat":
       void handleChat(msg);
       break;
+    case "buddyChat":
+      void handleBuddyChat(msg);
+      break;
     case "chatTool":
       void handleChatTool(msg.requestId, msg.call);
       break;
@@ -573,6 +583,123 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
   } catch (err) {
     post({
       type: "chatError",
+      requestId: msg.requestId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  } finally {
+    chatAborts.delete(msg.requestId);
+  }
+}
+
+// --- Landing-page buddy -------------------------------------------------------
+
+/** Lazy singletons: the buddy's library access + book discovery backends. */
+let buddyStore: IndexedDbStore | undefined;
+let buddyBookSearch: GutenbergSearch | undefined;
+
+/**
+ * One buddy round. Unlike `handleChat` this runs WITHOUT an open book: it uses
+ * the chat provider overrides directly, reads the library from IndexedDB, and
+ * when a tool opens something it posts the resolved BookSource to the main
+ * thread — which drives the normal open path (init/open/start), exactly as if
+ * the reader had picked the book by hand.
+ */
+async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>): Promise<void> {
+  const ac = new AbortController();
+  chatAborts.set(msg.requestId, ac);
+  try {
+    const { llm, imageSearch } = chatProviders();
+    if (!supportsChat(llm)) {
+      throw new Error(`The "${llm.id}" text provider doesn't support chat yet.`);
+    }
+    buddyStore ??= new IndexedDbStore();
+    buddyBookSearch ??= new GutenbergSearch();
+    const store = buddyStore;
+    const books = buddyBookSearch;
+    const opened = (book: BookSource, visuals: boolean): BuddyOpenedInfo => {
+      post({ type: "buddyOpened", requestId: msg.requestId, book, visuals });
+      return { title: book.title, chapters: book.chapters.length, pages: book.pages.length, visuals };
+    };
+    const outcome = await runBuddyTurn({
+      llm,
+      system: buildBuddySystemPrompt({ persona: msg.persona, library: msg.library }),
+      history: [...msg.history, { role: "user", content: msg.userText }],
+      deps: {
+        searchWeb: (q) => imageSearch.searchWeb(q),
+        searchBooks: (q) => books.search(q),
+        searchImages: (q) => imageSearch.search(q),
+        randomBooks: () => books.random(),
+        openLibraryBook: async (call) => {
+          const book = await store.getBook(call.id);
+          if (!book) throw new Error("that id isn't in the library");
+          return opened(book, call.visuals);
+        },
+        openWebText: async (call) => {
+          const page = await fetchPageText(call.url, { signal: ac.signal });
+          const title = call.title ?? page.title ?? call.url;
+          return opened(bookFromText(title, page.text, call.mode, "Chat buddy"), call.visuals);
+        },
+        openPastedText: async (call) =>
+          opened(bookFromText(call.title, call.text, call.mode, "Pasted in chat"), call.visuals),
+        removeLibraryBook: async (call) => {
+          const book = await store.getBook(call.id);
+          if (!book) return {};
+          await store.removeBook(call.id);
+          post({ type: "buddyLibraryChanged", requestId: msg.requestId });
+          return { removed: book.title };
+        },
+        setVisualStyle: async (call) => {
+          // Resolve against the real catalog so only known styles ever apply; the
+          // main thread owns settings, so it gets the resolved values to commit.
+          const styleId = call.style ? resolveStyleRequest(call.style) : undefined;
+          if (call.style && !styleId) {
+            throw new Error(
+              `no art style matches "${call.style}" — available: ${IMAGE_STYLES.map((s) => s.label).join(", ")}`,
+            );
+          }
+          const style = styleId ? getImageStyle(styleId) : undefined;
+          post({
+            type: "buddySettings",
+            requestId: msg.requestId,
+            ...(style ? { style: { id: style.id, label: style.label } } : {}),
+            ...(call.pagesPerImage !== undefined ? { pagesPerImage: call.pagesPerImage } : {}),
+            ...(call.illustrateAfter !== undefined ? { illustrateAfter: call.illustrateAfter } : {}),
+          });
+          return {
+            ...(style ? { style: style.label } : {}),
+            ...(call.pagesPerImage !== undefined ? { pagesPerImage: call.pagesPerImage } : {}),
+            ...(call.illustrateAfter !== undefined ? { illustrateAfter: call.illustrateAfter } : {}),
+          };
+        },
+      },
+      onEvent: (e) => {
+        if (e.kind === "token") post({ type: "buddyToken", requestId: msg.requestId, text: e.text });
+        else if (e.kind === "tool") post({ type: "buddyTool", requestId: msg.requestId, round: e.round, call: e.call });
+        else
+          post({
+            type: "buddyToolResult",
+            requestId: msg.requestId,
+            call: e.call,
+            ...(e.result.hits ? { hits: e.result.hits } : {}),
+            ...(e.result.books ? { books: e.result.books } : {}),
+            ...(e.result.imageHits ? { imageHits: e.result.imageHits } : {}),
+            ...(e.result.applied ? { applied: e.result.applied } : {}),
+            ...(e.result.removed ? { removed: e.result.removed } : {}),
+            ...(e.result.error ? { error: e.result.error } : {}),
+          });
+      },
+      signal: ac.signal,
+    });
+    post({
+      type: "buddyDone",
+      requestId: msg.requestId,
+      text: outcome.text,
+      transcript: outcome.transcript,
+      ...(outcome.pendingTool ? { pendingTool: outcome.pendingTool } : {}),
+    });
+  } catch (err) {
+    post({
+      type: "buddyError",
       requestId: msg.requestId,
       message: err instanceof Error ? err.message : String(err),
     });
