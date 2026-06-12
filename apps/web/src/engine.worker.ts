@@ -601,20 +601,32 @@ interface ContextBudgets {
 }
 
 /**
+ * Local servers report the model's ARCHITECTURAL max (llama-3.2 = 131072), NOT
+ * the context they actually loaded — Ollama defaults to a few thousand tokens and
+ * the OpenAI-compatible endpoint can't raise it. Budgeting to 70% of 131072 sent
+ * ~90k tokens into a ~4k window, which 500s the server. So cap the window we
+ * budget against to a value a default local setup can realistically hold, and
+ * reserve generous headroom (the system prompt + reply also live in the window).
+ */
+const SAFE_LOCAL_CONTEXT_TOKENS = 8192;
+
+/**
  * Split the model's context window into book + history char budgets. Cloud models
- * get generous fixed budgets. Local models are sized to their ACTUAL window when
- * known (Ollama reports it): ~70% of the window for input — reserving the rest for
- * the reply and the always-present tool/settings instructions — split 70/30 book/
- * history. A 128k local model now gets a large budget; a 4k one stays small (no
- * over-stuffing). Unknown window → the conservative 8k-class defaults.
+ * get generous fixed budgets. Local models are sized to their reported window,
+ * capped (see SAFE_LOCAL_CONTEXT_TOKENS) and budgeted conservatively — a smaller
+ * local model still gets sized DOWN; a huge one is held to the safe ceiling.
+ * Unknown window → the conservative 8k-class defaults.
  */
 function contextBudgets(llmId: string, ctxTokens?: number): ContextBudgets {
   if (CLOUD_LLM_IDS.has(llmId)) {
     return { book: 400_000, history: 80_000, ...(CLOUD_MAX_TOKENS[llmId] ? { maxTokens: CLOUD_MAX_TOKENS[llmId] } : {}) };
   }
   if (ctxTokens && ctxTokens > 0) {
-    const usableChars = Math.floor(ctxTokens * CHARS_PER_TOKEN * 0.7);
-    return { book: Math.floor(usableChars * 0.7), history: Math.floor(usableChars * 0.3), maxTokens: ctxTokens };
+    const usable = Math.min(ctxTokens, SAFE_LOCAL_CONTEXT_TOKENS);
+    // 45% of the window for book+history: the rest holds the system prompt (role +
+    // bible + tools + settings note) and the model's reply, all in the same window.
+    const inputChars = Math.floor(usable * CHARS_PER_TOKEN * 0.45);
+    return { book: Math.floor(inputChars * 0.7), history: Math.floor(inputChars * 0.3), maxTokens: usable };
   }
   return { book: CHAT_CONTEXT_BUDGET_CHARS, history: 8_000 };
 }

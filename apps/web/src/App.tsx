@@ -1421,13 +1421,8 @@ export function App() {
 
       {!book && !status && !localError && (
         <div style={styles.empty}>
-          <p>
-            Open an EPUB, load the sample — or just ask the reading buddy below to find
-            something and illustrate it.
-          </p>
-          <p style={{ opacity: 0.6 }}>
-            No API keys? It runs with built-in placeholder art so you can see the flow.
-          </p>
+          Open an EPUB, load the sample, or ask the buddy below to find &amp; illustrate something.
+          <span style={{ opacity: 0.55 }}> No API keys? It runs with placeholder art so you can see the flow.</span>
         </div>
       )}
 
@@ -2284,8 +2279,8 @@ const styles: Record<string, React.CSSProperties> = {
     borderColor: "rgba(120,150,220,0.45)",
     color: "#bcd0ff",
   },
-  empty: { padding: "40px 40px 16px", maxWidth: 560, lineHeight: 1.6 },
-  buddySection: { padding: "0 24px 32px", display: "flex", justifyContent: "center" },
+  empty: { padding: "10px 24px 8px", maxWidth: 760, fontSize: 13, opacity: 0.8, lineHeight: 1.5 },
+  buddySection: { padding: "0 24px 20px", display: "flex", justifyContent: "center" },
   reader: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) minmax(320px, 520px)",

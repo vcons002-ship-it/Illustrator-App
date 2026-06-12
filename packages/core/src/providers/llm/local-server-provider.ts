@@ -151,7 +151,23 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable {
         ...(json ? { response_format: { type: "json_object" } } : {}),
       },
     });
-    if (!res.ok) throw new Error(`Local LLM server request failed with status ${res.status}`);
+    if (!res.ok) {
+      // Surface the server's own error body — Ollama/LM Studio return a JSON or text
+      // reason (model not loaded, out of memory, context exceeded…). A bare status
+      // code left the user guessing; a 500 in particular is almost always one of
+      // those server-side conditions, not a bug in the request.
+      const detail = (await res.text().catch(() => "")).trim();
+      const reason = parseServerError(detail);
+      const hint =
+        res.status === 500
+          ? " — the local server hit an error loading or running this model (check it's pulled and your machine has enough memory; see the server's console)."
+          : res.status === 404
+            ? " — the server doesn't have a model by that name (re-check the model id in Settings)."
+            : "";
+      throw new Error(
+        `Local LLM server request failed with status ${res.status}${reason ? `: ${reason}` : ""}${hint}`,
+      );
+    }
     const data = await res.json<ChatResponse>();
     const choice = data.choices?.[0];
     // The server cut the response at max_tokens. For the JSON path that means a
@@ -304,4 +320,19 @@ export interface OllamaPullProgress {
 /** Ollama's API root from a configured base URL (strips the OpenAI-compat `/v1`). */
 function ollamaRoot(baseUrl: string): string {
   return baseUrl.replace(/\/$/, "").replace(/\/v1$/, "");
+}
+
+/** Pull a human reason out of a server error body: `{"error":{"message":…}}`,
+ * `{"error":"…"}`, or plain text. Capped so a giant HTML 500 page can't flood. */
+function parseServerError(body: string): string {
+  if (!body) return "";
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown };
+    const err = parsed.error;
+    const msg = typeof err === "string" ? err : (err as { message?: string } | undefined)?.message;
+    if (msg) return msg.slice(0, 300);
+  } catch {
+    /* not JSON — fall through to the raw text */
+  }
+  return body.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
 }
