@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { MessageBubble, type ChatMessageVM } from "./ChatPanel.js";
-import type { BuddyPersona } from "@visual-reader/core";
+import type { BuddyPersona, BuddyToolCall } from "@visual-reader/core";
 
 /**
  * The landing-page chat buddy. Pure presentation, like ChatPanel — but rendered
@@ -16,9 +16,13 @@ export interface ChatBuddyPanelProps {
   busy: boolean;
   /** Transient activity line ("searching Project Gutenberg…"). */
   activity?: string;
+  /** An un-executed generate_image awaiting the reader's approval. */
+  pendingTool?: BuddyToolCall;
   persona: BuddyPersona;
   onPersonaChange: (p: BuddyPersona) => void;
   onSend: (text: string) => void;
+  onApprovePendingTool: () => void;
+  onDismissPendingTool: () => void;
   onCancel: () => void;
   onClearHistory: () => void;
 }
@@ -29,7 +33,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [props.messages.length, props.streamingText, props.activity]);
+  }, [props.messages.length, props.streamingText, props.activity, props.pendingTool]);
 
   const send = () => {
     const text = draft.trim();
@@ -85,6 +89,25 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         {props.activity ? (
           <div style={{ opacity: 0.6, fontSize: 12, padding: "2px 8px" }}>{props.activity}</div>
         ) : null}
+        {props.pendingTool?.tool === "generate_image" && (
+          <div style={approvalStyle}>
+            <div style={{ fontSize: 12, marginBottom: 6 }}>
+              Generate this image?
+              <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
+                “{props.pendingTool.prompt}”
+                {props.pendingTool.model ? ` · model: ${props.pendingTool.model}` : ""}
+                {props.pendingTool.steps ? ` · ${props.pendingTool.steps} steps` : ""}
+                {props.pendingTool.style ? ` · style: ${props.pendingTool.style}` : ""}
+              </span>
+            </div>
+            <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+              Run
+            </button>
+            <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+              Dismiss
+            </button>
+          </div>
+        )}
       </div>
 
       <div style={inputRowStyle}>
@@ -200,4 +223,12 @@ const personaButtonStyle = {
 const personaActiveStyle = {
   background: "rgba(122,162,255,0.22)",
   opacity: 1,
+} as const;
+
+const approvalStyle = {
+  alignSelf: "flex-start",
+  border: "1px solid rgba(122,162,255,0.5)",
+  borderRadius: 8,
+  padding: 10,
+  background: "rgba(122,162,255,0.08)",
 } as const;

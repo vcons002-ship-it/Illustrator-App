@@ -68,6 +68,23 @@ describe("GutenbergSearch", () => {
     ]);
   });
 
+  it("random() pulls a deterministic page of the popularity shelf and shuffles it", async () => {
+    const shelf = {
+      results: Array.from({ length: 8 }, (_, i) => ({
+        id: i,
+        title: `Classic ${i}`,
+        authors: [],
+        formats: { "text/plain": `https://g.test/${i}.txt` },
+      })),
+    };
+    const transport = fakeTransport(shelf);
+    // rng=0.5 → page 16; subsequent calls drive the shuffle deterministically.
+    const hits = await new GutenbergSearch({ transport }).random(3, () => 0.5);
+    expect(transport.requests[0]!.url).toContain("?page=16");
+    expect(hits).toHaveLength(3);
+    for (const h of hits) expect(h.title).toMatch(/^Classic \d$/);
+  });
+
   it("respects the count cap and surfaces HTTP failures", async () => {
     const many = {
       results: Array.from({ length: 10 }, (_, i) => ({

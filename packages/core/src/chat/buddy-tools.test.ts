@@ -54,6 +54,30 @@ describe("parseBuddyToolCall", () => {
     ).toBeUndefined();
   });
 
+  it("parses the assistant-side tools (images, random picks, style, render)", () => {
+    expect(parseBuddyToolCall('{"tool":"search_images","query":"thermodynamic cycle diagram"}')).toEqual({
+      tool: "search_images",
+      query: "thermodynamic cycle diagram",
+    });
+    expect(parseBuddyToolCall('{"tool":"random_books"}')).toEqual({ tool: "random_books" });
+    expect(
+      parseBuddyToolCall('{"tool":"set_visual_style","style":"oil painting","pagesPerImage":"chapter"}'),
+    ).toEqual({ tool: "set_visual_style", style: "oil painting", pagesPerImage: "chapter" });
+    expect(parseBuddyToolCall('{"tool":"set_visual_style","pagesPerImage":3}')).toEqual({
+      tool: "set_visual_style",
+      pagesPerImage: 3,
+    });
+    // No-op style call (neither field) is rejected; page counts are clamped.
+    expect(parseBuddyToolCall('{"tool":"set_visual_style"}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"set_visual_style","pagesPerImage":99}')).toEqual({
+      tool: "set_visual_style",
+      pagesPerImage: 10,
+    });
+    expect(
+      parseBuddyToolCall('{"tool":"generate_image","prompt":"an apple","steps":20,"style":"watercolor"}'),
+    ).toEqual({ tool: "generate_image", prompt: "an apple", steps: 20, style: "watercolor" });
+  });
+
   it("only fires when the entire reply is one JSON object", () => {
     expect(
       parseBuddyToolCall('Sure! {"tool":"search_books","query":"dracula"}'),
@@ -109,6 +133,29 @@ describe("formatBuddyToolResult", () => {
       { opened: { title: "Dracula", chapters: 1, pages: 1, visuals: false } },
     );
     expect(waiting).toContain("presses Start");
+  });
+
+  it("formats the assistant-side results (random picks, images, style, render)", () => {
+    const random = formatBuddyToolResult(
+      { tool: "random_books" },
+      { books: [{ title: "Dracula", author: "Bram Stoker", textUrl: "https://g.test/345.txt" }] },
+    );
+    expect(random).toContain("random classics");
+    expect(random).toContain("[1] Dracula — Bram Stoker");
+    const figures = formatBuddyToolResult(
+      { tool: "search_images", query: "carnot cycle" },
+      { imageHits: [{ link: "https://img.test/c.png", title: "Carnot cycle.png" }] },
+    );
+    expect(figures).toContain("already shown to the reader inline");
+    const style = formatBuddyToolResult(
+      { tool: "set_visual_style", style: "oil painting", pagesPerImage: "chapter" },
+      { applied: { style: "Oil painting", pagesPerImage: "chapter" } },
+    );
+    expect(style).toContain('art style "Oil painting"');
+    expect(style).toContain("per chapter");
+    expect(
+      formatBuddyToolResult({ tool: "generate_image", prompt: "an apple" }, { image: { ok: true } }),
+    ).toContain("shown to the reader");
   });
 
   it("formats failures with a recovery instruction", () => {

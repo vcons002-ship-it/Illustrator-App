@@ -1,5 +1,5 @@
 import type { ChatCapable, ChatTurn } from "../providers/llm/chat.js";
-import type { WebSearchHit } from "../providers/image/image-search.js";
+import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
 import type { BookSearchHit } from "../providers/book-search.js";
 import {
   MAX_BUDDY_TOOL_ROUNDS,
@@ -13,18 +13,28 @@ import {
 /**
  * One user-message round of the landing-page buddy, including the tool loop —
  * worker-agnostic and fully testable with a scripted ChatCapable (the same shape
- * as chat-session.ts). ALL buddy tools auto-run: searches are free, and opening a
- * book only loads it (generation still needs the reader's Start unless they
- * explicitly asked for visuals — the host enforces that via the `visuals` flag).
+ * as chat-session.ts). Buddy tools auto-run: searches are free, settings changes
+ * are reversible, and opening a book only loads it (generation still needs the
+ * reader's Start unless they explicitly asked for visuals — the host enforces
+ * that via the `visuals` flag). The one exception is `generate_image`, which
+ * stops the loop for the reader's approval — same GPU/cost guard as the in-book
+ * chat (chat-session.ts).
  */
 
 export interface BuddyDeps {
   searchWeb?: (query: string) => Promise<WebSearchHit[]>;
   searchBooks?: (query: string) => Promise<BookSearchHit[]>;
+  searchImages?: (query: string) => Promise<ImageSearchHit[]>;
+  /** Random picks from the catalog's most-loved shelf ("surprise me"). */
+  randomBooks?: () => Promise<BookSearchHit[]>;
   /** Open a library book by id; the host posts the BookSource to the UI itself. */
   openLibraryBook: (call: Extract<BuddyToolCall, { tool: "open_library_book" }>) => Promise<BuddyOpenedInfo>;
   /** Fetch a URL's text, build a BookSource, and open it (host-side). */
   openWebText: (call: Extract<BuddyToolCall, { tool: "open_web_text" }>) => Promise<BuddyOpenedInfo>;
+  /** Apply art style / pages-per-image; returns what was ACTUALLY applied. */
+  setVisualStyle: (
+    call: Extract<BuddyToolCall, { tool: "set_visual_style" }>,
+  ) => Promise<{ style?: string; pagesPerImage?: number | "chapter" }>;
 }
 
 export type BuddyTurnEvent =
@@ -33,10 +43,12 @@ export type BuddyTurnEvent =
   | { kind: "toolResult"; round: number; call: BuddyToolCall; result: BuddyToolResultPayload };
 
 export interface BuddyTurnOutcome {
-  /** Final assistant prose. */
+  /** Final assistant prose (empty when the round ended on a pending tool). */
   text: string;
   /** Turns appended THIS round, ready to extend the stored history. */
   transcript: ChatTurn[];
+  /** An un-executed generate_image awaiting the reader's approval. */
+  pendingTool?: BuddyToolCall;
   toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[];
 }
 
@@ -67,6 +79,10 @@ export async function runBuddyTurn(opts: {
     transcript.push({ role: "assistant", content: reply });
     messages.push({ role: "assistant", content: reply });
 
+    if (call.tool === "generate_image") {
+      // Stops the loop: the host/UI takes over (approval → render → follow-up).
+      return { text: "", transcript, pendingTool: call, toolResults };
+    }
     const result = await runBuddyTool(call, opts.deps);
     toolResults.push({ call, result });
     opts.onEvent?.({ kind: "toolResult", round, call, result });
@@ -76,7 +92,10 @@ export async function runBuddyTurn(opts: {
   }
 }
 
-async function runBuddyTool(call: BuddyToolCall, deps: BuddyDeps): Promise<BuddyToolResultPayload> {
+async function runBuddyTool(
+  call: Exclude<BuddyToolCall, { tool: "generate_image" }>,
+  deps: BuddyDeps,
+): Promise<BuddyToolResultPayload> {
   try {
     switch (call.tool) {
       case "search_web":
@@ -85,10 +104,18 @@ async function runBuddyTool(call: BuddyToolCall, deps: BuddyDeps): Promise<Buddy
       case "search_books":
         if (!deps.searchBooks) return { error: "book search isn't available right now" };
         return { books: await deps.searchBooks(call.query) };
+      case "search_images":
+        if (!deps.searchImages) return { error: "image search isn't available right now" };
+        return { imageHits: await deps.searchImages(call.query) };
+      case "random_books":
+        if (!deps.randomBooks) return { error: "book discovery isn't available right now" };
+        return { books: await deps.randomBooks() };
       case "open_library_book":
         return { opened: await deps.openLibraryBook(call) };
       case "open_web_text":
         return { opened: await deps.openWebText(call) };
+      case "set_visual_style":
+        return { applied: await deps.setVisualStyle(call) };
     }
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };

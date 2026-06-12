@@ -2,6 +2,7 @@
 import {
   Engine,
   GutenbergSearch,
+  IMAGE_STYLES,
   IndexedDbStore,
   buildBuddySystemPrompt,
   buildChatSystemPrompt,
@@ -626,6 +627,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       deps: {
         searchWeb: (q) => imageSearch.searchWeb(q),
         searchBooks: (q) => books.search(q),
+        searchImages: (q) => imageSearch.search(q),
+        randomBooks: () => books.random(),
         openLibraryBook: async (call) => {
           const book = await store.getBook(call.id);
           if (!book) throw new Error("that id isn't in the library");
@@ -635,6 +638,27 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           const page = await fetchPageText(call.url, { signal: ac.signal });
           const title = call.title ?? page.title ?? call.url;
           return opened(bookFromText(title, page.text, call.mode, "Chat buddy"), call.visuals);
+        },
+        setVisualStyle: async (call) => {
+          // Resolve against the real catalog so only known styles ever apply; the
+          // main thread owns settings, so it gets the resolved values to commit.
+          const styleId = call.style ? resolveStyleRequest(call.style) : undefined;
+          if (call.style && !styleId) {
+            throw new Error(
+              `no art style matches "${call.style}" — available: ${IMAGE_STYLES.map((s) => s.label).join(", ")}`,
+            );
+          }
+          const style = styleId ? getImageStyle(styleId) : undefined;
+          post({
+            type: "buddySettings",
+            requestId: msg.requestId,
+            ...(style ? { style: { id: style.id, label: style.label } } : {}),
+            ...(call.pagesPerImage !== undefined ? { pagesPerImage: call.pagesPerImage } : {}),
+          });
+          return {
+            ...(style ? { style: style.label } : {}),
+            ...(call.pagesPerImage !== undefined ? { pagesPerImage: call.pagesPerImage } : {}),
+          };
         },
       },
       onEvent: (e) => {
@@ -647,12 +671,20 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             call: e.call,
             ...(e.result.hits ? { hits: e.result.hits } : {}),
             ...(e.result.books ? { books: e.result.books } : {}),
+            ...(e.result.imageHits ? { imageHits: e.result.imageHits } : {}),
+            ...(e.result.applied ? { applied: e.result.applied } : {}),
             ...(e.result.error ? { error: e.result.error } : {}),
           });
       },
       signal: ac.signal,
     });
-    post({ type: "buddyDone", requestId: msg.requestId, text: outcome.text, transcript: outcome.transcript });
+    post({
+      type: "buddyDone",
+      requestId: msg.requestId,
+      text: outcome.text,
+      transcript: outcome.transcript,
+      ...(outcome.pendingTool ? { pendingTool: outcome.pendingTool } : {}),
+    });
   } catch (err) {
     post({
       type: "buddyError",

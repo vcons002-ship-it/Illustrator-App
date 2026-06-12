@@ -31,6 +31,7 @@ describe("runBuddyTurn", () => {
         openWebText: async () => {
           throw new Error("must not be called");
         },
+        setVisualStyle: async () => ({}),
       },
     });
     expect(outcome.text).toContain("Dracula");
@@ -63,6 +64,7 @@ describe("runBuddyTurn", () => {
           expect(call.visuals).toBe(true);
           return opened(call.title ?? "?");
         },
+        setVisualStyle: async () => ({}),
       },
       onEvent: (e) => events.push(e),
     });
@@ -95,12 +97,66 @@ describe("runBuddyTurn", () => {
           throw new Error("that id isn't in the library");
         },
         openWebText: async () => opened("?"),
+        setVisualStyle: async () => ({}),
       },
     });
     expect(outcome.toolResults[0]!.result.error).toContain("isn't in the library");
     expect(outcome.text).toContain("Gutenberg");
     // The failure reached the model as a user-role turn.
     expect(llm.calls[1]!.some((t) => t.role === "user" && t.content.includes("failed"))).toBe(true);
+  });
+
+  it("stops on generate_image and surfaces it as a pending tool", async () => {
+    const llm = scriptedLlm(['{"tool":"generate_image","prompt":"a red apple","style":"watercolor"}']);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "generate a picture of an apple" }],
+      deps: {
+        openLibraryBook: async () => opened("?"),
+        openWebText: async () => opened("?"),
+        setVisualStyle: async () => ({}),
+      },
+    });
+    expect(outcome.pendingTool).toEqual({
+      tool: "generate_image",
+      prompt: "a red apple",
+      style: "watercolor",
+    });
+    expect(outcome.text).toBe("");
+    expect(outcome.toolResults).toHaveLength(0);
+    expect(llm.calls).toHaveLength(1); // the loop stopped for approval
+  });
+
+  it("applies a style change then opens with visuals in one flow", async () => {
+    const llm = scriptedLlm([
+      '{"tool":"set_visual_style","style":"oil painting"}',
+      '{"tool":"random_books"}',
+      '{"tool":"open_web_text","url":"https://g.test/345.txt","title":"Dracula","mode":"fiction","visuals":true}',
+      "Dracula it is, in oils — generating now!",
+    ]);
+    const applied: string[] = [];
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "open a random classic in oil painting style and illustrate it" }],
+      deps: {
+        randomBooks: async () => [{ title: "Dracula", textUrl: "https://g.test/345.txt" }],
+        openLibraryBook: async () => opened("?"),
+        openWebText: async (call) => opened(call.title ?? "?"),
+        setVisualStyle: async (call) => {
+          applied.push(call.style ?? "");
+          return { style: "Oil painting" };
+        },
+      },
+    });
+    expect(applied).toEqual(["oil painting"]);
+    expect(outcome.toolResults.map((r) => r.call.tool)).toEqual([
+      "set_visual_style",
+      "random_books",
+      "open_web_text",
+    ]);
+    expect(outcome.text).toContain("Dracula");
   });
 
   it("stops tool-looping after MAX_BUDDY_TOOL_ROUNDS", async () => {
@@ -113,6 +169,7 @@ describe("runBuddyTurn", () => {
         searchWeb: async () => [],
         openLibraryBook: async () => opened("?"),
         openWebText: async () => opened("?"),
+        setVisualStyle: async () => ({}),
       },
     });
     // Round cap reached: the final (still-JSON) reply is returned as text rather

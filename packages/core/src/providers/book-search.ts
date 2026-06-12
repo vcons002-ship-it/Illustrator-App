@@ -46,6 +46,27 @@ export class GutenbergSearch {
   /** Top matches with a usable text URL, in catalog (popularity) order. */
   async search(query: string, count = 5): Promise<BookSearchHit[]> {
     const url = `${this.baseUrl}?search=${encodeURIComponent(query)}`;
+    return (await this.fetchHits(url)).slice(0, count);
+  }
+
+  /**
+   * Random picks for "surprise me / open a random classic": Gutendex lists the
+   * catalog in download-count order, so a random page among the first ~30
+   * (≈ the thousand most-loved books) is a shuffle of the classics shelf.
+   * `rng` is injectable for tests.
+   */
+  async random(count = 5, rng: () => number = Math.random): Promise<BookSearchHit[]> {
+    const page = 1 + Math.floor(rng() * 30);
+    const hits = await this.fetchHits(`${this.baseUrl}?page=${page}`);
+    // Shuffle (Fisher–Yates) so repeat calls on the same page still vary.
+    for (let i = hits.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [hits[i], hits[j]] = [hits[j]!, hits[i]!];
+    }
+    return hits.slice(0, count);
+  }
+
+  private async fetchHits(url: string): Promise<BookSearchHit[]> {
     const res = await this.transport.send({ url, method: "GET" });
     if (!res.ok) throw new Error(`Project Gutenberg search failed with status ${res.status}`);
     const data = await res.json<GutendexResponse>();
@@ -60,7 +81,6 @@ export class GutenbergSearch {
         textUrl,
         ...(r.id !== undefined ? { pageUrl: `https://www.gutenberg.org/ebooks/${r.id}` } : {}),
       });
-      if (hits.length >= count) break;
     }
     return hits;
   }

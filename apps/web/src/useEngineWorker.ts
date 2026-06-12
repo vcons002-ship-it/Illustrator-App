@@ -122,15 +122,21 @@ export type BuddyStreamEvent =
       call: BuddyToolCall;
       hits?: WebSearchHit[];
       books?: BookSearchHit[];
+      imageHits?: ImageSearchHit[];
+      applied?: { style?: string; pagesPerImage?: number | "chapter" };
       error?: string;
     }
   /** A buddy tool opened a book — the app should open it (and start visuals). */
-  | { kind: "opened"; book: BookSource; visuals: boolean };
+  | { kind: "opened"; book: BookSource; visuals: boolean }
+  /** set_visual_style resolved — the app (settings owner) should commit it. */
+  | { kind: "settings"; style?: { id: string; label: string }; pagesPerImage?: number | "chapter" };
 
 export interface BuddyDoneResult {
   text: string;
   /** Turns to append to the stored buddy history (assistant + tool feedback). */
   transcript: ChatTurn[];
+  /** An un-executed generate_image awaiting the reader's approval. */
+  pendingTool?: BuddyToolCall;
   error?: string;
 }
 
@@ -371,6 +377,8 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
             call: msg.call,
             ...(msg.hits ? { hits: msg.hits } : {}),
             ...(msg.books ? { books: msg.books } : {}),
+            ...(msg.imageHits ? { imageHits: msg.imageHits } : {}),
+            ...(msg.applied ? { applied: msg.applied } : {}),
             ...(msg.error ? { error: msg.error } : {}),
           });
           break;
@@ -381,11 +389,23 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
             ?.onEvent({ kind: "opened", book: msg.book, visuals: msg.visuals });
           break;
         }
+        case "buddySettings": {
+          buddyRequests.current.get(msg.requestId)?.onEvent({
+            kind: "settings",
+            ...(msg.style ? { style: msg.style } : {}),
+            ...(msg.pagesPerImage !== undefined ? { pagesPerImage: msg.pagesPerImage } : {}),
+          });
+          break;
+        }
         case "buddyDone": {
           const req = buddyRequests.current.get(msg.requestId);
           buddyRequests.current.delete(msg.requestId);
           if (activeBuddyRequestId.current === msg.requestId) activeBuddyRequestId.current = undefined;
-          req?.resolve({ text: msg.text, transcript: msg.transcript });
+          req?.resolve({
+            text: msg.text,
+            transcript: msg.transcript,
+            ...(msg.pendingTool ? { pendingTool: msg.pendingTool } : {}),
+          });
           break;
         }
         case "buddyError": {

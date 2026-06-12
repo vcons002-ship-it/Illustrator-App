@@ -27,6 +27,7 @@ import {
   type BookSource,
   type BookSummary,
   type BuddyPersona,
+  type BuddyToolCall,
   type ChatTurn,
   type EncryptedSecrets,
   type StoredChatMessage,
@@ -154,6 +155,10 @@ export function App() {
   const [buddyStreaming, setBuddyStreaming] = useState("");
   const [buddyActivity, setBuddyActivity] = useState("");
   const [buddyPersona, setBuddyPersona] = useState<BuddyPersona>("entertainment");
+  const [buddyPendingTool, setBuddyPendingTool] = useState<BuddyToolCall | undefined>();
+  // The pending generate_image's transcript, folded in only on approval (same
+  // injection guard as the book chat's pendingTranscript).
+  const pendingBuddyTranscript = useRef<ChatTurn[]>([]);
   // Buddy messages handed into the next opened book's chat (consumed on book change),
   // so a buddy-initiated open continues the conversation inside the reader.
   const buddyHandoff = useRef<StoredChatMessage[] | undefined>(undefined);
@@ -717,6 +722,7 @@ export function App() {
       setBuddyBusy(true);
       setBuddyStreaming("");
       setBuddyActivity("");
+      setBuddyPendingTool(undefined);
       let openedBook = false;
       const res = await buddyChat(history, text, buddyPersona, library, (e) => {
         if (e.kind === "token") setBuddyStreaming((prev) => prev + e.text);
@@ -724,12 +730,35 @@ export function App() {
           setBuddyActivity(
             e.call.tool === "search_books"
               ? `Searching Project Gutenberg for “${e.call.query}”…`
-              : e.call.tool === "search_web"
-                ? `Searching for “${e.call.query}”…`
-                : e.call.tool === "open_library_book"
-                  ? "Opening from your library…"
-                  : "Fetching the text and opening it…",
+              : e.call.tool === "random_books"
+                ? "Pulling some classics off the shelf…"
+                : e.call.tool === "search_web"
+                  ? `Searching for “${e.call.query}”…`
+                  : e.call.tool === "search_images"
+                    ? `Looking for images of “${e.call.query}”…`
+                    : e.call.tool === "set_visual_style"
+                      ? "Updating the visual settings…"
+                      : e.call.tool === "open_library_book"
+                        ? "Opening from your library…"
+                        : e.call.tool === "generate_image"
+                          ? "Preparing an image…"
+                          : "Fetching the text and opening it…",
           );
+        } else if (e.kind === "settings") {
+          // The buddy resolved a settings change against the catalog; commit it
+          // here (the App owns settings) and show what changed.
+          setSettings((s) => ({
+            ...s,
+            ...(e.style ? { imageStyle: e.style.id } : {}),
+            ...(e.pagesPerImage !== undefined ? { pagesPerImage: e.pagesPerImage } : {}),
+          }));
+          const parts = [
+            ...(e.style ? [`art style: ${e.style.label}`] : []),
+            ...(e.pagesPerImage !== undefined
+              ? [e.pagesPerImage === "chapter" ? "one image per chapter" : `one image per ${e.pagesPerImage} page(s)`]
+              : []),
+          ];
+          appendBuddy({ role: "tool", text: `🎨 ${parts.join(" · ")}` });
         } else if (e.kind === "opened") {
           // Hand the VISIBLE conversation off into the book chat (model-facing
           // `turns` are stripped — the book chat has different tools/context),
@@ -752,11 +781,25 @@ export function App() {
           } else if (e.books?.length) {
             appendBuddy({
               role: "tool",
-              text: `Project Gutenberg matches for “${"query" in e.call ? e.call.query : ""}”:`,
+              text:
+                e.call.tool === "random_books"
+                  ? "Off the classics shelf:"
+                  : `Project Gutenberg matches for “${"query" in e.call ? e.call.query : ""}”:`,
               links: e.books.map((b) => ({
                 url: b.pageUrl ?? b.textUrl,
                 title: b.author ? `${b.title} — ${b.author}` : b.title,
               })),
+            });
+          } else if (e.imageHits?.length) {
+            // Inline figure, same presentation as the in-book chat.
+            const best = e.imageHits[0]!;
+            appendBuddy({
+              role: "tool",
+              text: `Found: ${best.title ?? "image"}`,
+              image: { sourceUrl: best.thumbnailLink ?? best.link },
+              links: e.imageHits
+                .slice(0, 3)
+                .map((h) => ({ url: h.contextLink ?? h.link, ...(h.title ? { title: h.title } : {}) })),
             });
           }
         }
@@ -766,6 +809,11 @@ export function App() {
       setBuddyActivity("");
       if (res.error) {
         appendBuddy({ role: "tool", text: `⚠ ${res.error}`, turns: [] });
+        return;
+      }
+      if (res.pendingTool) {
+        pendingBuddyTranscript.current = [{ role: "user", content: text }, ...res.transcript];
+        setBuddyPendingTool(res.pendingTool);
         return;
       }
       if (res.text) {
@@ -782,8 +830,36 @@ export function App() {
     [buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration],
   );
   const onBuddySendText = useCallback((text: string) => void onBuddySend(text), [onBuddySend]);
+  // Approved buddy render: the worker's chatTool path serves both chats (the
+  // buddy's generate_image call has the identical shape by design).
+  const onApproveBuddyTool = useCallback(async () => {
+    const call = buddyPendingTool;
+    if (!call || call.tool !== "generate_image") return;
+    setBuddyPendingTool(undefined);
+    setBuddyBusy(true);
+    setBuddyActivity("Generating the image…");
+    const out = await chatTool(call);
+    setBuddyBusy(false);
+    setBuddyActivity("");
+    const feedback = formatToolResult(call, {
+      image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
+    });
+    appendBuddy({
+      role: "tool",
+      text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
+      ...(out.image ? { image: out.image } : {}),
+      turns: [...pendingBuddyTranscript.current, { role: "user", content: feedback }],
+    });
+    pendingBuddyTranscript.current = [];
+  }, [buddyPendingTool, chatTool]);
+  const onApproveBuddyPendingTool = useCallback(() => void onApproveBuddyTool(), [onApproveBuddyTool]);
+  const onDismissBuddyPendingTool = useCallback(() => {
+    setBuddyPendingTool(undefined);
+    pendingBuddyTranscript.current = [];
+  }, []);
   const onClearBuddy = useCallback(() => {
     setBuddyMessages([]);
+    setBuddyPendingTool(undefined);
     void libraryStore.deleteChatHistory?.(BUDDY_CHAT_ID);
   }, [libraryStore]);
   const buddyPanelMessages = useMemo(
@@ -1267,9 +1343,12 @@ export function App() {
             {...(buddyStreaming ? { streamingText: buddyStreaming } : {})}
             busy={buddyBusy}
             {...(buddyActivity ? { activity: buddyActivity } : {})}
+            {...(buddyPendingTool ? { pendingTool: buddyPendingTool } : {})}
             persona={buddyPersona}
             onPersonaChange={setBuddyPersona}
             onSend={onBuddySendText}
+            onApprovePendingTool={onApproveBuddyPendingTool}
+            onDismissPendingTool={onDismissBuddyPendingTool}
             onCancel={buddyCancel}
             onClearHistory={onClearBuddy}
           />

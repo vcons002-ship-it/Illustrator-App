@@ -1,6 +1,7 @@
 import { stripThink } from "../providers/llm/extraction.js";
-import type { WebSearchHit } from "../providers/image/image-search.js";
+import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
 import type { BookSearchHit } from "../providers/book-search.js";
+import { IMAGE_STYLES } from "../providers/catalog.js";
 import type { BookSummary } from "../storage/store.js";
 
 /**
@@ -9,7 +10,8 @@ import type { BookSummary } from "../storage/store.js";
  * (chat-tools.ts) that discusses an already-open book. Same provider-agnostic
  * JSON-reply convention and the same strict envelope/length parsing; a separate
  * tool union because the two chats genuinely do different jobs, and widening one
- * union would let each chat call the other's tools.
+ * union would let each chat call the other's tools. (`generate_image` is shared
+ * by shape on purpose: the worker's approved-render path serves both chats.)
  */
 
 export type BuddyPersona = "entertainment" | "technical";
@@ -17,6 +19,9 @@ export type BuddyPersona = "entertainment" | "technical";
 export type BuddyToolCall =
   | { tool: "search_web"; query: string }
   | { tool: "search_books"; query: string }
+  | { tool: "search_images"; query: string }
+  /** Surprise picks from Project Gutenberg's most-loved shelf. */
+  | { tool: "random_books" }
   | { tool: "open_library_book"; id: string; visuals: boolean }
   | {
       tool: "open_web_text";
@@ -26,16 +31,22 @@ export type BuddyToolCall =
       /** Story vs. concept/diagram illustration pipeline for the fetched text. */
       mode: "fiction" | "technical";
       visuals: boolean;
-    };
+    }
+  /** Change the app's art style and/or illustration granularity (settings). */
+  | { tool: "set_visual_style"; style?: string; pagesPerImage?: number | "chapter" }
+  /** Same shape as the in-book chat's generate_image: approval-gated render. */
+  | { tool: "generate_image"; prompt: string; model?: string; steps?: number; style?: string };
 
-/** One extra round vs. the in-book chat: a find → open flow is two tools deep. */
-export const MAX_BUDDY_TOOL_ROUNDS = 4;
+/** Generous: a "style + random pick + open + prose" flow is three tools deep. */
+export const MAX_BUDDY_TOOL_ROUNDS = 5;
 
 /** Injection guards (mirrors chat-tools.ts). */
 const MAX_QUERY_CHARS = 200;
 const MAX_URL_CHARS = 600;
 const MAX_TITLE_CHARS = 120;
 const MAX_ID_CHARS = 120;
+const MAX_PROMPT_CHARS = 600;
+const MAX_NAME_CHARS = 80;
 
 export function buildBuddySystemPrompt(opts: {
   persona: BuddyPersona;
@@ -59,15 +70,25 @@ export function buildBuddySystemPrompt(opts: {
           .slice(0, 30)
           .map((b) => `- "${b.title}"${b.author ? ` by ${b.author}` : ""} — id: ${b.id}`)
           .join("\n");
+  const styles = IMAGE_STYLES.map((s) => s.label).join(", ");
   return (
-    `${persona}\n\n${library}\n\n` +
+    `${persona} You are also a full conversational assistant: answer general questions ` +
+    "directly in prose (use search_web to ground facts when it genuinely helps).\n\n" +
+    `${library}\n\n` +
     "TOOLS — use one by replying with ONLY one JSON object (no prose around it):\n" +
     '- {"tool":"search_books","query":"…"} — search Project Gutenberg (full public-domain books; each hit has a text URL).\n' +
-    '- {"tool":"search_web","query":"…"} — search for articles/topics (returns titles, snippets and URLs).\n' +
+    '- {"tool":"random_books"} — surprise picks from Gutenberg\'s most-loved classics (for "open something random / surprise me").\n' +
+    '- {"tool":"search_web","query":"…"} — search for articles/topics/facts (returns titles, snippets and URLs).\n' +
+    '- {"tool":"search_images","query":"…"} — find a REAL figure/diagram/photo; it is shown to the reader inline.\n' +
+    '- {"tool":"generate_image","prompt":"…"} — generate a NEW image with the app\'s image model (the reader approves it first). ' +
+    'Optional: "model" (an installed image model they name), "steps" (sampler steps), "style" (an art style name).\n' +
     '- {"tool":"open_library_book","id":"…","visuals":false} — open a book from the library list above.\n' +
-    '- {"tool":"open_web_text","url":"…","title":"…","mode":"fiction","visuals":false} — fetch a text/article ' +
-    'URL (a search hit\'s URL) and open it in the reader. "mode" picks the illustration pipeline: "fiction" for ' +
-    'stories/novels, "technical" for articles, papers and non-fiction.\n' +
+    '- {"tool":"open_web_text","url":"…","title":"…","mode":"fiction","visuals":false} — fetch a text/article/news ' +
+    'URL (or a search hit\'s URL) and open it in the reader. "mode" picks the illustration pipeline: "fiction" for ' +
+    'stories/novels, "technical" for articles, papers, news and non-fiction.\n' +
+    `- {"tool":"set_visual_style","style":"…","pagesPerImage":3} — set the app's art style (one of: ${styles}) ` +
+    'and/or how often it illustrates (a page count, or "chapter" for one image per chapter). Use BEFORE an open ' +
+    'with visuals when the reader asks for a look ("…in oil painting style").\n' +
     'Set "visuals": true ONLY when the reader asked to illustrate/visualize it — the app then starts ' +
     "generating illustrations immediately (which uses their image provider); otherwise they press Start themselves.\n" +
     "After a search result arrives, either open the best match (when the reader asked you to open/read it) or " +
@@ -92,9 +113,42 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
     return undefined;
   }
   const tool = obj.tool;
-  if (tool === "search_web" || tool === "search_books") {
+  if (tool === "search_web" || tool === "search_books" || tool === "search_images") {
     const query = strArg(obj.query, MAX_QUERY_CHARS);
     return query ? { tool, query } : undefined;
+  }
+  if (tool === "random_books") return { tool };
+  if (tool === "set_visual_style") {
+    const style = strArg(obj.style, MAX_NAME_CHARS);
+    const pagesPerImage =
+      obj.pagesPerImage === "chapter"
+        ? ("chapter" as const)
+        : typeof obj.pagesPerImage === "number" && Number.isFinite(obj.pagesPerImage)
+          ? Math.min(10, Math.max(1, Math.round(obj.pagesPerImage)))
+          : undefined;
+    if (!style && pagesPerImage === undefined) return undefined;
+    return {
+      tool,
+      ...(style ? { style } : {}),
+      ...(pagesPerImage !== undefined ? { pagesPerImage } : {}),
+    };
+  }
+  if (tool === "generate_image") {
+    const prompt = strArg(obj.prompt, MAX_PROMPT_CHARS);
+    if (!prompt) return undefined;
+    const model = strArg(obj.model, MAX_NAME_CHARS);
+    const style = strArg(obj.style, MAX_NAME_CHARS);
+    const steps =
+      typeof obj.steps === "number" && Number.isFinite(obj.steps)
+        ? Math.min(150, Math.max(1, Math.round(obj.steps)))
+        : undefined;
+    return {
+      tool,
+      prompt,
+      ...(model ? { model } : {}),
+      ...(style ? { style } : {}),
+      ...(steps !== undefined ? { steps } : {}),
+    };
   }
   if (tool === "open_library_book") {
     const id = strArg(obj.id, MAX_ID_CHARS);
@@ -126,7 +180,12 @@ export interface BuddyOpenedInfo {
 export interface BuddyToolResultPayload {
   hits?: WebSearchHit[];
   books?: BookSearchHit[];
+  imageHits?: ImageSearchHit[];
   opened?: BuddyOpenedInfo;
+  /** What set_visual_style actually applied (resolved style LABEL). */
+  applied?: { style?: string; pagesPerImage?: number | "chapter" };
+  /** Whether an approved image generation succeeded. */
+  image?: { ok: boolean; error?: string };
   error?: string;
 }
 
@@ -143,16 +202,45 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     );
     return `[tool search_web results for "${call.query}"]\n${lines.join("\n")}`;
   }
-  if (call.tool === "search_books") {
+  if (call.tool === "search_images") {
+    const hits = (result.imageHits ?? []).slice(0, 5);
+    if (hits.length === 0) return `[tool search_images returned no results for "${call.query}"]`;
+    const lines = hits.map((h, i) => `[${i + 1}] ${h.title ?? "image"} (${h.contextLink ?? h.link})`);
+    return (
+      `[tool search_images results for "${call.query}" — already shown to the reader inline]\n` +
+      lines.join("\n")
+    );
+  }
+  if (call.tool === "search_books" || call.tool === "random_books") {
+    const label = call.tool === "search_books" ? `results for "${call.query}"` : "random classics";
     const books = (result.books ?? []).slice(0, 5);
-    if (books.length === 0) return `[tool search_books returned no results for "${call.query}"]`;
+    if (books.length === 0) return `[tool ${call.tool} returned no ${label}]`;
     const lines = books.map(
       (b, i) => `[${i + 1}] ${b.title}${b.author ? ` — ${b.author}` : ""} (text: ${b.textUrl})`,
     );
     return (
-      `[tool search_books results for "${call.query}" — open one with open_web_text using its text URL]\n` +
+      `[tool ${call.tool} ${label} — open one with open_web_text using its text URL]\n` +
       lines.join("\n")
     );
+  }
+  if (call.tool === "set_visual_style") {
+    const parts = [
+      ...(result.applied?.style ? [`art style "${result.applied.style}"`] : []),
+      ...(result.applied?.pagesPerImage !== undefined
+        ? [
+            result.applied.pagesPerImage === "chapter"
+              ? "one illustration per chapter"
+              : `one illustration per ${result.applied.pagesPerImage} page${result.applied.pagesPerImage === 1 ? "" : "s"}`,
+          ]
+        : []),
+    ];
+    return `[visual settings updated: ${parts.join(", ") || "nothing changed"}] Confirm briefly and continue.`;
+  }
+  if (call.tool === "generate_image") {
+    // Ran (or failed) after the reader's approval — mirrors chat-tools.ts.
+    return result.image?.ok
+      ? "[tool generate_image: the image was generated and is shown to the reader]"
+      : `[tool generate_image failed: ${result.image?.error ?? "unknown error"}]`;
   }
   // open_library_book / open_web_text
   const o = result.opened;

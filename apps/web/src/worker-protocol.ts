@@ -147,10 +147,27 @@ export type WorkerToMain =
       call: BuddyToolCall;
       hits?: WebSearchHit[];
       books?: BookSearchHit[];
+      imageHits?: ImageSearchHit[];
+      applied?: { style?: string; pagesPerImage?: number | "chapter" };
       error?: string;
     }
   /** A buddy tool resolved a full BookSource — the main thread opens it (and
    * starts generation when `visuals` was requested). Arrives mid-turn. */
   | { type: "buddyOpened"; requestId: number; book: BookSource; visuals: boolean }
-  | { type: "buddyDone"; requestId: number; text: string; transcript: ChatTurn[] }
+  /** set_visual_style resolved against the catalog — the main thread (settings
+   * owner) commits it. Arrives mid-turn, before the tool result. */
+  | {
+      type: "buddySettings";
+      requestId: number;
+      style?: { id: string; label: string };
+      pagesPerImage?: number | "chapter";
+    }
+  | {
+      type: "buddyDone";
+      requestId: number;
+      text: string;
+      transcript: ChatTurn[];
+      /** An un-executed generate_image awaiting the reader's approval. */
+      pendingTool?: BuddyToolCall;
+    }
   | { type: "buddyError"; requestId: number; message: string };
