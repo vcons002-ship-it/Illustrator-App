@@ -40,9 +40,11 @@ export interface PipelineDeps {
   store: VisualReaderStore;
   tier: TierConfig;
   /**
-   * Optional real-figure retrieval (technical books): when set, a technical unit first
-   * looks for an EXISTING diagram of its keyEvent's subject (authoritative labels/data
-   * beat a generated picture); AI generation remains the fallback.
+   * Real-figure retrieval (technical books): a technical unit looks for an EXISTING
+   * diagram of its keyEvent's subject (authoritative labels/data beat a generated
+   * picture). Technical units NEVER fall back to AI generation — a plausible-looking
+   * invented diagram would corrupt the book's source of truth — they emit a `skipped`
+   * result instead, and the reader gets the concept's explanation in the text column.
    */
   imageSearch?: { retrieve(query: string): Promise<RetrievedImage | undefined> };
 }
@@ -220,42 +222,53 @@ export class RenderPipeline {
           error: "No illustration prompt for this unit yet.",
         };
       }
-      // Technical books, retrieval-first: an EXISTING figure (correct labels, correct
-      // data) beats a generated one — the STRONG preference for technical material.
-      // The LLM's visualization plan supplies the query (subject + visual form); when
-      // it produced no structured subject, fall back to the prompt text so retrieval
-      // still gets its shot. Any failure falls through to AI generation below.
-      const figureSubject =
-        keyEvent?.imagePrompt.subject?.trim() || keyEvent?.imagePrompt.text?.trim().slice(0, 120);
-      if (request.kind === "technical_illustration" && this.deps.imageSearch && figureSubject) {
-        const query = buildFigureQuery(figureSubject, keyEvent!.imagePrompt.environment);
-        try {
-          const found = await this.deps.imageSearch.retrieve(query);
-          if (found?.bytes) {
-            const caption = retrievedCaption(query, found);
-            await this.deps.store.putImage(requestId, found.bytes.bytes, found.bytes.mimeType, caption);
-            return {
-              requestId,
-              pageId: request.pageId,
-              status: "ready",
-              prompt: caption,
-              image: { bytes: found.bytes.bytes, mimeType: found.bytes.mimeType },
-            };
+      // Technical books, retrieval-ONLY: an EXISTING figure (correct labels, correct
+      // data) is the only image a technical unit shows — AI generation is disabled in
+      // this mode so an invented-but-plausible diagram can never pose as a source of
+      // truth. The LLM's visualization plan supplies the query (subject + visual form);
+      // when it produced no structured subject, fall back to the prompt text so
+      // retrieval still gets its shot. Nothing found → a `skipped` result whose note
+      // names the concept (the UI shows the concept's explanation instead).
+      if (request.kind === "technical_illustration") {
+        const figureSubject =
+          keyEvent?.imagePrompt.subject?.trim() || keyEvent?.imagePrompt.text?.trim().slice(0, 120);
+        if (this.deps.imageSearch && figureSubject) {
+          const query = buildFigureQuery(figureSubject, keyEvent!.imagePrompt.environment);
+          try {
+            const found = await this.deps.imageSearch.retrieve(query);
+            if (found?.bytes) {
+              const caption = retrievedCaption(query, found);
+              await this.deps.store.putImage(requestId, found.bytes.bytes, found.bytes.mimeType, caption);
+              return {
+                requestId,
+                pageId: request.pageId,
+                status: "ready",
+                prompt: caption,
+                image: { bytes: found.bytes.bytes, mimeType: found.bytes.mimeType },
+              };
+            }
+            if (found?.sourceUrl) {
+              // Hotlink-only (the host blocked downloads): displayable but not cacheable,
+              // so it re-resolves next session instead of being persisted.
+              return {
+                requestId,
+                pageId: request.pageId,
+                status: "ready",
+                prompt: retrievedCaption(query, found),
+                sourceUrl: found.sourceUrl,
+              };
+            }
+          } catch {
+            /* quota/network failure — fall through to the skipped result */
           }
-          if (found?.sourceUrl) {
-            // Hotlink-only (the host blocked downloads): displayable but not cacheable,
-            // so it re-resolves next session instead of being persisted.
-            return {
-              requestId,
-              pageId: request.pageId,
-              status: "ready",
-              prompt: retrievedCaption(query, found),
-              sourceUrl: found.sourceUrl,
-            };
-          }
-        } catch {
-          /* quota/network/no results — generate instead */
+          return {
+            requestId,
+            pageId: request.pageId,
+            status: "skipped",
+            prompt: noFigureNote(figureSubject),
+          };
         }
+        return { requestId, pageId: request.pageId, status: "skipped" };
       }
       // A stored keyEvent whose range doesn't exactly match this unit's is SHARED by
       // several units (the bible was extracted under a different pages-per-image
@@ -448,6 +461,11 @@ export class RenderPipeline {
 function retrievedCaption(query: string, found: RetrievedImage): string {
   const source = found.contextLink ? `\n\nSource: ${found.title ? `${found.title} — ` : ""}${found.contextLink}` : "";
   return `Retrieved figure for “${query}”${source}`;
+}
+
+/** Skip note when no verified figure exists — names the concept so the UI can say so. */
+export function noFigureNote(subject: string): string {
+  return `No verified figure found for “${subject}” — image generation is off for technical books to keep a source of truth.`;
 }
 
 /** The next-lower render-quality level, or undefined when already at the floor (draft). */

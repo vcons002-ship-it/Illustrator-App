@@ -24,6 +24,10 @@ import {
   spoilerRevealPoint,
   toRenderUnits,
   formatToolResult,
+  bestParagraphIndex,
+  conceptIntroductions,
+  subjectFromCaption,
+  type ConceptIntro,
   type BookSource,
   type BookSummary,
   type ChapterDataset,
@@ -50,6 +54,11 @@ import {
   LibraryPanel,
   SettingsPanel,
   useScrollDepth,
+  ConceptCard,
+  ConceptText,
+  InlineFigure,
+  SupportRow,
+  type DisplayResult,
   type InstalledModel,
   type LocalBackendId,
   type ProvidersDiagnostics,
@@ -616,6 +625,53 @@ export function App() {
         ? bible.datasets.filter((d) => d.chapterIndex === activeChapterIndex)
         : [],
     [book, bible, activeChapterIndex],
+  );
+
+  // --- Technical-mode reading support (inline, anchored to source paragraphs) --
+  // Key concepts marked in the text + first-appearance explanation cards. Depends
+  // only on the book + glossary, so it survives result churn untouched.
+  const techConcepts = useMemo(() => {
+    if (book?.contentMode !== "technical" || !bible?.glossary.length) return undefined;
+    const definitions = new Map(bible.glossary.map((g) => [g.term.toLowerCase(), g.definition]));
+    return {
+      terms: bible.glossary.map((g) => g.term),
+      definitions,
+      conceptsByPage: conceptIntroductions(book.pages, bible.glossary),
+    };
+  }, [book, bible?.glossary]);
+  // Each unit's retrieved figure (or its "no verified figure" note), anchored to
+  // the paragraph that best matches the figure's subject on the unit's first page.
+  const techFiguresByPage = useMemo(() => {
+    if (book?.contentMode !== "technical" || !units) return undefined;
+    const byPage = new Map<number, { unitIndex: number; paragraphIndex: number; result: DisplayResult }[]>();
+    const firstPageOfUnit = new Map<number, number>();
+    units.pageToUnit.forEach((u, page) => {
+      if (!firstPageOfUnit.has(u)) firstPageOfUnit.set(u, page);
+    });
+    for (const [unitIndex, result] of results) {
+      const showable =
+        (result.status === "ready" && (result.image || result.sourceUrl)) ||
+        (result.status === "skipped" && result.prompt);
+      if (!showable) continue;
+      const page = firstPageOfUnit.get(unitIndex);
+      const paragraphs = page !== undefined ? book.pages[page]?.paragraphs : undefined;
+      if (page === undefined || !paragraphs) continue;
+      const subject = subjectFromCaption(result.prompt ?? "") ?? "";
+      const paragraphIndex = subject
+        ? bestParagraphIndex(paragraphs.map((p) => p.text), subject)
+        : 0;
+      const list = byPage.get(page) ?? [];
+      list.push({ unitIndex, paragraphIndex, result });
+      byPage.set(page, list);
+    }
+    return byPage;
+  }, [book, units, results]);
+  const technicalSupport = useMemo<TechnicalSupportData | undefined>(
+    () =>
+      book?.contentMode === "technical"
+        ? { ...(techConcepts ?? {}), ...(techFiguresByPage ? { figuresByPage: techFiguresByPage } : {}) }
+        : undefined,
+    [book, techConcepts, techFiguresByPage],
   );
 
   // --- Reading-companion chat ------------------------------------------------
@@ -1616,31 +1672,36 @@ export function App() {
             unitIndex={unitIndex}
             pagesPerImage={pagesPerImage}
             registerParagraph={registerParagraph}
+            {...(technicalSupport ? { technical: technicalSupport } : {})}
           />
 
           <aside style={styles.aside}>
             <div style={styles.panel}>
-              {panelsPerView > 1 && units ? (
-                <PanelGrid
-                  panels={panelGroup(
-                    units.book.pages.map((p) => p.chapterId),
-                    unitIndex,
-                    panelsPerView,
-                  ).map((u) => ({ unitIndex: u, result: results.get(u) }))}
-                  currentUnit={unitIndex}
-                  bloom={bloom}
-                  direction={settings.imageStyle === "manga" ? "rtl" : "ltr"}
-                  pageKey={unitIndex}
-                />
-              ) : (
-                <ImagePanel
-                  result={results.get(unitIndex)}
-                  bloom={bloom}
-                  pageKey={unitIndex}
-                  awaitingStart={!generating}
-                />
-              )}
-              {imageCaption && (
+              {/* Technical mode shows its support INLINE, anchored to the source
+                  paragraphs (retrieved figures, concept cards) — no generated-art
+                  pane, no progressive blur. The aside keeps the data charts. */}
+              {!isTechnical &&
+                (panelsPerView > 1 && units ? (
+                  <PanelGrid
+                    panels={panelGroup(
+                      units.book.pages.map((p) => p.chapterId),
+                      unitIndex,
+                      panelsPerView,
+                    ).map((u) => ({ unitIndex: u, result: results.get(u) }))}
+                    currentUnit={unitIndex}
+                    bloom={bloom}
+                    direction={settings.imageStyle === "manga" ? "rtl" : "ltr"}
+                    pageKey={unitIndex}
+                  />
+                ) : (
+                  <ImagePanel
+                    result={results.get(unitIndex)}
+                    bloom={bloom}
+                    pageKey={unitIndex}
+                    awaitingStart={!generating}
+                  />
+                ))}
+              {!isTechnical && imageCaption && (
                 <div style={styles.imageDescription}>
                   {displayCaption(imageCaption)}
                   {displayCaption(imageCaption) !== imageCaption && (
@@ -1790,18 +1851,32 @@ export function App() {
  * frame (reading progress is state there), and reconciling every paragraph of
  * a whole book per frame was the single biggest main-thread cost while reading.
  */
+/** Technical-mode inline support handed to the reader column (all optional). */
+interface TechnicalSupportData {
+  terms?: string[];
+  /** Lower-cased term → plain-language definition (concept tooltips). */
+  definitions?: Map<string, string>;
+  /** First-appearance concept cards, by original page index. */
+  conceptsByPage?: Map<number, ConceptIntro[]>;
+  /** Retrieved figures / skip notes anchored to their source paragraph. */
+  figuresByPage?: Map<number, { unitIndex: number; paragraphIndex: number; result: DisplayResult }[]>;
+}
+
 const ReaderColumn = memo(function ReaderColumn({
   book,
   pageToUnit,
   unitIndex,
   pagesPerImage,
   registerParagraph,
+  technical,
 }: {
   book: BookSource;
   pageToUnit: number[] | undefined;
   unitIndex: number;
   pagesPerImage: number | "chapter";
   registerParagraph: (id: string) => (el: HTMLElement | null) => void;
+  /** Present only in technical mode: concept marks + paragraph-anchored support. */
+  technical?: TechnicalSupportData;
 }) {
   const chaptersById = useMemo(() => new Map(book.chapters.map((c) => [c.id, c])), [book]);
   return (
@@ -1817,6 +1892,8 @@ const ReaderColumn = memo(function ReaderColumn({
         // boundaries are marked by the heading). Hidden in whole-chapter mode.
         const showPageDivider =
           pagesPerImage !== "chapter" && next !== undefined && next.chapterId === page.chapterId;
+        const concepts = technical?.conceptsByPage?.get(i);
+        const figures = technical?.figuresByPage?.get(i);
         return (
           <Fragment key={page.id}>
             {newChapter && (
@@ -1825,11 +1902,39 @@ const ReaderColumn = memo(function ReaderColumn({
               </h2>
             )}
             <section style={isActiveUnit ? { ...styles.page, ...styles.sectionActive } : styles.page}>
-              {page.paragraphs.map((para) => (
-                <p key={para.id} ref={registerParagraph(para.id)} style={styles.paragraph}>
-                  {para.text}
-                </p>
-              ))}
+              {page.paragraphs.map((para, pi) => {
+                // Technical support anchored to THIS paragraph — it scrolls with
+                // its source text instead of living in a detached side pane.
+                const paraConcepts = concepts?.filter((c) => c.paragraphIndex === pi);
+                const paraFigures = figures?.filter((f) => f.paragraphIndex === pi);
+                const support =
+                  (paraConcepts?.length ?? 0) > 0 || (paraFigures?.length ?? 0) > 0;
+                return (
+                  <Fragment key={para.id}>
+                    <p ref={registerParagraph(para.id)} style={styles.paragraph}>
+                      {technical?.terms?.length && technical.definitions ? (
+                        <ConceptText
+                          text={para.text}
+                          terms={technical.terms}
+                          definitions={technical.definitions}
+                        />
+                      ) : (
+                        para.text
+                      )}
+                    </p>
+                    {support && (
+                      <SupportRow>
+                        {paraFigures?.map((f) => (
+                          <InlineFigure key={`fig-${f.unitIndex}`} result={f.result} />
+                        ))}
+                        {paraConcepts?.map((c) => (
+                          <ConceptCard key={c.term} term={c.term} definition={c.definition} />
+                        ))}
+                      </SupportRow>
+                    )}
+                  </Fragment>
+                );
+              })}
             </section>
             {showPageDivider && (
               <div style={styles.pageDivider}>
