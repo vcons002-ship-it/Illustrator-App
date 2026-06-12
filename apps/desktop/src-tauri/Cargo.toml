@@ -13,5 +13,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Streamed checkpoint/engine downloads (blocking client, used inside spawn_blocking).
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+# Body encoding for the `http_fetch` CORS proxy (invoke payloads are JSON, not binary).
+base64 = "0.22"
 # Unpack the official ComfyUI Windows portable .7z (bundled Python — no system install).
 sevenz-rust = "0.6"

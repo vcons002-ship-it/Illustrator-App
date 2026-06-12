@@ -242,6 +242,98 @@ fn read_safetensors_header(path: &Path) -> Option<String> {
     String::from_utf8(buf).ok()
 }
 
+// ------------------------------------------------------------------ http proxy
+
+/// One proxied HTTP request from the renderer (see `desktopHttpFetch` in
+/// `apps/web/src/runtime.ts`). Bodies travel base64-encoded because invoke
+/// payloads are JSON, not binary — same convention as the extension's proxy.
+#[derive(Deserialize)]
+struct HttpFetchRequest {
+    url: String,
+    method: String,
+    #[serde(default)]
+    headers: std::collections::HashMap<String, String>,
+    #[serde(rename = "bodyBase64")]
+    body_base64: Option<String>,
+}
+
+#[derive(Serialize)]
+struct HttpFetchResult {
+    ok: bool,
+    status: u16,
+    #[serde(rename = "statusText")]
+    status_text: String,
+    headers: std::collections::HashMap<String, String>,
+    #[serde(rename = "bodyBase64")]
+    body_base64: String,
+}
+
+/// Search pages / articles / figures — never model downloads (those have their
+/// own resumable path) and never LLM streams (cloud APIs are CORS-open and stay
+/// on the webview's native fetch). 32 MB covers any page or figure generously.
+const HTTP_FETCH_MAX_BYTES: usize = 32 * 1024 * 1024;
+
+/// CORS-free fetch for the renderer — the desktop twin of the extension's
+/// background-worker proxy (`apps/extension/src/background.ts`). The webview is
+/// a browser and enforces CORS like any other; this native command is what lets
+/// the chat buddy's keyless web search (DuckDuckGo) and "open this URL" work in
+/// the desktop app with no API keys. Plain request/response only: no cookies,
+/// no auth ambient to the user's browser — strictly less capable than curl.
+#[tauri::command]
+async fn http_fetch(request: HttpFetchRequest) -> Result<HttpFetchResult, String> {
+    tauri::async_runtime::spawn_blocking(move || http_fetch_blocking(request))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn http_fetch_blocking(req: HttpFetchRequest) -> Result<HttpFetchResult, String> {
+    use base64::Engine as _;
+    let engine = base64::engine::general_purpose::STANDARD;
+    if !(req.url.starts_with("https://") || req.url.starts_with("http://")) {
+        return Err("Only http(s) URLs can be fetched.".into());
+    }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let method =
+        reqwest::Method::from_bytes(req.method.as_bytes()).map_err(|e| e.to_string())?;
+    let mut builder = client.request(method, &req.url);
+    for (name, value) in &req.headers {
+        builder = builder.header(name, value);
+    }
+    if let Some(b64) = &req.body_base64 {
+        builder = builder.body(engine.decode(b64).map_err(|e| e.to_string())?);
+    }
+    let mut resp = builder.send().map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let mut headers = std::collections::HashMap::new();
+    for (name, value) in resp.headers() {
+        if let Ok(text) = value.to_str() {
+            headers.insert(name.to_string(), text.to_string());
+        }
+    }
+    let mut body: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 1 << 16];
+    loop {
+        let n = resp.read(&mut chunk).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        body.extend_from_slice(&chunk[..n]);
+        if body.len() > HTTP_FETCH_MAX_BYTES {
+            return Err("Response exceeded the 32 MB proxy limit.".into());
+        }
+    }
+    Ok(HttpFetchResult {
+        ok: status.is_success(),
+        status: status.as_u16(),
+        status_text: status.canonical_reason().unwrap_or("").to_string(),
+        headers,
+        body_base64: engine.encode(&body),
+    })
+}
+
 /// Download a style LoRA into the engine's loras dir, with progress.
 #[tauri::command]
 async fn download_lora(app: AppHandle, model: DownloadableModel) -> Result<(), String> {
@@ -538,7 +630,8 @@ fn main() {
             list_loras,
             lora_headers,
             download_lora,
-            gpu_info
+            gpu_info,
+            http_fetch
         ])
         .build(tauri::generate_context!())
         .expect("error while building Visual Reader")

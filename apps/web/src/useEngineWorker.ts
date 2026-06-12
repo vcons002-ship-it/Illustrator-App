@@ -28,6 +28,7 @@ export interface ImportResult {
   error?: string;
 }
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
+import { desktopHttpFetch, isDesktop } from "./runtime.js";
 
 /**
  * Owns the engine Web Worker and surfaces its state to React. The worker does
@@ -255,6 +256,14 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     worker.onmessage = (event: MessageEvent<WorkerToMain>) => {
       const msg = event.data;
       switch (msg.type) {
+        case "corsFetch": {
+          // Worker → Rust shell relay (workers can't reach the Tauri bridge).
+          // desktopHttpFetch never rejects; failures travel back as { error }.
+          void desktopHttpFetch(msg.request).then((r) =>
+            send({ type: "corsFetchResult", fetchId: msg.fetchId, ...r }),
+          );
+          break;
+        }
         case "status":
           setStatus(msg.message);
           break;
@@ -454,7 +463,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   const identityApplied = useRef(false);
   useEffect(() => {
     const apply = (): void => {
-      send({ type: "init", settings: settingsRef.current });
+      send({ type: "init", settings: settingsRef.current, ...(isDesktop ? { corsProxy: true } : {}) });
       if (lastBook.current) {
         setResults(new Map());
         send({ type: "open", book: lastBook.current });
@@ -484,7 +493,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
       generationRequested.current = false; // a new book waits for the button
       setBible(undefined);
       setResults(new Map());
-      send({ type: "init", settings });
+      send({ type: "init", settings, ...(isDesktop ? { corsProxy: true } : {}) });
       send({ type: "open", book });
     },
     [settings],
