@@ -834,6 +834,44 @@ describe("LocalServerLLMProvider", () => {
     expect((transport.requests[0]!.body as { max_tokens?: number }).max_tokens).toBe(12288);
   });
 
+  it("disables model reasoning for ANALYSIS calls only (chat keeps thinking)", async () => {
+    // Extraction is rubric-guided structured capture; a thinking model's hidden
+    // reasoning pass is the bulk of each chapter's analysis time on a local GPU.
+    const transport = new FakeTransport(() => ({
+      json: { choices: [{ message: { content: '{"summary":"s"}' } }] },
+    }));
+    const provider = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", transport });
+    await provider.extractEntities({ bookId: "b", chapterIndex: 0, chapterText: "x", existing: emptyBible() });
+    expect((transport.requests[0]!.body as { reasoning_effort?: string }).reasoning_effort).toBe("none");
+
+    await provider.buildImagePrompt(
+      { kind: "scene_illustration", bookId: "b", pageId: "p", pageIndex: 0, chapterIndex: 0, sourceText: "x", characterIds: [], environmentIds: [], creatureIds: [], spoilerIds: [] },
+      emptyBible(),
+    );
+    expect((transport.requests[1]!.body as { reasoning_effort?: string }).reasoning_effort).toBe("none");
+
+    await provider.chat([{ role: "user", content: "hi" }]);
+    expect((transport.requests[2]!.body as { reasoning_effort?: string }).reasoning_effort).toBeUndefined();
+  });
+
+  it("retries an analysis call without the reasoning opt-out when a strict server 400s it", async () => {
+    const transport = new FakeTransport((req) =>
+      (req.body as { reasoning_effort?: string }).reasoning_effort
+        ? { ok: false, status: 400, text: '{"error":"invalid reasoning_effort"}' }
+        : { json: { choices: [{ message: { content: '{"summary":"s"}' } }] } },
+    );
+    const provider = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", transport });
+    const bible = await provider.extractEntities({
+      bookId: "b",
+      chapterIndex: 0,
+      chapterText: "x",
+      existing: emptyBible(),
+    });
+    expect(bible.storyboard[0]?.summary).toBe("s");
+    expect(transport.requests).toHaveLength(2); // rejected once, succeeded without the field
+    expect((transport.requests[1]!.body as { reasoning_effort?: string }).reasoning_effort).toBeUndefined();
+  });
+
   it("builds an image prompt without response_format and trims it", async () => {
     const transport = new FakeTransport(() => ({
       json: { choices: [{ message: { content: "  a vivid scene  " } }] },

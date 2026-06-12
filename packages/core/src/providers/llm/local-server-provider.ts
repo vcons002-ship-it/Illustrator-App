@@ -105,7 +105,7 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable {
         },
         { role: "user", content: extractionUserContent(input) },
       ],
-      { json: true, ...(input.signal ? { signal: input.signal } : {}) },
+      { json: true, noThink: true, ...(input.signal ? { signal: input.signal } : {}) },
     );
     const raw = parseExtraction(text);
     // Nothing usable parsed — an empty/absent body, truncated/malformed JSON, or a
@@ -130,7 +130,7 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable {
         { role: "system", content: promptSystemFor(request.kind) },
         { role: "user", content: promptUserContent(request, bible) },
       ],
-      { json: false, ...(signal ? { signal } : {}) },
+      { json: false, noThink: true, ...(signal ? { signal } : {}) },
     );
     return stripThink(text).trim();
   }
@@ -188,33 +188,48 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable {
 
   private async complete(
     messages: { role: "system" | "user" | "assistant"; content: string }[],
-    opts: { json: boolean; signal?: AbortSignal; maxTokens?: number },
+    opts: { json: boolean; signal?: AbortSignal; maxTokens?: number; noThink?: boolean },
   ): Promise<string> {
     const json = opts.json;
-    const res = await this.transport.send({
-      url: `${this.baseUrl}/chat/completions`,
-      method: "POST",
-      headers: this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
-      ...(opts.signal ? { signal: opts.signal } : {}),
-      body: {
-        model: this.model,
-        messages,
-        temperature: json ? 0 : 0.7,
-        // Bound the response so a model can't run away (which on a local GPU stalls
-        // the whole bible build) — but with real headroom: a long chapter's extraction
-        // carries one folded scene prompt PER render unit plus new entities (and a
-        // thinking model spends tokens before the JSON), and a truncated response
-        // parses to nothing, leaving the chapter with no prompts. A prompt fits
-        // comfortably. There is still NO request timeout — a slow-but-working model
-        // is never cut off.
-        max_tokens: opts.maxTokens ?? (json ? 12288 : 512),
-        // Keep the model resident between the many sequential bible calls so the
-        // server doesn't unload/reload it each time (Ollama honours `keep_alive`;
-        // other OpenAI-compatible servers ignore the extra field).
-        keep_alive: "30m",
-        ...(json ? { response_format: { type: "json_object" } } : {}),
-      },
-    });
+    const send = (noThink: boolean) =>
+      this.transport.send({
+        url: `${this.baseUrl}/chat/completions`,
+        method: "POST",
+        headers: this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
+        ...(opts.signal ? { signal: opts.signal } : {}),
+        body: {
+          model: this.model,
+          messages,
+          temperature: json ? 0 : 0.7,
+          // Bound the response so a model can't run away (which on a local GPU stalls
+          // the whole bible build) — but with real headroom: a long chapter's extraction
+          // carries one folded scene prompt PER render unit plus new entities (and a
+          // thinking model spends tokens before the JSON), and a truncated response
+          // parses to nothing, leaving the chapter with no prompts. A prompt fits
+          // comfortably. There is still NO request timeout — a slow-but-working model
+          // is never cut off.
+          max_tokens: opts.maxTokens ?? (json ? 12288 : 512),
+          // Keep the model resident between the many sequential bible calls so the
+          // server doesn't unload/reload it each time (Ollama honours `keep_alive`;
+          // other OpenAI-compatible servers ignore the extra field).
+          keep_alive: "30m",
+          // Analysis calls skip the model's hidden reasoning pass: extraction is
+          // structured capture guided by an explicit rubric, and on a local GPU a
+          // thinking model burns thousands of throwaway tokens per chapter before
+          // the JSON — usually the bulk of the analysis time. Ollama's OpenAI-compat
+          // endpoint maps reasoning_effort "none" → thinking off; servers that don't
+          // know the field ignore it (and stripThink still cleans up any that think
+          // anyway). Chat keeps thinking — that's where open-ended reasoning helps.
+          ...(noThink ? { reasoning_effort: "none" } : {}),
+          ...(json ? { response_format: { type: "json_object" } } : {}),
+        },
+      });
+    let res = await send(opts.noThink === true);
+    if (!res.ok && opts.noThink && res.status === 400) {
+      // A strict server may reject the non-standard "none" value (OpenAI's own enum
+      // is low/medium/high) — never let the opt-out break analysis; retry without it.
+      res = await send(false);
+    }
     if (!res.ok) {
       // Surface the server's own error body — Ollama/LM Studio return a JSON or text
       // reason (model not loaded, out of memory, context exceeded…). A bare status
