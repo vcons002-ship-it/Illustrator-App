@@ -149,7 +149,10 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
   );
 });
 
-function MessageBubble({ message }: { message: ChatMessageVM }) {
+// Memoised: every keystroke in the draft (panel-local state) and every streamed
+// token re-renders the panel — settled bubbles (which can hold images and link
+// lists, and grow without bound over a session) must not re-render with it.
+const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMessageVM }) {
   const isUser = message.role === "user";
   const url = useMessageImageUrl(message.image);
   return (
@@ -177,7 +180,7 @@ function MessageBubble({ message }: { message: ChatMessageVM }) {
       ) : null}
     </div>
   );
-}
+});
 
 /** Object URL for a bytes image (revoked on change); pass-through for hotlinks. */
 function useMessageImageUrl(image: ChatMessageVM["image"]): string | undefined {

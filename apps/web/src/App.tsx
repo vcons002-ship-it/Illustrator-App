@@ -646,6 +646,28 @@ export function App() {
     if (book) void libraryStore.deleteChatHistory?.(book.id);
   }, [book, libraryStore]);
 
+  // Stable view-model + handlers for the memoised ChatPanel: rebuilt only when the
+  // history actually changes, so app-level renders (scroll frames, status lines)
+  // don't re-render every settled bubble, and bubble object identity holds across
+  // keystrokes/stream tokens (MessageBubble is memoised on it).
+  const chatPanelMessages = useMemo(
+    () =>
+      chatMessages.map((m) => ({
+        role: m.role,
+        text: m.text,
+        ...(m.image ? { image: m.image } : {}),
+        ...(m.links ? { links: m.links } : {}),
+      })),
+    [chatMessages],
+  );
+  const onChatSendText = useCallback((text: string) => void onChatSend(text), [onChatSend]);
+  const onApprovePendingTool = useCallback(() => void onApproveChatTool(), [onApproveChatTool]);
+  const onDismissPendingTool = useCallback(() => {
+    setChatPendingTool(undefined);
+    pendingTranscript.current = [];
+  }, []);
+  const onCloseChat = useCallback(() => setShowChat(false), []);
+
   // On-image description: the EXACT prompt the image was rendered from (persisted
   // with it, so it never shifts as the bible grows — and doubles as prompt
   // troubleshooting). Until the render lands, fall back to the unit's STORED scene
@@ -1199,27 +1221,19 @@ export function App() {
       {showChat && book && (
         <ChatPanel
           title={book.title}
-          messages={chatMessages.map((m) => ({
-            role: m.role,
-            text: m.text,
-            ...(m.image ? { image: m.image } : {}),
-            ...(m.links ? { links: m.links } : {}),
-          }))}
+          messages={chatPanelMessages}
           {...(chatStreaming ? { streamingText: chatStreaming } : {})}
           busy={chatBusy}
           {...(chatActivity ? { activity: chatActivity } : {})}
           {...(chatPendingTool ? { pendingTool: chatPendingTool } : {})}
           allowSpoilers={isTechnical || allowSpoilers}
           technical={isTechnical}
-          onSend={(text) => void onChatSend(text)}
-          onApprovePendingTool={() => void onApproveChatTool()}
-          onDismissPendingTool={() => {
-            setChatPendingTool(undefined);
-            pendingTranscript.current = [];
-          }}
+          onSend={onChatSendText}
+          onApprovePendingTool={onApprovePendingTool}
+          onDismissPendingTool={onDismissPendingTool}
           onToggleSpoilers={setAllowSpoilers}
           onCancel={chatCancel}
-          onClose={() => setShowChat(false)}
+          onClose={onCloseChat}
           onClearHistory={onClearChat}
         />
       )}
