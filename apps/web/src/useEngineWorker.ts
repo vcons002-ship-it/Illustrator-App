@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  BookSearchHit,
   BookSource,
+  BookSummary,
+  BuddyPersona,
+  BuddyToolCall,
   CharacterPatch,
   ChatTurn,
   ImageResult,
@@ -98,6 +102,36 @@ export interface EngineWorkerApi {
   chatTool: (call: ToolCall) => Promise<ChatToolRender>;
   /** Abort the in-flight chat round, if any. */
   chatCancel: () => void;
+  /** Landing-page buddy: one user message (no book open; streams via `onEvent`). */
+  buddyChat: (
+    history: ChatTurn[],
+    userText: string,
+    persona: BuddyPersona,
+    library: BookSummary[],
+    onEvent: (e: BuddyStreamEvent) => void,
+  ) => Promise<BuddyDoneResult>;
+  /** Abort the in-flight buddy round, if any. */
+  buddyCancel: () => void;
+}
+
+export type BuddyStreamEvent =
+  | { kind: "token"; text: string }
+  | { kind: "tool"; call: BuddyToolCall }
+  | {
+      kind: "toolResult";
+      call: BuddyToolCall;
+      hits?: WebSearchHit[];
+      books?: BookSearchHit[];
+      error?: string;
+    }
+  /** A buddy tool opened a book — the app should open it (and start visuals). */
+  | { kind: "opened"; book: BookSource; visuals: boolean };
+
+export interface BuddyDoneResult {
+  text: string;
+  /** Turns to append to the stored buddy history (assistant + tool feedback). */
+  transcript: ChatTurn[];
+  error?: string;
 }
 
 export type ChatStreamEvent =
@@ -174,6 +208,11 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   // In-flight approved tool renders (chatTool), resolved by `chatToolResult`.
   const chatToolRequests = useRef<Map<number, (r: ChatToolRender) => void>>(new Map());
   const activeChatRequestId = useRef<number | undefined>(undefined);
+  // In-flight buddy rounds (landing page), keyed by requestId like chatRequests.
+  const buddyRequests = useRef<
+    Map<number, { onEvent: (e: BuddyStreamEvent) => void; resolve: (r: BuddyDoneResult) => void }>
+  >(new Map());
+  const activeBuddyRequestId = useRef<number | undefined>(undefined);
 
   const send = (msg: MainToWorker, transfer: Transferable[] = []) =>
     workerRef.current?.postMessage(msg, transfer);
@@ -315,6 +354,44 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
           const req = chatRequests.current.get(msg.requestId);
           chatRequests.current.delete(msg.requestId);
           if (activeChatRequestId.current === msg.requestId) activeChatRequestId.current = undefined;
+          req?.resolve({ text: "", transcript: [], error: msg.message });
+          break;
+        }
+        case "buddyToken": {
+          buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "token", text: msg.text });
+          break;
+        }
+        case "buddyTool": {
+          buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "tool", call: msg.call });
+          break;
+        }
+        case "buddyToolResult": {
+          buddyRequests.current.get(msg.requestId)?.onEvent({
+            kind: "toolResult",
+            call: msg.call,
+            ...(msg.hits ? { hits: msg.hits } : {}),
+            ...(msg.books ? { books: msg.books } : {}),
+            ...(msg.error ? { error: msg.error } : {}),
+          });
+          break;
+        }
+        case "buddyOpened": {
+          buddyRequests.current
+            .get(msg.requestId)
+            ?.onEvent({ kind: "opened", book: msg.book, visuals: msg.visuals });
+          break;
+        }
+        case "buddyDone": {
+          const req = buddyRequests.current.get(msg.requestId);
+          buddyRequests.current.delete(msg.requestId);
+          if (activeBuddyRequestId.current === msg.requestId) activeBuddyRequestId.current = undefined;
+          req?.resolve({ text: msg.text, transcript: msg.transcript });
+          break;
+        }
+        case "buddyError": {
+          const req = buddyRequests.current.get(msg.requestId);
+          buddyRequests.current.delete(msg.requestId);
+          if (activeBuddyRequestId.current === msg.requestId) activeBuddyRequestId.current = undefined;
           req?.resolve({ text: "", transcript: [], error: msg.message });
           break;
         }
@@ -504,6 +581,38 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     const id = activeChatRequestId.current;
     if (id !== undefined) send({ type: "chatCancel", requestId: id });
   }, []);
+  const buddyChat = useCallback(
+    (
+      history: ChatTurn[],
+      userText: string,
+      persona: BuddyPersona,
+      library: BookSummary[],
+      onEvent: (e: BuddyStreamEvent) => void,
+    ): Promise<BuddyDoneResult> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        activeBuddyRequestId.current = requestId;
+        // Same stale-worker guard as `chat`: surface a timeout instead of spinning.
+        const timeout = setTimeout(() => {
+          if (buddyRequests.current.delete(requestId)) {
+            resolve({ text: "", transcript: [], error: "The chat timed out — try again." });
+          }
+        }, 180_000);
+        buddyRequests.current.set(requestId, {
+          onEvent,
+          resolve: (r) => {
+            clearTimeout(timeout);
+            resolve(r);
+          },
+        });
+        send({ type: "buddyChat", requestId, history, userText, persona, library });
+      }),
+    [],
+  );
+  const buddyCancel = useCallback(() => {
+    const id = activeBuddyRequestId.current;
+    if (id !== undefined) send({ type: "chatCancel", requestId: id });
+  }, []);
 
   return {
     bible,
@@ -542,6 +651,8 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     chat,
     chatTool,
     chatCancel,
+    buddyChat,
+    buddyCancel,
   };
 }
 

@@ -152,7 +152,8 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
 // Memoised: every keystroke in the draft (panel-local state) and every streamed
 // token re-renders the panel — settled bubbles (which can hold images and link
 // lists, and grow without bound over a session) must not re-render with it.
-const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMessageVM }) {
+// Exported for the landing-page buddy panel, which renders the same bubbles.
+export const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMessageVM }) {
   const isUser = message.role === "user";
   const url = useMessageImageUrl(message.image);
   return (
