@@ -46,4 +46,10 @@ export interface BookSource {
   author?: string;
   chapters: Chapter[];
   pages: Page[];
+  /**
+   * What kind of writing this is, chosen at import. "fiction" (default) illustrates
+   * story scenes; "technical" (papers, textbooks, non-fiction) uses the concept/
+   * diagram prompt template instead. Experimental.
+   */
+  contentMode?: "fiction" | "technical";
 }

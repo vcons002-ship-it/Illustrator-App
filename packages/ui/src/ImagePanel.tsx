@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
-import type { ImageResult } from "@visual-reader/core";
 import { BloomTransition } from "./BloomTransition.js";
-import { useObjectUrl } from "./imageObjectUrl.js";
+import { useObjectUrl, type DisplayResult } from "./imageObjectUrl.js";
 import { placeholderLabel } from "./imageStatus.js";
 
 /**
@@ -15,7 +14,7 @@ import { placeholderLabel } from "./imageStatus.js";
  * blurred (a fast scroll to an unread page can never flash its image).
  */
 export interface ImagePanelProps {
-  result: ImageResult | undefined;
+  result: DisplayResult | undefined;
   /** Bloom target 0..1, driven by reading progress through the current page. */
   bloom: number;
   /** Changes per page so the bloom resets (starts hidden) on navigation. */
@@ -30,6 +29,9 @@ export interface ImagePanelProps {
 
 export function ImagePanel({ result, bloom, pageKey, awaitingStart }: ImagePanelProps) {
   const imageUrl = useObjectUrl(result);
+  // A retrieved figure may be hotlink-only (no downloadable bytes): display it
+  // straight from its source URL — an <img src> renders inline regardless of CORS.
+  const displaySrc = imageUrl ?? result?.sourceUrl;
   // Click-to-reveal: the reader can force the current image fully visible,
   // overriding the progress-driven bloom. Resets on navigation so the next page
   // starts blurred again.
@@ -37,7 +39,7 @@ export function ImagePanel({ result, bloom, pageKey, awaitingStart }: ImagePanel
   useEffect(() => setManualReveal(false), [pageKey]);
   const effectiveBloom = manualReveal ? 1 : bloom;
 
-  if (!result || result.status !== "ready" || !imageUrl) {
+  if (!result || result.status !== "ready" || !displaySrc) {
     const ph = placeholderLabel(result, awaitingStart);
     return <Placeholder label={ph.label} pulse={ph.pulse} />;
   }
@@ -49,8 +51,9 @@ export function ImagePanel({ result, bloom, pageKey, awaitingStart }: ImagePanel
     >
       <BloomTransition key={pageKey} target={effectiveBloom}>
         <img
-          src={imageUrl}
+          src={displaySrc}
           alt="Illustration of the current passage"
+          decoding="async"
           style={{
             display: "block",
             width: "100%",

@@ -1,6 +1,6 @@
-import type { ImageResult } from "@visual-reader/core";
+import { memo } from "react";
 import { BloomTransition } from "./BloomTransition.js";
-import { useObjectUrl } from "./imageObjectUrl.js";
+import { useObjectUrl, type DisplayResult } from "./imageObjectUrl.js";
 
 /**
  * Multi-panel "comic page" view. Composes several consecutive render-unit images into a
@@ -17,7 +17,7 @@ import { useObjectUrl } from "./imageObjectUrl.js";
  */
 export interface PanelGridProps {
   /** The group's units in reading order: ascending unit index + its cached result. */
-  panels: { unitIndex: number; result: ImageResult | undefined }[];
+  panels: { unitIndex: number; result: DisplayResult | undefined }[];
   /** The unit the reader is currently on (gets the live bloom + highlight). */
   currentUnit: number;
   /** Bloom target 0..1 for the current panel, from reading progress. */
@@ -61,14 +61,17 @@ export function PanelGrid({ panels, currentUnit, bloom, direction, pageKey }: Pa
   );
 }
 
-function Panel({
+// Memoized: `bloom` changes on virtually every scroll frame while reading, but
+// only the CURRENT panel's `target` actually changes — the other panels' props
+// are primitives/stable refs, so they skip re-rendering their image subtrees.
+const Panel = memo(function Panel({
   result,
   target,
   highlight,
   showImage,
   bloomKey,
 }: {
-  result: ImageResult | undefined;
+  result: DisplayResult | undefined;
   target: number;
   highlight: boolean;
   showImage: boolean;
@@ -96,10 +99,11 @@ function Panel({
           <img
             src={imageUrl}
             alt="Comic panel"
+            decoding="async"
             style={{ display: "block", width: "100%", height: "100%", objectFit: "cover" }}
           />
         </BloomTransition>
       ) : null}
     </div>
   );
-}
+});

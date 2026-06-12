@@ -1,4 +1,4 @@
-import type { ImageResult } from "@visual-reader/core";
+import type { DisplayResult } from "./imageObjectUrl.js";
 
 /**
  * Choose the image-panel placeholder text + whether it should pulse, given the
@@ -11,7 +11,7 @@ import type { ImageResult } from "@visual-reader/core";
  * underway; "waiting to be illustrated…" (static) means it's queued, not active.
  */
 export function placeholderLabel(
-  result: ImageResult | undefined,
+  result: DisplayResult | undefined,
   awaitingStart: boolean | undefined,
 ): { label: string; pulse: boolean } {
   // Front/back matter (title page, copyright, contents…) is never illustrated.

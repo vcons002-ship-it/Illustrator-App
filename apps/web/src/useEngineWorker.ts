@@ -2,11 +2,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   BookSource,
   CharacterPatch,
+  ChatTurn,
   ImageResult,
+  ImageSearchHit,
   ImportStats,
+  ToolCall,
   VisualBible,
+  WebSearchHit,
 } from "@visual-reader/core";
-import type { ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
+import {
+  identitySettingsKey,
+  tuningSettingsKey,
+  type DisplayResult,
+  type ProvidersDiagnostics,
+  type ReaderSettings,
+} from "@visual-reader/ui";
 
 export interface ImportResult {
   ok: boolean;
@@ -23,7 +33,7 @@ import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
  */
 export interface EngineWorkerApi {
   bible: VisualBible | undefined;
-  results: Map<number, ImageResult>;
+  results: Map<number, DisplayResult>;
   status: string;
   /** Persistent Visual-Bible line (building… / complete · model), separate from `status`. */
   bibleStatus: string;
@@ -74,6 +84,52 @@ export interface EngineWorkerApi {
   clearImportResult: () => void;
   /** Repaint from a unit to the end with current settings (earlier units kept). */
   paintForward: (fromUnit: number) => void;
+  /** Playground: render ONE image straight from text (no bible/LLM/cache). */
+  testRender: (text: string) => Promise<TestRenderResult>;
+  /** Reading-companion chat: one user message (streams via `onEvent`). */
+  chat: (
+    history: ChatTurn[],
+    userText: string,
+    position: { pageIndex: number; paragraphIndex: number },
+    allowSpoilers: boolean,
+    onEvent: (e: ChatStreamEvent) => void,
+  ) => Promise<ChatDoneResult>;
+  /** Run a user-approved generate_image tool call. */
+  chatTool: (call: ToolCall) => Promise<ChatToolRender>;
+  /** Abort the in-flight chat round, if any. */
+  chatCancel: () => void;
+}
+
+export type ChatStreamEvent =
+  | { kind: "token"; text: string }
+  | { kind: "tool"; call: ToolCall }
+  | {
+      kind: "toolResult";
+      call: ToolCall;
+      hits?: WebSearchHit[];
+      imageHits?: ImageSearchHit[];
+      error?: string;
+    };
+
+export interface ChatDoneResult {
+  text: string;
+  /** Turns to append to the stored history (assistant + tool feedback). */
+  transcript: ChatTurn[];
+  pendingTool?: ToolCall;
+  error?: string;
+}
+
+export interface ChatToolRender {
+  image?: { bytes: ArrayBuffer; mimeType: string };
+  error?: string;
+}
+
+export interface TestRenderResult {
+  ok: boolean;
+  image?: { bytes: ArrayBuffer; mimeType: string };
+  /** The exact prompt sent (the text + the active style suffix). */
+  prompt?: string;
+  error?: string;
 }
 
 export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
@@ -84,7 +140,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   // instead of silently reverting to "not started".
   const generationRequested = useRef(false);
   const [bible, setBible] = useState<VisualBible | undefined>();
-  const [results, setResults] = useState<Map<number, ImageResult>>(new Map());
+  const [results, setResults] = useState<Map<number, DisplayResult>>(new Map());
   const [status, setStatus] = useState("");
   const [bibleStatus, setBibleStatus] = useState("");
   const [workflow, setWorkflow] = useState({
@@ -109,6 +165,15 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     Map<number, (image: { bytes: ArrayBuffer; mimeType: string } | undefined) => void>
   >(new Map());
   const nextRefRequestId = useRef(1);
+  // In-flight playground renders, resolved by `testRendered` replies.
+  const testRequests = useRef<Map<number, (result: TestRenderResult) => void>>(new Map());
+  // In-flight chat rounds: streaming events + the final resolve, keyed by requestId.
+  const chatRequests = useRef<
+    Map<number, { onEvent: (e: ChatStreamEvent) => void; resolve: (r: ChatDoneResult) => void }>
+  >(new Map());
+  // In-flight approved tool renders (chatTool), resolved by `chatToolResult`.
+  const chatToolRequests = useRef<Map<number, (r: ChatToolRender) => void>>(new Map());
+  const activeChatRequestId = useRef<number | undefined>(undefined);
 
   const send = (msg: MainToWorker, transfer: Transferable[] = []) =>
     workerRef.current?.postMessage(msg, transfer);
@@ -153,7 +218,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
           setBible(msg.bible);
           break;
         case "update":
-          setResults((prev) => new Map(prev).set(msg.pageIndex, msg.result));
+          setResults((prev) => new Map(prev).set(msg.pageIndex, toDisplayResult(msg.result)));
           // Time each image (first "rendering" → "ready") into a rolling average.
           if (msg.result.status === "rendering" && !renderStart.current.has(msg.pageIndex)) {
             renderStart.current.set(msg.pageIndex, Date.now());
@@ -196,6 +261,63 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
           resolve?.(msg.image);
           break;
         }
+        case "testRendered": {
+          const resolve = testRequests.current.get(msg.requestId);
+          testRequests.current.delete(msg.requestId);
+          resolve?.({
+            ok: msg.ok,
+            ...(msg.image ? { image: msg.image } : {}),
+            ...(msg.prompt ? { prompt: msg.prompt } : {}),
+            ...(msg.error ? { error: msg.error } : {}),
+          });
+          break;
+        }
+        case "chatToken": {
+          chatRequests.current.get(msg.requestId)?.onEvent({ kind: "token", text: msg.text });
+          break;
+        }
+        case "chatTool": {
+          chatRequests.current.get(msg.requestId)?.onEvent({ kind: "tool", call: msg.call });
+          break;
+        }
+        case "chatToolResult": {
+          // Either an approved tool render's reply, or a mid-chat search result.
+          const toolResolve = chatToolRequests.current.get(msg.requestId);
+          if (toolResolve) {
+            chatToolRequests.current.delete(msg.requestId);
+            toolResolve({
+              ...(msg.image ? { image: msg.image } : {}),
+              ...(msg.error ? { error: msg.error } : {}),
+            });
+            break;
+          }
+          chatRequests.current.get(msg.requestId)?.onEvent({
+            kind: "toolResult",
+            call: msg.call,
+            ...(msg.hits ? { hits: msg.hits } : {}),
+            ...(msg.imageHits ? { imageHits: msg.imageHits } : {}),
+            ...(msg.error ? { error: msg.error } : {}),
+          });
+          break;
+        }
+        case "chatDone": {
+          const req = chatRequests.current.get(msg.requestId);
+          chatRequests.current.delete(msg.requestId);
+          if (activeChatRequestId.current === msg.requestId) activeChatRequestId.current = undefined;
+          req?.resolve({
+            text: msg.text,
+            transcript: msg.transcript,
+            ...(msg.pendingTool ? { pendingTool: msg.pendingTool } : {}),
+          });
+          break;
+        }
+        case "chatError": {
+          const req = chatRequests.current.get(msg.requestId);
+          chatRequests.current.delete(msg.requestId);
+          if (activeChatRequestId.current === msg.requestId) activeChatRequestId.current = undefined;
+          req?.resolve({ text: "", transcript: [], error: msg.message });
+          break;
+        }
         case "error":
           setStatus(`Error: ${msg.message}`);
           break;
@@ -205,16 +327,45 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     return () => worker.terminate();
   }, []);
 
-  // Apply settings; re-open the current book so new keys/tier take effect, and
-  // resume generation if it was already running (the re-open built a new engine).
+  // Settings changes take two paths so a style tweak never interrupts running work:
+  //  - IDENTITY changes (providers, keys, models, pages-per-image, …) rebuild the
+  //    providers and re-open the book — the old engine is disposed (aborting its
+  //    in-flight work) because the providers themselves are different now.
+  //  - TUNING changes (style, quality, aspect, sampler overrides, …) only affect how
+  //    FUTURE renders are made: a light "tune" message updates the live engine's tier
+  //    in place. Nothing is aborted, results stay, the bible build keeps running.
+  // `panelsPerView` is pure UI and reaches neither path.
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const identityKey = identitySettingsKey(settings);
+  const tuningKey = tuningSettingsKey(settings);
+
+  const identityApplied = useRef(false);
   useEffect(() => {
-    send({ type: "init", settings });
-    if (lastBook.current) {
-      setResults(new Map());
-      send({ type: "open", book: lastBook.current });
-      if (generationRequested.current) send({ type: "start" });
+    const apply = (): void => {
+      send({ type: "init", settings: settingsRef.current });
+      if (lastBook.current) {
+        setResults(new Map());
+        send({ type: "open", book: lastBook.current });
+        if (generationRequested.current) send({ type: "start" });
+      }
+    };
+    // First run initialises the worker immediately. LATER identity changes are
+    // debounced: an identity re-open clones the whole book to the worker and
+    // rebuilds the engine (aborting in-flight work), so typing an API key must
+    // coalesce into one rebuild — not one per keystroke.
+    if (!identityApplied.current) {
+      identityApplied.current = true;
+      apply();
+      return;
     }
-  }, [settings]);
+    const timer = setTimeout(apply, 400);
+    return () => clearTimeout(timer);
+  }, [identityKey]); // deliberately keyed on the identity FIELDS, not the settings object
+
+  useEffect(() => {
+    send({ type: "tune", settings: settingsRef.current });
+  }, [tuningKey]); // deliberately keyed on the tuning FIELDS, not the settings object
 
   const openBook = useCallback(
     (book: BookSource) => {
@@ -302,6 +453,57 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     (fromUnit: number) => send({ type: "paintForward", fromUnit }),
     [],
   );
+  const testRender = useCallback(
+    (text: string): Promise<TestRenderResult> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        testRequests.current.set(requestId, resolve);
+        send({ type: "testRender", requestId, text });
+      }),
+    [],
+  );
+  const chat = useCallback(
+    (
+      history: ChatTurn[],
+      userText: string,
+      position: { pageIndex: number; paragraphIndex: number },
+      allowSpoilers: boolean,
+      onEvent: (e: ChatStreamEvent) => void,
+    ): Promise<ChatDoneResult> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        activeChatRequestId.current = requestId;
+        // A stale worker (dev/HMR) drops unknown messages silently — surface a
+        // timeout as a visible error rather than a forever-spinning panel.
+        const timeout = setTimeout(() => {
+          if (chatRequests.current.delete(requestId)) {
+            resolve({ text: "", transcript: [], error: "The chat timed out — try again." });
+          }
+        }, 180_000);
+        chatRequests.current.set(requestId, {
+          onEvent,
+          resolve: (r) => {
+            clearTimeout(timeout);
+            resolve(r);
+          },
+        });
+        send({ type: "chat", requestId, history, userText, position, allowSpoilers });
+      }),
+    [],
+  );
+  const chatTool = useCallback(
+    (call: ToolCall): Promise<ChatToolRender> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        chatToolRequests.current.set(requestId, resolve);
+        send({ type: "chatTool", requestId, call });
+      }),
+    [],
+  );
+  const chatCancel = useCallback(() => {
+    const id = activeChatRequestId.current;
+    if (id !== undefined) send({ type: "chatCancel", requestId: id });
+  }, []);
 
   return {
     bible,
@@ -336,6 +538,26 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     removeCharacterReference,
     getCharacterReference,
     paintForward,
+    testRender,
+    chat,
+    chatTool,
+    chatCancel,
+  };
+}
+
+/**
+ * Re-home a result's image bytes into a Blob on receipt. The worker transfers
+ * the only copy of the bytes here, and the UI keeps EVERY page's result for the
+ * whole session — as ArrayBuffers that's hundreds of MB of pinned JS heap on a
+ * long book, while a Blob's data is browser-managed (it can spill out of the
+ * heap, and object URLs are made from a Blob anyway).
+ */
+function toDisplayResult(result: ImageResult): DisplayResult {
+  if (!result.image) return result;
+  const { image, ...rest } = result;
+  return {
+    ...rest,
+    image: { blob: new Blob([image.bytes], { type: image.mimeType }), mimeType: image.mimeType },
   };
 }
 

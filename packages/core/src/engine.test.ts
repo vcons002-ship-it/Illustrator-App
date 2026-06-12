@@ -236,6 +236,96 @@ describe("Engine", () => {
     await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
   });
 
+  it("a technical book's extraction calls carry contentMode (Visual-Atlas prompt)", async () => {
+    const llm = new MockLLMProvider();
+    const extractSpy = vi.spyOn(llm, "extractEntities");
+    const engine = new Engine({ llm, image: new MockImageProvider() });
+    await engine.openBook({ ...sampleBook(), contentMode: "technical" });
+    engine.startGeneration();
+    await engine.whenBibleReady();
+    expect(extractSpy).toHaveBeenCalled();
+    expect(extractSpy.mock.calls[0]![0].contentMode).toBe("technical");
+
+    // A fiction book (no mode) sends none — providers fall back to the fiction prompt.
+    const llm2 = new MockLLMProvider();
+    const extractSpy2 = vi.spyOn(llm2, "extractEntities");
+    const engine2 = new Engine({ llm: llm2, image: new MockImageProvider() });
+    await engine2.openBook(sampleBook());
+    engine2.startGeneration();
+    await engine2.whenBibleReady();
+    expect(extractSpy2.mock.calls[0]![0].contentMode).toBeUndefined();
+  });
+
+  it("grounds a technical book's analysis via web search for ANY reader (local-LLM path)", async () => {
+    const llm = new MockLLMProvider();
+    const extractSpy = vi.spyOn(llm, "extractEntities");
+    const webSearch = {
+      searchWeb: vi.fn(async () => [
+        { link: "https://nih.gov/atp", title: "NIH", snippet: "ATP is the cell's energy currency." },
+      ]),
+    };
+    const engine = new Engine({ llm, image: new MockImageProvider(), webSearch });
+    await engine.openBook({ ...sampleBook(), title: "Cell Biology", contentMode: "technical" });
+    engine.startGeneration();
+    await engine.whenBibleReady();
+
+    // The chapter topic was searched and the snippets injected into the reader's prompt.
+    expect(webSearch.searchWeb).toHaveBeenCalled();
+    expect(extractSpy.mock.calls[0]![0].groundingContext).toContain("ATP is the cell's energy currency.");
+    // The sources are cited in the glossary (the local-reader analogue of Gemini grounding).
+    const refs = engine.getBible()!.glossary.find((g) => g.term.startsWith("References"));
+    expect(refs?.definition).toContain("https://nih.gov/atp");
+  });
+
+  it("never web-grounds a fiction book", async () => {
+    const llm = new MockLLMProvider();
+    const webSearch = { searchWeb: vi.fn(async () => []) };
+    const engine = new Engine({ llm, image: new MockImageProvider(), webSearch });
+    await engine.openBook(sampleBook()); // no contentMode
+    engine.startGeneration();
+    await engine.whenBibleReady();
+    expect(webSearch.searchWeb).not.toHaveBeenCalled();
+  });
+
+  it("updateTier restyles FUTURE renders in place (no engine rebuild needed)", async () => {
+    const image = new MockImageProvider();
+    const genSpy = vi.spyOn(image, "generate");
+    const engine = new Engine({ llm: new MockLLMProvider(), image });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+    expect(genSpy.mock.calls.at(-1)![0].prompt).not.toContain("watercolor painting");
+
+    engine.updateTier({ ...DEFAULT_TIER_CONFIG, style: "watercolor" });
+    await engine.regenerateCurrentImage(0);
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+    expect(genSpy.mock.calls.at(-1)![0].prompt).toContain("watercolor painting");
+  });
+
+  it("updateTier never aborts an in-flight render (a style tweak mustn't interrupt work)", async () => {
+    // An image provider that hangs until released, exposing each render's abort signal
+    // (the cloud buffer runs up to two renders concurrently — hold them all).
+    const releases: (() => void)[] = [];
+    const signals: (AbortSignal | undefined)[] = [];
+    const image = new MockImageProvider();
+    const real = image.generate.bind(image);
+    vi.spyOn(image, "generate").mockImplementation(async (input) => {
+      signals.push(input.signal);
+      await new Promise<void>((r) => releases.push(r));
+      return real(input);
+    });
+    const engine = new Engine({ llm: new MockLLMProvider(), image });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    await vi.waitFor(() => expect(signals.length).toBeGreaterThan(0));
+
+    engine.updateTier({ ...DEFAULT_TIER_CONFIG, style: "anime" });
+    for (const s of signals) expect(s?.aborted ?? false).toBe(false); // nothing cancelled
+
+    for (const r of releases) r();
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+  });
+
   it("regenerateCurrentImage re-rolls the seed so a redo isn't the identical image", async () => {
     const image = new MockImageProvider();
     const genSpy = vi.spyOn(image, "generate");

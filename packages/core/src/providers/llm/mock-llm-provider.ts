@@ -91,6 +91,16 @@ export class MockLLMProvider implements LLMProvider {
       .filter(Boolean)
       .join(" ");
   }
+
+  /** Deterministic canned chat so the panel works keyless (demo mode) and in tests. */
+  async chat(messages: { role: string; content: string }[]): Promise<string> {
+    const lastUser = [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+    const snippet = lastUser.replace(/\s+/g, " ").trim().slice(0, 120);
+    return (
+      `(Demo chat — no text provider is configured.) You asked: "${snippet}". ` +
+      `Connect a local model or add an API key in Settings for real answers.`
+    );
+  }
 }
 
 /** FNV-1a hash → stable per-name seed. */

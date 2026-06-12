@@ -39,6 +39,8 @@ export interface LLMProviderOptions {
   baseUrl?: string;
   /** Model id for the local LLM server. */
   model?: string;
+  /** Gemini only: ground technical analysis in Google Search (same Gemini key). */
+  ground?: boolean;
 }
 
 export interface ImageProviderOptions {
@@ -46,7 +48,7 @@ export interface ImageProviderOptions {
   key?: string;
   /** App-managed local engine + chosen model (required for id === "local"). */
   engine?: { backend: LocalEngineBackend; model: string };
-  /** Transport for the REST-based providers (Flux / Imagen / OpenAI). */
+  /** Transport for the REST-based providers (Flux / Gemini / OpenAI). */
   transport?: Transport;
   /**
    * "One API" native mode: use the same vendor's MULTIMODAL image endpoint (which
@@ -68,7 +70,11 @@ export function createLLMProvider(id: string, opts: LLMProviderOptions = {}): LL
         ...(opts.fetch ? { fetch: opts.fetch } : {}),
       });
     case "gemini":
-      return new GeminiLLMProvider({ apiKey: requireKey(opts.key, "gemini"), ...(transport ? { transport } : {}) });
+      return new GeminiLLMProvider({
+        apiKey: requireKey(opts.key, "gemini"),
+        ...(transport ? { transport } : {}),
+        ...(opts.ground ? { ground: true } : {}),
+      });
     case "openai":
       return new OpenAILLMProvider({ apiKey: requireKey(opts.key, "openai"), ...(transport ? { transport } : {}) });
     case "local":

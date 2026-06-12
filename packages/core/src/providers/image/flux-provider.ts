@@ -53,6 +53,9 @@ export class FluxProvider implements ImageProvider {
 
   async generate(input: ImageGenerationInput): Promise<ImageGenerationOutput> {
     const headers = { "x-key": this.apiKey };
+    // Honour the caller's cancellation (pause/book switch) at every stage — without
+    // it a pause kept polling (and downloading) a render nobody wanted anymore.
+    const signal = input.signal;
 
     // 1) SUBMIT — returns a request id + polling URL, not the image.
     const submit = await this.transport.send({
@@ -67,44 +70,67 @@ export class FluxProvider implements ImageProvider {
         height: input.height ?? 1024,
         steps: input.quality === "sketch" ? 4 : input.quality === "standard" ? 20 : 40,
       },
+      ...(signal ? { signal } : {}),
     });
     if (!submit.ok) throw new Error(`Flux submit failed with status ${submit.status}`);
     const { id, polling_url } = await submit.json<SubmitResponse>();
 
     // 2) POLL — until the job is Ready (or fails).
     for (let i = 0; i < this.maxPolls; i++) {
+      if (signal?.aborted) throw new Error("Flux generation cancelled");
       const res = await this.transport.send({
         url: `${polling_url}?id=${encodeURIComponent(id)}`,
         method: "GET",
         headers,
+        ...(signal ? { signal } : {}),
       });
       if (!res.ok) throw new Error(`Flux poll failed with status ${res.status}`);
       const poll = await res.json<PollResponse>();
       if (poll.status === "Ready") {
         const sample = poll.result?.sample;
         if (!sample) throw new Error("Flux reported Ready but returned no image");
-        return this.download(sample);
+        return this.download(sample, signal);
       }
       if (poll.status === "Error" || poll.status === "Content Moderated") {
         throw new Error(`Flux generation failed: ${poll.status}`);
       }
-      await delay(this.pollIntervalMs);
+      await delay(this.pollIntervalMs, signal);
     }
     throw new Error("Flux generation timed out");
   }
 
   // 3) DOWNLOAD — the sample URL is a short-lived signed URL to raw image bytes.
-  private async download(sampleUrl: string): Promise<ImageGenerationOutput> {
+  private async download(sampleUrl: string, signal?: AbortSignal): Promise<ImageGenerationOutput> {
     if (sampleUrl.startsWith("data:")) {
       const b64 = sampleUrl.slice(sampleUrl.indexOf(",") + 1);
       return { bytes: base64ToBytes(b64), mimeType: "image/png" };
     }
-    const img = await this.transport.send({ url: sampleUrl, method: "GET" });
+    const img = await this.transport.send({
+      url: sampleUrl,
+      method: "GET",
+      ...(signal ? { signal } : {}),
+    });
     if (!img.ok) throw new Error(`Flux download failed with status ${img.status}`);
     return { bytes: await img.arrayBuffer(), mimeType: "image/png" };
   }
 }
 
-function delay(ms: number): Promise<void> {
-  return ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve();
+/** Abort-aware delay: a pause mid-interval stops the poll loop at once. */
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("Flux generation cancelled"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(new Error("Flux generation cancelled"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }

@@ -5,7 +5,6 @@ import type { VisualBible } from "../types/bible.js";
 import type { ImageGenerationInput } from "./image/image-provider.js";
 import { GeminiLLMProvider } from "./llm/gemini-provider.js";
 import { OpenAILLMProvider } from "./llm/openai-provider.js";
-import { GeminiImageProvider } from "./image/gemini-image-provider.js";
 import { GeminiNativeImageProvider, pickBestGeminiImageModel } from "./image/gemini-native-image-provider.js";
 import { OpenAIImageProvider } from "./image/openai-image-provider.js";
 import { OpenAINativeImageProvider } from "./image/openai-native-image-provider.js";
@@ -146,6 +145,70 @@ describe("GeminiLLMProvider", () => {
     expect(bible.characters[0]?.name).toBe("Aria");
     expect(bible.processedChapters).toContain(0);
   });
+
+  it("grounds TECHNICAL extraction in Google Search and folds sources into the glossary", async () => {
+    const emptyExtraction = JSON.stringify({ characters: [], environments: [], spoilers: [] });
+    const transport = new FakeTransport(() => ({
+      json: {
+        candidates: [
+          {
+            content: { parts: [{ text: emptyExtraction }] },
+            groundingMetadata: {
+              groundingChunks: [
+                { web: { uri: "https://nature.com/krebs", title: "Nature" } },
+                { web: { uri: "https://nature.com/krebs" } }, // duplicate de-duped
+                { web: { uri: "https://nih.gov/atp" } },
+              ],
+            },
+          },
+        ],
+      },
+    }));
+    const provider = new GeminiLLMProvider({ apiKey: "KEY", transport, ground: true });
+    const bible = await provider.extractEntities({
+      bookId: "book",
+      chapterIndex: 0,
+      chapterText: "The Krebs cycle…",
+      existing: emptyBible(),
+      contentMode: "technical",
+    });
+
+    // The per-request google_search tool rides along (same Gemini key — no extra key).
+    expect((transport.requests[0]!.body as { tools?: unknown[] }).tools).toEqual([{ google_search: {} }]);
+    // Cited sources land in the glossary as a per-chapter References entry.
+    const refs = bible.glossary.find((g) => g.term.startsWith("References"));
+    expect(refs?.definition).toContain("https://nature.com/krebs");
+    expect(refs?.definition).toContain("https://nih.gov/atp");
+    expect(refs?.definition.match(/nature\.com/g)).toHaveLength(1); // de-duplicated
+  });
+
+  it("ground=true never sends tools for FICTION, and retries ungrounded if the grounded call is rejected", async () => {
+    const emptyExtraction = JSON.stringify({ characters: [], environments: [], spoilers: [] });
+    const fiction = new FakeTransport(() => ({
+      json: { candidates: [{ content: { parts: [{ text: emptyExtraction }] } }] },
+    }));
+    const p1 = new GeminiLLMProvider({ apiKey: "KEY", transport: fiction, ground: true });
+    await p1.extractEntities({ bookId: "b", chapterIndex: 0, chapterText: "x", existing: emptyBible() });
+    expect((fiction.requests[0]!.body as { tools?: unknown[] }).tools).toBeUndefined();
+
+    // Grounded technical call rejected (tool/JSON-mode combos vary) → plain retry succeeds.
+    const flaky = new FakeTransport((_req, i) =>
+      i === 0
+        ? { ok: false, status: 400 }
+        : { json: { candidates: [{ content: { parts: [{ text: emptyExtraction }] } }] } },
+    );
+    const p2 = new GeminiLLMProvider({ apiKey: "KEY", transport: flaky, ground: true });
+    const bible = await p2.extractEntities({
+      bookId: "b",
+      chapterIndex: 0,
+      chapterText: "x",
+      existing: emptyBible(),
+      contentMode: "technical",
+    });
+    expect(flaky.requests).toHaveLength(2);
+    expect((flaky.requests[1]!.body as { tools?: unknown[] }).tools).toBeUndefined();
+    expect(bible.processedChapters).toContain(0); // analysis survived the rejection
+  });
 });
 
 describe("OpenAILLMProvider", () => {
@@ -179,18 +242,6 @@ describe("OpenAILLMProvider", () => {
     expect((req.body as { response_format?: { type?: string } }).response_format?.type).toBe("json_schema");
     expect(bible.characters[0]?.name).toBe("Bram");
     expect(bible.environments[0]?.name).toBe("Keep");
-  });
-});
-
-describe("GeminiImageProvider", () => {
-  it("decodes the inline base64 prediction", async () => {
-    const transport = new FakeTransport(() => ({
-      json: { predictions: [{ bytesBase64Encoded: b64("PNGDATA"), mimeType: "image/png" }] },
-    }));
-    const provider = new GeminiImageProvider({ apiKey: "KEY", transport });
-    const out = await provider.generate(imageInput);
-    expect(new TextDecoder().decode(out.bytes)).toBe("PNGDATA");
-    expect(transport.requests[0]!.url).toContain(":predict?key=KEY");
   });
 });
 
@@ -234,6 +285,22 @@ describe("GeminiNativeImageProvider (one-API multimodal)", () => {
     const body = transport.requests[0]!.body as { contents: { parts: unknown[] }[] };
     expect(body.contents[0]!.parts).toHaveLength(1); // prompt only
     expect(out.mimeType).toBe("image/jpeg");
+  });
+
+  it("passes the canvas orientation as imageConfig.aspectRatio (the API takes a ratio)", async () => {
+    const transport = new FakeTransport(() => ({
+      json: { candidates: [{ content: { parts: [{ inlineData: { mimeType: "image/png", data: b64("I") } }] } }] },
+    }));
+    const provider = new GeminiNativeImageProvider({ ...pinned, transport });
+    await provider.generate({ ...imageInput, width: 832, height: 1248 }); // portrait
+    type Body = { generationConfig: { imageConfig: { aspectRatio: string } } };
+    expect((transport.requests[0]!.body as Body).generationConfig.imageConfig.aspectRatio).toBe("2:3");
+
+    await provider.generate({ ...imageInput, width: 1248, height: 832 }); // landscape
+    expect((transport.requests[1]!.body as Body).generationConfig.imageConfig.aspectRatio).toBe("3:2");
+
+    await provider.generate(imageInput); // default square
+    expect((transport.requests[2]!.body as Body).generationConfig.imageConfig.aspectRatio).toBe("1:1");
   });
 
   it("throws when the response has no image part", async () => {
@@ -1139,6 +1206,33 @@ describe("ComfyUI prompt formatting by family", () => {
     // CLIP + VAE come from the separate loaders, not a checkpoint.
     expect(wf["6"]!.inputs.clip).toEqual(["12", 0]);
     expect(wf["8"]!.inputs.vae).toEqual(["13", 0]);
+  });
+
+  it("Flux.2 (diffusion path): applies a style LoRA via LoraLoaderModelOnly", async () => {
+    const t = new FakeTransport((req) => {
+      if (req.url.endsWith("/object_info/VAELoader"))
+        return { json: { VAELoader: { input: { required: { vae_name: [["flux2-vae.safetensors"]] } } } } };
+      if (req.url.endsWith("/object_info/CLIPLoader"))
+        return { json: { CLIPLoader: { input: { required: { clip_name: [["mistral3-fp8.safetensors"]] } } } } };
+      if (req.url.endsWith("/object_info/LoraLoader"))
+        return { json: { LoraLoader: { input: { required: { lora_name: [["anime.safetensors"]] } } } } };
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
+      if (req.url.includes("/history/"))
+        return { json: { p1: { outputs: { "9": { images: [{ filename: "f.png", subfolder: "", type: "output" }] } } } } };
+      return { bytes: new TextEncoder().encode("IMG").buffer };
+    });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await backend.generate(
+      { ...imageInput, modelFamily: "flux2", styleLora: { name: "anime", strength: 0.8, trigger: "anime" } },
+      "flux2-dev.safetensors",
+    );
+    const wf = workflowOf(t);
+    // A UNET-only model gets a model-only LoRA (no clip output to thread through).
+    expect(wf["11"]!.class_type).toBe("LoraLoaderModelOnly");
+    expect(wf["11"]!.inputs.lora_name).toBe("anime.safetensors");
+    expect(wf["11"]!.inputs.model).toEqual(["4", 0]); // wraps the UNET
+    expect(wf["3"]!.inputs.model).toEqual(["11", 0]); // sampler reads the LoRA'd model
+    expect(wf["6"]!.inputs.text).toContain("anime,"); // trigger still prepended
   });
 
   it("Flux.2 with no Mistral encoder / VAE installed throws an actionable error", async () => {

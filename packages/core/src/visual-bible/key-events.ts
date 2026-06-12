@@ -49,8 +49,22 @@ export function resolveKeyEvent(
   chapterIndex: number,
   pageRange: [number, number] | undefined,
 ): KeyEvent | undefined {
+  return resolveKeyEventIn(
+    bible.storyboard.find((s) => s.chapterIndex === chapterIndex),
+    pageRange,
+  );
+}
+
+/**
+ * Same matching, but against an already-located scene — for callers that hold an
+ * indexed chapter→scene lookup (the engine's per-pump gate) and would otherwise
+ * re-scan the storyboard per page.
+ */
+export function resolveKeyEventIn(
+  scene: ChapterScene | undefined,
+  pageRange: [number, number] | undefined,
+): KeyEvent | undefined {
   if (!pageRange) return undefined;
-  const scene = bible.storyboard.find((s) => s.chapterIndex === chapterIndex);
   const events = scene?.keyEvents;
   if (!events || events.length === 0) return undefined;
 

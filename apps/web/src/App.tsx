@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Automatic1111Backend,
   ComfyUIBackend,
@@ -14,6 +14,7 @@ import {
   decryptSecrets,
   encryptSecrets,
   getImageStyle,
+  displayCaption,
   latestSpoilerParagraphIndex,
   panelGroup,
   paragraphIndexFromId,
@@ -22,13 +23,20 @@ import {
   resolvePageEntities,
   spoilerRevealPoint,
   toRenderUnits,
+  formatToolResult,
   type BookSource,
   type BookSummary,
+  type ChatTurn,
   type EncryptedSecrets,
+  type StoredChatMessage,
+  type ToolCall,
 } from "@visual-reader/core";
-import { parseEpub } from "@visual-reader/epub";
+import { bookFromText } from "@visual-reader/epub";
+import { IMPORT_ACCEPT, importBookFile } from "./import-file.js";
 import {
   CharacterBible,
+  ChatPanel,
+  DataSection,
   DEFAULT_SETTINGS,
   FirstRunWizard,
   ImagePanel,
@@ -43,7 +51,7 @@ import {
 } from "@visual-reader/ui";
 import type { LocalTextServerId } from "@visual-reader/core";
 import { loadSampleBook } from "./sample.js";
-import { useEngineWorker, type ImportResult } from "./useEngineWorker.js";
+import { useEngineWorker, type ImportResult, type TestRenderResult } from "./useEngineWorker.js";
 import {
   downloadLora,
   downloadModel,
@@ -52,6 +60,7 @@ import {
   isDesktop,
   listLocalModels,
   listLoras,
+  loraFamilies,
   onEngineProgress,
   onModelProgress,
 } from "./runtime.js";
@@ -73,6 +82,7 @@ export function App() {
   const [pullProgress, setPullProgress] = useState<Record<string, { status: string; percent?: number }>>({});
   const [engineStatus, setEngineStatus] = useState("");
   const [installedLoras, setInstalledLoras] = useState<string[]>([]);
+  const [loraFamilyMap, setLoraFamilyMap] = useState<Record<string, string>>({});
   const [library, setLibrary] = useState<BookSummary[]>([]);
   const libraryStore = useMemo(() => new IndexedDbStore(), []);
   const hydrated = useRef(false);
@@ -108,10 +118,29 @@ export function App() {
     clearImportResult,
     carryOverBible,
     paintForward,
+    testRender,
+    chat,
+    chatTool,
+    chatCancel,
   } = useEngineWorker(settings);
   const [showCharacters, setShowCharacters] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showPasteText, setShowPasteText] = useState(false);
+  const [showTestImage, setShowTestImage] = useState(false);
+  // Prefill for the paste modal when a text-bearing FILE (txt/md/html/pdf) was opened.
+  const [pasteInitial, setPasteInitial] = useState<{ title: string; text: string } | undefined>();
   const [showLibrary, setShowLibrary] = useState(false);
+  // Reading-companion chat (per book; persisted in IndexedDB).
+  const [showChat, setShowChat] = useState(false);
+  const [chatMessages, setChatMessages] = useState<StoredChatMessage[]>([]);
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatStreaming, setChatStreaming] = useState("");
+  const [chatActivity, setChatActivity] = useState("");
+  const [chatPendingTool, setChatPendingTool] = useState<ToolCall | undefined>();
+  const [allowSpoilers, setAllowSpoilers] = useState(false);
+  // The pending generate_image's transcript (assistant JSON turn), folded into the
+  // history only when the user approves — a dismissed call never reaches the model.
+  const pendingTranscript = useRef<ChatTurn[]>([]);
   const { registerParagraph, activeParagraphId, activeParagraphProgress } = useScrollDepth();
 
   // Decrypt stored keys after mount, then enable persistence. Persisting is gated
@@ -170,6 +199,9 @@ export function App() {
         const baseUrl = await ensureEngine();
         const models = await listLocalModels();
         const loras = await listLoras();
+        // Detect each LoRA's base architecture (reads only the safetensors header) so the
+        // UI can flag one that won't load on the active model.
+        const families = await loraFamilies();
         if (cancelled) return;
         // Detect VRAM once so Auto-quality stays within what the card can render
         // (best-effort; undefined on non-NVIDIA GPUs leaves Auto uncapped).
@@ -178,6 +210,7 @@ export function App() {
         setEngineStatus("");
         setInstalledModels(models);
         setInstalledLoras(loras);
+        setLoraFamilyMap(families);
         setSettings((s) => ({ ...s, engineBaseUrl: baseUrl, ...(vram ? { gpuVramMb: vram } : {}) }));
       } catch (err) {
         if (!cancelled) {
@@ -282,6 +315,7 @@ export function App() {
       await downloadLora({ id, filename, url });
       setModelProgress((prev) => ({ ...prev, [id]: 100 }));
       setInstalledLoras(await listLoras());
+      setLoraFamilyMap(await loraFamilies());
       setSettings((s) => ({ ...s })); // refresh providers so the engine picks it up
     } catch (err) {
       setModelProgress((prev) => {
@@ -423,11 +457,17 @@ export function App() {
   const onUpload = useCallback(
     async (file: File) => {
       try {
-        const data = new Uint8Array(await file.arrayBuffer());
-        const source = parseEpub(data, `epub-${file.name}-${file.size}`);
-        openBook(source);
+        const imported = await importBookFile(file);
+        if (imported.kind === "book") {
+          openBook(imported.book);
+        } else {
+          // Extracted text (txt/md/html/pdf): confirm in the paste modal so the user can
+          // fix the title and mark technical content before the book is created.
+          setPasteInitial({ title: imported.title, text: imported.text });
+          setShowPasteText(true);
+        }
       } catch (err) {
-        setLocalError(`Couldn't parse EPUB: ${err instanceof Error ? err.message : String(err)}`);
+        setLocalError(`Couldn't import ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
     [openBook],
@@ -457,6 +497,176 @@ export function App() {
   const pageEntities =
     book && bible && activePage ? resolvePageEntities(bible, activePage) : undefined;
   const pageSpoilerIds = pageEntities?.spoilerIds ?? [];
+  // The story-chapter index of the page being read (keys the bible's per-chapter
+  // storyboard/datasets) — same mapping the engine uses.
+  const activeChapterIndex = useMemo(
+    () => book?.chapters.find((c) => c.id === activePage?.chapterId)?.index ?? 0,
+    [book, activePage],
+  );
+  const activeDatasets = useMemo(
+    () =>
+      book?.contentMode === "technical" && bible?.datasets
+        ? bible.datasets.filter((d) => d.chapterIndex === activeChapterIndex)
+        : [],
+    [book, bible, activeChapterIndex],
+  );
+
+  // --- Reading-companion chat ------------------------------------------------
+  const isTechnical = book?.contentMode === "technical";
+  // Load this book's chat history; reset transient chat state on book change.
+  useEffect(() => {
+    setChatMessages([]);
+    setChatPendingTool(undefined);
+    setChatStreaming("");
+    setChatActivity("");
+    if (!book) return;
+    let cancelled = false;
+    void libraryStore.getChatHistory?.(book.id).then((stored) => {
+      if (!cancelled && stored) setChatMessages(stored);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [book, libraryStore]);
+  // Persist (debounced) — image bytes ride along so generated pictures survive reload.
+  useEffect(() => {
+    if (!book || chatMessages.length === 0) return;
+    const t = setTimeout(() => void libraryStore.putChatHistory?.(book.id, chatMessages), 500);
+    return () => clearTimeout(t);
+  }, [book, chatMessages, libraryStore]);
+
+  /** Model-facing history: each stored message contributes its explicit turns
+   * (tool messages) or maps 1:1 (plain user/assistant prose). */
+  const chatTurnsOf = (messages: StoredChatMessage[]): ChatTurn[] =>
+    messages.flatMap((m): ChatTurn[] => {
+      if (m.turns) return m.turns;
+      if (m.role === "tool") return [];
+      return m.text ? [{ role: m.role, content: m.text }] : [];
+    });
+
+  const appendChat = (msg: Omit<StoredChatMessage, "at">) =>
+    setChatMessages((prev) => [...prev, { ...msg, at: Date.now() }]);
+
+  const onChatSend = useCallback(
+    async (text: string) => {
+      if (!book) return;
+      const history = chatTurnsOf(chatMessages);
+      appendChat({ role: "user", text });
+      setChatBusy(true);
+      setChatStreaming("");
+      setChatActivity("");
+      setChatPendingTool(undefined);
+      const paragraphIndex = paragraphIndexFromId(activeParagraphId ?? "") ?? 0;
+      const res = await chat(
+        history,
+        text,
+        { pageIndex: activePageIndex, paragraphIndex },
+        isTechnical || allowSpoilers,
+        (e) => {
+          if (e.kind === "token") setChatStreaming((prev) => prev + e.text);
+          else if (e.kind === "tool")
+            setChatActivity(
+              e.call.tool === "search_web"
+                ? `Searching the web for “${e.call.query}”…`
+                : e.call.tool === "search_images"
+                  ? `Looking for images of “${e.call.query}”…`
+                  : "Preparing an image…",
+            );
+          else {
+            setChatActivity("");
+            // Inline search results: links for web hits, a hotlinked figure for images.
+            if (e.hits?.length) {
+              appendChat({
+                role: "tool",
+                text: `Web results for “${"query" in e.call ? e.call.query : ""}”:`,
+                links: e.hits.map((h) => ({ url: h.link, ...(h.title ? { title: h.title } : {}) })),
+              });
+            } else if (e.imageHits?.length) {
+              const best = e.imageHits[0]!;
+              appendChat({
+                role: "tool",
+                text: `Found: ${best.title ?? "image"}`,
+                image: { sourceUrl: best.thumbnailLink ?? best.link },
+                links: e.imageHits
+                  .slice(0, 3)
+                  .map((h) => ({ url: h.contextLink ?? h.link, ...(h.title ? { title: h.title } : {}) })),
+              });
+            }
+          }
+        },
+      );
+      setChatBusy(false);
+      setChatStreaming("");
+      setChatActivity("");
+      if (res.error) {
+        appendChat({ role: "tool", text: `⚠ ${res.error}`, turns: [] });
+        return;
+      }
+      if (res.pendingTool) {
+        pendingTranscript.current = [{ role: "user", content: text }, ...res.transcript];
+        setChatPendingTool(res.pendingTool);
+        return;
+      }
+      if (res.text) {
+        // The transcript carries the model-facing turns (incl. any tool rounds).
+        appendChat({
+          role: "assistant",
+          text: res.text,
+          turns: [{ role: "user", content: text }, ...res.transcript],
+        });
+      }
+    },
+    [book, chatMessages, chat, activePageIndex, activeParagraphId, isTechnical, allowSpoilers],
+  );
+
+  const onApproveChatTool = useCallback(async () => {
+    const call = chatPendingTool;
+    if (!call || call.tool !== "generate_image") return;
+    setChatPendingTool(undefined);
+    setChatBusy(true);
+    setChatActivity("Generating the image…");
+    const out = await chatTool(call);
+    setChatBusy(false);
+    setChatActivity("");
+    const feedback = formatToolResult(call, {
+      image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
+    });
+    appendChat({
+      role: "tool",
+      text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
+      ...(out.image ? { image: out.image } : {}),
+      turns: [...pendingTranscript.current, { role: "user", content: feedback }],
+    });
+    pendingTranscript.current = [];
+  }, [chatPendingTool, chatTool]);
+
+  const onClearChat = useCallback(() => {
+    setChatMessages([]);
+    setChatPendingTool(undefined);
+    if (book) void libraryStore.deleteChatHistory?.(book.id);
+  }, [book, libraryStore]);
+
+  // Stable view-model + handlers for the memoised ChatPanel: rebuilt only when the
+  // history actually changes, so app-level renders (scroll frames, status lines)
+  // don't re-render every settled bubble, and bubble object identity holds across
+  // keystrokes/stream tokens (MessageBubble is memoised on it).
+  const chatPanelMessages = useMemo(
+    () =>
+      chatMessages.map((m) => ({
+        role: m.role,
+        text: m.text,
+        ...(m.image ? { image: m.image } : {}),
+        ...(m.links ? { links: m.links } : {}),
+      })),
+    [chatMessages],
+  );
+  const onChatSendText = useCallback((text: string) => void onChatSend(text), [onChatSend]);
+  const onApprovePendingTool = useCallback(() => void onApproveChatTool(), [onApproveChatTool]);
+  const onDismissPendingTool = useCallback(() => {
+    setChatPendingTool(undefined);
+    pendingTranscript.current = [];
+  }, []);
+  const onCloseChat = useCallback(() => setShowChat(false), []);
 
   // On-image description: the EXACT prompt the image was rendered from (persisted
   // with it, so it never shifts as the bible grows — and doubles as prompt
@@ -648,18 +858,41 @@ export function App() {
               Library ({library.length})
             </button>
           )}
-          <label style={styles.upload}>
-            Open EPUB
+          <label style={styles.upload} title="EPUB, TXT, Markdown, HTML, or PDF">
+            Open book…
             <input
               type="file"
-              accept=".epub"
+              accept={IMPORT_ACCEPT}
               style={{ display: "none" }}
               onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])}
             />
           </label>
+          <button
+            style={styles.button}
+            onClick={() => setShowPasteText(true)}
+            title="Paste any text (an article, a chapter, a paper) and read/illustrate it like a book"
+          >
+            Paste text
+          </button>
           <button style={styles.button} onClick={() => openBook(loadSampleBook())}>
             Load sample
           </button>
+          <button
+            style={styles.button}
+            onClick={() => setShowTestImage(true)}
+            title="Type anything and render one image with the current model + style — a quick way to test providers, styles, and LoRAs"
+          >
+            Test image
+          </button>
+          {book && (
+            <button
+              style={styles.button}
+              onClick={() => setShowChat(true)}
+              title="Chat about what you're reading — it knows the book (spoiler-safely), can search the web, and can generate images"
+            >
+              Chat
+            </button>
+          )}
           {book && !generating && (
             <button
               style={styles.buttonPrimary}
@@ -848,6 +1081,7 @@ export function App() {
             downloadStage={downloadStage}
             engineStatus={engineStatus}
             installedLoras={installedLoras}
+            loraFamilies={loraFamilyMap}
             onDownloadStyleLora={onDownloadStyleLora}
             onConnectLocalServer={onConnectLocalServer}
             connectingLocal={connectingLocal}
@@ -896,43 +1130,13 @@ export function App() {
 
       {book && (
         <main style={styles.reader}>
-          <article style={styles.column}>
-            {book.pages.map((page, i) => {
-              const prev = book.pages[i - 1];
-              const newChapter = !prev || prev.chapterId !== page.chapterId;
-              const chapter = book.chapters.find((c) => c.id === page.chapterId);
-              const pageUnit = units?.pageToUnit[i] ?? i;
-              const isActiveUnit = pageUnit === unitIndex;
-              const next = book.pages[i + 1];
-              // "Page N" dividers between pages of the same chapter (chapter
-              // boundaries are marked by the heading). Hidden in whole-chapter mode.
-              const showPageDivider =
-                pagesPerImage !== "chapter" &&
-                next !== undefined &&
-                next.chapterId === page.chapterId;
-              return (
-                <Fragment key={page.id}>
-                  {newChapter && (
-                    <h2 style={styles.chapterHeading}>
-                      {chapter?.title || `Chapter ${(chapter?.index ?? 0) + 1}`}
-                    </h2>
-                  )}
-                  <section style={isActiveUnit ? { ...styles.page, ...styles.sectionActive } : styles.page}>
-                    {page.paragraphs.map((para) => (
-                      <p key={para.id} ref={registerParagraph(para.id)} style={styles.paragraph}>
-                        {para.text}
-                      </p>
-                    ))}
-                  </section>
-                  {showPageDivider && (
-                    <div style={styles.pageDivider}>
-                      <span style={styles.pageDividerLabel}>Page {i + 1}</span>
-                    </div>
-                  )}
-                </Fragment>
-              );
-            })}
-          </article>
+          <ReaderColumn
+            book={book}
+            pageToUnit={units?.pageToUnit}
+            unitIndex={unitIndex}
+            pagesPerImage={pagesPerImage}
+            registerParagraph={registerParagraph}
+          />
 
           <aside style={styles.aside}>
             <div style={styles.panel}>
@@ -956,14 +1160,31 @@ export function App() {
                   awaitingStart={!generating}
                 />
               )}
-              {imageCaption && <div style={styles.imageDescription}>{imageCaption}</div>}
+              {imageCaption && (
+                <div style={styles.imageDescription}>
+                  {displayCaption(imageCaption)}
+                  {displayCaption(imageCaption) !== imageCaption && (
+                    <details style={{ marginTop: 4 }}>
+                      <summary style={{ cursor: "pointer", fontSize: 11, opacity: 0.6 }}>
+                        Full prompt (as sent to the model)
+                      </summary>
+                      <div style={{ fontSize: 11, opacity: 0.7 }}>{imageCaption}</div>
+                    </details>
+                  )}
+                </div>
+              )}
+              <DataSection datasets={activeDatasets} />
               <div style={styles.caption}>
                 {pagesPerImage === "chapter"
                   ? `Chapter ${unitIndex + 1} of ${totalUnits}`
                   : `Page ${activePageIndex + 1} of ${book.pages.length}${
                       singlePage ? "" : ` · image ${unitIndex + 1}/${totalUnits}`
                     }`}
-                {bible ? ` · ${bible.characters.length} characters tracked` : ""}
+                {bible
+                  ? book.contentMode === "technical"
+                    ? ` · ${bible.glossary.length} concepts · ${bible.environments.length} structures tracked`
+                    : ` · ${bible.characters.length} characters tracked`
+                  : ""}
               </div>
             </div>
           </aside>
@@ -989,6 +1210,50 @@ export function App() {
           onClose={() => {
             clearImportResult();
             setShowImport(false);
+          }}
+        />
+      )}
+
+      {showTestImage && (
+        <TestImageModal onRender={testRender} onClose={() => setShowTestImage(false)} />
+      )}
+
+      {showChat && book && (
+        <ChatPanel
+          title={book.title}
+          messages={chatPanelMessages}
+          {...(chatStreaming ? { streamingText: chatStreaming } : {})}
+          busy={chatBusy}
+          {...(chatActivity ? { activity: chatActivity } : {})}
+          {...(chatPendingTool ? { pendingTool: chatPendingTool } : {})}
+          allowSpoilers={isTechnical || allowSpoilers}
+          technical={isTechnical}
+          onSend={onChatSendText}
+          onApprovePendingTool={onApprovePendingTool}
+          onDismissPendingTool={onDismissPendingTool}
+          onToggleSpoilers={setAllowSpoilers}
+          onCancel={chatCancel}
+          onClose={onCloseChat}
+          onClearHistory={onClearChat}
+        />
+      )}
+
+      {showPasteText && (
+        <PasteTextModal
+          initial={pasteInitial}
+          onCreate={(title, text, mode) => {
+            try {
+              // Library provenance: did this text come from a file or a raw paste?
+              openBook(bookFromText(title, text, mode, pasteInitial ? "Imported file" : "Pasted text"));
+              setShowPasteText(false);
+              setPasteInitial(undefined);
+            } catch (err) {
+              setLocalError(err instanceof Error ? err.message : String(err));
+            }
+          }}
+          onClose={() => {
+            setShowPasteText(false);
+            setPasteInitial(undefined);
           }}
         />
       )}
@@ -1020,6 +1285,66 @@ export function App() {
  * are read inline and re-encrypted on the next save.
  */
 /** "~Xs left" / "~Xm left" from a millisecond estimate. */
+/**
+ * The full book text column. Memoized so it only re-renders when the reader
+ * crosses into a new unit (or the book/layout changes) — NOT on every bloom
+ * tick, chat token, or status update. The app root re-renders on every scroll
+ * frame (reading progress is state there), and reconciling every paragraph of
+ * a whole book per frame was the single biggest main-thread cost while reading.
+ */
+const ReaderColumn = memo(function ReaderColumn({
+  book,
+  pageToUnit,
+  unitIndex,
+  pagesPerImage,
+  registerParagraph,
+}: {
+  book: BookSource;
+  pageToUnit: number[] | undefined;
+  unitIndex: number;
+  pagesPerImage: number | "chapter";
+  registerParagraph: (id: string) => (el: HTMLElement | null) => void;
+}) {
+  const chaptersById = useMemo(() => new Map(book.chapters.map((c) => [c.id, c])), [book]);
+  return (
+    <article style={styles.column}>
+      {book.pages.map((page, i) => {
+        const prev = book.pages[i - 1];
+        const newChapter = !prev || prev.chapterId !== page.chapterId;
+        const chapter = chaptersById.get(page.chapterId);
+        const pageUnit = pageToUnit?.[i] ?? i;
+        const isActiveUnit = pageUnit === unitIndex;
+        const next = book.pages[i + 1];
+        // "Page N" dividers between pages of the same chapter (chapter
+        // boundaries are marked by the heading). Hidden in whole-chapter mode.
+        const showPageDivider =
+          pagesPerImage !== "chapter" && next !== undefined && next.chapterId === page.chapterId;
+        return (
+          <Fragment key={page.id}>
+            {newChapter && (
+              <h2 style={styles.chapterHeading}>
+                {chapter?.title || `Chapter ${(chapter?.index ?? 0) + 1}`}
+              </h2>
+            )}
+            <section style={isActiveUnit ? { ...styles.page, ...styles.sectionActive } : styles.page}>
+              {page.paragraphs.map((para) => (
+                <p key={para.id} ref={registerParagraph(para.id)} style={styles.paragraph}>
+                  {para.text}
+                </p>
+              ))}
+            </section>
+            {showPageDivider && (
+              <div style={styles.pageDivider}>
+                <span style={styles.pageDividerLabel}>Page {i + 1}</span>
+              </div>
+            )}
+          </Fragment>
+        );
+      })}
+    </article>
+  );
+});
+
 function formatLeft(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "";
   return ms < 60000 ? `~${Math.round(ms / 1000)}s left` : `~${Math.round(ms / 60000)}m left`;
@@ -1170,6 +1495,156 @@ function ImportBibleModal({
             Import &amp; merge
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Paste any raw text (an article, a chapter, a paper) and read/illustrate it like a
+ * book. "Technical" marks non-fiction so illustration prompts use the concept/diagram
+ * template instead of fiction scenes. The book id is a hash of the content, so pasting
+ * the same text again reopens the same book with its bible and images intact.
+ */
+function PasteTextModal({
+  initial,
+  onCreate,
+  onClose,
+}: {
+  /** Prefill when the text came from an opened file (txt/md/html/pdf). */
+  initial?: { title: string; text: string } | undefined;
+  onCreate: (title: string, text: string, mode: "fiction" | "technical") => void;
+  onClose: () => void;
+}) {
+  const [title, setTitle] = useState(initial?.title ?? "");
+  const [text, setText] = useState(initial?.text ?? "");
+  const [mode, setMode] = useState<"fiction" | "technical">("fiction");
+  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+  return (
+    <div style={styles.modalOverlay} onClick={onClose}>
+      <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <strong>Read pasted text</strong>
+          <button style={styles.button} onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <p style={{ opacity: 0.65, fontSize: 12, margin: "0 0 8px" }}>
+          Paste anything — it becomes a book you can read and illustrate. Chapter headings
+          (Markdown #, “Chapter N”) are detected automatically.
+        </p>
+        <input
+          style={{ width: "100%", marginBottom: 8, boxSizing: "border-box" }}
+          value={title}
+          placeholder="Title (optional)"
+          onChange={(e) => setTitle(e.target.value)}
+        />
+        <textarea
+          style={styles.importTextarea}
+          value={text}
+          placeholder="Paste the text here…"
+          spellCheck={false}
+          onChange={(e) => setText(e.target.value)}
+        />
+        <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, margin: "6px 0" }}>
+          <input
+            type="checkbox"
+            checked={mode === "technical"}
+            onChange={(e) => setMode(e.target.checked ? "technical" : "fiction")}
+          />
+          <span>
+            Technical / non-fiction (papers, textbooks) — illustrate concepts and diagrams
+            instead of story scenes <em style={{ opacity: 0.6 }}>(experimental)</em>
+          </span>
+        </label>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+          <span style={{ opacity: 0.6, fontSize: 12 }}>{words ? `${words} words` : ""}</span>
+          <button
+            style={styles.buttonPrimary}
+            disabled={!text.trim()}
+            onClick={() => onCreate(title.trim() || "Pasted text", text, mode)}
+          >
+            Read it
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Freeform playground: type anything → one image with the current provider/style/
+ * quality (no bible, no LLM, no cache). The fastest way to test a model, an art style,
+ * or a LoRA before committing to a whole book.
+ */
+function TestImageModal({
+  onRender,
+  onClose,
+}: {
+  onRender: (text: string) => Promise<TestRenderResult>;
+  onClose: () => void;
+}) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<TestRenderResult | undefined>();
+  const [imageUrl, setImageUrl] = useState<string | undefined>();
+  useEffect(() => () => {
+    if (imageUrl) URL.revokeObjectURL(imageUrl);
+  }, [imageUrl]);
+
+  const run = async () => {
+    setBusy(true);
+    setResult(undefined);
+    const r = await onRender(text);
+    setBusy(false);
+    setResult(r);
+    if (r.image) {
+      setImageUrl(URL.createObjectURL(new Blob([r.image.bytes], { type: r.image.mimeType })));
+    }
+  };
+
+  return (
+    <div style={styles.modalOverlay} onClick={onClose}>
+      <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <strong>Test an image</strong>
+          <button style={styles.button} onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <p style={{ opacity: 0.65, fontSize: 12, margin: "0 0 8px" }}>
+          Renders one image from your text with the current model, art style, quality and
+          aspect settings — nothing is analysed or saved. Great for testing styles and LoRAs.
+        </p>
+        <textarea
+          style={{ ...styles.importTextarea, minHeight: 70 }}
+          value={text}
+          placeholder="e.g. A lighthouse keeper rowing out into a storm at dusk"
+          spellCheck={false}
+          onChange={(e) => setText(e.target.value)}
+        />
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+          <button style={styles.buttonPrimary} disabled={busy || !text.trim()} onClick={() => void run()}>
+            {busy ? "Rendering…" : "Render"}
+          </button>
+        </div>
+        {result?.error && (
+          <div style={{ color: "#ff9b9b", fontSize: 13, whiteSpace: "pre-wrap" }}>{result.error}</div>
+        )}
+        {result?.ok && imageUrl && (
+          <>
+            <img
+              src={imageUrl}
+              alt="Test render"
+              style={{ display: "block", width: "100%", height: "auto", borderRadius: 8, marginTop: 8 }}
+            />
+            {result.prompt && (
+              <div style={{ opacity: 0.6, fontSize: 11, marginTop: 6, whiteSpace: "pre-wrap" }}>
+                {result.prompt}
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
   );

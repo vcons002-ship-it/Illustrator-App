@@ -7,6 +7,8 @@
  * downloads) so the renderer never deals with processes, ports, or CORS.
  */
 
+import { classifyLoraHeader } from "@visual-reader/core";
+
 type UnlistenFn = () => void;
 
 interface TauriCore {
@@ -86,6 +88,26 @@ export function gpuVramMb(): Promise<number | undefined> {
 /** Installed LoRA filenames in the managed engine (for style auto-download checks). */
 export function listLoras(): Promise<string[]> {
   return invoke<string[]>("list_loras");
+}
+
+/**
+ * Detected base-model family for each installed LoRA (desktop only), by reading the small
+ * safetensors header off disk and classifying it. Lets the UI flag a LoRA that won't load
+ * on the active model. Returns {} on the web or if the bridge/command is unavailable.
+ */
+export async function loraFamilies(): Promise<Record<string, string>> {
+  if (!isDesktop) return {};
+  try {
+    const headers = await invoke<{ name: string; header: string }[]>("lora_headers");
+    const out: Record<string, string> = {};
+    for (const h of headers) {
+      const fam = classifyLoraHeader(h.header);
+      if (fam !== "unknown") out[h.name] = fam;
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 /** Download a curated checkpoint; emits `model://progress` events while it runs. */

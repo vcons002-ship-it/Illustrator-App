@@ -203,6 +203,23 @@ export function worldStyleClause(worldStyle?: string): string {
   return worldStyle && worldStyle.trim() ? worldStyle.trim() : "";
 }
 
+/** Paragraph prefixes that are machine scaffolding, not scene description. */
+const SCAFFOLD_PREFIX = /^(Title|Style|Layout|Characters|Creatures|Outfits|Places|Setting reference):\s/;
+
+/**
+ * The human-readable caption for a rendered prompt: the scene sentence(s) WITHOUT the
+ * machine scaffolding around them — the leading reference block (`Title: … Style: …
+ * Characters: …`) and the trailing `Style:` / `Layout:` paragraphs. The full prompt stays
+ * persisted for troubleshooting (the UI offers it behind a toggle); this is just the
+ * friendly view. Falls back to the input when stripping would leave nothing.
+ */
+export function displayCaption(prompt: string): string {
+  const paragraphs = prompt.split(/\n{2,}/);
+  const kept = paragraphs.filter((p) => !SCAFFOLD_PREFIX.test(p.trim()));
+  const out = kept.join("\n\n").trim();
+  return out || prompt;
+}
+
 /**
  * Expand a prompt for a target, given its `nameHandling`. `inject` replaces terms in
  * place and appends the world-style clause; `reference` keeps names and prepends the

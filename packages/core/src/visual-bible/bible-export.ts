@@ -1,4 +1,5 @@
 import type {
+  ChapterDataset,
   Character,
   Creature,
   Environment,
@@ -98,6 +99,18 @@ export const BIBLE_EXPORT_RULES = {
     worldStyle:
       "string — one concise genre + art-direction line for the WHOLE book, applied to every " +
       "illustration (e.g. 'high-fantasy military academy, dark, painterly'). Top-level field.",
+    ChapterDataset: {
+      chapterIndex: "number — 0-based STORY chapter the data comes from",
+      title: "string — what the series shows",
+      unit: "string — unit of the y values ('' when unitless)",
+      xLabel: "string",
+      yLabel: "string",
+      kind: "'bar' | 'line' | 'scatter' — suggested chart form",
+      points:
+        "{ label: string; x?: number; y: number }[] — REAL values stated in the text only " +
+        "(never invented or interpolated); `x` only when the text gives a numeric x",
+      source: "string — short locating quote/citation ('' when none)",
+    },
   },
   constraints: [
     "Output valid JSON only; use '' for unknown string fields (never invent).",
@@ -201,6 +214,9 @@ export function parseImportedBible(json: string, bookId: string): ImportResult {
   bible.spoilers = arr(data.spoilers).map((s, i) => toSpoiler(s, i));
   bible.glossary = dedupeGlossary(arr(data.glossary).map((g) => toGlossary(g)));
   bible.worldStyle = str(data.worldStyle);
+  bible.datasets = arr(data.datasets)
+    .map((d, i) => toDataset(d, i))
+    .filter((d) => d.points.length >= 2);
   bible.storyboard = arr(data.storyboard)
     .map((s) => toScene(s))
     .sort((a, b) => a.chapterIndex - b.chapterIndex);
@@ -303,6 +319,30 @@ function toSpoiler(v: unknown, i: number): SpoilerEntity {
 function toGlossary(v: unknown): GlossaryEntry {
   const o = obj(v);
   return { term: str(o.term), definition: str(o.definition) };
+}
+
+function toDataset(v: unknown, i: number): ChapterDataset {
+  const o = obj(v);
+  const title = str(o.title);
+  const kind = str(o.kind);
+  const points = arr(o.points)
+    .map((p) => {
+      const po = obj(p);
+      const x = typeof po.x === "number" && Number.isFinite(po.x) ? po.x : undefined;
+      return { label: str(po.label), y: num(po.y), ...(x !== undefined ? { x } : {}) };
+    })
+    .filter((p) => Number.isFinite(p.y));
+  return {
+    id: str(o.id) || `data-${num(o.chapterIndex)}-${slug(title) || i}`,
+    chapterIndex: num(o.chapterIndex),
+    title,
+    unit: str(o.unit),
+    xLabel: str(o.xLabel),
+    yLabel: str(o.yLabel),
+    kind: kind === "line" || kind === "scatter" ? kind : "bar",
+    points,
+    source: str(o.source),
+  };
 }
 
 function toScene(v: unknown): ChapterScene {

@@ -1,5 +1,5 @@
 /** Decode a base64 string to image bytes. Shared by the image providers that
- * receive images inline (Flux / OpenAI / Gemini-Imagen) rather than by URL. */
+ * receive images inline (Flux / OpenAI / Gemini) rather than by URL. */
 export function base64ToBytes(b64: string): ArrayBuffer {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);

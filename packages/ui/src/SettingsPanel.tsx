@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   IMAGE_PROVIDERS,
   IMAGE_STYLES,
@@ -77,6 +77,12 @@ export interface ReaderSettings {
   /** Art style id applied to every illustration (see catalog IMAGE_STYLES). */
   imageStyle?: string;
   /**
+   * Manual style-LoRA choice for the local engine, overriding the style's automatic
+   * mapping: "" / undefined = automatic, "none" = prompt-only (no LoRA), or an installed
+   * LoRA filename to force that one. Lets you use any LoRA in the engine's folder.
+   */
+  styleLoraOverride?: string;
+  /**
    * Force the local image model family for prompt formatting when auto-detection
    * from the checkpoint name is wrong. "auto" (default) detects it. SD families get
    * quality tags + a negative prompt; Flux gets plain natural language.
@@ -131,6 +137,24 @@ export interface ReaderSettings {
    * persisted). Caps Auto image-quality to a canvas the card can render.
    */
   gpuVramMb?: number;
+  /**
+   * Scientific sources (technical books). `searchEngineId` is the Programmable Search
+   * Engine id ("cx") paired with a Custom Search API key stored as `keys.search`;
+   * together they enable retrieving REAL figures/diagrams before generating one.
+   * `groundFacts` grounds Gemini's technical analysis in Google Search (same Gemini key).
+   */
+  searchEngineId?: string;
+  groundFacts?: boolean;
+  /**
+   * Reading-companion chat overrides — the chat can run on a DIFFERENT provider than
+   * the book analysis. Default "local" (free, private); "default" follows the book's
+   * text/image provider. When a chat override isn't usable (local server not
+   * connected, no key), the chat falls back to the book's provider rather than mock.
+   */
+  chatTextProvider?: "default" | TextProviderId;
+  /** Chat-only local model (Ollama id or WebLLM id, per the active local backend). */
+  chatLocalModel?: string;
+  chatImageProvider?: "default" | ImageProviderId;
   /** Which local engine API to talk to (browser "your own server" path). */
   localBackend?: LocalBackendId;
   /** Base URL of a local engine you run yourself (browser path; persisted). */
@@ -184,6 +208,8 @@ export interface SettingsPanelProps {
   engineStatus?: string;
   /** LoRA filenames installed in the managed engine (style auto-download). */
   installedLoras?: string[];
+  /** Detected base-model family per installed LoRA filename (desktop), for mismatch flags. */
+  loraFamilies?: Record<string, string>;
   /** Download the matching LoRA for a style; optional URL overrides the catalog. */
   onDownloadStyleLora?: (styleId: string, url?: string) => void;
   /** Connect to a self-hosted engine and load its model list (browser path). */
@@ -213,6 +239,7 @@ export function SettingsPanel({
   downloadStage = {},
   engineStatus = "",
   installedLoras = [],
+  loraFamilies = {},
   onDownloadStyleLora,
   onConnectLocalServer,
   connectingLocal = false,
@@ -353,11 +380,14 @@ export function SettingsPanel({
             <span>Art style</span>
             <select value={value.imageStyle ?? "auto"} onChange={(e) => set({ imageStyle: e.target.value })}>
               {IMAGE_STYLES.map((s) => (
-                <option key={s.id} value={s.id}>
+                <option key={s.id} value={s.id} title={s.description}>
                   {s.label}
                 </option>
               ))}
             </select>
+            <span style={{ opacity: 0.55, fontSize: 11 }}>
+              {getImageStyle(value.imageStyle).description}
+            </span>
           </label>
 
           {value.imageProvider === "local" && (
@@ -496,15 +526,182 @@ export function SettingsPanel({
             </label>
           )}
 
+          <details style={rowStyle}>
+            <summary style={{ cursor: "pointer", fontSize: 13, opacity: 0.85 }}>
+              Scientific sources (technical books)
+            </summary>
+            <p style={{ opacity: 0.6, fontSize: 11, margin: "4px 0 8px" }}>
+              For books imported as <em>technical</em>: retrieve REAL figures/diagrams (correct
+              labels and data) before generating one, and ground the analysis in Google Search.
+              Image retrieval needs a <b>Custom Search API key</b> (Google Cloud console →
+              enable “Custom Search API” → credentials) and a <b>Programmable Search Engine
+              id</b> (programmablesearchengine.google.com → create an engine → enable “Image
+              search” + “Search the entire web” → copy its ID). Free tier: 100 searches/day.
+              Already using a Gemini key? It can double as the search key — enable “Custom
+              Search API” on that key’s Google Cloud project and leave the key field blank.
+              The engine ID (cx) is still required either way.
+            </p>
+            <p style={{ opacity: 0.75, fontSize: 11, margin: "0 0 8px" }}>
+              {(value.keys.search || value.keys.gemini) && value.searchEngineId
+                ? "Active backend: Google Custom Search (whole-web figures + grounding)."
+                : "Active backend: free Wikipedia/Wikimedia search — keyless and automatic. Add a Custom Search key + engine ID for whole-web results."}
+            </p>
+            <label style={rowStyle}>
+              <span>Custom Search API key</span>
+              <input
+                type="password"
+                value={value.keys.search ?? ""}
+                placeholder="AIza… (blank = reuse the Gemini key, if Custom Search API is enabled on it)"
+                onChange={(e) => setKey("search", e.target.value.trim())}
+              />
+            </label>
+            <label style={rowStyle}>
+              <span>Search engine ID (cx)</span>
+              <input
+                value={value.searchEngineId ?? ""}
+                placeholder="e.g. a1b2c3d4e5f6g7h8i"
+                onChange={(e) => set({ searchEngineId: e.target.value.trim() })}
+              />
+            </label>
+            <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13 }}>
+              <input
+                type="checkbox"
+                checked={value.groundFacts ?? false}
+                onChange={(e) => set({ groundFacts: e.target.checked })}
+              />
+              <span>
+                Ground analysis in real sources (cited in the book’s glossary). With the
+                Gemini text provider this uses its built-in Google Search; with any other
+                reader — including a local LLM — it uses the Search engine above, so the
+                facts are sourced regardless of which model reads the book.
+              </span>
+            </label>
+          </details>
+
+          <details style={rowStyle}>
+            <summary style={{ cursor: "pointer", fontSize: 13, opacity: 0.85 }}>
+              Book chat (reading companion)
+            </summary>
+            <p style={{ opacity: 0.6, fontSize: 11, margin: "4px 0 8px" }}>
+              The chat panel can run on a different model than the book analysis. Defaults to
+              local (free &amp; private); when the local option isn’t connected it falls back to
+              the book’s provider. You can also ask for render settings IN the chat (“draw a
+              truck, 20 steps, flux 2”) — named models must already be downloaded.
+            </p>
+            <label style={rowStyle}>
+              <span>Chat model</span>
+              <select
+                value={value.chatTextProvider ?? "local"}
+                onChange={(e) =>
+                  set({ chatTextProvider: e.target.value as "default" | TextProviderId })
+                }
+              >
+                <option value="local">Local (on-device / local server)</option>
+                <option value="default">Same as book analysis</option>
+                {TEXT_PROVIDERS.filter((p) => p.id !== "local").map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {(value.chatTextProvider ?? "local") === "local" && (
+              <label style={rowStyle}>
+                <span>Chat local model</span>
+                <select
+                  value={value.chatLocalModel ?? ""}
+                  onChange={(e) => set({ chatLocalModel: e.target.value })}
+                >
+                  <option value="">Same as the book’s local model</option>
+                  {((value.localTextBackend ?? "webgpu") === "server"
+                    ? textModels.map((m) => ({ id: m.id, label: m.label }))
+                    : LOCAL_TEXT_MODELS.map((m) => ({ id: m.id, label: m.label }))
+                  ).map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+                <span style={{ opacity: 0.6, fontSize: 12 }}>
+                  Downloaded models from your local setup (connect the server in section 1 to
+                  list more).
+                </span>
+              </label>
+            )}
+            <label style={rowStyle}>
+              <span>Chat image generation</span>
+              <select
+                value={value.chatImageProvider ?? "local"}
+                onChange={(e) =>
+                  set({ chatImageProvider: e.target.value as "default" | ImageProviderId })
+                }
+              >
+                <option value="local">Local engine (free)</option>
+                <option value="default">Same as book illustrations</option>
+                {IMAGE_PROVIDERS.filter((p) => p.id !== "local").map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </details>
+
           {sameVendorNative(value) && <NativeModeRow value={value} set={set} />}
 
           {isDesktop && value.imageProvider === "local" && (
             <StyleLoraRow
               styleId={value.imageStyle ?? "auto"}
+              family={localFamily}
               installedLoras={installedLoras}
               progress={downloadProgress}
               onDownload={onDownloadStyleLora}
             />
+          )}
+
+          {value.imageProvider === "local" && installedLoras.length > 0 && (
+            (() => {
+              // Flag a chosen LoRA whose detected base architecture differs from the active
+              // model — it won't load. (Detection reads the LoRA's safetensors header; an
+              // unknown/undetected LoRA is never flagged.)
+              const chosen = value.styleLoraOverride;
+              const chosenFamily = chosen ? loraFamilies[chosen] : undefined;
+              const mismatch =
+                chosenFamily && localFamily !== "unknown" && chosenFamily !== localFamily;
+              const fam = (name: string): string =>
+                loraFamilies[name] ? ` · ${loraFamilies[name]!.toUpperCase()}` : "";
+              return (
+                <label style={rowStyle}>
+                  <span>Style LoRA (override)</span>
+                  <select
+                    value={value.styleLoraOverride ?? ""}
+                    onChange={(e) => set({ styleLoraOverride: e.target.value })}
+                    title="Pick any LoRA installed in the engine's loras folder to use with the current style, or turn LoRAs off. Overrides the style's automatic pack. The tag shows each LoRA's detected base model."
+                  >
+                    <option value="">Automatic (match the art style)</option>
+                    <option value="none">None — prompt-only styling</option>
+                    {installedLoras.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                        {fam(name)}
+                      </option>
+                    ))}
+                  </select>
+                  {mismatch ? (
+                    <span style={{ opacity: 0.85, fontSize: 11, color: "#e0716f" }}>
+                      ⚠ This LoRA is {chosenFamily!.toUpperCase()} but your model is{" "}
+                      {localFamily.toUpperCase()} — it won’t load. Pick a {localFamily.toUpperCase()}
+                      -compatible LoRA, or the prompt style alone will be used.
+                    </span>
+                  ) : (
+                    <span style={{ opacity: 0.55, fontSize: 11 }}>
+                      A LoRA must match your model’s family (the tag shows each one’s detected base
+                      model). The art-style prompt is always applied regardless.
+                    </span>
+                  )}
+                </label>
+              );
+            })()
           )}
 
           {value.imageProvider === "local" && (
@@ -629,6 +826,30 @@ export function SettingsPanel({
 }
 
 function KeyField({ info, value, onChange }: { info: ProviderInfo; value: string; onChange: (k: string) => void }) {
+  // Local draft, committed after a short pause (and on blur). Each commit flows
+  // into app-level settings — re-rendering the whole app and, for keys, an
+  // identity rebuild downstream — so it must not happen per keystroke.
+  const [draft, setDraft] = useState(value);
+  const commitFn = useRef(onChange);
+  commitFn.current = onChange;
+  const lastCommitted = useRef(value);
+  const commit = (text: string): void => {
+    lastCommitted.current = text;
+    commitFn.current(text);
+  };
+  // A value change we DIDN'T commit (hydration/decryption after mount) wins over
+  // the draft; our own commits round-tripping back must not clobber newer typing.
+  useEffect(() => {
+    if (value !== lastCommitted.current) {
+      lastCommitted.current = value;
+      setDraft(value);
+    }
+  }, [value]);
+  useEffect(() => {
+    if (draft === value) return;
+    const t = setTimeout(() => commit(draft), 300);
+    return () => clearTimeout(t);
+  }, [draft, value]);
   const saved = value.trim().length > 0;
   return (
     <label style={rowStyle}>
@@ -644,11 +865,14 @@ function KeyField({ info, value, onChange }: { info: ProviderInfo; value: string
       </span>
       <input
         type="password"
-        value={value}
+        value={draft}
         placeholder={info.keyHint ? `Paste your key (${info.keyHint})` : "Paste your key"}
         autoComplete="off"
         spellCheck={false}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          if (draft !== value) commit(draft);
+        }}
       />
       {info.keyBlurb && <span style={{ opacity: 0.6, fontSize: 12 }}>{info.keyBlurb}</span>}
     </label>
@@ -765,11 +989,14 @@ function NativeModeRow({
 
 function StyleLoraRow({
   styleId,
+  family,
   installedLoras,
   progress,
   onDownload,
 }: {
   styleId: string;
+  /** The active model's family, so an architecture-incompatible pack isn't offered. */
+  family?: string;
   installedLoras: string[];
   progress: Record<string, number>;
   onDownload: ((styleId: string, url?: string) => void) | undefined;
@@ -778,6 +1005,11 @@ function StyleLoraRow({
   if (!lora) return null; // style has no LoRA mapping (e.g. "auto")
   const label = getImageStyle(styleId).label;
   const catalog = styleLoraDownload(styleId); // present when the catalog has a URL
+  // A curated pack only loads on its own architecture. Offer the one-click download
+  // when the active model matches (or we can't tell); otherwise the pack is for a
+  // different family — point the user to the override dropdown / paste-a-URL path.
+  const packFamily = lora.family;
+  const compatible = !packFamily || !family || family === "unknown" || family === packFamily;
   const installed = resolveAssetName(new Set(installedLoras), lora.name) !== undefined;
   const pct = progress[lora.name];
   const downloading = pct !== undefined && pct < 100;
@@ -791,13 +1023,20 @@ function StyleLoraRow({
           <span style={{ color: "#7dd87f" }}>✓ installed</span>
         ) : downloading ? (
           <span style={{ opacity: 0.7 }}>{Math.round(pct)}%</span>
-        ) : catalog ? (
+        ) : catalog && compatible ? (
           <button style={buttonStyle} onClick={() => onDownload?.(styleId)}>
             Download style pack
           </button>
         ) : null}
       </div>
       {downloading && <ProgressBar pct={pct} />}
+      {!installed && catalog && !compatible && (
+        <span style={{ opacity: 0.7, fontSize: 11, color: "#e0b870" }}>
+          The bundled {label} pack is built for {packFamily!.toUpperCase()} and won’t load on your{" "}
+          {family!.toUpperCase()} model. Install a {family!.toUpperCase()}-compatible LoRA below (paste a
+          URL or drop the file in), then pick it under “Style LoRA (override)”.
+        </span>
+      )}
       {!installed && !downloading && (
         <PasteUrl
           placeholder={`Or paste a .safetensors LoRA URL for ${label}`}

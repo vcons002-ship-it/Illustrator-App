@@ -27,6 +27,28 @@ describe("InMemoryStore library", () => {
     expect((await store.listBooks()).map((b) => b.id)).toEqual(["b"]);
   });
 
+  it("a pasted-text book round-trips through the library with its contentMode intact", async () => {
+    const store = new InMemoryStore();
+    const pasted: BookSource = {
+      id: "text-abc123",
+      title: "My Paper",
+      author: "Pasted text",
+      contentMode: "technical",
+      chapters: [{ id: "ch-0", index: 0, title: "My Paper" }],
+      pages: [
+        { id: "pg-0", index: 0, chapterId: "ch-0", paragraphs: [{ id: "pg-0-0", index: 0, text: "Abstract." }] },
+      ],
+    };
+    await store.putBook(pasted);
+
+    const reopened = await store.getBook("text-abc123");
+    expect(reopened?.contentMode).toBe("technical"); // technical prompts survive reopen
+    expect(reopened?.pages[0]!.paragraphs[0]!.text).toBe("Abstract.");
+    const listed = (await store.listBooks()).find((b) => b.id === "text-abc123");
+    expect(listed?.title).toBe("My Paper");
+    expect(listed?.author).toBe("Pasted text"); // provenance visible in the library
+  });
+
   it("removeBook reclaims the book's images and bible (no leaked storage)", async () => {
     const store = new InMemoryStore();
     const bytes = new Uint8Array([1]).buffer;

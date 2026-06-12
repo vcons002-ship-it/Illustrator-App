@@ -1,17 +1,23 @@
 import type { BookSource } from "./types/book.js";
-import type { CharacterAppearance, IdentityAnchor, Outfit, VisualBible } from "./types/bible.js";
+import type { ChapterScene, CharacterAppearance, IdentityAnchor, Outfit, VisualBible } from "./types/bible.js";
 import { MAX_CHARACTER_REFS, referenceIdsOf } from "./types/bible.js";
 import type { ImageResult } from "./types/content.js";
 import type { TierConfig } from "./types/tier.js";
 import { DEFAULT_TIER_CONFIG } from "./types/tier.js";
 import type { LLMProvider } from "./providers/llm/llm-provider.js";
 import type { ImageProvider } from "./providers/image/image-provider.js";
+import {
+  formatGroundingContext,
+  groundingQuery,
+  type RetrievedImage,
+  type WebSearchHit,
+} from "./providers/image/image-search.js";
 import type { VisualReaderStore } from "./storage/store.js";
 import { InMemoryStore } from "./storage/store.js";
 import { RenderPipeline } from "./pipeline/pipeline.js";
 import { RenderBuffer } from "./render-buffer/render-buffer.js";
 import { createEmptyBible, migrateBible } from "./visual-bible/bible.js";
-import { addKeyEvent, clearKeyEvents, resolveKeyEvent } from "./visual-bible/key-events.js";
+import { addKeyEvent, clearKeyEvents, resolveKeyEvent, resolveKeyEventIn } from "./visual-bible/key-events.js";
 import {
   carryReferenceImages,
   exportBible,
@@ -32,6 +38,15 @@ export interface EngineOptions {
   image: ImageProvider;
   store?: VisualReaderStore;
   tier?: TierConfig;
+  /** Real-figure retrieval for technical books (see PipelineDeps.imageSearch). */
+  imageSearch?: { retrieve(query: string): Promise<RetrievedImage | undefined> };
+  /**
+   * Provider-agnostic grounding for technical books: when set, each chapter's analysis is
+   * grounded in a web search (snippets injected into the reader's prompt; sources cited in
+   * the glossary). Lets a LOCAL LLM produce sourced facts. Absent for Gemini-in-call
+   * grounding or when no search credentials are configured.
+   */
+  webSearch?: { searchWeb(query: string): Promise<WebSearchHit[]> };
   /** Forwarded to the buffer — fired whenever a page's render status changes. */
   onUpdate?: (pageIndex: number, result: ImageResult) => void;
   /**
@@ -109,11 +124,49 @@ export class Engine {
    */
   private bufferEpoch = 0;
   private readonly illustrateAfter: "book" | "chapter";
+  /**
+   * Per-book lookup tables, built once on `openBook` (the book is immutable).
+   * The render buffer's `canRender`/`shouldSkip` gates run for many pages on
+   * EVERY pump, so they must never re-scan `book.chapters` per page.
+   */
+  private chapterIndexOfPage: number[] = [];
+  private pageIsStory: boolean[] = [];
+  /** Indices of all story render units, in reading order. */
+  private storyUnitIndices: number[] = [];
+  /** Story-chapter indices that have pages (matches `chapterText(book).keys()`). */
+  private storyChapterIndices: number[] = [];
+  private unitsByChapter = new Map<number, number[]>();
+  private rangesByChapter = new Map<number, [number, number][]>();
+  /**
+   * Chapter→scene index for the CURRENT bible object. The bible is replaced
+   * immutably on every change, so object identity is a correct cache key.
+   */
+  private sceneCache: { bible: VisualBible; byChapter: Map<number, ChapterScene> } | undefined;
+  /** isLlmPhaseComplete memo for the current bible ("book" mode checks it per pump). */
+  private llmPhaseCache: { bible: VisualBible; complete: boolean } | undefined;
 
   constructor(private opts: EngineOptions) {
     this.store = opts.store ?? new InMemoryStore();
-    this.tier = opts.tier ?? DEFAULT_TIER_CONFIG;
+    // Own copy: `updateTier` swaps this object's contents in place (the pipeline shares
+    // the reference), which must never mutate the caller's object or the module default.
+    this.tier = { ...(opts.tier ?? DEFAULT_TIER_CONFIG) };
     this.illustrateAfter = opts.illustrateAfter ?? "chapter";
+  }
+
+  /**
+   * Apply new render TUNING (style, quality, aspect, sampler overrides…) to the live
+   * engine. The pipeline and buffer hold the SAME tier object, so its contents are
+   * swapped in place: future renders pick the changes up immediately while nothing is
+   * disposed, aborted, or re-analysed — in-flight LLM extraction and image renders run
+   * to completion, and finished images are untouched. Identity changes (different
+   * providers/keys/models, pages-per-image) still need a full reopen, which the host
+   * decides; this method assumes the providers themselves are unchanged.
+   */
+  updateTier(next: TierConfig): void {
+    for (const k of Object.keys(this.tier)) {
+      delete (this.tier as unknown as Record<string, unknown>)[k];
+    }
+    Object.assign(this.tier, next);
   }
 
   /**
@@ -124,6 +177,7 @@ export class Engine {
    */
   async openBook(book: BookSource): Promise<void> {
     this.book = book;
+    this.indexBook(book);
     // Restore the cached bible, migrating it forward where we can (v5→v6 is additive)
     // so existing analysis survives; only un-migratable older schemas are rebuilt.
     const stored = await this.store.getBible(book.id);
@@ -165,6 +219,7 @@ export class Engine {
       image: this.opts.image,
       store: this.store,
       tier: this.tier,
+      ...(this.opts.imageSearch ? { imageSearch: this.opts.imageSearch } : {}),
     });
     this.buffer = new RenderBuffer({
       totalPages: book.pages.length,
@@ -241,30 +296,78 @@ export class Engine {
   /** Seed the buffer with cached images from previous sessions (no generation). */
   private async loadCachedImages(): Promise<void> {
     if (!this.book || !this.pipeline || !this.buffer) return;
-    for (let i = 0; i < this.book.pages.length; i++) {
-      const cached = await this.pipeline.cachedResult(i);
-      if (cached) {
-        this.buffer.seed(i, cached);
-        this.opts.onUpdate?.(i, cached);
-      }
+    // Batch the lookups: each `getImage` is its own IndexedDB roundtrip, so a
+    // large book paying them one at a time made opens multi-second.
+    const CHUNK = 24;
+    for (let start = 0; start < this.book.pages.length; start += CHUNK) {
+      const count = Math.min(CHUNK, this.book.pages.length - start);
+      const chunk = await Promise.all(
+        Array.from({ length: count }, (_, k) => this.pipeline!.cachedResult(start + k)),
+      );
+      chunk.forEach((cached, k) => {
+        if (cached) {
+          this.buffer!.seed(start + k, cached);
+          this.opts.onUpdate?.(start + k, cached);
+        }
+      });
     }
+  }
+
+  /** Build the per-book lookup tables (see field docs). */
+  private indexBook(book: BookSource): void {
+    const chapterById = new Map(book.chapters.map((c) => [c.id, c]));
+    this.chapterIndexOfPage = [];
+    this.pageIsStory = [];
+    this.storyUnitIndices = [];
+    this.unitsByChapter = new Map();
+    this.rangesByChapter = new Map();
+    const storyChapters = new Set<number>();
+    book.pages.forEach((page, i) => {
+      const chapter = chapterById.get(page.chapterId);
+      const idx = chapter?.index ?? 0;
+      const isStory = chapter?.isStory !== false;
+      this.chapterIndexOfPage.push(idx);
+      this.pageIsStory.push(isStory);
+      const range = page.pageRange ?? ([page.index, page.index] as [number, number]);
+      const ranges = this.rangesByChapter.get(idx);
+      if (ranges) ranges.push(range);
+      else this.rangesByChapter.set(idx, [range]);
+      if (isStory) {
+        this.storyUnitIndices.push(i);
+        storyChapters.add(idx);
+        const units = this.unitsByChapter.get(idx);
+        if (units) units.push(i);
+        else this.unitsByChapter.set(idx, [i]);
+      }
+    });
+    this.storyChapterIndices = [...storyChapters];
+    this.sceneCache = undefined;
+    this.llmPhaseCache = undefined;
   }
 
   /** Whether this page belongs to a story chapter (not front/back matter). */
   private isStoryPage(pageIndex: number): boolean {
-    if (!this.book) return true;
-    const page = this.book.pages[pageIndex];
-    if (!page) return true;
-    const chapter = this.book.chapters.find((c) => c.id === page.chapterId);
-    return chapter?.isStory !== false;
+    return this.pageIsStory[pageIndex] ?? true;
   }
 
+  /** The current bible's storyboard scene for a chapter (indexed, memoized). */
+  private sceneFor(chapterIndex: number): ChapterScene | undefined {
+    if (!this.bible) return undefined;
+    if (this.sceneCache?.bible !== this.bible) {
+      this.sceneCache = {
+        bible: this.bible,
+        byChapter: new Map(this.bible.storyboard.map((s) => [s.chapterIndex, s])),
+      };
+    }
+    return this.sceneCache.byChapter.get(chapterIndex);
+  }
 
   /** Has every chapter of the book been processed into the bible? */
   private isBibleComplete(): boolean {
     if (!this.book || !this.bible) return false;
-    for (const idx of chapterText(this.book).keys()) {
-      if (!this.bible.processedChapters.includes(idx)) return false;
+    const processed = new Set(this.bible.processedChapters);
+    for (const idx of this.storyChapterIndices) {
+      if (!processed.has(idx)) return false;
     }
     return true;
   }
@@ -272,15 +375,22 @@ export class Engine {
   /** Has every story unit had its illustration prompt written? */
   private arePromptsComplete(): boolean {
     if (!this.book) return false;
-    for (let i = 0; i < this.book.pages.length; i++) {
-      if (this.isStoryPage(i) && !this.hasKeyEvent(i)) return false;
+    for (const i of this.storyUnitIndices) {
+      if (!this.hasKeyEvent(i)) return false;
     }
     return true;
   }
 
   /** The whole LLM phase (extraction + prompts) is done — nothing left to resume. */
   private isLlmPhaseComplete(): boolean {
-    return this.isBibleComplete() && this.arePromptsComplete();
+    if (!this.bible) return false;
+    if (this.llmPhaseCache?.bible !== this.bible) {
+      this.llmPhaseCache = {
+        bible: this.bible,
+        complete: this.isBibleComplete() && this.arePromptsComplete(),
+      };
+    }
+    return this.llmPhaseCache.complete;
   }
 
   /**
@@ -308,9 +418,9 @@ export class Engine {
     const textByChapter = chapterText(this.book); // story chapters only
     const storyIndices = [...textByChapter.keys()];
     const total = storyIndices.length;
-    const isProcessed = (i: number): boolean => this.bible!.processedChapters.includes(i);
+    const processed = new Set(this.bible.processedChapters);
     const pending = storyIndices
-      .filter((i) => !isProcessed(i))
+      .filter((i) => !processed.has(i))
       .map((i) => [i, textByChapter.get(i)!] as [number, string]);
     // Progress is reported against ALL story chapters (not just pending), so a
     // fully-cached re-open shows 100% rather than 0/0.
@@ -321,6 +431,23 @@ export class Engine {
     if (pending.length === 0) this.buffer?.refresh();
     for (const [chapterIndex, text] of pending) {
       if (stop()) return; // paused, or a newer run/book took over → stop before next chapter
+      // Provider-agnostic grounding (technical books): web-search this chapter's topic and
+      // inject the snippets so ANY reader — local LLM included — grounds its facts; the
+      // sources are cited in the glossary below. Best-effort: any failure just skips it.
+      let groundingContext = "";
+      let groundingSources: string[] = [];
+      if (this.opts.webSearch && this.book?.contentMode === "technical") {
+        const query = groundingQuery(this.book.chapters[chapterIndex]?.title, text, this.book.title);
+        if (query) {
+          try {
+            const hits = await this.opts.webSearch.searchWeb(query);
+            ({ context: groundingContext, sources: groundingSources } = formatGroundingContext(hits));
+          } catch {
+            /* search unavailable / over quota → analyse ungrounded */
+          }
+        }
+      }
+      if (cancelled()) return;
       // Extraction has no timeout (a slow-but-working LLM is never cut off). On a
       // transient failure, retry ONCE; only if it still fails do we mark the
       // chapter processed (so pages aren't gated forever) and surface a note.
@@ -336,11 +463,25 @@ export class Engine {
             // Fold prompt-writing into extraction: the chapter's render-unit ranges let
             // the model emit one scene prompt per illustration in this single call.
             unitRanges: this.unitRangesForChapter(chapterIndex),
+            // Technical books (papers/textbooks) use the Visual-Atlas extraction prompt.
+            ...(this.book?.contentMode ? { contentMode: this.book.contentMode } : {}),
+            ...(groundingContext ? { groundingContext } : {}),
             signal: ac.signal,
           });
         } catch {
           /* retry once, then give up on just this chapter */
         }
+      }
+      // Cite the grounding sources in the glossary (the local-reader analogue of the
+      // Gemini in-call grounding's References entry).
+      if (next && groundingSources.length > 0) {
+        next = {
+          ...next,
+          glossary: [
+            ...next.glossary,
+            { term: `References (chapter ${chapterIndex + 1})`, definition: groundingSources.join(" · ") },
+          ],
+        };
       }
       // A newer run/book may have taken over WHILE we awaited the LLM. Discard before
       // mutating any shared state so we never clobber the newly-opened book's bible.
@@ -413,26 +554,14 @@ export class Engine {
   /** Indices of this chapter's STORY render units, in reading order (per-chapter
    * prompt gap-fill). */
   private unitIndicesForChapter(chapterIndex: number): number[] {
-    if (!this.book) return [];
-    const out: number[] = [];
-    this.book.pages.forEach((page, i) => {
-      const idx = this.book!.chapters.find((c) => c.id === page.chapterId)?.index ?? 0;
-      if (idx === chapterIndex && this.isStoryPage(i)) out.push(i);
-    });
-    return out;
+    return this.unitsByChapter.get(chapterIndex) ?? [];
   }
 
   /** The chapter's render-unit page ranges, in reading order (for folded prompts). A raw
    * single page (no explicit range) is its own unit at [index, index] — matching
    * buildRequest/hasKeyEvent so the folded keyEvents line up with the render units. */
   private unitRangesForChapter(chapterIndex: number): [number, number][] {
-    if (!this.book) return [];
-    const ranges: [number, number][] = [];
-    for (const page of this.book.pages) {
-      const idx = this.book.chapters.find((c) => c.id === page.chapterId)?.index ?? 0;
-      if (idx === chapterIndex) ranges.push(page.pageRange ?? [page.index, page.index]);
-    }
-    return ranges;
+    return this.rangesByChapter.get(chapterIndex) ?? [];
   }
 
   /**
@@ -442,8 +571,7 @@ export class Engine {
    */
   private async buildPromptsForUnits(myRun: number, signal: AbortSignal): Promise<void> {
     if (!this.book) return;
-    const units = this.book.pages.map((_, i) => i).filter((i) => this.isStoryPage(i));
-    await this.writePromptsForUnits(units, myRun, signal);
+    await this.writePromptsForUnits(this.storyUnitIndices, myRun, signal);
   }
 
   /**
@@ -459,13 +587,31 @@ export class Engine {
     if (!this.book || !this.bible || !this.pipeline) return;
     const stop = (): boolean => this.biblePaused || this.bibleRun !== myRun;
     const cancelled = (): boolean => this.bibleRun !== myRun;
-    const allUnits = this.book.pages.map((_, i) => i).filter((i) => this.isStoryPage(i));
-    const total = allUnits.length;
-    const reportProgress = (): void =>
-      this.opts.onPromptProgress?.(allUnits.filter((i) => this.hasKeyEvent(i)).length, total);
+    const total = this.storyUnitIndices.length;
+    // Count the already-prompted units once, then keep a running tally — recounting
+    // the whole book after every written prompt made the pass quadratic.
+    let prompted = 0;
+    for (const i of this.storyUnitIndices) if (this.hasKeyEvent(i)) prompted++;
+    const reportProgress = (): void => this.opts.onPromptProgress?.(prompted, total);
     reportProgress();
+    // Persisting the bible is a structured clone of ALL of it (characters, glossary,
+    // every chapter's keyEvents) — per prompt, that's O(units × bibleSize). Coalesce:
+    // persist every few prompts / few seconds and on every exit, so a crash costs a
+    // handful of cheap prompt rewrites instead of slowing the whole pass.
+    let unpersisted = 0;
+    let lastPersistMs = Date.now();
+    const flush = async (): Promise<void> => {
+      if (unpersisted > 0 && !cancelled() && this.bible) {
+        unpersisted = 0;
+        lastPersistMs = Date.now();
+        await this.store.putBible(this.bible);
+      }
+    };
     for (const i of unitIndices) {
-      if (stop()) return;
+      if (stop()) {
+        await flush(); // a pause must not drop prompts already written
+        return;
+      }
       if (this.hasKeyEvent(i)) continue;
       const page = this.book.pages[i]!;
       const request = this.pipeline.buildRequest(page);
@@ -481,7 +627,9 @@ export class Engine {
           pageRange: request.pageRange ?? [page.index, page.index],
           imagePrompt: { text: text.trim() },
         });
-        await this.store.putBible(this.bible);
+        prompted++; // this unit had no keyEvent before (checked above)
+        unpersisted++;
+        if (unpersisted >= 5 || Date.now() - lastPersistMs >= 3000) await flush();
         if (cancelled()) return;
         this.opts.onBibleUpdate?.(this.bible);
         // A unit previously failed as "no prompt" can render now — clear the error.
@@ -491,16 +639,17 @@ export class Engine {
       }
       reportProgress();
     }
+    await flush();
   }
 
   /** Whether this story unit already has a stored keyEvent prompt. */
   private hasKeyEvent(pageIndex: number): boolean {
     const page = this.book?.pages[pageIndex];
     if (!page || !this.bible) return false;
-    const chapterIndex = this.book!.chapters.find((c) => c.id === page.chapterId)?.index ?? 0;
+    const chapterIndex = this.chapterIndexOfPage[pageIndex] ?? 0;
     // Match the range buildRequest/writePromptsForUnits store under (raw page → [i, i]).
     const range = page.pageRange ?? ([page.index, page.index] as [number, number]);
-    return resolveKeyEvent(this.bible, chapterIndex, range) !== undefined;
+    return resolveKeyEventIn(this.sceneFor(chapterIndex), range) !== undefined;
   }
 
   /**
@@ -648,6 +797,9 @@ export class Engine {
   /** Persist a character's reference ids (always the array form — legacy id folded in). */
   private async setAnchorReferences(characterId: string, ids: string[]): Promise<void> {
     if (!this.bible) return;
+    // A removed slot can be re-used by a later upload (same id, new bytes) — drop
+    // the pipeline's per-id byte cache so renders never see stale photos.
+    this.pipeline?.clearReferenceCache();
     this.bible = {
       ...this.bible,
       characters: this.bible.characters.map((c) =>
@@ -816,7 +968,7 @@ export class Engine {
     if (!this.book || !this.bible) return;
     const page = this.book.pages[unitIndex];
     if (!page) return;
-    const chapterIndex = this.book.chapters.find((c) => c.id === page.chapterId)?.index ?? 0;
+    const chapterIndex = this.chapterIndexOfPage[unitIndex] ?? 0;
     const range = page.pageRange ?? ([page.index, page.index] as [number, number]);
     const ev = resolveKeyEvent(this.bible, chapterIndex, range);
     if (!ev) return;
@@ -883,17 +1035,28 @@ function markChapterProcessed(bible: VisualBible, chapterIndex: number): VisualB
 /**
  * Concatenate each STORY chapter's page text, keyed by chapter index. Front/back
  * matter (chapter.isStory === false) is omitted entirely, so it's never analysed
- * and never blocks bible completion.
+ * and never blocks bible completion. Exported: the chat builds its book context
+ * from the SAME segmentation so chapter indices/offsets line up with the bible.
+ *
+ * Memoized per book object (books are immutable once built): joining a whole
+ * book is megabytes of string work, and both the bible build and every chat
+ * turn call this. Callers must treat the returned map as read-only.
  */
-function chapterText(book: BookSource): Map<number, string> {
+const chapterTextCache = new WeakMap<BookSource, Map<number, string>>();
+export function chapterText(book: BookSource): Map<number, string> {
+  const cached = chapterTextCache.get(book);
+  if (cached) return cached;
+  const chapterById = new Map(book.chapters.map((c) => [c.id, c]));
   const byChapter = new Map<number, string[]>();
   for (const page of book.pages) {
-    const chapter = book.chapters.find((c) => c.id === page.chapterId);
+    const chapter = chapterById.get(page.chapterId);
     if (chapter?.isStory === false) continue; // skip non-story matter
     const idx = chapter?.index ?? 0;
     const list = byChapter.get(idx) ?? [];
     list.push(...page.paragraphs.map((p) => p.text));
     byChapter.set(idx, list);
   }
-  return new Map([...byChapter].map(([idx, parts]) => [idx, parts.join("\n\n")]));
+  const result = new Map([...byChapter].map(([idx, parts]) => [idx, parts.join("\n\n")]));
+  chapterTextCache.set(book, result);
+  return result;
 }

@@ -2,6 +2,8 @@ export * from "./types/index.js";
 export * from "./providers/index.js";
 export * from "./storage/index.js";
 export * from "./visual-bible/index.js";
+export * from "./charts/index.js";
+export * from "./chat/index.js";
 export * from "./pipeline/index.js";
 export * from "./render-buffer/index.js";
 export * from "./render-units.js";

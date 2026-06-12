@@ -4,13 +4,20 @@ import { z } from "zod";
 import type { VisualBible } from "../../types/bible.js";
 import type { VisualRequest } from "../../types/content.js";
 import {
-  EXTRACTION_SYSTEM,
-  PROMPT_SYSTEM,
+  extractionSystemFor,
+  promptSystemFor,
   extractionUserContent,
   mergeExtraction,
   promptUserContent,
 } from "./extraction.js";
 import type { EntityExtractionInput, LLMProvider } from "./llm-provider.js";
+import {
+  DEFAULT_CHAT_MAX_TOKENS,
+  splitSystem,
+  type ChatCapable,
+  type ChatOptions,
+  type ChatTurn,
+} from "./chat.js";
 
 /**
  * Cloud LLM provider backed by Claude (the default cloud tier).
@@ -22,7 +29,9 @@ import type { EntityExtractionInput, LLMProvider } from "./llm-provider.js";
  *   without touching this class — the Transport seam, expressed through the SDK.
  */
 
-const ExtractionSchema = z.object({
+/** Exported so tests can assert key parity with EXTRACTION_JSON_SCHEMA (the two
+ * schemas describe the SAME shape for different providers and must not drift). */
+export const CLAUDE_EXTRACTION_SCHEMA = z.object({
   characters: z.array(
     z.object({
       name: z.string(),
@@ -86,6 +95,24 @@ const ExtractionSchema = z.object({
       location: z.string(),
     }),
   ),
+  worldStyle: z.string(),
+  datasets: z.array(
+    z.object({
+      title: z.string(),
+      unit: z.string(),
+      xLabel: z.string(),
+      yLabel: z.string(),
+      kind: z.string(),
+      points: z.array(
+        z.object({
+          label: z.string(),
+          x: z.number(),
+          y: z.number(),
+        }),
+      ),
+      source: z.string(),
+    }),
+  ),
 });
 
 export interface ClaudeProviderOptions {
@@ -98,7 +125,7 @@ export interface ClaudeProviderOptions {
   fetch?: typeof fetch;
 }
 
-export class ClaudeProvider implements LLMProvider {
+export class ClaudeProvider implements LLMProvider, ChatCapable {
   readonly id = "claude";
   private readonly client: Anthropic;
   private readonly model: string;
@@ -119,9 +146,18 @@ export class ClaudeProvider implements LLMProvider {
       {
         model: this.model,
         max_tokens: 4096,
-        system: EXTRACTION_SYSTEM,
+        // The system prompt is identical for every chapter of a build — mark it
+        // cacheable so chapters 2..N read it from the prompt cache (same output,
+        // lower input cost/latency; ignored when under the model's cache minimum).
+        system: [
+          {
+            type: "text" as const,
+            text: extractionSystemFor(input.contentMode),
+            cache_control: { type: "ephemeral" as const },
+          },
+        ],
         messages: [{ role: "user", content: extractionUserContent(input) }],
-        output_format: betaZodOutputFormat(ExtractionSchema),
+        output_format: betaZodOutputFormat(CLAUDE_EXTRACTION_SCHEMA),
       },
       input.signal ? { signal: input.signal } : undefined,
     );
@@ -138,12 +174,39 @@ export class ClaudeProvider implements LLMProvider {
     return mergeExtraction(input.existing, parsed, input.chapterIndex, input.unitRanges);
   }
 
+  /** Reading-companion chat (buffered; `onToken` unused — the seam allows that). */
+  async chat(messages: ChatTurn[], opts: ChatOptions = {}): Promise<string> {
+    const { system, turns } = splitSystem(messages);
+    const response = await this.client.messages.create(
+      {
+        model: this.model,
+        max_tokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
+        ...(system ? { system } : {}),
+        messages: turns,
+      },
+      opts.signal ? { signal: opts.signal } : undefined,
+    );
+    return response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("")
+      .trim();
+  }
+
   async buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string> {
     const response = await this.client.messages.create(
       {
         model: this.model,
         max_tokens: 512,
-        system: PROMPT_SYSTEM,
+        // Static per kind and sent once per story unit — cacheable across the
+        // whole prompt pass (ignored when under the model's cache minimum).
+        system: [
+          {
+            type: "text" as const,
+            text: promptSystemFor(request.kind),
+            cache_control: { type: "ephemeral" as const },
+          },
+        ],
         messages: [{ role: "user", content: promptUserContent(request, bible) }],
       },
       signal ? { signal } : undefined,

@@ -92,6 +92,238 @@ describe("RenderPipeline style injection", () => {
   });
 });
 
+describe("RenderPipeline technical content mode", () => {
+  it("a technical book's requests carry the technical_illustration kind and still render", async () => {
+    const book = oneParagraphBook("Mitochondria convert glucose into ATP.");
+    book.contentMode = "technical";
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a cutaway view of a mitochondrion");
+    const { provider, lastPrompt } = recordingImage();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: DEFAULT_TIER_CONFIG,
+    });
+
+    expect(pipeline.buildRequest(book.pages[0]!).kind).toBe("technical_illustration");
+    const result = await pipeline.renderPage(0);
+    expect(result.status).toBe("ready"); // the kind is supported end-to-end
+    expect(lastPrompt()).toContain("cutaway view");
+  });
+
+  it("a fiction book keeps scene_illustration", () => {
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => createEmptyBible(book.id),
+      llm,
+      image: recordingImage().provider,
+      store: new InMemoryStore(),
+      tier: DEFAULT_TIER_CONFIG,
+    });
+    expect(pipeline.buildRequest(book.pages[0]!).kind).toBe("scene_illustration");
+  });
+});
+
+describe("RenderPipeline technical figure retrieval", () => {
+  const png = new TextEncoder().encode("REAL_FIGURE").buffer;
+
+  function technicalSetup(retrieve: (q: string) => Promise<import("../providers/image/image-search.js").RetrievedImage | undefined>) {
+    const book = oneParagraphBook("The Krebs cycle has eight steps.");
+    book.contentMode = "technical";
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = createEmptyBible(book.id);
+    bible.storyboard.push({
+      chapterIndex: 0,
+      summary: "",
+      keyMoment: "",
+      location: "",
+      locationChange: "",
+      keyEvents: [
+        {
+          pageRange: [0, 0],
+          imagePrompt: {
+            subject: "the Krebs cycle",
+            action: "shows the eight steps in order",
+            environment: "step-by-step process diagram",
+            mood: "clean",
+            composition: "left to right",
+          },
+        },
+      ],
+    });
+    let generated = 0;
+    const provider: ImageProvider = {
+      id: "mock",
+      generate: async (): Promise<ImageGenerationOutput> => {
+        generated++;
+        return { bytes: new ArrayBuffer(1), mimeType: "image/png" };
+      },
+    };
+    const queries: string[] = [];
+    const store = new InMemoryStore();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store,
+      tier: DEFAULT_TIER_CONFIG,
+      imageSearch: {
+        retrieve: (q: string) => {
+          queries.push(q);
+          return retrieve(q);
+        },
+      },
+    });
+    return { pipeline, store, queries, generatedCount: () => generated };
+  }
+
+  it("retrieves a REAL figure first (cached like a generated image; no generation)", async () => {
+    const { pipeline, store, queries, generatedCount } = technicalSetup(async () => ({
+      bytes: { bytes: png, mimeType: "image/png" },
+      contextLink: "https://example.org/krebs",
+      title: "The Krebs cycle",
+    }));
+
+    const result = await pipeline.renderPage(0);
+
+    expect(queries[0]).toBe("the Krebs cycle step-by-step process diagram"); // LLM plan drives the query
+    expect(generatedCount()).toBe(0); // the AI image model was never called
+    expect(result.status).toBe("ready");
+    expect(new TextDecoder().decode(result.image!.bytes)).toBe("REAL_FIGURE");
+    expect(result.prompt).toContain("Retrieved figure");
+    expect(result.prompt).toContain("https://example.org/krebs"); // attribution in the caption
+    expect(await store.getImage(result.requestId)).toBeDefined(); // persisted like any render
+  });
+
+  it("hotlink-only figures display via sourceUrl (not persisted; re-resolved next session)", async () => {
+    const { pipeline, store, generatedCount } = technicalSetup(async () => ({
+      sourceUrl: "https://tbn.gstatic.com/k1",
+    }));
+    const result = await pipeline.renderPage(0);
+    expect(result.status).toBe("ready");
+    expect(result.sourceUrl).toBe("https://tbn.gstatic.com/k1");
+    expect(result.image).toBeUndefined();
+    expect(generatedCount()).toBe(0);
+    expect(await store.getImage(result.requestId)).toBeUndefined();
+  });
+
+  it("falls back to AI generation when nothing is found or search fails", async () => {
+    const { pipeline, generatedCount } = technicalSetup(async () => undefined);
+    expect((await pipeline.renderPage(0)).status).toBe("ready");
+    expect(generatedCount()).toBe(1);
+
+    const failing = technicalSetup(async () => {
+      throw new Error("quota exceeded");
+    });
+    expect((await failing.pipeline.renderPage(0)).status).toBe("ready");
+    expect(failing.generatedCount()).toBe(1);
+  });
+
+  it("fiction books never search — retrieval is technical-only", async () => {
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a knight by a window");
+    const { provider } = recordingImage();
+    let searched = 0;
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: DEFAULT_TIER_CONFIG,
+      imageSearch: {
+        retrieve: async () => {
+          searched++;
+          return undefined;
+        },
+      },
+    });
+    await pipeline.renderPage(0);
+    expect(searched).toBe(0);
+  });
+});
+
+describe("RenderPipeline world style vs explicit art style", () => {
+  async function renderWithStyle(styleId: string) {
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a knight by a window");
+    bible.worldStyle = "grim dark fantasy world";
+    const { provider, lastPrompt } = recordingImage();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: { ...DEFAULT_TIER_CONFIG, style: styleId }, // cloud tier → reference expansion
+    });
+    await pipeline.renderPage(0);
+    return lastPrompt();
+  }
+
+  it("auto style: the bible's world style rides along in the reference block", async () => {
+    expect(await renderWithStyle("auto")).toContain("grim dark fantasy world");
+  });
+
+  it("explicit style WINS: the world style is omitted so two Style directives never compete", async () => {
+    const prompt = await renderWithStyle("watercolor");
+    expect(prompt).not.toContain("grim dark fantasy world");
+    expect(prompt).toContain("watercolor painting"); // the chosen style's suffix is there
+  });
+});
+
+describe("RenderPipeline style LoRA override", () => {
+  function inputRecorder(): { provider: ImageProvider; last: () => ImageGenerationInput } {
+    let seen: ImageGenerationInput | undefined;
+    const provider: ImageProvider = {
+      id: "mock",
+      generate: async (input): Promise<ImageGenerationOutput> => {
+        seen = input;
+        return { bytes: new ArrayBuffer(1), mimeType: "image/png" };
+      },
+    };
+    return { provider, last: () => seen! };
+  }
+
+  async function renderWithTier(tier: Partial<typeof DEFAULT_TIER_CONFIG>) {
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a knight by a window");
+    const { provider, last } = inputRecorder();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: { ...DEFAULT_TIER_CONFIG, tier: "local", style: "anime", ...tier },
+    });
+    await pipeline.renderPage(0);
+    return last();
+  }
+
+  it("uses the style's automatic LoRA by default", async () => {
+    expect((await renderWithTier({})).styleLora?.name).toBe("anime");
+  });
+
+  it("a manual override forces any installed LoRA over the style mapping", async () => {
+    const input = await renderWithTier({ styleLoraOverride: "my-custom-lora.safetensors" });
+    expect(input.styleLora?.name).toBe("my-custom-lora.safetensors");
+  });
+
+  it("disableStyleLora renders prompt-only (no LoRA)", async () => {
+    expect((await renderWithTier({ disableStyleLora: true })).styleLora).toBeUndefined();
+  });
+});
+
 describe("RenderPipeline stored-first prompt fetch", () => {
   function countingLlm(): { provider: LLMProvider; calls: () => number } {
     let calls = 0;

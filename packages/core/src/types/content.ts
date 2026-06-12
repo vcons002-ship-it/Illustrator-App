@@ -9,12 +9,17 @@
  */
 export type ContentKind =
   | "scene_illustration"
+  /** Non-fiction (papers, textbooks): illustrate the CONCEPT/process, not a story scene. */
+  | "technical_illustration"
   // --- deferred (info-graphics), declared for forward-compatibility ---
   | "diagram"
   | "flowchart"
   | "summary";
 
-export const SUPPORTED_KINDS: readonly ContentKind[] = ["scene_illustration"];
+export const SUPPORTED_KINDS: readonly ContentKind[] = [
+  "scene_illustration",
+  "technical_illustration",
+];
 
 export function isSupportedKind(kind: ContentKind): boolean {
   return SUPPORTED_KINDS.includes(kind);
@@ -75,6 +80,12 @@ export interface ImageResult {
   status: RenderStatus;
   /** Rendered image bytes when status === "ready". */
   image?: ImageBytes;
+  /**
+   * Retrieved-figure fallback (technical books): a direct image URL for <img src>
+   * display when the figure's bytes couldn't be downloaded (hotlink-only host).
+   * Only one of `image` / `sourceUrl` is set on a ready result.
+   */
+  sourceUrl?: string;
   /** The final prompt sent to the image provider (for debugging / caching). */
   prompt?: string;
   error?: string;

@@ -2,6 +2,8 @@ import {
   Automatic1111Backend,
   ComfyUIBackend,
   DirectTransport,
+  GoogleImageSearch,
+  WikiSearch,
   LOCAL_TEXT_MODELS,
   MockImageProvider,
   MockLLMProvider,
@@ -11,6 +13,7 @@ import {
   createLLMProvider,
   getProvider,
   resolveQuality,
+  type FigureSearch,
   type GenerationActivity,
   type ImageProvider,
   type LLMProvider,
@@ -75,16 +78,58 @@ interface BuiltImage {
 export function buildProviders(
   settings: ReaderSettings,
   opts: BuildProvidersOptions = {},
-): { llm: LLMProvider; image: ImageProvider; tier: TierConfig; diagnostics: ProvidersDiagnostics } {
+): {
+  llm: LLMProvider;
+  image: ImageProvider;
+  tier: TierConfig;
+  diagnostics: ProvidersDiagnostics;
+  /**
+   * Real-figure retrieval for technical books — ALWAYS present: Google Custom Search
+   * when credentials are set, else the keyless Wikipedia/Wikimedia backend.
+   */
+  imageSearch: FigureSearch;
+  /** Which backend `imageSearch` resolved to, for the Settings status line. */
+  searchBackend: "google" | "wikipedia";
+  /**
+   * Provider-agnostic grounding source for technical books: present when grounding is
+   * on AND the reader isn't Gemini (which grounds in-call). Lets a local/Claude/OpenAI
+   * reader still produce sourced facts — keylessly via Wikipedia when no Google creds.
+   */
+  webSearch?: FigureSearch;
+} {
   const transport: Transport | undefined = opts.fetch ? new DirectTransport(opts.fetch) : undefined;
   const llm = buildLLM(settings, transport, opts.fetch, opts.onLocalStatus, opts.onLocalActivity);
   // "One API" native mode needs to know it BEFORE building the image slot (it picks the
   // multimodal provider variant). It depends only on settings (same vendor + key + opt-in).
   const native = isNativeIllustration(settings);
   const image = buildImage(settings, transport, native);
+  // Scientific sources: real-figure retrieval needs a Google API key AND the Programmable
+  // Search Engine id. The dedicated Custom Search key wins; absent it, the Gemini key is
+  // tried — the same Google Cloud key serves Custom Search when that API is enabled on its
+  // project, and a 403 from an un-enabled project degrades silently like every other
+  // search failure (the pipeline/engine wrap search calls in try/catch).
+  const searchKey = settings.keys.search || settings.keys.gemini;
+  const google =
+    searchKey && settings.searchEngineId
+      ? new GoogleImageSearch({
+          apiKey: searchKey,
+          engineId: settings.searchEngineId,
+          ...(transport ? { transport } : {}),
+        })
+      : undefined;
+  // No Google credentials → the keyless Wikipedia/Wikimedia backend, so figure
+  // retrieval and grounding work out of the box (narrower sources, zero setup).
+  const imageSearch: FigureSearch = google ?? new WikiSearch(transport ? { transport } : {});
+  // External grounding runs for every reader EXCEPT Gemini (which grounds in-call via its
+  // own google_search tool). So a local/Claude/OpenAI reader still gets sourced facts.
+  const webSearch =
+    settings.groundFacts && llm.provider.id !== "gemini" ? imageSearch : undefined;
   return {
     llm: llm.provider,
     image: image.provider,
+    imageSearch,
+    searchBackend: google ? "google" : "wikipedia",
+    ...(webSearch ? { webSearch } : {}),
     diagnostics: { llm: llm.diag, image: image.diag },
     tier: {
       tier: settings.imageProvider === "local" ? "local" : "cloud",
@@ -109,6 +154,13 @@ export function buildProviders(
         ? { aspectRatio: settings.aspectRatio }
         : {}),
       style: settings.imageStyle ?? "auto",
+      // Manual style-LoRA override (local engine): a specific installed LoRA, or "none"
+      // to render prompt-only. Anything else falls back to the style's automatic mapping.
+      ...(settings.imageProvider === "local" && settings.styleLoraOverride === "none"
+        ? { disableStyleLora: true }
+        : settings.imageProvider === "local" && settings.styleLoraOverride
+          ? { styleLoraOverride: settings.styleLoraOverride }
+          : {}),
       ...(settings.imageProvider === "local" && settings.localSampler
         ? { localSampler: settings.localSampler }
         : {}),
@@ -260,6 +312,8 @@ function buildLLM(
         key,
         ...(transport ? { transport } : {}),
         ...(fetchImpl ? { fetch: fetchImpl } : {}),
+        // Gemini only: ground technical analysis in Google Search (same Gemini key).
+        ...(id === "gemini" && settings.groundFacts ? { ground: true } : {}),
       }),
       diag: { id, label: providerLabel, mock: false },
     };

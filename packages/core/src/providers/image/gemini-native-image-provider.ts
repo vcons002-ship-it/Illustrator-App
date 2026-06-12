@@ -46,6 +46,22 @@ interface ModelsListResponse {
   models?: { name?: string; supportedGenerationMethods?: string[] }[];
 }
 
+/**
+ * Reference photos are stable per character for the whole book, but were being
+ * re-encoded to base64 (multi-MB string churn) on every render. The pipeline
+ * passes the same ArrayBuffer objects each time, so identity-keyed memoisation
+ * encodes each upload once per session.
+ */
+const refBase64Cache = new WeakMap<ArrayBuffer, string>();
+function cachedBase64(bytes: ArrayBuffer): string {
+  let b64 = refBase64Cache.get(bytes);
+  if (b64 === undefined) {
+    b64 = bytesToBase64(bytes);
+    refBase64Cache.set(bytes, b64);
+  }
+  return b64;
+}
+
 export class GeminiNativeImageProvider implements ImageProvider {
   readonly id = "gemini";
   private readonly transport: Transport;
@@ -94,7 +110,7 @@ export class GeminiNativeImageProvider implements ImageProvider {
     const parts: Record<string, unknown>[] = [{ text: input.prompt }];
     for (const ref of input.ipAdapterRefs ?? []) {
       parts.push({
-        inline_data: { mime_type: ref.mimeType, data: bytesToBase64(ref.bytes) },
+        inline_data: { mime_type: ref.mimeType, data: cachedBase64(ref.bytes) },
       });
     }
     const res = await this.transport.send({
@@ -103,7 +119,11 @@ export class GeminiNativeImageProvider implements ImageProvider {
       body: {
         contents: [{ role: "user", parts }],
         // Ask for an image back; some models also emit a stray text part — we ignore it.
-        generationConfig: { responseModalities: ["TEXT", "IMAGE"] },
+        // imageConfig carries the canvas orientation (the API takes a ratio, not pixels).
+        generationConfig: {
+          responseModalities: ["TEXT", "IMAGE"],
+          imageConfig: { aspectRatio: geminiAspectRatio(input.width, input.height) },
+        },
       },
       ...(input.signal ? { signal: input.signal } : {}),
     });
@@ -120,6 +140,19 @@ export class GeminiNativeImageProvider implements ImageProvider {
     }
     throw new Error("Gemini native image response contained no image data");
   }
+}
+
+/**
+ * Map requested pixel dimensions to the closest aspect ratio the generateContent
+ * imageConfig supports. Our portrait/landscape canvases are 2:3 / 3:2, which the API
+ * offers directly; square stays 1:1.
+ */
+export function geminiAspectRatio(width?: number, height?: number): string {
+  const w = width ?? 1024;
+  const h = height ?? 1024;
+  if (h > w) return "2:3";
+  if (w > h) return "3:2";
+  return "1:1";
 }
 
 /**

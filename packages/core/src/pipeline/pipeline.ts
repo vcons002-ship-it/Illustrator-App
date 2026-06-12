@@ -1,7 +1,7 @@
 import type { BookSource, Page } from "../types/book.js";
 import type { Character, VisualBible } from "../types/bible.js";
 import { referenceIdsOf } from "../types/bible.js";
-import type { ImageResult, VisualRequest } from "../types/content.js";
+import { isSupportedKind, type ImageResult, type VisualRequest } from "../types/content.js";
 import type { TierConfig } from "../types/tier.js";
 import type { LLMProvider } from "../providers/llm/llm-provider.js";
 import type {
@@ -15,6 +15,7 @@ import { resolvePageEntities } from "../visual-bible/bible.js";
 import { anchorSetting, composeScenePrompt, resolveKeyEvent } from "../visual-bible/key-events.js";
 import { expandPrompt, findBibleTermsInText } from "../providers/image/bible-injection.js";
 import { getImageStyle } from "../providers/catalog.js";
+import { buildFigureQuery, type RetrievedImage } from "../providers/image/image-search.js";
 import { profileDimensions, qualityProfile } from "../quality.js";
 
 /**
@@ -38,6 +39,12 @@ export interface PipelineDeps {
   image: ImageProvider;
   store: VisualReaderStore;
   tier: TierConfig;
+  /**
+   * Optional real-figure retrieval (technical books): when set, a technical unit first
+   * looks for an EXISTING diagram of its keyEvent's subject (authoritative labels/data
+   * beat a generated picture); AI generation remains the fallback.
+   */
+  imageSearch?: { retrieve(query: string): Promise<RetrievedImage | undefined> };
 }
 
 /**
@@ -57,7 +64,9 @@ export class RenderPipeline {
     );
     const chapterContext = this.chapterContextFor(page);
     return {
-      kind: "scene_illustration",
+      // Technical books (papers/textbooks, chosen at import) illustrate the passage's
+      // CONCEPT instead of a story scene — the LLM picks its prompt template by kind.
+      kind: this.deps.book.contentMode === "technical" ? "technical_illustration" : "scene_illustration",
       bookId: this.deps.book.id,
       ...(this.deps.book.title ? { bookTitle: this.deps.book.title } : {}),
       pageId: page.id,
@@ -75,15 +84,52 @@ export class RenderPipeline {
     };
   }
 
+  /**
+   * Reference-image bytes per ref id. A character's uploads are re-read from the
+   * store for EVERY frame they appear in; caching keeps that to one read per
+   * session AND hands providers identity-stable buffers (their own per-buffer
+   * caches — base64 encodings, engine uploads — key off object identity).
+   * The engine clears this whenever reference uploads change.
+   */
+  private readonly referenceBytesCache = new Map<
+    string,
+    Promise<{ bytes: ArrayBuffer; mimeType: string; prompt?: string } | undefined>
+  >();
+
+  /** Drop cached reference bytes (a reference was added/removed/re-keyed). */
+  clearReferenceCache(): void {
+    this.referenceBytesCache.clear();
+  }
+
+  private getReferenceImage(
+    id: string,
+  ): Promise<{ bytes: ArrayBuffer; mimeType: string; prompt?: string } | undefined> {
+    let p = this.referenceBytesCache.get(id);
+    if (!p) {
+      p = this.deps.store.getImage(id);
+      this.referenceBytesCache.set(id, p);
+    }
+    return p;
+  }
+
+  /** Bounded chapter context per chapterId — the book is immutable for this
+   * pipeline's lifetime, and `buildRequest` runs per unit on both the prompt
+   * pass and the render path, so the chapter join must not be repeated. */
+  private readonly chapterContextCache = new Map<string, string>();
+
   /** Bounded text of the whole chapter this page belongs to, for continuity. */
   private chapterContextFor(page: Page): string {
+    const cached = this.chapterContextCache.get(page.chapterId);
+    if (cached !== undefined) return cached;
     const full = this.deps.book.pages
       .filter((p) => p.chapterId === page.chapterId)
       .flatMap((p) => p.paragraphs.map((x) => x.text))
       .join("\n\n")
       .replace(/\s+/g, " ")
       .trim();
-    return full.length <= 1500 ? full : `${full.slice(0, 1500).trimEnd()}…`;
+    const bounded = full.length <= 1500 ? full : `${full.slice(0, 1500).trimEnd()}…`;
+    this.chapterContextCache.set(page.chapterId, bounded);
+    return bounded;
   }
 
   /** Stable cache id for a unit's image (`${bookId}:${pageId}`). */
@@ -100,13 +146,15 @@ export class RenderPipeline {
   async cachedResult(pageIndex: number): Promise<ImageResult | undefined> {
     const page = this.deps.book.pages[pageIndex];
     if (!page) return undefined;
-    const request = this.buildRequest(page);
-    const requestId = `${request.bookId}:${request.pageId}`;
+    // The cache id depends only on the page (same as `requestIdFor`) — building a
+    // full VisualRequest here made every book open pay an entity+context scan per
+    // page just to derive it.
+    const requestId = `${this.deps.book.id}:${page.id}`;
     const cached = await this.deps.store.getImage(requestId);
     if (!cached) return undefined;
     return {
       requestId,
-      pageId: request.pageId,
+      pageId: page.id,
       status: "ready",
       // The prompt this image was actually rendered from (persisted with it), so the
       // UI's per-image description stays STABLE across sessions instead of being
@@ -143,7 +191,7 @@ export class RenderPipeline {
       };
     }
 
-    if (request.kind !== "scene_illustration") {
+    if (!isSupportedKind(request.kind)) {
       return { requestId, pageId: request.pageId, status: "error", error: `Unsupported content kind: ${request.kind}` };
     }
 
@@ -171,6 +219,39 @@ export class RenderPipeline {
           error: "No illustration prompt for this unit yet.",
         };
       }
+      // Technical books, retrieval-first: an EXISTING figure (correct labels, correct
+      // data) beats a generated one. The LLM's visualization plan supplies the query
+      // (subject + visual form); any failure falls through to AI generation below.
+      if (request.kind === "technical_illustration" && this.deps.imageSearch && keyEvent?.imagePrompt.subject) {
+        const query = buildFigureQuery(keyEvent.imagePrompt.subject, keyEvent.imagePrompt.environment);
+        try {
+          const found = await this.deps.imageSearch.retrieve(query);
+          if (found?.bytes) {
+            const caption = retrievedCaption(query, found);
+            await this.deps.store.putImage(requestId, found.bytes.bytes, found.bytes.mimeType, caption);
+            return {
+              requestId,
+              pageId: request.pageId,
+              status: "ready",
+              prompt: caption,
+              image: { bytes: found.bytes.bytes, mimeType: found.bytes.mimeType },
+            };
+          }
+          if (found?.sourceUrl) {
+            // Hotlink-only (the host blocked downloads): displayable but not cacheable,
+            // so it re-resolves next session instead of being persisted.
+            return {
+              requestId,
+              pageId: request.pageId,
+              status: "ready",
+              prompt: retrievedCaption(query, found),
+              sourceUrl: found.sourceUrl,
+            };
+          }
+        } catch {
+          /* quota/network/no results — generate instead */
+        }
+      }
       const styled = style.promptSuffix ? `${stored}\n\nStyle: ${style.promptSuffix}` : stored;
       // Multi-panel comic page (opt-in, comic/manga only): ask for a SINGLE image laid
       // out as a comic page of sequential panels. Works best on natural-language/cloud
@@ -191,19 +272,31 @@ export class RenderPipeline {
       // family-aware; for cloud we pre-expand here (cloud providers don't know the bible).
       const terms = findBibleTermsInText(basePrompt, bible);
       const isLocal = this.deps.tier.tier === "local";
+      // The bible's world style only rides along for the "auto" art style — an explicitly
+      // chosen style WINS, instead of the prompt carrying two competing "Style:" directives.
+      const worldStyle = this.deps.tier.style && this.deps.tier.style !== "auto" ? undefined : bible.worldStyle;
       const prompt = isLocal
         ? basePrompt
         : expandPrompt(
             basePrompt,
             terms,
             cloudNameHandling(this.deps.image.id),
-            bible.worldStyle,
+            worldStyle,
             request.bookTitle,
           );
       // Reference images for IP-Adapter — user-uploaded only (auto-capture removed).
       const ipAdapterRefs = await this.referenceImagesFor(present);
-      // Local engines additionally apply a style LoRA/checkpoint when installed.
+      // Local engines additionally apply a style LoRA/checkpoint when installed. A manual
+      // override (Settings) picks any installed LoRA over the style's automatic mapping —
+      // or turns it off — so users aren't limited to the curated, model-specific packs.
       const local = isLocal ? style.local : undefined;
+      const styleLora = !isLocal
+        ? undefined
+        : this.deps.tier.disableStyleLora
+          ? undefined
+          : this.deps.tier.styleLoraOverride
+            ? { name: this.deps.tier.styleLoraOverride, strength: 0.8 }
+            : local?.lora;
       // Everything about the render except the quality-level-dependent steps + canvas,
       // which are filled per-attempt so an out-of-memory failure can retry one level down.
       const baseInput: ImageGenerationInput = {
@@ -212,7 +305,7 @@ export class RenderPipeline {
         quality: this.deps.tier.quality,
         ...(isLocal && this.deps.tier.localSampler ? { localSampler: this.deps.tier.localSampler } : {}),
         ...(isLocal && this.deps.tier.localScheduler ? { localScheduler: this.deps.tier.localScheduler } : {}),
-        ...(local?.lora ? { styleLora: local.lora } : {}),
+        ...(styleLora ? { styleLora } : {}),
         ...(local?.checkpoint ? { styleCheckpoint: local.checkpoint } : {}),
         ...(this.deps.tier.imageModelFamily ? { modelFamily: this.deps.tier.imageModelFamily } : {}),
         ...(isLocal && this.deps.tier.localTextEncoder ? { textEncoder: this.deps.tier.localTextEncoder } : {}),
@@ -221,7 +314,7 @@ export class RenderPipeline {
         ...(isLocal && this.deps.tier.localCfg !== undefined ? { cfgOverride: this.deps.tier.localCfg } : {}),
         // Local backends expand bible terms themselves (family-aware); cloud got them above.
         ...(isLocal && terms.length ? { terms } : {}),
-        ...(isLocal && bible.worldStyle ? { worldStyle: bible.worldStyle } : {}),
+        ...(isLocal && worldStyle ? { worldStyle } : {}),
         ...(isLocal && request.bookTitle ? { bookTitle: request.bookTitle } : {}),
         ...(ipAdapterRefs.length ? { ipAdapterRefs } : {}),
         ...(onProgress ? { onProgress } : {}),
@@ -231,7 +324,7 @@ export class RenderPipeline {
       };
       // Quality level → steps + aspect-aware resolution (more pages/image = higher
       // quality; the canvas orientation comes from the user's aspect setting).
-      const renderAt = (lvl: typeof this.deps.tier.renderQuality): Promise<ImageGenerationOutput> => {
+      const renderAt = (lvl: RenderQuality | undefined): Promise<ImageGenerationOutput> => {
         const dims = lvl ? profileDimensions(lvl, this.deps.tier.aspectRatio) : undefined;
         return this.deps.image.generate({
           ...baseInput,
@@ -305,7 +398,7 @@ export class RenderPipeline {
     for (const c of chosen) usedCount.set(c.charIndex, (usedCount.get(c.charIndex) ?? 0) + 1);
     const refs: { bytes: ArrayBuffer; mimeType: string; weight: number }[] = [];
     for (const { id, charIndex } of chosen) {
-      const img = await this.deps.store.getImage(id);
+      const img = await this.getReferenceImage(id);
       // Moderate total (not 0.7): the reference keeps the face recognizable without
       // forcing a portrait — the backend also ends IP-Adapter early so the scene
       // composition forms first.
@@ -322,6 +415,12 @@ export class RenderPipeline {
  * multimodal model reads the scene and depicts it directly. Character names in the
  * prose are still expanded into their Bible descriptors by the caller's term pass.
  */
+/** Caption for a retrieved figure: what was searched + where it came from. */
+function retrievedCaption(query: string, found: RetrievedImage): string {
+  const source = found.contextLink ? `\n\nSource: ${found.title ? `${found.title} — ` : ""}${found.contextLink}` : "";
+  return `Retrieved figure for “${query}”${source}`;
+}
+
 /** The next-lower render-quality level, or undefined when already at the floor (draft). */
 function oneLevelDown(level: RenderQuality): RenderQuality | undefined {
   const order: RenderQuality[] = ["draft", "standard", "high", "ultra"];

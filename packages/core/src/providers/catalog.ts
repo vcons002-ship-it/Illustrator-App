@@ -68,7 +68,7 @@ export const IMAGE_PROVIDERS: ProviderInfo[] = [
   },
   {
     id: "gemini",
-    label: "Imagen (Google)",
+    label: "Google Gemini (Nano Banana / Flash)",
     slot: "image",
     needsKey: true,
     keyUrl: "https://aistudio.google.com/app/apikey",
@@ -197,7 +197,7 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
   {
     id: "flux-schnell",
     label: "Flux-schnell (fp8)",
-    sizeGB: 12,
+    sizeGB: 17.2,
     note: "Highest quality · needs a strong GPU",
     filename: "flux1-schnell-fp8.safetensors",
     url: "https://huggingface.co/Comfy-Org/flux1-schnell/resolve/main/flux1-schnell-fp8.safetensors",
@@ -240,36 +240,43 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
   {
     id: "flux2-klein-9b",
     label: "Flux.2 Klein 9B (fp8)",
-    sizeGB: 19.5,
-    note: "Official open Flux.2 — excellent quality, strong GPU",
+    sizeGB: 18.5,
+    note: "Official open Flux.2 — last file needs a free Hugging Face sign-in (browser download)",
     filename: "flux-2-klein-base-9b-fp8.safetensors",
-    // Comfy-Org's repack mirror — the black-forest-labs repos are GATED on Hugging
-    // Face (401 without an accepted license + login), which the app's keyless
-    // downloader can't satisfy. Same files, ungated host.
-    url: "https://huggingface.co/Comfy-Org/flux2-klein-9B/resolve/main/split_files/diffusion_models/flux-2-klein-base-9b-fp8.safetensors",
+    // Comfy-Org's repack repo no longer hosts the Klein DIFFUSION weights (it was
+    // renamed to vae-text-encorder-for-flux-klein-9b and stripped to encoder+VAE);
+    // the only canonical source is black-forest-labs, which is gated (401 without a
+    // logged-in license acceptance). The ungated mirrors are zero-download personal
+    // repos — not something an auto-downloader should trust. URLs below match the
+    // current official image_flux2_text_to_image_9b template (verified 2026-06-11).
+    url: "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/resolve/main/flux-2-klein-base-9b-fp8.safetensors",
     family: "flux2",
     clipType: "flux2",
     // Klein base is NOT guidance-distilled (unlike Flux.2-dev): real CFG 5, no
     // FluxGuidance node — per the official image_flux2_text_to_image_9b template.
     sampler: { cfg: 5, sampler: "euler", scheduler: "simple", steps: 20 },
+    // The gated diffusion file goes LAST: the ungated encoder + VAE download
+    // unattended first, so after it fails with the "download it in your browser"
+    // hint, dropping that one file into diffusion_models completes the model
+    // (the downloader skips finished files on retry).
     files: [
-      {
-        filename: "flux-2-klein-base-9b-fp8.safetensors",
-        folder: "diffusion_models",
-        url: "https://huggingface.co/Comfy-Org/flux2-klein-9B/resolve/main/split_files/diffusion_models/flux-2-klein-base-9b-fp8.safetensors",
-        sizeGB: 9.7,
-      },
       {
         filename: "qwen_3_8b_fp8mixed.safetensors",
         folder: "text_encoders",
-        url: "https://huggingface.co/Comfy-Org/flux2-klein-9B/resolve/main/split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors",
-        sizeGB: 9.1,
+        url: "https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-9b/resolve/main/split_files/text_encoders/qwen_3_8b_fp8mixed.safetensors",
+        sizeGB: 8.7,
       },
       {
         filename: "full_encoder_small_decoder.safetensors",
         folder: "vae",
-        url: "https://huggingface.co/Comfy-Org/flux2-klein-9B/resolve/main/split_files/vae/full_encoder_small_decoder.safetensors",
-        sizeGB: 0.7,
+        url: "https://huggingface.co/black-forest-labs/FLUX.2-small-decoder/resolve/main/full_encoder_small_decoder.safetensors",
+        sizeGB: 0.25,
+      },
+      {
+        filename: "flux-2-klein-base-9b-fp8.safetensors",
+        folder: "diffusion_models",
+        url: "https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/resolve/main/flux-2-klein-base-9b-fp8.safetensors",
+        sizeGB: 9.6,
       },
     ],
   },
@@ -318,6 +325,47 @@ export function catalogModelFamily(name: string): CatalogModelFamily | undefined
   return catalogEntryForModel(name)?.family;
 }
 
+/** Squashed lowercase alphanumerics ("Flux 2 Klein.safetensors" → "flux2klein"). */
+function normalizeModelName(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\.(safetensors|ckpt|gguf)$/i, "")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+/**
+ * Resolve a model the user NAMED IN CHAT ("flux 2", "z image", "juggernaut") to an
+ * actually-installed file: exact normalized match first, then substring. Installed
+ * names only — a model that isn't downloaded can't render, so a miss returns
+ * undefined and the caller keeps the current model instead of failing the render.
+ */
+export function resolveModelRequest(
+  query: string,
+  installed: readonly string[],
+): string | undefined {
+  const nq = normalizeModelName(query);
+  if (!nq) return undefined;
+  return (
+    installed.find((m) => normalizeModelName(m) === nq) ??
+    installed.find((m) => normalizeModelName(m).includes(nq))
+  );
+}
+
+/**
+ * Resolve an art style the user named in chat ("oil painting", "noir") to a style id
+ * from IMAGE_STYLES (exact id, then label/id substring). Undefined when nothing fits.
+ */
+export function resolveStyleRequest(query: string): string | undefined {
+  const nq = normalizeModelName(query);
+  if (!nq) return undefined;
+  const match =
+    IMAGE_STYLES.find((s) => normalizeModelName(s.id) === nq) ??
+    IMAGE_STYLES.find(
+      (s) => normalizeModelName(s.label).includes(nq) || normalizeModelName(s.id).includes(nq),
+    );
+  return match && match.id !== "auto" ? match.id : undefined;
+}
+
 /**
  * Art-style catalog for the image style selector. The chosen style's
  * `promptSuffix` is appended to every image prompt (in the render pipeline), so it
@@ -339,16 +387,24 @@ export interface StyleLoraRef {
    * this LoRA on demand. Optional — when absent there's no auto-download (the
    * style still works via its prompt text, or a LoRA you install yourself).
    *
-   * NOTE: URLs below are best-effort community sources and are NOT verified in
-   * this environment; downloads fail gracefully, and this is the one place to
-   * fix/add a source. Saved locally as `${name}.safetensors` to match the
-   * by-style-id lookup the backends use.
+   * NOTE: URLs below are best-effort community sources, live-verified 2026-06-11
+   * (HEAD 200, anonymous); downloads fail gracefully if a host moves, and this is
+   * the one place to fix/add a source. Saved locally as `${name}.safetensors` to
+   * match the by-style-id lookup the backends use.
    */
   url?: string;
   /** Saved filename (defaults to `${name}.safetensors`). */
   filename?: string;
   /** Approximate download size in MB, for the UI. */
   sizeMB?: number;
+  /**
+   * The model family this curated download is BUILT FOR. A LoRA only loads on its own
+   * architecture (an SDXL LoRA can't run on Flux/Z-Image), so the UI offers the one-click
+   * download only when the active model matches — and points other families to the
+   * manual override / paste-a-URL path instead. Undefined = architecture-agnostic prompt
+   * helper (no real constraint).
+   */
+  family?: CatalogModelFamily;
 }
 
 export interface ImageStyleLocal {
@@ -361,19 +417,35 @@ export interface ImageStyleLocal {
 export interface ImageStyle {
   id: string;
   label: string;
+  /** One-line "what it looks like + what it suits", shown in the style picker. */
+  description: string;
   /** Appended to the image prompt; empty for "auto". */
   promptSuffix: string;
   /** Optional local-engine LoRA/checkpoint mapping (applied when installed). */
   local?: ImageStyleLocal;
 }
 
+/**
+ * The art-style catalog. Each style is primarily PROMPT-driven (the suffix steers any
+ * model, cloud or local); `local.lora` additionally applies a LoRA of that name when one
+ * is installed in the engine (only the entries with a `url` are downloadable in-app —
+ * for the rest, drop a matching `<name>.safetensors` into the engine's loras folder).
+ * Suffixes name a medium + technique + palette/lighting rather than artists, which
+ * steers reliably across SD, Flux and the cloud models alike.
+ */
 export const IMAGE_STYLES: ImageStyle[] = [
-  { id: "auto", label: "Auto (match the writing)", promptSuffix: "" },
+  {
+    id: "auto",
+    label: "Auto (match the writing)",
+    description: "No style is forced — the scene prompt and the book's own genre decide the look.",
+    promptSuffix: "",
+  },
   {
     id: "dynamic-action",
     label: "Dynamic action",
+    description: "High-energy cinematic shots with motion and impact — thrillers, battles, sports.",
     promptSuffix:
-      "dynamic action pose, intense motion, sense of speed and impact, cinematic action shot, motion blur on movement",
+      "dynamic action pose, intense motion, sense of speed and impact, cinematic action shot, motion blur on movement, dramatic low camera angle",
     // No bundled download — the prompt emphasis drives it; drop a LoRA named
     // dynamic-action.safetensors into the engine's loras folder to boost it.
     local: { lora: { name: "dynamic-action", strength: 0.7, trigger: "dynamic action" } },
@@ -381,27 +453,61 @@ export const IMAGE_STYLES: ImageStyle[] = [
   {
     id: "photorealistic",
     label: "Photorealistic",
+    description: "Looks like a photograph — contemporary fiction, memoirs, true stories.",
     promptSuffix:
-      "photorealistic, ultra-detailed, natural lighting, sharp focus, professional photography",
+      "photorealistic, ultra-detailed, natural lighting, sharp focus, realistic materials and skin texture, professional photography",
     local: { lora: { name: "photorealistic", strength: 0.6 } },
+  },
+  {
+    id: "cinematic",
+    label: "Cinematic film still",
+    description: "A frame from a movie — moody color grading and shallow focus; fits most novels.",
+    promptSuffix:
+      "cinematic film still, dramatic lighting, shallow depth of field, moody color grading, anamorphic framing, subtle film grain",
+    local: { lora: { name: "cinematic", strength: 0.7 } },
   },
   {
     id: "anime",
     label: "Anime",
-    promptSuffix: "anime illustration, cel shading, clean line art, vibrant colors, expressive",
+    description: "Crisp cel-shaded anime with vivid colors — light novels, YA, adventure.",
+    promptSuffix:
+      "anime illustration, cel shading, clean line art, vibrant colors, expressive characters, detailed scenery",
     local: { lora: { name: "anime", strength: 0.8, trigger: "anime" } },
+  },
+  {
+    id: "anime-film",
+    label: "Anime film (painterly)",
+    description: "Soft, hand-painted animation backgrounds and gentle light — cozy or wistful stories.",
+    promptSuffix:
+      "painterly anime film still, soft watercolor-tinted backgrounds, warm natural light, gentle pastel palette, hand-painted scenery, nostalgic atmosphere",
+    local: { lora: { name: "anime-film", strength: 0.7 } },
   },
   {
     id: "manga",
     label: "Manga (black & white)",
-    promptSuffix: "black-and-white manga, ink linework, screentone shading, dynamic composition",
+    description: "Inked black-and-white manga with screentones — pairs with the comic-panel view, right-to-left.",
+    promptSuffix:
+      "black-and-white manga, ink linework, screentone shading, high contrast, speed lines, dynamic composition",
     local: { lora: { name: "manga", strength: 0.8, trigger: "manga, monochrome, greyscale" } },
+  },
+  {
+    id: "comic",
+    label: "Comic book",
+    description: "Bold western comic art with inked outlines and halftones — pairs with the comic-panel view.",
+    promptSuffix:
+      "western comic book art, bold ink outlines, halftone shading, saturated flat colors, dramatic framing",
+    // No bundled download since 2026-06: the ComicBookRedmond repos went private on
+    // Hugging Face (anonymous fetch now 401s) and no reputable ungated SDXL comic
+    // LoRA replaces them — the prompt suffix carries the style; drop a LoRA named
+    // comic.safetensors into the engine's loras folder to boost it.
+    local: { lora: { name: "comic", strength: 0.8, trigger: "Comic Book" } },
   },
   {
     id: "animation-3d",
     label: "Realistic animation (3D)",
+    description: "Modern 3D-animated-film look with soft lighting — family stories and adventures.",
     promptSuffix:
-      "3D animated film still, stylized realism, soft global illumination, subtle subsurface detail",
+      "3D animated film still, stylized realism, soft global illumination, subtle subsurface detail, expressive characters",
     local: {
       lora: {
         name: "animation-3d",
@@ -410,50 +516,93 @@ export const IMAGE_STYLES: ImageStyle[] = [
         url: "https://huggingface.co/artificialguybr/3DRedmond-V1/resolve/main/3DRedmond-3DRenderStyle-3DRenderAF.safetensors",
         filename: "animation-3d.safetensors",
         sizeMB: 170,
+        family: "sdxl",
       },
     },
   },
   {
     id: "watercolor",
     label: "Watercolor",
-    promptSuffix: "watercolor painting, soft washes, textured paper, painterly, delicate",
+    description: "Soft translucent washes on textured paper — literary fiction, poetry, quiet drama.",
+    promptSuffix:
+      "watercolor painting, soft translucent washes, textured paper, loose expressive brushwork, delicate color bleeds, painterly",
     local: { lora: { name: "watercolor", strength: 0.8, trigger: "watercolor" } },
-  },
-  {
-    id: "comic",
-    label: "Comic book",
-    promptSuffix: "western comic book art, bold ink outlines, halftone shading, dramatic",
-    local: {
-      lora: {
-        name: "comic",
-        strength: 0.8,
-        trigger: "Comic Book",
-        url: "https://huggingface.co/artificialguybr/ComicBookRedmond-V2/resolve/main/ComicBookRedmond-V2-Comic-ComicRedmAF.safetensors",
-        filename: "comic.safetensors",
-        sizeMB: 170,
-      },
-    },
   },
   {
     id: "oil-painting",
     label: "Oil painting",
-    promptSuffix: "classical oil painting, visible brushstrokes, rich color, chiaroscuro lighting",
+    description: "Classical canvas with rich color and dramatic light — historical fiction and epics.",
+    promptSuffix:
+      "classical oil painting, visible impasto brushstrokes, rich color, chiaroscuro lighting, canvas texture, old-master composition",
     local: { lora: { name: "oil-painting", strength: 0.8, trigger: "oil painting" } },
+  },
+  {
+    id: "pencil-sketch",
+    label: "Pencil sketch",
+    description: "Hand-drawn graphite with crosshatching — a classic illustrated-novel feel.",
+    promptSuffix:
+      "detailed graphite pencil sketch, hand-drawn linework, crosshatching and soft smudged shading, monochrome, sketchbook illustration",
+    local: { lora: { name: "pencil-sketch", strength: 0.8, trigger: "pencil sketch" } },
+  },
+  {
+    id: "vintage-engraving",
+    label: "Vintage engraving",
+    description: "19th-century etched book plates, fine parallel lines — classics, gothic tales, fables.",
+    promptSuffix:
+      "antique book-plate engraving, fine etched parallel linework, woodcut hatching, monochrome ink, dramatic shading, 19th-century illustration",
+    local: { lora: { name: "vintage-engraving", strength: 0.8 } },
   },
   {
     id: "storybook",
     label: "Storybook",
-    promptSuffix: "children's storybook illustration, soft gouache, warm and whimsical",
+    description: "Warm, whimsical gouache for all ages — children's books and gentle fantasy.",
+    promptSuffix:
+      "children's storybook illustration, soft gouache, warm and whimsical, friendly rounded shapes, cozy colors",
     local: {
       lora: {
         name: "storybook",
         strength: 0.8,
-        trigger: "Storybook Redmond",
-        url: "https://huggingface.co/artificialguybr/StoryBookRedmond/resolve/main/StoryBookRedmond.safetensors",
+        // V2 of the Redmond storybook LoRA (V1's published filename changed); the
+        // trigger is the model's actual training tag, from the repo's README.
+        trigger: "KidsRedmAF, Kids Book",
+        url: "https://huggingface.co/artificialguybr/StoryBookRedmond-V2/resolve/main/StorybookRedmondV2-KidsBook-KidsRedmAF.safetensors",
         filename: "storybook.safetensors",
-        sizeMB: 170,
+        sizeMB: 163,
+        family: "sdxl",
       },
     },
+  },
+  {
+    id: "art-nouveau",
+    label: "Art nouveau",
+    description: "Ornate flowing lines and decorative borders in muted gold — fairy tales, romance, myth.",
+    promptSuffix:
+      "art nouveau illustration, ornate flowing linework, decorative floral framing, flat muted gold and jewel tones, elegant poster composition",
+    local: { lora: { name: "art-nouveau", strength: 0.8, trigger: "art nouveau" } },
+  },
+  {
+    id: "dark-fantasy",
+    label: "Dark fantasy",
+    description: "Grim, shadowy painted fantasy with a desaturated palette — grimdark, horror, gothic.",
+    promptSuffix:
+      "dark fantasy painting, grim foreboding atmosphere, deep ominous shadows, desaturated muted palette, intricate gothic detail, faint cold rim light",
+    local: { lora: { name: "dark-fantasy", strength: 0.8, trigger: "dark fantasy" } },
+  },
+  {
+    id: "noir",
+    label: "Film noir",
+    description: "High-contrast black & white, hard shadows and silhouettes — mysteries and crime.",
+    promptSuffix:
+      "film noir style, high-contrast black and white, hard dramatic shadows, venetian-blind and street-lamp lighting, silhouettes, moody atmosphere",
+    local: { lora: { name: "noir", strength: 0.8, trigger: "film noir" } },
+  },
+  {
+    id: "pixel-art",
+    label: "Pixel art",
+    description: "Retro 16-bit game scenes with a limited palette — a playful take on any story.",
+    promptSuffix:
+      "detailed pixel art, 16-bit retro video game scene, limited color palette, crisp clean pixels, atmospheric dithering",
+    local: { lora: { name: "pixel-art", strength: 0.8, trigger: "pixel art" } },
   },
 ];
 

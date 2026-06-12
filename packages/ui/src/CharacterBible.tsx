@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import type { Character, CharacterAppearance, Outfit, VisualBible } from "@visual-reader/core";
 import { MAX_CHARACTER_REFS, referenceIdsOf } from "@visual-reader/core";
 
@@ -60,7 +60,17 @@ export function CharacterBible({
   const characters = bible?.characters ?? [];
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
-  const filtered = q ? characters.filter((c) => matchesQuery(c, q)) : characters;
+  // Each character's searchable haystack, built once per bible update — not per
+  // keystroke (a long novel tracks dozens-to-hundreds of characters, each with
+  // many fields to join and lowercase).
+  const haystacks = useMemo(
+    () => characters.map((c) => ({ c, hay: characterHaystack(c) })),
+    [characters],
+  );
+  const filtered = useMemo(
+    () => (q ? haystacks.filter((e) => e.hay.includes(q)).map((e) => e.c) : characters),
+    [characters, haystacks, q],
+  );
   return (
     <div style={overlayStyle} onClick={onClose}>
       <div style={panelStyle} onClick={(e) => e.stopPropagation()}>
@@ -113,9 +123,9 @@ export function CharacterBible({
   );
 }
 
-/** Match a character against a lowercased query across name, aliases, and every detail. */
-function matchesQuery(c: Character, q: string): boolean {
-  const haystack = [
+/** A character's lowercased searchable text: name, aliases, and every detail. */
+function characterHaystack(c: Character): string {
+  return [
     c.name,
     ...c.aliases,
     ...Object.values(c.appearance),
@@ -125,10 +135,11 @@ function matchesQuery(c: Character, q: string): boolean {
   ]
     .join(" ")
     .toLowerCase();
-  return haystack.includes(q);
 }
 
-function CharacterCard({
+// Memoised: a search keystroke (or any parent re-render) must not re-render every
+// card — each one carries ~9 inputs, outfit rows, and a reference gallery.
+const CharacterCard = memo(function CharacterCard({
   character,
   onSave,
   onAddReference,
@@ -151,12 +162,21 @@ function CharacterCard({
     setOutfits(initialOutfits(character));
   }, [character]);
 
-  const cleanOutfits = outfits
-    .map((o) => ({ label: o.label.trim(), description: o.description.trim(), context: o.context.trim() }))
-    .filter((o) => o.label || o.description);
-  const dirty =
-    JSON.stringify(appearance) !== JSON.stringify(character.appearance) ||
-    JSON.stringify(cleanOutfits) !== JSON.stringify(initialOutfits(character));
+  const cleanOutfits = useMemo(
+    () =>
+      outfits
+        .map((o) => ({ label: o.label.trim(), description: o.description.trim(), context: o.context.trim() }))
+        .filter((o) => o.label || o.description),
+    [outfits],
+  );
+  // The stringify round-trips ran on EVERY render of every card; keyed on the
+  // actual edit state they run once per real change.
+  const dirty = useMemo(
+    () =>
+      JSON.stringify(appearance) !== JSON.stringify(character.appearance) ||
+      JSON.stringify(cleanOutfits) !== JSON.stringify(initialOutfits(character)),
+    [appearance, cleanOutfits, character],
+  );
 
   const setOutfit = (i: number, patch: Partial<Outfit>) =>
     setOutfits((list) => list.map((o, k) => (k === i ? { ...o, ...patch } : o)));
@@ -243,7 +263,7 @@ function CharacterCard({
       </div>
     </div>
   );
-}
+});
 
 /**
  * Up to MAX_CHARACTER_REFS uploaded reference photos per character (ideally different
@@ -329,7 +349,7 @@ function ReferenceThumb({
   return (
     <span style={thumbStyle}>
       {url ? (
-        <img src={url} alt="character reference" style={thumbImgStyle} />
+        <img src={url} alt="character reference" decoding="async" style={thumbImgStyle} />
       ) : (
         <span style={{ opacity: 0.4, fontSize: 11 }}>…</span>
       )}

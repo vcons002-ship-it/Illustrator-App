@@ -1,4 +1,4 @@
-import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
+import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Automatic1111Backend,
@@ -24,6 +24,8 @@ import {
   ImagePanel,
   SettingsPanel,
   buildProviders,
+  identitySettingsKey,
+  tuningSettingsKey,
   type InstalledModel,
   type LocalBackendId,
   type ReaderSettings,
@@ -33,6 +35,28 @@ import { createCacheStore } from "./cache-store.js";
 import { decryptViaBackground, encryptViaBackground, proxyFetch } from "./message-transport.js";
 
 const STORAGE_KEY = "vr-settings";
+
+/** Tracking query params that never change a page's content. */
+const TRACKING_PARAMS = new Set(["fbclid", "gclid", "igshid", "mc_cid", "mc_eid"]);
+
+/**
+ * Cache id for the current page. Tracking params and plain anchor fragments are
+ * stripped so a re-visit via `?utm_…` or `#section` reuses the page's bible and
+ * images instead of re-extracting and re-generating from scratch. Hash ROUTES
+ * (`#/…`, `#!…`) are kept — there the fragment selects different content.
+ */
+function cachePageId(href: string): string {
+  try {
+    const u = new URL(href);
+    if (!u.hash.startsWith("#/") && !u.hash.startsWith("#!")) u.hash = "";
+    for (const k of [...u.searchParams.keys()]) {
+      if (/^utm_/i.test(k) || TRACKING_PARAMS.has(k.toLowerCase())) u.searchParams.delete(k);
+    }
+    return `page-${u.href}`;
+  } catch {
+    return `page-${href}`;
+  }
+}
 
 /**
  * Content-script overlay. Extracts the page's readable text, runs it through the
@@ -95,24 +119,29 @@ function Overlay() {
     })();
   }, []);
 
-  // Persist on change: encrypt the keys, never store them in plaintext.
+  // Persist on change: encrypt the keys, never store them in plaintext. Debounced —
+  // each persist is an encrypt round-trip through the background worker plus a
+  // storage write, so per-keystroke edits must coalesce into one.
   useEffect(() => {
     if (!settings) return;
-    void (async () => {
-      const { keys, engineBaseUrl: _url, ...rest } = settings;
-      void _url;
-      const toStore: Record<string, unknown> = { ...rest };
-      delete toStore.keys;
-      delete toStore.keysEnc;
-      if (keys && Object.keys(keys).length > 0) {
-        try {
-          toStore.keysEnc = await encryptViaBackground(keys);
-        } catch {
-          /* if encryption fails, skip persisting keys rather than store plaintext */
+    const timer = setTimeout(() => {
+      void (async () => {
+        const { keys, engineBaseUrl: _url, ...rest } = settings;
+        void _url;
+        const toStore: Record<string, unknown> = { ...rest };
+        delete toStore.keys;
+        delete toStore.keysEnc;
+        if (keys && Object.keys(keys).length > 0) {
+          try {
+            toStore.keysEnc = await encryptViaBackground(keys);
+          } catch {
+            /* if encryption fails, skip persisting keys rather than store plaintext */
+          }
         }
-      }
-      await chrome.storage.local.set({ [STORAGE_KEY]: toStore });
-    })();
+        await chrome.storage.local.set({ [STORAGE_KEY]: toStore });
+      })();
+    }, 500);
+    return () => clearTimeout(timer);
   }, [settings]);
 
   // Extract the article text once.
@@ -121,50 +150,75 @@ function Overlay() {
     if (text.trim().length > 0) extractedRef.current = { title, text };
   }, []);
 
-  // (Re)build the engine whenever settings change so new keys / a connected
-  // server take effect immediately.
+  // The effects below read the latest settings without re-running per keystroke.
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+
+  // Settings changes split into the same two paths as the web app (settingsKeys):
+  // IDENTITY changes (providers/keys/models/URLs) rebuild the engine — debounced,
+  // so typing a key coalesces into ONE rebuild instead of one per keystroke —
+  // while TUNING changes (style/quality/aspect…) only swap the live tier in place.
+  const identityKey = settings ? identitySettingsKey(settings) : "";
+  const tuningKey = settings ? tuningSettingsKey(settings) : "";
+
   useEffect(() => {
-    if (!settings || !extractedRef.current) return;
-    const { title, text } = extractedRef.current;
-    const source = segmentBook({ id: `page-${location.href}`, title }, [{ title, text }], { wordsPerPage: 220 });
-    setError("");
-    setResults(new Map());
-    const { llm, image, tier } = buildProviders(settings, { fetch: proxyFetch, onLocalStatus: setStatus });
+    if (!identityKey || !extractedRef.current) return;
     let cancelled = false;
-    const engine = new Engine({
-      llm,
-      image,
-      tier,
-      store: createCacheStore(),
-      onUpdate: (idx, result) => {
-        if (!cancelled) setResults((prev) => new Map(prev).set(idx, result));
-      },
-      // The bible builds in the background (pages illustrate as their chapter is
-      // ready); keep the UI's character/spoiler context current as it grows.
-      onBibleUpdate: (bible) => {
-        if (!cancelled) setBible(bible);
-      },
-    });
-    engineRef.current = engine;
-    void engine
-      .openBook(source)
-      .then(() => {
-        if (cancelled) return;
-        setBook(source);
-        // openBook now only loads/restores; kick off generation explicitly so the
-        // extension keeps auto-illustrating as you read (reusing cached work).
-        engine.startGeneration();
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+    let engine: Engine | undefined;
+    const build = (): void => {
+      const s = settingsRef.current!;
+      const { title, text } = extractedRef.current!;
+      const source = segmentBook({ id: cachePageId(location.href), title }, [{ title, text }], { wordsPerPage: 220 });
+      setError("");
+      setResults(new Map());
+      const { llm, image, tier } = buildProviders(s, { fetch: proxyFetch, onLocalStatus: setStatus });
+      engine = new Engine({
+        llm,
+        image,
+        tier,
+        store: createCacheStore(),
+        onUpdate: (idx, result) => {
+          if (!cancelled) setResults((prev) => new Map(prev).set(idx, result));
+        },
+        // The bible builds in the background (pages illustrate as their chapter is
+        // ready); keep the UI's character/spoiler context current as it grows.
+        onBibleUpdate: (bible) => {
+          if (!cancelled) setBible(bible);
+        },
       });
+      engineRef.current = engine;
+      void engine
+        .openBook(source)
+        .then(() => {
+          if (cancelled) return;
+          setBook(source);
+          // openBook now only loads/restores; kick off generation explicitly so the
+          // extension keeps auto-illustrating as you read (reusing cached work).
+          engine!.startGeneration();
+        })
+        .catch((err) => {
+          if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        });
+    };
+    // First build runs at once (page load); rebuilds wait out the typing burst.
+    const timer = setTimeout(build, engineRef.current ? 400 : 0);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
       // Stop the replaced engine's background work (bible build + renders) — the
       // settings change builds a fresh engine, and two must never run at once.
-      engine.dispose();
+      engine?.dispose();
     };
-  }, [settings]);
+  }, [identityKey]);
+
+  // Tuning-only change: future renders pick the new tier up; nothing is disposed,
+  // in-flight extraction/renders continue, finished images stay.
+  useEffect(() => {
+    const s = settingsRef.current;
+    if (s && engineRef.current) {
+      engineRef.current.updateTier(buildProviders(s, { fetch: proxyFetch }).tier);
+    }
+  }, [tuningKey]);
 
   // Scroll-sync: map host-page scroll to a page index AND a continuous in-page
   // progress (drives the bloom — fast scrolling keeps progress low → image hidden).
@@ -179,9 +233,11 @@ function Overlay() {
         const scaled = frac * (book.pages.length - 1);
         const idx = Math.min(Math.floor(scaled), book.pages.length - 1);
         // Fraction within the current page; the last page tracks to full at the bottom.
+        // Quantized (~1.5% steps, invisible through the bloom easing) so unchanged
+        // frames bail out of re-rendering the overlay instead of running at 60fps.
         const within = idx >= book.pages.length - 1 ? 1 : Math.max(0, Math.min(1, scaled - idx));
         setPageIndex((p) => (p !== idx ? idx : p));
-        setSubPageProgress(within);
+        setSubPageProgress(Math.round(within * 64) / 64);
       });
     };
     window.addEventListener("scroll", onScroll, { passive: true });
@@ -247,10 +303,6 @@ function Overlay() {
     }
   }, []);
 
-  // The pull callback reads the latest URL without re-creating itself per keystroke.
-  const settingsRef = useRef(settings);
-  settingsRef.current = settings;
-
   // Download a text model INTO Ollama through the background proxy. The proxy
   // buffers responses (no streaming), so this uses the non-streaming pull and
   // shows an indeterminate "downloading…" until Ollama finishes.
@@ -276,25 +328,28 @@ function Overlay() {
     }
   }, []);
 
+  const page = book?.pages[pageIndex];
+  // Spoiler resolution is O(entities × paragraphs) — keyed on the bible/page it
+  // runs when they change, not on every scroll frame of the overlay.
+  const spoiler = useMemo(() => {
+    if (!bible || !page) return { has: false, revealPoint: 1 };
+    const spoilerIds = resolvePageEntities(bible, page).spoilerIds;
+    const has = spoilerIds.length > 0;
+    return {
+      has,
+      revealPoint: spoilerRevealPoint(
+        latestSpoilerParagraphIndex(page, spoilerIds, bible.spoilers ?? []),
+        has,
+        page.paragraphs.length,
+      ),
+    };
+  }, [bible, page]);
+
   if (!visible || !settings) return null;
 
-  const page = book?.pages[pageIndex];
-  const spoilerIds = bible && page ? resolvePageEntities(bible, page).spoilerIds : [];
-  const paraCount = page?.paragraphs.length ?? 1;
-  const hasSpoiler = spoilerIds.length > 0;
   // Reveal follows the reader's scroll through the article (fast scroll → hidden),
   // holding any depicted spoiler until they reach its paragraph.
-  const bloom = page
-    ? computeBloomTarget(
-        subPageProgress,
-        spoilerRevealPoint(
-          latestSpoilerParagraphIndex(page, spoilerIds, bible?.spoilers ?? []),
-          hasSpoiler,
-          paraCount,
-        ),
-        hasSpoiler,
-      )
-    : 0;
+  const bloom = page ? computeBloomTarget(subPageProgress, spoiler.revealPoint, spoiler.has) : 0;
 
   return (
     <div style={panel}>

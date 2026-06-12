@@ -1,4 +1,5 @@
 import type {
+  ChapterDataset,
   Character,
   CharacterAppearance,
   ChapterScene,
@@ -66,6 +67,22 @@ export interface RawExtraction {
   }[];
   /** One concise genre/art-direction line for the whole book, applied to every prompt. */
   worldStyle?: string;
+  /**
+   * Numeric series stated in THIS chapter's text (technical books) — real values only,
+   * never invented. The app renders these itself as computed SVG charts, so unlike a
+   * generated image the axes and numbers are exact. Optional for back-compat; fiction
+   * extraction leaves it empty.
+   */
+  datasets?: {
+    title: string;
+    unit: string;
+    xLabel: string;
+    yLabel: string;
+    /** Suggested chart form; validated at merge (unknown values coerce to "bar"). */
+    kind: string;
+    points: { label: string; x?: number; y: number }[];
+    source?: string;
+  }[];
 }
 
 export const EXTRACTION_SYSTEM =
@@ -136,7 +153,72 @@ export const EXTRACTION_SYSTEM =
   "art direction to apply to EVERY illustration — e.g. 'high-fantasy military academy, dark, " +
   "painterly, dramatic lighting' or 'cosy contemporary romance, warm, soft watercolour'. Cover " +
   "genre, era/setting, mood, and a rendering style. Refine it as the book reveals more (keep the " +
-  "most specific version).";
+  "most specific version). Leave 'datasets' as an empty list (it is for non-fiction data only).";
+
+/**
+ * Extraction system prompt for TECHNICAL / non-fiction books (papers, textbooks,
+ * articles). Reuses the SAME output schema as fiction, remapped: 'environments' hold
+ * recurring STRUCTURES/SYSTEMS (so naming one in a prompt injects its visual
+ * description), 'glossary' holds key terms/data/findings, and 'keyEvents' become a
+ * per-stretch VISUALIZATION PLAN — the creative pass that decides what's worth
+ * drawing and how. Characters/creatures/outfits/spoilers stay empty.
+ */
+export const TECHNICAL_EXTRACTION_SYSTEM =
+  "You are building a 'Visual Atlas' for illustrating a NON-FICTION text (a paper, " +
+  "textbook, or article) as it is read, chapter by chapter. You are given what was " +
+  "already recorded from earlier chapters. Work INCREMENTALLY: capture what THIS chapter " +
+  "adds and do NOT repeat what is already recorded. " +
+  "This is not a story: leave 'characters', 'creatures', and 'spoilers' as EMPTY lists " +
+  "(do not invent people), and give characters no outfits. Instead: " +
+  "Use 'environments' for every recurring STRUCTURE, SYSTEM, APPARATUS, ORGANISM, or " +
+  "PLACE the text describes (a mitochondrion, a transformer architecture, a reactor " +
+  "core, a trial cohort…) — name it by its established term and give a detailed VISUAL " +
+  "description (shape, parts, scale, materials, spatial arrangement, what it connects " +
+  "to), so later illustrations of it stay consistent. Reuse established names; only add " +
+  "NEW detail for known entries. " +
+  "Build the 'glossary' as the chapter's key INFORMATION: definitions of essential " +
+  "terms, important quantities/data points with their values and units, named methods, " +
+  "and central findings — each as a short term plus a precise definition (omit entries " +
+  "already listed). " +
+  "Write a 'summary' of what THIS chapter explains, and a 'keyMoment': the single most " +
+  "important idea of the chapter stated as one concrete, visualizable sentence. Set " +
+  "'location' to the chapter's primary subject system (established environment name) " +
+  "and 'locationChange' to '' unless the subject shifts mid-chapter. " +
+  "Write 'keyEvents' as the chapter's VISUALIZATION PLAN: the chapter is illustrated as " +
+  "a fixed number of images covering consecutive stretches in READING ORDER — you are " +
+  "told how many. For each stretch, choose the ONE most illustration-worthy item, in " +
+  "this priority: (1) a quantitative result, trend, or comparison — show magnitude and " +
+  "relationship visually (relative sizes, before/after, side-by-side); (2) a mechanism " +
+  "or process — show its stages flowing left-to-right or top-to-bottom; (3) a structure " +
+  "— show a cutaway, cross-section, or exploded view; (4) an abstract concept — invent " +
+  "ONE concrete visual metaphor that makes it tangible. Fill the five fields: 'subject' " +
+  "(the concept/data/structure being shown), 'action' (what the visual demonstrates — " +
+  "the change, flow, comparison, or relationship), 'environment' (the visual FORM: " +
+  "cutaway diagram, step-by-step process view, scale comparison, annotated-style " +
+  "scene…), 'mood' (palette and clarity, e.g. 'clean, high-contrast, neutral " +
+  "background'), 'composition' (layout/viewpoint) — plus 'location': the established " +
+  "system/structure name this stretch concerns (empty if none). Never request rendered " +
+  "text or labels — image models draw text poorly; the imagery itself must carry the " +
+  "meaning. " +
+  "Capture 'datasets': every coherent numeric SERIES this chapter's text actually " +
+  "states — a table, a results list, a comparison of 3+ related values with consistent " +
+  "units (e.g. measurements across conditions, quantities over years). For each give a " +
+  "'title', the y 'unit' ('' if unitless), 'xLabel'/'yLabel', a suggested 'kind' (bar | " +
+  "line | scatter), the 'points' (each a short 'label' and its numeric 'y'; set 'x' ONLY " +
+  "when the text gives a real numeric x like a year — repeat the point's position index " +
+  "otherwise), and 'source' (a short locating quote). STRICT RULES: use ONLY numbers " +
+  "stated in the text — never invent, estimate, or interpolate values; at most ~20 points " +
+  "per dataset; emit an EMPTY list when the chapter has no clean numeric series (most " +
+  "chapters don't — an empty list is the normal answer). " +
+  "Finally set 'worldStyle': one concise art-direction line applied to EVERY " +
+  "illustration of this text — e.g. 'clean modern scientific illustration, precise " +
+  "linework, soft studio lighting, neutral background, restrained technical palette'. " +
+  "Keep it consistent with the field (medicine, astronomy, engineering…).";
+
+/** The entity-extraction system prompt for a book's content mode. */
+export function extractionSystemFor(contentMode?: string): string {
+  return contentMode === "technical" ? TECHNICAL_EXTRACTION_SYSTEM : EXTRACTION_SYSTEM;
+}
 
 export const PROMPT_SYSTEM =
   "You write one vivid, concrete image-generation prompt for a single illustration of a " +
@@ -163,6 +245,32 @@ export const PROMPT_SYSTEM =
   "the SINGLE outfit LABEL from their listed options that best fits this scene and name only that " +
   "label (never combine outfits). For action scenes, convey dynamic movement — a dynamic pose, " +
   "motion, energy, a sense of speed or impact. Output only the prompt text, no preamble.";
+
+/**
+ * Image-prompt system prompt for TECHNICAL / non-fiction content (papers, textbooks,
+ * articles): illustrate the passage's central CONCEPT, mechanism, or process as a clean
+ * explanatory visual instead of a story scene. Experimental — entity extraction still
+ * runs the fiction pass (its character/outfit fields are simply sparse for non-fiction).
+ */
+export const TECHNICAL_PROMPT_SYSTEM =
+  "You write one clear, concrete image-generation prompt for a single EXPLANATORY " +
+  "illustration of a non-fiction passage (a paper, textbook, or article). Write a single " +
+  "paragraph of natural, descriptive language (NOT a list of tags, no weighting syntax, no " +
+  "markdown). Depict the single most important concept, mechanism, structure, or process " +
+  "in THIS passage — each illustration covers a different stretch of the text, so depict " +
+  "what THIS passage explains, never repeating another illustration's subject. Prefer a " +
+  "clean scientific/technical illustration: a clear focal subject, simple uncluttered " +
+  "composition, neutral background, accurate proportions and spatial relationships — like " +
+  "a high-quality textbook figure or museum exhibit visual. For a process, show its stages " +
+  "or flow visually (left to right or top to bottom); for a structure, show a clear " +
+  "cutaway, cross-section, or labeled-style view (but do NOT ask for rendered text or " +
+  "labels — image models draw text poorly; convey meaning through the imagery itself). " +
+  "No people unless the passage is about people. Output only the prompt text, no preamble.";
+
+/** The image-prompt system prompt for a request's content kind. */
+export function promptSystemFor(kind: string): string {
+  return kind === "technical_illustration" ? TECHNICAL_PROMPT_SYSTEM : PROMPT_SYSTEM;
+}
 
 /**
  * JSON Schema for the extraction result. Gemini (`responseSchema`) and OpenAI
@@ -294,6 +402,38 @@ export const EXTRACTION_JSON_SCHEMA = {
       },
     },
     worldStyle: { type: "string" },
+    datasets: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          title: { type: "string" },
+          unit: { type: "string" },
+          xLabel: { type: "string" },
+          yLabel: { type: "string" },
+          kind: { type: "string" },
+          points: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                label: { type: "string" },
+                // Strict schemas (OpenAI/Gemini) require every property, so `x` is
+                // always present: the model repeats the point's index when the text
+                // gives no real numeric x, and the merge treats x===index as positional.
+                x: { type: "number" },
+                y: { type: "number" },
+              },
+              required: ["label", "x", "y"],
+            },
+          },
+          source: { type: "string" },
+        },
+        required: ["title", "unit", "xLabel", "yLabel", "kind", "points", "source"],
+      },
+    },
   },
   required: [
     "characters",
@@ -307,6 +447,7 @@ export const EXTRACTION_JSON_SCHEMA = {
     "locationChange",
     "keyEvents",
     "worldStyle",
+    "datasets",
   ],
 } as const;
 
@@ -385,7 +526,11 @@ export function extractionUserContent(input: EntityExtractionInput): string {
     ? `This chapter is illustrated as ${k} image${k === 1 ? "" : "s"} in reading order — ` +
       `produce EXACTLY ${k} keyEvents, in order.\n\n`
     : "";
-  return `${castSoFar}${beastsSoFar}${placesSoFar}${glossarySoFar}${soFar}${scenes}Chapter ${input.chapterIndex} text:\n\n${input.chapterText}`;
+  // Provider-agnostic grounding: web-search snippets fetched for THIS chapter's topic
+  // (any text provider, incl. local). Placed last, just before the chapter text, so the
+  // model leans on these real sources for definitions/quantities over its recollection.
+  const grounding = input.groundingContext?.trim() ? `${input.groundingContext.trim()}\n\n` : "";
+  return `${castSoFar}${beastsSoFar}${placesSoFar}${glossarySoFar}${soFar}${scenes}${grounding}Chapter ${input.chapterIndex} text:\n\n${input.chapterText}`;
 }
 
 /**
@@ -420,6 +565,48 @@ function mapKeyEventsToUnits(
   return out;
 }
 
+/**
+ * Validate one chapter's raw datasets into the stored shape: real series only
+ * (≥ 2 finite points), unknown chart kinds coerced to "bar", point count capped,
+ * and an `x` that just repeats the point's index dropped — strict JSON schemas
+ * force the model to always emit `x`, so a positional echo isn't a real axis.
+ */
+function sanitizeDatasets(
+  raw: RawExtraction["datasets"],
+  chapterIndex: number,
+): ChapterDataset[] {
+  const MAX_DATASETS = 10;
+  const MAX_POINTS = 100;
+  const out: ChapterDataset[] = [];
+  for (const d of (raw ?? []).slice(0, MAX_DATASETS)) {
+    const title = (d.title ?? "").trim();
+    if (!title) continue;
+    const rawPoints = (d.points ?? []).slice(0, MAX_POINTS);
+    const positionalX = rawPoints.every((p, i) => p.x === undefined || p.x === i);
+    const points = rawPoints
+      .filter((p) => Number.isFinite(p.y))
+      .map((p) => ({
+        label: (p.label ?? "").trim(),
+        y: p.y,
+        ...(!positionalX && typeof p.x === "number" && Number.isFinite(p.x) ? { x: p.x } : {}),
+      }));
+    if (points.length < 2) continue;
+    const kind = d.kind === "line" || d.kind === "scatter" ? d.kind : "bar";
+    out.push({
+      id: `data-${chapterIndex}-${slug(title) || out.length}`,
+      chapterIndex,
+      title,
+      unit: (d.unit ?? "").trim(),
+      xLabel: (d.xLabel ?? "").trim(),
+      yLabel: (d.yLabel ?? "").trim(),
+      kind,
+      points,
+      source: (d.source ?? "").trim(),
+    });
+  }
+  return out;
+}
+
 export function mergeExtraction(
   existing: VisualBible,
   raw: RawExtraction,
@@ -434,6 +621,7 @@ export function mergeExtraction(
     spoilers: [...existing.spoilers],
     storyboard: [...(existing.storyboard ?? [])],
     glossary: [...(existing.glossary ?? [])],
+    datasets: [...(existing.datasets ?? [])],
     processedChapters: [...existing.processedChapters],
   };
   const knownEnvs = new Set(bible.environments.map((e) => e.name.toLowerCase()));
@@ -561,6 +749,16 @@ export function mergeExtraction(
     bible.storyboard.sort((a, b) => a.chapterIndex - b.chapterIndex);
   }
 
+  // Datasets: upsert per chapter, mirroring the storyboard — a re-run REPLACES this
+  // chapter's series (idempotent) but keeps nothing stale when the re-run finds none.
+  const incomingData = sanitizeDatasets(raw.datasets, chapterIndex);
+  if (incomingData.length > 0 || (raw.datasets?.length ?? 0) > 0) {
+    bible.datasets = [
+      ...(bible.datasets ?? []).filter((d) => d.chapterIndex !== chapterIndex),
+      ...incomingData,
+    ].sort((a, b) => a.chapterIndex - b.chapterIndex);
+  }
+
   // World style: adopt it, preferring the most specific (longest) version seen so far so
   // a later chapter can enrich it but a terse mention never overwrites a richer one.
   const newStyle = (raw.worldStyle ?? "").trim();
@@ -584,6 +782,10 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
   const chars = bible.characters.filter((c) => request.characterIds.includes(c.id));
   const envs = bible.environments.filter((e) => request.environmentIds.includes(e.id));
   const creatures = (bible.creatures ?? []).filter((c) => request.creatureIds.includes(c.id));
+  // Grounding citations ("References (chapter N)" = bare source URLs) are kept in the
+  // glossary for the bible/export, but they're useless to a prompt writer — and one
+  // accrues per chapter, so they'd grow every image-prompt request for nothing.
+  const facts = (bible.glossary ?? []).filter((g) => !g.term.startsWith("References (chapter"));
   const scene = (bible.storyboard ?? []).find((s) => s.chapterIndex === request.chapterIndex);
   // Beat-level setting: this unit's stored keyEvent (if any) knows where ITS moment
   // happens — more exact than the chapter's single location when the chapter moves.
@@ -612,8 +814,8 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
           .map((e) => `- ${e.name}`)
           .join("\n")}`
       : "",
-    (bible.glossary ?? []).length
-      ? `World facts (apply as defaults unless the passage says otherwise):\n${(bible.glossary ?? [])
+    facts.length
+      ? `World facts (apply as defaults unless the passage says otherwise):\n${facts
           .map((g) => `- ${g.term}: ${g.definition}`)
           .join("\n")}`
       : "",

@@ -1,10 +1,16 @@
 import { describe, it, expect } from "vitest";
 import {
   consolidateCharacters,
+  EXTRACTION_SYSTEM,
+  extractionSystemFor,
   extractionUserContent,
   mergeExtraction,
+  promptSystemFor,
   promptUserContent,
+  PROMPT_SYSTEM,
   stripThink,
+  TECHNICAL_EXTRACTION_SYSTEM,
+  TECHNICAL_PROMPT_SYSTEM,
 } from "./extraction.js";
 import { createEmptyBible } from "../../visual-bible/bible.js";
 import { emptyAppearance, type Character } from "../../types/bible.js";
@@ -857,5 +863,38 @@ describe("extractionUserContent bounding (perf)", () => {
     // Whole "known so far" preamble (everything before the chapter body) stays small.
     const preamble = text.slice(0, text.indexOf("THE_CHAPTER_BODY"));
     expect(preamble.length).toBeLessThan(8000);
+  });
+});
+
+describe("promptSystemFor", () => {
+  it("picks the technical (concept/diagram) template for technical_illustration", () => {
+    expect(promptSystemFor("technical_illustration")).toBe(TECHNICAL_PROMPT_SYSTEM);
+    expect(promptSystemFor("scene_illustration")).toBe(PROMPT_SYSTEM);
+  });
+
+  it("the technical template explains concepts, not story scenes", () => {
+    expect(TECHNICAL_PROMPT_SYSTEM).toMatch(/concept|mechanism|process/i);
+    expect(TECHNICAL_PROMPT_SYSTEM).not.toMatch(/Visual Bible/);
+  });
+});
+
+describe("extractionSystemFor", () => {
+  it("picks the Visual-Atlas template for technical books, the Visual Bible otherwise", () => {
+    expect(extractionSystemFor("technical")).toBe(TECHNICAL_EXTRACTION_SYSTEM);
+    expect(extractionSystemFor("fiction")).toBe(EXTRACTION_SYSTEM);
+    expect(extractionSystemFor(undefined)).toBe(EXTRACTION_SYSTEM);
+  });
+
+  it("the technical template remaps the schema: structures + data, no characters", () => {
+    // Recurring structures/systems land in 'environments' (so name→descriptor injection works)…
+    expect(TECHNICAL_EXTRACTION_SYSTEM).toMatch(/STRUCTURE, SYSTEM/);
+    // …key information/data lands in the glossary…
+    expect(TECHNICAL_EXTRACTION_SYSTEM).toMatch(/quantities\/data points/);
+    // …keyEvents become a visualization plan with a priority for what's worth drawing…
+    expect(TECHNICAL_EXTRACTION_SYSTEM).toMatch(/VISUALIZATION PLAN/);
+    expect(TECHNICAL_EXTRACTION_SYSTEM).toMatch(/quantitative result/);
+    expect(TECHNICAL_EXTRACTION_SYSTEM).toMatch(/visual metaphor/);
+    // …and people are explicitly out.
+    expect(TECHNICAL_EXTRACTION_SYSTEM).toMatch(/'characters', 'creatures', and 'spoilers' as EMPTY/);
   });
 });

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildReferenceBlock,
   describeCharacterIdentity,
+  displayCaption,
   expandPrompt,
   findBibleTermsInText,
   injectBibleTerms,
@@ -150,5 +151,31 @@ describe("expandPrompt", () => {
 describe("buildReferenceBlock", () => {
   it("returns empty when there are no terms and no world style (a title alone isn't worth it)", () => {
     expect(buildReferenceBlock([], undefined, "Some Book")).toBe("");
+  });
+});
+
+describe("displayCaption", () => {
+  it("strips the leading reference block and trailing Style/Layout paragraphs", () => {
+    const full =
+      "Title: The Empyrean. Style: dark fantasy. Characters: Violet = woman, brown hair.\n\n" +
+      "Violet rides Tairn across the valley.\n\n" +
+      "Style: painterly, epic landscape\n\n" +
+      "Layout: a single comic page composed of 4–6 sequential panels.";
+    expect(displayCaption(full)).toBe("Violet rides Tairn across the valley.");
+  });
+
+  it("keeps a plain scene prompt unchanged (incl. Setting sentences inside the paragraph)", () => {
+    const plain = "Blades crossed at dawn. Setting: the Courtyard.";
+    expect(displayCaption(plain)).toBe(plain);
+  });
+
+  it("keeps multi-paragraph scene prose, dropping only scaffolding", () => {
+    const full = "First beat.\n\nSecond beat.\n\nStyle: watercolor";
+    expect(displayCaption(full)).toBe("First beat.\n\nSecond beat.");
+  });
+
+  it("falls back to the input when stripping would leave nothing", () => {
+    const onlyBlock = "Style: dark fantasy.";
+    expect(displayCaption(onlyBlock)).toBe(onlyBlock);
   });
 });

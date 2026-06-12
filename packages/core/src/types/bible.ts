@@ -229,6 +229,33 @@ export interface GlossaryEntry {
   definition: string;
 }
 
+/** One point of an extracted numeric series. `x` only when the text gives a real numeric x. */
+export interface DataPoint {
+  label: string;
+  x?: number;
+  y: number;
+}
+
+/**
+ * A numeric dataset extracted from one TECHNICAL chapter — real values stated in the
+ * text, never invented — driving the computed (SVG) charts. Generated images can't be
+ * trusted with axes and numbers; these can, because the app draws them itself.
+ */
+export interface ChapterDataset {
+  id: string;
+  chapterIndex: number;
+  title: string;
+  /** Unit of the y values ("%", "GW", "ms"…), "" when unitless. */
+  unit: string;
+  xLabel: string;
+  yLabel: string;
+  /** Model-suggested chart form; the UI lets the reader override it. */
+  kind: "bar" | "line" | "scatter";
+  points: DataPoint[];
+  /** Short locating quote/citation from the chapter, "" when none. */
+  source: string;
+}
+
 export interface VisualBible {
   bookId: string;
   /** Schema version, so cached Bibles can be migrated. */
@@ -242,6 +269,8 @@ export interface VisualBible {
   storyboard: ChapterScene[];
   /** Recurring world facts applied as defaults in every image prompt. */
   glossary: GlossaryEntry[];
+  /** Numeric series extracted from technical chapters (computed-chart data). */
+  datasets?: ChapterDataset[];
   /**
    * One concise genre/art-style line for the whole book (e.g. "high-fantasy military
    * academy, dark, painterly"), auto-derived during analysis and applied to EVERY image
