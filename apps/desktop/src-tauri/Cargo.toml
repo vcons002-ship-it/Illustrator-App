@@ -15,5 +15,9 @@ serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 # Body encoding for the `http_fetch` CORS proxy (invoke payloads are JSON, not binary).
 base64 = "0.22"
+# BUILD PIN, not used directly: time 0.3.48 collides with tauri-utils 2.9.2's blanket
+# From impls under recent rustc coherence (E0119). Cargo.lock is gitignored, so the
+# ceiling must live here for fresh clones to build; drop when tauri-utils ships a fix.
+time = { version = ">=0.3.47, <0.3.48", default-features = false }
 # Unpack the official ComfyUI Windows portable .7z (bundled Python — no system install).
 sevenz-rust = "0.6"
