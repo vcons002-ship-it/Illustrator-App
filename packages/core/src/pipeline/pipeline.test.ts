@@ -183,6 +183,20 @@ describe("RenderPipeline technical figure retrieval", () => {
     return { pipeline, store, queries, generatedCount: () => generated };
   }
 
+  it("still retrieves when the plan has no structured subject (falls back to prompt text)", async () => {
+    const { pipeline, queries, generatedCount } = technicalSetup(async () => ({
+      bytes: { bytes: png, mimeType: "image/png" },
+    }));
+    // Simulate an under-structured plan: only a freeform text prompt, no subject.
+    const bible = (pipeline as unknown as { deps: { getBible: () => VisualBible } }).deps.getBible();
+    bible.storyboard[0]!.keyEvents![0]!.imagePrompt = { text: "carnot cycle pressure-volume diagram" };
+    const result = await pipeline.renderPage(0);
+    expect(queries.length).toBeGreaterThan(0); // retrieval still ran
+    expect(queries[0]).toContain("carnot cycle");
+    expect(generatedCount()).toBe(0); // real figure beat generation
+    expect(result.status).toBe("ready");
+  });
+
   it("retrieves a REAL figure first (cached like a generated image; no generation)", async () => {
     const { pipeline, store, queries, generatedCount } = technicalSetup(async () => ({
       bytes: { bytes: png, mimeType: "image/png" },

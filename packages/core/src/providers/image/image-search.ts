@@ -162,7 +162,11 @@ export async function retrieveFromHits(
 ): Promise<RetrievedImage | undefined> {
   if (hits.length === 0) return undefined;
   for (const hit of hits.slice(0, 3)) {
-    for (const url of [hit.link, hit.thumbnailLink]) {
+    // THUMBNAIL FIRST: it's always a browser-renderable raster (Commons renders a
+    // PNG/JPEG thumb even for SVG/TIFF/PDF/DjVu originals — which <img> can NOT
+    // display from raw bytes; trying the original first showed alt text instead
+    // of the figure). The full link is the fallback when no thumb exists.
+    for (const url of [hit.thumbnailLink, hit.link]) {
       if (!url) continue;
       const bytes = await fetchImageBytes(transport, url);
       if (bytes) {
@@ -191,11 +195,16 @@ export async function retrieveFromHits(
  */
 const IMAGE_FETCH_TIMEOUT_MS = 10_000;
 
+/** Formats an <img> can't decode from raw bytes — never download these (Commons
+ * originals are often TIFF/PDF/DjVu scans; their THUMBS are fine rasters). */
+const UNDISPLAYABLE_EXT = /\.(tiff?|pdf|djvu?|xcf|webm|ogv|ogg|stl)(\?|$)/i;
+
 /** Download an image's bytes; undefined on any failure or a non-image response. */
 async function fetchImageBytes(
   transport: Transport,
   url: string,
 ): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined> {
+  if (UNDISPLAYABLE_EXT.test(url)) return undefined;
   try {
     const res = await transport.send({ url, method: "GET", signal: AbortSignal.timeout(IMAGE_FETCH_TIMEOUT_MS) });
     if (!res.ok) return undefined;

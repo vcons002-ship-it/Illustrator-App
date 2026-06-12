@@ -221,10 +221,14 @@ export class RenderPipeline {
         };
       }
       // Technical books, retrieval-first: an EXISTING figure (correct labels, correct
-      // data) beats a generated one. The LLM's visualization plan supplies the query
-      // (subject + visual form); any failure falls through to AI generation below.
-      if (request.kind === "technical_illustration" && this.deps.imageSearch && keyEvent?.imagePrompt.subject) {
-        const query = buildFigureQuery(keyEvent.imagePrompt.subject, keyEvent.imagePrompt.environment);
+      // data) beats a generated one — the STRONG preference for technical material.
+      // The LLM's visualization plan supplies the query (subject + visual form); when
+      // it produced no structured subject, fall back to the prompt text so retrieval
+      // still gets its shot. Any failure falls through to AI generation below.
+      const figureSubject =
+        keyEvent?.imagePrompt.subject?.trim() || keyEvent?.imagePrompt.text?.trim().slice(0, 120);
+      if (request.kind === "technical_illustration" && this.deps.imageSearch && figureSubject) {
+        const query = buildFigureQuery(figureSubject, keyEvent!.imagePrompt.environment);
         try {
           const found = await this.deps.imageSearch.retrieve(query);
           if (found?.bytes) {
