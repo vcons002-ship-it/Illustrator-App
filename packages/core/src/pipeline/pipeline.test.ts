@@ -93,7 +93,7 @@ describe("RenderPipeline style injection", () => {
 });
 
 describe("RenderPipeline technical content mode", () => {
-  it("a technical book's requests carry the technical_illustration kind and still render", async () => {
+  it("a technical book's requests carry the technical_illustration kind; without figure search it skips (never generates)", async () => {
     const book = oneParagraphBook("Mitochondria convert glucose into ATP.");
     book.contentMode = "technical";
     book.pages[0]!.pageRange = [0, 0];
@@ -110,8 +110,8 @@ describe("RenderPipeline technical content mode", () => {
 
     expect(pipeline.buildRequest(book.pages[0]!).kind).toBe("technical_illustration");
     const result = await pipeline.renderPage(0);
-    expect(result.status).toBe("ready"); // the kind is supported end-to-end
-    expect(lastPrompt()).toContain("cutaway view");
+    expect(result.status).toBe("skipped"); // no retrieval available → no image, no generation
+    expect(lastPrompt()).toBe(""); // the AI image model was never called
   });
 
   it("a fiction book keeps scene_illustration", () => {
@@ -227,16 +227,21 @@ describe("RenderPipeline technical figure retrieval", () => {
     expect(await store.getImage(result.requestId)).toBeUndefined();
   });
 
-  it("falls back to AI generation when nothing is found or search fails", async () => {
+  it("NEVER generates when nothing is found or search fails — skips with a note instead", async () => {
+    // A plausible-looking invented diagram would corrupt the technical book's
+    // source of truth, so the fallback is a skip (the UI explains the concept).
     const { pipeline, generatedCount } = technicalSetup(async () => undefined);
-    expect((await pipeline.renderPage(0)).status).toBe("ready");
-    expect(generatedCount()).toBe(1);
+    const result = await pipeline.renderPage(0);
+    expect(result.status).toBe("skipped");
+    expect(result.prompt).toContain("No verified figure found");
+    expect(result.prompt).toContain("the Krebs cycle");
+    expect(generatedCount()).toBe(0);
 
     const failing = technicalSetup(async () => {
       throw new Error("quota exceeded");
     });
-    expect((await failing.pipeline.renderPage(0)).status).toBe("ready");
-    expect(failing.generatedCount()).toBe(1);
+    expect((await failing.pipeline.renderPage(0)).status).toBe("skipped");
+    expect(failing.generatedCount()).toBe(0);
   });
 
   it("fiction books never search — retrieval is technical-only", async () => {

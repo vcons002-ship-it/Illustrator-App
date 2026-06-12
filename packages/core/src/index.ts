@@ -5,6 +5,7 @@ export * from "./visual-bible/index.js";
 export * from "./charts/index.js";
 export * from "./chat/index.js";
 export * from "./pipeline/index.js";
+export * from "./reader-support/technical-support.js";
 export * from "./render-buffer/index.js";
 export * from "./render-units.js";
 export * from "./quality.js";

@@ -179,10 +179,13 @@ export const TECHNICAL_EXTRACTION_SYSTEM =
   "description (shape, parts, scale, materials, spatial arrangement, what it connects " +
   "to), so later illustrations of it stay consistent. Reuse established names; only add " +
   "NEW detail for known entries. " +
-  "Build the 'glossary' as the chapter's key INFORMATION: definitions of essential " +
-  "terms, important quantities/data points with their values and units, named methods, " +
-  "and central findings — each as a short term plus a precise definition (omit entries " +
-  "already listed). " +
+  "Build the 'glossary' as the chapter's KEY CONCEPTS: essential terms, named methods, " +
+  "important quantities/data points with their values and units, and central findings — " +
+  "each as a short term plus a definition written as a PLAIN-LANGUAGE explanation (1–3 " +
+  "sentences a newcomer to the field could follow: what it is, why it matters here — " +
+  "keep the precise values/units, drop the jargon-heavy phrasing). These definitions are " +
+  "shown to the reader beside the text as study aids, so make each one genuinely " +
+  "explanatory, not a circular restatement (omit entries already listed). " +
   "Write a 'summary' of what THIS chapter explains, and a 'keyMoment': the single most " +
   "important idea of the chapter stated as one concrete, visualizable sentence. Set " +
   "'location' to the chapter's primary subject system (established environment name) " +

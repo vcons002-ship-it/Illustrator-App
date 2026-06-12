@@ -10,6 +10,7 @@ export * from "./ChatBuddyPanel.js";
 export * from "./ContextUsageDonut.js";
 export * from "./DataChart.js";
 export * from "./DataSection.js";
+export * from "./TechnicalSupport.js";
 export * from "./CharacterBible.js";
 export * from "./LibraryPanel.js";
 export * from "./SettingsPanel.js";
