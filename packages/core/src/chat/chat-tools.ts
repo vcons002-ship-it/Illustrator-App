@@ -23,7 +23,9 @@ export type ToolCall =
   | { tool: "search_web"; query: string }
   | { tool: "search_images"; query: string }
   /** Pull passages from elsewhere in the BOOK (the chat only holds a recent window). */
-  | { tool: "search_book"; query: string };
+  | { tool: "search_book"; query: string }
+  /** Pull full detail for a named bible entry (character/location/term/dataset). */
+  | { tool: "lookup_bible"; query: string };
 
 /** Search rounds per user message — bounds quota use and tool-looping models. */
 export const MAX_TOOL_ROUNDS = 3;
@@ -39,6 +41,8 @@ export const CHAT_TOOLS_SYSTEM =
   "scene, a specific quote, a detail from another chapter), call search_book to pull it — don't say " +
   "you can't see it, and don't guess.\n" +
   "TOOLS — you can use these by replying with ONLY one JSON object (no prose around it):\n" +
+  '- {"tool":"lookup_bible","query":"…"} — full detail for a name/term in the bible INDEX above ' +
+  "(a character's appearance + outfits, a location's description, a glossary definition, a dataset's values).\n" +
   '- {"tool":"search_book","query":"…"} — find passages elsewhere in the book by keyword (characters, ' +
   "places, events, quotes).\n" +
   '- {"tool":"search_web","query":"…"} — search the web for facts/sources about the book\'s topics.\n' +
@@ -69,7 +73,12 @@ export function parseToolCall(text: string): ToolCall | undefined {
     return undefined;
   }
   const tool = obj.tool;
-  if (tool === "search_web" || tool === "search_images" || tool === "search_book") {
+  if (
+    tool === "search_web" ||
+    tool === "search_images" ||
+    tool === "search_book" ||
+    tool === "lookup_bible"
+  ) {
     const query = strArg(obj.query, MAX_QUERY_CHARS);
     return query ? { tool, query } : undefined;
   }
@@ -99,6 +108,8 @@ export interface ToolResultPayload {
   imageHits?: ImageSearchHit[];
   /** Passages found by search_book. */
   passages?: BookPassage[];
+  /** Detail string from lookup_bible (empty when nothing matched). */
+  bibleDetail?: string;
   /** Whether an approved image generation succeeded. */
   image?: { ok: boolean; error?: string };
   /** Tool-level failure (missing capability, network error…). */
@@ -137,6 +148,11 @@ export function formatToolResult(call: ToolCall, result: ToolResultPayload): str
         `— Chapter ${p.chapterIndex + 1}${p.chapterTitle ? ` (${p.chapterTitle})` : ""}: ${p.text}`,
     );
     return `[tool search_book passages for "${call.query}"]\n${lines.join("\n\n")}`;
+  }
+  if (call.tool === "lookup_bible") {
+    return result.bibleDetail
+      ? `[bible detail for "${call.query}"]\n${result.bibleDetail}`
+      : `[tool lookup_bible found no entry matching "${call.query}"]`;
   }
   // generate_image: ran (or failed) after the reader's approval.
   return result.image?.ok

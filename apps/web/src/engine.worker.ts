@@ -8,6 +8,7 @@ import {
   base64ToBytes,
   bytesToBase64,
   chatContextSections,
+  lookupBible,
   measureContextUsage,
   searchBookPassages,
   trimChatHistory,
@@ -816,6 +817,16 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
         searchWeb: (q) => imageSearch.searchWeb(q),
         searchImages: (q) => imageSearch.search(q),
         searchBook: (q) => searchBookPassages(searchableChapters, q),
+        ...(currentBible
+          ? {
+              lookupBible: (q: string) =>
+                lookupBible(currentBible!, q, {
+                  fullView,
+                  chapterIndex: pos.chapterIndex,
+                  contentMode: book.contentMode ?? "fiction",
+                }),
+            }
+          : {}),
       },
       onEvent: (e) => {
         if (e.kind === "token") post({ type: "chatToken", requestId: msg.requestId, text: e.text });
@@ -1123,7 +1134,13 @@ async function installedModelNames(s: ReaderSettings): Promise<string[]> {
       s.localBackend === "a1111"
         ? new Automatic1111Backend({ baseUrl })
         : new ComfyUIBackend({ baseUrl });
-    return (await backend.listModels()).map((m) => m.id);
+    // Bounded: this runs per chat turn (for the settings note) — a wedged local
+    // engine must not hang the whole chat. A miss just omits the installed list.
+    const names = await Promise.race([
+      backend.listModels().then((m) => m.map((x) => x.id)),
+      new Promise<string[]>((resolve) => setTimeout(() => resolve([]), 2500)),
+    ]);
+    return names;
   } catch {
     return [];
   }

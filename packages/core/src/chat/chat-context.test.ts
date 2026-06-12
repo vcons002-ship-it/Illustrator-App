@@ -1,7 +1,45 @@
 import { describe, expect, it } from "vitest";
-import { buildChatSystemPrompt, MATURE_CHAT_NOTE, type ChatContextInput } from "./chat-context.js";
+import { buildChatSystemPrompt, lookupBible, MATURE_CHAT_NOTE, type ChatContextInput } from "./chat-context.js";
 import { createEmptyBible } from "../visual-bible/bible.js";
 import { emptyAppearance } from "../types/bible.js";
+
+describe("lookupBible", () => {
+  const bible = (() => {
+    const b = createEmptyBible("t");
+    b.characters.push({
+      id: "c1",
+      name: "Violet",
+      aliases: ["Vi"],
+      appearance: { ...emptyAppearance(), hair: "brown", gender: "woman" },
+      persistentTraits: [],
+      clothing: [],
+      outfits: [],
+      anchor: { seed: 1 },
+      firstSeenChapter: 0,
+    });
+    b.environments.push({
+      id: "e1",
+      name: "Basgiath",
+      aliases: ["the fortress"],
+      description: ["dark basalt fortress"],
+      firstSeenChapter: 3,
+    });
+    b.glossary = [{ term: "flight leathers", definition: "fitted black hide" }];
+    return b;
+  })();
+
+  it("returns full detail for a name/alias match, spoiler-gated", () => {
+    const opts = { fullView: false, chapterIndex: 1, contentMode: "fiction" as const };
+    expect(lookupBible(bible, "violet", opts)).toContain("brown");
+    expect(lookupBible(bible, "Vi", opts)).toContain("CHARACTER Violet"); // alias
+    expect(lookupBible(bible, "flight leathers", opts)).toContain("fitted black hide");
+    // Basgiath is first seen in ch 3 — not reached at ch 1, so hidden…
+    expect(lookupBible(bible, "the fortress", opts)).toBe("");
+    // …but reachable once spoilers/full view is on.
+    expect(lookupBible(bible, "the fortress", { ...opts, fullView: true })).toContain("basalt");
+    expect(lookupBible(bible, "nothing-here", opts)).toBe("");
+  });
+});
 
 function input(over: Partial<ChatContextInput> = {}): ChatContextInput {
   return {
@@ -83,14 +121,14 @@ describe("buildChatSystemPrompt — fiction, spoilers off", () => {
     expect(sys).toContain("haven't read that far");
   });
 
-  it("filters bible entities/storyboard to reached chapters and NEVER lists spoiler labels", () => {
+  it("INDEXES reached entities by name, never lists spoiler labels, detail is lookup-only", () => {
     const sys = buildChatSystemPrompt(input({ bible: bibleWith() }));
-    expect(sys).toContain("Alice");
-    expect(sys).not.toContain("Zed"); // first seen later
-    expect(sys).toContain("They meet."); // ch 0 summary
-    expect(sys).not.toContain("The betrayal."); // ch 2 summary
+    expect(sys).toContain("INDEX only"); // the compact-index header
+    expect(sys).toContain("Alice"); // reached character: NAME in the index
+    expect(sys).not.toContain("Zed"); // first seen later → excluded
+    expect(sys).not.toContain("The betrayal."); // ch 2 summary (future) absent
     expect(sys).not.toContain("Bob is the traitor"); // spoiler label excluded in EVERY mode
-    expect(sys).not.toContain("Casualties"); // ch 2 dataset
+    expect(sys).not.toContain("Casualties"); // ch 2 dataset (future) absent
   });
 
   it("keeps the TAIL nearest the reader when over budget", () => {
@@ -111,22 +149,21 @@ describe("buildChatSystemPrompt — fiction, spoilers off", () => {
 });
 
 describe("buildChatSystemPrompt — full view", () => {
-  it("allowSpoilers includes the whole book and later entities", () => {
+  it("allowSpoilers includes the whole book and indexes later entities by name", () => {
     const sys = buildChatSystemPrompt(input({ allowSpoilers: true, bible: bibleWith() }));
-    expect(sys).toContain("traitor all along");
-    expect(sys).toContain("Zed");
-    expect(sys).toContain("The betrayal.");
+    expect(sys).toContain("traitor all along"); // full book text
+    expect(sys).toContain("Zed"); // later character now indexed (spoilers on)
     expect(sys).not.toContain("Bob is the traitor"); // labels still never dumped
   });
 
-  it("technical books are ALWAYS fully visible, with the technical bible", () => {
+  it("technical books are ALWAYS fully visible; bible index lists titles, values are lookup-only", () => {
     const sys = buildChatSystemPrompt(
       input({ contentMode: "technical", allowSpoilers: false, bible: bibleWith() }),
     );
     expect(sys).toContain("traitor all along"); // full text despite spoilers off
     expect(sys).toContain("TECHNICAL BIBLE");
-    expect(sys).toContain("Casualties by day");
-    expect(sys).toContain("a=1, b=2");
+    expect(sys).toContain("Casualties by day"); // dataset TITLE in the index
+    expect(sys).not.toContain("a=1, b=2"); // values are behind lookup_bible now
   });
 
   it("keeps the chapter nearest the reader when the whole book exceeds the budget", () => {

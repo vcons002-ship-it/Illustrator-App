@@ -1,4 +1,10 @@
 import type { VisualBible } from "../types/bible.js";
+import {
+  describeCharacterIdentity,
+  describeCreature,
+  describeLocation,
+  describeOutfit,
+} from "../providers/image/bible-injection.js";
 import { CHAT_TOOLS_SYSTEM } from "./chat-tools.js";
 
 /**
@@ -160,11 +166,14 @@ function renderChapter(c: { index: number; title: string; text: string }): strin
 }
 
 /**
- * The bible ("technical bible" for technical books) as notes: glossary,
- * structures/locations, world style, storyboard summaries + stored image prompts,
- * dataset titles. Fiction spoilers-off filters everything to chapters the reader
- * has REACHED, and spoiler labels are never included in either mode — listing
- * "things that would spoil the plot" is itself the spoiler.
+ * The bible as a COMPACT INDEX — names/terms/titles only, plus the world style and
+ * the CURRENT chapter's summary. The full appearance/description/definition for
+ * any entry is one `lookup_bible` tool call away, and earlier chapter text is a
+ * `search_book` call away. Dumping every entry's full detail (and every chapter's
+ * stored illustration prompts) filled a small model's whole context on turn one;
+ * this keeps the always-on context tiny while everything stays reachable on demand.
+ * Spoilers-off filters to chapters the reader has REACHED; spoiler labels are never
+ * listed (naming "what would spoil the plot" is itself the spoiler).
  */
 function bibleSlice(input: ChatContextInput, fullView: boolean): string {
   const bible = input.bible;
@@ -175,61 +184,89 @@ function bibleSlice(input: ChatContextInput, fullView: boolean): string {
     fullView ? [...list] : list.filter((e) => e.firstSeenChapter <= cur);
   const lines: string[] = [];
   if (bible.worldStyle?.trim()) lines.push(`Art direction: ${bible.worldStyle.trim()}`);
-  const glossary = bible.glossary ?? [];
-  if (glossary.length > 0) {
-    lines.push(
-      `${technical ? "Key terms & data" : "World facts"}:\n${glossary
-        .map((g) => `- ${g.term}: ${g.definition}`)
-        .join("\n")}`,
-    );
+
+  // The reader's current chapter summary only — recent, small, usually relevant.
+  const here = (bible.storyboard ?? []).find((s) => s.chapterIndex === cur);
+  if (here?.summary?.trim()) lines.push(`This chapter so far: ${here.summary.trim()}`);
+
+  const names = (list: readonly { name: string; aliases?: string[] }[]): string =>
+    list.map((e) => e.name + (e.aliases?.length ? ` (${e.aliases.join(", ")})` : "")).join(", ");
+
+  if (!technical) {
+    const chars = seen(bible.characters);
+    if (chars.length > 0) lines.push(`Characters (look up for appearance): ${names(chars)}`);
+    const creatures = seen(bible.creatures ?? []);
+    if (creatures.length > 0) lines.push(`Creatures: ${names(creatures)}`);
   }
   const envs = seen(bible.environments);
   if (envs.length > 0) {
-    lines.push(
-      `${technical ? "Structures/systems" : "Locations"}:\n${envs
-        .map((e) => `- ${e.name}: ${e.description.join("; ")}`)
-        .join("\n")}`,
-    );
+    lines.push(`${technical ? "Structures/systems" : "Locations"}: ${names(envs)}`);
   }
-  if (!technical) {
-    const chars = seen(bible.characters);
-    if (chars.length > 0) {
-      lines.push(
-        `Characters:\n${chars
-          .map((c) => `- ${c.name}${c.aliases.length ? ` (aka ${c.aliases.join(", ")})` : ""}`)
-          .join("\n")}`,
-      );
-    }
-  }
-  const scenes = (bible.storyboard ?? []).filter((s) => fullView || s.chapterIndex <= cur);
-  if (scenes.length > 0) {
-    lines.push(
-      `Chapter notes (summaries + the illustration prompts used):\n${scenes
-        .map((s) => {
-          const prompts = (s.keyEvents ?? [])
-            .map((e) => Object.values(e.imagePrompt).filter(Boolean).join(", "))
-            .filter(Boolean);
-          return (
-            `- Chapter ${s.chapterIndex + 1}: ${s.summary}` +
-            (prompts.length ? `\n  prompts: ${prompts.join(" | ")}` : "")
-          );
-        })
-        .join("\n")}`,
-    );
+  const glossary = bible.glossary ?? [];
+  if (glossary.length > 0) {
+    lines.push(`${technical ? "Key terms" : "World facts"} (terms): ${glossary.map((g) => g.term).join(", ")}`);
   }
   const datasets = (bible.datasets ?? []).filter((d) => fullView || d.chapterIndex <= cur);
   if (datasets.length > 0) {
-    lines.push(
-      `Extracted datasets (real values; charts shown in the reader):\n${datasets
-        .map(
-          (d) =>
-            `- [ch ${d.chapterIndex + 1}] ${d.title}${d.unit ? ` (${d.unit})` : ""}: ${d.points
-              .map((p) => `${p.label}=${p.y}`)
-              .join(", ")}`,
-        )
-        .join("\n")}`,
-    );
+    lines.push(`Datasets (look up for values): ${datasets.map((d) => d.title).join(", ")}`);
   }
   if (lines.length === 0) return "";
-  return `${technical ? "TECHNICAL BIBLE" : "VISUAL BIBLE"} (the app's accumulated notes):\n${lines.join("\n\n")}`;
+  return (
+    `${technical ? "TECHNICAL BIBLE" : "VISUAL BIBLE"} — INDEX only (names/terms). For a character's ` +
+    `full appearance, a location's description, a definition, or a dataset's values, call ` +
+    `lookup_bible with the name; for the book's actual text, call search_book.\n${lines.join("\n")}`
+  );
+}
+
+/**
+ * Full detail for the bible entries matching a query — the `lookup_bible` tool's
+ * payload. Matches characters/creatures/locations by name or alias, glossary by
+ * term, datasets by title, all case-insensitively and spoiler-gated. Returns "" on
+ * no match so the tool can say so.
+ */
+export function lookupBible(
+  bible: VisualBible,
+  query: string,
+  opts: { fullView: boolean; chapterIndex: number; contentMode: "fiction" | "technical" },
+): string {
+  const q = query.trim().toLowerCase();
+  if (!q) return "";
+  const cur = opts.chapterIndex;
+  const reached = (firstSeen: number): boolean => opts.fullView || firstSeen <= cur;
+  const hit = (s: string): boolean => s.toLowerCase().includes(q) || q.includes(s.toLowerCase());
+  const out: string[] = [];
+
+  for (const c of bible.characters) {
+    if (!reached(c.firstSeenChapter)) continue;
+    if (hit(c.name) || c.aliases.some(hit)) {
+      const outfits = (c.outfits ?? []).map((o) => `${o.label}: ${describeOutfit(o)}`);
+      out.push(
+        `CHARACTER ${c.name}${c.aliases.length ? ` (aka ${c.aliases.join(", ")})` : ""}: ` +
+          `${describeCharacterIdentity(c)}${outfits.length ? `\n  outfits: ${outfits.join("; ")}` : ""}`,
+      );
+    }
+  }
+  for (const cr of bible.creatures ?? []) {
+    if (reached(cr.firstSeenChapter) && (hit(cr.name) || cr.aliases.some(hit))) {
+      out.push(`CREATURE ${cr.name}: ${describeCreature(cr)}`);
+    }
+  }
+  for (const e of bible.environments) {
+    if (reached(e.firstSeenChapter) && (hit(e.name) || (e.aliases ?? []).some(hit))) {
+      out.push(`LOCATION ${e.name}: ${describeLocation(e)}`);
+    }
+  }
+  for (const g of bible.glossary ?? []) {
+    if (hit(g.term)) out.push(`TERM ${g.term}: ${g.definition}`);
+  }
+  for (const d of bible.datasets ?? []) {
+    if ((opts.fullView || d.chapterIndex <= cur) && hit(d.title)) {
+      out.push(
+        `DATASET ${d.title}${d.unit ? ` (${d.unit})` : ""} [ch ${d.chapterIndex + 1}]: ${d.points
+          .map((p) => `${p.label}=${p.y}`)
+          .join(", ")}`,
+      );
+    }
+  }
+  return out.join("\n\n");
 }
