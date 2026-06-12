@@ -43,6 +43,14 @@ import type { ReaderSettings } from "./SettingsPanel.js";
 export interface BuildProvidersOptions {
   /** Proxy fetch routed through a CORS-exempt context (e.g. an extension SW). */
   fetch?: typeof fetch;
+  /**
+   * CORS-exempt fetch for the CORS-BLOCKED paths only (keyless DuckDuckGo
+   * search + figure retrieval) — the desktop shell's native proxy. Unlike
+   * `fetch` it does NOT reroute the provider APIs (those are CORS-open and
+   * keep the platform fetch + its streaming); when both are set, `fetch`
+   * already covers everything and wins.
+   */
+  corsFetch?: typeof fetch;
   /** Status line for local-model loading (on-device LLM download/progress). */
   onLocalStatus?: (text: string) => void;
   /** Live token progress during on-device generation (bible/prompt), for the UI. */
@@ -119,9 +127,12 @@ export function buildProviders(
         })
       : undefined;
   // No Google credentials → the keyless composite: DuckDuckGo full-web search where
-  // the transport dodges CORS (extension proxy), Wikipedia as the always-works
-  // fallback, Commons for figures — grounding works out of the box, zero setup.
-  const imageSearch: FigureSearch = google ?? new KeylessSearch(transport ? { transport } : {});
+  // the transport dodges CORS (extension proxy / desktop shell), Wikipedia as the
+  // always-works fallback, Commons for figures — grounding works with zero setup.
+  const searchTransport =
+    transport ?? (opts.corsFetch ? new DirectTransport(opts.corsFetch) : undefined);
+  const imageSearch: FigureSearch =
+    google ?? new KeylessSearch(searchTransport ? { transport: searchTransport } : {});
   // External grounding runs for every reader EXCEPT Gemini (which grounds in-call via its
   // own google_search tool). So a local/Claude/OpenAI reader still gets sourced facts.
   const webSearch =

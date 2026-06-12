@@ -23,7 +23,12 @@ import type { ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
  */
 
 export type MainToWorker =
-  | { type: "init"; settings: ReaderSettings }
+  /**
+   * `corsProxy` is set when the host has a CORS-exempt native fetch (the Tauri
+   * desktop shell): the worker then routes its CORS-blocked paths (keyless web
+   * search, open-this-URL page fetches) through `corsFetch` round-trips below.
+   */
+  | { type: "init"; settings: ReaderSettings; corsProxy?: boolean }
   /**
    * Render-tuning change only (style/quality/aspect/sampler…): update the LIVE engine's
    * tier so future renders use it — without disposing the engine, aborting in-flight
@@ -75,6 +80,17 @@ export type MainToWorker =
   /** Run a user-APPROVED generate_image tool call (answered by `chatToolResult`). */
   | { type: "chatTool"; requestId: number; call: ToolCall }
   | { type: "chatCancel"; requestId: number }
+  /** Reply to a worker `corsFetch` (the native fetch's outcome, body base64). */
+  | {
+      type: "corsFetchResult";
+      fetchId: number;
+      ok: boolean;
+      status: number;
+      statusText: string;
+      headers: Record<string, string>;
+      bodyBase64?: string;
+      error?: string;
+    }
   /**
    * Landing-page buddy: one user message BEFORE any book is open. `library` is the
    * reader's book list (for open_library_book); `persona` picks the entertainment
@@ -92,6 +108,13 @@ export type MainToWorker =
     };
 
 export type WorkerToMain =
+  /** Route one HTTP request through the host's CORS-exempt native fetch
+   * (desktop Rust shell). Answered by `corsFetchResult` with the same fetchId. */
+  | {
+      type: "corsFetch";
+      fetchId: number;
+      request: { url: string; method: string; headers: Record<string, string>; bodyBase64?: string };
+    }
   | { type: "status"; message: string }
   | { type: "providers"; diagnostics: ProvidersDiagnostics }
   | { type: "generating"; value: boolean }

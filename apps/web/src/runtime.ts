@@ -110,6 +110,45 @@ export async function loraFamilies(): Promise<Record<string, string>> {
   }
 }
 
+/** One proxied HTTP request/response (bodies base64 — invoke payloads are JSON). */
+export interface DesktopFetchRequest {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  bodyBase64?: string;
+}
+
+export interface DesktopFetchResult {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  bodyBase64?: string;
+  /** Set instead of the fields above when the native fetch itself failed. */
+  error?: string;
+}
+
+/**
+ * CORS-free fetch through the Rust shell — the desktop twin of the extension's
+ * background proxy. Lets the chat buddy's keyless web search (DuckDuckGo) and
+ * "open this URL" reach sites that block cross-origin browser requests. Never
+ * rejects: failures come back as `{ error }` so the worker's fetch wrapper can
+ * surface them as a normal TypeError.
+ */
+export async function desktopHttpFetch(request: DesktopFetchRequest): Promise<DesktopFetchResult> {
+  try {
+    return await invoke<DesktopFetchResult>("http_fetch", { request });
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      statusText: "",
+      headers: {},
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
 /** Download a curated checkpoint; emits `model://progress` events while it runs. */
 export function downloadModel(model: DownloadableModel): Promise<void> {
   return invoke<void>("download_model", { model });

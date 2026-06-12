@@ -1,9 +1,12 @@
 /// <reference lib="webworker" />
 import {
+  DirectTransport,
   Engine,
   GutenbergSearch,
   IMAGE_STYLES,
   IndexedDbStore,
+  base64ToBytes,
+  bytesToBase64,
   buildBuddySystemPrompt,
   buildChatSystemPrompt,
   chapterText,
@@ -59,6 +62,67 @@ const chatAborts = new Map<number, AbortController>();
 
 function post(message: WorkerToMain, transfer: Transferable[] = []): void {
   ctx.postMessage(message, transfer);
+}
+
+// --- CORS-exempt fetch via the host -----------------------------------------
+// Workers can't reach the Tauri bridge (`window.__TAURI__` doesn't exist here),
+// so when init says the host has a native fetch (desktop shell), CORS-blocked
+// paths round-trip each request through the main thread: `corsFetch` out,
+// `corsFetchResult` back, correlated by fetchId. Only the keyless web search
+// and page fetches use this — provider APIs are CORS-open and keep the
+// webview's native fetch (and its streaming).
+
+/** Whether the host offered a CORS-exempt native fetch (init.corsProxy). */
+let corsProxyAvailable = false;
+type CorsFetchReply = Extract<MainToWorker, { type: "corsFetchResult" }>;
+const corsFetchPending = new Map<number, (reply: CorsFetchReply) => void>();
+let nextCorsFetchId = 1;
+/** Statuses a Response object may not carry a body for. */
+const NO_BODY_STATUS = new Set([101, 103, 204, 205, 304]);
+
+const corsProxyFetch: typeof fetch = async (input, init) => {
+  const req = new Request(input as RequestInfo, init);
+  const headers: Record<string, string> = {};
+  req.headers.forEach((value, key) => {
+    headers[key] = value;
+  });
+  let bodyBase64: string | undefined;
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    const body = await req.clone().arrayBuffer();
+    if (body.byteLength > 0) bodyBase64 = bytesToBase64(body);
+  }
+  const reply = await new Promise<CorsFetchReply>((resolve, reject) => {
+    const fetchId = nextCorsFetchId++;
+    // A dead main thread must not hang the chat turn forever.
+    const timeout = setTimeout(() => {
+      if (corsFetchPending.delete(fetchId)) {
+        reject(new TypeError("The desktop fetch proxy timed out."));
+      }
+    }, 90_000);
+    corsFetchPending.set(fetchId, (r) => {
+      clearTimeout(timeout);
+      resolve(r);
+    });
+    post({
+      type: "corsFetch",
+      fetchId,
+      request: { url: req.url, method: req.method, headers, ...(bodyBase64 ? { bodyBase64 } : {}) },
+    });
+  });
+  if (reply.error || reply.status === 0) {
+    throw new TypeError(reply.error ?? "The desktop fetch proxy failed.");
+  }
+  const bytes = reply.bodyBase64 ? base64ToBytes(reply.bodyBase64) : new ArrayBuffer(0);
+  return new Response(NO_BODY_STATUS.has(reply.status) ? null : bytes, {
+    status: reply.status,
+    statusText: reply.statusText,
+    headers: reply.headers,
+  });
+};
+
+/** The CORS-exempt fetch when the host has one (else undefined → page CORS rules). */
+function corsFetch(): typeof fetch | undefined {
+  return corsProxyAvailable ? corsProxyFetch : undefined;
 }
 
 /** Broadcast the current (independent) bible/image pause state + clear status lines. */
@@ -246,6 +310,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
   switch (msg.type) {
     case "init":
       settings = msg.settings;
+      corsProxyAvailable = msg.corsProxy === true;
       // Report which providers are live vs. a silent mock fallback (and why), so
       // the UI can show it before a book is even opened.
       try {
@@ -386,6 +451,12 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       chatAborts.get(msg.requestId)?.abort();
       chatAborts.delete(msg.requestId);
       break;
+    case "corsFetchResult": {
+      const resolve = corsFetchPending.get(msg.fetchId);
+      corsFetchPending.delete(msg.fetchId);
+      resolve?.(msg);
+      break;
+    }
   }
 };
 
@@ -487,7 +558,8 @@ function chatSettingsOf(s: ReaderSettings): ReaderSettings {
  */
 function chatProviders(): { llm: LLMProvider; image: ImageProvider; tier: TierConfig; imageSearch: FigureSearch } {
   if (!settings) throw new Error("Settings not initialised yet.");
-  const built = buildProviders(chatSettingsOf(settings));
+  const cf = corsFetch();
+  const built = buildProviders(chatSettingsOf(settings), cf ? { corsFetch: cf } : {});
   const llm =
     built.diagnostics.llm.mock && bookProviders && !bookProviders.llmMock
       ? bookProviders.llm
@@ -635,7 +707,13 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           return opened(book, call.visuals);
         },
         openWebText: async (call) => {
-          const page = await fetchPageText(call.url, { signal: ac.signal });
+          // The desktop shell's native fetch (when present) reaches CORS-blocked
+          // sites (news front pages…); browsers stay subject to page CORS.
+          const cf = corsFetch();
+          const page = await fetchPageText(call.url, {
+            signal: ac.signal,
+            ...(cf ? { transport: new DirectTransport(cf) } : {}),
+          });
           const title = call.title ?? page.title ?? call.url;
           return opened(bookFromText(title, page.text, call.mode, "Chat buddy"), call.visuals);
         },
@@ -794,7 +872,9 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     postWorkflow();
     post({ type: "bibleStatus", text: "" }); // reset the persistent line for the new book
     setStoryPageCounts(book); // progress is reported against story pages/chapters
+    const openCf = corsFetch();
     const { llm, image, tier, diagnostics, imageSearch, webSearch } = buildProviders(settings, {
+      ...(openCf ? { corsFetch: openCf } : {}),
       onLocalStatus: (message) => post({ type: "status", message: message || "Building the Visual Bible…" }),
       onLocalActivity: (activity) => {
         // Live token count during on-device generation. Bible tokens enrich the
