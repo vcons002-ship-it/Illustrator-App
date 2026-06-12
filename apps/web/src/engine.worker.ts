@@ -22,7 +22,11 @@ import {
   getImageStyle,
   loadMemory,
   memoryPromptBlock,
+  parseBuddySlashCommand,
+  parseChatSlashCommand,
   rememberNote,
+  runBuddyTool,
+  runChatTool,
   profileDimensions,
   qualityProfile,
   resolveModelRequest,
@@ -34,7 +38,9 @@ import {
   ComfyUIBackend,
   Automatic1111Backend,
   type BookSource,
+  type BuddyDeps,
   type BuddyOpenedInfo,
+  type ChatToolDeps,
   type FigureSearch,
   type ImageProvider,
   type LLMProvider,
@@ -820,9 +826,6 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
   try {
     if (!currentBook) throw new Error("Open a book first — the chat discusses the current book.");
     const { llm, imageSearch } = chatProviders();
-    if (!supportsChat(llm)) {
-      throw new Error(`The "${llm.id}" text provider doesn't support chat yet.`);
-    }
     const book = currentBook;
     const chapters = [...chapterText(book)]
       .map(([index, text]) => ({
@@ -831,8 +834,6 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
         text,
       }))
       .sort((a, b) => a.index - b.index);
-    const note = await renderDefaultsNote();
-    const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
     const pos = chatPosition(book, msg.position);
     const fullView = (book.contentMode ?? "fiction") === "technical" || msg.allowSpoilers;
     // Spoiler-gated chapters the search_book tool may reach: everything up to the
@@ -846,6 +847,52 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
               ? { ...c, text: c.text.slice(0, Math.max(0, pos.charOffsetInChapter)) }
               : c,
           );
+    const tools: ChatToolDeps = {
+      searchWeb: (q) => imageSearch.searchWeb(q),
+      searchImages: (q) => imageSearch.search(q),
+      searchBook: (q) => searchBookPassages(searchableChapters, q),
+      remember: async (n) => (await rememberNote(memoryStore(), n)).length,
+      forget: async (m) => (await forgetNote(memoryStore(), m)).length,
+      ...(currentBible
+        ? {
+            lookupBible: (q: string) =>
+              lookupBible(currentBible!, q, {
+                fullView,
+                chapterIndex: pos.chapterIndex,
+                contentMode: book.contentMode ?? "fiction",
+              }),
+          }
+        : {}),
+    };
+    // Slash command: run the tool DIRECTLY — no LLM round (instant, deterministic,
+    // free). /draw flows through the regular pendingTool approval bubble.
+    const slash = parseChatSlashCommand(msg.userText);
+    if (slash) {
+      if ("error" in slash) throw new Error(slash.error);
+      if (slash.call.tool === "generate_image") {
+        post({ type: "chatDone", requestId: msg.requestId, text: "", transcript: [], pendingTool: slash.call });
+        return;
+      }
+      const result = await runChatTool(slash.call, tools);
+      post({
+        type: "chatToolResult",
+        requestId: msg.requestId,
+        call: slash.call,
+        ...(result.hits ? { hits: result.hits } : {}),
+        ...(result.imageHits ? { imageHits: result.imageHits } : {}),
+        ...(result.passages ? { passages: result.passages } : {}),
+        ...(result.bibleDetail !== undefined ? { bibleDetail: result.bibleDetail } : {}),
+        ...(result.memory ? { memory: result.memory } : {}),
+        ...(result.error ? { error: result.error } : {}),
+      });
+      post({ type: "chatDone", requestId: msg.requestId, text: "", transcript: [] });
+      return;
+    }
+    if (!supportsChat(llm)) {
+      throw new Error(`The "${llm.id}" text provider doesn't support chat yet.`);
+    }
+    const note = await renderDefaultsNote();
+    const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
     const sections = chatContextSections({
       bookTitle: book.title,
       contentMode: book.contentMode ?? "fiction",
@@ -1006,9 +1053,6 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
   chatAborts.set(msg.requestId, ac);
   try {
     const { llm, imageSearch } = chatProviders();
-    if (!supportsChat(llm)) {
-      throw new Error(`The "${llm.id}" text provider doesn't support chat yet.`);
-    }
     buddyStore ??= new IndexedDbStore();
     buddyBookSearch ??= new GutenbergSearch();
     const store = buddyStore;
@@ -1017,6 +1061,103 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       post({ type: "buddyOpened", requestId: msg.requestId, book, visuals });
       return { title: book.title, chapters: book.chapters.length, pages: book.pages.length, visuals };
     };
+    const deps: BuddyDeps = {
+      searchWeb: (q) => imageSearch.searchWeb(q),
+      searchBooks: (q) => books.search(q),
+      searchImages: (q) => imageSearch.search(q),
+      randomBooks: () => books.random(),
+      remember: async (n) => (await rememberNote(store, n)).length,
+      forget: async (m) => (await forgetNote(store, m)).length,
+      openLibraryBook: async (call) => {
+        const book = await store.getBook(call.id);
+        if (!book) throw new Error("that id isn't in the library");
+        return opened(book, call.visuals);
+      },
+      openWebText: async (call) => {
+        // The desktop shell's native fetch (when present) reaches CORS-blocked
+        // sites (news front pages…); browsers stay subject to page CORS.
+        const cf = corsFetch();
+        const page = await fetchPageText(call.url, {
+          signal: ac.signal,
+          ...(cf ? { transport: new DirectTransport(cf) } : {}),
+        });
+        const title = call.title ?? page.title ?? call.url;
+        return opened(bookFromText(title, page.text, call.mode, "Chat buddy"), call.visuals);
+      },
+      openPastedText: async (call) =>
+        opened(bookFromText(call.title, call.text, call.mode, "Pasted in chat"), call.visuals),
+      removeLibraryBook: async (call) => {
+        const book = await store.getBook(call.id);
+        if (!book) return {};
+        await store.removeBook(call.id);
+        post({ type: "buddyLibraryChanged", requestId: msg.requestId });
+        return { removed: book.title };
+      },
+      setVisualStyle: async (call) => {
+        // Resolve against the real catalog so only known styles ever apply; the
+        // main thread owns settings, so it gets the resolved values to commit.
+        const styleId = call.style ? resolveStyleRequest(call.style) : undefined;
+        if (call.style && !styleId) {
+          throw new Error(
+            `no art style matches "${call.style}" — available: ${IMAGE_STYLES.map((s) => s.label).join(", ")}`,
+          );
+        }
+        const style = styleId ? getImageStyle(styleId) : undefined;
+        // Apply to the WORKER's settings immediately: an open later in this
+        // same buddy turn must render with the new style — the main thread's
+        // committed copy arrives only after a React re-render (and its init
+        // would otherwise race the open with stale settings).
+        if (settings) {
+          settings = {
+            ...settings,
+            ...(style ? { imageStyle: style.id } : {}),
+            ...(call.pagesPerImage !== undefined ? { pagesPerImage: call.pagesPerImage } : {}),
+            ...(call.illustrateAfter !== undefined ? { illustrateAfter: call.illustrateAfter } : {}),
+          };
+        }
+        post({
+          type: "buddySettings",
+          requestId: msg.requestId,
+          ...(style ? { style: { id: style.id, label: style.label } } : {}),
+          ...(call.pagesPerImage !== undefined ? { pagesPerImage: call.pagesPerImage } : {}),
+          ...(call.illustrateAfter !== undefined ? { illustrateAfter: call.illustrateAfter } : {}),
+        });
+        return {
+          ...(style ? { style: style.label } : {}),
+          ...(call.pagesPerImage !== undefined ? { pagesPerImage: call.pagesPerImage } : {}),
+          ...(call.illustrateAfter !== undefined ? { illustrateAfter: call.illustrateAfter } : {}),
+        };
+      },
+    };
+    // Slash command: run the tool DIRECTLY — no LLM round (instant, deterministic,
+    // free). /draw flows through the regular pendingTool approval bubble.
+    const slash = parseBuddySlashCommand(msg.userText, msg.library);
+    if (slash) {
+      if ("error" in slash) throw new Error(slash.error);
+      if (slash.call.tool === "generate_image") {
+        post({ type: "buddyDone", requestId: msg.requestId, text: "", transcript: [], pendingTool: slash.call });
+        return;
+      }
+      const result = await runBuddyTool(slash.call, deps);
+      post({
+        type: "buddyToolResult",
+        requestId: msg.requestId,
+        call: slash.call,
+        ...(result.hits ? { hits: result.hits } : {}),
+        ...(result.books ? { books: result.books } : {}),
+        ...(result.imageHits ? { imageHits: result.imageHits } : {}),
+        ...(result.applied ? { applied: result.applied } : {}),
+        ...(result.removed ? { removed: result.removed } : {}),
+        ...(result.calc ? { calc: result.calc } : {}),
+        ...(result.memory ? { memory: result.memory } : {}),
+        ...(result.error ? { error: result.error } : {}),
+      });
+      post({ type: "buddyDone", requestId: msg.requestId, text: "", transcript: [] });
+      return;
+    }
+    if (!supportsChat(llm)) {
+      throw new Error(`The "${llm.id}" text provider doesn't support chat yet.`);
+    }
     const note = await renderDefaultsNote();
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
     const memory = memoryPromptBlock(await loadMemory(store));
@@ -1052,74 +1193,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       system: setup,
       history,
       maxTokens: budgets.reply,
-      deps: {
-        searchWeb: (q) => imageSearch.searchWeb(q),
-        searchBooks: (q) => books.search(q),
-        searchImages: (q) => imageSearch.search(q),
-        randomBooks: () => books.random(),
-        remember: async (n) => (await rememberNote(store, n)).length,
-        forget: async (m) => (await forgetNote(store, m)).length,
-        openLibraryBook: async (call) => {
-          const book = await store.getBook(call.id);
-          if (!book) throw new Error("that id isn't in the library");
-          return opened(book, call.visuals);
-        },
-        openWebText: async (call) => {
-          // The desktop shell's native fetch (when present) reaches CORS-blocked
-          // sites (news front pages…); browsers stay subject to page CORS.
-          const cf = corsFetch();
-          const page = await fetchPageText(call.url, {
-            signal: ac.signal,
-            ...(cf ? { transport: new DirectTransport(cf) } : {}),
-          });
-          const title = call.title ?? page.title ?? call.url;
-          return opened(bookFromText(title, page.text, call.mode, "Chat buddy"), call.visuals);
-        },
-        openPastedText: async (call) =>
-          opened(bookFromText(call.title, call.text, call.mode, "Pasted in chat"), call.visuals),
-        removeLibraryBook: async (call) => {
-          const book = await store.getBook(call.id);
-          if (!book) return {};
-          await store.removeBook(call.id);
-          post({ type: "buddyLibraryChanged", requestId: msg.requestId });
-          return { removed: book.title };
-        },
-        setVisualStyle: async (call) => {
-          // Resolve against the real catalog so only known styles ever apply; the
-          // main thread owns settings, so it gets the resolved values to commit.
-          const styleId = call.style ? resolveStyleRequest(call.style) : undefined;
-          if (call.style && !styleId) {
-            throw new Error(
-              `no art style matches "${call.style}" — available: ${IMAGE_STYLES.map((s) => s.label).join(", ")}`,
-            );
-          }
-          const style = styleId ? getImageStyle(styleId) : undefined;
-          // Apply to the WORKER's settings immediately: an open later in this
-          // same buddy turn must render with the new style — the main thread's
-          // committed copy arrives only after a React re-render (and its init
-          // would otherwise race the open with stale settings).
-          if (settings) {
-            settings = {
-              ...settings,
-              ...(style ? { imageStyle: style.id } : {}),
-              ...(call.pagesPerImage !== undefined ? { pagesPerImage: call.pagesPerImage } : {}),
-              ...(call.illustrateAfter !== undefined ? { illustrateAfter: call.illustrateAfter } : {}),
-            };
-          }
-          post({
-            type: "buddySettings",
-            requestId: msg.requestId,
-            ...(style ? { style: { id: style.id, label: style.label } } : {}),
-            ...(call.pagesPerImage !== undefined ? { pagesPerImage: call.pagesPerImage } : {}),
-            ...(call.illustrateAfter !== undefined ? { illustrateAfter: call.illustrateAfter } : {}),
-          });
-          return {
-            ...(style ? { style: style.label } : {}),
-            ...(call.pagesPerImage !== undefined ? { pagesPerImage: call.pagesPerImage } : {}),
-            ...(call.illustrateAfter !== undefined ? { illustrateAfter: call.illustrateAfter } : {}),
-          };
-        },
-      },
+      deps,
       onEvent: (e) => {
         if (e.kind === "token") post({ type: "buddyToken", requestId: msg.requestId, text: e.text });
         else if (e.kind === "thinking") thinking(e.chars);

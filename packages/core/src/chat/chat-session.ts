@@ -132,7 +132,7 @@ export async function runChatTurn(opts: {
       // Stops the loop: the worker/UI takes over (approval → render → follow-up).
       return { text: "", transcript, pendingTool: call, toolResults };
     }
-    const result = await runSearchTool(call, opts.tools);
+    const result = await runChatTool(call, opts.tools);
     toolResults.push({ call, result });
     opts.onEvent?.({ kind: "toolResult", round, call, result });
     const feedback = formatToolResult(call, result);
@@ -141,7 +141,9 @@ export async function runChatTurn(opts: {
   }
 }
 
-async function runSearchTool(
+/** Execute one auto-run tool (everything but generate_image). Exported for the
+ * slash-command path, which runs tools directly without an LLM round. */
+export async function runChatTool(
   call: Exclude<ToolCall, { tool: "generate_image" }>,
   tools: ChatToolDeps,
 ): Promise<ToolResultPayload> {

@@ -1,4 +1,5 @@
 import type {
+  BookPassage,
   BookSearchHit,
   BookSource,
   BookSummary,
@@ -157,6 +158,10 @@ export type WorkerToMain =
       hits?: WebSearchHit[];
       imageHits?: ImageSearchHit[];
       image?: { bytes: ArrayBuffer; mimeType: string };
+      /** search_book passages (slash commands render these in the panel). */
+      passages?: BookPassage[];
+      /** lookup_bible detail (slash commands render this in the panel). */
+      bibleDetail?: string;
       memory?: { action: "remembered" | "forgot"; note: string; count: number };
       error?: string;
     }

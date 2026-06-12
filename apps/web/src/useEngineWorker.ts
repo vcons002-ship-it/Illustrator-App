@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  BookPassage,
   BookSearchHit,
   BookSource,
   BookSummary,
@@ -170,6 +171,10 @@ export type ChatStreamEvent =
       call: ToolCall;
       hits?: WebSearchHit[];
       imageHits?: ImageSearchHit[];
+      /** search_book passages (slash commands render these in the panel). */
+      passages?: BookPassage[];
+      /** lookup_bible detail (slash commands render this in the panel). */
+      bibleDetail?: string;
       memory?: { action: "remembered" | "forgot"; note: string; count: number };
       error?: string;
     }
@@ -388,6 +393,8 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
             call: msg.call,
             ...(msg.hits ? { hits: msg.hits } : {}),
             ...(msg.imageHits ? { imageHits: msg.imageHits } : {}),
+            ...(msg.passages ? { passages: msg.passages } : {}),
+            ...(msg.bibleDetail !== undefined ? { bibleDetail: msg.bibleDetail } : {}),
             ...(msg.memory ? { memory: msg.memory } : {}),
             ...(msg.error ? { error: msg.error } : {}),
           });

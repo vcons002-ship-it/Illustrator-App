@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { MessageBubble, UsageDisclosure, type ChatMessageVM } from "./ChatPanel.js";
-import type { BuddyPersona, BuddyToolCall, ContextUsage } from "@visual-reader/core";
+import { MessageBubble, SlashMenu, UsageDisclosure, completeSlash, type ChatMessageVM } from "./ChatPanel.js";
+import { BUDDY_SLASH_COMMANDS, type BuddyPersona, type BuddyToolCall, type ContextUsage } from "@visual-reader/core";
 
 /**
  * The landing-page chat buddy. Pure presentation, like ChatPanel — but rendered
@@ -132,6 +132,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         )}
       </div>
 
+      <SlashMenu draft={draft} commands={BUDDY_SLASH_COMMANDS} onPick={setDraft} />
       <div style={inputRowStyle}>
         <textarea
           value={draft}
@@ -140,14 +141,20 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               send();
+            } else if (e.key === "Tab") {
+              const completed = completeSlash(draft, BUDDY_SLASH_COMMANDS);
+              if (completed) {
+                e.preventDefault();
+                setDraft(completed);
+              }
             }
           }}
           placeholder={
             props.busy
               ? "Thinking…"
               : props.persona === "technical"
-                ? "What do you want to study? (Enter to send)"
-                : "What do you feel like reading? (Enter to send)"
+                ? "What do you want to study? (Enter to send, / for commands)"
+                : "What do you feel like reading? (Enter to send, / for commands)"
           }
           rows={2}
           style={textareaStyle}
