@@ -288,6 +288,14 @@ export function SettingsPanel({
       </button>
       {open && (
         <div style={panelStyle}>
+          {/* The panel floats at the viewport's top-right, over the Settings button —
+              so it needs its OWN always-visible close control. */}
+          <div style={closeRowStyle}>
+            <strong>Settings</strong>
+            <button onClick={() => setOpen(false)} style={closeButtonStyle} aria-label="Close settings">
+              ✕ Close
+            </button>
+          </div>
           <div style={sectionHeaderStyle}>
             <span>1 · Read &amp; analyse — text model</span>
             <span style={sectionHintStyle}>
@@ -1432,6 +1440,30 @@ const buttonStyle = {
   borderRadius: 6,
   padding: "4px 10px",
   cursor: "pointer",
+} as const;
+
+const closeRowStyle = {
+  position: "sticky",
+  top: 0,
+  zIndex: 1,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 8,
+  margin: "-12px -16px 4px -12px", // span the panel's padding so the bar is flush
+  padding: "10px 12px",
+  background: "#16181d",
+  borderBottom: "1px solid rgba(255,255,255,0.12)",
+} as const;
+
+const closeButtonStyle = {
+  background: "rgba(255,255,255,0.08)",
+  border: "1px solid rgba(255,255,255,0.25)",
+  color: "inherit",
+  borderRadius: 6,
+  padding: "4px 10px",
+  cursor: "pointer",
+  fontSize: 12,
 } as const;
 
 const panelStyle = {

@@ -538,6 +538,12 @@ export function App() {
   // to the unit the engine rendered (must match the worker — shared toRenderUnits).
   const pagesPerImage = settings.pagesPerImage ?? 3;
   const panelsPerView = settings.panelsPerView ?? 1;
+  // Multi-panel views (a drawn comic PAGE, or the per-image panel grid) are
+  // detail-dense — give them a much wider image column so panels aren't shrunk.
+  const comicPageMode =
+    (settings.drawAsComicPage ?? false) &&
+    (settings.imageStyle === "comic" || settings.imageStyle === "manga");
+  const wideImageColumn = panelsPerView > 1 || comicPageMode;
   const units = useMemo(
     () => (book ? toRenderUnits(book, pagesPerImage) : undefined),
     [book, pagesPerImage],
@@ -1513,7 +1519,7 @@ export function App() {
       )}
 
       {book && (
-        <main style={styles.reader}>
+        <main style={wideImageColumn ? styles.readerWide : styles.reader}>
           <ReaderColumn
             book={book}
             pageToUnit={units?.pageToUnit}
@@ -2351,6 +2357,15 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 40,
     padding: "32px 20px 50vh",
     maxWidth: 1400,
+    margin: "0 auto",
+  },
+  // Wider image column for dense multi-panel views (comic page / panel grid).
+  readerWide: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) minmax(440px, 900px)",
+    gap: 40,
+    padding: "32px 20px 50vh",
+    maxWidth: 1700,
     margin: "0 auto",
   },
   column: { maxWidth: 640 },
