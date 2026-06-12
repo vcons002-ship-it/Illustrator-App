@@ -31,8 +31,35 @@ export interface ChatToolDeps {
 
 export type ChatTurnEvent =
   | { kind: "token"; text: string }
+  /** A thinking model is reasoning (no visible tokens yet); `chars` grows. */
+  | { kind: "thinking"; chars: number }
   | { kind: "tool"; round: number; call: ToolCall }
   | { kind: "toolResult"; round: number; call: ToolCall; result: ToolResultPayload };
+
+/**
+ * Wrap a token sink so a reply that LOOKS like a tool call (starts with "{" or a
+ * code fence) never streams into the visible bubble — tool JSON used to type
+ * itself out in the panel and then "vanish" into a search. Prose flows through
+ * live once the first non-JSON character proves the reply is an answer; a held
+ * JSON reply that turns out to be prose still arrives via the final text.
+ */
+export function jsonGatedTokenSink(emit: (text: string) => void): (delta: string) => void {
+  let buffer = "";
+  let mode: "hold" | "live" | "mute" = "hold";
+  return (delta) => {
+    if (mode === "live") return emit(delta);
+    if (mode === "mute") return;
+    buffer += delta;
+    const lead = buffer.trimStart();
+    if (!lead) return;
+    if (lead.startsWith("{") || lead.startsWith("`")) {
+      mode = "mute";
+      return;
+    }
+    mode = "live";
+    emit(buffer);
+  };
+}
 
 export interface ChatTurnOutcome {
   /** Final assistant prose (may be empty when the round ended on a pending tool). */
@@ -82,7 +109,13 @@ export async function runChatTurn(opts: {
 
   for (let round = 0; ; round++) {
     const reply = await opts.llm.chat(messages, {
-      ...(opts.onEvent ? { onToken: (text: string) => opts.onEvent?.({ kind: "token", text }) } : {}),
+      // Fresh gate per round: a tool-JSON round streams nothing; the prose round streams live.
+      ...(opts.onEvent
+        ? {
+            onToken: jsonGatedTokenSink((text) => opts.onEvent?.({ kind: "token", text })),
+            onThinking: (chars: number) => opts.onEvent?.({ kind: "thinking", chars }),
+          }
+        : {}),
       ...(opts.signal ? { signal: opts.signal } : {}),
       ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
     });

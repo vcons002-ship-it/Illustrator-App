@@ -122,6 +122,44 @@ describe("runChatTurn", () => {
     expect(tokens).toEqual(["hello"]);
   });
 
+  it("never streams a tool-JSON round into the visible bubble", async () => {
+    const llm = new FakeChat([SEARCH, "Found it."]);
+    const tokens: string[] = [];
+    await runChatTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "look it up" }],
+      tools: { searchWeb: async () => [] },
+      onEvent: (e) => {
+        if (e.kind === "token") tokens.push(e.text);
+      },
+    });
+    // The JSON round emitted nothing; only the prose round streamed.
+    expect(tokens.join("")).toBe("Found it.");
+  });
+
+  it("forwards thinking progress events", async () => {
+    const llm: ChatCapable = {
+      async chat(_messages, opts) {
+        opts?.onThinking?.(120);
+        opts?.onThinking?.(480);
+        opts?.onToken?.("done");
+        return "done";
+      },
+    };
+    const seen: number[] = [];
+    await runChatTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "hi" }],
+      tools: {},
+      onEvent: (e) => {
+        if (e.kind === "thinking") seen.push(e.chars);
+      },
+    });
+    expect(seen).toEqual([120, 480]);
+  });
+
   it("rejects when the signal aborts", async () => {
     const ac = new AbortController();
     ac.abort();
@@ -172,6 +210,29 @@ describe("runChatTurn memory tools", () => {
     });
     expect(out.toolResults[0]!.result.error).toContain("memory isn't available");
     expect(out.text).toBe("I can't right now.");
+  });
+});
+
+describe("jsonGatedTokenSink", () => {
+  it("streams prose live after the first non-JSON character proves it", async () => {
+    const { jsonGatedTokenSink } = await import("./chat-session.js");
+    const out: string[] = [];
+    const sink = jsonGatedTokenSink((t) => out.push(t));
+    sink("  ");
+    sink("He"); // proves prose → flushes buffered whitespace + text
+    sink("llo");
+    expect(out.join("")).toBe("  Hello");
+  });
+
+  it("mutes replies that open like a tool call or code fence", async () => {
+    const { jsonGatedTokenSink } = await import("./chat-session.js");
+    for (const opener of ['{"tool":', "```json\n{"]) {
+      const out: string[] = [];
+      const sink = jsonGatedTokenSink((t) => out.push(t));
+      for (const ch of opener) sink(ch);
+      sink("more");
+      expect(out).toEqual([]);
+    }
   });
 });
 

@@ -77,6 +77,41 @@ function memoryStore(): IndexedDbStore {
   return buddyStore;
 }
 
+/**
+ * Give an interactive chat turn priority on a SHARED local model. A background
+ * bible build holds the local server/GPU for a whole 12k-token extraction at a
+ * time, so the chat's next round queues behind it — which reads as the chat
+ * hanging on "Thinking…". Pausing the bible build aborts the in-flight chapter
+ * promptly (it re-extracts on resume, in order); the build resumes the moment
+ * the turn finishes. Cloud chat models don't contend, so they never pause it.
+ */
+async function withChatPriority<T>(llmId: string, fn: () => Promise<T>): Promise<T> {
+  const eng = engine;
+  const yieldBible =
+    (llmId === "local-server" || llmId === "webllm") &&
+    eng !== undefined &&
+    bibleActive &&
+    !eng.isBiblePaused();
+  if (yieldBible) eng.setBiblePaused(true);
+  try {
+    return await fn();
+  } finally {
+    // Resume only the engine WE paused — the book may have been closed mid-turn.
+    if (yieldBible && engine === eng) eng.setBiblePaused(false);
+  }
+}
+
+/** Throttled "Reasoning…" activity for thinking models (raw chars → ~tokens). */
+function thinkingNotifier(post: (text: string) => void): (chars: number) => void {
+  let lastAt = 0;
+  return (chars) => {
+    const now = Date.now();
+    if (now - lastAt < 400) return;
+    lastAt = now;
+    post(`Reasoning… (~${Math.max(1, Math.round(chars / 4))} tokens)`);
+  };
+}
+
 function post(message: WorkerToMain, transfer: Transferable[] = []): void {
   ctx.postMessage(message, transfer);
 }
@@ -853,7 +888,10 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
         { budgetChars: budgets.book, ...(budgets.maxTokens ? { maxTokens: budgets.maxTokens } : {}) },
       ),
     });
-    const outcome = await runChatTurn({
+    const thinking = thinkingNotifier((text) =>
+      post({ type: "chatActivity", requestId: msg.requestId, text }),
+    );
+    const outcome = await withChatPriority(llm.id, () => runChatTurn({
       llm,
       system,
       history,
@@ -877,6 +915,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       },
       onEvent: (e) => {
         if (e.kind === "token") post({ type: "chatToken", requestId: msg.requestId, text: e.text });
+        else if (e.kind === "thinking") thinking(e.chars);
         else if (e.kind === "tool") post({ type: "chatTool", requestId: msg.requestId, round: e.round, call: e.call });
         else
           post({
@@ -890,7 +929,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
           });
       },
       signal: ac.signal,
-    });
+    }));
     post({
       type: "chatDone",
       requestId: msg.requestId,
@@ -1005,7 +1044,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         { budgetChars: budgets.book, ...(budgets.maxTokens ? { maxTokens: budgets.maxTokens } : {}) },
       ),
     });
-    const outcome = await runBuddyTurn({
+    const thinking = thinkingNotifier((text) =>
+      post({ type: "buddyActivity", requestId: msg.requestId, text }),
+    );
+    const outcome = await withChatPriority(llm.id, () => runBuddyTurn({
       llm,
       system: setup,
       history,
@@ -1080,6 +1122,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       },
       onEvent: (e) => {
         if (e.kind === "token") post({ type: "buddyToken", requestId: msg.requestId, text: e.text });
+        else if (e.kind === "thinking") thinking(e.chars);
         else if (e.kind === "tool") post({ type: "buddyTool", requestId: msg.requestId, round: e.round, call: e.call });
         else
           post({
@@ -1097,7 +1140,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           });
       },
       signal: ac.signal,
-    });
+    }));
     post({
       type: "buddyDone",
       requestId: msg.requestId,

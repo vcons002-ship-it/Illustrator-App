@@ -165,6 +165,10 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable {
           if (visible.length > emitted) {
             opts.onToken!(visible.slice(emitted));
             emitted = visible.length;
+          } else if (visible.length === 0) {
+            // Still inside the think block — report progress so the host can show
+            // the model IS working (a silent gate reads as a hang).
+            opts.onThinking?.(full.length);
           }
         },
       }).catch((err) => {

@@ -185,10 +185,26 @@ export class WebLLMProvider implements LLMProvider, ChatCapable {
    */
   async chat(messages: ChatTurn[], opts: ChatOptions = {}): Promise<string> {
     const complete = await this.completer();
+    // Think-gate the stream (same as local-server-provider): reasoning tokens
+    // never render as the answer, but their progress is reported so a long
+    // think doesn't look like a hang.
+    let full = "";
+    let emitted = 0;
+    const onText = (delta: string): void => {
+      full += delta;
+      const stripped = stripThink(full);
+      const visible = stripped.trimStart().startsWith("<think>") ? "" : stripped;
+      if (visible.length > emitted) {
+        opts.onToken!(visible.slice(emitted));
+        emitted = visible.length;
+      } else if (visible.length === 0) {
+        opts.onThinking?.(full.length);
+      }
+    };
     const text = await complete(messages, {
       json: false,
       maxTokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
-      ...(opts.onToken ? { onText: opts.onToken } : {}),
+      ...(opts.onToken ? { onText } : {}),
       ...(opts.signal ? { signal: opts.signal } : {}),
     });
     return stripThink(text).trim();

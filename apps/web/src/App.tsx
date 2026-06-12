@@ -704,7 +704,10 @@ export function App() {
         { pageIndex: activePageIndex, paragraphIndex },
         isTechnical || allowSpoilers,
         (e) => {
-          if (e.kind === "token") setChatStreaming((prev) => prev + e.text);
+          if (e.kind === "token") {
+            setChatStreaming((prev) => prev + e.text);
+            setChatActivity(""); // visible text replaces any "Reasoning…" status
+          } else if (e.kind === "activity") setChatActivity(e.text);
           else if (e.kind === "usage") setChatUsage(e.usage);
           else if (e.kind === "tool")
             setChatActivity(
@@ -877,7 +880,10 @@ export function App() {
       setBuddyPendingTool(undefined);
       let openedBook = false;
       const res = await buddyChat(history, text, buddyPersona, library, (e) => {
-        if (e.kind === "token") setBuddyStreaming((prev) => prev + e.text);
+        if (e.kind === "token") {
+          setBuddyStreaming((prev) => prev + e.text);
+          setBuddyActivity(""); // visible text replaces any "Reasoning…" status
+        } else if (e.kind === "activity") setBuddyActivity(e.text);
         else if (e.kind === "usage") setBuddyUsage(e.usage);
         else if (e.kind === "tool") {
           setBuddyActivity(
