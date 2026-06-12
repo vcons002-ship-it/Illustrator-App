@@ -39,6 +39,8 @@ export interface ChatPanelProps {
   onClearHistory: () => void;
   /** Delete one message by index (must be referentially stable — see MessageBubble). */
   onDeleteMessage?: (index: number) => void;
+  /** Compact the conversation into a summary (frees the model's context window). */
+  onCompact?: () => void;
 }
 
 export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
@@ -72,6 +74,16 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
                 />
                 allow spoilers (whole book)
               </label>
+            )}
+            {props.onCompact && props.messages.length > 4 && (
+              <button
+                style={smallButtonStyle}
+                onClick={props.onCompact}
+                disabled={props.busy}
+                title="Summarize the conversation so far and continue from the summary (frees the model's memory)"
+              >
+                Compact
+              </button>
             )}
             <button style={smallButtonStyle} onClick={props.onClearHistory} title="Clear this book's chat history">
               Clear

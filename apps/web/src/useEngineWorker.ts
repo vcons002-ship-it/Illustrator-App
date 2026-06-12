@@ -113,6 +113,8 @@ export interface EngineWorkerApi {
   ) => Promise<BuddyDoneResult>;
   /** Abort the in-flight buddy round, if any. */
   buddyCancel: () => void;
+  /** Compact a chat: summarize the model-facing turns into a continuation brief. */
+  summarize: (turns: ChatTurn[]) => Promise<{ text?: string; error?: string }>;
 }
 
 export type BuddyStreamEvent =
@@ -229,6 +231,10 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     Map<number, { onEvent: (e: BuddyStreamEvent) => void; resolve: (r: BuddyDoneResult) => void }>
   >(new Map());
   const activeBuddyRequestId = useRef<number | undefined>(undefined);
+  // In-flight compact-summaries, resolved by `summarized` replies.
+  const summarizeRequests = useRef<Map<number, (r: { text?: string; error?: string }) => void>>(
+    new Map(),
+  );
 
   const send = (msg: MainToWorker, transfer: Transferable[] = []) =>
     workerRef.current?.postMessage(msg, transfer);
@@ -438,6 +444,12 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
           buddyRequests.current.delete(msg.requestId);
           if (activeBuddyRequestId.current === msg.requestId) activeBuddyRequestId.current = undefined;
           req?.resolve({ text: "", transcript: [], error: msg.message });
+          break;
+        }
+        case "summarized": {
+          const resolve = summarizeRequests.current.get(msg.requestId);
+          summarizeRequests.current.delete(msg.requestId);
+          resolve?.(msg.ok && msg.text ? { text: msg.text } : { error: msg.error ?? "Summarize failed." });
           break;
         }
         case "error":
@@ -658,6 +670,23 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     const id = activeBuddyRequestId.current;
     if (id !== undefined) send({ type: "chatCancel", requestId: id });
   }, []);
+  const summarize = useCallback(
+    (turns: ChatTurn[]): Promise<{ text?: string; error?: string }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (summarizeRequests.current.delete(requestId)) {
+            resolve({ error: "Compacting timed out — try again." });
+          }
+        }, 120_000);
+        summarizeRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "summarize", requestId, turns });
+      }),
+    [],
+  );
 
   return {
     bible,
@@ -698,6 +727,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     chatCancel,
     buddyChat,
     buddyCancel,
+    summarize,
   };
 }
 

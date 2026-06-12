@@ -130,6 +130,7 @@ export function App() {
     chatCancel,
     buddyChat,
     buddyCancel,
+    summarize,
   } = useEngineWorker(settings);
   const [showCharacters, setShowCharacters] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -916,6 +917,40 @@ export function App() {
   const onDeleteChatMessage = useCallback((index: number) => {
     setChatMessages((prev) => prev.filter((_, i) => i !== index));
   }, []);
+
+  /** Replacement history after a compact: ONE visible summary message whose
+   * model-facing turns hand the brief to the model as established context. */
+  const compactedMessage = (summary: string): StoredChatMessage => ({
+    role: "tool",
+    at: Date.now(),
+    text: `📜 Conversation compacted — continuing from this summary:\n\n${summary}`,
+    turns: [
+      { role: "user", content: `[Summary of our conversation so far — continue from this context]\n${summary}` },
+      { role: "assistant", content: "Got it — I have the context from the summary." },
+    ],
+  });
+  const onCompactBuddy = useCallback(async () => {
+    if (buddyBusy || buddyMessages.length < 4) return;
+    setBuddyBusy(true);
+    setBuddyActivity("Compacting the conversation…");
+    const res = await summarize(chatTurnsOf(buddyMessages));
+    setBuddyBusy(false);
+    setBuddyActivity("");
+    if (res.text) setBuddyMessages([compactedMessage(res.text)]);
+    else appendBuddy({ role: "tool", text: `⚠ Compact failed: ${res.error}`, turns: [] });
+  }, [buddyBusy, buddyMessages, summarize]);
+  const onCompactChat = useCallback(async () => {
+    if (chatBusy || chatMessages.length < 4) return;
+    setChatBusy(true);
+    setChatActivity("Compacting the conversation…");
+    const res = await summarize(chatTurnsOf(chatMessages));
+    setChatBusy(false);
+    setChatActivity("");
+    if (res.text) setChatMessages([compactedMessage(res.text)]);
+    else appendChat({ role: "tool", text: `⚠ Compact failed: ${res.error}`, turns: [] });
+  }, [chatBusy, chatMessages, summarize]);
+  const onCompactBuddyClick = useCallback(() => void onCompactBuddy(), [onCompactBuddy]);
+  const onCompactChatClick = useCallback(() => void onCompactChat(), [onCompactChat]);
   const buddyPanelMessages = useMemo(
     () =>
       buddyMessages.map((m) => ({
@@ -1406,6 +1441,7 @@ export function App() {
             onCancel={buddyCancel}
             onClearHistory={onClearBuddy}
             onDeleteMessage={onDeleteBuddyMessage}
+            onCompact={onCompactBuddyClick}
           />
         </section>
       )}
@@ -1518,6 +1554,7 @@ export function App() {
           onClose={onCloseChat}
           onClearHistory={onClearChat}
           onDeleteMessage={onDeleteChatMessage}
+          onCompact={onCompactChatClick}
         />
       )}
 

@@ -7,6 +7,8 @@ import {
   IndexedDbStore,
   base64ToBytes,
   bytesToBase64,
+  trimChatHistory,
+  CHAT_CONTEXT_BUDGET_CHARS,
   buildBuddySystemPrompt,
   buildChatSystemPrompt,
   chapterText,
@@ -444,6 +446,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "buddyChat":
       void handleBuddyChat(msg);
       break;
+    case "summarize":
+      void handleSummarize(msg);
+      break;
     case "chatTool":
       void handleChatTool(msg.requestId, msg.call);
       break;
@@ -575,6 +580,57 @@ function chatProviders(): { llm: LLMProvider; image: ImageProvider; tier: TierCo
   return { llm, image, tier, imageSearch: built.imageSearch };
 }
 
+/**
+ * Context budgets by provider class. Cloud chat models have six-figure token
+ * windows — capping their book context at the local-friendly default threw away
+ * 90% of what they could read. Local/on-device models keep the small budgets.
+ */
+const CLOUD_LLM_IDS = new Set(["claude", "gemini", "openai"]);
+function bookContextBudget(llmId: string): number {
+  return CLOUD_LLM_IDS.has(llmId) ? 400_000 : CHAT_CONTEXT_BUDGET_CHARS;
+}
+function historyBudget(llmId: string): number {
+  return CLOUD_LLM_IDS.has(llmId) ? 80_000 : 8_000;
+}
+
+/** The local image engine's installed model names, cached briefly (each chat
+ * turn would otherwise hit the engine's HTTP API just to build the prompt). */
+let installedNamesCache: { at: number; names: string[] } | undefined;
+async function cachedInstalledModels(s: ReaderSettings): Promise<string[]> {
+  if (installedNamesCache && Date.now() - installedNamesCache.at < 60_000) {
+    return installedNamesCache.names;
+  }
+  const names = await installedModelNames(s);
+  installedNamesCache = { at: Date.now(), names };
+  return names;
+}
+
+/**
+ * One line telling the chat model what the app will ALREADY do on a render —
+ * provider, default model, style, cadence, and the installed local models (so
+ * "generate with flux 2" can name something that actually resolves). Stops the
+ * model from re-specifying defaults or inventing model names.
+ */
+async function renderDefaultsNote(): Promise<string> {
+  if (!settings) return "";
+  const style = getImageStyle(settings.imageStyle);
+  const local = chatSettingsOf(settings).imageProvider === "local" || settings.imageProvider === "local";
+  const installed = local ? await cachedInstalledModels(settings) : [];
+  const parts = [
+    `art style "${style.label}"`,
+    ...(settings.imageProvider === "local" && settings.localModel
+      ? [`default local image model "${settings.localModel}"`]
+      : []),
+    `${settings.pagesPerImage ?? 3} page(s) per illustration`,
+    `illustrating after ${settings.illustrateAfter ?? "book"}`,
+  ];
+  return (
+    `CURRENT APP SETTINGS (applied to every render automatically): ${parts.join(", ")}.` +
+    (installed.length ? ` INSTALLED LOCAL IMAGE MODELS: ${installed.join(", ")}.` : "") +
+    ' These defaults are used unless the reader explicitly asks for something different — only then pass "model"/"style" fields, naming a model close to an installed name above.'
+  );
+}
+
 /** Map the reader's page/paragraph position to (chapterIndex, char offset) in the
  * SAME chapter-text segmentation the chat context is built from. */
 function chatPosition(
@@ -614,18 +670,24 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
         text,
       }))
       .sort((a, b) => a.index - b.index);
-    const system = buildChatSystemPrompt({
-      bookTitle: book.title,
-      contentMode: book.contentMode ?? "fiction",
-      chapters,
-      ...(currentBible ? { bible: currentBible } : {}),
-      position: chatPosition(book, msg.position),
-      allowSpoilers: msg.allowSpoilers,
-    });
+    const note = await renderDefaultsNote();
+    const system =
+      buildChatSystemPrompt({
+        bookTitle: book.title,
+        contentMode: book.contentMode ?? "fiction",
+        chapters,
+        ...(currentBible ? { bible: currentBible } : {}),
+        position: chatPosition(book, msg.position),
+        allowSpoilers: msg.allowSpoilers,
+        budgetChars: bookContextBudget(llm.id),
+      }) + (note ? `\n\n${note}` : "");
     const outcome = await runChatTurn({
       llm,
       system,
-      history: [...msg.history, { role: "user", content: msg.userText }],
+      history: trimChatHistory(
+        [...msg.history, { role: "user", content: msg.userText }],
+        historyBudget(llm.id),
+      ),
       tools: {
         searchWeb: (q) => imageSearch.searchWeb(q),
         searchImages: (q) => imageSearch.search(q),
@@ -663,6 +725,46 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
   }
 }
 
+/**
+ * Compact a chat: summarize the model-facing transcript into a brief that
+ * replaces the history (the App swaps the messages for one summary message).
+ * Frees the context window while keeping continuity — the chat equivalent of
+ * the reader's own notes.
+ */
+async function handleSummarize(msg: Extract<MainToWorker, { type: "summarize" }>): Promise<void> {
+  try {
+    const { llm } = chatProviders();
+    if (!supportsChat(llm)) {
+      throw new Error(`The "${llm.id}" text provider doesn't support chat yet.`);
+    }
+    const transcript = msg.turns.map((t) => `${t.role.toUpperCase()}: ${t.content}`).join("\n\n");
+    const text = await llm.chat(
+      [
+        {
+          role: "system",
+          content:
+            "Compress this conversation transcript into a brief that lets the SAME assistant continue " +
+            "seamlessly. Preserve: decisions made, facts established, names/numbers/links, the reader's " +
+            "stated preferences, anything opened or generated, and open questions. Terse bullet points; " +
+            "no preamble, no meta-commentary.",
+        },
+        { role: "user", content: transcript.slice(-120_000) },
+      ],
+      { maxTokens: 1024 },
+    );
+    const trimmed = text.trim();
+    if (!trimmed) throw new Error("the model returned an empty summary");
+    post({ type: "summarized", requestId: msg.requestId, ok: true, text: trimmed });
+  } catch (err) {
+    post({
+      type: "summarized",
+      requestId: msg.requestId,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 // --- Landing-page buddy -------------------------------------------------------
 
 /** Lazy singletons: the buddy's library access + book discovery backends. */
@@ -692,10 +794,16 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       post({ type: "buddyOpened", requestId: msg.requestId, book, visuals });
       return { title: book.title, chapters: book.chapters.length, pages: book.pages.length, visuals };
     };
+    const note = await renderDefaultsNote();
     const outcome = await runBuddyTurn({
       llm,
-      system: buildBuddySystemPrompt({ persona: msg.persona, library: msg.library }),
-      history: [...msg.history, { role: "user", content: msg.userText }],
+      system:
+        buildBuddySystemPrompt({ persona: msg.persona, library: msg.library }) +
+        (note ? `\n\n${note}` : ""),
+      history: trimChatHistory(
+        [...msg.history, { role: "user", content: msg.userText }],
+        historyBudget(llm.id),
+      ),
       deps: {
         searchWeb: (q) => imageSearch.searchWeb(q),
         searchBooks: (q) => books.search(q),
@@ -810,11 +918,28 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
     if (call.tool !== "generate_image") throw new Error("Only generate_image needs approval.");
     if (!settings) throw new Error("Settings not initialised yet.");
     let cs = chatSettingsOf(settings);
+    // A request the reader explicitly made must never silently fall back to the
+    // defaults — fail loudly WITH the available options, so the model (which
+    // sees the error as tool feedback) can retry with a name that resolves.
     const styleId = call.style ? resolveStyleRequest(call.style) : undefined;
+    if (call.style && !styleId) {
+      throw new Error(
+        `no art style matches "${call.style}" — available: ${IMAGE_STYLES.map((s) => s.label).join(", ")}`,
+      );
+    }
     if (styleId) cs = { ...cs, imageStyle: styleId };
     if (call.model && cs.imageProvider === "local") {
-      const resolved = resolveModelRequest(call.model, await installedModelNames(cs));
-      if (resolved) cs = { ...cs, localModel: resolved };
+      const installed = await installedModelNames(cs);
+      const resolved = resolveModelRequest(call.model, installed);
+      if (!resolved) {
+        throw new Error(
+          `no installed image model matches "${call.model}"` +
+            (installed.length
+              ? ` — installed: ${installed.join(", ")}`
+              : " — the local engine lists no models (is it running and connected in Settings?)"),
+        );
+      }
+      cs = { ...cs, localModel: resolved };
     }
     const built = buildProviders(cs);
     // Same per-slot fallback as chat text: a mock chat-image slot (local engine not

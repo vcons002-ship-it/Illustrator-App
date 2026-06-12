@@ -38,6 +38,25 @@ export interface ChatTurnOutcome {
   toolResults: { call: ToolCall; result: ToolResultPayload }[];
 }
 
+/**
+ * Cap the MODEL-FACING history by characters, dropping the oldest whole turns.
+ * The stored history can hold hundreds of messages; what each provider can
+ * usefully take differs by orders of magnitude (local 8k-context models vs
+ * 200k-token cloud models), so the host passes a per-provider budget. The
+ * newest turn is always kept, however large.
+ */
+export function trimChatHistory(history: ChatTurn[], maxChars: number): ChatTurn[] {
+  let used = 0;
+  let start = history.length;
+  while (start > 0) {
+    const next = used + history[start - 1]!.content.length;
+    if (next > maxChars && start < history.length) break;
+    used = next;
+    start--;
+  }
+  return start === 0 ? history : history.slice(start);
+}
+
 export async function runChatTurn(opts: {
   llm: ChatCapable;
   system: string;

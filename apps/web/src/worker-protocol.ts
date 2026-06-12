@@ -80,6 +80,8 @@ export type MainToWorker =
   /** Run a user-APPROVED generate_image tool call (answered by `chatToolResult`). */
   | { type: "chatTool"; requestId: number; call: ToolCall }
   | { type: "chatCancel"; requestId: number }
+  /** Compact a chat: summarize these model-facing turns (answered by `summarized`). */
+  | { type: "summarize"; requestId: number; turns: ChatTurn[] }
   /** Reply to a worker `corsFetch` (the native fetch's outcome, body base64). */
   | {
       type: "corsFetchResult";
@@ -198,4 +200,6 @@ export type WorkerToMain =
       /** An un-executed generate_image awaiting the reader's approval. */
       pendingTool?: BuddyToolCall;
     }
-  | { type: "buddyError"; requestId: number; message: string };
+  | { type: "buddyError"; requestId: number; message: string }
+  /** Reply to `summarize`: the compact brief, or why it failed. */
+  | { type: "summarized"; requestId: number; ok: boolean; text?: string; error?: string };

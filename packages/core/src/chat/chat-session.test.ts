@@ -119,3 +119,20 @@ describe("runChatTurn", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("trimChatHistory", () => {
+  it("keeps the newest whole turns within budget, always at least the last", async () => {
+    const { trimChatHistory } = await import("./chat-session.js");
+    const turns = [
+      { role: "user" as const, content: "a".repeat(100) },
+      { role: "assistant" as const, content: "b".repeat(100) },
+      { role: "user" as const, content: "c".repeat(100) },
+    ];
+    expect(trimChatHistory(turns, 1000)).toEqual(turns); // fits → untouched
+    expect(trimChatHistory(turns, 250)).toEqual(turns.slice(1)); // oldest dropped
+    expect(trimChatHistory(turns, 150)).toEqual(turns.slice(2));
+    // The newest turn survives even when it alone exceeds the budget.
+    expect(trimChatHistory(turns, 10)).toEqual(turns.slice(2));
+    expect(trimChatHistory([], 100)).toEqual([]);
+  });
+});
