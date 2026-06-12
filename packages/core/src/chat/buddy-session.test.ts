@@ -245,6 +245,50 @@ describe("runBuddyTurn", () => {
     expect(outcome.text).toContain("24");
   });
 
+  it("routes remember/forget to the memory deps (and errors without them)", async () => {
+    const remembered: string[] = [];
+    const llm = scriptedLlm([
+      '{"tool":"remember","note":"prefers watercolor"}',
+      "Got it — watercolor it is.",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "remember I prefer watercolor" }],
+      deps: {
+        remember: async (note) => {
+          remembered.push(note);
+          return 1;
+        },
+        openLibraryBook: async () => opened("?"),
+        openWebText: async () => opened("?"),
+        openPastedText: async (call) => opened(call.title),
+        removeLibraryBook: async () => ({ removed: "x" }),
+        setVisualStyle: async () => ({}),
+      },
+    });
+    expect(remembered).toEqual(["prefers watercolor"]);
+    expect(outcome.toolResults[0]!.result.memory).toEqual({
+      action: "remembered",
+      note: "prefers watercolor",
+      count: 1,
+    });
+    // Without the dep, the tool fails soft (the model is told and recovers).
+    const noDep = await runBuddyTurn({
+      llm: scriptedLlm(['{"tool":"forget","match":"x"}', "Sorry, no memory here."]),
+      system: "sys",
+      history: [{ role: "user", content: "forget x" }],
+      deps: {
+        openLibraryBook: async () => opened("?"),
+        openWebText: async () => opened("?"),
+        openPastedText: async (call) => opened(call.title),
+        removeLibraryBook: async () => ({ removed: "x" }),
+        setVisualStyle: async () => ({}),
+      },
+    });
+    expect(noDep.toolResults[0]!.result.error).toContain("memory isn't available");
+  });
+
   it("stops tool-looping after MAX_BUDDY_TOOL_ROUNDS", async () => {
     const llm = scriptedLlm(['{"tool":"search_web","query":"loop"}']);
     const outcome = await runBuddyTurn({

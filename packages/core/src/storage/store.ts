@@ -66,6 +66,11 @@ export interface VisualReaderStore {
   getChatHistory?(bookId: string): Promise<StoredChatMessage[] | undefined>;
   putChatHistory?(bookId: string, messages: StoredChatMessage[]): Promise<void>;
   deleteChatHistory?(bookId: string): Promise<void>;
+
+  /** Small keyed text blobs (the chat's long-term reader memory). Optional. */
+  getMemo?(key: string): Promise<string | undefined>;
+  putMemo?(key: string, text: string): Promise<void>;
+  deleteMemo?(key: string): Promise<void>;
 }
 
 /** In-memory store — used by tests and as a fallback when no persistence exists. */
@@ -135,5 +140,16 @@ export class InMemoryStore implements VisualReaderStore {
   }
   async deleteChatHistory(bookId: string): Promise<void> {
     this.chats.delete(bookId);
+  }
+
+  private memos = new Map<string, string>();
+  async getMemo(key: string): Promise<string | undefined> {
+    return this.memos.get(key);
+  }
+  async putMemo(key: string, text: string): Promise<void> {
+    this.memos.set(key, text);
+  }
+  async deleteMemo(key: string): Promise<void> {
+    this.memos.delete(key);
   }
 }

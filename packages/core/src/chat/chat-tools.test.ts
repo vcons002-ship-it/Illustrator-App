@@ -49,6 +49,20 @@ describe("parseToolCall", () => {
     expect(parseToolCall("just a normal prose answer")).toBeUndefined();
     expect(parseToolCall('{"tool":"search_web"')).toBeUndefined();
   });
+
+  it("parses memory calls and caps their length", () => {
+    expect(parseToolCall('{"tool":"remember","note":"prefers watercolor"}')).toEqual({
+      tool: "remember",
+      note: "prefers watercolor",
+    });
+    expect(parseToolCall('{"tool":"forget","match":"watercolor"}')).toEqual({
+      tool: "forget",
+      match: "watercolor",
+    });
+    const long = parseToolCall(`{"tool":"remember","note":"${"x".repeat(500)}"}`);
+    expect(long?.tool === "remember" && long.note.length).toBe(200);
+    expect(parseToolCall('{"tool":"remember","note":"  "}')).toBeUndefined();
+  });
 });
 
 describe("formatToolResult", () => {
@@ -74,6 +88,15 @@ describe("formatToolResult", () => {
     expect(
       formatToolResult({ tool: "generate_image", prompt: "p" }, { image: { ok: false, error: "no engine" } }),
     ).toContain("no engine");
+  });
+
+  it("confirms memory updates with the kept count", () => {
+    const text = formatToolResult(
+      { tool: "remember", note: "prefers watercolor" },
+      { memory: { action: "remembered", note: "prefers watercolor", count: 3 } },
+    );
+    expect(text).toContain("remembered");
+    expect(text).toContain("3 notes kept");
   });
 });
 

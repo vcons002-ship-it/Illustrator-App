@@ -716,7 +716,9 @@ export function App() {
                     ? `Looking in the book for “${e.call.query}”…`
                     : e.call.tool === "lookup_bible"
                       ? `Looking up “${e.call.query}”…`
-                      : "Preparing an image…",
+                      : e.call.tool === "remember" || e.call.tool === "forget"
+                        ? "Updating memory…"
+                        : "Preparing an image…",
             );
           else {
             setChatActivity("");
@@ -736,6 +738,11 @@ export function App() {
                 links: e.imageHits
                   .slice(0, 3)
                   .map((h) => ({ url: h.contextLink ?? h.link, ...(h.title ? { title: h.title } : {}) })),
+              });
+            } else if (e.memory) {
+              appendChat({
+                role: "tool",
+                text: `🧠 ${e.memory.action === "remembered" ? "Remembered" : "Forgot"}: “${e.memory.note}”`,
               });
             } else if (e.call.tool === "search_images") {
               // Make a failed/empty figure search VISIBLE — otherwise it looks like
@@ -884,6 +891,8 @@ export function App() {
                     ? `Looking for images of “${e.call.query}”…`
                     : e.call.tool === "calculate"
                       ? "Calculating…"
+                      : e.call.tool === "remember" || e.call.tool === "forget"
+                      ? "Updating memory…"
                       : e.call.tool === "set_visual_style"
                         ? "Updating the visual settings…"
                         : e.call.tool === "open_library_book"
@@ -963,6 +972,11 @@ export function App() {
             });
           } else if (e.calc) {
             appendBuddy({ role: "tool", text: `🧮 ${e.calc.expression} = ${e.calc.result}` });
+          } else if (e.memory) {
+            appendBuddy({
+              role: "tool",
+              text: `🧠 ${e.memory.action === "remembered" ? "Remembered" : "Forgot"}: “${e.memory.note}”`,
+            });
           } else if (e.call.tool === "search_images") {
             appendBuddy({ role: "tool", text: imageSearchMiss(e.call.query, e.error, hasSearchKey) });
           }

@@ -48,7 +48,10 @@ export type BuddyToolCall =
       illustrateAfter?: "chapter" | "book";
     }
   /** Same shape as the in-book chat's generate_image: approval-gated render. */
-  | { tool: "generate_image"; prompt: string; model?: string; steps?: number; style?: string };
+  | { tool: "generate_image"; prompt: string; model?: string; steps?: number; style?: string }
+  /** Long-term reader memory (shared with the book chat — see reader-memory.ts). */
+  | { tool: "remember"; note: string }
+  | { tool: "forget"; match: string };
 
 /** Generous: a "style + random pick + open + prose" flow is three tools deep. */
 export const MAX_BUDDY_TOOL_ROUNDS = 5;
@@ -64,6 +67,8 @@ const MAX_NAME_CHARS = 80;
 const MAX_PASTE_CHARS = 12_000;
 /** Matches the calculator's own input cap. */
 const MAX_EXPRESSION_CHARS = 300;
+/** Matches reader-memory's MAX_NOTE_CHARS. */
+const MAX_MEMORY_NOTE_CHARS = 200;
 
 export function buildBuddySystemPrompt(opts: {
   persona: BuddyPersona;
@@ -132,6 +137,10 @@ export function buildBuddySystemPrompt(opts: {
     'chapter), and the cadence ("illustrateAfter": "chapter" to illustrate as each chapter finishes, or "book" to ' +
     'wait for the whole book and get the best art). Use BEFORE an open with visuals when the reader asks for a look ' +
     '("…in oil painting style") or pace.\n' +
+    '- {"tool":"remember","note":"…"} — save a DURABLE reader preference/fact to long-term memory (applies in every ' +
+    'future conversation, in every book). Use when they state a lasting preference ("I prefer watercolor", "never ' +
+    'spoil endings", "I\'m reading the series in order") or say "remember…". One short note, not conversation recap.\n' +
+    '- {"tool":"forget","match":"…"} — remove memory notes containing this text, when asked to forget.\n' +
     'Set "visuals": true ONLY when the reader asked to illustrate/visualize it — the app then starts ' +
     "generating illustrations immediately (which uses their image provider); otherwise they press Start themselves.\n" +
     "After a book search, use each hit's subjects to recommend and to match the reader's request; either open the " +
@@ -167,6 +176,14 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
   if (tool === "calculate") {
     const expression = strArg(obj.expression, MAX_EXPRESSION_CHARS);
     return expression ? { tool, expression } : undefined;
+  }
+  if (tool === "remember") {
+    const note = strArg(obj.note, MAX_MEMORY_NOTE_CHARS);
+    return note ? { tool, note } : undefined;
+  }
+  if (tool === "forget") {
+    const match = strArg(obj.match, MAX_MEMORY_NOTE_CHARS);
+    return match ? { tool, match } : undefined;
   }
   if (tool === "remove_library_book") {
     const id = strArg(obj.id, MAX_ID_CHARS);
@@ -260,6 +277,8 @@ export interface BuddyToolResultPayload {
   applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
   /** Whether an approved image generation succeeded. */
   image?: { ok: boolean; error?: string };
+  /** A remember/forget outcome (note echoed for the inline chip). */
+  memory?: { action: "remembered" | "forgot"; note: string; count: number };
   error?: string;
 }
 
@@ -302,6 +321,11 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     return result.calc
       ? `[calculate: ${result.calc.expression} = ${result.calc.result}] Use this exact value in your answer.`
       : "[calculate returned nothing]";
+  }
+  if (call.tool === "remember" || call.tool === "forget") {
+    return result.memory
+      ? `[memory ${result.memory.action}: "${result.memory.note}" — ${result.memory.count} note${result.memory.count === 1 ? "" : "s"} kept] Confirm briefly.`
+      : `[${call.tool} did nothing]`;
   }
   if (call.tool === "remove_library_book") {
     return result.removed

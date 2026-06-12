@@ -8,12 +8,14 @@ import { MAX_CHAT_HISTORY, type BookSummary, type StoredChatMessage, type Visual
  * library of opened books so the reader can switch between them.
  */
 const DB_NAME = "visual-reader";
-// v3 adds the per-book chat-history store (additive upgrade — existing stores untouched).
-const DB_VERSION = 3;
+// v3 adds the per-book chat-history store; v4 adds "memos" (the chat's long-term
+// reader memory). Additive upgrades — existing stores untouched.
+const DB_VERSION = 4;
 const BIBLE_STORE = "bibles";
 const IMAGE_STORE = "images";
 const BOOK_STORE = "books";
 const CHAT_STORE = "chats";
+const MEMO_STORE = "memos";
 
 interface BookRecord extends BookSource {
   addedAt: number;
@@ -117,6 +119,18 @@ export class IndexedDbStore implements VisualReaderStore {
     return this.delete(CHAT_STORE, bookId);
   }
 
+  async getMemo(key: string): Promise<string | undefined> {
+    return this.get<string>(MEMO_STORE, key);
+  }
+
+  async putMemo(key: string, text: string): Promise<void> {
+    return this.put(MEMO_STORE, key, text);
+  }
+
+  async deleteMemo(key: string): Promise<void> {
+    return this.delete(MEMO_STORE, key);
+  }
+
   private async get<T>(store: string, key: string): Promise<T | undefined> {
     const db = await this.dbPromise;
     return new Promise((resolve, reject) => {
@@ -165,6 +179,7 @@ function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(IMAGE_STORE)) db.createObjectStore(IMAGE_STORE);
       if (!db.objectStoreNames.contains(BOOK_STORE)) db.createObjectStore(BOOK_STORE);
       if (!db.objectStoreNames.contains(CHAT_STORE)) db.createObjectStore(CHAT_STORE);
+      if (!db.objectStoreNames.contains(MEMO_STORE)) db.createObjectStore(MEMO_STORE);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);

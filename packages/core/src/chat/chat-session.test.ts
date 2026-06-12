@@ -138,6 +138,43 @@ describe("runChatTurn", () => {
   });
 });
 
+describe("runChatTurn memory tools", () => {
+  it("routes remember to the dep and feeds the confirmation back", async () => {
+    const llm = new FakeChat(['{"tool":"remember","note":"never spoil endings"}', "Noted!"]);
+    const remembered: string[] = [];
+    const out = await runChatTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "never spoil endings please" }],
+      tools: {
+        remember: async (note) => {
+          remembered.push(note);
+          return 2;
+        },
+      },
+    });
+    expect(remembered).toEqual(["never spoil endings"]);
+    expect(out.toolResults[0]!.result.memory).toEqual({
+      action: "remembered",
+      note: "never spoil endings",
+      count: 2,
+    });
+    expect(out.text).toBe("Noted!");
+  });
+
+  it("fails soft when the memory dep is missing", async () => {
+    const llm = new FakeChat(['{"tool":"forget","match":"x"}', "I can't right now."]);
+    const out = await runChatTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "forget x" }],
+      tools: {},
+    });
+    expect(out.toolResults[0]!.result.error).toContain("memory isn't available");
+    expect(out.text).toBe("I can't right now.");
+  });
+});
+
 describe("trimChatHistory", () => {
   it("keeps the newest whole turns within budget, always at least the last", async () => {
     const { trimChatHistory } = await import("./chat-session.js");
