@@ -122,6 +122,8 @@ export interface EngineWorkerApi {
 
 export type BuddyStreamEvent =
   | { kind: "token"; text: string }
+  /** Live status while the model works invisibly (thinking-model reasoning). */
+  | { kind: "activity"; text: string }
   | { kind: "tool"; call: BuddyToolCall }
   | {
       kind: "toolResult";
@@ -160,6 +162,8 @@ export interface BuddyDoneResult {
 
 export type ChatStreamEvent =
   | { kind: "token"; text: string }
+  /** Live status while the model works invisibly (thinking-model reasoning). */
+  | { kind: "activity"; text: string }
   | { kind: "tool"; call: ToolCall }
   | {
       kind: "toolResult";
@@ -360,6 +364,10 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
           chatRequests.current.get(msg.requestId)?.onEvent({ kind: "token", text: msg.text });
           break;
         }
+        case "chatActivity": {
+          chatRequests.current.get(msg.requestId)?.onEvent({ kind: "activity", text: msg.text });
+          break;
+        }
         case "chatTool": {
           chatRequests.current.get(msg.requestId)?.onEvent({ kind: "tool", call: msg.call });
           break;
@@ -405,6 +413,10 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
         }
         case "buddyToken": {
           buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "token", text: msg.text });
+          break;
+        }
+        case "buddyActivity": {
+          buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "activity", text: msg.text });
           break;
         }
         case "buddyTool": {

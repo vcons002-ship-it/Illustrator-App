@@ -20,6 +20,14 @@ export interface ChatOptions {
    * the interface without faking a stream; streaming providers (WebLLM) call it.
    */
   onToken?: (delta: string) => void;
+  /**
+   * Progress while a thinking model reasons INSIDE its `<think>` block — those
+   * tokens are gated out of `onToken` (reasoning never renders as the answer),
+   * which used to leave the panel frozen on "Thinking…" for minutes and reading
+   * as a hang. `chars` is the total raw length so far; hosts show it as live
+   * "Reasoning…" feedback.
+   */
+  onThinking?: (chars: number) => void;
   signal?: AbortSignal;
   /** Response budget; defaults per provider (~1024). */
   maxTokens?: number;

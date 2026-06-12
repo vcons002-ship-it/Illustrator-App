@@ -65,8 +65,15 @@ describe("provider streaming chat", () => {
       fetchImpl: streamingFetch(sse(["<think>hmm", " pondering</think>", "real ", "answer"])),
     });
     const tokens: string[] = [];
-    const text = await p.chat([{ role: "user", content: "hi" }], { onToken: (t) => tokens.push(t) });
+    const thinking: number[] = [];
+    const text = await p.chat([{ role: "user", content: "hi" }], {
+      onToken: (t) => tokens.push(t),
+      onThinking: (c) => thinking.push(c),
+    });
     expect(tokens.join("")).toBe("real answer"); // reasoning never reached the panel
     expect(text).toBe("real answer");
+    // …but its PROGRESS was reported (otherwise a long think reads as a hang).
+    expect(thinking.length).toBeGreaterThan(0);
+    expect(thinking[thinking.length - 1]!).toBeGreaterThanOrEqual("<think>hmm pondering".length);
   });
 });

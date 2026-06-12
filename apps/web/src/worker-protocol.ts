@@ -145,6 +145,8 @@ export type WorkerToMain =
   | { type: "error"; message: string }
   /** Incremental assistant text (streaming providers only). */
   | { type: "chatToken"; requestId: number; text: string }
+  /** Live status while the model works invisibly (a thinking model reasoning). */
+  | { type: "chatActivity"; requestId: number; text: string }
   /** The model called a tool (so the panel can show "searching…"). */
   | { type: "chatTool"; requestId: number; round: number; call: ToolCall }
   /** A tool finished: search hits for inline rendering, or generated image bytes. */
@@ -171,6 +173,8 @@ export type WorkerToMain =
   | { type: "chatContextUsage"; requestId: number; usage: ContextUsage }
   /** Incremental buddy text (streaming providers only). */
   | { type: "buddyToken"; requestId: number; text: string }
+  /** Live status while the model works invisibly (a thinking model reasoning). */
+  | { type: "buddyActivity"; requestId: number; text: string }
   | { type: "buddyTool"; requestId: number; round: number; call: BuddyToolCall }
   | {
       type: "buddyToolResult";

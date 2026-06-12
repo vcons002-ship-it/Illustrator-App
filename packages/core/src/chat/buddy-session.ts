@@ -10,6 +10,7 @@ import {
   type BuddyToolResultPayload,
 } from "./buddy-tools.js";
 import { evaluateExpression, formatCalcResult } from "./calculator.js";
+import { jsonGatedTokenSink } from "./chat-session.js";
 
 /**
  * One user-message round of the landing-page buddy, including the tool loop —
@@ -49,6 +50,8 @@ export interface BuddyDeps {
 
 export type BuddyTurnEvent =
   | { kind: "token"; text: string }
+  /** A thinking model is reasoning (no visible tokens yet); `chars` grows. */
+  | { kind: "thinking"; chars: number }
   | { kind: "tool"; round: number; call: BuddyToolCall }
   | { kind: "toolResult"; round: number; call: BuddyToolCall; result: BuddyToolResultPayload };
 
@@ -79,7 +82,13 @@ export async function runBuddyTurn(opts: {
 
   for (let round = 0; ; round++) {
     const reply = await opts.llm.chat(messages, {
-      ...(opts.onEvent ? { onToken: (text: string) => opts.onEvent?.({ kind: "token", text }) } : {}),
+      // Fresh gate per round (see chat-session.ts): tool JSON never streams visibly.
+      ...(opts.onEvent
+        ? {
+            onToken: jsonGatedTokenSink((text) => opts.onEvent?.({ kind: "token", text })),
+            onThinking: (chars: number) => opts.onEvent?.({ kind: "thinking", chars }),
+          }
+        : {}),
       ...(opts.signal ? { signal: opts.signal } : {}),
       ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
     });
