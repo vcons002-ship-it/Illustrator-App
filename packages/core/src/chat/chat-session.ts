@@ -22,6 +22,8 @@ export interface ChatToolDeps {
   searchImages?: (query: string) => Promise<ImageSearchHit[]>;
   /** Find passages elsewhere in the book (sync — it's a local text scan). */
   searchBook?: (query: string) => BookPassage[];
+  /** Full detail for a named bible entry (sync — reads the in-memory bible). */
+  lookupBible?: (query: string) => string;
 }
 
 export type ChatTurnEvent =
@@ -101,7 +103,7 @@ export async function runChatTurn(opts: {
 }
 
 async function runSearchTool(
-  call: ToolCall & { tool: "search_web" | "search_images" | "search_book" },
+  call: ToolCall & { tool: "search_web" | "search_images" | "search_book" | "lookup_bible" },
   tools: ChatToolDeps,
 ): Promise<ToolResultPayload> {
   try {
@@ -112,6 +114,10 @@ async function runSearchTool(
     if (call.tool === "search_book") {
       if (!tools.searchBook) return { error: "book search isn't available right now" };
       return { passages: tools.searchBook(call.query) };
+    }
+    if (call.tool === "lookup_bible") {
+      if (!tools.lookupBible) return { error: "no visual bible is available yet" };
+      return { bibleDetail: tools.lookupBible(call.query) };
     }
     if (!tools.searchImages) return { error: "image search isn't available right now" };
     return { imageHits: await tools.searchImages(call.query) };

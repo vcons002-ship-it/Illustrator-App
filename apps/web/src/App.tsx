@@ -149,6 +149,10 @@ export function App() {
   const [chatActivity, setChatActivity] = useState("");
   const [chatPendingTool, setChatPendingTool] = useState<ToolCall | undefined>();
   const [chatUsage, setChatUsage] = useState<ContextUsage | undefined>();
+  // Bumped whenever a turn is superseded (Clear / cancel) so its async completion
+  // is ignored — a cancelled turn's late reply (or stray error) can't reappear.
+  const chatTurnSeq = useRef(0);
+  const buddyTurnSeq = useRef(0);
   const [allowSpoilers, setAllowSpoilers] = useState(false);
   // The pending generate_image's transcript (assistant JSON turn), folded into the
   // history only when the user approves — a dismissed call never reaches the model.
@@ -632,6 +636,7 @@ export function App() {
     async (text: string) => {
       if (!book) return;
       const turnBookId = book.id; // guard: ignore this turn if the reader switches/exits
+      const seq = ++chatTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
       const history = chatTurnsOf(chatMessages);
       appendChat({ role: "user", text });
       setChatBusy(true);
@@ -655,7 +660,9 @@ export function App() {
                   ? `Looking for images of “${e.call.query}”…`
                   : e.call.tool === "search_book"
                     ? `Looking in the book for “${e.call.query}”…`
-                    : "Preparing an image…",
+                    : e.call.tool === "lookup_bible"
+                      ? `Looking up “${e.call.query}”…`
+                      : "Preparing an image…",
             );
           else {
             setChatActivity("");
@@ -680,9 +687,9 @@ export function App() {
           }
         },
       );
-      // The reader switched books or exited mid-turn — this reply belongs to a book
-      // that's no longer open; drop it rather than write it into another book's chat.
-      if (chatBookRef.current?.id !== turnBookId) return;
+      // Dropped if the reader switched/exited (wrong book) or Cleared/cancelled this
+      // turn (seq bumped) — its busy state + reply were already reset by that action.
+      if (chatBookRef.current?.id !== turnBookId || chatTurnSeq.current !== seq) return;
       setChatBusy(false);
       setChatStreaming("");
       setChatActivity("");
@@ -731,10 +738,17 @@ export function App() {
   }, [chatPendingTool, chatTool]);
 
   const onClearChat = useCallback(() => {
+    // Supersede + cancel any in-flight turn and return the panel to a clean idle
+    // state — clearing while "thinking" otherwise left it stuck busy with no reply.
+    chatTurnSeq.current++;
+    chatCancel();
+    setChatBusy(false);
+    setChatStreaming("");
+    setChatActivity("");
     setChatMessages([]);
     setChatPendingTool(undefined);
     if (book) void libraryStore.deleteChatHistory?.(book.id);
-  }, [book, libraryStore]);
+  }, [book, libraryStore, chatCancel]);
 
   // Stable view-model + handlers for the memoised ChatPanel: rebuilt only when the
   // history actually changes, so app-level renders (scroll frames, status lines)
@@ -787,6 +801,7 @@ export function App() {
 
   const onBuddySend = useCallback(
     async (text: string) => {
+      const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
       const history = chatTurnsOf(buddyMessages);
       appendBuddy({ role: "user", text });
       setBuddyBusy(true);
@@ -891,6 +906,8 @@ export function App() {
           }
         }
       });
+      // Dropped if Cleared/cancelled mid-turn (seq bumped) — state already reset.
+      if (buddyTurnSeq.current !== seq) return;
       setBuddyBusy(false);
       setBuddyStreaming("");
       setBuddyActivity("");
@@ -945,10 +962,15 @@ export function App() {
     pendingBuddyTranscript.current = [];
   }, []);
   const onClearBuddy = useCallback(() => {
+    buddyTurnSeq.current++;
+    buddyCancel();
+    setBuddyBusy(false);
+    setBuddyStreaming("");
+    setBuddyActivity("");
     setBuddyMessages([]);
     setBuddyPendingTool(undefined);
     void libraryStore.deleteChatHistory?.(BUDDY_CHAT_ID);
-  }, [libraryStore]);
+  }, [libraryStore, buddyCancel]);
   // Stable per-index delete handlers (memoised bubbles take the SAME function).
   const onDeleteBuddyMessage = useCallback((index: number) => {
     setBuddyMessages((prev) => prev.filter((_, i) => i !== index));

@@ -220,6 +220,9 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable {
         url: `${ollamaRoot(baseUrl)}/api/show`,
         method: "POST",
         body: { model },
+        // Best-effort sizing must never hang the chat turn — a wedged/slow local
+        // server would otherwise block the whole request before it even starts.
+        signal: AbortSignal.timeout(2500),
       });
       if (!res.ok) return undefined;
       const data = await res.json<OllamaShowResponse>();
