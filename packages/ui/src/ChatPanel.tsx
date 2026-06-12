@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
-import type { ContextUsage, ToolCall } from "@visual-reader/core";
+import { CHAT_SLASH_COMMANDS, type ContextUsage, type SlashCommandInfo, type ToolCall } from "@visual-reader/core";
 import { ContextUsageDonut } from "./ContextUsageDonut.js";
 
 /**
@@ -139,6 +139,7 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
           )}
         </div>
 
+        <SlashMenu draft={draft} commands={CHAT_SLASH_COMMANDS} onPick={setDraft} />
         <div style={inputRowStyle}>
           <textarea
             value={draft}
@@ -147,9 +148,15 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 send();
+              } else if (e.key === "Tab") {
+                const completed = completeSlash(draft, CHAT_SLASH_COMMANDS);
+                if (completed) {
+                  e.preventDefault();
+                  setDraft(completed);
+                }
               }
             }}
-            placeholder={props.busy ? "Thinking…" : "Ask about the book… (Enter to send)"}
+            placeholder={props.busy ? "Thinking…" : "Ask about the book… (Enter to send, / for commands)"}
             rows={2}
             style={textareaStyle}
           />
@@ -167,6 +174,88 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
     </div>
   );
 });
+
+/**
+ * The "/" command menu: shown while the draft is a bare "/prefix" (no space
+ * yet), filtered as you type; click (or Tab) inserts the command. Shared by
+ * both chat panels — each passes its own command set.
+ */
+export function SlashMenu({
+  draft,
+  commands,
+  onPick,
+}: {
+  draft: string;
+  commands: SlashCommandInfo[];
+  onPick: (text: string) => void;
+}) {
+  if (!draft.startsWith("/") || /\s/.test(draft)) return null;
+  const q = draft.slice(1).toLowerCase();
+  const hits = commands.filter((c) => c.name.startsWith(q));
+  if (hits.length === 0) return null;
+  return (
+    <div style={slashMenuStyle}>
+      <div style={slashHintStyle}>Commands run their tool directly — no model round. Tab completes.</div>
+      {hits.map((c) => (
+        <button
+          key={c.name}
+          style={slashItemStyle}
+          // onMouseDown (not click) so the textarea keeps focus for typing the args.
+          onMouseDown={(e) => {
+            e.preventDefault();
+            onPick(`/${c.name} `);
+          }}
+        >
+          <code style={slashCodeStyle}>
+            /{c.name}
+            {c.args ? ` ${c.args}` : ""}
+          </code>
+          <span style={{ opacity: 0.65 }}>{c.description}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Tab-completion for a bare "/prefix" draft; undefined when nothing applies. */
+export function completeSlash(draft: string, commands: SlashCommandInfo[]): string | undefined {
+  if (!draft.startsWith("/") || /\s/.test(draft)) return undefined;
+  const hit = commands.find((c) => c.name.startsWith(draft.slice(1).toLowerCase()));
+  return hit ? `/${hit.name} ` : undefined;
+}
+
+const slashMenuStyle = {
+  borderTop: "1px solid rgba(255,255,255,0.1)",
+  maxHeight: 220,
+  overflowY: "auto",
+  display: "flex",
+  flexDirection: "column",
+} as const;
+
+const slashHintStyle = {
+  fontSize: 10,
+  opacity: 0.5,
+  padding: "6px 12px 2px",
+} as const;
+
+const slashItemStyle = {
+  display: "flex",
+  gap: 10,
+  alignItems: "baseline",
+  background: "transparent",
+  color: "inherit",
+  border: "none",
+  textAlign: "left",
+  padding: "5px 12px",
+  fontSize: 12,
+  cursor: "pointer",
+} as const;
+
+const slashCodeStyle = {
+  color: "#9db8ff",
+  whiteSpace: "nowrap",
+  fontSize: 12,
+} as const;
 
 /** Collapsible context-usage readout — a one-line summary that expands to the
  * donut + legend. Shared by both chat panels. */

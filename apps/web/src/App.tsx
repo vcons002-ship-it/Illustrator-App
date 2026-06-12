@@ -803,6 +803,25 @@ export function App() {
                 role: "tool",
                 text: `🧠 ${e.memory.action === "remembered" ? "Remembered" : "Forgot"}: “${e.memory.note}”`,
               });
+            } else if (e.passages?.length) {
+              // Slash-command /book results (model-driven searches consume these
+              // silently as feedback; a direct command shows them to the reader).
+              appendChat({
+                role: "tool",
+                text: e.passages
+                  .map((p) => `Chapter ${p.chapterIndex + 1}${p.chapterTitle ? ` (${p.chapterTitle})` : ""}: ${p.text}`)
+                  .join("\n\n"),
+              });
+            } else if (e.bibleDetail !== undefined) {
+              appendChat({
+                role: "tool",
+                text: e.bibleDetail || `Nothing in the Visual Bible matches that yet.`,
+              });
+            } else if (text.startsWith("/") && e.error) {
+              // A direct command's failure has no model to fold it into — show it.
+              appendChat({ role: "tool", text: `⚠ ${e.error}` });
+            } else if (text.startsWith("/") && e.call.tool === "search_book") {
+              appendChat({ role: "tool", text: `🔍 Nothing found in the book for “${e.call.query}”.` });
             } else if (e.call.tool === "search_images") {
               // Make a failed/empty figure search VISIBLE — otherwise it looks like
               // nothing happened (Commons is encyclopedic; misses are common).
@@ -1039,8 +1058,18 @@ export function App() {
               role: "tool",
               text: `🧠 ${e.memory.action === "remembered" ? "Remembered" : "Forgot"}: “${e.memory.note}”`,
             });
+          } else if (e.removed) {
+            appendBuddy({ role: "tool", text: `🗑 Removed “${e.removed}” from the library.` });
           } else if (e.call.tool === "search_images") {
             appendBuddy({ role: "tool", text: imageSearchMiss(e.call.query, e.error, hasSearchKey) });
+          } else if (text.startsWith("/") && e.error) {
+            // A direct command's failure has no model to fold it into — show it.
+            appendBuddy({ role: "tool", text: `⚠ ${e.error}` });
+          } else if (
+            text.startsWith("/") &&
+            (e.call.tool === "search_books" || e.call.tool === "random_books" || e.call.tool === "search_web")
+          ) {
+            appendBuddy({ role: "tool", text: "🔍 No results." });
           }
         }
       });

@@ -114,7 +114,9 @@ export async function runBuddyTurn(opts: {
   }
 }
 
-async function runBuddyTool(
+/** Execute one auto-run buddy tool (everything but generate_image). Exported for
+ * the slash-command path, which runs tools directly without an LLM round. */
+export async function runBuddyTool(
   call: Exclude<BuddyToolCall, { tool: "generate_image" }>,
   deps: BuddyDeps,
 ): Promise<BuddyToolResultPayload> {
