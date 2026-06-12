@@ -226,6 +226,7 @@ export const MessageBubble = memo(function MessageBubble({
         <button
           style={deleteButtonStyle}
           title="Delete this message (it leaves the conversation the model sees too)"
+          aria-label="Delete message"
           onClick={() => onDelete(index)}
         >
           ✕

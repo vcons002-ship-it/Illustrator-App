@@ -98,6 +98,22 @@ describe("KeylessSearch", () => {
     expect(wikiTransport.requests).toHaveLength(2);
   });
 
+  it("does NOT latch on a transient HTTP status — only on transport (CORS) failure", async () => {
+    // A 429 is transient: fall back this call but keep DDG enabled for the next.
+    const ddg429 = fakeTransport(() => ({ ok: false, status: 429, body: "" }));
+    const wiki = fakeTransport(() => ({ body: wikiBody }));
+    const state = { ddgUnavailable: false };
+    const search = new KeylessSearch({
+      ddg: new DuckDuckGoSearch({ transport: ddg429 }),
+      wiki: new WikiSearch({ transport: wiki }),
+      state,
+    });
+    await search.searchWeb("news");
+    expect(state.ddgUnavailable).toBe(false); // NOT latched on a status error
+    await search.searchWeb("more news");
+    expect(ddg429.requests).toHaveLength(2); // DDG retried, not disabled
+  });
+
   it("falls through (without blacklisting) when DDG parses to zero hits", async () => {
     const ddgTransport = fakeTransport(() => ({ body: "<html>bot wall</html>" }));
     const wikiTransport = fakeTransport(() => ({ body: wikiBody }));

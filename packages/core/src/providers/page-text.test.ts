@@ -1,4 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { decodeEntities } from "./page-text.js";
+
+describe("decodeEntities", () => {
+  it("decodes common + numeric entities and survives out-of-range code points", () => {
+    expect(decodeEntities("a &amp; b &lt;c&gt; &quot;d&quot;")).toBe('a & b <c> "d"');
+    expect(decodeEntities("caf&#233; &#x2014; ok")).toBe("café — ok");
+    // > 0x10FFFF would throw String.fromCodePoint — must not crash the parse
+    // (each bad entity drops to "", leaving the surrounding spaces).
+    expect(decodeEntities("x &#1114112; &#x110000; y")).toBe("x   y");
+  });
+});
 import type { Transport, TransportRequest } from "./transport/transport.js";
 import { fetchPageText } from "./page-text.js";
 

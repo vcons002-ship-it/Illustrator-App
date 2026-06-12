@@ -88,11 +88,18 @@ function htmlToText(html: string): string {
     .trim();
 }
 
+/** A numeric character reference → its character, or "" if out of Unicode range
+ * (String.fromCodePoint throws on > 0x10FFFF — hostile/garbled HTML must not crash
+ * the whole page parse, and in KeylessSearch a throw latches DDG off for good). */
+function codePoint(cp: number): string {
+  return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : "";
+}
+
 /** Decode the common HTML entities (shared by the HTML-ish parsers in providers/). */
 export function decodeEntities(s: string): string {
   return s
-    .replace(/&#(\d+);/g, (_, d: string) => String.fromCodePoint(Number(d)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, h: string) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d: string) => codePoint(Number(d)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h: string) => codePoint(parseInt(h, 16)))
     .replace(/&nbsp;/g, " ")
     .replace(/&quot;/g, '"')
     .replace(/&#0?39;|&apos;/g, "'")

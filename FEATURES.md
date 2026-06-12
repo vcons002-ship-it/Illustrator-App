@@ -14,6 +14,11 @@ keeping everyone looking consistent and never spoiling what's ahead. It runs on 
 machine and can work fully offline. Non-fiction (papers, textbooks) can be read in a
 **technical mode** that illustrates concepts and diagrams instead of story scenes.
 
+The home screen is a **chat assistant** that drives the whole app conversationally:
+ask it anything, or tell it to *"open a random classic novel and illustrate it in oil
+painting style"* and it finds the book, sets the style, opens it, and starts painting —
+then follows you into the book to keep talking about it.
+
 ---
 
 ## Feature list
@@ -80,26 +85,60 @@ switches from a story Visual Bible to a **Visual Atlas**:
   imagined numbers) plus min/max/mean/median and the trend, in a collapsible **Data**
   section under the illustration.
 
+### 🤝 Chat buddy (the home screen)
+The landing page **is** a full-window chat assistant. Three voices — **Freeform**
+(default: a general assistant that runs the app on request), **Entertainment** (book-club
+companion), and **Technical** (research companion):
+- **Talk about anything** — questions, brainstorming and invention help, working through
+  ideas; it does **real math** with a built-in calculator tool (never guessed arithmetic).
+- **Finds things to read**: your **library** (it knows your books), **Project Gutenberg**
+  (~75k public-domain books — "open Frankenstein", or "surprise me" for a random classic),
+  **web articles** by search or URL, or text you **paste straight into the chat** (a poem,
+  an excerpt) — and opens any of them in the reader.
+- **Runs the app by voice**: set the art style and illustration cadence ("…in oil painting
+  style, one image per chapter"), start illustrating ("…and illustrate it"), generate
+  one-off images (with your approval), find real figures/diagrams, manage the library
+  ("remove Dune"). It knows your current default settings and only overrides them when
+  you ask.
+- **The conversation follows you** — when it opens a book, the discussion continues
+  inside the reader's book chat, context intact.
+- **Searches the web keylessly** — Wikipedia out of the box; full-web DuckDuckGo where
+  the platform allows it (extension / desktop); your Google Custom Search key upgrades it
+  to whole-web everywhere.
+
 ### 💬 Book chat (reading companion)
 Open **Chat** while reading to discuss the book with an AI that actually knows it:
 - **Spoiler-safe by default** (fiction) — the chat only sees the book up to your current
   position and says so if you ask about later events; an *allow spoilers* toggle unlocks
   the whole book. Technical books are always fully visible.
+- **Fast on simple requests, deep when asked** — the chat keeps the text around your
+  position in view and **looks passages up on demand** (a `search the book` tool) when a
+  question needs another chapter, instead of re-reading the whole book every message.
 - **Knows the app's analysis** — the glossary, structures/locations, chapter summaries,
   the actual image prompts, and any extracted datasets (the "technical bible").
-- **Can use the app's tools**: search the web for sources, find real images/diagrams
-  (shown inline with links), and **generate images** with your image models — image
-  generation always asks for your approval first.
+- **Can use the app's tools**: search the book, search the web for sources, find real
+  images/diagrams (shown inline with links), and **generate images** with your image
+  models — image generation always asks for your approval first.
 - **Ask for render settings in plain chat** — "draw a truck, 20 steps, flux 2" picks the
-  named *installed* model, step count, and style for that one render. No settings digging.
+  named *installed* model, step count, and style for that one render — and if a name
+  doesn't match anything installed, it tells you what is installed instead of silently
+  using the default.
 - **Its own model choice** — the chat defaults to a local model (free & private) and can
   use any downloaded Ollama/WebLLM model independently of the book reader, or an API
   provider; image generation likewise defaults to the local engine (Settings → *Book chat*).
-- **Per-book history** that survives reloads (clearable in the panel).
+- **Context you can see** — a "Context: ~N tokens" line above the chat expands into a
+  donut showing exactly where the model's window is going (book text / visual bible /
+  history / your message / instructions), with a warning as you near a small local
+  model's limit. Local models are budgeted to their **actual** context window.
+- **Manage the conversation** — per-book history that survives reloads, **delete any
+  single message** (✕ on the bubble), or **Compact** the chat into a summary the model
+  continues from (frees a small model's memory without losing the thread).
 
 ### ✏️ Control & correction
 - **Begin generating** button — start illustrating when you're ready; reuses anything
   made in past sessions.
+- **← Exit book** — close the reader back to the home screen anytime (generation stops;
+  the book stays in your Library and reopens instantly).
 - **Character Bible editor** — open *Characters*, see every character's appearance, and
   fix any mistake. Saved instantly (existing images stay until you re-render).
 - **Pause / Resume** generation anytime.
@@ -129,12 +168,19 @@ Open **Chat** while reading to discuss the book with an AI that actually knows i
   cloud renders — the consistency a local IP-Adapter gives, with just a key.
 - **No keys? Still works** — built-in placeholder art shows the whole flow.
 - **Keys are encrypted** on your device; local/on-device options keep everything private.
+- **Mature mode (adults only, off by default)** — a Settings toggle for intentionally
+  adult fiction: relaxes the adjustable safety filters (Gemini text+image, Flux) and tells
+  the models to illustrate and discuss explicit/violent source material faithfully instead
+  of sanitising it. Claude/OpenAI expose no such control and keep their own policies; local
+  models have no external filter at all.
 
 ### 💻 Where it runs
 - **Web app** — the main reader.
 - **Desktop app** (Tauri) — same reader, plus it can set up and launch a local GPU image
-  engine for you.
-- **Chrome extension** — illustrates articles you read on the web (shares the same engine).
+  engine for you, and its native shell gives the chat buddy **unrestricted web access**
+  (news front pages, DuckDuckGo search) that a browser tab's CORS rules would block.
+- **Chrome extension** — illustrates articles you read on the web (shares the same
+  engine; its background worker provides the same CORS-free web access).
 
 ---
 
@@ -191,11 +237,9 @@ Open **Chat** while reading to discuss the book with an AI that actually knows i
 ## Roadmap
 
 **Next up / under consideration**
-- **Web search to help understand a book** — *deferred on purpose.* The on-device model
-  can't browse on its own; adding web knowledge means the app fetches results and feeds
-  them in. The risk is **spoilers**, so the planned shape is an **opt-in, cloud-only**
-  lookup limited to what you've already read. (Today the app stays fully offline-capable
-  and spoiler-safe.)
+- **Render web articles with their original layout** — today an opened article is
+  converted to clean reader text; an optional sanitized-HTML view (keeping images and
+  headings, with illustrations still anchored to paragraphs) is sketched but deferred.
 - **Per-character LoRA styles** — pin a character with a dedicated LoRA for even tighter
   consistency (reference-image upload is in; the LoRA slot already exists).
 - **Bring the newest reader UI to the Chrome extension** — bigger image, caption, and the
@@ -208,6 +252,23 @@ Open **Chat** while reading to discuss the book with an AI that actually knows i
 - **Hosted option** — an optional managed backend so you don't need your own keys/GPU.
 
 **Done recently**
+- **The chat buddy home screen** — a full-window assistant (Freeform / Entertainment /
+  Technical voices) that finds books (library · Project Gutenberg · web · pasted text),
+  opens and illustrates them by voice (style + cadence included), generates images with
+  approval, retrieves real figures, does real math, manages the library, and hands the
+  conversation off into the book chat when a book opens.
+- **Chat that knows the book lazily** — a recent window plus an on-demand book search
+  tool, so simple requests are instant and deep questions can reach the whole book.
+- **Context window transparency** — provider-aware context budgets (local models sized to
+  their *actual* window via Ollama), a usage donut showing where every token goes, message
+  delete, and a one-click **Compact** that summarizes the conversation in place.
+- **Keyless web search everywhere it's possible** — Wikipedia/Commons out of the box,
+  DuckDuckGo full-web through the extension's and desktop app's CORS-free shells, and a
+  Project Gutenberg catalog (with random-classic picks) for whole books.
+- **Mature mode (adults only)** — opt-in unfiltered illustration + discussion of adult
+  fiction (relaxed Gemini/Flux safety settings + faithful-depiction prompts end to end).
+- **Smarter prompt naming** — locations now track the epithets the text uses ("the
+  fortress" → Basgiliath), so indirect references get the right place's visual details.
 - **One-API "native" mode** — when the same vendor (Gemini or OpenAI) serves text **and**
   images, opt into rendering through that vendor's **multimodal** model, which takes your
   uploaded character reference photos inline — cloud character-consistency without a local

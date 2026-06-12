@@ -1,4 +1,5 @@
 import { DirectTransport, type Transport } from "../transport/transport.js";
+import { MATURE_SAFETY_SETTINGS } from "../gemini-safety.js";
 import { base64ToBytes, bytesToBase64 } from "./base64.js";
 import type { ImageGenerationInput, ImageGenerationOutput, ImageProvider } from "./image-provider.js";
 
@@ -28,14 +29,6 @@ export interface GeminiNativeImageProviderOptions {
   /** Mature mode: BLOCK_NONE safetySettings so adult source scenes aren't filtered. */
   allowMature?: boolean;
 }
-
-/** All adjustable harm categories at BLOCK_NONE — sent only in mature mode. */
-const MATURE_SAFETY_SETTINGS = [
-  "HARM_CATEGORY_HARASSMENT",
-  "HARM_CATEGORY_HATE_SPEECH",
-  "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-  "HARM_CATEGORY_DANGEROUS_CONTENT",
-].map((category) => ({ category, threshold: "BLOCK_NONE" }));
 
 /** Used when discovery fails AND no model was pinned — broadly available on a standard key. */
 export const DEFAULT_GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image";
@@ -78,7 +71,7 @@ export class GeminiNativeImageProvider implements ImageProvider {
   private readonly explicitModel: string | undefined;
   private readonly baseUrl: string;
   private readonly apiKey: string;
-  private readonly safetySettings?: { category: string; threshold: string }[];
+  private readonly safetySettings?: readonly { category: string; threshold: string }[];
   /** Memoised model resolution (discovery runs once, then is reused). */
   private modelPromise: Promise<string> | undefined;
 

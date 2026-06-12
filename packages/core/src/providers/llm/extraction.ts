@@ -642,7 +642,6 @@ export function mergeExtraction(
     datasets: [...(existing.datasets ?? [])],
     processedChapters: [...existing.processedChapters],
   };
-  const knownEnvs = new Set(bible.environments.map((e) => e.name.toLowerCase()));
   const knownTerms = new Set(bible.glossary.map((g) => g.term.toLowerCase()));
 
   for (const c of raw.characters) {
@@ -696,18 +695,22 @@ export function mergeExtraction(
           have.add(d.toLowerCase());
         }
       }
+      // Add the canonical name + any newly-heard aliases, deduping against both the
+      // existing forms AND each other (the batch can carry "The Fortress"/"the fortress").
       const known = new Set(allNames(existingEnv));
-      const aliases = [
-        ...(existingEnv.aliases ?? []),
-        ...[e.name, ...rawAliases].filter((a) => !known.has(a.toLowerCase())),
-      ];
+      const aliases = [...(existingEnv.aliases ?? [])];
+      for (const a of [e.name, ...rawAliases]) {
+        if (!known.has(a.toLowerCase())) {
+          known.add(a.toLowerCase());
+          aliases.push(a);
+        }
+      }
       bible.environments[at] = {
         ...existingEnv,
         description: merged,
         ...(aliases.length ? { aliases } : {}),
       };
     } else {
-      knownEnvs.add(key);
       bible.environments.push({
         id: `env-${slug(e.name)}`,
         name: e.name,

@@ -1,4 +1,5 @@
 import { DirectTransport, type Transport } from "../transport/transport.js";
+import { MATURE_SAFETY_SETTINGS } from "../gemini-safety.js";
 import type { VisualBible } from "../../types/bible.js";
 import type { VisualRequest } from "../../types/content.js";
 import {
@@ -51,14 +52,6 @@ export interface GeminiProviderOptions {
   allowMature?: boolean;
 }
 
-/** All adjustable harm categories at BLOCK_NONE — sent only in mature mode. */
-const MATURE_SAFETY_SETTINGS = [
-  "HARM_CATEGORY_HARASSMENT",
-  "HARM_CATEGORY_HATE_SPEECH",
-  "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-  "HARM_CATEGORY_DANGEROUS_CONTENT",
-].map((category) => ({ category, threshold: "BLOCK_NONE" }));
-
 interface GeminiResponse {
   candidates?: {
     content?: { parts?: { text?: string }[] };
@@ -75,7 +68,7 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly ground: boolean;
-  private readonly safetySettings?: { category: string; threshold: string }[];
+  private readonly safetySettings?: readonly { category: string; threshold: string }[];
 
   constructor(opts: GeminiProviderOptions) {
     this.transport = opts.transport ?? new DirectTransport();

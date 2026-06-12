@@ -1,5 +1,6 @@
 import type { ChatCapable, ChatTurn } from "../providers/llm/chat.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
+import type { BookPassage } from "./book-passage-search.js";
 import {
   MAX_TOOL_ROUNDS,
   formatToolResult,

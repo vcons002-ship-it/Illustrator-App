@@ -91,12 +91,18 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable {
       { json: true, ...(input.signal ? { signal: input.signal } : {}) },
     );
     const raw = parseExtraction(text);
-    // The model responded but nothing parsed (truncated/malformed JSON, or a thinking
-    // preamble that ate the whole budget). Committing an "empty" chapter would leave
-    // its units with no scene prompts — stuck at "waiting to be illustrated" — so FAIL
-    // instead: the engine retries once, then the per-chapter prompt pass covers it.
-    if (text.trim() && isEmptyExtraction(raw)) {
-      throw new Error("Local LLM extraction response was not parseable JSON (likely truncated).");
+    // Nothing usable parsed — an empty/absent body, truncated/malformed JSON, or a
+    // thinking preamble that ate the budget. A JSON extraction always carries at least
+    // a summary + keyEvents, so an empty result (incl. an empty body, which would
+    // otherwise slip past) means failure. Committing it would leave the chapter's units
+    // with no scene prompts — stuck at "waiting to be illustrated" — so FAIL instead:
+    // the engine retries once, then the per-chapter prompt pass covers it.
+    if (isEmptyExtraction(raw)) {
+      throw new Error(
+        text.trim()
+          ? "Local LLM extraction response was not parseable JSON (likely truncated)."
+          : "Local LLM returned an empty extraction response.",
+      );
     }
     return mergeExtraction(input.existing, raw, input.chapterIndex, input.unitRanges);
   }

@@ -1,5 +1,6 @@
 export * from "./transport/transport.js";
 export * from "./catalog.js";
+export * from "./gemini-safety.js";
 export * from "./llm/llm-provider.js";
 export * from "./llm/chat.js";
 export * from "./llm/extraction.js";

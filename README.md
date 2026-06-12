@@ -61,6 +61,14 @@ EPUB ──▶ segment ──▶ Visual Bible (LLM pre-pass) ──▶ pipeline 
   block the reading UI; image bytes are transferred to the main thread zero-copy.
 - **Gaze-Sync UI** — a "contextual bloom" fade reveals each image as you reach
   it, and a "Fog of War" blur keeps spoiler imagery hidden until you scroll past.
+- **Conversational layer** — the landing page is a full-window **chat buddy**
+  (`packages/core/src/chat/buddy-*`) that drives the app through a provider-agnostic
+  JSON tool protocol: find books (library / Project Gutenberg / web / pasted text),
+  open + illustrate them (style & cadence included), generate images (approval-gated),
+  retrieve figures, calculate, manage the library. In-book, a reading-companion chat
+  shares the same protocol with spoiler-safe context, an on-demand `search_book` tool
+  (recent-window context, whole book reachable lazily), provider-aware context budgets
+  (local models sized to their real window), and a context-usage breakdown in the UI.
 
 ## Architecture
 
@@ -77,7 +85,9 @@ apps/
   extension/  Chrome MV3 overlay — illustrates any article; same engine + settings
               (API calls proxy through the background worker to bypass page CORS)
   desktop/    Tauri shell wrapping the web UI — downloads/launches a local GPU
-              engine (ComfyUI portable) and curated models; pending on-device verify
+              engine (ComfyUI portable) and curated models, plus a native
+              `http_fetch` command (the desktop twin of the extension's proxy)
+              giving the chat's web search/fetch CORS-free reach
 ```
 
 ### Designed-in seams (so v1 doesn't need rework later)
@@ -108,8 +118,20 @@ apps/
   resume) from the Settings picker (implemented; pending on-device verification).
 - **Local text:** WebLLM (on-device WebGPU) or an OpenAI-compatible local server
   (Ollama / LM Studio / llama.cpp); `ollama-setup.bat` installs Ollama and text
-  models download from the Settings menu with live progress. The ONNX/WebGPU
-  **image** provider remains a stub for a later phase.
+  models download from the Settings menu with live progress. Chat context budgets
+  are sized to the model's **actual** window (read from Ollama `/api/show`, safely
+  capped). The ONNX/WebGPU **image** provider remains a stub for a later phase.
+- **Keyless search & discovery:** with no Google Custom Search credentials, search
+  resolves to a layered keyless stack — Wikipedia (grounding) + Wikimedia Commons
+  (figures) always; **DuckDuckGo full-web** where a CORS-exempt transport exists
+  (extension background worker, the desktop shell's `http_fetch` command), with
+  automatic per-session fallback to Wikipedia; **Project Gutenberg** (Gutendex) for
+  whole-book discovery in the chat buddy.
+- **Mature mode (opt-in, adults only):** a Settings toggle that relaxes the
+  adjustable provider safety knobs (Gemini `safetySettings`, Flux `safety_tolerance`)
+  and threads faithful-depiction instructions through extraction, prompt-writing,
+  and chat — for intentionally adult source material. Claude/OpenAI expose no such
+  knob and keep their own policies.
 
 ## Develop
 
@@ -135,6 +157,8 @@ pnpm --filter @visual-reader/extension build
 
 ## Status
 
-v1 covers the fiction scene-illustration path end to end. Deliberately deferred
-(seams in place): info-graphics output, a hosted backend/billing, and the full
-local-WebGPU tier.
+v1 covers the fiction scene-illustration path end to end, plus the technical
+(Visual Atlas) mode, the conversational layer (home-screen chat buddy + in-book
+companion with tools), keyless web/book search, and opt-in mature mode.
+Deliberately deferred (seams in place): info-graphics output, sanitized-HTML
+article rendering, a hosted backend/billing, and the full local-WebGPU tier.
