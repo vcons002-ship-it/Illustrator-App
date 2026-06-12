@@ -83,16 +83,26 @@ describe("LocalServerLLMProvider chat errors", () => {
 });
 
 describe("LocalServerLLMProvider.contextLength", () => {
-  it("reads the architecture-prefixed context_length from /api/show", async () => {
-    const t = new FakeTransport({ model_info: { "llama.context_length": 131072, "llama.block_count": 32 } });
-    const ctx = await LocalServerLLMProvider.contextLength("http://localhost:11434/v1", "llama3.2", t);
-    expect(ctx).toBe(131072);
+  it("reads BOTH the Modelfile num_ctx (loaded) and the architectural max", async () => {
+    const t = new FakeTransport({
+      parameters: "stop <|im_end|>\nnum_ctx 40960\ntemperature 0.6",
+      model_info: { "qwen3.context_length": 262144, "qwen3.block_count": 32 },
+    });
+    const ctx = await LocalServerLLMProvider.contextLength("http://localhost:11434/v1", "qwen3", t);
+    expect(ctx).toEqual({ loaded: 40960, max: 262144 });
     expect(t.requests[0]!.url).toContain("/api/show");
-    expect((t.requests[0]!.body as { model: string }).model).toBe("llama3.2");
+    expect((t.requests[0]!.body as { model: string }).model).toBe("qwen3");
   });
 
-  it("returns undefined when no context_length key is present", async () => {
-    const t = new FakeTransport({ model_info: { "qwen2.block_count": 28 } });
+  it("returns only the architectural max when no num_ctx is set", async () => {
+    const t = new FakeTransport({ model_info: { "llama.context_length": 131072 } });
+    expect(await LocalServerLLMProvider.contextLength("http://x/v1", "llama3.2", t)).toEqual({
+      max: 131072,
+    });
+  });
+
+  it("returns undefined when neither signal is present", async () => {
+    const t = new FakeTransport({ model_info: { "qwen2.block_count": 28 }, parameters: "temperature 0.7" });
     expect(await LocalServerLLMProvider.contextLength("http://x/v1", "qwen2", t)).toBeUndefined();
   });
 });

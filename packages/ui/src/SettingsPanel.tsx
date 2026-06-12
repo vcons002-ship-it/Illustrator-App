@@ -155,6 +155,13 @@ export interface ReaderSettings {
   /** Chat-only local model (Ollama id or WebLLM id, per the active local backend). */
   chatLocalModel?: string;
   chatImageProvider?: "default" | ImageProviderId;
+  /**
+   * The context window (tokens) the LOCAL text server actually loads — overrides
+   * auto-detection. Needed when raised via OLLAMA_CONTEXT_LENGTH (invisible to any
+   * API) or for LM Studio/WebLLM (no query API). Unset = auto: the model's
+   * Modelfile num_ctx when Ollama reports one, else a conservative 4096.
+   */
+  localContextTokens?: number;
   /** Which local engine API to talk to (browser "your own server" path). */
   localBackend?: LocalBackendId;
   /** Base URL of a local engine you run yourself (browser path; persisted). */
@@ -345,6 +352,33 @@ export function SettingsPanel({
                   pullProgress={pullProgress}
                 />
               )}
+              <label style={rowStyle}>
+                <span>Context window (tokens) — optional</span>
+                <input
+                  type="number"
+                  min={1024}
+                  step={1024}
+                  placeholder="auto"
+                  value={value.localContextTokens ?? ""}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    if (Number.isFinite(n) && n > 0) {
+                      set({ localContextTokens: n });
+                    } else {
+                      // Cleared → drop the key (exactOptionalPropertyTypes: no undefined).
+                      const { localContextTokens: _drop, ...rest } = value;
+                      onChange(rest);
+                    }
+                  }}
+                />
+                <span style={{ opacity: 0.55, fontSize: 11 }}>
+                  What your server actually loads. Auto reads the model's Modelfile num_ctx
+                  from Ollama (many new models ship one — qwen3 = 40960), else assumes
+                  Ollama's ~4k default. Set this if you raised OLLAMA_CONTEXT_LENGTH (not
+                  visible to apps) or use LM Studio/WebLLM. Bigger window = the chat sends
+                  more book/history per turn — large values prefill slowly on local GPUs.
+                </span>
+              </label>
             </div>
           )}
 
