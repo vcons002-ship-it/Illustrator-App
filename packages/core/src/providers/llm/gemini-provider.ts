@@ -1,5 +1,6 @@
 import { DirectTransport, type Transport } from "../transport/transport.js";
 import { MATURE_SAFETY_SETTINGS } from "../gemini-safety.js";
+import { streamSse } from "./sse.js";
 import type { VisualBible } from "../../types/bible.js";
 import type { VisualRequest } from "../../types/content.js";
 import {
@@ -50,6 +51,8 @@ export interface GeminiProviderOptions {
    * default — Gemini's standard filters apply.
    */
   allowMature?: boolean;
+  /** Raw fetch for STREAMING chat (Transport buffers); defaults to global fetch. */
+  fetchImpl?: typeof fetch;
 }
 
 interface GeminiResponse {
@@ -69,6 +72,7 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable {
   private readonly apiKey: string;
   private readonly ground: boolean;
   private readonly safetySettings?: readonly { category: string; threshold: string }[];
+  private readonly fetchImpl: typeof fetch;
 
   constructor(opts: GeminiProviderOptions) {
     this.transport = opts.transport ?? new DirectTransport();
@@ -77,6 +81,7 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable {
     this.apiKey = opts.apiKey;
     this.ground = opts.ground ?? false;
     if (opts.allowMature) this.safetySettings = MATURE_SAFETY_SETTINGS;
+    this.fetchImpl = opts.fetchImpl ?? ((input, init) => fetch(input, init));
   }
 
   async extractEntities(input: EntityExtractionInput): Promise<VisualBible> {
@@ -121,19 +126,44 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable {
    */
   async chat(messages: ChatTurn[], opts: ChatOptions = {}): Promise<string> {
     const { system, turns } = splitSystem(messages);
+    const body = {
+      ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
+      contents: turns.map((t) => ({
+        role: t.role === "assistant" ? "model" : "user",
+        parts: [{ text: t.content }],
+      })),
+      generationConfig: { maxOutputTokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS },
+      ...(this.safetySettings ? { safetySettings: this.safetySettings } : {}),
+    };
+    // STREAMING path (SSE via raw fetch — Transport buffers) when tokens are wanted.
+    if (opts.onToken) {
+      let text = "";
+      await streamSse(
+        this.fetchImpl,
+        `${this.baseUrl}/models/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`,
+        {
+          body,
+          ...(opts.signal ? { signal: opts.signal } : {}),
+          onEvent: (e) => {
+            const delta = ((e as GeminiResponse).candidates?.[0]?.content?.parts ?? [])
+              .map((p) => p.text ?? "")
+              .join("");
+            if (delta) {
+              text += delta;
+              opts.onToken!(delta);
+            }
+          },
+        },
+      ).catch((err) => {
+        throw new Error(`Gemini chat stream failed with ${err instanceof Error ? err.message : String(err)}`);
+      });
+      return text.trim();
+    }
     const res = await this.transport.send({
       url: `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`,
       method: "POST",
       ...(opts.signal ? { signal: opts.signal } : {}),
-      body: {
-        ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
-        contents: turns.map((t) => ({
-          role: t.role === "assistant" ? "model" : "user",
-          parts: [{ text: t.content }],
-        })),
-        generationConfig: { maxOutputTokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS },
-        ...(this.safetySettings ? { safetySettings: this.safetySettings } : {}),
-      },
+      body,
     });
     if (!res.ok) throw new Error(`Gemini chat request failed with status ${res.status}`);
     const data = await res.json<GeminiResponse>();

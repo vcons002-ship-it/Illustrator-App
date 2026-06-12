@@ -77,11 +77,16 @@ export function createLLMProvider(id: string, opts: LLMProviderOptions = {}): LL
       return new GeminiLLMProvider({
         apiKey: requireKey(opts.key, "gemini"),
         ...(transport ? { transport } : {}),
+        ...(opts.fetch ? { fetchImpl: opts.fetch } : {}),
         ...(opts.ground ? { ground: true } : {}),
         ...(opts.allowMature ? { allowMature: true } : {}),
       });
     case "openai":
-      return new OpenAILLMProvider({ apiKey: requireKey(opts.key, "openai"), ...(transport ? { transport } : {}) });
+      return new OpenAILLMProvider({
+        apiKey: requireKey(opts.key, "openai"),
+        ...(transport ? { transport } : {}),
+        ...(opts.fetch ? { fetchImpl: opts.fetch } : {}),
+      });
     case "local":
       return new WebLLMProvider();
     case "local-server": {
@@ -91,6 +96,7 @@ export function createLLMProvider(id: string, opts: LLMProviderOptions = {}): LL
         model: opts.model ?? DEFAULT_LOCAL_SERVER_TEXT_MODEL,
         ...(opts.key ? { apiKey: opts.key } : {}),
         ...(transport ? { transport } : {}),
+        ...(opts.fetch ? { fetchImpl: opts.fetch } : {}),
       });
     }
     case "mock":

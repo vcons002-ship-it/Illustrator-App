@@ -11,6 +11,7 @@ import {
   promptUserContent,
 } from "./extraction.js";
 import type { EntityExtractionInput, LLMProvider } from "./llm-provider.js";
+import { streamSse } from "./sse.js";
 import {
   DEFAULT_CHAT_MAX_TOKENS,
   type ChatCapable,
@@ -33,10 +34,17 @@ export interface OpenAIProviderOptions {
   /** Override base URL — point at a proxy or Azure/OpenAI-compatible endpoint. */
   baseUrl?: string;
   transport?: Transport;
+  /** Raw fetch for STREAMING chat (Transport buffers); defaults to global fetch. */
+  fetchImpl?: typeof fetch;
 }
 
 interface ChatResponse {
   choices?: { message?: { content?: string } }[];
+}
+
+/** One Chat Completions SSE frame (stream: true). */
+interface ChatStreamEvent {
+  choices?: { delta?: { content?: string } }[];
 }
 
 export class OpenAILLMProvider implements LLMProvider, ChatCapable {
@@ -46,11 +54,14 @@ export class OpenAILLMProvider implements LLMProvider, ChatCapable {
   private readonly baseUrl: string;
   private readonly apiKey: string;
 
+  private readonly fetchImpl: typeof fetch;
+
   constructor(opts: OpenAIProviderOptions) {
     this.transport = opts.transport ?? new DirectTransport();
     this.model = opts.model ?? "gpt-4o-mini";
     this.baseUrl = opts.baseUrl ?? "https://api.openai.com/v1";
     this.apiKey = opts.apiKey;
+    this.fetchImpl = opts.fetchImpl ?? ((input, init) => fetch(input, init));
   }
 
   async extractEntities(input: EntityExtractionInput): Promise<VisualBible> {
@@ -81,8 +92,32 @@ export class OpenAILLMProvider implements LLMProvider, ChatCapable {
     return text.trim();
   }
 
-  /** Reading-companion chat (buffered) — the same completion seam, multi-turn. */
+  /** Reading-companion chat. STREAMS deltas to `onToken` when the caller wants
+   * them (SSE via raw fetch — Transport buffers); buffered otherwise. */
   async chat(messages: ChatTurn[], opts: ChatOptions = {}): Promise<string> {
+    if (opts.onToken) {
+      let text = "";
+      await streamSse(this.fetchImpl, `${this.baseUrl}/chat/completions`, {
+        headers: { authorization: `Bearer ${this.apiKey}` },
+        body: {
+          model: this.model,
+          messages,
+          max_tokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
+          stream: true,
+        },
+        ...(opts.signal ? { signal: opts.signal } : {}),
+        onEvent: (e) => {
+          const delta = (e as ChatStreamEvent).choices?.[0]?.delta?.content;
+          if (delta) {
+            text += delta;
+            opts.onToken!(delta);
+          }
+        },
+      }).catch((err) => {
+        throw new Error(`OpenAI chat stream failed with ${err instanceof Error ? err.message : String(err)}`);
+      });
+      return text.trim();
+    }
     const text = await this.complete(messages, {
       json: false,
       maxTokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
