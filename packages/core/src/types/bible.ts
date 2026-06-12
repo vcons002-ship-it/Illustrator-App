@@ -111,6 +111,11 @@ export interface Character {
 export interface Environment {
   id: string;
   name: string;
+  /** Epithets/indirect names the text uses for this place ("the fortress",
+   * "the white city") — lets a scene prompt that says "the fortress" resolve to
+   * the canonical place and its visual details. Optional: bibles stored before
+   * this field exist without it. */
+  aliases?: string[];
   /** Static descriptive details of a recurring location. */
   description: string[];
   firstSeenChapter: number;

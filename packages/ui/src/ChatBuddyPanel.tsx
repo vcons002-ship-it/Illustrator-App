@@ -4,9 +4,10 @@ import type { BuddyPersona, BuddyToolCall } from "@visual-reader/core";
 
 /**
  * The landing-page chat buddy. Pure presentation, like ChatPanel — but rendered
- * INLINE in the empty state (no overlay): it IS the landing experience. Two
- * personas switch the buddy's voice (and the App's prompt): entertainment
- * (stories, recommendations) vs. technical (articles, papers, research).
+ * INLINE as the landing experience itself (full-window, no overlay). Three
+ * personas switch the buddy's voice (and the App's prompt): freeform (default —
+ * a general assistant that runs the app on request), entertainment (stories,
+ * recommendations) and technical (articles, papers, research).
  */
 
 export interface ChatBuddyPanelProps {
@@ -25,6 +26,8 @@ export interface ChatBuddyPanelProps {
   onDismissPendingTool: () => void;
   onCancel: () => void;
   onClearHistory: () => void;
+  /** Delete one message by index (must be referentially stable — see MessageBubble). */
+  onDeleteMessage?: (index: number) => void;
 }
 
 export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanelProps) {
@@ -58,9 +61,10 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   return (
     <div style={panelStyle}>
       <div style={headerStyle}>
-        <strong style={{ fontSize: 14 }}>Reading buddy</strong>
+        <strong style={{ fontSize: 14 }}>Chat</strong>
         <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
           <span style={personaGroupStyle}>
+            {personaButton("freeform", "Freeform", "General assistant — chat about anything; runs the app when asked")}
             {personaButton("entertainment", "Entertainment", "Stories, novels, fun reads — a book-club voice")}
             {personaButton("technical", "Technical", "Articles, papers, study material — a research voice")}
           </span>
@@ -77,11 +81,13 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           <div style={{ opacity: 0.55, fontSize: 12, padding: 12, lineHeight: 1.5 }}>
             {props.persona === "technical"
               ? "Ask for a topic — I can find articles, open them in the reader, and illustrate the concepts while we talk. Try “find me an article on the citric acid cycle and open it”."
-              : "Tell me what you feel like reading — I can open books from your library, find classics on Project Gutenberg, and illustrate them while we chat. Try “open Frankenstein and illustrate it”."}
+              : props.persona === "entertainment"
+                ? "Tell me what you feel like reading — I can open books from your library, find classics on Project Gutenberg, and illustrate them while we chat. Try “open Frankenstein and illustrate it”."
+                : "Chat about anything — questions, ideas, math, inventions. When you want the app to do something, just ask: “open a random classic and illustrate it in oil painting style”, “generate a picture of an apple”, “show me a diagram of a jet engine”."}
           </div>
         )}
         {props.messages.map((m, i) => (
-          <MessageBubble key={i} message={m} />
+          <MessageBubble key={i} message={m} index={i} {...(props.onDeleteMessage ? { onDelete: props.onDeleteMessage } : {})} />
         ))}
         {props.streamingText ? (
           <MessageBubble message={{ role: "assistant", text: props.streamingText }} />
@@ -144,9 +150,11 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   );
 });
 
+// Full-window landing experience: the chat IS the home screen, so it takes the
+// viewport (minus the header area) rather than floating as a small card.
 const panelStyle = {
-  width: "min(720px, 94vw)",
-  height: "min(56vh, 520px)",
+  width: "min(1100px, 96vw)",
+  height: "max(440px, calc(100vh - 290px))",
   background: "#16181d",
   color: "#e6e6e6",
   border: "1px solid rgba(255,255,255,0.12)",

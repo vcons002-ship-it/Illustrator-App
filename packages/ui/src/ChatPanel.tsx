@@ -37,6 +37,8 @@ export interface ChatPanelProps {
   onCancel: () => void;
   onClose: () => void;
   onClearHistory: () => void;
+  /** Delete one message by index (must be referentially stable — see MessageBubble). */
+  onDeleteMessage?: (index: number) => void;
 }
 
 export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
@@ -91,7 +93,7 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
             </div>
           )}
           {props.messages.map((m, i) => (
-            <MessageBubble key={i} message={m} />
+            <MessageBubble key={i} message={m} index={i} {...(props.onDeleteMessage ? { onDelete: props.onDeleteMessage } : {})} />
           ))}
           {props.streamingText ? (
             <MessageBubble message={{ role: "assistant", text: props.streamingText }} />
@@ -153,7 +155,17 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
 // token re-renders the panel — settled bubbles (which can hold images and link
 // lists, and grow without bound over a session) must not re-render with it.
 // Exported for the landing-page buddy panel, which renders the same bubbles.
-export const MessageBubble = memo(function MessageBubble({ message }: { message: ChatMessageVM }) {
+// `onDelete(index)` must be a STABLE callback for the same reason — a per-bubble
+// closure would defeat the memo.
+export const MessageBubble = memo(function MessageBubble({
+  message,
+  index,
+  onDelete,
+}: {
+  message: ChatMessageVM;
+  index?: number;
+  onDelete?: (index: number) => void;
+}) {
   const isUser = message.role === "user";
   const url = useMessageImageUrl(message.image);
   return (
@@ -164,6 +176,15 @@ export const MessageBubble = memo(function MessageBubble({ message }: { message:
         background: isUser ? "rgba(122,162,255,0.18)" : "rgba(255,255,255,0.06)",
       }}
     >
+      {onDelete !== undefined && index !== undefined && (
+        <button
+          style={deleteButtonStyle}
+          title="Delete this message (it leaves the conversation the model sees too)"
+          onClick={() => onDelete(index)}
+        >
+          ✕
+        </button>
+      )}
       {message.text ? <div style={{ whiteSpace: "pre-wrap" }}>{message.text}</div> : null}
       {url ? (
         <img src={url} alt="Chat image" decoding="async" style={{ maxWidth: "100%", borderRadius: 6, marginTop: message.text ? 6 : 0 }} />
@@ -245,6 +266,20 @@ const bubbleStyle = {
   borderRadius: 8,
   fontSize: 13,
   lineHeight: 1.45,
+  position: "relative",
+} as const;
+
+const deleteButtonStyle = {
+  position: "absolute",
+  top: 2,
+  right: 2,
+  background: "transparent",
+  color: "inherit",
+  border: "none",
+  fontSize: 10,
+  opacity: 0.35,
+  cursor: "pointer",
+  padding: "2px 4px",
 } as const;
 
 const approvalStyle = {

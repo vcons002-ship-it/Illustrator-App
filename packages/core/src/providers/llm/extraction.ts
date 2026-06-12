@@ -37,7 +37,7 @@ export interface RawExtraction {
     /** Distinct outfits the character is described wearing. */
     outfits?: { label: string; description: string }[];
   }[];
-  environments: { name: string; description: string[] }[];
+  environments: { name: string; description: string[]; aliases?: string[] }[];
   /** Named/notable non-human creatures (dragons, beasts…). Optional for back-compat. */
   creatures?: { name: string; aliases: string[]; kind: string; description: string[] }[];
   spoilers: { label: string }[];
@@ -110,6 +110,9 @@ export const EXTRACTION_SYSTEM =
   "Capture EVERY named location with a detailed visual " +
   "description (architecture, materials, layout, lighting, palette, mood) AND its world's " +
   "fashion and aesthetic; always refer to a location you already know by its established name. " +
+  "Record each location's 'aliases': the epithets and indirect names the TEXT uses for it " +
+  "('the fortress', 'the white city', 'the academy') — these let a scene that says 'the " +
+  "fortress' resolve to the right place; [] when the text only ever uses the proper name. " +
   "Capture notable non-human 'creatures' — dragons, beasts, monsters, mounts — separately " +
   "from human characters (do NOT put them in 'characters'). For each give its name (or a " +
   "descriptive label if unnamed, e.g. 'the black dragon'), any aliases, its 'kind' (dragon, " +
@@ -351,9 +354,10 @@ export const EXTRACTION_JSON_SCHEMA = {
         additionalProperties: false,
         properties: {
           name: { type: "string" },
+          aliases: { type: "array", items: { type: "string" } },
           description: { type: "array", items: { type: "string" } },
         },
-        required: ["name", "description"],
+        required: ["name", "aliases", "description"],
       },
     },
     creatures: {
@@ -656,10 +660,19 @@ export function mergeExtraction(
   }
   for (const e of raw.environments) {
     const key = e.name.toLowerCase();
-    const at = bible.environments.findIndex((env) => env.name.toLowerCase() === key);
+    const rawAliases = (e.aliases ?? []).map((a) => a.trim()).filter(Boolean);
+    // Match by canonical name OR alias, in both directions — a later chapter
+    // re-extracting "the fortress" must merge into Basgiliath, not fork it.
+    const allNames = (env: (typeof bible.environments)[number]) =>
+      [env.name, ...(env.aliases ?? [])].map((n) => n.toLowerCase());
+    const at = bible.environments.findIndex(
+      (env) =>
+        allNames(env).includes(key) || rawAliases.some((a) => allNames(env).includes(a.toLowerCase())),
+    );
     if (at >= 0) {
       // Known location → ACCUMULATE new description lines (so a chapter that adds
-      // detail enriches it, and a name-only mention later still has the full look).
+      // detail enriches it, and a name-only mention later still has the full look)
+      // and any newly-heard aliases.
       const existingEnv = bible.environments[at]!;
       const have = new Set(existingEnv.description.map((d) => d.toLowerCase()));
       const merged = [...existingEnv.description];
@@ -669,12 +682,22 @@ export function mergeExtraction(
           have.add(d.toLowerCase());
         }
       }
-      bible.environments[at] = { ...existingEnv, description: merged };
+      const known = new Set(allNames(existingEnv));
+      const aliases = [
+        ...(existingEnv.aliases ?? []),
+        ...[e.name, ...rawAliases].filter((a) => !known.has(a.toLowerCase())),
+      ];
+      bible.environments[at] = {
+        ...existingEnv,
+        description: merged,
+        ...(aliases.length ? { aliases } : {}),
+      };
     } else {
       knownEnvs.add(key);
       bible.environments.push({
         id: `env-${slug(e.name)}`,
         name: e.name,
+        ...(rawAliases.length ? { aliases: rawAliases } : {}),
         description: e.description,
         firstSeenChapter: chapterIndex,
       });

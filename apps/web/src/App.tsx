@@ -154,7 +154,7 @@ export function App() {
   const [buddyBusy, setBuddyBusy] = useState(false);
   const [buddyStreaming, setBuddyStreaming] = useState("");
   const [buddyActivity, setBuddyActivity] = useState("");
-  const [buddyPersona, setBuddyPersona] = useState<BuddyPersona>("entertainment");
+  const [buddyPersona, setBuddyPersona] = useState<BuddyPersona>("freeform");
   const [buddyPendingTool, setBuddyPendingTool] = useState<BuddyToolCall | undefined>();
   // The pending generate_image's transcript, folded in only on approval (same
   // injection guard as the book chat's pendingTranscript).
@@ -495,10 +495,23 @@ export function App() {
   );
 
   // Map the active paragraph back to its page and steer the predictive buffer.
+  // During a fast scroll no paragraph may be in the active band for a few frames
+  // (IntersectionObserver gap) — HOLD the last known page instead of snapping the
+  // status/caption/image to page 0 and back.
+  const lastActivePage = useRef(0);
+  useEffect(() => {
+    lastActivePage.current = 0;
+  }, [book]);
   const activePageIndex = useMemo(() => {
-    if (!book || !activeParagraphId) return 0;
-    const pageId = activeParagraphId.replace(/-\d+$/, "");
-    return Math.max(0, book.pages.findIndex((p) => p.id === pageId));
+    if (book && activeParagraphId) {
+      const pageId = activeParagraphId.replace(/-\d+$/, "");
+      const idx = book.pages.findIndex((p) => p.id === pageId);
+      if (idx >= 0) {
+        lastActivePage.current = idx;
+        return idx;
+      }
+    }
+    return lastActivePage.current;
   }, [book, activeParagraphId]);
 
   // Render units: a group of pages (or a whole chapter) shares one illustration.
@@ -555,8 +568,20 @@ export function App() {
     };
   }, [book, libraryStore]);
   // Persist (debounced) — image bytes ride along so generated pictures survive reload.
+  // The ref tracks whether this book's chat HELD messages this session: deleting the
+  // last one must clear the stored copy, but the initial empty render (before the
+  // history loads) must not wipe it.
+  const chatHadMessages = useRef(false);
   useEffect(() => {
-    if (!book || chatMessages.length === 0) return;
+    chatHadMessages.current = false;
+  }, [book]);
+  useEffect(() => {
+    if (!book) return;
+    if (chatMessages.length === 0) {
+      if (chatHadMessages.current) void libraryStore.deleteChatHistory?.(book.id);
+      return;
+    }
+    chatHadMessages.current = true;
     const t = setTimeout(() => void libraryStore.putChatHistory?.(book.id, chatMessages), 500);
     return () => clearTimeout(t);
   }, [book, chatMessages, libraryStore]);
@@ -706,8 +731,14 @@ export function App() {
       cancelled = true;
     };
   }, [libraryStore]);
+  const buddyHadMessages = useRef(false);
   useEffect(() => {
-    if (buddyMessages.length === 0) return;
+    if (buddyMessages.length === 0) {
+      // Same delete-vs-initial-empty distinction as the book chat's persist.
+      if (buddyHadMessages.current) void libraryStore.deleteChatHistory?.(BUDDY_CHAT_ID);
+      return;
+    }
+    buddyHadMessages.current = true;
     const t = setTimeout(() => void libraryStore.putChatHistory?.(BUDDY_CHAT_ID, buddyMessages), 500);
     return () => clearTimeout(t);
   }, [buddyMessages, libraryStore]);
@@ -736,9 +767,11 @@ export function App() {
                   ? `Searching for “${e.call.query}”…`
                   : e.call.tool === "search_images"
                     ? `Looking for images of “${e.call.query}”…`
-                    : e.call.tool === "set_visual_style"
-                      ? "Updating the visual settings…"
-                      : e.call.tool === "open_library_book"
+                    : e.call.tool === "calculate"
+                      ? "Calculating…"
+                      : e.call.tool === "set_visual_style"
+                        ? "Updating the visual settings…"
+                        : e.call.tool === "open_library_book"
                         ? "Opening from your library…"
                         : e.call.tool === "open_pasted_text"
                           ? "Opening your text…"
@@ -813,6 +846,8 @@ export function App() {
                 .slice(0, 3)
                 .map((h) => ({ url: h.contextLink ?? h.link, ...(h.title ? { title: h.title } : {}) })),
             });
+          } else if (e.calc) {
+            appendBuddy({ role: "tool", text: `🧮 ${e.calc.expression} = ${e.calc.result}` });
           }
         }
       });
@@ -874,6 +909,13 @@ export function App() {
     setBuddyPendingTool(undefined);
     void libraryStore.deleteChatHistory?.(BUDDY_CHAT_ID);
   }, [libraryStore]);
+  // Stable per-index delete handlers (memoised bubbles take the SAME function).
+  const onDeleteBuddyMessage = useCallback((index: number) => {
+    setBuddyMessages((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+  const onDeleteChatMessage = useCallback((index: number) => {
+    setChatMessages((prev) => prev.filter((_, i) => i !== index));
+  }, []);
   const buddyPanelMessages = useMemo(
     () =>
       buddyMessages.map((m) => ({
@@ -1363,6 +1405,7 @@ export function App() {
             onDismissPendingTool={onDismissBuddyPendingTool}
             onCancel={buddyCancel}
             onClearHistory={onClearBuddy}
+            onDeleteMessage={onDeleteBuddyMessage}
           />
         </section>
       )}
@@ -1474,6 +1517,7 @@ export function App() {
           onCancel={chatCancel}
           onClose={onCloseChat}
           onClearHistory={onClearChat}
+          onDeleteMessage={onDeleteChatMessage}
         />
       )}
 
@@ -2196,7 +2240,7 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#bcd0ff",
   },
   empty: { padding: "40px 40px 16px", maxWidth: 560, lineHeight: 1.6 },
-  buddySection: { padding: "0 40px 48px" },
+  buddySection: { padding: "0 24px 32px", display: "flex", justifyContent: "center" },
   reader: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) minmax(320px, 520px)",

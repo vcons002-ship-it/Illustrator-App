@@ -60,6 +60,11 @@ describe("parseBuddyToolCall", () => {
       query: "thermodynamic cycle diagram",
     });
     expect(parseBuddyToolCall('{"tool":"random_books"}')).toEqual({ tool: "random_books" });
+    expect(parseBuddyToolCall('{"tool":"calculate","expression":"sqrt(144) * 2"}')).toEqual({
+      tool: "calculate",
+      expression: "sqrt(144) * 2",
+    });
+    expect(parseBuddyToolCall('{"tool":"calculate"}')).toBeUndefined();
     expect(
       parseBuddyToolCall(
         '{"tool":"set_visual_style","style":"oil painting","pagesPerImage":"chapter","illustrateAfter":"chapter"}',
@@ -193,6 +198,12 @@ describe("formatBuddyToolResult", () => {
     expect(
       formatBuddyToolResult({ tool: "generate_image", prompt: "an apple" }, { image: { ok: true } }),
     ).toContain("shown to the reader");
+    expect(
+      formatBuddyToolResult(
+        { tool: "calculate", expression: "sqrt(144) * 2" },
+        { calc: { expression: "sqrt(144) * 2", result: "24" } },
+      ),
+    ).toContain("sqrt(144) * 2 = 24");
   });
 
   it("formats remove_library_book (hit and miss)", () => {
@@ -225,5 +236,12 @@ describe("buildBuddySystemPrompt", () => {
     const tech = buildBuddySystemPrompt({ persona: "technical", library: [] });
     expect(tech).toContain("research buddy");
     expect(tech).toContain("LIBRARY is empty");
+  });
+
+  it("freeform leads as a general assistant and never steers toward books", () => {
+    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    expect(prompt).toContain("general conversational assistant");
+    expect(prompt).toContain("OPERATE ON REQUEST");
+    expect(prompt).toContain("NEVER steer the chat toward opening");
   });
 });

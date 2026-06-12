@@ -736,6 +736,18 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             );
           }
           const style = styleId ? getImageStyle(styleId) : undefined;
+          // Apply to the WORKER's settings immediately: an open later in this
+          // same buddy turn must render with the new style — the main thread's
+          // committed copy arrives only after a React re-render (and its init
+          // would otherwise race the open with stale settings).
+          if (settings) {
+            settings = {
+              ...settings,
+              ...(style ? { imageStyle: style.id } : {}),
+              ...(call.pagesPerImage !== undefined ? { pagesPerImage: call.pagesPerImage } : {}),
+              ...(call.illustrateAfter !== undefined ? { illustrateAfter: call.illustrateAfter } : {}),
+            };
+          }
           post({
             type: "buddySettings",
             requestId: msg.requestId,
@@ -763,6 +775,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             ...(e.result.imageHits ? { imageHits: e.result.imageHits } : {}),
             ...(e.result.applied ? { applied: e.result.applied } : {}),
             ...(e.result.removed ? { removed: e.result.removed } : {}),
+            ...(e.result.calc ? { calc: e.result.calc } : {}),
             ...(e.result.error ? { error: e.result.error } : {}),
           });
       },
@@ -797,10 +810,8 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
     if (call.tool !== "generate_image") throw new Error("Only generate_image needs approval.");
     if (!settings) throw new Error("Settings not initialised yet.");
     let cs = chatSettingsOf(settings);
-    if (call.style) {
-      const styleId = resolveStyleRequest(call.style);
-      if (styleId) cs = { ...cs, imageStyle: styleId };
-    }
+    const styleId = call.style ? resolveStyleRequest(call.style) : undefined;
+    if (styleId) cs = { ...cs, imageStyle: styleId };
     if (call.model && cs.imageProvider === "local") {
       const resolved = resolveModelRequest(call.model, await installedModelNames(cs));
       if (resolved) cs = { ...cs, localModel: resolved };
@@ -810,7 +821,10 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
     // connected) falls back to the book's real provider rather than placeholder art.
     const useBook = built.diagnostics.image.mock && bookProviders && !bookProviders.imageMock;
     const image = useBook ? bookProviders!.image : built.image;
-    const tier = useBook ? bookProviders!.tier : built.tier;
+    // The fallback must not also swallow an in-chat style request: the book tier
+    // carries the SETTINGS style, so re-apply the resolved override on top of it.
+    const baseTier = useBook ? bookProviders!.tier : built.tier;
+    const tier = styleId ? { ...baseTier, style: styleId } : baseTier;
     const out = await renderFromText(image, tier, call.prompt, call.steps);
     post(
       {

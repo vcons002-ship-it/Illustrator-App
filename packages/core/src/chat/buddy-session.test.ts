@@ -223,6 +223,28 @@ describe("runBuddyTurn", () => {
     expect(outcome.text).toContain("Dune");
   });
 
+  it("runs calculate in-core and feeds the exact value back", async () => {
+    const llm = scriptedLlm([
+      '{"tool":"calculate","expression":"sqrt(144) * 2"}',
+      "That works out to exactly 24.",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "what's sqrt(144) times 2?" }],
+      deps: {
+        openLibraryBook: async () => opened("?"),
+        openWebText: async () => opened("?"),
+        openPastedText: async (call) => opened(call.title),
+        removeLibraryBook: async () => ({ removed: "x" }),
+        setVisualStyle: async () => ({}),
+      },
+    });
+    expect(outcome.toolResults[0]!.result.calc).toEqual({ expression: "sqrt(144) * 2", result: "24" });
+    expect(llm.calls[1]!.some((t) => t.role === "user" && t.content.includes("= 24"))).toBe(true);
+    expect(outcome.text).toContain("24");
+  });
+
   it("stops tool-looping after MAX_BUDDY_TOOL_ROUNDS", async () => {
     const llm = scriptedLlm(['{"tool":"search_web","query":"loop"}']);
     const outcome = await runBuddyTurn({

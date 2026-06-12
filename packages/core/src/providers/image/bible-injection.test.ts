@@ -100,6 +100,30 @@ describe("findBibleTermsInText", () => {
     expect(kinds).toEqual(["character", "creature", "location", "outfit"]);
   });
 
+  it("matches a location by alias and carries every form for replacement", () => {
+    const bible = bibleWith({
+      environments: [
+        {
+          id: "env-basgiliath",
+          name: "Basgiliath",
+          aliases: ["the fortress", "the black keep"],
+          description: ["dark basalt fortress", "torch-lit walls"],
+          firstSeenChapter: 0,
+        },
+      ],
+    });
+    // The prompt never names Basgiliath — the alias alone must resolve it.
+    const terms = findBibleTermsInText("Soldiers march toward the fortress at dawn", bible);
+    const loc = terms.find((t) => t.kind === "location");
+    expect(loc).toBeDefined();
+    expect(loc!.names).toEqual(["Basgiliath", "the fortress", "the black keep"]);
+    expect(loc!.descriptor).toContain("basalt");
+    // And the CLIP-path replacement swaps the alias text for the visual details.
+    const out = injectBibleTerms("Soldiers march toward the fortress at dawn", [loc!]);
+    expect(out).toContain("basalt");
+    expect(out).not.toContain("the fortress");
+  });
+
   it("does NOT expand an outfit label when its owning character is absent from the prompt", () => {
     const bible = bibleWith({
       characters: [

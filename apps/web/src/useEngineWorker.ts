@@ -126,6 +126,7 @@ export type BuddyStreamEvent =
       imageHits?: ImageSearchHit[];
       applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
       removed?: string;
+      calc?: { expression: string; result: string };
       error?: string;
     }
   /** A buddy tool opened a book — the app should open it (and start visuals). */
@@ -397,6 +398,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
             ...(msg.imageHits ? { imageHits: msg.imageHits } : {}),
             ...(msg.applied ? { applied: msg.applied } : {}),
             ...(msg.removed ? { removed: msg.removed } : {}),
+            ...(msg.calc ? { calc: msg.calc } : {}),
             ...(msg.error ? { error: msg.error } : {}),
           });
           break;
