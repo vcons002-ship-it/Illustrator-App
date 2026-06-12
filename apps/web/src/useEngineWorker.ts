@@ -54,6 +54,8 @@ export interface EngineWorkerApi {
   /** Independent pause state for the bible build vs. image rendering. */
   paused: { bible: boolean; images: boolean };
   openBook: (book: BookSource) => void;
+  /** Exit the current book back to the landing page (disposes the worker engine). */
+  closeBook: () => void;
   startGeneration: () => void;
   pause: () => void;
   resume: () => void;
@@ -524,6 +526,18 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     [settings],
   );
 
+  const closeBook = useCallback(() => {
+    // Forget the book so a later settings change can't re-open it, reset the
+    // local view, and tell the worker to dispose its engine.
+    lastBook.current = undefined;
+    generationRequested.current = false;
+    setBible(undefined);
+    setResults(new Map());
+    setStatus("");
+    setBibleStatus("");
+    send({ type: "close" });
+  }, []);
+
   const startGeneration = useCallback(() => {
     generationRequested.current = true;
     send({ type: "start" });
@@ -710,6 +724,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     generating,
     paused,
     openBook,
+    closeBook,
     startGeneration,
     pause,
     resume,

@@ -19,6 +19,8 @@ import {
 export interface ChatToolDeps {
   searchWeb?: (query: string) => Promise<WebSearchHit[]>;
   searchImages?: (query: string) => Promise<ImageSearchHit[]>;
+  /** Find passages elsewhere in the book (sync — it's a local text scan). */
+  searchBook?: (query: string) => BookPassage[];
 }
 
 export type ChatTurnEvent =
@@ -98,13 +100,17 @@ export async function runChatTurn(opts: {
 }
 
 async function runSearchTool(
-  call: ToolCall & { tool: "search_web" | "search_images" },
+  call: ToolCall & { tool: "search_web" | "search_images" | "search_book" },
   tools: ChatToolDeps,
 ): Promise<ToolResultPayload> {
   try {
     if (call.tool === "search_web") {
       if (!tools.searchWeb) return { error: "web search isn't available right now" };
       return { hits: await tools.searchWeb(call.query) };
+    }
+    if (call.tool === "search_book") {
+      if (!tools.searchBook) return { error: "book search isn't available right now" };
+      return { passages: tools.searchBook(call.query) };
     }
     if (!tools.searchImages) return { error: "image search isn't available right now" };
     return { imageHits: await tools.searchImages(call.query) };

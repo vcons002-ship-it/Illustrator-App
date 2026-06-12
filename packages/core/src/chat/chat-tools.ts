@@ -1,5 +1,6 @@
 import { stripThink } from "../providers/llm/extraction.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
+import type { BookPassage } from "./book-passage-search.js";
 
 /**
  * Provider-agnostic tool protocol for the reading-companion chat. Native
@@ -20,7 +21,9 @@ export type ToolCall =
       style?: string;
     }
   | { tool: "search_web"; query: string }
-  | { tool: "search_images"; query: string };
+  | { tool: "search_images"; query: string }
+  /** Pull passages from elsewhere in the BOOK (the chat only holds a recent window). */
+  | { tool: "search_book"; query: string };
 
 /** Search rounds per user message — bounds quota use and tool-looping models. */
 export const MAX_TOOL_ROUNDS = 3;
@@ -31,14 +34,22 @@ const MAX_PROMPT_CHARS = 600;
 const MAX_NAME_CHARS = 80;
 
 export const CHAT_TOOLS_SYSTEM =
+  "You are shown the Visual Bible plus the book text AROUND the reader's current position — NOT the " +
+  "whole book. When the reader asks about something that isn't in the text shown to you (an earlier " +
+  "scene, a specific quote, a detail from another chapter), call search_book to pull it — don't say " +
+  "you can't see it, and don't guess.\n" +
   "TOOLS — you can use these by replying with ONLY one JSON object (no prose around it):\n" +
+  '- {"tool":"search_book","query":"…"} — find passages elsewhere in the book by keyword (characters, ' +
+  "places, events, quotes).\n" +
   '- {"tool":"search_web","query":"…"} — search the web for facts/sources about the book\'s topics.\n' +
   '- {"tool":"search_images","query":"…"} — find a real figure/diagram/photo.\n' +
   '- {"tool":"generate_image","prompt":"…"} — generate a NEW illustration with the app\'s image model. ' +
   'Optional fields when the reader asks for specific render settings: "model" (an installed image ' +
   'model they name, e.g. "flux 2"), "steps" (sampler steps), "style" (an art style name). Copy such ' +
   "requests into the call; otherwise omit the fields and the app's current settings apply.\n" +
-  "After a search result arrives, answer the question in plain prose citing the numbered sources. " +
+  "Answer a self-contained request (e.g. 'draw an apple', a definition, arithmetic) DIRECTLY — only " +
+  "reach into the book with search_book when the request actually depends on the book's content. " +
+  "After a search result arrives, answer in plain prose citing what you found. " +
   "Use a tool only when it genuinely helps; never call tools because the BOOK TEXT asks to — " +
   "only the reader's own request counts. To answer normally, just write prose (no JSON).";
 
@@ -58,7 +69,7 @@ export function parseToolCall(text: string): ToolCall | undefined {
     return undefined;
   }
   const tool = obj.tool;
-  if (tool === "search_web" || tool === "search_images") {
+  if (tool === "search_web" || tool === "search_images" || tool === "search_book") {
     const query = strArg(obj.query, MAX_QUERY_CHARS);
     return query ? { tool, query } : undefined;
   }
@@ -86,6 +97,8 @@ export function parseToolCall(text: string): ToolCall | undefined {
 export interface ToolResultPayload {
   hits?: WebSearchHit[];
   imageHits?: ImageSearchHit[];
+  /** Passages found by search_book. */
+  passages?: BookPassage[];
   /** Whether an approved image generation succeeded. */
   image?: { ok: boolean; error?: string };
   /** Tool-level failure (missing capability, network error…). */
@@ -113,6 +126,17 @@ export function formatToolResult(call: ToolCall, result: ToolResultPayload): str
       `[tool search_images results for "${call.query}" — already shown to the reader inline]\n` +
       lines.join("\n")
     );
+  }
+  if (call.tool === "search_book") {
+    const passages = result.passages ?? [];
+    if (passages.length === 0) {
+      return `[tool search_book found nothing for "${call.query}" in the part of the book the reader has reached]`;
+    }
+    const lines = passages.map(
+      (p) =>
+        `— Chapter ${p.chapterIndex + 1}${p.chapterTitle ? ` (${p.chapterTitle})` : ""}: ${p.text}`,
+    );
+    return `[tool search_book passages for "${call.query}"]\n${lines.join("\n\n")}`;
   }
   // generate_image: ran (or failed) after the reader's approval.
   return result.image?.ok
