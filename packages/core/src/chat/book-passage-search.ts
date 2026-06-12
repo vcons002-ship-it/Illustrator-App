@@ -28,10 +28,13 @@ export function searchBookPassages(
   count = 3,
   maxChars = 700,
 ): BookPassage[] {
+  // Unicode-aware split: an ASCII-only class would mangle accented/non-Latin
+  // queries ("café" → "caf", a CJK query → nothing). Keep the >2 length filter
+  // for Latin noise words but let short non-Latin tokens (CJK words) through.
   const terms = query
     .toLowerCase()
-    .split(/[^a-z0-9']+/)
-    .filter((t) => t.length > 2 && !STOPWORDS.has(t));
+    .split(/[^\p{L}\p{N}']+/u)
+    .filter((t) => t.length > 0 && !STOPWORDS.has(t) && (t.length > 2 || /\P{ASCII}/u.test(t)));
   if (terms.length === 0) return [];
   const scored: { score: number; passage: BookPassage }[] = [];
   for (const ch of chapters) {

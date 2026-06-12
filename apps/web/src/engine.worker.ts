@@ -119,10 +119,20 @@ const corsProxyFetch: typeof fetch = async (input, init) => {
     throw new TypeError(reply.error ?? "The desktop fetch proxy failed.");
   }
   const bytes = reply.bodyBase64 ? base64ToBytes(reply.bodyBase64) : new ArrayBuffer(0);
+  // The native fetch already decoded the body to identity bytes; drop the
+  // hop-by-hop/length headers so `Response` doesn't claim the (now wrong)
+  // content-length or a content-encoding the bytes no longer carry (L7).
+  const replyHeaders = { ...reply.headers };
+  for (const k of Object.keys(replyHeaders)) {
+    const lk = k.toLowerCase();
+    if (lk === "content-encoding" || lk === "content-length" || lk === "transfer-encoding") {
+      delete replyHeaders[k];
+    }
+  }
   return new Response(NO_BODY_STATUS.has(reply.status) ? null : bytes, {
     status: reply.status,
     statusText: reply.statusText,
-    headers: reply.headers,
+    headers: replyHeaders,
   });
 };
 
@@ -149,9 +159,15 @@ function postPaused(): void {
   if (!bibleActive) post({ type: "status", message: imagesPaused ? "Image generation paused" : "" });
 }
 
-/** Begin generation now if the engine is up, else remember to start on open. */
+/** True while `handleOpen` is mid-flight (the engine object exists but its book
+ * isn't loaded yet). A `start` that arrives in this window must NOT call
+ * startGeneration() — `openBook` resets generationStarted afterwards, swallowing
+ * it — so it defers via pendingStart, which handleOpen replays once open resolves. */
+let opening = false;
+
+/** Begin generation now if the engine is up AND idle, else remember to start. */
 function beginGeneration(): void {
-  if (engine) {
+  if (engine && !opening) {
     engine.startGeneration();
     post({ type: "generating", value: true });
   } else {
@@ -1068,7 +1084,8 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
       }
       cs = { ...cs, localModel: resolved };
     }
-    const built = buildProviders(cs);
+    const cfTool = corsFetch();
+    const built = buildProviders(cs, cfTool ? { corsFetch: cfTool } : {});
     // Same per-slot fallback as chat text: a mock chat-image slot (local engine not
     // connected) falls back to the book's real provider rather than placeholder art.
     const useBook = built.diagnostics.image.mock && bookProviders && !bookProviders.imageMock;
@@ -1124,6 +1141,7 @@ function handleClose(): void {
   currentBible = undefined;
   bookProviders = undefined;
   pendingStart = false;
+  opening = false;
   bibleActive = false;
   bibleRunStartMs = 0;
   bibleCharacters = 0;
@@ -1144,6 +1162,7 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     post({ type: "error", message: "Worker received open before init" });
     return;
   }
+  opening = true;
   try {
     // A NEW engine is built per book — stop the previous one FIRST, or its bible loop
     // and renders keep running and its callbacks mingle the old book's characters and
@@ -1251,9 +1270,16 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     // Loads the book + restores cached bible/images, but does NOT generate. The
     // user triggers generation via the "start" message ("Begin generating book").
     await engine.openBook(renderBook);
-    // Resume generation if "start" was requested while this open was in flight.
-    if (pendingStart) beginGeneration();
+    // Open is complete — now a deferred start can actually run (and `beginGeneration`
+    // below sees `opening === false`). Replaying covers a `start` that arrived during
+    // the open (e.g. the buddy's "open and illustrate it") as well as a settings re-open.
+    opening = false;
+    if (pendingStart) {
+      pendingStart = false;
+      beginGeneration();
+    }
   } catch (err) {
+    opening = false;
     post({ type: "error", message: err instanceof Error ? err.message : String(err) });
   }
 }

@@ -454,11 +454,12 @@ export function App() {
   // Exit the current book back to the landing page (the buddy/home screen). The
   // book stays in the library; this just closes the reader and stops generation.
   const onExitBook = useCallback(() => {
+    chatCancel(); // stop any in-flight chat turn before its book is torn down
     setShowChat(false);
     setShowCharacters(false);
     setBook(undefined);
     closeBook();
-  }, [closeBook]);
+  }, [closeBook, chatCancel]);
 
   // Load the library on mount (recent books to switch between).
   useEffect(() => {
@@ -565,7 +566,15 @@ export function App() {
   // A buddy-initiated open seeds the history with the handed-off landing
   // conversation, then the stored history is PREPENDED when it loads (it's
   // older than the handoff — and a plain set would race away the handoff).
+  // Tracks the live book so an async chat continuation can detect a switch/exit
+  // and not write the old book's reply into the new book's chat (cross-book bleed).
+  const chatBookRef = useRef<BookSource | undefined>(book);
   useEffect(() => {
+    // A chat turn for the previous book is now irrelevant — cancel it so the worker
+    // stops streaming/spending and its completion is ignored (the continuation also
+    // guards on the book id).
+    chatCancel();
+    chatBookRef.current = book;
     const handoff = buddyHandoff.current;
     buddyHandoff.current = undefined;
     setChatMessages(book && handoff ? handoff : []);
@@ -581,16 +590,22 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [book, libraryStore]);
+  }, [book, libraryStore, chatCancel]);
   // Persist (debounced) — image bytes ride along so generated pictures survive reload.
-  // The ref tracks whether this book's chat HELD messages this session: deleting the
-  // last one must clear the stored copy, but the initial empty render (before the
-  // history loads) must not wipe it.
+  // `chatHadMessages` tracks whether this book's chat HELD messages this session:
+  // deleting the last one must clear the stored copy, but the initial empty render
+  // (before the history loads) must not wipe it. `persistedFor` guards the book-switch
+  // race: on A→B the effect re-runs with book=B but chatMessages still A's (the load
+  // effect's reset hasn't flushed) — so SKIP the first run for a new book, which both
+  // avoids writing A's messages under B.id and resets the had-messages flag.
   const chatHadMessages = useRef(false);
+  const persistedFor = useRef<BookSource | undefined>(undefined);
   useEffect(() => {
-    chatHadMessages.current = false;
-  }, [book]);
-  useEffect(() => {
+    if (persistedFor.current !== book) {
+      persistedFor.current = book;
+      chatHadMessages.current = false;
+      return;
+    }
     if (!book) return;
     if (chatMessages.length === 0) {
       if (chatHadMessages.current) void libraryStore.deleteChatHistory?.(book.id);
@@ -616,6 +631,7 @@ export function App() {
   const onChatSend = useCallback(
     async (text: string) => {
       if (!book) return;
+      const turnBookId = book.id; // guard: ignore this turn if the reader switches/exits
       const history = chatTurnsOf(chatMessages);
       appendChat({ role: "user", text });
       setChatBusy(true);
@@ -664,6 +680,9 @@ export function App() {
           }
         },
       );
+      // The reader switched books or exited mid-turn — this reply belongs to a book
+      // that's no longer open; drop it rather than write it into another book's chat.
+      if (chatBookRef.current?.id !== turnBookId) return;
       setChatBusy(false);
       setChatStreaming("");
       setChatActivity("");
@@ -676,8 +695,10 @@ export function App() {
         setChatPendingTool(res.pendingTool);
         return;
       }
-      if (res.text) {
-        // The transcript carries the model-facing turns (incl. any tool rounds).
+      // Store the model-facing transcript whenever there was one (tool rounds), even
+      // if the final visible prose is empty — otherwise the next turn loses the
+      // exchange and the tool feedback the model expects to have seen (L5).
+      if (res.text || res.transcript.length > 0) {
         appendChat({
           role: "assistant",
           text: res.text,

@@ -43,11 +43,23 @@ export class DuckDuckGoSearch {
   /** Top organic results (ads filtered), in page order. */
   async searchWeb(query: string, count = 5): Promise<WebSearchHit[]> {
     const url = `${this.baseUrl}?q=${encodeURIComponent(query)}&kl=wt-wt`;
-    const res = await this.transport.send({ url, method: "GET" });
+    let res;
+    try {
+      res = await this.transport.send({ url, method: "GET" });
+    } catch (err) {
+      // The request never completed — CORS in a plain browser tab, or offline.
+      // CORS is PERMANENT for this realm, so this is what should latch DDG off
+      // (a non-ok HTTP status below is transient and must not).
+      throw new DdgUnavailableError(err instanceof Error ? err.message : String(err));
+    }
     if (!res.ok) throw new Error(`DuckDuckGo search failed with status ${res.status}`);
     return parseLiteResults(await res.text()).slice(0, Math.min(10, Math.max(1, count)));
   }
 }
+
+/** Marks a TRANSPORT-level failure (CORS/offline) — the only thing that should
+ * disable DDG for the session. HTTP-status/parse errors are transient. */
+export class DdgUnavailableError extends Error {}
 
 /**
  * Parse the Lite results page: each organic result is an anchor with class
@@ -146,8 +158,11 @@ export class KeylessSearch implements FigureSearch {
         if (hits.length > 0) return hits;
         // Parsed to nothing (markup drift / bot wall): fall through this call,
         // but keep trying DDG — a niche query can legitimately have no results.
-      } catch {
-        this.state.ddgUnavailable = true;
+      } catch (err) {
+        // Only a CORS/offline failure is permanent for the session; a transient
+        // HTTP status or parse error falls through to Wikipedia for THIS call but
+        // leaves DDG enabled for the next one.
+        if (err instanceof DdgUnavailableError) this.state.ddgUnavailable = true;
       }
     }
     return this.wiki.searchWeb(query, count);

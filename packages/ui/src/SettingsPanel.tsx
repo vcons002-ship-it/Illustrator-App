@@ -1401,11 +1401,12 @@ const buttonStyle = {
 } as const;
 
 const panelStyle = {
-  // Floats OVER the page (anchored under the Settings button) instead of pushing
-  // the header/reader down when opened.
-  position: "absolute",
-  top: "calc(100% + 6px)",
-  right: 0,
+  // Floats OVER the page instead of pushing the header/reader down. Anchored to the
+  // VIEWPORT's top-right (not the button) so it can never clip off-screen when the
+  // button-heavy header wraps and the Settings button lands mid-row.
+  position: "fixed",
+  top: 8,
+  right: 8,
   zIndex: 60,
   display: "flex",
   flexDirection: "column",
@@ -1414,12 +1415,11 @@ const panelStyle = {
   paddingRight: 16, // room for the internal scrollbar so it doesn't overlap inputs
   border: "1px solid rgba(255,255,255,0.18)",
   borderRadius: 8,
-  width: "min(340px, 92vw)",
+  width: "min(340px, calc(100vw - 16px))",
   background: "#16181d",
   boxShadow: "0 12px 40px rgba(0,0,0,0.55)",
-  // Bound the height to the viewport so the panel gets its OWN scrollbar instead
-  // of overflowing the screen.
-  maxHeight: "min(80vh, calc(100vh - 96px))",
+  // Own scrollbar instead of overflowing the screen.
+  maxHeight: "calc(100vh - 16px)",
   overflowY: "auto",
 } as const;
 

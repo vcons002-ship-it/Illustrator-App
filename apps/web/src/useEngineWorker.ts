@@ -636,6 +636,10 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
         // timeout as a visible error rather than a forever-spinning panel.
         const timeout = setTimeout(() => {
           if (chatRequests.current.delete(requestId)) {
+            // Tell the worker to stop too (else it streams into the void and burns
+            // the model) and clear the active id so it can't be left un-cancellable.
+            send({ type: "chatCancel", requestId });
+            if (activeChatRequestId.current === requestId) activeChatRequestId.current = undefined;
             resolve({ text: "", transcript: [], error: "The chat timed out — try again." });
           }
         }, 180_000);
@@ -654,7 +658,17 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     (call: ToolCall): Promise<ChatToolRender> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
-        chatToolRequests.current.set(requestId, resolve);
+        // A dead/HMR worker can't answer — surface a timeout so the approval flow
+        // doesn't spin on "Generating the image…" forever (M5).
+        const timeout = setTimeout(() => {
+          if (chatToolRequests.current.delete(requestId)) {
+            resolve({ error: "The image render timed out — try again." });
+          }
+        }, 180_000);
+        chatToolRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
         send({ type: "chatTool", requestId, call });
       }),
     [],
@@ -674,9 +688,12 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
         activeBuddyRequestId.current = requestId;
-        // Same stale-worker guard as `chat`: surface a timeout instead of spinning.
+        // Same stale-worker guard as `chat`: surface a timeout instead of spinning,
+        // and cancel the worker turn + clear the active id (M6).
         const timeout = setTimeout(() => {
           if (buddyRequests.current.delete(requestId)) {
+            send({ type: "chatCancel", requestId });
+            if (activeBuddyRequestId.current === requestId) activeBuddyRequestId.current = undefined;
             resolve({ text: "", transcript: [], error: "The chat timed out — try again." });
           }
         }, 180_000);

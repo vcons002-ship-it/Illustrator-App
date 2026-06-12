@@ -357,7 +357,9 @@ export function parseExtraction(content: string): RawExtraction {
       }),
       environments: asArray(json.environments).map((e) => {
         const o = e as Record<string, unknown>;
-        return { name: str(o.name), description: strArray(o.description) };
+        // aliases (epithets like "the fortress") drive indirect-reference resolution
+        // in the bible — drop them and local readers lose the feature cloud readers get.
+        return { name: str(o.name), aliases: strArray(o.aliases), description: strArray(o.description) };
       }),
       creatures: asArray(json.creatures).map((c) => {
         const o = c as Record<string, unknown>;
