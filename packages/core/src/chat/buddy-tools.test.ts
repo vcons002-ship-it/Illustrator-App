@@ -244,4 +244,14 @@ describe("buildBuddySystemPrompt", () => {
     expect(prompt).toContain("OPERATE ON REQUEST");
     expect(prompt).toContain("NEVER steer the chat toward opening");
   });
+
+  it("every persona carries the show-me-vs-generate image-tool rule", () => {
+    for (const persona of ["freeform", "entertainment", "technical"] as const) {
+      const prompt = buildBuddySystemPrompt({ persona, library: [] });
+      expect(prompt).toContain("PICKING THE IMAGE TOOL");
+      expect(prompt).toContain("search_images");
+      // The persona text itself must not bias toward generation.
+      expect(prompt).not.toContain("offer concept art");
+    }
+  });
 });
