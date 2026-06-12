@@ -292,8 +292,14 @@ fn http_fetch_blocking(req: HttpFetchRequest) -> Result<HttpFetchResult, String>
     if !(req.url.starts_with("https://") || req.url.starts_with("http://")) {
         return Err("Only http(s) URLs can be fetched.".into());
     }
+    // A real User-Agent is REQUIRED by some hosts: Wikimedia (the keyless image/
+    // figure search) returns 403 to a client with none, and reqwest built with
+    // default-features=false sends no default UA. The browser/extension paths get
+    // the webview's UA for free; this proxy must set one or desktop figure search
+    // 403s. A request that carries its own User-Agent header still overrides this.
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
+        .user_agent("VisualReader/1.0 (https://github.com/vcons002-ship-it/illustrator-app)")
         .build()
         .map_err(|e| e.to_string())?;
     let method =
