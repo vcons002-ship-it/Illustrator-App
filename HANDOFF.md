@@ -59,6 +59,32 @@ Ollama does); DDG search inert in the plain web app (CORS, by design); desktop
 `http_fetch` + managed-engine runtime still need on-device verification; mature
 mode unverified against live provider APIs.
 
+### Audit follow-ups DEFERRED (design calls, not yet done)
+A two-agent audit of the session diff fixed the high/medium issues (see the
+"Audit fixes" commit). Deliberately left for a decision:
+- **`fullBookText` over-budget windowing** (`chat-context.ts`) — a single chapter
+  larger than the budget (web articles/papers via `open_web_text`; technical mode
+  is always full-view) is force-included un-sliced, blowing the context budget.
+  `readSoFarText` tail-slices correctly; `fullBookText` should window the current
+  chapter around the reader too.
+- **DDG link↔snippet pairing** (`ddg-search.ts`) — paired by index across two
+  regex passes; a result with a link but no snippet cell shifts all following
+  snippets. Needs a single sequential scan + a markup fixture test.
+- **`open_web_text` SSRF** (`buddy-tools.ts`) — accepts `http://localhost`/RFC-1918
+  hosts; harmless in the CORS-bound web app, but the desktop/extension transports
+  are CORS-exempt. Cheap to block loopback/private hosts.
+- **Buddy-turn settings ownership** (`engine.worker.ts` / `App.tsx`) — a same-turn
+  `set_visual_style`→`open` still races a stale `init` from the main thread; it
+  self-heals via the follow-up `tune`, but the clean fix is the worker opening the
+  book itself.
+- **Delete-by-stable-key** (`App.tsx`/`ChatPanel`) — message delete is by index,
+  which races the async history prepend; switch to an `at`-keyed delete.
+- **Buddy→book handoff dedupe** — re-opening a book that was buddy-opened before
+  duplicates the handed-off bubbles (persisted last time + handed off again).
+- Minor: `lastActivePage` resets one render late; `useScrollDepth` settle assumes
+  Map order == document order; Rust `http_fetch` collapses duplicate response
+  headers (harmless today).
+
 ## Previous session: performance pass (no behavior changes)
 
 A full-codebase performance audit, then the high-leverage batch implemented:
