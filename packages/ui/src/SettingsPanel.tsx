@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   IMAGE_PROVIDERS,
   IMAGE_STYLES,
@@ -265,6 +265,8 @@ export function SettingsPanel({
   pullProgress = {},
 }: SettingsPanelProps) {
   const [open, setOpen] = useState(false);
+  // Settings filter: typing hides non-matching groups and force-opens matches.
+  const [query, setQuery] = useState("");
   const set = (patch: Partial<ReaderSettings>) => onChange({ ...value, ...patch });
   const setKey = (id: string, key: string) => set({ keys: { ...value.keys, [id]: key } });
 
@@ -291,18 +293,28 @@ export function SettingsPanel({
           {/* The panel floats at the viewport's top-right, over the Settings button —
               so it needs its OWN always-visible close control. */}
           <div style={closeRowStyle}>
-            <strong>Settings</strong>
-            <button onClick={() => setOpen(false)} style={closeButtonStyle} aria-label="Close settings">
-              ✕ Close
-            </button>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <strong>Settings</strong>
+              <button onClick={() => setOpen(false)} style={closeButtonStyle} aria-label="Close settings">
+                ✕ Close
+              </button>
+            </div>
+            <input
+              type="search"
+              placeholder="Find a setting… (style, key, context, chat, quality)"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              style={searchStyle}
+              aria-label="Filter settings"
+            />
           </div>
-          <div style={sectionHeaderStyle}>
-            <span>1 · Read &amp; analyse — text model</span>
-            <span style={sectionHintStyle}>
-              Reads the book, learns characters/places, writes the illustration prompts. Changes
-              apply via ↻ Redo → Story analysis (or → Prompts).
-            </span>
-          </div>
+          <Group
+            q={query}
+            title="📖 1 · Read & analyse — text model"
+            hint="Reads the book, learns characters/places, writes the illustration prompts. Changes apply via ↻ Redo → Story analysis (or → Prompts)."
+            keywords="text provider llm claude gemini openai api key local ollama lm studio llama webgpu on-device server model download pull context window tokens"
+            defaultOpen
+          >
           <label style={rowStyle}>
             <span>Text (story understanding)</span>
             <select
@@ -389,7 +401,13 @@ export function SettingsPanel({
               </label>
             </div>
           )}
+          </Group>
 
+          <Group
+            q={query}
+            title="⏱ Illustration cadence"
+            keywords="illustrate after chapter book when timing cadence generate"
+          >
           <label style={rowStyle}>
             <span>Illustrate after</span>
             <select
@@ -403,14 +421,15 @@ export function SettingsPanel({
               <option value="chapter">Each chapter done (faster)</option>
             </select>
           </label>
+          </Group>
 
-          <div style={sectionHeaderStyle}>
-            <span>2 · Paint — image model</span>
-            <span style={sectionHintStyle}>
-              New paintings always use these settings. Apply them to already-painted pictures
-              with ↻ Redo → All images (or → This image).
-            </span>
-          </div>
+          <Group
+            q={query}
+            title="🎨 2 · Paint — image provider"
+            hint="New paintings always use these settings. Apply them to already-painted pictures with ↻ Redo → All images (or → This image)."
+            keywords="image provider flux gemini openai dall-e api key local gpu comfyui automatic1111"
+            defaultOpen
+          >
           <label style={rowStyle}>
             <span>Images</span>
             <select
@@ -425,7 +444,13 @@ export function SettingsPanel({
             </select>
           </label>
           {imageInfo?.needsKey && <KeyField info={imageInfo} value={value.keys[imageInfo.id] ?? ""} onChange={(k) => setKey(imageInfo.id, k)} />}
+          </Group>
 
+          <Group
+            q={query}
+            title="🖌 Look & layout"
+            keywords="art style anime manga watercolor oil painting comic photorealistic pages per image quality draft ultra aspect ratio portrait landscape panels per view grid comic page local model checkpoint"
+          >
           <label style={rowStyle}>
             <span>Art style</span>
             <select value={value.imageStyle ?? "auto"} onChange={(e) => set({ imageStyle: e.target.value })}>
@@ -575,7 +600,13 @@ export function SettingsPanel({
               </span>
             </label>
           )}
+          </Group>
 
+          <Group
+            q={query}
+            title="🔞 Content"
+            keywords="mature adult explicit nsfw content filter safety moderation uncensored"
+          >
           <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
             <input
               type="checkbox"
@@ -592,11 +623,13 @@ export function SettingsPanel({
               </span>
             </span>
           </label>
+          </Group>
 
-          <details style={rowStyle}>
-            <summary style={{ cursor: "pointer", fontSize: 13, opacity: 0.85 }}>
-              Scientific sources (technical books)
-            </summary>
+          <Group
+            q={query}
+            title="🔬 Scientific sources (technical books)"
+            keywords="google custom search programmable engine cx key grounding figures wikimedia wikipedia citations sources real diagrams"
+          >
             <p style={{ opacity: 0.6, fontSize: 11, margin: "4px 0 8px" }}>
               For books imported as <em>technical</em>: retrieve REAL figures/diagrams (correct
               labels and data) before generating one, and ground the analysis in Google Search.
@@ -643,12 +676,13 @@ export function SettingsPanel({
                 facts are sourced regardless of which model reads the book.
               </span>
             </label>
-          </details>
+          </Group>
 
-          <details style={rowStyle}>
-            <summary style={{ cursor: "pointer", fontSize: 13, opacity: 0.85 }}>
-              Book chat (reading companion)
-            </summary>
+          <Group
+            q={query}
+            title="💬 Chat (buddy & reading companion)"
+            keywords="chat buddy companion local model ollama webllm chat provider chat image override private"
+          >
             <p style={{ opacity: 0.6, fontSize: 11, margin: "4px 0 8px" }}>
               The chat panel can run on a different model than the book analysis. Defaults to
               local (free &amp; private); when the local option isn’t connected it falls back to
@@ -712,8 +746,13 @@ export function SettingsPanel({
                 ))}
               </select>
             </label>
-          </details>
+          </Group>
 
+          <Group
+            q={query}
+            title="⚙️ Local engine & advanced"
+            keywords="comfyui automatic1111 a1111 connect url lora style pack download sampler steps cfg scheduler vae text encoder native one api multimodal reference photos model files"
+          >
           {sameVendorNative(value) && <NativeModeRow value={value} set={set} />}
 
           {isDesktop && value.imageProvider === "local" && (
@@ -882,6 +921,7 @@ export function SettingsPanel({
               </label>
             </details>
           )}
+          </Group>
 
           <p style={{ opacity: 0.6, margin: "4px 0 0" }}>
             Keys are stored encrypted on this device only.
@@ -1433,6 +1473,75 @@ function ModelSelect({
   );
 }
 
+/**
+ * One titled, collapsible, SEARCHABLE settings group. The filter box hides
+ * non-matching groups and force-opens matches — so finding a setting is "type a
+ * word", not "scroll a 1400-line column". `keywords` carry the synonyms a user
+ * might type (provider names, "nsfw", "cx"…) beyond the visible title/hint.
+ */
+function Group({
+  q,
+  title,
+  hint,
+  keywords,
+  defaultOpen,
+  children,
+}: {
+  q: string;
+  title: string;
+  hint?: string;
+  keywords?: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [userOpen, setUserOpen] = useState(defaultOpen ?? false);
+  const query = q.trim().toLowerCase();
+  const hay = `${title} ${hint ?? ""} ${keywords ?? ""}`.toLowerCase();
+  const matches = !query || query.split(/\s+/).every((t) => hay.includes(t));
+  if (!matches) return null;
+  const isOpen = query ? true : userOpen; // searching always reveals the contents
+  return (
+    <details
+      open={isOpen}
+      onToggle={(e) => {
+        if (!query) setUserOpen((e.target as HTMLDetailsElement).open);
+      }}
+      style={groupStyle}
+    >
+      <summary style={groupSummaryStyle}>
+        <span style={{ fontWeight: 600 }}>{title}</span>
+        {hint ? <span style={{ ...sectionHintStyle, display: "block" }}>{hint}</span> : null}
+      </summary>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 8 }}>{children}</div>
+    </details>
+  );
+}
+
+const groupStyle = {
+  border: "1px solid rgba(255,255,255,0.12)",
+  borderRadius: 8,
+  padding: "8px 10px",
+  background: "rgba(255,255,255,0.03)",
+} as const;
+
+const groupSummaryStyle = {
+  cursor: "pointer",
+  fontSize: 13,
+  lineHeight: 1.4,
+} as const;
+
+const searchStyle = {
+  width: "100%",
+  marginTop: 8,
+  background: "rgba(255,255,255,0.07)",
+  color: "inherit",
+  border: "1px solid rgba(255,255,255,0.2)",
+  borderRadius: 6,
+  padding: "6px 8px",
+  fontSize: 12,
+  boxSizing: "border-box",
+} as const;
+
 const buttonStyle = {
   background: "transparent",
   border: "1px solid rgba(255,255,255,0.3)",
@@ -1447,9 +1556,7 @@ const closeRowStyle = {
   top: 0,
   zIndex: 1,
   display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 8,
+  flexDirection: "column",
   margin: "-12px -16px 4px -12px", // span the panel's padding so the bar is flush
   padding: "10px 12px",
   background: "#16181d",
@@ -1493,17 +1600,6 @@ const rowStyle = {
   display: "flex",
   flexDirection: "column",
   gap: 4,
-} as const;
-
-/** Workflow-stage section header (matches the header bar: 1 Read → 2 Paint). */
-const sectionHeaderStyle = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 2,
-  marginTop: 6,
-  paddingTop: 8,
-  borderTop: "1px solid rgba(255,255,255,0.12)",
-  fontWeight: 600,
 } as const;
 
 const sectionHintStyle = {
