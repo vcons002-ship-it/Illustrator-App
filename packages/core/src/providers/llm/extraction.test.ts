@@ -898,6 +898,39 @@ describe("extractionUserContent bounding (perf)", () => {
   });
 });
 
+describe("mature mode", () => {
+  const bible = createEmptyBible("b");
+  const baseReq = {
+    kind: "scene_illustration" as const,
+    bookId: "b",
+    pageId: "u-0",
+    pageIndex: 0,
+    chapterIndex: 0,
+    sourceText: "They embraced.",
+    characterIds: [],
+    environmentIds: [],
+    creatureIds: [],
+    spoilerIds: [],
+  };
+
+  it("prepends the mature note to extraction + prompt content only when enabled", () => {
+    const off = extractionUserContent({ bookId: "b", chapterIndex: 0, chapterText: "x", existing: bible });
+    expect(off).not.toContain("MATURE MODE");
+    const on = extractionUserContent({
+      bookId: "b",
+      chapterIndex: 0,
+      chapterText: "x",
+      existing: bible,
+      allowMature: true,
+    });
+    expect(on).toContain("MATURE MODE");
+    expect(on.startsWith("[MATURE MODE")).toBe(true); // leads the content
+
+    expect(promptUserContent(baseReq, bible)).not.toContain("MATURE MODE");
+    expect(promptUserContent({ ...baseReq, allowMature: true }, bible)).toContain("MATURE MODE");
+  });
+});
+
 describe("promptSystemFor", () => {
   it("picks the technical (concept/diagram) template for technical_illustration", () => {
     expect(promptSystemFor("technical_illustration")).toBe(TECHNICAL_PROMPT_SYSTEM);

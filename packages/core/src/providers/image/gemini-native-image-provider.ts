@@ -25,7 +25,17 @@ export interface GeminiNativeImageProviderOptions {
   model?: string;
   baseUrl?: string;
   transport?: Transport;
+  /** Mature mode: BLOCK_NONE safetySettings so adult source scenes aren't filtered. */
+  allowMature?: boolean;
 }
+
+/** All adjustable harm categories at BLOCK_NONE — sent only in mature mode. */
+const MATURE_SAFETY_SETTINGS = [
+  "HARM_CATEGORY_HARASSMENT",
+  "HARM_CATEGORY_HATE_SPEECH",
+  "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+  "HARM_CATEGORY_DANGEROUS_CONTENT",
+].map((category) => ({ category, threshold: "BLOCK_NONE" }));
 
 /** Used when discovery fails AND no model was pinned — broadly available on a standard key. */
 export const DEFAULT_GEMINI_IMAGE_MODEL = "gemini-2.5-flash-image";
@@ -68,6 +78,7 @@ export class GeminiNativeImageProvider implements ImageProvider {
   private readonly explicitModel: string | undefined;
   private readonly baseUrl: string;
   private readonly apiKey: string;
+  private readonly safetySettings?: { category: string; threshold: string }[];
   /** Memoised model resolution (discovery runs once, then is reused). */
   private modelPromise: Promise<string> | undefined;
 
@@ -76,6 +87,7 @@ export class GeminiNativeImageProvider implements ImageProvider {
     this.explicitModel = opts.model;
     this.baseUrl = opts.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta";
     this.apiKey = opts.apiKey;
+    if (opts.allowMature) this.safetySettings = MATURE_SAFETY_SETTINGS;
   }
 
   /** The image model to use — a pinned one, or the best the key can access (cached). */
@@ -124,6 +136,7 @@ export class GeminiNativeImageProvider implements ImageProvider {
           responseModalities: ["TEXT", "IMAGE"],
           imageConfig: { aspectRatio: geminiAspectRatio(input.width, input.height) },
         },
+        ...(this.safetySettings ? { safetySettings: this.safetySettings } : {}),
       },
       ...(input.signal ? { signal: input.signal } : {}),
     });

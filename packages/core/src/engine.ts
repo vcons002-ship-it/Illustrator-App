@@ -466,6 +466,7 @@ export class Engine {
             // Technical books (papers/textbooks) use the Visual-Atlas extraction prompt.
             ...(this.book?.contentMode ? { contentMode: this.book.contentMode } : {}),
             ...(groundingContext ? { groundingContext } : {}),
+            ...(this.tier.allowMature ? { allowMature: true } : {}),
             signal: ac.signal,
           });
         } catch {

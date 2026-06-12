@@ -43,7 +43,21 @@ export interface GeminiProviderOptions {
    * vary by model), it silently retries ungrounded — grounding never breaks analysis.
    */
   ground?: boolean;
+  /**
+   * Mature mode: send `safetySettings: BLOCK_NONE` so Gemini doesn't filter the
+   * explicit/adult content of the book being illustrated and discussed. Off by
+   * default — Gemini's standard filters apply.
+   */
+  allowMature?: boolean;
 }
+
+/** All adjustable harm categories at BLOCK_NONE — sent only in mature mode. */
+const MATURE_SAFETY_SETTINGS = [
+  "HARM_CATEGORY_HARASSMENT",
+  "HARM_CATEGORY_HATE_SPEECH",
+  "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+  "HARM_CATEGORY_DANGEROUS_CONTENT",
+].map((category) => ({ category, threshold: "BLOCK_NONE" }));
 
 interface GeminiResponse {
   candidates?: {
@@ -61,6 +75,7 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly ground: boolean;
+  private readonly safetySettings?: { category: string; threshold: string }[];
 
   constructor(opts: GeminiProviderOptions) {
     this.transport = opts.transport ?? new DirectTransport();
@@ -68,6 +83,7 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable {
     this.baseUrl = opts.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta";
     this.apiKey = opts.apiKey;
     this.ground = opts.ground ?? false;
+    if (opts.allowMature) this.safetySettings = MATURE_SAFETY_SETTINGS;
   }
 
   async extractEntities(input: EntityExtractionInput): Promise<VisualBible> {
@@ -123,6 +139,7 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable {
           parts: [{ text: t.content }],
         })),
         generationConfig: { maxOutputTokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS },
+        ...(this.safetySettings ? { safetySettings: this.safetySettings } : {}),
       },
     });
     if (!res.ok) throw new Error(`Gemini chat request failed with status ${res.status}`);
@@ -141,6 +158,7 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable {
         ? { responseMimeType: "application/json", responseSchema: EXTRACTION_JSON_SCHEMA }
         : {},
       ...(withTool ? { tools: [{ google_search: {} }] } : {}),
+      ...(this.safetySettings ? { safetySettings: this.safetySettings } : {}),
     });
     const url = `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`;
     let res = await this.transport.send({ url, method: "POST", body: body(opts.ground === true) });

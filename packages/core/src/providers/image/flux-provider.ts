@@ -23,6 +23,11 @@ export interface FluxProviderOptions {
   pollIntervalMs?: number;
   /** Max number of polls before giving up. */
   maxPolls?: number;
+  /**
+   * Mature mode: send `safety_tolerance: 6` (BFL's most permissive; default is 2)
+   * so adult source scenes aren't moderation-blocked. Off by default.
+   */
+  allowMature?: boolean;
 }
 
 interface SubmitResponse {
@@ -42,6 +47,7 @@ export class FluxProvider implements ImageProvider {
   private readonly apiKey: string;
   private readonly pollIntervalMs: number;
   private readonly maxPolls: number;
+  private readonly safetyTolerance?: number;
 
   constructor(opts: FluxProviderOptions) {
     this.transport = opts.transport ?? new DirectTransport();
@@ -49,6 +55,7 @@ export class FluxProvider implements ImageProvider {
     this.apiKey = opts.apiKey;
     this.pollIntervalMs = opts.pollIntervalMs ?? 1000;
     this.maxPolls = opts.maxPolls ?? 60;
+    if (opts.allowMature) this.safetyTolerance = 6;
   }
 
   async generate(input: ImageGenerationInput): Promise<ImageGenerationOutput> {
@@ -69,6 +76,7 @@ export class FluxProvider implements ImageProvider {
         width: input.width ?? 1024,
         height: input.height ?? 1024,
         steps: input.quality === "sketch" ? 4 : input.quality === "standard" ? 20 : 40,
+        ...(this.safetyTolerance !== undefined ? { safety_tolerance: this.safetyTolerance } : {}),
       },
       ...(signal ? { signal } : {}),
     });
