@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   IMAGE_PROVIDERS,
   IMAGE_STYLES,
@@ -826,6 +826,30 @@ export function SettingsPanel({
 }
 
 function KeyField({ info, value, onChange }: { info: ProviderInfo; value: string; onChange: (k: string) => void }) {
+  // Local draft, committed after a short pause (and on blur). Each commit flows
+  // into app-level settings — re-rendering the whole app and, for keys, an
+  // identity rebuild downstream — so it must not happen per keystroke.
+  const [draft, setDraft] = useState(value);
+  const commitFn = useRef(onChange);
+  commitFn.current = onChange;
+  const lastCommitted = useRef(value);
+  const commit = (text: string): void => {
+    lastCommitted.current = text;
+    commitFn.current(text);
+  };
+  // A value change we DIDN'T commit (hydration/decryption after mount) wins over
+  // the draft; our own commits round-tripping back must not clobber newer typing.
+  useEffect(() => {
+    if (value !== lastCommitted.current) {
+      lastCommitted.current = value;
+      setDraft(value);
+    }
+  }, [value]);
+  useEffect(() => {
+    if (draft === value) return;
+    const t = setTimeout(() => commit(draft), 300);
+    return () => clearTimeout(t);
+  }, [draft, value]);
   const saved = value.trim().length > 0;
   return (
     <label style={rowStyle}>
@@ -841,11 +865,14 @@ function KeyField({ info, value, onChange }: { info: ProviderInfo; value: string
       </span>
       <input
         type="password"
-        value={value}
+        value={draft}
         placeholder={info.keyHint ? `Paste your key (${info.keyHint})` : "Paste your key"}
         autoComplete="off"
         spellCheck={false}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          if (draft !== value) commit(draft);
+        }}
       />
       {info.keyBlurb && <span style={{ opacity: 0.6, fontSize: 12 }}>{info.keyBlurb}</span>}
     </label>

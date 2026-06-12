@@ -46,6 +46,22 @@ interface ModelsListResponse {
   models?: { name?: string; supportedGenerationMethods?: string[] }[];
 }
 
+/**
+ * Reference photos are stable per character for the whole book, but were being
+ * re-encoded to base64 (multi-MB string churn) on every render. The pipeline
+ * passes the same ArrayBuffer objects each time, so identity-keyed memoisation
+ * encodes each upload once per session.
+ */
+const refBase64Cache = new WeakMap<ArrayBuffer, string>();
+function cachedBase64(bytes: ArrayBuffer): string {
+  let b64 = refBase64Cache.get(bytes);
+  if (b64 === undefined) {
+    b64 = bytesToBase64(bytes);
+    refBase64Cache.set(bytes, b64);
+  }
+  return b64;
+}
+
 export class GeminiNativeImageProvider implements ImageProvider {
   readonly id = "gemini";
   private readonly transport: Transport;
@@ -94,7 +110,7 @@ export class GeminiNativeImageProvider implements ImageProvider {
     const parts: Record<string, unknown>[] = [{ text: input.prompt }];
     for (const ref of input.ipAdapterRefs ?? []) {
       parts.push({
-        inline_data: { mime_type: ref.mimeType, data: bytesToBase64(ref.bytes) },
+        inline_data: { mime_type: ref.mimeType, data: cachedBase64(ref.bytes) },
       });
     }
     const res = await this.transport.send({

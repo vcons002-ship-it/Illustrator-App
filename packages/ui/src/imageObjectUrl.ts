@@ -2,11 +2,23 @@ import { useEffect, useState } from "react";
 import type { ImageResult } from "@visual-reader/core";
 
 /**
- * Turn a ready result's image bytes into an object URL, revoking it on change.
+ * A render result as the UI displays it: the engine's raw `ArrayBuffer` image,
+ * or a `Blob` the host converted on receipt. Hosts SHOULD convert: a Blob's data
+ * is browser-managed (spillable out of the JS heap), so keeping every rendered
+ * page of a long book doesn't pin hundreds of MB of ArrayBuffers in memory.
+ * `ImageResult` stays assignable, so hosts without the conversion work as-is.
+ */
+export type DisplayImage =
+  | { bytes: ArrayBuffer; mimeType: string }
+  | { blob: Blob; mimeType: string };
+export type DisplayResult = Omit<ImageResult, "image"> & { image?: DisplayImage };
+
+/**
+ * Turn a ready result's image into an object URL, revoking it on change.
  * Shared by the single-image `ImagePanel` and the multi-panel `PanelGrid` so the
  * blob lifecycle is identical in both. Returns undefined while there's nothing to show.
  */
-export function useObjectUrl(result: ImageResult | undefined): string | undefined {
+export function useObjectUrl(result: DisplayResult | undefined): string | undefined {
   const [url, setUrl] = useState<string | undefined>(undefined);
   const image = result?.image;
   useEffect(() => {
@@ -14,7 +26,8 @@ export function useObjectUrl(result: ImageResult | undefined): string | undefine
       setUrl(undefined);
       return;
     }
-    const objectUrl = URL.createObjectURL(new Blob([image.bytes], { type: image.mimeType }));
+    const blob = "blob" in image ? image.blob : new Blob([image.bytes], { type: image.mimeType });
+    const objectUrl = URL.createObjectURL(blob);
     setUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
   }, [image]);

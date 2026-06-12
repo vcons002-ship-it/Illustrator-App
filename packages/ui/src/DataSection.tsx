@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { DataChart } from "./DataChart.js";
 import type { ChapterDataset } from "@visual-reader/core";
 
@@ -10,7 +11,9 @@ export interface DataSectionProps {
   datasets: ChapterDataset[];
 }
 
-export function DataSection({ datasets }: DataSectionProps) {
+// Memoised: it renders inside the reader aside (re-rendered per reading-progress
+// tick) while `datasets` only changes per chapter — props are stable in between.
+export const DataSection = memo(function DataSection({ datasets }: DataSectionProps) {
   if (datasets.length === 0) return null;
   return (
     <details
@@ -30,4 +33,4 @@ export function DataSection({ datasets }: DataSectionProps) {
       ))}
     </details>
   );
-}
+});

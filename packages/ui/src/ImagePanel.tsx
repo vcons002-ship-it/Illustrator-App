@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
-import type { ImageResult } from "@visual-reader/core";
 import { BloomTransition } from "./BloomTransition.js";
-import { useObjectUrl } from "./imageObjectUrl.js";
+import { useObjectUrl, type DisplayResult } from "./imageObjectUrl.js";
 import { placeholderLabel } from "./imageStatus.js";
 
 /**
@@ -15,7 +14,7 @@ import { placeholderLabel } from "./imageStatus.js";
  * blurred (a fast scroll to an unread page can never flash its image).
  */
 export interface ImagePanelProps {
-  result: ImageResult | undefined;
+  result: DisplayResult | undefined;
   /** Bloom target 0..1, driven by reading progress through the current page. */
   bloom: number;
   /** Changes per page so the bloom resets (starts hidden) on navigation. */

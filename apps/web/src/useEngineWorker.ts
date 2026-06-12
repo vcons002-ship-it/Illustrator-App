@@ -13,6 +13,7 @@ import type {
 import {
   identitySettingsKey,
   tuningSettingsKey,
+  type DisplayResult,
   type ProvidersDiagnostics,
   type ReaderSettings,
 } from "@visual-reader/ui";
@@ -32,7 +33,7 @@ import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
  */
 export interface EngineWorkerApi {
   bible: VisualBible | undefined;
-  results: Map<number, ImageResult>;
+  results: Map<number, DisplayResult>;
   status: string;
   /** Persistent Visual-Bible line (building… / complete · model), separate from `status`. */
   bibleStatus: string;
@@ -139,7 +140,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   // instead of silently reverting to "not started".
   const generationRequested = useRef(false);
   const [bible, setBible] = useState<VisualBible | undefined>();
-  const [results, setResults] = useState<Map<number, ImageResult>>(new Map());
+  const [results, setResults] = useState<Map<number, DisplayResult>>(new Map());
   const [status, setStatus] = useState("");
   const [bibleStatus, setBibleStatus] = useState("");
   const [workflow, setWorkflow] = useState({
@@ -217,7 +218,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
           setBible(msg.bible);
           break;
         case "update":
-          setResults((prev) => new Map(prev).set(msg.pageIndex, msg.result));
+          setResults((prev) => new Map(prev).set(msg.pageIndex, toDisplayResult(msg.result)));
           // Time each image (first "rendering" → "ready") into a rolling average.
           if (msg.result.status === "rendering" && !renderStart.current.has(msg.pageIndex)) {
             renderStart.current.set(msg.pageIndex, Date.now());
@@ -541,6 +542,22 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     chat,
     chatTool,
     chatCancel,
+  };
+}
+
+/**
+ * Re-home a result's image bytes into a Blob on receipt. The worker transfers
+ * the only copy of the bytes here, and the UI keeps EVERY page's result for the
+ * whole session — as ArrayBuffers that's hundreds of MB of pinned JS heap on a
+ * long book, while a Blob's data is browser-managed (it can spill out of the
+ * heap, and object URLs are made from a Blob anyway).
+ */
+function toDisplayResult(result: ImageResult): DisplayResult {
+  if (!result.image) return result;
+  const { image, ...rest } = result;
+  return {
+    ...rest,
+    image: { blob: new Blob([image.bytes], { type: image.mimeType }), mimeType: image.mimeType },
   };
 }
 

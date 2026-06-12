@@ -274,8 +274,11 @@ function buildChaptersFromToc(
       }
       continue;
     }
+    // One pass over the document collects every anchor's offset — scanning the
+    // whole HTML once per TOC entry was O(entries × document size).
+    const anchors = entries.some((e) => e.fragment) ? anchorOffsets(d.html) : undefined;
     const withOffset = entries
-      .map((e) => ({ e, off: e.fragment ? anchorOffset(d.html!, e.fragment) : 0 }))
+      .map((e) => ({ e, off: e.fragment ? (anchors?.get(e.fragment) ?? -1) : 0 }))
       .sort((a, b) => a.off - b.off);
     if (withOffset.length === 1 || withOffset.some((x) => x.off < 0)) {
       // Single entry (or unreliable anchors) → the whole document is one chapter.
@@ -324,11 +327,21 @@ function findNcxHref(opfXml: string, manifest: Map<string, ManifestItem>): strin
   )?.[0];
   return ncxItem ? attr(ncxItem, "href") : undefined;
 }
-/** Offset of the element bearing `id`/`name="frag"`, or -1 if not found. */
-function anchorOffset(html: string, frag: string): number {
-  const esc = frag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const m = new RegExp(`<[^>]*\\b(?:id|name)\\s*=\\s*["']${esc}["']`, "i").exec(html);
-  return m ? m.index : -1;
+/** Tag-start offset of every element bearing an `id`/`name`, first wins. Scoped
+ * per tag so `<a name="y" id="x">` records both (as per-fragment scans did). */
+function anchorOffsets(html: string): Map<string, number> {
+  const out = new Map<string, number>();
+  const tagRe = /<[^>]+>/g;
+  const attrRe = /\b(?:id|name)\s*=\s*["']([^"']+)["']/gi;
+  let tag: RegExpExecArray | null;
+  while ((tag = tagRe.exec(html)) !== null) {
+    attrRe.lastIndex = 0;
+    let a: RegExpExecArray | null;
+    while ((a = attrRe.exec(tag[0])) !== null) {
+      if (!out.has(a[1]!)) out.set(a[1]!, tag.index);
+    }
+  }
+  return out;
 }
 /** Slice `html` at the given ascending offsets (backed up to element starts). */
 function splitAtOffsets(html: string, offsets: number[]): string[] {
