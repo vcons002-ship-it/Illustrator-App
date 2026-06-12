@@ -106,14 +106,28 @@ function fullBookText(input: ChatContextInput, budget: number): string {
 function readSoFarText(input: ChatContextInput, budget: number): string {
   const upTo = input.chapters.filter((c) => c.index <= input.position.chapterIndex);
   if (upTo.length === 0) return "THE BOOK SO FAR: (the reader has just started)";
-  const parts = upTo.map((c) =>
-    c.index === input.position.chapterIndex
-      ? renderChapter({ ...c, text: c.text.slice(0, Math.max(0, input.position.charOffsetInChapter)) })
-      : renderChapter(c),
-  );
-  let text = parts.join("\n\n");
-  if (text.length > budget) {
-    text = `${OMITTED}\n${text.slice(text.length - budget)}`;
+  // Walk BACKWARDS from the reader, rendering only until the budget is covered —
+  // deep into a book, joining every prior chapter built megabytes per chat turn
+  // just to keep the last `budget` chars. Output is identical to the full join's tail.
+  const rendered: string[] = [];
+  let keptLen = 0;
+  let droppedEarlier = false;
+  for (let i = upTo.length - 1; i >= 0; i--) {
+    const c = upTo[i]!;
+    rendered.unshift(
+      c.index === input.position.chapterIndex
+        ? renderChapter({ ...c, text: c.text.slice(0, Math.max(0, input.position.charOffsetInChapter)) })
+        : renderChapter(c),
+    );
+    keptLen += rendered[0]!.length + (rendered.length > 1 ? 2 : 0); // 2 = the "\n\n" joiner
+    if (keptLen >= budget && i > 0) {
+      droppedEarlier = true; // earlier chapters can't reach the kept tail anyway
+      break;
+    }
+  }
+  let text = rendered.join("\n\n");
+  if (droppedEarlier || text.length > budget) {
+    text = `${OMITTED}\n${text.slice(Math.max(0, text.length - budget))}`;
   }
   return `THE BOOK SO FAR (up to the reader's position — nothing beyond exists for you):\n${text}`;
 }

@@ -146,7 +146,16 @@ export class ClaudeProvider implements LLMProvider, ChatCapable {
       {
         model: this.model,
         max_tokens: 4096,
-        system: extractionSystemFor(input.contentMode),
+        // The system prompt is identical for every chapter of a build — mark it
+        // cacheable so chapters 2..N read it from the prompt cache (same output,
+        // lower input cost/latency; ignored when under the model's cache minimum).
+        system: [
+          {
+            type: "text" as const,
+            text: extractionSystemFor(input.contentMode),
+            cache_control: { type: "ephemeral" as const },
+          },
+        ],
         messages: [{ role: "user", content: extractionUserContent(input) }],
         output_format: betaZodOutputFormat(CLAUDE_EXTRACTION_SCHEMA),
       },
@@ -189,7 +198,15 @@ export class ClaudeProvider implements LLMProvider, ChatCapable {
       {
         model: this.model,
         max_tokens: 512,
-        system: promptSystemFor(request.kind),
+        // Static per kind and sent once per story unit — cacheable across the
+        // whole prompt pass (ignored when under the model's cache minimum).
+        system: [
+          {
+            type: "text" as const,
+            text: promptSystemFor(request.kind),
+            cache_control: { type: "ephemeral" as const },
+          },
+        ],
         messages: [{ role: "user", content: promptUserContent(request, bible) }],
       },
       signal ? { signal } : undefined,

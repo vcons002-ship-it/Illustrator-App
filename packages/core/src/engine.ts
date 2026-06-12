@@ -594,8 +594,24 @@ export class Engine {
     for (const i of this.storyUnitIndices) if (this.hasKeyEvent(i)) prompted++;
     const reportProgress = (): void => this.opts.onPromptProgress?.(prompted, total);
     reportProgress();
+    // Persisting the bible is a structured clone of ALL of it (characters, glossary,
+    // every chapter's keyEvents) — per prompt, that's O(units × bibleSize). Coalesce:
+    // persist every few prompts / few seconds and on every exit, so a crash costs a
+    // handful of cheap prompt rewrites instead of slowing the whole pass.
+    let unpersisted = 0;
+    let lastPersistMs = Date.now();
+    const flush = async (): Promise<void> => {
+      if (unpersisted > 0 && !cancelled() && this.bible) {
+        unpersisted = 0;
+        lastPersistMs = Date.now();
+        await this.store.putBible(this.bible);
+      }
+    };
     for (const i of unitIndices) {
-      if (stop()) return;
+      if (stop()) {
+        await flush(); // a pause must not drop prompts already written
+        return;
+      }
       if (this.hasKeyEvent(i)) continue;
       const page = this.book.pages[i]!;
       const request = this.pipeline.buildRequest(page);
@@ -612,7 +628,8 @@ export class Engine {
           imagePrompt: { text: text.trim() },
         });
         prompted++; // this unit had no keyEvent before (checked above)
-        await this.store.putBible(this.bible);
+        unpersisted++;
+        if (unpersisted >= 5 || Date.now() - lastPersistMs >= 3000) await flush();
         if (cancelled()) return;
         this.opts.onBibleUpdate?.(this.bible);
         // A unit previously failed as "no prompt" can render now — clear the error.
@@ -622,6 +639,7 @@ export class Engine {
       }
       reportProgress();
     }
+    await flush();
   }
 
   /** Whether this story unit already has a stored keyEvent prompt. */
@@ -779,6 +797,9 @@ export class Engine {
   /** Persist a character's reference ids (always the array form — legacy id folded in). */
   private async setAnchorReferences(characterId: string, ids: string[]): Promise<void> {
     if (!this.bible) return;
+    // A removed slot can be re-used by a later upload (same id, new bytes) — drop
+    // the pipeline's per-id byte cache so renders never see stale photos.
+    this.pipeline?.clearReferenceCache();
     this.bible = {
       ...this.bible,
       characters: this.bible.characters.map((c) =>

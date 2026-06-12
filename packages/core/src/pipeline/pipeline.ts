@@ -84,6 +84,34 @@ export class RenderPipeline {
     };
   }
 
+  /**
+   * Reference-image bytes per ref id. A character's uploads are re-read from the
+   * store for EVERY frame they appear in; caching keeps that to one read per
+   * session AND hands providers identity-stable buffers (their own per-buffer
+   * caches — base64 encodings, engine uploads — key off object identity).
+   * The engine clears this whenever reference uploads change.
+   */
+  private readonly referenceBytesCache = new Map<
+    string,
+    Promise<{ bytes: ArrayBuffer; mimeType: string; prompt?: string } | undefined>
+  >();
+
+  /** Drop cached reference bytes (a reference was added/removed/re-keyed). */
+  clearReferenceCache(): void {
+    this.referenceBytesCache.clear();
+  }
+
+  private getReferenceImage(
+    id: string,
+  ): Promise<{ bytes: ArrayBuffer; mimeType: string; prompt?: string } | undefined> {
+    let p = this.referenceBytesCache.get(id);
+    if (!p) {
+      p = this.deps.store.getImage(id);
+      this.referenceBytesCache.set(id, p);
+    }
+    return p;
+  }
+
   /** Bounded chapter context per chapterId — the book is immutable for this
    * pipeline's lifetime, and `buildRequest` runs per unit on both the prompt
    * pass and the render path, so the chapter join must not be repeated. */
@@ -370,7 +398,7 @@ export class RenderPipeline {
     for (const c of chosen) usedCount.set(c.charIndex, (usedCount.get(c.charIndex) ?? 0) + 1);
     const refs: { bytes: ArrayBuffer; mimeType: string; weight: number }[] = [];
     for (const { id, charIndex } of chosen) {
-      const img = await this.deps.store.getImage(id);
+      const img = await this.getReferenceImage(id);
       // Moderate total (not 0.7): the reference keeps the face recognizable without
       // forcing a portrait — the backend also ends IP-Adapter early so the scene
       // composition forms first.

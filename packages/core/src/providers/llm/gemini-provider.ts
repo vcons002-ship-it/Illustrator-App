@@ -144,9 +144,11 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable {
     });
     const url = `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`;
     let res = await this.transport.send({ url, method: "POST", body: body(opts.ground === true) });
-    // Some model/mode combinations reject tools alongside JSON output — retry plain
-    // rather than failing the chapter (grounding is an enhancement, never a gate).
-    if (!res.ok && opts.ground) {
+    // Some model/mode combinations reject tools alongside JSON output (a 400) — retry
+    // plain rather than failing the chapter (grounding is an enhancement, never a
+    // gate). Only on 400: a 429/5xx would fail ungrounded too, and re-sending the
+    // full chapter immediately doubles traffic exactly when the API is saturated.
+    if (!res.ok && res.status === 400 && opts.ground) {
       res = await this.transport.send({ url, method: "POST", body: body(false) });
     }
     if (!res.ok) throw new Error(`Gemini request failed with status ${res.status}`);

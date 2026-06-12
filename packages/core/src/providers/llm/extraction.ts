@@ -782,6 +782,10 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
   const chars = bible.characters.filter((c) => request.characterIds.includes(c.id));
   const envs = bible.environments.filter((e) => request.environmentIds.includes(e.id));
   const creatures = (bible.creatures ?? []).filter((c) => request.creatureIds.includes(c.id));
+  // Grounding citations ("References (chapter N)" = bare source URLs) are kept in the
+  // glossary for the bible/export, but they're useless to a prompt writer — and one
+  // accrues per chapter, so they'd grow every image-prompt request for nothing.
+  const facts = (bible.glossary ?? []).filter((g) => !g.term.startsWith("References (chapter"));
   const scene = (bible.storyboard ?? []).find((s) => s.chapterIndex === request.chapterIndex);
   // Beat-level setting: this unit's stored keyEvent (if any) knows where ITS moment
   // happens — more exact than the chapter's single location when the chapter moves.
@@ -810,8 +814,8 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
           .map((e) => `- ${e.name}`)
           .join("\n")}`
       : "",
-    (bible.glossary ?? []).length
-      ? `World facts (apply as defaults unless the passage says otherwise):\n${(bible.glossary ?? [])
+    facts.length
+      ? `World facts (apply as defaults unless the passage says otherwise):\n${facts
           .map((g) => `- ${g.term}: ${g.definition}`)
           .join("\n")}`
       : "",

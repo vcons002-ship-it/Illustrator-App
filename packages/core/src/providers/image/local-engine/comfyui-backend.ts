@@ -40,10 +40,6 @@ export interface ComfyUIBackendOptions {
   idleTimeoutMs?: number;
 }
 
-interface ObjectInfoResponse {
-  CheckpointLoaderSimple?: { input?: { required?: { ckpt_name?: [string[], unknown] } } };
-}
-
 interface LoraObjectInfo {
   LoraLoader?: { input?: { required?: { lora_name?: [string[], unknown] } } };
 }
@@ -99,6 +95,22 @@ export class ComfyUIBackend implements LocalEngineBackend {
   private lorasCache?: Promise<Set<string>>;
   private ipAdapterCache?: Promise<IpAdapterCaps | null>;
   private warnedNoIpAdapter = false;
+  /**
+   * `/object_info/<node>` responses per node. Installed files are stable for an
+   * engine session (the same assumption as `lorasCache`; a Settings reconnect
+   * builds a fresh backend), but resolving a render's load kind + components was
+   * re-fetching the same enums 2–5× per image. Failures are evicted so a
+   * transient error doesn't stick for the session.
+   */
+  private readonly nodeInfoCache = new Map<string, Promise<NodeSchema | undefined>>();
+  /**
+   * Uploaded-reference filenames per byte buffer. The pipeline hands the SAME
+   * buffers to every render, but each render re-POSTed the photos under
+   * seed-unique names — pure upload waste plus unbounded growth of ComfyUI's
+   * input folder. WeakMap: dropped with the buffers, never serves stale bytes.
+   */
+  private readonly uploadedRefs = new WeakMap<ArrayBuffer, Promise<string>>();
+  private uploadCounter = 0;
 
   constructor(opts: ComfyUIBackendOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, "");
@@ -110,13 +122,10 @@ export class ComfyUIBackend implements LocalEngineBackend {
   }
 
   async listModels(): Promise<LocalModelDescriptor[]> {
-    const res = await this.transport.send({
-      url: `${this.baseUrl}/object_info/CheckpointLoaderSimple`,
-      method: "GET",
-    });
-    if (!res.ok) throw new Error(`ComfyUI listModels failed with status ${res.status}`);
-    const data = await res.json<ObjectInfoResponse>();
-    const checkpoints = data.CheckpointLoaderSimple?.input?.required?.ckpt_name?.[0] ?? [];
+    const info = await this.nodeInfo("CheckpointLoaderSimple");
+    if (!info) throw new Error("ComfyUI listModels failed (couldn't read /object_info)");
+    const ckpt = info.input?.required?.["ckpt_name"];
+    const checkpoints = Array.isArray(ckpt) && Array.isArray(ckpt[0]) ? (ckpt[0] as string[]) : [];
     // Also surface diffusion-only models (Flux.2 / UNET-only Flux.1) so they appear in the
     // picker and route to the separate-component graph. Best-effort: ignore if absent.
     const unets = await this.enumValues("UNETLoader", "unet_name");
@@ -131,17 +140,31 @@ export class ComfyUIBackend implements LocalEngineBackend {
     return names.map((id) => ({ id, label: id, sizeGB: 0 }));
   }
 
+  /** A node's `/object_info` schema, cached per session (failures evicted). */
+  private nodeInfo(node: string): Promise<NodeSchema | undefined> {
+    const cached = this.nodeInfoCache.get(node);
+    if (cached) return cached;
+    const p = (async (): Promise<NodeSchema | undefined> => {
+      try {
+        const res = await this.transport.send({ url: `${this.baseUrl}/object_info/${node}`, method: "GET" });
+        if (!res.ok) return undefined;
+        return (await res.json<Record<string, NodeSchema>>())[node];
+      } catch {
+        return undefined;
+      }
+    })();
+    this.nodeInfoCache.set(node, p);
+    void p.then((info) => {
+      if (info === undefined) this.nodeInfoCache.delete(node);
+    });
+    return p;
+  }
+
   /** Read a node's required-input enum (e.g. UNETLoader.unet_name); [] if unavailable. */
   private async enumValues(node: string, key: string): Promise<string[]> {
-    try {
-      const res = await this.transport.send({ url: `${this.baseUrl}/object_info/${node}`, method: "GET" });
-      if (!res.ok) return [];
-      const data = (await res.json<Record<string, NodeSchema>>())[node];
-      const enumVal = data?.input?.required?.[key];
-      return Array.isArray(enumVal) && Array.isArray(enumVal[0]) ? (enumVal[0] as string[]) : [];
-    } catch {
-      return [];
-    }
+    const data = await this.nodeInfo(node);
+    const enumVal = data?.input?.required?.[key];
+    return Array.isArray(enumVal) && Array.isArray(enumVal[0]) ? (enumVal[0] as string[]) : [];
   }
 
   /**
@@ -307,6 +330,18 @@ export class ComfyUIBackend implements LocalEngineBackend {
     return data.name ?? name;
   }
 
+  /** The reference's uploaded name — uploading at most once per buffer per session.
+   * (ComfyUI suffixes a clashing name and returns the stored one, which we use.) */
+  private uploadedReference(bytes: ArrayBuffer, mimeType: string): Promise<string> {
+    const cached = this.uploadedRefs.get(bytes);
+    if (cached) return cached;
+    const p = this.uploadReference(bytes, mimeType, `vr-ref-${Date.now()}-${this.uploadCounter++}.png`);
+    this.uploadedRefs.set(bytes, p);
+    // A failed upload must not pin the failure for the rest of the session.
+    p.catch(() => this.uploadedRefs.delete(bytes));
+    return p;
+  }
+
   async generate(input: ImageGenerationInput, model: string): Promise<ImageGenerationOutput> {
     const seed = input.seed ?? input.anchors[0]?.seed ?? Math.floor(Math.random() * 1_000_000_000);
 
@@ -382,12 +417,14 @@ export class ComfyUIBackend implements LocalEngineBackend {
       const caps = await this.availableIpAdapter();
       if (caps) {
         try {
-          const refs: { filename: string; weight: number }[] = [];
-          for (let i = 0; i < input.ipAdapterRefs.length; i++) {
-            const ref = input.ipAdapterRefs[i]!;
-            const filename = await this.uploadReference(ref.bytes, ref.mimeType, `vr-ref-${seed}-${i}.png`);
-            refs.push({ filename, weight: ref.weight });
-          }
+          // Cached per buffer (uploaded once per session) and fetched in parallel
+          // on a miss; `map` keeps the refs in their original order.
+          const refs = await Promise.all(
+            input.ipAdapterRefs.map(async (ref) => ({
+              filename: await this.uploadedReference(ref.bytes, ref.mimeType),
+              weight: ref.weight,
+            })),
+          );
           ipAdapter = { caps, refs };
         } catch {
           ipAdapter = undefined; // upload failed → fall back to seed-only
