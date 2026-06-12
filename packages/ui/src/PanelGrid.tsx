@@ -1,7 +1,6 @@
 import { memo } from "react";
-import type { ImageResult } from "@visual-reader/core";
 import { BloomTransition } from "./BloomTransition.js";
-import { useObjectUrl } from "./imageObjectUrl.js";
+import { useObjectUrl, type DisplayResult } from "./imageObjectUrl.js";
 
 /**
  * Multi-panel "comic page" view. Composes several consecutive render-unit images into a
@@ -18,7 +17,7 @@ import { useObjectUrl } from "./imageObjectUrl.js";
  */
 export interface PanelGridProps {
   /** The group's units in reading order: ascending unit index + its cached result. */
-  panels: { unitIndex: number; result: ImageResult | undefined }[];
+  panels: { unitIndex: number; result: DisplayResult | undefined }[];
   /** The unit the reader is currently on (gets the live bloom + highlight). */
   currentUnit: number;
   /** Bloom target 0..1 for the current panel, from reading progress. */
@@ -72,7 +71,7 @@ const Panel = memo(function Panel({
   showImage,
   bloomKey,
 }: {
-  result: ImageResult | undefined;
+  result: DisplayResult | undefined;
   target: number;
   highlight: boolean;
   showImage: boolean;

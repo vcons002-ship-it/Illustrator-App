@@ -31,13 +31,38 @@ A full-codebase performance audit, then the high-leverage batch implemented:
   `packages/ui/src/settingsKeys.ts`): tuning edits call `updateTier` instead of
   rebuilding the engine; rebuilds + settings persistence debounced.
 
-Remaining audit findings (not yet implemented, in priority order): render-buffer
-retains all image bytes in worker memory (LRU/lazy-fetch opportunity); ChatPanel/
-CharacterBible/DataChart memoization; Claude prompt caching (`cache_control` on the
-extraction system prompt); Gemini grounded-call fallback retries non-400s; EPUB
-parse on the main thread; extension cache unbounded + URL-keyed with tracking
-params; ComfyUI re-uploads reference photos per render + uncached `/object_info`;
-Flux provider ignores `input.signal`; bible persisted per prompt write.
+A second pass implemented the rest of the audit:
+
+- **Providers** — Flux honours `input.signal` (abort-aware poll/delay/download);
+  Gemini grounded fallback retries only on 400; Claude system prompts carry
+  `cache_control: ephemeral` (extraction + prompt pass); Gemini native image
+  memoises reference base64; the pipeline caches reference bytes per ref id
+  (identity-stable buffers, cleared on reference change); ComfyUI caches
+  `/object_info` per session and uploads each reference photo once per buffer
+  (was per render, with unbounded input-folder growth); grounding citation
+  glossary entries no longer ride along in image-prompt requests.
+- **Core** — bible persisted every 5 prompts/3s + on pause/finish during the
+  prompt pass; the chat's spoiler-safe context renders chapters backwards until
+  the budget fills (identical output).
+- **UI** — MessageBubble/CharacterCard/DataChart/DataSection memoised (with
+  App-side stable props for ChatPanel); search haystacks + dirty checks off the
+  render path; BloomTransition writes the eased value straight to the DOM in one
+  persistent rAF loop (zero React renders per frame); key fields commit on a
+  300ms debounce/blur.
+- **Apps** — image bytes are re-homed into Blobs on receipt (`DisplayResult` in
+  `packages/ui/src/imageObjectUrl.ts`): the worker transfers the only copy, and
+  Blob data is browser-managed, so a long book no longer pins hundreds of MB of
+  ArrayBuffers in the main-thread heap (worker-side copies were already detached
+  by the transfer). EPUB parses in a dedicated worker (`apps/web/src/epub.worker.ts`).
+  The extension cache is LRU-capped at 20 pages (book ledger = recency index)
+  and keys strip tracking params + plain anchors; the overlay quantizes scroll
+  progress and memoises spoiler resolution. Epub TOC anchors resolve in one pass.
+
+Deliberately NOT done (judgement calls): skipping `putBook` on library re-opens
+(the write IS the recency refresh — skipping breaks "most recent first");
+grounding-search lookahead (timing-sensitive, low value); ComfyUI WebSocket reuse
+(low, localhost); reader-column virtualization (memoization removed the per-frame
+cost; revisit only if very large books still lag).
 
 **PR:** #1 (`vcons002-ship-it/illustrator-app`), base `main`, head
 `claude/visual-content-generator-BLJks`. Everything below is committed + pushed (13 commits
