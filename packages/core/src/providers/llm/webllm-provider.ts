@@ -86,7 +86,7 @@ export const EXTRACTION_JSON_INSTRUCTION =
   '"persistentTraits":string[],' +
   '"outfits":[{"label":string,"description":string}]}],' +
   '"glossary":[{"term":string,"definition":string}],' +
-  '"environments":[{"name":string,"description":string[]}],' +
+  '"environments":[{"name":string,"aliases":string[],"description":string[]}],' +
   '"creatures":[{"name":string,"aliases":string[],"kind":string,"description":string[]}],' +
   '"spoilers":[{"label":string}],' +
   '"summary":string,"keyMoment":string,"location":string,"locationChange":string,' +

@@ -9,6 +9,7 @@ import {
   type BuddyToolCall,
   type BuddyToolResultPayload,
 } from "./buddy-tools.js";
+import { evaluateExpression, formatCalcResult } from "./calculator.js";
 
 /**
  * One user-message round of the landing-page buddy, including the tool loop —
@@ -116,6 +117,11 @@ async function runBuddyTool(
       case "random_books":
         if (!deps.randomBooks) return { error: "book discovery isn't available right now" };
         return { books: await deps.randomBooks() };
+      case "calculate":
+        // Pure core code — no host dep to inject, and nothing async about it.
+        return {
+          calc: { expression: call.expression, result: formatCalcResult(evaluateExpression(call.expression)) },
+        };
       case "open_library_book":
         return { opened: await deps.openLibraryBook(call) };
       case "open_web_text":

@@ -173,6 +173,7 @@ export type WorkerToMain =
       imageHits?: ImageSearchHit[];
       applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
       removed?: string;
+      calc?: { expression: string; result: string };
       error?: string;
     }
   /** A buddy tool resolved a full BookSource — the main thread opens it (and

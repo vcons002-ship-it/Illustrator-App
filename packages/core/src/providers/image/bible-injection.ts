@@ -115,8 +115,10 @@ export function findBibleTermsInText(prompt: string, bible: VisualBible): SceneT
   }
 
   for (const e of bible.environments) {
-    if (e.name && mentions(prompt, e.name)) {
-      terms.push({ names: [e.name], descriptor: describeLocation(e), kind: "location" });
+    // Aliases cover indirect references ("the fortress" → Basgiliath's details).
+    const forms = [e.name, ...(e.aliases ?? [])].filter(Boolean);
+    if (forms.some((f) => mentions(prompt, f))) {
+      terms.push({ names: forms, descriptor: describeLocation(e), kind: "location" });
     }
   }
 

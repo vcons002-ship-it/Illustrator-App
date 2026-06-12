@@ -57,6 +57,43 @@ export function useScrollDepth(): ScrollDepth {
     return () => observer.current?.disconnect();
   }, []);
 
+  // Scroll-settle correction. During a FAST scroll (or a jump via scrollbar drag)
+  // the observer can fire with no paragraph in the active band, leaving
+  // `activeParagraphId` stale — the page/status/illustration then show the wrong
+  // position until something re-enters the band. Once scrolling settles, find the
+  // paragraph actually at the band line and correct. Runs only on settle (150ms
+  // quiet), and walks elements in document order with an early exit — not per
+  // frame, so a multi-thousand-paragraph book stays cheap.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settle = () => {
+      const bandLine = window.innerHeight * ACTIVE_BAND;
+      let best: { id: string; top: number } | undefined;
+      for (const [id, el] of elements.current) {
+        const rect = el.getBoundingClientRect();
+        // First paragraph whose box spans the band line is THE active one.
+        if (rect.top <= bandLine && rect.bottom >= bandLine) {
+          setActive(id);
+          return;
+        }
+        // Otherwise remember the nearest paragraph below the line (start of a
+        // page after a heading/divider gap) and stop once past the viewport.
+        if (rect.top > bandLine && (!best || rect.top < best.top)) best = { id, top: rect.top };
+        if (rect.top > window.innerHeight) break;
+      }
+      if (best) setActive(best.id);
+    };
+    const onScroll = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(settle, 150);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+
   // Continuous progress through the active paragraph: how far its box has scrolled
   // past the active-band line. rAF-throttled so it's cheap during scroll.
   useEffect(() => {

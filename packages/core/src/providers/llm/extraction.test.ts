@@ -412,6 +412,38 @@ describe("environments + location tracking", () => {
     expect(spire.description).toEqual(["black basalt tower", "tall", "ringed by storm clouds"]);
   });
 
+  it("merges environments by alias and accumulates newly-heard aliases", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [],
+        environments: [
+          { name: "Basgiliath", aliases: ["the fortress"], description: ["dark basalt walls"] },
+        ],
+        spoilers: [],
+      },
+      0,
+    );
+    // A later chapter only knows the place by its epithet, with a new alias too.
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [],
+        environments: [
+          { name: "the fortress", aliases: ["the black keep"], description: ["torch-lit gates"] },
+        ],
+        spoilers: [],
+      },
+      4,
+    );
+    expect(bible.environments).toHaveLength(1); // alias matched — no fork
+    const env = bible.environments[0]!;
+    expect(env.name).toBe("Basgiliath"); // canonical name wins
+    expect(env.aliases).toEqual(["the fortress", "the black keep"]);
+    expect(env.description).toEqual(["dark basalt walls", "torch-lit gates"]);
+  });
+
   it("stores the chapter location and a single-location Setting line in the prompt", () => {
     let bible = createEmptyBible("b");
     bible = mergeExtraction(
