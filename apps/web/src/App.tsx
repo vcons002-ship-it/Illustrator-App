@@ -72,6 +72,20 @@ import {
 /** Chat-history key for the landing-page buddy — reserved, never a book id. */
 const BUDDY_CHAT_ID = "__buddy__";
 
+/** Message shown when a figure search returns nothing (or errors) — so an empty
+ * result is visible instead of looking like the search silently did nothing. */
+function imageSearchMiss(query: string, error: string | undefined, hasSearchKey: boolean): string {
+  if (error) return `⚠ Image search failed for “${query}”: ${error}`;
+  return (
+    `🔍 No figure found for “${query}”.` +
+    (hasSearchKey
+      ? ""
+      : " (Free image search uses Wikimedia Commons — strong on diagrams/science/history," +
+        " weak on pop-culture or specific products. Add a Google Programmable Search key in" +
+        " Settings → Scientific sources for whole-web image results.)")
+  );
+}
+
 export function App() {
   const stored = useMemo(loadStoredSettings, []);
   const [settings, setSettings] = useState<ReaderSettings>(stored.settings);
@@ -538,6 +552,12 @@ export function App() {
   // to the unit the engine rendered (must match the worker — shared toRenderUnits).
   const pagesPerImage = settings.pagesPerImage ?? 3;
   const panelsPerView = settings.panelsPerView ?? 1;
+  // Whole-web image/figure search is active only with BOTH a search key (the
+  // dedicated one, or the Gemini key as fallback) and a Programmable Search engine
+  // id; otherwise figure search is keyless Wikimedia Commons (encyclopedic).
+  const hasSearchKey = Boolean(
+    (settings.keys?.search || settings.keys?.gemini) && settings.searchEngineId,
+  );
   // Multi-panel views (a drawn comic PAGE, or the per-image panel grid) are
   // detail-dense — give them a much wider image column so panels aren't shrunk.
   const comicPageMode =
@@ -689,6 +709,12 @@ export function App() {
                   .slice(0, 3)
                   .map((h) => ({ url: h.contextLink ?? h.link, ...(h.title ? { title: h.title } : {}) })),
               });
+            } else if (e.call.tool === "search_images") {
+              // Make a failed/empty figure search VISIBLE — otherwise it looks like
+              // nothing happened (Commons is encyclopedic; misses are common).
+              appendChat({ role: "tool", text: imageSearchMiss(e.call.query, e.error, hasSearchKey) });
+            } else if (e.call.tool === "search_web" && !e.hits?.length) {
+              appendChat({ role: "tool", text: `🔍 No web results for “${e.call.query}”.` });
             }
           }
         },
@@ -719,7 +745,7 @@ export function App() {
         });
       }
     },
-    [book, chatMessages, chat, activePageIndex, activeParagraphId, isTechnical, allowSpoilers],
+    [book, chatMessages, chat, activePageIndex, activeParagraphId, isTechnical, allowSpoilers, hasSearchKey],
   );
 
   const onApproveChatTool = useCallback(async () => {
@@ -909,6 +935,8 @@ export function App() {
             });
           } else if (e.calc) {
             appendBuddy({ role: "tool", text: `🧮 ${e.calc.expression} = ${e.calc.result}` });
+          } else if (e.call.tool === "search_images") {
+            appendBuddy({ role: "tool", text: imageSearchMiss(e.call.query, e.error, hasSearchKey) });
           }
         }
       });
@@ -937,7 +965,7 @@ export function App() {
         if (openedBook) appendChat({ role: "assistant", text: res.text });
       }
     },
-    [buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration, libraryStore],
+    [buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration, libraryStore, hasSearchKey],
   );
   const onBuddySendText = useCallback((text: string) => void onBuddySend(text), [onBuddySend]);
   // Approved buddy render: the worker's chatTool path serves both chats (the
