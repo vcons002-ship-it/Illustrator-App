@@ -253,7 +253,26 @@ export class RenderPipeline {
           /* quota/network/no results — generate instead */
         }
       }
-      const styled = style.promptSuffix ? `${stored}\n\nStyle: ${style.promptSuffix}` : stored;
+      // A stored keyEvent whose range doesn't exactly match this unit's is SHARED by
+      // several units (the bible was extracted under a different pages-per-image
+      // grouping, or the model emitted fewer keyEvents than units). Same prompt +
+      // the same identity seed = pixel-identical images across those units — the
+      // "every panel is the same picture" bug in the panel grid. Differentiate the
+      // siblings deterministically: a beat cue in the prompt (covers providers that
+      // ignore seeds) and a per-unit seed nudge below.
+      const sharedEventOffset =
+        keyEvent &&
+        request.pageRange &&
+        !this.deps.tier.nativeOneShot &&
+        (keyEvent.pageRange[0] !== request.pageRange[0] ||
+          keyEvent.pageRange[1] !== request.pageRange[1])
+          ? Math.max(0, request.pageRange[0] - keyEvent.pageRange[0])
+          : undefined;
+      const beatCued =
+        sharedEventOffset !== undefined && sharedEventOffset > 0
+          ? `${stored}\n\n(Part ${sharedEventOffset + 1} of this scene's sequence — depict a LATER beat of the same moment, with a different composition than earlier parts.)`
+          : stored;
+      const styled = style.promptSuffix ? `${beatCued}\n\nStyle: ${style.promptSuffix}` : beatCued;
       // Multi-panel comic page (opt-in, comic/manga only): ask for a SINGLE image laid
       // out as a comic page of sequential panels. Works best on natural-language/cloud
       // models. The reader's panel-grid view is separate (it composes per-unit images).
@@ -268,7 +287,12 @@ export class RenderPipeline {
       );
       // Characters first so the seed anchor (anchors[0]) stays a character when one
       // is present; a creature-only frame is pinned by the creature's seed.
-      const anchors = [...present.map((c) => c.anchor), ...presentCreatures.map((c) => c.anchor)];
+      let anchors = [...present.map((c) => c.anchor), ...presentCreatures.map((c) => c.anchor)];
+      // Per-unit seed nudge for units sharing one keyEvent (see sharedEventOffset
+      // above) — deterministic, so re-renders stay reproducible per unit.
+      if (sharedEventOffset !== undefined && sharedEventOffset > 0) {
+        anchors = anchors.map((a) => ({ ...a, seed: a.seed + sharedEventOffset }));
+      }
       // Bible terms mentioned in the prompt (names → descriptors). Local backends expand them
       // family-aware; for cloud we pre-expand here (cloud providers don't know the bible).
       const terms = findBibleTermsInText(basePrompt, bible);
