@@ -88,7 +88,8 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-function decodeEntities(s: string): string {
+/** Decode the common HTML entities (shared by the HTML-ish parsers in providers/). */
+export function decodeEntities(s: string): string {
   return s
     .replace(/&#(\d+);/g, (_, d: string) => String.fromCodePoint(Number(d)))
     .replace(/&#x([0-9a-f]+);/gi, (_, h: string) => String.fromCodePoint(parseInt(h, 16)))

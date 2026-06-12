@@ -3,7 +3,7 @@ import {
   ComfyUIBackend,
   DirectTransport,
   GoogleImageSearch,
-  WikiSearch,
+  KeylessSearch,
   LOCAL_TEXT_MODELS,
   MockImageProvider,
   MockLLMProvider,
@@ -85,11 +85,12 @@ export function buildProviders(
   diagnostics: ProvidersDiagnostics;
   /**
    * Real-figure retrieval for technical books — ALWAYS present: Google Custom Search
-   * when credentials are set, else the keyless Wikipedia/Wikimedia backend.
+   * when credentials are set, else the keyless composite (DuckDuckGo full-web where
+   * the transport is CORS-exempt, Wikipedia fallback, Wikimedia Commons figures).
    */
   imageSearch: FigureSearch;
   /** Which backend `imageSearch` resolved to, for the Settings status line. */
-  searchBackend: "google" | "wikipedia";
+  searchBackend: "google" | "keyless";
   /**
    * Provider-agnostic grounding source for technical books: present when grounding is
    * on AND the reader isn't Gemini (which grounds in-call). Lets a local/Claude/OpenAI
@@ -117,9 +118,10 @@ export function buildProviders(
           ...(transport ? { transport } : {}),
         })
       : undefined;
-  // No Google credentials → the keyless Wikipedia/Wikimedia backend, so figure
-  // retrieval and grounding work out of the box (narrower sources, zero setup).
-  const imageSearch: FigureSearch = google ?? new WikiSearch(transport ? { transport } : {});
+  // No Google credentials → the keyless composite: DuckDuckGo full-web search where
+  // the transport dodges CORS (extension proxy), Wikipedia as the always-works
+  // fallback, Commons for figures — grounding works out of the box, zero setup.
+  const imageSearch: FigureSearch = google ?? new KeylessSearch(transport ? { transport } : {});
   // External grounding runs for every reader EXCEPT Gemini (which grounds in-call via its
   // own google_search tool). So a local/Claude/OpenAI reader still gets sourced facts.
   const webSearch =
@@ -128,7 +130,7 @@ export function buildProviders(
     llm: llm.provider,
     image: image.provider,
     imageSearch,
-    searchBackend: google ? "google" : "wikipedia",
+    searchBackend: google ? "google" : "keyless",
     ...(webSearch ? { webSearch } : {}),
     diagnostics: { llm: llm.diag, image: image.diag },
     tier: {
