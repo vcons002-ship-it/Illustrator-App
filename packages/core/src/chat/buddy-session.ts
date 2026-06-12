@@ -42,6 +42,9 @@ export interface BuddyDeps {
   setVisualStyle: (
     call: Extract<BuddyToolCall, { tool: "set_visual_style" }>,
   ) => Promise<{ style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" }>;
+  /** Long-term reader memory (see reader-memory.ts); returns the kept count. */
+  remember?: (note: string) => Promise<number>;
+  forget?: (match: string) => Promise<number>;
 }
 
 export type BuddyTurnEvent =
@@ -135,6 +138,12 @@ async function runBuddyTool(
         return await deps.removeLibraryBook(call);
       case "set_visual_style":
         return { applied: await deps.setVisualStyle(call) };
+      case "remember":
+        if (!deps.remember) return { error: "memory isn't available right now" };
+        return { memory: { action: "remembered", note: call.note, count: await deps.remember(call.note) } };
+      case "forget":
+        if (!deps.forget) return { error: "memory isn't available right now" };
+        return { memory: { action: "forgot", note: call.match, count: await deps.forget(call.match) } };
     }
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };

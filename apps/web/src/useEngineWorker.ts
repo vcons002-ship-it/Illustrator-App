@@ -132,6 +132,7 @@ export type BuddyStreamEvent =
       applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
       removed?: string;
       calc?: { expression: string; result: string };
+      memory?: { action: "remembered" | "forgot"; note: string; count: number };
       error?: string;
     }
   /** A buddy tool opened a book — the app should open it (and start visuals). */
@@ -165,6 +166,7 @@ export type ChatStreamEvent =
       call: ToolCall;
       hits?: WebSearchHit[];
       imageHits?: ImageSearchHit[];
+      memory?: { action: "remembered" | "forgot"; note: string; count: number };
       error?: string;
     }
   /** Where the request's context budget is going (for the usage donut). */
@@ -378,6 +380,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
             call: msg.call,
             ...(msg.hits ? { hits: msg.hits } : {}),
             ...(msg.imageHits ? { imageHits: msg.imageHits } : {}),
+            ...(msg.memory ? { memory: msg.memory } : {}),
             ...(msg.error ? { error: msg.error } : {}),
           });
           break;
@@ -418,6 +421,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
             ...(msg.applied ? { applied: msg.applied } : {}),
             ...(msg.removed ? { removed: msg.removed } : {}),
             ...(msg.calc ? { calc: msg.calc } : {}),
+            ...(msg.memory ? { memory: msg.memory } : {}),
             ...(msg.error ? { error: msg.error } : {}),
           });
           break;

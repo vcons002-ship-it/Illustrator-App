@@ -155,6 +155,7 @@ export type WorkerToMain =
       hits?: WebSearchHit[];
       imageHits?: ImageSearchHit[];
       image?: { bytes: ArrayBuffer; mimeType: string };
+      memory?: { action: "remembered" | "forgot"; note: string; count: number };
       error?: string;
     }
   /** Chat round complete: final prose + the turns to append to the stored history. */
@@ -181,6 +182,7 @@ export type WorkerToMain =
       applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
       removed?: string;
       calc?: { expression: string; result: string };
+      memory?: { action: "remembered" | "forgot"; note: string; count: number };
       error?: string;
     }
   /** A buddy tool resolved a full BookSource — the main thread opens it (and

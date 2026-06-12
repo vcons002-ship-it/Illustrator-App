@@ -18,7 +18,11 @@ import {
   buildBuddySystemPrompt,
   chapterText,
   fetchPageText,
+  forgetNote,
   getImageStyle,
+  loadMemory,
+  memoryPromptBlock,
+  rememberNote,
   profileDimensions,
   qualityProfile,
   resolveModelRequest,
@@ -66,6 +70,12 @@ let bookProviders:
   | undefined;
 /** In-flight chat rounds, aborted by `chatCancel`. */
 const chatAborts = new Map<number, AbortController>();
+
+/** Store for long-term reader memory (shares the buddy's lazy IndexedDB handle). */
+function memoryStore(): IndexedDbStore {
+  buddyStore ??= new IndexedDbStore();
+  return buddyStore;
+}
 
 function post(message: WorkerToMain, transfer: Transferable[] = []): void {
   ctx.postMessage(message, transfer);
@@ -812,11 +822,14 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       budgetChars: budgets.book,
     });
     const sec = (key: string) => sections.find((s) => s.key === key)?.text ?? "";
+    const memory = memoryPromptBlock(await loadMemory(memoryStore()));
     const system =
       sections
         .map((s) => s.text)
         .filter(Boolean)
-        .join("\n\n") + (note ? `\n\n${note}` : "");
+        .join("\n\n") +
+      (memory ? `\n\n${memory}` : "") +
+      (note ? `\n\n${note}` : "");
     const history = trimChatHistory(
       [...msg.history, { role: "user", content: msg.userText }],
       budgets.history,
@@ -832,7 +845,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
           {
             key: "instructions",
             label: "Instructions & tools",
-            text: [sec("role"), sec("tools"), sec("guard"), note].filter(Boolean).join("\n\n"),
+            text: [sec("role"), sec("tools"), sec("guard"), memory, note].filter(Boolean).join("\n\n"),
           },
           { key: "history", label: "Chat history", text: history.slice(0, -1).map((t) => t.content).join("\n") },
           { key: "message", label: "Your message", text: msg.userText },
@@ -849,6 +862,8 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
         searchWeb: (q) => imageSearch.searchWeb(q),
         searchImages: (q) => imageSearch.search(q),
         searchBook: (q) => searchBookPassages(searchableChapters, q),
+        remember: async (n) => (await rememberNote(memoryStore(), n)).length,
+        forget: async (m) => (await forgetNote(memoryStore(), m)).length,
         ...(currentBible
           ? {
               lookupBible: (q: string) =>
@@ -870,6 +885,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
             call: e.call,
             ...(e.result.hits ? { hits: e.result.hits } : {}),
             ...(e.result.imageHits ? { imageHits: e.result.imageHits } : {}),
+            ...(e.result.memory ? { memory: e.result.memory } : {}),
             ...(e.result.error ? { error: e.result.error } : {}),
           });
       },
@@ -964,12 +980,15 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     };
     const note = await renderDefaultsNote();
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
+    const memory = memoryPromptBlock(await loadMemory(store));
     const setup =
       buildBuddySystemPrompt({
         persona: msg.persona,
         library: msg.library,
         ...(settings?.allowMature ? { allowMature: true } : {}),
-      }) + (note ? `\n\n${note}` : "");
+      }) +
+      (memory ? `\n\n${memory}` : "") +
+      (note ? `\n\n${note}` : "");
     const history = trimChatHistory(
       [...msg.history, { role: "user", content: msg.userText }],
       budgets.history,
@@ -996,6 +1015,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         searchBooks: (q) => books.search(q),
         searchImages: (q) => imageSearch.search(q),
         randomBooks: () => books.random(),
+        remember: async (n) => (await rememberNote(store, n)).length,
+        forget: async (m) => (await forgetNote(store, m)).length,
         openLibraryBook: async (call) => {
           const book = await store.getBook(call.id);
           if (!book) throw new Error("that id isn't in the library");
@@ -1071,6 +1092,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             ...(e.result.applied ? { applied: e.result.applied } : {}),
             ...(e.result.removed ? { removed: e.result.removed } : {}),
             ...(e.result.calc ? { calc: e.result.calc } : {}),
+            ...(e.result.memory ? { memory: e.result.memory } : {}),
             ...(e.result.error ? { error: e.result.error } : {}),
           });
       },

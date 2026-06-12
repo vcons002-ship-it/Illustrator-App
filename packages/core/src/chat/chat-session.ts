@@ -24,6 +24,9 @@ export interface ChatToolDeps {
   searchBook?: (query: string) => BookPassage[];
   /** Full detail for a named bible entry (sync — reads the in-memory bible). */
   lookupBible?: (query: string) => string;
+  /** Long-term reader memory (see reader-memory.ts); returns the kept count. */
+  remember?: (note: string) => Promise<number>;
+  forget?: (match: string) => Promise<number>;
 }
 
 export type ChatTurnEvent =
@@ -106,10 +109,18 @@ export async function runChatTurn(opts: {
 }
 
 async function runSearchTool(
-  call: ToolCall & { tool: "search_web" | "search_images" | "search_book" | "lookup_bible" },
+  call: Exclude<ToolCall, { tool: "generate_image" }>,
   tools: ChatToolDeps,
 ): Promise<ToolResultPayload> {
   try {
+    if (call.tool === "remember") {
+      if (!tools.remember) return { error: "memory isn't available right now" };
+      return { memory: { action: "remembered", note: call.note, count: await tools.remember(call.note) } };
+    }
+    if (call.tool === "forget") {
+      if (!tools.forget) return { error: "memory isn't available right now" };
+      return { memory: { action: "forgot", note: call.match, count: await tools.forget(call.match) } };
+    }
     if (call.tool === "search_web") {
       if (!tools.searchWeb) return { error: "web search isn't available right now" };
       return { hits: await tools.searchWeb(call.query) };

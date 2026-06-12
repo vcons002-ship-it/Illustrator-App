@@ -25,7 +25,10 @@ export type ToolCall =
   /** Pull passages from elsewhere in the BOOK (the chat only holds a recent window). */
   | { tool: "search_book"; query: string }
   /** Pull full detail for a named bible entry (character/location/term/dataset). */
-  | { tool: "lookup_bible"; query: string };
+  | { tool: "lookup_bible"; query: string }
+  /** Long-term reader memory (shared with the buddy — see reader-memory.ts). */
+  | { tool: "remember"; note: string }
+  | { tool: "forget"; match: string };
 
 /** Search rounds per user message — bounds quota use and tool-looping models. */
 export const MAX_TOOL_ROUNDS = 3;
@@ -34,6 +37,8 @@ export const MAX_TOOL_ROUNDS = 3;
 const MAX_QUERY_CHARS = 200;
 const MAX_PROMPT_CHARS = 600;
 const MAX_NAME_CHARS = 80;
+/** Matches reader-memory's MAX_NOTE_CHARS. */
+const MAX_MEMORY_NOTE_CHARS = 200;
 
 export const CHAT_TOOLS_SYSTEM =
   "You are shown the Visual Bible plus the book text AROUND the reader's current position — NOT the " +
@@ -54,6 +59,9 @@ export const CHAT_TOOLS_SYSTEM =
   'PICKING THE IMAGE TOOL: "show me / find / pull up / what does X look like" = a REAL image → ' +
   'search_images. "generate / draw / make / create / paint / imagine" = NEW art → generate_image. ' +
   "Ambiguous → search_images for real-world subjects, generate_image only for fictional scenes.\n" +
+  '- {"tool":"remember","note":"…"} — save a DURABLE reader preference to long-term memory (applies in every ' +
+  'future conversation and book); use for lasting preferences ("prefers watercolor", "never spoil endings") or ' +
+  'when asked to remember. - {"tool":"forget","match":"…"} — remove memory notes containing this text.\n' +
   "Answer a self-contained request (e.g. 'draw an apple', a definition, arithmetic) DIRECTLY — only " +
   "reach into the book with search_book when the request actually depends on the book's content. " +
   "After a search result arrives, answer in plain prose citing what you found. " +
@@ -85,6 +93,14 @@ export function parseToolCall(text: string): ToolCall | undefined {
     const query = strArg(obj.query, MAX_QUERY_CHARS);
     return query ? { tool, query } : undefined;
   }
+  if (tool === "remember") {
+    const note = strArg(obj.note, MAX_MEMORY_NOTE_CHARS);
+    return note ? { tool, note } : undefined;
+  }
+  if (tool === "forget") {
+    const match = strArg(obj.match, MAX_MEMORY_NOTE_CHARS);
+    return match ? { tool, match } : undefined;
+  }
   if (tool === "generate_image") {
     const prompt = strArg(obj.prompt, MAX_PROMPT_CHARS);
     if (!prompt) return undefined;
@@ -113,6 +129,8 @@ export interface ToolResultPayload {
   passages?: BookPassage[];
   /** Detail string from lookup_bible (empty when nothing matched). */
   bibleDetail?: string;
+  /** A remember/forget outcome (note echoed for the inline chip). */
+  memory?: { action: "remembered" | "forgot"; note: string; count: number };
   /** Whether an approved image generation succeeded. */
   image?: { ok: boolean; error?: string };
   /** Tool-level failure (missing capability, network error…). */
@@ -156,6 +174,11 @@ export function formatToolResult(call: ToolCall, result: ToolResultPayload): str
     return result.bibleDetail
       ? `[bible detail for "${call.query}"]\n${result.bibleDetail}`
       : `[tool lookup_bible found no entry matching "${call.query}"]`;
+  }
+  if (call.tool === "remember" || call.tool === "forget") {
+    return result.memory
+      ? `[memory ${result.memory.action}: "${result.memory.note}" — ${result.memory.count} note${result.memory.count === 1 ? "" : "s"} kept] Confirm briefly.`
+      : `[${call.tool} did nothing]`;
   }
   // generate_image: ran (or failed) after the reader's approval.
   return result.image?.ok

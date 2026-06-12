@@ -11,6 +11,7 @@ import {
   stripThink,
 } from "./extraction.js";
 import { EXTRACTION_JSON_INSTRUCTION, parseExtraction } from "./webllm-provider.js";
+import { streamSse } from "./sse.js";
 import type { EntityExtractionInput, LLMProvider } from "./llm-provider.js";
 import {
   DEFAULT_CHAT_MAX_TOKENS,
@@ -42,6 +43,8 @@ export interface LocalServerProviderOptions {
   /** Optional bearer token — Ollama/LM Studio ignore it; proxies may need it. */
   apiKey?: string;
   transport?: Transport;
+  /** Raw fetch for STREAMING chat (Transport buffers); defaults to global fetch. */
+  fetchImpl?: typeof fetch;
 }
 
 interface ChatResponse {
@@ -83,11 +86,14 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable {
   private readonly model: string;
   private readonly apiKey: string | undefined;
 
+  private readonly fetchImpl: typeof fetch;
+
   constructor(opts: LocalServerProviderOptions) {
     this.transport = opts.transport ?? new DirectTransport();
     this.baseUrl = opts.baseUrl.replace(/\/$/, "");
     this.model = opts.model;
     this.apiKey = opts.apiKey;
+    this.fetchImpl = opts.fetchImpl ?? ((input, init) => fetch(input, init));
   }
 
   async extractEntities(input: EntityExtractionInput): Promise<VisualBible> {
@@ -129,8 +135,45 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable {
     return stripThink(text).trim();
   }
 
-  /** Reading-companion chat (buffered; thinking-model preambles stripped). */
+  /** Reading-companion chat. STREAMS deltas to `onToken` (SSE — Ollama/LM Studio
+   * both speak OpenAI-style `stream: true`); buffered otherwise. Thinking-model
+   * preambles are stripped in both paths — streamed tokens are gated until the
+   * `<think>` block closes so reasoning never flashes in the panel. */
   async chat(messages: ChatTurn[], opts: ChatOptions = {}): Promise<string> {
+    if (opts.onToken) {
+      let full = "";
+      let emitted = 0;
+      await streamSse(this.fetchImpl, `${this.baseUrl}/chat/completions`, {
+        headers: this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
+        body: {
+          model: this.model,
+          messages,
+          temperature: 0.7,
+          max_tokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
+          keep_alive: "30m",
+          stream: true,
+        },
+        ...(opts.signal ? { signal: opts.signal } : {}),
+        onEvent: (e) => {
+          const delta = (e as { choices?: { delta?: { content?: string } }[] }).choices?.[0]?.delta
+            ?.content;
+          if (!delta) return;
+          full += delta;
+          // Visible text = the reply minus any (possibly still-open) think block.
+          const stripped = stripThink(full);
+          const visible = stripped.trimStart().startsWith("<think>") ? "" : stripped;
+          if (visible.length > emitted) {
+            opts.onToken!(visible.slice(emitted));
+            emitted = visible.length;
+          }
+        },
+      }).catch((err) => {
+        throw new Error(
+          `Local LLM server stream failed with ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+      return stripThink(full).trim();
+    }
     const text = await this.complete(messages, {
       json: false,
       maxTokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
