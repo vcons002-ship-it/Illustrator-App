@@ -26,6 +26,7 @@ import {
   formatToolResult,
   type BookSource,
   type BookSummary,
+  type ChapterDataset,
   type BuddyPersona,
   type BuddyToolCall,
   type ChatTurn,
@@ -40,6 +41,7 @@ import {
   CharacterBible,
   ChatBuddyPanel,
   ChatPanel,
+  DataChart,
   DataSection,
   DEFAULT_SETTINGS,
   FirstRunWizard,
@@ -149,6 +151,7 @@ export function App() {
     summarize,
   } = useEngineWorker(settings);
   const [showCharacters, setShowCharacters] = useState(false);
+  const [showData, setShowData] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [showPasteText, setShowPasteText] = useState(false);
   const [showTestImage, setShowTestImage] = useState(false);
@@ -468,6 +471,31 @@ export function App() {
     },
     [openInWorker, libraryStore],
   );
+
+  // Transient "✓ your click did X" feedback, so a Redo press is never ambiguous.
+  // (Declared up here because handlers below — mode toggle, redo — depend on it.)
+  const [actionNote, setActionNote] = useState("");
+  const actionNoteTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const noteAction = useCallback((text: string) => {
+    setActionNote(text);
+    if (actionNoteTimer.current) clearTimeout(actionNoteTimer.current);
+    actionNoteTimer.current = setTimeout(() => setActionNote(""), 8000);
+  }, []);
+
+  // Switch the book between STORY and TECHNICAL analysis. Re-opens the book with
+  // the new mode (cheap; restores cache) — but the existing bible was built for
+  // the OLD mode, so the action note points at Redo → Story analysis.
+  const onToggleContentMode = useCallback(() => {
+    if (!book) return;
+    const next: BookSource = {
+      ...book,
+      contentMode: book.contentMode === "technical" ? "fiction" : "technical",
+    };
+    openBook(next); // persists to the library + re-opens in the worker
+    noteAction(
+      `✓ Now a ${next.contentMode === "technical" ? "TECHNICAL" : "STORY"} book — run ↻ Redo → Story analysis to rebuild the analysis for this mode.`,
+    );
+  }, [book, openBook, noteAction]);
 
   // Exit the current book back to the landing page (the buddy/home screen). The
   // book stays in the library; this just closes the reader and stops generation.
@@ -1131,14 +1159,6 @@ export function App() {
       : "";
 
   // ---- Workflow bar: what the app is working on right now (always visible) ----
-  // Transient "✓ your click did X" feedback, so a Redo press is never ambiguous.
-  const [actionNote, setActionNote] = useState("");
-  const actionNoteTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const noteAction = useCallback((text: string) => {
-    setActionNote(text);
-    if (actionNoteTimer.current) clearTimeout(actionNoteTimer.current);
-    actionNoteTimer.current = setTimeout(() => setActionNote(""), 8000);
-  }, []);
   // The "Redo…" dropdown (a native <details>); close it after picking an item.
   const redoMenuRef = useRef<HTMLDetailsElement | null>(null);
   const closeRedoMenu = useCallback(() => {
@@ -1444,10 +1464,32 @@ export function App() {
           {book && (
             <button
               style={styles.button}
+              onClick={onToggleContentMode}
+              title={
+                isTechnical
+                  ? "This book is analysed as TECHNICAL (concepts, structures, data, real figures). Click to switch to Story mode — then run ↻ Redo → Story analysis."
+                  : "This book is analysed as a STORY (characters, scenes). Click to switch to Technical mode — then run ↻ Redo → Story analysis."
+              }
+            >
+              {isTechnical ? "🔬 Technical" : "📖 Story"}
+            </button>
+          )}
+          {book && !isTechnical && (
+            <button
+              style={styles.button}
               onClick={() => setShowCharacters(true)}
               title="View and correct each character's appearance in the Visual Bible"
             >
               Characters{bible ? ` (${bible.characters.length})` : ""}
+            </button>
+          )}
+          {book && isTechnical && (
+            <button
+              style={styles.button}
+              onClick={() => setShowData(true)}
+              title="Every dataset extracted from this book — real values, charted by the app"
+            >
+              Data{bible ? ` (${bible.datasets?.length ?? 0})` : ""}
             </button>
           )}
           {book && (
@@ -1591,7 +1633,14 @@ export function App() {
                   )}
                 </div>
               )}
-              <DataSection datasets={activeDatasets} />
+              <DataSection
+                datasets={activeDatasets}
+                sourceLabel={
+                  book.chapters.find((c) => c.index === activeChapterIndex)?.title ||
+                  `chapter ${activeChapterIndex + 1}`
+                }
+                defaultOpen={isTechnical}
+              />
               <div style={styles.caption}>
                 {pagesPerImage === "chapter"
                   ? `Chapter ${unitIndex + 1} of ${totalUnits}`
@@ -1617,6 +1666,14 @@ export function App() {
           onRemoveReference={removeCharacterReference}
           getReferenceImage={getCharacterReference}
           onClose={() => setShowCharacters(false)}
+        />
+      )}
+
+      {showData && book && (
+        <DataModal
+          datasets={bible?.datasets ?? []}
+          chapterTitles={book.chapters.map((c) => c.title || `Chapter ${c.index + 1}`)}
+          onClose={() => setShowData(false)}
         />
       )}
 
@@ -1845,6 +1902,61 @@ async function saveSettings(s: ReaderSettings): Promise<void> {
  * no checkpoint selected" instead of guessing.
  */
 /** Paste/upload a Visual Bible JSON, preview its contents, and import it. */
+/** Every dataset the analysis extracted from a TECHNICAL book, charted, grouped
+ * by chapter — the technical counterpart of the Character Bible. */
+function DataModal({
+  datasets,
+  chapterTitles,
+  onClose,
+}: {
+  datasets: ChapterDataset[];
+  chapterTitles: string[];
+  onClose: () => void;
+}) {
+  const byChapter = useMemo(() => {
+    const groups = new Map<number, ChapterDataset[]>();
+    for (const d of datasets) {
+      const list = groups.get(d.chapterIndex) ?? [];
+      list.push(d);
+      groups.set(d.chapterIndex, list);
+    }
+    return [...groups.entries()].sort((a, b) => a[0] - b[0]);
+  }, [datasets]);
+  return (
+    <div style={styles.modalOverlay} onClick={onClose}>
+      <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <strong>📊 Data — every extracted dataset ({datasets.length})</strong>
+          <button style={styles.button} onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <p style={{ opacity: 0.65, fontSize: 12, margin: "0 0 8px" }}>
+          Real numeric series captured from the text, charted by the app with exact values —
+          never an AI&rsquo;s imagined numbers. The reader aside shows the current chapter&rsquo;s
+          data; this is the whole book&rsquo;s.
+        </p>
+        {datasets.length === 0 && (
+          <p style={{ opacity: 0.6, fontSize: 13 }}>
+            No datasets extracted yet — they appear as the analysis finds real numeric series
+            (tables, results, comparisons) in the text.
+          </p>
+        )}
+        {byChapter.map(([chapterIndex, list]) => (
+          <section key={chapterIndex} style={{ marginBottom: 14 }}>
+            <h3 style={{ fontSize: 13, margin: "10px 0 4px", opacity: 0.85 }}>
+              {chapterTitles[chapterIndex] ?? `Chapter ${chapterIndex + 1}`}
+            </h3>
+            {list.map((d) => (
+              <DataChart key={d.id} dataset={d} />
+            ))}
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ImportBibleModal({
   bookId,
   onImport,
@@ -2429,7 +2541,16 @@ const styles: Record<string, React.CSSProperties> = {
   },
   paragraph: { fontSize: 19, lineHeight: 1.8, margin: "0 0 18px" },
   aside: {},
-  panel: { position: "sticky", top: 80 },
+  // The aside is sticky; when its content (image + data charts on technical
+  // books) exceeds the viewport it must scroll INTERNALLY — a sticky element's
+  // overflow is otherwise unreachable ("no scroll" on technical books).
+  panel: {
+    position: "sticky",
+    top: 80,
+    maxHeight: "calc(100vh - 96px)",
+    overflowY: "auto",
+    paddingRight: 4,
+  },
   imageDescription: {
     marginTop: 10,
     fontSize: 13,
