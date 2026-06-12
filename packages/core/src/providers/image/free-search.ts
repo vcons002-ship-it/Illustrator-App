@@ -16,10 +16,10 @@ import {
  * used) an encyclopedia is a strong source, and Commons is full of exactly the
  * labeled diagrams figure retrieval wants.
  *
- * Deliberately NOT here: scraping DuckDuckGo/Google result pages through a
- * CORS-exempt context (the desktop Rust shell / the extension background worker).
- * Possible, but fragile (markup drift), rate-limited and ToS-gray — revisit only
- * if Wikipedia coverage proves too narrow in practice.
+ * Full-web coverage for non-encyclopedic questions lives in ddg-search.ts: a
+ * DuckDuckGo Lite parser that only works through CORS-exempt transports (the
+ * extension background worker), with THIS class as its hard fallback — markup
+ * drift or a blocked transport degrades to Wikipedia, never to broken search.
  */
 
 export interface WikiSearchOptions {

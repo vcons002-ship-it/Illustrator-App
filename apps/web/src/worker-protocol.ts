@@ -1,5 +1,9 @@
 import type {
+  BookSearchHit,
   BookSource,
+  BookSummary,
+  BuddyPersona,
+  BuddyToolCall,
   CharacterPatch,
   ChatTurn,
   ImageResult,
@@ -70,7 +74,22 @@ export type MainToWorker =
     }
   /** Run a user-APPROVED generate_image tool call (answered by `chatToolResult`). */
   | { type: "chatTool"; requestId: number; call: ToolCall }
-  | { type: "chatCancel"; requestId: number };
+  | { type: "chatCancel"; requestId: number }
+  /**
+   * Landing-page buddy: one user message BEFORE any book is open. `library` is the
+   * reader's book list (for open_library_book); `persona` picks the entertainment
+   * vs. technical voice. Streams `buddyToken`/`buddyTool`/`buddyToolResult` (and
+   * `buddyOpened` when a tool opens a book), finishes with `buddyDone`/`buddyError`.
+   * Cancelled by the shared `chatCancel` (request ids come from one counter).
+   */
+  | {
+      type: "buddyChat";
+      requestId: number;
+      history: ChatTurn[];
+      userText: string;
+      persona: BuddyPersona;
+      library: BookSummary[];
+    };
 
 export type WorkerToMain =
   | { type: "status"; message: string }
@@ -118,4 +137,41 @@ export type WorkerToMain =
       transcript: ChatTurn[];
       pendingTool?: ToolCall;
     }
-  | { type: "chatError"; requestId: number; message: string };
+  | { type: "chatError"; requestId: number; message: string }
+  /** Incremental buddy text (streaming providers only). */
+  | { type: "buddyToken"; requestId: number; text: string }
+  | { type: "buddyTool"; requestId: number; round: number; call: BuddyToolCall }
+  | {
+      type: "buddyToolResult";
+      requestId: number;
+      call: BuddyToolCall;
+      hits?: WebSearchHit[];
+      books?: BookSearchHit[];
+      imageHits?: ImageSearchHit[];
+      applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
+      removed?: string;
+      error?: string;
+    }
+  /** A buddy tool resolved a full BookSource — the main thread opens it (and
+   * starts generation when `visuals` was requested). Arrives mid-turn. */
+  | { type: "buddyOpened"; requestId: number; book: BookSource; visuals: boolean }
+  /** remove_library_book deleted a book — the main thread refreshes its library list. */
+  | { type: "buddyLibraryChanged"; requestId: number }
+  /** set_visual_style resolved against the catalog — the main thread (settings
+   * owner) commits it. Arrives mid-turn, before the tool result. */
+  | {
+      type: "buddySettings";
+      requestId: number;
+      style?: { id: string; label: string };
+      pagesPerImage?: number | "chapter";
+      illustrateAfter?: "chapter" | "book";
+    }
+  | {
+      type: "buddyDone";
+      requestId: number;
+      text: string;
+      transcript: ChatTurn[];
+      /** An un-executed generate_image awaiting the reader's approval. */
+      pendingTool?: BuddyToolCall;
+    }
+  | { type: "buddyError"; requestId: number; message: string };

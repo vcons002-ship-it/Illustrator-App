@@ -6,6 +6,7 @@ export * from "./PanelGrid.js";
 export * from "./imageObjectUrl.js";
 export * from "./imageStatus.js";
 export * from "./ChatPanel.js";
+export * from "./ChatBuddyPanel.js";
 export * from "./DataChart.js";
 export * from "./DataSection.js";
 export * from "./CharacterBible.js";

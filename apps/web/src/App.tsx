@@ -26,6 +26,8 @@ import {
   formatToolResult,
   type BookSource,
   type BookSummary,
+  type BuddyPersona,
+  type BuddyToolCall,
   type ChatTurn,
   type EncryptedSecrets,
   type StoredChatMessage,
@@ -35,6 +37,7 @@ import { bookFromText } from "@visual-reader/epub";
 import { IMPORT_ACCEPT, importBookFile } from "./import-file.js";
 import {
   CharacterBible,
+  ChatBuddyPanel,
   ChatPanel,
   DataSection,
   DEFAULT_SETTINGS,
@@ -64,6 +67,9 @@ import {
   onEngineProgress,
   onModelProgress,
 } from "./runtime.js";
+
+/** Chat-history key for the landing-page buddy — reserved, never a book id. */
+const BUDDY_CHAT_ID = "__buddy__";
 
 export function App() {
   const stored = useMemo(loadStoredSettings, []);
@@ -122,6 +128,8 @@ export function App() {
     chat,
     chatTool,
     chatCancel,
+    buddyChat,
+    buddyCancel,
   } = useEngineWorker(settings);
   const [showCharacters, setShowCharacters] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -141,6 +149,19 @@ export function App() {
   // The pending generate_image's transcript (assistant JSON turn), folded into the
   // history only when the user approves — a dismissed call never reaches the model.
   const pendingTranscript = useRef<ChatTurn[]>([]);
+  // Landing-page buddy (persisted under its own key; finds + opens books via tools).
+  const [buddyMessages, setBuddyMessages] = useState<StoredChatMessage[]>([]);
+  const [buddyBusy, setBuddyBusy] = useState(false);
+  const [buddyStreaming, setBuddyStreaming] = useState("");
+  const [buddyActivity, setBuddyActivity] = useState("");
+  const [buddyPersona, setBuddyPersona] = useState<BuddyPersona>("entertainment");
+  const [buddyPendingTool, setBuddyPendingTool] = useState<BuddyToolCall | undefined>();
+  // The pending generate_image's transcript, folded in only on approval (same
+  // injection guard as the book chat's pendingTranscript).
+  const pendingBuddyTranscript = useRef<ChatTurn[]>([]);
+  // Buddy messages handed into the next opened book's chat (consumed on book change),
+  // so a buddy-initiated open continues the conversation inside the reader.
+  const buddyHandoff = useRef<StoredChatMessage[] | undefined>(undefined);
   const { registerParagraph, activeParagraphId, activeParagraphProgress } = useScrollDepth();
 
   // Decrypt stored keys after mount, then enable persistence. Persisting is gated
@@ -514,15 +535,20 @@ export function App() {
   // --- Reading-companion chat ------------------------------------------------
   const isTechnical = book?.contentMode === "technical";
   // Load this book's chat history; reset transient chat state on book change.
+  // A buddy-initiated open seeds the history with the handed-off landing
+  // conversation, then the stored history is PREPENDED when it loads (it's
+  // older than the handoff — and a plain set would race away the handoff).
   useEffect(() => {
-    setChatMessages([]);
+    const handoff = buddyHandoff.current;
+    buddyHandoff.current = undefined;
+    setChatMessages(book && handoff ? handoff : []);
     setChatPendingTool(undefined);
     setChatStreaming("");
     setChatActivity("");
     if (!book) return;
     let cancelled = false;
     void libraryStore.getChatHistory?.(book.id).then((stored) => {
-      if (!cancelled && stored) setChatMessages(stored);
+      if (!cancelled && stored?.length) setChatMessages((prev) => [...stored, ...prev]);
     });
     return () => {
       cancelled = true;
@@ -667,6 +693,197 @@ export function App() {
     pendingTranscript.current = [];
   }, []);
   const onCloseChat = useCallback(() => setShowChat(false), []);
+
+  // --- Landing-page buddy ------------------------------------------------------
+  // Same persistence scheme as the per-book chat, under a reserved key that can
+  // never collide with a book id (epub hashes / "text-…").
+  useEffect(() => {
+    let cancelled = false;
+    void libraryStore.getChatHistory?.(BUDDY_CHAT_ID).then((stored) => {
+      if (!cancelled && stored) setBuddyMessages(stored);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [libraryStore]);
+  useEffect(() => {
+    if (buddyMessages.length === 0) return;
+    const t = setTimeout(() => void libraryStore.putChatHistory?.(BUDDY_CHAT_ID, buddyMessages), 500);
+    return () => clearTimeout(t);
+  }, [buddyMessages, libraryStore]);
+
+  const appendBuddy = (msg: Omit<StoredChatMessage, "at">) =>
+    setBuddyMessages((prev) => [...prev, { ...msg, at: Date.now() }]);
+
+  const onBuddySend = useCallback(
+    async (text: string) => {
+      const history = chatTurnsOf(buddyMessages);
+      appendBuddy({ role: "user", text });
+      setBuddyBusy(true);
+      setBuddyStreaming("");
+      setBuddyActivity("");
+      setBuddyPendingTool(undefined);
+      let openedBook = false;
+      const res = await buddyChat(history, text, buddyPersona, library, (e) => {
+        if (e.kind === "token") setBuddyStreaming((prev) => prev + e.text);
+        else if (e.kind === "tool") {
+          setBuddyActivity(
+            e.call.tool === "search_books"
+              ? `Searching Project Gutenberg for “${e.call.query}”…`
+              : e.call.tool === "random_books"
+                ? "Pulling some classics off the shelf…"
+                : e.call.tool === "search_web"
+                  ? `Searching for “${e.call.query}”…`
+                  : e.call.tool === "search_images"
+                    ? `Looking for images of “${e.call.query}”…`
+                    : e.call.tool === "set_visual_style"
+                      ? "Updating the visual settings…"
+                      : e.call.tool === "open_library_book"
+                        ? "Opening from your library…"
+                        : e.call.tool === "open_pasted_text"
+                          ? "Opening your text…"
+                          : e.call.tool === "remove_library_book"
+                            ? "Removing from your library…"
+                            : e.call.tool === "generate_image"
+                              ? "Preparing an image…"
+                              : "Fetching the text and opening it…",
+          );
+        } else if (e.kind === "settings") {
+          // The buddy resolved a settings change against the catalog; commit it
+          // here (the App owns settings) and show what changed.
+          setSettings((s) => ({
+            ...s,
+            ...(e.style ? { imageStyle: e.style.id } : {}),
+            ...(e.pagesPerImage !== undefined ? { pagesPerImage: e.pagesPerImage } : {}),
+            ...(e.illustrateAfter !== undefined ? { illustrateAfter: e.illustrateAfter } : {}),
+          }));
+          const parts = [
+            ...(e.style ? [`art style: ${e.style.label}`] : []),
+            ...(e.pagesPerImage !== undefined
+              ? [e.pagesPerImage === "chapter" ? "one image per chapter" : `one image per ${e.pagesPerImage} page(s)`]
+              : []),
+            ...(e.illustrateAfter !== undefined
+              ? [e.illustrateAfter === "chapter" ? "illustrate as you read" : "illustrate after the whole book"]
+              : []),
+          ];
+          appendBuddy({ role: "tool", text: `🎨 ${parts.join(" · ")}` });
+        } else if (e.kind === "libraryChanged") {
+          // A book was removed from IndexedDB — refresh the library list (the
+          // tool's prose confirmation handles user-facing acknowledgement).
+          void libraryStore.listBooks().then(setLibrary).catch(() => {});
+        } else if (e.kind === "opened") {
+          // Hand the VISIBLE conversation off into the book chat (model-facing
+          // `turns` are stripped — the book chat has different tools/context),
+          // open the book, and start visuals when the reader asked for them.
+          openedBook = true;
+          buddyHandoff.current = [...buddyMessages, { role: "user" as const, text, at: Date.now() }]
+            .slice(-12)
+            .map(({ turns: _turns, ...m }) => m);
+          openBook(e.book);
+          if (e.visuals) startGeneration();
+          setShowChat(true);
+        } else {
+          setBuddyActivity("");
+          if (e.hits?.length) {
+            appendBuddy({
+              role: "tool",
+              text: `Results for “${"query" in e.call ? e.call.query : ""}”:`,
+              links: e.hits.map((h) => ({ url: h.link, ...(h.title ? { title: h.title } : {}) })),
+            });
+          } else if (e.books?.length) {
+            appendBuddy({
+              role: "tool",
+              text:
+                e.call.tool === "random_books"
+                  ? "Off the classics shelf:"
+                  : `Project Gutenberg matches for “${"query" in e.call ? e.call.query : ""}”:`,
+              links: e.books.map((b) => ({
+                url: b.pageUrl ?? b.textUrl,
+                title: b.author ? `${b.title} — ${b.author}` : b.title,
+              })),
+            });
+          } else if (e.imageHits?.length) {
+            // Inline figure, same presentation as the in-book chat.
+            const best = e.imageHits[0]!;
+            appendBuddy({
+              role: "tool",
+              text: `Found: ${best.title ?? "image"}`,
+              image: { sourceUrl: best.thumbnailLink ?? best.link },
+              links: e.imageHits
+                .slice(0, 3)
+                .map((h) => ({ url: h.contextLink ?? h.link, ...(h.title ? { title: h.title } : {}) })),
+            });
+          }
+        }
+      });
+      setBuddyBusy(false);
+      setBuddyStreaming("");
+      setBuddyActivity("");
+      if (res.error) {
+        appendBuddy({ role: "tool", text: `⚠ ${res.error}`, turns: [] });
+        return;
+      }
+      if (res.pendingTool) {
+        pendingBuddyTranscript.current = [{ role: "user", content: text }, ...res.transcript];
+        setBuddyPendingTool(res.pendingTool);
+        return;
+      }
+      if (res.text) {
+        appendBuddy({
+          role: "assistant",
+          text: res.text,
+          turns: [{ role: "user", content: text }, ...res.transcript],
+        });
+        // When a book opened this turn the landing panel is gone — the closing
+        // prose ("It's open! …") must land in the book chat to be seen.
+        if (openedBook) appendChat({ role: "assistant", text: res.text });
+      }
+    },
+    [buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration, libraryStore],
+  );
+  const onBuddySendText = useCallback((text: string) => void onBuddySend(text), [onBuddySend]);
+  // Approved buddy render: the worker's chatTool path serves both chats (the
+  // buddy's generate_image call has the identical shape by design).
+  const onApproveBuddyTool = useCallback(async () => {
+    const call = buddyPendingTool;
+    if (!call || call.tool !== "generate_image") return;
+    setBuddyPendingTool(undefined);
+    setBuddyBusy(true);
+    setBuddyActivity("Generating the image…");
+    const out = await chatTool(call);
+    setBuddyBusy(false);
+    setBuddyActivity("");
+    const feedback = formatToolResult(call, {
+      image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
+    });
+    appendBuddy({
+      role: "tool",
+      text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
+      ...(out.image ? { image: out.image } : {}),
+      turns: [...pendingBuddyTranscript.current, { role: "user", content: feedback }],
+    });
+    pendingBuddyTranscript.current = [];
+  }, [buddyPendingTool, chatTool]);
+  const onApproveBuddyPendingTool = useCallback(() => void onApproveBuddyTool(), [onApproveBuddyTool]);
+  const onDismissBuddyPendingTool = useCallback(() => {
+    setBuddyPendingTool(undefined);
+    pendingBuddyTranscript.current = [];
+  }, []);
+  const onClearBuddy = useCallback(() => {
+    setBuddyMessages([]);
+    setBuddyPendingTool(undefined);
+    void libraryStore.deleteChatHistory?.(BUDDY_CHAT_ID);
+  }, [libraryStore]);
+  const buddyPanelMessages = useMemo(
+    () =>
+      buddyMessages.map((m) => ({
+        role: m.role,
+        text: m.text,
+        ...(m.image ? { image: m.image } : {}),
+        ...(m.links ? { links: m.links } : {}),
+      })),
+    [buddyMessages],
+  );
 
   // On-image description: the EXACT prompt the image was rendered from (persisted
   // with it, so it never shifts as the bible grows — and doubles as prompt
@@ -1121,11 +1338,33 @@ export function App() {
 
       {!book && !status && !localError && (
         <div style={styles.empty}>
-          <p>Open an EPUB or load the sample to start reading with live illustrations.</p>
+          <p>
+            Open an EPUB, load the sample — or just ask the reading buddy below to find
+            something and illustrate it.
+          </p>
           <p style={{ opacity: 0.6 }}>
             No API keys? It runs with built-in placeholder art so you can see the flow.
           </p>
         </div>
+      )}
+
+      {!book && (
+        <section style={styles.buddySection}>
+          <ChatBuddyPanel
+            messages={buddyPanelMessages}
+            {...(buddyStreaming ? { streamingText: buddyStreaming } : {})}
+            busy={buddyBusy}
+            {...(buddyActivity ? { activity: buddyActivity } : {})}
+            {...(buddyPendingTool ? { pendingTool: buddyPendingTool } : {})}
+            persona={buddyPersona}
+            onPersonaChange={setBuddyPersona}
+            onSend={onBuddySendText}
+            onApprovePendingTool={onApproveBuddyPendingTool}
+            onDismissPendingTool={onDismissBuddyPendingTool}
+            onCancel={buddyCancel}
+            onClearHistory={onClearBuddy}
+          />
+        </section>
       )}
 
       {book && (
@@ -1956,7 +2195,8 @@ const styles: Record<string, React.CSSProperties> = {
     borderColor: "rgba(120,150,220,0.45)",
     color: "#bcd0ff",
   },
-  empty: { padding: 40, maxWidth: 560, lineHeight: 1.6 },
+  empty: { padding: "40px 40px 16px", maxWidth: 560, lineHeight: 1.6 },
+  buddySection: { padding: "0 40px 48px" },
   reader: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) minmax(320px, 520px)",
