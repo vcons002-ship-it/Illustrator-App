@@ -7,6 +7,7 @@ import type {
   BuddyToolCall,
   CharacterPatch,
   ChatTurn,
+  ContextUsage,
   ImageResult,
   ImageSearchHit,
   ImportStats,
@@ -133,6 +134,8 @@ export type BuddyStreamEvent =
     }
   /** A buddy tool opened a book — the app should open it (and start visuals). */
   | { kind: "opened"; book: BookSource; visuals: boolean }
+  /** Where the request's context budget is going (for the usage donut). */
+  | { kind: "usage"; usage: ContextUsage }
   /** remove_library_book deleted a book — the app should refresh its library. */
   | { kind: "libraryChanged" }
   /** set_visual_style resolved — the app (settings owner) should commit it. */
@@ -161,7 +164,9 @@ export type ChatStreamEvent =
       hits?: WebSearchHit[];
       imageHits?: ImageSearchHit[];
       error?: string;
-    };
+    }
+  /** Where the request's context budget is going (for the usage donut). */
+  | { kind: "usage"; usage: ContextUsage };
 
 export interface ChatDoneResult {
   text: string;
@@ -339,6 +344,12 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
             ...(msg.prompt ? { prompt: msg.prompt } : {}),
             ...(msg.error ? { error: msg.error } : {}),
           });
+          break;
+        }
+        case "chatContextUsage": {
+          // Routed to whichever chat (book or buddy) owns the request id.
+          chatRequests.current.get(msg.requestId)?.onEvent({ kind: "usage", usage: msg.usage });
+          buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "usage", usage: msg.usage });
           break;
         }
         case "chatToken": {
