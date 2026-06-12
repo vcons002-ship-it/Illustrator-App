@@ -1,4 +1,4 @@
-import { StrictMode, useCallback, useEffect, useRef, useState } from "react";
+import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Automatic1111Backend,
@@ -35,6 +35,28 @@ import { createCacheStore } from "./cache-store.js";
 import { decryptViaBackground, encryptViaBackground, proxyFetch } from "./message-transport.js";
 
 const STORAGE_KEY = "vr-settings";
+
+/** Tracking query params that never change a page's content. */
+const TRACKING_PARAMS = new Set(["fbclid", "gclid", "igshid", "mc_cid", "mc_eid"]);
+
+/**
+ * Cache id for the current page. Tracking params and plain anchor fragments are
+ * stripped so a re-visit via `?utm_…` or `#section` reuses the page's bible and
+ * images instead of re-extracting and re-generating from scratch. Hash ROUTES
+ * (`#/…`, `#!…`) are kept — there the fragment selects different content.
+ */
+function cachePageId(href: string): string {
+  try {
+    const u = new URL(href);
+    if (!u.hash.startsWith("#/") && !u.hash.startsWith("#!")) u.hash = "";
+    for (const k of [...u.searchParams.keys()]) {
+      if (/^utm_/i.test(k) || TRACKING_PARAMS.has(k.toLowerCase())) u.searchParams.delete(k);
+    }
+    return `page-${u.href}`;
+  } catch {
+    return `page-${href}`;
+  }
+}
 
 /**
  * Content-script overlay. Extracts the page's readable text, runs it through the
@@ -146,7 +168,7 @@ function Overlay() {
     const build = (): void => {
       const s = settingsRef.current!;
       const { title, text } = extractedRef.current!;
-      const source = segmentBook({ id: `page-${location.href}`, title }, [{ title, text }], { wordsPerPage: 220 });
+      const source = segmentBook({ id: cachePageId(location.href), title }, [{ title, text }], { wordsPerPage: 220 });
       setError("");
       setResults(new Map());
       const { llm, image, tier } = buildProviders(s, { fetch: proxyFetch, onLocalStatus: setStatus });
@@ -211,9 +233,11 @@ function Overlay() {
         const scaled = frac * (book.pages.length - 1);
         const idx = Math.min(Math.floor(scaled), book.pages.length - 1);
         // Fraction within the current page; the last page tracks to full at the bottom.
+        // Quantized (~1.5% steps, invisible through the bloom easing) so unchanged
+        // frames bail out of re-rendering the overlay instead of running at 60fps.
         const within = idx >= book.pages.length - 1 ? 1 : Math.max(0, Math.min(1, scaled - idx));
         setPageIndex((p) => (p !== idx ? idx : p));
-        setSubPageProgress(within);
+        setSubPageProgress(Math.round(within * 64) / 64);
       });
     };
     window.addEventListener("scroll", onScroll, { passive: true });
@@ -304,25 +328,28 @@ function Overlay() {
     }
   }, []);
 
+  const page = book?.pages[pageIndex];
+  // Spoiler resolution is O(entities × paragraphs) — keyed on the bible/page it
+  // runs when they change, not on every scroll frame of the overlay.
+  const spoiler = useMemo(() => {
+    if (!bible || !page) return { has: false, revealPoint: 1 };
+    const spoilerIds = resolvePageEntities(bible, page).spoilerIds;
+    const has = spoilerIds.length > 0;
+    return {
+      has,
+      revealPoint: spoilerRevealPoint(
+        latestSpoilerParagraphIndex(page, spoilerIds, bible.spoilers ?? []),
+        has,
+        page.paragraphs.length,
+      ),
+    };
+  }, [bible, page]);
+
   if (!visible || !settings) return null;
 
-  const page = book?.pages[pageIndex];
-  const spoilerIds = bible && page ? resolvePageEntities(bible, page).spoilerIds : [];
-  const paraCount = page?.paragraphs.length ?? 1;
-  const hasSpoiler = spoilerIds.length > 0;
   // Reveal follows the reader's scroll through the article (fast scroll → hidden),
   // holding any depicted spoiler until they reach its paragraph.
-  const bloom = page
-    ? computeBloomTarget(
-        subPageProgress,
-        spoilerRevealPoint(
-          latestSpoilerParagraphIndex(page, spoilerIds, bible?.spoilers ?? []),
-          hasSpoiler,
-          paraCount,
-        ),
-        hasSpoiler,
-      )
-    : 0;
+  const bloom = page ? computeBloomTarget(subPageProgress, spoiler.revealPoint, spoiler.has) : 0;
 
   return (
     <div style={panel}>

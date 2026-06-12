@@ -25,8 +25,8 @@ export async function importBookFile(file: File): Promise<ImportedFile> {
   const title = file.name.replace(/\.[^.]+$/, "");
   switch (ext) {
     case "epub": {
-      const data = new Uint8Array(await file.arrayBuffer());
-      return { kind: "book", book: parseEpub(data, `epub-${file.name}-${file.size}`) };
+      const bytes = await file.arrayBuffer();
+      return { kind: "book", book: await parseEpubOffMain(bytes, `epub-${file.name}-${file.size}`) };
     }
     case "txt":
     case "md":
@@ -44,6 +44,37 @@ export async function importBookFile(file: File): Promise<ImportedFile> {
         `Unsupported file type ".${ext}" — supported: EPUB, TXT, Markdown, HTML, PDF (or paste text directly).`,
       );
   }
+}
+
+/**
+ * Parse an EPUB in a dedicated worker (transferred bytes, zero-copy): unzip +
+ * HTML→text is synchronous and froze the page for seconds on real books. Falls
+ * back to inline parsing where module workers can't be constructed.
+ */
+function parseEpubOffMain(bytes: ArrayBuffer, id: string): Promise<BookSource> {
+  return new Promise((resolve, reject) => {
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL("./epub.worker.ts", import.meta.url), { type: "module" });
+    } catch {
+      try {
+        resolve(parseEpub(new Uint8Array(bytes), id));
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+      return;
+    }
+    worker.onmessage = (e: MessageEvent<{ ok: boolean; book?: BookSource; error?: string }>) => {
+      worker.terminate();
+      if (e.data.ok && e.data.book) resolve(e.data.book);
+      else reject(new Error(e.data.error ?? "EPUB parse failed"));
+    };
+    worker.onerror = (e: ErrorEvent) => {
+      worker.terminate();
+      reject(new Error(`Couldn't parse the EPUB — ${e.message || "the parser worker failed to load"}`));
+    };
+    worker.postMessage({ bytes, id }, [bytes]);
+  });
 }
 
 /**

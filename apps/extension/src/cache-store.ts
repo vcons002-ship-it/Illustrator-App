@@ -14,6 +14,26 @@ import {
  * store if IndexedDB is blocked on a given site, so caching is best-effort and
  * never breaks the overlay.
  */
+/** Most recently visited pages whose work is kept; older ones are reclaimed.
+ * Without a cap, normal browsing accumulated every page's bible + multi-MB
+ * rendered images in IndexedDB forever. */
+const MAX_CACHED_PAGES = 20;
+
+/**
+ * Refresh a page's recency and evict the least-recently-used pages beyond the
+ * cap. The book ledger doubles as the recency index: `putBook` stamps a fresh
+ * `addedAt`, `listBooks` returns newest-first, and `removeBook` reclaims
+ * everything the page owns (bible, images, chat). Stub records — the extension
+ * reads the live page, so only the id/recency matter.
+ */
+async function touchAndEvict(store: VisualReaderStore, bookId: string): Promise<void> {
+  await store.putBook({ id: bookId, title: bookId, chapters: [], pages: [] });
+  const books = await store.listBooks();
+  for (const b of books.slice(MAX_CACHED_PAGES)) {
+    await store.removeBook(b.id);
+  }
+}
+
 export function createCacheStore(): VisualReaderStore {
   let backing: VisualReaderStore;
   try {
@@ -26,6 +46,9 @@ export function createCacheStore(): VisualReaderStore {
   return {
     async getBible(bookId: string): Promise<VisualBible | undefined> {
       try {
+        // Touch on open (best-effort) so a fully-cached re-visit still counts as
+        // recent use even when nothing new is generated.
+        void touchAndEvict(backing, bookId).catch(() => {});
         return await backing.getBible(bookId);
       } catch {
         return fallback.getBible(bookId);
@@ -34,6 +57,7 @@ export function createCacheStore(): VisualReaderStore {
     async putBible(bible: VisualBible): Promise<void> {
       try {
         await backing.putBible(bible);
+        void touchAndEvict(backing, bible.bookId).catch(() => {});
       } catch {
         await fallback.putBible(bible);
       }
