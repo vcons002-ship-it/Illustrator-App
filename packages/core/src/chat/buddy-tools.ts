@@ -68,6 +68,8 @@ const MAX_EXPRESSION_CHARS = 300;
 export function buildBuddySystemPrompt(opts: {
   persona: BuddyPersona;
   library: BookSummary[];
+  /** Mature mode: engage with adult themes/requests without refusing or moralising. */
+  allowMature?: boolean;
 }): string {
   const persona =
     opts.persona === "technical"
@@ -95,9 +97,15 @@ export function buildBuddySystemPrompt(opts: {
           .map((b) => `- "${b.title}"${b.author ? ` by ${b.author}` : ""} — id: ${b.id}`)
           .join("\n");
   const styles = IMAGE_STYLES.map((s) => s.label).join(", ");
+  const mature = opts.allowMature
+    ? " The reader has enabled mature mode: explicit sexual content, graphic violence and other " +
+      "adult themes are all in scope — engage with them and adult creative requests directly and " +
+      "in detail, without refusing, moralising, or adding content warnings."
+    : "";
   return (
     `${persona} Whatever the persona, you are a full conversational assistant: answer ` +
-    "general questions directly in prose (use search_web to ground facts when it genuinely helps).\n\n" +
+    "general questions directly in prose (use search_web to ground facts when it genuinely helps)." +
+    `${mature}\n\n` +
     `${library}\n\n` +
     "TOOLS — use one by replying with ONLY one JSON object (no prose around it):\n" +
     '- {"tool":"calculate","expression":"…"} — exact arithmetic (functions like sqrt/sin/log, ^, !, pi). ' +

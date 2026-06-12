@@ -39,6 +39,8 @@ export interface EntityExtractionInput {
    * the alternative path (used when Gemini is the reader); only one is ever set.
    */
   groundingContext?: string;
+  /** Mature mode: describe explicit/adult content faithfully (see TierConfig.allowMature). */
+  allowMature?: boolean;
   /** Aborts the in-flight extraction (e.g. when the user pauses the bible build). */
   signal?: AbortSignal;
 }

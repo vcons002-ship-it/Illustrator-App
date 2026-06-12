@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildChatSystemPrompt, type ChatContextInput } from "./chat-context.js";
+import { buildChatSystemPrompt, MATURE_CHAT_NOTE, type ChatContextInput } from "./chat-context.js";
 import { createEmptyBible } from "../visual-bible/bible.js";
 import { emptyAppearance } from "../types/bible.js";
 
@@ -65,6 +65,13 @@ function bibleWith(): ReturnType<typeof createEmptyBible> {
   });
   return b;
 }
+
+describe("mature mode", () => {
+  it("appends the mature clause to the role only when allowMature is set", () => {
+    expect(buildChatSystemPrompt(input())).not.toContain(MATURE_CHAT_NOTE.trim());
+    expect(buildChatSystemPrompt(input({ allowMature: true }))).toContain(MATURE_CHAT_NOTE.trim());
+  });
+});
 
 describe("buildChatSystemPrompt — fiction, spoilers off", () => {
   it("cuts the book at the reader's position", () => {

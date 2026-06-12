@@ -79,6 +79,15 @@ export interface TierConfig {
    * world style; only the prompt TEXT is swapped. Off unless the user opts in.
    */
   nativeOneShot?: boolean;
+  /**
+   * Mature-content mode: the reader has opted in to unfiltered illustration and
+   * discussion of explicit/adult source material. Relaxes the adjustable provider
+   * safety knobs (Gemini safetySettings, Flux safety_tolerance) and tells the LLM
+   * to depict/describe mature content faithfully rather than sanitize it. Off by
+   * default. (Providers without an adjustable knob — Claude/OpenAI — still follow
+   * their own policies; this only changes what THIS app asks for.)
+   */
+  allowMature?: boolean;
 }
 
 export const DEFAULT_TIER_CONFIG: TierConfig = {

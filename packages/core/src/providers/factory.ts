@@ -41,6 +41,8 @@ export interface LLMProviderOptions {
   model?: string;
   /** Gemini only: ground technical analysis in Google Search (same Gemini key). */
   ground?: boolean;
+  /** Relax adjustable provider safety filters for adult source material (Gemini). */
+  allowMature?: boolean;
 }
 
 export interface ImageProviderOptions {
@@ -59,6 +61,8 @@ export interface ImageProviderOptions {
   /** Pin a specific cloud model id (advanced). When unset, Gemini auto-selects the
    * best image model the key can access; other providers use their default. */
   model?: string;
+  /** Relax adjustable provider safety filters for adult source material (Gemini/Flux). */
+  allowMature?: boolean;
 }
 
 export function createLLMProvider(id: string, opts: LLMProviderOptions = {}): LLMProvider {
@@ -74,6 +78,7 @@ export function createLLMProvider(id: string, opts: LLMProviderOptions = {}): LL
         apiKey: requireKey(opts.key, "gemini"),
         ...(transport ? { transport } : {}),
         ...(opts.ground ? { ground: true } : {}),
+        ...(opts.allowMature ? { allowMature: true } : {}),
       });
     case "openai":
       return new OpenAILLMProvider({ apiKey: requireKey(opts.key, "openai"), ...(transport ? { transport } : {}) });
@@ -99,7 +104,11 @@ export function createImageProvider(id: string, opts: ImageProviderOptions = {})
   const transport = opts.transport;
   switch (id) {
     case "flux":
-      return new FluxProvider({ apiKey: requireKey(opts.key, "flux"), ...(transport ? { transport } : {}) });
+      return new FluxProvider({
+        apiKey: requireKey(opts.key, "flux"),
+        ...(transport ? { transport } : {}),
+        ...(opts.allowMature ? { allowMature: true } : {}),
+      });
     case "gemini":
       // Multimodal generateContent (auto-selects the best image model the key can access —
       // Nano Banana Pro if available, else Flash): works on a standard key AND accepts
@@ -109,6 +118,7 @@ export function createImageProvider(id: string, opts: ImageProviderOptions = {})
         apiKey: requireKey(opts.key, "gemini"),
         ...(opts.model ? { model: opts.model } : {}),
         ...(transport ? { transport } : {}),
+        ...(opts.allowMature ? { allowMature: true } : {}),
       });
     case "openai":
       return opts.native

@@ -728,6 +728,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       ...(currentBible ? { bible: currentBible } : {}),
       position: chatPosition(book, msg.position),
       allowSpoilers: msg.allowSpoilers,
+      ...(settings?.allowMature ? { allowMature: true } : {}),
       budgetChars: budgets.book,
     });
     const sec = (key: string) => sections.find((s) => s.key === key)?.text ?? "";
@@ -872,8 +873,11 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const note = await renderDefaultsNote();
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
     const setup =
-      buildBuddySystemPrompt({ persona: msg.persona, library: msg.library }) +
-      (note ? `\n\n${note}` : "");
+      buildBuddySystemPrompt({
+        persona: msg.persona,
+        library: msg.library,
+        ...(settings?.allowMature ? { allowMature: true } : {}),
+      }) + (note ? `\n\n${note}` : "");
     const history = trimChatHistory(
       [...msg.history, { role: "user", content: msg.userText }],
       budgets.history,

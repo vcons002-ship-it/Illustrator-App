@@ -81,6 +81,7 @@ export class RenderPipeline {
       environmentIds,
       creatureIds,
       spoilerIds,
+      ...(this.deps.tier.allowMature ? { allowMature: true } : {}),
     };
   }
 

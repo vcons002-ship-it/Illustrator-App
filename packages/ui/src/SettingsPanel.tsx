@@ -173,6 +173,14 @@ export interface ReaderSettings {
   imageModel?: string;
   /** True once the first-run wizard has been completed. */
   configured?: boolean;
+  /**
+   * Mature mode (adults only): turn off the app's content filtering so books with
+   * explicit sexual content, graphic violence or other adult themes are illustrated
+   * and discussed faithfully. Relaxes the adjustable provider safety knobs (Gemini /
+   * Flux) and tells the models not to sanitise. Off by default. Providers without an
+   * adjustable knob (Claude / OpenAI) still apply their own policies.
+   */
+  allowMature?: boolean;
   /** Transient: base URL of the app-managed local engine (desktop; not persisted). */
   engineBaseUrl?: string;
 }
@@ -525,6 +533,23 @@ export function SettingsPanel({
               </span>
             </label>
           )}
+
+          <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={value.allowMature ?? false}
+              onChange={(e) => set({ allowMature: e.target.checked })}
+            />
+            <span>
+              Mature mode (adults only)
+              <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                Turns off content filtering so books with explicit sexual content, graphic
+                violence or other adult themes are illustrated and discussed faithfully. Relaxes
+                the adjustable safety filters on Gemini and Flux and tells the models not to
+                sanitise; Claude and OpenAI still apply their own policies regardless.
+              </span>
+            </span>
+          </label>
 
           <details style={rowStyle}>
             <summary style={{ cursor: "pointer", fontSize: 13, opacity: 0.85 }}>

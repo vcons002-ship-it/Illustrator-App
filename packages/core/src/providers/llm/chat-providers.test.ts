@@ -29,6 +29,22 @@ const turns: ChatTurn[] = [
   { role: "user", content: "what now?" },
 ];
 
+describe("Gemini mature-mode safetySettings", () => {
+  it("sends BLOCK_NONE safetySettings on chat only when allowMature is set", async () => {
+    const off = new FakeTransport({ candidates: [{ content: { parts: [{ text: "hi" }] } }] });
+    await new GeminiLLMProvider({ apiKey: "k", transport: off }).chat(turns);
+    expect((off.requests[0]!.body as { safetySettings?: unknown }).safetySettings).toBeUndefined();
+
+    const on = new FakeTransport({ candidates: [{ content: { parts: [{ text: "hi" }] } }] });
+    await new GeminiLLMProvider({ apiKey: "k", transport: on, allowMature: true }).chat(turns);
+    const s = (on.requests[0]!.body as { safetySettings: { category: string; threshold: string }[] })
+      .safetySettings;
+    expect(s).toHaveLength(4);
+    expect(s.every((x) => x.threshold === "BLOCK_NONE")).toBe(true);
+    expect(s.map((x) => x.category)).toContain("HARM_CATEGORY_SEXUALLY_EXPLICIT");
+  });
+});
+
 describe("LocalServerLLMProvider.contextLength", () => {
   it("reads the architecture-prefixed context_length from /api/show", async () => {
     const t = new FakeTransport({ model_info: { "llama.context_length": 131072, "llama.block_count": 32 } });

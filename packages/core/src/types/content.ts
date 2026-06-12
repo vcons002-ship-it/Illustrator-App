@@ -56,6 +56,8 @@ export interface VisualRequest {
   creatureIds: string[];
   /** Spoiler entities present in the generated visual, if any. */
   spoilerIds: string[];
+  /** Mature mode: depict explicit/adult content faithfully (see TierConfig.allowMature). */
+  allowMature?: boolean;
 }
 
 export type RenderStatus =

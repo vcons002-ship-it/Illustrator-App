@@ -485,7 +485,21 @@ function truncate(s: string, n: number): string {
   return t.length <= n ? t : `${t.slice(0, n).trimEnd()}…`;
 }
 
+/**
+ * Prepended to extraction / image-prompt user content when the reader has enabled
+ * mature mode. Permission + instruction so any provider (incl. self-censoring
+ * local models) records and depicts adult source material faithfully instead of
+ * sanitizing the bible and the scene prompts.
+ */
+export const MATURE_CONTENT_NOTE =
+  "[MATURE MODE — adult fiction for an adult reader] This source text may contain explicit " +
+  "sexual content, graphic violence, or other adult themes. Capture and describe them faithfully " +
+  "and in concrete visual detail exactly as the text presents them — do not omit, euphemise, " +
+  "soften, or add warnings. Treat anatomy, nudity, and adult acts as ordinary describable subject " +
+  "matter for this published work.";
+
 export function extractionUserContent(input: EntityExtractionInput): string {
+  const mature = input.allowMature ? `${MATURE_CONTENT_NOTE}\n\n` : "";
   // Only the most recent summaries (bounded), each truncated — older context is
   // already captured in the accumulated entities, so the full history isn't needed.
   const priorSummaries = cap(
@@ -534,7 +548,7 @@ export function extractionUserContent(input: EntityExtractionInput): string {
   // (any text provider, incl. local). Placed last, just before the chapter text, so the
   // model leans on these real sources for definitions/quantities over its recollection.
   const grounding = input.groundingContext?.trim() ? `${input.groundingContext.trim()}\n\n` : "";
-  return `${castSoFar}${beastsSoFar}${placesSoFar}${glossarySoFar}${soFar}${scenes}${grounding}Chapter ${input.chapterIndex} text:\n\n${input.chapterText}`;
+  return `${mature}${castSoFar}${beastsSoFar}${placesSoFar}${glossarySoFar}${soFar}${scenes}${grounding}Chapter ${input.chapterIndex} text:\n\n${input.chapterText}`;
 }
 
 /**
@@ -814,6 +828,7 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
   // happens — more exact than the chapter's single location when the chapter moves.
   const beatLocation = resolveKeyEvent(bible, request.chapterIndex, request.pageRange)?.location;
   return [
+    request.allowMature ? MATURE_CONTENT_NOTE : "",
     request.bookTitle ? `Book: ${request.bookTitle}.` : "",
     `Illustrate the single most important action in THIS passage (below). Each illustration ` +
       `covers a DIFFERENT stretch of the chapter, so depict ONLY what happens in THIS passage — ` +

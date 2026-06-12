@@ -198,6 +198,10 @@ export function buildProviders(
       // mark the tier (and carry the experimental one-shot sub-mode, only when native).
       ...(native && !image.diag.mock ? { nativeIllustration: true } : {}),
       ...(native && !image.diag.mock && settings.nativeOneShot ? { nativeOneShot: true } : {}),
+      // Mature mode: also carried on the tier so the pipeline's extraction + prompt
+      // writing tell the LLM to depict adult content faithfully (provider safety
+      // knobs above are the other half).
+      ...(settings.allowMature ? { allowMature: true } : {}),
     },
   };
 }
@@ -327,6 +331,7 @@ function buildLLM(
         ...(fetchImpl ? { fetch: fetchImpl } : {}),
         // Gemini only: ground technical analysis in Google Search (same Gemini key).
         ...(id === "gemini" && settings.groundFacts ? { ground: true } : {}),
+        ...(settings.allowMature ? { allowMature: true } : {}),
       }),
       diag: { id, label: providerLabel, mock: false },
     };
@@ -398,6 +403,7 @@ function buildImage(
         ...(transport ? { transport } : {}),
         ...(native ? { native: true } : {}),
         ...(settings.imageModel ? { model: settings.imageModel } : {}),
+        ...(settings.allowMature ? { allowMature: true } : {}),
       }),
       diag: {
         id,

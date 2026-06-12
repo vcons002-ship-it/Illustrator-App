@@ -24,8 +24,17 @@ export interface ChatContextInput {
   bible?: VisualBible;
   position: ChatPosition;
   allowSpoilers: boolean;
+  /** Mature mode: discuss explicit/adult content frankly (see TierConfig.allowMature). */
+  allowMature?: boolean;
   budgetChars?: number;
 }
+
+/** Appended to the chat role clause in mature mode — adult reader, adult text. */
+export const MATURE_CHAT_NOTE =
+  " This reader is an adult who has enabled mature mode: the book may contain explicit sexual " +
+  "content, graphic violence, or other adult themes, and all of it is in scope. Discuss it " +
+  "directly, frankly, and in as much detail as the reader wants — do not refuse, moralise, add " +
+  "content warnings, or sanitise; treat it as the adult literary discussion it is.";
 
 const OMITTED = "[… omitted for length …]";
 
@@ -44,7 +53,7 @@ export function chatContextSections(input: ChatContextInput): ChatContextSection
   const fullView = technical || input.allowSpoilers;
   const budget = input.budgetChars ?? CHAT_CONTEXT_BUDGET_CHARS;
   const text = fullView ? fullBookText(input, budget) : readSoFarText(input, budget);
-  const role = technical
+  const baseRole = technical
     ? `You are a study companion for the reader of "${input.bookTitle}" (a technical/non-fiction text). ` +
       "Discuss, explain, and analyse it using the material below; prefer its actual data and definitions."
     : `You are a reading companion for "${input.bookTitle}". Discuss the story with the reader.` +
@@ -52,6 +61,7 @@ export function chatContextSections(input: ChatContextInput): ChatContextSection
         ? ""
         : " You only know the book UP TO the reader's current position (provided below) — if asked " +
           "about anything beyond it, say you haven't read that far yet rather than guessing or spoiling.");
+  const role = input.allowMature ? baseRole + MATURE_CHAT_NOTE : baseRole;
   return [
     { key: "role", label: "Instructions", text: role },
     { key: "bible", label: "Visual bible", text: bibleSlice(input, fullView) },
