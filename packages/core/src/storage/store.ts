@@ -22,6 +22,8 @@ export interface StoredChatMessage {
   links?: { url: string; title?: string }[];
   /** Clickable local-file results (the desktop `/find` command); each opens on click. */
   files?: { path: string; name: string }[];
+  /** Quick-reply action buttons (e.g. what to do with a pasted link). */
+  actions?: { label: string; send: string }[];
   /**
    * The MODEL-FACING turns this message represents (tool messages carry the model's
    * JSON call + the formatted result; plain messages omit this and map 1:1). Keeps

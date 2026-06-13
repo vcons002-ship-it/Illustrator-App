@@ -1079,6 +1079,21 @@ export function App() {
         await runFileSearch(find[1]!.trim());
         return;
       }
+      // A pasted bare link: offer concrete options instead of guessing what to do.
+      const url = text.trim();
+      if (/^https?:\/\/\S+$/i.test(url)) {
+        appendBuddy({ role: "user", text });
+        appendBuddy({
+          role: "tool",
+          text: "I see a link — what would you like to do with it?",
+          actions: [
+            { label: "📖 Open & read", send: `/open ${url}` },
+            { label: "🔬 Open as technical", send: `/open ${url} technical` },
+            { label: "💬 Just discuss it", send: `Tell me about this link: ${url}` },
+          ],
+        });
+        return;
+      }
       const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
       const history = chatTurnsOf(buddyMessages);
       appendBuddy({ role: "user", text });
@@ -1340,6 +1355,7 @@ export function App() {
         ...(m.image ? { image: m.image } : {}),
         ...(m.links ? { links: m.links } : {}),
         ...(m.files ? { files: m.files } : {}),
+        ...(m.actions ? { actions: m.actions } : {}),
       })),
     [buddyMessages],
   );

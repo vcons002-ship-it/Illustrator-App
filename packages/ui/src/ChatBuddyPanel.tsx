@@ -138,6 +138,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             index={i}
             {...(props.onDeleteMessage ? { onDelete: props.onDeleteMessage } : {})}
             {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
+            onAction={props.onSend}
           />
         ))}
         {props.streamingText ? (
