@@ -80,26 +80,27 @@ export function xlsxToText(input: ArrayBuffer | Uint8Array): string {
       shared.push(runs.join(""));
     }
   }
-  // First sheet — sheet1.xml by convention.
-  const sheetName =
-    Object.keys(files).find((k) => /^xl\/worksheets\/sheet1\.xml$/i.test(k)) ??
-    Object.keys(files).find((k) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(k));
-  const sheet = sheetName ? strFromU8(files[sheetName]!) : "";
-  if (!sheet) throw new Error("This .xlsx has no readable worksheet.");
+  const sheet = strFromU8(firstWorksheet(files));
+  if (!sheet) {
+    throw new Error("Couldn't read this .xlsx (unusual structure). Tip: in Excel, Save As → CSV.");
+  }
   const rows: string[][] = [];
+  // Both real cells (<c …>…</c>) and self-closing empty cells (<c r="B1"/>) — the
+  // latter keep column alignment when a row skips a column.
   for (const rowXml of (sheet.match(/<row[\s\S]*?<\/row>/g) ?? []).slice(0, MAX_TABLE_ROWS)) {
     const cells: string[] = [];
-    for (const c of rowXml.matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g)) {
+    for (const c of rowXml.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
       const attrs = c[1]!;
-      const inner = c[2]!;
+      const inner = c[2] ?? "";
       const ref = /r="([A-Z]+\d+)"/.exec(attrs)?.[1] ?? "";
       const type = /t="([^"]+)"/.exec(attrs)?.[1];
       let value = "";
       if (type === "s") {
         const idx = Number(/<v>([\s\S]*?)<\/v>/.exec(inner)?.[1] ?? "");
         value = shared[idx] ?? "";
-      } else if (type === "inlineStr") {
-        value = decodeXmlEntities([...inner.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((m) => m[1]!).join(""));
+      } else if (type === "inlineStr" || type === "str") {
+        value = decodeXmlEntities([...inner.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((m) => m[1]!).join("")) ||
+          decodeXmlEntities(/<v>([\s\S]*?)<\/v>/.exec(inner)?.[1] ?? "");
       } else {
         value = decodeXmlEntities(/<v>([\s\S]*?)<\/v>/.exec(inner)?.[1] ?? "");
       }
@@ -112,6 +113,29 @@ export function xlsxToText(input: ArrayBuffer | Uint8Array): string {
   const text = gridToText(rows);
   if (!text) throw new Error("This spreadsheet's first sheet has no data.");
   return text;
+}
+
+/**
+ * The bytes of the workbook's FIRST worksheet. Resolves the real sheet order via
+ * workbook.xml + its rels (the first sheet isn't always sheet1.xml); falls back to
+ * sheet1.xml, then the lowest-numbered sheet, then any worksheet at all.
+ */
+function firstWorksheet(files: Record<string, Uint8Array>): Uint8Array {
+  const workbook = files["xl/workbook.xml"] ? strFromU8(files["xl/workbook.xml"]) : "";
+  const rels = files["xl/_rels/workbook.xml.rels"] ? strFromU8(files["xl/_rels/workbook.xml.rels"]) : "";
+  const firstRid = /<sheet\b[^>]*r:id="([^"]+)"/.exec(workbook)?.[1];
+  if (firstRid && rels) {
+    const target = new RegExp(`<Relationship\\b[^>]*Id="${firstRid}"[^>]*Target="([^"]+)"`).exec(rels)?.[1];
+    if (target) {
+      const key = `xl/${target.replace(/^\.?\//, "").replace(/^\/+/, "")}`;
+      if (files[key]) return files[key]!;
+    }
+  }
+  const sheetKeys = Object.keys(files)
+    .filter((k) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(k))
+    .sort((a, b) => (Number(/(\d+)\.xml$/.exec(a)?.[1]) || 0) - (Number(/(\d+)\.xml$/.exec(b)?.[1]) || 0));
+  const key = files["xl/worksheets/sheet1.xml"] ? "xl/worksheets/sheet1.xml" : sheetKeys[0];
+  return key && files[key] ? files[key]! : new Uint8Array(0);
 }
 
 /** Split one CSV/TSV line, honouring quoted fields ("" → literal quote). */

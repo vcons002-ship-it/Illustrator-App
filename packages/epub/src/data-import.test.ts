@@ -39,13 +39,34 @@ describe("xlsxToText", () => {
     expect(text.split("\n")).toEqual(["Year | Output", "2020 | 42", "2021 | 55"]);
   });
 
-  it("handles gaps (a missing B cell) by column position", () => {
+  it("handles gaps and self-closing empty cells by column position", () => {
     const sheet =
       "<worksheet><sheetData>" +
-      '<row><c r="A1"><v>1</v></c><c r="C1"><v>3</v></c></row>' +
+      '<row><c r="A1"><v>1</v></c><c r="B1"/><c r="C1"><v>3</v></c></row>' +
       "</sheetData></worksheet>";
     const text = xlsxToText(zipSync({ "xl/worksheets/sheet1.xml": strToU8(sheet) }));
     expect(text).toBe("1 |  | 3");
+  });
+
+  it("reads the workbook's FIRST sheet via rels, even when it isn't sheet1.xml", () => {
+    const workbook = '<workbook><sheets><sheet name="Data" sheetId="1" r:id="rId7"/></sheets></workbook>';
+    const rels =
+      '<Relationships><Relationship Id="rId7" Target="worksheets/sheet3.xml"/></Relationships>';
+    const sheet3 = "<worksheet><sheetData><row><c r=\"A1\"><v>42</v></c></row></sheetData></worksheet>";
+    const sheet1 = "<worksheet><sheetData><row><c r=\"A1\"><v>999</v></c></row></sheetData></worksheet>";
+    const text = xlsxToText(
+      zipSync({
+        "xl/workbook.xml": strToU8(workbook),
+        "xl/_rels/workbook.xml.rels": strToU8(rels),
+        "xl/worksheets/sheet1.xml": strToU8(sheet1),
+        "xl/worksheets/sheet3.xml": strToU8(sheet3),
+      }),
+    );
+    expect(text).toBe("42"); // the rels-resolved first sheet, not sheet1.xml
+  });
+
+  it("gives a CSV-tip error when the file is unreadable", () => {
+    expect(() => xlsxToText(zipSync({ "docProps/core.xml": strToU8("x") }))).toThrow(/CSV/);
   });
 });
 
