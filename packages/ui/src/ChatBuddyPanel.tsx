@@ -194,6 +194,37 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             </button>
           </div>
         )}
+        {props.pendingTool?.tool === "run_command" && (
+          <div style={{ ...approvalStyle, borderColor: "rgba(255,170,90,0.6)", background: "rgba(255,170,90,0.08)" }}>
+            <div style={{ fontSize: 12, marginBottom: 6 }}>
+              ⚠ Run this command on your computer?
+              <code
+                style={{
+                  display: "block",
+                  marginTop: 4,
+                  padding: "6px 8px",
+                  borderRadius: 6,
+                  background: "rgba(0,0,0,0.3)",
+                  fontFamily: "ui-monospace, Menlo, monospace",
+                  fontSize: 12,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-all",
+                }}
+              >
+                {props.pendingTool.command}
+              </code>
+              <span style={{ display: "block", opacity: 0.7, marginTop: 4 }}>
+                Runs in your VisualReader/workspace folder, with your permissions. Read it before approving.
+              </span>
+            </div>
+            <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+              Run
+            </button>
+            <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+              Deny
+            </button>
+          </div>
+        )}
       </div>
 
       <SlashMenu draft={draft} commands={commands} onPick={setDraft} />
