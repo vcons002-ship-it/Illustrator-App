@@ -214,6 +214,9 @@ export function App() {
   // The pending generate_image's transcript, folded in only on approval (same
   // injection guard as the book chat's pendingTranscript).
   const pendingBuddyTranscript = useRef<ChatTurn[]>([]);
+  // The model-facing history of the turn that produced a pendingTool — so an
+  // approved run_command can auto-react with the exact context up to its call.
+  const pendingBuddyHistory = useRef<ChatTurn[]>([]);
   // Session grant for buddy-initiated filesystem search: once the reader picks
   // "Allow this session", later find_files calls run without re-confirming (a
   // direct /find never needed confirming — the reader typed it). Reset on reload.
@@ -1092,31 +1095,199 @@ export function App() {
   // model only ever PROPOSES; nothing runs without this explicit approval.
   const approveRunCommand = async (call: Extract<BuddyToolCall, { tool: "run_command" }>): Promise<void> => {
     setBuddyPendingTool(undefined);
-    const turns = pendingBuddyTranscript.current;
+    const pre = pendingBuddyTranscript.current; // [{user:driver}, {assistant:run_command JSON}]
+    const preHistory = pendingBuddyHistory.current;
     pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
     if (!isDesktop) {
       appendBuddy({ role: "tool", text: "🔒 Running commands needs the desktop app.", turns: [] });
       return;
     }
     setBuddyBusy(true);
     setBuddyActivity(`Running: ${call.command}`);
+    let r;
     try {
-      const r = await runCommand(call.command);
-      const feedback = formatBuddyToolResult(call, { command: r });
-      const summary =
-        `$ ${call.command}\n[exit ${r.code}${r.timedOut ? " · timed out" : ""}]` +
-        (r.stdout ? `\n${r.stdout.slice(0, 4000)}` : "") +
-        (r.stderr ? `\n⚠ ${r.stderr.slice(0, 2000)}` : "");
-      appendBuddy({ role: "tool", text: summary, turns: [...turns, { role: "user", content: feedback }] });
+      r = await runCommand(call.command);
     } catch (err) {
+      setBuddyBusy(false);
+      setBuddyActivity("");
       appendBuddy({
         role: "tool",
         text: `⚠ Couldn't run the command: ${err instanceof Error ? err.message : String(err)}`,
         turns: [],
       });
-    } finally {
-      setBuddyBusy(false);
-      setBuddyActivity("");
+      return;
+    }
+    const feedback = formatBuddyToolResult(call, { command: r });
+    const summary =
+      `$ ${call.command}\n[exit ${r.code}${r.timedOut ? " · timed out" : ""}]` +
+      (r.stdout ? `\n${r.stdout.slice(0, 4000)}` : "") +
+      (r.stderr ? `\n⚠ ${r.stderr.slice(0, 2000)}` : "");
+    appendBuddy({ role: "tool", text: summary, turns: [...pre, { role: "user", content: feedback }] });
+    // AUTO-REACT: the model reads the output and continues — if it proposes another
+    // command, that re-prompts for approval, so the loop stays human-gated.
+    await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+  };
+
+  // One buddy model turn (streaming + tool events + result). Shared by the normal
+  // send and the auto-react continuation after an approved command. `userBubbleText`
+  // (when set) is shown as the reader's message; a continuation passes none — its
+  // "input" is the tool feedback, recorded in the visible result above it.
+  const dispatchBuddyTurn = async (
+    history: ChatTurn[],
+    userText: string,
+    userBubbleText?: string,
+  ): Promise<void> => {
+    const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
+    if (userBubbleText !== undefined) appendBuddy({ role: "user", text: userBubbleText });
+    setBuddyBusy(true);
+    setBuddyStreaming("");
+    setBuddyActivity("");
+    setBuddyPendingTool(undefined);
+    let openedBook = false;
+    const res = await buddyChat(history, userText, buddyPersona, library, (e) => {
+      if (e.kind === "token") {
+        setBuddyStreaming((prev) => prev + e.text);
+        setBuddyActivity(""); // visible text replaces any "Reasoning…" status
+      } else if (e.kind === "activity") setBuddyActivity(e.text);
+      else if (e.kind === "usage") setBuddyUsage(e.usage);
+      else if (e.kind === "tool") {
+        setBuddyActivity(
+          e.call.tool === "search_books"
+            ? `Searching Project Gutenberg for “${e.call.query}”…`
+            : e.call.tool === "random_books"
+              ? "Pulling some classics off the shelf…"
+              : e.call.tool === "search_web"
+                ? `Searching for “${e.call.query}”…`
+                : e.call.tool === "read_url"
+                  ? `Reading ${e.call.url}…`
+                  : e.call.tool === "search_images"
+                    ? `Looking for images of “${e.call.query}”…`
+                    : e.call.tool === "calculate"
+                      ? "Calculating…"
+                      : e.call.tool === "remember" || e.call.tool === "forget"
+                        ? "Updating memory…"
+                        : e.call.tool === "set_visual_style"
+                          ? "Updating the visual settings…"
+                          : e.call.tool === "open_library_book"
+                            ? "Opening from your library…"
+                            : e.call.tool === "open_pasted_text"
+                              ? "Opening your text…"
+                              : e.call.tool === "remove_library_book"
+                                ? "Removing from your library…"
+                                : e.call.tool === "generate_image"
+                                  ? "Preparing an image…"
+                                  : e.call.tool === "find_files"
+                                    ? "Asking to search your files…"
+                                    : e.call.tool === "run_command"
+                                      ? "Proposing a command…"
+                                      : "Fetching the text and opening it…",
+        );
+      } else if (e.kind === "settings") {
+        setSettings((s) => ({
+          ...s,
+          ...(e.style ? { imageStyle: e.style.id } : {}),
+          ...(e.pagesPerImage !== undefined ? { pagesPerImage: e.pagesPerImage } : {}),
+          ...(e.illustrateAfter !== undefined ? { illustrateAfter: e.illustrateAfter } : {}),
+        }));
+        const parts = [
+          ...(e.style ? [`art style: ${e.style.label}`] : []),
+          ...(e.pagesPerImage !== undefined
+            ? [e.pagesPerImage === "chapter" ? "one image per chapter" : `one image per ${e.pagesPerImage} page(s)`]
+            : []),
+          ...(e.illustrateAfter !== undefined
+            ? [e.illustrateAfter === "chapter" ? "illustrate as you read" : "illustrate after the whole book"]
+            : []),
+        ];
+        appendBuddy({ role: "tool", text: `🎨 ${parts.join(" · ")}` });
+      } else if (e.kind === "libraryChanged") {
+        void libraryStore.listBooks().then(setLibrary).catch(() => {});
+      } else if (e.kind === "opened") {
+        openedBook = true;
+        buddyHandoff.current = [...buddyMessages, { role: "user" as const, text: userBubbleText ?? userText, at: Date.now() }]
+          .slice(-12)
+          .map(({ turns: _turns, ...m }) => m);
+        openBook(e.book);
+        if (e.visuals) startGeneration();
+        setShowChat(true);
+      } else {
+        setBuddyActivity("");
+        const typed = userBubbleText ?? "";
+        if (e.hits?.length) {
+          appendBuddy({
+            role: "tool",
+            text: `Results for “${"query" in e.call ? e.call.query : ""}”:`,
+            links: e.hits.map((h) => ({ url: h.link, ...(h.title ? { title: h.title } : {}) })),
+          });
+        } else if (e.books?.length) {
+          appendBuddy({
+            role: "tool",
+            text:
+              e.call.tool === "random_books"
+                ? "Off the classics shelf:"
+                : `Project Gutenberg matches for “${"query" in e.call ? e.call.query : ""}”:`,
+            links: e.books.map((b) => ({
+              url: b.pageUrl ?? b.textUrl,
+              title: b.author ? `${b.title} — ${b.author}` : b.title,
+            })),
+          });
+        } else if (e.imageHits?.length) {
+          const best = e.imageHits[0]!;
+          lastRefs.current = e.imageHits.map((h) => ({ kind: "image", label: h.title ?? "image", url: h.link }));
+          appendBuddy({
+            role: "tool",
+            text: `Found: ${best.title ?? "image"} (say “show #N” for another)`,
+            image: { sourceUrl: best.thumbnailLink ?? best.link },
+            links: e.imageHits.slice(0, 5).map((h, i) => ({ url: h.link, title: `${i + 1}. ${h.title ?? "image"}` })),
+          });
+        } else if (e.calc) {
+          appendBuddy({ role: "tool", text: `🧮 ${e.calc.expression} = ${e.calc.result}` });
+        } else if (e.memory) {
+          appendBuddy({
+            role: "tool",
+            text: `🧠 ${e.memory.action === "remembered" ? "Remembered" : "Forgot"}: “${e.memory.note}”`,
+          });
+        } else if (e.removed) {
+          appendBuddy({ role: "tool", text: `🗑 Removed “${e.removed}” from the library.` });
+        } else if (e.call.tool === "search_images") {
+          appendBuddy({ role: "tool", text: imageSearchMiss(e.call.query, e.error, hasSearchKey) });
+        } else if (typed.startsWith("/") && e.error) {
+          appendBuddy({ role: "tool", text: `⚠ ${e.error}` });
+        } else if (
+          typed.startsWith("/") &&
+          (e.call.tool === "search_books" || e.call.tool === "random_books" || e.call.tool === "search_web")
+        ) {
+          appendBuddy({ role: "tool", text: "🔍 No results." });
+        }
+      }
+    });
+    if (buddyTurnSeq.current !== seq) return;
+    setBuddyBusy(false);
+    setBuddyStreaming("");
+    setBuddyActivity("");
+    if (res.error) {
+      appendBuddy({ role: "tool", text: `⚠ ${res.error}`, turns: [] });
+      return;
+    }
+    if (res.pendingTool) {
+      // Record the exact context up to this tool call so an approved run_command can
+      // auto-react. `userText` is in `history` for a continuation; not for a typed turn.
+      pendingBuddyHistory.current = history;
+      pendingBuddyTranscript.current = [{ role: "user", content: userText }, ...res.transcript];
+      if (res.pendingTool.tool === "find_files" && fileAccessGranted.current) {
+        approveFindFiles(res.pendingTool);
+      } else {
+        setBuddyPendingTool(res.pendingTool);
+      }
+      return;
+    }
+    if (res.text) {
+      appendBuddy({
+        role: "assistant",
+        text: res.text,
+        turns: [{ role: "user", content: userText }, ...res.transcript],
+      });
+      if (openedBook) appendChat({ role: "assistant", text: res.text });
     }
   };
 
@@ -1172,176 +1343,7 @@ export function App() {
         });
         return;
       }
-      const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
-      const history = chatTurnsOf(buddyMessages);
-      appendBuddy({ role: "user", text });
-      setBuddyBusy(true);
-      setBuddyStreaming("");
-      setBuddyActivity("");
-      setBuddyPendingTool(undefined);
-      let openedBook = false;
-      const res = await buddyChat(history, text, buddyPersona, library, (e) => {
-        if (e.kind === "token") {
-          setBuddyStreaming((prev) => prev + e.text);
-          setBuddyActivity(""); // visible text replaces any "Reasoning…" status
-        } else if (e.kind === "activity") setBuddyActivity(e.text);
-        else if (e.kind === "usage") setBuddyUsage(e.usage);
-        else if (e.kind === "tool") {
-          setBuddyActivity(
-            e.call.tool === "search_books"
-              ? `Searching Project Gutenberg for “${e.call.query}”…`
-              : e.call.tool === "random_books"
-                ? "Pulling some classics off the shelf…"
-                : e.call.tool === "search_web"
-                  ? `Searching for “${e.call.query}”…`
-                  : e.call.tool === "read_url"
-                    ? `Reading ${e.call.url}…`
-                    : e.call.tool === "search_images"
-                    ? `Looking for images of “${e.call.query}”…`
-                    : e.call.tool === "calculate"
-                      ? "Calculating…"
-                      : e.call.tool === "remember" || e.call.tool === "forget"
-                      ? "Updating memory…"
-                      : e.call.tool === "set_visual_style"
-                        ? "Updating the visual settings…"
-                        : e.call.tool === "open_library_book"
-                        ? "Opening from your library…"
-                        : e.call.tool === "open_pasted_text"
-                          ? "Opening your text…"
-                          : e.call.tool === "remove_library_book"
-                            ? "Removing from your library…"
-                            : e.call.tool === "generate_image"
-                              ? "Preparing an image…"
-                              : e.call.tool === "find_files"
-                                ? "Asking to search your files…"
-                                : e.call.tool === "run_command"
-                                  ? "Proposing a command…"
-                                  : "Fetching the text and opening it…",
-          );
-        } else if (e.kind === "settings") {
-          // The buddy resolved a settings change against the catalog; commit it
-          // here (the App owns settings) and show what changed.
-          setSettings((s) => ({
-            ...s,
-            ...(e.style ? { imageStyle: e.style.id } : {}),
-            ...(e.pagesPerImage !== undefined ? { pagesPerImage: e.pagesPerImage } : {}),
-            ...(e.illustrateAfter !== undefined ? { illustrateAfter: e.illustrateAfter } : {}),
-          }));
-          const parts = [
-            ...(e.style ? [`art style: ${e.style.label}`] : []),
-            ...(e.pagesPerImage !== undefined
-              ? [e.pagesPerImage === "chapter" ? "one image per chapter" : `one image per ${e.pagesPerImage} page(s)`]
-              : []),
-            ...(e.illustrateAfter !== undefined
-              ? [e.illustrateAfter === "chapter" ? "illustrate as you read" : "illustrate after the whole book"]
-              : []),
-          ];
-          appendBuddy({ role: "tool", text: `🎨 ${parts.join(" · ")}` });
-        } else if (e.kind === "libraryChanged") {
-          // A book was removed from IndexedDB — refresh the library list (the
-          // tool's prose confirmation handles user-facing acknowledgement).
-          void libraryStore.listBooks().then(setLibrary).catch(() => {});
-        } else if (e.kind === "opened") {
-          // Hand the VISIBLE conversation off into the book chat (model-facing
-          // `turns` are stripped — the book chat has different tools/context),
-          // open the book, and start visuals when the reader asked for them.
-          openedBook = true;
-          buddyHandoff.current = [...buddyMessages, { role: "user" as const, text, at: Date.now() }]
-            .slice(-12)
-            .map(({ turns: _turns, ...m }) => m);
-          openBook(e.book);
-          if (e.visuals) startGeneration();
-          setShowChat(true);
-        } else {
-          setBuddyActivity("");
-          if (e.hits?.length) {
-            appendBuddy({
-              role: "tool",
-              text: `Results for “${"query" in e.call ? e.call.query : ""}”:`,
-              links: e.hits.map((h) => ({ url: h.link, ...(h.title ? { title: h.title } : {}) })),
-            });
-          } else if (e.books?.length) {
-            appendBuddy({
-              role: "tool",
-              text:
-                e.call.tool === "random_books"
-                  ? "Off the classics shelf:"
-                  : `Project Gutenberg matches for “${"query" in e.call ? e.call.query : ""}”:`,
-              links: e.books.map((b) => ({
-                url: b.pageUrl ?? b.textUrl,
-                title: b.author ? `${b.title} — ${b.author}` : b.title,
-              })),
-            });
-          } else if (e.imageHits?.length) {
-            // Inline figure + links that open the IMAGES themselves (not their source
-            // pages); remember the list so "show #2" can display another one.
-            const best = e.imageHits[0]!;
-            lastRefs.current = e.imageHits.map((h) => ({
-              kind: "image",
-              label: h.title ?? "image",
-              url: h.link,
-            }));
-            appendBuddy({
-              role: "tool",
-              text: `Found: ${best.title ?? "image"} (say “show #N” for another)`,
-              image: { sourceUrl: best.thumbnailLink ?? best.link },
-              links: e.imageHits
-                .slice(0, 5)
-                .map((h, i) => ({ url: h.link, title: `${i + 1}. ${h.title ?? "image"}` })),
-            });
-          } else if (e.calc) {
-            appendBuddy({ role: "tool", text: `🧮 ${e.calc.expression} = ${e.calc.result}` });
-          } else if (e.memory) {
-            appendBuddy({
-              role: "tool",
-              text: `🧠 ${e.memory.action === "remembered" ? "Remembered" : "Forgot"}: “${e.memory.note}”`,
-            });
-          } else if (e.removed) {
-            appendBuddy({ role: "tool", text: `🗑 Removed “${e.removed}” from the library.` });
-          } else if (e.call.tool === "search_images") {
-            appendBuddy({ role: "tool", text: imageSearchMiss(e.call.query, e.error, hasSearchKey) });
-          } else if (text.startsWith("/") && e.error) {
-            // A direct command's failure has no model to fold it into — show it.
-            appendBuddy({ role: "tool", text: `⚠ ${e.error}` });
-          } else if (
-            text.startsWith("/") &&
-            (e.call.tool === "search_books" || e.call.tool === "random_books" || e.call.tool === "search_web")
-          ) {
-            appendBuddy({ role: "tool", text: "🔍 No results." });
-          }
-        }
-      });
-      // Clear this turn's busy/transient state unless a newer turn superseded it, so
-      // a mid-turn Clear/supersede can never leave the panel stuck "Thinking…".
-      if (buddyTurnSeq.current !== seq) return;
-      setBuddyBusy(false);
-      setBuddyStreaming("");
-      setBuddyActivity("");
-      if (res.error) {
-        appendBuddy({ role: "tool", text: `⚠ ${res.error}`, turns: [] });
-        return;
-      }
-      if (res.pendingTool) {
-        pendingBuddyTranscript.current = [{ role: "user", content: text }, ...res.transcript];
-        // find_files runs WITHOUT re-prompting once the reader granted access this
-        // session; otherwise (and always for generate_image) it waits for approval.
-        if (res.pendingTool.tool === "find_files" && fileAccessGranted.current) {
-          approveFindFiles(res.pendingTool);
-        } else {
-          setBuddyPendingTool(res.pendingTool);
-        }
-        return;
-      }
-      if (res.text) {
-        appendBuddy({
-          role: "assistant",
-          text: res.text,
-          turns: [{ role: "user", content: text }, ...res.transcript],
-        });
-        // When a book opened this turn the landing panel is gone — the closing
-        // prose ("It's open! …") must land in the book chat to be seen.
-        if (openedBook) appendChat({ role: "assistant", text: res.text });
-      }
+      await dispatchBuddyTurn(chatTurnsOf(buddyMessages), text, text);
     },
     [buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration, libraryStore, hasSearchKey],
   );
@@ -1389,6 +1391,7 @@ export function App() {
   const onDismissBuddyPendingTool = useCallback(() => {
     setBuddyPendingTool(undefined);
     pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
   }, []);
   const onClearBuddy = useCallback(() => {
     buddyTurnSeq.current++;
