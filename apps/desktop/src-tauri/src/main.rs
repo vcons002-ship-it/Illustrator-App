@@ -407,7 +407,7 @@ struct FoundFile {
 /// File types the importer can read (mirrors the web importer's accept list).
 const SEARCHABLE_EXTS: &[&str] = &[
     "epub", "pdf", "txt", "md", "markdown", "html", "htm", "docx", "rtf", "csv", "tsv", "json",
-    "xlsx",
+    "xlsx", "png", "jpg", "jpeg", "webp", "gif",
 ];
 /// Bounds so a broad walk stays fast and can't wander into heavy caches forever.
 const MAX_RESULTS: usize = 100;

@@ -513,7 +513,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       postPaused();
       break;
     case "testRender":
-      void handleTestRender(msg.requestId, msg.text);
+      void handleTestRender(msg.requestId, msg.text, msg.initImage, msg.denoise);
       break;
     case "chat":
       void handleChat(msg);
@@ -545,11 +545,19 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
  * quality, aspect and sampler settings — no bible, no LLM, no cache. A fast way to
  * try out models/styles/LoRAs without opening a book.
  */
-async function handleTestRender(requestId: number, text: string): Promise<void> {
+async function handleTestRender(
+  requestId: number,
+  text: string,
+  initImage?: { bytes: ArrayBuffer; mimeType: string },
+  denoise?: number,
+): Promise<void> {
   try {
     if (!settings) throw new Error("Settings not initialised yet.");
     const { image, tier } = buildProviders(settings);
-    const out = await renderFromText(image, tier, text);
+    const out = await renderFromText(image, tier, text, {
+      ...(initImage ? { initImage } : {}),
+      ...(denoise !== undefined ? { denoise } : {}),
+    });
     post(
       {
         type: "testRendered",
@@ -577,8 +585,14 @@ async function renderFromText(
   image: ImageProvider,
   tier: TierConfig,
   text: string,
-  stepsOverride?: number,
+  opts: {
+    stepsOverride?: number;
+    /** img2img base photo + strength (the photo-transform path; local engine only). */
+    initImage?: { bytes: ArrayBuffer; mimeType: string };
+    denoise?: number;
+  } = {},
 ): Promise<{ bytes: ArrayBuffer; mimeType: string; prompt: string }> {
+  const stepsOverride = opts.stepsOverride;
   const style = getImageStyle(tier.style);
   const prompt = style.promptSuffix ? `${text.trim()}\n\nStyle: ${style.promptSuffix}` : text.trim();
   const level = tier.renderQuality;
@@ -606,6 +620,8 @@ async function renderFromText(
     ...(isLocal && tier.localCfg !== undefined ? { cfgOverride: tier.localCfg } : {}),
     ...(isLocal && tier.localSampler ? { localSampler: tier.localSampler } : {}),
     ...(isLocal && tier.localScheduler ? { localScheduler: tier.localScheduler } : {}),
+    ...(opts.initImage ? { initImage: opts.initImage } : {}),
+    ...(opts.denoise !== undefined ? { denoise: opts.denoise } : {}),
   });
   return { bytes: out.bytes, mimeType: out.mimeType, prompt };
 }
@@ -1282,7 +1298,7 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
     // carries the SETTINGS style, so re-apply the resolved override on top of it.
     const baseTier = useBook ? bookProviders!.tier : built.tier;
     const tier = styleId ? { ...baseTier, style: styleId } : baseTier;
-    const out = await renderFromText(image, tier, call.prompt, call.steps);
+    const out = await renderFromText(image, tier, call.prompt, call.steps ? { stepsOverride: call.steps } : {});
     post(
       {
         type: "chatToolResult",

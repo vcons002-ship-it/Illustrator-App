@@ -96,6 +96,18 @@ export interface ImageGenerationInput {
    */
   ipAdapterRefs?: { bytes: ArrayBuffer; mimeType: string; weight: number }[];
   /**
+   * img2img base — photo manipulation. When set, the backend encodes this image to
+   * latent and denoises FROM it (transform an existing picture) instead of starting
+   * from pure noise. ComfyUI only; the other providers ignore it and run txt2img.
+   */
+  initImage?: { bytes: ArrayBuffer; mimeType: string };
+  /**
+   * img2img strength 0..1 — how much the init image may change. Lower stays closer
+   * to the photo, higher reinvents more. Only meaningful with `initImage`; the
+   * backend defaults to ~0.65 when unset.
+   */
+  denoise?: number;
+  /**
    * Optional progress sink (0..1) for engines that can report it (e.g. ComfyUI's
    * websocket emits per-step progress). Best-effort: providers that can't report
    * progress simply never call it. Not serialised — set in-process by the pipeline.

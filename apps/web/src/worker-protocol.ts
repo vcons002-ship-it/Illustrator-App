@@ -67,7 +67,14 @@ export type MainToWorker =
    * Freeform playground: render ONE image straight from the given text with the current
    * provider/style/quality — no bible, no LLM, no cache. Answered by `testRendered`.
    */
-  | { type: "testRender"; requestId: number; text: string }
+  | {
+      type: "testRender";
+      requestId: number;
+      text: string;
+      /** img2img base photo (the photo-transform path) + strength 0..1. */
+      initImage?: { bytes: ArrayBuffer; mimeType: string };
+      denoise?: number;
+    }
   /**
    * Reading-companion chat: one user message. `history` is the prior transcript
    * (model-facing turns), `position` the reader's place (for spoiler-safe context).

@@ -27,6 +27,7 @@ export interface LocalFile extends RankableFile {
 export const SEARCHABLE_FILE_EXTS = [
   "epub", "pdf", "txt", "md", "markdown", "html", "htm",
   "docx", "rtf", "csv", "tsv", "json", "xlsx",
+  "png", "jpg", "jpeg", "webp", "gif", // images → the photo-transform path
 ] as const;
 
 function tokenize(q: string): string[] {

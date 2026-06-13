@@ -176,6 +176,11 @@ export function App() {
   const [showImport, setShowImport] = useState(false);
   const [showPasteText, setShowPasteText] = useState(false);
   const [showTestImage, setShowTestImage] = useState(false);
+  // Photo-transform (img2img) panel + an optional starting photo (from upload / find).
+  const [showPhoto, setShowPhoto] = useState(false);
+  const [photoInitial, setPhotoInitial] = useState<
+    { name: string; bytes: ArrayBuffer; mimeType: string } | undefined
+  >();
   // Prefill for the paste modal when a text-bearing FILE (txt/md/html/pdf) was opened.
   const [pasteInitial, setPasteInitial] = useState<
     { title: string; text: string; mode?: "fiction" | "technical" } | undefined
@@ -569,6 +574,10 @@ export function App() {
         const imported = await importBookFile(file);
         if (imported.kind === "book") {
           openBook(imported.book);
+        } else if (imported.kind === "image") {
+          // A picture isn't a book — open it in the photo-transform (img2img) panel.
+          setPhotoInitial({ name: imported.name, bytes: imported.bytes, mimeType: imported.mimeType });
+          setShowPhoto(true);
         } else {
           // Extracted text (PDF/Word/CSV/…): confirm in the paste modal so the user can
           // fix the title and the fiction/technical choice before the book is created
@@ -1609,6 +1618,16 @@ export function App() {
           >
             Test image
           </button>
+          <button
+            style={styles.button}
+            onClick={() => {
+              setPhotoInitial(undefined);
+              setShowPhoto(true);
+            }}
+            title="Start from a photo and reimagine it with the current image model and art style (local engine)"
+          >
+            🖼 Photo
+          </button>
           {book && (
             <button
               style={styles.button}
@@ -2037,6 +2056,17 @@ export function App() {
 
       {showTestImage && (
         <TestImageModal onRender={testRender} onClose={() => setShowTestImage(false)} />
+      )}
+
+      {showPhoto && (
+        <PhotoTransformModal
+          {...(photoInitial ? { initial: photoInitial } : {})}
+          onRender={(text, opts) => testRender(text, opts)}
+          onClose={() => {
+            setShowPhoto(false);
+            setPhotoInitial(undefined);
+          }}
+        />
       )}
 
       {showChat && book && (
@@ -2572,6 +2602,153 @@ function TestImageModal({
                 {result.prompt}
               </div>
             )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Transform a photo (img2img): pick or drop in a picture, describe the change,
+ * set how far to push it, and render a NEW image based on it with the current
+ * image model/style. Local engine only (ComfyUI encodes the photo to latent and
+ * denoises from it); the result can be saved or fed back in as the next base.
+ */
+function PhotoTransformModal({
+  initial,
+  onRender,
+  onClose,
+}: {
+  initial?: { name: string; bytes: ArrayBuffer; mimeType: string } | undefined;
+  onRender: (
+    text: string,
+    opts: { initImage: { bytes: ArrayBuffer; mimeType: string }; denoise: number },
+  ) => Promise<TestRenderResult>;
+  onClose: () => void;
+}) {
+  const [base, setBase] = useState<{ name: string; bytes: ArrayBuffer; mimeType: string } | undefined>(initial);
+  const [text, setText] = useState("");
+  const [strength, setStrength] = useState(0.6);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<TestRenderResult | undefined>();
+  const [baseUrl, setBaseUrl] = useState<string | undefined>();
+  const [resultUrl, setResultUrl] = useState<string | undefined>();
+
+  useEffect(() => {
+    if (!base) {
+      setBaseUrl(undefined);
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([base.bytes], { type: base.mimeType }));
+    setBaseUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [base]);
+  useEffect(() => () => {
+    if (resultUrl) URL.revokeObjectURL(resultUrl);
+  }, [resultUrl]);
+
+  const pickFile = async (file: File | undefined) => {
+    if (!file) return;
+    setResult(undefined);
+    setBase({ name: file.name, bytes: await file.arrayBuffer(), mimeType: file.type || "image/png" });
+  };
+
+  const run = async () => {
+    if (!base) return;
+    setBusy(true);
+    setResult(undefined);
+    const r = await onRender(text, { initImage: { bytes: base.bytes, mimeType: base.mimeType }, denoise: strength });
+    setBusy(false);
+    setResult(r);
+    if (r.image) setResultUrl(URL.createObjectURL(new Blob([r.image.bytes], { type: r.image.mimeType })));
+  };
+
+  const useResultAsBase = () => {
+    if (!result?.image) return;
+    setBase({ name: "result.png", bytes: result.image.bytes, mimeType: result.image.mimeType });
+    setResult(undefined);
+    setResultUrl(undefined);
+  };
+
+  const saveResult = async () => {
+    if (!result?.image) return;
+    const ext = /jpe?g/i.test(result.image.mimeType) ? "jpg" : /webp/i.test(result.image.mimeType) ? "webp" : "png";
+    await saveExportFile(`transformed-${Date.now()}.${ext}`, new Uint8Array(result.image.bytes), result.image.mimeType);
+  };
+
+  return (
+    <div style={styles.modalOverlay} onClick={onClose}>
+      <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <strong>Transform a photo</strong>
+          <button style={styles.button} onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <p style={{ opacity: 0.65, fontSize: 12, margin: "0 0 8px" }}>
+          Start from a picture and reimagine it with the current image model and art style.
+          Needs the local engine (ComfyUI). Lower strength stays close to the photo; higher
+          reinvents more.
+        </p>
+        <label style={{ ...styles.button, display: "inline-block", cursor: "pointer", marginBottom: 8 }}>
+          {base ? `Photo: ${base.name}` : "Choose a photo…"}
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            style={{ display: "none" }}
+            onChange={(e) => void pickFile(e.target.files?.[0])}
+          />
+        </label>
+        {baseUrl && (
+          <img
+            src={baseUrl}
+            alt="Base"
+            style={{ display: "block", maxHeight: 180, borderRadius: 8, marginBottom: 8 }}
+          />
+        )}
+        <textarea
+          style={{ ...styles.importTextarea, minHeight: 56 }}
+          value={text}
+          placeholder="Describe the change — e.g. turn this into an oil painting; make it a snowy night"
+          spellCheck={false}
+          onChange={(e) => setText(e.target.value)}
+        />
+        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, margin: "8px 0" }}>
+          <span style={{ opacity: 0.7, whiteSpace: "nowrap" }}>Strength {Math.round(strength * 100)}%</span>
+          <input
+            type="range"
+            min={0.2}
+            max={0.9}
+            step={0.05}
+            value={strength}
+            style={{ flex: 1 }}
+            onChange={(e) => setStrength(Number(e.target.value))}
+          />
+        </label>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+          <button style={styles.buttonPrimary} disabled={busy || !base || !text.trim()} onClick={() => void run()}>
+            {busy ? "Rendering…" : "Transform"}
+          </button>
+        </div>
+        {result?.error && (
+          <div style={{ color: "#ff9b9b", fontSize: 13, whiteSpace: "pre-wrap", marginTop: 8 }}>{result.error}</div>
+        )}
+        {result?.ok && resultUrl && (
+          <>
+            <img
+              src={resultUrl}
+              alt="Transformed"
+              style={{ display: "block", width: "100%", height: "auto", borderRadius: 8, marginTop: 8 }}
+            />
+            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+              <button style={styles.button} onClick={() => void saveResult()}>
+                ⤓ Save
+              </button>
+              <button style={styles.button} onClick={useResultAsBase}>
+                ↺ Use as new base
+              </button>
+            </div>
           </>
         )}
       </div>

@@ -93,8 +93,11 @@ export interface EngineWorkerApi {
   clearImportResult: () => void;
   /** Repaint from a unit to the end with current settings (earlier units kept). */
   paintForward: (fromUnit: number) => void;
-  /** Playground: render ONE image straight from text (no bible/LLM/cache). */
-  testRender: (text: string) => Promise<TestRenderResult>;
+  /** Playground: render ONE image from text (optionally img2img from a base photo). */
+  testRender: (
+    text: string,
+    opts?: { initImage?: { bytes: ArrayBuffer; mimeType: string }; denoise?: number },
+  ) => Promise<TestRenderResult>;
   /** Reading-companion chat: one user message (streams via `onEvent`). */
   chat: (
     history: ChatTurn[],
@@ -636,11 +639,20 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     [],
   );
   const testRender = useCallback(
-    (text: string): Promise<TestRenderResult> =>
+    (
+      text: string,
+      opts?: { initImage?: { bytes: ArrayBuffer; mimeType: string }; denoise?: number },
+    ): Promise<TestRenderResult> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
         testRequests.current.set(requestId, resolve);
-        send({ type: "testRender", requestId, text });
+        send({
+          type: "testRender",
+          requestId,
+          text,
+          ...(opts?.initImage ? { initImage: opts.initImage } : {}),
+          ...(opts?.denoise !== undefined ? { denoise: opts.denoise } : {}),
+        });
       }),
     [],
   );
