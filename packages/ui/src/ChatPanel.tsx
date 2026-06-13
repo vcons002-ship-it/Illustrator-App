@@ -50,6 +50,7 @@ export interface ChatPanelProps {
 
 export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
   const [draft, setDraft] = useState("");
+  const [showHelp, setShowHelp] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Follow the conversation: stick to the bottom as messages/tokens arrive.
   useEffect(() => {
@@ -90,6 +91,14 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
                 Compact
               </button>
             )}
+            <button
+              style={smallButtonStyle}
+              onClick={() => setShowHelp((h) => !h)}
+              title="What can this chat do? (commands & tools)"
+              aria-label="Help"
+            >
+              ?
+            </button>
             <button style={smallButtonStyle} onClick={props.onClearHistory} title="Clear this book's chat history">
               Clear
             </button>
@@ -100,6 +109,12 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
         </div>
 
         {props.contextUsage && <UsageDisclosure usage={props.contextUsage} />}
+        {showHelp && (
+          <CommandHelp
+            commands={CHAT_SLASH_COMMANDS}
+            intro="Ask in plain language — I'll use these tools when they help. You can also run any of them directly by typing the command:"
+          />
+        )}
 
         <div ref={scrollRef} style={scrollStyle}>
           {props.messages.length === 0 && !props.streamingText && (
@@ -218,6 +233,37 @@ export function SlashMenu({
     </div>
   );
 }
+
+/**
+ * Help card listing everything the chat can do — the same commands the model can
+ * use as tools, which you can also invoke directly by typing them. Toggled by the
+ * "?" button in either panel's header.
+ */
+export function CommandHelp({ commands, intro }: { commands: SlashCommandInfo[]; intro: string }) {
+  return (
+    <div style={helpCardStyle}>
+      <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>{intro}</div>
+      {commands.map((c) => (
+        <div key={c.name} style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "3px 0" }}>
+          <code style={{ ...slashCodeStyle, minWidth: 132 }}>
+            /{c.name}
+            {c.args ? ` ${c.args}` : ""}
+          </code>
+          <span style={{ opacity: 0.7, fontSize: 12 }}>{c.description}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const helpCardStyle = {
+  borderTop: "1px solid rgba(255,255,255,0.1)",
+  borderBottom: "1px solid rgba(255,255,255,0.1)",
+  background: "rgba(122,162,255,0.06)",
+  padding: "8px 12px",
+  maxHeight: 260,
+  overflowY: "auto",
+} as const;
 
 /** Tab-completion for a bare "/prefix" draft; undefined when nothing applies. */
 export function completeSlash(draft: string, commands: SlashCommandInfo[]): string | undefined {
