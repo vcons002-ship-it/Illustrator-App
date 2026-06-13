@@ -275,10 +275,15 @@ describe("buildBuddySystemPrompt", () => {
 });
 
 describe("screenshot tool", () => {
-  it("parses screenshot with or without a question", () => {
+  it("parses screenshot with question and/or a target window", () => {
     expect(parseBuddyToolCall('{"tool":"screenshot","question":"is the game showing?"}')).toEqual({
       tool: "screenshot",
       question: "is the game showing?",
+    });
+    expect(parseBuddyToolCall('{"tool":"screenshot","window":"Pygame","question":"player visible?"}')).toEqual({
+      tool: "screenshot",
+      question: "player visible?",
+      window: "Pygame",
     });
     expect(parseBuddyToolCall('{"tool":"screenshot"}')).toEqual({ tool: "screenshot" });
   });
