@@ -217,6 +217,9 @@ export function App() {
   // "Allow this session", later find_files calls run without re-confirming (a
   // direct /find never needed confirming — the reader typed it). Reset on reload.
   const fileAccessGranted = useRef(false);
+  // The last NUMBERED list the buddy showed (file-search hits or image-search hits),
+  // so "open #2" / "show 3" can act on it without re-running the search.
+  const lastRefs = useRef<{ kind: "file" | "image"; label: string; path?: string; url?: string }[]>([]);
   // Buddy messages handed into the next opened book's chat (consumed on book change),
   // so a buddy-initiated open continues the conversation inside the reader.
   const buddyHandoff = useRef<StoredChatMessage[] | undefined>(undefined);
@@ -842,9 +845,10 @@ export function App() {
                 role: "tool",
                 text: `Found: ${best.title ?? "image"}`,
                 image: { sourceUrl: best.thumbnailLink ?? best.link },
+                // Links open the IMAGES themselves, not their source pages.
                 links: e.imageHits
-                  .slice(0, 3)
-                  .map((h) => ({ url: h.contextLink ?? h.link, ...(h.title ? { title: h.title } : {}) })),
+                  .slice(0, 5)
+                  .map((h, i) => ({ url: h.link, title: `${i + 1}. ${h.title ?? "image"}` })),
               });
             } else if (e.memory) {
               appendChat({
@@ -1039,12 +1043,13 @@ export function App() {
       if (ranked.length === 0) {
         appendBuddy({ role: "tool", text: `No importable files matched “${query}”.`, ...baked });
       } else {
+        lastRefs.current = ranked.map((f) => ({ kind: "file", label: f.name, path: f.path }));
         appendBuddy({
           role: "tool",
-          text: `Found ${ranked.length} file${ranked.length === 1 ? "" : "s"} — click to open:`,
-          files: ranked.map((f) => ({
+          text: `Found ${ranked.length} file${ranked.length === 1 ? "" : "s"} — click one, or say “open #N”:`,
+          files: ranked.map((f, i) => ({
             path: f.path,
-            name: formatFileSize(f.size) ? `${f.name} · ${formatFileSize(f.size)}` : f.name,
+            name: `${i + 1}. ${f.name}${formatFileSize(f.size) ? ` · ${formatFileSize(f.size)}` : ""}`,
           })),
           ...baked,
         });
@@ -1079,10 +1084,37 @@ export function App() {
         await runFileSearch(find[1]!.trim());
         return;
       }
-      // A pasted bare link: offer concrete options instead of guessing what to do.
+      // "open #2" / "show 3" — act on the last numbered list (files or images) the
+      // buddy showed, instead of re-searching or guessing.
+      const refMatch = /^(?:\/open|open|show|display|view)\s+(?:number\s+|the\s+)?#?(\d+)\b/i.exec(text.trim());
+      if (refMatch && lastRefs.current.length) {
+        appendBuddy({ role: "user", text });
+        const n = Number(refMatch[1]);
+        const ref = lastRefs.current[n - 1];
+        if (!ref) {
+          appendBuddy({ role: "tool", text: `There's no #${n} in the last list (it had ${lastRefs.current.length}).` });
+        } else if (ref.kind === "file" && ref.path) {
+          appendBuddy({ role: "tool", text: `Opening #${n}: ${ref.label}…` });
+          void onOpenLocalFile(ref.path);
+        } else if (ref.kind === "image" && ref.url) {
+          appendBuddy({
+            role: "tool",
+            text: `#${n}: ${ref.label}`,
+            image: { sourceUrl: ref.url },
+            links: [{ url: ref.url, title: "open full image" }],
+          });
+        }
+        return;
+      }
+      // A pasted bare link.
       const url = text.trim();
       if (/^https?:\/\/\S+$/i.test(url)) {
         appendBuddy({ role: "user", text });
+        // A direct image link should just DISPLAY — not try to open a book/article.
+        if (/\.(png|jpe?g|webp|gif|bmp|svg)(\?|#|$)/i.test(url)) {
+          appendBuddy({ role: "tool", text: "Here's that image:", image: { sourceUrl: url }, links: [{ url, title: "open full image" }] });
+          return;
+        }
         appendBuddy({
           role: "tool",
           text: "I see a link — what would you like to do with it?",
@@ -1191,15 +1223,21 @@ export function App() {
               })),
             });
           } else if (e.imageHits?.length) {
-            // Inline figure, same presentation as the in-book chat.
+            // Inline figure + links that open the IMAGES themselves (not their source
+            // pages); remember the list so "show #2" can display another one.
             const best = e.imageHits[0]!;
+            lastRefs.current = e.imageHits.map((h) => ({
+              kind: "image",
+              label: h.title ?? "image",
+              url: h.link,
+            }));
             appendBuddy({
               role: "tool",
-              text: `Found: ${best.title ?? "image"}`,
+              text: `Found: ${best.title ?? "image"} (say “show #N” for another)`,
               image: { sourceUrl: best.thumbnailLink ?? best.link },
               links: e.imageHits
-                .slice(0, 3)
-                .map((h) => ({ url: h.contextLink ?? h.link, ...(h.title ? { title: h.title } : {}) })),
+                .slice(0, 5)
+                .map((h, i) => ({ url: h.link, title: `${i + 1}. ${h.title ?? "image"}` })),
             });
           } else if (e.calc) {
             appendBuddy({ role: "tool", text: `🧮 ${e.calc.expression} = ${e.calc.result}` });
