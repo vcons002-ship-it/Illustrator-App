@@ -24,7 +24,10 @@ export interface LocalFile extends RankableFile {
 }
 
 /** File extensions the importer understands (mirrors the web importer's accept). */
-export const SEARCHABLE_FILE_EXTS = ["epub", "pdf", "txt", "md", "markdown", "html", "htm"] as const;
+export const SEARCHABLE_FILE_EXTS = [
+  "epub", "pdf", "txt", "md", "markdown", "html", "htm",
+  "docx", "rtf", "csv", "tsv", "json", "xlsx",
+] as const;
 
 function tokenize(q: string): string[] {
   return q.toLowerCase().split(/[^a-z0-9]+/i).filter(Boolean);

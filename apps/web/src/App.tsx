@@ -177,7 +177,9 @@ export function App() {
   const [showPasteText, setShowPasteText] = useState(false);
   const [showTestImage, setShowTestImage] = useState(false);
   // Prefill for the paste modal when a text-bearing FILE (txt/md/html/pdf) was opened.
-  const [pasteInitial, setPasteInitial] = useState<{ title: string; text: string } | undefined>();
+  const [pasteInitial, setPasteInitial] = useState<
+    { title: string; text: string; mode?: "fiction" | "technical" } | undefined
+  >();
   const [showLibrary, setShowLibrary] = useState(false);
   // Reading-companion chat (per book; persisted in IndexedDB).
   const [showChat, setShowChat] = useState(false);
@@ -568,9 +570,14 @@ export function App() {
         if (imported.kind === "book") {
           openBook(imported.book);
         } else {
-          // Extracted text (txt/md/html/pdf): confirm in the paste modal so the user can
-          // fix the title and mark technical content before the book is created.
-          setPasteInitial({ title: imported.title, text: imported.text });
+          // Extracted text (PDF/Word/CSV/…): confirm in the paste modal so the user can
+          // fix the title and the fiction/technical choice before the book is created
+          // (data files arrive pre-marked technical).
+          setPasteInitial({
+            title: imported.title,
+            text: imported.text,
+            ...(imported.mode ? { mode: imported.mode } : {}),
+          });
           setShowPasteText(true);
         }
       } catch (err) {
@@ -2433,14 +2440,14 @@ function PasteTextModal({
   onCreate,
   onClose,
 }: {
-  /** Prefill when the text came from an opened file (txt/md/html/pdf). */
-  initial?: { title: string; text: string } | undefined;
+  /** Prefill when the text came from an opened file (PDF/Word/CSV/…). */
+  initial?: { title: string; text: string; mode?: "fiction" | "technical" } | undefined;
   onCreate: (title: string, text: string, mode: "fiction" | "technical") => void;
   onClose: () => void;
 }) {
   const [title, setTitle] = useState(initial?.title ?? "");
   const [text, setText] = useState(initial?.text ?? "");
-  const [mode, setMode] = useState<"fiction" | "technical">("fiction");
+  const [mode, setMode] = useState<"fiction" | "technical">(initial?.mode ?? "fiction");
   const words = text.trim() ? text.trim().split(/\s+/).length : 0;
   return (
     <div style={styles.modalOverlay} onClick={onClose}>
