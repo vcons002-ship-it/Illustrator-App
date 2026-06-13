@@ -64,6 +64,10 @@ export interface TierConfig {
    * CFG/guidance scale. Unset = the family/catalog default. Cloud providers ignore these. */
   localSteps?: number;
   localCfg?: number;
+  /** Low-VRAM mode for the local engine: fp8 UNET loading + (managed engine) launch ComfyUI
+   * with --lowvram so the big text encoder offloads to CPU after encoding. Shrinks the
+   * resident VRAM/RAM footprint of heavy split-file models (Flux.2/Z-Image/Qwen-Image). */
+  lowVram?: boolean;
   /**
    * "One API" native mode: the SAME cloud vendor + key serves both slots (e.g. both
    * Gemini), and the image slot uses the vendor's MULTIMODAL endpoint — which accepts

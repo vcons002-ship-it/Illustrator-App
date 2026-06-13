@@ -82,9 +82,16 @@ struct DownloadableModel {
 
 // --------------------------------------------------------------------- commands
 
-/// Ensure the local engine is installed and running; return its base URL.
+/// Ensure the local engine is installed and running; return its base URL. `low_vram`
+/// launches ComfyUI with `--lowvram` so the big text encoder offloads to CPU after
+/// encoding (only honoured the FIRST time the engine starts — a reused instance keeps
+/// whatever mode it booted in).
 #[tauri::command]
-async fn ensure_engine(app: AppHandle, state: State<'_, EngineState>) -> Result<String, String> {
+async fn ensure_engine(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    low_vram: Option<bool>,
+) -> Result<String, String> {
     if let Some(existing) = state.base_url.lock().unwrap().clone() {
         return Ok(existing);
     }
@@ -95,7 +102,8 @@ async fn ensure_engine(app: AppHandle, state: State<'_, EngineState>) -> Result<
         return Ok(existing);
     }
     let app2 = app.clone();
-    let (base, child) = tauri::async_runtime::spawn_blocking(move || ensure_blocking(&app2))
+    let low = low_vram.unwrap_or(false);
+    let (base, child) = tauri::async_runtime::spawn_blocking(move || ensure_blocking(&app2, low))
         .await
         .map_err(|e| e.to_string())??;
     *state.base_url.lock().unwrap() = Some(base.clone());
@@ -722,7 +730,7 @@ async fn download_lora(app: AppHandle, model: DownloadableModel) -> Result<(), S
 
 // --------------------------------------------------------------------- blocking
 
-fn ensure_blocking(app: &AppHandle) -> Result<(String, Option<Child>), String> {
+fn ensure_blocking(app: &AppHandle, low_vram: bool) -> Result<(String, Option<Child>), String> {
     let base = format!("http://127.0.0.1:{ENGINE_PORT}");
     // Reuse an engine that's already up (e.g. the user's own ComfyUI, or a
     // previous run of ours).
@@ -753,7 +761,7 @@ fn ensure_blocking(app: &AppHandle) -> Result<(String, Option<Child>), String> {
              (or run stop-comfyui.bat), then try again."
         ));
     }
-    let child = install_and_spawn(app)?;
+    let child = install_and_spawn(app, low_vram)?;
     emit_engine(app, "ready", "Engine ready", Some(100.0));
     Ok((base, Some(child)))
 }
@@ -763,7 +771,7 @@ fn port_in_use(port: u16) -> bool {
     std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
 }
 
-fn install_and_spawn(app: &AppHandle) -> Result<Child, String> {
+fn install_and_spawn(app: &AppHandle, low_vram: bool) -> Result<Child, String> {
     let root = engine_root(app);
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let portable = root.join("ComfyUI_windows_portable");
@@ -778,7 +786,7 @@ fn install_and_spawn(app: &AppHandle) -> Result<Child, String> {
     }
 
     emit_engine(app, "starting", "Starting the engine…", None);
-    let child = spawn_comfy(&portable)?;
+    let child = spawn_comfy(&portable, low_vram)?;
 
     let base = format!("http://127.0.0.1:{ENGINE_PORT}");
     for _ in 0..180 {
@@ -790,7 +798,7 @@ fn install_and_spawn(app: &AppHandle) -> Result<Child, String> {
     Err("The engine did not become ready in time.".into())
 }
 
-fn spawn_comfy(portable: &Path) -> Result<Child, String> {
+fn spawn_comfy(portable: &Path, low_vram: bool) -> Result<Child, String> {
     let python = portable.join("python_embeded").join("python.exe");
     let main_py = portable.join("ComfyUI").join("main.py");
     let mut cmd = Command::new(python);
@@ -803,6 +811,10 @@ fn spawn_comfy(portable: &Path) -> Result<Child, String> {
         .current_dir(portable);
     if !has_nvidia() {
         cmd.arg("--cpu");
+    } else if low_vram {
+        // Keep the big text encoder / weights on CPU and stream into VRAM on demand,
+        // instead of ComfyUI's default "grab all free VRAM" mode. Only on a GPU box.
+        cmd.arg("--lowvram");
     }
     cmd.spawn().map_err(|e| format!("Failed to start the engine: {e}"))
 }

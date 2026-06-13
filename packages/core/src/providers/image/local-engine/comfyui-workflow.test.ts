@@ -49,6 +49,21 @@ describe("buildWorkflow img2img", () => {
     expect(inputsOf(g, "3").latent_image).toEqual(["16", 0]);
   });
 
+  it("carries the components' weight_dtype onto the UNET loader (Low-VRAM fp8)", () => {
+    const g = buildWorkflow({
+      ...base,
+      loadKind: "diffusion",
+      family: "flux2",
+      components: {
+        textEncoder: { class_type: "CLIPLoader", inputs: { clip_name: "qwen.safetensors", type: "flux2" } },
+        vaeName: "ae.safetensors",
+        weightDtype: "fp8_e4m3fn",
+      },
+    });
+    expect(classOf(g, "4")).toBe("UNETLoader");
+    expect(inputsOf(g, "4").weight_dtype).toBe("fp8_e4m3fn");
+  });
+
   it("wires VAEEncode to the standalone VAE loader on a diffusion (Flux.2) model", () => {
     const g = buildWorkflow({
       ...base,

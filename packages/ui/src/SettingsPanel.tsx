@@ -131,6 +131,9 @@ export interface ReaderSettings {
    * scale. Unset/undefined = the family/catalog default. */
   localSteps?: number | undefined;
   localCfg?: number | undefined;
+  /** Low-VRAM mode (local ComfyUI): fp8 UNET loading + (managed engine) --lowvram so the
+   * heavy text encoder offloads to CPU. Shrinks VRAM/RAM for Flux.2/Z-Image/Qwen-Image. */
+  lowVram?: boolean;
   /** Advanced manual sampler / scheduler choice for local ComfyUI; "" = per-model default. */
   localSampler?: string;
   localScheduler?: string;
@@ -873,6 +876,26 @@ export function SettingsPanel({
               onDownloadModelUrl={onDownloadModelUrl}
               onConnect={onConnectLocalServer}
             />
+          )}
+
+          {value.imageProvider === "local" && (
+            <label style={{ ...rowStyle, alignItems: "flex-start" }}>
+              <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={value.lowVram ?? false}
+                  onChange={(e) => set({ lowVram: e.target.checked })}
+                />
+                <span>Low-VRAM mode</span>
+              </span>
+              <span style={{ opacity: 0.6, fontSize: 11 }}>
+                Loads the diffusion model in fp8 and (managed engine) runs ComfyUI with{" "}
+                <code>--lowvram</code>, so the big text encoder offloads to system RAM after
+                encoding instead of squatting VRAM. Roughly halves the resident footprint of
+                heavy split-file models (Flux.2 / Z-Image / Qwen-Image) for a small speed/quality
+                cost. {isDesktop ? "Takes effect next time the engine starts." : "For your own ComfyUI, also launch it with --lowvram."}
+              </span>
+            </label>
           )}
 
           {value.imageProvider === "local" && (
