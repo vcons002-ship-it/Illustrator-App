@@ -22,6 +22,46 @@ export interface ChatMessageVM {
   actions?: { label: string; send: string }[];
 }
 
+export type MessageBlock = { type: "text"; text: string } | { type: "code"; lang: string; code: string };
+
+/** Split a message into prose and fenced ```code``` blocks (saveable as files). */
+export function parseMessageBlocks(text: string): MessageBlock[] {
+  const blocks: MessageBlock[] = [];
+  const re = /```([a-zA-Z0-9+#.-]*)[ \t]*\r?\n?([\s\S]*?)```/g;
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    const i = m.index;
+    if (i > last) blocks.push({ type: "text", text: text.slice(last, i) });
+    blocks.push({ type: "code", lang: (m[1] || "").toLowerCase(), code: m[2]!.replace(/\n$/, "") });
+    last = i + m[0].length;
+  }
+  if (last < text.length) blocks.push({ type: "text", text: text.slice(last) });
+  return blocks.length ? blocks : [{ type: "text", text }];
+}
+
+const LANG_EXT: Record<string, string> = {
+  html: "html", htm: "html", xml: "xml", svg: "svg", css: "css",
+  javascript: "js", js: "js", jsx: "jsx", typescript: "ts", ts: "ts", tsx: "tsx",
+  python: "py", py: "py", json: "json", csv: "csv", tsv: "tsv",
+  markdown: "md", md: "md", yaml: "yaml", yml: "yml", sql: "sql",
+  sh: "sh", bash: "sh", shell: "sh", java: "java", c: "c", cpp: "cpp", "c++": "cpp",
+  cs: "cs", go: "go", rust: "rs", rs: "rs", rb: "rb", ruby: "rb", php: "php", toml: "toml", ini: "ini",
+};
+/** Extension + a friendly default base name for a code block's language. */
+export function fileForLang(lang: string): { ext: string; base: string; mime: string } {
+  const ext = LANG_EXT[lang] ?? (lang && /^[a-z0-9]{1,5}$/.test(lang) ? lang : "txt");
+  const base =
+    ext === "html" ? "page" : ext === "csv" || ext === "tsv" ? "sheet" : ext === "md" ? "document" : "file";
+  const mime =
+    ext === "html" ? "text/html" :
+    ext === "csv" ? "text/csv" :
+    ext === "json" ? "application/json" :
+    ext === "svg" ? "image/svg+xml" :
+    ext === "md" ? "text/markdown" :
+    "text/plain";
+  return { ext, base, mime };
+}
+
 /** Split text into plain runs and bare http(s) URLs (for inline clickable links). */
 export function linkifyText(text: string): ({ text: string } | { url: string })[] {
   const out: ({ text: string } | { url: string })[] = [];
@@ -64,6 +104,8 @@ export interface ChatPanelProps {
   onDeleteMessage?: (index: number) => void;
   /** Compact the conversation into a summary (frees the model's context window). */
   onCompact?: () => void;
+  /** Save a file the assistant wrote in a code block. */
+  onSaveFile?: (filename: string, content: string, mime: string) => Promise<string | true>;
   /** Latest context-usage breakdown (for the usage donut). */
   contextUsage?: ContextUsage;
 }
@@ -147,7 +189,13 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
             </div>
           )}
           {props.messages.map((m, i) => (
-            <MessageBubble key={i} message={m} index={i} {...(props.onDeleteMessage ? { onDelete: props.onDeleteMessage } : {})} />
+            <MessageBubble
+              key={i}
+              message={m}
+              index={i}
+              {...(props.onDeleteMessage ? { onDelete: props.onDeleteMessage } : {})}
+              {...(props.onSaveFile ? { onSaveFile: props.onSaveFile } : {})}
+            />
           ))}
           {props.streamingText ? (
             <MessageBubble message={{ role: "assistant", text: props.streamingText }} />
@@ -366,6 +414,7 @@ export const MessageBubble = memo(function MessageBubble({
   onDelete,
   onOpenLocalFile,
   onAction,
+  onSaveFile,
 }: {
   message: ChatMessageVM;
   index?: number;
@@ -374,9 +423,14 @@ export const MessageBubble = memo(function MessageBubble({
   onOpenLocalFile?: (path: string) => void;
   /** Run a quick-reply action (sends its text). Stable callback (memo). */
   onAction?: (send: string) => void;
+  /** Save a code block the assistant wrote as a file. Stable callback (memo). */
+  onSaveFile?: (filename: string, content: string, mime: string) => Promise<string | true>;
 }) {
   const isUser = message.role === "user";
   const url = useMessageImageUrl(message.image);
+  // Assistant prose may contain fenced code blocks (a file the model created) —
+  // render those as saveable cards; the user's own messages stay verbatim.
+  const blocks = !isUser && message.text ? parseMessageBlocks(message.text) : undefined;
   return (
     <div
       style={{
@@ -395,19 +449,23 @@ export const MessageBubble = memo(function MessageBubble({
           ✕
         </button>
       )}
-      {message.text ? (
-        <div style={{ whiteSpace: "pre-wrap" }}>
-          {linkifyText(message.text).map((seg, i) =>
-            "url" in seg ? (
-              <a key={i} href={seg.url} target="_blank" rel="noreferrer" style={{ color: "#9db8ff" }}>
-                {seg.url}
-              </a>
-            ) : (
-              <span key={i}>{seg.text}</span>
-            ),
-          )}
-        </div>
-      ) : null}
+      {blocks
+        ? blocks.map((b, i) =>
+            b.type === "code" ? (
+              <CodeCard key={i} lang={b.lang} code={b.code} {...(onSaveFile ? { onSaveFile } : {})} />
+            ) : b.text.trim() ? (
+              <div key={i} style={{ whiteSpace: "pre-wrap" }}>
+                <Linkified text={b.text} />
+              </div>
+            ) : null,
+          )
+        : message.text
+          ? (
+            <div style={{ whiteSpace: "pre-wrap" }}>
+              <Linkified text={message.text} />
+            </div>
+          )
+          : null}
       {url ? (
         <img
           src={url}
@@ -472,6 +530,126 @@ const fileChipStyle = {
   padding: "5px 8px",
   fontSize: 12,
   cursor: "pointer",
+} as const;
+
+/** Inline prose with clickable bare URLs. */
+function Linkified({ text }: { text: string }) {
+  return (
+    <>
+      {linkifyText(text).map((seg, i) =>
+        "url" in seg ? (
+          <a key={i} href={seg.url} target="_blank" rel="noreferrer" style={{ color: "#9db8ff" }}>
+            {seg.url}
+          </a>
+        ) : (
+          <span key={i}>{seg.text}</span>
+        ),
+      )}
+    </>
+  );
+}
+
+/**
+ * A code/content block the assistant wrote (a webpage, a CSV worksheet, a
+ * script…), with Save (to disk / download), Copy, and — for HTML — Preview.
+ * The model "creates" the file; the user saves it with a click (a real gesture,
+ * so browser downloads aren't blocked).
+ */
+function CodeCard({
+  lang,
+  code,
+  onSaveFile,
+}: {
+  lang: string;
+  code: string;
+  onSaveFile?: (filename: string, content: string, mime: string) => Promise<string | true>;
+}) {
+  const [copied, setCopied] = useState(false);
+  const [saved, setSaved] = useState<string | undefined>();
+  const { ext, base, mime } = fileForLang(lang);
+  const filename = `${base}.${ext}`;
+  const save = async () => {
+    if (!onSaveFile) return;
+    const r = await onSaveFile(filename, code, mime);
+    setSaved(typeof r === "string" ? r : "saved");
+  };
+  const preview = () => {
+    const url = URL.createObjectURL(new Blob([code], { type: mime }));
+    window.open(url, "_blank", "noreferrer");
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  };
+  return (
+    <div style={codeCardStyle}>
+      <div style={codeHeaderStyle}>
+        <span style={{ opacity: 0.7 }}>{lang || "text"} · {filename}</span>
+        <span style={{ display: "flex", gap: 6 }}>
+          {onSaveFile && (
+            <button style={codeBtnStyle} onClick={() => void save()}>
+              💾 Save
+            </button>
+          )}
+          {(ext === "html" || ext === "svg") && (
+            <button style={codeBtnStyle} onClick={preview}>
+              ▶ Preview
+            </button>
+          )}
+          <button
+            style={codeBtnStyle}
+            onClick={() => {
+              void navigator.clipboard?.writeText(code);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1200);
+            }}
+          >
+            {copied ? "Copied" : "📋 Copy"}
+          </button>
+        </span>
+      </div>
+      <pre style={codePreStyle}>
+        <code>{code}</code>
+      </pre>
+      {saved && (
+        <div style={{ fontSize: 11, opacity: 0.7, padding: "4px 8px" }}>
+          {saved === "saved" ? "✓ Saved (check your downloads)" : `✓ Saved to ${saved}`}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const codeCardStyle = {
+  border: "1px solid rgba(255,255,255,0.14)",
+  borderRadius: 8,
+  margin: "6px 0",
+  overflow: "hidden",
+  background: "rgba(0,0,0,0.25)",
+} as const;
+const codeHeaderStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 8,
+  padding: "4px 8px",
+  fontSize: 11,
+  borderBottom: "1px solid rgba(255,255,255,0.1)",
+} as const;
+const codeBtnStyle = {
+  background: "rgba(255,255,255,0.08)",
+  color: "inherit",
+  border: "1px solid rgba(255,255,255,0.2)",
+  borderRadius: 5,
+  padding: "2px 6px",
+  fontSize: 11,
+  cursor: "pointer",
+} as const;
+const codePreStyle = {
+  margin: 0,
+  padding: 8,
+  maxHeight: 280,
+  overflow: "auto",
+  fontSize: 12,
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  whiteSpace: "pre",
 } as const;
 
 /** Object URL for a bytes image (revoked on change); pass-through for hotlinks. */

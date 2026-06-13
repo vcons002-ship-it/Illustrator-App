@@ -160,6 +160,11 @@ export function buildBuddySystemPrompt(opts: {
     "best match (when they asked you to open/read it) or present the numbered options in prose and ask. After an open " +
     "succeeds, confirm it in plain prose and invite them to keep chatting in the reader — the conversation follows " +
     "them into the book. To answer normally, just write prose (no JSON).\n" +
+    "CREATING FILES: when the reader asks you to make a file, document, webpage, spreadsheet, or code (e.g. 'create a " +
+    "worksheet', 'code me a landing page', 'make a CSV of…'), write the COMPLETE file content inside a single fenced " +
+    "code block tagged with its language/format (```html, ```csv, ```python, ```json, ```markdown …). The app shows a " +
+    "Save button on that block so the reader keeps it as a real file — so put the whole, ready-to-use content in the " +
+    "block (not a snippet), and keep your prose around it short.\n" +
     "CONVERSATION RULES: use a tool only when the reader's request actually calls for one — most messages deserve a " +
     "plain conversational reply. NEVER steer the chat toward opening, illustrating, or finding books unless the " +
     "reader brings it up; ordinary conversation is the default, operating the app is the exception. Never call tools " +
