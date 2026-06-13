@@ -41,6 +41,7 @@ import {
   type EncryptedSecrets,
   type StoredChatMessage,
   type ToolCall,
+  type ToolResultPayload,
 } from "@visual-reader/core";
 import {
   bookFromText,
@@ -919,6 +920,12 @@ export function App() {
         return;
       }
       if (res.pendingTool) {
+        // export_book is a safe host action — run it now and feed the result back,
+        // rather than showing the (image-only) approval bubble.
+        if (res.pendingTool.tool === "export_book") {
+          void runChatExport(res.pendingTool.format, [{ role: "user", content: text }, ...res.transcript]);
+          return;
+        }
         pendingTranscript.current = [{ role: "user", content: text }, ...res.transcript];
         setChatPendingTool(res.pendingTool);
         return;
@@ -1677,6 +1684,41 @@ export function App() {
     },
     [book, gatherExportImages, settings.imageStyle, noteAction],
   );
+
+  // The in-book chat's export_book tool: export the current book and feed the
+  // outcome back so the chat can confirm it (reuses the Export menu's machinery).
+  const runChatExport = async (format: "html" | "epub", modelTurns: ChatTurn[]): Promise<void> => {
+    if (!book) return;
+    setChatBusy(true);
+    setChatActivity(`Exporting as ${format.toUpperCase()}…`);
+    let payload: ToolResultPayload;
+    try {
+      const images = await gatherExportImages();
+      const opts = {
+        styleNote: `Illustrated with Visual Reader · ${getImageStyle(settings.imageStyle).label} style · ${images.size} image${images.size === 1 ? "" : "s"}`,
+      };
+      const base = safeFileName(book.title);
+      const saved =
+        format === "html"
+          ? await saveExportFile(`${base}.html`, buildIllustratedHtml(book, images, opts), "text/html")
+          : await saveExportFile(`${base}.epub`, buildIllustratedEpub(book, images, opts), "application/epub+zip");
+      payload = {
+        export: { ok: true, format, where: typeof saved === "string" ? saved : "your downloads", images: images.size },
+      };
+    } catch (err) {
+      payload = { export: { ok: false, format, where: "", images: 0, error: err instanceof Error ? err.message : String(err) } };
+    }
+    setChatBusy(false);
+    setChatActivity("");
+    const e = payload.export!;
+    appendChat({
+      role: "tool",
+      text: e.ok
+        ? `⤓ Exported as ${format.toUpperCase()} with ${e.images} illustration${e.images === 1 ? "" : "s"}${e.where !== "your downloads" ? ` → ${e.where}` : " (check your downloads)"}`
+        : `⚠ Export failed: ${e.error}`,
+      turns: [...modelTurns, { role: "user", content: formatToolResult({ tool: "export_book", format }, payload) }],
+    });
+  };
 
   // Save just the illustration the reader is currently looking at.
   const onSaveCurrentImage = useCallback(async () => {

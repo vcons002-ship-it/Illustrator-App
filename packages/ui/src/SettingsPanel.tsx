@@ -733,6 +733,12 @@ export function SettingsPanel({
                 ))}
               </select>
             </label>
+            <p style={{ opacity: 0.6, fontSize: 11, margin: "2px 0 6px" }}>
+              👁 <b>Vision</b> (needed for the screen-capture tool, and to discuss images):{" "}
+              <b>Gemini</b>, <b>OpenAI</b> and <b>Claude</b> can see images. Local works too with a{" "}
+              <b>vision model</b> — Ollama <code>llama3.2-vision</code> / <code>llava</code>, or LM
+              Studio. Other local (text-only) models can’t see images.
+            </p>
             {(value.chatTextProvider ?? "local") === "local" && (
               <label style={rowStyle}>
                 <span>Chat local model</span>
