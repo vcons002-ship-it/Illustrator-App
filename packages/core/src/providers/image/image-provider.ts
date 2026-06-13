@@ -80,6 +80,9 @@ export interface ImageGenerationInput {
    */
   localSampler?: string;
   localScheduler?: string;
+  /** Low-VRAM: load the diffusion UNET in fp8 (split-file families) to roughly halve its
+   * resident weights. The engine's --lowvram flag handles encoder offload. Local only. */
+  lowVram?: boolean;
   /** Always-applied world-style/genre anchor (from the bible), added to every prompt. */
   worldStyle?: string;
   /** Book title, for the reference-block header on LLM-grade targets. */

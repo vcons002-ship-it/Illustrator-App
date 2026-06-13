@@ -290,6 +290,17 @@ Downloads **resume** if interrupted; retrying skips files that finished.
 - **SD 1.5 / SDXL / SDXL-Turbo / Flux.1** — the classic single-file checkpoints;
   smaller and fine on modest GPUs (SD 1.5 runs almost anywhere).
 
+> **Why a "small" model can fill a big card.** A split-file model's checkpoint size
+> is only part of what loads: Flux.2 / Z-Image / Qwen-Image each pair the diffusion
+> weights with a **large separate text encoder** (a Qwen-3-8B / T5-XXL, ~9 GB) plus a
+> VAE, and ComfyUI keeps a copy in **system RAM** as well as VRAM — so the resident
+> footprint is easily ~20 GB, mirrored. If you're tight on memory, turn on
+> **Settings → Low-VRAM mode**: it loads the diffusion model in fp8 and (managed
+> engine) launches ComfyUI with `--lowvram`, so the encoder offloads to RAM after it
+> encodes instead of squatting VRAM — roughly halving the resident footprint for a
+> small speed/quality cost. (Running **your own** ComfyUI? Add `--lowvram` to how you
+> launch it.)
+
 Notes for **manually installed** files (everything above is automatic):
 
 - **All-in-one checkpoints just work** (SD 1.5 / SDXL / Flux.1 fp8) — the app probes

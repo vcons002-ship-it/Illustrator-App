@@ -203,6 +203,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
     family: ModelFamily,
     model: string,
     overrides?: { textEncoder?: string; vae?: string },
+    lowVram?: boolean,
   ): Promise<DiffusionComponents> {
     const vaes = await this.enumValues("VAELoader", "vae_name");
 
@@ -223,7 +224,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
       return {
         textEncoder: { class_type: "DualCLIPLoader", inputs: { clip_name1: t5, clip_name2: clipL, type: "flux" } },
         vaeName: vae,
-        weightDtype: "default",
+        weightDtype: lowVram ? "fp8_e4m3fn" : "default",
       };
     }
 
@@ -258,7 +259,10 @@ export class ComfyUIBackend implements LocalEngineBackend {
     return {
       textEncoder: { class_type: "CLIPLoader", inputs: { clip_name: encoder, type: clipType } },
       vaeName: vae,
-      weightDtype: "default",
+      // Low-VRAM: load the UNET in fp8 (≈half the diffusion weights in VRAM). The big
+      // text encoder (Qwen-3/T5/Mistral) is shrunk by the engine's --lowvram offloading,
+      // not here (CLIPLoader has no dtype input). Only applies to UNETLoader families.
+      weightDtype: lowVram ? "fp8_e4m3fn" : "default",
     };
   }
 
@@ -443,10 +447,15 @@ export class ComfyUIBackend implements LocalEngineBackend {
     // the cryptic "clip input is invalid: None".
     const components =
       loadKind === "diffusion"
-        ? await this.resolveComponents(family, checkpoint, {
-            ...(input.textEncoder ? { textEncoder: input.textEncoder } : {}),
-            ...(input.vae ? { vae: input.vae } : {}),
-          })
+        ? await this.resolveComponents(
+            family,
+            checkpoint,
+            {
+              ...(input.textEncoder ? { textEncoder: input.textEncoder } : {}),
+              ...(input.vae ? { vae: input.vae } : {}),
+            },
+            input.lowVram,
+          )
         : undefined;
 
     // img2img: upload the base photo (reuses the per-session reference cache) and

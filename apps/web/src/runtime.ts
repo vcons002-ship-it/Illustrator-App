@@ -65,8 +65,8 @@ export interface ModelProgress {
  * Ensure the local engine is installed + running (downloads on first use) and
  * return its base URL. Emits `engine://progress` events on the Rust side.
  */
-export function ensureEngine(): Promise<string> {
-  return invoke<string>("ensure_engine");
+export function ensureEngine(lowVram?: boolean): Promise<string> {
+  return invoke<string>("ensure_engine", lowVram ? { lowVram: true } : {});
 }
 
 export function listLocalModels(): Promise<InstalledModel[]> {

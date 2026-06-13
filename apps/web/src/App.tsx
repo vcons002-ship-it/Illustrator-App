@@ -350,7 +350,7 @@ export function App() {
     void (async () => {
       try {
         setEngineStatus("Setting up the local engine…");
-        const baseUrl = await ensureEngine();
+        const baseUrl = await ensureEngine(settings.lowVram);
         const models = await listLocalModels();
         const loras = await listLoras();
         // Detect each LoRA's base architecture (reads only the safetensors header) so the
