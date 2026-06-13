@@ -1828,7 +1828,10 @@ export function App() {
               Library ({library.length})
             </button>
           )}
-          <label style={styles.upload} title="EPUB, TXT, Markdown, HTML, or PDF">
+          <label
+            style={styles.upload}
+            title="Open a book or document — EPUB, PDF, Word, Excel, CSV, RTF, JSON, text, Markdown, HTML — or drop an image to transform it"
+          >
             Open book…
             <input
               type="file"
@@ -1860,7 +1863,7 @@ export function App() {
               setPhotoInitial(undefined);
               setShowPhoto(true);
             }}
-            title="Start from a photo and reimagine it with the current image model and art style (local engine)"
+            title="Start from a photo and reimagine it with your image model — your local engine, or Gemini/OpenAI native image"
           >
             🖼 Photo
           </button>
@@ -2154,8 +2157,9 @@ export function App() {
 
       {!book && !status && !localError && (
         <div style={styles.empty}>
-          Open an EPUB, load the sample, or ask the buddy below to find &amp; illustrate something.
-          <span style={{ opacity: 0.55 }}> No API keys? It runs with placeholder art so you can see the flow.</span>
+          Ask the assistant below anything — or have it find &amp; illustrate a book. You can also
+          open your own file (EPUB, PDF, Word, and more), transform a photo, or load the sample.
+          <span style={{ opacity: 0.55 }}> No API keys? It still runs, with placeholder art, so you can see the whole flow.</span>
         </div>
       )}
 

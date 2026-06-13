@@ -3,10 +3,13 @@ import { getProvider } from "@visual-reader/core";
 import type { ReaderSettings } from "./SettingsPanel.js";
 
 /**
- * First-run experience. One friendly question — how should we create images —
- * with two paths: bring a cloud account (paste one key) or run on your own
- * computer (the desktop app sets everything up). A quiet third link starts a
- * keyless demo. The goal is zero jargon and zero config to the first image.
+ * First-run experience. Visual Reader is an AI assistant that also illustrates
+ * whatever you read, so the welcome offers three honest starting points: bring a
+ * cloud account (one key powers the assistant, reading analysis AND images), run
+ * on your own computer (the desktop app sets everything up), or "just chat & read"
+ * — set up a text model only and skip image generation (it stays on placeholder
+ * art until you add an image provider in Settings). A quiet link starts a keyless
+ * look-around. The goal is zero jargon and a working app in one choice.
  */
 
 export interface FirstRunWizardProps {
@@ -18,18 +21,27 @@ export interface FirstRunWizardProps {
 // Providers that can do BOTH text and images from a single key (keeps setup to
 // one field). Mixing (e.g. Claude for text + Flux for images) lives in Settings.
 const CLOUD_CHOICES = ["gemini", "openai"] as const;
+// The "just chat & read" path sets up a TEXT brain only — so it also offers Claude,
+// which has no image model. Images stay on placeholder until configured in Settings.
+const TEXT_CHOICES = ["claude", "gemini", "openai"] as const;
 
 export function FirstRunWizard({ current, onComplete, isDesktop = false }: FirstRunWizardProps) {
-  const [path, setPath] = useState<"none" | "cloud">("none");
-  const [provider, setProvider] = useState<(typeof CLOUD_CHOICES)[number]>("gemini");
+  const [path, setPath] = useState<"none" | "cloud" | "text">("none");
+  const [provider, setProvider] = useState<(typeof TEXT_CHOICES)[number]>("gemini");
   const [key, setKey] = useState("");
+  const textOnly = path === "text";
+  const choices = textOnly ? TEXT_CHOICES : CLOUD_CHOICES;
 
   const finishCloud = () => {
     if (!key.trim()) return;
     onComplete({
       ...current,
       textProvider: provider,
-      imageProvider: provider,
+      // Text-only start: leave the image provider untouched (placeholder art) so the
+      // assistant + reading work now and images can be added later. Cloud start: the
+      // one key serves images too, so point the image provider at it as well — except
+      // Claude, which has no image model (only offered on the text-only path anyway).
+      ...(textOnly || provider === "claude" ? {} : { imageProvider: provider }),
       keys: { ...current.keys, [provider]: key.trim() },
       configured: true,
     });
@@ -54,34 +66,46 @@ export function FirstRunWizard({ current, onComplete, isDesktop = false }: First
     <div style={overlay}>
       <div style={card}>
         <h2 style={{ margin: "0 0 4px" }}>Welcome to Visual Reader</h2>
-        <p style={{ marginTop: 0, opacity: 0.75 }}>How should we create images for what you read?</p>
+        <p style={{ marginTop: 0, opacity: 0.75 }}>
+          An AI assistant that also illustrates whatever you read. How do you want to start?
+        </p>
 
         {path === "none" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <button style={choice} onClick={() => setPath("cloud")}>
               <strong>Use my AI account</strong>
-              <span style={sub}>Paste one key from Google or OpenAI. Works everywhere.</span>
+              <span style={sub}>
+                One key from Google or OpenAI — powers the assistant, reading, and image
+                generation. Works everywhere.
+              </span>
             </button>
             <button style={choice} onClick={finishLocal}>
               <strong>Run on my computer (free &amp; private)</strong>
               <span style={sub}>
                 {isDesktop
-                  ? "Uses your GPU. We set everything up — the model downloads on first use."
-                  : "Connect your own Stable Diffusion server (AUTOMATIC1111 or ComfyUI) in Settings."}
+                  ? "Uses your GPU for the assistant and images. We set everything up — the model downloads on first use."
+                  : "Connect your own local model (Ollama) and Stable Diffusion server (AUTOMATIC1111 or ComfyUI) in Settings."}
+              </span>
+            </button>
+            <button style={choice} onClick={() => setPath("text")}>
+              <strong>Just chat &amp; read — skip image setup</strong>
+              <span style={sub}>
+                Set up a text model only (Claude, Gemini, or OpenAI) for the assistant,
+                document reading, and study help. Add image generation anytime in Settings.
               </span>
             </button>
             <button style={linkBtn} onClick={finishDemo}>
-              Just show me a demo
+              Just look around first (placeholder art, no setup)
             </button>
           </div>
         )}
 
-        {path === "cloud" && (
+        {(path === "cloud" || path === "text") && (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-              <span>Provider</span>
-              <select value={provider} onChange={(e) => setProvider(e.target.value as (typeof CLOUD_CHOICES)[number])}>
-                {CLOUD_CHOICES.map((id) => (
+              <span>{textOnly ? "Which AI should power the assistant & reading?" : "Provider"}</span>
+              <select value={provider} onChange={(e) => setProvider(e.target.value as (typeof TEXT_CHOICES)[number])}>
+                {choices.map((id) => (
                   <option key={id} value={id}>
                     {getProvider("text", id)?.label ?? id}
                   </option>
@@ -106,14 +130,17 @@ export function FirstRunWizard({ current, onComplete, isDesktop = false }: First
               {getProvider("text", provider)?.keyBlurb && (
                 <span style={{ opacity: 0.6, fontSize: 12 }}>{getProvider("text", provider)?.keyBlurb}</span>
               )}
-              <span style={{ opacity: 0.6, fontSize: 12 }}>Stored encrypted on this device only.</span>
+              <span style={{ opacity: 0.6, fontSize: 12 }}>
+                Stored encrypted on this device only.
+                {textOnly ? " Images stay on placeholder art until you set up an image provider in Settings." : ""}
+              </span>
             </label>
             <div style={{ display: "flex", gap: 8, justifyContent: "space-between" }}>
               <button style={linkBtn} onClick={() => setPath("none")}>
                 Back
               </button>
               <button style={primary} onClick={finishCloud} disabled={!key.trim()}>
-                Start reading
+                {textOnly ? "Start" : "Start reading"}
               </button>
             </div>
           </div>
