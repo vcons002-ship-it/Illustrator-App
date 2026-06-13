@@ -374,7 +374,20 @@ export const MessageBubble = memo(function MessageBubble({
       )}
       {message.text ? <div style={{ whiteSpace: "pre-wrap" }}>{message.text}</div> : null}
       {url ? (
-        <img src={url} alt="Chat image" decoding="async" style={{ maxWidth: "100%", borderRadius: 6, marginTop: message.text ? 6 : 0 }} />
+        <img
+          src={url}
+          alt="Chat image"
+          decoding="async"
+          style={{
+            display: "block",
+            maxWidth: "100%",
+            height: "auto", // keep the image's own aspect ratio (never stretched/cropped)
+            maxHeight: 420,
+            objectFit: "contain",
+            borderRadius: 6,
+            marginTop: message.text ? 6 : 0,
+          }}
+        />
       ) : null}
       {message.links?.length ? (
         <ol style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 11 }}>

@@ -74,6 +74,8 @@ export type MainToWorker =
       /** img2img base photo (the photo-transform path) + strength 0..1. */
       initImage?: { bytes: ArrayBuffer; mimeType: string };
       denoise?: number;
+      /** Output dimensions — the photo path passes the source photo's aspect. */
+      size?: { width: number; height: number };
     }
   /**
    * Reading-companion chat: one user message. `history` is the prior transcript
@@ -150,6 +152,8 @@ export type WorkerToMain =
       prompt?: string;
       error?: string;
     }
+  /** Render progress 0..1 for a test/photo render (engines that report it). */
+  | { type: "testProgress"; requestId: number; fraction: number }
   | { type: "error"; message: string }
   /** Incremental assistant text (streaming providers only). */
   | { type: "chatToken"; requestId: number; text: string }

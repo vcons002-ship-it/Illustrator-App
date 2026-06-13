@@ -96,7 +96,12 @@ export interface EngineWorkerApi {
   /** Playground: render ONE image from text (optionally img2img from a base photo). */
   testRender: (
     text: string,
-    opts?: { initImage?: { bytes: ArrayBuffer; mimeType: string }; denoise?: number },
+    opts?: {
+      initImage?: { bytes: ArrayBuffer; mimeType: string };
+      denoise?: number;
+      size?: { width: number; height: number };
+      onProgress?: (fraction: number) => void;
+    },
   ) => Promise<TestRenderResult>;
   /** Reading-companion chat: one user message (streams via `onEvent`). */
   chat: (
@@ -239,7 +244,9 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   >(new Map());
   const nextRefRequestId = useRef(1);
   // In-flight playground renders, resolved by `testRendered` replies.
-  const testRequests = useRef<Map<number, (result: TestRenderResult) => void>>(new Map());
+  const testRequests = useRef<
+    Map<number, { resolve: (result: TestRenderResult) => void; onProgress?: (fraction: number) => void }>
+  >(new Map());
   // In-flight chat rounds: streaming events + the final resolve, keyed by requestId.
   const chatRequests = useRef<
     Map<number, { onEvent: (e: ChatStreamEvent) => void; resolve: (r: ChatDoneResult) => void }>
@@ -351,10 +358,14 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
           resolve?.(msg.image);
           break;
         }
+        case "testProgress": {
+          testRequests.current.get(msg.requestId)?.onProgress?.(msg.fraction);
+          break;
+        }
         case "testRendered": {
-          const resolve = testRequests.current.get(msg.requestId);
+          const req = testRequests.current.get(msg.requestId);
           testRequests.current.delete(msg.requestId);
-          resolve?.({
+          req?.resolve({
             ok: msg.ok,
             ...(msg.image ? { image: msg.image } : {}),
             ...(msg.prompt ? { prompt: msg.prompt } : {}),
@@ -641,17 +652,26 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   const testRender = useCallback(
     (
       text: string,
-      opts?: { initImage?: { bytes: ArrayBuffer; mimeType: string }; denoise?: number },
+      opts?: {
+        initImage?: { bytes: ArrayBuffer; mimeType: string };
+        denoise?: number;
+        size?: { width: number; height: number };
+        onProgress?: (fraction: number) => void;
+      },
     ): Promise<TestRenderResult> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
-        testRequests.current.set(requestId, resolve);
+        testRequests.current.set(requestId, {
+          resolve,
+          ...(opts?.onProgress ? { onProgress: opts.onProgress } : {}),
+        });
         send({
           type: "testRender",
           requestId,
           text,
           ...(opts?.initImage ? { initImage: opts.initImage } : {}),
           ...(opts?.denoise !== undefined ? { denoise: opts.denoise } : {}),
+          ...(opts?.size ? { size: opts.size } : {}),
         });
       }),
     [],
