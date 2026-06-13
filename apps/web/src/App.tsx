@@ -39,7 +39,13 @@ import {
   type StoredChatMessage,
   type ToolCall,
 } from "@visual-reader/core";
-import { bookFromText } from "@visual-reader/epub";
+import {
+  bookFromText,
+  buildIllustratedEpub,
+  buildIllustratedHtml,
+  type ExportImage,
+  type ExportImages,
+} from "@visual-reader/epub";
 import { IMPORT_ACCEPT, importBookFile } from "./import-file.js";
 import {
   CharacterBible,
@@ -78,6 +84,7 @@ import {
   loraFamilies,
   onEngineProgress,
   onModelProgress,
+  saveExportFile,
 } from "./runtime.js";
 
 /** Chat-history key for the landing-page buddy — reserved, never a book id. */
@@ -1293,6 +1300,84 @@ export function App() {
     );
   }, [book, units, activePageIndex, paintForward, noteAction, remainingEta]);
 
+  // ---- Export an illustrated copy -------------------------------------------
+  const exportMenuRef = useRef<HTMLDetailsElement | null>(null);
+  // How many units actually have a rendered illustration (drives the menu state).
+  const illustratedCount = useMemo(
+    () => [...results.values()].filter((r) => r.status === "ready" && (r.image || r.sourceUrl)).length,
+    [results],
+  );
+  // Gather every rendered illustration keyed by the ORIGINAL page it sits on (a
+  // unit's first page), reading the bytes out of the session's in-memory results.
+  const gatherExportImages = useCallback(async (): Promise<ExportImages> => {
+    const map = new Map<number, ExportImage>();
+    const pageToUnit = units?.pageToUnit;
+    const firstPageOfUnit = new Map<number, number>();
+    if (pageToUnit) {
+      pageToUnit.forEach((u, page) => {
+        if (!firstPageOfUnit.has(u)) firstPageOfUnit.set(u, page);
+      });
+    }
+    for (const [unitIndex, result] of results) {
+      if (result.status !== "ready" || !result.image) continue; // hotlink-only figures aren't embeddable
+      const bytes =
+        "blob" in result.image ? await result.image.blob.arrayBuffer() : result.image.bytes;
+      const page = firstPageOfUnit.get(unitIndex) ?? unitIndex;
+      map.set(page, {
+        bytes,
+        mimeType: result.image.mimeType,
+        ...(result.prompt ? { caption: displayCaption(result.prompt) } : {}),
+      });
+    }
+    return map;
+  }, [results, units]);
+
+  const onExport = useCallback(
+    async (format: "html" | "epub") => {
+      if (!book) return;
+      if (exportMenuRef.current) exportMenuRef.current.open = false;
+      try {
+        const images = await gatherExportImages();
+        const styleNote = `Illustrated with Visual Reader · ${getImageStyle(settings.imageStyle).label} style · ${images.size} image${images.size === 1 ? "" : "s"}`;
+        const opts = { styleNote };
+        const base = safeFileName(book.title);
+        const result =
+          format === "html"
+            ? await saveExportFile(`${base}.html`, buildIllustratedHtml(book, images, opts), "text/html")
+            : await saveExportFile(
+                `${base}.epub`,
+                buildIllustratedEpub(book, images, opts),
+                "application/epub+zip",
+              );
+        const where = typeof result === "string" ? ` to ${result}` : " (check your downloads)";
+        noteAction(`✓ Exported ${format.toUpperCase()} with ${images.size} illustration${images.size === 1 ? "" : "s"}${where}.`);
+      } catch (err) {
+        setLocalError(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [book, gatherExportImages, settings.imageStyle, noteAction],
+  );
+
+  // Save just the illustration the reader is currently looking at.
+  const onSaveCurrentImage = useCallback(async () => {
+    const result = results.get(unitIndex);
+    if (!book || !result?.image) return;
+    try {
+      const bytes =
+        "blob" in result.image ? await result.image.blob.arrayBuffer() : result.image.bytes;
+      const ext = /jpe?g/i.test(result.image.mimeType) ? "jpg" : /webp/i.test(result.image.mimeType) ? "webp" : "png";
+      const saved = await saveExportFile(
+        `${safeFileName(book.title)} - image ${unitIndex + 1}.${ext}`,
+        new Uint8Array(bytes),
+        result.image.mimeType,
+      );
+      const where = typeof saved === "string" ? ` to ${saved}` : " (check your downloads)";
+      noteAction(`✓ Saved image ${unitIndex + 1}${where}.`);
+    } catch (err) {
+      setLocalError(`Couldn't save the image: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [book, results, unitIndex, noteAction]);
+
   // Gaps to fill = story units whose illustration failed or never finished. (Pages with
   // a ready or skipped result, or one still rendering, don't count.) Drives the
   // "Complete book" button's badge.
@@ -1598,13 +1683,44 @@ export function App() {
             </button>
           )}
           {book && (
-            <button
-              style={styles.button}
-              onClick={exportBible}
-              title="Download the Visual Bible (+ AI rules) as JSON for editing or external analysis"
-            >
-              ⤓ Export bible
-            </button>
+            <details style={styles.menu} ref={exportMenuRef}>
+              <summary
+                style={styles.menuSummary}
+                title="Keep a copy of this illustrated book (text + the images rendered so far)"
+              >
+                ⤓ Export…
+              </summary>
+              <div style={styles.menuList}>
+                <button
+                  style={styles.menuItem}
+                  disabled={illustratedCount === 0}
+                  onClick={() => void onExport("html")}
+                >
+                  <b>Illustrated HTML{illustratedCount ? ` (${illustratedCount})` : ""}</b>
+                  <small>One self-contained web page — text with the images inline. Opens anywhere.</small>
+                </button>
+                <button
+                  style={styles.menuItem}
+                  disabled={illustratedCount === 0}
+                  onClick={() => void onExport("epub")}
+                >
+                  <b>EPUB ebook{illustratedCount ? ` (${illustratedCount})` : ""}</b>
+                  <small>A real ebook with the illustrations embedded — for e-readers / Apple Books.</small>
+                </button>
+                <button
+                  style={styles.menuItem}
+                  disabled={results.get(unitIndex)?.status !== "ready" || !results.get(unitIndex)?.image}
+                  onClick={() => void onSaveCurrentImage()}
+                >
+                  <b>Save this image</b>
+                  <small>Save the illustration you’re looking at as a picture file.</small>
+                </button>
+                <button style={styles.menuItem} onClick={() => { if (exportMenuRef.current) exportMenuRef.current.open = false; exportBible(); }}>
+                  <b>Visual Bible (JSON)</b>
+                  <small>The analysis + AI rules, for editing or reuse on another book.</small>
+                </button>
+              </div>
+            </details>
           )}
           {book && (
             <button
@@ -1980,6 +2096,12 @@ const ReaderColumn = memo(function ReaderColumn({
 function formatLeft(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "";
   return ms < 60000 ? `~${Math.round(ms / 1000)}s left` : `~${Math.round(ms / 60000)}m left`;
+}
+
+/** A book title reduced to a safe export filename stem (no path/illegal chars). */
+function safeFileName(title: string): string {
+  const cleaned = title.replace(/[/\\:*?"<>|]/g, " ").replace(/\s+/g, " ").trim();
+  return (cleaned || "book").slice(0, 80);
 }
 
 /** Best-effort filename from a download URL (for pasted checkpoint/LoRA URLs). */
