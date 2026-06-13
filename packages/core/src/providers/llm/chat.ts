@@ -38,8 +38,22 @@ export interface ChatCapable {
   chat(messages: ChatTurn[], opts?: ChatOptions): Promise<string>;
 }
 
+/** A model that can look at an image and answer in text (vision input). */
+export interface VisionCapable {
+  describeImage(input: {
+    bytes: ArrayBuffer;
+    mimeType: string;
+    prompt: string;
+    signal?: AbortSignal;
+  }): Promise<string>;
+}
+
 export function supportsChat(p: LLMProvider): p is LLMProvider & ChatCapable {
   return typeof (p as Partial<ChatCapable>).chat === "function";
+}
+
+export function supportsVision(p: LLMProvider): p is LLMProvider & VisionCapable {
+  return typeof (p as Partial<VisionCapable>).describeImage === "function";
 }
 
 /** First system turn(s) joined, and the non-system turns — the split every API wants. */

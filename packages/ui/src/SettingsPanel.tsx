@@ -638,13 +638,14 @@ export function SettingsPanel({
                 onChange={(e) => set({ allowCommands: e.target.checked })}
               />
               <span>
-                Let the assistant run commands (advanced)
+                Let the assistant run commands &amp; see the screen (advanced)
                 <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
                   Allows the chat to PROPOSE shell commands (install dependencies, run tests,
-                  execute code it wrote) in a <code>VisualReader/workspace</code> folder — the
-                  test-as-you-go coding loop. You approve <b>every</b> command before it runs;
-                  nothing executes on its own. Off by default. Only enable if you understand that
-                  approved commands run on your computer with your permissions.
+                  execute code it wrote) in a <code>VisualReader/workspace</code> folder, and to
+                  capture your screen so it can check whether something it built is working — the
+                  test-as-you-go loop. You approve <b>every</b> command and <b>every</b> screen
+                  capture before it happens; nothing runs on its own. Off by default. Only enable if
+                  you understand that approved commands run on your computer with your permissions.
                 </span>
               </span>
             </label>

@@ -113,6 +113,11 @@ export interface EngineWorkerApi {
   ) => Promise<ChatDoneResult>;
   /** Run a user-approved generate_image tool call. */
   chatTool: (call: ToolCall, opts?: { onProgress?: (fraction: number) => void }) => Promise<ChatToolRender>;
+  /** Have the chat's vision model describe a captured screenshot. */
+  assessImage: (
+    image: { bytes: ArrayBuffer; mimeType: string },
+    question?: string,
+  ) => Promise<{ text?: string; error?: string }>;
   /** Abort the in-flight chat round, if any. */
   chatCancel: () => void;
   /** Landing-page buddy: one user message (no book open; streams via `onEvent`). */
@@ -247,6 +252,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   const testRequests = useRef<
     Map<number, { resolve: (result: TestRenderResult) => void; onProgress?: (fraction: number) => void }>
   >(new Map());
+  const assessRequests = useRef<Map<number, (r: { text?: string; error?: string }) => void>>(new Map());
   // In-flight chat rounds: streaming events + the final resolve, keyed by requestId.
   const chatRequests = useRef<
     Map<number, { onEvent: (e: ChatStreamEvent) => void; resolve: (r: ChatDoneResult) => void }>
@@ -363,6 +369,12 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
         case "testProgress": {
           testRequests.current.get(msg.requestId)?.onProgress?.(msg.fraction);
           chatToolRequests.current.get(msg.requestId)?.onProgress?.(msg.fraction);
+          break;
+        }
+        case "imageAssessed": {
+          const resolve = assessRequests.current.get(msg.requestId);
+          assessRequests.current.delete(msg.requestId);
+          resolve?.({ ...(msg.text ? { text: msg.text } : {}), ...(msg.error ? { error: msg.error } : {}) });
           break;
         }
         case "testRendered": {
@@ -734,6 +746,21 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
       }),
     [],
   );
+  const assessImage = useCallback(
+    (image: { bytes: ArrayBuffer; mimeType: string }, question?: string): Promise<{ text?: string; error?: string }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (assessRequests.current.delete(requestId)) resolve({ error: "Looking at the screen timed out." });
+        }, 120_000);
+        assessRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "assessImage", requestId, image, ...(question ? { question } : {}) }, [image.bytes]);
+      }),
+    [],
+  );
   const chatCancel = useCallback(() => {
     const id = activeChatRequestId.current;
     if (id !== undefined) send({ type: "chatCancel", requestId: id });
@@ -826,6 +853,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     getCharacterReference,
     paintForward,
     testRender,
+    assessImage,
     chat,
     chatTool,
     chatCancel,

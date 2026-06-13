@@ -644,6 +644,47 @@ async fn run_command(app: AppHandle, command: String) -> Result<CommandResult, S
     .map_err(|e| e.to_string())?
 }
 
+#[derive(Serialize)]
+struct Screenshot {
+    #[serde(rename = "bytesBase64")]
+    bytes_base64: String,
+    #[serde(rename = "mimeType")]
+    mime_type: String,
+}
+
+/// Capture the primary monitor to a PNG (the chat's screenshot tool, after the
+/// reader approved it). Returns base64 PNG bytes. Reached only after an explicit
+/// approval click — there is no silent capture path. Best-effort: a headless or
+/// permission-restricted environment fails with a clear message.
+#[tauri::command]
+async fn capture_screen() -> Result<Screenshot, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        use base64::Engine as _;
+        use image::ImageEncoder as _;
+        let monitor = xcap::Monitor::all()
+            .map_err(|e| format!("Couldn't list monitors: {e}"))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| "No monitor to capture.".to_string())?;
+        let frame = monitor.capture_image().map_err(|e| format!("Screen capture failed: {e}"))?;
+        let mut png: Vec<u8> = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(
+                frame.as_raw(),
+                frame.width(),
+                frame.height(),
+                image::ExtendedColorType::Rgba8,
+            )
+            .map_err(|e| format!("PNG encode failed: {e}"))?;
+        Ok(Screenshot {
+            bytes_base64: base64::engine::general_purpose::STANDARD.encode(&png),
+            mime_type: "image/png".to_string(),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Download a style LoRA into the engine's loras dir, with progress.
 #[tauri::command]
 async fn download_lora(app: AppHandle, model: DownloadableModel) -> Result<(), String> {
@@ -956,7 +997,8 @@ fn main() {
             save_file,
             search_files,
             read_file,
-            run_command
+            run_command,
+            capture_screen
         ])
         .build(tauri::generate_context!())
         .expect("error while building Visual Reader")

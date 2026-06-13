@@ -84,6 +84,7 @@ import {
   isDesktop,
   listLocalModels,
   listLoras,
+  captureScreen,
   loraFamilies,
   onEngineProgress,
   onModelProgress,
@@ -165,6 +166,7 @@ export function App() {
     carryOverBible,
     paintForward,
     testRender,
+    assessImage,
     chat,
     chatTool,
     chatCancel,
@@ -1129,6 +1131,47 @@ export function App() {
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
+  // Approve a buddy-requested screenshot: capture the screen, show it, have the
+  // vision model describe it, and feed that observation back so the model reacts.
+  const approveScreenshot = async (call: Extract<BuddyToolCall, { tool: "screenshot" }>): Promise<void> => {
+    setBuddyPendingTool(undefined);
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+    if (!isDesktop) {
+      appendBuddy({ role: "tool", text: "🔒 Capturing the screen needs the desktop app.", turns: [] });
+      return;
+    }
+    setBuddyBusy(true);
+    setBuddyActivity("Capturing the screen…");
+    let observation: string;
+    let shotImage: { bytes: ArrayBuffer; mimeType: string } | undefined;
+    try {
+      const shot = await captureScreen();
+      // Keep a copy for the visible bubble (assessImage transfers its bytes away).
+      const display = shot.bytes.slice(0);
+      shotImage = { bytes: display, mimeType: shot.mimeType };
+      setBuddyActivity("Looking at the screen…");
+      const r = await assessImage(shot, call.question);
+      if (r.error) throw new Error(r.error);
+      observation = r.text ?? "(the vision model returned nothing)";
+    } catch (err) {
+      setBuddyBusy(false);
+      setBuddyActivity("");
+      appendBuddy({ role: "tool", text: `⚠ Screenshot failed: ${err instanceof Error ? err.message : String(err)}`, turns: [] });
+      return;
+    }
+    const feedback = formatBuddyToolResult(call, { observation });
+    appendBuddy({
+      role: "tool",
+      text: `📷 ${observation}`,
+      ...(shotImage ? { image: shotImage } : {}),
+      turns: [...pre, { role: "user", content: feedback }],
+    });
+    await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+  };
+
   // One buddy model turn (streaming + tool events + result). Shared by the normal
   // send and the auto-react continuation after an approved command. `userBubbleText`
   // (when set) is shown as the reader's message; a continuation passes none — its
@@ -1181,7 +1224,9 @@ export function App() {
                                     ? "Asking to search your files…"
                                     : e.call.tool === "run_command"
                                       ? "Proposing a command…"
-                                      : "Fetching the text and opening it…",
+                                      : e.call.tool === "screenshot"
+                                        ? "Asking to see your screen…"
+                                        : "Fetching the text and opening it…",
         );
       } else if (e.kind === "settings") {
         setSettings((s) => ({
@@ -1358,6 +1403,10 @@ export function App() {
     }
     if (call?.tool === "run_command") {
       void approveRunCommand(call);
+      return;
+    }
+    if (call?.tool === "screenshot") {
+      void approveScreenshot(call);
       return;
     }
     if (!call || call.tool !== "generate_image") return;

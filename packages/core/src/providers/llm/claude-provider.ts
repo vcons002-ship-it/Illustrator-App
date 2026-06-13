@@ -17,7 +17,9 @@ import {
   type ChatCapable,
   type ChatOptions,
   type ChatTurn,
+  type VisionCapable,
 } from "./chat.js";
+import { bytesToBase64 } from "../image/base64.js";
 
 /**
  * Cloud LLM provider backed by Claude (the default cloud tier).
@@ -125,7 +127,7 @@ export interface ClaudeProviderOptions {
   fetch?: typeof fetch;
 }
 
-export class ClaudeProvider implements LLMProvider, ChatCapable {
+export class ClaudeProvider implements LLMProvider, ChatCapable, VisionCapable {
   readonly id = "claude";
   private readonly client: Anthropic;
   private readonly model: string;
@@ -185,6 +187,44 @@ export class ClaudeProvider implements LLMProvider, ChatCapable {
         messages: turns,
       },
       opts.signal ? { signal: opts.signal } : undefined,
+    );
+    return response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("")
+      .trim();
+  }
+
+  /** Vision: look at an image and answer the prompt in text. */
+  async describeImage(input: {
+    bytes: ArrayBuffer;
+    mimeType: string;
+    prompt: string;
+    signal?: AbortSignal;
+  }): Promise<string> {
+    const mediaType = (/png|jpe?g|webp|gif/i.exec(input.mimeType)?.[0] ?? "png").replace("jpg", "jpeg");
+    const response = await this.client.messages.create(
+      {
+        model: this.model,
+        max_tokens: 1024,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: input.prompt },
+              {
+                type: "image",
+                source: {
+                  type: "base64",
+                  media_type: `image/${mediaType}` as "image/png" | "image/jpeg" | "image/webp" | "image/gif",
+                  data: bytesToBase64(input.bytes),
+                },
+              },
+            ],
+          },
+        ],
+      },
+      input.signal ? { signal: input.signal } : undefined,
     );
     return response.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")

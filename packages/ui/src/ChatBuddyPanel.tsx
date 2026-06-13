@@ -225,6 +225,27 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             </button>
           </div>
         )}
+        {props.pendingTool?.tool === "screenshot" && (
+          <div style={{ ...approvalStyle, borderColor: "rgba(255,170,90,0.6)", background: "rgba(255,170,90,0.08)" }}>
+            <div style={{ fontSize: 12, marginBottom: 6 }}>
+              📷 Let the assistant capture your screen and look at it?
+              {props.pendingTool.question && (
+                <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
+                  To check: “{props.pendingTool.question}”
+                </span>
+              )}
+              <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
+                It captures your whole primary screen once and sends it to your chat model. Close anything private first.
+              </span>
+            </div>
+            <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+              Capture
+            </button>
+            <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+              Deny
+            </button>
+          </div>
+        )}
       </div>
 
       <SlashMenu draft={draft} commands={commands} onPick={setDraft} />

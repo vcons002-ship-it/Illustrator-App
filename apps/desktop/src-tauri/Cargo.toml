@@ -21,3 +21,7 @@ base64 = "0.22"
 time = { version = ">=0.3.47, <0.3.48", default-features = false }
 # Unpack the official ComfyUI Windows portable .7z (bundled Python — no system install).
 sevenz-rust = "0.6"
+# Cross-platform screen capture for the chat's screenshot tool (Win/macOS/Linux).
+xcap = "0.0.14"
+# Encode the captured frame to PNG bytes for the renderer/vision model.
+image = { version = "0.25", default-features = false, features = ["png"] }

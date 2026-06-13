@@ -230,6 +230,15 @@ export function runCommand(command: string): Promise<CommandResult> {
   return invoke<CommandResult>("run_command", { command });
 }
 
+/**
+ * Capture the primary screen to PNG bytes (desktop), for the chat's screenshot
+ * tool. Only reached after the reader approves the capture. Rejects on the web.
+ */
+export async function captureScreen(): Promise<{ bytes: ArrayBuffer; mimeType: string }> {
+  const r = await invoke<{ bytesBase64: string; mimeType: string }>("capture_screen");
+  return { bytes: base64ToBytes(r.bytesBase64), mimeType: r.mimeType };
+}
+
 /** Subscribe to engine install/launch progress. Returns undefined on the web. */
 export function onEngineProgress(handler: (p: EngineProgress) => void): Promise<UnlistenFn> | undefined {
   return tauri()?.event?.listen<EngineProgress>("engine://progress", (e) => handler(e.payload));

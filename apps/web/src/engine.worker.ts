@@ -34,6 +34,7 @@ import {
   runBuddyTurn,
   runChatTurn,
   supportsChat,
+  supportsVision,
   toRenderUnits,
   ComfyUIBackend,
   Automatic1111Backend,
@@ -81,6 +82,34 @@ const chatAborts = new Map<number, AbortController>();
 function memoryStore(): IndexedDbStore {
   buddyStore ??= new IndexedDbStore();
   return buddyStore;
+}
+
+/** The screenshot tool's vision pass: have the chat's vision-capable model look at
+ * a captured screen and describe it. Runs on the main thread's request via a
+ * worker message because the providers (with keys) live here. */
+async function handleAssessImage(
+  requestId: number,
+  image: { bytes: ArrayBuffer; mimeType: string },
+  question?: string,
+): Promise<void> {
+  try {
+    const { llm } = chatProviders();
+    if (!supportsVision(llm)) {
+      throw new Error(
+        `Your chat model (“${llm.id}”) can't see images. Switch the chat text provider to Gemini, OpenAI, or Claude in Settings.`,
+      );
+    }
+    const prompt =
+      "You are looking at a screenshot of the reader's computer screen. " +
+      (question
+        ? `Answer this specifically and concisely: ${question}`
+        : "Describe what's on screen and whether anything looks broken or like an error.") +
+      " Be concrete about what you can and cannot see.";
+    const text = await llm.describeImage({ bytes: image.bytes, mimeType: image.mimeType, prompt });
+    post({ type: "imageAssessed", requestId, text });
+  } catch (err) {
+    post({ type: "imageAssessed", requestId, error: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 /** The chats' `read_url` tool: fetch a page's readable text into the conversation
@@ -540,6 +569,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "chatTool":
       void handleChatTool(msg.requestId, msg.call);
+      break;
+    case "assessImage":
+      void handleAssessImage(msg.requestId, msg.image, msg.question);
       break;
     case "chatCancel":
       chatAborts.get(msg.requestId)?.abort();
@@ -1208,7 +1240,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       if (
         slash.call.tool === "generate_image" ||
         slash.call.tool === "find_files" ||
-        slash.call.tool === "run_command"
+        slash.call.tool === "run_command" ||
+        slash.call.tool === "screenshot"
       ) {
         post({ type: "buddyDone", requestId: msg.requestId, text: "", transcript: [], pendingTool: slash.call });
         return;
