@@ -130,7 +130,10 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               ? "Ask for a topic — I can find articles, open them in the reader, and illustrate the concepts while we talk. Try “find me an article on the citric acid cycle and open it”."
               : props.persona === "entertainment"
                 ? "Tell me what you feel like reading — I can open books from your library, find classics on Project Gutenberg, and illustrate them while we chat. Try “open Frankenstein and illustrate it”."
-                : "Chat about anything — questions, ideas, math, inventions. When you want the app to do something, just ask: “open a random classic and illustrate it in oil painting style”, “generate a picture of an apple”, “show me a diagram of a jet engine”."}
+                : "Chat about anything — questions, ideas, math, inventions, writing. I can also run the app for you: “open a random classic and illustrate it in oil painting style”, “generate a picture of an apple”, “read this URL and summarize it”, “make a study quiz from my notes”." +
+                  (props.desktop
+                    ? " On the desktop app I can also find files on your computer, run and test code, and take a screenshot to see if it works (you approve each step)."
+                    : "")}
           </div>
         )}
         {props.messages.map((m, i) => (
