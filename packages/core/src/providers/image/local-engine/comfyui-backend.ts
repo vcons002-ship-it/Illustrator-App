@@ -449,6 +449,19 @@ export class ComfyUIBackend implements LocalEngineBackend {
           })
         : undefined;
 
+    // img2img: upload the base photo (reuses the per-session reference cache) and
+    // denoise from it. Clamp the strength to a sane working band.
+    let initImage: { filename: string; denoise: number } | undefined;
+    if (input.initImage) {
+      try {
+        const filename = await this.uploadedReference(input.initImage.bytes, input.initImage.mimeType);
+        const denoise = Math.min(1, Math.max(0.05, input.denoise ?? 0.65));
+        initImage = { filename, denoise };
+      } catch {
+        initImage = undefined; // upload failed → fall back to txt2img
+      }
+    }
+
     const workflow = buildWorkflow({
       model: checkpoint,
       prompt,
@@ -463,6 +476,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
       ...(components ? { components } : {}),
       ...(lora ? { lora } : {}),
       ...(ipAdapter ? { ipAdapter } : {}),
+      ...(initImage ? { initImage } : {}),
     });
 
     // Best-effort live progress: ComfyUI broadcasts per-step `progress` messages
@@ -646,6 +660,8 @@ interface WorkflowParams {
   lora?: { name: string; strength: number };
   /** Optional IP-Adapter conditioning (character reference images). */
   ipAdapter?: IpAdapterGraph;
+  /** img2img: an already-uploaded base image (LoadImage name) + denoise strength. */
+  initImage?: { filename: string; denoise: number };
 }
 
 /**
@@ -660,7 +676,7 @@ interface WorkflowParams {
  * clip); the diffusion path uses LoraLoaderModelOnly (a UNETLoader has no clip output), so
  * LoRAs apply to Flux.2 / Z-Image / Qwen-Image too — not just SD checkpoints.
  */
-function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
+export function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
   const diffusion = p.loadKind === "diffusion";
   // Source refs for model / clip / vae, depending on the load shape. A LoRA wraps the
   // model output: node "10" (LoraLoader) on the checkpoint path, "11" (LoraLoaderModelOnly)
@@ -676,6 +692,9 @@ function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
   const vaeRef: [string, number] = diffusion ? ["13", 0] : ["4", 2];
   // Positive conditioning: Flux routes through a FluxGuidance node ("14").
   const positiveRef: [string, number] = p.sampler.guidance !== undefined ? ["14", 0] : ["6", 0];
+  // img2img: the sampler starts from the encoded photo's latent (node "16") and
+  // denoises only partway (denoise < 1). txt2img starts from an empty latent ("5").
+  const latentRef: [string, number] = p.initImage ? ["16", 0] : ["5", 0];
   const graph: Record<string, unknown> = {
     "3": {
       class_type: "KSampler",
@@ -685,16 +704,12 @@ function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
         cfg: p.sampler.cfg,
         sampler_name: p.sampler.sampler,
         scheduler: p.sampler.scheduler,
-        denoise: 1,
+        denoise: p.initImage ? p.initImage.denoise : 1,
         model: modelRef,
         positive: positiveRef,
         negative: ["7", 0],
-        latent_image: ["5", 0],
+        latent_image: latentRef,
       },
-    },
-    "5": {
-      class_type: "EmptyLatentImage",
-      inputs: { width: p.width, height: p.height, batch_size: 1 },
     },
     "6": { class_type: "CLIPTextEncode", inputs: { text: p.prompt, clip: clipRef } },
     "7": { class_type: "CLIPTextEncode", inputs: { text: p.negative, clip: clipRef } },
@@ -709,6 +724,13 @@ function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
     graph["13"] = { class_type: "VAELoader", inputs: { vae_name: c.vaeName } };
   } else {
     graph["4"] = { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: p.model } };
+  }
+  if (p.initImage) {
+    // img2img: load the uploaded photo and encode it to the latent the sampler denoises from.
+    graph["15"] = { class_type: "LoadImage", inputs: { image: p.initImage.filename } };
+    graph["16"] = { class_type: "VAEEncode", inputs: { pixels: ["15", 0], vae: vaeRef } };
+  } else {
+    graph["5"] = { class_type: "EmptyLatentImage", inputs: { width: p.width, height: p.height, batch_size: 1 } };
   }
   if (p.sampler.guidance !== undefined) {
     // Flux embedded guidance — conditioning passes through FluxGuidance before the sampler.

@@ -11,21 +11,35 @@ import { csvToText, docxToText, htmlToText, parseEpub, rtfToText, xlsxToText } f
 
 /** File extensions the importer understands (used for the input's `accept`). */
 export const IMPORT_ACCEPT =
-  ".epub,.txt,.md,.markdown,.html,.htm,.pdf,.docx,.rtf,.csv,.tsv,.json,.xlsx";
+  ".epub,.txt,.md,.markdown,.html,.htm,.pdf,.docx,.rtf,.csv,.tsv,.json,.xlsx," +
+  ".png,.jpg,.jpeg,.webp,.gif";
+
+/** Image extensions routed to the photo-transform (img2img) path, not the book importer. */
+const IMAGE_EXTS: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif",
+};
 
 /**
- * An EPUB parses straight to a ready book; everything else yields extracted TEXT that
- * the caller confirms in the paste modal first (title fix-up + fiction/technical choice).
- * `mode` pre-selects that choice — data files (spreadsheets/CSV) default to technical,
- * where the extraction turns their numbers into charts.
+ * An EPUB parses straight to a ready book; documents yield extracted TEXT the caller
+ * confirms in the paste modal (title + fiction/technical choice); an image opens the
+ * photo-transform panel. `mode` pre-selects the text choice — data files (CSV/Excel)
+ * default to technical, where the extraction turns their numbers into charts.
  */
 export type ImportedFile =
   | { kind: "book"; book: BookSource }
-  | { kind: "text"; title: string; text: string; mode?: "fiction" | "technical" };
+  | { kind: "text"; title: string; text: string; mode?: "fiction" | "technical" }
+  | { kind: "image"; name: string; bytes: ArrayBuffer; mimeType: string };
 
 export async function importBookFile(file: File): Promise<ImportedFile> {
   const ext = (file.name.split(".").pop() ?? "").toLowerCase();
   const title = file.name.replace(/\.[^.]+$/, "");
+  if (IMAGE_EXTS[ext]) {
+    return { kind: "image", name: file.name, bytes: await file.arrayBuffer(), mimeType: IMAGE_EXTS[ext]! };
+  }
   switch (ext) {
     case "epub": {
       const bytes = await file.arrayBuffer();
