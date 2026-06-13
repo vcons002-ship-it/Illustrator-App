@@ -7,7 +7,7 @@
  * downloads) so the renderer never deals with processes, ports, or CORS.
  */
 
-import { classifyLoraHeader } from "@visual-reader/core";
+import { base64ToBytes, classifyLoraHeader, type LocalFile } from "@visual-reader/core";
 
 type UnlistenFn = () => void;
 
@@ -193,6 +193,25 @@ export async function saveExportFile(
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   return true;
+}
+
+/**
+ * Search the user's local files for importable books (desktop only). Returns
+ * coarse filename matches the caller ranks with `rankLocalFiles`. Empty on the
+ * web (no filesystem). `root` scopes the walk to a folder (default: home dir).
+ */
+export async function searchLocalFiles(query: string, root?: string): Promise<LocalFile[]> {
+  if (!isDesktop) return [];
+  return invoke<LocalFile[]>("search_files", { query, ...(root ? { root } : {}) });
+}
+
+/**
+ * Read one chosen local file's bytes (desktop only), wrapped as a `File` so it
+ * flows through the SAME importer as an uploaded file. Rejects on the web.
+ */
+export async function readLocalFile(path: string): Promise<File> {
+  const r = await invoke<{ name: string; ext: string; bodyBase64: string }>("read_file", { path });
+  return new File([base64ToBytes(r.bodyBase64) as BlobPart], r.name);
 }
 
 /** Subscribe to engine install/launch progress. Returns undefined on the web. */

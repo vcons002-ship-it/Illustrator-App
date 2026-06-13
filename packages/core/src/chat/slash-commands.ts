@@ -47,6 +47,20 @@ export const BUDDY_SLASH_COMMANDS: SlashCommandInfo[] = [
   { name: "forget", args: "<text>", description: "Remove memory notes containing this text" },
 ];
 
+/** The desktop-only `/find` command — handled on the MAIN thread, never the LLM
+ * (filesystem access is offered solely through this explicit user command, so no
+ * web page or book text can talk the model into reading the user's disk). */
+export const FIND_FILES_COMMAND: SlashCommandInfo = {
+  name: "find",
+  args: "<keywords>",
+  description: "Search your computer for a book/PDF/text file to open",
+};
+
+/** Buddy commands shown for the given platform (desktop adds local-file search). */
+export function buddySlashCommands(desktop: boolean): SlashCommandInfo[] {
+  return desktop ? [...BUDDY_SLASH_COMMANDS, FIND_FILES_COMMAND] : BUDDY_SLASH_COMMANDS;
+}
+
 /** "/web foo bar" → { name: "web", args: "foo bar" }; undefined for non-slash text. */
 function splitSlash(text: string): { name: string; args: string } | undefined {
   const m = /^\/(\S*)\s*([\s\S]*)$/.exec(text.trim());
