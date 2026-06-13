@@ -223,6 +223,10 @@ export function App() {
   // "Allow this session", later find_files calls run without re-confirming (a
   // direct /find never needed confirming — the reader typed it). Reset on reload.
   const fileAccessGranted = useRef(false);
+  // Session grant for buddy screen captures: once the reader picks "Allow this
+  // session", later screenshot calls capture without re-prompting (so a test loop
+  // can observe a running game without a click each frame). Reset on reload.
+  const screenCaptureGranted = useRef(false);
   // The last NUMBERED list the buddy showed (file-search hits or image-search hits),
   // so "open #2" / "show 3" can act on it without re-running the search.
   const lastRefs = useRef<{ kind: "file" | "image"; label: string; path?: string; url?: string }[]>([]);
@@ -1144,11 +1148,11 @@ export function App() {
       return;
     }
     setBuddyBusy(true);
-    setBuddyActivity("Capturing the screen…");
+    setBuddyActivity(call.window ? `Capturing “${call.window}”…` : "Capturing the screen…");
     let observation: string;
     let shotImage: { bytes: ArrayBuffer; mimeType: string } | undefined;
     try {
-      const shot = await captureScreen();
+      const shot = await captureScreen(call.window);
       // Keep a copy for the visible bubble (assessImage transfers its bytes away).
       const display = shot.bytes.slice(0);
       shotImage = { bytes: display, mimeType: shot.mimeType };
@@ -1321,6 +1325,8 @@ export function App() {
       pendingBuddyTranscript.current = [{ role: "user", content: userText }, ...res.transcript];
       if (res.pendingTool.tool === "find_files" && fileAccessGranted.current) {
         approveFindFiles(res.pendingTool);
+      } else if (res.pendingTool.tool === "screenshot" && screenCaptureGranted.current) {
+        void approveScreenshot(res.pendingTool);
       } else {
         setBuddyPendingTool(res.pendingTool);
       }
@@ -1430,12 +1436,17 @@ export function App() {
     pendingBuddyTranscript.current = [];
   }, [buddyPendingTool, chatTool]);
   const onApproveBuddyPendingTool = useCallback(() => void onApproveBuddyTool(), [onApproveBuddyTool]);
-  // "Allow this session": grant filesystem access so later find_files calls run
-  // without re-prompting, then run the pending search.
-  const onAllowBuddyFilesAlways = useCallback(() => {
-    fileAccessGranted.current = true;
+  // "Allow this session": grant the pending capability (file search OR screen
+  // capture) so later same-kind calls run without re-prompting, then run this one.
+  const onAllowBuddyAlways = useCallback(() => {
     const call = buddyPendingTool;
-    if (call?.tool === "find_files") approveFindFiles(call);
+    if (call?.tool === "find_files") {
+      fileAccessGranted.current = true;
+      approveFindFiles(call);
+    } else if (call?.tool === "screenshot") {
+      screenCaptureGranted.current = true;
+      void approveScreenshot(call);
+    }
   }, [buddyPendingTool]);
   const onDismissBuddyPendingTool = useCallback(() => {
     setBuddyPendingTool(undefined);
@@ -2118,7 +2129,7 @@ export function App() {
             onPersonaChange={setBuddyPersona}
             onSend={onBuddySendText}
             onApprovePendingTool={onApproveBuddyPendingTool}
-            onApprovePendingToolAlways={onAllowBuddyFilesAlways}
+            onApprovePendingToolAlways={onAllowBuddyAlways}
             onDismissPendingTool={onDismissBuddyPendingTool}
             onCancel={buddyCancel}
             onClearHistory={onClearBuddy}

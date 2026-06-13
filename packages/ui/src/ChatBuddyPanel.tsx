@@ -228,19 +228,30 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         {props.pendingTool?.tool === "screenshot" && (
           <div style={{ ...approvalStyle, borderColor: "rgba(255,170,90,0.6)", background: "rgba(255,170,90,0.08)" }}>
             <div style={{ fontSize: 12, marginBottom: 6 }}>
-              📷 Let the assistant capture your screen and look at it?
+              📷 Let the assistant {props.pendingTool.window ? `capture the “${props.pendingTool.window}” window` : "capture your screen"} and look at it?
               {props.pendingTool.question && (
                 <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
                   To check: “{props.pendingTool.question}”
                 </span>
               )}
               <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
-                It captures your whole primary screen once and sends it to your chat model. Close anything private first.
+                {props.pendingTool.window
+                  ? "Captures just that window and sends it to your chat model."
+                  : "Captures your whole primary screen and sends it to your chat model — close anything private first."}
               </span>
             </div>
             <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
               Capture
             </button>
+            {props.onApprovePendingToolAlways && (
+              <button
+                style={{ ...smallButtonStyle, marginRight: 6 }}
+                onClick={props.onApprovePendingToolAlways}
+                title="Don't ask again for screen captures this session (e.g. while testing a running game)"
+              >
+                Allow this session
+              </button>
+            )}
             <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
               Deny
             </button>

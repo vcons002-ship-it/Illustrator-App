@@ -231,11 +231,13 @@ export function runCommand(command: string): Promise<CommandResult> {
 }
 
 /**
- * Capture the primary screen to PNG bytes (desktop), for the chat's screenshot
- * tool. Only reached after the reader approves the capture. Rejects on the web.
+ * Capture a screenshot to PNG bytes (desktop), for the chat's screenshot tool.
+ * `window` (a title substring) captures just that window — e.g. a game — even when
+ * the app is focused; omit it to capture the primary screen. Only reached after the
+ * reader approves the capture. Rejects on the web.
  */
-export async function captureScreen(): Promise<{ bytes: ArrayBuffer; mimeType: string }> {
-  const r = await invoke<{ bytesBase64: string; mimeType: string }>("capture_screen");
+export async function captureScreen(window?: string): Promise<{ bytes: ArrayBuffer; mimeType: string }> {
+  const r = await invoke<{ bytesBase64: string; mimeType: string }>("capture_screen", window ? { window } : {});
   return { bytes: base64ToBytes(r.bytesBase64), mimeType: r.mimeType };
 }
 

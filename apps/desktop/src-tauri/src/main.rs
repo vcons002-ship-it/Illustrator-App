@@ -652,21 +652,42 @@ struct Screenshot {
     mime_type: String,
 }
 
-/// Capture the primary monitor to a PNG (the chat's screenshot tool, after the
-/// reader approved it). Returns base64 PNG bytes. Reached only after an explicit
-/// approval click — there is no silent capture path. Best-effort: a headless or
-/// permission-restricted environment fails with a clear message.
+/// Capture either a specific WINDOW (by title substring) or, when no window is
+/// given, the primary monitor — to a PNG (the chat's screenshot tool, after the
+/// reader approved it). Window capture lets the model see e.g. a game window even
+/// when the app is focused for the approval click. Reached only after an explicit
+/// approval — no silent capture. A bad window name returns the list of open titles.
 #[tauri::command]
-async fn capture_screen() -> Result<Screenshot, String> {
-    tauri::async_runtime::spawn_blocking(|| {
+async fn capture_screen(window: Option<String>) -> Result<Screenshot, String> {
+    tauri::async_runtime::spawn_blocking(move || {
         use base64::Engine as _;
         use image::ImageEncoder as _;
-        let monitor = xcap::Monitor::all()
-            .map_err(|e| format!("Couldn't list monitors: {e}"))?
-            .into_iter()
-            .next()
-            .ok_or_else(|| "No monitor to capture.".to_string())?;
-        let frame = monitor.capture_image().map_err(|e| format!("Screen capture failed: {e}"))?;
+        let needle = window.as_deref().map(str::trim).filter(|w| !w.is_empty());
+        let frame = match needle {
+            Some(needle) => {
+                let windows = xcap::Window::all().map_err(|e| format!("Couldn't list windows: {e}"))?;
+                let lower = needle.to_lowercase();
+                match windows.iter().find(|w| w.title().to_lowercase().contains(&lower)) {
+                    Some(w) => w.capture_image().map_err(|e| format!("Window capture failed: {e}"))?,
+                    None => {
+                        let titles: Vec<String> =
+                            windows.iter().map(|w| w.title()).filter(|t| !t.is_empty()).collect();
+                        return Err(format!(
+                            "No open window matches \"{needle}\". Open windows: {}",
+                            if titles.is_empty() { "(none)".into() } else { titles.join(" | ") }
+                        ));
+                    }
+                }
+            }
+            None => {
+                let monitor = xcap::Monitor::all()
+                    .map_err(|e| format!("Couldn't list monitors: {e}"))?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| "No monitor to capture.".to_string())?;
+                monitor.capture_image().map_err(|e| format!("Screen capture failed: {e}"))?
+            }
+        };
         let mut png: Vec<u8> = Vec::new();
         image::codecs::png::PngEncoder::new(&mut png)
             .write_image(
