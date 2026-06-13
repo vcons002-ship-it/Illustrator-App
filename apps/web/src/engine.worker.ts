@@ -83,6 +83,20 @@ function memoryStore(): IndexedDbStore {
   return buddyStore;
 }
 
+/** The chats' `read_url` tool: fetch a page's readable text into the conversation
+ * (desktop routes CORS-blocked sites through the native fetch). Bounded fetch. */
+function readUrlText(signal: AbortSignal): (url: string) => Promise<{ title?: string; text: string }> {
+  return async (url) => {
+    const cf = corsFetch();
+    const page = await fetchPageText(url, {
+      maxChars: 16_000,
+      signal,
+      ...(cf ? { transport: new DirectTransport(cf) } : {}),
+    });
+    return { ...(page.title ? { title: page.title } : {}), text: page.text };
+  };
+}
+
 /**
  * Give an interactive chat turn priority on a SHARED local model. A background
  * bible build holds the local server/GPU for a whole 12k-token extraction at a
@@ -903,6 +917,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       searchWeb: (q) => imageSearch.searchWeb(q),
       searchImages: (q) => imageSearch.search(q),
       searchBook: (q) => searchBookPassages(searchableChapters, q),
+      readUrl: readUrlText(ac.signal),
       remember: async (n) => (await rememberNote(memoryStore(), n)).length,
       forget: async (m) => (await forgetNote(memoryStore(), m)).length,
       ...(currentBible
@@ -999,6 +1014,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
         searchWeb: (q) => imageSearch.searchWeb(q),
         searchImages: (q) => imageSearch.search(q),
         searchBook: (q) => searchBookPassages(searchableChapters, q),
+        readUrl: readUrlText(ac.signal),
         remember: async (n) => (await rememberNote(memoryStore(), n)).length,
         forget: async (m) => (await forgetNote(memoryStore(), m)).length,
         ...(currentBible
@@ -1117,6 +1133,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       searchWeb: (q) => imageSearch.searchWeb(q),
       searchBooks: (q) => books.search(q),
       searchImages: (q) => imageSearch.search(q),
+      readUrl: readUrlText(ac.signal),
       randomBooks: () => books.random(),
       remember: async (n) => (await rememberNote(store, n)).length,
       forget: async (m) => (await forgetNote(store, m)).length,

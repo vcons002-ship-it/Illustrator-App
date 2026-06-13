@@ -20,6 +20,8 @@ import {
 export interface ChatToolDeps {
   searchWeb?: (query: string) => Promise<WebSearchHit[]>;
   searchImages?: (query: string) => Promise<ImageSearchHit[]>;
+  /** Fetch a URL's readable text so the model can read/learn from a page. */
+  readUrl?: (url: string) => Promise<{ title?: string; text: string }>;
   /** Find passages elsewhere in the book (sync — it's a local text scan). */
   searchBook?: (query: string) => BookPassage[];
   /** Full detail for a named bible entry (sync — reads the in-memory bible). */
@@ -155,6 +157,10 @@ export async function runChatTool(
     if (call.tool === "forget") {
       if (!tools.forget) return { error: "memory isn't available right now" };
       return { memory: { action: "forgot", note: call.match, count: await tools.forget(call.match) } };
+    }
+    if (call.tool === "read_url") {
+      if (!tools.readUrl) return { error: "reading web pages isn't available right now" };
+      return { page: await tools.readUrl(call.url) };
     }
     if (call.tool === "search_web") {
       if (!tools.searchWeb) return { error: "web search isn't available right now" };

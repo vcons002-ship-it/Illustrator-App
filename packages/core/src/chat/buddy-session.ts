@@ -27,6 +27,8 @@ export interface BuddyDeps {
   searchWeb?: (query: string) => Promise<WebSearchHit[]>;
   searchBooks?: (query: string) => Promise<BookSearchHit[]>;
   searchImages?: (query: string) => Promise<ImageSearchHit[]>;
+  /** Fetch a URL's readable text so the model can read/learn from a page. */
+  readUrl?: (url: string) => Promise<{ title?: string; text: string }>;
   /** Random picks from the catalog's most-loved shelf ("surprise me"). */
   randomBooks?: () => Promise<BookSearchHit[]>;
   /** Open a library book by id; the host posts the BookSource to the UI itself. */
@@ -127,6 +129,9 @@ export async function runBuddyTool(
       case "search_web":
         if (!deps.searchWeb) return { error: "web search isn't available right now" };
         return { hits: await deps.searchWeb(call.query) };
+      case "read_url":
+        if (!deps.readUrl) return { error: "reading web pages isn't available right now" };
+        return { page: await deps.readUrl(call.url) };
       case "search_books":
         if (!deps.searchBooks) return { error: "book search isn't available right now" };
         return { books: await deps.searchBooks(call.query) };
