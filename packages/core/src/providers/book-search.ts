@@ -36,21 +36,27 @@ interface GutendexResponse {
 export interface GutenbergSearchOptions {
   transport?: Transport;
   baseUrl?: string;
+  /** Abort a slow Gutendex request after this long (ms). Default 15s. */
+  timeoutMs?: number;
 }
 
 export class GutenbergSearch {
   readonly id = "gutenberg-search";
   private readonly transport: Transport;
   private readonly baseUrl: string;
+  private readonly timeoutMs: number;
 
   constructor(opts: GutenbergSearchOptions = {}) {
     this.transport = opts.transport ?? new DirectTransport();
     this.baseUrl = opts.baseUrl ?? "https://gutendex.com/books";
+    this.timeoutMs = opts.timeoutMs ?? 15_000;
   }
 
-  /** Top matches with a usable text URL, in catalog (popularity) order. */
+  /** Top matches with a usable text URL, in catalog (popularity) order.
+   * `mime_type=text%2F` asks Gutendex for only books that HAVE a text format — a
+   * smaller, more relevant result set (every hit is openable) and a faster response. */
   async search(query: string, count = 5): Promise<BookSearchHit[]> {
-    const url = `${this.baseUrl}?search=${encodeURIComponent(query)}`;
+    const url = `${this.baseUrl}?search=${encodeURIComponent(query)}&mime_type=text%2F`;
     return (await this.fetchHits(url)).slice(0, count);
   }
 
@@ -72,7 +78,21 @@ export class GutenbergSearch {
   }
 
   private async fetchHits(url: string): Promise<BookSearchHit[]> {
-    const res = await this.transport.send({ url, method: "GET" });
+    // Gutendex can be slow or unresponsive; bound the wait so the buddy fails fast
+    // with a clear message instead of appearing to hang forever.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), this.timeoutMs);
+    let res;
+    try {
+      res = await this.transport.send({ url, method: "GET", signal: ac.signal });
+    } catch (err) {
+      if (ac.signal.aborted) {
+        throw new Error("Project Gutenberg search timed out — try again, or a simpler query.");
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
     if (!res.ok) throw new Error(`Project Gutenberg search failed with status ${res.status}`);
     const data = await res.json<GutendexResponse>();
     const hits: BookSearchHit[] = [];
