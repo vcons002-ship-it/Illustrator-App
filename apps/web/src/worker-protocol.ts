@@ -90,6 +90,9 @@ export type MainToWorker =
       position: { pageIndex: number; paragraphIndex: number };
       allowSpoilers: boolean;
     }
+  /** Ask the chat's vision model to describe a captured screenshot (answered by
+   * `imageAssessed`). Bytes travel zero-copy. */
+  | { type: "assessImage"; requestId: number; image: { bytes: ArrayBuffer; mimeType: string }; question?: string }
   /** Run a user-APPROVED generate_image tool call (answered by `chatToolResult`). */
   | { type: "chatTool"; requestId: number; call: ToolCall }
   | { type: "chatCancel"; requestId: number }
@@ -154,6 +157,8 @@ export type WorkerToMain =
     }
   /** Render progress 0..1 for a test/photo render (engines that report it). */
   | { type: "testProgress"; requestId: number; fraction: number }
+  /** A vision model's text observation of a screenshot (or an error). */
+  | { type: "imageAssessed"; requestId: number; text?: string; error?: string }
   | { type: "error"; message: string }
   /** Incremental assistant text (streaming providers only). */
   | { type: "chatToken"; requestId: number; text: string }

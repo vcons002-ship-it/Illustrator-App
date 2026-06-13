@@ -1,4 +1,5 @@
 import { DirectTransport, type Transport } from "../transport/transport.js";
+import { bytesToBase64 } from "../image/base64.js";
 import type { VisualBible } from "../../types/bible.js";
 import type { VisualRequest } from "../../types/content.js";
 import {
@@ -17,6 +18,7 @@ import {
   type ChatCapable,
   type ChatOptions,
   type ChatTurn,
+  type VisionCapable,
 } from "./chat.js";
 
 /**
@@ -47,7 +49,7 @@ interface ChatStreamEvent {
   choices?: { delta?: { content?: string } }[];
 }
 
-export class OpenAILLMProvider implements LLMProvider, ChatCapable {
+export class OpenAILLMProvider implements LLMProvider, ChatCapable, VisionCapable {
   readonly id = "openai";
   private readonly transport: Transport;
   private readonly model: string;
@@ -124,6 +126,40 @@ export class OpenAILLMProvider implements LLMProvider, ChatCapable {
       ...(opts.signal ? { signal: opts.signal } : {}),
     });
     return text.trim();
+  }
+
+  /** Vision: look at an image and answer the prompt in text (chat completions). */
+  async describeImage(input: {
+    bytes: ArrayBuffer;
+    mimeType: string;
+    prompt: string;
+    signal?: AbortSignal;
+  }): Promise<string> {
+    const res = await this.transport.send({
+      url: `${this.baseUrl}/chat/completions`,
+      method: "POST",
+      headers: { authorization: `Bearer ${this.apiKey}` },
+      ...(input.signal ? { signal: input.signal } : {}),
+      body: {
+        model: this.model,
+        max_tokens: 1024,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: input.prompt },
+              {
+                type: "image_url",
+                image_url: { url: `data:${input.mimeType};base64,${bytesToBase64(input.bytes)}` },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    if (!res.ok) throw new Error(`OpenAI vision request failed with status ${res.status}`);
+    const data = await res.json<ChatResponse>();
+    return (data.choices?.[0]?.message?.content ?? "").trim();
   }
 
   private async complete(

@@ -1,5 +1,6 @@
 import { DirectTransport, type Transport } from "../transport/transport.js";
 import { MATURE_SAFETY_SETTINGS } from "../gemini-safety.js";
+import { bytesToBase64 } from "../image/base64.js";
 import { streamSse } from "./sse.js";
 import type { VisualBible } from "../../types/bible.js";
 import type { VisualRequest } from "../../types/content.js";
@@ -19,6 +20,7 @@ import {
   type ChatCapable,
   type ChatOptions,
   type ChatTurn,
+  type VisionCapable,
 } from "./chat.js";
 
 /**
@@ -64,7 +66,7 @@ interface GeminiResponse {
   }[];
 }
 
-export class GeminiLLMProvider implements LLMProvider, ChatCapable {
+export class GeminiLLMProvider implements LLMProvider, ChatCapable, VisionCapable {
   readonly id = "gemini";
   private readonly transport: Transport;
   private readonly model: string;
@@ -166,6 +168,35 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable {
       body,
     });
     if (!res.ok) throw new Error(`Gemini chat request failed with status ${res.status}`);
+    const data = await res.json<GeminiResponse>();
+    return (data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? "").join("").trim();
+  }
+
+  /** Vision: look at an image and answer the prompt in text (generateContent). */
+  async describeImage(input: {
+    bytes: ArrayBuffer;
+    mimeType: string;
+    prompt: string;
+    signal?: AbortSignal;
+  }): Promise<string> {
+    const res = await this.transport.send({
+      url: `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`,
+      method: "POST",
+      ...(input.signal ? { signal: input.signal } : {}),
+      body: {
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: input.prompt },
+              { inline_data: { mime_type: input.mimeType, data: bytesToBase64(input.bytes) } },
+            ],
+          },
+        ],
+        ...(this.safetySettings ? { safetySettings: this.safetySettings } : {}),
+      },
+    });
+    if (!res.ok) throw new Error(`Gemini vision request failed with status ${res.status}`);
     const data = await res.json<GeminiResponse>();
     return (data.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? "").join("").trim();
   }

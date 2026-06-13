@@ -262,12 +262,36 @@ describe("buildBuddySystemPrompt", () => {
     expect(desktop).toContain("OWN COMPUTER");
   });
 
-  it("advertises run_command only when explicitly enabled (opt-in)", () => {
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain("run_command");
+  it("advertises run_command + screenshot only when explicitly enabled (opt-in)", () => {
+    const off = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    expect(off).not.toContain("run_command");
+    expect(off).not.toContain("screenshot");
     const on = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true });
     expect(on).toContain('"tool":"run_command"');
+    expect(on).toContain('"tool":"screenshot"');
     expect(on).toContain("APPROVE");
     expect(on).toContain("NEVER run");
+  });
+});
+
+describe("screenshot tool", () => {
+  it("parses screenshot with or without a question", () => {
+    expect(parseBuddyToolCall('{"tool":"screenshot","question":"is the game showing?"}')).toEqual({
+      tool: "screenshot",
+      question: "is the game showing?",
+    });
+    expect(parseBuddyToolCall('{"tool":"screenshot"}')).toEqual({ tool: "screenshot" });
+  });
+
+  it("feeds the vision observation back to the model", () => {
+    const text = formatBuddyToolResult(
+      { tool: "screenshot", question: "is the player visible?" },
+      { observation: "A platformer with a red sprite and score 0 is shown." },
+    );
+    expect(text).toContain("red sprite");
+    expect(text).toContain("is the player visible?");
+    expect(text).toContain("propose the fix");
+    expect(formatBuddyToolResult({ tool: "screenshot" }, {})).toContain("couldn't be captured");
   });
 });
 
