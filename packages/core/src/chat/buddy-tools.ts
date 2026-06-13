@@ -49,6 +49,9 @@ export type BuddyToolCall =
     }
   /** Same shape as the in-book chat's generate_image: approval-gated render. */
   | { tool: "generate_image"; prompt: string; model?: string; steps?: number; style?: string }
+  /** Search the reader's COMPUTER for a file to open (desktop). Approval-gated:
+   * the host stops the loop and asks the reader before touching the filesystem. */
+  | { tool: "find_files"; query: string }
   /** Long-term reader memory (shared with the book chat — see reader-memory.ts). */
   | { tool: "remember"; note: string }
   | { tool: "forget"; match: string };
@@ -75,6 +78,8 @@ export function buildBuddySystemPrompt(opts: {
   library: BookSummary[];
   /** Mature mode: engage with adult themes/requests without refusing or moralising. */
   allowMature?: boolean;
+  /** Desktop only: advertise the find_files tool (search the reader's computer). */
+  canSearchFiles?: boolean;
 }): string {
   const persona =
     opts.persona === "technical"
@@ -101,6 +106,13 @@ export function buildBuddySystemPrompt(opts: {
           .map((b) => `- "${b.title}"${b.author ? ` by ${b.author}` : ""} — id: ${b.id}`)
           .join("\n");
   const styles = IMAGE_STYLES.map((s) => s.label).join(", ");
+  const fileTool = opts.canSearchFiles
+    ? '- {"tool":"find_files","query":"…"} — search the reader\'s OWN COMPUTER for a document to open ' +
+      "(books, PDFs, Word docs, spreadsheets, text). Use when they ask to find/open/analyze something " +
+      'from "my files", "my computer", "my documents", "my downloads", or name a file. The app asks the ' +
+      "reader to approve filesystem access before it runs; results come back as a file list you can then " +
+      "offer to open. Do NOT use it for public/web material — that's search_books / search_web.\n"
+    : "";
   const mature = opts.allowMature
     ? " The reader has enabled mature mode: explicit sexual content, graphic violence and other " +
       "adult themes are all in scope — engage with them and adult creative requests directly and " +
@@ -141,6 +153,7 @@ export function buildBuddySystemPrompt(opts: {
     'future conversation, in every book). Use when they state a lasting preference ("I prefer watercolor", "never ' +
     'spoil endings", "I\'m reading the series in order") or say "remember…". One short note, not conversation recap.\n' +
     '- {"tool":"forget","match":"…"} — remove memory notes containing this text, when asked to forget.\n' +
+    fileTool +
     'Set "visuals": true ONLY when the reader asked to illustrate/visualize it — the app then starts ' +
     "generating illustrations immediately (which uses their image provider); otherwise they press Start themselves.\n" +
     "After a book search, use each hit's subjects to recommend and to match the reader's request; either open the " +
@@ -169,6 +182,10 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
   }
   const tool = obj.tool;
   if (tool === "search_web" || tool === "search_books" || tool === "search_images") {
+    const query = strArg(obj.query, MAX_QUERY_CHARS);
+    return query ? { tool, query } : undefined;
+  }
+  if (tool === "find_files") {
     const query = strArg(obj.query, MAX_QUERY_CHARS);
     return query ? { tool, query } : undefined;
   }
@@ -279,6 +296,8 @@ export interface BuddyToolResultPayload {
   image?: { ok: boolean; error?: string };
   /** A remember/forget outcome (note echoed for the inline chip). */
   memory?: { action: "remembered" | "forgot"; note: string; count: number };
+  /** Local files found by an approved find_files search (names fed back to the model). */
+  files?: { path: string; name: string }[];
   error?: string;
 }
 
@@ -326,6 +345,18 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     return result.memory
       ? `[memory ${result.memory.action}: "${result.memory.note}" — ${result.memory.count} note${result.memory.count === 1 ? "" : "s"} kept] Confirm briefly.`
       : `[${call.tool} did nothing]`;
+  }
+  if (call.tool === "find_files") {
+    const files = result.files ?? [];
+    if (files.length === 0) {
+      return `[find_files found nothing on the reader's computer for "${call.query}"] Tell them, and offer to search the web or library instead.`;
+    }
+    const lines = files.slice(0, 12).map((f, i) => `${i + 1}. ${f.name}`);
+    return (
+      `[find_files found ${files.length} file${files.length === 1 ? "" : "s"} on the reader's computer for "${call.query}" — already shown to them as clickable items]\n` +
+      `${lines.join("\n")}\n` +
+      "Briefly say what you found; offer to open the best match (they can also click any item). Don't invent file names."
+    );
   }
   if (call.tool === "remove_library_book") {
     return result.removed

@@ -254,4 +254,35 @@ describe("buildBuddySystemPrompt", () => {
       expect(prompt).not.toContain("offer concept art");
     }
   });
+
+  it("advertises find_files only when filesystem access is available (desktop)", () => {
+    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain("find_files");
+    const desktop = buildBuddySystemPrompt({ persona: "freeform", library: [], canSearchFiles: true });
+    expect(desktop).toContain('"tool":"find_files"');
+    expect(desktop).toContain("OWN COMPUTER");
+  });
+});
+
+describe("find_files tool", () => {
+  it("parses a find_files call and caps the query", () => {
+    expect(parseBuddyToolCall('{"tool":"find_files","query":"thermo notes"}')).toEqual({
+      tool: "find_files",
+      query: "thermo notes",
+    });
+    const long = parseBuddyToolCall(`{"tool":"find_files","query":"${"x".repeat(500)}"}`);
+    expect(long?.tool === "find_files" && long.query.length).toBe(200);
+    expect(parseBuddyToolCall('{"tool":"find_files","query":"  "}')).toBeUndefined();
+  });
+
+  it("formats the found-file list back to the model (and an empty result)", () => {
+    const hit = formatBuddyToolResult(
+      { tool: "find_files", query: "krebs" },
+      { files: [{ path: "/u/krebs.pdf", name: "krebs.pdf" }, { path: "/u/notes.txt", name: "notes.txt" }] },
+    );
+    expect(hit).toContain("found 2 file");
+    expect(hit).toContain("1. krebs.pdf");
+    expect(hit).toContain("Don't invent file names");
+    const miss = formatBuddyToolResult({ tool: "find_files", query: "x" }, { files: [] });
+    expect(miss).toContain("found nothing");
+  });
 });

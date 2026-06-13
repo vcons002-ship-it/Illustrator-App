@@ -1134,7 +1134,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const slash = parseBuddySlashCommand(msg.userText, msg.library);
     if (slash) {
       if ("error" in slash) throw new Error(slash.error);
-      if (slash.call.tool === "generate_image") {
+      // generate_image (and find_files, though the parser never emits it for a slash —
+      // /find is handled on the main thread) stop for the host instead of auto-running.
+      if (slash.call.tool === "generate_image" || slash.call.tool === "find_files") {
         post({ type: "buddyDone", requestId: msg.requestId, text: "", transcript: [], pendingTool: slash.call });
         return;
       }
@@ -1166,6 +1168,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         persona: msg.persona,
         library: msg.library,
         ...(settings?.allowMature ? { allowMature: true } : {}),
+        // Desktop only: the find_files tool needs the native filesystem bridge,
+        // signalled by the same init flag as the CORS-exempt fetch.
+        ...(corsProxyAvailable ? { canSearchFiles: true } : {}),
       }) +
       (memory ? `\n\n${memory}` : "") +
       (note ? `\n\n${note}` : "");
