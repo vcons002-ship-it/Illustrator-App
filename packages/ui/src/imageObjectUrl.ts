@@ -11,7 +11,13 @@ import type { ImageResult } from "@visual-reader/core";
 export type DisplayImage =
   | { bytes: ArrayBuffer; mimeType: string }
   | { blob: Blob; mimeType: string };
-export type DisplayResult = Omit<ImageResult, "image"> & { image?: DisplayImage };
+export type DisplayResult = Omit<ImageResult, "image"> & {
+  image?: DisplayImage;
+  /** Bytes were dropped to bound memory (a long book), but the image IS rendered and
+   * cached on disk — the host reloads it from IndexedDB when the reader returns. The
+   * status stays "ready"; this flags that the heavy bytes just aren't resident. */
+  evicted?: boolean;
+};
 
 /**
  * Turn a ready result's image into an object URL, revoking it on change.

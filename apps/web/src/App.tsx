@@ -194,7 +194,8 @@ export function App() {
     buddyChat,
     buddyCancel,
     summarize,
-  } = useEngineWorker(settings);
+    setActiveUnit,
+  } = useEngineWorker(settings, libraryStore);
   const [showCharacters, setShowCharacters] = useState(false);
   const [showData, setShowData] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -714,7 +715,10 @@ export function App() {
   );
   const unitIndex = units?.pageToUnit[activePageIndex] ?? activePageIndex;
   // NOTE: the reader's position is deliberately NOT fed to the engine — generation
-  // runs front-to-back on its own; scrolling only drives the reveal (bloom).
+  // runs front-to-back on its own; scrolling only drives the reveal (bloom). The one
+  // exception is MEMORY windowing: tell the worker where the reader is so a long book
+  // keeps only nearby images' bytes resident (far ones drop to disk, reload on return).
+  useEffect(() => setActiveUnit(unitIndex), [unitIndex, setActiveUnit]);
 
   const activePage = book?.pages[activePageIndex];
   const pageEntities =
@@ -1717,7 +1721,11 @@ export function App() {
   const exportMenuRef = useRef<HTMLDetailsElement | null>(null);
   // How many units actually have a rendered illustration (drives the menu state).
   const illustratedCount = useMemo(
-    () => [...results.values()].filter((r) => r.status === "ready" && (r.image || r.sourceUrl)).length,
+    // `evicted` units ARE rendered (bytes just dropped from memory to bound RAM) — count them.
+    () =>
+      [...results.values()].filter(
+        (r) => r.status === "ready" && (r.image || r.sourceUrl || r.evicted),
+      ).length,
     [results],
   );
   // Gather every rendered illustration keyed by the ORIGINAL page it sits on (a
@@ -1732,18 +1740,28 @@ export function App() {
       });
     }
     for (const [unitIndex, result] of results) {
-      if (result.status !== "ready" || !result.image) continue; // hotlink-only figures aren't embeddable
-      const bytes =
-        "blob" in result.image ? await result.image.blob.arrayBuffer() : result.image.bytes;
+      if (result.status !== "ready") continue;
+      // Resident bytes, or — for an image windowed out of memory — reload it from the
+      // IndexedDB cache so the export is COMPLETE regardless of what's currently resident.
+      let bytes: ArrayBuffer | undefined;
+      let mimeType: string | undefined;
+      if (result.image) {
+        bytes = "blob" in result.image ? await result.image.blob.arrayBuffer() : result.image.bytes;
+        mimeType = result.image.mimeType;
+      } else if (result.evicted && result.requestId) {
+        const stored = await libraryStore.getImage(result.requestId);
+        if (stored) ({ bytes, mimeType } = stored);
+      }
+      if (!bytes || !mimeType) continue; // hotlink-only figures / not embeddable
       const page = firstPageOfUnit.get(unitIndex) ?? unitIndex;
       map.set(page, {
         bytes,
-        mimeType: result.image.mimeType,
+        mimeType,
         ...(result.prompt ? { caption: displayCaption(result.prompt) } : {}),
       });
     }
     return map;
-  }, [results, units]);
+  }, [results, units, libraryStore]);
 
   const onExport = useCallback(
     async (format: "html" | "epub") => {
@@ -1809,22 +1827,32 @@ export function App() {
   // Save just the illustration the reader is currently looking at.
   const onSaveCurrentImage = useCallback(async () => {
     const result = results.get(unitIndex);
-    if (!book || !result?.image) return;
+    if (!book || result?.status !== "ready") return;
     try {
-      const bytes =
-        "blob" in result.image ? await result.image.blob.arrayBuffer() : result.image.bytes;
-      const ext = /jpe?g/i.test(result.image.mimeType) ? "jpg" : /webp/i.test(result.image.mimeType) ? "webp" : "png";
+      // Normally resident (the reader's unit is always in the retained window); fall back
+      // to the IndexedDB cache if it was momentarily windowed out.
+      let bytes: ArrayBuffer | undefined;
+      let mimeType: string | undefined;
+      if (result.image) {
+        bytes = "blob" in result.image ? await result.image.blob.arrayBuffer() : result.image.bytes;
+        mimeType = result.image.mimeType;
+      } else if (result.requestId) {
+        const stored = await libraryStore.getImage(result.requestId);
+        if (stored) ({ bytes, mimeType } = stored);
+      }
+      if (!bytes || !mimeType) return;
+      const ext = /jpe?g/i.test(mimeType) ? "jpg" : /webp/i.test(mimeType) ? "webp" : "png";
       const saved = await saveExportFile(
         `${safeFileName(book.title)} - image ${unitIndex + 1}.${ext}`,
         new Uint8Array(bytes),
-        result.image.mimeType,
+        mimeType,
       );
       const where = typeof saved === "string" ? ` to ${saved}` : " (check your downloads)";
       noteAction(`✓ Saved image ${unitIndex + 1}${where}.`);
     } catch (err) {
       setLocalError(`Couldn't save the image: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, [book, results, unitIndex, noteAction]);
+  }, [book, results, unitIndex, noteAction, libraryStore]);
 
   // Gaps to fill = story units whose illustration failed or never finished. (Pages with
   // a ready or skipped result, or one still rendering, don't count.) Drives the

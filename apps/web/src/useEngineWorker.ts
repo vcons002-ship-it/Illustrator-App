@@ -16,6 +16,7 @@ import type {
   VisualBible,
   WebSearchHit,
 } from "@visual-reader/core";
+import { planRetention } from "@visual-reader/core";
 import {
   identitySettingsKey,
   tuningSettingsKey,
@@ -91,6 +92,9 @@ export interface EngineWorkerApi {
   importResult: ImportResult | undefined;
   /** Clear the last import result (e.g. on closing the import dialog). */
   clearImportResult: () => void;
+  /** Tell the engine which unit the reader is on so memory windowing can keep that
+   * region's images resident and drop far ones (a long-book RAM bound; no-op otherwise). */
+  setActiveUnit: (unit: number) => void;
   /** Repaint from a unit to the end with current settings (earlier units kept). */
   paintForward: (fromUnit: number) => void;
   /** Playground: render ONE image from text (optionally img2img from a base photo). */
@@ -215,7 +219,12 @@ export interface TestRenderResult {
   error?: string;
 }
 
-export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
+/** Minimal image-cache read surface (the main-thread IndexedDB store), for reloads. */
+export interface ImageReadStore {
+  getImage(requestId: string): Promise<{ bytes: ArrayBuffer; mimeType: string; prompt?: string } | undefined>;
+}
+
+export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageReadStore): EngineWorkerApi {
   const workerRef = useRef<Worker | undefined>(undefined);
   const lastBook = useRef<BookSource | undefined>(undefined);
   // Whether the user has begun generating the current book. Survives the
@@ -224,6 +233,13 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
   const generationRequested = useRef(false);
   const [bible, setBible] = useState<VisualBible | undefined>();
   const [results, setResults] = useState<Map<number, DisplayResult>>(new Map());
+  // Memory windowing: the reader's current unit, a live mirror of `results` (so the
+  // planner reads the latest without IO inside a state updater), and reloads already
+  // in flight (so we never re-request the same evicted image while its read is pending).
+  const activeUnitRef = useRef(0);
+  const resultsRef = useRef(results);
+  resultsRef.current = results;
+  const reloadingRef = useRef(new Set<number>());
   const [status, setStatus] = useState("");
   const [bibleStatus, setBibleStatus] = useState("");
   const [workflow, setWorkflow] = useState({
@@ -572,6 +588,8 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
       generationRequested.current = false; // a new book waits for the button
       setBible(undefined);
       setResults(new Map());
+      reloadingRef.current.clear();
+      activeUnitRef.current = 0;
       send({ type: "init", settings, ...(isDesktop ? { corsProxy: true } : {}) });
       send({ type: "open", book });
     },
@@ -659,6 +677,67 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     send({ type: "importBible", json });
   }, []);
   const clearImportResult = useCallback(() => setImportResult(undefined), []);
+
+  // Memory windowing: drop image bytes far from the reader (they stay on disk) and
+  // reload evicted images that have come back near. A no-op for typical-length books
+  // (see RETAIN_MIN_RESIDENT) and when no image store is wired (e.g. tests).
+  const runRetention = useCallback(() => {
+    if (!imageStore) return;
+    const { evict, reload } = planRetention(resultsRef.current, activeUnitRef.current);
+    // Reload evicted images that are back near the reader (from the IndexedDB cache).
+    for (const { unit, requestId } of reload) {
+      if (reloadingRef.current.has(unit)) continue;
+      reloadingRef.current.add(unit);
+      void imageStore
+        .getImage(requestId)
+        .then((img) => {
+          if (!img) return;
+          setResults((p) => {
+            const r = p.get(unit);
+            if (!r || !r.evicted) return p; // book switched / already back — leave it
+            return new Map(p).set(unit, {
+              ...r,
+              image: { blob: new Blob([img.bytes], { type: img.mimeType }), mimeType: img.mimeType },
+              evicted: false,
+            });
+          });
+        })
+        .finally(() => reloadingRef.current.delete(unit));
+    }
+    if (evict.length === 0) return;
+    setResults((prev) => {
+      const next = new Map(prev);
+      for (const unit of evict) {
+        const r = next.get(unit);
+        if (!r || !r.image) continue;
+        // Drop the heavy bytes (omit the key — exactOptionalPropertyTypes), flag evicted.
+        const { image: _dropped, ...rest } = r;
+        next.set(unit, { ...rest, evicted: true });
+      }
+      return next;
+    });
+  }, [imageStore]);
+
+  const setActiveUnit = useCallback(
+    (unit: number) => {
+      if (activeUnitRef.current === unit) return;
+      activeUnitRef.current = unit;
+      runRetention();
+    },
+    [runRetention],
+  );
+
+  // Also window during generation: pre-rendering a whole long book while the reader
+  // sits still would otherwise pile every image into memory. Rate-limited (leading
+  // edge) so a render burst can't thrash — it just trims around the reader's position.
+  const lastRetentionRef = useRef(0);
+  useEffect(() => {
+    if (!imageStore) return;
+    const now = Date.now();
+    if (now - lastRetentionRef.current < 1500) return;
+    lastRetentionRef.current = now;
+    runRetention();
+  }, [results, runRetention, imageStore]);
   const carryOverBible = useCallback((fromBookId: string) => send({ type: "carryOverBible", fromBookId }), []);
   const paintForward = useCallback(
     (fromUnit: number) => send({ type: "paintForward", fromUnit }),
@@ -846,6 +925,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     importBible,
     importResult,
     clearImportResult,
+    setActiveUnit,
     carryOverBible,
     updateCharacter,
     addCharacterReference,
