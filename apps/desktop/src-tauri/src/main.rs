@@ -340,6 +340,60 @@ fn http_fetch_blocking(req: HttpFetchRequest) -> Result<HttpFetchResult, String>
     })
 }
 
+/// Save a generated artifact (illustrated HTML/EPUB export, or a single image) to
+/// disk. Writes into `~/VisualReader/exports` (created on demand) and returns the
+/// full path — the renderer shows it to the reader. Deliberately uses a fixed,
+/// app-owned folder via plain `std::fs` rather than a file-picker plugin: no new
+/// capability surface, and the same home-dir root the engine already uses.
+#[tauri::command]
+async fn save_file(app: AppHandle, filename: String, body_base64: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(body_base64.as_bytes())
+            .map_err(|e| e.to_string())?;
+        let dir = exports_dir(&app);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let dest = unique_path(&dir, &sanitize_filename(&filename));
+        std::fs::write(&dest, &bytes).map_err(|e| e.to_string())?;
+        Ok(dest.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Strip any path separators / parent refs so a renderer-supplied name can only
+/// ever land a file INSIDE the exports dir (never traverse out of it).
+fn sanitize_filename(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let cleaned: String = base
+        .chars()
+        .filter(|c| !matches!(c, '\0' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        .collect();
+    let trimmed = cleaned.trim().trim_matches('.');
+    if trimmed.is_empty() { "export".to_string() } else { trimmed.to_string() }
+}
+
+/// First non-colliding path: `name.ext`, then `name (2).ext`, `name (3).ext`… so a
+/// repeat export never silently overwrites the previous keep.
+fn unique_path(dir: &Path, filename: &str) -> PathBuf {
+    let first = dir.join(filename);
+    if !first.exists() {
+        return first;
+    }
+    let (stem, ext) = match filename.rsplit_once('.') {
+        Some((s, e)) => (s.to_string(), format!(".{e}")),
+        None => (filename.to_string(), String::new()),
+    };
+    for n in 2..1000 {
+        let candidate = dir.join(format!("{stem} ({n}){ext}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    first
+}
+
 /// Download a style LoRA into the engine's loras dir, with progress.
 #[tauri::command]
 async fn download_lora(app: AppHandle, model: DownloadableModel) -> Result<(), String> {
@@ -591,6 +645,11 @@ fn comfy_models_dir(app: &AppHandle) -> PathBuf {
         .join("models")
 }
 
+/// Where saved exports (illustrated HTML/EPUB, images) land: `~/VisualReader/exports`.
+fn exports_dir(app: &AppHandle) -> PathBuf {
+    engine_root(app).join("exports")
+}
+
 fn checkpoints_dir(app: &AppHandle) -> PathBuf {
     comfy_models_dir(app).join("checkpoints")
 }
@@ -637,7 +696,8 @@ fn main() {
             lora_headers,
             download_lora,
             gpu_info,
-            http_fetch
+            http_fetch,
+            save_file
         ])
         .build(tauri::generate_context!())
         .expect("error while building Visual Reader")

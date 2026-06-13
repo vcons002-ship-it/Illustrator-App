@@ -159,6 +159,42 @@ export function downloadLora(model: DownloadableModel): Promise<void> {
   return invoke<void>("download_lora", { model });
 }
 
+/** Base64-encode bytes for an invoke payload (invoke args are JSON, not binary).
+ * Chunked so a multi-MB image can't overflow the argument stack of String.fromCharCode. */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+/**
+ * Save a generated artifact (an illustrated HTML/EPUB export, or a single image)
+ * to disk. On the desktop the Rust shell writes it into `~/VisualReader/exports`
+ * and returns the full path (shown to the reader). In the browser there's no
+ * filesystem, so it falls back to a normal download and returns `true`.
+ */
+export async function saveExportFile(
+  filename: string,
+  data: string | Uint8Array,
+  mimeType: string,
+): Promise<string | true> {
+  const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
+  if (isDesktop) {
+    return invoke<string>("save_file", { filename, bodyBase64: bytesToBase64(bytes) });
+  }
+  const blob = new Blob([bytes as BlobPart], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
+}
+
 /** Subscribe to engine install/launch progress. Returns undefined on the web. */
 export function onEngineProgress(handler: (p: EngineProgress) => void): Promise<UnlistenFn> | undefined {
   return tauri()?.event?.listen<EngineProgress>("engine://progress", (e) => handler(e.payload));
