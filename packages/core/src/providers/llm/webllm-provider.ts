@@ -210,6 +210,27 @@ export class WebLLMProvider implements LLMProvider, ChatCapable {
     return stripThink(text).trim();
   }
 
+  /**
+   * Free the on-device model's VRAM/RAM. WebLLM keeps the loaded engine in a
+   * module-level cache (loads are slow); after the book's LLM phase the model just
+   * squats GPU memory the image engine wants, so unload it and clear the cache. A
+   * later call (chat, re-analysis) reloads it lazily via `engine()`. Best-effort:
+   * a failed/absent engine is a no-op. Skipped when a completion fn is injected
+   * (tests) — there's no real engine to unload.
+   */
+  async unload(): Promise<void> {
+    if (this.injected || !enginePromise) return;
+    const pending = enginePromise;
+    enginePromise = undefined;
+    engineModel = undefined;
+    try {
+      const engine = await pending;
+      await engine.unload();
+    } catch {
+      /* never loaded, or already gone — nothing to free */
+    }
+  }
+
   async buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string> {
     try {
       const complete = await this.completer();

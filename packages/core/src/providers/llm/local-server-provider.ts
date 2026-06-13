@@ -137,6 +137,26 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
     return stripThink(text).trim();
   }
 
+  /**
+   * Ask the server to evict the model from VRAM/RAM. Ollama unloads a model when a
+   * request carries `keep_alive: 0`, so once the book's LLM phase is done the image
+   * engine isn't fighting it for the GPU. Ollama-specific (its native `/api/generate`
+   * below the OpenAI `/v1`); LM Studio / llama.cpp lack the endpoint and harmlessly
+   * 404. Best-effort and bounded — a failure (or non-Ollama server) is a silent no-op.
+   */
+  async unload(): Promise<void> {
+    try {
+      await this.transport.send({
+        url: `${ollamaRoot(this.baseUrl)}/api/generate`,
+        method: "POST",
+        body: { model: this.model, keep_alive: 0 },
+        signal: AbortSignal.timeout(2500),
+      });
+    } catch {
+      /* not Ollama, or already unloaded — nothing to do */
+    }
+  }
+
   /** Reading-companion chat. STREAMS deltas to `onToken` (SSE — Ollama/LM Studio
    * both speak OpenAI-style `stream: true`); buffered otherwise. Thinking-model
    * preambles are stripped in both paths — streamed tokens are gated until the
