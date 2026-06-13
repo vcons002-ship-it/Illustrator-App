@@ -1,5 +1,6 @@
 import {
   Automatic1111Backend,
+  BUNDLED_LLM,
   ComfyUIBackend,
   DirectTransport,
   GoogleImageSearch,
@@ -235,9 +236,13 @@ function buildLLM(
 ): BuiltLLM {
   const id = settings.textProvider;
   if (id === "local") {
-    // Local server (Ollama / LM Studio / llama.cpp) — an OpenAI-compatible server
-    // the user runs themselves. Reliable alternative to WebGPU; mock when not set up.
-    if (settings.localTextBackend === "server") {
+    // Two server-backed paths share the same OpenAI-compatible provider:
+    //  - "server": a server the USER runs (Ollama / LM Studio / llama.cpp).
+    //  - "bundled": the model the DESKTOP app ships and auto-launches (BUNDLED_LLM);
+    //    the desktop runtime fills in localServerTextUrl/Model once llama-server is up.
+    // Both read localServerTextUrl/Model; only the label + "not ready yet" copy differ.
+    if (settings.localTextBackend === "server" || settings.localTextBackend === "bundled") {
+      const bundled = settings.localTextBackend === "bundled";
       const baseUrl = settings.localServerTextUrl;
       if (!baseUrl) {
         return {
@@ -246,11 +251,13 @@ function buildLLM(
             id: "mock",
             label: MOCK_LABEL,
             mock: true,
-            reason: "Local LLM server isn't connected — click Connect in Settings.",
+            reason: bundled
+              ? "Starting the built-in model… (the desktop app launches it on first use)."
+              : "Local LLM server isn't connected — click Connect in Settings.",
           },
         };
       }
-      const serverModel = settings.localServerTextModel;
+      const serverModel = settings.localServerTextModel ?? (bundled ? BUNDLED_LLM.model : undefined);
       try {
         return {
           provider: createLLMProvider("local-server", {
@@ -260,7 +267,7 @@ function buildLLM(
           }),
           diag: {
             id: "local-server",
-            label: `Local server: ${serverModel ?? "default model"}`,
+            label: bundled ? BUNDLED_LLM.label : `Local server: ${serverModel ?? "default model"}`,
             mock: false,
           },
         };
@@ -271,7 +278,9 @@ function buildLLM(
             id: "mock",
             label: MOCK_LABEL,
             mock: true,
-            reason: "Couldn't initialise the local LLM server.",
+            reason: bundled
+              ? "Couldn't start the built-in model."
+              : "Couldn't initialise the local LLM server.",
           },
         };
       }

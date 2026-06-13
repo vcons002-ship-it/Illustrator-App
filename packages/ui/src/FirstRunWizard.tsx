@@ -52,10 +52,11 @@ export function FirstRunWizard({ current, onComplete, isDesktop = false }: First
       ...current,
       textProvider: "local",
       imageProvider: "local",
-      // Desktop auto-manages an engine (curated download); the browser path
-      // connects to a server you run yourself, where you pick the model after.
+      // Desktop auto-manages an engine (curated download) AND ships a built-in text
+      // model that launches itself; the browser path connects to servers you run
+      // yourself (image) and defaults text to on-device WebGPU.
       ...(isDesktop
-        ? { localModel: current.localModel ?? "z-image-turbo" }
+        ? { localModel: current.localModel ?? "z-image-turbo", localTextBackend: "bundled" as const }
         : { localBackend: current.localBackend ?? "a1111" }),
       configured: true,
     });

@@ -745,3 +745,23 @@ export const LOCAL_TEXT_MODELS: LocalTextModel[] = [
     note: "Strong reasoning",
   },
 ];
+
+/**
+ * The text model the DESKTOP app ships and auto-runs (the "built-in" backend):
+ * a small GGUF served by a bundled llama.cpp `llama-server`, which the Rust shell
+ * launches on first use (see `ensure_llm`). The renderer points the ordinary
+ * `LocalServerProvider` at it (it's OpenAI-compatible), so no new provider is
+ * needed. These values are the renderer-side facts (label, the model id the
+ * server reports, a safe default context); the actual binary/GGUF URLs live in
+ * the Rust shell + `llm-setup.bat`. Keep `model` in sync with what the server
+ * loads (we name it explicitly so `/v1/models` is predictable).
+ */
+export const BUNDLED_LLM = {
+  /** Model id passed to the local-server provider / reported by llama-server. */
+  model: "Llama-3.2-3B-Instruct",
+  /** Friendly label for Settings + provider diagnostics. */
+  label: "Built-in: Llama 3.2 3B",
+  /** Conservative context budget (the bundled server is launched with -c 8192). */
+  contextTokens: 8192,
+} as const;
+

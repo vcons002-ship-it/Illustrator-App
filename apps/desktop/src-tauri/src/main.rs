@@ -1003,11 +1003,184 @@ fn emit_engine(app: &AppHandle, phase: &str, message: &str, percent: Option<f64>
     );
 }
 
+// ------------------------------------------------------------ bundled local LLM
+//
+// The desktop app ships a small GGUF + a `llama-server` (llama.cpp) binary and
+// runs them on first use, so a brand-new install has a working local text model
+// with zero setup. The renderer then talks to it through the ordinary
+// OpenAI-compatible `LocalServerProvider` (see `ensureLocalLlm` in runtime.ts and
+// `BUNDLED_LLM` in packages/core). The model id below MUST match `BUNDLED_LLM.model`.
+
+/// A dedicated port so the built-in model never collides with a user's own Ollama
+/// (11434) or LM Studio (1234).
+const LLM_PORT: u16 = 11435;
+/// Must equal `BUNDLED_LLM.model` in packages/core (what /v1/models reports).
+const BUNDLED_LLM_MODEL: &str = "Llama-3.2-3B-Instruct";
+/// The GGUF + server binary placed by `llm-setup.bat` (bundled as Tauri resources
+/// under `llm/`, or dropped into `~/VisualReader/llm`).
+const BUNDLED_GGUF_FILE: &str = "Llama-3.2-3B-Instruct-Q4_K_M.gguf";
+const LLAMA_SERVER_BIN: &str = "llama-server.exe";
+
+/// Process + endpoint handle for the bundled text model, mirroring `EngineState`.
+/// The child is killed on app exit alongside the image engine.
+#[derive(Default)]
+struct LlmState {
+    base_url: Mutex<Option<String>>,
+    model: Mutex<Option<String>>,
+    child: Mutex<Option<Child>>,
+    setup: tauri::async_runtime::Mutex<()>,
+}
+
+#[derive(Serialize, Clone)]
+struct LlmInfo {
+    #[serde(rename = "baseUrl")]
+    base_url: String,
+    model: String,
+}
+
+/// Ensure the bundled text model is running; return its OpenAI-compatible base URL
+/// and model id. One setup at a time (like `ensure_engine`); a second concurrent
+/// call reuses the first's result.
+#[tauri::command]
+async fn ensure_llm(app: AppHandle, state: State<'_, LlmState>) -> Result<LlmInfo, String> {
+    if let (Some(base_url), Some(model)) = (
+        state.base_url.lock().unwrap().clone(),
+        state.model.lock().unwrap().clone(),
+    ) {
+        return Ok(LlmInfo { base_url, model });
+    }
+    let _setup = state.setup.lock().await;
+    if let (Some(base_url), Some(model)) = (
+        state.base_url.lock().unwrap().clone(),
+        state.model.lock().unwrap().clone(),
+    ) {
+        return Ok(LlmInfo { base_url, model });
+    }
+    let app2 = app.clone();
+    let (base_url, child) = tauri::async_runtime::spawn_blocking(move || ensure_llm_blocking(&app2))
+        .await
+        .map_err(|e| e.to_string())??;
+    *state.base_url.lock().unwrap() = Some(base_url.clone());
+    *state.model.lock().unwrap() = Some(BUNDLED_LLM_MODEL.to_string());
+    if let Some(child) = child {
+        *state.child.lock().unwrap() = Some(child);
+    }
+    Ok(LlmInfo { base_url, model: BUNDLED_LLM_MODEL.to_string() })
+}
+
+fn ensure_llm_blocking(app: &AppHandle) -> Result<(String, Option<Child>), String> {
+    let root = format!("http://127.0.0.1:{LLM_PORT}");
+    let api = format!("{root}/v1");
+    // Reuse an instance already answering (a prior run of ours).
+    if llm_health_ok(&root) {
+        emit_llm(app, "ready", "Built-in model ready", Some(100.0));
+        return Ok((api, None));
+    }
+    if !cfg!(target_os = "windows") {
+        return Err("The built-in model currently ships on Windows. On macOS/Linux, run a local \
+                    server (Ollama / LM Studio) and pick \"Local server\" under Text in Settings."
+            .into());
+    }
+    // Something already on the port (our prior run still booting): wait, then reuse.
+    if port_in_use(LLM_PORT) {
+        emit_llm(app, "starting", "Waiting for the built-in model…", None);
+        for _ in 0..120 {
+            if llm_health_ok(&root) {
+                emit_llm(app, "ready", "Built-in model ready", Some(100.0));
+                return Ok((api, None));
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        return Err(format!("Port {LLM_PORT} is busy but not answering as the built-in model."));
+    }
+    let (bin, gguf) = resolve_llm_files(app)?;
+    emit_llm(app, "starting", "Starting the built-in model…", None);
+    let child = spawn_llama(&bin, &gguf)?;
+    for _ in 0..120 {
+        if llm_health_ok(&root) {
+            emit_llm(app, "ready", "Built-in model ready", Some(100.0));
+            return Ok((api, Some(child)));
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    Err("The built-in model did not become ready in time.".into())
+}
+
+/// Locate the bundled `llama-server` + GGUF: first the Tauri resource dir (shipped in
+/// the installer under `llm/`), then `~/VisualReader/llm` (where `llm-setup.bat` can
+/// place them). A clear error — pointing at the setup script — beats a cryptic spawn
+/// failure when neither is present (e.g. a dev build that didn't bundle the model).
+fn resolve_llm_files(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Ok(res) = app.path().resource_dir() {
+        dirs.push(res.join("llm"));
+    }
+    dirs.push(engine_root(app).join("llm"));
+    for dir in &dirs {
+        let bin = dir.join(LLAMA_SERVER_BIN);
+        let gguf = dir.join(BUNDLED_GGUF_FILE);
+        if bin.exists() && gguf.exists() {
+            return Ok((bin, gguf));
+        }
+    }
+    Err(format!(
+        "The built-in model isn't installed. Run llm-setup.bat to fetch {LLAMA_SERVER_BIN} + \
+         {BUNDLED_GGUF_FILE} (into the app's llm folder), or pick \"Local server\" / a cloud key \
+         under Text in Settings."
+    ))
+}
+
+fn spawn_llama(bin: &Path, gguf: &Path) -> Result<Child, String> {
+    let mut cmd = Command::new(bin);
+    cmd.arg("-m")
+        .arg(gguf)
+        .arg("--host")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(LLM_PORT.to_string())
+        // 8k context matches BUNDLED_LLM.contextTokens in packages/core.
+        .arg("-c")
+        .arg("8192")
+        // Report a stable model id on /v1/models (what the provider sends).
+        .arg("--alias")
+        .arg(BUNDLED_LLM_MODEL);
+    // Offload to the GPU when one is present; CPU-only builds ignore it.
+    if has_nvidia() {
+        cmd.arg("-ngl").arg("99");
+    }
+    if let Some(dir) = bin.parent() {
+        cmd.current_dir(dir); // find the ggml/llama DLLs shipped beside the exe
+    }
+    cmd.spawn().map_err(|e| format!("Failed to start the built-in model: {e}"))
+}
+
+fn llm_health_ok(root: &str) -> bool {
+    reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .and_then(|c| c.get(format!("{root}/health")).send())
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
+}
+
+fn emit_llm(app: &AppHandle, phase: &str, message: &str, percent: Option<f64>) {
+    let _ = app.emit(
+        "llm://progress",
+        EngineProgress {
+            phase: phase.to_string(),
+            message: message.to_string(),
+            percent,
+        },
+    );
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(EngineState::default())
+        .manage(LlmState::default())
         .invoke_handler(tauri::generate_handler![
             ensure_engine,
+            ensure_llm,
             list_models,
             download_model,
             list_loras,
@@ -1025,7 +1198,16 @@ fn main() {
         .expect("error while building Visual Reader")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
+                // Kill both managed children (image engine + built-in model) so no
+                // stray process lingers after the window closes.
                 if let Some(state) = app.try_state::<EngineState>() {
+                    if let Ok(mut guard) = state.child.lock() {
+                        if let Some(mut child) = guard.take() {
+                            let _ = child.kill();
+                        }
+                    }
+                }
+                if let Some(state) = app.try_state::<LlmState>() {
                     if let Ok(mut guard) = state.child.lock() {
                         if let Some(mut child) = guard.take() {
                             let _ = child.kill();

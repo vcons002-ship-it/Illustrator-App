@@ -464,8 +464,16 @@ Free tier: ~100 searches/day. Then:
   — including a **local LLM** — it uses the search engine above. So a fully local read can
   still produce sourced facts.
 
-**C) On-device text (no key):** set **Text** to **On my computer**. There are two
-ways to run the story-understanding LLM locally — pick one under **How to run it**:
+**C) On-device text (no key):** set **Text** to **On my computer**. Pick how to run
+the story-understanding LLM locally under **How to run it**:
+
+- **Built-in model (desktop app only — the default, zero setup):** the desktop app
+  **ships a small text model** (Llama 3.2 3B) and a llama.cpp server, and launches them
+  for you on first use — no install, no download, no API key. It runs on the **CPU**, so
+  it never competes with a local GPU image engine for VRAM (handy when you also generate
+  images on the same machine). It's the lightest-touch local option; for faster local text
+  use Ollama or keep Text on a cloud key. *(Building the desktop app from source? Run
+  `llm-setup.bat` once so the model is bundled into the build — see the desktop README.)*
 
 - **On-device (WebGPU, no install):** runs the model right in the browser/desktop
   via **WebGPU**. Pick a model (default **Llama 3.2 3B**; **Qwen2.5 3B** is best at

@@ -1,0 +1,8 @@
+# The bundled model + server binary are large (fetched by llm-setup.bat, not committed).
+*.gguf
+*.exe
+*.dll
+*.so
+*.dylib
+*.metal
+*.bin
