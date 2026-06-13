@@ -16,6 +16,9 @@ export interface ChatMessageVM {
   image?: { bytes: ArrayBuffer; mimeType: string } | { sourceUrl: string };
   /** Source links from a search tool. */
   links?: { url: string; title?: string }[];
+  /** Retrieved images shown as an inline thumbnail gallery (multi-hit search_images);
+   * each thumbnail enlarges in place on click. */
+  gallery?: { thumb: string; full: string; title?: string }[];
   /** Clickable local-file results (desktop `/find`); each opens the book on click. */
   files?: { path: string; name: string }[];
   /** Quick-reply action buttons (e.g. what to do with a pasted link). */
@@ -62,9 +65,30 @@ export function fileForLang(lang: string): { ext: string; base: string; mime: st
   return { ext, base, mime };
 }
 
-/** Split text into plain runs and bare http(s) URLs (for inline clickable links). */
-export function linkifyText(text: string): ({ text: string } | { url: string })[] {
-  const out: ({ text: string } | { url: string })[] = [];
+export type LinkSegment = { text: string } | { url: string; label?: string };
+
+/**
+ * Split text into plain runs and links. Markdown links `[label](url)` become a
+ * single labeled link (so a model that writes `[Title](https://…long…url)` shows a
+ * tidy "Title" instead of the raw bracketed URL); bare http(s) URLs in the
+ * remaining prose are linkified too.
+ */
+export function linkifyText(text: string): LinkSegment[] {
+  const out: LinkSegment[] = [];
+  const md = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  let last = 0;
+  for (const m of text.matchAll(md)) {
+    const i = m.index;
+    if (i > last) scanBareUrls(text.slice(last, i), out);
+    out.push({ url: m[2]!, label: m[1]! });
+    last = i + m[0].length;
+  }
+  if (last < text.length) scanBareUrls(text.slice(last), out);
+  return out;
+}
+
+/** Push plain runs + bare http(s) URLs of `text` into `out`. */
+function scanBareUrls(text: string, out: LinkSegment[]): void {
   const re = /https?:\/\/[^\s<>"')\]]+/g;
   let last = 0;
   for (const m of text.matchAll(re)) {
@@ -77,7 +101,6 @@ export function linkifyText(text: string): ({ text: string } | { url: string })[
     last = i + m[0].length;
   }
   if (last < text.length) out.push({ text: text.slice(last) });
-  return out;
 }
 
 export interface ChatPanelProps {
@@ -482,6 +505,9 @@ export const MessageBubble = memo(function MessageBubble({
           }}
         />
       ) : null}
+      {message.gallery?.length ? (
+        <ImageGallery items={message.gallery} />
+      ) : null}
       {message.links?.length ? (
         <ol style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 11 }}>
           {message.links.map((l, i) => (
@@ -532,6 +558,60 @@ const fileChipStyle = {
   cursor: "pointer",
 } as const;
 
+/**
+ * A row of retrieved-image thumbnails (a multi-hit `search_images`). Every result
+ * shows at once — so "show me 3 images of X" actually shows several — and clicking
+ * a thumbnail enlarges it in place (no new tab, which the desktop webview blocks).
+ */
+function ImageGallery({ items }: { items: { thumb: string; full: string; title?: string }[] }) {
+  const [enlarged, setEnlarged] = useState<number | null>(null);
+  const open = enlarged != null ? items[enlarged] : undefined;
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {items.map((g, i) => (
+          <img
+            key={i}
+            src={g.thumb}
+            alt={g.title || "image result"}
+            title={g.title || ""}
+            loading="lazy"
+            decoding="async"
+            onClick={() => setEnlarged(enlarged === i ? null : i)}
+            style={{
+              width: 116,
+              height: 116,
+              objectFit: "cover",
+              borderRadius: 6,
+              cursor: enlarged === i ? "zoom-out" : "zoom-in",
+              border:
+                enlarged === i ? "2px solid #9db8ff" : "1px solid rgba(255,255,255,0.18)",
+            }}
+          />
+        ))}
+      </div>
+      {open ? (
+        <img
+          src={open.full}
+          alt={open.title || "enlarged image"}
+          decoding="async"
+          onClick={() => setEnlarged(null)}
+          style={{
+            display: "block",
+            maxWidth: "100%",
+            height: "auto",
+            maxHeight: 420,
+            objectFit: "contain",
+            borderRadius: 6,
+            marginTop: 6,
+            cursor: "zoom-out",
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 /** Inline prose with clickable bare URLs. */
 function Linkified({ text }: { text: string }) {
   return (
@@ -539,7 +619,7 @@ function Linkified({ text }: { text: string }) {
       {linkifyText(text).map((seg, i) =>
         "url" in seg ? (
           <a key={i} href={seg.url} target="_blank" rel="noreferrer" style={{ color: "#9db8ff" }}>
-            {seg.url}
+            {seg.label ?? seg.url}
           </a>
         ) : (
           <span key={i}>{seg.text}</span>

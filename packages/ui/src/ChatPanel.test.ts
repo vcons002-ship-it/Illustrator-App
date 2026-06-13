@@ -30,6 +30,23 @@ describe("linkifyText", () => {
   it("ignores non-http schemes and bare words", () => {
     expect(linkifyText("email me at a@b.com or ftp://x")).toEqual([{ text: "email me at a@b.com or ftp://x" }]);
   });
+
+  it("turns a markdown link into one labeled link (not the raw bracketed URL)", () => {
+    expect(linkifyText("see [Elephant photo](https://commons.example/File:E.jpg) here")).toEqual([
+      { text: "see " },
+      { url: "https://commons.example/File:E.jpg", label: "Elephant photo" },
+      { text: " here" },
+    ]);
+  });
+
+  it("linkifies bare URLs in the prose around a markdown link", () => {
+    const segs = linkifyText("[A](https://a.com) then https://b.com");
+    expect(segs).toEqual([
+      { url: "https://a.com", label: "A" },
+      { text: " then " },
+      { url: "https://b.com" },
+    ]);
+  });
 });
 
 describe("parseMessageBlocks", () => {

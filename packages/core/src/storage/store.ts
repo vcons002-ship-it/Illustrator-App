@@ -20,6 +20,10 @@ export interface StoredChatMessage {
   at: number;
   image?: { bytes: ArrayBuffer; mimeType: string } | { sourceUrl: string };
   links?: { url: string; title?: string }[];
+  /** A set of retrieved images shown as an inline thumbnail gallery (a multi-hit
+   * `search_images`); each thumbnail enlarges in place on click. This is what lets
+   * "show me 3 images of X" actually display several, not just the first. */
+  gallery?: { thumb: string; full: string; title?: string }[];
   /** Clickable local-file results (the desktop `/find` command); each opens on click. */
   files?: { path: string; name: string }[];
   /** Quick-reply action buttons (e.g. what to do with a pasted link). */
