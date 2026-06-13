@@ -81,6 +81,7 @@ import {
   downloadLora,
   downloadModel,
   ensureEngine,
+  ensureLocalLlm,
   gpuVramMb,
   isDesktop,
   listLocalModels,
@@ -88,6 +89,7 @@ import {
   captureScreen,
   loraFamilies,
   onEngineProgress,
+  onLlmProgress,
   onModelProgress,
   readLocalFile,
   runCommand,
@@ -293,11 +295,52 @@ export function App() {
       const pct = mf ? ((mf.index + p.percent / 100) / mf.count) * 100 : p.percent;
       setModelProgress((prev) => ({ ...prev, [p.id]: pct }));
     });
+    const unLlm = onLlmProgress((p) => {
+      setEngineStatus(
+        p.phase === "ready"
+          ? ""
+          : p.percent !== undefined
+            ? `${p.message} ${Math.round(p.percent)}%`
+            : p.message,
+      );
+    });
     return () => {
       void unEngine?.then((fn) => fn());
       void unModel?.then((fn) => fn());
+      void unLlm?.then((fn) => fn());
     };
   }, []);
+
+  // Desktop: when text is set to the BUILT-IN model, make sure the bundled
+  // llama-server is running (downloads/launches on first use) and point the
+  // local-server provider at it — mirrors the image-engine setup above.
+  useEffect(() => {
+    if (
+      !isDesktop ||
+      settings.textProvider !== "local" ||
+      settings.localTextBackend !== "bundled" ||
+      settings.localServerTextUrl
+    )
+      return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        setEngineStatus("Starting the built-in model…");
+        const { baseUrl, model } = await ensureLocalLlm();
+        if (cancelled) return;
+        setEngineStatus("");
+        setSettings((s) => ({ ...s, localServerTextUrl: baseUrl, localServerTextModel: model }));
+      } catch (err) {
+        if (!cancelled) {
+          setEngineStatus("");
+          setLocalError(`Built-in model failed to start: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.textProvider, settings.localTextBackend, settings.localServerTextUrl]);
 
   // Desktop: when the local image path is selected, make sure the GPU engine is
   // installed + running (downloads on first use) and learn its base URL + models.

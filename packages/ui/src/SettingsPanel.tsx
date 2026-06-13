@@ -5,6 +5,7 @@ import {
   catalogEntryForModel,
   resolveModelFamily,
   samplerFor,
+  BUNDLED_LLM,
   LOCAL_TEXT_MODELS,
   LOCAL_TEXT_SERVER_DEFAULT_URL,
   LOCAL_TEXT_SERVER_LABEL,
@@ -66,8 +67,9 @@ export interface ReaderSettings {
   localModel?: string;
   /** On-device text model id (WebLLM) when textProvider is "local". */
   localTextModel?: string;
-  /** Under textProvider "local": run on-device (WebGPU) or via a local server. */
-  localTextBackend?: "webgpu" | "server";
+  /** Under textProvider "local": on-device (WebGPU), a local server you run, or the
+   * "bundled" model the desktop app ships and auto-launches (see BUNDLED_LLM). */
+  localTextBackend?: "webgpu" | "server" | "bundled";
   /** Which local LLM server kind (sets the default URL/label), for the server path. */
   localTextServer?: LocalTextServerId;
   /** Base URL of the local LLM server you run yourself (persisted). */
@@ -340,13 +342,24 @@ export function SettingsPanel({
             <div style={rowStyle}>
               <span>How to run it</span>
               <select
-                value={value.localTextBackend ?? "webgpu"}
-                onChange={(e) => set({ localTextBackend: e.target.value as "webgpu" | "server" })}
+                value={value.localTextBackend ?? (isDesktop ? "bundled" : "webgpu")}
+                onChange={(e) =>
+                  set({ localTextBackend: e.target.value as "webgpu" | "server" | "bundled" })
+                }
               >
+                {isDesktop && (
+                  <option value="bundled">Built-in model (shipped with the app, no setup)</option>
+                )}
                 <option value="webgpu">On-device (WebGPU, no install)</option>
                 <option value="server">Local server (Ollama / LM Studio / llama.cpp)</option>
               </select>
-              {(value.localTextBackend ?? "webgpu") === "webgpu" ? (
+              {(value.localTextBackend ?? (isDesktop ? "bundled" : "webgpu")) === "bundled" ? (
+                <span style={{ opacity: 0.6, fontSize: 12 }}>
+                  {BUNDLED_LLM.label} runs automatically inside the app — nothing to install or
+                  connect. Best for reading and chat out of the box; switch to a Local server for a
+                  bigger model, or keep Text on a cloud key for the strongest story understanding.
+                </span>
+              ) : (value.localTextBackend ?? (isDesktop ? "bundled" : "webgpu")) === "webgpu" ? (
                 <label style={rowStyle}>
                   <span>On-device text model</span>
                   <select

@@ -73,6 +73,30 @@ export function listLocalModels(): Promise<InstalledModel[]> {
   return invoke<InstalledModel[]>("list_models");
 }
 
+/** Where the bundled local LLM server is running + the model id it serves. */
+export interface LocalLlm {
+  /** OpenAI-compatible base URL, e.g. http://127.0.0.1:11435/v1. */
+  baseUrl: string;
+  /** Model id the server reports (passed straight to the local-server provider). */
+  model: string;
+}
+
+/**
+ * Ensure the DESKTOP-bundled text model is running and return where to reach it.
+ * The Rust shell launches a bundled `llama-server` over a small GGUF on first use
+ * (downloading the binary/weights into ~/VisualReader/llm if they weren't bundled
+ * into the installer), then the renderer points the ordinary OpenAI-compatible
+ * `LocalServerProvider` at it. Emits `llm://progress` while it sets up.
+ */
+export function ensureLocalLlm(): Promise<LocalLlm> {
+  return invoke<LocalLlm>("ensure_llm");
+}
+
+/** Subscribe to bundled-LLM setup progress (download/launch). Undefined on the web. */
+export function onLlmProgress(handler: (p: EngineProgress) => void): Promise<UnlistenFn> | undefined {
+  return tauri()?.event?.listen<EngineProgress>("llm://progress", (e) => handler(e.payload));
+}
+
 /**
  * Total VRAM of the primary GPU in MB, or undefined when unknown (web, or no NVIDIA
  * GPU). Used to keep Auto image-quality within what the card can render. Best-effort:

@@ -130,11 +130,15 @@ apps/
   **auto-manages** the engine: it downloads/launches ComfyUI portable and fetches
   every file a catalog model needs (diffusion model + text encoder + VAE, with
   resume) from the Settings picker (implemented; pending on-device verification).
-- **Local text:** WebLLM (on-device WebGPU) or an OpenAI-compatible local server
-  (Ollama / LM Studio / llama.cpp); `ollama-setup.bat` installs Ollama and text
-  models download from the Settings menu with live progress. Chat context budgets
-  are sized to the model's **actual** window (read from Ollama `/api/show`, safely
-  capped). The ONNX/WebGPU **image** provider remains a stub for a later phase.
+- **Local text:** the **desktop app ships a built-in model** — a small GGUF (Llama 3.2
+  3B) served by a bundled llama.cpp `llama-server` it launches on first use (zero setup,
+  CPU-only so it never competes with a local GPU image engine for VRAM; `ensure_llm` in the
+  Tauri shell, `BUNDLED_LLM` in core). Otherwise: WebLLM (on-device WebGPU) or an
+  OpenAI-compatible local server (Ollama / LM Studio / llama.cpp); `ollama-setup.bat`
+  installs Ollama and text models download from the Settings menu with live progress. Once
+  the book's analysis is done the local model is **unloaded** so the image engine gets the
+  GPU back. Chat context budgets are sized to the model's **actual** window (read from
+  Ollama `/api/show`, safely capped). The ONNX/WebGPU **image** provider remains a stub.
 - **Vision (describe images):** the screenshot tool and any "discuss this image"
   request need a vision-capable model. Cloud **Claude, Gemini, and OpenAI** all see
   images; **locally** a vision model works too — Ollama `llama3.2-vision` / `llava` /

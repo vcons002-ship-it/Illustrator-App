@@ -17,10 +17,19 @@ down the engine invisibly — the user only ever picks a model.
 - **Renderer:** `apps/web` build is loaded directly (`tauri.conf.json` →
   `frontendDist: ../../web/dist`). `withGlobalTauri: true` exposes `window.__TAURI__`,
   which `apps/web/src/runtime.ts` detects (`isDesktop`) to enable the local path.
-- **Commands (Rust → renderer):** `ensure_engine`, `list_models`, `download_model`,
-  `download_lora`, `lora_headers`, `gpu_info`, `http_fetch`, and the agentic-tool
-  commands `save_file`, `search_files`, `read_file`, `run_command`, and `capture_screen`
-  (see `src-tauri/src/main.rs`). The renderer calls these from `runtime.ts`.
+- **Commands (Rust → renderer):** `ensure_engine`, `ensure_llm`, `list_models`,
+  `download_model`, `download_lora`, `lora_headers`, `gpu_info`, `http_fetch`, and the
+  agentic-tool commands `save_file`, `search_files`, `read_file`, `run_command`, and
+  `capture_screen` (see `src-tauri/src/main.rs`). The renderer calls these from `runtime.ts`.
+- **Built-in text model (`ensure_llm`):** the desktop app ships a small GGUF + a
+  llama.cpp `llama-server` and launches it on first use, so a fresh install has a working
+  local text model with **zero setup** (the "Built-in model" Text option, default on
+  desktop). The renderer then talks to it through the ordinary OpenAI-compatible
+  local-server provider. The CPU build runs on system RAM — it never competes with the
+  local GPU image engine for VRAM. The files live under `resources/llm/` (bundled via
+  `tauri.conf.json` → `bundle.resources`); run **`llm-setup.bat`** to fetch them before a
+  packaged build. Model id/filename are mirrored in `packages/core` (`BUNDLED_LLM`) and the
+  Rust consts.
 - **Agentic tools — the desktop-only reach the chat assistant gets:** a browser tab
   can't touch the filesystem, spawn a process, or capture the screen, so these live in
   the Rust shell, each one human-approved in the UI before it fires:
