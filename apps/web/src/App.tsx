@@ -781,6 +781,14 @@ export function App() {
   const appendChat = (msg: Omit<StoredChatMessage, "at">) =>
     setChatMessages((prev) => [...prev, { ...msg, at: Date.now() }]);
 
+  // Save a file the assistant wrote in a code block (a webpage, CSV worksheet,
+  // script…) — desktop writes to ~/VisualReader/exports, web downloads it.
+  const onSaveChatFile = useCallback(
+    (filename: string, content: string, mime: string): Promise<string | true> =>
+      saveExportFile(filename, content, mime),
+    [],
+  );
+
   // Drop a rendered image (from Test image / Transform photo) into the live chat —
   // the book chat when one is open, otherwise the landing buddy, opening it so it shows.
   const onAddImageToChat = (image: { bytes: ArrayBuffer; mimeType: string }) => {
@@ -2022,6 +2030,7 @@ export function App() {
             onCompact={onCompactBuddyClick}
             desktop={isDesktop}
             onOpenLocalFile={onOpenLocalFile}
+            onSaveFile={onSaveChatFile}
             {...(buddyUsage ? { contextUsage: buddyUsage } : {})}
           />
         </section>
@@ -2168,6 +2177,7 @@ export function App() {
           onClearHistory={onClearChat}
           onDeleteMessage={onDeleteChatMessage}
           onCompact={onCompactChatClick}
+          onSaveFile={onSaveChatFile}
           {...(chatUsage ? { contextUsage: chatUsage } : {})}
         />
       )}

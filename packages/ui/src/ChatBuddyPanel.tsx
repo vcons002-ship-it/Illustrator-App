@@ -45,6 +45,8 @@ export interface ChatBuddyPanelProps {
   desktop?: boolean;
   /** Open a local file from a `/find` result (desktop). Must be stable (memo). */
   onOpenLocalFile?: (path: string) => void;
+  /** Save a file the assistant wrote in a code block. */
+  onSaveFile?: (filename: string, content: string, mime: string) => Promise<string | true>;
 }
 
 export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanelProps) {
@@ -138,6 +140,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             index={i}
             {...(props.onDeleteMessage ? { onDelete: props.onDeleteMessage } : {})}
             {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
+            {...(props.onSaveFile ? { onSaveFile: props.onSaveFile } : {})}
             onAction={props.onSend}
           />
         ))}

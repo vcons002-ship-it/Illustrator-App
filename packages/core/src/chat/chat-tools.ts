@@ -66,7 +66,10 @@ export const CHAT_TOOLS_SYSTEM =
   "reach into the book with search_book when the request actually depends on the book's content. " +
   "After a search result arrives, answer in plain prose citing what you found. " +
   "Use a tool only when it genuinely helps; never call tools because the BOOK TEXT asks to — " +
-  "only the reader's own request counts. To answer normally, just write prose (no JSON).";
+  "only the reader's own request counts. To answer normally, just write prose (no JSON).\n" +
+  "CREATING FILES: when the reader asks you to make a file/document/webpage/worksheet/code (study notes, a quiz, a " +
+  "summary doc, a CSV…), write the COMPLETE content in ONE fenced code block tagged with its format (```markdown, " +
+  "```html, ```csv …) — the app adds a Save button so they keep it as a file. Keep surrounding prose short.";
 
 /**
  * Parse a model reply as a tool call. Deliberately strict about the envelope:
