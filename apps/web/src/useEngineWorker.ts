@@ -112,7 +112,7 @@ export interface EngineWorkerApi {
     onEvent: (e: ChatStreamEvent) => void,
   ) => Promise<ChatDoneResult>;
   /** Run a user-approved generate_image tool call. */
-  chatTool: (call: ToolCall) => Promise<ChatToolRender>;
+  chatTool: (call: ToolCall, opts?: { onProgress?: (fraction: number) => void }) => Promise<ChatToolRender>;
   /** Abort the in-flight chat round, if any. */
   chatCancel: () => void;
   /** Landing-page buddy: one user message (no book open; streams via `onEvent`). */
@@ -252,7 +252,9 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     Map<number, { onEvent: (e: ChatStreamEvent) => void; resolve: (r: ChatDoneResult) => void }>
   >(new Map());
   // In-flight approved tool renders (chatTool), resolved by `chatToolResult`.
-  const chatToolRequests = useRef<Map<number, (r: ChatToolRender) => void>>(new Map());
+  const chatToolRequests = useRef<
+    Map<number, { resolve: (r: ChatToolRender) => void; onProgress?: (fraction: number) => void }>
+  >(new Map());
   const activeChatRequestId = useRef<number | undefined>(undefined);
   // In-flight buddy rounds (landing page), keyed by requestId like chatRequests.
   const buddyRequests = useRef<
@@ -360,6 +362,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
         }
         case "testProgress": {
           testRequests.current.get(msg.requestId)?.onProgress?.(msg.fraction);
+          chatToolRequests.current.get(msg.requestId)?.onProgress?.(msg.fraction);
           break;
         }
         case "testRendered": {
@@ -393,10 +396,10 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
         }
         case "chatToolResult": {
           // Either an approved tool render's reply, or a mid-chat search result.
-          const toolResolve = chatToolRequests.current.get(msg.requestId);
-          if (toolResolve) {
+          const toolReq = chatToolRequests.current.get(msg.requestId);
+          if (toolReq) {
             chatToolRequests.current.delete(msg.requestId);
-            toolResolve({
+            toolReq.resolve({
               ...(msg.image ? { image: msg.image } : {}),
               ...(msg.error ? { error: msg.error } : {}),
             });
@@ -710,7 +713,7 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
     [],
   );
   const chatTool = useCallback(
-    (call: ToolCall): Promise<ChatToolRender> =>
+    (call: ToolCall, opts?: { onProgress?: (fraction: number) => void }): Promise<ChatToolRender> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
         // A dead/HMR worker can't answer — surface a timeout so the approval flow
@@ -720,9 +723,12 @@ export function useEngineWorker(settings: ReaderSettings): EngineWorkerApi {
             resolve({ error: "The image render timed out — try again." });
           }
         }, 180_000);
-        chatToolRequests.current.set(requestId, (r) => {
-          clearTimeout(timeout);
-          resolve(r);
+        chatToolRequests.current.set(requestId, {
+          resolve: (r) => {
+            clearTimeout(timeout);
+            resolve(r);
+          },
+          ...(opts?.onProgress ? { onProgress: opts.onProgress } : {}),
         });
         send({ type: "chatTool", requestId, call });
       }),

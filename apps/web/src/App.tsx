@@ -923,7 +923,9 @@ export function App() {
     setChatPendingTool(undefined);
     setChatBusy(true);
     setChatActivity("Generating the image…");
-    const out = await chatTool(call);
+    const out = await chatTool(call, {
+      onProgress: (f) => setChatActivity(`Generating the image… ${Math.round(f * 100)}%`),
+    });
     setChatBusy(false);
     setChatActivity("");
     const feedback = formatToolResult(call, {
@@ -1308,7 +1310,9 @@ export function App() {
     setBuddyPendingTool(undefined);
     setBuddyBusy(true);
     setBuddyActivity("Generating the image…");
-    const out = await chatTool(call);
+    const out = await chatTool(call, {
+      onProgress: (f) => setBuddyActivity(`Generating the image… ${Math.round(f * 100)}%`),
+    });
     setBuddyBusy(false);
     setBuddyActivity("");
     const feedback = formatToolResult(call, {
