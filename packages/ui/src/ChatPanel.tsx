@@ -16,6 +16,8 @@ export interface ChatMessageVM {
   image?: { bytes: ArrayBuffer; mimeType: string } | { sourceUrl: string };
   /** Source links from a search tool. */
   links?: { url: string; title?: string }[];
+  /** Clickable local-file results (desktop `/find`); each opens the book on click. */
+  files?: { path: string; name: string }[];
 }
 
 export interface ChatPanelProps {
@@ -296,10 +298,13 @@ export const MessageBubble = memo(function MessageBubble({
   message,
   index,
   onDelete,
+  onOpenLocalFile,
 }: {
   message: ChatMessageVM;
   index?: number;
   onDelete?: (index: number) => void;
+  /** Open a local-file result (desktop `/find`). Stable callback (memo). */
+  onOpenLocalFile?: (path: string) => void;
 }) {
   const isUser = message.role === "user";
   const url = useMessageImageUrl(message.image);
@@ -336,9 +341,35 @@ export const MessageBubble = memo(function MessageBubble({
           ))}
         </ol>
       ) : null}
+      {message.files?.length ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
+          {message.files.map((f, i) => (
+            <button
+              key={i}
+              style={fileChipStyle}
+              title={`Open ${f.path}`}
+              onClick={() => onOpenLocalFile?.(f.path)}
+            >
+              📄 {f.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 });
+
+const fileChipStyle = {
+  display: "block",
+  textAlign: "left",
+  background: "rgba(255,255,255,0.06)",
+  color: "inherit",
+  border: "1px solid rgba(255,255,255,0.18)",
+  borderRadius: 6,
+  padding: "5px 8px",
+  fontSize: 12,
+  cursor: "pointer",
+} as const;
 
 /** Object URL for a bytes image (revoked on change); pass-through for hotlinks. */
 function useMessageImageUrl(image: ChatMessageVM["image"]): string | undefined {

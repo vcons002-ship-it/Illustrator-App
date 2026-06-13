@@ -394,6 +394,167 @@ fn unique_path(dir: &Path, filename: &str) -> PathBuf {
     first
 }
 
+// ------------------------------------------------------------- local file search
+
+#[derive(Serialize)]
+struct FoundFile {
+    path: String,
+    name: String,
+    ext: String,
+    size: u64,
+}
+
+/// File types the importer can read (mirrors the web importer's accept list).
+const SEARCHABLE_EXTS: &[&str] = &["epub", "pdf", "txt", "md", "markdown", "html", "htm"];
+/// Bounds so a broad walk stays fast and can't wander into heavy caches forever.
+const MAX_RESULTS: usize = 100;
+const MAX_VISITS: usize = 400_000;
+const MAX_DEPTH: usize = 8;
+/// Cap a single pulled-in file (a huge PDF would blow the base64 invoke payload).
+const MAX_READ_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Heavy / system directories that never hold the user's books — skipped so the
+/// walk spends its budget on real document folders.
+fn is_skipped_dir(name: &str) -> bool {
+    matches!(
+        name.to_lowercase().as_str(),
+        "node_modules"
+            | "library"
+            | "appdata"
+            | "$recycle.bin"
+            | "windows"
+            | "program files"
+            | "program files (x86)"
+            | "programdata"
+            | ".git"
+            | "target"
+            | "venv"
+            | ".venv"
+            | "__pycache__"
+            | "site-packages"
+            | "cache"
+            | "caches"
+            | ".cache"
+            | "dist"
+            | "build"
+            | ".cargo"
+            | ".rustup"
+            | ".npm"
+    )
+}
+
+/// Search the user's files for importable books whose NAME contains every query
+/// token (case-insensitive AND). Walks from `root` (default: the home dir), with
+/// the bounds above; hidden entries and the skiplist dirs are pruned. Filename
+/// matching only — never opens or reads file contents. The renderer ranks the
+/// returned candidates (see `rankLocalFiles`).
+#[tauri::command]
+async fn search_files(
+    app: AppHandle,
+    query: String,
+    root: Option<String>,
+) -> Result<Vec<FoundFile>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let tokens: Vec<String> =
+            query.to_lowercase().split_whitespace().map(|s| s.to_string()).collect();
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+        let start = match root {
+            Some(r) if !r.trim().is_empty() => PathBuf::from(r),
+            _ => app.path().home_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        };
+        let mut out: Vec<FoundFile> = Vec::new();
+        let mut visits = 0usize;
+        let mut stack: Vec<(PathBuf, usize)> = vec![(start, 0)];
+        while let Some((dir, depth)) = stack.pop() {
+            if out.len() >= MAX_RESULTS || visits >= MAX_VISITS {
+                break;
+            }
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(e) => e,
+                Err(_) => continue, // unreadable dir (permissions) — skip, don't fail
+            };
+            for entry in entries.flatten() {
+                visits += 1;
+                if out.len() >= MAX_RESULTS || visits >= MAX_VISITS {
+                    break;
+                }
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') {
+                    continue; // hidden files/dirs
+                }
+                let file_type = match entry.file_type() {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                if file_type.is_dir() {
+                    if depth < MAX_DEPTH && !is_skipped_dir(&name) {
+                        stack.push((entry.path(), depth + 1));
+                    }
+                    continue;
+                }
+                let lower = name.to_lowercase();
+                let ext = lower.rsplit('.').next().unwrap_or("");
+                if !SEARCHABLE_EXTS.contains(&ext) {
+                    continue;
+                }
+                if tokens.iter().all(|t| lower.contains(t.as_str())) {
+                    let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                    out.push(FoundFile {
+                        path: entry.path().to_string_lossy().to_string(),
+                        name,
+                        ext: ext.to_string(),
+                        size,
+                    });
+                }
+            }
+        }
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+struct ReadFileResult {
+    name: String,
+    ext: String,
+    #[serde(rename = "bodyBase64")]
+    body_base64: String,
+}
+
+/// Read ONE chosen file's bytes (base64) so the renderer can import it through
+/// the same parsers as an uploaded file. Bounded; only invoked from the explicit
+/// `/open <path>` command or a click on a `/find` result.
+#[tauri::command]
+async fn read_file(path: String) -> Result<ReadFileResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use base64::Engine as _;
+        let p = PathBuf::from(&path);
+        let meta = std::fs::metadata(&p).map_err(|e| e.to_string())?;
+        if !meta.is_file() {
+            return Err("That path isn't a file.".into());
+        }
+        if meta.len() > MAX_READ_BYTES {
+            return Err("That file is larger than the 100 MB import limit.".into());
+        }
+        let name = p
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "file".to_string());
+        let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
+        let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
+        Ok(ReadFileResult {
+            name,
+            ext,
+            body_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Download a style LoRA into the engine's loras dir, with progress.
 #[tauri::command]
 async fn download_lora(app: AppHandle, model: DownloadableModel) -> Result<(), String> {
@@ -697,7 +858,9 @@ fn main() {
             download_lora,
             gpu_info,
             http_fetch,
-            save_file
+            save_file,
+            search_files,
+            read_file
         ])
         .build(tauri::generate_context!())
         .expect("error while building Visual Reader")

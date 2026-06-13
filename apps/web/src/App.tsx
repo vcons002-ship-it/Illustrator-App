@@ -27,6 +27,8 @@ import {
   bestParagraphIndex,
   conceptIntroductions,
   subjectFromCaption,
+  rankLocalFiles,
+  formatFileSize,
   type ConceptIntro,
   type BookSource,
   type BookSummary,
@@ -84,7 +86,9 @@ import {
   loraFamilies,
   onEngineProgress,
   onModelProgress,
+  readLocalFile,
   saveExportFile,
+  searchLocalFiles,
 } from "./runtime.js";
 
 /** Chat-history key for the landing-page buddy — reserved, never a book id. */
@@ -951,8 +955,52 @@ export function App() {
   const appendBuddy = (msg: Omit<StoredChatMessage, "at">) =>
     setBuddyMessages((prev) => [...prev, { ...msg, at: Date.now() }]);
 
+  // Open a local file the desktop `/find` surfaced: read its bytes via the Rust
+  // bridge, then run it through the SAME importer as an upload.
+  const onOpenLocalFile = useCallback(
+    async (path: string) => {
+      try {
+        const file = await readLocalFile(path);
+        await onUpload(file);
+      } catch (err) {
+        setLocalError(`Couldn't open that file: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [onUpload],
+  );
+
   const onBuddySend = useCallback(
     async (text: string) => {
+      // `/find` is a MAIN-THREAD command (desktop only) — filesystem access never
+      // routes through the LLM worker, so no web page / book text can trigger it.
+      const find = /^\/find\s+(.+)$/i.exec(text.trim());
+      if (find) {
+        appendBuddy({ role: "user", text });
+        if (!isDesktop) {
+          appendBuddy({ role: "tool", text: "🔒 Searching your computer needs the desktop app." });
+          return;
+        }
+        const query = find[1]!.trim();
+        appendBuddy({ role: "tool", text: `Searching your files for “${query}”…` });
+        try {
+          const ranked = rankLocalFiles(query, await searchLocalFiles(query), 15);
+          if (ranked.length === 0) {
+            appendBuddy({ role: "tool", text: `No importable files matched “${query}”.` });
+          } else {
+            appendBuddy({
+              role: "tool",
+              text: `Found ${ranked.length} file${ranked.length === 1 ? "" : "s"} — click to open:`,
+              files: ranked.map((f) => ({
+                path: f.path,
+                name: formatFileSize(f.size) ? `${f.name} · ${formatFileSize(f.size)}` : f.name,
+              })),
+            });
+          }
+        } catch (err) {
+          appendBuddy({ role: "tool", text: `⚠ File search failed: ${err instanceof Error ? err.message : String(err)}` });
+        }
+        return;
+      }
       const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
       const history = chatTurnsOf(buddyMessages);
       appendBuddy({ role: "user", text });
@@ -1193,6 +1241,7 @@ export function App() {
         text: m.text,
         ...(m.image ? { image: m.image } : {}),
         ...(m.links ? { links: m.links } : {}),
+        ...(m.files ? { files: m.files } : {}),
       })),
     [buddyMessages],
   );
@@ -1804,6 +1853,8 @@ export function App() {
             onClearHistory={onClearBuddy}
             onDeleteMessage={onDeleteBuddyMessage}
             onCompact={onCompactBuddyClick}
+            desktop={isDesktop}
+            onOpenLocalFile={onOpenLocalFile}
             {...(buddyUsage ? { contextUsage: buddyUsage } : {})}
           />
         </section>

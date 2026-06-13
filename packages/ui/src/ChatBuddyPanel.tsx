@@ -1,6 +1,6 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { MessageBubble, SlashMenu, UsageDisclosure, completeSlash, type ChatMessageVM } from "./ChatPanel.js";
-import { BUDDY_SLASH_COMMANDS, type BuddyPersona, type BuddyToolCall, type ContextUsage } from "@visual-reader/core";
+import { buddySlashCommands, type BuddyPersona, type BuddyToolCall, type ContextUsage } from "@visual-reader/core";
 
 /**
  * The landing-page chat buddy. Pure presentation, like ChatPanel — but rendered
@@ -32,10 +32,15 @@ export interface ChatBuddyPanelProps {
   onCompact?: () => void;
   /** Latest context-usage breakdown (for the usage donut). */
   contextUsage?: ContextUsage;
+  /** Desktop build: enables the `/find` local-file command. */
+  desktop?: boolean;
+  /** Open a local file from a `/find` result (desktop). Must be stable (memo). */
+  onOpenLocalFile?: (path: string) => void;
 }
 
 export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanelProps) {
   const [draft, setDraft] = useState("");
+  const commands = useMemo(() => buddySlashCommands(props.desktop ?? false), [props.desktop]);
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = scrollRef.current;
@@ -103,7 +108,13 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           </div>
         )}
         {props.messages.map((m, i) => (
-          <MessageBubble key={i} message={m} index={i} {...(props.onDeleteMessage ? { onDelete: props.onDeleteMessage } : {})} />
+          <MessageBubble
+            key={i}
+            message={m}
+            index={i}
+            {...(props.onDeleteMessage ? { onDelete: props.onDeleteMessage } : {})}
+            {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
+          />
         ))}
         {props.streamingText ? (
           <MessageBubble message={{ role: "assistant", text: props.streamingText }} />
@@ -132,7 +143,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         )}
       </div>
 
-      <SlashMenu draft={draft} commands={BUDDY_SLASH_COMMANDS} onPick={setDraft} />
+      <SlashMenu draft={draft} commands={commands} onPick={setDraft} />
       <div style={inputRowStyle}>
         <textarea
           value={draft}
@@ -142,7 +153,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               e.preventDefault();
               send();
             } else if (e.key === "Tab") {
-              const completed = completeSlash(draft, BUDDY_SLASH_COMMANDS);
+              const completed = completeSlash(draft, commands);
               if (completed) {
                 e.preventDefault();
                 setDraft(completed);
