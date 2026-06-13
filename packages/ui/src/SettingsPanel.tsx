@@ -188,6 +188,13 @@ export interface ReaderSettings {
    * adjustable knob (Claude / OpenAI) still apply their own policies.
    */
   allowMature?: boolean;
+  /**
+   * Desktop only, OFF by default: let the chat assistant propose shell commands to
+   * run in its workspace (install deps, run tests, execute code it wrote). Even
+   * when on, EVERY command is shown and must be approved before it runs. Enables
+   * the test-as-you-go coding loop.
+   */
+  allowCommands?: boolean;
   /** Transient: base URL of the app-managed local engine (desktop; not persisted). */
   engineBaseUrl?: string;
 }
@@ -623,6 +630,25 @@ export function SettingsPanel({
               </span>
             </span>
           </label>
+          {isDesktop && (
+            <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+              <input
+                type="checkbox"
+                checked={value.allowCommands ?? false}
+                onChange={(e) => set({ allowCommands: e.target.checked })}
+              />
+              <span>
+                Let the assistant run commands (advanced)
+                <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                  Allows the chat to PROPOSE shell commands (install dependencies, run tests,
+                  execute code it wrote) in a <code>VisualReader/workspace</code> folder — the
+                  test-as-you-go coding loop. You approve <b>every</b> command before it runs;
+                  nothing executes on its own. Off by default. Only enable if you understand that
+                  approved commands run on your computer with your permissions.
+                </span>
+              </span>
+            </label>
+          )}
           </Group>
 
           <Group

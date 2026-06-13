@@ -31,6 +31,8 @@ export const TUNING_FIELDS = [
   "chatLocalModel",
   "chatImageProvider",
   "localContextTokens",
+  // Read when building the buddy prompt; toggling it must not rebuild the engine.
+  "allowCommands",
 ] as const satisfies readonly (keyof ReaderSettings)[];
 
 /** Settings the engine never needs at all (pure presentation). */

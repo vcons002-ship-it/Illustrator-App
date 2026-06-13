@@ -88,6 +88,7 @@ import {
   onEngineProgress,
   onModelProgress,
   readLocalFile,
+  runCommand,
   saveExportFile,
   searchLocalFiles,
 } from "./runtime.js";
@@ -1086,6 +1087,39 @@ export function App() {
     void runFileSearch(call.query, turns);
   };
 
+  // Approve a buddy-requested shell command: run it (desktop), show the output, and
+  // bake the result into history so the model can read it and fix/continue. The
+  // model only ever PROPOSES; nothing runs without this explicit approval.
+  const approveRunCommand = async (call: Extract<BuddyToolCall, { tool: "run_command" }>): Promise<void> => {
+    setBuddyPendingTool(undefined);
+    const turns = pendingBuddyTranscript.current;
+    pendingBuddyTranscript.current = [];
+    if (!isDesktop) {
+      appendBuddy({ role: "tool", text: "🔒 Running commands needs the desktop app.", turns: [] });
+      return;
+    }
+    setBuddyBusy(true);
+    setBuddyActivity(`Running: ${call.command}`);
+    try {
+      const r = await runCommand(call.command);
+      const feedback = formatBuddyToolResult(call, { command: r });
+      const summary =
+        `$ ${call.command}\n[exit ${r.code}${r.timedOut ? " · timed out" : ""}]` +
+        (r.stdout ? `\n${r.stdout.slice(0, 4000)}` : "") +
+        (r.stderr ? `\n⚠ ${r.stderr.slice(0, 2000)}` : "");
+      appendBuddy({ role: "tool", text: summary, turns: [...turns, { role: "user", content: feedback }] });
+    } catch (err) {
+      appendBuddy({
+        role: "tool",
+        text: `⚠ Couldn't run the command: ${err instanceof Error ? err.message : String(err)}`,
+        turns: [],
+      });
+    } finally {
+      setBuddyBusy(false);
+      setBuddyActivity("");
+    }
+  };
+
   const onBuddySend = useCallback(
     async (text: string) => {
       // `/find` is a MAIN-THREAD command (desktop only) — filesystem access never
@@ -1180,7 +1214,9 @@ export function App() {
                               ? "Preparing an image…"
                               : e.call.tool === "find_files"
                                 ? "Asking to search your files…"
-                                : "Fetching the text and opening it…",
+                                : e.call.tool === "run_command"
+                                  ? "Proposing a command…"
+                                  : "Fetching the text and opening it…",
           );
         } else if (e.kind === "settings") {
           // The buddy resolved a settings change against the catalog; commit it
@@ -1316,6 +1352,10 @@ export function App() {
     const call = buddyPendingTool;
     if (call?.tool === "find_files") {
       approveFindFiles(call);
+      return;
+    }
+    if (call?.tool === "run_command") {
+      void approveRunCommand(call);
       return;
     }
     if (!call || call.tool !== "generate_image") return;

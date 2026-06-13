@@ -214,6 +214,22 @@ export async function readLocalFile(path: string): Promise<File> {
   return new File([base64ToBytes(r.bodyBase64) as BlobPart], r.name);
 }
 
+export interface CommandResult {
+  stdout: string;
+  stderr: string;
+  code: number;
+  timedOut: boolean;
+}
+
+/**
+ * Run ONE approved shell command in the desktop app's workspace folder and return
+ * its output. Only reached AFTER the reader approves the exact command in the chat
+ * (the run_command tool). Rejects on the web (no shell).
+ */
+export function runCommand(command: string): Promise<CommandResult> {
+  return invoke<CommandResult>("run_command", { command });
+}
+
 /** Subscribe to engine install/launch progress. Returns undefined on the web. */
 export function onEngineProgress(handler: (p: EngineProgress) => void): Promise<UnlistenFn> | undefined {
   return tauri()?.event?.listen<EngineProgress>("engine://progress", (e) => handler(e.payload));

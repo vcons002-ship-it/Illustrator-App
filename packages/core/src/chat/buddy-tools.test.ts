@@ -261,6 +261,42 @@ describe("buildBuddySystemPrompt", () => {
     expect(desktop).toContain('"tool":"find_files"');
     expect(desktop).toContain("OWN COMPUTER");
   });
+
+  it("advertises run_command only when explicitly enabled (opt-in)", () => {
+    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain("run_command");
+    const on = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true });
+    expect(on).toContain('"tool":"run_command"');
+    expect(on).toContain("APPROVE");
+    expect(on).toContain("NEVER run");
+  });
+});
+
+describe("run_command tool", () => {
+  it("parses a run_command call and caps its length", () => {
+    expect(parseBuddyToolCall('{"tool":"run_command","command":"npm test"}')).toEqual({
+      tool: "run_command",
+      command: "npm test",
+    });
+    const long = parseBuddyToolCall(`{"tool":"run_command","command":"${"x".repeat(2000)}"}`);
+    expect(long?.tool === "run_command" && long.command.length).toBe(1000);
+    expect(parseBuddyToolCall('{"tool":"run_command","command":"  "}')).toBeUndefined();
+  });
+
+  it("feeds the command's output back to the model with exit code", () => {
+    const ok = formatBuddyToolResult(
+      { tool: "run_command", command: "npm test" },
+      { command: { stdout: "5 passing", stderr: "", code: 0 } },
+    );
+    expect(ok).toContain("exit code 0");
+    expect(ok).toContain("5 passing");
+    expect(ok).toContain("React to this");
+    const fail = formatBuddyToolResult(
+      { tool: "run_command", command: "node x.js" },
+      { command: { stdout: "", stderr: "SyntaxError", code: 1, timedOut: false } },
+    );
+    expect(fail).toContain("exit code 1");
+    expect(fail).toContain("SyntaxError");
+  });
 });
 
 describe("find_files tool", () => {

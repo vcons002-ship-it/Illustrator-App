@@ -24,8 +24,9 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -558,6 +559,91 @@ async fn read_file(path: String) -> Result<ReadFileResult, String> {
     .map_err(|e| e.to_string())?
 }
 
+#[derive(Serialize)]
+struct CommandResult {
+    stdout: String,
+    stderr: String,
+    code: i32,
+    #[serde(rename = "timedOut")]
+    timed_out: bool,
+}
+
+/// Hard ceilings so an approved command can't hang the UI or flood it with output.
+const COMMAND_TIMEOUT_SECS: u64 = 240;
+const COMMAND_OUTPUT_CAP: usize = 32 * 1024;
+
+/// Run ONE shell command (the chat's run_command tool, after the reader approved it)
+/// in the app's workspace folder, capturing stdout/stderr/exit. The renderer only
+/// reaches this after an explicit per-command approval click — there is no silent
+/// path to it. stdout/stderr are drained on their own threads (so a chatty command
+/// can't deadlock on a full pipe), and a watchdog kills a command that overruns the
+/// timeout. Cross-platform via `cmd /C` on Windows, `sh -c` elsewhere.
+#[tauri::command]
+async fn run_command(app: AppHandle, command: String) -> Result<CommandResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dir = workspace_dir(&app);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let mut cmd = if cfg!(target_os = "windows") {
+            let mut c = Command::new("cmd");
+            c.arg("/C").arg(&command);
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.arg("-c").arg(&command);
+            c
+        };
+        cmd.current_dir(&dir).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = cmd.spawn().map_err(|e| format!("Couldn't start the command: {e}"))?;
+
+        // Drain both pipes concurrently so a large output never blocks the child.
+        let mut out_pipe = child.stdout.take();
+        let mut err_pipe = child.stderr.take();
+        let out_handle = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(p) = out_pipe.as_mut() {
+                let _ = p.read_to_end(&mut buf);
+            }
+            buf
+        });
+        let err_handle = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(p) = err_pipe.as_mut() {
+                let _ = p.read_to_end(&mut buf);
+            }
+            buf
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(COMMAND_TIMEOUT_SECS);
+        let mut timed_out = false;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(st)) => break st,
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        timed_out = true;
+                        break child.wait().map_err(|e| e.to_string())?;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(e) => return Err(e.to_string()),
+            }
+        };
+        let cap = |bytes: Vec<u8>| {
+            let s = String::from_utf8_lossy(&bytes);
+            s.chars().take(COMMAND_OUTPUT_CAP).collect::<String>()
+        };
+        Ok(CommandResult {
+            stdout: cap(out_handle.join().unwrap_or_default()),
+            stderr: cap(err_handle.join().unwrap_or_default()),
+            code: status.code().unwrap_or(-1),
+            timed_out,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Download a style LoRA into the engine's loras dir, with progress.
 #[tauri::command]
 async fn download_lora(app: AppHandle, model: DownloadableModel) -> Result<(), String> {
@@ -814,6 +900,12 @@ fn exports_dir(app: &AppHandle) -> PathBuf {
     engine_root(app).join("exports")
 }
 
+/// Working directory for the run_command tool: `~/VisualReader/workspace`. A known,
+/// app-owned folder where the assistant's files + commands live (not the user's cwd).
+fn workspace_dir(app: &AppHandle) -> PathBuf {
+    engine_root(app).join("workspace")
+}
+
 fn checkpoints_dir(app: &AppHandle) -> PathBuf {
     comfy_models_dir(app).join("checkpoints")
 }
@@ -863,7 +955,8 @@ fn main() {
             http_fetch,
             save_file,
             search_files,
-            read_file
+            read_file,
+            run_command
         ])
         .build(tauri::generate_context!())
         .expect("error while building Visual Reader")
