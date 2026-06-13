@@ -24,6 +24,7 @@ import {
   spoilerRevealPoint,
   toRenderUnits,
   formatToolResult,
+  formatBuddyToolResult,
   bestParagraphIndex,
   conceptIntroductions,
   subjectFromCaption,
@@ -205,6 +206,10 @@ export function App() {
   // The pending generate_image's transcript, folded in only on approval (same
   // injection guard as the book chat's pendingTranscript).
   const pendingBuddyTranscript = useRef<ChatTurn[]>([]);
+  // Session grant for buddy-initiated filesystem search: once the reader picks
+  // "Allow this session", later find_files calls run without re-confirming (a
+  // direct /find never needed confirming — the reader typed it). Reset on reload.
+  const fileAccessGranted = useRef(false);
   // Buddy messages handed into the next opened book's chat (consumed on book change),
   // so a buddy-initiated open continues the conversation inside the reader.
   const buddyHandoff = useRef<StoredChatMessage[] | undefined>(undefined);
@@ -969,6 +974,65 @@ export function App() {
     [onUpload],
   );
 
+  // Run a local-file search and present the matches as clickable chips. `modelTurns`
+  // (the conversational find_files path) bakes a model-facing feedback turn into the
+  // result so the buddy can follow up; the direct `/find` path passes none.
+  const runFileSearch = async (query: string, modelTurns?: ChatTurn[]): Promise<void> => {
+    if (!isDesktop) {
+      appendBuddy({ role: "tool", text: "🔒 Searching your computer needs the desktop app.", ...(modelTurns ? { turns: [] } : {}) });
+      return;
+    }
+    setBuddyBusy(true);
+    setBuddyActivity(`Searching your files for “${query}”…`);
+    try {
+      const ranked = rankLocalFiles(query, await searchLocalFiles(query), 15);
+      const baked = modelTurns
+        ? {
+            turns: [
+              ...modelTurns,
+              {
+                role: "user" as const,
+                content: formatBuddyToolResult(
+                  { tool: "find_files", query },
+                  { files: ranked.map((f) => ({ path: f.path, name: f.name })) },
+                ),
+              },
+            ],
+          }
+        : {};
+      if (ranked.length === 0) {
+        appendBuddy({ role: "tool", text: `No importable files matched “${query}”.`, ...baked });
+      } else {
+        appendBuddy({
+          role: "tool",
+          text: `Found ${ranked.length} file${ranked.length === 1 ? "" : "s"} — click to open:`,
+          files: ranked.map((f) => ({
+            path: f.path,
+            name: formatFileSize(f.size) ? `${f.name} · ${formatFileSize(f.size)}` : f.name,
+          })),
+          ...baked,
+        });
+      }
+    } catch (err) {
+      appendBuddy({
+        role: "tool",
+        text: `⚠ File search failed: ${err instanceof Error ? err.message : String(err)}`,
+        ...(modelTurns ? { turns: [] } : {}),
+      });
+    } finally {
+      setBuddyBusy(false);
+      setBuddyActivity("");
+    }
+  };
+
+  // Approve a buddy-requested find_files: run it with the pending transcript baked in.
+  const approveFindFiles = (call: Extract<BuddyToolCall, { tool: "find_files" }>): void => {
+    setBuddyPendingTool(undefined);
+    const turns = pendingBuddyTranscript.current;
+    pendingBuddyTranscript.current = [];
+    void runFileSearch(call.query, turns);
+  };
+
   const onBuddySend = useCallback(
     async (text: string) => {
       // `/find` is a MAIN-THREAD command (desktop only) — filesystem access never
@@ -976,29 +1040,7 @@ export function App() {
       const find = /^\/find\s+(.+)$/i.exec(text.trim());
       if (find) {
         appendBuddy({ role: "user", text });
-        if (!isDesktop) {
-          appendBuddy({ role: "tool", text: "🔒 Searching your computer needs the desktop app." });
-          return;
-        }
-        const query = find[1]!.trim();
-        appendBuddy({ role: "tool", text: `Searching your files for “${query}”…` });
-        try {
-          const ranked = rankLocalFiles(query, await searchLocalFiles(query), 15);
-          if (ranked.length === 0) {
-            appendBuddy({ role: "tool", text: `No importable files matched “${query}”.` });
-          } else {
-            appendBuddy({
-              role: "tool",
-              text: `Found ${ranked.length} file${ranked.length === 1 ? "" : "s"} — click to open:`,
-              files: ranked.map((f) => ({
-                path: f.path,
-                name: formatFileSize(f.size) ? `${f.name} · ${formatFileSize(f.size)}` : f.name,
-              })),
-            });
-          }
-        } catch (err) {
-          appendBuddy({ role: "tool", text: `⚠ File search failed: ${err instanceof Error ? err.message : String(err)}` });
-        }
+        await runFileSearch(find[1]!.trim());
         return;
       }
       const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
@@ -1039,7 +1081,9 @@ export function App() {
                             ? "Removing from your library…"
                             : e.call.tool === "generate_image"
                               ? "Preparing an image…"
-                              : "Fetching the text and opening it…",
+                              : e.call.tool === "find_files"
+                                ? "Asking to search your files…"
+                                : "Fetching the text and opening it…",
           );
         } else if (e.kind === "settings") {
           // The buddy resolved a settings change against the catalog; commit it
@@ -1139,7 +1183,13 @@ export function App() {
       }
       if (res.pendingTool) {
         pendingBuddyTranscript.current = [{ role: "user", content: text }, ...res.transcript];
-        setBuddyPendingTool(res.pendingTool);
+        // find_files runs WITHOUT re-prompting once the reader granted access this
+        // session; otherwise (and always for generate_image) it waits for approval.
+        if (res.pendingTool.tool === "find_files" && fileAccessGranted.current) {
+          approveFindFiles(res.pendingTool);
+        } else {
+          setBuddyPendingTool(res.pendingTool);
+        }
         return;
       }
       if (res.text) {
@@ -1160,6 +1210,10 @@ export function App() {
   // buddy's generate_image call has the identical shape by design).
   const onApproveBuddyTool = useCallback(async () => {
     const call = buddyPendingTool;
+    if (call?.tool === "find_files") {
+      approveFindFiles(call);
+      return;
+    }
     if (!call || call.tool !== "generate_image") return;
     setBuddyPendingTool(undefined);
     setBuddyBusy(true);
@@ -1179,6 +1233,13 @@ export function App() {
     pendingBuddyTranscript.current = [];
   }, [buddyPendingTool, chatTool]);
   const onApproveBuddyPendingTool = useCallback(() => void onApproveBuddyTool(), [onApproveBuddyTool]);
+  // "Allow this session": grant filesystem access so later find_files calls run
+  // without re-prompting, then run the pending search.
+  const onAllowBuddyFilesAlways = useCallback(() => {
+    fileAccessGranted.current = true;
+    const call = buddyPendingTool;
+    if (call?.tool === "find_files") approveFindFiles(call);
+  }, [buddyPendingTool]);
   const onDismissBuddyPendingTool = useCallback(() => {
     setBuddyPendingTool(undefined);
     pendingBuddyTranscript.current = [];
@@ -1848,6 +1909,7 @@ export function App() {
             onPersonaChange={setBuddyPersona}
             onSend={onBuddySendText}
             onApprovePendingTool={onApproveBuddyPendingTool}
+            onApprovePendingToolAlways={onAllowBuddyFilesAlways}
             onDismissPendingTool={onDismissBuddyPendingTool}
             onCancel={buddyCancel}
             onClearHistory={onClearBuddy}

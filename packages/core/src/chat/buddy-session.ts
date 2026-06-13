@@ -101,8 +101,10 @@ export async function runBuddyTurn(opts: {
     transcript.push({ role: "assistant", content: reply });
     messages.push({ role: "assistant", content: reply });
 
-    if (call.tool === "generate_image") {
-      // Stops the loop: the host/UI takes over (approval → render → follow-up).
+    if (call.tool === "generate_image" || call.tool === "find_files") {
+      // Stops the loop for the host/UI: generate_image needs render approval;
+      // find_files needs the reader's OK before any filesystem access. Both come
+      // back as a pendingTool the main thread runs after the reader confirms.
       return { text: "", transcript, pendingTool: call, toolResults };
     }
     const result = await runBuddyTool(call, opts.deps);
@@ -117,7 +119,7 @@ export async function runBuddyTurn(opts: {
 /** Execute one auto-run buddy tool (everything but generate_image). Exported for
  * the slash-command path, which runs tools directly without an LLM round. */
 export async function runBuddyTool(
-  call: Exclude<BuddyToolCall, { tool: "generate_image" }>,
+  call: Exclude<BuddyToolCall, { tool: "generate_image" | "find_files" }>,
   deps: BuddyDeps,
 ): Promise<BuddyToolResultPayload> {
   try {

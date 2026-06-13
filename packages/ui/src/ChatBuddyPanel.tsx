@@ -23,6 +23,8 @@ export interface ChatBuddyPanelProps {
   onPersonaChange: (p: BuddyPersona) => void;
   onSend: (text: string) => void;
   onApprovePendingTool: () => void;
+  /** Grant filesystem access for the session (find_files approval only). */
+  onApprovePendingToolAlways?: () => void;
   onDismissPendingTool: () => void;
   onCancel: () => void;
   onClearHistory: () => void;
@@ -138,6 +140,31 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             </button>
             <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
               Dismiss
+            </button>
+          </div>
+        )}
+        {props.pendingTool?.tool === "find_files" && (
+          <div style={approvalStyle}>
+            <div style={{ fontSize: 12, marginBottom: 6 }}>
+              🔒 Let the buddy search your computer for a file?
+              <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
+                “{props.pendingTool.query}” — it reads file names only, and opens nothing without your click.
+              </span>
+            </div>
+            <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+              Allow once
+            </button>
+            {props.onApprovePendingToolAlways && (
+              <button
+                style={{ ...smallButtonStyle, marginRight: 6 }}
+                onClick={props.onApprovePendingToolAlways}
+                title="Don't ask again for file searches this session"
+              >
+                Allow this session
+              </button>
+            )}
+            <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+              Deny
             </button>
           </div>
         )}
