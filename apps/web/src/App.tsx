@@ -100,6 +100,24 @@ const BUDDY_CHAT_ID = "__buddy__";
 
 /** Message shown when a figure search returns nothing (or errors) — so an empty
  * result is visible instead of looking like the search silently did nothing. */
+/** Direct-image extensions for the "just display this URL" shortcut. */
+const IMAGE_URL_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif)(\?|#|$)/i;
+
+/**
+ * If a message is really a request to just SHOW a web image (a bare image link, or
+ * "show/open/view the image at <link>"), return that URL — so the chat displays it
+ * inline instead of trying to open it as a book or running another search.
+ */
+function pastedImageUrl(text: string): string | undefined {
+  const t = text.trim();
+  const m =
+    /^(?:show|open|view|display|see)?\s*(?:me\s+|the\s+)?(?:image\s+(?:on|at|from)\s+(?:that\s+|this\s+)?(?:link|url|page)?\s*:?\s*)?(https?:\/\/\S+)$/i.exec(
+      t,
+    );
+  const url = m?.[1] ?? (/^https?:\/\/\S+$/i.test(t) ? t : undefined);
+  return url && IMAGE_URL_RE.test(url) ? url : undefined;
+}
+
 function imageSearchMiss(query: string, error: string | undefined, hasSearchKey: boolean): string {
   if (error) return `⚠ Image search failed for “${query}”: ${error}`;
   return (
@@ -815,6 +833,14 @@ export function App() {
   const onChatSend = useCallback(
     async (text: string) => {
       if (!book) return;
+      // A pasted/typed image URL just gets DISPLAYED — don't feed a .jpg to the LLM
+      // (which would try to read it as a page or re-search).
+      const directImg = pastedImageUrl(text);
+      if (directImg) {
+        appendChat({ role: "user", text });
+        appendChat({ role: "tool", text: "Here's that image:", gallery: [{ thumb: directImg, full: directImg }] });
+        return;
+      }
       const turnBookId = book.id; // guard: ignore this turn if the reader switches/exits
       const seq = ++chatTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
       const history = chatTurnsOf(chatMessages);
@@ -861,15 +887,20 @@ export function App() {
                 links: e.hits.map((h) => ({ url: h.link, ...(h.title ? { title: h.title } : {}) })),
               });
             } else if (e.imageHits?.length) {
-              const best = e.imageHits[0]!;
+              // Show EVERY hit as a thumbnail gallery (click to enlarge), not just the
+              // first — so "show me 3 images of X" actually shows several.
+              const hits = e.imageHits.slice(0, 8);
               appendChat({
                 role: "tool",
-                text: `Found: ${best.title ?? "image"}`,
-                image: { sourceUrl: best.thumbnailLink ?? best.link },
-                // Links open the IMAGES themselves, not their source pages.
-                links: e.imageHits
-                  .slice(0, 5)
-                  .map((h, i) => ({ url: h.link, title: `${i + 1}. ${h.title ?? "image"}` })),
+                text:
+                  hits.length > 1
+                    ? `Found ${hits.length} images — tap any to enlarge:`
+                    : `Found: ${hits[0]!.title ?? "image"} (tap to enlarge)`,
+                gallery: hits.map((h) => ({
+                  thumb: h.thumbnailLink ?? h.link,
+                  full: h.link,
+                  ...(h.title ? { title: h.title } : {}),
+                })),
               });
             } else if (e.memory) {
               appendChat({
@@ -991,6 +1022,7 @@ export function App() {
         text: m.text,
         ...(m.image ? { image: m.image } : {}),
         ...(m.links ? { links: m.links } : {}),
+        ...(m.gallery ? { gallery: m.gallery } : {}),
       })),
     [chatMessages],
   );
@@ -1288,13 +1320,21 @@ export function App() {
             })),
           });
         } else if (e.imageHits?.length) {
-          const best = e.imageHits[0]!;
+          // All hits as a thumbnail gallery (tap to enlarge); keep lastRefs so
+          // "show #N" still works for an even bigger view of one.
+          const hits = e.imageHits.slice(0, 8);
           lastRefs.current = e.imageHits.map((h) => ({ kind: "image", label: h.title ?? "image", url: h.link }));
           appendBuddy({
             role: "tool",
-            text: `Found: ${best.title ?? "image"} (say “show #N” for another)`,
-            image: { sourceUrl: best.thumbnailLink ?? best.link },
-            links: e.imageHits.slice(0, 5).map((h, i) => ({ url: h.link, title: `${i + 1}. ${h.title ?? "image"}` })),
+            text:
+              hits.length > 1
+                ? `Found ${hits.length} images — tap any to enlarge:`
+                : `Found: ${hits[0]!.title ?? "image"} (tap to enlarge)`,
+            gallery: hits.map((h) => ({
+              thumb: h.thumbnailLink ?? h.link,
+              full: h.link,
+              ...(h.title ? { title: h.title } : {}),
+            })),
           });
         } else if (e.calc) {
           appendBuddy({ role: "tool", text: `🧮 ${e.calc.expression} = ${e.calc.result}` });
@@ -1375,21 +1415,23 @@ export function App() {
           appendBuddy({
             role: "tool",
             text: `#${n}: ${ref.label}`,
-            image: { sourceUrl: ref.url },
-            links: [{ url: ref.url, title: "open full image" }],
+            gallery: [{ thumb: ref.url, full: ref.url, title: ref.label }],
           });
         }
         return;
       }
-      // A pasted bare link.
+      // A pasted/typed image link (bare, or "show me the image at <link>") just gets
+      // DISPLAYED inline — not opened as a book/article or re-searched.
+      const directImg = pastedImageUrl(text);
+      if (directImg) {
+        appendBuddy({ role: "user", text });
+        appendBuddy({ role: "tool", text: "Here's that image:", gallery: [{ thumb: directImg, full: directImg }] });
+        return;
+      }
+      // A pasted bare (non-image) link.
       const url = text.trim();
       if (/^https?:\/\/\S+$/i.test(url)) {
         appendBuddy({ role: "user", text });
-        // A direct image link should just DISPLAY — not try to open a book/article.
-        if (/\.(png|jpe?g|webp|gif|bmp|svg)(\?|#|$)/i.test(url)) {
-          appendBuddy({ role: "tool", text: "Here's that image:", image: { sourceUrl: url }, links: [{ url, title: "open full image" }] });
-          return;
-        }
         appendBuddy({
           role: "tool",
           text: "I see a link — what would you like to do with it?",
@@ -1518,6 +1560,7 @@ export function App() {
         text: m.text,
         ...(m.image ? { image: m.image } : {}),
         ...(m.links ? { links: m.links } : {}),
+        ...(m.gallery ? { gallery: m.gallery } : {}),
         ...(m.files ? { files: m.files } : {}),
         ...(m.actions ? { actions: m.actions } : {}),
       })),
