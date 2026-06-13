@@ -571,6 +571,7 @@ async function handleTestRender(
       },
       [out.bytes],
     );
+    warmChatModel(); // reload the local LLM the render may have evicted
   } catch (err) {
     post({
       type: "testRendered",
@@ -642,6 +643,23 @@ async function renderFromText(
     ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),
   });
   return { bytes: out.bytes, mimeType: out.mimeType, prompt };
+}
+
+/**
+ * Reload the local chat model into VRAM after an image render — image generation
+ * (ComfyUI/local) evicts the LLM under GPU memory pressure, so the NEXT chat turn
+ * would otherwise wait on a cold reload (felt like a hang). Fire-and-forget: a
+ * 1-token request warms it while the reader looks at the rendered image. Cloud
+ * chat models don't load locally, so they're skipped.
+ */
+function warmChatModel(): void {
+  try {
+    const { llm } = chatProviders();
+    if (!supportsChat(llm) || (llm.id !== "local-server" && llm.id !== "webllm")) return;
+    void llm.chat([{ role: "user", content: "ok" }], { maxTokens: 1 }).catch(() => {});
+  } catch {
+    /* no chat provider yet / not initialised — nothing to warm */
+  }
 }
 
 // --- Reading-companion chat -------------------------------------------------
@@ -1316,7 +1334,10 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
     // carries the SETTINGS style, so re-apply the resolved override on top of it.
     const baseTier = useBook ? bookProviders!.tier : built.tier;
     const tier = styleId ? { ...baseTier, style: styleId } : baseTier;
-    const out = await renderFromText(image, tier, call.prompt, call.steps ? { stepsOverride: call.steps } : {});
+    const out = await renderFromText(image, tier, call.prompt, {
+      ...(call.steps ? { stepsOverride: call.steps } : {}),
+      onProgress: (fraction) => post({ type: "testProgress", requestId, fraction }),
+    });
     post(
       {
         type: "chatToolResult",
@@ -1326,6 +1347,7 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
       },
       [out.bytes],
     );
+    warmChatModel(); // reload the local LLM the render may have evicted
   } catch (err) {
     post({
       type: "chatToolResult",
