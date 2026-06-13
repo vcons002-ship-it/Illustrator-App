@@ -1,5 +1,5 @@
 import type { BookSource } from "@visual-reader/core";
-import { htmlToText, parseEpub } from "@visual-reader/epub";
+import { csvToText, docxToText, htmlToText, parseEpub, rtfToText, xlsxToText } from "@visual-reader/epub";
 
 /**
  * Universal book import (browser side): turn any supported file — EPUB, plain text,
@@ -10,15 +10,18 @@ import { htmlToText, parseEpub } from "@visual-reader/epub";
  */
 
 /** File extensions the importer understands (used for the input's `accept`). */
-export const IMPORT_ACCEPT = ".epub,.txt,.md,.markdown,.html,.htm,.pdf";
+export const IMPORT_ACCEPT =
+  ".epub,.txt,.md,.markdown,.html,.htm,.pdf,.docx,.rtf,.csv,.tsv,.json,.xlsx";
 
 /**
  * An EPUB parses straight to a ready book; everything else yields extracted TEXT that
  * the caller confirms in the paste modal first (title fix-up + fiction/technical choice).
+ * `mode` pre-selects that choice — data files (spreadsheets/CSV) default to technical,
+ * where the extraction turns their numbers into charts.
  */
 export type ImportedFile =
   | { kind: "book"; book: BookSource }
-  | { kind: "text"; title: string; text: string };
+  | { kind: "text"; title: string; text: string; mode?: "fiction" | "technical" };
 
 export async function importBookFile(file: File): Promise<ImportedFile> {
   const ext = (file.name.split(".").pop() ?? "").toLowerCase();
@@ -32,17 +35,40 @@ export async function importBookFile(file: File): Promise<ImportedFile> {
     case "md":
     case "markdown":
       return { kind: "text", title, text: await file.text() };
+    case "json":
+      // Pretty-print so the structure is readable as prose; fall back to raw text.
+      return { kind: "text", title, text: prettyJson(await file.text()) };
     case "html":
     case "htm":
       return { kind: "text", title, text: htmlToText(await file.text()) };
+    case "rtf":
+      return { kind: "text", title, text: rtfToText(await file.text()) };
+    case "docx":
+      return { kind: "text", title, text: docxToText(await file.arrayBuffer()) };
+    case "csv":
+    case "tsv":
+      // Tabular data → technical mode (the extraction charts the numbers).
+      return { kind: "text", title, text: csvToText(await file.text()), mode: "technical" };
+    case "xlsx":
+      return { kind: "text", title, text: xlsxToText(await file.arrayBuffer()), mode: "technical" };
     case "pdf": {
       const data = new Uint8Array(await file.arrayBuffer());
       return { kind: "text", title, text: await pdfToText(data) };
     }
     default:
       throw new Error(
-        `Unsupported file type ".${ext}" — supported: EPUB, TXT, Markdown, HTML, PDF (or paste text directly).`,
+        `Unsupported file type ".${ext}" — supported: EPUB, PDF, Word (.docx), Excel (.xlsx), ` +
+          `CSV/TSV, RTF, JSON, TXT, Markdown, HTML (or paste text directly).`,
       );
+  }
+}
+
+/** Pretty-print JSON for readable import; raw text when it isn't valid JSON. */
+function prettyJson(raw: string): string {
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
   }
 }
 
