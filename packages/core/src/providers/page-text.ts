@@ -1,10 +1,14 @@
 import { DirectTransport, type Transport } from "./transport/transport.js";
+import { base64ToBytes } from "./image/base64.js";
 
 /**
  * Fetch a URL's readable text so the buddy can open web articles/books as a
- * `BookSource` (via epub's `bookFromText`). Two paths:
+ * `BookSource` (via epub's `bookFromText`) or read a page into the chat. Paths:
  *  - Wikipedia article URLs go through the Action API's plaintext extracts
  *    (CORS-open via `origin=*`, and far cleaner than stripping the page HTML).
+ *  - GitHub repo / file URLs go through GitHub's keyless, CORS-open API
+ *    (raw.githubusercontent for files; the readme + contents endpoints for a
+ *    repo root) — the heavy github.com SPA strips to mush otherwise.
  *  - Everything else is fetched directly; HTML responses get a tag-strip good
  *    enough for article prose. CORS-blocked origins surface as a fetch error the
  *    chat reports ("ask the reader to paste/upload instead") — by design there is
@@ -23,9 +27,79 @@ export const MAX_PAGE_TEXT_CHARS = 1_500_000;
 const API_USER_AGENT = "VisualReader/1.0 (https://github.com/vcons002-ship-it/illustrator-app)";
 
 const WIKIPEDIA_ARTICLE = /^https?:\/\/([a-z][a-z-]*)(?:\.m)?\.wikipedia\.org\/wiki\/([^#?]+)/i;
+/** A GitHub repo ROOT: github.com/owner/repo (optionally .git / trailing slash). */
+const GITHUB_REPO = /^https?:\/\/github\.com\/([^/\s#?]+)\/([^/\s#?]+?)(?:\.git)?\/?(?:[#?].*)?$/i;
+/** A GitHub file view: github.com/owner/repo/blob/ref/path. */
+const GITHUB_BLOB = /^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/([^/]+)\/(.+?)(?:[#?].*)?$/i;
 
 interface WikiExtractResponse {
   query?: { pages?: Record<string, { title?: string; extract?: string }> };
+}
+
+interface GitHubReadme {
+  content?: string;
+  encoding?: string;
+}
+interface GitHubContentItem {
+  name?: string;
+  type?: string;
+}
+
+/** A repo root → its README + top-level file list; a blob URL → that file's raw text. */
+async function fetchGitHub(
+  url: string,
+  transport: Transport,
+  maxChars: number,
+  signal: { signal?: AbortSignal },
+): Promise<PageText | undefined> {
+  const blob = GITHUB_BLOB.exec(url);
+  if (blob) {
+    const [, owner, repo, ref, path] = blob;
+    const raw = `https://raw.githubusercontent.com/${owner}/${repo}/${ref}/${path}`;
+    const res = await transport.send({ url: raw, method: "GET", ...signal });
+    if (!res.ok) throw new Error(`GitHub file fetch failed with status ${res.status}`);
+    return { title: `${owner}/${repo} · ${path}`, text: (await res.text()).slice(0, maxChars) };
+  }
+  const root = GITHUB_REPO.exec(url);
+  if (!root) return undefined;
+  const [, owner, repo] = root;
+  const api = `https://api.github.com/repos/${owner}/${repo}`;
+  let readme = "";
+  try {
+    const r = await transport.send({ url: `${api}/readme`, method: "GET", ...signal });
+    if (r.ok) {
+      const data = await r.json<GitHubReadme>();
+      if (data.content && data.encoding === "base64") {
+        readme = new TextDecoder().decode(base64ToBytes(data.content.replace(/\s/g, "")));
+      }
+    }
+  } catch {
+    /* no README, or rate-limited — fall through to the file list */
+  }
+  let files = "";
+  try {
+    const c = await transport.send({ url: `${api}/contents`, method: "GET", ...signal });
+    if (c.ok) {
+      const items = await c.json<GitHubContentItem[]>();
+      files = (Array.isArray(items) ? items : [])
+        .filter((i) => i.name)
+        .map((i) => `${i.type === "dir" ? "[dir] " : ""}${i.name}`)
+        .join("\n");
+    }
+  } catch {
+    /* ignore — README alone is still useful */
+  }
+  if (!readme && !files) {
+    throw new Error(`Couldn't read the GitHub repo ${owner}/${repo} (private, missing, or rate-limited).`);
+  }
+  const text = [
+    files ? `Repository ${owner}/${repo} — top-level files:\n${files}` : "",
+    readme ? `README (${owner}/${repo}):\n${readme}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+    .slice(0, maxChars);
+  return { title: `${owner}/${repo}`, text };
 }
 
 export async function fetchPageText(
@@ -54,6 +128,9 @@ export async function fetchPageText(
     if (!page?.extract) throw new Error(`Wikipedia has no readable article at ${url}`);
     return { ...(page.title ? { title: page.title } : {}), text: page.extract.slice(0, maxChars) };
   }
+
+  const github = await fetchGitHub(url, transport, maxChars, signal);
+  if (github) return github;
 
   const res = await transport.send({ url, method: "GET", ...signal });
   if (!res.ok) throw new Error(`Fetching ${url} failed with status ${res.status}`);

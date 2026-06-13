@@ -44,6 +44,46 @@ describe("fetchPageText", () => {
     expect(api).toContain(encodeURIComponent("Citric acid cycle"));
   });
 
+  it("reads a GitHub repo via the API: README (base64) + top-level file list", async () => {
+    const readme = "# Setup\n\nRun `npm install`, then `npm start`.";
+    const b64 = Buffer.from(readme, "utf8").toString("base64");
+    const requests: TransportRequest[] = [];
+    const transport: Transport & { requests: TransportRequest[] } = {
+      requests,
+      async send(request) {
+        requests.push(request);
+        const u = request.url;
+        const body = u.endsWith("/readme")
+          ? { content: b64, encoding: "base64" }
+          : u.endsWith("/contents")
+            ? [{ name: "package.json", type: "file" }, { name: "src", type: "dir" }]
+            : "";
+        return {
+          ok: true,
+          status: 200,
+          json: async <T>() => body as T,
+          arrayBuffer: async () => new ArrayBuffer(0),
+          text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
+        };
+      },
+    };
+    const page = await fetchPageText("https://github.com/owner/repo", { transport });
+    expect(page.title).toBe("owner/repo");
+    expect(page.text).toContain("npm install");
+    expect(page.text).toContain("package.json");
+    expect(page.text).toContain("[dir] src");
+    expect(requests.some((r) => r.url.endsWith("/repos/owner/repo/readme"))).toBe(true);
+    expect(requests.some((r) => r.url.endsWith("/repos/owner/repo/contents"))).toBe(true);
+  });
+
+  it("reads a GitHub blob URL as raw file text", async () => {
+    const transport = fakeTransport("export const x = 1;");
+    const page = await fetchPageText("https://github.com/o/r/blob/main/src/index.ts", { transport });
+    expect(page.text).toContain("export const x");
+    expect(page.title).toContain("src/index.ts");
+    expect(transport.requests[0]!.url).toBe("https://raw.githubusercontent.com/o/r/main/src/index.ts");
+  });
+
   it("returns plain-text responses as-is", async () => {
     const transport = fakeTransport("CHAPTER I.\n\nIt was a dark and stormy night.");
     const page = await fetchPageText("https://g.test/84.txt", { transport });
