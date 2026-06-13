@@ -99,6 +99,38 @@ terminal to stop.
 
 ---
 
+## Minimum & recommended specs
+
+The app itself is light — it runs in a browser tab or a small native window. What needs
+real horsepower is the AI, and you choose where that runs: **cloud** (any computer, just a
+key) or **local** (your own CPU/GPU, free and private). You can place the **text** model
+and the **image** model independently. With **no keys at all**, the built-in placeholder
+art works on anything.
+
+**Text LLM** (reads the book, writes prompts, powers the chat):
+
+| Where | Needs | Models (pick any) |
+|---|---|---|
+| **Cloud** | Any laptop + a key | **Claude**, **Gemini**, or **OpenAI** |
+| **Local — minimum** | A WebGPU browser, or ~8 GB RAM for Ollama | **Llama 3.2 1B/3B**, **Qwen2.5 3B** (in-browser), **Qwen 3 8B** (Ollama) |
+| **Local — recommended** | 12–16 GB VRAM or Apple Silicon | **Qwen 3 14B**, **Gemma 3 12B** (better prompts) |
+| **Local — vision** | 8 GB+ VRAM | **llama3.2-vision**, **llava**, **qwen2-vl**, or an LM Studio vision model (for the screenshot tool) |
+
+**Image model** (renders the art):
+
+| Where | Needs | Models (pick any) |
+|---|---|---|
+| **Cloud** | Any laptop + a key | **Flux** (Black Forest Labs), **Gemini** native, **OpenAI** `gpt-image-1` |
+| **Local — minimum** | ~4 GB VRAM | **SD 1.5**, **SDXL-Turbo** (run almost anywhere) |
+| **Local — recommended** | 8–12 GB VRAM | **SDXL**, **Flux.1**, **Z-Image Turbo** (the recommended default — 8 steps) |
+| **Local — high-end** | 16–24 GB VRAM | **Flux.2 Klein 9B**, **Qwen-Image** (sharpest detail + in-image text) |
+
+One **Gemini** or one **OpenAI** key covers both text and images. A common high-continuity
+combo is **Claude** (text) + **Flux** (images). Mix cloud and local freely — e.g. a cloud
+text key with a local SDXL GPU.
+
+---
+
 ## Desktop app (optional)
 
 Prefer a native window over a browser tab? Visual Reader also ships a desktop app
@@ -127,6 +159,31 @@ The app downloads the ComfyUI engine (bundled Python — nothing installed
 system-wide) and your chosen checkpoint, shows progress bars, launches it, and
 connects — no separate `comfyui-setup.bat` needed. (macOS/Linux still connect to
 an engine you run yourself; see below.)
+
+### Hands-on assistant tools (desktop only — approval-gated)
+
+The desktop app lets the chat assistant reach your machine to *do* things, with a
+human approval at every step. Some are on by default, the riskier ones are opt-in:
+
+- **Find files on your computer** — ask "open the PDF in my downloads" and it searches
+  and lists matches as clickable items. The first search asks you to **allow filesystem
+  access for the session**.
+- **Run commands & test code** *(opt-in)* — turn on **Settings → "Let the assistant run
+  commands"** and it can run **one shell command at a time** in a dedicated
+  `VisualReader` workspace folder (install dependencies, run a build or tests, execute a
+  script it wrote). **You approve every command** before it runs; its output comes back so
+  the assistant can check whether code works, fix it, and re-run. The same flag enables the
+  **screenshot** tool.
+- **Screenshots for a vision model** *(opt-in, same flag)* — it can capture your whole
+  screen, or just one window by name (great for a running game), and look at it with a
+  **vision model** to verify what it built. Vision can be cloud (Claude/Gemini/OpenAI) **or
+  a local vision model** (Ollama `llama3.2-vision` / `llava`, or LM Studio) so the image
+  never leaves your machine. You approve the first capture and can allow the rest for the
+  session.
+
+These tools only exist in the desktop app (a browser tab can't touch the filesystem, run a
+process, or capture the screen). They never act on their own — and the assistant will not
+run a command or open a file just because some web page or book text told it to.
 
 ---
 
@@ -301,19 +358,28 @@ Style ids: `photorealistic`, `anime`, `manga`, `animation-3d`, `watercolor`,
 
 The home screen is a **chat assistant** — you can simply tell it what you want:
 *"open Frankenstein and illustrate it in oil painting style"*, *"find me an
-article on the citric acid cycle"*, *"generate a picture of an apple"*, or just
-chat. It can open books from your library, fetch public-domain classics from
-Project Gutenberg, open web articles, change the art style, and start
-illustrating — all from the conversation. Or drive everything by hand:
+article on the citric acid cycle"*, *"generate a picture of an apple"*, *"export
+this as an epub"*, or just chat. It can open books from your library, fetch
+public-domain classics from Project Gutenberg, open web articles, read a web page
+or GitHub repo, change the art style, and start illustrating — all from the
+conversation. Type **`/`** for a menu of commands (`/web`, `/books`, `/draw`,
+`/style`, `/remember`, …), ask it to **make a file** (a worksheet, a CSV, a web
+page — it adds a Save button), and it **remembers your preferences** across
+sessions. If a request is ambiguous it asks a quick clarifying question rather than
+guessing. Or drive everything by hand:
 
 1. Click **Load sample** to start reading immediately — it works with **no API
    keys**, using built-in placeholder art so you can see the whole flow
    (Visual Bible → predictive rendering → bloom reveal → spoiler gating).
-2. Or click **Open book…** and choose an `.epub` (or txt/md/html/pdf) file.
-   Every book you open is remembered in a **Library** dropdown in the top bar —
+2. Or click **Open book…** and choose a file — **EPUB, PDF, Word (`.docx`),
+   Excel (`.xlsx`), CSV/TSV, RTF, JSON, plain text, Markdown, or HTML** (data files
+   open in technical mode). Dropping an **image** (`.png/.jpg/.webp/.gif`) instead
+   opens the **photo-transform** panel to restyle that picture through your image
+   model. Every book you open is remembered in a **Library** dropdown in the top bar —
    pick a title to switch back to it instantly (its illustrations + Visual Bible
    are cached, so there's nothing to regenerate). **← Exit book** returns to the
-   home screen anytime.
+   home screen anytime. You can **export** any open book as an illustrated HTML page
+   or EPUB from the toolbar (or just ask the chat).
 3. As you scroll, the illustration for the current page appears beside the text,
    fading in as you arrive. Spoiler imagery stays blurred until you read past it.
 4. Optional: click **Pre-render whole book** in the top bar to generate every

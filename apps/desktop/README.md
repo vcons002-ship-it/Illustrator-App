@@ -18,8 +18,23 @@ down the engine invisibly — the user only ever picks a model.
   `frontendDist: ../../web/dist`). `withGlobalTauri: true` exposes `window.__TAURI__`,
   which `apps/web/src/runtime.ts` detects (`isDesktop`) to enable the local path.
 - **Commands (Rust → renderer):** `ensure_engine`, `list_models`, `download_model`,
-  `download_lora`, `lora_headers`, `gpu_info`, and `http_fetch` (see
-  `src-tauri/src/main.rs`). The renderer calls these from `runtime.ts`.
+  `download_lora`, `lora_headers`, `gpu_info`, `http_fetch`, and the agentic-tool
+  commands `save_file`, `search_files`, `read_file`, `run_command`, and `capture_screen`
+  (see `src-tauri/src/main.rs`). The renderer calls these from `runtime.ts`.
+- **Agentic tools — the desktop-only reach the chat assistant gets:** a browser tab
+  can't touch the filesystem, spawn a process, or capture the screen, so these live in
+  the Rust shell, each one human-approved in the UI before it fires:
+  - `save_file` — writes a chat-authored file (a fenced code block's *Save* button) into
+    the `VisualReader` workspace.
+  - `search_files` / `read_file` — back the buddy's `find_files` tool: locate a document
+    on the user's machine and read it in to open as a book.
+  - `run_command` — runs **one** shell command in the workspace folder and returns
+    stdout/stderr/exit code so the assistant can build, test, and fix code iteratively. It
+    drains the pipes on a thread and enforces a watchdog timeout so a hung child can't wedge
+    the app. Gated behind the opt-in `allowCommands` setting.
+  - `capture_screen` — screenshots the whole screen or a single window by title (via the
+    `xcap` crate, PNG-encoded) so a vision model can assess what the assistant built. Same
+    opt-in gate; the renderer hands the image to a cloud **or local** vision model.
 - **`http_fetch` — CORS-free web access:** the desktop twin of the extension's
   background-worker proxy. The webview is a browser and enforces CORS like one;
   this native command (reqwest, 60s timeout, 32 MB cap, http(s)-only, base64

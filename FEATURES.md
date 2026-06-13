@@ -24,8 +24,17 @@ then follows you into the book to keep talking about it.
 ## Feature list
 
 ### 📖 Reading & illustrations
-- **Open any book** — EPUB, plain text (`.txt`), Markdown, HTML, or PDF; or **Paste text**
-  to read/illustrate any article or excerpt. (Or click *Load sample* to try it instantly.)
+- **Open almost any document** — EPUB, plain text (`.txt`), Markdown, HTML, PDF, **Word
+  (`.docx`)**, **Excel (`.xlsx`)**, **CSV/TSV**, **RTF**, and **JSON**; or **Paste text** to
+  read/illustrate any article or excerpt. (Or click *Load sample* to try it instantly.)
+  Spreadsheets and data files open in technical mode automatically.
+- **Transform a photo** — drop an image file (`.png/.jpg/.webp/.gif`) and the app opens a
+  **photo-transform** panel instead: restyle or reimagine that picture through your image
+  model (cloud Gemini/OpenAI or your local ComfyUI) — it keeps the photo's composition and
+  doesn't force the book's global art style onto it.
+- **Export an illustrated copy** — save the open book (its text + the art rendered so far)
+  as a **self-contained HTML page** or an **EPUB** — from the toolbar or just by asking the
+  chat ("export this as an epub").
 - **Test image** — type any prompt and render one image with the current model/style to
   quickly try providers, styles, and LoRAs without opening a book.
 - **Clean reader** with chapter headings and page dividers.
@@ -102,9 +111,38 @@ companion), and **Technical** (research companion):
   you ask.
 - **The conversation follows you** — when it opens a book, the discussion continues
   inside the reader's book chat, context intact.
+- **Reads a page or repo for you** — point it at a URL (or a GitHub repo, where it reads
+  the README + file list, or a single file) and it pulls the text into the chat to learn
+  from before answering or writing code.
+- **Remembers what you like** — tell it "I prefer watercolor" or "never spoil endings" and
+  it keeps a **long-term memory** that applies in every future conversation and book (you
+  can ask it to forget, too).
+- **Asks instead of guessing** — if a request is ambiguous (which book, which window, which
+  export format), it asks one short question or offers a couple of concrete options.
+- **Type `/` for commands** — a slash-command menu runs any tool directly: `/web`, `/books`,
+  `/random`, `/open`, `/images`, `/draw`, `/calc`, `/style`, `/remember`, and (desktop)
+  `/find`. The book chat has its own set (`/bible`, `/book`, `/web`, `/draw`, …).
+- **Makes files** — ask for a worksheet, a quiz, a CSV, or "code me a landing page" and it
+  writes the complete content with a one-click **Save** button.
 - **Searches the web keylessly** — Wikipedia out of the box; full-web DuckDuckGo where
   the platform allows it (extension / desktop); your Google Custom Search key upgrades it
   to whole-web everywhere.
+
+### 🛠 Hands-on tools (desktop, opt-in & always approved)
+On the desktop app the assistant can reach your machine to actually *do* things — every
+step is shown and waits for your click, and the riskier tools are off until you turn them
+on in Settings:
+- **Find a file on your computer** — "open the PDF in my downloads" → it searches and shows
+  the matches as clickable items (you approve filesystem access once per session).
+- **Run a command and react to it** — install dependencies, run a build or tests, or execute
+  a script it just wrote — in a dedicated `VisualReader` workspace folder. You approve each
+  command; its output comes back so the assistant can **test code, see what failed, fix it,
+  and try again** on its own.
+- **Look at your screen** — it can take a screenshot (the whole screen, or just one window
+  by name — handy for a running game) and **assess it with a vision model** to check whether
+  what it built actually works. Vision can be a cloud model *or* a fully local one, so the
+  picture never has to leave your machine. You approve the first capture and can allow the
+  rest for the session.
 
 ### 💬 Book chat (reading companion)
 Open **Chat** while reading to discuss the book with an AI that actually knows it:
@@ -116,9 +154,12 @@ Open **Chat** while reading to discuss the book with an AI that actually knows i
   question needs another chapter, instead of re-reading the whole book every message.
 - **Knows the app's analysis** — the glossary, structures/locations, chapter summaries,
   the actual image prompts, and any extracted datasets (the "technical bible").
-- **Can use the app's tools**: search the book, search the web for sources, find real
-  images/diagrams (shown inline with links), and **generate images** with your image
-  models — image generation always asks for your approval first.
+- **Can use the app's tools**: search the book, search the web for sources, **read a web
+  page** into the chat (`read_url`), find real images/diagrams (shown inline with links),
+  **generate images** with your image models (always with your approval), **export** the
+  illustrated book, and keep a **long-term memory** of your preferences. Type `/` for the
+  command menu (`/bible`, `/book`, `/web`, `/images`, `/draw`, `/remember`, …), or ask for a
+  file/quiz/summary and it writes it with a Save button.
 - **Ask for render settings in plain chat** — "draw a truck, 20 steps, flux 2" picks the
   named *installed* model, step count, and style for that one render — and if a name
   doesn't match anything installed, it tells you what is installed instead of silently
@@ -163,9 +204,20 @@ Open **Chat** while reading to discuss the book with an AI that actually knows i
   own GPU via ComfyUI or AUTOMATIC1111 (SD 1.5 / SDXL / Flux.1, plus **Z-Image Turbo**,
   **Flux.2 Klein** and **Qwen-Image** on ComfyUI). The **desktop app can auto-manage**
   ComfyUI and downloads every file a model needs (split files included, resumable).
+- **Vision (seeing images):** the screenshot tool and "what's in this image?" need a
+  vision-capable model. **Claude, Gemini, and OpenAI** all see images; **locally**, a vision
+  model does too — Ollama `llama3.2-vision` / `llava` / `qwen2-vl`, or an LM Studio vision
+  model — so screen assessment can stay fully offline. Settings calls out which of your
+  models can see (text-only local models can't).
 - **One-API native mode:** when the same vendor (Gemini/OpenAI) runs text **and** images,
   opt into its **multimodal** image model so your uploaded character reference photos guide
   cloud renders — the consistency a local IP-Adapter gives, with just a key.
+- **What you need to run it:** **cloud** needs nothing but a key and any laptop. **Local
+  text** ranges from tiny on-device models (Llama 3.2 1B/3B, Qwen2.5 3B) up to Qwen 3 14B /
+  Gemma 3 12B for the best prompts; **local images** from SD 1.5 on ~4 GB VRAM up through
+  SDXL, Flux.1, **Z-Image Turbo** (the recommended default), Flux.2 Klein, and Qwen-Image on
+  bigger GPUs. See **[README → Minimum & recommended specs](./README.md#minimum--recommended-specs)**
+  for the full breakdown.
 - **No keys? Still works** — built-in placeholder art shows the whole flow.
 - **Keys are encrypted** on your device; local/on-device options keep everything private.
 - **Mature mode (adults only, off by default)** — a Settings toggle for intentionally
@@ -177,8 +229,10 @@ Open **Chat** while reading to discuss the book with an AI that actually knows i
 ### 💻 Where it runs
 - **Web app** — the main reader.
 - **Desktop app** (Tauri) — same reader, plus it can set up and launch a local GPU image
-  engine for you, and its native shell gives the chat buddy **unrestricted web access**
-  (news front pages, DuckDuckGo search) that a browser tab's CORS rules would block.
+  engine for you, gives the chat buddy **unrestricted web access** (news front pages,
+  DuckDuckGo search) that a browser tab's CORS rules would block, and unlocks the **hands-on
+  tools** — finding files on your computer, running commands in a workspace, and taking
+  screenshots for a vision model to assess (all approval-gated).
 - **Chrome extension** — illustrates articles you read on the web (shares the same
   engine; its background worker provides the same CORS-free web access).
 
@@ -252,6 +306,19 @@ Open **Chat** while reading to discuss the book with an AI that actually knows i
 - **Hosted option** — an optional managed backend so you don't need your own keys/GPU.
 
 **Done recently**
+- **Hands-on desktop tools** — the assistant can (with per-step approval) find files on your
+  computer, run commands in a `VisualReader` workspace to build/test code and fix it
+  iteratively from the output, and take screenshots that a **cloud or local vision model**
+  assesses — so it can verify a game or UI it just built. The command and screenshot tools
+  are off by default behind a Settings flag.
+- **Illustrated export** — save the open book as a self-contained **HTML page** or an
+  **EPUB**, from the toolbar or by asking the chat.
+- **More ways in** — open Word, Excel, CSV/TSV, RTF, and JSON files (data files default to
+  technical mode); drop an image to **transform a photo** through your image model.
+- **Slash commands, memory & read-a-page** — type `/` in either chat for a command menu;
+  a **long-term memory** keeps your preferences across books; `read_url` pulls a web page or
+  GitHub repo into the chat; and both chats **ask a clarifying question** instead of guessing
+  when a request is ambiguous.
 - **The chat buddy home screen** — a full-window assistant (Freeform / Entertainment /
   Technical voices) that finds books (library · Project Gutenberg · web · pasted text),
   opens and illustrates them by voice (style + cadence included), generates images with

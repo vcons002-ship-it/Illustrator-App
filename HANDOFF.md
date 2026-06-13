@@ -6,6 +6,53 @@ Paste-in pointer for a fresh session:
 > work branch, then PR + merge into the default branch (the user's installers
 > and `git pull` track it; `main` was deleted). Read `HANDOFF.md` first.
 
+## Newest session: agentic tools, export, formats & docs
+
+Branch `claude/chat-context-pull-2l6pkv`; each piece PR'd and squash-merged into the
+default branch, then merged back to keep the work branch in sync. What landed:
+
+- **Slash commands + `/` menu** (`packages/core/src/chat/slash-commands.ts`) — both chats
+  list commands when you type `/`; sending `/cmd args` runs the tool DIRECTLY (no LLM
+  round) via the same parser/caps. Book set: `/bible /book /web /images /draw /remember
+  /forget`; buddy set: `/web /books /random /open /remove /images /draw /calc /style
+  /remember /forget`; desktop-only `/find` runs on the MAIN thread (never the LLM).
+- **Long-term reader memory** (`chat/reader-memory.ts`) — `remember`/`forget` tools shared
+  by both chats; persisted, injected into every future system prompt.
+- **`read_url`** (both unions) — fetch a page's readable text into the chat; **GitHub-aware**
+  (`providers/page-text.ts`): a repo URL reads README + top-level file list, a `…/blob/…`
+  URL reads that file. Treated as reference DATA, not instructions (guard in the prompt + the
+  formatted result).
+- **Agentic desktop tools** (buddy union + Rust commands in `apps/desktop/src-tauri/src/main.rs`):
+  - **File creation** — a fenced code block in a reply gets a Save button → `save_file`.
+  - **`find_files`** — `search_files`/`read_file`; approval-gated, `fileAccessGranted` session
+    ref + "Allow this session" button.
+  - **`run_command`** — one command in the `VisualReader` workspace; per-command approval;
+    stdout/stderr/exit fed back so the model auto-reacts and fixes code; threaded pipe drain +
+    watchdog timeout. Gated by the opt-in `allowCommands` setting.
+  - **`screenshot`** — `capture_screen` via `xcap` (added to Cargo.toml with `image`/png);
+    whole screen or one window by title; assessed by a vision model. Same `allowCommands`
+    gate; `screenCaptureGranted` session ref.
+- **Local vision** — new `VisionCapable.describeImage` interface + `supportsVision` guard
+  (`providers/llm/chat.ts`); Claude/Gemini/OpenAI/local-server providers implement it. Local
+  vision via Ollama (`llama3.2-vision`/`llava`/`qwen2-vl`) or LM Studio. Settings calls out
+  which models can see (SettingsPanel vision blurb).
+- **`export_book`** (chat tool, host-handled, no approval) — illustrated HTML or EPUB export
+  (`packages/epub/src/export.ts`); also a toolbar button.
+- **Expanded import** (`packages/epub/src/data-import.ts`, `apps/web/src/import-file.ts`) —
+  `.docx/.xlsx/.csv/.tsv/.rtf/.json` added to EPUB/txt/md/html/pdf (data files → technical
+  mode); image files (`.png/.jpg/.webp/.gif`) route to the **photo-transform** (img2img)
+  panel — `renderFromText` skips the forced global style when `opts.initImage` is set, and
+  img2img is wired for Gemini/OpenAI native (describeImage/edits) + local ComfyUI.
+- **Ambiguity prompts** — both system prompts now tell the model to ask one short clarifying
+  question / offer 2–3 options instead of guessing.
+- **Docs** — README/FEATURES/SETUP/desktop-README updated for all of the above, plus a new
+  **Minimum & recommended specs** section (a variety of LLMs + image models, cloud and local)
+  in README.md and SETUP.md.
+
+Still desktop-verified only (no Rust toolchain in CI): the new Tauri commands compile-checked
+by shape, runtime needs an on-device pass (filesystem search, run_command pipes/timeout,
+xcap window capture).
+
 ## Latest session: the conversational layer (chat buddy) + follow-ups
 
 The landing page is now a full-window **chat buddy** that drives the whole app;
