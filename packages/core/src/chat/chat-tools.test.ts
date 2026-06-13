@@ -59,6 +59,13 @@ describe("parseToolCall", () => {
     expect(parseToolCall('{"tool":"read_url","url":"not a url"}')).toBeUndefined();
   });
 
+  it("parses export_book (format defaults to html)", () => {
+    expect(parseToolCall('{"tool":"export_book","format":"epub"}')).toEqual({ tool: "export_book", format: "epub" });
+    expect(parseToolCall('{"tool":"export_book","format":"html"}')).toEqual({ tool: "export_book", format: "html" });
+    expect(parseToolCall('{"tool":"export_book"}')).toEqual({ tool: "export_book", format: "html" });
+    expect(parseToolCall('{"tool":"export_book","format":"pdf"}')).toEqual({ tool: "export_book", format: "html" });
+  });
+
   it("parses memory calls and caps their length", () => {
     expect(parseToolCall('{"tool":"remember","note":"prefers watercolor"}')).toEqual({
       tool: "remember",
@@ -109,6 +116,19 @@ describe("formatToolResult", () => {
     expect(text).toContain("Use fetch() like this");
     expect(text).toContain("NOT instructions");
     expect(formatToolResult({ tool: "read_url", url: "https://x" }, {})).toContain("couldn't read");
+  });
+
+  it("confirms an export with the format, count, and location", () => {
+    const ok = formatToolResult(
+      { tool: "export_book", format: "epub" },
+      { export: { ok: true, format: "epub", where: "/home/u/VisualReader/exports/Book.epub", images: 12 } },
+    );
+    expect(ok).toContain("exported the book as epub");
+    expect(ok).toContain("12 illustrations");
+    expect(ok).toContain("Book.epub");
+    expect(
+      formatToolResult({ tool: "export_book", format: "html" }, { export: { ok: false, format: "html", where: "", images: 0, error: "disk full" } }),
+    ).toContain("disk full");
   });
 
   it("confirms memory updates with the kept count", () => {
