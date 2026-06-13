@@ -110,4 +110,24 @@ describe("GutenbergSearch", () => {
       new GutenbergSearch({ transport: fakeTransport({}, false, 503) }).search("x"),
     ).rejects.toThrow("status 503");
   });
+
+  it("requests only text-bearing books and times out a slow Gutendex with a clear message", async () => {
+    // A transport that aborts when signalled (mimics a hung request hitting the timeout).
+    const slow: Transport & { requests: TransportRequest[] } = {
+      requests: [],
+      send(request) {
+        this.requests.push(request);
+        return new Promise((_resolve, reject) => {
+          request.signal?.addEventListener("abort", () =>
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+          );
+        });
+      },
+    };
+    await expect(new GutenbergSearch({ transport: slow, timeoutMs: 5 }).search("frankenstein")).rejects.toThrow(
+      /timed out/,
+    );
+    expect(slow.requests[0]!.url).toContain("mime_type=text"); // text-only filter applied
+    expect(slow.requests[0]!.signal).toBeDefined();
+  });
 });
