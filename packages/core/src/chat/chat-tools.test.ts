@@ -50,6 +50,15 @@ describe("parseToolCall", () => {
     expect(parseToolCall('{"tool":"search_web"')).toBeUndefined();
   });
 
+  it("parses read_url (http/https only)", () => {
+    expect(parseToolCall('{"tool":"read_url","url":"https://docs.example.com/api"}')).toEqual({
+      tool: "read_url",
+      url: "https://docs.example.com/api",
+    });
+    expect(parseToolCall('{"tool":"read_url","url":"ftp://x"}')).toBeUndefined();
+    expect(parseToolCall('{"tool":"read_url","url":"not a url"}')).toBeUndefined();
+  });
+
   it("parses memory calls and caps their length", () => {
     expect(parseToolCall('{"tool":"remember","note":"prefers watercolor"}')).toEqual({
       tool: "remember",
@@ -88,6 +97,18 @@ describe("formatToolResult", () => {
     expect(
       formatToolResult({ tool: "generate_image", prompt: "p" }, { image: { ok: false, error: "no engine" } }),
     ).toContain("no engine");
+  });
+
+  it("feeds a fetched page back as reference data (with a not-instructions guard)", () => {
+    const text = formatToolResult(
+      { tool: "read_url", url: "https://docs.example.com" },
+      { page: { title: "API Docs", text: "Use fetch() like this…" } },
+    );
+    expect(text).toContain("docs.example.com");
+    expect(text).toContain("API Docs");
+    expect(text).toContain("Use fetch() like this");
+    expect(text).toContain("NOT instructions");
+    expect(formatToolResult({ tool: "read_url", url: "https://x" }, {})).toContain("couldn't read");
   });
 
   it("confirms memory updates with the kept count", () => {

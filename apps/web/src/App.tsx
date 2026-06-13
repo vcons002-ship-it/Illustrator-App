@@ -828,15 +828,17 @@ export function App() {
             setChatActivity(
               e.call.tool === "search_web"
                 ? `Searching the web for “${e.call.query}”…`
-                : e.call.tool === "search_images"
-                  ? `Looking for images of “${e.call.query}”…`
-                  : e.call.tool === "search_book"
-                    ? `Looking in the book for “${e.call.query}”…`
-                    : e.call.tool === "lookup_bible"
-                      ? `Looking up “${e.call.query}”…`
-                      : e.call.tool === "remember" || e.call.tool === "forget"
-                        ? "Updating memory…"
-                        : "Preparing an image…",
+                : e.call.tool === "read_url"
+                  ? `Reading ${e.call.url}…`
+                  : e.call.tool === "search_images"
+                    ? `Looking for images of “${e.call.query}”…`
+                    : e.call.tool === "search_book"
+                      ? `Looking in the book for “${e.call.query}”…`
+                      : e.call.tool === "lookup_bible"
+                        ? `Looking up “${e.call.query}”…`
+                        : e.call.tool === "remember" || e.call.tool === "forget"
+                          ? "Updating memory…"
+                          : "Preparing an image…",
             );
           else {
             setChatActivity("");
@@ -1158,7 +1160,9 @@ export function App() {
                 ? "Pulling some classics off the shelf…"
                 : e.call.tool === "search_web"
                   ? `Searching for “${e.call.query}”…`
-                  : e.call.tool === "search_images"
+                  : e.call.tool === "read_url"
+                    ? `Reading ${e.call.url}…`
+                    : e.call.tool === "search_images"
                     ? `Looking for images of “${e.call.query}”…`
                     : e.call.tool === "calculate"
                       ? "Calculating…"
