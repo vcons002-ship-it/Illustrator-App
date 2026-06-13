@@ -778,6 +778,18 @@ export function App() {
   const appendChat = (msg: Omit<StoredChatMessage, "at">) =>
     setChatMessages((prev) => [...prev, { ...msg, at: Date.now() }]);
 
+  // Drop a rendered image (from Test image / Transform photo) into the live chat —
+  // the book chat when one is open, otherwise the landing buddy, opening it so it shows.
+  const onAddImageToChat = (image: { bytes: ArrayBuffer; mimeType: string }) => {
+    const msg = { role: "assistant" as const, text: "", image, at: Date.now() };
+    if (book) {
+      setChatMessages((prev) => [...prev, msg]);
+      setShowChat(true);
+    } else {
+      setBuddyMessages((prev) => [...prev, msg]);
+    }
+  };
+
   const onChatSend = useCallback(
     async (text: string) => {
       if (!book) return;
@@ -2064,13 +2076,14 @@ export function App() {
       )}
 
       {showTestImage && (
-        <TestImageModal onRender={testRender} onClose={() => setShowTestImage(false)} />
+        <TestImageModal onRender={testRender} onAddToChat={onAddImageToChat} onClose={() => setShowTestImage(false)} />
       )}
 
       {showPhoto && (
         <PhotoTransformModal
           {...(photoInitial ? { initial: photoInitial } : {})}
           onRender={(text, opts) => testRender(text, opts)}
+          onAddToChat={onAddImageToChat}
           onClose={() => {
             setShowPhoto(false);
             setPhotoInitial(undefined);
@@ -2547,15 +2560,20 @@ function PasteTextModal({
  */
 function TestImageModal({
   onRender,
+  onAddToChat,
   onClose,
 }: {
-  onRender: (text: string) => Promise<TestRenderResult>;
+  onRender: (text: string, opts?: { onProgress?: (f: number) => void }) => Promise<TestRenderResult>;
+  /** Drop the rendered image into the chat conversation. */
+  onAddToChat?: (image: { bytes: ArrayBuffer; mimeType: string }) => void;
   onClose: () => void;
 }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<number | undefined>();
   const [result, setResult] = useState<TestRenderResult | undefined>();
   const [imageUrl, setImageUrl] = useState<string | undefined>();
+  const [addedToChat, setAddedToChat] = useState(false);
   useEffect(() => () => {
     if (imageUrl) URL.revokeObjectURL(imageUrl);
   }, [imageUrl]);
@@ -2563,8 +2581,11 @@ function TestImageModal({
   const run = async () => {
     setBusy(true);
     setResult(undefined);
-    const r = await onRender(text);
+    setProgress(undefined);
+    setAddedToChat(false);
+    const r = await onRender(text, { onProgress: setProgress });
     setBusy(false);
+    setProgress(undefined);
     setResult(r);
     if (r.image) {
       setImageUrl(URL.createObjectURL(new Blob([r.image.bytes], { type: r.image.mimeType })));
@@ -2572,7 +2593,7 @@ function TestImageModal({
   };
 
   return (
-    <div style={styles.modalOverlay} onClick={onClose}>
+    <div style={styles.modalOverlay}>
       <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <strong>Test an image</strong>
@@ -2591,9 +2612,14 @@ function TestImageModal({
           spellCheck={false}
           onChange={(e) => setText(e.target.value)}
         />
-        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 4 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginTop: 4 }}>
+          {busy && (
+            <span style={{ opacity: 0.7, fontSize: 12 }}>
+              {progress !== undefined ? `Rendering… ${Math.round(progress * 100)}%` : "Rendering…"}
+            </span>
+          )}
           <button style={styles.buttonPrimary} disabled={busy || !text.trim()} onClick={() => void run()}>
-            {busy ? "Rendering…" : "Render"}
+            {busy ? "Working…" : "Render"}
           </button>
         </div>
         {result?.error && (
@@ -2604,8 +2630,22 @@ function TestImageModal({
             <img
               src={imageUrl}
               alt="Test render"
-              style={{ display: "block", width: "100%", height: "auto", borderRadius: 8, marginTop: 8 }}
+              style={{ display: "block", maxWidth: "100%", height: "auto", borderRadius: 8, marginTop: 8 }}
             />
+            {onAddToChat && result.image && (
+              <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
+                <button
+                  style={styles.button}
+                  onClick={() => {
+                    onAddToChat(result.image!);
+                    setAddedToChat(true);
+                  }}
+                >
+                  💬 Add to chat
+                </button>
+                {addedToChat && <span style={{ opacity: 0.65, fontSize: 12 }}>Added to chat.</span>}
+              </div>
+            )}
             {result.prompt && (
               <div style={{ opacity: 0.6, fontSize: 11, marginTop: 6, whiteSpace: "pre-wrap" }}>
                 {result.prompt}
@@ -2627,30 +2667,52 @@ function TestImageModal({
 function PhotoTransformModal({
   initial,
   onRender,
+  onAddToChat,
   onClose,
 }: {
   initial?: { name: string; bytes: ArrayBuffer; mimeType: string } | undefined;
   onRender: (
     text: string,
-    opts: { initImage: { bytes: ArrayBuffer; mimeType: string }; denoise: number },
+    opts: {
+      initImage: { bytes: ArrayBuffer; mimeType: string };
+      denoise: number;
+      size?: { width: number; height: number };
+      onProgress?: (f: number) => void;
+    },
   ) => Promise<TestRenderResult>;
+  /** Drop the transformed image into the chat conversation. */
+  onAddToChat?: (image: { bytes: ArrayBuffer; mimeType: string }) => void;
   onClose: () => void;
 }) {
   const [base, setBase] = useState<{ name: string; bytes: ArrayBuffer; mimeType: string } | undefined>(initial);
+  const [baseDims, setBaseDims] = useState<{ width: number; height: number } | undefined>();
   const [text, setText] = useState("");
   const [strength, setStrength] = useState(0.6);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<number | undefined>();
   const [result, setResult] = useState<TestRenderResult | undefined>();
   const [baseUrl, setBaseUrl] = useState<string | undefined>();
   const [resultUrl, setResultUrl] = useState<string | undefined>();
+  const [note, setNote] = useState<string>("");
 
   useEffect(() => {
     if (!base) {
       setBaseUrl(undefined);
+      setBaseDims(undefined);
       return;
     }
     const url = URL.createObjectURL(new Blob([base.bytes], { type: base.mimeType }));
     setBaseUrl(url);
+    // Read the source aspect so the output matches it (no more square crops). Scale
+    // the long edge to ~1024, rounded to /8 for the local sampler.
+    const img = new Image();
+    img.onload = () => {
+      const long = Math.max(img.naturalWidth, img.naturalHeight) || 1024;
+      const scale = Math.min(1, 1024 / long);
+      const round8 = (n: number) => Math.max(64, Math.round((n * scale) / 8) * 8);
+      setBaseDims({ width: round8(img.naturalWidth), height: round8(img.naturalHeight) });
+    };
+    img.src = url;
     return () => URL.revokeObjectURL(url);
   }, [base]);
   useEffect(() => () => {
@@ -2660,6 +2722,7 @@ function PhotoTransformModal({
   const pickFile = async (file: File | undefined) => {
     if (!file) return;
     setResult(undefined);
+    setNote("");
     setBase({ name: file.name, bytes: await file.arrayBuffer(), mimeType: file.type || "image/png" });
   };
 
@@ -2667,8 +2730,16 @@ function PhotoTransformModal({
     if (!base) return;
     setBusy(true);
     setResult(undefined);
-    const r = await onRender(text, { initImage: { bytes: base.bytes, mimeType: base.mimeType }, denoise: strength });
+    setProgress(undefined);
+    setNote("");
+    const r = await onRender(text, {
+      initImage: { bytes: base.bytes, mimeType: base.mimeType },
+      denoise: strength,
+      ...(baseDims ? { size: baseDims } : {}),
+      onProgress: setProgress,
+    });
     setBusy(false);
+    setProgress(undefined);
     setResult(r);
     if (r.image) setResultUrl(URL.createObjectURL(new Blob([r.image.bytes], { type: r.image.mimeType })));
   };
@@ -2678,16 +2749,22 @@ function PhotoTransformModal({
     setBase({ name: "result.png", bytes: result.image.bytes, mimeType: result.image.mimeType });
     setResult(undefined);
     setResultUrl(undefined);
+    setNote("");
   };
 
   const saveResult = async () => {
     if (!result?.image) return;
     const ext = /jpe?g/i.test(result.image.mimeType) ? "jpg" : /webp/i.test(result.image.mimeType) ? "webp" : "png";
-    await saveExportFile(`transformed-${Date.now()}.${ext}`, new Uint8Array(result.image.bytes), result.image.mimeType);
+    try {
+      const saved = await saveExportFile(`transformed-${Date.now()}.${ext}`, new Uint8Array(result.image.bytes), result.image.mimeType);
+      setNote(typeof saved === "string" ? `✓ Saved to ${saved}` : "✓ Saved (check your downloads)");
+    } catch (err) {
+      setNote(`✗ Save failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   };
 
   return (
-    <div style={styles.modalOverlay} onClick={onClose}>
+    <div style={styles.modalOverlay}>
       <div style={styles.modalPanel} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <strong>Transform a photo</strong>
@@ -2696,9 +2773,10 @@ function PhotoTransformModal({
           </button>
         </div>
         <p style={{ opacity: 0.65, fontSize: 12, margin: "0 0 8px" }}>
-          Start from a picture and reimagine it with the current image model and art style.
-          Needs the local engine (ComfyUI). Lower strength stays close to the photo; higher
-          reinvents more.
+          Start from a picture and reimagine it. Works with a local ComfyUI engine or a
+          Gemini / OpenAI image key — other engines ignore the photo. Set the art style to
+          “Auto” and describe what you want in the box (a forced style fights the photo).
+          On the local engine, lower strength stays closer to the original.
         </p>
         <label style={{ ...styles.button, display: "inline-block", cursor: "pointer", marginBottom: 8 }}>
           {base ? `Photo: ${base.name}` : "Choose a photo…"}
@@ -2713,13 +2791,13 @@ function PhotoTransformModal({
           <img
             src={baseUrl}
             alt="Base"
-            style={{ display: "block", maxHeight: 180, borderRadius: 8, marginBottom: 8 }}
+            style={{ display: "block", maxHeight: 180, maxWidth: "100%", height: "auto", borderRadius: 8, marginBottom: 8 }}
           />
         )}
         <textarea
           style={{ ...styles.importTextarea, minHeight: 56 }}
           value={text}
-          placeholder="Describe the change — e.g. turn this into an oil painting; make it a snowy night"
+          placeholder="Describe what you want — e.g. a photorealistic aerial view of this dungeon map; turn this into an oil painting"
           spellCheck={false}
           onChange={(e) => setText(e.target.value)}
         />
@@ -2735,9 +2813,14 @@ function PhotoTransformModal({
             onChange={(e) => setStrength(Number(e.target.value))}
           />
         </label>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10 }}>
+          {busy && (
+            <span style={{ opacity: 0.7, fontSize: 12 }}>
+              {progress !== undefined ? `Rendering… ${Math.round(progress * 100)}%` : "Rendering…"}
+            </span>
+          )}
           <button style={styles.buttonPrimary} disabled={busy || !base || !text.trim()} onClick={() => void run()}>
-            {busy ? "Rendering…" : "Transform"}
+            {busy ? "Working…" : "Transform"}
           </button>
         </div>
         {result?.error && (
@@ -2748,16 +2831,28 @@ function PhotoTransformModal({
             <img
               src={resultUrl}
               alt="Transformed"
-              style={{ display: "block", width: "100%", height: "auto", borderRadius: 8, marginTop: 8 }}
+              style={{ display: "block", maxWidth: "100%", height: "auto", borderRadius: 8, marginTop: 8 }}
             />
-            <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+            <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
               <button style={styles.button} onClick={() => void saveResult()}>
                 ⤓ Save
               </button>
+              {onAddToChat && result.image && (
+                <button
+                  style={styles.button}
+                  onClick={() => {
+                    onAddToChat(result.image!);
+                    setNote("✓ Added to chat.");
+                  }}
+                >
+                  💬 Add to chat
+                </button>
+              )}
               <button style={styles.button} onClick={useResultAsBase}>
                 ↺ Use as new base
               </button>
             </div>
+            {note && <div style={{ opacity: 0.75, fontSize: 12, marginTop: 6 }}>{note}</div>}
           </>
         )}
       </div>

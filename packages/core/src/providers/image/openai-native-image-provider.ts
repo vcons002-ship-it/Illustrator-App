@@ -43,20 +43,34 @@ export class OpenAINativeImageProvider implements ImageProvider {
   async generate(input: ImageGenerationInput): Promise<ImageGenerationOutput> {
     const size = pickSize(input.width, input.height);
     const refs = input.ipAdapterRefs ?? [];
-    const res = refs.length
+    // /images/edits conditions on input photos: the img2img base first (the image to
+    // transform), then any character references. Plain generation when there are none.
+    const editFiles = [
+      ...(input.initImage
+        ? [
+            {
+              field: "image[]",
+              bytes: input.initImage.bytes,
+              filename: "base.png",
+              contentType: input.initImage.mimeType || "image/png",
+            },
+          ]
+        : []),
+      ...refs.map((ref, i) => ({
+        field: "image[]",
+        bytes: ref.bytes,
+        filename: `reference-${i}.png`,
+        contentType: ref.mimeType || "image/png",
+      })),
+    ];
+    const res = editFiles.length
       ? await this.transport.send({
-          // /images/edits conditions on reference photos (multipart, multiple files).
           url: `${this.baseUrl}/images/edits`,
           method: "POST",
           headers: { authorization: `Bearer ${this.apiKey}` },
           multipart: {
             fields: { model: this.model, prompt: input.prompt, n: "1", size },
-            files: refs.map((ref, i) => ({
-              field: "image[]",
-              bytes: ref.bytes,
-              filename: `reference-${i}.png`,
-              contentType: ref.mimeType || "image/png",
-            })),
+            files: editFiles,
           },
           ...(input.signal ? { signal: input.signal } : {}),
         })

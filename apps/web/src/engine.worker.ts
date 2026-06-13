@@ -513,7 +513,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       postPaused();
       break;
     case "testRender":
-      void handleTestRender(msg.requestId, msg.text, msg.initImage, msg.denoise);
+      void handleTestRender(msg.requestId, msg.text, msg.initImage, msg.denoise, msg.size);
       break;
     case "chat":
       void handleChat(msg);
@@ -550,6 +550,7 @@ async function handleTestRender(
   text: string,
   initImage?: { bytes: ArrayBuffer; mimeType: string },
   denoise?: number,
+  size?: { width: number; height: number },
 ): Promise<void> {
   try {
     if (!settings) throw new Error("Settings not initialised yet.");
@@ -557,6 +558,8 @@ async function handleTestRender(
     const out = await renderFromText(image, tier, text, {
       ...(initImage ? { initImage } : {}),
       ...(denoise !== undefined ? { denoise } : {}),
+      ...(size ? { width: size.width, height: size.height } : {}),
+      onProgress: (fraction) => post({ type: "testProgress", requestId, fraction }),
     });
     post(
       {
@@ -590,15 +593,29 @@ async function renderFromText(
     /** img2img base photo + strength (the photo-transform path; local engine only). */
     initImage?: { bytes: ArrayBuffer; mimeType: string };
     denoise?: number;
+    /** Output dimensions (the photo path passes the source photo's aspect). */
+    width?: number;
+    height?: number;
+    /** Render progress sink (0..1) for engines that report it (ComfyUI). */
+    onProgress?: (fraction: number) => void;
   } = {},
 ): Promise<{ bytes: ArrayBuffer; mimeType: string; prompt: string }> {
   const stepsOverride = opts.stepsOverride;
   const style = getImageStyle(tier.style);
-  const prompt = style.promptSuffix ? `${text.trim()}\n\nStyle: ${style.promptSuffix}` : text.trim();
+  // A photo transform's instruction IS the prompt — don't force the global art style
+  // on top (an "anime" style otherwise overrides "make this photorealistic"). The art
+  // style still applies to plain text renders.
+  const applyStyle = !opts.initImage;
+  const prompt = applyStyle && style.promptSuffix ? `${text.trim()}\n\nStyle: ${style.promptSuffix}` : text.trim();
   const level = tier.renderQuality;
-  const dims = level ? profileDimensions(level, tier.aspectRatio) : undefined;
+  const dims =
+    opts.width && opts.height
+      ? { width: opts.width, height: opts.height }
+      : level
+        ? profileDimensions(level, tier.aspectRatio)
+        : undefined;
   const isLocal = tier.tier === "local";
-  const styleLora = !isLocal
+  const styleLora = !isLocal || !applyStyle
     ? undefined
     : tier.disableStyleLora
       ? undefined
@@ -622,6 +639,7 @@ async function renderFromText(
     ...(isLocal && tier.localScheduler ? { localScheduler: tier.localScheduler } : {}),
     ...(opts.initImage ? { initImage: opts.initImage } : {}),
     ...(opts.denoise !== undefined ? { denoise: opts.denoise } : {}),
+    ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),
   });
   return { bytes: out.bytes, mimeType: out.mimeType, prompt };
 }

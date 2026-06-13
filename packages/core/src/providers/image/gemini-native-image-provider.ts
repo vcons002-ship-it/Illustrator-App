@@ -113,6 +113,12 @@ export class GeminiNativeImageProvider implements ImageProvider {
     // The prompt text, then each reference photo as an inline image part — the model
     // treats them as "make the character look like this" conditioning.
     const parts: Record<string, unknown>[] = [{ text: input.prompt }];
+    // img2img base photo first (the image to transform), then any character refs.
+    if (input.initImage) {
+      parts.push({
+        inline_data: { mime_type: input.initImage.mimeType, data: cachedBase64(input.initImage.bytes) },
+      });
+    }
     for (const ref of input.ipAdapterRefs ?? []) {
       parts.push({
         inline_data: { mime_type: ref.mimeType, data: cachedBase64(ref.bytes) },
