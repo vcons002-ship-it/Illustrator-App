@@ -1,4 +1,5 @@
 import { DirectTransport, type Transport } from "../transport/transport.js";
+import { bytesToBase64 } from "../image/base64.js";
 import type { VisualBible } from "../../types/bible.js";
 import type { VisualRequest } from "../../types/content.js";
 import {
@@ -18,6 +19,7 @@ import {
   type ChatCapable,
   type ChatOptions,
   type ChatTurn,
+  type VisionCapable,
 } from "./chat.js";
 
 /**
@@ -79,7 +81,7 @@ export interface LocalModelInfo {
   contextLength?: number;
 }
 
-export class LocalServerLLMProvider implements LLMProvider, ChatCapable {
+export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionCapable {
   readonly id = "local-server";
   private readonly transport: Transport;
   private readonly baseUrl: string;
@@ -184,6 +186,49 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable {
       ...(opts.signal ? { signal: opts.signal } : {}),
     });
     return stripThink(text).trim();
+  }
+
+  /** Vision: look at an image and answer the prompt in text. Works when the local
+   * server is running a VISION model (e.g. Ollama llama3.2-vision / llava, LM Studio
+   * llava) via the OpenAI-compatible `image_url` content — keeping the image on-device. */
+  async describeImage(input: {
+    bytes: ArrayBuffer;
+    mimeType: string;
+    prompt: string;
+    signal?: AbortSignal;
+  }): Promise<string> {
+    const res = await this.transport.send({
+      url: `${this.baseUrl}/chat/completions`,
+      method: "POST",
+      headers: this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
+      ...(input.signal ? { signal: input.signal } : {}),
+      body: {
+        model: this.model,
+        max_tokens: 1024,
+        keep_alive: "30m",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: input.prompt },
+              {
+                type: "image_url",
+                image_url: { url: `data:${input.mimeType};base64,${bytesToBase64(input.bytes)}` },
+              },
+            ],
+          },
+        ],
+      },
+    });
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).trim();
+      throw new Error(
+        `Local vision request failed (status ${res.status})${detail ? `: ${parseServerError(detail)}` : ""} — ` +
+          "is the loaded model a vision model (e.g. llama3.2-vision, llava, qwen2-vl)?",
+      );
+    }
+    const data = await res.json<ChatResponse>();
+    return stripThink(data.choices?.[0]?.message?.content ?? "").trim();
   }
 
   private async complete(

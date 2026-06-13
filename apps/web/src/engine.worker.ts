@@ -96,7 +96,8 @@ async function handleAssessImage(
     const { llm } = chatProviders();
     if (!supportsVision(llm)) {
       throw new Error(
-        `Your chat model (“${llm.id}”) can't see images. Switch the chat text provider to Gemini, OpenAI, or Claude in Settings.`,
+        `Your chat model (“${llm.id}”) can't see images. Use Gemini, OpenAI, or Claude, or a local VISION ` +
+          "model (Ollama llama3.2-vision / llava, or LM Studio) — set the chat text provider in Settings.",
       );
     }
     const prompt =
