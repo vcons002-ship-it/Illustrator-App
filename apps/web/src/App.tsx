@@ -728,6 +728,10 @@ export function App() {
     setChatStreaming("");
     setChatActivity("");
     setChatUsage(undefined);
+    // Clear busy too: a turn in flight when the book changes returns early at its
+    // guard (book mismatch) WITHOUT resetting busy, which left the next book's chat
+    // stuck on "Thinking…" with no way to send (only Clear recovered it).
+    setChatBusy(false);
     if (!book) return;
     let cancelled = false;
     void libraryStore.getChatHistory?.(book.id).then((stored) => {
@@ -864,12 +868,16 @@ export function App() {
           }
         },
       );
-      // Dropped if the reader switched/exited (wrong book) or Cleared/cancelled this
-      // turn (seq bumped) — its busy state + reply were already reset by that action.
+      // Always clear THIS turn's busy/transient state unless a newer turn superseded
+      // it (that newer turn owns the busy flag) — so a book switch/exit mid-turn can
+      // never leave the panel stuck "Thinking…". Then ignore the RESULT itself when
+      // it belongs to a book the reader has since left, or a superseded turn.
+      if (chatTurnSeq.current === seq) {
+        setChatBusy(false);
+        setChatStreaming("");
+        setChatActivity("");
+      }
       if (chatBookRef.current?.id !== turnBookId || chatTurnSeq.current !== seq) return;
-      setChatBusy(false);
-      setChatStreaming("");
-      setChatActivity("");
       if (res.error) {
         appendChat({ role: "tool", text: `⚠ ${res.error}`, turns: [] });
         return;
@@ -1188,7 +1196,8 @@ export function App() {
           }
         }
       });
-      // Dropped if Cleared/cancelled mid-turn (seq bumped) — state already reset.
+      // Clear this turn's busy/transient state unless a newer turn superseded it, so
+      // a mid-turn Clear/supersede can never leave the panel stuck "Thinking…".
       if (buddyTurnSeq.current !== seq) return;
       setBuddyBusy(false);
       setBuddyStreaming("");

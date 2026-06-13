@@ -1,5 +1,12 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { MessageBubble, SlashMenu, UsageDisclosure, completeSlash, type ChatMessageVM } from "./ChatPanel.js";
+import {
+  CommandHelp,
+  MessageBubble,
+  SlashMenu,
+  UsageDisclosure,
+  completeSlash,
+  type ChatMessageVM,
+} from "./ChatPanel.js";
 import { buddySlashCommands, type BuddyPersona, type BuddyToolCall, type ContextUsage } from "@visual-reader/core";
 
 /**
@@ -42,6 +49,7 @@ export interface ChatBuddyPanelProps {
 
 export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanelProps) {
   const [draft, setDraft] = useState("");
+  const [showHelp, setShowHelp] = useState(false);
   const commands = useMemo(() => buddySlashCommands(props.desktop ?? false), [props.desktop]);
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -89,6 +97,14 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               Compact
             </button>
           )}
+          <button
+            style={smallButtonStyle}
+            onClick={() => setShowHelp((h) => !h)}
+            title="What can this chat do? (commands & tools)"
+            aria-label="Help"
+          >
+            ?
+          </button>
           {props.messages.length > 0 && (
             <button style={smallButtonStyle} onClick={props.onClearHistory} title="Clear the buddy conversation">
               Clear
@@ -98,6 +114,12 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
       </div>
 
       {props.contextUsage && <UsageDisclosure usage={props.contextUsage} />}
+      {showHelp && (
+        <CommandHelp
+          commands={commands}
+          intro="Tell me what you want in plain language — I'll use these tools when they help. You can also run any of them directly by typing the command:"
+        />
+      )}
 
       <div ref={scrollRef} style={scrollStyle}>
         {props.messages.length === 0 && !props.streamingText && (
