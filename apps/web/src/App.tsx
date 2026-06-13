@@ -2646,7 +2646,17 @@ function TestImageModal({
             <img
               src={imageUrl}
               alt="Test render"
-              style={{ display: "block", maxWidth: "100%", height: "auto", borderRadius: 8, marginTop: 8 }}
+              style={{
+                display: "block",
+                alignSelf: "flex-start",
+                width: "auto",
+                height: "auto",
+                maxWidth: "100%",
+                maxHeight: 480,
+                objectFit: "contain",
+                borderRadius: 8,
+                marginTop: 8,
+              }}
             />
             {onAddToChat && result.image && (
               <div style={{ display: "flex", gap: 6, marginTop: 6, alignItems: "center" }}>
@@ -2807,7 +2817,20 @@ function PhotoTransformModal({
           <img
             src={baseUrl}
             alt="Base"
-            style={{ display: "block", maxHeight: 180, maxWidth: "100%", height: "auto", borderRadius: 8, marginBottom: 8 }}
+            // alignSelf/width:auto stop the flex-column from stretching the image to the
+            // panel width (which, with maxHeight, squished wide photos); maxW+maxH+auto
+            // then scale it down preserving its real aspect ratio.
+            style={{
+              display: "block",
+              alignSelf: "flex-start",
+              width: "auto",
+              height: "auto",
+              maxWidth: "100%",
+              maxHeight: 200,
+              objectFit: "contain",
+              borderRadius: 8,
+              marginBottom: 8,
+            }}
           />
         )}
         <textarea
@@ -2847,7 +2870,17 @@ function PhotoTransformModal({
             <img
               src={resultUrl}
               alt="Transformed"
-              style={{ display: "block", maxWidth: "100%", height: "auto", borderRadius: 8, marginTop: 8 }}
+              style={{
+                display: "block",
+                alignSelf: "flex-start",
+                width: "auto",
+                height: "auto",
+                maxWidth: "100%",
+                maxHeight: 480,
+                objectFit: "contain",
+                borderRadius: 8,
+                marginTop: 8,
+              }}
             />
             <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
               <button style={styles.button} onClick={() => void saveResult()}>
