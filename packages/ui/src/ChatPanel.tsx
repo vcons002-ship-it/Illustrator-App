@@ -18,6 +18,26 @@ export interface ChatMessageVM {
   links?: { url: string; title?: string }[];
   /** Clickable local-file results (desktop `/find`); each opens the book on click. */
   files?: { path: string; name: string }[];
+  /** Quick-reply action buttons (e.g. what to do with a pasted link). */
+  actions?: { label: string; send: string }[];
+}
+
+/** Split text into plain runs and bare http(s) URLs (for inline clickable links). */
+export function linkifyText(text: string): ({ text: string } | { url: string })[] {
+  const out: ({ text: string } | { url: string })[] = [];
+  const re = /https?:\/\/[^\s<>"')\]]+/g;
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    const i = m.index;
+    if (i > last) out.push({ text: text.slice(last, i) });
+    // Trailing sentence punctuation isn't part of the URL.
+    const raw = m[0].replace(/[.,;:!?]+$/, "");
+    out.push({ url: raw });
+    if (raw.length < m[0].length) out.push({ text: m[0].slice(raw.length) });
+    last = i + m[0].length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last) });
+  return out;
 }
 
 export interface ChatPanelProps {
@@ -345,12 +365,15 @@ export const MessageBubble = memo(function MessageBubble({
   index,
   onDelete,
   onOpenLocalFile,
+  onAction,
 }: {
   message: ChatMessageVM;
   index?: number;
   onDelete?: (index: number) => void;
   /** Open a local-file result (desktop `/find`). Stable callback (memo). */
   onOpenLocalFile?: (path: string) => void;
+  /** Run a quick-reply action (sends its text). Stable callback (memo). */
+  onAction?: (send: string) => void;
 }) {
   const isUser = message.role === "user";
   const url = useMessageImageUrl(message.image);
@@ -372,7 +395,19 @@ export const MessageBubble = memo(function MessageBubble({
           ✕
         </button>
       )}
-      {message.text ? <div style={{ whiteSpace: "pre-wrap" }}>{message.text}</div> : null}
+      {message.text ? (
+        <div style={{ whiteSpace: "pre-wrap" }}>
+          {linkifyText(message.text).map((seg, i) =>
+            "url" in seg ? (
+              <a key={i} href={seg.url} target="_blank" rel="noreferrer" style={{ color: "#9db8ff" }}>
+                {seg.url}
+              </a>
+            ) : (
+              <span key={i}>{seg.text}</span>
+            ),
+          )}
+        </div>
+      ) : null}
       {url ? (
         <img
           src={url}
@@ -410,6 +445,15 @@ export const MessageBubble = memo(function MessageBubble({
               onClick={() => onOpenLocalFile?.(f.path)}
             >
               📄 {f.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {message.actions?.length ? (
+        <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+          {message.actions.map((a, i) => (
+            <button key={i} style={fileChipStyle} onClick={() => onAction?.(a.send)}>
+              {a.label}
             </button>
           ))}
         </div>
