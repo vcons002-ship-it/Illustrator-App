@@ -58,4 +58,12 @@ export interface LLMProvider {
    * `signal` aborts the in-flight call (e.g. when the user pauses image generation).
    */
   buildImagePrompt(request: VisualRequest, bible: VisualBible, signal?: AbortSignal): Promise<string>;
+  /**
+   * Release any GPU/RAM the model holds (optional). Called once the book's LLM
+   * phase is over: rendering reads prompts straight from the Visual Bible, so an
+   * on-GPU local model (WebLLM, or Ollama on the same card) no longer needs to
+   * squat VRAM that the image engine is fighting it for. Cloud providers have
+   * nothing to free and omit this. A later call (chat, re-analysis) reloads lazily.
+   */
+  unload?(): Promise<void>;
 }

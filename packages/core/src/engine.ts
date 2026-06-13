@@ -522,6 +522,12 @@ export class Engine {
     // would otherwise sit silently queued forever behind the canRender gate — surface
     // an explicit, regenerable error instead so the failure is visible.
     if (!stop()) this.failUnpromptedUnits();
+    // Rendering reads prompts straight from the Bible — the LLM isn't needed again
+    // until chat / re-analysis. Free its VRAM/RAM so an on-GPU local model (WebLLM,
+    // or Ollama on the same card) stops fighting the image engine for the GPU, which
+    // is what made ComfyUI re-allocate/offload memory each render. Cloud providers
+    // no-op; a later call reloads lazily. Best-effort — never block on it.
+    if (!stop()) void this.opts.llm.unload?.().catch(() => {});
   }
 
   /** Mark every story unit that never got a prompt as an error (visible + actionable). */

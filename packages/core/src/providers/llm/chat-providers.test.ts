@@ -107,6 +107,22 @@ describe("LocalServerLLMProvider.contextLength", () => {
   });
 });
 
+describe("LocalServerLLMProvider.unload", () => {
+  it("asks Ollama to evict the model (keep_alive 0) at the Ollama root", async () => {
+    const t = new FakeTransport({});
+    const p = new LocalServerLLMProvider({ baseUrl: "http://localhost:11434/v1", model: "qwen3", transport: t });
+    await p.unload();
+    expect(t.requests[0]!.url).toBe("http://localhost:11434/api/generate");
+    expect(t.requests[0]!.body).toEqual({ model: "qwen3", keep_alive: 0 });
+  });
+
+  it("never throws when the server isn't Ollama / refuses", async () => {
+    const throwing: Transport = { send: () => Promise.reject(new Error("no such endpoint")) };
+    const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", transport: throwing });
+    await expect(p.unload()).resolves.toBeUndefined();
+  });
+});
+
 describe("provider chat()", () => {
   it("openai maps the turns 1:1 onto chat/completions", async () => {
     const t = new FakeTransport({ choices: [{ message: { content: " answer " } }] });
