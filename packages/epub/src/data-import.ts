@@ -70,6 +70,13 @@ function gridToText(rows: string[][]): string {
  * extraction can read the columns as datasets. One sheet (the common case).
  */
 export function xlsxToText(input: ArrayBuffer | Uint8Array): string {
+  const text = gridToText(xlsxToGrid(input));
+  if (!text) throw new Error("This spreadsheet's first sheet has no data.");
+  return text;
+}
+
+/** Excel `.xlsx` → the FIRST worksheet's raw cell grid (header row + data rows). */
+export function xlsxToGrid(input: ArrayBuffer | Uint8Array): string[][] {
   const files = unzipSync(toBytes(input));
   // Shared strings: each <si> is one string (possibly several <t> runs).
   const shared: string[] = [];
@@ -110,9 +117,7 @@ export function xlsxToText(input: ArrayBuffer | Uint8Array): string {
     for (let i = 0; i < cells.length; i++) cells[i] ??= "";
     rows.push(cells);
   }
-  const text = gridToText(rows);
-  if (!text) throw new Error("This spreadsheet's first sheet has no data.");
-  return text;
+  return rows;
 }
 
 /**
@@ -173,14 +178,18 @@ function splitDelimited(text: string, delimiter: string): string[][] {
   return rows;
 }
 
-/** CSV/TSV → a " | "-separated text table (auto-detects tab vs comma). */
-export function csvToText(text: string): string {
+/** CSV/TSV → the raw cell grid (auto-detects tab vs comma). */
+export function csvToGrid(text: string): string[][] {
   const trimmed = text.replace(/^\uFEFF/, ""); // strip a leading byte-order mark
   // Tab wins when the first line has more tabs than commas (a TSV export).
   const firstLine = trimmed.split(/\r?\n/, 1)[0] ?? "";
   const delimiter = (firstLine.match(/\t/g)?.length ?? 0) > (firstLine.match(/,/g)?.length ?? 0) ? "\t" : ",";
-  const rows = splitDelimited(trimmed, delimiter).slice(0, MAX_TABLE_ROWS).map((r) => r.slice(0, MAX_TABLE_COLS));
-  const out = gridToText(rows);
+  return splitDelimited(trimmed, delimiter).slice(0, MAX_TABLE_ROWS).map((r) => r.slice(0, MAX_TABLE_COLS));
+}
+
+/** CSV/TSV → a " | "-separated text table (auto-detects tab vs comma). */
+export function csvToText(text: string): string {
+  const out = gridToText(csvToGrid(text));
   if (!out) throw new Error("This file has no rows to read.");
   return out;
 }

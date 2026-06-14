@@ -32,6 +32,7 @@ import {
   formatFileSize,
   POLISH_PRESETS,
   type ConceptIntro,
+  type DataTable,
   type BookSource,
   type BookSummary,
   type ChapterDataset,
@@ -212,7 +213,7 @@ export function App() {
   >();
   // Prefill for the paste modal when a text-bearing FILE (txt/md/html/pdf) was opened.
   const [pasteInitial, setPasteInitial] = useState<
-    { title: string; text: string; mode?: "fiction" | "technical" } | undefined
+    { title: string; text: string; mode?: "fiction" | "technical"; data?: DataTable } | undefined
   >();
   // Faithful document-polish panel + an optional prefill (from upload or a home click).
   const [showPolish, setShowPolish] = useState(false);
@@ -671,6 +672,7 @@ export function App() {
             title: imported.title,
             text: imported.text,
             ...(imported.mode ? { mode: imported.mode } : {}),
+            ...(imported.data ? { data: imported.data } : {}),
           });
           setShowPasteText(true);
         }
@@ -2484,7 +2486,9 @@ export function App() {
           onCreate={(title, text, mode) => {
             try {
               // Library provenance: did this text come from a file or a raw paste?
-              openBook(bookFromText(title, text, mode, pasteInitial ? "Imported file" : "Pasted text"));
+              const created = bookFromText(title, text, mode, pasteInitial ? "Imported file" : "Pasted text");
+              // Carry the spreadsheet's structured grid onto the book (chat analyze_data).
+              openBook(pasteInitial?.data ? { ...created, data: pasteInitial.data } : created);
               setShowPasteText(false);
               setPasteInitial(undefined);
             } catch (err) {
