@@ -52,6 +52,43 @@ describe("computeStats", () => {
   it("ignores non-finite y values", () => {
     expect(computeStats([{ label: "a", y: NaN }, ...pts([1, 2])])!.count).toBe(2);
   });
+
+  it("computes sample variance / stdev (n−1) and quartiles", () => {
+    const s = computeStats(pts([2, 4, 4, 4, 5, 5, 7, 9]))!;
+    expect(s.variance).toBeCloseTo(4.571, 2); // sample variance (n−1) of this classic set
+    expect(s.stdev).toBeCloseTo(2.138, 2);
+    // Linear-interpolation percentiles (numpy "linear" default): q1=4, q3=5.5.
+    expect(s.q1).toBeCloseTo(4, 5);
+    expect(s.q3).toBeCloseTo(5.5, 5);
+  });
+
+  it("single point has zero variance/stdev", () => {
+    const s = computeStats(pts([7]))!;
+    expect(s.variance).toBe(0);
+    expect(s.stdev).toBe(0);
+  });
+
+  it("fits a perfect line: slope/intercept exact, R²=1, r=1", () => {
+    const s = computeStats([
+      { label: "a", x: 1, y: 3 },
+      { label: "b", x: 2, y: 5 },
+      { label: "c", x: 3, y: 7 },
+    ])!;
+    expect(s.regression.slope).toBeCloseTo(2, 6);
+    expect(s.regression.intercept).toBeCloseTo(1, 6);
+    expect(s.regression.r2).toBeCloseTo(1, 6);
+    expect(s.regression.r).toBeCloseTo(1, 6);
+  });
+
+  it("a perfect negative line gives r=−1", () => {
+    const s = computeStats([
+      { label: "a", x: 0, y: 10 },
+      { label: "b", x: 1, y: 8 },
+      { label: "c", x: 2, y: 6 },
+    ])!;
+    expect(s.regression.r).toBeCloseTo(-1, 6);
+    expect(s.regression.r2).toBeCloseTo(1, 6);
+  });
 });
 
 describe("formatStat", () => {
