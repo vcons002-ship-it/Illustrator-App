@@ -1,5 +1,13 @@
-import type { BookSource } from "@visual-reader/core";
-import { csvToText, docxToText, htmlToText, parseEpub, rtfToText, xlsxToText } from "@visual-reader/epub";
+import { dataTableFromGrid, type BookSource, type DataTable } from "@visual-reader/core";
+import { csvToGrid, docxToText, htmlToText, parseEpub, rtfToText, xlsxToGrid } from "@visual-reader/epub";
+
+/** Render a parsed cell grid as the " | "-separated text the reader/extraction reads. */
+function gridText(grid: string[][]): string {
+  return grid
+    .map((cells) => cells.map((c) => (c ?? "").trim()).join(" | ").replace(/(?: \| )+$/, ""))
+    .filter((line) => line.trim())
+    .join("\n");
+}
 
 /**
  * Universal book import (browser side): turn any supported file — EPUB, plain text,
@@ -31,7 +39,7 @@ const IMAGE_EXTS: Record<string, string> = {
  */
 export type ImportedFile =
   | { kind: "book"; book: BookSource }
-  | { kind: "text"; title: string; text: string; mode?: "fiction" | "technical" }
+  | { kind: "text"; title: string; text: string; mode?: "fiction" | "technical"; data?: DataTable }
   | { kind: "image"; name: string; bytes: ArrayBuffer; mimeType: string };
 
 export async function importBookFile(file: File): Promise<ImportedFile> {
@@ -60,11 +68,18 @@ export async function importBookFile(file: File): Promise<ImportedFile> {
     case "docx":
       return { kind: "text", title, text: docxToText(await file.arrayBuffer()) };
     case "csv":
-    case "tsv":
-      // Tabular data → technical mode (the extraction charts the numbers).
-      return { kind: "text", title, text: csvToText(await file.text()), mode: "technical" };
-    case "xlsx":
-      return { kind: "text", title, text: xlsxToText(await file.arrayBuffer()), mode: "technical" };
+    case "tsv": {
+      // Tabular data → technical mode (the extraction charts the numbers), AND keep the
+      // structured grid for the chat's grounded analyze_data tool.
+      const grid = csvToGrid(await file.text());
+      const data = dataTableFromGrid(grid);
+      return { kind: "text", title, text: gridText(grid), mode: "technical", ...(data ? { data } : {}) };
+    }
+    case "xlsx": {
+      const grid = xlsxToGrid(await file.arrayBuffer());
+      const data = dataTableFromGrid(grid);
+      return { kind: "text", title, text: gridText(grid), mode: "technical", ...(data ? { data } : {}) };
+    }
     case "pdf": {
       const data = new Uint8Array(await file.arrayBuffer());
       return { kind: "text", title, text: await pdfToText(data) };

@@ -3,6 +3,7 @@
  * The paragraph is the atomic unit the Gaze-Sync UI tracks and the unit a
  * "spoiler entity" is anchored to.
  */
+import type { DataTable } from "../data/data-table.js";
 
 export interface Paragraph {
   /** Stable id, unique within the book. */
@@ -52,4 +53,7 @@ export interface BookSource {
    * diagram prompt template instead. Experimental.
    */
   contentMode?: "fiction" | "technical";
+  /** Structured grid for a spreadsheet/CSV import — powers the chat's `analyze_data`
+   * tool (group-by / pivots / aggregates over real cells). Absent for prose. */
+  data?: DataTable;
 }

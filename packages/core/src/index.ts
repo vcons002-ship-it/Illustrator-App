@@ -3,6 +3,7 @@ export * from "./providers/index.js";
 export * from "./storage/index.js";
 export * from "./visual-bible/index.js";
 export * from "./charts/index.js";
+export * from "./data/index.js";
 export * from "./chat/index.js";
 export * from "./pipeline/index.js";
 export * from "./reader-support/technical-support.js";
