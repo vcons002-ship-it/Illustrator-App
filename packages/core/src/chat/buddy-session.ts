@@ -30,6 +30,8 @@ export interface BuddyDeps {
   searchImages?: (query: string) => Promise<ImageSearchHit[]>;
   /** Fetch a URL's readable text so the model can read/learn from a page. */
   readUrl?: (url: string) => Promise<{ title?: string; text: string }>;
+  /** Wolfram|Alpha grounding (optional; present only when an AppID is configured). */
+  wolfram?: (query: string) => Promise<string>;
   /** Random picks from the catalog's most-loved shelf ("surprise me"). */
   randomBooks?: () => Promise<BookSearchHit[]>;
   /** Open a library book by id; the host posts the BookSource to the UI itself. */
@@ -163,6 +165,9 @@ export async function runBuddyTool(
             return { error: err instanceof Error ? err.message : "couldn't compute that" };
           }
         }
+      case "wolfram":
+        if (!deps.wolfram) return { error: "Wolfram|Alpha isn't set up (add an AppID in Settings)." };
+        return { wolfram: { query: call.query, answer: await deps.wolfram(call.query) } };
       case "open_library_book":
         return { opened: await deps.openLibraryBook(call) };
       case "open_web_text":

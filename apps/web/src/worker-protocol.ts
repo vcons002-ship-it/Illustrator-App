@@ -223,6 +223,7 @@ export type WorkerToMain =
       applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
       removed?: string;
       calc?: { expression: string; result: string };
+      wolfram?: { query: string; answer: string };
       memory?: { action: "remembered" | "forgot"; note: string; count: number };
       error?: string;
     }

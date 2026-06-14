@@ -28,6 +28,7 @@ import {
   parseUnderstanding,
   parseChatSlashCommand,
   rememberNote,
+  queryWolfram,
   runBuddyTool,
   runChatTool,
   profileDimensions,
@@ -1220,6 +1221,19 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       searchBooks: (q) => books.search(q),
       searchImages: (q) => imageSearch.search(q),
       readUrl: readUrlText(ac.signal),
+      ...(settings?.keys?.wolfram
+        ? {
+            wolfram: (query: string) => {
+              const cf = corsFetch();
+              return queryWolfram({
+                appId: settings!.keys.wolfram!,
+                query,
+                signal: ac.signal,
+                ...(cf ? { transport: new DirectTransport(cf) } : {}),
+              });
+            },
+          }
+        : {}),
       randomBooks: () => books.random(),
       remember: async (n) => (await rememberNote(store, n)).length,
       forget: async (m) => (await forgetNote(store, m)).length,
@@ -1311,6 +1325,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         ...(result.applied ? { applied: result.applied } : {}),
         ...(result.removed ? { removed: result.removed } : {}),
         ...(result.calc ? { calc: result.calc } : {}),
+        ...(result.wolfram ? { wolfram: result.wolfram } : {}),
         ...(result.memory ? { memory: result.memory } : {}),
         ...(result.error ? { error: result.error } : {}),
       });
@@ -1333,6 +1348,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         ...(corsProxyAvailable ? { canSearchFiles: true } : {}),
         // Desktop + explicit opt-in: the run_command tool executes shell commands.
         ...(corsProxyAvailable && settings?.allowCommands ? { canRunCommands: true } : {}),
+        // Wolfram|Alpha grounding when an AppID is configured.
+        ...(settings?.keys?.wolfram ? { canWolfram: true } : {}),
       }) +
       (memory ? `\n\n${memory}` : "") +
       (note ? `\n\n${note}` : "");
@@ -1376,6 +1393,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             ...(e.result.applied ? { applied: e.result.applied } : {}),
             ...(e.result.removed ? { removed: e.result.removed } : {}),
             ...(e.result.calc ? { calc: e.result.calc } : {}),
+            ...(e.result.wolfram ? { wolfram: e.result.wolfram } : {}),
             ...(e.result.memory ? { memory: e.result.memory } : {}),
             ...(e.result.error ? { error: e.result.error } : {}),
           });

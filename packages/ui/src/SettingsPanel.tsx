@@ -699,12 +699,30 @@ export function SettingsPanel({
                 facts are sourced regardless of which model reads the book.
               </span>
             </label>
+            <label style={rowStyle}>
+              <span>Wolfram|Alpha AppID (optional)</span>
+              <input
+                type="password"
+                value={value.keys.wolfram ?? ""}
+                placeholder="blank = use the built-in calculator (mathjs) for math"
+                onChange={(e) => setKey("wolfram", e.target.value.trim())}
+              />
+              <span style={{ opacity: 0.6, fontSize: 11 }}>
+                Lets the chat ground answers in Wolfram|Alpha for <b>real-world data &amp; computation</b>
+                {" "}(facts/figures, equation solving, step-by-step). Free AppID at{" "}
+                <a href="https://developer.wolframalpha.com/access" target="_blank" rel="noreferrer" style={{ color: "#9db4ff" }}>
+                  developer.wolframalpha.com ↗
+                </a>
+                . Without it, math still works via the built-in calculator (units, matrices, calculus,
+                stats — keyless). Needs the desktop app or extension to dodge browser CORS.
+              </span>
+            </label>
           </Group>
 
           <Group
             q={query}
             title="💬 Chat (buddy & reading companion)"
-            keywords="chat buddy companion local model ollama webllm chat provider chat image override private vision describe image screenshot run commands shell agentic assistant workspace test code find files allow"
+            keywords="chat buddy companion local model ollama webllm chat provider chat image override private vision describe image screenshot run commands shell agentic assistant workspace test code find files allow wolfram alpha math knowledge appid"
           >
             <p style={{ opacity: 0.6, fontSize: 11, margin: "4px 0 8px" }}>
               The chat panel can run on a different model than the book analysis. Defaults to
