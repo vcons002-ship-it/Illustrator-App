@@ -16,6 +16,7 @@ import { streamSse } from "./sse.js";
 import type { EntityExtractionInput, LLMProvider } from "./llm-provider.js";
 import {
   DEFAULT_CHAT_MAX_TOKENS,
+  reasoningSoFar,
   type ChatCapable,
   type ChatOptions,
   type ChatTurn,
@@ -188,9 +189,9 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
             opts.onToken!(visible.slice(emitted));
             emitted = visible.length;
           } else if (visible.length === 0) {
-            // Still inside the think block — report progress so the host can show
-            // the model IS working (a silent gate reads as a hang).
-            opts.onThinking?.(full.length);
+            // Still inside the think block — stream the reasoning so the host can show
+            // the model's live thoughts (a silent gate reads as a hang).
+            opts.onThinking?.(reasoningSoFar(full));
           }
         },
       }).catch((err) => {

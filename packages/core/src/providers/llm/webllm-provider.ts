@@ -3,6 +3,7 @@ import type { VisualRequest } from "../../types/content.js";
 import type { EntityExtractionInput, LLMProvider } from "./llm-provider.js";
 import {
   DEFAULT_CHAT_MAX_TOKENS,
+  reasoningSoFar,
   type ChatCapable,
   type ChatOptions,
   type ChatTurn,
@@ -198,7 +199,7 @@ export class WebLLMProvider implements LLMProvider, ChatCapable {
         opts.onToken!(visible.slice(emitted));
         emitted = visible.length;
       } else if (visible.length === 0) {
-        opts.onThinking?.(full.length);
+        opts.onThinking?.(reasoningSoFar(full));
       }
     };
     const text = await complete(messages, {

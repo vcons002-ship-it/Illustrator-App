@@ -4,7 +4,7 @@ import { OpenAILLMProvider } from "./openai-provider.js";
 import { LocalServerLLMProvider } from "./local-server-provider.js";
 import { WebLLMProvider } from "./webllm-provider.js";
 import { MockLLMProvider } from "./mock-llm-provider.js";
-import { supportsChat, type ChatTurn } from "./chat.js";
+import { reasoningSoFar, supportsChat, type ChatTurn } from "./chat.js";
 import type { Transport, TransportRequest, TransportResponse } from "../transport/transport.js";
 
 class FakeTransport implements Transport {
@@ -104,6 +104,18 @@ describe("LocalServerLLMProvider.contextLength", () => {
   it("returns undefined when neither signal is present", async () => {
     const t = new FakeTransport({ model_info: { "qwen2.block_count": 28 }, parameters: "temperature 0.7" });
     expect(await LocalServerLLMProvider.contextLength("http://x/v1", "qwen2", t)).toBeUndefined();
+  });
+});
+
+describe("reasoningSoFar", () => {
+  it("returns the live reasoning inside an unclosed <think> block", () => {
+    expect(reasoningSoFar("<think>weighing the\noptions")).toBe("weighing the\noptions");
+  });
+  it("drops the answer once the think block closes", () => {
+    expect(reasoningSoFar("<think>hmm</think>the answer")).toBe("hmm");
+  });
+  it("falls back to the raw text when there's no think tag yet", () => {
+    expect(reasoningSoFar("  starting to reason")).toBe("starting to reason");
   });
 });
 

@@ -108,6 +108,8 @@ export interface ChatPanelProps {
   messages: ChatMessageVM[];
   /** In-flight assistant text (streaming providers), shown as a live bubble. */
   streamingText?: string;
+  /** A thinking model's live reasoning (shown dimmed/collapsible while it works). */
+  thinking?: string;
   busy: boolean;
   /** Transient activity line ("searching the web…"). */
   activity?: string;
@@ -220,6 +222,7 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
               {...(props.onSaveFile ? { onSaveFile: props.onSaveFile } : {})}
             />
           ))}
+          {props.thinking ? <ThinkingBlock text={props.thinking} /> : null}
           {props.streamingText ? (
             <MessageBubble message={{ role: "assistant", text: props.streamingText }} />
           ) : null}
@@ -611,6 +614,47 @@ function ImageGallery({ items }: { items: { thumb: string; full: string; title?:
     </div>
   );
 }
+
+/**
+ * A thinking model's live reasoning, shown dimmed and auto-scrolling while it works
+ * (so a long reason-before-answering reads as visible progress, not a frozen hang).
+ * Collapsible — the reasoning isn't the answer, so it stays out of the way.
+ */
+export function ThinkingBlock({ text }: { text: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [text]);
+  return (
+    <details open style={thinkingStyle}>
+      <summary style={{ cursor: "pointer", fontSize: 11, opacity: 0.7 }}>💭 Thinking…</summary>
+      <div
+        ref={ref}
+        style={{
+          whiteSpace: "pre-wrap",
+          fontSize: 12,
+          opacity: 0.6,
+          fontStyle: "italic",
+          marginTop: 4,
+          maxHeight: 160,
+          overflowY: "auto",
+        }}
+      >
+        {text}
+      </div>
+    </details>
+  );
+}
+
+const thinkingStyle = {
+  alignSelf: "flex-start",
+  maxWidth: "92%",
+  border: "1px dashed rgba(255,255,255,0.18)",
+  borderRadius: 8,
+  padding: "6px 10px",
+  background: "rgba(255,255,255,0.03)",
+} as const;
 
 /** Inline prose with clickable bare URLs. */
 function Linkified({ text }: { text: string }) {

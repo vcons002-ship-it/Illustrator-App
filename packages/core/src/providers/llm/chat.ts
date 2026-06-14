@@ -21,13 +21,12 @@ export interface ChatOptions {
    */
   onToken?: (delta: string) => void;
   /**
-   * Progress while a thinking model reasons INSIDE its `<think>` block — those
-   * tokens are gated out of `onToken` (reasoning never renders as the answer),
-   * which used to leave the panel frozen on "Thinking…" for minutes and reading
-   * as a hang. `chars` is the total raw length so far; hosts show it as live
-   * "Reasoning…" feedback.
+   * The model's REASONING so far while it's still inside its `<think>` block (those
+   * tokens are kept out of `onToken`, since reasoning isn't the answer). The string
+   * is the accumulated thinking text — hosts stream it into a dimmed "thinking" area
+   * so a long reason-before-answering reads as visible progress, not a frozen hang.
    */
-  onThinking?: (chars: number) => void;
+  onThinking?: (thinking: string) => void;
   signal?: AbortSignal;
   /** Response budget; defaults per provider (~1024). */
   maxTokens?: number;
@@ -72,3 +71,14 @@ export function splitSystem(messages: ChatTurn[]): {
 }
 
 export const DEFAULT_CHAT_MAX_TOKENS = 1024;
+
+/**
+ * The reasoning text so far from a raw, still-streaming reply that's inside a
+ * `<think>` block — the content after the (possibly unclosed) `<think>` tag, with
+ * any closed `</think>…` tail dropped. Used to surface live "thinking" to the host.
+ */
+export function reasoningSoFar(raw: string): string {
+  const m = /<think>([\s\S]*)$/i.exec(raw);
+  const inner = m ? m[1]! : raw;
+  return inner.replace(/<\/think>[\s\S]*$/i, "").trimStart();
+}

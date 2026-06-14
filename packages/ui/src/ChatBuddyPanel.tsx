@@ -3,6 +3,7 @@ import {
   CommandHelp,
   MessageBubble,
   SlashMenu,
+  ThinkingBlock,
   UsageDisclosure,
   completeSlash,
   type ChatMessageVM,
@@ -21,6 +22,8 @@ export interface ChatBuddyPanelProps {
   messages: ChatMessageVM[];
   /** In-flight assistant text (streaming providers), shown as a live bubble. */
   streamingText?: string;
+  /** A thinking model's live reasoning (shown dimmed/collapsible while it works). */
+  thinking?: string;
   busy: boolean;
   /** Transient activity line ("searching Project Gutenberg…"). */
   activity?: string;
@@ -147,6 +150,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             onAction={props.onSend}
           />
         ))}
+        {props.thinking ? <ThinkingBlock text={props.thinking} /> : null}
         {props.streamingText ? (
           <MessageBubble message={{ role: "assistant", text: props.streamingText }} />
         ) : null}
