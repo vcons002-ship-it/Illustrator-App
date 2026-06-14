@@ -12,6 +12,7 @@ import type {
   ImageResult,
   ImageSearchHit,
   ImportStats,
+  PolishMode,
   ToolCall,
   VisualBible,
   WebSearchHit,
@@ -136,6 +137,17 @@ export interface EngineWorkerApi {
   buddyCancel: () => void;
   /** Compact a chat: summarize the model-facing turns into a continuation brief. */
   summarize: (turns: ChatTurn[]) => Promise<{ text?: string; error?: string }>;
+  /** Run one document-polish stage; returns the requestId (for cancel) + the result. */
+  polishText: (args: {
+    stage: "understand" | "produce";
+    mode?: PolishMode;
+    freeText: string;
+    source: string;
+    confirmedPlan?: string;
+    onToken?: (delta: string) => void;
+  }) => { requestId: number; result: Promise<PolishResult> };
+  /** Cancel an in-flight polish stage by its requestId. */
+  polishCancel: (requestId: number) => void;
 }
 
 export type BuddyStreamEvent =
@@ -219,6 +231,14 @@ export interface TestRenderResult {
   error?: string;
 }
 
+/** One polish stage's outcome: understand returns plan/question; produce returns text. */
+export interface PolishResult {
+  plan?: string;
+  question?: string;
+  text?: string;
+  error?: string;
+}
+
 /** Minimal image-cache read surface (the main-thread IndexedDB store), for reloads. */
 export interface ImageReadStore {
   getImage(requestId: string): Promise<{ bytes: ArrayBuffer; mimeType: string; prompt?: string } | undefined>;
@@ -287,6 +307,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const summarizeRequests = useRef<Map<number, (r: { text?: string; error?: string }) => void>>(
     new Map(),
   );
+  // In-flight document-polish stages, resolved by `polished` (and streamed via `polishToken`).
+  const polishRequests = useRef<
+    Map<number, { onToken?: (delta: string) => void; resolve: (r: PolishResult) => void }>
+  >(new Map());
 
   const send = (msg: MainToWorker, transfer: Transferable[] = []) =>
     workerRef.current?.postMessage(msg, transfer);
@@ -531,6 +555,24 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           const resolve = summarizeRequests.current.get(msg.requestId);
           summarizeRequests.current.delete(msg.requestId);
           resolve?.(msg.ok && msg.text ? { text: msg.text } : { error: msg.error ?? "Summarize failed." });
+          break;
+        }
+        case "polishToken": {
+          polishRequests.current.get(msg.requestId)?.onToken?.(msg.text);
+          break;
+        }
+        case "polished": {
+          const req = polishRequests.current.get(msg.requestId);
+          polishRequests.current.delete(msg.requestId);
+          req?.resolve(
+            msg.ok
+              ? {
+                  ...(msg.plan !== undefined ? { plan: msg.plan } : {}),
+                  ...(msg.question !== undefined ? { question: msg.question } : {}),
+                  ...(msg.text !== undefined ? { text: msg.text } : {}),
+                }
+              : { error: msg.error ?? "Polish failed." },
+          );
           break;
         }
         case "error":
@@ -896,6 +938,45 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const polishText = useCallback(
+    (args: {
+      stage: "understand" | "produce";
+      mode?: PolishMode;
+      freeText: string;
+      source: string;
+      confirmedPlan?: string;
+      onToken?: (delta: string) => void;
+    }): { requestId: number; result: Promise<PolishResult> } => {
+      const requestId = nextRefRequestId.current++;
+      const result = new Promise<PolishResult>((resolve) => {
+        // Produce can be slow on a local model — generous, like the buddy timeout.
+        const timeout = setTimeout(() => {
+          if (polishRequests.current.delete(requestId)) resolve({ error: "The model timed out — try again." });
+        }, 180_000);
+        polishRequests.current.set(requestId, {
+          ...(args.onToken ? { onToken: args.onToken } : {}),
+          resolve: (r) => {
+            clearTimeout(timeout);
+            resolve(r);
+          },
+        });
+        send({
+          type: "polish",
+          requestId,
+          stage: args.stage,
+          ...(args.mode ? { mode: args.mode } : {}),
+          freeText: args.freeText,
+          source: args.source,
+          ...(args.confirmedPlan ? { confirmedPlan: args.confirmedPlan } : {}),
+        });
+      });
+      return { requestId, result };
+    },
+    [],
+  );
+  const polishCancel = useCallback((requestId: number) => {
+    if (polishRequests.current.delete(requestId)) send({ type: "chatCancel", requestId });
+  }, []);
 
   return {
     bible,
@@ -940,6 +1021,8 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     buddyChat,
     buddyCancel,
     summarize,
+    polishText,
+    polishCancel,
   };
 }
 

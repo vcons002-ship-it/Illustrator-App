@@ -8,6 +8,7 @@ export * from "./imageStatus.js";
 export * from "./ChatPanel.js";
 export * from "./ChatBuddyPanel.js";
 export * from "./ContextUsageDonut.js";
+export * from "./DocumentPolishPanel.js";
 export * from "./DataChart.js";
 export * from "./DataSection.js";
 export * from "./TechnicalSupport.js";

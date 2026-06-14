@@ -6,6 +6,7 @@ import {
   describeOutfit,
 } from "../providers/image/bible-injection.js";
 import { CHAT_TOOLS_SYSTEM } from "./chat-tools.js";
+import { POLISH_CHAT_GUIDANCE } from "./document-polish.js";
 
 /**
  * Builds the chat's system prompt: the book (spoiler-safely truncated for fiction),
@@ -72,7 +73,7 @@ export function chatContextSections(input: ChatContextInput): ChatContextSection
     { key: "role", label: "Instructions", text: role },
     { key: "bible", label: "Visual bible", text: bibleSlice(input, fullView) },
     { key: "book", label: "Book text", text },
-    { key: "tools", label: "Tool definitions", text: CHAT_TOOLS_SYSTEM },
+    { key: "tools", label: "Tool definitions", text: `${CHAT_TOOLS_SYSTEM}\n${POLISH_CHAT_GUIDANCE}` },
     {
       key: "guard",
       label: "Instructions",

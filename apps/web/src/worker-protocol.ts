@@ -11,6 +11,7 @@ import type {
   ImageResult,
   ImageSearchHit,
   ImportStats,
+  PolishMode,
   ToolCall,
   VisualBible,
   WebSearchHit,
@@ -98,6 +99,17 @@ export type MainToWorker =
   | { type: "chatCancel"; requestId: number }
   /** Compact a chat: summarize these model-facing turns (answered by `summarized`). */
   | { type: "summarize"; requestId: number; turns: ChatTurn[] }
+  /** Faithful document polish (two stages); answered by `polished` (+ `polishToken`
+   * deltas while producing). Cancel via `chatCancel` (shares the abort map). */
+  | {
+      type: "polish";
+      requestId: number;
+      stage: "understand" | "produce";
+      mode?: PolishMode;
+      freeText: string;
+      source: string;
+      confirmedPlan?: string;
+    }
   /** Reply to a worker `corsFetch` (the native fetch's outcome, body base64). */
   | {
       type: "corsFetchResult";
@@ -234,4 +246,17 @@ export type WorkerToMain =
     }
   | { type: "buddyError"; requestId: number; message: string }
   /** Reply to `summarize`: the compact brief, or why it failed. */
-  | { type: "summarized"; requestId: number; ok: boolean; text?: string; error?: string };
+  | { type: "summarized"; requestId: number; ok: boolean; text?: string; error?: string }
+  /** Streaming delta while the polish "produce" stage runs. */
+  | { type: "polishToken"; requestId: number; text: string }
+  /** Reply to `polish`: the understood plan (+ optional question), or the produced text. */
+  | {
+      type: "polished";
+      requestId: number;
+      stage: "understand" | "produce";
+      ok: boolean;
+      plan?: string;
+      question?: string;
+      text?: string;
+      error?: string;
+    };
