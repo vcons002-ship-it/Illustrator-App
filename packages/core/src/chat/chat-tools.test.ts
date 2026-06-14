@@ -66,6 +66,31 @@ describe("parseToolCall", () => {
     expect(parseToolCall('{"tool":"export_book","format":"pdf"}')).toEqual({ tool: "export_book", format: "html" });
   });
 
+  it("parses an analyze_data spec (op/agg/columns/filters/chart)", () => {
+    const call = parseToolCall(
+      '{"tool":"analyze_data","op":"groupby","groupBy":"Region","agg":"sum","valueColumn":"Revenue",' +
+        '"filters":[{"column":"Product","op":"=","value":"Widget"}],"chart":"bar"}',
+    );
+    expect(call).toEqual({
+      tool: "analyze_data",
+      op: "groupby",
+      groupBy: "Region",
+      agg: "sum",
+      valueColumn: "Revenue",
+      filters: [{ column: "Product", op: "=", value: "Widget" }],
+      chart: "bar",
+    });
+  });
+
+  it("rejects analyze_data with an unknown op, and drops a bad agg/chart/filter", () => {
+    expect(parseToolCall('{"tool":"analyze_data","op":"frobnicate"}')).toBeUndefined();
+    const call = parseToolCall(
+      '{"tool":"analyze_data","op":"describe","agg":"bogus","chart":"hologram",' +
+        '"filters":[{"column":"X","op":"~~","value":1},{"column":"Y","op":">","value":3}]}',
+    );
+    expect(call).toEqual({ tool: "analyze_data", op: "describe", filters: [{ column: "Y", op: ">", value: 3 }] });
+  });
+
   it("parses memory calls and caps their length", () => {
     expect(parseToolCall('{"tool":"remember","note":"prefers watercolor"}')).toEqual({
       tool: "remember",

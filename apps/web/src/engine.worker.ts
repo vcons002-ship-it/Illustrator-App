@@ -15,6 +15,7 @@ import {
   CHARS_PER_TOKEN,
   CHAT_CONTEXT_BUDGET_CHARS,
   LocalServerLLMProvider,
+  analyzeData,
   buildBuddySystemPrompt,
   buildProducePrompt,
   buildUnderstandPrompt,
@@ -962,6 +963,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       readUrl: readUrlText(ac.signal),
       remember: async (n) => (await rememberNote(memoryStore(), n)).length,
       forget: async (m) => (await forgetNote(memoryStore(), m)).length,
+      ...(book.data ? { analyzeData: (spec) => analyzeData(book.data!, spec) } : {}),
       ...(currentBible
         ? {
             lookupBible: (q: string) =>
@@ -1010,6 +1012,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       position: pos,
       allowSpoilers: msg.allowSpoilers,
       ...(settings?.allowMature ? { allowMature: true } : {}),
+      ...(book.data ? { dataTable: book.data } : {}),
       budgetChars: budgets.book,
     });
     const sec = (key: string) => sections.find((s) => s.key === key)?.text ?? "";
@@ -1059,6 +1062,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
         readUrl: readUrlText(ac.signal),
         remember: async (n) => (await rememberNote(memoryStore(), n)).length,
         forget: async (m) => (await forgetNote(memoryStore(), m)).length,
+        ...(book.data ? { analyzeData: (spec) => analyzeData(book.data!, spec) } : {}),
         ...(currentBible
           ? {
               lookupBible: (q: string) =>
@@ -1082,6 +1086,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
             ...(e.result.hits ? { hits: e.result.hits } : {}),
             ...(e.result.imageHits ? { imageHits: e.result.imageHits } : {}),
             ...(e.result.memory ? { memory: e.result.memory } : {}),
+            ...(e.result.analysis ? { analysis: e.result.analysis } : {}),
             ...(e.result.error ? { error: e.result.error } : {}),
           });
       },

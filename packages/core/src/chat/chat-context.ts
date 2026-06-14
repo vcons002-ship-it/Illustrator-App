@@ -5,8 +5,9 @@ import {
   describeLocation,
   describeOutfit,
 } from "../providers/image/bible-injection.js";
-import { CHAT_TOOLS_SYSTEM } from "./chat-tools.js";
+import { CHAT_TOOLS_SYSTEM, dataToolsBlock } from "./chat-tools.js";
 import { POLISH_CHAT_GUIDANCE } from "./document-polish.js";
+import type { DataTable } from "../data/data-table.js";
 
 /**
  * Builds the chat's system prompt: the book (spoiler-safely truncated for fiction),
@@ -33,6 +34,8 @@ export interface ChatContextInput {
   allowSpoilers: boolean;
   /** Mature mode: discuss explicit/adult content frankly (see TierConfig.allowMature). */
   allowMature?: boolean;
+  /** When the "book" is an uploaded spreadsheet/CSV — enables the analyze_data tool. */
+  dataTable?: DataTable;
   budgetChars?: number;
 }
 
@@ -73,7 +76,13 @@ export function chatContextSections(input: ChatContextInput): ChatContextSection
     { key: "role", label: "Instructions", text: role },
     { key: "bible", label: "Visual bible", text: bibleSlice(input, fullView) },
     { key: "book", label: "Book text", text },
-    { key: "tools", label: "Tool definitions", text: `${CHAT_TOOLS_SYSTEM}\n${POLISH_CHAT_GUIDANCE}` },
+    {
+      key: "tools",
+      label: "Tool definitions",
+      text:
+        `${CHAT_TOOLS_SYSTEM}\n${POLISH_CHAT_GUIDANCE}` +
+        (input.dataTable ? `\n${dataToolsBlock(input.dataTable)}` : ""),
+    },
     {
       key: "guard",
       label: "Instructions",

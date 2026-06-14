@@ -1,5 +1,6 @@
 import type { ChatCapable, ChatTurn } from "../providers/llm/chat.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
+import type { AnalyzeResult, AnalyzeSpec } from "../data/analyze.js";
 import type { BookPassage } from "./book-passage-search.js";
 import {
   MAX_TOOL_ROUNDS,
@@ -29,6 +30,8 @@ export interface ChatToolDeps {
   /** Long-term reader memory (see reader-memory.ts); returns the kept count. */
   remember?: (note: string) => Promise<number>;
   forget?: (match: string) => Promise<number>;
+  /** Grounded analysis over the uploaded spreadsheet/CSV (sync — pure over the table). */
+  analyzeData?: (spec: AnalyzeSpec) => AnalyzeResult;
 }
 
 export type ChatTurnEvent =
@@ -151,6 +154,12 @@ export async function runChatTool(
   tools: ChatToolDeps,
 ): Promise<ToolResultPayload> {
   try {
+    if (call.tool === "analyze_data") {
+      if (!tools.analyzeData) return { error: "no spreadsheet/CSV data is loaded to analyze" };
+      const { chart: _chart, tool: _tool, ...spec } = call;
+      const res = tools.analyzeData(spec);
+      return { analysis: { table: res.table, summary: res.summary, ...(call.chart ? { chart: call.chart } : {}) } };
+    }
     if (call.tool === "remember") {
       if (!tools.remember) return { error: "memory isn't available right now" };
       return { memory: { action: "remembered", note: call.note, count: await tools.remember(call.note) } };

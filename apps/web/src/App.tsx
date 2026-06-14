@@ -962,6 +962,16 @@ export function App() {
                   ...(h.title ? { title: h.title } : {}),
                 })),
               });
+            } else if (e.analysis) {
+              appendChat({
+                role: "tool",
+                text: `📊 ${e.analysis.summary}`,
+                analysis: {
+                  table: e.analysis.table,
+                  ...(e.analysis.summary ? { summary: e.analysis.summary } : {}),
+                  ...(e.analysis.chart ? { chart: e.analysis.chart } : {}),
+                },
+              });
             } else if (e.memory) {
               appendChat({
                 role: "tool",
@@ -1084,6 +1094,7 @@ export function App() {
         ...(m.image ? { image: m.image } : {}),
         ...(m.links ? { links: m.links } : {}),
         ...(m.gallery ? { gallery: m.gallery } : {}),
+        ...(m.analysis ? { analysis: m.analysis } : {}),
       })),
     [chatMessages],
   );

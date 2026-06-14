@@ -10,6 +10,8 @@ import type {
   ChatTurn,
   ContextUsage,
   ImageResult,
+  AnalyzeChart,
+  DataTable,
   ImageSearchHit,
   ImportStats,
   PolishMode,
@@ -218,6 +220,8 @@ export type ChatStreamEvent =
       /** lookup_bible detail (slash commands render this in the panel). */
       bibleDetail?: string;
       memory?: { action: "remembered" | "forgot"; note: string; count: number };
+      /** A grounded analyze_data result table (rendered inline). */
+      analysis?: { table: DataTable; summary: string; chart?: AnalyzeChart };
       error?: string;
     }
   /** Where the request's context budget is going (for the usage donut). */
@@ -488,6 +492,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             ...(msg.passages ? { passages: msg.passages } : {}),
             ...(msg.bibleDetail !== undefined ? { bibleDetail: msg.bibleDetail } : {}),
             ...(msg.memory ? { memory: msg.memory } : {}),
+            ...(msg.analysis ? { analysis: msg.analysis } : {}),
             ...(msg.error ? { error: msg.error } : {}),
           });
           break;

@@ -1,5 +1,7 @@
 import type { VisualBible } from "../types/bible.js";
 import type { BookSource } from "../types/book.js";
+import type { DataTable } from "../data/data-table.js";
+import type { AnalyzeChart } from "../data/analyze.js";
 
 /** Lightweight library entry for the "switch between books" picker. */
 export interface BookSummary {
@@ -24,6 +26,8 @@ export interface StoredChatMessage {
    * `search_images`); each thumbnail enlarges in place on click. This is what lets
    * "show me 3 images of X" actually display several, not just the first. */
   gallery?: { thumb: string; full: string; title?: string }[];
+  /** A grounded analyze_data result table (rendered inline, with an optional chart). */
+  analysis?: { table: DataTable; summary?: string; chart?: AnalyzeChart };
   /** Clickable local-file results (the desktop `/find` command); each opens on click. */
   files?: { path: string; name: string }[];
   /** Quick-reply action buttons (e.g. what to do with a pasted link). */

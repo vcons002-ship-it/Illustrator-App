@@ -1,6 +1,8 @@
 import { stripThink } from "../providers/llm/extraction.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
 import type { BookPassage } from "./book-passage-search.js";
+import type { AnalyzeChart, AnalyzeSpec, Aggregation, DataFilter, FilterOp } from "../data/analyze.js";
+import { tableToText, type DataTable } from "../data/data-table.js";
 
 /**
  * Provider-agnostic tool protocol for the reading-companion chat. Native
@@ -31,12 +33,38 @@ export type ToolCall =
   | { tool: "lookup_bible"; query: string }
   /** Save an illustrated copy of the current book (host-handled, no approval). */
   | { tool: "export_book"; format: "html" | "epub" }
+  /** Grounded analysis of the uploaded spreadsheet/CSV (the app computes over real
+   * cells — group-by / pivot / aggregate / describe / filter — and optionally charts it). */
+  | ({ tool: "analyze_data"; chart?: AnalyzeChart } & AnalyzeSpec)
   /** Long-term reader memory (shared with the buddy — see reader-memory.ts). */
   | { tool: "remember"; note: string }
   | { tool: "forget"; match: string };
 
 /** Search rounds per user message — bounds quota use and tool-looping models. */
 export const MAX_TOOL_ROUNDS = 3;
+
+/**
+ * The analyze_data tool instructions + this book's table schema, appended to the chat
+ * system prompt ONLY when the open "book" is an uploaded spreadsheet/CSV. The app
+ * computes the result over the real cells, so the model must use EXACT column names.
+ */
+export function dataToolsBlock(table: DataTable): string {
+  const cols = table.columns.map((c) => `${c.name} (${c.type})`).join(", ");
+  return [
+    `THIS DOCUMENT IS A DATA TABLE — ${table.rows.length} rows. Columns: ${cols}.`,
+    `Preview:\n${tableToText(table, 8)}`,
+    "To analyze it (counts, sums, averages, group-bys, pivots, distributions — anything the reader asks of",
+    'the data), reply with ONLY one JSON object: {"tool":"analyze_data","op":"...", ...}. ops:',
+    '- "describe": per-column stats (count/min/max/mean/median/stdev/distinct).',
+    '- "aggregate": one number; needs "agg" + "valueColumn".',
+    '- "groupby": "agg" of "valueColumn" per "groupBy" value (top groups first; optional "limit").',
+    '- "pivot": a "groupBy" x "pivotColumn" matrix of "agg" over "valueColumn".',
+    'agg is one of sum/mean/median/min/max/count/countDistinct/stdev. Optional "filters" is an array of',
+    '{"column","op","value"} (op is =/!=/>/</>=/<=/contains) applied first, and "chart" is "bar"/"line"/"pie"',
+    "to chart the result. Use the EXACT column names above. The app computes it over the real cells (NEVER",
+    "guess the numbers) and shows the reader the result table; you then narrate it.",
+  ].join("\n");
+}
 
 /** Injection guard: lengths a tool argument can't exceed (book text can't smuggle essays). */
 const MAX_QUERY_CHARS = 200;
@@ -110,6 +138,7 @@ export function parseToolCall(text: string): ToolCall | undefined {
   if (tool === "export_book") {
     return { tool, format: obj.format === "epub" ? "epub" : "html" };
   }
+  if (tool === "analyze_data") return parseAnalyzeData(obj);
   if (
     tool === "search_web" ||
     tool === "search_images" ||
@@ -147,6 +176,37 @@ export function parseToolCall(text: string): ToolCall | undefined {
   return undefined;
 }
 
+const ANALYZE_OPS = new Set(["describe", "aggregate", "groupby", "pivot"]);
+const ANALYZE_AGGS = new Set<Aggregation>(["sum", "mean", "median", "min", "max", "count", "countDistinct", "stdev"]);
+const FILTER_OPS = new Set<FilterOp>(["=", "!=", ">", "<", ">=", "<=", "contains"]);
+
+/** Validate an analyze_data spec from the model into a typed, capped ToolCall. */
+function parseAnalyzeData(obj: Record<string, unknown>): ToolCall | undefined {
+  if (typeof obj.op !== "string" || !ANALYZE_OPS.has(obj.op)) return undefined;
+  const spec: AnalyzeSpec = { op: obj.op as AnalyzeSpec["op"] };
+  const colName = (v: unknown): string | undefined => strArg(v, MAX_NAME_CHARS);
+  if (colName(obj.groupBy)) spec.groupBy = colName(obj.groupBy)!;
+  if (colName(obj.pivotColumn)) spec.pivotColumn = colName(obj.pivotColumn)!;
+  if (colName(obj.valueColumn)) spec.valueColumn = colName(obj.valueColumn)!;
+  if (typeof obj.agg === "string" && ANALYZE_AGGS.has(obj.agg as Aggregation)) spec.agg = obj.agg as Aggregation;
+  if (typeof obj.limit === "number" && Number.isFinite(obj.limit)) spec.limit = Math.min(200, Math.max(1, Math.round(obj.limit)));
+  if (Array.isArray(obj.filters)) {
+    const filters: DataFilter[] = [];
+    for (const f of obj.filters.slice(0, 10)) {
+      const fo = f as Record<string, unknown>;
+      const column = colName(fo.column);
+      const op = typeof fo.op === "string" && FILTER_OPS.has(fo.op as FilterOp) ? (fo.op as FilterOp) : undefined;
+      const value =
+        typeof fo.value === "number" ? fo.value : typeof fo.value === "string" ? fo.value.slice(0, MAX_NAME_CHARS) : undefined;
+      if (column && op && value !== undefined) filters.push({ column, op, value });
+    }
+    if (filters.length) spec.filters = filters;
+  }
+  const chart: AnalyzeChart | undefined =
+    obj.chart === "bar" || obj.chart === "line" || obj.chart === "pie" ? obj.chart : undefined;
+  return { tool: "analyze_data", ...spec, ...(chart ? { chart } : {}) };
+}
+
 /** Tool outcome data fed back to the model (image bytes stay OUT of the transcript). */
 export interface ToolResultPayload {
   hits?: WebSearchHit[];
@@ -163,6 +223,8 @@ export interface ToolResultPayload {
   export?: { ok: boolean; format: string; where: string; images: number; error?: string };
   /** Whether an approved image generation succeeded. */
   image?: { ok: boolean; error?: string };
+  /** A grounded analyze_data outcome — the computed result table + summary (+ chart). */
+  analysis?: { table: DataTable; summary: string; chart?: AnalyzeChart };
   /** Tool-level failure (missing capability, network error…). */
   error?: string;
 }
@@ -218,6 +280,14 @@ export function formatToolResult(call: ToolCall, result: ToolResultPayload): str
     return result.memory
       ? `[memory ${result.memory.action}: "${result.memory.note}" — ${result.memory.count} note${result.memory.count === 1 ? "" : "s"} kept] Confirm briefly.`
       : `[${call.tool} did nothing]`;
+  }
+  if (call.tool === "analyze_data") {
+    if (!result.analysis) return "[analyze_data returned nothing]";
+    return (
+      `[analyze_data — computed result (these numbers are EXACT, from the actual data):\n` +
+      `${result.analysis.summary}\n${tableToText(result.analysis.table, 30)}]\n` +
+      "Report these figures to the reader; the table is already shown to them inline."
+    );
   }
   if (call.tool === "export_book") {
     const e = result.export;
