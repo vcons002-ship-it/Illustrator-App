@@ -174,6 +174,7 @@ export type BuddyStreamEvent =
       applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
       removed?: string;
       calc?: { expression: string; result: string };
+      wolfram?: { query: string; answer: string };
       memory?: { action: "remembered" | "forgot"; note: string; count: number };
       error?: string;
     }
@@ -535,6 +536,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             ...(msg.applied ? { applied: msg.applied } : {}),
             ...(msg.removed ? { removed: msg.removed } : {}),
             ...(msg.calc ? { calc: msg.calc } : {}),
+            ...(msg.wolfram ? { wolfram: msg.wolfram } : {}),
             ...(msg.memory ? { memory: msg.memory } : {}),
             ...(msg.error ? { error: msg.error } : {}),
           });

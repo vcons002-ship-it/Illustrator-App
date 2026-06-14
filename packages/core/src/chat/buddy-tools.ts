@@ -28,6 +28,8 @@ export type BuddyToolCall =
   | { tool: "random_books" }
   /** Real arithmetic (LLMs guess; the parser doesn't). Runs in-core, no host dep. */
   | { tool: "calculate"; expression: string }
+  /** Wolfram|Alpha: real-world data + computation (optional, needs an AppID). */
+  | { tool: "wolfram"; query: string }
   | { tool: "open_library_book"; id: string; visuals: boolean }
   | {
       tool: "open_web_text";
@@ -95,6 +97,8 @@ export function buildBuddySystemPrompt(opts: {
   canSearchFiles?: boolean;
   /** Desktop + opt-in: advertise the run_command tool (each command is approved). */
   canRunCommands?: boolean;
+  /** An AppID is set: advertise the Wolfram|Alpha tool (real-world data + computation). */
+  canWolfram?: boolean;
 }): string {
   const persona =
     opts.persona === "technical"
@@ -143,6 +147,12 @@ export function buildBuddySystemPrompt(opts: {
       "best for a running game; omit it to capture the whole screen. If the window name is wrong the result lists the " +
       "open windows, so retry with one of those. The reader approves the first capture (and can allow the rest for the " +
       "session).\n"
+    : "";
+  const wolframTool = opts.canWolfram
+    ? '- {"tool":"wolfram","query":"…"} — ask Wolfram|Alpha for REAL-WORLD data and computation it ' +
+      "curates better than you remember: facts/figures (populations, distances, chemistry, physics " +
+      "constants, finance, nutrition, dates), equation solving, and step-by-step results. Use it when a " +
+      "question needs an authoritative real-world value; use calculate for pure math you can express directly.\n"
     : "";
   const mature = opts.allowMature
     ? " The reader has enabled mature mode: explicit sexual content, graphic violence and other " +
@@ -193,6 +203,7 @@ export function buildBuddySystemPrompt(opts: {
     '- {"tool":"forget","match":"…"} — remove memory notes containing this text, when asked to forget.\n' +
     fileTool +
     commandTool +
+    wolframTool +
     'Set "visuals": true ONLY when the reader asked to illustrate/visualize it — the app then starts ' +
     "generating illustrations immediately (which uses their image provider); otherwise they press Start themselves.\n" +
     "After a book search, use each hit's subjects to recommend and to match the reader's request; either open the " +
@@ -254,6 +265,10 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
   if (tool === "calculate") {
     const expression = strArg(obj.expression, MAX_EXPRESSION_CHARS);
     return expression ? { tool, expression } : undefined;
+  }
+  if (tool === "wolfram") {
+    const query = strArg(obj.query, MAX_QUERY_CHARS);
+    return query ? { tool, query } : undefined;
   }
   if (tool === "remember") {
     const note = strArg(obj.note, MAX_MEMORY_NOTE_CHARS);
@@ -351,6 +366,8 @@ export interface BuddyToolResultPayload {
   removed?: string;
   /** A calculate tool's outcome (expression echoed for the inline chip). */
   calc?: { expression: string; result: string };
+  /** A Wolfram|Alpha answer (plain text). */
+  wolfram?: { query: string; answer: string };
   /** What set_visual_style actually applied (resolved style LABEL). */
   applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
   /** Whether an approved image generation succeeded. */
@@ -435,6 +452,12 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     return result.calc
       ? `[calculate: ${result.calc.expression} = ${result.calc.result}] Use this exact value in your answer.`
       : "[calculate returned nothing]";
+  }
+  if (call.tool === "wolfram") {
+    return result.wolfram
+      ? `[Wolfram|Alpha — authoritative answer for "${result.wolfram.query}"]\n${result.wolfram.answer}\n` +
+          "Use these facts/values in your answer; cite Wolfram|Alpha."
+      : "[wolfram returned nothing]";
   }
   if (call.tool === "remember" || call.tool === "forget") {
     return result.memory

@@ -1399,6 +1399,8 @@ export function App() {
           });
         } else if (e.calc) {
           appendBuddy({ role: "tool", text: `🧮 ${e.calc.expression} = ${e.calc.result}` });
+        } else if (e.wolfram) {
+          appendBuddy({ role: "tool", text: `🔢 Wolfram|Alpha — ${e.wolfram.query}:\n${e.wolfram.answer}` });
         } else if (e.memory) {
           appendBuddy({
             role: "tool",
