@@ -30,6 +30,7 @@ import {
   subjectFromCaption,
   rankLocalFiles,
   formatFileSize,
+  POLISH_PRESETS,
   type ConceptIntro,
   type BookSource,
   type BookSummary,
@@ -58,6 +59,7 @@ import {
   DataChart,
   DataSection,
   DEFAULT_SETTINGS,
+  DocumentPolishPanel,
   FirstRunWizard,
   ImagePanel,
   PanelGrid,
@@ -195,6 +197,8 @@ export function App() {
     buddyCancel,
     summarize,
     setActiveUnit,
+    polishText,
+    polishCancel,
   } = useEngineWorker(settings, libraryStore);
   const [showCharacters, setShowCharacters] = useState(false);
   const [showData, setShowData] = useState(false);
@@ -210,6 +214,9 @@ export function App() {
   const [pasteInitial, setPasteInitial] = useState<
     { title: string; text: string; mode?: "fiction" | "technical" } | undefined
   >();
+  // Faithful document-polish panel + an optional prefill (from upload or a home click).
+  const [showPolish, setShowPolish] = useState(false);
+  const [polishInitial, setPolishInitial] = useState<{ title?: string; text?: string } | undefined>();
   const [showLibrary, setShowLibrary] = useState(false);
   // Reading-companion chat (per book; persisted in IndexedDB).
   const [showChat, setShowChat] = useState(false);
@@ -1961,6 +1968,16 @@ export function App() {
           >
             Paste text
           </button>
+          <button
+            style={styles.button}
+            onClick={() => {
+              setPolishInitial(undefined);
+              setShowPolish(true);
+            }}
+            title="Summarize, condense, rewrite, or proofread a document — faithfully, with no illustration"
+          >
+            ✍ Polish doc
+          </button>
           <button style={styles.button} onClick={() => openBook(loadSampleBook())}>
             Load sample
           </button>
@@ -2462,9 +2479,46 @@ export function App() {
               setLocalError(err instanceof Error ? err.message : String(err));
             }
           }}
+          onPolish={(title, text) => {
+            setShowPasteText(false);
+            setPasteInitial(undefined);
+            setPolishInitial({ title, text });
+            setShowPolish(true);
+          }}
           onClose={() => {
             setShowPasteText(false);
             setPasteInitial(undefined);
+          }}
+        />
+      )}
+
+      {showPolish && (
+        <DocumentPolishPanel
+          {...(polishInitial ? { initial: polishInitial } : {})}
+          presets={POLISH_PRESETS}
+          onUnderstand={(a) =>
+            polishText({
+              stage: "understand",
+              freeText: a.freeText,
+              source: a.source,
+              ...(a.mode ? { mode: a.mode } : {}),
+            }).result
+          }
+          onProduce={(a) => {
+            const { requestId, result } = polishText({
+              stage: "produce",
+              freeText: a.freeText,
+              source: a.source,
+              confirmedPlan: a.confirmedPlan,
+              onToken: a.onToken,
+              ...(a.mode ? { mode: a.mode } : {}),
+            });
+            return { cancel: () => polishCancel(requestId), result };
+          }}
+          onSaveFile={onSaveChatFile}
+          onClose={() => {
+            setShowPolish(false);
+            setPolishInitial(undefined);
           }}
         />
       )}
@@ -2825,11 +2879,14 @@ function ImportBibleModal({
 function PasteTextModal({
   initial,
   onCreate,
+  onPolish,
   onClose,
 }: {
   /** Prefill when the text came from an opened file (PDF/Word/CSV/…). */
   initial?: { title: string; text: string; mode?: "fiction" | "technical" } | undefined;
   onCreate: (title: string, text: string, mode: "fiction" | "technical") => void;
+  /** Switch to the faithful summarize/rework flow with the current title + text. */
+  onPolish?: (title: string, text: string) => void;
   onClose: () => void;
 }) {
   const [title, setTitle] = useState(initial?.title ?? "");
@@ -2875,13 +2932,25 @@ function PasteTextModal({
         </label>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
           <span style={{ opacity: 0.6, fontSize: 12 }}>{words ? `${words} words` : ""}</span>
-          <button
-            style={styles.buttonPrimary}
-            disabled={!text.trim()}
-            onClick={() => onCreate(title.trim() || "Pasted text", text, mode)}
-          >
-            Read it
-          </button>
+          <span style={{ display: "flex", gap: 6 }}>
+            {onPolish && (
+              <button
+                style={styles.button}
+                disabled={!text.trim()}
+                title="Summarize, rewrite, or proofread this text faithfully — no illustration"
+                onClick={() => onPolish(title.trim() || "Document", text)}
+              >
+                ✍ Summarize / rework
+              </button>
+            )}
+            <button
+              style={styles.buttonPrimary}
+              disabled={!text.trim()}
+              onClick={() => onCreate(title.trim() || "Pasted text", text, mode)}
+            >
+              Read it
+            </button>
+          </span>
         </div>
       </div>
     </div>

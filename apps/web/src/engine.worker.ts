@@ -16,6 +16,8 @@ import {
   CHAT_CONTEXT_BUDGET_CHARS,
   LocalServerLLMProvider,
   buildBuddySystemPrompt,
+  buildProducePrompt,
+  buildUnderstandPrompt,
   chapterText,
   fetchPageText,
   forgetNote,
@@ -23,6 +25,7 @@ import {
   loadMemory,
   memoryPromptBlock,
   parseBuddySlashCommand,
+  parseUnderstanding,
   parseChatSlashCommand,
   rememberNote,
   runBuddyTool,
@@ -567,6 +570,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "summarize":
       void handleSummarize(msg);
+      break;
+    case "polish":
+      void handlePolish(msg);
       break;
     case "chatTool":
       void handleChatTool(msg.requestId, msg.call);
@@ -1133,6 +1139,51 @@ async function handleSummarize(msg: Extract<MainToWorker, { type: "summarize" }>
       ok: false,
       error: err instanceof Error ? err.message : String(err),
     });
+  }
+}
+
+/**
+ * Faithful document polish (two stages). Mirrors handleSummarize: a one-shot
+ * `chat()` over the provider-neutral seam, available with no book open. "understand"
+ * restates the plan (+ optional clarifying question); "produce" streams the reworked
+ * text. The shared `chatAborts` map makes the existing `chatCancel` message cancel it.
+ */
+async function handlePolish(msg: Extract<MainToWorker, { type: "polish" }>): Promise<void> {
+  const ac = new AbortController();
+  chatAborts.set(msg.requestId, ac);
+  try {
+    const { llm } = chatProviders();
+    if (!supportsChat(llm)) {
+      throw new Error(`The "${llm.id}" text provider doesn't support chat yet.`);
+    }
+    const base = { freeText: msg.freeText, source: msg.source, ...(msg.mode ? { mode: msg.mode } : {}) };
+    if (msg.stage === "understand") {
+      const raw = await llm.chat(buildUnderstandPrompt(base), { maxTokens: 512, signal: ac.signal });
+      const { plan, question } = parseUnderstanding(raw);
+      post({ type: "polished", requestId: msg.requestId, stage: "understand", ok: true, plan, question });
+      return;
+    }
+    const text = await llm.chat(
+      buildProducePrompt({ ...base, confirmedPlan: msg.confirmedPlan ?? "" }),
+      {
+        maxTokens: 4096,
+        signal: ac.signal,
+        onToken: (delta) => post({ type: "polishToken", requestId: msg.requestId, text: delta }),
+      },
+    );
+    const trimmed = text.trim();
+    if (!trimmed) throw new Error("the model returned an empty result");
+    post({ type: "polished", requestId: msg.requestId, stage: "produce", ok: true, text: trimmed });
+  } catch (err) {
+    post({
+      type: "polished",
+      requestId: msg.requestId,
+      stage: msg.stage,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  } finally {
+    chatAborts.delete(msg.requestId);
   }
 }
 

@@ -8,3 +8,4 @@ export * from "./context-usage.js";
 export * from "./book-passage-search.js";
 export * from "./reader-memory.js";
 export * from "./slash-commands.js";
+export * from "./document-polish.js";
