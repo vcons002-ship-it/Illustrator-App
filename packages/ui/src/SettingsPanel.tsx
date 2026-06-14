@@ -324,7 +324,7 @@ export function SettingsPanel({
             q={query}
             title="📖 1 · Read & analyse — text model"
             hint="Reads the book, learns characters/places, writes the illustration prompts. Changes apply via ↻ Redo → Story analysis (or → Prompts)."
-            keywords="text provider llm claude gemini openai api key local ollama lm studio llama webgpu on-device server model download pull context window tokens"
+            keywords="text provider llm claude gemini openai api key local ollama lm studio llama webgpu on-device server model download pull context window tokens built-in bundled"
             defaultOpen
           >
           <label style={rowStyle}>
@@ -646,26 +646,6 @@ export function SettingsPanel({
               </span>
             </span>
           </label>
-          {isDesktop && (
-            <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
-              <input
-                type="checkbox"
-                checked={value.allowCommands ?? false}
-                onChange={(e) => set({ allowCommands: e.target.checked })}
-              />
-              <span>
-                Let the assistant run commands &amp; see the screen (advanced)
-                <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
-                  Allows the chat to PROPOSE shell commands (install dependencies, run tests,
-                  execute code it wrote) in a <code>VisualReader/workspace</code> folder, and to
-                  capture your screen so it can check whether something it built is working — the
-                  test-as-you-go loop. You approve <b>every</b> command and <b>every</b> screen
-                  capture before it happens; nothing runs on its own. Off by default. Only enable if
-                  you understand that approved commands run on your computer with your permissions.
-                </span>
-              </span>
-            </label>
-          )}
           </Group>
 
           <Group
@@ -724,7 +704,7 @@ export function SettingsPanel({
           <Group
             q={query}
             title="💬 Chat (buddy & reading companion)"
-            keywords="chat buddy companion local model ollama webllm chat provider chat image override private"
+            keywords="chat buddy companion local model ollama webllm chat provider chat image override private vision describe image screenshot run commands shell agentic assistant workspace test code find files allow"
           >
             <p style={{ opacity: 0.6, fontSize: 11, margin: "4px 0 8px" }}>
               The chat panel can run on a different model than the book analysis. Defaults to
@@ -795,12 +775,47 @@ export function SettingsPanel({
                 ))}
               </select>
             </label>
+            {isDesktop && (
+              <>
+                <div
+                  style={{
+                    marginTop: 12,
+                    paddingTop: 10,
+                    borderTop: "1px solid rgba(255,255,255,0.1)",
+                    fontSize: 12,
+                    opacity: 0.85,
+                  }}
+                >
+                  🛠 <b>Assistant abilities (desktop)</b>
+                </div>
+                <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={value.allowCommands ?? false}
+                    onChange={(e) => set({ allowCommands: e.target.checked })}
+                  />
+                  <span>
+                    Let the assistant run commands &amp; see the screen (advanced)
+                    <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                      Allows the chat to PROPOSE shell commands (install dependencies, run tests,
+                      execute code it wrote) in a <code>VisualReader/workspace</code> folder, and to
+                      capture your screen so it can check whether something it built is working — the
+                      test-as-you-go loop. You approve <b>every</b> command and <b>every</b> screen
+                      capture before it happens; nothing runs on its own. Off by default. Only enable
+                      if you understand that approved commands run on your computer with your
+                      permissions. (Opening files from your computer is always available and asks per
+                      session.)
+                    </span>
+                  </span>
+                </label>
+              </>
+            )}
           </Group>
 
           <Group
             q={query}
             title="⚙️ Local engine & advanced"
-            keywords="comfyui automatic1111 a1111 connect url lora style pack download sampler steps cfg scheduler vae text encoder native one api multimodal reference photos model files"
+            keywords="comfyui automatic1111 a1111 connect url lora style pack download sampler steps cfg scheduler vae text encoder native one api multimodal reference photos model files low vram lowvram fp8 memory offload gpu"
           >
           {sameVendorNative(value) && <NativeModeRow value={value} set={set} />}
 
