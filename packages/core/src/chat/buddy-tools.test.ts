@@ -271,6 +271,9 @@ describe("buildBuddySystemPrompt", () => {
     expect(on).toContain('"tool":"screenshot"');
     expect(on).toContain("APPROVE");
     expect(on).toContain("NEVER run");
+    // The pandas/code-interpreter workflow rides on run_command, so it appears with it.
+    expect(on).toMatch(/pandas/i);
+    expect(on).toContain("python");
   });
 });
 
