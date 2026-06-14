@@ -223,6 +223,7 @@ export function App() {
   const [chatMessages, setChatMessages] = useState<StoredChatMessage[]>([]);
   const [chatBusy, setChatBusy] = useState(false);
   const [chatStreaming, setChatStreaming] = useState("");
+  const [chatThinking, setChatThinking] = useState("");
   const [chatActivity, setChatActivity] = useState("");
   const [chatPendingTool, setChatPendingTool] = useState<ToolCall | undefined>();
   const [chatUsage, setChatUsage] = useState<ContextUsage | undefined>();
@@ -238,6 +239,7 @@ export function App() {
   const [buddyMessages, setBuddyMessages] = useState<StoredChatMessage[]>([]);
   const [buddyBusy, setBuddyBusy] = useState(false);
   const [buddyStreaming, setBuddyStreaming] = useState("");
+  const [buddyThinking, setBuddyThinking] = useState("");
   const [buddyActivity, setBuddyActivity] = useState("");
   const [buddyPersona, setBuddyPersona] = useState<BuddyPersona>("freeform");
   const [buddyPendingTool, setBuddyPendingTool] = useState<BuddyToolCall | undefined>();
@@ -901,6 +903,7 @@ export function App() {
       appendChat({ role: "user", text });
       setChatBusy(true);
       setChatStreaming("");
+      setChatThinking("");
       setChatActivity("");
       setChatPendingTool(undefined);
       const paragraphIndex = paragraphIndexFromId(activeParagraphId ?? "") ?? 0;
@@ -913,7 +916,8 @@ export function App() {
           if (e.kind === "token") {
             setChatStreaming((prev) => prev + e.text);
             setChatActivity(""); // visible text replaces any "Reasoning…" status
-          } else if (e.kind === "activity") setChatActivity(e.text);
+          } else if (e.kind === "thinking") setChatThinking(e.text);
+          else if (e.kind === "activity") setChatActivity(e.text);
           else if (e.kind === "usage") setChatUsage(e.usage);
           else if (e.kind === "tool")
             setChatActivity(
@@ -997,6 +1001,7 @@ export function App() {
       if (chatTurnSeq.current === seq) {
         setChatBusy(false);
         setChatStreaming("");
+        setChatThinking("");
         setChatActivity("");
       }
       if (chatBookRef.current?.id !== turnBookId || chatTurnSeq.current !== seq) return;
@@ -1282,6 +1287,7 @@ export function App() {
     if (userBubbleText !== undefined) appendBuddy({ role: "user", text: userBubbleText });
     setBuddyBusy(true);
     setBuddyStreaming("");
+    setBuddyThinking("");
     setBuddyActivity("");
     setBuddyPendingTool(undefined);
     let openedBook = false;
@@ -1289,7 +1295,8 @@ export function App() {
       if (e.kind === "token") {
         setBuddyStreaming((prev) => prev + e.text);
         setBuddyActivity(""); // visible text replaces any "Reasoning…" status
-      } else if (e.kind === "activity") setBuddyActivity(e.text);
+      } else if (e.kind === "thinking") setBuddyThinking(e.text);
+      else if (e.kind === "activity") setBuddyActivity(e.text);
       else if (e.kind === "usage") setBuddyUsage(e.usage);
       else if (e.kind === "tool") {
         setBuddyActivity(
@@ -1414,6 +1421,7 @@ export function App() {
     if (buddyTurnSeq.current !== seq) return;
     setBuddyBusy(false);
     setBuddyStreaming("");
+    setBuddyThinking("");
     setBuddyActivity("");
     if (res.error) {
       appendBuddy({ role: "tool", text: `⚠ ${res.error}`, turns: [] });
@@ -2299,6 +2307,7 @@ export function App() {
           <ChatBuddyPanel
             messages={buddyPanelMessages}
             {...(buddyStreaming ? { streamingText: buddyStreaming } : {})}
+            {...(buddyThinking ? { thinking: buddyThinking } : {})}
             busy={buddyBusy}
             {...(buddyActivity ? { activity: buddyActivity } : {})}
             {...(buddyPendingTool ? { pendingTool: buddyPendingTool } : {})}
@@ -2447,6 +2456,7 @@ export function App() {
           title={book.title}
           messages={chatPanelMessages}
           {...(chatStreaming ? { streamingText: chatStreaming } : {})}
+          {...(chatThinking ? { thinking: chatThinking } : {})}
           busy={chatBusy}
           {...(chatActivity ? { activity: chatActivity } : {})}
           {...(chatPendingTool ? { pendingTool: chatPendingTool } : {})}

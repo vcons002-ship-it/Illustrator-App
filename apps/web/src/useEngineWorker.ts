@@ -35,6 +35,14 @@ import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
 import { desktopHttpFetch, isDesktop } from "./runtime.js";
 
 /**
+ * How long the chat may stay COMPLETELY silent (no token, reasoning, tool, or status
+ * event) before we assume the worker is wedged (stale dev/HMR) and surface an error.
+ * It is reset by every stream event, so a long-but-progressing answer never trips it —
+ * the Stop button, not a timer, is how a reader interrupts a working model.
+ */
+const CHAT_SILENCE_MS = 120_000;
+
+/**
  * Owns the engine Web Worker and surfaces its state to React. The worker does
  * all extraction + rendering; this hook just relays messages and keeps a copy
  * of the latest results so the UI re-renders. Changing settings re-opens the
@@ -152,6 +160,8 @@ export interface EngineWorkerApi {
 
 export type BuddyStreamEvent =
   | { kind: "token"; text: string }
+  /** A thinking model's live reasoning text (shown dimmed while it works). */
+  | { kind: "thinking"; text: string }
   /** Live status while the model works invisibly (thinking-model reasoning). */
   | { kind: "activity"; text: string }
   | { kind: "tool"; call: BuddyToolCall }
@@ -192,6 +202,8 @@ export interface BuddyDoneResult {
 
 export type ChatStreamEvent =
   | { kind: "token"; text: string }
+  /** A thinking model's live reasoning text (shown dimmed while it works). */
+  | { kind: "thinking"; text: string }
   /** Live status while the model works invisibly (thinking-model reasoning). */
   | { kind: "activity"; text: string }
   | { kind: "tool"; call: ToolCall }
@@ -291,7 +303,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const assessRequests = useRef<Map<number, (r: { text?: string; error?: string }) => void>>(new Map());
   // In-flight chat rounds: streaming events + the final resolve, keyed by requestId.
   const chatRequests = useRef<
-    Map<number, { onEvent: (e: ChatStreamEvent) => void; resolve: (r: ChatDoneResult) => void }>
+    Map<
+      number,
+      { onEvent: (e: ChatStreamEvent) => void; resolve: (r: ChatDoneResult) => void; bump: () => void }
+    >
   >(new Map());
   // In-flight approved tool renders (chatTool), resolved by `chatToolResult`.
   const chatToolRequests = useRef<
@@ -300,7 +315,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const activeChatRequestId = useRef<number | undefined>(undefined);
   // In-flight buddy rounds (landing page), keyed by requestId like chatRequests.
   const buddyRequests = useRef<
-    Map<number, { onEvent: (e: BuddyStreamEvent) => void; resolve: (r: BuddyDoneResult) => void }>
+    Map<
+      number,
+      { onEvent: (e: BuddyStreamEvent) => void; resolve: (r: BuddyDoneResult) => void; bump: () => void }
+    >
   >(new Map());
   const activeBuddyRequestId = useRef<number | undefined>(undefined);
   // In-flight compact-summaries, resolved by `summarized` replies.
@@ -438,6 +456,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           chatRequests.current.get(msg.requestId)?.onEvent({ kind: "token", text: msg.text });
           break;
         }
+        case "chatThinking": {
+          chatRequests.current.get(msg.requestId)?.onEvent({ kind: "thinking", text: msg.text });
+          break;
+        }
         case "chatActivity": {
           chatRequests.current.get(msg.requestId)?.onEvent({ kind: "activity", text: msg.text });
           break;
@@ -489,6 +511,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
         }
         case "buddyToken": {
           buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "token", text: msg.text });
+          break;
+        }
+        case "buddyThinking": {
+          buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "thinking", text: msg.text });
           break;
         }
         case "buddyActivity": {
@@ -823,21 +849,32 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
         activeChatRequestId.current = requestId;
-        // A stale worker (dev/HMR) drops unknown messages silently — surface a
-        // timeout as a visible error rather than a forever-spinning panel.
-        const timeout = setTimeout(() => {
+        // SILENCE watchdog (not a hard cap): a complex ask can take as long as it
+        // needs as long as it keeps streaming tokens or reasoning — every event
+        // resets this. It only fires when the model goes truly SILENT (no output at
+        // all) for a long while, which means a wedged/stale worker (dev/HMR); the
+        // Stop button handles a model the reader simply wants to interrupt.
+        let timer: ReturnType<typeof setTimeout>;
+        const fail = () => {
           if (chatRequests.current.delete(requestId)) {
-            // Tell the worker to stop too (else it streams into the void and burns
-            // the model) and clear the active id so it can't be left un-cancellable.
             send({ type: "chatCancel", requestId });
             if (activeChatRequestId.current === requestId) activeChatRequestId.current = undefined;
-            resolve({ text: "", transcript: [], error: "The chat timed out — try again." });
+            resolve({ text: "", transcript: [], error: "The chat went quiet for too long — try again, or press Stop." });
           }
-        }, 180_000);
+        };
+        const bump = () => {
+          clearTimeout(timer);
+          timer = setTimeout(fail, CHAT_SILENCE_MS);
+        };
+        bump();
         chatRequests.current.set(requestId, {
-          onEvent,
+          onEvent: (e) => {
+            bump();
+            onEvent(e);
+          },
+          bump,
           resolve: (r) => {
-            clearTimeout(timeout);
+            clearTimeout(timer);
             resolve(r);
           },
         });
@@ -897,19 +934,29 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
         activeBuddyRequestId.current = requestId;
-        // Same stale-worker guard as `chat`: surface a timeout instead of spinning,
-        // and cancel the worker turn + clear the active id (M6).
-        const timeout = setTimeout(() => {
+        // Same SILENCE watchdog as `chat`: never caps a streaming reply, only fires
+        // on a truly silent (wedged/stale) worker; Stop handles a normal interrupt.
+        let timer: ReturnType<typeof setTimeout>;
+        const fail = () => {
           if (buddyRequests.current.delete(requestId)) {
             send({ type: "chatCancel", requestId });
             if (activeBuddyRequestId.current === requestId) activeBuddyRequestId.current = undefined;
-            resolve({ text: "", transcript: [], error: "The chat timed out — try again." });
+            resolve({ text: "", transcript: [], error: "The chat went quiet for too long — try again, or press Stop." });
           }
-        }, 180_000);
+        };
+        const bump = () => {
+          clearTimeout(timer);
+          timer = setTimeout(fail, CHAT_SILENCE_MS);
+        };
+        bump();
         buddyRequests.current.set(requestId, {
-          onEvent,
+          onEvent: (e) => {
+            bump();
+            onEvent(e);
+          },
+          bump,
           resolve: (r) => {
-            clearTimeout(timeout);
+            clearTimeout(timer);
             resolve(r);
           },
         });

@@ -154,14 +154,16 @@ async function withChatPriority<T>(llmId: string, fn: () => Promise<T>): Promise
   }
 }
 
-/** Throttled "Reasoning…" activity for thinking models (raw chars → ~tokens). */
-function thinkingNotifier(post: (text: string) => void): (chars: number) => void {
+/** Throttled passthrough of a thinking model's live reasoning text (latest wins). */
+function thinkingNotifier(post: (text: string) => void): (text: string) => void {
   let lastAt = 0;
-  return (chars) => {
+  let latest = "";
+  return (text) => {
+    latest = text;
     const now = Date.now();
-    if (now - lastAt < 400) return;
+    if (now - lastAt < 250) return;
     lastAt = now;
-    post(`Reasoning… (~${Math.max(1, Math.round(chars / 4))} tokens)`);
+    post(latest);
   };
 }
 
@@ -1042,7 +1044,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       ),
     });
     const thinking = thinkingNotifier((text) =>
-      post({ type: "chatActivity", requestId: msg.requestId, text }),
+      post({ type: "chatThinking", requestId: msg.requestId, text }),
     );
     const outcome = await withChatPriority(llm.id, () => runChatTurn({
       llm,
@@ -1069,7 +1071,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       },
       onEvent: (e) => {
         if (e.kind === "token") post({ type: "chatToken", requestId: msg.requestId, text: e.text });
-        else if (e.kind === "thinking") thinking(e.chars);
+        else if (e.kind === "thinking") thinking(e.text);
         else if (e.kind === "tool") post({ type: "chatTool", requestId: msg.requestId, round: e.round, call: e.call });
         else
           post({
@@ -1351,7 +1353,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       ),
     });
     const thinking = thinkingNotifier((text) =>
-      post({ type: "buddyActivity", requestId: msg.requestId, text }),
+      post({ type: "buddyThinking", requestId: msg.requestId, text }),
     );
     const outcome = await withChatPriority(llm.id, () => runBuddyTurn({
       llm,
@@ -1361,7 +1363,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       deps,
       onEvent: (e) => {
         if (e.kind === "token") post({ type: "buddyToken", requestId: msg.requestId, text: e.text });
-        else if (e.kind === "thinking") thinking(e.chars);
+        else if (e.kind === "thinking") thinking(e.text);
         else if (e.kind === "tool") post({ type: "buddyTool", requestId: msg.requestId, round: e.round, call: e.call });
         else
           post({

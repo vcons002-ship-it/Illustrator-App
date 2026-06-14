@@ -138,26 +138,26 @@ describe("runChatTurn", () => {
     expect(tokens.join("")).toBe("Found it.");
   });
 
-  it("forwards thinking progress events", async () => {
+  it("forwards the model's live reasoning text as thinking events", async () => {
     const llm: ChatCapable = {
       async chat(_messages, opts) {
-        opts?.onThinking?.(120);
-        opts?.onThinking?.(480);
+        opts?.onThinking?.("weighing");
+        opts?.onThinking?.("weighing the options");
         opts?.onToken?.("done");
         return "done";
       },
     };
-    const seen: number[] = [];
+    const seen: string[] = [];
     await runChatTurn({
       llm,
       system: "sys",
       history: [{ role: "user", content: "hi" }],
       tools: {},
       onEvent: (e) => {
-        if (e.kind === "thinking") seen.push(e.chars);
+        if (e.kind === "thinking") seen.push(e.text);
       },
     });
-    expect(seen).toEqual([120, 480]);
+    expect(seen).toEqual(["weighing", "weighing the options"]);
   });
 
   it("rejects when the signal aborts", async () => {

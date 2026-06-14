@@ -33,8 +33,8 @@ export interface ChatToolDeps {
 
 export type ChatTurnEvent =
   | { kind: "token"; text: string }
-  /** A thinking model is reasoning (no visible tokens yet); `chars` grows. */
-  | { kind: "thinking"; chars: number }
+  /** A thinking model is reasoning (no visible answer yet); `text` is the live reasoning. */
+  | { kind: "thinking"; text: string }
   | { kind: "tool"; round: number; call: ToolCall }
   | { kind: "toolResult"; round: number; call: ToolCall; result: ToolResultPayload };
 
@@ -115,7 +115,7 @@ export async function runChatTurn(opts: {
       ...(opts.onEvent
         ? {
             onToken: jsonGatedTokenSink((text) => opts.onEvent?.({ kind: "token", text })),
-            onThinking: (chars: number) => opts.onEvent?.({ kind: "thinking", chars }),
+            onThinking: (text: string) => opts.onEvent?.({ kind: "thinking", text }),
           }
         : {}),
       ...(opts.signal ? { signal: opts.signal } : {}),
