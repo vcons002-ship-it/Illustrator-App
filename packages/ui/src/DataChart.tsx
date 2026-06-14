@@ -140,7 +140,11 @@ export const DataChart = memo(function DataChart({ dataset }: DataChartProps) {
       {stats ? (
         <div style={{ color: FAINT, marginTop: 2 }}>
           n={stats.count} · min {formatStat(stats.min)} · max {formatStat(stats.max)} · mean{" "}
-          {formatStat(stats.mean)} · median {formatStat(stats.median)} · {stats.trend}
+          {formatStat(stats.mean)} · median {formatStat(stats.median)} · sd {formatStat(stats.stdev)} ·
+          IQR {formatStat(stats.q1)}–{formatStat(stats.q3)} · {stats.trend}
+          {stats.count > 2 && Number.isFinite(stats.regression.r2)
+            ? ` (fit R²=${stats.regression.r2.toFixed(2)})`
+            : ""}
         </div>
       ) : null}
       {dataset.source ? (
