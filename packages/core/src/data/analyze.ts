@@ -15,6 +15,9 @@ import {
 
 export type Aggregation = "sum" | "mean" | "median" | "min" | "max" | "count" | "countDistinct" | "stdev";
 
+/** A chart the model can request OF an analysis result (rendered over the result table). */
+export type AnalyzeChart = "bar" | "line" | "pie";
+
 export type FilterOp = "=" | "!=" | ">" | "<" | ">=" | "<=" | "contains";
 
 export interface DataFilter {

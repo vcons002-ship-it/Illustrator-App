@@ -9,6 +9,8 @@ import type {
   ChatTurn,
   ContextUsage,
   ImageResult,
+  AnalyzeChart,
+  DataTable,
   ImageSearchHit,
   ImportStats,
   PolishMode,
@@ -193,6 +195,8 @@ export type WorkerToMain =
       /** lookup_bible detail (slash commands render this in the panel). */
       bibleDetail?: string;
       memory?: { action: "remembered" | "forgot"; note: string; count: number };
+      /** A grounded analyze_data result table (rendered inline in the chat). */
+      analysis?: { table: DataTable; summary: string; chart?: AnalyzeChart };
       error?: string;
     }
   /** Chat round complete: final prose + the turns to append to the stored history. */
