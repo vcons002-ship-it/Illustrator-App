@@ -146,7 +146,15 @@ export function buildBuddySystemPrompt(opts: {
       "from the target window's title (e.g. the game/app name) to capture JUST that window even when it isn't focused — " +
       "best for a running game; omit it to capture the whole screen. If the window name is wrong the result lists the " +
       "open windows, so retry with one of those. The reader approves the first capture (and can allow the rest for the " +
-      "session).\n"
+      "session).\n" +
+      "DATA ANALYSIS WITH CODE (pandas/numpy/matplotlib): for analysis beyond simple aggregates — regressions, " +
+      "correlations, joins/merges, cleaning, time series, custom or statistical plots — write a Python script and run it " +
+      "(a local 'code interpreter'): (1) get the data into the workspace — if the reader points at a file, find_files " +
+      "gives its path; for data already in the chat, write it as a ```csv block they Save; (2) write the analysis as a " +
+      "```python block they Save (read the CSV with pandas, print the RESULTS you need, and save any chart to a .png in " +
+      "the workspace for them to open); (3) run_command `python <script>.py` (use `pip install pandas matplotlib` first " +
+      "if a module is missing); (4) read stdout, and if it errored, fix the script and re-run. Prefer this over guessing " +
+      "any number.\n"
     : "";
   const wolframTool = opts.canWolfram
     ? '- {"tool":"wolfram","query":"…"} — ask Wolfram|Alpha for REAL-WORLD data and computation it ' +
