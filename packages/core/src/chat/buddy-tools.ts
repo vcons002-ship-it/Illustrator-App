@@ -155,8 +155,11 @@ export function buildBuddySystemPrompt(opts: {
     `${mature}\n\n` +
     `${library}\n\n` +
     "TOOLS — use one by replying with ONLY one JSON object (no prose around it):\n" +
-    '- {"tool":"calculate","expression":"…"} — exact arithmetic (functions like sqrt/sin/log, ^, !, pi). ' +
-    "Use it for ANY non-trivial computation instead of computing in your head.\n" +
+    '- {"tool":"calculate","expression":"…"} — exact, grounded math (NOT just arithmetic): functions ' +
+    "(sqrt/sin/log/gcd/…), ^, !, pi; UNIT conversions (\"5 km to miles\", \"60 mph in m/s\"); MATRICES + " +
+    "linear algebra (det, inv, [[1,2],[3,4]]*[[5],[6]]); CALCULUS + algebra (derivative('x^2','x'), " +
+    "simplify('2x+3x')); and statistics (mean/median/std/variance of a list). Use it for ANY non-trivial " +
+    "computation instead of working it out in your head — it never guesses.\n" +
     '- {"tool":"search_books","query":"…"} — search Project Gutenberg (full public-domain books; each hit has a text URL).\n' +
     '- {"tool":"random_books"} — surprise picks from Gutenberg\'s most-loved classics (for "open something random / surprise me").\n' +
     '- {"tool":"search_web","query":"…"} — search for articles/topics/facts (returns titles, snippets and URLs).\n' +

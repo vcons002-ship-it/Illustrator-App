@@ -10,6 +10,7 @@ import {
   type BuddyToolResultPayload,
 } from "./buddy-tools.js";
 import { evaluateExpression, formatCalcResult } from "./calculator.js";
+import { evaluateMath } from "./math-engine.js";
 import { jsonGatedTokenSink } from "./chat-session.js";
 
 /**
@@ -148,10 +149,20 @@ export async function runBuddyTool(
         if (!deps.randomBooks) return { error: "book discovery isn't available right now" };
         return { books: await deps.randomBooks() };
       case "calculate":
-        // Pure core code — no host dep to inject, and nothing async about it.
-        return {
-          calc: { expression: call.expression, result: formatCalcResult(evaluateExpression(call.expression)) },
-        };
+        // Grounded math via mathjs (units, matrices, derivatives, stats…); on a bad
+        // expression OR when mathjs can't load, fall back to the keyless arithmetic
+        // parser so basic computation always works.
+        try {
+          return { calc: { expression: call.expression, result: await evaluateMath(call.expression) } };
+        } catch (err) {
+          try {
+            return {
+              calc: { expression: call.expression, result: formatCalcResult(evaluateExpression(call.expression)) },
+            };
+          } catch {
+            return { error: err instanceof Error ? err.message : "couldn't compute that" };
+          }
+        }
       case "open_library_book":
         return { opened: await deps.openLibraryBook(call) };
       case "open_web_text":
