@@ -180,6 +180,25 @@ human approval at every step. Some are on by default, the riskier ones are opt-i
   a local vision model** (Ollama `llama3.2-vision` / `llava`, or LM Studio) so the image
   never leaves your machine. You approve the first capture and can allow the rest for the
   session.
+- **Work with your GitHub repos** *(opt-in — needs the run-commands flag + a token)* — paste a
+  GitHub token into **Settings → "GitHub token"** and the assistant can **clone, branch,
+  commit, push, open pull requests, and manage issues** using `git` and the `gh` CLI in its
+  workspace. Setup:
+  1. Install `git` and the **GitHub CLI** (`gh`) — e.g. `winget install GitHub.cli` on
+     Windows, `brew install gh` on macOS, your package manager on Linux.
+  2. Create a token at **[github.com/settings/tokens](https://github.com/settings/tokens)**
+     (a fine-grained token scoped to the repos you want, with Contents + Pull requests +
+     Issues access, is ideal). Paste it into Settings.
+  3. Turn on **"Let the assistant run commands"** (GitHub work runs through that same
+     approval-gated runner — you click to approve every command).
+
+  The token is handed to commands through their **environment** (`GH_TOKEN`) — it's never
+  written into a command, shown to the model, or printed — so `gh` is authenticated and
+  `git push` works without `gh auth login`. **There's no fixed "current repo":** you tell the
+  assistant which repo to clone/work on in plain language, and it works inside the
+  `VisualReader` workspace. For changes it creates a branch and opens a PR — `gh` targets the
+  repo's **default branch** automatically. It won't force-push, delete history, or change repo
+  settings unless you explicitly ask.
 
 These tools only exist in the desktop app (a browser tab can't touch the filesystem, run a
 process, or capture the screen). They never act on their own — and the assistant will not
