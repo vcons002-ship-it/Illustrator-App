@@ -9,6 +9,7 @@ import {
   type BuddyToolCall,
   type BuddyToolResultPayload,
 } from "./buddy-tools.js";
+import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../providers/google.js";
 import { evaluateExpression, formatCalcResult } from "./calculator.js";
 import { evaluateMath } from "./math-engine.js";
 import { jsonGatedTokenSink } from "./chat-session.js";
@@ -56,6 +57,13 @@ export interface BuddyDeps {
   readSkill?: (name: string) => Promise<string>;
   saveSkill?: (name: string, description: string, body: string) => Promise<number>;
   forgetSkill?: (match: string) => Promise<number>;
+  /** Google (Gmail read; Calendar + Tasks read/create) — present when connected. */
+  gmailSearch?: (query: string, max?: number) => Promise<EmailSummary[]>;
+  readEmail?: (id: string) => Promise<EmailFull>;
+  listEvents?: (max?: number) => Promise<CalendarEvent[]>;
+  createEvent?: (ev: { summary: string; start: string; end: string; description?: string; location?: string }) => Promise<CalendarEvent>;
+  listTasks?: (max?: number) => Promise<TaskItem[]>;
+  createTask?: (t: { title: string; notes?: string; due?: string }) => Promise<TaskItem>;
 }
 
 export type BuddyTurnEvent =
@@ -205,6 +213,38 @@ export async function runBuddyTool(
       case "forget_skill":
         if (!deps.forgetSkill) return { error: "skills aren't available right now" };
         return { skill: { action: "forgot", name: call.match, count: await deps.forgetSkill(call.match) } };
+      case "gmail_search":
+        if (!deps.gmailSearch) return { error: "Google isn't connected (connect it in Settings)." };
+        return { emails: await deps.gmailSearch(call.query, call.max) };
+      case "read_email":
+        if (!deps.readEmail) return { error: "Google isn't connected (connect it in Settings)." };
+        return { emailFull: await deps.readEmail(call.id) };
+      case "list_events":
+        if (!deps.listEvents) return { error: "Google isn't connected (connect it in Settings)." };
+        return { events: await deps.listEvents(call.max) };
+      case "create_event":
+        if (!deps.createEvent) return { error: "Google isn't connected (connect it in Settings)." };
+        return {
+          eventCreated: await deps.createEvent({
+            summary: call.summary,
+            start: call.start,
+            end: call.end,
+            ...(call.description ? { description: call.description } : {}),
+            ...(call.location ? { location: call.location } : {}),
+          }),
+        };
+      case "list_tasks":
+        if (!deps.listTasks) return { error: "Google isn't connected (connect it in Settings)." };
+        return { tasks: await deps.listTasks(call.max) };
+      case "create_task":
+        if (!deps.createTask) return { error: "Google isn't connected (connect it in Settings)." };
+        return {
+          taskCreated: await deps.createTask({
+            title: call.title,
+            ...(call.notes ? { notes: call.notes } : {}),
+            ...(call.due ? { due: call.due } : {}),
+          }),
+        };
     }
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };

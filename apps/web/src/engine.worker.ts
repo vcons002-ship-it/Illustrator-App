@@ -39,6 +39,14 @@ import {
   exchangeGoogleCode,
   saveGoogleTokens,
   getGoogleEmail,
+  loadGoogleTokens,
+  getFreshAccessToken,
+  gmailSearch,
+  gmailReadEmail,
+  listEvents,
+  createEvent,
+  listTasks,
+  createTask,
   runBuddyTool,
   runChatTool,
   profileDimensions,
@@ -1272,7 +1280,28 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       post({ type: "buddyOpened", requestId: msg.requestId, book, visuals });
       return { title: book.title, chapters: book.chapters.length, pages: book.pages.length, visuals };
     };
+    // Google (Gmail/Calendar/Tasks): wired only when a client is configured AND tokens
+    // are stored. Every call gets a fresh access token (auto-refreshed) over the CORS
+    // proxy; the same transport carries the refresh and the API call.
+    const googleId = settings?.keys?.googleClientId;
+    const googleSecret = settings?.keys?.googleClientSecret;
+    const googleConnected = !!(googleId && googleSecret && (await loadGoogleTokens(store)));
+    const googleDeps: Partial<BuddyDeps> = googleConnected
+      ? (() => {
+          const transport = new DirectTransport(corsFetch());
+          const tok = () => getFreshAccessToken(store, { clientId: googleId!, clientSecret: googleSecret!, transport });
+          return {
+            gmailSearch: async (q: string, max?: number) => gmailSearch(transport, await tok(), q, max),
+            readEmail: async (id: string) => gmailReadEmail(transport, await tok(), id),
+            listEvents: async (max?: number) => listEvents(transport, await tok(), max !== undefined ? { max } : {}),
+            createEvent: async (ev) => createEvent(transport, await tok(), ev),
+            listTasks: async (max?: number) => listTasks(transport, await tok(), max),
+            createTask: async (t) => createTask(transport, await tok(), t),
+          };
+        })()
+      : {};
     const deps: BuddyDeps = {
+      ...googleDeps,
       searchWeb: (q) => imageSearch.searchWeb(q),
       searchBooks: (q) => books.search(q),
       searchImages: (q) => imageSearch.search(q),
@@ -1417,6 +1446,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           : {}),
         // The chosen working folder only matters when commands/file-search can run.
         ...(corsProxyAvailable && settings?.allowCommands && msg.workingDir ? { workingDir: msg.workingDir } : {}),
+        // Gmail/Calendar/Tasks tools when Google is connected.
+        ...(googleConnected ? { canGoogle: true } : {}),
       }) +
       (memory ? `\n\n${memory}` : "") +
       (skills ? `\n\n${skills}` : "") +
