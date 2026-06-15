@@ -73,6 +73,8 @@ export interface BuddyTurnOutcome {
 export async function runBuddyTurn(opts: {
   llm: ChatCapable;
   system: string;
+  /** Stable leading portion of `system` to cache (see ChatOptions.cachePrefix). */
+  cachePrefix?: string;
   /** Prior turns + the new user message (caller appends it before calling). */
   history: ChatTurn[];
   deps: BuddyDeps;
@@ -96,6 +98,7 @@ export async function runBuddyTurn(opts: {
         : {}),
       ...(opts.signal ? { signal: opts.signal } : {}),
       ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
+      ...(opts.cachePrefix ? { cachePrefix: opts.cachePrefix } : {}),
     });
     const call = round < MAX_BUDDY_TOOL_ROUNDS ? parseBuddyToolCall(reply) : undefined;
     if (!call) {

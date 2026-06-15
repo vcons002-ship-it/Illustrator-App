@@ -30,6 +30,15 @@ export interface ChatOptions {
   signal?: AbortSignal;
   /** Response budget; defaults per provider (~1024). */
   maxTokens?: number;
+  /**
+   * The byte-stable LEADING portion of the system prompt (role + tool definitions +
+   * guard) — must be a genuine prefix of the joined system text. Providers with an
+   * explicit prompt cache (Claude) mark a cache breakpoint after it so multi-turn
+   * conversations re-read it instead of re-prefilling it; providers that auto-cache
+   * prefixes server-side (Gemini/OpenAI) and local servers (llama.cpp KV reuse) get
+   * the same win for free from the stable-prefix ORDERING and ignore this field.
+   */
+  cachePrefix?: string;
 }
 
 export interface ChatCapable {
@@ -71,6 +80,36 @@ export function splitSystem(messages: ChatTurn[]): {
 }
 
 export const DEFAULT_CHAT_MAX_TOKENS = 1024;
+
+/**
+ * Below this, a cache breakpoint isn't worth a two-block split — Anthropic enforces
+ * its own per-model token floor (~1024 tokens, ~2048 for Haiku) and silently ignores
+ * `cache_control` under it, so this only avoids splitting a trivially short prefix
+ * for no benefit. ~4 chars/token.
+ */
+export const MIN_CACHE_PREFIX_CHARS = 2_000;
+
+/** One block of a structured system prompt; `cache` marks an ephemeral cache
+ * breakpoint after it (Anthropic prompt caching). */
+export interface SystemBlock {
+  text: string;
+  cache?: boolean;
+}
+
+/**
+ * Split a system prompt into cache blocks for a provider with EXPLICIT prompt caching
+ * (Claude). `cachePrefix` must be the stable, byte-identical-across-turns leading part
+ * AND a real prefix of `system`; the volatile remainder (book text, bible) trails it
+ * uncached. Returns a single uncached block when there's no usable prefix, so the
+ * caller can map blindly. The empty-`system` case is handled by the caller (no system).
+ */
+export function systemCacheBlocks(system: string, cachePrefix?: string): SystemBlock[] {
+  if (cachePrefix && cachePrefix.length >= MIN_CACHE_PREFIX_CHARS && system.startsWith(cachePrefix)) {
+    const rest = system.slice(cachePrefix.length);
+    return rest.trim() ? [{ text: cachePrefix, cache: true }, { text: rest }] : [{ text: cachePrefix, cache: true }];
+  }
+  return [{ text: system }];
+}
 
 /**
  * The reasoning text so far from a raw, still-streaming reply that's inside a

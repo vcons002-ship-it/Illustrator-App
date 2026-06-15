@@ -14,6 +14,7 @@ import type { EntityExtractionInput, LLMProvider } from "./llm-provider.js";
 import {
   DEFAULT_CHAT_MAX_TOKENS,
   splitSystem,
+  systemCacheBlocks,
   type ChatCapable,
   type ChatOptions,
   type ChatTurn,
@@ -179,11 +180,20 @@ export class ClaudeProvider implements LLMProvider, ChatCapable, VisionCapable {
   /** Reading-companion chat (buffered; `onToken` unused — the seam allows that). */
   async chat(messages: ChatTurn[], opts: ChatOptions = {}): Promise<string> {
     const { system, turns } = splitSystem(messages);
+    // Mark a cache breakpoint after the stable prefix (tool defs + guard) so a
+    // multi-turn conversation re-reads it instead of re-prefilling the whole system
+    // prompt each turn. Sent as text blocks; the volatile book/bible tail trails it
+    // uncached. The API ignores cache_control under its per-model token floor.
+    const systemBlocks = systemCacheBlocks(system, opts.cachePrefix).map((b) =>
+      b.cache
+        ? { type: "text" as const, text: b.text, cache_control: { type: "ephemeral" as const } }
+        : { type: "text" as const, text: b.text },
+    );
     const response = await this.client.messages.create(
       {
         model: this.model,
         max_tokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
-        ...(system ? { system } : {}),
+        ...(system ? { system: systemBlocks } : {}),
         messages: turns,
       },
       opts.signal ? { signal: opts.signal } : undefined,
