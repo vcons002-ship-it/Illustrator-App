@@ -1,4 +1,12 @@
-import { dataTableFromGrid, type BookSource, type DataTable } from "@visual-reader/core";
+import {
+  classifyJson,
+  dataTableFromGrid,
+  parseJsonValue,
+  tableToText,
+  type BookSource,
+  type DataTable,
+  type JsonValue,
+} from "@visual-reader/core";
 import { csvToGrid, docxToText, htmlToText, parseEpub, rtfToText, xlsxToGrid } from "@visual-reader/epub";
 
 /** Render a parsed cell grid as the " | "-separated text the reader/extraction reads. */
@@ -39,7 +47,16 @@ const IMAGE_EXTS: Record<string, string> = {
  */
 export type ImportedFile =
   | { kind: "book"; book: BookSource }
-  | { kind: "text"; title: string; text: string; mode?: "fiction" | "technical"; data?: DataTable }
+  | {
+      kind: "text";
+      title: string;
+      text: string;
+      mode?: "fiction" | "technical";
+      /** Tabular import (spreadsheet/CSV, or tabular JSON) → the table view. */
+      data?: DataTable;
+      /** Nested/irregular JSON that doesn't tabularise → the tree view. */
+      tree?: JsonValue;
+    }
   | { kind: "image"; name: string; bytes: ArrayBuffer; mimeType: string };
 
 export async function importBookFile(file: File): Promise<ImportedFile> {
@@ -57,9 +74,19 @@ export async function importBookFile(file: File): Promise<ImportedFile> {
     case "md":
     case "markdown":
       return { kind: "text", title, text: await file.text() };
-    case "json":
-      // Pretty-print so the structure is readable as prose; fall back to raw text.
-      return { kind: "text", title, text: prettyJson(await file.text()) };
+    case "json": {
+      // Pick the view that fits the JSON's shape: tabular data (arrays of records,
+      // lists, a flat object) → the table view + analyze_data; nested/irregular data
+      // → the collapsible tree. Invalid JSON falls back to readable prose.
+      const raw = await file.text();
+      const value = parseJsonValue(raw);
+      if (value === undefined) return { kind: "text", title, text: prettyJson(raw) };
+      const view = classifyJson(value);
+      if (view.kind === "table") {
+        return { kind: "text", title, text: tableToText(view.table, view.table.rows.length), mode: "technical", data: view.table };
+      }
+      return { kind: "text", title, text: JSON.stringify(value, null, 2), tree: value };
+    }
     case "html":
     case "htm":
       return { kind: "text", title, text: htmlToText(await file.text()) };

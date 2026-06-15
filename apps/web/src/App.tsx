@@ -30,9 +30,11 @@ import {
   subjectFromCaption,
   rankLocalFiles,
   formatFileSize,
+  chartDatasetFromTable,
   POLISH_PRESETS,
   type ConceptIntro,
   type DataTable,
+  type JsonValue,
   type BookSource,
   type BookSummary,
   type ChapterDataset,
@@ -60,6 +62,7 @@ import {
   DataChart,
   DataSection,
   DataTablePreview,
+  JsonTreeView,
   DEFAULT_SETTINGS,
   DocumentPolishPanel,
   FirstRunWizard,
@@ -214,7 +217,7 @@ export function App() {
   >();
   // Prefill for the paste modal when a text-bearing FILE (txt/md/html/pdf) was opened.
   const [pasteInitial, setPasteInitial] = useState<
-    { title: string; text: string; mode?: "fiction" | "technical"; data?: DataTable } | undefined
+    { title: string; text: string; mode?: "fiction" | "technical"; data?: DataTable; tree?: JsonValue } | undefined
   >();
   // Faithful document-polish panel + an optional prefill (from upload or a home click).
   const [showPolish, setShowPolish] = useState(false);
@@ -674,6 +677,7 @@ export function App() {
             text: imported.text,
             ...(imported.mode ? { mode: imported.mode } : {}),
             ...(imported.data ? { data: imported.data } : {}),
+            ...(imported.tree !== undefined ? { tree: imported.tree } : {}),
           });
           setShowPasteText(true);
         }
@@ -2499,8 +2503,13 @@ export function App() {
             try {
               // Library provenance: did this text come from a file or a raw paste?
               const created = bookFromText(title, text, mode, pasteInitial ? "Imported file" : "Pasted text");
-              // Carry the spreadsheet's structured grid onto the book (chat analyze_data).
-              openBook(pasteInitial?.data ? { ...created, data: pasteInitial.data } : created);
+              // Carry the structured view onto the book: a spreadsheet/tabular grid (chat
+              // analyze_data + the table card) or a nested-JSON tree (the tree card).
+              openBook({
+                ...created,
+                ...(pasteInitial?.data ? { data: pasteInitial.data } : {}),
+                ...(pasteInitial?.tree !== undefined ? { tree: pasteInitial.tree } : {}),
+              });
               setShowPasteText(false);
               setPasteInitial(undefined);
             } catch (err) {
@@ -2596,6 +2605,16 @@ interface TechnicalSupportData {
   figuresByPage?: Map<number, { unitIndex: number; paragraphIndex: number; result: DisplayResult }[]>;
 }
 
+/** Auto-chart a data card ONLY for a clean label+value shape (a Key/Value table, a
+ * numeric list, a small label/value list) — never a wide multi-numeric sheet, where
+ * an auto-picked series would be noise. Charting stays on-demand via chat for those. */
+function autoChartDataset(table: DataTable): ChapterDataset | undefined {
+  const numeric = table.columns.filter((c) => c.type === "number").length;
+  const strings = table.columns.filter((c) => c.type === "string").length;
+  if (numeric !== 1 || strings > 1 || table.columns.length > 3) return undefined;
+  return chartDatasetFromTable(table);
+}
+
 const ReaderColumn = memo(function ReaderColumn({
   book,
   pageToUnit,
@@ -2613,15 +2632,17 @@ const ReaderColumn = memo(function ReaderColumn({
   technical?: TechnicalSupportData;
 }) {
   const chaptersById = useMemo(() => new Map(book.chapters.map((c) => [c.id, c])), [book]);
+  const dataChart = useMemo(() => (book.data ? autoChartDataset(book.data) : undefined), [book.data]);
   return (
     <article style={styles.column}>
-      {/* An uploaded spreadsheet/CSV: show the REAL grid as an aligned table up top
-          (the flattened "a | b | c" pipe-text below is what the illustration/extraction
-          pipeline reads, but it's no way to actually look at a sheet). */}
+      {/* An uploaded spreadsheet/CSV/tabular-JSON: show the REAL grid as an aligned
+          table up top (the flattened "a | b | c" pipe-text below is what the
+          illustration/extraction pipeline reads, but it's no way to look at a sheet).
+          A single label+value table also gets an auto-chart. */}
       {book.data ? (
         <details open style={styles.dataPreview}>
           <summary style={styles.dataPreviewSummary}>
-            <strong>🗂 {book.title || "Spreadsheet"}</strong>
+            <strong>🗂 {book.title || "Data"}</strong>
             <span style={{ opacity: 0.6 }}>
               {" "}
               — {book.data.rows.length.toLocaleString("en-US")} row
@@ -2631,6 +2652,22 @@ const ReaderColumn = memo(function ReaderColumn({
           </summary>
           <div style={{ marginTop: 8 }}>
             <DataTablePreview table={book.data} maxRows={200} maxHeight={420} />
+          </div>
+          {dataChart ? (
+            <div style={{ marginTop: 8 }}>
+              <DataChart dataset={dataChart} />
+            </div>
+          ) : null}
+        </details>
+      ) : book.tree !== undefined ? (
+        // Nested/irregular JSON: a collapsible tree, the view that actually fits it.
+        <details open style={styles.dataPreview}>
+          <summary style={styles.dataPreviewSummary}>
+            <strong>🧬 {book.title || "JSON"}</strong>
+            <span style={{ opacity: 0.6 }}> — structured JSON. Expand to explore; ask the buddy about it.</span>
+          </summary>
+          <div style={{ marginTop: 8 }}>
+            <JsonTreeView value={book.tree} maxHeight={460} />
           </div>
         </details>
       ) : null}
@@ -2930,7 +2967,9 @@ function PasteTextModal({
   onClose,
 }: {
   /** Prefill when the text came from an opened file (PDF/Word/CSV/…). */
-  initial?: { title: string; text: string; mode?: "fiction" | "technical"; data?: DataTable } | undefined;
+  initial?:
+    | { title: string; text: string; mode?: "fiction" | "technical"; data?: DataTable; tree?: JsonValue }
+    | undefined;
   onCreate: (title: string, text: string, mode: "fiction" | "technical") => void;
   /** Switch to the faithful summarize/rework flow with the current title + text. */
   onPolish?: (title: string, text: string) => void;
@@ -2967,6 +3006,13 @@ function PasteTextModal({
               maxHeight={200}
               caption={`Detected a table — ${initial.data.rows.length.toLocaleString("en-US")} rows × ${initial.data.columns.length} columns. Opened technical, ready to analyse/chart in chat.`}
             />
+          </div>
+        ) : initial?.tree !== undefined ? (
+          <div style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 11, opacity: 0.6, margin: "0 0 4px" }}>
+              Detected nested JSON — shown as a tree you can explore in the reader.
+            </div>
+            <JsonTreeView value={initial.tree} maxHeight={200} />
           </div>
         ) : null}
         <textarea

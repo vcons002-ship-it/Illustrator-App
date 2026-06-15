@@ -6,6 +6,8 @@
  * from flattened text. Rides on `BookSource.data` so it survives reloads.
  */
 
+import type { ChapterDataset } from "../types/bible.js";
+
 export type CellValue = number | string | null;
 export type ColumnType = "number" | "string";
 
@@ -92,4 +94,39 @@ export function tableToText(table: DataTable, maxRows = 20): string {
     .join("\n");
   const more = table.rows.length > maxRows ? `\n… (${table.rows.length - maxRows} more rows)` : "";
   return `${head}\n${body}${more}`;
+}
+
+/**
+ * Build a chartable series from a table: its first text column labels the points and
+ * its first numeric column supplies the values. Returns `undefined` when the table
+ * has no numeric column (nothing honest to chart). Shared by the chat's analysis
+ * result and the reader's data card so the "what's chartable" rule lives in one place.
+ */
+export function chartDatasetFromTable(
+  table: DataTable,
+  kind: "bar" | "line" | "scatter" = "bar",
+  maxPoints = 60,
+): ChapterDataset | undefined {
+  const labelCol = table.columns.findIndex((c) => c.type === "string");
+  const valueCol = table.columns.findIndex((c) => c.type === "number");
+  if (valueCol < 0) return undefined;
+  const points = table.rows
+    .slice(0, maxPoints)
+    .map((r, i) => ({
+      label: labelCol >= 0 ? String(r[labelCol] ?? `#${i + 1}`) : `#${i + 1}`,
+      y: Number(r[valueCol]),
+    }))
+    .filter((p) => Number.isFinite(p.y));
+  if (points.length === 0) return undefined;
+  return {
+    id: "table-chart",
+    chapterIndex: 0,
+    title: table.columns[valueCol]?.name ?? "value",
+    unit: "",
+    xLabel: labelCol >= 0 ? (table.columns[labelCol]?.name ?? "") : "",
+    yLabel: table.columns[valueCol]?.name ?? "",
+    kind,
+    points,
+    source: "",
+  };
 }
