@@ -1017,6 +1017,13 @@ export function App() {
       saveExportFile(filename, content, mime),
     [],
   );
+  // Download a grounded analysis-result table (a pivot/aggregate the chat computed)
+  // as a real Excel workbook or CSV — built in the host from the typed DataTable.
+  const onDownloadData = useCallback((table: DataTable, name: string, format: "xlsx" | "csv") => {
+    const base = (name || "data").replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "data";
+    if (format === "csv") void saveExportFile(`${base}.csv`, dataTableToCsv(table), "text/csv");
+    else void saveExportFile(`${base}.xlsx`, dataTableToXlsx(table), XLSX_MIME);
+  }, []);
 
   // Google (Gmail/Calendar/Tasks) connection status, derived from the stored tokens.
   const [googleConnected, setGoogleConnected] = useState(false);
@@ -3014,6 +3021,7 @@ export function App() {
           onSaveFile={onSaveChatFile}
           onSaveProject={onSaveProject}
           onBuildDocument={onBuildDocument}
+          onDownloadData={onDownloadData}
           {...(chatUsage ? { contextUsage: chatUsage } : {})}
         />
       )}
