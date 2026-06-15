@@ -38,7 +38,10 @@ import {
   deleteTaskPlan,
   upsertTaskPlan,
   advanceStep,
+  addIgnore,
+  sourceId,
   type TaskPlan,
+  type TaskCandidate,
   MAX_SKILL_NAME_CHARS,
   MAX_SKILL_DESC_CHARS,
   MAX_SKILL_BODY_CHARS,
@@ -242,6 +245,7 @@ export function App() {
     summarize,
     googleConnect,
     planTask,
+    scanInbox,
     setActiveUnit,
     polishText,
     polishCancel,
@@ -273,9 +277,28 @@ export function App() {
   }, [libraryStore]);
   const [showTasks, setShowTasks] = useState(false);
   const [taskPlans, setTaskPlans] = useState<TaskPlan[]>([]);
+  const [taskCandidates, setTaskCandidates] = useState<TaskCandidate[]>([]);
   const refreshTaskPlans = useCallback(() => {
     void loadTaskPlans(libraryStore).then(setTaskPlans).catch(() => {});
   }, [libraryStore]);
+  // Plan an actionable item the scan surfaced.
+  const planCandidate = useCallback(
+    async (c: TaskCandidate) => {
+      setTaskCandidates((prev) => prev.filter((x) => x !== c));
+      const res = await planTask({ source: c.source, sourceText: `${c.title}. ${c.reason}` });
+      if (res.ok) refreshTaskPlans();
+    },
+    [planTask, refreshTaskPlans],
+  );
+  // Dismiss a candidate so it never re-surfaces (this item, or everything from its sender).
+  const dismissCandidate = useCallback(
+    (c: TaskCandidate, scope: "item" | "sender") => {
+      setTaskCandidates((prev) => prev.filter((x) => x !== c));
+      const value = scope === "sender" ? (c.from ?? "") : (sourceId(c.source) ?? "");
+      if (value) void addIgnore(libraryStore, { kind: scope, value }).catch(() => {});
+    },
+    [libraryStore],
+  );
   const openTasks = useCallback(async () => {
     await loadTaskPlans(libraryStore).then(setTaskPlans).catch(() => {});
     setShowTasks(true);
@@ -1014,6 +1037,40 @@ export function App() {
     void clearGoogleTokens(libraryStore).catch(() => {});
     void libraryStore.deleteMemo?.("google-email").catch(() => {});
   }, [libraryStore]);
+
+  // Phase-2 idle scan: while the app is open, Google's connected, automation is on, AND
+  // the reader has been inactive a few minutes, periodically scan recent email + calendar
+  // for actionable items — so it never interrupts active work (no always-on daemon).
+  const lastInputAt = useRef(Date.now());
+  const scanningRef = useRef(false);
+  useEffect(() => {
+    const bump = () => {
+      lastInputAt.current = Date.now();
+    };
+    window.addEventListener("pointerdown", bump);
+    window.addEventListener("keydown", bump);
+    return () => {
+      window.removeEventListener("pointerdown", bump);
+      window.removeEventListener("keydown", bump);
+    };
+  }, []);
+  useEffect(() => {
+    if (!googleConnected || !settings.allowTaskAutomation) return;
+    const IDLE_MS = 3 * 60_000;
+    const id = setInterval(() => {
+      if (scanningRef.current || Date.now() - lastInputAt.current < IDLE_MS) return;
+      scanningRef.current = true;
+      void scanInbox()
+        .then((r) => {
+          if (r.candidates) setTaskCandidates(r.candidates);
+        })
+        .catch(() => {})
+        .finally(() => {
+          scanningRef.current = false;
+        });
+    }, 90_000);
+    return () => clearInterval(id);
+  }, [googleConnected, settings.allowTaskAutomation, scanInbox]);
   // Bundle a multi-file answer (its named code blocks) into one project.zip — keeps a
   // linked HTML/CSS/JS site or small script project together with its relative paths.
   const onSaveProject = useCallback(
@@ -2350,7 +2407,7 @@ export function App() {
             onClick={() => void openTasks()}
             title="Your planned multi-step tasks — research, steps, deadlines, prepped docs. Ask the assistant to “plan …” anything."
           >
-            📋 Tasks
+            📋 Tasks{taskCandidates.length ? ` (${taskCandidates.length})` : ""}
           </button>
           <button style={styles.button} onClick={() => openBook(loadSampleBook())}>
             Load sample
@@ -2961,6 +3018,9 @@ export function App() {
       {showTasks && (
         <TasksPanel
           plans={taskPlans}
+          candidates={taskCandidates}
+          onPlanCandidate={(c) => void planCandidate(c)}
+          onDismissCandidate={dismissCandidate}
           onOpenTask={(id) => void openTaskInChat(id)}
           onAdvanceStep={onAdvanceTaskStep}
           onDelete={async (id) => {

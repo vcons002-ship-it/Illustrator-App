@@ -1,5 +1,5 @@
 import { memo } from "react";
-import type { TaskPlan, TaskStep } from "@visual-reader/core";
+import type { TaskCandidate, TaskPlan, TaskStep } from "@visual-reader/core";
 
 /**
  * The Task Orchestrator's panel — the durable plans the assistant built, with their
@@ -10,6 +10,12 @@ import type { TaskPlan, TaskStep } from "@visual-reader/core";
  */
 export interface TasksPanelProps {
   plans: TaskPlan[];
+  /** Actionable items the idle scan surfaced (Phase 2). */
+  candidates?: TaskCandidate[];
+  /** Turn a candidate into a full plan. */
+  onPlanCandidate?: (candidate: TaskCandidate) => void;
+  /** Dismiss a candidate — "item" (just this) or "sender" (always ignore this sender). */
+  onDismissCandidate?: (candidate: TaskCandidate, scope: "item" | "sender") => void;
   /** Open a plan to work it in a preloaded chat session. */
   onOpenTask: (planId: string) => void;
   /** Mark the current step done and advance the plan (best-effort Google write-back). */
@@ -101,7 +107,16 @@ function PlanCard({
   );
 }
 
-export const TasksPanel = memo(function TasksPanel({ plans, onOpenTask, onAdvanceStep, onDelete, onClose }: TasksPanelProps) {
+export const TasksPanel = memo(function TasksPanel({
+  plans,
+  candidates = [],
+  onPlanCandidate,
+  onDismissCandidate,
+  onOpenTask,
+  onAdvanceStep,
+  onDelete,
+  onClose,
+}: TasksPanelProps) {
   const active = plans.filter((p) => p.status !== "archived").sort((a, b) => b.updatedAt - a.updatedAt);
   return (
     <div style={overlay} onClick={onClose}>
@@ -112,6 +127,44 @@ export const TasksPanel = memo(function TasksPanel({ plans, onOpenTask, onAdvanc
             Close
           </button>
         </div>
+        {candidates.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, opacity: 0.8, marginBottom: 4 }}>
+              💡 Spotted in your inbox/calendar — plan any of these?
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {candidates.map((c, i) => (
+                <div key={i} style={{ ...card, borderColor: "rgba(255,207,139,0.4)" }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{c.title}</div>
+                  <div style={{ fontSize: 11, opacity: 0.7 }}>
+                    {c.reason}
+                    {c.from ? ` · ${c.from}` : ""}
+                    {c.suggestedDeadlineIso ? ` · ~${c.suggestedDeadlineIso}` : ""}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                    {onPlanCandidate && (
+                      <button style={btnPrimary} onClick={() => onPlanCandidate(c)}>
+                        Plan this →
+                      </button>
+                    )}
+                    {onDismissCandidate && (
+                      <>
+                        <button style={btn} onClick={() => onDismissCandidate(c, "item")} title="Don't surface this one again">
+                          Dismiss
+                        </button>
+                        {c.from ? (
+                          <button style={btn} onClick={() => onDismissCandidate(c, "sender")} title={`Always ignore ${c.from}`}>
+                            Ignore sender
+                          </button>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         <p style={{ fontSize: 12, opacity: 0.7, margin: "0 0 8px" }}>
           Multi-step tasks the assistant researched and planned. Open one to work it with everything preloaded — the AI
           handles the prep steps and walks you through the ones only you can do. Ask it to “plan …” anything to add more.
