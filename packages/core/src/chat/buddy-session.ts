@@ -11,6 +11,7 @@ import {
 } from "./buddy-tools.js";
 import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../providers/google.js";
 import type { TaskPlan } from "./tasks.js";
+import { findSetupGuide, setupGuideTopics } from "./setup-guides.js";
 import { evaluateExpression, formatCalcResult } from "./calculator.js";
 import { evaluateMath } from "./math-engine.js";
 import { jsonGatedTokenSink } from "./chat-session.js";
@@ -207,6 +208,11 @@ export async function runBuddyTool(
       case "forget":
         if (!deps.forget) return { error: "memory isn't available right now" };
         return { memory: { action: "forgot", note: call.match, count: await deps.forget(call.match) } };
+      case "setup_help": {
+        // Pure lookup over the built-in guides — no host dependency, always available.
+        const guide = findSetupGuide(call.topic);
+        return { setupHelp: guide ? { guide } : { topics: setupGuideTopics() } };
+      }
       case "read_skill": {
         if (!deps.readSkill) return { error: "skills aren't available right now" };
         const body = await deps.readSkill(call.name);

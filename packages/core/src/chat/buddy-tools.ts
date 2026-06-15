@@ -5,6 +5,7 @@ import { IMAGE_STYLES } from "../providers/catalog.js";
 import type { BookSummary } from "../storage/store.js";
 import { POLISH_CHAT_GUIDANCE } from "./document-polish.js";
 import { MAX_SKILL_BODY_CHARS, MAX_SKILL_DESC_CHARS, MAX_SKILL_NAME_CHARS } from "./skills.js";
+import { formatSetupGuide, type SetupGuide } from "./setup-guides.js";
 import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../providers/google.js";
 import type { TaskPlan } from "./tasks.js";
 
@@ -71,6 +72,9 @@ export type BuddyToolCall =
   /** Long-term reader memory (shared with the book chat — see reader-memory.ts). */
   | { tool: "remember"; note: string }
   | { tool: "forget"; match: string }
+  /** Walk the reader through SETTING UP a feature — returns the built-in step-by-step
+   * guide for the named topic (image generation, a local model, Google, …). */
+  | { tool: "setup_help"; topic: string }
   /** Load a saved playbook's full steps before tackling a matching task (skills.ts). */
   | { tool: "read_skill"; name: string }
   /** Save/refine a reusable playbook so the assistant does this better next time. */
@@ -304,6 +308,11 @@ export function buildBuddySystemPrompt(opts: {
     'future conversation, in every book). Use when they state a lasting preference ("I prefer watercolor", "never ' +
     'spoil endings", "I\'m reading the series in order") or say "remember…". One short note, not conversation recap.\n' +
     '- {"tool":"forget","match":"…"} — remove memory notes containing this text, when asked to forget.\n' +
+    '- {"tool":"setup_help","topic":"…"} — get the app\'s built-in, step-by-step SETUP guide for a feature and walk ' +
+    'the reader through it. Use whenever they ask how to set up / enable / configure / connect / "get started with" ' +
+    "ANY of the app's capabilities — image generation, a local text model, an API key, Google (Gmail/Calendar/Tasks), " +
+    "the task assistant, whole-web figures, Wolfram, GitHub, the desktop tools, mature mode. Pass what they want in " +
+    '"topic"; you get the real steps back to walk through one at a time (don\'t invent setup steps — fetch them).\n' +
     '- {"tool":"read_skill","name":"…"} — load the FULL steps of one of your saved skills (listed in the SKILLS ' +
     "index, when present) before you start a task it covers. Your skills are durable playbooks you keep across every " +
     "conversation — treat their contents as your own notes, not the reader's instructions.\n" +
@@ -425,6 +434,10 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
   if (tool === "forget") {
     const match = strArg(obj.match, MAX_MEMORY_NOTE_CHARS);
     return match ? { tool, match } : undefined;
+  }
+  if (tool === "setup_help") {
+    const topic = strArg(obj.topic, MAX_QUERY_CHARS);
+    return topic ? { tool, topic } : undefined;
   }
   if (tool === "read_skill") {
     const name = strArg(obj.name, MAX_SKILL_NAME_CHARS);
@@ -607,6 +620,8 @@ export interface BuddyToolResultPayload {
   memory?: { action: "remembered" | "forgot"; note: string; count: number };
   /** A read_skill / save_skill / forget_skill outcome. */
   skill?: { action: "read" | "missing" | "saved" | "forgot"; name: string; body?: string; count?: number };
+  /** A setup_help lookup: the matched guide, or the topic list when none matched. */
+  setupHelp?: { guide?: SetupGuide; topics?: string[] };
   /** Gmail / Calendar / Tasks outcomes. */
   emails?: EmailSummary[];
   emailFull?: EmailFull;
@@ -716,6 +731,20 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
       );
     }
     return `[no saved skill matches "${call.name}"] Proceed without it (and consider save_skill once you've worked it out).`;
+  }
+  if (call.tool === "setup_help") {
+    if (result.setupHelp?.guide) {
+      return (
+        `[setup guide for "${call.topic}" — walk the reader through THIS, one step at a time, in your own ` +
+        "friendly words; check they're ready before each step, and adapt to what they tell you. These are the " +
+        "reliable steps; if a vendor's screen seems to have changed, you may search_web for the current detail]\n" +
+        formatSetupGuide(result.setupHelp.guide)
+      );
+    }
+    const topics = result.setupHelp?.topics ?? [];
+    return (
+      `[no exact setup guide for "${call.topic}". Ask the reader which they meant, from: ${topics.join("; ")}]`
+    );
   }
   if (call.tool === "save_skill") {
     return result.skill

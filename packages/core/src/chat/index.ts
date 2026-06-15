@@ -8,6 +8,7 @@ export * from "./context-usage.js";
 export * from "./book-passage-search.js";
 export * from "./reader-memory.js";
 export * from "./skills.js";
+export * from "./setup-guides.js";
 export * from "./tasks.js";
 export * from "./task-planner.js";
 export * from "./task-scan.js";

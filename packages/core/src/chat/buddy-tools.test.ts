@@ -348,6 +348,36 @@ describe("skill tools", () => {
   });
 });
 
+describe("setup_help tool", () => {
+  it("parses setup_help and always advertises it", () => {
+    expect(parseBuddyToolCall('{"tool":"setup_help","topic":"image generation"}')).toEqual({
+      tool: "setup_help",
+      topic: "image generation",
+    });
+    expect(parseBuddyToolCall('{"tool":"setup_help","topic":"  "}')).toBeUndefined();
+    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"setup_help"');
+  });
+
+  it("feeds a matched guide back as a walkthrough, and falls back to a topic list", () => {
+    const g = formatBuddyToolResult(
+      { tool: "setup_help", topic: "connect google" },
+      {
+        setupHelp: {
+          guide: { id: "google", title: "Connect Gmail, Calendar & Tasks", aliases: [], when: "w", steps: ["Step one", "Step two"] },
+        },
+      },
+    );
+    expect(g).toContain("one step at a time");
+    expect(g).toContain("1. Step one");
+    const miss = formatBuddyToolResult(
+      { tool: "setup_help", topic: "teleporter" },
+      { setupHelp: { topics: ["Turn on real image generation", "Connect Gmail, Calendar & Tasks"] } },
+    );
+    expect(miss).toContain("which they meant");
+    expect(miss).toContain("Connect Gmail");
+  });
+});
+
 describe("google tools", () => {
   it("parses the gmail/calendar/tasks calls and rejects missing required fields", () => {
     expect(parseBuddyToolCall('{"tool":"gmail_search","query":"is:unread","max":5}')).toEqual({
