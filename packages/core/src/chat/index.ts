@@ -8,6 +8,7 @@ export * from "./context-usage.js";
 export * from "./book-passage-search.js";
 export * from "./reader-memory.js";
 export * from "./skills.js";
+export * from "./tasks.js";
 export * from "./slash-commands.js";
 export * from "./document-polish.js";
 export * from "./math-engine.js";
