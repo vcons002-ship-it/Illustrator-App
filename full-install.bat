@@ -13,7 +13,8 @@ echo the Tauri CLI, and a built extension. No typing required.
 echo.
 echo (It does NOT install the optional local AI engines — set those up separately:
 echo  comfyui-setup.bat for local images, ollama-setup.bat for local text.
-echo  See SETUP.md.)
+echo  github-setup.bat installs git + the gh CLI so the assistant can work with
+echo  your GitHub repos. See SETUP.md.)
 echo.
 echo Some toolchains need a fresh window after install. If this script says it
 echo just installed something and asks you to run it again, CLOSE this window and

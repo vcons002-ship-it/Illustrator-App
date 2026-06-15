@@ -15,6 +15,7 @@ version is a single file you double-click. (macOS / Linux steps are further down
 | The **Chrome extension** (illustrate the web) | **`extension.bat`** | Builds the extension and opens the folder + Chrome to load it. Re-open it later with **`run-extension.bat`**. |
 | A **free local image engine** (optional) | **`comfyui-setup.bat`** | Downloads ComfyUI portable + a starter model so you can generate on your own GPU, no API keys. |
 | A **free local text engine** (optional) | **`ollama-setup.bat`** | Installs Ollama (story analysis + prompt writing on your machine, no API key). Text models are then downloaded from inside the app — Settings → Text. |
+| **GitHub repo access** (optional, desktop) | **`github-setup.bat`** | Installs Git + the GitHub CLI (`gh`) so the desktop assistant can clone, commit, push, open PRs, and manage issues. Then add a token in Settings → "GitHub token". |
 
 Each script checks for and installs anything it needs (Node.js, etc.) on its own.
 If a script says it just installed something and asks you to run it again, close
@@ -184,8 +185,9 @@ human approval at every step. Some are on by default, the riskier ones are opt-i
   GitHub token into **Settings → "GitHub token"** and the assistant can **clone, branch,
   commit, push, open pull requests, and manage issues** using `git` and the `gh` CLI in its
   workspace. Setup:
-  1. Install `git` and the **GitHub CLI** (`gh`) — e.g. `winget install GitHub.cli` on
-     Windows, `brew install gh` on macOS, your package manager on Linux.
+  1. Install `git` and the **GitHub CLI** (`gh`) — on **Windows just double-click
+     `github-setup.bat`** (installs both and can sign you in); on macOS `brew install git gh`,
+     on Linux your package manager.
   2. Create a token at **[github.com/settings/tokens](https://github.com/settings/tokens)**
      (a fine-grained token scoped to the repos you want, with Contents + Pull requests +
      Issues access, is ideal). Paste it into Settings.
