@@ -204,6 +204,8 @@ export interface ChatPanelProps {
   onSaveProject?: (files: ProjectFile[]) => Promise<string | true>;
   /** Generate + embed a designed document's images. */
   onBuildDocument?: BuildDocumentFn;
+  /** Download a grounded analysis-result table as a real .xlsx / .csv (host builds it). */
+  onDownloadData?: (table: DataTable, name: string, format: "xlsx" | "csv") => void;
   /** Latest context-usage breakdown (for the usage donut). */
   contextUsage?: ContextUsage;
 }
@@ -295,6 +297,7 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
               {...(props.onSaveFile ? { onSaveFile: props.onSaveFile } : {})}
               {...(props.onSaveProject ? { onSaveProject: props.onSaveProject } : {})}
               {...(props.onBuildDocument ? { onBuildDocument: props.onBuildDocument } : {})}
+              {...(props.onDownloadData ? { onDownloadData: props.onDownloadData } : {})}
             />
           ))}
           {props.thinking ? <ThinkingBlock text={props.thinking} /> : null}
@@ -518,6 +521,7 @@ export const MessageBubble = memo(function MessageBubble({
   onSaveFile,
   onSaveProject,
   onBuildDocument,
+  onDownloadData,
 }: {
   message: ChatMessageVM;
   index?: number;
@@ -532,6 +536,8 @@ export const MessageBubble = memo(function MessageBubble({
   onSaveProject?: (files: ProjectFile[]) => Promise<string | true>;
   /** Generate + embed a designed document's images. Stable (memo). */
   onBuildDocument?: BuildDocumentFn;
+  /** Download a grounded analysis-result table as .xlsx / .csv. Stable (memo). */
+  onDownloadData?: (table: DataTable, name: string, format: "xlsx" | "csv") => void;
 }) {
   const isUser = message.role === "user";
   const url = useMessageImageUrl(message.image);
@@ -608,7 +614,9 @@ export const MessageBubble = memo(function MessageBubble({
           }}
         />
       ) : null}
-      {message.analysis ? <AnalysisBlock analysis={message.analysis} /> : null}
+      {message.analysis ? (
+        <AnalysisBlock analysis={message.analysis} {...(onDownloadData ? { onDownloadData } : {})} />
+      ) : null}
       {message.gallery?.length ? (
         <ImageGallery items={message.gallery} />
       ) : null}
@@ -763,17 +771,39 @@ const thinkingStyle = {
  */
 function AnalysisBlock({
   analysis,
+  onDownloadData,
 }: {
   analysis: { table: DataTable; summary?: string; chart?: AnalyzeChart };
+  onDownloadData?: (table: DataTable, name: string, format: "xlsx" | "csv") => void;
 }) {
   const { table, chart } = analysis;
   return (
     <div style={{ marginTop: 6 }}>
       <DataTablePreview table={table} maxRows={50} maxHeight={320} />
       {chart ? <AnalysisChart table={table} chart={chart} /> : null}
+      {onDownloadData ? (
+        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+          <button style={dataDownloadBtn} title="Download this result as a real Excel workbook" onClick={() => onDownloadData(table, "analysis", "xlsx")}>
+            ⬇ Excel
+          </button>
+          <button style={dataDownloadBtn} title="Download this result as CSV" onClick={() => onDownloadData(table, "analysis", "csv")}>
+            ⬇ CSV
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
+
+const dataDownloadBtn: React.CSSProperties = {
+  background: "rgba(90,209,155,0.12)",
+  border: "1px solid rgba(90,209,155,0.5)",
+  color: "inherit",
+  borderRadius: 6,
+  padding: "2px 8px",
+  fontSize: 11,
+  cursor: "pointer",
+};
 
 /** Render an analysis result table as a chart by taking its first text + numeric columns. */
 function AnalysisChart({ table, chart }: { table: DataTable; chart: AnalyzeChart }) {
