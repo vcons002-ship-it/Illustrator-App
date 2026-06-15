@@ -114,6 +114,7 @@ import {
   onModelProgress,
   readLocalFile,
   runCommand,
+  pickFolder,
   saveExportFile,
   searchLocalFiles,
 } from "./runtime.js";
@@ -2424,7 +2425,9 @@ export function App() {
             onDeleteMessage={onDeleteBuddyMessage}
             onCompact={onCompactBuddyClick}
             desktop={isDesktop}
-            {...(isDesktop && settings.allowCommands ? { workingDir: buddyWorkingDir, onSetWorkingDir: setWorkingDir } : {})}
+            {...(isDesktop && settings.allowCommands
+              ? { workingDir: buddyWorkingDir, onSetWorkingDir: setWorkingDir, onPickFolder: pickFolder }
+              : {})}
             onOpenLocalFile={onOpenLocalFile}
             onSaveFile={onSaveChatFile}
             onSaveProject={onSaveProject}

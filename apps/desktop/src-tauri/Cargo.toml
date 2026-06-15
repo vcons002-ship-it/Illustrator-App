@@ -25,3 +25,5 @@ sevenz-rust = "0.6"
 xcap = "0.0.14"
 # Encode the captured frame to PNG bytes for the renderer/vision model.
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Native folder picker for the assistant's working-folder control (Win/macOS/Linux).
+rfd = "0.15"

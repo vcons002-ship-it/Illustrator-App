@@ -260,6 +260,14 @@ export function runCommand(command: string, githubToken?: string, cwd?: string):
   });
 }
 
+/** Native "choose a folder" dialog (desktop). Resolves to the path, or undefined on
+ * cancel / on the web. */
+export async function pickFolder(): Promise<string | undefined> {
+  if (!isDesktop) return undefined;
+  const path = await invoke<string | null>("pick_folder");
+  return path ?? undefined;
+}
+
 /**
  * Capture a screenshot to PNG bytes (desktop), for the chat's screenshot tool.
  * `window` (a title substring) captures just that window — e.g. a game — even when
