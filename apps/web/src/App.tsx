@@ -59,6 +59,7 @@ import {
   ChatPanel,
   DataChart,
   DataSection,
+  DataTablePreview,
   DEFAULT_SETTINGS,
   DocumentPolishPanel,
   FirstRunWizard,
@@ -2614,6 +2615,25 @@ const ReaderColumn = memo(function ReaderColumn({
   const chaptersById = useMemo(() => new Map(book.chapters.map((c) => [c.id, c])), [book]);
   return (
     <article style={styles.column}>
+      {/* An uploaded spreadsheet/CSV: show the REAL grid as an aligned table up top
+          (the flattened "a | b | c" pipe-text below is what the illustration/extraction
+          pipeline reads, but it's no way to actually look at a sheet). */}
+      {book.data ? (
+        <details open style={styles.dataPreview}>
+          <summary style={styles.dataPreviewSummary}>
+            <strong>🗂 {book.title || "Spreadsheet"}</strong>
+            <span style={{ opacity: 0.6 }}>
+              {" "}
+              — {book.data.rows.length.toLocaleString("en-US")} row
+              {book.data.rows.length === 1 ? "" : "s"} × {book.data.columns.length} column
+              {book.data.columns.length === 1 ? "" : "s"}. Ask the buddy to analyse, chart, or pivot it.
+            </span>
+          </summary>
+          <div style={{ marginTop: 8 }}>
+            <DataTablePreview table={book.data} maxRows={200} maxHeight={420} />
+          </div>
+        </details>
+      ) : null}
       {book.pages.map((page, i) => {
         const prev = book.pages[i - 1];
         const newChapter = !prev || prev.chapterId !== page.chapterId;
@@ -2910,7 +2930,7 @@ function PasteTextModal({
   onClose,
 }: {
   /** Prefill when the text came from an opened file (PDF/Word/CSV/…). */
-  initial?: { title: string; text: string; mode?: "fiction" | "technical" } | undefined;
+  initial?: { title: string; text: string; mode?: "fiction" | "technical"; data?: DataTable } | undefined;
   onCreate: (title: string, text: string, mode: "fiction" | "technical") => void;
   /** Switch to the faithful summarize/rework flow with the current title + text. */
   onPolish?: (title: string, text: string) => void;
@@ -2939,6 +2959,16 @@ function PasteTextModal({
           placeholder="Title (optional)"
           onChange={(e) => setTitle(e.target.value)}
         />
+        {initial?.data ? (
+          <div style={{ marginBottom: 8 }}>
+            <DataTablePreview
+              table={initial.data}
+              maxRows={8}
+              maxHeight={200}
+              caption={`Detected a table — ${initial.data.rows.length.toLocaleString("en-US")} rows × ${initial.data.columns.length} columns. Opened technical, ready to analyse/chart in chat.`}
+            />
+          </div>
+        ) : null}
         <textarea
           style={styles.importTextarea}
           value={text}
@@ -3650,6 +3680,14 @@ const styles: Record<string, React.CSSProperties> = {
     margin: "0 auto",
   },
   column: { maxWidth: 640 },
+  dataPreview: {
+    marginBottom: 24,
+    background: "rgba(122,162,255,0.05)",
+    border: "1px solid rgba(122,162,255,0.25)",
+    borderRadius: 10,
+    padding: "8px 12px",
+  },
+  dataPreviewSummary: { cursor: "pointer", fontSize: 13, fontFamily: "system-ui, sans-serif" },
   page: { marginBottom: 32, transition: "border-color 0.4s ease" },
   sectionActive: {
     borderLeft: "2px solid rgba(120,180,255,0.6)",

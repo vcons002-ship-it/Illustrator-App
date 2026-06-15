@@ -11,6 +11,7 @@ export * from "./ContextUsageDonut.js";
 export * from "./DocumentPolishPanel.js";
 export * from "./DataChart.js";
 export * from "./DataSection.js";
+export * from "./DataTablePreview.js";
 export * from "./TechnicalSupport.js";
 export * from "./CharacterBible.js";
 export * from "./LibraryPanel.js";
