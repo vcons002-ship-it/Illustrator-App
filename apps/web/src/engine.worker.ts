@@ -1583,6 +1583,18 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           ...(call.illustrateAfter !== undefined ? { illustrateAfter: call.illustrateAfter } : {}),
         };
       },
+      // A natural-language settings change (validated in core). Apply it to the
+      // worker's copy so an open later in this same turn uses it, and hand the patch
+      // to the main thread (the settings owner) to commit + persist + re-init/tune.
+      applySetting: async ({ key, value, label, valueLabel }) => {
+        if (settings) settings = { ...settings, [key]: value };
+        post({
+          type: "buddySettings",
+          requestId: msg.requestId,
+          patch: { [key]: value } as Partial<ReaderSettings>,
+          summary: `${label}: ${valueLabel}`,
+        });
+      },
     };
     // Slash command: run the tool DIRECTLY — no LLM round (instant, deterministic,
     // free). /draw flows through the regular pendingTool approval bubble.

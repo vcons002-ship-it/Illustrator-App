@@ -6,6 +6,7 @@ import type { BookSummary } from "../storage/store.js";
 import { POLISH_CHAT_GUIDANCE } from "./document-polish.js";
 import { MAX_SKILL_BODY_CHARS, MAX_SKILL_DESC_CHARS, MAX_SKILL_NAME_CHARS } from "./skills.js";
 import { formatSetupGuide, type SetupGuide } from "./setup-guides.js";
+import { controllableSettingsIndex } from "./settings-control.js";
 import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../providers/google.js";
 import type { TaskPlan } from "./tasks.js";
 
@@ -72,6 +73,8 @@ export type BuddyToolCall =
   /** Long-term reader memory (shared with the book chat — see reader-memory.ts). */
   | { tool: "remember"; note: string }
   | { tool: "forget"; match: string }
+  /** Change one of the app's settings by name on the reader's request (then confirm). */
+  | { tool: "update_setting"; field: string; value: string | number | boolean }
   /** Walk the reader through SETTING UP a feature — returns the built-in step-by-step
    * guide for the named topic (image generation, a local model, Google, …). */
   | { tool: "setup_help"; topic: string }
@@ -308,6 +311,14 @@ export function buildBuddySystemPrompt(opts: {
     'future conversation, in every book). Use when they state a lasting preference ("I prefer watercolor", "never ' +
     'spoil endings", "I\'m reading the series in order") or say "remember…". One short note, not conversation recap.\n' +
     '- {"tool":"forget","match":"…"} — remove memory notes containing this text, when asked to forget.\n' +
+    `- {"tool":"update_setting","field":"…","value":…} — CHANGE one of the app's settings when the reader asks in ` +
+    'plain language ("turn on mature mode", "set image quality to high", "use portrait orientation", "enable auto ' +
+    'task scheduling"). "field" names the setting, "value" is the new value (true/false for a toggle, or the option ' +
+    `name/number). Controllable settings: ${controllableSettingsIndex()}. After it applies, CONFIRM the change to ` +
+    "the reader in one short sentence. For ART STYLE or how often to illustrate, use set_visual_style instead; for " +
+    "providers, API keys, models, or anything that needs a Settings screen, use setup_help to walk them through it. " +
+    "For the sensitive toggles (mature mode, command execution), make sure it's clearly what the reader wants before " +
+    "you flip it.\n" +
     '- {"tool":"setup_help","topic":"…"} — get the app\'s built-in, step-by-step SETUP guide for a feature and walk ' +
     'the reader through it. Use whenever they ask how to set up / enable / configure / connect / "get started with" ' +
     "ANY of the app's capabilities — image generation, a local text model, an API key, Google (Gmail/Calendar/Tasks), " +
@@ -434,6 +445,13 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
   if (tool === "forget") {
     const match = strArg(obj.match, MAX_MEMORY_NOTE_CHARS);
     return match ? { tool, match } : undefined;
+  }
+  if (tool === "update_setting") {
+    const field = strArg(obj.field, MAX_NAME_CHARS);
+    if (!field) return undefined;
+    const v = obj.value;
+    const value = typeof v === "boolean" || typeof v === "number" ? v : strArg(v, MAX_NAME_CHARS);
+    return value === undefined ? undefined : { tool, field, value };
   }
   if (tool === "setup_help") {
     const topic = strArg(obj.topic, MAX_QUERY_CHARS);
@@ -622,6 +640,8 @@ export interface BuddyToolResultPayload {
   skill?: { action: "read" | "missing" | "saved" | "forgot"; name: string; body?: string; count?: number };
   /** A setup_help lookup: the matched guide, or the topic list when none matched. */
   setupHelp?: { guide?: SetupGuide; topics?: string[] };
+  /** An update_setting outcome: the applied change, or an error with valid options. */
+  settingChange?: { label?: string; valueLabel?: string; sensitive?: boolean; error?: string };
   /** Gmail / Calendar / Tasks outcomes. */
   emails?: EmailSummary[];
   emailFull?: EmailFull;
@@ -731,6 +751,15 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
       );
     }
     return `[no saved skill matches "${call.name}"] Proceed without it (and consider save_skill once you've worked it out).`;
+  }
+  if (call.tool === "update_setting") {
+    const c = result.settingChange;
+    if (!c) return "[update_setting did nothing]";
+    if (c.error) return `[couldn't change that setting: ${c.error}] Tell the reader plainly and offer the valid options.`;
+    return (
+      `[setting applied: ${c.label} → ${c.valueLabel}] Confirm the change to the reader in one short sentence` +
+      (c.sensitive ? " and briefly note what it does, since it's a sensitive setting." : ".")
+    );
   }
   if (call.tool === "setup_help") {
     if (result.setupHelp?.guide) {

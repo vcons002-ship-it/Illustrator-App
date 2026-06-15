@@ -264,6 +264,9 @@ export type WorkerToMain =
       style?: { id: string; label: string };
       pagesPerImage?: number | "chapter";
       illustrateAfter?: "chapter" | "book";
+      /** A generic validated settings patch from update_setting + a chip summary. */
+      patch?: Partial<ReaderSettings>;
+      summary?: string;
     }
   | {
       type: "buddyDone";

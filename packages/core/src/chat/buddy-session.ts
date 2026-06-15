@@ -12,6 +12,7 @@ import {
 import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../providers/google.js";
 import type { TaskPlan } from "./tasks.js";
 import { findSetupGuide, setupGuideTopics } from "./setup-guides.js";
+import { parseSettingChange } from "./settings-control.js";
 import { evaluateExpression, formatCalcResult } from "./calculator.js";
 import { evaluateMath } from "./math-engine.js";
 import { jsonGatedTokenSink } from "./chat-session.js";
@@ -51,6 +52,8 @@ export interface BuddyDeps {
   setVisualStyle: (
     call: Extract<BuddyToolCall, { tool: "set_visual_style" }>,
   ) => Promise<{ style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" }>;
+  /** Apply a validated settings change (host owns ReaderSettings + persistence). */
+  applySetting?: (change: { key: string; value: boolean | number | string; label: string; valueLabel: string }) => Promise<void>;
   /** Long-term reader memory (see reader-memory.ts); returns the kept count. */
   remember?: (note: string) => Promise<number>;
   forget?: (match: string) => Promise<number>;
@@ -208,6 +211,15 @@ export async function runBuddyTool(
       case "forget":
         if (!deps.forget) return { error: "memory isn't available right now" };
         return { memory: { action: "forgot", note: call.match, count: await deps.forget(call.match) } };
+      case "update_setting": {
+        // Validate purely (coerce + bound to the controllable table), then hand the
+        // concrete patch to the host, which owns ReaderSettings and persistence.
+        const r = parseSettingChange(call.field, call.value);
+        if (!r.ok) return { settingChange: { error: r.error } };
+        if (!deps.applySetting) return { error: "changing settings isn't available right now" };
+        await deps.applySetting({ key: r.key, value: r.value, label: r.label, valueLabel: r.valueLabel });
+        return { settingChange: { label: r.label, valueLabel: r.valueLabel, sensitive: r.sensitive } };
+      }
       case "setup_help": {
         // Pure lookup over the built-in guides — no host dependency, always available.
         const guide = findSetupGuide(call.topic);
