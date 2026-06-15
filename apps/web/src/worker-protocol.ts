@@ -137,6 +137,9 @@ export type MainToWorker =
       userText: string;
       persona: BuddyPersona;
       library: BookSummary[];
+      /** The session's chosen working folder (desktop), so the prompt tells the model
+       * where its run_command/find_files operate. Absent = the default workspace. */
+      workingDir?: string;
     };
 
 export type WorkerToMain =

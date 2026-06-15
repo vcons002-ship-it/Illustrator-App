@@ -591,10 +591,23 @@ async fn run_command(
     app: AppHandle,
     command: String,
     github_token: Option<String>,
+    cwd: Option<String>,
 ) -> Result<CommandResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let dir = workspace_dir(&app);
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        // The session's chosen working folder when it's a real directory; otherwise the
+        // default sandbox workspace (created on demand).
+        let dir = match cwd
+            .filter(|c| !c.is_empty())
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.is_dir())
+        {
+            Some(p) => p,
+            None => {
+                let d = workspace_dir(&app);
+                std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+                d
+            }
+        };
         let mut cmd = if cfg!(target_os = "windows") {
             let mut c = Command::new("cmd");
             c.arg("/C").arg(&command);

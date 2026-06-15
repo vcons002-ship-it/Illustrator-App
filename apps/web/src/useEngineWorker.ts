@@ -142,6 +142,7 @@ export interface EngineWorkerApi {
     persona: BuddyPersona,
     library: BookSummary[],
     onEvent: (e: BuddyStreamEvent) => void,
+    workingDir?: string,
   ) => Promise<BuddyDoneResult>;
   /** Abort the in-flight buddy round, if any. */
   buddyCancel: () => void;
@@ -937,6 +938,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       persona: BuddyPersona,
       library: BookSummary[],
       onEvent: (e: BuddyStreamEvent) => void,
+      workingDir?: string,
     ): Promise<BuddyDoneResult> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
@@ -967,7 +969,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             resolve(r);
           },
         });
-        send({ type: "buddyChat", requestId, history, userText, persona, library });
+        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}) });
       }),
     [],
   );

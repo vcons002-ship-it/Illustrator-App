@@ -1370,6 +1370,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         ...(settings?.keys?.wolfram ? { canWolfram: true } : {}),
         // GitHub repo work rides run_command, so it needs desktop + commands + a token.
         ...(corsProxyAvailable && settings?.allowCommands && settings?.keys?.github ? { canGithub: true } : {}),
+        // The chosen working folder only matters when commands/file-search can run.
+        ...(corsProxyAvailable && settings?.allowCommands && msg.workingDir ? { workingDir: msg.workingDir } : {}),
       }) +
       (memory ? `\n\n${memory}` : "") +
       (skills ? `\n\n${skills}` : "") +

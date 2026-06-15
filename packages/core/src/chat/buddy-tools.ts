@@ -108,6 +108,8 @@ export function buildBuddySystemPrompt(opts: {
   canWolfram?: boolean;
   /** A GitHub token is set (desktop + commands): advertise git/gh repo work. */
   canGithub?: boolean;
+  /** The session's chosen working folder (desktop): commands + file search run here. */
+  workingDir?: string;
 }): string {
   const persona =
     opts.persona === "technical"
@@ -170,6 +172,11 @@ export function buildBuddySystemPrompt(opts: {
       "curates better than you remember: facts/figures (populations, distances, chemistry, physics " +
       "constants, finance, nutrition, dates), equation solving, and step-by-step results. Use it when a " +
       "question needs an authoritative real-world value; use calculate for pure math you can express directly.\n"
+    : "";
+  const workingFolderNote = opts.workingDir
+    ? `WORKING FOLDER: your run_command and find_files operate in \`${opts.workingDir}\` (the reader chose it for this ` +
+      "session). Paths you reference are relative to it. Remember each command starts here fresh — a `cd` into a " +
+      "subfolder does NOT carry to the next command, so chain with `&&` or re-`cd` each time.\n"
     : "";
   const githubBlock = opts.canGithub
     ? "GITHUB: a GitHub token is configured and ALREADY in your shell environment (GH_TOKEN / GITHUB_TOKEN), so the gh " +
@@ -242,6 +249,7 @@ export function buildBuddySystemPrompt(opts: {
     '- {"tool":"forget_skill","match":"…"} — delete a saved skill by name, when asked.\n' +
     fileTool +
     commandTool +
+    workingFolderNote +
     wolframTool +
     githubBlock +
     "GROUNDED IN TRUTH: don't guess at facts, APIs, library names, syntax, or current details you're unsure of. " +

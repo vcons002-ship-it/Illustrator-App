@@ -174,7 +174,9 @@ human approval at every step. Some are on by default, the riskier ones are opt-i
   `VisualReader` workspace folder (install dependencies, run a build or tests, execute a
   script it wrote). **You approve every command** before it runs; its output comes back so
   the assistant can check whether code works, fix it, and re-run. The same flag enables the
-  **screenshot** tool.
+  **screenshot** tool. Use the **📁 folder** control at the top of the chat to point it at a
+  specific **project folder** (blank = the default workspace); commands *and* file search then
+  run there, and the choice is remembered — so different chats can work in different folders.
 - **Screenshots for a vision model** *(opt-in, same flag)* — it can capture your whole
   screen, or just one window by name (great for a running game), and look at it with a
   **vision model** to verify what it built. Vision can be cloud (Claude/Gemini/OpenAI) **or

@@ -277,6 +277,14 @@ describe("buildBuddySystemPrompt", () => {
     expect(on).toMatch(/never.*print|NEVER print/i); // the token-safety rule
   });
 
+  it("names the session's working folder only when one is set", () => {
+    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain("WORKING FOLDER");
+    const on = buildBuddySystemPrompt({ persona: "freeform", library: [], workingDir: "/home/u/projects/site" });
+    expect(on).toContain("WORKING FOLDER");
+    expect(on).toContain("/home/u/projects/site");
+    expect(on).toMatch(/cd.*does NOT carry|cd.*not carry/i); // the per-command caveat
+  });
+
   it("advertises run_command + screenshot only when explicitly enabled (opt-in)", () => {
     const off = buildBuddySystemPrompt({ persona: "freeform", library: [] });
     expect(off).not.toContain("run_command");
