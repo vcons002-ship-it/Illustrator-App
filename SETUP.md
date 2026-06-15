@@ -188,9 +188,24 @@ human approval at every step. Some are on by default, the riskier ones are opt-i
   1. Install `git` and the **GitHub CLI** (`gh`) — on **Windows just double-click
      `github-setup.bat`** (installs both and can sign you in); on macOS `brew install git gh`,
      on Linux your package manager.
-  2. Create a token at **[github.com/settings/tokens](https://github.com/settings/tokens)**
-     (a fine-grained token scoped to the repos you want, with Contents + Pull requests +
-     Issues access, is ideal). Paste it into Settings.
+  2. **Create a GitHub token** — go to
+     **[github.com/settings/tokens](https://github.com/settings/tokens)** and make a
+     **fine-grained** token (recommended over a classic one — it's scoped to just the repos and
+     permissions you choose):
+     - Click **Generate new token** → **Fine-grained token**.
+     - **Name** it (e.g. `Visual Reader`) and pick an **Expiration** (90 days is a good default —
+       you can regenerate later).
+     - **Repository access** → **Only select repositories**, and choose the repo(s) you want the
+       assistant to touch (or *All repositories* if you prefer).
+     - **Permissions → Repository permissions** — set these to **Read and write**:
+       **Contents** (clone/commit/push), **Pull requests** (open/manage PRs), **Issues**
+       (manage issues). *Metadata* is set to read-only for you automatically. Leave everything
+       else as **No access**.
+     - Click **Generate token** and **copy it** (it starts with `github_pat_…` and is shown
+       once). Paste it into **Settings → "GitHub token"**.
+
+     *(Prefer a classic token? Generate one with the **`repo`** scope. Fine-grained is safer
+     because it's limited to the repos and permissions above.)*
   3. Turn on **"Let the assistant run commands"** (GitHub work runs through that same
      approval-gated runner — you click to approve every command).
 
