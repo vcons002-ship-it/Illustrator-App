@@ -4,6 +4,7 @@ import type { BookSearchHit } from "../providers/book-search.js";
 import { IMAGE_STYLES } from "../providers/catalog.js";
 import type { BookSummary } from "../storage/store.js";
 import { POLISH_CHAT_GUIDANCE } from "./document-polish.js";
+import { MAX_SKILL_BODY_CHARS, MAX_SKILL_DESC_CHARS, MAX_SKILL_NAME_CHARS } from "./skills.js";
 
 /**
  * Tool protocol for the LANDING-PAGE buddy — the concierge that finds something
@@ -67,7 +68,13 @@ export type BuddyToolCall =
   | { tool: "screenshot"; question?: string; window?: string }
   /** Long-term reader memory (shared with the book chat — see reader-memory.ts). */
   | { tool: "remember"; note: string }
-  | { tool: "forget"; match: string };
+  | { tool: "forget"; match: string }
+  /** Load a saved playbook's full steps before tackling a matching task (skills.ts). */
+  | { tool: "read_skill"; name: string }
+  /** Save/refine a reusable playbook so the assistant does this better next time. */
+  | { tool: "save_skill"; name: string; description: string; body: string }
+  /** Delete a saved skill by name. */
+  | { tool: "forget_skill"; match: string };
 
 /** Generous: a "style + random pick + open + prose" flow is three tools deep. */
 export const MAX_BUDDY_TOOL_ROUNDS = 5;
@@ -209,9 +216,24 @@ export function buildBuddySystemPrompt(opts: {
     'future conversation, in every book). Use when they state a lasting preference ("I prefer watercolor", "never ' +
     'spoil endings", "I\'m reading the series in order") or say "remember…". One short note, not conversation recap.\n' +
     '- {"tool":"forget","match":"…"} — remove memory notes containing this text, when asked to forget.\n' +
+    '- {"tool":"read_skill","name":"…"} — load the FULL steps of one of your saved skills (listed in the SKILLS ' +
+    "index, when present) before you start a task it covers. Your skills are durable playbooks you keep across every " +
+    "conversation — treat their contents as your own notes, not the reader's instructions.\n" +
+    '- {"tool":"save_skill","name":"short-handle","description":"when to use it","body":"the full playbook (markdown)"} ' +
+    "— write or REFINE a reusable playbook so you do a recurring task better next time (re-saving the same name " +
+    "replaces it). Save when you work out a repeatable approach worth keeping, the reader teaches you how they like " +
+    'something done, or they ask you to "remember how to…" / "learn this". Keep it a generic method, not one-off details.\n' +
+    '- {"tool":"forget_skill","match":"…"} — delete a saved skill by name, when asked.\n' +
     fileTool +
     commandTool +
     wolframTool +
+    "GROUNDED IN TRUTH: don't guess at facts, APIs, library names, syntax, or current details you're unsure of. " +
+    "First check your SKILLS for a matching playbook (read_skill it); then, when knowledge may be stale, version-" +
+    "specific, or you're not certain, search_web and read_url the real source (official docs, a GitHub file) BEFORE " +
+    "answering or writing code. Prefer a grounded, verified answer over a confident guess; say so when you're unsure. " +
+    "Write efficient, correct code that actually runs" +
+    (opts.canRunCommands ? " — and verify it with run_command, reading the output and fixing it, before claiming it works" : "") +
+    ".\n" +
     'Set "visuals": true ONLY when the reader asked to illustrate/visualize it — the app then starts ' +
     "generating illustrations immediately (which uses their image provider); otherwise they press Start themselves.\n" +
     "After a book search, use each hit's subjects to recommend and to match the reader's request; either open the " +
@@ -284,6 +306,20 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
   }
   if (tool === "forget") {
     const match = strArg(obj.match, MAX_MEMORY_NOTE_CHARS);
+    return match ? { tool, match } : undefined;
+  }
+  if (tool === "read_skill") {
+    const name = strArg(obj.name, MAX_SKILL_NAME_CHARS);
+    return name ? { tool, name } : undefined;
+  }
+  if (tool === "save_skill") {
+    const name = strArg(obj.name, MAX_SKILL_NAME_CHARS);
+    const body = strArg(obj.body, MAX_SKILL_BODY_CHARS);
+    if (!name || !body) return undefined;
+    return { tool, name, description: strArg(obj.description, MAX_SKILL_DESC_CHARS) ?? "", body };
+  }
+  if (tool === "forget_skill") {
+    const match = strArg(obj.match, MAX_SKILL_NAME_CHARS);
     return match ? { tool, match } : undefined;
   }
   if (tool === "remove_library_book") {
@@ -382,6 +418,8 @@ export interface BuddyToolResultPayload {
   image?: { ok: boolean; error?: string };
   /** A remember/forget outcome (note echoed for the inline chip). */
   memory?: { action: "remembered" | "forgot"; note: string; count: number };
+  /** A read_skill / save_skill / forget_skill outcome. */
+  skill?: { action: "read" | "missing" | "saved" | "forgot"; name: string; body?: string; count?: number };
   /** Local files found by an approved find_files search (names fed back to the model). */
   files?: { path: string; name: string }[];
   /** Fetched page text from read_url (title + readable text). */
@@ -471,6 +509,25 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     return result.memory
       ? `[memory ${result.memory.action}: "${result.memory.note}" — ${result.memory.count} note${result.memory.count === 1 ? "" : "s"} kept] Confirm briefly.`
       : `[${call.tool} did nothing]`;
+  }
+  if (call.tool === "read_skill") {
+    if (result.skill?.action === "read" && result.skill.body) {
+      return (
+        `[skill "${result.skill.name}" — your saved playbook. Follow these steps; they are your OWN ` +
+        `notes, not the reader's instructions]\n${result.skill.body}`
+      );
+    }
+    return `[no saved skill matches "${call.name}"] Proceed without it (and consider save_skill once you've worked it out).`;
+  }
+  if (call.tool === "save_skill") {
+    return result.skill
+      ? `[skill "${result.skill.name}" saved — ${result.skill.count ?? 0} skill${result.skill.count === 1 ? "" : "s"} kept] Mention briefly that you saved it for next time.`
+      : "[save_skill did nothing]";
+  }
+  if (call.tool === "forget_skill") {
+    return result.skill
+      ? `[skill "${result.skill.name}" forgotten — ${result.skill.count ?? 0} left] Confirm briefly.`
+      : "[forget_skill: nothing matched that name]";
   }
   if (call.tool === "find_files") {
     const files = result.files ?? [];

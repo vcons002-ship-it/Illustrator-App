@@ -51,6 +51,11 @@ export interface BuddyDeps {
   /** Long-term reader memory (see reader-memory.ts); returns the kept count. */
   remember?: (note: string) => Promise<number>;
   forget?: (match: string) => Promise<number>;
+  /** Skills (durable playbooks — see skills.ts). readSkill returns the body ("" if
+   * none); saveSkill/forgetSkill return the kept count. */
+  readSkill?: (name: string) => Promise<string>;
+  saveSkill?: (name: string, description: string, body: string) => Promise<number>;
+  forgetSkill?: (match: string) => Promise<number>;
 }
 
 export type BuddyTurnEvent =
@@ -187,6 +192,19 @@ export async function runBuddyTool(
       case "forget":
         if (!deps.forget) return { error: "memory isn't available right now" };
         return { memory: { action: "forgot", note: call.match, count: await deps.forget(call.match) } };
+      case "read_skill": {
+        if (!deps.readSkill) return { error: "skills aren't available right now" };
+        const body = await deps.readSkill(call.name);
+        return { skill: body ? { action: "read", name: call.name, body } : { action: "missing", name: call.name } };
+      }
+      case "save_skill":
+        if (!deps.saveSkill) return { error: "skills aren't available right now" };
+        return {
+          skill: { action: "saved", name: call.name, count: await deps.saveSkill(call.name, call.description, call.body) },
+        };
+      case "forget_skill":
+        if (!deps.forgetSkill) return { error: "skills aren't available right now" };
+        return { skill: { action: "forgot", name: call.match, count: await deps.forgetSkill(call.match) } };
     }
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };

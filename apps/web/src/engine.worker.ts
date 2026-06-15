@@ -23,9 +23,14 @@ import {
   chapterText,
   fetchPageText,
   forgetNote,
+  forgetSkill,
   getImageStyle,
   loadMemory,
+  loadSkills,
   memoryPromptBlock,
+  readSkillBody,
+  saveSkill,
+  skillsIndexBlock,
   parseBuddySlashCommand,
   parseUnderstanding,
   parseChatSlashCommand,
@@ -1246,6 +1251,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       randomBooks: () => books.random(),
       remember: async (n) => (await rememberNote(store, n)).length,
       forget: async (m) => (await forgetNote(store, m)).length,
+      readSkill: async (name) => readSkillBody(await loadSkills(store), name),
+      saveSkill: async (name, description, body) => (await saveSkill(store, { name, description, body })).length,
+      forgetSkill: async (m) => (await forgetSkill(store, m)).length,
       openLibraryBook: async (call) => {
         const book = await store.getBook(call.id);
         if (!book) throw new Error("that id isn't in the library");
@@ -1347,6 +1355,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const note = await renderDefaultsNote();
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
     const memory = memoryPromptBlock(await loadMemory(store));
+    const skills = skillsIndexBlock(await loadSkills(store));
     const setup =
       buildBuddySystemPrompt({
         persona: msg.persona,
@@ -1361,6 +1370,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         ...(settings?.keys?.wolfram ? { canWolfram: true } : {}),
       }) +
       (memory ? `\n\n${memory}` : "") +
+      (skills ? `\n\n${skills}` : "") +
       (note ? `\n\n${note}` : "");
     const history = trimChatHistory(
       [...msg.history, { role: "user", content: msg.userText }],

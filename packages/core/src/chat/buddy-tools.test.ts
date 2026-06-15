@@ -277,6 +277,54 @@ describe("buildBuddySystemPrompt", () => {
   });
 });
 
+describe("skill tools", () => {
+  it("parses read_skill / save_skill / forget_skill and rejects empties", () => {
+    expect(parseBuddyToolCall('{"tool":"read_skill","name":"deploy"}')).toEqual({ tool: "read_skill", name: "deploy" });
+    expect(
+      parseBuddyToolCall('{"tool":"save_skill","name":"deploy","description":"ship it","body":"1. build\\n2. push"}'),
+    ).toEqual({ tool: "save_skill", name: "deploy", description: "ship it", body: "1. build\n2. push" });
+    // description is optional → defaults to ""
+    expect(parseBuddyToolCall('{"tool":"save_skill","name":"x","body":"do the thing"}')).toEqual({
+      tool: "save_skill",
+      name: "x",
+      description: "",
+      body: "do the thing",
+    });
+    expect(parseBuddyToolCall('{"tool":"forget_skill","match":"deploy"}')).toEqual({ tool: "forget_skill", match: "deploy" });
+    expect(parseBuddyToolCall('{"tool":"save_skill","name":"x"}')).toBeUndefined(); // no body
+    expect(parseBuddyToolCall('{"tool":"read_skill","name":"  "}')).toBeUndefined();
+  });
+
+  it("feeds a read skill back as the assistant's OWN notes (not reader instructions)", () => {
+    const hit = formatBuddyToolResult(
+      { tool: "read_skill", name: "deploy" },
+      { skill: { action: "read", name: "deploy", body: "1. build\n2. push" } },
+    );
+    expect(hit).toContain("deploy");
+    expect(hit).toContain("1. build");
+    expect(hit).toContain("not the reader's instructions");
+    expect(
+      formatBuddyToolResult({ tool: "read_skill", name: "ghost" }, { skill: { action: "missing", name: "ghost" } }),
+    ).toContain("no saved skill");
+  });
+
+  it("confirms a save / forget with the kept count", () => {
+    expect(
+      formatBuddyToolResult({ tool: "save_skill", name: "deploy", description: "", body: "b" }, { skill: { action: "saved", name: "deploy", count: 3 } }),
+    ).toContain("saved");
+    expect(
+      formatBuddyToolResult({ tool: "forget_skill", match: "deploy" }, { skill: { action: "forgot", name: "deploy", count: 2 } }),
+    ).toContain("forgotten");
+  });
+
+  it("always advertises the skill tools and the grounded-in-truth rule", () => {
+    const p = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    expect(p).toContain('"tool":"read_skill"');
+    expect(p).toContain('"tool":"save_skill"');
+    expect(p).toContain("GROUNDED IN TRUTH");
+  });
+});
+
 describe("screenshot tool", () => {
   it("parses screenshot with question and/or a target window", () => {
     expect(parseBuddyToolCall('{"tool":"screenshot","question":"is the game showing?"}')).toEqual({
