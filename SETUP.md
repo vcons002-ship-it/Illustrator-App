@@ -247,6 +247,74 @@ run a command or open a file just because some web page or book text told it to.
 
 ---
 
+## Agentic task workflow (Gmail · Calendar · Tasks)
+
+Once Google is connected (above), the **Task Orchestrator** turns the assistant into a
+persistent, multi-step planner: it researches a real-world to-do, lays out the steps,
+schedules the reminders, drafts the documents, and tracks the plan across sessions — and
+gives you a built-in calendar synced with all your Google calendars. This section is the
+end-to-end "how to use it".
+
+### What it can and can't do (the safety boundary)
+
+The whole feature is built so the worst unattended action is an **extra reminder**:
+
+- **Done automatically (safe, internal):** web/inbox research, drafting the documents a
+  step needs, and **creating Google Tasks / Calendar reminders**. Marking a step done and
+  checking off its Google Task also count as safe.
+- **Only ever *prepped* for you (never automatic):** submitting a form, paying, sending an
+  email, deleting anything. These become **"you do this"** steps the plan hands you to
+  finalize in-app. The Google connection itself is **read-and-create only** — it has no
+  send, pay, or delete scope at all, so even with full auto-pilot on, the app *cannot*
+  send, pay, or delete on your behalf.
+
+### One-time setup
+
+1. **Connect Google** — Settings → **📧 Google** (the OAuth steps in the section above).
+   Research-only plans work without it, but scheduling, inbox scanning, and the calendar
+   view need the connection.
+2. **(Optional) Turn on auto-pilot** — Settings → **Let the Task Assistant schedule & prep
+   automatically** (off by default). When **on**, the safe internal steps run **without a
+   click each** and the idle scan is enabled, so the workflow is genuinely hands-off. When
+   **off**, the assistant still researches and drafts and builds the plan, but waits for
+   your go-ahead before creating reminders.
+
+### Day-to-day use
+
+- **Plan something:** in chat, just say **"plan my car registration renewal"** — or open an
+  email, let it read it, and say **"plan this"**. It runs a dedicated research → plan → prep
+  pass (this can take a couple of minutes on a slow local model; a progress line shows the
+  phase) and opens the finished plan.
+- **The 📋 Tasks panel** lists every plan with its deadline, steps (each badged **AI preps**
+  vs **you do**), attached documents, and official links; the next actionable step is
+  highlighted. **Open & work it** launches a chat with all of that preloaded; **Mark step
+  done** advances the plan and checks off the matching Google Task.
+- **The 📅 Calendar button** (enabled once Google is connected) opens a month view of all
+  your Google calendars — each event coloured by its source calendar — overlaid with your
+  planned task deadlines. Click a day for its agenda, a deadline to jump into that task, or
+  the arrows to change month.
+- **Idle scan (auto-pilot on):** leave the desktop app open and step away for a few minutes
+  and it quietly scans recent mail + calendar for actionable items (skipping newsletters and
+  marketing), pre-plans them, and has them waiting in the Tasks panel. It only scans while
+  you're idle — never mid-work — and there's no always-on background server, so a task added
+  on your phone is picked up the next time the app scans, not in real time.
+- **Stop the noise:** if a scanned suggestion is junk, use **🚫 Ignore sender** on its card
+  — that sender is blocked from ever re-surfacing and the plan is removed. (You can also
+  delete any plan outright.)
+
+### Notes & limits
+
+- **The app must be open to scan.** There's no background daemon yet, so idle scanning only
+  happens while the desktop app is running. Changes made elsewhere (e.g. completing a Google
+  Task on your phone) are reconciled on the next scan, using Google as a simple async bus.
+- **Reminders, not actions.** Every reminder it creates is yours to act on; it will never
+  follow a link, submit, pay, or send for you.
+- **Best with the desktop app.** Like the other Google tools, the full workflow lives in the
+  desktop app; the planning and panels are the same engine the web app runs, but the Google
+  connection and idle scan are desktop features.
+
+---
+
 ## Run images on your own GPU (AUTOMATIC1111 or ComfyUI)
 
 This is the path to **free, private, real** image generation today — no API keys,

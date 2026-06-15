@@ -128,6 +128,43 @@ companion), and **Technical** (research companion):
   the platform allows it (extension / desktop); your Google Custom Search key upgrades it
   to whole-web everywhere.
 
+### 📋 Task Orchestrator (agentic, multi-step planning)
+Connect Google (Gmail · Calendar · Tasks) and the assistant becomes a **persistent task
+planner** — it takes a real-world to-do, researches it, lays out the steps, schedules the
+reminders, and preps the documents, then tracks it across sessions and over time:
+- **Plan anything in plain language** — say *"plan my car registration renewal"* (or
+  *"plan this"* right after it reads an email) and it runs a dedicated planning pass:
+  researches the deadline, lead time, cost, official site, and the actual steps; writes an
+  ordered, multi-step plan; and opens it ready to work.
+- **It does the safe prep itself** — research, drafting the documents each step needs, and
+  creating **Google Tasks / Calendar reminders** are done for you. The riskier, irreversible
+  actions — submitting a form, paying, sending — are only **prepped** and handed to you to
+  finalize. **It never submits, pays, or sends on its own** (the Google connection is
+  read-and-create only, so the worst it can ever do unattended is add an extra reminder).
+- **Auto-pilot, if you want it** — a Settings opt-in (*Let the Task Assistant schedule &
+  prep automatically*, **off by default**) lets those safe steps run **without a click each**,
+  so the scheduling is actually hands-off. With it off, planning still produces the plan and
+  drafts and waits for your go-ahead.
+- **Finds tasks before you ask** — while the app is open and you've stepped away, it
+  periodically scans recent mail + calendar for **actionable items** (ignoring newsletters
+  and marketing) and quietly plans them, so they're waiting for you. It only scans when
+  idle, never mid-work, and there's no always-on background server.
+- **Won't nag you twice** — dismiss a junk suggestion with **"ignore this sender"** (or item)
+  and it's blocked from ever re-surfacing; ads and bloat don't come back.
+- **Open a task = a preloaded chat** — clicking a plan opens a chat session with everything
+  already loaded: the summary, the next ready step, its prepped docs and official links, and
+  the research. Mark a step done and the plan advances — and the matching Google Task is
+  checked off too (a phone-side completion syncs back on the next scan, using Google as a
+  simple remote bus).
+- **📅 Calendar view** — a built-in month calendar synced with **all** your Google
+  calendars (each event coloured by its source calendar) and overlaid with your **planned
+  task deadlines**, so your real schedule and the assistant's plan live in one view. Click a
+  day for its full agenda; click a deadline to jump straight into that task.
+
+The Task Orchestrator needs a Google connection (see **[SETUP.md → Agentic task
+workflow](./SETUP.md#agentic-task-workflow-gmail--calendar--tasks)**). Research-only plans
+work without it; scheduling and inbox scanning light up once you connect.
+
 ### 🛠 Hands-on tools (desktop, opt-in & always approved)
 On the desktop app the assistant can reach your machine to actually *do* things — every
 step is shown and waits for your click, and the riskier tools are off until you turn them
@@ -306,6 +343,14 @@ Open **Chat** while reading to discuss the book with an AI that actually knows i
 - **Hosted option** — an optional managed backend so you don't need your own keys/GPU.
 
 **Done recently**
+- **Task Orchestrator** — connect Google and the assistant plans real-world tasks end to
+  end: it researches the deadline/steps/cost/official site, writes an ordered multi-step
+  plan, auto-creates Google Tasks/Calendar reminders and prepped documents (safe internal
+  actions only — it never submits, pays, or sends), and tracks each plan across sessions.
+  An opt-in auto-pilot runs the safe steps without a click each; an idle inbox/calendar scan
+  surfaces and pre-plans actionable items (with a persistent "ignore this sender" so junk
+  never returns); opening a task gives you a preloaded chat with the ready step; and a
+  built-in **Calendar** view shows all your Google calendars plus your planned deadlines.
 - **Hands-on desktop tools** — the assistant can (with per-step approval) find files on your
   computer, run commands in a `VisualReader` workspace to build/test code and fix it
   iteratively from the output, and take screenshots that a **cloud or local vision model**
