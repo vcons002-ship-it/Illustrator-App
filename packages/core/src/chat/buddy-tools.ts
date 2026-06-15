@@ -84,7 +84,10 @@ export type BuddyToolCall =
   | { tool: "create_event"; summary: string; start: string; end: string; description?: string; location?: string }
   /** Google Tasks (read + create). */
   | { tool: "list_tasks"; max?: number }
-  | { tool: "create_task"; title: string; notes?: string; due?: string };
+  | { tool: "create_task"; title: string; notes?: string; due?: string }
+  /** Plan a multi-step real-world task from a natural-language request (the host
+   * researches it, builds a step plan, schedules reminders, and opens it). */
+  | { tool: "plan_task"; request: string };
 
 /** Generous: a "style + random pick + open + prose" flow is three tools deep. */
 export const MAX_BUDDY_TOOL_ROUNDS = 5;
@@ -289,6 +292,12 @@ export function buildBuddySystemPrompt(opts: {
     wolframTool +
     googleBlock +
     githubBlock +
+    '- {"tool":"plan_task","request":"…"} — when the reader asks you to PLAN or organize a real-world MULTI-STEP task ' +
+    '(e.g. "plan my car registration renewal", "help me get ready for the trip", or "plan this" after you read an ' +
+    "email/event), use this. The app researches the deadline, lead time, steps, cost and official site, builds a dated " +
+    'step-by-step plan, schedules reminders, prepares documents, and opens it for the reader. Put the task in "request" ' +
+    "(include any specifics you learned). Use it for genuine multi-step tasks with a deadline — not for a one-off " +
+    "question you can just answer.\n" +
     "GROUNDED IN TRUTH: don't guess at facts, APIs, library names, syntax, or current details you're unsure of. " +
     "First check your SKILLS for a matching playbook (read_skill it); then, when knowledge may be stale, version-" +
     "specific, or you're not certain, search_web and read_url the real source (official docs, a GitHub file) BEFORE " +
@@ -435,6 +444,10 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
       ...(strArg(obj.notes, MAX_GOOGLE_TEXT_CHARS) ? { notes: strArg(obj.notes, MAX_GOOGLE_TEXT_CHARS)! } : {}),
       ...(strArg(obj.due, MAX_NAME_CHARS) ? { due: strArg(obj.due, MAX_NAME_CHARS)! } : {}),
     };
+  }
+  if (tool === "plan_task") {
+    const request = strArg(obj.request, MAX_PASTE_CHARS);
+    return request ? { tool, request } : undefined;
   }
   if (tool === "remove_library_book") {
     const id = strArg(obj.id, MAX_ID_CHARS);
