@@ -73,12 +73,42 @@ export function jsonToDataTable(value: JsonValue): DataTable | undefined {
   return undefined; // a bare primitive → the tree shows it plainly
 }
 
+/** How deep to flatten nested objects into dotted columns before giving up and
+ * stringifying (guards against pathological nesting). */
+export const MAX_FLATTEN_DEPTH = 4;
+
+/**
+ * Flatten a record's NESTED OBJECT fields into dotted keys (`address.city`,
+ * `address.zip`) so a semi-nested record — the shape of most real API exports —
+ * becomes proper columns instead of one stringified blob. Arrays are left as a single
+ * cell (variable length doesn't map to fixed columns), and anything past the depth cap
+ * is stringified too.
+ */
+export function flattenRecord(
+  obj: Record<string, JsonValue>,
+  prefix = "",
+  depth = 0,
+  out: Record<string, JsonValue> = {},
+): Record<string, JsonValue> {
+  for (const [k, v] of Object.entries(obj)) {
+    const key = prefix ? `${prefix}.${k}` : k;
+    if (depth < MAX_FLATTEN_DEPTH && v !== null && typeof v === "object" && !Array.isArray(v)) {
+      flattenRecord(v as Record<string, JsonValue>, key, depth + 1, out);
+    } else {
+      out[key] = v; // primitive, array, or (at max depth) nested object → cellText handles it
+    }
+  }
+  return out;
+}
+
 /** Build a table from an array of record objects: columns = the union of keys (in
- * first-seen order), nested/array cell values compacted to JSON text. */
+ * first-seen order), with nested object fields flattened to dotted columns and arrays
+ * compacted to JSON text. */
 export function dataTableFromRecords(records: Record<string, JsonValue>[]): DataTable | undefined {
+  const flat = records.map((rec) => flattenRecord(rec));
   const keys: string[] = [];
   const seen = new Set<string>();
-  for (const rec of records) {
+  for (const rec of flat) {
     for (const k of Object.keys(rec)) {
       if (!seen.has(k)) {
         seen.add(k);
@@ -87,7 +117,7 @@ export function dataTableFromRecords(records: Record<string, JsonValue>[]): Data
     }
   }
   if (keys.length === 0) return undefined;
-  const grid = [keys, ...records.map((rec) => keys.map((k) => (k in rec ? cellText(rec[k]!) : "")))];
+  const grid = [keys, ...flat.map((rec) => keys.map((k) => (k in rec ? cellText(rec[k]!) : "")))];
   return dataTableFromGrid(grid);
 }
 
