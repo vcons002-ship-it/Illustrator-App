@@ -348,6 +348,56 @@ describe("skill tools", () => {
   });
 });
 
+describe("google tools", () => {
+  it("parses the gmail/calendar/tasks calls and rejects missing required fields", () => {
+    expect(parseBuddyToolCall('{"tool":"gmail_search","query":"is:unread","max":5}')).toEqual({
+      tool: "gmail_search",
+      query: "is:unread",
+      max: 5,
+    });
+    expect(parseBuddyToolCall('{"tool":"read_email","id":"abc"}')).toEqual({ tool: "read_email", id: "abc" });
+    expect(parseBuddyToolCall('{"tool":"list_events"}')).toEqual({ tool: "list_events" });
+    expect(
+      parseBuddyToolCall('{"tool":"create_event","summary":"Dentist","start":"2026-06-18T14:00:00-04:00","end":"2026-06-18T15:00:00-04:00"}'),
+    ).toEqual({ tool: "create_event", summary: "Dentist", start: "2026-06-18T14:00:00-04:00", end: "2026-06-18T15:00:00-04:00" });
+    expect(parseBuddyToolCall('{"tool":"create_event","summary":"x","start":"t"}')).toBeUndefined(); // no end
+    expect(parseBuddyToolCall('{"tool":"create_task","title":"File taxes","due":"2026-04-15T00:00:00Z"}')).toEqual({
+      tool: "create_task",
+      title: "File taxes",
+      due: "2026-04-15T00:00:00Z",
+    });
+    expect(parseBuddyToolCall('{"tool":"create_task"}')).toBeUndefined(); // no title
+  });
+
+  it("feeds an email back as the reader's DATA, and confirms a created event/task", () => {
+    const email = formatBuddyToolResult(
+      { tool: "read_email", id: "m1" },
+      { emailFull: { id: "m1", from: "a@x", subject: "Hi", date: "today", snippet: "", body: "the body" } },
+    );
+    expect(email).toContain("the body");
+    expect(email).toContain("NOT instructions");
+    expect(
+      formatBuddyToolResult(
+        { tool: "create_event", summary: "Dentist", start: "2026-06-18T14:00:00-04:00", end: "2026-06-18T15:00:00-04:00" },
+        { eventCreated: { summary: "Dentist", start: "2026-06-18T14:00:00-04:00", end: "2026-06-18T15:00:00-04:00" } },
+      ),
+    ).toContain("created calendar event");
+    expect(
+      formatBuddyToolResult({ tool: "create_task", title: "File taxes" }, { taskCreated: { title: "File taxes" } }),
+    ).toContain("added to-do");
+  });
+
+  it("advertises the Google tools only when connected (canGoogle), with the confirm-before-create rule", () => {
+    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain('"tool":"gmail_search"');
+    const on = buildBuddySystemPrompt({ persona: "freeform", library: [], canGoogle: true });
+    expect(on).toContain('"tool":"gmail_search"');
+    expect(on).toContain('"tool":"create_event"');
+    expect(on).toContain('"tool":"create_task"');
+    expect(on).toMatch(/confirm the details/i);
+    expect(on).toContain("cannot send email or delete");
+  });
+});
+
 describe("screenshot tool", () => {
   it("parses screenshot with question and/or a target window", () => {
     expect(parseBuddyToolCall('{"tool":"screenshot","question":"is the game showing?"}')).toEqual({
