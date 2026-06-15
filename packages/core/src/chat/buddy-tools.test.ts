@@ -369,6 +369,28 @@ describe("google tools", () => {
     expect(parseBuddyToolCall('{"tool":"create_task"}')).toBeUndefined(); // no title
   });
 
+  it("parses a date-scoped list_events for 'this week / today' schedule questions", () => {
+    expect(
+      parseBuddyToolCall('{"tool":"list_events","timeMin":"2026-06-15T00:00:00-04:00","timeMax":"2026-06-22T00:00:00-04:00"}'),
+    ).toEqual({ tool: "list_events", timeMin: "2026-06-15T00:00:00-04:00", timeMax: "2026-06-22T00:00:00-04:00" });
+    // The window is echoed back in the tool result so the model frames its answer.
+    const out = formatBuddyToolResult(
+      { tool: "list_events", timeMin: "2026-06-15T00:00:00-04:00", timeMax: "2026-06-22T00:00:00-04:00" },
+      { events: [{ summary: "Standup", start: "2026-06-16T09:00:00-04:00", end: "2026-06-16T09:15:00-04:00" }] },
+    );
+    expect(out).toContain("Standup");
+    expect(out).toContain("2026-06-15T00:00:00-04:00");
+  });
+
+  it("injects the current date/time and advertises schedule/mail lookups when connected", () => {
+    const dated = buildBuddySystemPrompt({ persona: "freeform", library: [], now: "Sunday, June 15, 2026, 4:58 PM (UTC-04:00)" });
+    expect(dated).toContain("CURRENT DATE & TIME: Sunday, June 15, 2026");
+    const g = buildBuddySystemPrompt({ persona: "freeform", library: [], canGoogle: true });
+    expect(g).toContain("this week");
+    expect(g).toMatch(/when did I last pay/i);
+    expect(g).toContain("timeMin");
+  });
+
   it("parses plan_task (natural-language planning) and advertises it always", () => {
     expect(parseBuddyToolCall('{"tool":"plan_task","request":"plan my car registration renewal"}')).toEqual({
       tool: "plan_task",

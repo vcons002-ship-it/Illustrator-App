@@ -1221,7 +1221,8 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
         ? {
             gmailSearch: async (q: string, max?: number) => gmailSearch(transport, await tok(), q, max),
             readEmail: async (id: string) => gmailReadEmail(transport, await tok(), id),
-            listEvents: async (max?: number) => listEvents(transport, await tok(), max !== undefined ? { max } : {}),
+            listEvents: async (o: { max?: number; timeMin?: string; timeMax?: string }) =>
+              listEvents(transport, await tok(), o),
           }
         : {}),
       openLibraryBook: notUsed,
@@ -1400,6 +1401,27 @@ let buddyBookSearch: GutenbergSearch | undefined;
  * thread — which drives the normal open path (init/open/start), exactly as if
  * the reader had picked the book by hand.
  */
+/** The reader's current local date/time + UTC offset (e.g. "Sunday, June 15, 2026,
+ * 4:58 PM (UTC-04:00)") — fed to the buddy prompt so "today"/"this week"/"by when"
+ * and the ISO ranges it builds are anchored to their own clock. */
+function currentDateTimeLabel(): string {
+  const now = new Date();
+  const label = now.toLocaleString(undefined, {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const offMin = now.getTimezoneOffset(); // minutes BEHIND UTC (positive west of UTC)
+  const sign = offMin <= 0 ? "+" : "-";
+  const abs = Math.abs(offMin);
+  const hh = String(Math.floor(abs / 60)).padStart(2, "0");
+  const mm = String(abs % 60).padStart(2, "0");
+  return `${label} (UTC${sign}${hh}:${mm})`;
+}
+
 async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>): Promise<void> {
   const ac = new AbortController();
   chatAborts.set(msg.requestId, ac);
@@ -1426,7 +1448,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           return {
             gmailSearch: async (q: string, max?: number) => gmailSearch(transport, await tok(), q, max),
             readEmail: async (id: string) => gmailReadEmail(transport, await tok(), id),
-            listEvents: async (max?: number) => listEvents(transport, await tok(), max !== undefined ? { max } : {}),
+            listEvents: async (o: { max?: number; timeMin?: string; timeMax?: string }) =>
+              listEvents(transport, await tok(), o),
             createEvent: async (ev) => createEvent(transport, await tok(), ev),
             listTasks: async (max?: number) => listTasks(transport, await tok(), max),
             createTask: async (t) => createTask(transport, await tok(), t),
@@ -1609,6 +1632,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       buildBuddySystemPrompt({
         persona: msg.persona,
         library: msg.library,
+        // Anchor "today"/"this week"/"by when" answers + ISO date math to the reader's
+        // own clock (the worker runs in their browser, so this is their local time/zone).
+        now: currentDateTimeLabel(),
         ...(activePlan ? { activeTask: tasksIndexBlock(activePlan) } : {}),
         ...(settings?.allowMature ? { allowMature: true } : {}),
         // Desktop only: the find_files tool needs the native filesystem bridge,

@@ -61,7 +61,7 @@ export interface BuddyDeps {
   /** Google (Gmail read; Calendar + Tasks read/create) — present when connected. */
   gmailSearch?: (query: string, max?: number) => Promise<EmailSummary[]>;
   readEmail?: (id: string) => Promise<EmailFull>;
-  listEvents?: (max?: number) => Promise<CalendarEvent[]>;
+  listEvents?: (opts: { max?: number; timeMin?: string; timeMax?: string }) => Promise<CalendarEvent[]>;
   createEvent?: (ev: { summary: string; start: string; end: string; description?: string; location?: string }) => Promise<CalendarEvent>;
   listTasks?: (max?: number) => Promise<TaskItem[]>;
   createTask?: (t: { title: string; notes?: string; due?: string }) => Promise<TaskItem>;
@@ -228,7 +228,13 @@ export async function runBuddyTool(
         return { emailFull: await deps.readEmail(call.id) };
       case "list_events":
         if (!deps.listEvents) return { error: "Google isn't connected (connect it in Settings)." };
-        return { events: await deps.listEvents(call.max) };
+        return {
+          events: await deps.listEvents({
+            ...(call.max !== undefined ? { max: call.max } : {}),
+            ...(call.timeMin ? { timeMin: call.timeMin } : {}),
+            ...(call.timeMax ? { timeMax: call.timeMax } : {}),
+          }),
+        };
       case "create_event":
         if (!deps.createEvent) return { error: "Google isn't connected (connect it in Settings)." };
         return {
