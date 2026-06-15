@@ -32,9 +32,9 @@ export type PlanStatus = "active" | "completed" | "archived";
 
 export type TaskSource =
   | { kind: "typed"; text: string }
-  | { kind: "email"; emailId: string; subject?: string }
+  | { kind: "email"; emailId: string; subject?: string; from?: string }
   | { kind: "calendar"; eventId: string; summary?: string }
-  | { kind: "scan"; emailId?: string; eventId?: string };
+  | { kind: "scan"; emailId?: string; eventId?: string; from?: string };
 
 export interface TaskLink {
   label: string;
@@ -335,6 +335,11 @@ export function sourceId(source: TaskSource): string | undefined {
   if (source.kind === "calendar") return source.eventId;
   if (source.kind === "scan") return source.emailId ?? source.eventId;
   return undefined;
+}
+
+/** The source's from-address (email/scan), for "ignore this sender" on a plan. */
+export function sourceFrom(source: TaskSource): string | undefined {
+  return source.kind === "email" || source.kind === "scan" ? source.from : undefined;
 }
 
 /** True when a scan candidate matches a persistent ignore rule (its item id, its
