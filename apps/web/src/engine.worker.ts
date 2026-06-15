@@ -1023,12 +1023,14 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
     });
     const sec = (key: string) => sections.find((s) => s.key === key)?.text ?? "";
     const memory = memoryPromptBlock(await loadMemory(memoryStore()));
+    const skills = skillsIndexBlock(await loadSkills(memoryStore()));
     const system =
       sections
         .map((s) => s.text)
         .filter(Boolean)
         .join("\n\n") +
       (memory ? `\n\n${memory}` : "") +
+      (skills ? `\n\n${skills}` : "") +
       (note ? `\n\n${note}` : "");
     const history = trimChatHistory(
       [...msg.history, { role: "user", content: msg.userText }],
@@ -1071,6 +1073,9 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
         readUrl: readUrlText(ac.signal),
         remember: async (n) => (await rememberNote(memoryStore(), n)).length,
         forget: async (m) => (await forgetNote(memoryStore(), m)).length,
+        readSkill: async (name) => readSkillBody(await loadSkills(memoryStore()), name),
+        saveSkill: async (name, description, body) => (await saveSkill(memoryStore(), { name, description, body })).length,
+        forgetSkill: async (m) => (await forgetSkill(memoryStore(), m)).length,
         ...(book.data ? { analyzeData: (spec) => analyzeData(book.data!, spec) } : {}),
         ...(currentBible
           ? {

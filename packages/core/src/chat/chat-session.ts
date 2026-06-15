@@ -30,6 +30,10 @@ export interface ChatToolDeps {
   /** Long-term reader memory (see reader-memory.ts); returns the kept count. */
   remember?: (note: string) => Promise<number>;
   forget?: (match: string) => Promise<number>;
+  /** Skills — durable playbooks (skills.ts). readSkill returns the body ("" if none). */
+  readSkill?: (name: string) => Promise<string>;
+  saveSkill?: (name: string, description: string, body: string) => Promise<number>;
+  forgetSkill?: (match: string) => Promise<number>;
   /** Grounded analysis over the uploaded spreadsheet/CSV (sync — pure over the table). */
   analyzeData?: (spec: AnalyzeSpec) => AnalyzeResult;
 }
@@ -170,6 +174,19 @@ export async function runChatTool(
     if (call.tool === "forget") {
       if (!tools.forget) return { error: "memory isn't available right now" };
       return { memory: { action: "forgot", note: call.match, count: await tools.forget(call.match) } };
+    }
+    if (call.tool === "read_skill") {
+      if (!tools.readSkill) return { error: "skills aren't available right now" };
+      const body = await tools.readSkill(call.name);
+      return { skill: body ? { action: "read", name: call.name, body } : { action: "missing", name: call.name } };
+    }
+    if (call.tool === "save_skill") {
+      if (!tools.saveSkill) return { error: "skills aren't available right now" };
+      return { skill: { action: "saved", name: call.name, count: await tools.saveSkill(call.name, call.description, call.body) } };
+    }
+    if (call.tool === "forget_skill") {
+      if (!tools.forgetSkill) return { error: "skills aren't available right now" };
+      return { skill: { action: "forgot", name: call.match, count: await tools.forgetSkill(call.match) } };
     }
     if (call.tool === "read_url") {
       if (!tools.readUrl) return { error: "reading web pages isn't available right now" };
