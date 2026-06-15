@@ -9,6 +9,7 @@ import {
 } from "@visual-reader/core";
 import { ContextUsageDonut } from "./ContextUsageDonut.js";
 import { DataChart } from "./DataChart.js";
+import { DataTablePreview } from "./DataTablePreview.js";
 
 /**
  * The reading-companion chat panel. Pure presentation: messages, a streaming
@@ -677,32 +678,9 @@ function AnalysisBlock({
   analysis: { table: DataTable; summary?: string; chart?: AnalyzeChart };
 }) {
   const { table, chart } = analysis;
-  const rows = table.rows.slice(0, 50);
   return (
-    <div style={{ marginTop: 6, overflowX: "auto" }}>
-      <table style={analysisTableStyle}>
-        <thead>
-          <tr>
-            {table.columns.map((c, i) => (
-              <th key={i} style={analysisThStyle}>{c.name}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, ri) => (
-            <tr key={ri}>
-              {r.map((v, ci) => (
-                <td key={ci} style={{ ...analysisTdStyle, textAlign: table.columns[ci]?.type === "number" ? "right" : "left" }}>
-                  {v === null ? "" : typeof v === "number" ? v.toLocaleString("en-US", { maximumFractionDigits: 4 }) : v}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {table.rows.length > rows.length ? (
-        <div style={{ fontSize: 10, opacity: 0.5 }}>…{table.rows.length - rows.length} more rows</div>
-      ) : null}
+    <div style={{ marginTop: 6 }}>
+      <DataTablePreview table={table} maxRows={50} maxHeight={320} />
       {chart ? <AnalysisChart table={table} chart={chart} /> : null}
     </div>
   );
@@ -737,20 +715,6 @@ function AnalysisChart({ table, chart }: { table: DataTable; chart: AnalyzeChart
     </div>
   );
 }
-
-const analysisTableStyle = { borderCollapse: "collapse", fontSize: 11, width: "100%" } as const;
-const analysisThStyle = {
-  textAlign: "left",
-  padding: "2px 6px",
-  borderBottom: "1px solid rgba(255,255,255,0.25)",
-  opacity: 0.8,
-  whiteSpace: "nowrap",
-} as const;
-const analysisTdStyle = {
-  padding: "2px 6px",
-  borderBottom: "1px solid rgba(255,255,255,0.08)",
-  whiteSpace: "nowrap",
-} as const;
 
 /** Inline prose with clickable bare URLs. */
 function Linkified({ text }: { text: string }) {
