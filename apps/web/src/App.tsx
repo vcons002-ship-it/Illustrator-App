@@ -119,8 +119,22 @@ import {
   searchLocalFiles,
 } from "./runtime.js";
 
-/** Chat-history key for the landing-page buddy — reserved, never a book id. */
+/** Chat-history key for the landing-page buddy's FIRST session — reserved, never a
+ * book id. Additional sessions use ids like "__buddy__-<n>". */
 const BUDDY_CHAT_ID = "__buddy__";
+
+/** One landing-page chat session: its own history (keyed by id) + working folder. */
+interface BuddySession {
+  id: string;
+  workingDir: string;
+}
+
+/** Last path segment, for a session's display label (so a folder-bound session reads
+ * as its folder name). */
+function lastPathSegment(p: string): string {
+  const parts = p.replace(/[\\/]+$/, "").split(/[\\/]/);
+  return parts[parts.length - 1] || p;
+}
 
 /** Message shown when a figure search returns nothing (or errors) — so an empty
  * result is visible instead of looking like the search silently did nothing. */
@@ -273,15 +287,26 @@ export function App() {
   const [buddyThinking, setBuddyThinking] = useState("");
   const [buddyActivity, setBuddyActivity] = useState("");
   const [buddyPersona, setBuddyPersona] = useState<BuddyPersona>("freeform");
-  // The desktop assistant's chosen working folder ("" = the default VisualReader
-  // workspace). Persisted so it survives reloads; routes run_command + find_files.
-  const [buddyWorkingDir, setBuddyWorkingDir] = useState("");
+  // Multiple landing-page chat SESSIONS — each with its own history (keyed by id) and
+  // (desktop) working folder, while skills/memory stay global. Persisted so they
+  // survive reloads.
+  const [buddySessions, setBuddySessions] = useState<BuddySession[]>([{ id: BUDDY_CHAT_ID, workingDir: "" }]);
+  const [activeBuddyId, setActiveBuddyId] = useState(BUDDY_CHAT_ID);
+  const buddyWorkingDir = buddySessions.find((s) => s.id === activeBuddyId)?.workingDir ?? "";
+  const persistSessions = useCallback(
+    (sessions: BuddySession[]) => void libraryStore.putMemo?.("buddy-sessions", JSON.stringify(sessions)).catch(() => {}),
+    [libraryStore],
+  );
+  // The active session's working folder ("" = the default VisualReader workspace).
   const setWorkingDir = useCallback(
     (dir: string) => {
-      setBuddyWorkingDir(dir);
-      void libraryStore.putMemo?.("buddy-working-dir", dir).catch(() => {});
+      setBuddySessions((prev) => {
+        const next = prev.map((s) => (s.id === activeBuddyId ? { ...s, workingDir: dir } : s));
+        persistSessions(next);
+        return next;
+      });
     },
-    [libraryStore],
+    [activeBuddyId, persistSessions],
   );
   const [buddyPendingTool, setBuddyPendingTool] = useState<BuddyToolCall | undefined>();
   const [buddyUsage, setBuddyUsage] = useState<ContextUsage | undefined>();
@@ -1184,29 +1209,49 @@ export function App() {
   // --- Landing-page buddy ------------------------------------------------------
   // Same persistence scheme as the per-book chat, under a reserved key that can
   // never collide with a book id (epub hashes / "text-…").
+  const buddyReady = useRef(false);
   useEffect(() => {
     let cancelled = false;
-    void libraryStore.getChatHistory?.(BUDDY_CHAT_ID).then((stored) => {
-      if (!cancelled && stored) setBuddyMessages(stored);
-    });
-    void libraryStore.getMemo?.("buddy-working-dir").then((d) => {
-      if (!cancelled && d) setBuddyWorkingDir(d);
-    });
+    void (async () => {
+      const rawSessions = await libraryStore.getMemo?.("buddy-sessions").catch(() => undefined);
+      let sessions: BuddySession[] = [];
+      try {
+        const parsed = rawSessions ? (JSON.parse(rawSessions) as unknown) : null;
+        if (Array.isArray(parsed)) {
+          sessions = parsed
+            .filter((s): s is BuddySession => !!s && typeof (s as BuddySession).id === "string")
+            .map((s) => ({ id: s.id, workingDir: typeof s.workingDir === "string" ? s.workingDir : "" }));
+        }
+      } catch {
+        /* corrupt — start fresh below */
+      }
+      if (sessions.length === 0) {
+        // First run (or pre-sessions install): migrate the legacy single working-dir.
+        const legacyDir = (await libraryStore.getMemo?.("buddy-working-dir").catch(() => undefined)) || "";
+        sessions = [{ id: BUDDY_CHAT_ID, workingDir: legacyDir }];
+      }
+      const savedActive = (await libraryStore.getMemo?.("buddy-active-session").catch(() => undefined)) || BUDDY_CHAT_ID;
+      const active = sessions.some((s) => s.id === savedActive) ? savedActive : sessions[0]!.id;
+      const hist = await libraryStore.getChatHistory?.(active).catch(() => undefined);
+      if (cancelled) return;
+      setBuddySessions(sessions);
+      setActiveBuddyId(active);
+      if (hist) setBuddyMessages(hist);
+      buddyReady.current = true;
+    })();
     return () => {
       cancelled = true;
     };
   }, [libraryStore]);
-  const buddyHadMessages = useRef(false);
+  // Persist the ACTIVE session's history (debounced). Deletion is explicit (clear /
+  // delete session), so an empty conversation just stores nothing — never wiping a
+  // session before its history has loaded.
   useEffect(() => {
-    if (buddyMessages.length === 0) {
-      // Same delete-vs-initial-empty distinction as the book chat's persist.
-      if (buddyHadMessages.current) void libraryStore.deleteChatHistory?.(BUDDY_CHAT_ID);
-      return;
-    }
-    buddyHadMessages.current = true;
-    const t = setTimeout(() => void libraryStore.putChatHistory?.(BUDDY_CHAT_ID, buddyMessages), 500);
+    if (!buddyReady.current || buddyMessages.length === 0) return;
+    const id = activeBuddyId;
+    const t = setTimeout(() => void libraryStore.putChatHistory?.(id, buddyMessages), 500);
     return () => clearTimeout(t);
-  }, [buddyMessages, libraryStore]);
+  }, [buddyMessages, activeBuddyId, libraryStore]);
 
   const appendBuddy = (msg: Omit<StoredChatMessage, "at">) =>
     setBuddyMessages((prev) => [...prev, { ...msg, at: Date.now() }]);
@@ -1668,8 +1713,66 @@ export function App() {
     setBuddyActivity("");
     setBuddyMessages([]);
     setBuddyPendingTool(undefined);
-    void libraryStore.deleteChatHistory?.(BUDDY_CHAT_ID);
-  }, [libraryStore, buddyCancel]);
+    void libraryStore.deleteChatHistory?.(activeBuddyId);
+  }, [libraryStore, buddyCancel, activeBuddyId]);
+
+  // Reset the live conversation view when moving between sessions.
+  const resetBuddyView = useCallback(() => {
+    buddyTurnSeq.current++;
+    buddyCancel();
+    setBuddyBusy(false);
+    setBuddyStreaming("");
+    setBuddyThinking("");
+    setBuddyActivity("");
+    setBuddyPendingTool(undefined);
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+  }, [buddyCancel]);
+  const onSwitchBuddySession = useCallback(
+    (id: string) => {
+      if (id === activeBuddyId) return;
+      resetBuddyView();
+      void libraryStore.putMemo?.("buddy-active-session", id).catch(() => {});
+      void libraryStore.getChatHistory?.(id).then((hist) => {
+        setActiveBuddyId(id);
+        setBuddyMessages(hist ?? []);
+      });
+    },
+    [activeBuddyId, libraryStore, resetBuddyView],
+  );
+  const onNewBuddySession = useCallback(() => {
+    const id = `${BUDDY_CHAT_ID}-${Date.now().toString(36)}`;
+    resetBuddyView();
+    setBuddySessions((prev) => {
+      const next = [...prev, { id, workingDir: "" }];
+      persistSessions(next);
+      return next;
+    });
+    setActiveBuddyId(id);
+    setBuddyMessages([]);
+    void libraryStore.putMemo?.("buddy-active-session", id).catch(() => {});
+  }, [libraryStore, persistSessions, resetBuddyView]);
+  const onDeleteBuddySession = useCallback(
+    (id: string) => {
+      setBuddySessions((prev) => {
+        if (prev.length <= 1) return prev; // keep at least one session
+        const next = prev.filter((s) => s.id !== id);
+        persistSessions(next);
+        void libraryStore.deleteChatHistory?.(id).catch(() => {});
+        if (id === activeBuddyId) {
+          const fallback = next[0]!.id;
+          resetBuddyView();
+          void libraryStore.putMemo?.("buddy-active-session", fallback).catch(() => {});
+          void libraryStore.getChatHistory?.(fallback).then((hist) => {
+            setActiveBuddyId(fallback);
+            setBuddyMessages(hist ?? []);
+          });
+        }
+        return next;
+      });
+    },
+    [activeBuddyId, libraryStore, persistSessions, resetBuddyView],
+  );
   // Stable per-index delete handlers (memoised bubbles take the SAME function).
   const onDeleteBuddyMessage = useCallback((index: number) => {
     setBuddyMessages((prev) => prev.filter((_, i) => i !== index));
@@ -2416,6 +2519,14 @@ export function App() {
             {...(buddyPendingTool ? { pendingTool: buddyPendingTool } : {})}
             persona={buddyPersona}
             onPersonaChange={setBuddyPersona}
+            sessions={buddySessions.map((s, i) => ({
+              id: s.id,
+              label: s.workingDir ? lastPathSegment(s.workingDir) : `Chat ${i + 1}`,
+            }))}
+            activeSessionId={activeBuddyId}
+            onSwitchSession={onSwitchBuddySession}
+            onNewSession={onNewBuddySession}
+            onDeleteSession={onDeleteBuddySession}
             onSend={onBuddySendText}
             onApprovePendingTool={onApproveBuddyPendingTool}
             onApprovePendingToolAlways={onAllowBuddyAlways}

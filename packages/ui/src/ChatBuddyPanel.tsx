@@ -38,6 +38,12 @@ export interface ChatBuddyPanelProps {
   pendingTool?: BuddyToolCall;
   persona: BuddyPersona;
   onPersonaChange: (p: BuddyPersona) => void;
+  /** Multiple chat sessions (each its own history + folder); switch/create/delete. */
+  sessions?: { id: string; label: string }[];
+  activeSessionId?: string;
+  onSwitchSession?: (id: string) => void;
+  onNewSession?: () => void;
+  onDeleteSession?: (id: string) => void;
   onSend: (text: string) => void;
   onApprovePendingTool: () => void;
   /** Grant filesystem access for the session (find_files approval only). */
@@ -102,7 +108,38 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   return (
     <div style={panelStyle}>
       <div style={headerStyle}>
-        <strong style={{ fontSize: 14 }}>Chat</strong>
+        {props.sessions && props.onSwitchSession ? (
+          <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <select
+              value={props.activeSessionId}
+              onChange={(e) => props.onSwitchSession!(e.target.value)}
+              style={sessionSelectStyle}
+              title="Switch chat session (each keeps its own history + working folder)"
+            >
+              {props.sessions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+            {props.onNewSession && (
+              <button style={smallButtonStyle} title="New chat session" onClick={props.onNewSession}>
+                ＋
+              </button>
+            )}
+            {props.onDeleteSession && props.sessions.length > 1 && props.activeSessionId && (
+              <button
+                style={smallButtonStyle}
+                title="Delete this session (its history is removed)"
+                onClick={() => props.onDeleteSession!(props.activeSessionId!)}
+              >
+                🗑
+              </button>
+            )}
+          </span>
+        ) : (
+          <strong style={{ fontSize: 14 }}>Chat</strong>
+        )}
         <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
           <span style={personaGroupStyle}>
             {personaButton("freeform", "Freeform", "General assistant — chat about anything; runs the app when asked")}
@@ -391,6 +428,18 @@ const smallButtonStyle = {
   borderRadius: 6,
   padding: "6px 10px",
   fontSize: 12,
+  cursor: "pointer",
+} as const;
+
+const sessionSelectStyle = {
+  background: "rgba(255,255,255,0.08)",
+  color: "inherit",
+  border: "1px solid rgba(255,255,255,0.2)",
+  borderRadius: 6,
+  padding: "5px 8px",
+  fontSize: 13,
+  fontWeight: 600,
+  maxWidth: 160,
   cursor: "pointer",
 } as const;
 
