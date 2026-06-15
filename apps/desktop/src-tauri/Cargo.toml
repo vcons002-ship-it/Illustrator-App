@@ -27,3 +27,5 @@ xcap = "0.0.14"
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Native folder picker for the assistant's working-folder control (Win/macOS/Linux).
 rfd = "0.15"
+# URL-encode the OAuth consent URL / decode the redirect query (Google loopback).
+percent-encoding = "2"

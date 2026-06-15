@@ -1,4 +1,5 @@
 import type { Transport } from "./transport/transport.js";
+import type { VisualReaderStore } from "../storage/store.js";
 
 /**
  * Google integration — Gmail (read), Calendar (read + create), Tasks (read + create).
@@ -122,6 +123,54 @@ export function refreshGoogleToken(opts: {
     client_id: opts.clientId,
     client_secret: opts.clientSecret,
   });
+}
+
+// ------------------------------------------------------------- token storage
+
+/** Store key for the persisted Google tokens (refresh token survives reloads). */
+export const GOOGLE_TOKENS_KEY = "google-tokens";
+
+export async function loadGoogleTokens(store: VisualReaderStore): Promise<GoogleTokens | undefined> {
+  try {
+    const raw = await store.getMemo?.(GOOGLE_TOKENS_KEY);
+    if (!raw) return undefined;
+    const t = JSON.parse(raw) as GoogleTokens;
+    return typeof t?.accessToken === "string" ? t : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function saveGoogleTokens(store: VisualReaderStore, tokens: GoogleTokens): Promise<void> {
+  await store.putMemo?.(GOOGLE_TOKENS_KEY, JSON.stringify(tokens));
+}
+
+export async function clearGoogleTokens(store: VisualReaderStore): Promise<void> {
+  await store.deleteMemo?.(GOOGLE_TOKENS_KEY);
+}
+
+/**
+ * A currently-valid access token: returns the stored one, or refreshes (and persists
+ * the new one, keeping the refresh token) when it's within a minute of expiry. Throws
+ * when Google isn't connected. Used by every API call.
+ */
+export async function getFreshAccessToken(
+  store: VisualReaderStore,
+  opts: { clientId: string; clientSecret: string; transport: Transport },
+): Promise<string> {
+  const tokens = await loadGoogleTokens(store);
+  if (!tokens) throw new Error("Google isn't connected — connect it in Settings.");
+  if (tokens.expiresAt > Date.now() + 60_000) return tokens.accessToken;
+  if (!tokens.refreshToken) throw new Error("Google session expired — reconnect it in Settings.");
+  const refreshed = await refreshGoogleToken({
+    transport: opts.transport,
+    clientId: opts.clientId,
+    clientSecret: opts.clientSecret,
+    refreshToken: tokens.refreshToken,
+  });
+  const merged: GoogleTokens = { ...refreshed, refreshToken: refreshed.refreshToken ?? tokens.refreshToken };
+  await saveGoogleTokens(store, merged);
+  return merged.accessToken;
 }
 
 // -------------------------------------------------------------------- API calls
@@ -248,6 +297,12 @@ export async function gmailSearch(
 /** Full text of one email (for pulling into the chat to summarize/re-work). */
 export async function gmailReadEmail(transport: Transport, token: string, id: string): Promise<EmailFull> {
   return parseGmailMessage(await apiGet<GmailMessage>(transport, token, `${GMAIL}/messages/${id}?format=full`));
+}
+
+/** The connected account's email address (also verifies the token works). */
+export async function getGoogleEmail(transport: Transport, token: string): Promise<string> {
+  const p = await apiGet<{ emailAddress?: string }>(transport, token, `${GMAIL}/profile`);
+  return p.emailAddress ?? "";
 }
 
 // ------------------------------------------------------------------- Calendar

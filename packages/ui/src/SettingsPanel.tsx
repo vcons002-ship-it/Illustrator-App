@@ -242,6 +242,13 @@ export interface SettingsPanelProps {
   loraFamilies?: Record<string, string>;
   /** Download the matching LoRA for a style; optional URL overrides the catalog. */
   onDownloadStyleLora?: (styleId: string, url?: string) => void;
+  /** Whether Google (Gmail/Calendar/Tasks) is connected, and as which account. */
+  googleConnected?: boolean;
+  googleEmail?: string;
+  /** Run the Google OAuth consent flow (desktop); returns the outcome. */
+  onConnectGoogle?: () => Promise<{ ok: boolean; email?: string; error?: string }>;
+  /** Forget the stored Google tokens. */
+  onDisconnectGoogle?: () => void;
   /** Connect to a self-hosted engine and load its model list (browser path). */
   onConnectLocalServer?: (backend: LocalBackendId, url: string) => void;
   /** True while a connection attempt is in flight. */
@@ -278,6 +285,10 @@ export function SettingsPanel({
   connectingLocalText = false,
   onPullTextModel,
   pullProgress = {},
+  googleConnected,
+  googleEmail,
+  onConnectGoogle,
+  onDisconnectGoogle,
 }: SettingsPanelProps) {
   const [open, setOpen] = useState(false);
   // Settings filter: typing hides non-matching groups and force-opens matches.
@@ -725,7 +736,7 @@ export function SettingsPanel({
           <Group
             q={query}
             title="💬 Chat (buddy & reading companion)"
-            keywords="chat buddy companion local model ollama webllm chat provider chat image override private vision describe image screenshot run commands shell agentic assistant workspace test code find files allow wolfram alpha math knowledge appid github git gh token clone commit push pull request pr issue repository repo"
+            keywords="chat buddy companion local model ollama webllm chat provider chat image override private vision describe image screenshot run commands shell agentic assistant workspace test code find files allow wolfram alpha math knowledge appid github git gh token clone commit push pull request pr issue repository repo google gmail email calendar tasks schedule to-do todo oauth connect"
           >
             <p style={{ opacity: 0.6, fontSize: 11, margin: "4px 0 8px" }}>
               The chat panel can run on a different model than the book analysis. Defaults to
@@ -863,6 +874,16 @@ export function SettingsPanel({
                     </span>
                   </span>
                 </label>
+                {onConnectGoogle && (
+                  <GoogleConnectBlock
+                    value={value}
+                    setKey={setKey}
+                    connected={googleConnected ?? false}
+                    {...(googleEmail ? { email: googleEmail } : {})}
+                    onConnect={onConnectGoogle}
+                    {...(onDisconnectGoogle ? { onDisconnect: onDisconnectGoogle } : {})}
+                  />
+                )}
               </>
             )}
           </Group>
@@ -1067,6 +1088,88 @@ export function SettingsPanel({
           </p>
         </div>
       )}
+    </div>
+  );
+}
+
+function GoogleConnectBlock({
+  value,
+  setKey,
+  connected,
+  email,
+  onConnect,
+  onDisconnect,
+}: {
+  value: ReaderSettings;
+  setKey: (id: string, key: string) => void;
+  connected: boolean;
+  email?: string;
+  onConnect: () => Promise<{ ok: boolean; email?: string; error?: string }>;
+  onDisconnect?: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const connect = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const r = await onConnect();
+      if (!r.ok) setError(r.error ?? "Couldn't connect.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const ready = !!value.keys.googleClientId && !!value.keys.googleClientSecret;
+  const btn = {
+    background: "rgba(122,162,255,0.22)",
+    color: "inherit",
+    border: "1px solid rgba(122,162,255,0.55)",
+    borderRadius: 6,
+    padding: "5px 12px",
+    fontSize: 12,
+    cursor: "pointer",
+  } as const;
+  return (
+    <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+      <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 4 }}>📧 Google (Gmail · Calendar · Tasks)</div>
+      <p style={{ opacity: 0.55, fontSize: 11, margin: "0 0 6px" }}>
+        Let the assistant read your email, see &amp; create calendar events, and manage to-dos. One-time setup: create a
+        Google Cloud OAuth client (Desktop app), then paste its ID + secret here. Step-by-step in SETUP.md.
+      </p>
+      <label style={rowStyle}>
+        <span>Google client ID</span>
+        <input
+          type="password"
+          value={value.keys.googleClientId ?? ""}
+          placeholder="…apps.googleusercontent.com"
+          onChange={(e) => setKey("googleClientId", e.target.value.trim())}
+        />
+      </label>
+      <label style={rowStyle}>
+        <span>Google client secret</span>
+        <input
+          type="password"
+          value={value.keys.googleClientSecret ?? ""}
+          onChange={(e) => setKey("googleClientSecret", e.target.value.trim())}
+        />
+      </label>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+        {connected ? (
+          <>
+            <span style={{ fontSize: 12, color: "#7ddf9a" }}>✓ Connected{email ? ` as ${email}` : ""}</span>
+            {onDisconnect && (
+              <button type="button" onClick={onDisconnect} style={{ ...btn, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.2)" }}>
+                Disconnect
+              </button>
+            )}
+          </>
+        ) : (
+          <button type="button" disabled={busy || !ready} onClick={() => void connect()} style={btn}>
+            {busy ? "Connecting… (approve in your browser)" : "Connect Google"}
+          </button>
+        )}
+      </div>
+      {error && <div style={{ color: "#ff9b9b", fontSize: 11, marginTop: 4 }}>{error}</div>}
     </div>
   );
 }

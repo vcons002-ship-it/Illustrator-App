@@ -580,6 +580,114 @@ struct CommandResult {
 const COMMAND_TIMEOUT_SECS: u64 = 240;
 const COMMAND_OUTPUT_CAP: usize = 32 * 1024;
 
+/// Result of the Google OAuth loopback: the consent code + the exact redirect_uri it
+/// was issued for (the token exchange must echo the same redirect_uri).
+#[derive(serde::Serialize)]
+struct OauthResult {
+    code: String,
+    #[serde(rename = "redirectUri")]
+    redirect_uri: String,
+}
+
+/// Pull one query param out of a request path like `/?code=abc&state=xyz`.
+fn query_param(path: &str, key: &str) -> Option<String> {
+    let q = path.split_once('?')?.1;
+    for pair in q.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            if k == key {
+                return Some(
+                    percent_encoding::percent_decode_str(v)
+                        .decode_utf8_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+    }
+    None
+}
+
+fn open_browser(url: &str) {
+    #[cfg(target_os = "windows")]
+    let _ = std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+}
+
+/// Run the Google OAuth consent + loopback redirect: bind a localhost port, open the
+/// system browser to the consent screen, and capture the `code` from the redirect. The
+/// renderer supplies the OAuth params (client id, scope, PKCE challenge, state); this
+/// builds the URL because the redirect_uri (port) is only known after binding. Times out
+/// so a never-completed consent doesn't leak the listener thread.
+#[tauri::command]
+async fn oauth_loopback(
+    client_id: String,
+    scope: String,
+    code_challenge: String,
+    state: String,
+) -> Result<OauthResult, String> {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    tauri::async_runtime::spawn_blocking(move || {
+        let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        let redirect_uri = format!("http://127.0.0.1:{port}");
+        let enc = |s: &str| {
+            percent_encoding::utf8_percent_encode(s, percent_encoding::NON_ALPHANUMERIC).to_string()
+        };
+        let auth_url = format!(
+            "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code\
+             &scope={}&code_challenge={}&code_challenge_method=S256&access_type=offline&prompt=consent&state={}",
+            enc(&client_id), enc(&redirect_uri), enc(&scope), enc(&code_challenge), enc(&state),
+        );
+        open_browser(&auth_url);
+
+        listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+        let deadline = Instant::now() + Duration::from_secs(180);
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut buf = [0u8; 4096];
+                    let n = stream.read(&mut buf).map_err(|e| e.to_string())?;
+                    let req = String::from_utf8_lossy(&buf[..n]);
+                    let path = req
+                        .lines()
+                        .next()
+                        .and_then(|l| l.split_whitespace().nth(1))
+                        .unwrap_or("");
+                    let got_state = query_param(path, "state");
+                    let code = query_param(path, "code");
+                    let html = "<html><body style='font-family:system-ui;padding:3rem;text-align:center'>\
+                        <h2>Visual Reader is connected to Google.</h2><p>You can close this tab.</p></body></html>";
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        html.len(),
+                        html
+                    );
+                    if got_state.as_deref() != Some(state.as_str()) {
+                        return Err("OAuth state mismatch — please try connecting again.".into());
+                    }
+                    return match code {
+                        Some(code) if !code.is_empty() => Ok(OauthResult { code, redirect_uri }),
+                        _ => Err(query_param(path, "error").unwrap_or_else(|| "No authorization code returned.".into())),
+                    };
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return Err("Timed out waiting for Google sign-in.".into());
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Native "choose a folder" dialog for the assistant's working-folder control.
 /// Returns the chosen absolute path, or None if the reader cancelled. AsyncFileDialog
 /// drives the dialog on the platform's UI thread without blocking the command runtime.
@@ -1244,7 +1352,8 @@ fn main() {
             read_file,
             run_command,
             capture_screen,
-            pick_folder
+            pick_folder,
+            oauth_loopback
         ])
         .build(tauri::generate_context!())
         .expect("error while building Visual Reader")

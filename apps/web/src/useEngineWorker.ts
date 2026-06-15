@@ -148,6 +148,8 @@ export interface EngineWorkerApi {
   buddyCancel: () => void;
   /** Compact a chat: summarize the model-facing turns into a continuation brief. */
   summarize: (turns: ChatTurn[]) => Promise<{ text?: string; error?: string }>;
+  /** Finish Google OAuth in the worker (exchange the consent code for tokens). */
+  googleConnect: (args: { code: string; redirectUri: string; codeVerifier: string }) => Promise<{ ok: boolean; email?: string; error?: string }>;
   /** Run one document-polish stage; returns the requestId (for cancel) + the result. */
   polishText: (args: {
     stage: "understand" | "produce";
@@ -329,6 +331,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const activeBuddyRequestId = useRef<number | undefined>(undefined);
   // In-flight compact-summaries, resolved by `summarized` replies.
   const summarizeRequests = useRef<Map<number, (r: { text?: string; error?: string }) => void>>(
+    new Map(),
+  );
+  // In-flight Google OAuth exchanges, resolved by `googleConnected`.
+  const googleConnectRequests = useRef<Map<number, (r: { ok: boolean; email?: string; error?: string }) => void>>(
     new Map(),
   );
   // In-flight document-polish stages, resolved by `polished` (and streamed via `polishToken`).
@@ -589,6 +595,12 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           const resolve = summarizeRequests.current.get(msg.requestId);
           summarizeRequests.current.delete(msg.requestId);
           resolve?.(msg.ok && msg.text ? { text: msg.text } : { error: msg.error ?? "Summarize failed." });
+          break;
+        }
+        case "googleConnected": {
+          const resolve = googleConnectRequests.current.get(msg.requestId);
+          googleConnectRequests.current.delete(msg.requestId);
+          resolve?.({ ok: msg.ok, ...(msg.email ? { email: msg.email } : {}), ...(msg.error ? { error: msg.error } : {}) });
           break;
         }
         case "polishToken": {
@@ -994,6 +1006,21 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const googleConnect = useCallback(
+    (args: { code: string; redirectUri: string; codeVerifier: string }): Promise<{ ok: boolean; email?: string; error?: string }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (googleConnectRequests.current.delete(requestId)) resolve({ ok: false, error: "Connecting timed out." });
+        }, 60_000);
+        googleConnectRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "googleConnect", requestId, ...args });
+      }),
+    [],
+  );
   const polishText = useCallback(
     (args: {
       stage: "understand" | "produce";
@@ -1077,6 +1104,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     buddyChat,
     buddyCancel,
     summarize,
+    googleConnect,
     polishText,
     polishCancel,
   };

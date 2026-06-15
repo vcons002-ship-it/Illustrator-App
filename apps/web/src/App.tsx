@@ -42,6 +42,9 @@ import {
   parseDocImages,
   embedDocImages,
   bytesToBase64,
+  generatePkce,
+  clearGoogleTokens,
+  GOOGLE_SCOPES,
   POLISH_PRESETS,
   type ConceptIntro,
   type DataTable,
@@ -115,6 +118,7 @@ import {
   readLocalFile,
   runCommand,
   pickFolder,
+  googleOauthLoopback,
   saveExportFile,
   searchLocalFiles,
 } from "./runtime.js";
@@ -230,6 +234,7 @@ export function App() {
     buddyChat,
     buddyCancel,
     summarize,
+    googleConnect,
     setActiveUnit,
     polishText,
     polishCancel,
@@ -941,6 +946,45 @@ export function App() {
       saveExportFile(filename, content, mime),
     [],
   );
+
+  // Google (Gmail/Calendar/Tasks) connection status, derived from the stored tokens.
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [googleEmail, setGoogleEmail] = useState<string | undefined>();
+  useEffect(() => {
+    void libraryStore.getMemo?.("google-tokens").then((t) => setGoogleConnected(!!t)).catch(() => {});
+    void libraryStore.getMemo?.("google-email").then((e) => setGoogleEmail(e || undefined)).catch(() => {});
+  }, [libraryStore]);
+  const onConnectGoogle = useCallback(async (): Promise<{ ok: boolean; email?: string; error?: string }> => {
+    if (!isDesktop) return { ok: false, error: "Connecting Google needs the desktop app." };
+    if (!settings.keys?.googleClientId || !settings.keys?.googleClientSecret) {
+      return { ok: false, error: "Add your Google client ID and secret first." };
+    }
+    try {
+      const { verifier, challenge } = await generatePkce();
+      const state = crypto.randomUUID();
+      const { code, redirectUri } = await googleOauthLoopback({
+        clientId: settings.keys.googleClientId,
+        scope: GOOGLE_SCOPES.join(" "),
+        codeChallenge: challenge,
+        state,
+      });
+      const res = await googleConnect({ code, redirectUri, codeVerifier: verifier });
+      if (res.ok) {
+        setGoogleConnected(true);
+        setGoogleEmail(res.email);
+        if (res.email) void libraryStore.putMemo?.("google-email", res.email).catch(() => {});
+      }
+      return res;
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }, [settings.keys?.googleClientId, settings.keys?.googleClientSecret, googleConnect, libraryStore]);
+  const onDisconnectGoogle = useCallback(() => {
+    setGoogleConnected(false);
+    setGoogleEmail(undefined);
+    void clearGoogleTokens(libraryStore).catch(() => {});
+    void libraryStore.deleteMemo?.("google-email").catch(() => {});
+  }, [libraryStore]);
   // Bundle a multi-file answer (its named code blocks) into one project.zip — keeps a
   // linked HTML/CSS/JS site or small script project together with its relative paths.
   const onSaveProject = useCallback(
@@ -2471,6 +2515,10 @@ export function App() {
             connectingLocalText={connectingLocalText}
             onPullTextModel={onPullTextModel}
             pullProgress={pullProgress}
+            googleConnected={googleConnected}
+            {...(googleEmail ? { googleEmail } : {})}
+            onConnectGoogle={onConnectGoogle}
+            onDisconnectGoogle={onDisconnectGoogle}
           />
         </div>
         </div>

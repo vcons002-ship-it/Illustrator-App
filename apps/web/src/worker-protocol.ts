@@ -101,6 +101,8 @@ export type MainToWorker =
   | { type: "chatCancel"; requestId: number }
   /** Compact a chat: summarize these model-facing turns (answered by `summarized`). */
   | { type: "summarize"; requestId: number; turns: ChatTurn[] }
+  /** Finish Google OAuth: exchange the consent code (worker has the CORS proxy + store). */
+  | { type: "googleConnect"; requestId: number; code: string; redirectUri: string; codeVerifier: string }
   /** Faithful document polish (two stages); answered by `polished` (+ `polishToken`
    * deltas while producing). Cancel via `chatCancel` (shares the abort map). */
   | {
@@ -259,6 +261,7 @@ export type WorkerToMain =
   | { type: "buddyError"; requestId: number; message: string }
   /** Reply to `summarize`: the compact brief, or why it failed. */
   | { type: "summarized"; requestId: number; ok: boolean; text?: string; error?: string }
+  | { type: "googleConnected"; requestId: number; ok: boolean; email?: string; error?: string }
   /** Streaming delta while the polish "produce" stage runs. */
   | { type: "polishToken"; requestId: number; text: string }
   /** Reply to `polish`: the understood plan (+ optional question), or the produced text. */

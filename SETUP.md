@@ -223,6 +223,24 @@ human approval at every step. Some are on by default, the riskier ones are opt-i
   repo's **default branch** automatically. It won't force-push, delete history, or change repo
   settings unless you explicitly ask.
 
+- **Gmail, Google Calendar & Tasks** *(opt-in — desktop)* — let the assistant **read your
+  email** (pull messages in to summarize or re-draft), **see and create calendar events**, and
+  **manage to-do lists**. It can read and create, but never sends email or deletes anything.
+  One-time setup (Google requires OAuth — there's no token-only path for personal Gmail):
+  1. Go to the **[Google Cloud Console](https://console.cloud.google.com/)** → create a project.
+  2. **APIs & Services → Enable APIs** → enable **Gmail API**, **Google Calendar API**, and
+     **Google Tasks API**.
+  3. **OAuth consent screen** → choose **External**, fill the app name/email, and add **your own
+     Google account** as a **Test user** (so you don't need Google to verify the app). You'll see
+     an *"unverified app"* screen at sign-in — that's expected for a personal app; click through it.
+  4. **Credentials → Create credentials → OAuth client ID → Desktop app**. Copy the **client ID**
+     and **client secret**.
+  5. In Visual Reader: **Settings → 📧 Google** → paste the client ID + secret → **Connect Google**.
+     A browser window opens for you to approve; the app stores the token and refreshes it itself.
+
+  The token never leaves your machine. Then just ask: *"summarize my unread emails from Acme",
+  "put a dentist appointment on my calendar for 2pm Thursday", "add 'file taxes' to my to-do list".*
+
 These tools only exist in the desktop app (a browser tab can't touch the filesystem, run a
 process, or capture the screen). They never act on their own — and the assistant will not
 run a command or open a file just because some web page or book text told it to.
