@@ -10,6 +10,7 @@ import {
   type BuddyToolResultPayload,
 } from "./buddy-tools.js";
 import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../providers/google.js";
+import type { TaskPlan } from "./tasks.js";
 import { evaluateExpression, formatCalcResult } from "./calculator.js";
 import { evaluateMath } from "./math-engine.js";
 import { jsonGatedTokenSink } from "./chat-session.js";
@@ -64,6 +65,11 @@ export interface BuddyDeps {
   createEvent?: (ev: { summary: string; start: string; end: string; description?: string; location?: string }) => Promise<CalendarEvent>;
   listTasks?: (max?: number) => Promise<TaskItem[]>;
   createTask?: (t: { title: string; notes?: string; due?: string }) => Promise<TaskItem>;
+  /** Task-plan execution (the orchestrator) — wired over the shared store. */
+  markStepDone?: (planId: string, stepId: string) => Promise<{ planTitle: string; nextStep?: string; completed: boolean } | undefined>;
+  updateTaskStep?: (planId: string, stepId: string, patch: { status?: string; notes?: string }) => Promise<{ planTitle: string } | undefined>;
+  listTaskPlans?: () => Promise<{ id: string; title: string; status: string; nextStep?: string; deadlineIso?: string }[]>;
+  getTaskPlan?: (id: string) => Promise<TaskPlan | undefined>;
 }
 
 export type BuddyTurnEvent =
@@ -246,6 +252,27 @@ export async function runBuddyTool(
             ...(call.due ? { due: call.due } : {}),
           }),
         };
+      case "mark_step_done": {
+        if (!deps.markStepDone) return { error: "task plans aren't available" };
+        const r = await deps.markStepDone(call.planId, call.stepId);
+        return r ? { taskAction: { planTitle: r.planTitle, ...(r.nextStep ? { nextStep: r.nextStep } : {}), completed: r.completed } } : {};
+      }
+      case "update_task_step": {
+        if (!deps.updateTaskStep) return { error: "task plans aren't available" };
+        const r = await deps.updateTaskStep(call.planId, call.stepId, {
+          ...(call.status ? { status: call.status } : {}),
+          ...(call.notes ? { notes: call.notes } : {}),
+        });
+        return r ? { taskAction: { planTitle: r.planTitle } } : {};
+      }
+      case "list_task_plans":
+        if (!deps.listTaskPlans) return { error: "task plans aren't available" };
+        return { taskPlansList: await deps.listTaskPlans() };
+      case "get_task_plan": {
+        if (!deps.getTaskPlan) return { error: "task plans aren't available" };
+        const p = await deps.getTaskPlan(call.id);
+        return p ? { taskPlan: p } : {};
+      }
     }
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };

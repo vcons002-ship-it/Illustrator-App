@@ -6,6 +6,7 @@ import type { BookSummary } from "../storage/store.js";
 import { POLISH_CHAT_GUIDANCE } from "./document-polish.js";
 import { MAX_SKILL_BODY_CHARS, MAX_SKILL_DESC_CHARS, MAX_SKILL_NAME_CHARS } from "./skills.js";
 import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../providers/google.js";
+import type { TaskPlan } from "./tasks.js";
 
 /**
  * Tool protocol for the LANDING-PAGE buddy — the concierge that finds something
@@ -87,7 +88,12 @@ export type BuddyToolCall =
   | { tool: "create_task"; title: string; notes?: string; due?: string }
   /** Plan a multi-step real-world task from a natural-language request (the host
    * researches it, builds a step plan, schedules reminders, and opens it). */
-  | { tool: "plan_task"; request: string };
+  | { tool: "plan_task"; request: string }
+  /** Execute/track an active task plan (in its preloaded chat). */
+  | { tool: "mark_step_done"; planId: string; stepId: string }
+  | { tool: "update_task_step"; planId: string; stepId: string; status?: string; notes?: string }
+  | { tool: "list_task_plans" }
+  | { tool: "get_task_plan"; id: string };
 
 /** Generous: a "style + random pick + open + prose" flow is three tools deep. */
 export const MAX_BUDDY_TOOL_ROUNDS = 5;
@@ -129,6 +135,8 @@ export function buildBuddySystemPrompt(opts: {
   canGoogle?: boolean;
   /** Task automation opted in: create reminders directly without per-item confirm. */
   canAutomateTasks?: boolean;
+  /** The active task plan's context (this chat opened a task) — enables the step tools. */
+  activeTask?: string;
 }): string {
   const persona =
     opts.persona === "technical"
@@ -298,6 +306,13 @@ export function buildBuddySystemPrompt(opts: {
     'step-by-step plan, schedules reminders, prepares documents, and opens it for the reader. Put the task in "request" ' +
     "(include any specifics you learned). Use it for genuine multi-step tasks with a deadline — not for a one-off " +
     "question you can just answer.\n" +
+    (opts.activeTask
+      ? `${opts.activeTask}\nThis chat is working the task above. Help the reader finish the CURRENT step — do the ` +
+        'prep parts yourself, walk them through the parts only they can do. {"tool":"mark_step_done","planId":"…",' +
+        '"stepId":"…"} when they finish a step (it advances the plan); {"tool":"update_task_step","planId":"…",' +
+        '"stepId":"…","status":"blocked","notes":"…"} to note a blocker; {"tool":"list_task_plans"} / ' +
+        '{"tool":"get_task_plan","id":"…"} to check state.\n'
+      : "") +
     "GROUNDED IN TRUTH: don't guess at facts, APIs, library names, syntax, or current details you're unsure of. " +
     "First check your SKILLS for a matching playbook (read_skill it); then, when knowledge may be stale, version-" +
     "specific, or you're not certain, search_web and read_url the real source (official docs, a GitHub file) BEFORE " +
@@ -449,6 +464,28 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
     const request = strArg(obj.request, MAX_PASTE_CHARS);
     return request ? { tool, request } : undefined;
   }
+  if (tool === "mark_step_done") {
+    const planId = strArg(obj.planId, MAX_ID_CHARS);
+    const stepId = strArg(obj.stepId, MAX_ID_CHARS);
+    return planId && stepId ? { tool, planId, stepId } : undefined;
+  }
+  if (tool === "update_task_step") {
+    const planId = strArg(obj.planId, MAX_ID_CHARS);
+    const stepId = strArg(obj.stepId, MAX_ID_CHARS);
+    if (!planId || !stepId) return undefined;
+    return {
+      tool,
+      planId,
+      stepId,
+      ...(strArg(obj.status, MAX_NAME_CHARS) ? { status: strArg(obj.status, MAX_NAME_CHARS)! } : {}),
+      ...(strArg(obj.notes, MAX_GOOGLE_TEXT_CHARS) ? { notes: strArg(obj.notes, MAX_GOOGLE_TEXT_CHARS)! } : {}),
+    };
+  }
+  if (tool === "list_task_plans") return { tool };
+  if (tool === "get_task_plan") {
+    const id = strArg(obj.id, MAX_ID_CHARS);
+    return id ? { tool, id } : undefined;
+  }
   if (tool === "remove_library_book") {
     const id = strArg(obj.id, MAX_ID_CHARS);
     return id ? { tool, id } : undefined;
@@ -554,6 +591,10 @@ export interface BuddyToolResultPayload {
   eventCreated?: CalendarEvent;
   tasks?: TaskItem[];
   taskCreated?: TaskItem;
+  /** Task-plan execution outcomes. */
+  taskAction?: { planTitle: string; nextStep?: string; completed?: boolean };
+  taskPlansList?: { id: string; title: string; status: string; nextStep?: string; deadlineIso?: string }[];
+  taskPlan?: TaskPlan;
   /** Local files found by an approved find_files search (names fed back to the model). */
   files?: { path: string; name: string }[];
   /** Fetched page text from read_url (title + readable text). */
@@ -700,6 +741,38 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
   }
   if (call.tool === "create_task") {
     return result.taskCreated ? `[added to-do "${result.taskCreated.title}"] Confirm it to the reader.` : "[create_task did nothing]";
+  }
+  if (call.tool === "mark_step_done") {
+    const a = result.taskAction;
+    if (!a) return "[mark_step_done: that step or plan wasn't found]";
+    return (
+      `[marked the step done in "${a.planTitle}".` +
+      (a.completed ? " The whole plan is now complete! 🎉]" : a.nextStep ? ` Next step: ${a.nextStep}]` : "]") +
+      " Confirm to the reader and offer to help with the next step (or set its reminder)."
+    );
+  }
+  if (call.tool === "update_task_step") {
+    return result.taskAction ? `[updated the step in "${result.taskAction.planTitle}"] Confirm briefly.` : "[update_task_step: not found]";
+  }
+  if (call.tool === "list_task_plans") {
+    const list = result.taskPlansList ?? [];
+    if (list.length === 0) return "[list_task_plans: no active task plans]";
+    return (
+      "[task plans]\n" +
+      list
+        .map((p) => `· ${p.title} [${p.status}]${p.deadlineIso ? ` due ${p.deadlineIso}` : ""}${p.nextStep ? ` — next: ${p.nextStep}` : ""} (id: ${p.id})`)
+        .join("\n")
+    );
+  }
+  if (call.tool === "get_task_plan") {
+    const p = result.taskPlan;
+    if (!p) return `[get_task_plan: no plan with id ${call.id}]`;
+    return (
+      `[task plan "${p.title}"${p.deadlineIso ? ` — deadline ${p.deadlineIso}` : ""}]\n` +
+      p.steps
+        .map((s, i) => `${i + 1}. [${s.status}] ${s.title} (${s.actor === "ai_prep" ? "AI preps" : "reader does"}) (step id: ${s.id})`)
+        .join("\n")
+    );
   }
   if (call.tool === "find_files") {
     const files = result.files ?? [];

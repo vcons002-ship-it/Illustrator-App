@@ -281,18 +281,18 @@ export function nextReadyStep(plan: TaskPlan): TaskStep | undefined {
   return ordered.find((s) => s.status === "ready") ?? ordered.find((s) => s.status !== "done");
 }
 
-/** Compact plan context to prepend to the execution chat's system prompt. */
+/** Compact plan context to prepend to the execution chat's system prompt (carries the
+ * ids the step tools need). */
 export function tasksIndexBlock(plan: TaskPlan): string {
   const ready = nextReadyStep(plan);
   const lines = [
-    `ACTIVE TASK: ${plan.title}${plan.deadlineIso ? ` — deadline ${plan.deadlineIso}` : ""}`,
+    `ACTIVE TASK: ${plan.title}${plan.deadlineIso ? ` — deadline ${plan.deadlineIso}` : ""} (plan id: ${plan.id})`,
     plan.summary ? plan.summary : "",
     ready
-      ? `Current step (${ready.actor === "ai_prep" ? "you can prep this" : "the reader does this"}): ` +
+      ? `Current step (${ready.actor === "ai_prep" ? "you can prep this" : "the reader does this"}, step id: ${ready.id}): ` +
         `${ready.title}${ready.detail ? ` — ${ready.detail}` : ""}` +
         (ready.links.length ? `\nLinks: ${ready.links.map((l) => l.url).join(", ")}` : "")
       : "All steps are done.",
-    `Use mark_step_done when the reader finishes the current step; update_task_step to note a blocker.`,
   ].filter(Boolean);
   return lines.join("\n");
 }

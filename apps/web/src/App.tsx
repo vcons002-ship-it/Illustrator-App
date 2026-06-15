@@ -1672,7 +1672,7 @@ export function App() {
           appendBuddy({ role: "tool", text: "🔍 No results." });
         }
       }
-    }, buddyWorkingDir || undefined);
+    }, buddyWorkingDir || undefined, taskPlans.find((p) => p.sessionId === activeBuddyId)?.id);
     if (buddyTurnSeq.current !== seq) return;
     setBuddyBusy(false);
     setBuddyStreaming("");
