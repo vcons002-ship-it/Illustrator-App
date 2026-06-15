@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildGoogleAuthUrl,
   createTask,
+  patchTask,
   decodeBase64Url,
   exchangeGoogleCode,
   gmailReadEmail,
@@ -165,5 +166,14 @@ describe("listEvents / createTask network shape", () => {
     expect(task.title).toBe("Call dentist");
     expect(t.requests[0]!.method).toBe("POST");
     expect(t.requests[0]!.body).toMatchObject({ title: "Call dentist", due: "2026-06-20T00:00:00Z" });
+  });
+
+  it("patchTask PATCHes the completion status (remote-bus write-back)", async () => {
+    const t = new FakeTransport({ id: "t3", title: "done", status: "completed" });
+    const task = await patchTask(t, "tok", "t3", { status: "completed" });
+    expect(task.status).toBe("completed");
+    expect(t.requests[0]!.method).toBe("PATCH");
+    expect(t.requests[0]!.url).toContain("/tasks/t3");
+    expect(t.requests[0]!.body).toEqual({ status: "completed" });
   });
 });

@@ -124,6 +124,8 @@ export function buildBuddySystemPrompt(opts: {
   workingDir?: string;
   /** Google is connected: advertise the Gmail/Calendar/Tasks tools. */
   canGoogle?: boolean;
+  /** Task automation opted in: create reminders directly without per-item confirm. */
+  canAutomateTasks?: boolean;
 }): string {
   const persona =
     opts.persona === "technical"
@@ -203,9 +205,14 @@ export function buildBuddySystemPrompt(opts: {
       "add an event. start/end are ISO 8601 WITH the reader's UTC offset.\n" +
       '- {"tool":"list_tasks","max":20} — open to-dos. - {"tool":"create_task","title":"…","notes":"…",' +
       '"due":"2026-06-20T00:00:00Z"} — add a to-do.\n' +
-      "Before you CREATE an event or task, confirm the details (title, date/time) with the reader in plain words — " +
-      "don't write to their calendar/list on a vague request; ask if anything's ambiguous. You only read and create — " +
-      "you cannot send email or delete anything.\n"
+      (opts.canAutomateTasks
+        ? "Task automation is ON: you MAY create/update Tasks and Calendar reminders directly as part of a task plan, " +
+          "without asking each time — schedule deadlines and lead-time dates as you go. But NEVER submit forms, pay, " +
+          "or send on the reader's behalf; those are theirs to do. You only read and create — you cannot send email " +
+          "or delete anything.\n"
+        : "Before you CREATE an event or task, confirm the details (title, date/time) with the reader in plain words — " +
+          "don't write to their calendar/list on a vague request; ask if anything's ambiguous. You only read and create " +
+          "— you cannot send email or delete anything.\n")
     : "";
   const githubBlock = opts.canGithub
     ? "GITHUB: GitHub is connected — the gh CLI is authenticated (via a token in your environment or the reader's own " +

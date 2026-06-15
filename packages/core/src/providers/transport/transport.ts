@@ -9,7 +9,7 @@
 
 export interface TransportRequest {
   url: string;
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "PATCH";
   headers?: Record<string, string>;
   /** JSON-serialisable body. */
   body?: unknown;

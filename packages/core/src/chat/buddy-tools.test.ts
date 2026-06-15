@@ -396,6 +396,14 @@ describe("google tools", () => {
     expect(on).toMatch(/confirm the details/i);
     expect(on).toContain("cannot send email or delete");
   });
+
+  it("swaps the confirm rule for auto-approval when canAutomateTasks is on", () => {
+    const auto = buildBuddySystemPrompt({ persona: "freeform", library: [], canGoogle: true, canAutomateTasks: true });
+    expect(auto).toContain("Task automation is ON");
+    expect(auto).toContain("without asking each time");
+    expect(auto).toMatch(/NEVER submit forms, pay, or send/);
+    expect(auto).not.toMatch(/confirm the details/i); // the confirm sentence is replaced
+  });
 });
 
 describe("screenshot tool", () => {

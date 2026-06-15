@@ -203,6 +203,10 @@ export interface ReaderSettings {
   /** Enable GitHub repo work using your OWN local `gh` login (gh auth login) instead
    * of a stored token — so the assistant's GitHub mode turns on without `keys.github`. */
   githubLocalAuth?: boolean;
+  /** Let the Task Assistant schedule + prep automatically (create/update Google Tasks
+   * & Calendar reminders, run inbox scans, research, draft docs) without asking each
+   * time. Never submits forms, pays, or sends. Default off. */
+  allowTaskAutomation?: boolean;
   /** Transient: base URL of the app-managed local engine (desktop; not persisted). */
   engineBaseUrl?: string;
 }
@@ -883,6 +887,23 @@ export function SettingsPanel({
                     onConnect={onConnectGoogle}
                     {...(onDisconnectGoogle ? { onDisconnect: onDisconnectGoogle } : {})}
                   />
+                )}
+                {onConnectGoogle && (
+                  <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={value.allowTaskAutomation ?? false}
+                      onChange={(e) => set({ allowTaskAutomation: e.target.checked })}
+                    />
+                    <span>
+                      Let the Task Assistant schedule &amp; prep automatically
+                      <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                        When planning a task, create/update Google Tasks &amp; Calendar reminders, run inbox scans,
+                        research, and draft documents <b>without asking each time</b>. It will <b>never</b> submit
+                        forms, pay, or send email — those stay your action. Off by default; needs Google connected.
+                      </span>
+                    </span>
+                  </label>
                 )}
               </>
             )}
