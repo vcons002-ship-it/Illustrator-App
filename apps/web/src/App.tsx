@@ -31,10 +31,17 @@ import {
   rankLocalFiles,
   formatFileSize,
   chartDatasetFromTable,
+  loadSkills,
+  saveSkill,
+  forgetSkill,
+  MAX_SKILL_NAME_CHARS,
+  MAX_SKILL_DESC_CHARS,
+  MAX_SKILL_BODY_CHARS,
   POLISH_PRESETS,
   type ConceptIntro,
   type DataTable,
   type JsonValue,
+  type Skill,
   type BookSource,
   type BookSummary,
   type ChapterDataset,
@@ -63,6 +70,7 @@ import {
   DataSection,
   DataTablePreview,
   JsonTreeView,
+  SkillsPanel,
   DEFAULT_SETTINGS,
   DocumentPolishPanel,
   FirstRunWizard,
@@ -219,6 +227,17 @@ export function App() {
   const [pasteInitial, setPasteInitial] = useState<
     { title: string; text: string; mode?: "fiction" | "technical"; data?: DataTable; tree?: JsonValue } | undefined
   >();
+  const [showSkills, setShowSkills] = useState(false);
+  const [skills, setSkills] = useState<Skill[]>([]);
+  // Skills live in the same shared store the worker reads (libraryStore → IndexedDB),
+  // so panel edits show up on the assistant's next turn with no extra plumbing.
+  const refreshSkills = useCallback(() => {
+    void loadSkills(libraryStore).then(setSkills).catch(() => {});
+  }, [libraryStore]);
+  const openSkills = useCallback(async () => {
+    await loadSkills(libraryStore).then(setSkills).catch(() => {});
+    setShowSkills(true);
+  }, [libraryStore]);
   // Faithful document-polish panel + an optional prefill (from upload or a home click).
   const [showPolish, setShowPolish] = useState(false);
   const [polishInitial, setPolishInitial] = useState<{ title?: string; text?: string } | undefined>();
@@ -2006,6 +2025,13 @@ export function App() {
           >
             ✍ Polish doc
           </button>
+          <button
+            style={styles.button}
+            onClick={() => void openSkills()}
+            title="The assistant's skills — durable how-to playbooks it keeps across every chat (view, edit, or import a .md)"
+          >
+            🧠 Skills
+          </button>
           <button style={styles.button} onClick={() => openBook(loadSampleBook())}>
             Load sample
           </button>
@@ -2574,6 +2600,22 @@ export function App() {
             setShowLibrary(false);
           }}
           onClose={() => setShowLibrary(false)}
+        />
+      )}
+
+      {showSkills && (
+        <SkillsPanel
+          skills={skills}
+          limits={{ name: MAX_SKILL_NAME_CHARS, description: MAX_SKILL_DESC_CHARS, body: MAX_SKILL_BODY_CHARS }}
+          onSave={async (name, description, body) => {
+            await saveSkill(libraryStore, { name, description, body });
+            refreshSkills();
+          }}
+          onDelete={async (name) => {
+            await forgetSkill(libraryStore, name);
+            refreshSkills();
+          }}
+          onClose={() => setShowSkills(false)}
         />
       )}
     </div>
