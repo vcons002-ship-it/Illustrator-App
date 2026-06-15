@@ -39,7 +39,7 @@ import {
   upsertTaskPlan,
   advanceStep,
   addIgnore,
-  sourceId,
+  sourceFrom,
   type TaskPlan,
   type TaskCandidate,
   MAX_SKILL_NAME_CHARS,
@@ -277,27 +277,38 @@ export function App() {
   }, [libraryStore]);
   const [showTasks, setShowTasks] = useState(false);
   const [taskPlans, setTaskPlans] = useState<TaskPlan[]>([]);
-  const [taskCandidates, setTaskCandidates] = useState<TaskCandidate[]>([]);
+  const [planningCount, setPlanningCount] = useState(0);
   const refreshTaskPlans = useCallback(() => {
     void loadTaskPlans(libraryStore).then(setTaskPlans).catch(() => {});
   }, [libraryStore]);
-  // Plan an actionable item the scan surfaced.
-  const planCandidate = useCallback(
-    async (c: TaskCandidate) => {
-      setTaskCandidates((prev) => prev.filter((x) => x !== c));
-      const res = await planTask({ source: c.source, sourceText: `${c.title}. ${c.reason}` });
-      if (res.ok) refreshTaskPlans();
+  // AUTO-plan + prep the actionable items the scan found (no click needed). Bounded per
+  // scan so a busy inbox can't stampede; each item is planned once (then deduped out of
+  // future scans). The finished plans appear in the panel; unwanted ones are removed with
+  // "Ignore sender" (which also blocks the sender going forward).
+  const autoPlanScan = useCallback(
+    async (cands: TaskCandidate[]) => {
+      const queue = cands.slice(0, 3);
+      if (queue.length === 0) return;
+      setPlanningCount((n) => n + queue.length);
+      for (const c of queue) {
+        const source: TaskCandidate["source"] = { ...c.source, ...(c.from ? { from: c.from } : {}) };
+        const res = await planTask({ source, sourceText: `${c.title}. ${c.reason}` });
+        setPlanningCount((n) => Math.max(0, n - 1));
+        if (res.ok) refreshTaskPlans();
+      }
     },
     [planTask, refreshTaskPlans],
   );
-  // Dismiss a candidate so it never re-surfaces (this item, or everything from its sender).
-  const dismissCandidate = useCallback(
-    (c: TaskCandidate, scope: "item" | "sender") => {
-      setTaskCandidates((prev) => prev.filter((x) => x !== c));
-      const value = scope === "sender" ? (c.from ?? "") : (sourceId(c.source) ?? "");
-      if (value) void addIgnore(libraryStore, { kind: scope, value }).catch(() => {});
+  // "This auto-planned task was junk" — block the sender and delete the plan.
+  const ignorePlanSender = useCallback(
+    async (planId: string) => {
+      const plan = (await loadTaskPlans(libraryStore)).find((p) => p.id === planId);
+      const from = plan ? sourceFrom(plan.source) : undefined;
+      if (from) await addIgnore(libraryStore, { kind: "sender", value: from }).catch(() => {});
+      await deleteTaskPlan(libraryStore, planId);
+      refreshTaskPlans();
     },
-    [libraryStore],
+    [libraryStore, refreshTaskPlans],
   );
   const openTasks = useCallback(async () => {
     await loadTaskPlans(libraryStore).then(setTaskPlans).catch(() => {});
@@ -1062,7 +1073,7 @@ export function App() {
       scanningRef.current = true;
       void scanInbox()
         .then((r) => {
-          if (r.candidates) setTaskCandidates(r.candidates);
+          if (r.candidates?.length) void autoPlanScan(r.candidates);
         })
         .catch(() => {})
         .finally(() => {
@@ -1070,7 +1081,7 @@ export function App() {
         });
     }, 90_000);
     return () => clearInterval(id);
-  }, [googleConnected, settings.allowTaskAutomation, scanInbox]);
+  }, [googleConnected, settings.allowTaskAutomation, scanInbox, autoPlanScan]);
   // Bundle a multi-file answer (its named code blocks) into one project.zip — keeps a
   // linked HTML/CSS/JS site or small script project together with its relative paths.
   const onSaveProject = useCallback(
@@ -2407,7 +2418,7 @@ export function App() {
             onClick={() => void openTasks()}
             title="Your planned multi-step tasks — research, steps, deadlines, prepped docs. Ask the assistant to “plan …” anything."
           >
-            📋 Tasks{taskCandidates.length ? ` (${taskCandidates.length})` : ""}
+            📋 Tasks{planningCount ? " · planning…" : ""}
           </button>
           <button style={styles.button} onClick={() => openBook(loadSampleBook())}>
             Load sample
@@ -3018,11 +3029,10 @@ export function App() {
       {showTasks && (
         <TasksPanel
           plans={taskPlans}
-          candidates={taskCandidates}
-          onPlanCandidate={(c) => void planCandidate(c)}
-          onDismissCandidate={dismissCandidate}
+          planning={planningCount}
           onOpenTask={(id) => void openTaskInChat(id)}
           onAdvanceStep={onAdvanceTaskStep}
+          onIgnoreSender={ignorePlanSender}
           onDelete={async (id) => {
             await deleteTaskPlan(libraryStore, id);
             refreshTaskPlans();
