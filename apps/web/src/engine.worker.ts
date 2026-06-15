@@ -36,6 +36,9 @@ import {
   parseChatSlashCommand,
   rememberNote,
   queryWolfram,
+  exchangeGoogleCode,
+  saveGoogleTokens,
+  getGoogleEmail,
   runBuddyTool,
   runChatTool,
   profileDimensions,
@@ -580,6 +583,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "summarize":
       void handleSummarize(msg);
+      break;
+    case "googleConnect":
+      void handleGoogleConnect(msg);
       break;
     case "polish":
       void handlePolish(msg);
@@ -1130,6 +1136,37 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
  * Frees the context window while keeping continuity — the chat equivalent of
  * the reader's own notes.
  */
+/** Finish Google OAuth: exchange the consent code for tokens (using the desktop CORS
+ * proxy, which dodges the token endpoint's lack of browser CORS), persist them, and
+ * confirm by fetching the account email. */
+async function handleGoogleConnect(msg: Extract<MainToWorker, { type: "googleConnect" }>): Promise<void> {
+  try {
+    const clientId = settings?.keys?.googleClientId;
+    const clientSecret = settings?.keys?.googleClientSecret;
+    if (!clientId || !clientSecret) throw new Error("Add your Google client ID and secret in Settings first.");
+    const cf = corsFetch();
+    const transport = new DirectTransport(cf);
+    const tokens = await exchangeGoogleCode({
+      transport,
+      clientId,
+      clientSecret,
+      code: msg.code,
+      redirectUri: msg.redirectUri,
+      codeVerifier: msg.codeVerifier,
+    });
+    await saveGoogleTokens(memoryStore(), tokens);
+    const email = await getGoogleEmail(transport, tokens.accessToken).catch(() => "");
+    post({ type: "googleConnected", requestId: msg.requestId, ok: true, ...(email ? { email } : {}) });
+  } catch (err) {
+    post({
+      type: "googleConnected",
+      requestId: msg.requestId,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 async function handleSummarize(msg: Extract<MainToWorker, { type: "summarize" }>): Promise<void> {
   try {
     const { llm } = chatProviders();

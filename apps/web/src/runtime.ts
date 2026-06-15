@@ -268,6 +268,17 @@ export async function pickFolder(): Promise<string | undefined> {
   return path ?? undefined;
 }
 
+/** Run the Google OAuth consent + loopback redirect (desktop): opens the browser and
+ * returns the consent `code` + the redirect_uri it was issued for. */
+export function googleOauthLoopback(args: {
+  clientId: string;
+  scope: string;
+  codeChallenge: string;
+  state: string;
+}): Promise<{ code: string; redirectUri: string }> {
+  return invoke<{ code: string; redirectUri: string }>("oauth_loopback", args);
+}
+
 /**
  * Capture a screenshot to PNG bytes (desktop), for the chat's screenshot tool.
  * `window` (a title substring) captures just that window — e.g. a game — even when
