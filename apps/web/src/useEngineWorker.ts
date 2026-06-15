@@ -206,6 +206,9 @@ export type BuddyStreamEvent =
       style?: { id: string; label: string };
       pagesPerImage?: number | "chapter";
       illustrateAfter?: "chapter" | "book";
+      /** A generic settings patch from update_setting + a chip summary. */
+      patch?: Partial<ReaderSettings>;
+      summary?: string;
     };
 
 export interface BuddyDoneResult {
@@ -589,6 +592,8 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             ...(msg.style ? { style: msg.style } : {}),
             ...(msg.pagesPerImage !== undefined ? { pagesPerImage: msg.pagesPerImage } : {}),
             ...(msg.illustrateAfter !== undefined ? { illustrateAfter: msg.illustrateAfter } : {}),
+            ...(msg.patch ? { patch: msg.patch } : {}),
+            ...(msg.summary ? { summary: msg.summary } : {}),
           });
           break;
         }

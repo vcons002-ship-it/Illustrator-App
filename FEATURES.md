@@ -122,6 +122,11 @@ companion), and **Technical** (research companion):
   guide for that feature and walks you through it one step at a time (image/local models, API
   keys, Google, the task workflow, whole-web figures, Wolfram, GitHub, the desktop tools,
   mature mode).
+- **Changes settings by request** — just say *"set image quality to high"*, *"use portrait
+  orientation"*, *"draw as a comic page"*, *"turn on mature mode"*, or *"enable auto task
+  scheduling"* and it applies the change and confirms it (validated against the real options;
+  it double-checks the sensitive toggles like mature mode and command execution first). For
+  provider/key/model changes that need a Settings screen, it walks you through them instead.
 - **Asks instead of guessing** — if a request is ambiguous (which book, which window, which
   export format), it asks one short question or offers a couple of concrete options.
 - **Type `/` for commands** — a slash-command menu runs any tool directly: `/web`, `/books`,

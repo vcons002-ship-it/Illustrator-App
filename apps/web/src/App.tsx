@@ -1703,6 +1703,8 @@ export function App() {
                         ? "Updating memory…"
                         : e.call.tool === "set_visual_style"
                           ? "Updating the visual settings…"
+                          : e.call.tool === "update_setting"
+                          ? "Updating a setting…"
                           : e.call.tool === "open_library_book"
                             ? "Opening from your library…"
                             : e.call.tool === "open_pasted_text"
@@ -1720,11 +1722,15 @@ export function App() {
                                         : "Fetching the text and opening it…",
         );
       } else if (e.kind === "settings") {
+        // set_visual_style fields + a generic update_setting patch both land here; App
+        // owns ReaderSettings, so committing via setSettings runs the normal tune-vs-
+        // rebuild machinery (a mature-mode flip re-inits; a quality tweak tunes in place).
         setSettings((s) => ({
           ...s,
           ...(e.style ? { imageStyle: e.style.id } : {}),
           ...(e.pagesPerImage !== undefined ? { pagesPerImage: e.pagesPerImage } : {}),
           ...(e.illustrateAfter !== undefined ? { illustrateAfter: e.illustrateAfter } : {}),
+          ...(e.patch ?? {}),
         }));
         const parts = [
           ...(e.style ? [`art style: ${e.style.label}`] : []),
@@ -1735,7 +1741,8 @@ export function App() {
             ? [e.illustrateAfter === "chapter" ? "illustrate as you read" : "illustrate after the whole book"]
             : []),
         ];
-        appendBuddy({ role: "tool", text: `🎨 ${parts.join(" · ")}` });
+        if (e.summary) appendBuddy({ role: "tool", text: `⚙ ${e.summary}` });
+        else appendBuddy({ role: "tool", text: `🎨 ${parts.join(" · ")}` });
       } else if (e.kind === "libraryChanged") {
         void libraryStore.listBooks().then(setLibrary).catch(() => {});
       } else if (e.kind === "opened") {

@@ -348,6 +348,44 @@ describe("skill tools", () => {
   });
 });
 
+describe("update_setting tool", () => {
+  it("parses a settings change (toggle, enum, numeric) and rejects an empty field", () => {
+    expect(parseBuddyToolCall('{"tool":"update_setting","field":"mature mode","value":true}')).toEqual({
+      tool: "update_setting",
+      field: "mature mode",
+      value: true,
+    });
+    expect(parseBuddyToolCall('{"tool":"update_setting","field":"image quality","value":"high"}')).toEqual({
+      tool: "update_setting",
+      field: "image quality",
+      value: "high",
+    });
+    expect(parseBuddyToolCall('{"tool":"update_setting","field":"comic panels","value":4}')).toEqual({
+      tool: "update_setting",
+      field: "comic panels",
+      value: 4,
+    });
+    expect(parseBuddyToolCall('{"tool":"update_setting","field":"  ","value":true}')).toBeUndefined();
+    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"update_setting"');
+  });
+
+  it("confirms an applied change (flagging sensitive ones) and reports a bad one", () => {
+    const ok = formatBuddyToolResult(
+      { tool: "update_setting", field: "mature mode", value: true },
+      { settingChange: { label: "mature mode", valueLabel: "on", sensitive: true } },
+    );
+    expect(ok).toContain("mature mode → on");
+    expect(ok).toMatch(/confirm/i);
+    expect(ok).toMatch(/sensitive/i);
+    const bad = formatBuddyToolResult(
+      { tool: "update_setting", field: "quality", value: "supreme" },
+      { settingChange: { error: '"image quality" must be one of: auto, draft, standard, high, ultra.' } },
+    );
+    expect(bad).toContain("couldn't change that setting");
+    expect(bad).toContain("auto, draft");
+  });
+});
+
 describe("setup_help tool", () => {
   it("parses setup_help and always advertises it", () => {
     expect(parseBuddyToolCall('{"tool":"setup_help","topic":"image generation"}')).toEqual({
