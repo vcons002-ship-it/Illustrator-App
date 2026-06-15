@@ -39,6 +39,9 @@ import {
   MAX_SKILL_BODY_CHARS,
   zipProject,
   PROJECT_ZIP_MIME,
+  parseDocImages,
+  embedDocImages,
+  bytesToBase64,
   POLISH_PRESETS,
   type ConceptIntro,
   type DataTable,
@@ -908,6 +911,33 @@ export function App() {
     (files: ProjectFile[]): Promise<string | true> =>
       saveExportFile("project.zip", zipProject(files), PROJECT_ZIP_MIME),
     [],
+  );
+  // A designed document (invite, flyer, card): generate each `data-generate` image via
+  // the normal render path and embed it as a self-contained data: URI, so the finished
+  // HTML previews/saves as one standalone file. Failed renders just fall back to alt text.
+  const onBuildDocument = useCallback(
+    async (html: string, onProgress?: (done: number, total: number) => void) => {
+      const placeholders = parseDocImages(html);
+      const srcById = new Map<string, string>();
+      let generated = 0;
+      let failed = 0;
+      for (let k = 0; k < placeholders.length; k++) {
+        const p = placeholders[k]!;
+        onProgress?.(k, placeholders.length);
+        const res = await testRender(p.prompt, {
+          ...(p.width && p.height ? { size: { width: p.width, height: p.height } } : {}),
+        });
+        if (res.image) {
+          srcById.set(p.id, `data:${res.image.mimeType};base64,${bytesToBase64(res.image.bytes)}`);
+          generated++;
+        } else {
+          failed++;
+        }
+      }
+      onProgress?.(placeholders.length, placeholders.length);
+      return { html: embedDocImages(html, srcById), generated, failed };
+    },
+    [testRender],
   );
 
   // Drop a rendered image (from Test image / Transform photo) into the live chat —
@@ -2381,6 +2411,7 @@ export function App() {
             onOpenLocalFile={onOpenLocalFile}
             onSaveFile={onSaveChatFile}
             onSaveProject={onSaveProject}
+            onBuildDocument={onBuildDocument}
             {...(buddyUsage ? { contextUsage: buddyUsage } : {})}
           />
         </section>
@@ -2530,6 +2561,7 @@ export function App() {
           onCompact={onCompactChatClick}
           onSaveFile={onSaveChatFile}
           onSaveProject={onSaveProject}
+          onBuildDocument={onBuildDocument}
           {...(chatUsage ? { contextUsage: chatUsage } : {})}
         />
       )}

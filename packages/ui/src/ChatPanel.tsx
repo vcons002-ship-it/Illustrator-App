@@ -2,6 +2,8 @@ import { memo, useEffect, useRef, useState } from "react";
 import {
   CHAT_SLASH_COMMANDS,
   chartDatasetFromTable,
+  hasDocImages,
+  parseDocImages,
   type AnalyzeChart,
   type ContextUsage,
   type DataTable,
@@ -98,6 +100,17 @@ export function projectFilesFromBlocks(blocks: MessageBlock[]): ProjectFile[] {
     .map((b) => ({ name: b.filename ?? resolveCodeFile(b.lang, b.filename).filename, content: b.code }));
 }
 
+/** An HTML block that asks the app to generate + embed images → render as a DocumentCard. */
+function isDocBlock(b: Extract<MessageBlock, { type: "code" }>): boolean {
+  return (b.lang === "html" || b.lang === "htm" || (b.filename ?? "").endsWith(".html")) && hasDocImages(b.code);
+}
+
+/** Generate a designed document's images and return the self-contained HTML. */
+export type BuildDocumentFn = (
+  html: string,
+  onProgress?: (done: number, total: number) => void,
+) => Promise<{ html: string; generated: number; failed: number }>;
+
 const LANG_EXT: Record<string, string> = {
   html: "html", htm: "html", xml: "xml", svg: "svg", css: "css",
   javascript: "js", js: "js", jsx: "jsx", typescript: "ts", ts: "ts", tsx: "tsx",
@@ -189,6 +202,8 @@ export interface ChatPanelProps {
   onSaveFile?: (filename: string, content: string, mime: string) => Promise<string | true>;
   /** Zip + save a multi-file (≥2 code blocks) answer as one project. */
   onSaveProject?: (files: ProjectFile[]) => Promise<string | true>;
+  /** Generate + embed a designed document's images. */
+  onBuildDocument?: BuildDocumentFn;
   /** Latest context-usage breakdown (for the usage donut). */
   contextUsage?: ContextUsage;
 }
@@ -279,6 +294,7 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
               {...(props.onDeleteMessage ? { onDelete: props.onDeleteMessage } : {})}
               {...(props.onSaveFile ? { onSaveFile: props.onSaveFile } : {})}
               {...(props.onSaveProject ? { onSaveProject: props.onSaveProject } : {})}
+              {...(props.onBuildDocument ? { onBuildDocument: props.onBuildDocument } : {})}
             />
           ))}
           {props.thinking ? <ThinkingBlock text={props.thinking} /> : null}
@@ -501,6 +517,7 @@ export const MessageBubble = memo(function MessageBubble({
   onAction,
   onSaveFile,
   onSaveProject,
+  onBuildDocument,
 }: {
   message: ChatMessageVM;
   index?: number;
@@ -513,6 +530,8 @@ export const MessageBubble = memo(function MessageBubble({
   onSaveFile?: (filename: string, content: string, mime: string) => Promise<string | true>;
   /** Zip + save the message's code blocks as one project (≥2 files). Stable (memo). */
   onSaveProject?: (files: ProjectFile[]) => Promise<string | true>;
+  /** Generate + embed a designed document's images. Stable (memo). */
+  onBuildDocument?: BuildDocumentFn;
 }) {
   const isUser = message.role === "user";
   const url = useMessageImageUrl(message.image);
@@ -541,13 +560,22 @@ export const MessageBubble = memo(function MessageBubble({
       {blocks
         ? blocks.map((b, i) =>
             b.type === "code" ? (
-              <CodeCard
-                key={i}
-                lang={b.lang}
-                code={b.code}
-                {...(b.filename ? { filename: b.filename } : {})}
-                {...(onSaveFile ? { onSaveFile } : {})}
-              />
+              isDocBlock(b) && onBuildDocument ? (
+                <DocumentCard
+                  key={i}
+                  code={b.code}
+                  onBuildDocument={onBuildDocument}
+                  {...(onSaveFile ? { onSaveFile } : {})}
+                />
+              ) : (
+                <CodeCard
+                  key={i}
+                  lang={b.lang}
+                  code={b.code}
+                  {...(b.filename ? { filename: b.filename } : {})}
+                  {...(onSaveFile ? { onSaveFile } : {})}
+                />
+              )
             ) : b.text.trim() ? (
               <div key={i} style={{ whiteSpace: "pre-wrap" }}>
                 <Linkified text={b.text} />
@@ -876,6 +904,89 @@ function ProjectSaveBar({
           {saved === "saved" ? "✓ Saved (check your downloads)" : `✓ Saved to ${saved}`}
         </span>
       ) : null}
+    </div>
+  );
+}
+
+/** A designed HTML document whose images the app generates and embeds. Shows the
+ * source, a "Generate N images & build" action, progress, then Preview + Save of the
+ * finished self-contained document. */
+function DocumentCard({
+  code,
+  onBuildDocument,
+  onSaveFile,
+}: {
+  code: string;
+  onBuildDocument: BuildDocumentFn;
+  onSaveFile?: (filename: string, content: string, mime: string) => Promise<string | true>;
+}) {
+  const imageCount = parseDocImages(code).length;
+  const [building, setBuilding] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number }>();
+  const [built, setBuilt] = useState<{ html: string; generated: number; failed: number }>();
+  const [saved, setSaved] = useState<string | undefined>();
+  const [error, setError] = useState("");
+
+  const html = built?.html ?? code;
+  const build = async () => {
+    setBuilding(true);
+    setError("");
+    setProgress({ done: 0, total: imageCount });
+    try {
+      const r = await onBuildDocument(code, (done, total) => setProgress({ done, total }));
+      setBuilt(r);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBuilding(false);
+      setProgress(undefined);
+    }
+  };
+  const preview = () => {
+    const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    window.open(url, "_blank", "noreferrer");
+    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  };
+  const save = async () => {
+    if (!onSaveFile) return;
+    const r = await onSaveFile("document.html", html, "text/html");
+    setSaved(typeof r === "string" ? r : "saved");
+  };
+
+  return (
+    <div style={codeCardStyle}>
+      <div style={codeHeaderStyle}>
+        <span style={{ opacity: 0.7 }}>
+          🎨 designed document · {imageCount} image{imageCount === 1 ? "" : "s"}
+          {built ? ` · ${built.generated} generated${built.failed ? `, ${built.failed} failed` : ""}` : ""}
+        </span>
+        <span style={{ display: "flex", gap: 6 }}>
+          {!built && (
+            <button style={codeBtnStyle} onClick={() => void build()} disabled={building}>
+              {building
+                ? `🎨 Generating ${progress ? `${progress.done}/${progress.total}` : ""}…`
+                : `🎨 Generate ${imageCount} image${imageCount === 1 ? "" : "s"} & build`}
+            </button>
+          )}
+          <button style={codeBtnStyle} onClick={preview} disabled={building}>
+            ▶ Preview
+          </button>
+          {onSaveFile && built && (
+            <button style={codeBtnStyle} onClick={() => void save()}>
+              💾 Save
+            </button>
+          )}
+        </span>
+      </div>
+      <pre style={codePreStyle}>
+        <code>{built ? "<!-- images embedded — Preview or Save the finished document -->" : code}</code>
+      </pre>
+      {error ? <div style={{ fontSize: 11, color: "#ff9b9b", padding: "4px 8px" }}>{error}</div> : null}
+      {saved && (
+        <div style={{ fontSize: 11, opacity: 0.7, padding: "4px 8px" }}>
+          {saved === "saved" ? "✓ Saved (check your downloads)" : `✓ Saved to ${saved}`}
+        </div>
+      )}
     </div>
   );
 }
