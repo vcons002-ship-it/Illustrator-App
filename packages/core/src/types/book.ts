@@ -55,8 +55,13 @@ export interface BookSource {
    */
   contentMode?: "fiction" | "technical";
   /** Structured grid for a spreadsheet/CSV import — powers the chat's `analyze_data`
-   * tool (group-by / pivots / aggregates over real cells). Absent for prose. */
+   * tool (group-by / pivots / aggregates over real cells). Absent for prose. For a
+   * multi-sheet workbook this is the FIRST sheet (`dataSheets` holds them all). */
   data?: DataTable;
+  /** Every worksheet of a multi-sheet `.xlsx` (tab name + table), in workbook order.
+   * Present only when an import yielded more than one tabular sheet; `data` aliases
+   * the first. Lets the reader view/download any sheet and re-export the workbook. */
+  dataSheets?: { name: string; table: DataTable }[];
   /** Parsed value for a NESTED/irregular JSON import (one that doesn't normalise to a
    * table) — the reader shows it as a collapsible tree. Absent otherwise. */
   tree?: JsonValue;

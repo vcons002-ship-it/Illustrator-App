@@ -7,7 +7,7 @@ import {
   type DataTable,
   type JsonValue,
 } from "@visual-reader/core";
-import { csvToGrid, docxToText, htmlToText, parseEpub, rtfToText, xlsxToGrid } from "@visual-reader/epub";
+import { csvToGrid, docxToText, htmlToText, parseEpub, rtfToText, xlsxToWorkbook } from "@visual-reader/epub";
 
 /** Render a parsed cell grid as the " | "-separated text the reader/extraction reads. */
 function gridText(grid: string[][]): string {
@@ -54,6 +54,8 @@ export type ImportedFile =
       mode?: "fiction" | "technical";
       /** Tabular import (spreadsheet/CSV, or tabular JSON) → the table view. */
       data?: DataTable;
+      /** Every tabular sheet of a multi-sheet workbook (data aliases the first). */
+      dataSheets?: { name: string; table: DataTable }[];
       /** Nested/irregular JSON that doesn't tabularise → the tree view. */
       tree?: JsonValue;
     }
@@ -103,9 +105,27 @@ export async function importBookFile(file: File): Promise<ImportedFile> {
       return { kind: "text", title, text: gridText(grid), mode: "technical", ...(data ? { data } : {}) };
     }
     case "xlsx": {
-      const grid = xlsxToGrid(await file.arrayBuffer());
-      const data = dataTableFromGrid(grid);
-      return { kind: "text", title, text: gridText(grid), mode: "technical", ...(data ? { data } : {}) };
+      // Read EVERY worksheet, not just the first. The primary table (`data`) drives
+      // the chat's analyze_data; `dataSheets` keeps all tabs for viewing / re-export.
+      const sheets = xlsxToWorkbook(await file.arrayBuffer())
+        .map((s) => ({ name: s.name, table: dataTableFromGrid(s.grid) }))
+        .filter((s): s is { name: string; table: DataTable } => !!s.table);
+      const data = sheets[0]?.table;
+      // Text the extraction reads: each sheet labelled, so multi-sheet context is kept.
+      const text =
+        sheets.length > 1
+          ? sheets.map((s) => `## ${s.name}\n${tableToText(s.table, s.table.rows.length)}`).join("\n\n")
+          : data
+            ? tableToText(data, data.rows.length)
+            : "";
+      return {
+        kind: "text",
+        title,
+        text,
+        mode: "technical",
+        ...(data ? { data } : {}),
+        ...(sheets.length > 1 ? { dataSheets: sheets } : {}),
+      };
     }
     case "pdf": {
       const data = new Uint8Array(await file.arrayBuffer());

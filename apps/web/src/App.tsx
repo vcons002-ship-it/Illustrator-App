@@ -76,8 +76,10 @@ import {
   bookFromText,
   buildIllustratedEpub,
   buildIllustratedHtml,
+  buildXlsx,
   dataTableToCsv,
   dataTableToXlsx,
+  sheetFromDataTable,
   type ExportImage,
   type ExportImages,
 } from "@visual-reader/epub";
@@ -270,7 +272,14 @@ export function App() {
   >();
   // Prefill for the paste modal when a text-bearing FILE (txt/md/html/pdf) was opened.
   const [pasteInitial, setPasteInitial] = useState<
-    { title: string; text: string; mode?: "fiction" | "technical"; data?: DataTable; tree?: JsonValue } | undefined
+    {
+      title: string;
+      text: string;
+      mode?: "fiction" | "technical";
+      data?: DataTable;
+      dataSheets?: { name: string; table: DataTable }[];
+      tree?: JsonValue;
+    } | undefined
   >();
   const [showSkills, setShowSkills] = useState(false);
   const [skills, setSkills] = useState<Skill[]>([]);
@@ -814,6 +823,7 @@ export function App() {
             text: imported.text,
             ...(imported.mode ? { mode: imported.mode } : {}),
             ...(imported.data ? { data: imported.data } : {}),
+            ...(imported.dataSheets ? { dataSheets: imported.dataSheets } : {}),
             ...(imported.tree !== undefined ? { tree: imported.tree } : {}),
           });
           setShowPasteText(true);
@@ -3038,6 +3048,7 @@ export function App() {
               openBook({
                 ...created,
                 ...(pasteInitial?.data ? { data: pasteInitial.data } : {}),
+                ...(pasteInitial?.dataSheets ? { dataSheets: pasteInitial.dataSheets } : {}),
                 ...(pasteInitial?.tree !== undefined ? { tree: pasteInitial.tree } : {}),
               });
               setShowPasteText(false);
@@ -3210,48 +3221,76 @@ const ReaderColumn = memo(function ReaderColumn({
   technical?: TechnicalSupportData;
 }) {
   const chaptersById = useMemo(() => new Map(book.chapters.map((c) => [c.id, c])), [book]);
-  const dataChart = useMemo(() => (book.data ? autoChartDataset(book.data) : undefined), [book.data]);
+  // Multi-sheet workbook: let the reader pick which tab to view/chart/download.
+  const sheets = book.dataSheets && book.dataSheets.length > 1 ? book.dataSheets : undefined;
+  const [activeSheet, setActiveSheet] = useState(0);
+  const activeTable = sheets ? (sheets[Math.min(activeSheet, sheets.length - 1)]?.table ?? book.data) : book.data;
+  const dataChart = useMemo(() => (activeTable ? autoChartDataset(activeTable) : undefined), [activeTable]);
   return (
     <article style={styles.column}>
       {/* An uploaded spreadsheet/CSV/tabular-JSON: show the REAL grid as an aligned
           table up top (the flattened "a | b | c" pipe-text below is what the
           illustration/extraction pipeline reads, but it's no way to look at a sheet).
           A single label+value table also gets an auto-chart. */}
-      {book.data ? (
+      {activeTable ? (
         <details open style={styles.dataPreview}>
           <summary style={styles.dataPreviewSummary}>
             <strong>🗂 {book.title || "Data"}</strong>
             <span style={{ opacity: 0.6 }}>
               {" "}
-              — {book.data.rows.length.toLocaleString("en-US")} row
-              {book.data.rows.length === 1 ? "" : "s"} × {book.data.columns.length} column
-              {book.data.columns.length === 1 ? "" : "s"}. Ask the buddy to analyse, chart, or pivot it.
+              {sheets ? `— ${sheets.length} sheets · ` : "— "}
+              {activeTable.rows.length.toLocaleString("en-US")} row
+              {activeTable.rows.length === 1 ? "" : "s"} × {activeTable.columns.length} column
+              {activeTable.columns.length === 1 ? "" : "s"}. Ask the buddy to analyse, chart, or pivot it.
             </span>
           </summary>
+          {sheets ? (
+            <div style={{ display: "flex", gap: 4, marginTop: 8, flexWrap: "wrap" }}>
+              {sheets.map((s, i) => (
+                <button
+                  key={s.name + i}
+                  onClick={() => setActiveSheet(i)}
+                  style={{
+                    ...styles.smallButton,
+                    ...(i === Math.min(activeSheet, sheets.length - 1)
+                      ? { background: "rgba(90,209,155,0.3)", fontWeight: 600 }
+                      : {}),
+                  }}
+                  title={`View sheet "${s.name}"`}
+                >
+                  {s.name}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
             <button
               style={styles.smallButton}
-              title="Download a real Excel workbook (.xlsx) of this table"
+              title={sheets ? "Download a real Excel workbook (.xlsx) of ALL sheets" : "Download a real Excel workbook (.xlsx) of this table"}
               onClick={() => {
                 const base = (book.title || "data").replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "data";
-                void saveExportFile(`${base}.xlsx`, dataTableToXlsx(book.data!), XLSX_MIME);
+                const bytes = sheets
+                  ? buildXlsx(sheets.map((s) => sheetFromDataTable(s.name, s.table)))
+                  : dataTableToXlsx(activeTable);
+                void saveExportFile(`${base}.xlsx`, bytes, XLSX_MIME);
               }}
             >
-              ⬇ Excel (.xlsx)
+              ⬇ Excel (.xlsx){sheets ? " — all sheets" : ""}
             </button>
             <button
               style={styles.smallButton}
-              title="Download this table as CSV"
+              title={sheets ? "Download the current sheet as CSV" : "Download this table as CSV"}
               onClick={() => {
                 const base = (book.title || "data").replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "data";
-                void saveExportFile(`${base}.csv`, dataTableToCsv(book.data!), "text/csv");
+                const suffix = sheets ? `-${(sheets[Math.min(activeSheet, sheets.length - 1)]?.name ?? "sheet").replace(/[^\w.-]+/g, "_")}` : "";
+                void saveExportFile(`${base}${suffix}.csv`, dataTableToCsv(activeTable), "text/csv");
               }}
             >
-              ⬇ CSV
+              ⬇ CSV{sheets ? " (this sheet)" : ""}
             </button>
           </div>
           <div style={{ marginTop: 8 }}>
-            <DataTablePreview table={book.data} maxRows={200} maxHeight={420} />
+            <DataTablePreview table={activeTable} maxRows={200} maxHeight={420} />
           </div>
           {dataChart ? (
             <div style={{ marginTop: 8 }}>
