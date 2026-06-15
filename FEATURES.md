@@ -117,6 +117,11 @@ companion), and **Technical** (research companion):
 - **Remembers what you like** — tell it "I prefer watercolor" or "never spoil endings" and
   it keeps a **long-term memory** that applies in every future conversation and book (you
   can ask it to forget, too).
+- **Walks you through setup** — ask *"how do I set up image generation?"*, *"connect my
+  calendar"*, or *"enable the task assistant"* and it pulls the app's built-in step-by-step
+  guide for that feature and walks you through it one step at a time (image/local models, API
+  keys, Google, the task workflow, whole-web figures, Wolfram, GitHub, the desktop tools,
+  mature mode).
 - **Asks instead of guessing** — if a request is ambiguous (which book, which window, which
   export format), it asks one short question or offers a couple of concrete options.
 - **Type `/` for commands** — a slash-command menu runs any tool directly: `/web`, `/books`,
