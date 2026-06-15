@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from "react";
 import {
   CHAT_SLASH_COMMANDS,
+  chartDatasetFromTable,
   type AnalyzeChart,
   type ContextUsage,
   type DataTable,
@@ -688,30 +689,12 @@ function AnalysisBlock({
 
 /** Render an analysis result table as a chart by taking its first text + numeric columns. */
 function AnalysisChart({ table, chart }: { table: DataTable; chart: AnalyzeChart }) {
-  const labelCol = table.columns.findIndex((c) => c.type === "string");
-  const valueCol = table.columns.findIndex((c) => c.type === "number");
-  if (valueCol < 0) return null;
-  const points = table.rows
-    .slice(0, 40)
-    .map((r, i) => ({ label: labelCol >= 0 ? String(r[labelCol] ?? `#${i + 1}`) : `#${i + 1}`, y: Number(r[valueCol]) }))
-    .filter((p) => Number.isFinite(p.y));
-  if (points.length === 0) return null;
+  // DataChart supports bar/line/scatter; a requested "pie" falls back to bar.
+  const dataset = chartDatasetFromTable(table, chart === "line" ? "line" : "bar", 40);
+  if (!dataset) return null;
   return (
     <div style={{ marginTop: 4 }}>
-      <DataChart
-        dataset={{
-          id: "analysis",
-          chapterIndex: 0,
-          title: table.columns[valueCol]?.name ?? "result",
-          unit: "",
-          xLabel: labelCol >= 0 ? table.columns[labelCol]!.name : "",
-          yLabel: table.columns[valueCol]?.name ?? "",
-          // DataChart supports bar/line/scatter; a requested "pie" falls back to bar.
-          kind: chart === "line" ? "line" : "bar",
-          points,
-          source: "",
-        }}
-      />
+      <DataChart dataset={dataset} />
     </div>
   );
 }

@@ -4,6 +4,7 @@
  * "spoiler entity" is anchored to.
  */
 import type { DataTable } from "../data/data-table.js";
+import type { JsonValue } from "../data/json-shape.js";
 
 export interface Paragraph {
   /** Stable id, unique within the book. */
@@ -56,4 +57,7 @@ export interface BookSource {
   /** Structured grid for a spreadsheet/CSV import — powers the chat's `analyze_data`
    * tool (group-by / pivots / aggregates over real cells). Absent for prose. */
   data?: DataTable;
+  /** Parsed value for a NESTED/irregular JSON import (one that doesn't normalise to a
+   * table) — the reader shows it as a collapsible tree. Absent otherwise. */
+  tree?: JsonValue;
 }
