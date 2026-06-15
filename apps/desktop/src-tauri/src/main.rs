@@ -587,7 +587,11 @@ const COMMAND_OUTPUT_CAP: usize = 32 * 1024;
 /// can't deadlock on a full pipe), and a watchdog kills a command that overruns the
 /// timeout. Cross-platform via `cmd /C` on Windows, `sh -c` elsewhere.
 #[tauri::command]
-async fn run_command(app: AppHandle, command: String) -> Result<CommandResult, String> {
+async fn run_command(
+    app: AppHandle,
+    command: String,
+    github_token: Option<String>,
+) -> Result<CommandResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let dir = workspace_dir(&app);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -601,6 +605,13 @@ async fn run_command(app: AppHandle, command: String) -> Result<CommandResult, S
             c
         };
         cmd.current_dir(&dir).stdout(Stdio::piped()).stderr(Stdio::piped());
+        // GitHub token (when configured) is injected into the child's ENVIRONMENT —
+        // never the command string — so `gh` is authenticated and `git push` works,
+        // while the token stays out of the chat transcript and shell history.
+        if let Some(token) = github_token.filter(|t| !t.is_empty()) {
+            cmd.env("GH_TOKEN", &token);
+            cmd.env("GITHUB_TOKEN", &token);
+        }
         let mut child = cmd.spawn().map_err(|e| format!("Couldn't start the command: {e}"))?;
 
         // Drain both pipes concurrently so a large output never blocks the child.
@@ -678,8 +689,11 @@ async fn capture_screen(window: Option<String>) -> Result<Screenshot, String> {
                 match windows.iter().find(|w| w.title().to_lowercase().contains(&lower)) {
                     Some(w) => w.capture_image().map_err(|e| format!("Window capture failed: {e}"))?,
                     None => {
-                        let titles: Vec<String> =
-                            windows.iter().map(|w| w.title()).filter(|t| !t.is_empty()).collect();
+                        let titles: Vec<String> = windows
+                            .iter()
+                            .map(|w| w.title().to_string())
+                            .filter(|t| !t.is_empty())
+                            .collect();
                         return Err(format!(
                             "No open window matches \"{needle}\". Open windows: {}",
                             if titles.is_empty() { "(none)".into() } else { titles.join(" | ") }

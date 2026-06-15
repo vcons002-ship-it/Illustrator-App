@@ -248,10 +248,12 @@ export interface CommandResult {
 /**
  * Run ONE approved shell command in the desktop app's workspace folder and return
  * its output. Only reached AFTER the reader approves the exact command in the chat
- * (the run_command tool). Rejects on the web (no shell).
+ * (the run_command tool). Rejects on the web (no shell). A configured GitHub token is
+ * passed out-of-band as an ENV var (GH_TOKEN/GITHUB_TOKEN) for the child — never in
+ * the command string — so `gh`/`git` are authenticated without exposing it.
  */
-export function runCommand(command: string): Promise<CommandResult> {
-  return invoke<CommandResult>("run_command", { command });
+export function runCommand(command: string, githubToken?: string): Promise<CommandResult> {
+  return invoke<CommandResult>("run_command", { command, ...(githubToken ? { githubToken } : {}) });
 }
 
 /**

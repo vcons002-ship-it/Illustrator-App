@@ -106,6 +106,8 @@ export function buildBuddySystemPrompt(opts: {
   canRunCommands?: boolean;
   /** An AppID is set: advertise the Wolfram|Alpha tool (real-world data + computation). */
   canWolfram?: boolean;
+  /** A GitHub token is set (desktop + commands): advertise git/gh repo work. */
+  canGithub?: boolean;
 }): string {
   const persona =
     opts.persona === "technical"
@@ -169,6 +171,15 @@ export function buildBuddySystemPrompt(opts: {
       "constants, finance, nutrition, dates), equation solving, and step-by-step results. Use it when a " +
       "question needs an authoritative real-world value; use calculate for pure math you can express directly.\n"
     : "";
+  const githubBlock = opts.canGithub
+    ? "GITHUB: a GitHub token is configured and ALREADY in your shell environment (GH_TOKEN / GITHUB_TOKEN), so the gh " +
+      "CLI is authenticated and git can push — do real repository work through run_command in the workspace: clone " +
+      "(`gh repo clone owner/repo`), branch, edit/create files, commit, and push; open pull requests (`gh pr create " +
+      '--title "…" --body "…"`); and manage issues (`gh issue list`, `gh issue create`, `gh issue comment`). Run ' +
+      "`gh auth setup-git` ONCE before your first `git push` so git uses the token. Confirm the target repo before " +
+      "you push or open a PR. NEVER print, echo, log, or commit the token (don't run env/printenv or put it in a URL), " +
+      "and NEVER force-push, delete branches/repos/history, or change repo settings unless the reader explicitly asks.\n"
+    : "";
   const mature = opts.allowMature
     ? " The reader has enabled mature mode: explicit sexual content, graphic violence and other " +
       "adult themes are all in scope — engage with them and adult creative requests directly and " +
@@ -227,6 +238,7 @@ export function buildBuddySystemPrompt(opts: {
     fileTool +
     commandTool +
     wolframTool +
+    githubBlock +
     "GROUNDED IN TRUTH: don't guess at facts, APIs, library names, syntax, or current details you're unsure of. " +
     "First check your SKILLS for a matching playbook (read_skill it); then, when knowledge may be stale, version-" +
     "specific, or you're not certain, search_web and read_url the real source (official docs, a GitHub file) BEFORE " +
