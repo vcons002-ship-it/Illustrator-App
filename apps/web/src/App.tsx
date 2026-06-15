@@ -37,10 +37,13 @@ import {
   MAX_SKILL_NAME_CHARS,
   MAX_SKILL_DESC_CHARS,
   MAX_SKILL_BODY_CHARS,
+  zipProject,
+  PROJECT_ZIP_MIME,
   POLISH_PRESETS,
   type ConceptIntro,
   type DataTable,
   type JsonValue,
+  type ProjectFile,
   type Skill,
   type BookSource,
   type BookSummary,
@@ -897,6 +900,13 @@ export function App() {
   const onSaveChatFile = useCallback(
     (filename: string, content: string, mime: string): Promise<string | true> =>
       saveExportFile(filename, content, mime),
+    [],
+  );
+  // Bundle a multi-file answer (its named code blocks) into one project.zip — keeps a
+  // linked HTML/CSS/JS site or small script project together with its relative paths.
+  const onSaveProject = useCallback(
+    (files: ProjectFile[]): Promise<string | true> =>
+      saveExportFile("project.zip", zipProject(files), PROJECT_ZIP_MIME),
     [],
   );
 
@@ -2370,6 +2380,7 @@ export function App() {
             desktop={isDesktop}
             onOpenLocalFile={onOpenLocalFile}
             onSaveFile={onSaveChatFile}
+            onSaveProject={onSaveProject}
             {...(buddyUsage ? { contextUsage: buddyUsage } : {})}
           />
         </section>
@@ -2518,6 +2529,7 @@ export function App() {
           onDeleteMessage={onDeleteChatMessage}
           onCompact={onCompactChatClick}
           onSaveFile={onSaveChatFile}
+          onSaveProject={onSaveProject}
           {...(chatUsage ? { contextUsage: chatUsage } : {})}
         />
       )}

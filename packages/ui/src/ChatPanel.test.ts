@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { fileForLang, linkifyText, parseMessageBlocks } from "./ChatPanel.js";
+import {
+  fileForLang,
+  linkifyText,
+  parseFenceInfo,
+  parseMessageBlocks,
+  projectFilesFromBlocks,
+} from "./ChatPanel.js";
 
 describe("linkifyText", () => {
   it("returns a single text run when there are no links", () => {
@@ -69,6 +75,47 @@ describe("parseMessageBlocks", () => {
       { type: "code", lang: "", code: "a" },
       { type: "code", lang: "js", code: "b" },
     ]);
+  });
+
+  it("reads a filename from the fence (after the lang, a bare filename, or a path)", () => {
+    expect(parseMessageBlocks("```html index.html\n<h1>hi</h1>\n```")[0]).toEqual({
+      type: "code",
+      lang: "html",
+      code: "<h1>hi</h1>",
+      filename: "index.html",
+    });
+    expect(parseMessageBlocks("```app.js\nx\n```")[0]).toEqual({ type: "code", lang: "js", code: "x", filename: "app.js" });
+    expect(parseMessageBlocks("```js src/util.js\nx\n```")[0]).toEqual({
+      type: "code",
+      lang: "js",
+      code: "x",
+      filename: "src/util.js",
+    });
+    expect(parseMessageBlocks("```js\nx\n```")[0]).toEqual({ type: "code", lang: "js", code: "x" }); // no filename
+  });
+});
+
+describe("parseFenceInfo", () => {
+  it("splits lang + optional filename, tolerating title=\"…\"", () => {
+    expect(parseFenceInfo("html")).toEqual({ lang: "html" });
+    expect(parseFenceInfo("html index.html")).toEqual({ lang: "html", filename: "index.html" });
+    expect(parseFenceInfo('python title="main.py"')).toEqual({ lang: "python", filename: "main.py" });
+    expect(parseFenceInfo("styles.css")).toEqual({ lang: "css", filename: "styles.css" });
+    expect(parseFenceInfo("")).toEqual({ lang: "" });
+  });
+});
+
+describe("projectFilesFromBlocks", () => {
+  it("collects named multi-file blocks into project files", () => {
+    const blocks = parseMessageBlocks("```html index.html\n<a></a>\n```\nand\n```css styles.css\nbody{}\n```");
+    expect(projectFilesFromBlocks(blocks)).toEqual([
+      { name: "index.html", content: "<a></a>" },
+      { name: "styles.css", content: "body{}" },
+    ]);
+  });
+
+  it("falls back to a generic name for an unnamed block", () => {
+    expect(projectFilesFromBlocks(parseMessageBlocks("```js\nx\n```"))).toEqual([{ name: "file.js", content: "x" }]);
   });
 });
 

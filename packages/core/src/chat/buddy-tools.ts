@@ -245,6 +245,12 @@ export function buildBuddySystemPrompt(opts: {
     "code block tagged with its language/format (```html, ```csv, ```python, ```json, ```markdown …). The app shows a " +
     "Save button on that block so the reader keeps it as a real file — so put the whole, ready-to-use content in the " +
     "block (not a snippet), and keep your prose around it short.\n" +
+    "MULTI-FILE PROJECTS: when something needs SEVERAL files that link together (a site = index.html + styles.css + " +
+    "app.js; a script project with modules), write each file in its OWN fenced block and NAME it on the fence line " +
+    "after the language — ```html index.html, ```css styles.css, ```js app.js, ```python src/main.py (a relative path " +
+    "is fine). Reference the files by those exact names (e.g. <link href=\"styles.css\">, <script src=\"app.js\">) so " +
+    "they work together. The app then offers a \"Save all as project (.zip)\" button that keeps the whole set — with " +
+    "its folder structure — in one archive.\n" +
     "CONVERSATION RULES: use a tool only when the reader's request actually calls for one — most messages deserve a " +
     "plain conversational reply. NEVER steer the chat toward opening, illustrating, or finding books unless the " +
     "reader brings it up; ordinary conversation is the default, operating the app is the exception. Never call tools " +
