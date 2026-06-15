@@ -13,6 +13,7 @@ import type {
   AnalyzeChart,
   DataTable,
   ImageSearchHit,
+  CalendarEvent,
   ImportStats,
   PolishMode,
   TaskCandidate,
@@ -158,6 +159,8 @@ export interface EngineWorkerApi {
   planTask: (args: { source: TaskSource; sourceText: string; onProgress?: (phase: string, note?: string) => void }) => Promise<{ ok: boolean; plan?: TaskPlan; error?: string }>;
   /** Idle scan: actionable email/calendar items as task candidates. */
   scanInbox: () => Promise<{ ok: boolean; candidates?: TaskCandidate[] }>;
+  /** Load events across all Google calendars in a window (the calendar grid). */
+  loadCalendar: (timeMin: string, timeMax: string) => Promise<{ ok: boolean; events?: CalendarEvent[] }>;
   /** Run one document-polish stage; returns the requestId (for cancel) + the result. */
   polishText: (args: {
     stage: "understand" | "produce";
@@ -351,6 +354,8 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   >(new Map());
   // In-flight idle scans, resolved by `scanned`.
   const scanRequests = useRef<Map<number, (r: { ok: boolean; candidates?: TaskCandidate[] }) => void>>(new Map());
+  // In-flight calendar loads, resolved by `calendarLoaded`.
+  const calendarRequests = useRef<Map<number, (r: { ok: boolean; events?: CalendarEvent[] }) => void>>(new Map());
   // In-flight document-polish stages, resolved by `polished` (and streamed via `polishToken`).
   const polishRequests = useRef<
     Map<number, { onToken?: (delta: string) => void; resolve: (r: PolishResult) => void }>
@@ -635,6 +640,12 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           const resolve = scanRequests.current.get(msg.requestId);
           scanRequests.current.delete(msg.requestId);
           resolve?.({ ok: msg.ok, ...(msg.candidates ? { candidates: msg.candidates } : {}) });
+          break;
+        }
+        case "calendarLoaded": {
+          const resolve = calendarRequests.current.get(msg.requestId);
+          calendarRequests.current.delete(msg.requestId);
+          resolve?.({ ok: msg.ok, ...(msg.events ? { events: msg.events } : {}) });
           break;
         }
         case "polishToken": {
@@ -1093,6 +1104,21 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const loadCalendar = useCallback(
+    (timeMin: string, timeMax: string): Promise<{ ok: boolean; events?: CalendarEvent[] }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (calendarRequests.current.delete(requestId)) resolve({ ok: false });
+        }, 60_000);
+        calendarRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "loadCalendar", requestId, timeMin, timeMax });
+      }),
+    [],
+  );
   const polishText = useCallback(
     (args: {
       stage: "understand" | "produce";
@@ -1179,6 +1205,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     googleConnect,
     planTask,
     scanInbox,
+    loadCalendar,
     polishText,
     polishCancel,
   };

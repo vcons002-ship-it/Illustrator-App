@@ -7,6 +7,7 @@ import {
   exchangeGoogleCode,
   gmailReadEmail,
   listEvents,
+  listAllEvents,
   parseCalendarEvent,
   parseGmailMessage,
   parseTask,
@@ -138,7 +139,28 @@ describe("calendar + tasks parsers", () => {
       start: "2026-06-15T14:00:00Z",
       end: "2026-06-15T15:00:00Z",
     });
-    expect(parseCalendarEvent({ summary: "Holiday", start: { date: "2026-12-25" }, end: { date: "2026-12-26" } }).start).toBe("2026-12-25");
+    const allDay = parseCalendarEvent({ summary: "Holiday", start: { date: "2026-12-25" }, end: { date: "2026-12-26" } });
+    expect(allDay.start).toBe("2026-12-25");
+    expect(allDay.allDay).toBe(true);
+  });
+
+  it("listAllEvents tags each event with its calendar id + colour", async () => {
+    // First request = calendarList; subsequent = each calendar's events.
+    const t = new (class implements Transport {
+      n = 0;
+      readonly requests: TransportRequest[] = [];
+      send(req: TransportRequest): Promise<TransportResponse> {
+        this.requests.push(req);
+        const body =
+          this.n++ === 0
+            ? { items: [{ id: "primary", summary: "Me", primary: true, backgroundColor: "#3366cc" }] }
+            : { items: [{ id: "ev1", summary: "Standup", start: { dateTime: "2026-06-16T09:00:00Z" }, end: { dateTime: "2026-06-16T09:15:00Z" } }] };
+        return Promise.resolve({ ok: true, status: 200, json: <T>() => Promise.resolve(body as T), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)), text: () => Promise.resolve("") });
+      }
+    })();
+    const evs = await listAllEvents(t, "tok", { timeMin: "2026-06-01T00:00:00Z", timeMax: "2026-06-30T00:00:00Z" });
+    expect(evs).toHaveLength(1);
+    expect(evs[0]).toMatchObject({ summary: "Standup", calendarId: "primary", color: "#3366cc" });
   });
 
   it("parseTask keeps title/notes/due", () => {

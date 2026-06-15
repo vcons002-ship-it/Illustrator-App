@@ -315,6 +315,19 @@ export interface CalendarEvent {
   end: string;
   description?: string;
   location?: string;
+  /** Which calendar this came from + its colour (set by listEvents for the grid view). */
+  calendarId?: string;
+  color?: string;
+  /** True when start carries no time (an all-day event). */
+  allDay?: boolean;
+}
+
+/** One of the user's calendars. */
+export interface GoogleCalendar {
+  id: string;
+  summary: string;
+  primary?: boolean;
+  backgroundColor?: string;
 }
 
 interface RawEvent {
@@ -333,27 +346,65 @@ export function parseCalendarEvent(e: RawEvent): CalendarEvent {
     summary: e.summary ?? "(no title)",
     start: e.start?.dateTime ?? e.start?.date ?? "",
     end: e.end?.dateTime ?? e.end?.date ?? "",
+    ...(e.start?.date && !e.start?.dateTime ? { allDay: true } : {}),
     ...(e.description ? { description: e.description } : {}),
     ...(e.location ? { location: e.location } : {}),
   };
 }
 
-const CALENDAR = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
+const CAL_BASE = "https://www.googleapis.com/calendar/v3/calendars";
 
-/** Upcoming events from the primary calendar (from `timeMin`, default now). */
+/** Events from one calendar (default "primary"), in a window (default: from now). */
 export async function listEvents(
   transport: Transport,
   token: string,
-  opts: { max?: number; timeMin?: string } = {},
+  opts: { max?: number; timeMin?: string; timeMax?: string; calendarId?: string } = {},
 ): Promise<CalendarEvent[]> {
   const params = new URLSearchParams({
-    maxResults: String(Math.min(25, Math.max(1, opts.max ?? 10))),
+    maxResults: String(Math.min(250, Math.max(1, opts.max ?? 10))),
     singleEvents: "true",
     orderBy: "startTime",
     timeMin: opts.timeMin ?? new Date().toISOString(),
+    ...(opts.timeMax ? { timeMax: opts.timeMax } : {}),
   });
-  const data = await apiGet<{ items?: RawEvent[] }>(transport, token, `${CALENDAR}?${params.toString()}`);
+  const cal = encodeURIComponent(opts.calendarId ?? "primary");
+  const data = await apiGet<{ items?: RawEvent[] }>(transport, token, `${CAL_BASE}/${cal}/events?${params.toString()}`);
   return (data.items ?? []).map(parseCalendarEvent);
+}
+
+/** The user's calendars (for the calendar view — show events across all of them). */
+export async function listCalendars(transport: Transport, token: string): Promise<GoogleCalendar[]> {
+  const data = await apiGet<{ items?: { id?: string; summary?: string; primary?: boolean; backgroundColor?: string }[] }>(
+    transport,
+    token,
+    "https://www.googleapis.com/calendar/v3/users/me/calendarList",
+  );
+  return (data.items ?? [])
+    .filter((c): c is { id: string } & typeof c => typeof c.id === "string")
+    .map((c) => ({
+      id: c.id,
+      summary: c.summary ?? c.id,
+      ...(c.primary ? { primary: true } : {}),
+      ...(c.backgroundColor ? { backgroundColor: c.backgroundColor } : {}),
+    }));
+}
+
+/** Events across ALL the user's calendars in a window (each tagged with its colour) —
+ * the data behind the in-app calendar grid. Bounded per calendar. */
+export async function listAllEvents(
+  transport: Transport,
+  token: string,
+  opts: { timeMin: string; timeMax: string; maxCalendars?: number },
+): Promise<CalendarEvent[]> {
+  const calendars = (await listCalendars(transport, token)).slice(0, opts.maxCalendars ?? 12);
+  const lists = await Promise.all(
+    calendars.map((c) =>
+      listEvents(transport, token, { calendarId: c.id, timeMin: opts.timeMin, timeMax: opts.timeMax, max: 250 })
+        .then((evs) => evs.map((e) => ({ ...e, calendarId: c.id, ...(c.backgroundColor ? { color: c.backgroundColor } : {}) })))
+        .catch(() => [] as CalendarEvent[]),
+    ),
+  );
+  return lists.flat();
 }
 
 /** Create an event. `start`/`end` are ISO datetimes (with offset or Z). */
@@ -369,7 +420,7 @@ export async function createEvent(
     ...(ev.description ? { description: ev.description } : {}),
     ...(ev.location ? { location: ev.location } : {}),
   };
-  return parseCalendarEvent(await apiPost<RawEvent>(transport, token, CALENDAR, body));
+  return parseCalendarEvent(await apiPost<RawEvent>(transport, token, `${CAL_BASE}/primary/events`, body));
 }
 
 // ---------------------------------------------------------------------- Tasks
