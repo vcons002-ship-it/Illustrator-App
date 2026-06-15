@@ -65,6 +65,8 @@ export interface ChatBuddyPanelProps {
   workingDir?: string;
   /** Set the working folder run_command/find_files operate in ("" resets to default). */
   onSetWorkingDir?: (dir: string) => void;
+  /** Native folder picker (desktop); resolves to a path or undefined on cancel. */
+  onPickFolder?: () => Promise<string | undefined>;
 }
 
 export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanelProps) {
@@ -134,7 +136,11 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
       </div>
 
       {props.onSetWorkingDir && (
-        <WorkingFolderBar workingDir={props.workingDir ?? ""} onSet={props.onSetWorkingDir} />
+        <WorkingFolderBar
+          workingDir={props.workingDir ?? ""}
+          onSet={props.onSetWorkingDir}
+          {...(props.onPickFolder ? { onPick: props.onPickFolder } : {})}
+        />
       )}
       {props.contextUsage && <UsageDisclosure usage={props.contextUsage} />}
       {showHelp && (
@@ -389,11 +395,23 @@ const smallButtonStyle = {
 } as const;
 
 /** Desktop: shows/sets the folder the assistant's commands + file search run in. */
-function WorkingFolderBar({ workingDir, onSet }: { workingDir: string; onSet: (dir: string) => void }) {
+function WorkingFolderBar({
+  workingDir,
+  onSet,
+  onPick,
+}: {
+  workingDir: string;
+  onSet: (dir: string) => void;
+  onPick?: () => Promise<string | undefined>;
+}) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(workingDir);
   const label = workingDir || "Default workspace (~/VisualReader/workspace)";
   const tinyBtn = { ...smallButtonStyle, padding: "2px 8px", fontSize: 11 } as const;
+  const browse = async () => {
+    const p = await onPick?.();
+    if (p) onSet(p);
+  };
   return (
     <div style={folderBarStyle}>
       <span title="Where the assistant's commands and file search run">📁</span>
@@ -423,7 +441,10 @@ function WorkingFolderBar({ workingDir, onSet }: { workingDir: string; onSet: (d
           >
             {label}
           </span>
-          <button style={tinyBtn} onClick={() => { setDraft(workingDir); setEditing(true); }}>Change</button>
+          {onPick ? <button style={tinyBtn} onClick={() => void browse()}>Browse…</button> : null}
+          <button style={tinyBtn} onClick={() => { setDraft(workingDir); setEditing(true); }}>
+            {onPick ? "Type" : "Change"}
+          </button>
           {workingDir ? (
             <button style={tinyBtn} title="Use the default workspace" onClick={() => onSet("")}>Reset</button>
           ) : null}

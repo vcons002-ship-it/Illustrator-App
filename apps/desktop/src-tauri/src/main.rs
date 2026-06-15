@@ -580,6 +580,18 @@ struct CommandResult {
 const COMMAND_TIMEOUT_SECS: u64 = 240;
 const COMMAND_OUTPUT_CAP: usize = 32 * 1024;
 
+/// Native "choose a folder" dialog for the assistant's working-folder control.
+/// Returns the chosen absolute path, or None if the reader cancelled. AsyncFileDialog
+/// drives the dialog on the platform's UI thread without blocking the command runtime.
+#[tauri::command]
+async fn pick_folder() -> Option<String> {
+    rfd::AsyncFileDialog::new()
+        .set_title("Choose a working folder for the assistant")
+        .pick_folder()
+        .await
+        .map(|h| h.path().to_string_lossy().into_owned())
+}
+
 /// Run ONE shell command (the chat's run_command tool, after the reader approved it)
 /// in the app's workspace folder, capturing stdout/stderr/exit. The renderer only
 /// reaches this after an explicit per-command approval click — there is no silent
@@ -1231,7 +1243,8 @@ fn main() {
             search_files,
             read_file,
             run_command,
-            capture_screen
+            capture_screen,
+            pick_folder
         ])
         .build(tauri::generate_context!())
         .expect("error while building Visual Reader")
