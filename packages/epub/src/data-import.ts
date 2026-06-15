@@ -75,10 +75,8 @@ export function xlsxToText(input: ArrayBuffer | Uint8Array): string {
   return text;
 }
 
-/** Excel `.xlsx` → the FIRST worksheet's raw cell grid (header row + data rows). */
-export function xlsxToGrid(input: ArrayBuffer | Uint8Array): string[][] {
-  const files = unzipSync(toBytes(input));
-  // Shared strings: each <si> is one string (possibly several <t> runs).
+/** The workbook's shared-string table (each <si> is one string of <t> runs). */
+function sharedStrings(files: Record<string, Uint8Array>): string[] {
   const shared: string[] = [];
   const sst = entryText(files, "xl/sharedStrings.xml");
   if (sst) {
@@ -87,14 +85,16 @@ export function xlsxToGrid(input: ArrayBuffer | Uint8Array): string[][] {
       shared.push(runs.join(""));
     }
   }
-  const sheet = strFromU8(firstWorksheet(files));
-  if (!sheet) {
-    throw new Error("Couldn't read this .xlsx (unusual structure). Tip: in Excel, Save As → CSV.");
-  }
+  return shared;
+}
+
+/** One worksheet's XML → its raw cell grid, resolving shared/inline/numeric cells. */
+function parseSheetGrid(sheetXml: string, shared: string[]): string[][] {
   const rows: string[][] = [];
   // Both real cells (<c …>…</c>) and self-closing empty cells (<c r="B1"/>) — the
-  // latter keep column alignment when a row skips a column.
-  for (const rowXml of (sheet.match(/<row[\s\S]*?<\/row>/g) ?? []).slice(0, MAX_TABLE_ROWS)) {
+  // latter keep column alignment when a row skips a column. A cell's cached <v> is
+  // read even when it carries an <f> formula (Excel stores the computed value too).
+  for (const rowXml of (sheetXml.match(/<row[\s\S]*?<\/row>/g) ?? []).slice(0, MAX_TABLE_ROWS)) {
     const cells: string[] = [];
     for (const c of rowXml.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
       const attrs = c[1]!;
@@ -118,6 +118,52 @@ export function xlsxToGrid(input: ArrayBuffer | Uint8Array): string[][] {
     rows.push(cells);
   }
   return rows;
+}
+
+/** One imported worksheet: its tab name + raw cell grid. */
+export interface XlsxSheetGrid {
+  name: string;
+  grid: string[][];
+}
+
+/** Cap on how many worksheets one import reads (sanity bound). */
+const MAX_SHEETS = 64;
+
+/** Excel `.xlsx` → the FIRST worksheet's raw cell grid (header row + data rows). */
+export function xlsxToGrid(input: ArrayBuffer | Uint8Array): string[][] {
+  const files = unzipSync(toBytes(input));
+  const sheet = strFromU8(firstWorksheet(files));
+  if (!sheet) {
+    throw new Error("Couldn't read this .xlsx (unusual structure). Tip: in Excel, Save As → CSV.");
+  }
+  return parseSheetGrid(sheet, sharedStrings(files));
+}
+
+/**
+ * Excel `.xlsx` → EVERY worksheet (in workbook tab order) with its name + grid, so
+ * a multi-sheet workbook isn't truncated to the first tab. Resolves each sheet's
+ * part via workbook.xml + its rels; falls back to the lone first worksheet when the
+ * workbook index is missing/unusual.
+ */
+export function xlsxToWorkbook(input: ArrayBuffer | Uint8Array): XlsxSheetGrid[] {
+  const files = unzipSync(toBytes(input));
+  const shared = sharedStrings(files);
+  const workbook = entryText(files, "xl/workbook.xml");
+  const rels = entryText(files, "xl/_rels/workbook.xml.rels");
+  const out: XlsxSheetGrid[] = [];
+  for (const tag of (workbook.match(/<sheet\b[^>]*?\/?>/g) ?? []).slice(0, MAX_SHEETS)) {
+    const name = decodeXmlEntities(/name="([^"]*)"/.exec(tag)?.[1] ?? `Sheet ${out.length + 1}`);
+    const rid = /r:id="([^"]+)"/.exec(tag)?.[1];
+    const target = rid ? new RegExp(`<Relationship\\b[^>]*Id="${rid}"[^>]*Target="([^"]+)"`).exec(rels)?.[1] : undefined;
+    const key = target ? `xl/${target.replace(/^\.?\//, "").replace(/^\/+/, "")}` : "";
+    const xml = key && files[key] ? strFromU8(files[key]!) : "";
+    if (xml) out.push({ name, grid: parseSheetGrid(xml, shared) });
+  }
+  if (out.length === 0) {
+    const sheet = strFromU8(firstWorksheet(files));
+    if (sheet) out.push({ name: "Sheet 1", grid: parseSheetGrid(sheet, shared) });
+  }
+  return out;
 }
 
 /**

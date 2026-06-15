@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { zipSync, strToU8 } from "fflate";
-import { csvToText, docxToText, rtfToText, xlsxToText } from "./data-import.js";
+import { csvToText, docxToText, rtfToText, xlsxToText, xlsxToWorkbook } from "./data-import.js";
 
 describe("docxToText", () => {
   it("extracts paragraph text, tabs, and decoded entities", () => {
@@ -67,6 +67,42 @@ describe("xlsxToText", () => {
 
   it("gives a CSV-tip error when the file is unreadable", () => {
     expect(() => xlsxToText(zipSync({ "docProps/core.xml": strToU8("x") }))).toThrow(/CSV/);
+  });
+});
+
+describe("xlsxToWorkbook", () => {
+  it("reads EVERY sheet in tab order, with names, resolving parts via rels", () => {
+    const workbook =
+      "<workbook><sheets>" +
+      '<sheet name="Sales" sheetId="1" r:id="rIdA"/>' +
+      '<sheet name="Q1 &amp; Q2" sheetId="2" r:id="rIdB"/>' +
+      "</sheets></workbook>";
+    const rels =
+      "<Relationships>" +
+      '<Relationship Id="rIdA" Target="worksheets/sheet1.xml"/>' +
+      '<Relationship Id="rIdB" Target="worksheets/sheet2.xml"/>' +
+      "</Relationships>";
+    const s1 = '<worksheet><sheetData><row><c r="A1"><v>1</v></c></row></sheetData></worksheet>';
+    // A formula cell: the cached <v> is what we import (computed value, not the <f>).
+    const s2 = '<worksheet><sheetData><row><c r="A1"><f>1+1</f><v>2</v></c></row></sheetData></worksheet>';
+    const wb = xlsxToWorkbook(
+      zipSync({
+        "xl/workbook.xml": strToU8(workbook),
+        "xl/_rels/workbook.xml.rels": strToU8(rels),
+        "xl/worksheets/sheet1.xml": strToU8(s1),
+        "xl/worksheets/sheet2.xml": strToU8(s2),
+      }),
+    );
+    expect(wb.map((s) => s.name)).toEqual(["Sales", "Q1 & Q2"]);
+    expect(wb[0]!.grid).toEqual([["1"]]);
+    expect(wb[1]!.grid).toEqual([["2"]]); // formula's cached value
+  });
+
+  it("falls back to the first worksheet when there's no workbook index", () => {
+    const sheet = '<worksheet><sheetData><row><c r="A1"><v>7</v></c></row></sheetData></worksheet>';
+    const wb = xlsxToWorkbook(zipSync({ "xl/worksheets/sheet1.xml": strToU8(sheet) }));
+    expect(wb).toHaveLength(1);
+    expect(wb[0]!.grid).toEqual([["7"]]);
   });
 });
 
