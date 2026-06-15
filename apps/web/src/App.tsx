@@ -76,6 +76,8 @@ import {
   bookFromText,
   buildIllustratedEpub,
   buildIllustratedHtml,
+  dataTableToCsv,
+  dataTableToXlsx,
   type ExportImage,
   type ExportImages,
 } from "@visual-reader/epub";
@@ -156,6 +158,8 @@ function lastPathSegment(p: string): string {
  * result is visible instead of looking like the search silently did nothing. */
 /** Direct-image extensions for the "just display this URL" shortcut. */
 const IMAGE_URL_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif)(\?|#|$)/i;
+/** Excel workbook MIME for downloads (the OOXML spreadsheet type). */
+const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
 /**
  * If a message is really a request to just SHOW a web image (a bare image link, or
@@ -3216,6 +3220,28 @@ const ReaderColumn = memo(function ReaderColumn({
               {book.data.columns.length === 1 ? "" : "s"}. Ask the buddy to analyse, chart, or pivot it.
             </span>
           </summary>
+          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+            <button
+              style={styles.smallButton}
+              title="Download a real Excel workbook (.xlsx) of this table"
+              onClick={() => {
+                const base = (book.title || "data").replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "data";
+                void saveExportFile(`${base}.xlsx`, dataTableToXlsx(book.data!), XLSX_MIME);
+              }}
+            >
+              ⬇ Excel (.xlsx)
+            </button>
+            <button
+              style={styles.smallButton}
+              title="Download this table as CSV"
+              onClick={() => {
+                const base = (book.title || "data").replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "data";
+                void saveExportFile(`${base}.csv`, dataTableToCsv(book.data!), "text/csv");
+              }}
+            >
+              ⬇ CSV
+            </button>
+          </div>
           <div style={{ marginTop: 8 }}>
             <DataTablePreview table={book.data} maxRows={200} maxHeight={420} />
           </div>
@@ -4236,6 +4262,15 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     fontSize: 13,
     fontWeight: 600,
+  },
+  smallButton: {
+    background: "rgba(90,209,155,0.12)",
+    border: "1px solid rgba(90,209,155,0.5)",
+    color: "inherit",
+    borderRadius: 6,
+    padding: "3px 9px",
+    cursor: "pointer",
+    fontSize: 12,
   },
   status: { padding: "10px 20px", color: "#ffd479" },
   bibleStatus: { padding: "4px 20px 0", fontSize: 12, opacity: 0.75, fontFamily: "system-ui, sans-serif" },

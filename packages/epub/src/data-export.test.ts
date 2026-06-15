@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { unzipSync, strFromU8 } from "fflate";
 import type { DataTable } from "@visual-reader/core";
-import { buildXlsx, columnLetter, dataTableToXlsx, sheetFromDataTable } from "./data-export.js";
+import { buildXlsx, columnLetter, dataTableToCsv, dataTableToXlsx, sheetFromDataTable } from "./data-export.js";
 import { xlsxToGrid } from "./data-import.js";
 
 const table: DataTable = {
@@ -60,6 +60,14 @@ describe("buildXlsx", () => {
     expect(workbook).toContain('name="Data 2025"'); // "/" stripped from the tab name
     expect(workbook).toContain('name="Notes"');
     expect(strFromU8(files["xl/worksheets/sheet2.xml"]!)).toContain("<f>1+1</f>");
+  });
+
+  it("exports CSV with RFC-4180 quoting", () => {
+    const t: DataTable = {
+      columns: [{ name: "Name", type: "string" }, { name: "Note", type: "string" }],
+      rows: [["Acme, Inc.", 'say "hi"'], ["Beta", "line1\nline2"]],
+    };
+    expect(dataTableToCsv(t)).toBe('Name,Note\r\n"Acme, Inc.","say ""hi"""\r\nBeta,"line1\nline2"');
   });
 
   it("escapes XML-special characters in strings", () => {

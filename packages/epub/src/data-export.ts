@@ -227,6 +227,20 @@ export function sheetFromDataTable(
   return { name, rows };
 }
 
+/** RFC-4180 CSV for one cell: quote when it contains a comma, quote, or newline. */
+function csvCell(v: XlsxCellValue): string {
+  if (v === null || v === undefined) return "";
+  const s = String(v);
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/** A typed DataTable → CSV text (header + rows). Excel opens it directly. */
+export function dataTableToCsv(table: DataTable): string {
+  const header = table.columns.map((c) => csvCell(c.name)).join(",");
+  const rows = table.rows.map((r) => r.map((v) => csvCell(v as XlsxCellValue)).join(","));
+  return [header, ...rows].join("\r\n");
+}
+
 /** Build a single-sheet `.xlsx` straight from a DataTable (the common case). */
 export function dataTableToXlsx(
   table: DataTable,
