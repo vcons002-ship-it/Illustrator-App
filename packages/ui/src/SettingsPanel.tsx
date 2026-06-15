@@ -200,6 +200,9 @@ export interface ReaderSettings {
    * the test-as-you-go coding loop.
    */
   allowCommands?: boolean;
+  /** Enable GitHub repo work using your OWN local `gh` login (gh auth login) instead
+   * of a stored token — so the assistant's GitHub mode turns on without `keys.github`. */
+  githubLocalAuth?: boolean;
   /** Transient: base URL of the app-managed local engine (desktop; not persisted). */
   engineBaseUrl?: string;
 }
@@ -843,6 +846,21 @@ export function SettingsPanel({
                       github.com/settings/tokens ↗
                     </a>
                     {" "}(<code>git</code>/<code>gh</code> must be installed).
+                  </span>
+                </label>
+                <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={value.githubLocalAuth ?? false}
+                    onChange={(e) => set({ githubLocalAuth: e.target.checked })}
+                  />
+                  <span>
+                    No token? Use my own <code>gh</code> login instead
+                    <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                      If you’ve run <code>gh auth login</code> yourself (so <code>git</code>/<code>gh</code> already
+                      work in a terminal), turn this on to enable the assistant’s GitHub features without storing a
+                      token here — it uses your existing login.
+                    </span>
                   </span>
                 </label>
               </>

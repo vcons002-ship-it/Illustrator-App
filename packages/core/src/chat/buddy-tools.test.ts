@@ -270,7 +270,7 @@ describe("buildBuddySystemPrompt", () => {
     expect(on).toContain("GITHUB:");
     expect(on).toContain("gh pr create");
     expect(on).toContain("gh auth setup-git");
-    expect(on).toContain("GH_TOKEN");
+    expect(on).toContain("authenticated"); // gh is authed (token OR local gh login)
     expect(on).toContain("default branch"); // gh targets it automatically
     expect(on).toContain("git checkout -b"); // work on a NEW branch, not the default
     expect(on).toMatch(/cd <repo>/); // the per-command working-dir caveat
