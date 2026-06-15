@@ -1511,6 +1511,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         ...(corsProxyAvailable && settings?.allowCommands && msg.workingDir ? { workingDir: msg.workingDir } : {}),
         // Gmail/Calendar/Tasks tools when Google is connected.
         ...(googleConnected ? { canGoogle: true } : {}),
+        // Auto-approval: create reminders without per-item confirm when opted in.
+        ...(googleConnected && settings?.allowTaskAutomation ? { canAutomateTasks: true } : {}),
       }) +
       (memory ? `\n\n${memory}` : "") +
       (skills ? `\n\n${skills}` : "") +

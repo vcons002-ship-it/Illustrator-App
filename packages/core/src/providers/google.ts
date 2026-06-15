@@ -427,3 +427,21 @@ export async function createTask(
   };
   return parseTask(await apiPost<RawTask>(transport, token, TASKS, body));
 }
+
+/** Flip a to-do's completion (the remote-bus write-back when a step is finished
+ * in-app). Read+create+complete only — no delete. */
+export async function patchTask(
+  transport: Transport,
+  token: string,
+  id: string,
+  patch: { status: "completed" | "needsAction" },
+): Promise<TaskItem> {
+  const res = await transport.send({
+    url: `${TASKS}/${encodeURIComponent(id)}`,
+    method: "PATCH",
+    headers: { authorization: `Bearer ${token}` },
+    body: { status: patch.status },
+  });
+  if (!res.ok) throw new Error(await apiError(res));
+  return parseTask(await res.json<RawTask>());
+}
