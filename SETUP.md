@@ -211,6 +211,10 @@ human approval at every step. Some are on by default, the riskier ones are opt-i
   3. Turn on **"Let the assistant run commands"** (GitHub work runs through that same
      approval-gated runner — you click to approve every command).
 
+  *Prefer not to store a token?* If you've already run **`gh auth login`** yourself, tick
+  **Settings → "Use my own `gh` login instead"** and the assistant's GitHub features turn on
+  using your existing local login — no token stored in the app.
+
   The token is handed to commands through their **environment** (`GH_TOKEN`) — it's never
   written into a command, shown to the model, or printed — so `gh` is authenticated and
   `git push` works without `gh auth login`. **There's no fixed "current repo":** you tell the

@@ -179,8 +179,8 @@ export function buildBuddySystemPrompt(opts: {
       "subfolder does NOT carry to the next command, so chain with `&&` or re-`cd` each time.\n"
     : "";
   const githubBlock = opts.canGithub
-    ? "GITHUB: a GitHub token is configured and ALREADY in your shell environment (GH_TOKEN / GITHUB_TOKEN), so the gh " +
-      "CLI is authenticated and git can push — do real repository work through run_command in the workspace. Clone with " +
+    ? "GITHUB: GitHub is connected — the gh CLI is authenticated (via a token in your environment or the reader's own " +
+      "gh login) and git can push — do real repository work through run_command in the workspace. Clone with " +
       "`gh repo clone owner/repo` (ask the reader which repo if it isn't obvious). IMPORTANT: each run_command starts " +
       "fresh in the workspace ROOT and a `cd` does NOT carry over to the next command, so after cloning into ./<repo> " +
       "prefix EVERY later command with `cd <repo> && …`. Run `gh auth setup-git` once before your first `git push`. " +
