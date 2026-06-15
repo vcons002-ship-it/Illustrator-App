@@ -18,6 +18,7 @@ export * from "./CharacterBible.js";
 export * from "./LibraryPanel.js";
 export * from "./SettingsPanel.js";
 export * from "./SkillsPanel.js";
+export * from "./TasksPanel.js";
 export * from "./FirstRunWizard.js";
 export * from "./buildProviders.js";
 export * from "./settingsKeys.js";

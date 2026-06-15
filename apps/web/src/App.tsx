@@ -34,6 +34,11 @@ import {
   loadSkills,
   saveSkill,
   forgetSkill,
+  loadTaskPlans,
+  deleteTaskPlan,
+  upsertTaskPlan,
+  advanceStep,
+  type TaskPlan,
   MAX_SKILL_NAME_CHARS,
   MAX_SKILL_DESC_CHARS,
   MAX_SKILL_BODY_CHARS,
@@ -80,6 +85,7 @@ import {
   DataTablePreview,
   JsonTreeView,
   SkillsPanel,
+  TasksPanel,
   DEFAULT_SETTINGS,
   DocumentPolishPanel,
   FirstRunWizard,
@@ -265,6 +271,28 @@ export function App() {
     await loadSkills(libraryStore).then(setSkills).catch(() => {});
     setShowSkills(true);
   }, [libraryStore]);
+  const [showTasks, setShowTasks] = useState(false);
+  const [taskPlans, setTaskPlans] = useState<TaskPlan[]>([]);
+  const refreshTaskPlans = useCallback(() => {
+    void loadTaskPlans(libraryStore).then(setTaskPlans).catch(() => {});
+  }, [libraryStore]);
+  const openTasks = useCallback(async () => {
+    await loadTaskPlans(libraryStore).then(setTaskPlans).catch(() => {});
+    setShowTasks(true);
+  }, [libraryStore]);
+  const onAdvanceTaskStep = useCallback(
+    async (planId: string, stepId: string) => {
+      const plan = (await loadTaskPlans(libraryStore)).find((p) => p.id === planId);
+      if (!plan) return;
+      const step = plan.steps.find((s) => s.id === stepId);
+      // advanceStep marks the first non-done step done; only act if that's the one shown.
+      if (step && step.status !== "done") {
+        await upsertTaskPlan(libraryStore, advanceStep(plan).plan);
+        refreshTaskPlans();
+      }
+    },
+    [libraryStore, refreshTaskPlans],
+  );
   // Faithful document-polish panel + an optional prefill (from upload or a home click).
   const [showPolish, setShowPolish] = useState(false);
   const [polishInitial, setPolishInitial] = useState<{ title?: string; text?: string } | undefined>();
@@ -1483,6 +1511,7 @@ export function App() {
       return;
     }
     const plan = res.plan;
+    refreshTaskPlans();
     const summary =
       `📋 Planned: ${plan.title}${plan.deadlineIso ? ` (deadline ${plan.deadlineIso})` : ""}\n` +
       plan.steps
@@ -1862,6 +1891,41 @@ export function App() {
     },
     [activeBuddyId, libraryStore, persistSessions, resetBuddyView],
   );
+  // Open a task in its own preloaded chat session (reuses multi-session): switch to the
+  // plan's session (creating one the first time), seed it with the current step + links.
+  const openTaskInChat = useCallback(
+    async (planId: string) => {
+      const plan = (await loadTaskPlans(libraryStore)).find((p) => p.id === planId);
+      if (!plan) return;
+      setShowTasks(false);
+      let sessionId = plan.sessionId;
+      if (!sessionId || !buddySessions.some((s) => s.id === sessionId)) {
+        const sid = `${BUDDY_CHAT_ID}-${Date.now().toString(36)}`;
+        sessionId = sid;
+        setBuddySessions((prev) => {
+          const next = [...prev, { id: sid, workingDir: "" }];
+          persistSessions(next);
+          return next;
+        });
+        await upsertTaskPlan(libraryStore, { ...plan, sessionId: sid });
+        refreshTaskPlans();
+      }
+      resetBuddyView();
+      setActiveBuddyId(sessionId);
+      void libraryStore.putMemo?.("buddy-active-session", sessionId).catch(() => {});
+      const ready = plan.steps.find((s) => s.status === "ready") ?? plan.steps.find((s) => s.status !== "done");
+      const primer = [
+        `📋 ${plan.title}${plan.deadlineIso ? ` — due ${plan.deadlineIso}` : ""}`,
+        plan.summary,
+        ready ? `Current step: ${ready.title}${ready.detail ? ` — ${ready.detail}` : ""}` : "All steps are done. 🎉",
+        ready?.links.length ? `Links: ${ready.links.map((l) => l.url).join("  ")}` : "",
+        "Ask me to help with this step.",
+      ].filter(Boolean);
+      setBuddyMessages([{ role: "tool", text: primer.join("\n"), at: Date.now() }]);
+    },
+    [libraryStore, buddySessions, persistSessions, resetBuddyView, refreshTaskPlans],
+  );
+
   // Stable per-index delete handlers (memoised bubbles take the SAME function).
   const onDeleteBuddyMessage = useCallback((index: number) => {
     setBuddyMessages((prev) => prev.filter((_, i) => i !== index));
@@ -2280,6 +2344,13 @@ export function App() {
             title="The assistant's skills — durable how-to playbooks it keeps across every chat (view, edit, or import a .md)"
           >
             🧠 Skills
+          </button>
+          <button
+            style={styles.button}
+            onClick={() => void openTasks()}
+            title="Your planned multi-step tasks — research, steps, deadlines, prepped docs. Ask the assistant to “plan …” anything."
+          >
+            📋 Tasks
           </button>
           <button style={styles.button} onClick={() => openBook(loadSampleBook())}>
             Load sample
@@ -2884,6 +2955,19 @@ export function App() {
             refreshSkills();
           }}
           onClose={() => setShowSkills(false)}
+        />
+      )}
+
+      {showTasks && (
+        <TasksPanel
+          plans={taskPlans}
+          onOpenTask={(id) => void openTaskInChat(id)}
+          onAdvanceStep={onAdvanceTaskStep}
+          onDelete={async (id) => {
+            await deleteTaskPlan(libraryStore, id);
+            refreshTaskPlans();
+          }}
+          onClose={() => setShowTasks(false)}
         />
       )}
     </div>
