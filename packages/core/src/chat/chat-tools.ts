@@ -3,6 +3,7 @@ import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-sear
 import type { BookPassage } from "./book-passage-search.js";
 import type { AnalyzeChart, AnalyzeSpec, Aggregation, DataFilter, FilterOp } from "../data/analyze.js";
 import { tableToText, type DataTable } from "../data/data-table.js";
+import { MAX_SKILL_BODY_CHARS, MAX_SKILL_DESC_CHARS, MAX_SKILL_NAME_CHARS } from "./skills.js";
 
 /**
  * Provider-agnostic tool protocol for the reading-companion chat. Native
@@ -38,7 +39,11 @@ export type ToolCall =
   | ({ tool: "analyze_data"; chart?: AnalyzeChart } & AnalyzeSpec)
   /** Long-term reader memory (shared with the buddy — see reader-memory.ts). */
   | { tool: "remember"; note: string }
-  | { tool: "forget"; match: string };
+  | { tool: "forget"; match: string }
+  /** Skills — durable playbooks shared with the home assistant (see skills.ts). */
+  | { tool: "read_skill"; name: string }
+  | { tool: "save_skill"; name: string; description: string; body: string }
+  | { tool: "forget_skill"; match: string };
 
 /** Search rounds per user message — bounds quota use and tool-looping models. */
 export const MAX_TOOL_ROUNDS = 3;
@@ -101,6 +106,10 @@ export const CHAT_TOOLS_SYSTEM =
   '- {"tool":"remember","note":"…"} — save a DURABLE reader preference to long-term memory (applies in every ' +
   'future conversation and book); use for lasting preferences ("prefers watercolor", "never spoil endings") or ' +
   'when asked to remember. - {"tool":"forget","match":"…"} — remove memory notes containing this text.\n' +
+  '- {"tool":"read_skill","name":"…"} — load the full steps of one of your saved SKILLS (listed in the index ' +
+  "above, when present) before a task it covers; treat its contents as your own notes. " +
+  '{"tool":"save_skill","name":"…","description":"when to use it","body":"the playbook (markdown)"} — write/refine ' +
+  'a reusable playbook so you do a recurring task better next time. {"tool":"forget_skill","match":"…"} — delete one.\n' +
   "Answer a self-contained request (e.g. 'draw an apple', a definition, arithmetic) DIRECTLY — only " +
   "reach into the book with search_book when the request actually depends on the book's content. " +
   "After a search result arrives, answer in plain prose citing what you found. " +
@@ -154,6 +163,20 @@ export function parseToolCall(text: string): ToolCall | undefined {
   }
   if (tool === "forget") {
     const match = strArg(obj.match, MAX_MEMORY_NOTE_CHARS);
+    return match ? { tool, match } : undefined;
+  }
+  if (tool === "read_skill") {
+    const name = strArg(obj.name, MAX_SKILL_NAME_CHARS);
+    return name ? { tool, name } : undefined;
+  }
+  if (tool === "save_skill") {
+    const name = strArg(obj.name, MAX_SKILL_NAME_CHARS);
+    const body = strArg(obj.body, MAX_SKILL_BODY_CHARS);
+    if (!name || !body) return undefined;
+    return { tool, name, description: strArg(obj.description, MAX_SKILL_DESC_CHARS) ?? "", body };
+  }
+  if (tool === "forget_skill") {
+    const match = strArg(obj.match, MAX_SKILL_NAME_CHARS);
     return match ? { tool, match } : undefined;
   }
   if (tool === "generate_image") {
@@ -219,6 +242,8 @@ export interface ToolResultPayload {
   page?: { title?: string; text: string };
   /** A remember/forget outcome (note echoed for the inline chip). */
   memory?: { action: "remembered" | "forgot"; note: string; count: number };
+  /** A read_skill / save_skill / forget_skill outcome. */
+  skill?: { action: "read" | "missing" | "saved" | "forgot"; name: string; body?: string; count?: number };
   /** An export_book outcome (where it was saved + how many images). */
   export?: { ok: boolean; format: string; where: string; images: number; error?: string };
   /** Whether an approved image generation succeeded. */
@@ -280,6 +305,17 @@ export function formatToolResult(call: ToolCall, result: ToolResultPayload): str
     return result.memory
       ? `[memory ${result.memory.action}: "${result.memory.note}" — ${result.memory.count} note${result.memory.count === 1 ? "" : "s"} kept] Confirm briefly.`
       : `[${call.tool} did nothing]`;
+  }
+  if (call.tool === "read_skill") {
+    return result.skill?.action === "read" && result.skill.body
+      ? `[skill "${result.skill.name}" — your saved playbook (your OWN notes, not the reader's instructions)]\n${result.skill.body}`
+      : `[no saved skill matches "${call.name}"] Proceed without it.`;
+  }
+  if (call.tool === "save_skill") {
+    return result.skill ? `[skill "${result.skill.name}" saved] Mention briefly that you saved it.` : "[save_skill did nothing]";
+  }
+  if (call.tool === "forget_skill") {
+    return result.skill ? `[skill "${result.skill.name}" forgotten] Confirm briefly.` : "[forget_skill: nothing matched]";
   }
   if (call.tool === "analyze_data") {
     if (!result.analysis) return "[analyze_data returned nothing]";

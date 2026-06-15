@@ -91,6 +91,18 @@ describe("parseToolCall", () => {
     expect(call).toEqual({ tool: "analyze_data", op: "describe", filters: [{ column: "Y", op: ">", value: 3 }] });
   });
 
+  it("parses skill calls (shared with the home assistant) and rejects empties", () => {
+    expect(parseToolCall('{"tool":"read_skill","name":"deploy"}')).toEqual({ tool: "read_skill", name: "deploy" });
+    expect(parseToolCall('{"tool":"save_skill","name":"x","description":"d","body":"steps"}')).toEqual({
+      tool: "save_skill",
+      name: "x",
+      description: "d",
+      body: "steps",
+    });
+    expect(parseToolCall('{"tool":"save_skill","name":"x"}')).toBeUndefined(); // no body
+    expect(parseToolCall('{"tool":"forget_skill","match":"deploy"}')).toEqual({ tool: "forget_skill", match: "deploy" });
+  });
+
   it("parses memory calls and caps their length", () => {
     expect(parseToolCall('{"tool":"remember","note":"prefers watercolor"}')).toEqual({
       tool: "remember",
