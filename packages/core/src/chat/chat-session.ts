@@ -100,6 +100,8 @@ export function trimChatHistory(history: ChatTurn[], maxChars: number): ChatTurn
 export async function runChatTurn(opts: {
   llm: ChatCapable;
   system: string;
+  /** Stable leading portion of `system` to cache (see ChatOptions.cachePrefix). */
+  cachePrefix?: string;
   /** Prior turns + the new user message (caller appends it before calling). */
   history: ChatTurn[];
   tools: ChatToolDeps;
@@ -123,6 +125,7 @@ export async function runChatTurn(opts: {
         : {}),
       ...(opts.signal ? { signal: opts.signal } : {}),
       ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
+      ...(opts.cachePrefix ? { cachePrefix: opts.cachePrefix } : {}),
     });
     const call = round < MAX_TOOL_ROUNDS ? parseToolCall(reply) : undefined;
     if (!call) {

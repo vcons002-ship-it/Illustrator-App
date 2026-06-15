@@ -8,6 +8,7 @@ import {
   base64ToBytes,
   bytesToBase64,
   chatContextSections,
+  chatSystemCachePrefix,
   lookupBible,
   measureContextUsage,
   searchBookPassages,
@@ -1053,6 +1054,9 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
     const outcome = await withChatPriority(llm.id, () => runChatTurn({
       llm,
       system,
+      // Stable prefix (role + tools + guard) the volatile bible/book tail trails —
+      // cached across turns by Claude; rides llama.cpp KV-cache reuse for free.
+      cachePrefix: chatSystemCachePrefix(sections),
       history,
       maxTokens: budgets.reply,
       tools: {
@@ -1380,6 +1384,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const outcome = await withChatPriority(llm.id, () => runBuddyTurn({
       llm,
       system: setup,
+      // The buddy prompt (persona + tool defs + library) is stable across a
+      // conversation — nothing changes turn-to-turn but the history — so the whole
+      // system is the cache prefix (an explicit library edit just rewrites it once).
+      cachePrefix: setup,
       history,
       maxTokens: budgets.reply,
       deps,

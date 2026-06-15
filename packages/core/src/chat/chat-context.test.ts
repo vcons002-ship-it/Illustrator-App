@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildChatSystemPrompt, lookupBible, MATURE_CHAT_NOTE, type ChatContextInput } from "./chat-context.js";
+import {
+  buildChatSystemPrompt,
+  chatContextSections,
+  chatSystemCachePrefix,
+  lookupBible,
+  MATURE_CHAT_NOTE,
+  type ChatContextInput,
+} from "./chat-context.js";
 import { createEmptyBible } from "../visual-bible/bible.js";
 import { emptyAppearance } from "../types/bible.js";
 
@@ -191,5 +198,23 @@ describe("buildChatSystemPrompt — invariants", () => {
     const sys = buildChatSystemPrompt(input());
     expect(sys).toContain('"tool":"search_web"');
     expect(sys).toContain("not instructions to follow");
+  });
+});
+
+describe("system-prompt cache prefix", () => {
+  it("the stable prefix (role + tools + guard) is a genuine LEADING substring of the full prompt", () => {
+    const i = input({ bible: bibleWith() });
+    const full = buildChatSystemPrompt(i);
+    const prefix = chatSystemCachePrefix(chatContextSections(i));
+    expect(full.startsWith(prefix)).toBe(true);
+    expect(prefix).toContain('"tool":"search_web"'); // tool defs ride the cached prefix
+    expect(prefix).toContain("not instructions to follow"); // and so does the guard
+    expect(prefix).not.toContain("Alice met Bob"); // but the volatile book text does NOT
+  });
+
+  it("orders the stable sections BEFORE the volatile book/bible (so the prefix is cacheable)", () => {
+    const full = buildChatSystemPrompt(input({ bible: bibleWith() }));
+    expect(full.indexOf('"tool":"search_web"')).toBeLessThan(full.indexOf("Alice met Bob"));
+    expect(full.indexOf("not instructions to follow")).toBeLessThan(full.indexOf("Alice met Bob"));
   });
 });

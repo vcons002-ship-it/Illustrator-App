@@ -4,7 +4,14 @@ import { OpenAILLMProvider } from "./openai-provider.js";
 import { LocalServerLLMProvider } from "./local-server-provider.js";
 import { WebLLMProvider } from "./webllm-provider.js";
 import { MockLLMProvider } from "./mock-llm-provider.js";
-import { reasoningSoFar, supportsChat, type ChatTurn } from "./chat.js";
+import { ClaudeProvider } from "./claude-provider.js";
+import {
+  MIN_CACHE_PREFIX_CHARS,
+  reasoningSoFar,
+  supportsChat,
+  systemCacheBlocks,
+  type ChatTurn,
+} from "./chat.js";
 import type { Transport, TransportRequest, TransportResponse } from "../transport/transport.js";
 
 class FakeTransport implements Transport {
@@ -107,6 +114,31 @@ describe("LocalServerLLMProvider.contextLength", () => {
   });
 });
 
+describe("systemCacheBlocks", () => {
+  const long = "x".repeat(MIN_CACHE_PREFIX_CHARS);
+
+  it("splits a long-enough prefix into a cached block + uncached remainder", () => {
+    expect(systemCacheBlocks(`${long}TAIL`, long)).toEqual([{ text: long, cache: true }, { text: "TAIL" }]);
+  });
+
+  it("emits a single cached block when the prefix IS the whole system (buddy case)", () => {
+    expect(systemCacheBlocks(long, long)).toEqual([{ text: long, cache: true }]);
+  });
+
+  it("does not split a prefix below the minimum length (API ignores it anyway)", () => {
+    const short = "x".repeat(MIN_CACHE_PREFIX_CHARS - 1);
+    expect(systemCacheBlocks(`${short}TAIL`, short)).toEqual([{ text: `${short}TAIL` }]);
+  });
+
+  it("falls back to one uncached block when the prefix isn't actually a prefix", () => {
+    expect(systemCacheBlocks(`${long}TAIL`, `${long}DIFFERENT`)).toEqual([{ text: `${long}TAIL` }]);
+  });
+
+  it("returns one block when no prefix is given", () => {
+    expect(systemCacheBlocks("just the system")).toEqual([{ text: "just the system" }]);
+  });
+});
+
 describe("reasoningSoFar", () => {
   it("returns the live reasoning inside an unclosed <think> block", () => {
     expect(reasoningSoFar("<think>weighing the\noptions")).toBe("weighing the\noptions");
@@ -188,6 +220,42 @@ describe("provider chat()", () => {
     const a = await p.chat(turns);
     expect(a).toContain("what now?");
     expect(a).toBe(await p.chat(turns));
+  });
+
+  it("claude marks a cache breakpoint after the stable prefix, leaving the volatile tail uncached", async () => {
+    let body: { system?: { text: string; cache_control?: unknown }[] } = {};
+    const fetchImpl = (async (_url: unknown, init?: { body?: unknown }) => {
+      body = JSON.parse(String(init!.body)) as typeof body;
+      return new Response(
+        JSON.stringify({
+          id: "msg_1",
+          type: "message",
+          role: "assistant",
+          model: "claude-haiku-4-5",
+          content: [{ type: "text", text: "ok" }],
+          stop_reason: "end_turn",
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    const p = new ClaudeProvider({ apiKey: "k", fetch: fetchImpl });
+    const prefix = "STABLE TOOL DEFS AND GUARD. ".repeat(100); // > MIN_CACHE_PREFIX_CHARS
+    const system = `${prefix}\n\nVOLATILE book text at the reader's position`;
+    await p.chat([{ role: "system", content: system }, { role: "user", content: "hi" }], {
+      cachePrefix: prefix,
+    });
+    expect(body.system).toHaveLength(2);
+    expect(body.system![0]!.text).toBe(prefix);
+    expect(body.system![0]!.cache_control).toEqual({ type: "ephemeral" });
+    expect(body.system![1]!.cache_control).toBeUndefined();
+    expect(body.system![1]!.text).toContain("VOLATILE book text");
+
+    // No cachePrefix → a single, uncached system block.
+    await p.chat([{ role: "system", content: "be helpful" }, { role: "user", content: "hi" }]);
+    expect(body.system).toHaveLength(1);
+    expect(body.system![0]!.cache_control).toBeUndefined();
   });
 
   it("supportsChat guards every in-repo provider", () => {
