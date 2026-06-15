@@ -42,6 +42,7 @@ import {
   sourceFrom,
   type TaskPlan,
   type TaskCandidate,
+  type CalendarEvent,
   MAX_SKILL_NAME_CHARS,
   MAX_SKILL_DESC_CHARS,
   MAX_SKILL_BODY_CHARS,
@@ -89,6 +90,8 @@ import {
   JsonTreeView,
   SkillsPanel,
   TasksPanel,
+  CalendarPanel,
+  type CalendarDeadline,
   DEFAULT_SETTINGS,
   DocumentPolishPanel,
   FirstRunWizard,
@@ -246,6 +249,7 @@ export function App() {
     googleConnect,
     planTask,
     scanInbox,
+    loadCalendar,
     setActiveUnit,
     polishText,
     polishCancel,
@@ -1082,6 +1086,68 @@ export function App() {
     }, 90_000);
     return () => clearInterval(id);
   }, [googleConnected, settings.allowTaskAutomation, scanInbox, autoPlanScan]);
+
+  // In-app calendar synced with the user's Google calendar(s). `calendarMonth` is the
+  // first day of the visible month; `loadCalendarFor` pulls the events spanning the whole
+  // grid (the month plus the leading/trailing spill weeks) so edge days aren't blank.
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const n = new Date();
+    return new Date(n.getFullYear(), n.getMonth(), 1);
+  });
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const loadCalendarFor = useCallback(
+    async (month: Date) => {
+      if (!googleConnected) return;
+      // Cover the 6×7 grid: from the Sunday on/before the 1st to ~42 days later.
+      const first = new Date(month.getFullYear(), month.getMonth(), 1);
+      const start = new Date(first);
+      start.setDate(1 - first.getDay());
+      const end = new Date(start);
+      end.setDate(start.getDate() + 42);
+      setCalendarLoading(true);
+      try {
+        const res = await loadCalendar(start.toISOString(), end.toISOString());
+        if (res.ok && res.events) setCalendarEvents(res.events);
+      } finally {
+        setCalendarLoading(false);
+      }
+    },
+    [googleConnected, loadCalendar],
+  );
+  const openCalendar = useCallback(() => {
+    setShowCalendar(true);
+    void loadCalendarFor(calendarMonth);
+  }, [loadCalendarFor, calendarMonth]);
+  const shiftCalendarMonth = useCallback(
+    (delta: number | "today") => {
+      setCalendarMonth((prev) => {
+        const next =
+          delta === "today"
+            ? (() => {
+                const n = new Date();
+                return new Date(n.getFullYear(), n.getMonth(), 1);
+              })()
+            : new Date(prev.getFullYear(), prev.getMonth() + delta, 1);
+        void loadCalendarFor(next);
+        return next;
+      });
+    },
+    [loadCalendarFor],
+  );
+  // Overlay the assistant's planned deadlines (plan-level + each dated step) onto the grid.
+  const calendarDeadlines = useMemo<CalendarDeadline[]>(() => {
+    const out: CalendarDeadline[] = [];
+    for (const p of taskPlans) {
+      if (p.status === "archived") continue;
+      if (p.deadlineIso) out.push({ date: p.deadlineIso.slice(0, 10), title: p.title, planId: p.id });
+      for (const s of p.steps) {
+        if (s.dueIso) out.push({ date: s.dueIso.slice(0, 10), title: `${p.title}: ${s.title}`, planId: p.id });
+      }
+    }
+    return out;
+  }, [taskPlans]);
   // Bundle a multi-file answer (its named code blocks) into one project.zip — keeps a
   // linked HTML/CSS/JS site or small script project together with its relative paths.
   const onSaveProject = useCallback(
@@ -2420,6 +2486,18 @@ export function App() {
           >
             📋 Tasks{planningCount ? " · planning…" : ""}
           </button>
+          <button
+            style={styles.button}
+            onClick={openCalendar}
+            disabled={!googleConnected}
+            title={
+              googleConnected
+                ? "Your calendar — Google events from all your calendars plus your planned task deadlines, in one month view"
+                : "Connect Google to see your calendar here"
+            }
+          >
+            📅 Calendar
+          </button>
           <button style={styles.button} onClick={() => openBook(loadSampleBook())}>
             Load sample
           </button>
@@ -3038,6 +3116,23 @@ export function App() {
             refreshTaskPlans();
           }}
           onClose={() => setShowTasks(false)}
+        />
+      )}
+
+      {showCalendar && (
+        <CalendarPanel
+          events={calendarEvents}
+          deadlines={calendarDeadlines}
+          month={calendarMonth}
+          loading={calendarLoading}
+          onPrev={() => shiftCalendarMonth(-1)}
+          onNext={() => shiftCalendarMonth(1)}
+          onToday={() => shiftCalendarMonth("today")}
+          onOpenTask={(id) => {
+            setShowCalendar(false);
+            void openTaskInChat(id);
+          }}
+          onClose={() => setShowCalendar(false)}
         />
       )}
     </div>

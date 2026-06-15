@@ -59,6 +59,7 @@ import {
   buildScanPrompt,
   parseCandidates,
   dedupeCandidates,
+  listAllEvents,
   runBuddyTool,
   runChatTool,
   profileDimensions,
@@ -612,6 +613,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "scanInbox":
       void handleScanInbox(msg);
+      break;
+    case "loadCalendar":
+      void handleLoadCalendar(msg);
       break;
     case "polish":
       void handlePolish(msg);
@@ -1282,6 +1286,25 @@ async function handleScanInbox(msg: Extract<MainToWorker, { type: "scanInbox" }>
     post({ type: "scanned", requestId: msg.requestId, ok: true, candidates });
   } catch (err) {
     post({ type: "scanned", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/** Load events across all the user's Google calendars in a window (the calendar grid). */
+async function handleLoadCalendar(msg: Extract<MainToWorker, { type: "loadCalendar" }>): Promise<void> {
+  try {
+    const store = memoryStore();
+    const googleId = settings?.keys?.googleClientId;
+    const googleSecret = settings?.keys?.googleClientSecret;
+    if (!googleId || !googleSecret || !(await loadGoogleTokens(store))) {
+      post({ type: "calendarLoaded", requestId: msg.requestId, ok: true, events: [] });
+      return;
+    }
+    const transport = new DirectTransport(corsFetch());
+    const token = await getFreshAccessToken(store, { clientId: googleId, clientSecret: googleSecret, transport });
+    const events = await listAllEvents(transport, token, { timeMin: msg.timeMin, timeMax: msg.timeMax });
+    post({ type: "calendarLoaded", requestId: msg.requestId, ok: true, events });
+  } catch (err) {
+    post({ type: "calendarLoaded", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
   }
 }
 
