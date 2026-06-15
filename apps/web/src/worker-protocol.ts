@@ -148,6 +148,9 @@ export type MainToWorker =
       /** The session's chosen working folder (desktop), so the prompt tells the model
        * where its run_command/find_files operate. Absent = the default workspace. */
       workingDir?: string;
+      /** When this session is executing a task plan: its id, so the prompt loads the
+       * plan context + enables the step tools. */
+      taskPlanId?: string;
     };
 
 export type WorkerToMain =

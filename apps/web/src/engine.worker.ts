@@ -49,6 +49,12 @@ import {
   createTask,
   runTaskPlanning,
   upsertTaskPlan,
+  loadTaskPlans,
+  updateTaskStep,
+  advanceStep,
+  nextReadyStep,
+  tasksIndexBlock,
+  patchTask,
   runBuddyTool,
   runChatTool,
   profileDimensions,
@@ -1388,6 +1394,48 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       readSkill: async (name) => readSkillBody(await loadSkills(store), name),
       saveSkill: async (name, description, body) => (await saveSkill(store, { name, description, body })).length,
       forgetSkill: async (m) => (await forgetSkill(store, m)).length,
+      // Task-plan execution: advance/update steps + read plans over the shared store,
+      // writing a completed step back to Google Tasks (best-effort) when connected.
+      markStepDone: async (planId, stepId) => {
+        const plan = (await loadTaskPlans(store)).find((p) => p.id === planId);
+        if (!plan) return undefined;
+        const step = plan.steps.find((s) => s.id === stepId);
+        const { plan: next, ready } = advanceStep(plan);
+        await upsertTaskPlan(store, next);
+        if (step?.googleTaskId && googleConnected) {
+          try {
+            const t = new DirectTransport(corsFetch());
+            const at = await getFreshAccessToken(store, { clientId: googleId!, clientSecret: googleSecret!, transport: t });
+            await patchTask(t, at, step.googleTaskId, { status: "completed" });
+          } catch {
+            /* best-effort write-back */
+          }
+        }
+        return { planTitle: next.title, ...(ready ? { nextStep: ready.title } : {}), completed: next.status === "completed" };
+      },
+      updateTaskStep: async (planId, stepId, patch) => {
+        const plan = (await loadTaskPlans(store)).find((p) => p.id === planId);
+        if (!plan) return undefined;
+        await updateTaskStep(store, planId, stepId, {
+          ...(patch.status ? { status: patch.status as never } : {}),
+          ...(patch.notes ? { researchNotes: patch.notes } : {}),
+        });
+        return { planTitle: plan.title };
+      },
+      listTaskPlans: async () =>
+        (await loadTaskPlans(store))
+          .filter((p) => p.status !== "archived")
+          .map((p) => {
+            const next = nextReadyStep(p);
+            return {
+              id: p.id,
+              title: p.title,
+              status: p.status,
+              ...(next ? { nextStep: next.title } : {}),
+              ...(p.deadlineIso ? { deadlineIso: p.deadlineIso } : {}),
+            };
+          }),
+      getTaskPlan: async (id) => (await loadTaskPlans(store)).find((p) => p.id === id),
       openLibraryBook: async (call) => {
         const book = await store.getBook(call.id);
         if (!book) throw new Error("that id isn't in the library");
@@ -1491,10 +1539,13 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
     const memory = memoryPromptBlock(await loadMemory(store));
     const skills = skillsIndexBlock(await loadSkills(store));
+    // When this session is executing a task plan, load its context for the prompt.
+    const activePlan = msg.taskPlanId ? (await loadTaskPlans(store)).find((p) => p.id === msg.taskPlanId) : undefined;
     const setup =
       buildBuddySystemPrompt({
         persona: msg.persona,
         library: msg.library,
+        ...(activePlan ? { activeTask: tasksIndexBlock(activePlan) } : {}),
         ...(settings?.allowMature ? { allowMature: true } : {}),
         // Desktop only: the find_files tool needs the native filesystem bridge,
         // signalled by the same init flag as the CORS-exempt fetch.

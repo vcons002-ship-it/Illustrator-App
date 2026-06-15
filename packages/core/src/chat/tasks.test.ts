@@ -120,12 +120,13 @@ describe("advanceStep / nextReadyStep", () => {
     expect(nextReadyStep(allButLast)!.title).toBe("b");
   });
 
-  it("tasksIndexBlock names the active task + current step", () => {
+  it("tasksIndexBlock names the active task + current step with ids", () => {
     const block = tasksIndexBlock(plan({ deadlineIso: "2026-07-01" }));
     expect(block).toContain("ACTIVE TASK: Renew registration");
     expect(block).toContain("deadline 2026-07-01");
     expect(block).toContain("Gather documents");
-    expect(block).toContain("mark_step_done");
+    expect(block).toMatch(/plan id:/);
+    expect(block).toMatch(/step id:/);
   });
 });
 

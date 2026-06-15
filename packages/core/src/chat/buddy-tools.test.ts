@@ -378,6 +378,28 @@ describe("google tools", () => {
     expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"plan_task"');
   });
 
+  it("parses the task-execution tools and shows them only with an active task", () => {
+    expect(parseBuddyToolCall('{"tool":"mark_step_done","planId":"t1","stepId":"s1"}')).toEqual({
+      tool: "mark_step_done",
+      planId: "t1",
+      stepId: "s1",
+    });
+    expect(parseBuddyToolCall('{"tool":"update_task_step","planId":"t1","stepId":"s1","status":"blocked","notes":"waiting"}')).toEqual({
+      tool: "update_task_step",
+      planId: "t1",
+      stepId: "s1",
+      status: "blocked",
+      notes: "waiting",
+    });
+    expect(parseBuddyToolCall('{"tool":"list_task_plans"}')).toEqual({ tool: "list_task_plans" });
+    expect(parseBuddyToolCall('{"tool":"mark_step_done","planId":"t1"}')).toBeUndefined(); // no stepId
+    // The step tools + the plan context appear only when a task is active.
+    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain('"tool":"mark_step_done"');
+    const active = buildBuddySystemPrompt({ persona: "freeform", library: [], activeTask: "ACTIVE TASK: Renew (plan id: t1)" });
+    expect(active).toContain("ACTIVE TASK: Renew");
+    expect(active).toContain('"tool":"mark_step_done"');
+  });
+
   it("feeds an email back as the reader's DATA, and confirms a created event/task", () => {
     const email = formatBuddyToolResult(
       { tool: "read_email", id: "m1" },
