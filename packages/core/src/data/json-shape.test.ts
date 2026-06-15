@@ -56,6 +56,17 @@ describe("jsonToDataTable — tabular shapes normalise to a table", () => {
     const t = jsonToDataTable([{ id: 1, tags: ["a", "b"] }])!;
     expect(t.rows[0]).toEqual([1, '["a","b"]']);
   });
+
+  it("flattens nested OBJECT fields into dotted columns (real-world API shape)", () => {
+    const t = jsonToDataTable([
+      { name: "Ada", address: { city: "London", zip: 1 }, tags: ["x"] },
+      { name: "Linus", address: { city: "Helsinki", zip: 2 } },
+    ])!;
+    expect(t.columns.map((c) => c.name)).toEqual(["name", "address.city", "address.zip", "tags"]);
+    expect(t.columns.find((c) => c.name === "address.zip")!.type).toBe("number");
+    expect(t.rows[0]).toEqual(["Ada", "London", 1, '["x"]']); // arrays stay one cell
+    expect(t.rows[1]).toEqual(["Linus", "Helsinki", 2, null]); // missing nested key → null
+  });
 });
 
 describe("jsonToDataTable — non-tabular shapes return undefined (→ tree)", () => {
