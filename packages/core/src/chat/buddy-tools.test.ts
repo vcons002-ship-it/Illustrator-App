@@ -369,6 +369,15 @@ describe("google tools", () => {
     expect(parseBuddyToolCall('{"tool":"create_task"}')).toBeUndefined(); // no title
   });
 
+  it("parses plan_task (natural-language planning) and advertises it always", () => {
+    expect(parseBuddyToolCall('{"tool":"plan_task","request":"plan my car registration renewal"}')).toEqual({
+      tool: "plan_task",
+      request: "plan my car registration renewal",
+    });
+    expect(parseBuddyToolCall('{"tool":"plan_task","request":"  "}')).toBeUndefined();
+    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"plan_task"');
+  });
+
   it("feeds an email back as the reader's DATA, and confirms a created event/task", () => {
     const email = formatBuddyToolResult(
       { tool: "read_email", id: "m1" },

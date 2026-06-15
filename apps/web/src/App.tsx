@@ -235,6 +235,7 @@ export function App() {
     buddyCancel,
     summarize,
     googleConnect,
+    planTask,
     setActiveUnit,
     polishText,
     polishCancel,
@@ -1459,6 +1460,46 @@ export function App() {
 
   // One buddy model turn (streaming + tool events + result). Shared by the normal
   // send and the auto-react continuation after an approved command. `userBubbleText`
+  // Natural-language planning: the model emitted plan_task; research + build the plan
+  // in the worker (no approval click — it's a safe host op), show it, and continue the
+  // conversation so the assistant can offer to set reminders / start the first step.
+  const runPlanTask = async (request: string): Promise<void> => {
+    setBuddyPendingTool(undefined);
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+    setBuddyBusy(true);
+    setBuddyActivity("Researching the task…");
+    const res = await planTask({
+      source: { kind: "typed", text: request },
+      sourceText: request,
+      onProgress: (phase) => setBuddyActivity(phase === "plan" ? "Building the plan…" : "Researching the task…"),
+    });
+    setBuddyBusy(false);
+    setBuddyActivity("");
+    if (!res.ok || !res.plan) {
+      appendBuddy({ role: "tool", text: `⚠ Couldn't plan that: ${res.error ?? "unknown error"}`, turns: [] });
+      return;
+    }
+    const plan = res.plan;
+    const summary =
+      `📋 Planned: ${plan.title}${plan.deadlineIso ? ` (deadline ${plan.deadlineIso})` : ""}\n` +
+      plan.steps
+        .map(
+          (s, i) =>
+            `${i + 1}. ${s.title}${s.actor === "ai_prep" ? " — I can prep this" : ""}${s.dueIso ? ` (by ${s.dueIso})` : ""}`,
+        )
+        .join("\n");
+    const feedback =
+      `[plan_task done — saved a ${plan.steps.length}-step plan "${plan.title}"` +
+      (plan.deadlineIso ? `, deadline ${plan.deadlineIso}` : "") +
+      `. Steps: ${plan.steps.map((s) => `${s.title} [${s.actor}]`).join("; ")}. Briefly confirm the plan to the ` +
+      "reader and offer to set the reminders (create the dated Tasks/Calendar events) or start the first step.]";
+    appendBuddy({ role: "tool", text: summary, turns: [...pre, { role: "user", content: feedback }] });
+    await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+  };
+
   // (when set) is shown as the reader's message; a continuation passes none — its
   // "input" is the tool feedback, recorded in the visible result above it.
   const dispatchBuddyTurn = async (
@@ -1621,6 +1662,10 @@ export function App() {
         approveFindFiles(res.pendingTool);
       } else if (res.pendingTool.tool === "screenshot" && screenCaptureGranted.current) {
         void approveScreenshot(res.pendingTool);
+      } else if (res.pendingTool.tool === "plan_task") {
+        // Planning is a safe, host-run operation (research + build a plan) — no approval
+        // click; run it with progress and report back.
+        void runPlanTask(res.pendingTool.request);
       } else {
         setBuddyPendingTool(res.pendingTool);
       }
