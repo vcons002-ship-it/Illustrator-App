@@ -6,6 +6,7 @@ import {
   ThinkingBlock,
   UsageDisclosure,
   completeSlash,
+  type BuildDocumentFn,
   type ChatMessageVM,
 } from "./ChatPanel.js";
 import {
@@ -58,6 +59,8 @@ export interface ChatBuddyPanelProps {
   onSaveFile?: (filename: string, content: string, mime: string) => Promise<string | true>;
   /** Zip + save a multi-file (≥2 code blocks) answer as one project. */
   onSaveProject?: (files: ProjectFile[]) => Promise<string | true>;
+  /** Generate + embed a designed document's images. */
+  onBuildDocument?: BuildDocumentFn;
 }
 
 export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanelProps) {
@@ -156,6 +159,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
             {...(props.onSaveFile ? { onSaveFile: props.onSaveFile } : {})}
             {...(props.onSaveProject ? { onSaveProject: props.onSaveProject } : {})}
+            {...(props.onBuildDocument ? { onBuildDocument: props.onBuildDocument } : {})}
             onAction={props.onSend}
           />
         ))}

@@ -245,6 +245,14 @@ export function buildBuddySystemPrompt(opts: {
     "code block tagged with its language/format (```html, ```csv, ```python, ```json, ```markdown …). The app shows a " +
     "Save button on that block so the reader keeps it as a real file — so put the whole, ready-to-use content in the " +
     "block (not a snippet), and keep your prose around it short.\n" +
+    "DESIGNED DOCUMENTS WITH IMAGES: when the reader wants a designed piece that NEEDS pictures — an invitation, " +
+    "flyer, poster, greeting card, menu, certificate — write a COMPLETE styled HTML document in one ```html block and " +
+    "mark each image you want the app to create with an <img> whose data-generate attribute holds a rich description " +
+    "(subject, art style, colors, mood — match the theme), e.g. " +
+    '<img data-generate="a friendly cartoon brontosaurus holding a baby bottle, soft pastel storybook style, white ' +
+    'background" alt="dino" width="320">. The app then shows a “Generate N images & build” button that renders ' +
+    "each one and embeds it, giving the reader a finished document to Preview and Save. Keep descriptions free of double " +
+    "quotes, set width/height for the layout, and use real layout/CSS/text around the images so it looks designed.\n" +
     "MULTI-FILE PROJECTS: when something needs SEVERAL files that link together (a site = index.html + styles.css + " +
     "app.js; a script project with modules), write each file in its OWN fenced block and NAME it on the fence line " +
     "after the language — ```html index.html, ```css styles.css, ```js app.js, ```python src/main.py (a relative path " +
