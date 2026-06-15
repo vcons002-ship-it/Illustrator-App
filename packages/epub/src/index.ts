@@ -3,3 +3,4 @@ export * from "./from-text.js";
 export * from "./load.js";
 export * from "./export.js";
 export * from "./data-import.js";
+export * from "./data-export.js";
