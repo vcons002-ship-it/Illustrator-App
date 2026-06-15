@@ -15,6 +15,8 @@ import type {
   ImageSearchHit,
   ImportStats,
   PolishMode,
+  TaskPlan,
+  TaskSource,
   ToolCall,
   VisualBible,
   WebSearchHit,
@@ -150,6 +152,8 @@ export interface EngineWorkerApi {
   summarize: (turns: ChatTurn[]) => Promise<{ text?: string; error?: string }>;
   /** Finish Google OAuth in the worker (exchange the consent code for tokens). */
   googleConnect: (args: { code: string; redirectUri: string; codeVerifier: string }) => Promise<{ ok: boolean; email?: string; error?: string }>;
+  /** Research + plan a task into a persisted TaskPlan (progress streamed via onProgress). */
+  planTask: (args: { source: TaskSource; sourceText: string; onProgress?: (phase: string, note?: string) => void }) => Promise<{ ok: boolean; plan?: TaskPlan; error?: string }>;
   /** Run one document-polish stage; returns the requestId (for cancel) + the result. */
   polishText: (args: {
     stage: "understand" | "produce";
@@ -337,6 +341,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const googleConnectRequests = useRef<Map<number, (r: { ok: boolean; email?: string; error?: string }) => void>>(
     new Map(),
   );
+  // In-flight task-plan requests (resolved by `planned`, progress via `planProgress`).
+  const planRequests = useRef<
+    Map<number, { resolve: (r: { ok: boolean; plan?: TaskPlan; error?: string }) => void; onProgress?: (phase: string, note?: string) => void }>
+  >(new Map());
   // In-flight document-polish stages, resolved by `polished` (and streamed via `polishToken`).
   const polishRequests = useRef<
     Map<number, { onToken?: (delta: string) => void; resolve: (r: PolishResult) => void }>
@@ -601,6 +609,20 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           const resolve = googleConnectRequests.current.get(msg.requestId);
           googleConnectRequests.current.delete(msg.requestId);
           resolve?.({ ok: msg.ok, ...(msg.email ? { email: msg.email } : {}), ...(msg.error ? { error: msg.error } : {}) });
+          break;
+        }
+        case "planProgress": {
+          planRequests.current.get(msg.requestId)?.onProgress?.(msg.phase, msg.note);
+          break;
+        }
+        case "planned": {
+          const req = planRequests.current.get(msg.requestId);
+          planRequests.current.delete(msg.requestId);
+          req?.resolve(
+            msg.ok && msg.plan
+              ? { ok: true, plan: msg.plan }
+              : { ok: false, ...(msg.error ? { error: msg.error } : {}) },
+          );
           break;
         }
         case "polishToken": {
@@ -1021,6 +1043,28 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const planTask = useCallback(
+    (args: {
+      source: TaskSource;
+      sourceText: string;
+      onProgress?: (phase: string, note?: string) => void;
+    }): Promise<{ ok: boolean; plan?: TaskPlan; error?: string }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (planRequests.current.delete(requestId)) resolve({ ok: false, error: "Planning timed out." });
+        }, 240_000);
+        planRequests.current.set(requestId, {
+          resolve: (r) => {
+            clearTimeout(timeout);
+            resolve(r);
+          },
+          ...(args.onProgress ? { onProgress: args.onProgress } : {}),
+        });
+        send({ type: "planTask", requestId, source: args.source, sourceText: args.sourceText });
+      }),
+    [],
+  );
   const polishText = useCallback(
     (args: {
       stage: "understand" | "produce";
@@ -1105,6 +1149,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     buddyCancel,
     summarize,
     googleConnect,
+    planTask,
     polishText,
     polishCancel,
   };

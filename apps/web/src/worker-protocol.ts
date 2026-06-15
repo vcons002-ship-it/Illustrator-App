@@ -14,6 +14,8 @@ import type {
   ImageSearchHit,
   ImportStats,
   PolishMode,
+  TaskPlan,
+  TaskSource,
   ToolCall,
   VisualBible,
   WebSearchHit,
@@ -103,6 +105,10 @@ export type MainToWorker =
   | { type: "summarize"; requestId: number; turns: ChatTurn[] }
   /** Finish Google OAuth: exchange the consent code (worker has the CORS proxy + store). */
   | { type: "googleConnect"; requestId: number; code: string; redirectUri: string; codeVerifier: string }
+  /** Plan a task: research it, produce a structured TaskPlan, and persist it (worker has
+   * the CORS proxy + Google deps + store). `sourceText` is the typed ask or the source
+   * email/event content the host already read. */
+  | { type: "planTask"; requestId: number; source: TaskSource; sourceText: string }
   /** Faithful document polish (two stages); answered by `polished` (+ `polishToken`
    * deltas while producing). Cancel via `chatCancel` (shares the abort map). */
   | {
@@ -262,6 +268,8 @@ export type WorkerToMain =
   /** Reply to `summarize`: the compact brief, or why it failed. */
   | { type: "summarized"; requestId: number; ok: boolean; text?: string; error?: string }
   | { type: "googleConnected"; requestId: number; ok: boolean; email?: string; error?: string }
+  | { type: "planProgress"; requestId: number; phase: "research" | "plan"; note?: string }
+  | { type: "planned"; requestId: number; ok: boolean; plan?: TaskPlan; error?: string }
   /** Streaming delta while the polish "produce" stage runs. */
   | { type: "polishToken"; requestId: number; text: string }
   /** Reply to `polish`: the understood plan (+ optional question), or the produced text. */

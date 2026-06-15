@@ -1,7 +1,9 @@
-import type { ChatTurn } from "../providers/llm/chat.js";
+import type { ChatCapable, ChatTurn } from "../providers/llm/chat.js";
 import { stripThink } from "../providers/llm/extraction.js";
 import { FAITHFULNESS_RULES } from "./document-polish.js";
-import type { TaskPlanInput, TaskStep } from "./tasks.js";
+import { formatBuddyToolResult, parseBuddyToolCall, type BuddyToolCall } from "./buddy-tools.js";
+import { runBuddyTool, type BuddyDeps } from "./buddy-session.js";
+import { normalizeTaskPlan, type TaskPlan, type TaskPlanInput, type TaskSource, type TaskStep } from "./tasks.js";
 
 /**
  * Task PLANNER — the prompt + parse layer for the orchestrator. Given a real-world
@@ -163,4 +165,74 @@ export function parsePlan(raw: string): ParsedPlan | undefined {
     ...(str(obj.estCost) ? { estCost: str(obj.estCost)! } : {}),
     steps,
   };
+}
+
+// ------------------------------------------------------------- planning driver
+
+/** Research tools the planner may auto-run (all are auto-run buddy tools). */
+const RESEARCH_TOOLS = new Set<BuddyToolCall["tool"]>([
+  "search_web",
+  "read_url",
+  "gmail_search",
+  "read_email",
+  "list_events",
+]);
+type ResearchCall = Extract<BuddyToolCall, { tool: "search_web" | "read_url" | "gmail_search" | "read_email" | "list_events" }>;
+
+export interface TaskPlanningOpts {
+  llm: ChatCapable;
+  /** Research deps (search_web/read_url/gmail_search/read_email/list_events) — same
+   * shape the buddy chat wires; missing ones just return "not available". */
+  research: BuddyDeps;
+  source: TaskSource;
+  /** The task in words (typed text, or the source email/event content the host read). */
+  sourceText: string;
+  todayIso: string;
+  signal?: AbortSignal;
+  onPhase?: (phase: "research" | "plan", note?: string) => void;
+}
+
+/** Bounded research loop → accumulated research summary. */
+async function gatherResearch(opts: TaskPlanningOpts): Promise<string> {
+  const sig = opts.signal ? { signal: opts.signal } : {};
+  const messages: ChatTurn[] = [
+    { role: "system", content: buildResearchSystemPrompt() },
+    { role: "user", content: `TASK: ${describeSource(opts.sourceText)}` },
+  ];
+  for (let round = 0; round < MAX_PLAN_RESEARCH_ROUNDS; round++) {
+    const reply = await opts.llm.chat(messages, { maxTokens: 1024, ...sig });
+    const call = parseBuddyToolCall(reply);
+    if (!call || !RESEARCH_TOOLS.has(call.tool)) return stripThink(reply).trim();
+    opts.onPhase?.("research", call.tool);
+    messages.push({ role: "assistant", content: reply });
+    const result = await runBuddyTool(call as ResearchCall, opts.research);
+    messages.push({ role: "user", content: formatBuddyToolResult(call, result) });
+  }
+  // Hit the cap — ask for the summary explicitly.
+  const final = await opts.llm.chat(
+    [...messages, { role: "user", content: "Stop researching now and give the RESEARCH SUMMARY (facts + source URLs)." }],
+    { maxTokens: 1024, ...sig },
+  );
+  return stripThink(final).trim();
+}
+
+/**
+ * Run the full planning pass: bounded research, then one strict-JSON plan, returning a
+ * normalized `TaskPlan` (the caller persists it + handles Google scheduling). Returns
+ * undefined when the plan can't be parsed (caller surfaces an error). Prep documents are
+ * drafted on demand in the execution chat (the model writes them as fenced blocks).
+ */
+export async function runTaskPlanning(opts: TaskPlanningOpts): Promise<TaskPlan | undefined> {
+  opts.onPhase?.("research");
+  const research = await gatherResearch(opts);
+  opts.onPhase?.("plan");
+  const reply = await opts.llm.chat(buildPlanPrompt(opts.sourceText, research, opts.todayIso), {
+    maxTokens: 2048,
+    ...(opts.signal ? { signal: opts.signal } : {}),
+  });
+  const parsed = parsePlan(reply);
+  if (!parsed) return undefined;
+  const input: TaskPlanInput = { ...parsed, source: opts.source };
+  if (research) input.researchNotes = research;
+  return normalizeTaskPlan(input);
 }

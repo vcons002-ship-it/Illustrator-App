@@ -47,6 +47,8 @@ import {
   createEvent,
   listTasks,
   createTask,
+  runTaskPlanning,
+  upsertTaskPlan,
   runBuddyTool,
   runChatTool,
   profileDimensions,
@@ -594,6 +596,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "googleConnect":
       void handleGoogleConnect(msg);
+      break;
+    case "planTask":
+      void handlePlanTask(msg);
       break;
     case "polish":
       void handlePolish(msg);
@@ -1172,6 +1177,64 @@ async function handleGoogleConnect(msg: Extract<MainToWorker, { type: "googleCon
       ok: false,
       error: err instanceof Error ? err.message : String(err),
     });
+  }
+}
+
+/** Plan a task: bounded research (web + Gmail/Calendar) then a structured plan, persisted.
+ * Reuses the buddy research tools + the CORS proxy; cancellable via the shared chatAborts. */
+async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>): Promise<void> {
+  const ac = new AbortController();
+  chatAborts.set(msg.requestId, ac);
+  try {
+    const { llm, imageSearch } = chatProviders();
+    if (!supportsChat(llm)) throw new Error(`The "${llm.id}" text provider doesn't support chat yet.`);
+    const store = memoryStore();
+    const googleId = settings?.keys?.googleClientId;
+    const googleSecret = settings?.keys?.googleClientSecret;
+    const googleConnected = !!(googleId && googleSecret && (await loadGoogleTokens(store)));
+    const transport = new DirectTransport(corsFetch());
+    const tok = () => getFreshAccessToken(store, { clientId: googleId!, clientSecret: googleSecret!, transport });
+    const notUsed = (): never => {
+      throw new Error("not available during planning");
+    };
+    const research: BuddyDeps = {
+      searchWeb: (q) => imageSearch.searchWeb(q),
+      readUrl: readUrlText(ac.signal),
+      ...(googleConnected
+        ? {
+            gmailSearch: async (q: string, max?: number) => gmailSearch(transport, await tok(), q, max),
+            readEmail: async (id: string) => gmailReadEmail(transport, await tok(), id),
+            listEvents: async (max?: number) => listEvents(transport, await tok(), max !== undefined ? { max } : {}),
+          }
+        : {}),
+      openLibraryBook: notUsed,
+      openWebText: notUsed,
+      openPastedText: notUsed,
+      removeLibraryBook: notUsed,
+      setVisualStyle: notUsed,
+    };
+    const plan = await runTaskPlanning({
+      llm,
+      research,
+      source: msg.source,
+      sourceText: msg.sourceText,
+      todayIso: new Date().toISOString().slice(0, 10),
+      signal: ac.signal,
+      onPhase: (phase, note) =>
+        post({ type: "planProgress", requestId: msg.requestId, phase, ...(note ? { note } : {}) }),
+    });
+    if (!plan) throw new Error("Couldn't produce a usable plan — try rephrasing the task.");
+    await upsertTaskPlan(store, plan);
+    post({ type: "planned", requestId: msg.requestId, ok: true, plan });
+  } catch (err) {
+    post({
+      type: "planned",
+      requestId: msg.requestId,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  } finally {
+    chatAborts.delete(msg.requestId);
   }
 }
 
