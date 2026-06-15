@@ -8,7 +8,13 @@ import {
   completeSlash,
   type ChatMessageVM,
 } from "./ChatPanel.js";
-import { buddySlashCommands, type BuddyPersona, type BuddyToolCall, type ContextUsage } from "@visual-reader/core";
+import {
+  buddySlashCommands,
+  type BuddyPersona,
+  type BuddyToolCall,
+  type ContextUsage,
+  type ProjectFile,
+} from "@visual-reader/core";
 
 /**
  * The landing-page chat buddy. Pure presentation, like ChatPanel — but rendered
@@ -50,6 +56,8 @@ export interface ChatBuddyPanelProps {
   onOpenLocalFile?: (path: string) => void;
   /** Save a file the assistant wrote in a code block. */
   onSaveFile?: (filename: string, content: string, mime: string) => Promise<string | true>;
+  /** Zip + save a multi-file (≥2 code blocks) answer as one project. */
+  onSaveProject?: (files: ProjectFile[]) => Promise<string | true>;
 }
 
 export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanelProps) {
@@ -147,6 +155,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             {...(props.onDeleteMessage ? { onDelete: props.onDeleteMessage } : {})}
             {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
             {...(props.onSaveFile ? { onSaveFile: props.onSaveFile } : {})}
+            {...(props.onSaveProject ? { onSaveProject: props.onSaveProject } : {})}
             onAction={props.onSend}
           />
         ))}

@@ -5,6 +5,7 @@ import {
   type AnalyzeChart,
   type ContextUsage,
   type DataTable,
+  type ProjectFile,
   type SlashCommandInfo,
   type ToolCall,
 } from "@visual-reader/core";
@@ -37,21 +38,64 @@ export interface ChatMessageVM {
   actions?: { label: string; send: string }[];
 }
 
-export type MessageBlock = { type: "text"; text: string } | { type: "code"; lang: string; code: string };
+export type MessageBlock =
+  | { type: "text"; text: string }
+  | { type: "code"; lang: string; code: string; filename?: string };
 
-/** Split a message into prose and fenced ```code``` blocks (saveable as files). */
+/** Split a message into prose and fenced ```code``` blocks (saveable as files). The
+ * fence's info string may carry a filename after the language (```html index.html`,
+ * ```js src/app.js`, or just ```index.html`) so a multi-file answer keeps real names. */
 export function parseMessageBlocks(text: string): MessageBlock[] {
   const blocks: MessageBlock[] = [];
-  const re = /```([a-zA-Z0-9+#.-]*)[ \t]*\r?\n?([\s\S]*?)```/g;
+  const re = /```([^\n`]*)\r?\n([\s\S]*?)```/g;
   let last = 0;
   for (const m of text.matchAll(re)) {
     const i = m.index;
     if (i > last) blocks.push({ type: "text", text: text.slice(last, i) });
-    blocks.push({ type: "code", lang: (m[1] || "").toLowerCase(), code: m[2]!.replace(/\n$/, "") });
+    const { lang, filename } = parseFenceInfo(m[1] ?? "");
+    blocks.push({ type: "code", lang, code: m[2]!.replace(/\n$/, ""), ...(filename ? { filename } : {}) });
     last = i + m[0].length;
   }
   if (last < text.length) blocks.push({ type: "text", text: text.slice(last) });
   return blocks.length ? blocks : [{ type: "text", text }];
+}
+
+const looksLikeFilename = (s: string): boolean => /[^/\s]+\.[A-Za-z0-9]+$/.test(s) || s.includes("/");
+
+/** Parse a fence info string into a language + optional filename, tolerating
+ * `lang filename`, `lang title="filename"`, and a bare `filename`. */
+export function parseFenceInfo(info: string): { lang: string; filename?: string } {
+  const tokens = info.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return { lang: "" };
+  const cleaned = tokens.map((t) =>
+    t.replace(/^(?:title|name|file|filename)=/i, "").replace(/^["']|["']$/g, ""),
+  );
+  // A bare `filename.ext` as the first token: derive the language from its extension.
+  if (looksLikeFilename(cleaned[0]!) && !LANG_EXT[tokens[0]!.toLowerCase()]) {
+    return { lang: (cleaned[0]!.split(".").pop() ?? "").toLowerCase(), filename: cleaned[0]! };
+  }
+  const lang = tokens[0]!.toLowerCase();
+  const filename = cleaned.slice(1).find(looksLikeFilename);
+  return filename ? { lang, filename } : { lang };
+}
+
+/** Resolve a code block's display filename + save name (basename) + mime, preferring
+ * an explicit fence filename over the language's generic default. */
+export function resolveCodeFile(lang: string, filename?: string): { filename: string; saveName: string; mime: string } {
+  if (filename) {
+    const ext = (filename.split(".").pop() ?? "").toLowerCase();
+    const base = filename.split("/").pop() || filename;
+    return { filename, saveName: base, mime: fileForLang(ext).mime };
+  }
+  const { ext, base, mime } = fileForLang(lang);
+  return { filename: `${base}.${ext}`, saveName: `${base}.${ext}`, mime };
+}
+
+/** Collect a message's code blocks into project files (named for the zip). */
+export function projectFilesFromBlocks(blocks: MessageBlock[]): ProjectFile[] {
+  return blocks
+    .filter((b): b is Extract<MessageBlock, { type: "code" }> => b.type === "code")
+    .map((b) => ({ name: b.filename ?? resolveCodeFile(b.lang, b.filename).filename, content: b.code }));
 }
 
 const LANG_EXT: Record<string, string> = {
@@ -143,6 +187,8 @@ export interface ChatPanelProps {
   onCompact?: () => void;
   /** Save a file the assistant wrote in a code block. */
   onSaveFile?: (filename: string, content: string, mime: string) => Promise<string | true>;
+  /** Zip + save a multi-file (≥2 code blocks) answer as one project. */
+  onSaveProject?: (files: ProjectFile[]) => Promise<string | true>;
   /** Latest context-usage breakdown (for the usage donut). */
   contextUsage?: ContextUsage;
 }
@@ -232,6 +278,7 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
               index={i}
               {...(props.onDeleteMessage ? { onDelete: props.onDeleteMessage } : {})}
               {...(props.onSaveFile ? { onSaveFile: props.onSaveFile } : {})}
+              {...(props.onSaveProject ? { onSaveProject: props.onSaveProject } : {})}
             />
           ))}
           {props.thinking ? <ThinkingBlock text={props.thinking} /> : null}
@@ -453,6 +500,7 @@ export const MessageBubble = memo(function MessageBubble({
   onOpenLocalFile,
   onAction,
   onSaveFile,
+  onSaveProject,
 }: {
   message: ChatMessageVM;
   index?: number;
@@ -463,12 +511,15 @@ export const MessageBubble = memo(function MessageBubble({
   onAction?: (send: string) => void;
   /** Save a code block the assistant wrote as a file. Stable callback (memo). */
   onSaveFile?: (filename: string, content: string, mime: string) => Promise<string | true>;
+  /** Zip + save the message's code blocks as one project (≥2 files). Stable (memo). */
+  onSaveProject?: (files: ProjectFile[]) => Promise<string | true>;
 }) {
   const isUser = message.role === "user";
   const url = useMessageImageUrl(message.image);
   // Assistant prose may contain fenced code blocks (a file the model created) —
   // render those as saveable cards; the user's own messages stay verbatim.
   const blocks = !isUser && message.text ? parseMessageBlocks(message.text) : undefined;
+  const codeCount = blocks?.reduce((n, b) => n + (b.type === "code" ? 1 : 0), 0) ?? 0;
   return (
     <div
       style={{
@@ -490,7 +541,13 @@ export const MessageBubble = memo(function MessageBubble({
       {blocks
         ? blocks.map((b, i) =>
             b.type === "code" ? (
-              <CodeCard key={i} lang={b.lang} code={b.code} {...(onSaveFile ? { onSaveFile } : {})} />
+              <CodeCard
+                key={i}
+                lang={b.lang}
+                code={b.code}
+                {...(b.filename ? { filename: b.filename } : {})}
+                {...(onSaveFile ? { onSaveFile } : {})}
+              />
             ) : b.text.trim() ? (
               <div key={i} style={{ whiteSpace: "pre-wrap" }}>
                 <Linkified text={b.text} />
@@ -504,6 +561,9 @@ export const MessageBubble = memo(function MessageBubble({
             </div>
           )
           : null}
+      {codeCount >= 2 && onSaveProject && blocks ? (
+        <ProjectSaveBar files={projectFilesFromBlocks(blocks)} onSaveProject={onSaveProject} />
+      ) : null}
       {url ? (
         <img
           src={url}
@@ -725,19 +785,21 @@ function Linkified({ text }: { text: string }) {
 function CodeCard({
   lang,
   code,
+  filename: rawFilename,
   onSaveFile,
 }: {
   lang: string;
   code: string;
+  filename?: string;
   onSaveFile?: (filename: string, content: string, mime: string) => Promise<string | true>;
 }) {
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState<string | undefined>();
-  const { ext, base, mime } = fileForLang(lang);
-  const filename = `${base}.${ext}`;
+  const { filename, saveName, mime } = resolveCodeFile(lang, rawFilename);
+  const ext = (filename.split(".").pop() ?? "").toLowerCase();
   const save = async () => {
     if (!onSaveFile) return;
-    const r = await onSaveFile(filename, code, mime);
+    const r = await onSaveFile(saveName, code, mime);
     setSaved(typeof r === "string" ? r : "saved");
   };
   const preview = () => {
@@ -780,6 +842,40 @@ function CodeCard({
           {saved === "saved" ? "✓ Saved (check your downloads)" : `✓ Saved to ${saved}`}
         </div>
       )}
+    </div>
+  );
+}
+
+/** "Save all as project (.zip)" — appears under a message with ≥2 code blocks, so a
+ * linked multi-file answer is kept together (with its relative paths) in one archive. */
+function ProjectSaveBar({
+  files,
+  onSaveProject,
+}: {
+  files: ProjectFile[];
+  onSaveProject: (files: ProjectFile[]) => Promise<string | true>;
+}) {
+  const [saved, setSaved] = useState<string | undefined>();
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    try {
+      const r = await onSaveProject(files);
+      setSaved(typeof r === "string" ? r : "saved");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+      <button style={codeBtnStyle} onClick={() => void save()} disabled={busy} title={files.map((f) => f.name).join(", ")}>
+        📦 {busy ? "Zipping…" : `Save all ${files.length} files as project (.zip)`}
+      </button>
+      {saved ? (
+        <span style={{ fontSize: 11, opacity: 0.7 }}>
+          {saved === "saved" ? "✓ Saved (check your downloads)" : `✓ Saved to ${saved}`}
+        </span>
+      ) : null}
     </div>
   );
 }

@@ -16,6 +16,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.69.0",
     "@mlc-ai/web-llm": "^0.2.84",
+    "fflate": "^0.8.2",
     "mathjs": "^15.2.0",
     "zod": "^4.0.0"
   },
