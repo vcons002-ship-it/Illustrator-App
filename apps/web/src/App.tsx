@@ -1288,7 +1288,9 @@ export function App() {
     setBuddyActivity(`Running: ${call.command}`);
     let r;
     try {
-      r = await runCommand(call.command);
+      // Authenticate gh/git for this command via the env (token never enters the
+      // command string or the chat) when a GitHub token is configured.
+      r = await runCommand(call.command, settings.keys?.github || undefined);
     } catch (err) {
       setBuddyBusy(false);
       setBuddyActivity("");

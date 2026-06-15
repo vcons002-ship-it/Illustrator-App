@@ -262,6 +262,18 @@ describe("buildBuddySystemPrompt", () => {
     expect(desktop).toContain("OWN COMPUTER");
   });
 
+  it("advertises GitHub repo work only when a token is configured (canGithub)", () => {
+    const off = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    expect(off).not.toContain("GITHUB:");
+    expect(off).not.toContain("gh repo clone");
+    const on = buildBuddySystemPrompt({ persona: "freeform", library: [], canGithub: true });
+    expect(on).toContain("GITHUB:");
+    expect(on).toContain("gh pr create");
+    expect(on).toContain("gh auth setup-git");
+    expect(on).toContain("GH_TOKEN");
+    expect(on).toMatch(/never.*print|NEVER print/i); // the token-safety rule
+  });
+
   it("advertises run_command + screenshot only when explicitly enabled (opt-in)", () => {
     const off = buildBuddySystemPrompt({ persona: "freeform", library: [] });
     expect(off).not.toContain("run_command");

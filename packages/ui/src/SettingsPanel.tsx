@@ -722,7 +722,7 @@ export function SettingsPanel({
           <Group
             q={query}
             title="💬 Chat (buddy & reading companion)"
-            keywords="chat buddy companion local model ollama webllm chat provider chat image override private vision describe image screenshot run commands shell agentic assistant workspace test code find files allow wolfram alpha math knowledge appid"
+            keywords="chat buddy companion local model ollama webllm chat provider chat image override private vision describe image screenshot run commands shell agentic assistant workspace test code find files allow wolfram alpha math knowledge appid github git gh token clone commit push pull request pr issue repository repo"
           >
             <p style={{ opacity: 0.6, fontSize: 11, margin: "4px 0 8px" }}>
               The chat panel can run on a different model than the book analysis. Defaults to
@@ -824,6 +824,25 @@ export function SettingsPanel({
                       permissions. (Opening files from your computer is always available and asks per
                       session.)
                     </span>
+                  </span>
+                </label>
+                <label style={{ ...rowStyle, marginTop: 8 }}>
+                  <span>GitHub token (optional)</span>
+                  <input
+                    type="password"
+                    value={value.keys.github ?? ""}
+                    placeholder="ghp_… — lets the assistant work with your repos"
+                    onChange={(e) => setKey("github", e.target.value.trim())}
+                  />
+                  <span style={{ opacity: 0.55, fontSize: 11 }}>
+                    With “run commands” on, lets the assistant <b>clone, commit, push, open pull requests and manage
+                    issues</b> on your repos using <code>git</code> and the <code>gh</code> CLI in its workspace. The
+                    token is injected into the command’s environment — never shown to the model, printed, or committed.
+                    Create a fine-scoped token at{" "}
+                    <a href="https://github.com/settings/tokens" target="_blank" rel="noreferrer" style={{ color: "#9db4ff" }}>
+                      github.com/settings/tokens ↗
+                    </a>
+                    {" "}(<code>git</code>/<code>gh</code> must be installed).
                   </span>
                 </label>
               </>

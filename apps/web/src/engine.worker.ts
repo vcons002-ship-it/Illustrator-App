@@ -1368,6 +1368,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         ...(corsProxyAvailable && settings?.allowCommands ? { canRunCommands: true } : {}),
         // Wolfram|Alpha grounding when an AppID is configured.
         ...(settings?.keys?.wolfram ? { canWolfram: true } : {}),
+        // GitHub repo work rides run_command, so it needs desktop + commands + a token.
+        ...(corsProxyAvailable && settings?.allowCommands && settings?.keys?.github ? { canGithub: true } : {}),
       }) +
       (memory ? `\n\n${memory}` : "") +
       (skills ? `\n\n${skills}` : "") +
