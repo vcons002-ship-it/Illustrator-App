@@ -272,6 +272,16 @@ export function App() {
   const [buddyThinking, setBuddyThinking] = useState("");
   const [buddyActivity, setBuddyActivity] = useState("");
   const [buddyPersona, setBuddyPersona] = useState<BuddyPersona>("freeform");
+  // The desktop assistant's chosen working folder ("" = the default VisualReader
+  // workspace). Persisted so it survives reloads; routes run_command + find_files.
+  const [buddyWorkingDir, setBuddyWorkingDir] = useState("");
+  const setWorkingDir = useCallback(
+    (dir: string) => {
+      setBuddyWorkingDir(dir);
+      void libraryStore.putMemo?.("buddy-working-dir", dir).catch(() => {});
+    },
+    [libraryStore],
+  );
   const [buddyPendingTool, setBuddyPendingTool] = useState<BuddyToolCall | undefined>();
   const [buddyUsage, setBuddyUsage] = useState<ContextUsage | undefined>();
   // The pending generate_image's transcript, folded in only on approval (same
@@ -1178,6 +1188,9 @@ export function App() {
     void libraryStore.getChatHistory?.(BUDDY_CHAT_ID).then((stored) => {
       if (!cancelled && stored) setBuddyMessages(stored);
     });
+    void libraryStore.getMemo?.("buddy-working-dir").then((d) => {
+      if (!cancelled && d) setBuddyWorkingDir(d);
+    });
     return () => {
       cancelled = true;
     };
@@ -1222,7 +1235,7 @@ export function App() {
     setBuddyBusy(true);
     setBuddyActivity(`Searching your files for “${query}”…`);
     try {
-      const ranked = rankLocalFiles(query, await searchLocalFiles(query), 15);
+      const ranked = rankLocalFiles(query, await searchLocalFiles(query, buddyWorkingDir || undefined), 15);
       const baked = modelTurns
         ? {
             turns: [
@@ -1289,8 +1302,9 @@ export function App() {
     let r;
     try {
       // Authenticate gh/git for this command via the env (token never enters the
-      // command string or the chat) when a GitHub token is configured.
-      r = await runCommand(call.command, settings.keys?.github || undefined);
+      // command string or the chat) when a GitHub token is configured; run it in the
+      // session's chosen working folder (or the default workspace when unset).
+      r = await runCommand(call.command, settings.keys?.github || undefined, buddyWorkingDir || undefined);
     } catch (err) {
       setBuddyBusy(false);
       setBuddyActivity("");
@@ -1498,7 +1512,7 @@ export function App() {
           appendBuddy({ role: "tool", text: "🔍 No results." });
         }
       }
-    });
+    }, buddyWorkingDir || undefined);
     if (buddyTurnSeq.current !== seq) return;
     setBuddyBusy(false);
     setBuddyStreaming("");
@@ -2410,6 +2424,7 @@ export function App() {
             onDeleteMessage={onDeleteBuddyMessage}
             onCompact={onCompactBuddyClick}
             desktop={isDesktop}
+            {...(isDesktop && settings.allowCommands ? { workingDir: buddyWorkingDir, onSetWorkingDir: setWorkingDir } : {})}
             onOpenLocalFile={onOpenLocalFile}
             onSaveFile={onSaveChatFile}
             onSaveProject={onSaveProject}

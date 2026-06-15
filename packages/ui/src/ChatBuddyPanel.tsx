@@ -61,6 +61,10 @@ export interface ChatBuddyPanelProps {
   onSaveProject?: (files: ProjectFile[]) => Promise<string | true>;
   /** Generate + embed a designed document's images. */
   onBuildDocument?: BuildDocumentFn;
+  /** The session's working folder ("" = default workspace). Present → show the picker. */
+  workingDir?: string;
+  /** Set the working folder run_command/find_files operate in ("" resets to default). */
+  onSetWorkingDir?: (dir: string) => void;
 }
 
 export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanelProps) {
@@ -129,6 +133,9 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         </span>
       </div>
 
+      {props.onSetWorkingDir && (
+        <WorkingFolderBar workingDir={props.workingDir ?? ""} onSet={props.onSetWorkingDir} />
+      )}
       {props.contextUsage && <UsageDisclosure usage={props.contextUsage} />}
       {showHelp && (
         <CommandHelp
@@ -379,6 +386,72 @@ const smallButtonStyle = {
   padding: "6px 10px",
   fontSize: 12,
   cursor: "pointer",
+} as const;
+
+/** Desktop: shows/sets the folder the assistant's commands + file search run in. */
+function WorkingFolderBar({ workingDir, onSet }: { workingDir: string; onSet: (dir: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(workingDir);
+  const label = workingDir || "Default workspace (~/VisualReader/workspace)";
+  const tinyBtn = { ...smallButtonStyle, padding: "2px 8px", fontSize: 11 } as const;
+  return (
+    <div style={folderBarStyle}>
+      <span title="Where the assistant's commands and file search run">📁</span>
+      {editing ? (
+        <>
+          <input
+            style={folderInputStyle}
+            value={draft}
+            placeholder="Absolute path to a project folder (blank = default workspace)"
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                onSet(draft.trim());
+                setEditing(false);
+              }
+            }}
+            autoFocus
+          />
+          <button style={tinyBtn} onClick={() => { onSet(draft.trim()); setEditing(false); }}>Set</button>
+          <button style={tinyBtn} onClick={() => { setDraft(workingDir); setEditing(false); }}>Cancel</button>
+        </>
+      ) : (
+        <>
+          <span
+            style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: 0.8 }}
+            title={label}
+          >
+            {label}
+          </span>
+          <button style={tinyBtn} onClick={() => { setDraft(workingDir); setEditing(true); }}>Change</button>
+          {workingDir ? (
+            <button style={tinyBtn} title="Use the default workspace" onClick={() => onSet("")}>Reset</button>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
+const folderBarStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "4px 10px",
+  fontSize: 11,
+  borderBottom: "1px solid rgba(255,255,255,0.08)",
+} as const;
+
+const folderInputStyle = {
+  flex: 1,
+  minWidth: 0,
+  background: "rgba(255,255,255,0.06)",
+  color: "inherit",
+  border: "1px solid rgba(255,255,255,0.18)",
+  borderRadius: 6,
+  padding: "3px 8px",
+  fontSize: 11,
+  fontFamily: "ui-monospace, Menlo, monospace",
 } as const;
 
 const personaGroupStyle = {
