@@ -14,6 +14,7 @@ import type {
   ImageSearchHit,
   ImportStats,
   PolishMode,
+  TaskCandidate,
   TaskPlan,
   TaskSource,
   ToolCall,
@@ -109,6 +110,8 @@ export type MainToWorker =
    * the CORS proxy + Google deps + store). `sourceText` is the typed ask or the source
    * email/event content the host already read. */
   | { type: "planTask"; requestId: number; source: TaskSource; sourceText: string }
+  /** Idle scan: surface actionable email/calendar items as task candidates (Phase 2). */
+  | { type: "scanInbox"; requestId: number }
   /** Faithful document polish (two stages); answered by `polished` (+ `polishToken`
    * deltas while producing). Cancel via `chatCancel` (shares the abort map). */
   | {
@@ -273,6 +276,7 @@ export type WorkerToMain =
   | { type: "googleConnected"; requestId: number; ok: boolean; email?: string; error?: string }
   | { type: "planProgress"; requestId: number; phase: "research" | "plan"; note?: string }
   | { type: "planned"; requestId: number; ok: boolean; plan?: TaskPlan; error?: string }
+  | { type: "scanned"; requestId: number; ok: boolean; candidates?: TaskCandidate[]; error?: string }
   /** Streaming delta while the polish "produce" stage runs. */
   | { type: "polishToken"; requestId: number; text: string }
   /** Reply to `polish`: the understood plan (+ optional question), or the produced text. */

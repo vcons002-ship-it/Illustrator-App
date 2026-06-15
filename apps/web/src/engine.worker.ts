@@ -55,6 +55,10 @@ import {
   nextReadyStep,
   tasksIndexBlock,
   patchTask,
+  loadIgnored,
+  buildScanPrompt,
+  parseCandidates,
+  dedupeCandidates,
   runBuddyTool,
   runChatTool,
   profileDimensions,
@@ -605,6 +609,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "planTask":
       void handlePlanTask(msg);
+      break;
+    case "scanInbox":
+      void handleScanInbox(msg);
       break;
     case "polish":
       void handlePolish(msg);
@@ -1241,6 +1248,40 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
     });
   } finally {
     chatAborts.delete(msg.requestId);
+  }
+}
+
+/** Idle scan: classify recent Gmail + upcoming Calendar into actionable task candidates,
+ * deduped against existing plans + the ignore list. Best-effort, one-shot. */
+async function handleScanInbox(msg: Extract<MainToWorker, { type: "scanInbox" }>): Promise<void> {
+  try {
+    const { llm } = chatProviders();
+    const store = memoryStore();
+    const googleId = settings?.keys?.googleClientId;
+    const googleSecret = settings?.keys?.googleClientSecret;
+    if (!supportsChat(llm) || !googleId || !googleSecret || !(await loadGoogleTokens(store))) {
+      post({ type: "scanned", requestId: msg.requestId, ok: true, candidates: [] });
+      return;
+    }
+    const transport = new DirectTransport(corsFetch());
+    const token = await getFreshAccessToken(store, { clientId: googleId, clientSecret: googleSecret, transport });
+    const [emails, events] = await Promise.all([
+      gmailSearch(transport, token, "newer_than:2d -category:promotions -category:social", 15).catch(() => []),
+      listEvents(transport, token, { max: 10 }).catch(() => []),
+    ]);
+    if (emails.length === 0 && events.length === 0) {
+      post({ type: "scanned", requestId: msg.requestId, ok: true, candidates: [] });
+      return;
+    }
+    const reply = await llm.chat(buildScanPrompt(emails, events), { maxTokens: 1024 });
+    const candidates = dedupeCandidates(
+      parseCandidates(reply, emails, events),
+      await loadTaskPlans(store),
+      await loadIgnored(store),
+    );
+    post({ type: "scanned", requestId: msg.requestId, ok: true, candidates });
+  } catch (err) {
+    post({ type: "scanned", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
   }
 }
 

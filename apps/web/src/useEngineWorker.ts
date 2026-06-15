@@ -15,6 +15,7 @@ import type {
   ImageSearchHit,
   ImportStats,
   PolishMode,
+  TaskCandidate,
   TaskPlan,
   TaskSource,
   ToolCall,
@@ -155,6 +156,8 @@ export interface EngineWorkerApi {
   googleConnect: (args: { code: string; redirectUri: string; codeVerifier: string }) => Promise<{ ok: boolean; email?: string; error?: string }>;
   /** Research + plan a task into a persisted TaskPlan (progress streamed via onProgress). */
   planTask: (args: { source: TaskSource; sourceText: string; onProgress?: (phase: string, note?: string) => void }) => Promise<{ ok: boolean; plan?: TaskPlan; error?: string }>;
+  /** Idle scan: actionable email/calendar items as task candidates. */
+  scanInbox: () => Promise<{ ok: boolean; candidates?: TaskCandidate[] }>;
   /** Run one document-polish stage; returns the requestId (for cancel) + the result. */
   polishText: (args: {
     stage: "understand" | "produce";
@@ -346,6 +349,8 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const planRequests = useRef<
     Map<number, { resolve: (r: { ok: boolean; plan?: TaskPlan; error?: string }) => void; onProgress?: (phase: string, note?: string) => void }>
   >(new Map());
+  // In-flight idle scans, resolved by `scanned`.
+  const scanRequests = useRef<Map<number, (r: { ok: boolean; candidates?: TaskCandidate[] }) => void>>(new Map());
   // In-flight document-polish stages, resolved by `polished` (and streamed via `polishToken`).
   const polishRequests = useRef<
     Map<number, { onToken?: (delta: string) => void; resolve: (r: PolishResult) => void }>
@@ -624,6 +629,12 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
               ? { ok: true, plan: msg.plan }
               : { ok: false, ...(msg.error ? { error: msg.error } : {}) },
           );
+          break;
+        }
+        case "scanned": {
+          const resolve = scanRequests.current.get(msg.requestId);
+          scanRequests.current.delete(msg.requestId);
+          resolve?.({ ok: msg.ok, ...(msg.candidates ? { candidates: msg.candidates } : {}) });
           break;
         }
         case "polishToken": {
@@ -1067,6 +1078,21 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const scanInbox = useCallback(
+    (): Promise<{ ok: boolean; candidates?: TaskCandidate[] }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (scanRequests.current.delete(requestId)) resolve({ ok: false });
+        }, 60_000);
+        scanRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "scanInbox", requestId });
+      }),
+    [],
+  );
   const polishText = useCallback(
     (args: {
       stage: "understand" | "produce";
@@ -1152,6 +1178,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     summarize,
     googleConnect,
     planTask,
+    scanInbox,
     polishText,
     polishCancel,
   };
