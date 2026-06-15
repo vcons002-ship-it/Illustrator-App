@@ -1,0 +1,374 @@
+import type { Transport } from "./transport/transport.js";
+
+/**
+ * Google integration — Gmail (read), Calendar (read + create), Tasks (read + create).
+ * OAuth 2.0 with PKCE against the user's OWN Google Cloud OAuth client (no app
+ * backend); the desktop shell runs the consent + loopback redirect, this module does
+ * the token exchange/refresh and the API calls through the Transport seam (so the
+ * desktop CORS proxy carries them). Read + create only — no send-email or delete here,
+ * matching the chosen permission scope.
+ *
+ * The PARSERS (Gmail message → email, API item → event/task) are pure and unit-tested;
+ * the network functions take an injected Transport so they're testable with a fake.
+ */
+
+/** Read Gmail + read/create Calendar events + read/create Tasks. */
+export const GOOGLE_SCOPES = [
+  "https://www.googleapis.com/auth/gmail.readonly",
+  "https://www.googleapis.com/auth/calendar.events",
+  "https://www.googleapis.com/auth/tasks",
+] as const;
+
+const AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
+const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
+
+export interface GoogleTokens {
+  accessToken: string;
+  /** Long-lived; only returned on the FIRST exchange (offline access). */
+  refreshToken?: string;
+  /** ms epoch when the access token expires. */
+  expiresAt: number;
+}
+
+// ----------------------------------------------------------------- OAuth (PKCE)
+
+function base64Url(bytes: Uint8Array): string {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/** A PKCE verifier + its S256 challenge (Web Crypto). */
+export async function generatePkce(): Promise<{ verifier: string; challenge: string }> {
+  const verifier = base64Url(crypto.getRandomValues(new Uint8Array(32)));
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+  return { verifier, challenge: base64Url(new Uint8Array(digest)) };
+}
+
+/** The Google consent URL to open in the browser (offline access + forced consent so a
+ * refresh token always comes back). */
+export function buildGoogleAuthUrl(opts: {
+  clientId: string;
+  redirectUri: string;
+  codeChallenge: string;
+  state: string;
+  scopes?: readonly string[];
+}): string {
+  const params = new URLSearchParams({
+    client_id: opts.clientId,
+    redirect_uri: opts.redirectUri,
+    response_type: "code",
+    scope: (opts.scopes ?? GOOGLE_SCOPES).join(" "),
+    code_challenge: opts.codeChallenge,
+    code_challenge_method: "S256",
+    access_type: "offline",
+    prompt: "consent",
+    include_granted_scopes: "true",
+    state: opts.state,
+  });
+  return `${AUTH_ENDPOINT}?${params.toString()}`;
+}
+
+interface RawTokenResponse {
+  access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  error?: string;
+  error_description?: string;
+}
+
+async function tokenRequest(transport: Transport, fields: Record<string, string>): Promise<GoogleTokens> {
+  const res = await transport.send({ url: TOKEN_ENDPOINT, method: "POST", formEncoded: fields });
+  const data = await res.json<RawTokenResponse>().catch(() => ({}) as RawTokenResponse);
+  if (!res.ok || !data.access_token) {
+    throw new Error(`Google token request failed: ${data.error_description || data.error || res.status}`);
+  }
+  return {
+    accessToken: data.access_token,
+    ...(data.refresh_token ? { refreshToken: data.refresh_token } : {}),
+    expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
+  };
+}
+
+/** Exchange the consent `code` for tokens (first time → includes a refresh token). */
+export function exchangeGoogleCode(opts: {
+  transport: Transport;
+  clientId: string;
+  clientSecret: string;
+  code: string;
+  redirectUri: string;
+  codeVerifier: string;
+}): Promise<GoogleTokens> {
+  return tokenRequest(opts.transport, {
+    grant_type: "authorization_code",
+    code: opts.code,
+    client_id: opts.clientId,
+    client_secret: opts.clientSecret,
+    redirect_uri: opts.redirectUri,
+    code_verifier: opts.codeVerifier,
+  });
+}
+
+/** Get a fresh access token from the stored refresh token. */
+export function refreshGoogleToken(opts: {
+  transport: Transport;
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
+}): Promise<GoogleTokens> {
+  return tokenRequest(opts.transport, {
+    grant_type: "refresh_token",
+    refresh_token: opts.refreshToken,
+    client_id: opts.clientId,
+    client_secret: opts.clientSecret,
+  });
+}
+
+// -------------------------------------------------------------------- API calls
+
+async function apiGet<T>(transport: Transport, token: string, url: string): Promise<T> {
+  const res = await transport.send({ url, method: "GET", headers: { authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error(await apiError(res));
+  return res.json<T>();
+}
+
+async function apiPost<T>(transport: Transport, token: string, url: string, body: unknown): Promise<T> {
+  const res = await transport.send({
+    url,
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body,
+  });
+  if (!res.ok) throw new Error(await apiError(res));
+  return res.json<T>();
+}
+
+async function apiError(res: { status: number; json: <T>() => Promise<T> }): Promise<string> {
+  const data = await res.json<{ error?: { message?: string } }>().catch(() => undefined);
+  return `Google API error ${res.status}${data?.error?.message ? `: ${data.error.message}` : ""}`;
+}
+
+// --------------------------------------------------------------------- Gmail
+
+export interface EmailSummary {
+  id: string;
+  from: string;
+  subject: string;
+  date: string;
+  snippet: string;
+}
+export interface EmailFull extends EmailSummary {
+  body: string;
+}
+
+interface GmailHeader {
+  name: string;
+  value: string;
+}
+interface GmailPart {
+  mimeType?: string;
+  body?: { data?: string };
+  parts?: GmailPart[];
+}
+interface GmailMessage {
+  id: string;
+  snippet?: string;
+  payload?: { headers?: GmailHeader[] } & GmailPart;
+}
+
+/** Decode Gmail's base64url body data to a UTF-8 string. */
+export function decodeBase64Url(data: string): string {
+  const b64 = data.replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(b64);
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+function header(headers: GmailHeader[] | undefined, name: string): string {
+  return headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value ?? "";
+}
+
+/** Walk the MIME tree for the first text/plain body (falling back to text/html, stripped). */
+function bodyText(part: GmailPart | undefined): string {
+  if (!part) return "";
+  if (part.mimeType === "text/plain" && part.body?.data) return decodeBase64Url(part.body.data);
+  for (const child of part.parts ?? []) {
+    const t = bodyText(child);
+    if (t) return t;
+  }
+  if (part.mimeType === "text/html" && part.body?.data) {
+    return decodeBase64Url(part.body.data).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  }
+  return "";
+}
+
+/** Pure: a Gmail message JSON → a structured email (PURE — unit-tested). */
+export function parseGmailMessage(msg: GmailMessage): EmailFull {
+  const headers = msg.payload?.headers;
+  return {
+    id: msg.id,
+    from: header(headers, "From"),
+    subject: header(headers, "Subject"),
+    date: header(headers, "Date"),
+    snippet: msg.snippet ?? "",
+    body: bodyText(msg.payload).trim(),
+  };
+}
+
+const GMAIL = "https://gmail.googleapis.com/gmail/v1/users/me";
+
+/** Search the inbox (Gmail query syntax, e.g. "is:unread from:acme"); returns metadata. */
+export async function gmailSearch(
+  transport: Transport,
+  token: string,
+  query: string,
+  max = 10,
+): Promise<EmailSummary[]> {
+  const list = await apiGet<{ messages?: { id: string }[] }>(
+    transport,
+    token,
+    `${GMAIL}/messages?maxResults=${Math.min(25, Math.max(1, max))}&q=${encodeURIComponent(query)}`,
+  );
+  const ids = (list.messages ?? []).map((m) => m.id);
+  const msgs = await Promise.all(
+    ids.map((id) =>
+      apiGet<GmailMessage>(
+        transport,
+        token,
+        `${GMAIL}/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`,
+      ),
+    ),
+  );
+  return msgs.map((m) => {
+    const { body: _body, ...summary } = parseGmailMessage(m);
+    return summary;
+  });
+}
+
+/** Full text of one email (for pulling into the chat to summarize/re-work). */
+export async function gmailReadEmail(transport: Transport, token: string, id: string): Promise<EmailFull> {
+  return parseGmailMessage(await apiGet<GmailMessage>(transport, token, `${GMAIL}/messages/${id}?format=full`));
+}
+
+// ------------------------------------------------------------------- Calendar
+
+export interface CalendarEvent {
+  id?: string;
+  summary: string;
+  /** ISO datetime (or date for all-day). */
+  start: string;
+  end: string;
+  description?: string;
+  location?: string;
+}
+
+interface RawEvent {
+  id?: string;
+  summary?: string;
+  description?: string;
+  location?: string;
+  start?: { dateTime?: string; date?: string };
+  end?: { dateTime?: string; date?: string };
+}
+
+/** Pure: a Calendar API item → a CalendarEvent (PURE — unit-tested). */
+export function parseCalendarEvent(e: RawEvent): CalendarEvent {
+  return {
+    ...(e.id ? { id: e.id } : {}),
+    summary: e.summary ?? "(no title)",
+    start: e.start?.dateTime ?? e.start?.date ?? "",
+    end: e.end?.dateTime ?? e.end?.date ?? "",
+    ...(e.description ? { description: e.description } : {}),
+    ...(e.location ? { location: e.location } : {}),
+  };
+}
+
+const CALENDAR = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
+
+/** Upcoming events from the primary calendar (from `timeMin`, default now). */
+export async function listEvents(
+  transport: Transport,
+  token: string,
+  opts: { max?: number; timeMin?: string } = {},
+): Promise<CalendarEvent[]> {
+  const params = new URLSearchParams({
+    maxResults: String(Math.min(25, Math.max(1, opts.max ?? 10))),
+    singleEvents: "true",
+    orderBy: "startTime",
+    timeMin: opts.timeMin ?? new Date().toISOString(),
+  });
+  const data = await apiGet<{ items?: RawEvent[] }>(transport, token, `${CALENDAR}?${params.toString()}`);
+  return (data.items ?? []).map(parseCalendarEvent);
+}
+
+/** Create an event. `start`/`end` are ISO datetimes (with offset or Z). */
+export async function createEvent(
+  transport: Transport,
+  token: string,
+  ev: { summary: string; start: string; end: string; description?: string; location?: string },
+): Promise<CalendarEvent> {
+  const body = {
+    summary: ev.summary,
+    start: { dateTime: ev.start },
+    end: { dateTime: ev.end },
+    ...(ev.description ? { description: ev.description } : {}),
+    ...(ev.location ? { location: ev.location } : {}),
+  };
+  return parseCalendarEvent(await apiPost<RawEvent>(transport, token, CALENDAR, body));
+}
+
+// ---------------------------------------------------------------------- Tasks
+
+export interface TaskItem {
+  id?: string;
+  title: string;
+  notes?: string;
+  /** RFC 3339 date (the API only honours the date part). */
+  due?: string;
+  status?: string;
+}
+
+interface RawTask {
+  id?: string;
+  title?: string;
+  notes?: string;
+  due?: string;
+  status?: string;
+}
+
+/** Pure: a Tasks API item → a TaskItem (PURE — unit-tested). */
+export function parseTask(t: RawTask): TaskItem {
+  return {
+    ...(t.id ? { id: t.id } : {}),
+    title: t.title ?? "(untitled)",
+    ...(t.notes ? { notes: t.notes } : {}),
+    ...(t.due ? { due: t.due } : {}),
+    ...(t.status ? { status: t.status } : {}),
+  };
+}
+
+const TASKS = "https://tasks.googleapis.com/tasks/v1/lists/@default/tasks";
+
+/** Open to-do items from the default list. */
+export async function listTasks(transport: Transport, token: string, max = 20): Promise<TaskItem[]> {
+  const data = await apiGet<{ items?: RawTask[] }>(
+    transport,
+    token,
+    `${TASKS}?showCompleted=false&maxResults=${Math.min(50, Math.max(1, max))}`,
+  );
+  return (data.items ?? []).map(parseTask);
+}
+
+/** Add a to-do. `due` is an RFC 3339 timestamp (date part honoured). */
+export async function createTask(
+  transport: Transport,
+  token: string,
+  t: { title: string; notes?: string; due?: string },
+): Promise<TaskItem> {
+  const body = {
+    title: t.title,
+    ...(t.notes ? { notes: t.notes } : {}),
+    ...(t.due ? { due: t.due } : {}),
+  };
+  return parseTask(await apiPost<RawTask>(transport, token, TASKS, body));
+}
