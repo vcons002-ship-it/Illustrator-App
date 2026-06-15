@@ -10,6 +10,7 @@ export * from "./reader-memory.js";
 export * from "./skills.js";
 export * from "./tasks.js";
 export * from "./task-planner.js";
+export * from "./task-scan.js";
 export * from "./slash-commands.js";
 export * from "./document-polish.js";
 export * from "./math-engine.js";
