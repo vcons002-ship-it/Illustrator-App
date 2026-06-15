@@ -14,6 +14,12 @@ export interface TransportRequest {
   /** JSON-serialisable body. */
   body?: unknown;
   /**
+   * `application/x-www-form-urlencoded` body (OAuth token endpoints require this).
+   * When set, `body` is ignored and the fields are URL-encoded with the form
+   * content-type. The desktop CORS proxy forwards the raw bytes + header unchanged.
+   */
+  formEncoded?: Record<string, string>;
+  /**
    * Multipart file upload (e.g. ComfyUI `/upload/image`). When set, `body` is
    * ignored and the request is sent as `multipart/form-data` with this one file
    * field; `fetch` sets the boundary. Used by the local ComfyUI IP-Adapter path.
@@ -82,6 +88,12 @@ export class DirectTransport implements Transport {
         request.form.filename,
       );
       init = { method: request.method ?? "POST", headers: { ...request.headers }, body: fd };
+    } else if (request.formEncoded) {
+      init = {
+        method: request.method ?? "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", ...request.headers },
+        body: new URLSearchParams(request.formEncoded).toString(),
+      };
     } else {
       init = {
         method: request.method ?? "POST",
