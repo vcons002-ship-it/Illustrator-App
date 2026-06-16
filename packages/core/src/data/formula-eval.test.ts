@@ -61,6 +61,56 @@ describe("evaluateFormula", () => {
   });
 });
 
+describe("evaluateFormula — lookups, logic, multi-criteria, math/text", () => {
+  // A1:C4 price table (header + 3 rows).
+  const grid = gridCtx([
+    ["Item", "Qty", "Price"],
+    ["apple", 2, 1.5],
+    ["pear", 5, 2],
+    ["plum", 1, 3],
+  ]);
+
+  it("VLOOKUP / HLOOKUP / INDEX / MATCH over 2-D ranges", () => {
+    expect(evaluateFormula('VLOOKUP("pear",A2:C4,3,FALSE)', grid)).toBe(2);
+    expect(evaluateFormula('VLOOKUP("plum",A2:C4,2,FALSE)', grid)).toBe(1);
+    expect(evaluateFormula("INDEX(A2:C4,1,3)", grid)).toBe(1.5);
+    expect(evaluateFormula('MATCH("plum",A2:A4,0)', grid)).toBe(3);
+    expect(evaluateFormula("HLOOKUP(\"Price\",A1:C4,3,FALSE)", grid)).toBe(2); // 3rd row under Price header
+    expect(() => evaluateFormula('VLOOKUP("missing",A2:C4,2,FALSE)', grid)).toThrow(/N\/A/);
+  });
+
+  it("lazy IF / IFERROR / IFS — the untaken branch is never evaluated", () => {
+    expect(evaluateFormula("IF(B2=0,0,Price/B2)", gridCtx([["", 0], ["x", 0]]))).toBe(0); // no #DIV/0!
+    expect(evaluateFormula("IFERROR(1/0,-1)", grid)).toBe(-1);
+    expect(evaluateFormula('IFS(B2>4,"hi",B2>1,"mid",TRUE,"lo")', grid)).toBe("mid"); // B2=2
+    expect(evaluateFormula("ISERROR(1/0)", grid)).toBe(true);
+    expect(evaluateFormula("ISNUMBER(C2)", grid)).toBe(true);
+  });
+
+  it("multi-criteria SUMIFS / COUNTIFS / AVERAGEIFS / MAXIFS", () => {
+    const g = gridCtx([
+      ["Cat", "Region", "Amt"],
+      ["food", "N", 10],
+      ["food", "S", 30],
+      ["rent", "N", 50],
+    ]);
+    expect(evaluateFormula('SUMIFS(C2:C4,A2:A4,"food")', g)).toBe(40);
+    expect(evaluateFormula('SUMIFS(C2:C4,A2:A4,"food",B2:B4,"N")', g)).toBe(10);
+    expect(evaluateFormula('COUNTIFS(A2:A4,"food")', g)).toBe(2);
+    expect(evaluateFormula('MAXIFS(C2:C4,A2:A4,"food")', g)).toBe(30);
+  });
+
+  it("math + stats + text helpers", () => {
+    expect(evaluateFormula("ROUNDUP(2.1,0)", grid)).toBe(3);
+    expect(evaluateFormula("CEILING(7,5)", grid)).toBe(10);
+    expect(evaluateFormula("LARGE(A2:C4,1)", grid)).toBe(5); // biggest number in the block
+    expect(evaluateFormula("SMALL(B2:B4,1)", grid)).toBe(1);
+    expect(evaluateFormula('LEFT(UPPER("apple"),3)', grid)).toBe("APP");
+    expect(evaluateFormula('TEXTJOIN("-",TRUE,A2:A4)', grid)).toBe("apple-pear-plum");
+    expect(evaluateFormula("CHOOSE(2,10,20,30)", grid)).toBe(20);
+  });
+});
+
 describe("recalcTable", () => {
   it("computes formula cells and resolves chained dependencies", () => {
     const t: DataTable = {
