@@ -29,12 +29,35 @@ export interface XlsxCell {
 /** A cell is either a bare value or the richer {formula,value,bold} form. */
 export type XlsxCellInput = XlsxCellValue | XlsxCell;
 
+/**
+ * An embedded NATIVE Excel chart on a sheet (a real, editable chart — not an image).
+ * Columns are 0-based indices into the sheet's columns; the header is row 1 and the
+ * data spans rows 2..N, matching `sheetFromDataTable` output.
+ */
+export interface XlsxChartSpec {
+  kind: "bar" | "line" | "pie";
+  title?: string;
+  /** Column whose data cells label the categories (x-axis / pie slices). */
+  categoriesCol: number;
+  /** Column(s) supplying the value series (pie uses the first only). */
+  valueCols: number[];
+  /** Excel row of the last DATA row (excludes a trailing totals row). Defaults to the
+   * sheet's row count when unset. */
+  lastDataRow?: number;
+}
+
 export interface XlsxSheet {
   /** Tab name (sanitised to Excel's rules: ≤31 chars, no []:*?/\\). */
   name: string;
   /** Row-major cells. A `null` (or undefined) cell is left empty. */
   rows: XlsxCellInput[][];
+  /** Optional embedded native chart over this sheet's data. */
+  chart?: XlsxChartSpec;
 }
+
+const NS_CHART = "http://schemas.openxmlformats.org/drawingml/2006/chart";
+const NS_DRAW = "http://schemas.openxmlformats.org/drawingml/2006/main";
+const NS_SS_DRAW = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
 
 /** Aggregations that map cleanly to an Excel built-in function for a totals row. */
 export type XlsxAggregation = "sum" | "average" | "mean" | "min" | "max" | "count" | "median" | "stdev";
@@ -117,9 +140,76 @@ function sheetXml(sheet: XlsxSheet): string {
       return `<row r="${rowNum}">${body}</row>`;
     })
     .join("");
+  // A charted sheet references its drawing part (and needs the relationships ns).
+  const ns = sheet.chart ? `xmlns="${NS_MAIN}" xmlns:r="${NS_R}"` : `xmlns="${NS_MAIN}"`;
+  const drawing = sheet.chart ? `<drawing r:id="rId1"/>` : "";
   return (
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
-    `<worksheet xmlns="${NS_MAIN}"><sheetData>${rows}</sheetData></worksheet>`
+    `<worksheet ${ns}><sheetData>${rows}</sheetData>${drawing}</worksheet>`
+  );
+}
+
+/** Absolute range ref on a named sheet, e.g. `'Data'!$B$2:$B$11`. */
+function absRange(name: string, col: number, r1: number, r2: number): string {
+  const L = columnLetter(col);
+  return `'${name.replace(/'/g, "''")}'!$${L}$${r1}:$${L}$${r2}`;
+}
+/** Absolute single-cell ref, e.g. `'Data'!$B$1` (a series-name header). */
+function absCell(name: string, col: number, row: number): string {
+  return `'${name.replace(/'/g, "''")}'!$${columnLetter(col)}$${row}`;
+}
+
+/** The chart definition part (chartN.xml) for a sheet's chart spec. */
+function chartXml(sheetName: string, sheet: XlsxSheet, spec: XlsxChartSpec): string {
+  const lastRow = spec.lastDataRow ?? sheet.rows.length; // header = row 1, data = rows 2..lastRow
+  const cat = absRange(sheetName, spec.categoriesCol, 2, lastRow);
+  const cols = spec.kind === "pie" ? spec.valueCols.slice(0, 1) : spec.valueCols;
+  const series = cols
+    .map((vc, i) => {
+      const tx = `<c:tx><c:strRef><c:f>${escapeXml(absCell(sheetName, vc, 1))}</c:f></c:strRef></c:tx>`;
+      const catRef = `<c:cat><c:strRef><c:f>${escapeXml(cat)}</c:f></c:strRef></c:cat>`;
+      const valRef = `<c:val><c:numRef><c:f>${escapeXml(absRange(sheetName, vc, 2, lastRow))}</c:f></c:numRef></c:val>`;
+      const marker = spec.kind === "line" ? `<c:marker><c:symbol val="circle"/></c:marker>` : "";
+      return `<c:ser><c:idx val="${i}"/><c:order val="${i}"/>${tx}${marker}${catRef}${valRef}</c:ser>`;
+    })
+    .join("");
+  const title = spec.title
+    ? `<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>${escapeXml(spec.title)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/>`
+    : `<c:autoTitleDeleted val="1"/>`;
+  const axes =
+    `<c:catAx><c:axId val="1"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:crossAx val="2"/></c:catAx>` +
+    `<c:valAx><c:axId val="2"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="l"/><c:crossAx val="1"/></c:valAx>`;
+  let plot: string;
+  if (spec.kind === "pie") {
+    plot = `<c:pieChart><c:varyColors val="1"/>${series}</c:pieChart>`;
+  } else if (spec.kind === "line") {
+    plot = `<c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>${series}<c:marker val="1"/><c:axId val="1"/><c:axId val="2"/></c:lineChart>${axes}`;
+  } else {
+    plot = `<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="0"/>${series}<c:axId val="1"/><c:axId val="2"/></c:barChart>${axes}`;
+  }
+  return (
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+    `<c:chartSpace xmlns:c="${NS_CHART}" xmlns:a="${NS_DRAW}" xmlns:r="${NS_R}">` +
+    `<c:chart>${title}<c:plotArea><c:layout/>${plot}</c:plotArea>` +
+    (spec.kind === "pie" ? `<c:legend><c:legendPos val="r"/></c:legend>` : "") +
+    `<c:plotVisOnly val="1"/></c:chart></c:chartSpace>`
+  );
+}
+
+/** The drawing part (drawingN.xml) anchoring one chart on the sheet. */
+function drawingXml(): string {
+  return (
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+    `<xdr:wsDr xmlns:xdr="${NS_SS_DRAW}" xmlns:a="${NS_DRAW}">` +
+    `<xdr:twoCellAnchor>` +
+    `<xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${1}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>` +
+    `<xdr:to><xdr:col>9</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>20</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>` +
+    `<xdr:graphicFrame macro="">` +
+    `<xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>` +
+    `<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm>` +
+    `<a:graphic><a:graphicData uri="${NS_CHART}">` +
+    `<c:chart xmlns:c="${NS_CHART}" xmlns:r="${NS_R}" r:id="rId1"/>` +
+    `</a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>`
   );
 }
 
@@ -151,7 +241,23 @@ export function buildXlsx(sheets: XlsxSheet[]): Uint8Array {
 
   const files: Record<string, Uint8Array> = {};
   list.forEach((s, i) => {
-    files[`xl/worksheets/sheet${i + 1}.xml`] = strToU8(sheetXml(s));
+    const n = i + 1;
+    files[`xl/worksheets/sheet${n}.xml`] = strToU8(sheetXml(s));
+    if (s.chart) {
+      // Per-sheet chart + drawing parts, each wired sheet → drawing → chart by rels.
+      files[`xl/charts/chart${n}.xml`] = strToU8(chartXml(names[i]!, s, s.chart));
+      files[`xl/drawings/drawing${n}.xml`] = strToU8(drawingXml());
+      files[`xl/drawings/_rels/drawing${n}.xml.rels`] = strToU8(
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+          `<Relationships xmlns="${NS_REL}">` +
+          `<Relationship Id="rId1" Type="${NS_R}/chart" Target="../charts/chart${n}.xml"/></Relationships>`,
+      );
+      files[`xl/worksheets/_rels/sheet${n}.xml.rels`] = strToU8(
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+          `<Relationships xmlns="${NS_REL}">` +
+          `<Relationship Id="rId1" Type="${NS_R}/drawing" Target="../drawings/drawing${n}.xml"/></Relationships>`,
+      );
+    }
   });
   files["xl/styles.xml"] = strToU8(stylesXml());
 
@@ -180,9 +286,18 @@ export function buildXlsx(sheets: XlsxSheet[]): Uint8Array {
       `<Relationship Id="rId1" Type="${NS_R}/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
   );
 
+  const chartOverrides = list
+    .map((s, i) =>
+      s.chart
+        ? `<Override PartName="/xl/charts/chart${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>` +
+          `<Override PartName="/xl/drawings/drawing${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`
+        : "",
+    )
+    .join("");
   const overrides =
     list.map((_s, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("") +
-    `<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>`;
+    `<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>` +
+    chartOverrides;
   files["[Content_Types].xml"] = strToU8(
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
       `<Types xmlns="${NS_CT}">` +
@@ -201,10 +316,27 @@ export function buildXlsx(sheets: XlsxSheet[]): Uint8Array {
  * formulas (e.g. `=SUM(B2:B11)`) across the numeric columns, so the saved file
  * carries working built-in functions rather than baked numbers.
  */
+/**
+ * A chart spec over a DataTable: the first string column labels the categories (or
+ * column 0 when there's none), the numeric columns are the value series (pie uses the
+ * first). `undefined` when the table has no numeric column to plot.
+ */
+export function chartSpecFromTable(table: DataTable, kind: "bar" | "line" | "pie"): XlsxChartSpec | undefined {
+  const catCol = table.columns.findIndex((c) => c.type === "string");
+  const valueCols = table.columns.map((c, i) => ({ c, i })).filter((x) => x.c.type === "number").map((x) => x.i);
+  if (valueCols.length === 0) return undefined;
+  return {
+    kind,
+    categoriesCol: catCol >= 0 ? catCol : 0,
+    valueCols: kind === "pie" ? valueCols.slice(0, 1) : valueCols,
+    lastDataRow: table.rows.length + 1, // header is row 1; data ends here (before any totals)
+  };
+}
+
 export function sheetFromDataTable(
   name: string,
   table: DataTable,
-  opts: { totals?: XlsxAggregation; totalsLabel?: string } = {},
+  opts: { totals?: XlsxAggregation; totalsLabel?: string; chart?: "bar" | "line" | "pie" } = {},
 ): XlsxSheet {
   const header: XlsxCellInput[] = table.columns.map((c) => ({ value: c.name, bold: true }));
   // Body cells: emit an imported/edited formula where present (with its cached value),
@@ -229,7 +361,8 @@ export function sheetFromDataTable(
     });
     rows.push(totalRow);
   }
-  return { name, rows };
+  const chart = opts.chart ? chartSpecFromTable(table, opts.chart) : undefined;
+  return { name, rows, ...(chart ? { chart } : {}) };
 }
 
 /** RFC-4180 CSV for one cell: quote when it contains a comma, quote, or newline. */

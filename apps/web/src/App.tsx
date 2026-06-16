@@ -1405,8 +1405,8 @@ export function App() {
         }
         // export_data is a safe host action too — build the .xlsx/.csv and save it.
         if (res.pendingTool.tool === "export_data") {
-          const { format, totals, analyze } = res.pendingTool;
-          void runChatDataExport(format, totals, !!analyze, [{ role: "user", content: text }, ...res.transcript]);
+          const { format, totals, analyze, chart } = res.pendingTool;
+          void runChatDataExport(format, totals, !!analyze, chart, [{ role: "user", content: text }, ...res.transcript]);
           return;
         }
         pendingTranscript.current = [{ role: "user", content: text }, ...res.transcript];
@@ -2413,6 +2413,7 @@ export function App() {
     format: "xlsx" | "csv",
     totals: "sum" | "average" | "min" | "max" | "count" | undefined,
     analyze: boolean,
+    chart: "bar" | "line" | "pie" | undefined,
     modelTurns: ChatTurn[],
   ): Promise<void> => {
     if (!book?.data) return;
@@ -2425,7 +2426,7 @@ export function App() {
       if (format === "csv") {
         saved = await saveExportFile(`${base}.csv`, dataTableToCsv(book.data), "text/csv");
       } else {
-        const bytes = buildSpreadsheetXlsx(book.data, book.dataSheets, { ...(totals ? { totals } : {}), analyze });
+        const bytes = buildSpreadsheetXlsx(book.data, book.dataSheets, { ...(totals ? { totals } : {}), analyze, ...(chart ? { chart } : {}) });
         saved = await saveExportFile(`${base}.xlsx`, bytes, XLSX_MIME);
       }
       payload = {
@@ -2435,6 +2436,7 @@ export function App() {
           where: typeof saved === "string" ? saved : "your downloads",
           ...(totals ? { totals } : {}),
           ...(analyze && format === "xlsx" ? { analyze: true } : {}),
+          ...(chart && format === "xlsx" ? { chart } : {}),
         },
       };
     } catch (err) {
@@ -2446,9 +2448,9 @@ export function App() {
     appendChat({
       role: "tool",
       text: e.ok
-        ? `⤓ Saved as ${format.toUpperCase()}${e.totals ? ` with a live ${e.totals} totals row` : ""}${e.analyze ? " + an Analysis sheet of live formulas" : ""}${e.where !== "your downloads" ? ` → ${e.where}` : " (check your downloads)"}`
+        ? `⤓ Saved as ${format.toUpperCase()}${e.totals ? ` with a live ${e.totals} totals row` : ""}${e.analyze ? " + an Analysis sheet of live formulas" : ""}${e.chart ? ` + an embedded ${e.chart} chart` : ""}${e.where !== "your downloads" ? ` → ${e.where}` : " (check your downloads)"}`
         : `⚠ Export failed: ${e.error}`,
-      turns: [...modelTurns, { role: "user", content: formatToolResult({ tool: "export_data", format, ...(totals ? { totals } : {}), ...(analyze ? { analyze: true } : {}) }, payload) }],
+      turns: [...modelTurns, { role: "user", content: formatToolResult({ tool: "export_data", format, ...(totals ? { totals } : {}), ...(analyze ? { analyze: true } : {}), ...(chart ? { chart } : {}) }, payload) }],
     });
   };
 
@@ -3303,10 +3305,16 @@ interface TechnicalSupportData {
 function buildSpreadsheetXlsx(
   data: DataTable,
   dataSheets: { name: string; table: DataTable }[] | undefined,
-  opts: { totals?: "sum" | "average" | "min" | "max" | "count"; analyze?: boolean },
+  opts: { totals?: "sum" | "average" | "min" | "max" | "count"; analyze?: boolean; chart?: "bar" | "line" | "pie" },
 ): Uint8Array {
   const sheets = dataSheets && dataSheets.length > 1 ? dataSheets : [{ name: "Sheet1", table: data }];
-  const xlsxSheets = sheets.map((s) => sheetFromDataTable(s.name, s.table, opts.totals ? { totals: opts.totals } : {}));
+  const xlsxSheets = sheets.map((s, i) =>
+    // The native chart (when requested) embeds over the FIRST sheet's data.
+    sheetFromDataTable(s.name, s.table, {
+      ...(opts.totals ? { totals: opts.totals } : {}),
+      ...(opts.chart && i === 0 ? { chart: opts.chart } : {}),
+    }),
+  );
   if (opts.analyze) {
     const primary = sheets[0]!;
     const analysis = buildAnalysisTable(primary.table, primary.name);
@@ -3424,6 +3432,20 @@ const ReaderColumn = memo(function ReaderColumn({
                 }}
               >
                 ⬇ + Analysis
+              </button>
+            ) : null}
+            {activeTable.columns.some((c) => c.type === "number") ? (
+              <button
+                style={styles.smallButton}
+                title="Excel with a native, editable chart embedded over this sheet's data"
+                onClick={() => {
+                  const base = (book.title || "data").replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "data";
+                  const name = sheets ? (sheets[Math.min(activeSheet, sheets.length - 1)]?.name ?? "Sheet1") : "Sheet1";
+                  const kind: "bar" | "line" | "pie" = dataChart?.kind === "line" ? "line" : "bar";
+                  void saveExportFile(`${base}-chart.xlsx`, buildXlsx([sheetFromDataTable(name, activeTable, { chart: kind })]), XLSX_MIME);
+                }}
+              >
+                ⬇ + Chart
               </button>
             ) : null}
             <button

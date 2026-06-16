@@ -76,6 +76,8 @@ describe("parseToolCall", () => {
     });
     expect(parseToolCall('{"tool":"export_data","totals":"bogus"}')).toEqual({ tool: "export_data", format: "xlsx" });
     expect(parseToolCall('{"tool":"export_data","analyze":true}')).toEqual({ tool: "export_data", format: "xlsx", analyze: true });
+    expect(parseToolCall('{"tool":"export_data","chart":"line"}')).toEqual({ tool: "export_data", format: "xlsx", chart: "line" });
+    expect(parseToolCall('{"tool":"export_data","chart":"3d"}')).toEqual({ tool: "export_data", format: "xlsx" });
     expect(
       formatToolResult(
         { tool: "export_data", format: "xlsx", totals: "sum" },

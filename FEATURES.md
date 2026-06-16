@@ -98,19 +98,25 @@ switches from a story Visual Bible to a **Visual Atlas**:
 Upload an Excel/CSV/TSV file (or tabular JSON) and the app keeps the real, typed grid —
 not just flattened text — so it can be worked with end to end:
 - **Reads the whole workbook** — every worksheet (not just the first), each kept as a tab
-  you can switch between; formula cells import their computed values.
+  you can switch between, and **cell formulas are preserved** (they round-trip back out on
+  export, with their computed values shown).
 - **View it as a real grid** — aligned, scrollable, with the sheet's row/column counts;
   simple tables auto-chart.
-- **Edit live** — click any cell to change it; the edit is typed-checked, saved, and the
-  chat re-analyses the new numbers immediately (no re-upload).
+- **Edit live** — click any cell to change it (type `=A2*2` for a formula), rename a column
+  header, add/delete rows and columns; every edit is typed-checked, saved, and the chat
+  re-analyses the new numbers immediately (no re-upload).
 - **Grounded analysis in chat** — ask for counts, sums, averages, group-bys, pivots,
   filters, distributions; the app computes them over the **real cells** (never guessed) and
   shows the result as a table + chart you can also download.
 - **Export to real Excel** — save the sheet (or the whole multi-sheet workbook) as a true
-  **`.xlsx`**, or as CSV — from the data view or by asking the chat. Ask for **column totals**
-  and it writes **live Excel formulas** (`=SUM(…)`, `=AVERAGE(…)`), so the file has working
-  built-in functions, not baked numbers. Any analysis result (a pivot/aggregate) downloads
-  as Excel/CSV too.
+  **`.xlsx`**, or as CSV — from the data view or by asking the chat. Options:
+  - **column totals** → a row of **live Excel formulas** (`=SUM(…)`, `=AVERAGE(…)`);
+  - a full **statistical Analysis sheet** of live formulas (count/sum/average/median/min/max/
+    stdev/variance per column, plus correlation and linear-regression slope/intercept/R²) —
+    a workbook that analyses *itself* with built-in functions;
+  - an embedded **native, editable Excel chart** (bar/line/pie) over the data.
+  Any analysis result (a pivot/aggregate) downloads as Excel/CSV too, and any on-screen chart
+  saves as SVG/PNG.
 
 ### 🤝 Chat buddy (the home screen)
 The landing page **is** a full-window chat assistant. Three voices — **Freeform**
