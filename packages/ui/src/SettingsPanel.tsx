@@ -211,6 +211,9 @@ export interface ReaderSettings {
    * (set symbol, add studies, read state, inject Pine) via its DevTools bridge. Chart-only
    * — it never trades. Requires TradingView Desktop launched with remote debugging. */
   allowTradingViewBridge?: boolean;
+  /** OFF by default: after a multi-step task the buddy distills a reusable "skill" (playbook)
+   * and saves it so it does that kind of task better next time. Reviewable in the Skills panel. */
+  autoLearnSkills?: boolean;
   /** Transient: base URL of the app-managed local engine (desktop; not persisted). */
   engineBaseUrl?: string;
 }
@@ -665,6 +668,22 @@ export function SettingsPanel({
                 violence or other adult themes are illustrated and discussed faithfully. Relaxes
                 the adjustable safety filters on Gemini and Flux and tells the models not to
                 sanitise; Claude and OpenAI still apply their own policies regardless.
+              </span>
+            </span>
+          </label>
+          <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+            <input
+              type="checkbox"
+              checked={value.autoLearnSkills ?? false}
+              onChange={(e) => set({ autoLearnSkills: e.target.checked })}
+            />
+            <span>
+              Let the assistant learn skills from experience
+              <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                After it works through a multi-step task, the assistant distils a reusable
+                “skill” (a saved playbook) so it handles that kind of task better next time. New
+                skills appear in the 🧠 Skills panel where you can review, edit, or delete them.
+                Off by default; it adds a short reflection step at the end of those turns.
               </span>
             </span>
           </label>

@@ -271,6 +271,9 @@ export type WorkerToMain =
   | { type: "buddyScheduledChanged"; requestId: number }
   /** A price alert was created/cancelled by the chat — the host refreshes its list. */
   | { type: "buddyAlertsChanged"; requestId: number }
+  /** The buddy distilled + saved a reusable skill from the turn — the host announces it
+   * and refreshes the Skills list. Arrives just before buddyDone. */
+  | { type: "buddySkillLearned"; requestId: number; name: string }
   /** set_visual_style resolved against the catalog — the main thread (settings
    * owner) commits it. Arrives mid-turn, before the tool result. */
   | {

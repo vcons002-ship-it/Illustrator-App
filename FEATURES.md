@@ -214,6 +214,11 @@ companion), and **Technical** (research companion):
 - **Remembers what you like** — tell it "I prefer watercolor" or "never spoil endings" and
   it keeps a **long-term memory** that applies in every future conversation and book (you
   can ask it to forget, too).
+- **Learns skills from experience (opt-in)** — turn on *"let the assistant learn skills from
+  experience"* and, after it works through a multi-step task, it distils a reusable **skill**
+  (a saved playbook) so it handles that kind of task better next time. New skills show up in
+  the 🧠 Skills panel where you can review, edit, or delete them; nothing is saved silently
+  with the toggle off. (You and the assistant can also write skills by hand any time.)
 - **Walks you through setup** — ask *"how do I set up image generation?"*, *"connect my
   calendar"*, or *"enable the task assistant"* and it pulls the app's built-in step-by-step
   guide for that feature and walks you through it one step at a time (image/local models, API

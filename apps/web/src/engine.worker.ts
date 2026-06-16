@@ -48,6 +48,8 @@ import {
   memoryPromptBlock,
   readSkillBody,
   saveSkill,
+  runSkillProposal,
+  worthLearning,
   skillsIndexBlock,
   parseBuddySlashCommand,
   parseUnderstanding,
@@ -1933,6 +1935,21 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       },
       signal: ac.signal,
     }));
+    // Self-improving skills (opt-in): after a substantive completed turn, look back and
+    // distill a reusable playbook, saving it for next time (the reader reviews/edits it in
+    // the Skills panel). Dedup by name; a failed reflection never breaks the turn.
+    if (!outcome.pendingTool && settings?.autoLearnSkills && worthLearning(outcome.toolResults)) {
+      try {
+        post({ type: "buddyThinking", requestId: msg.requestId, text: "Reflecting on what I learned…" });
+        const candidate = await runSkillProposal(llm, { goal: msg.userText, transcript: outcome.transcript, signal: ac.signal });
+        if (candidate && !(await loadSkills(store)).some((s) => s.name.toLowerCase() === candidate.name.toLowerCase())) {
+          await saveSkill(store, candidate);
+          post({ type: "buddySkillLearned", requestId: msg.requestId, name: candidate.name });
+        }
+      } catch {
+        // Reflection is best-effort — skip silently on any failure.
+      }
+    }
     post({
       type: "buddyDone",
       requestId: msg.requestId,

@@ -2049,6 +2049,9 @@ export function App() {
         refreshScheduled();
       } else if (e.kind === "alertsChanged") {
         refreshAlerts();
+      } else if (e.kind === "skillLearned") {
+        appendBuddy({ role: "tool", text: `📌 Learned a skill: “${e.name}” — review or edit it in 🧠 Skills.` });
+        refreshSkills();
       } else if (e.kind === "opened") {
         openedBook = true;
         buddyHandoff.current = [...buddyMessages, { role: "user" as const, text: userBubbleText ?? userText, at: Date.now() }]
