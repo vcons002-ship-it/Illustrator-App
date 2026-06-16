@@ -50,6 +50,8 @@ import {
   saveSkill,
   runSkillProposal,
   worthLearning,
+  busCommands,
+  formatBusReply,
   skillsIndexBlock,
   parseBuddySlashCommand,
   parseUnderstanding,
@@ -663,6 +665,12 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "readPage":
       void handleReadPage(msg);
+      break;
+    case "remoteBusList":
+      void handleRemoteBusList(msg);
+      break;
+    case "remoteBusReply":
+      void handleRemoteBusReply(msg);
       break;
     case "marketIndicators":
       void handleMarketIndicators(msg);
@@ -1368,6 +1376,43 @@ async function handleLoadCalendar(msg: Extract<MainToWorker, { type: "loadCalend
     post({ type: "calendarLoaded", requestId: msg.requestId, ok: true, events });
   } catch (err) {
     post({ type: "calendarLoaded", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+// Remote bus: shared helper to build a Google transport + fresh token, or undefined when
+// Google isn't connected (the host just skips the poll then).
+async function googleAuth(): Promise<{ transport: DirectTransport; token: string } | undefined> {
+  const store = memoryStore();
+  const googleId = settings?.keys?.googleClientId;
+  const googleSecret = settings?.keys?.googleClientSecret;
+  if (!googleId || !googleSecret || !(await loadGoogleTokens(store))) return undefined;
+  const transport = new DirectTransport(corsFetch());
+  const token = await getFreshAccessToken(store, { clientId: googleId, clientSecret: googleSecret, transport });
+  return { transport, token };
+}
+
+async function handleRemoteBusList(msg: Extract<MainToWorker, { type: "remoteBusList" }>): Promise<void> {
+  try {
+    const auth = await googleAuth();
+    if (!auth) {
+      post({ type: "remoteBusListed", requestId: msg.requestId, ok: true, commands: [] });
+      return;
+    }
+    const tasks = await listTasks(auth.transport, auth.token, 30);
+    post({ type: "remoteBusListed", requestId: msg.requestId, ok: true, commands: busCommands(tasks) });
+  } catch (err) {
+    post({ type: "remoteBusListed", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function handleRemoteBusReply(msg: Extract<MainToWorker, { type: "remoteBusReply" }>): Promise<void> {
+  try {
+    const auth = await googleAuth();
+    if (!auth) throw new Error("Google isn't connected.");
+    await patchTask(auth.transport, auth.token, msg.id, { status: "completed", notes: formatBusReply(msg.answer) });
+    post({ type: "remoteBusReplied", requestId: msg.requestId, ok: true });
+  } catch (err) {
+    post({ type: "remoteBusReplied", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
   }
 }
 

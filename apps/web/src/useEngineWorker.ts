@@ -16,6 +16,7 @@ import type {
   CalendarEvent,
   StockQuote,
   PageText,
+  BusCommand,
   Indicators,
   ImportStats,
   PolishMode,
@@ -174,6 +175,9 @@ export interface EngineWorkerApi {
   stockQuote: (symbol: string) => Promise<{ ok: boolean; quote?: StockQuote }>;
   /** Fetch a URL's readable text + on-page links for the in-app browser. */
   readPage: (url: string) => Promise<{ ok: boolean; page?: PageText; error?: string }>;
+  /** Remote bus: list pending "VR:" Google-Task commands; write an answer back + complete one. */
+  remoteBusList: () => Promise<{ ok: boolean; commands?: BusCommand[] }>;
+  remoteBusReply: (id: string, answer: string) => Promise<{ ok: boolean; error?: string }>;
   /** Fetch keyless technical indicators (VWAP/MA/RSI/recent-move) for a symbol. */
   marketIndicators: (symbol: string, interval?: string, range?: string) => Promise<{ ok: boolean; indicators?: Indicators }>;
   /** Run one document-polish stage; returns the requestId (for cancel) + the result. */
@@ -386,6 +390,9 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const quoteRequests = useRef<Map<number, (r: { ok: boolean; quote?: StockQuote }) => void>>(new Map());
   // In-flight page reads (in-app browser), resolved by `pageRead`.
   const pageRequests = useRef<Map<number, (r: { ok: boolean; page?: PageText; error?: string }) => void>>(new Map());
+  // In-flight remote-bus list/reply ops (phone↔Google↔desktop).
+  const busListRequests = useRef<Map<number, (r: { ok: boolean; commands?: BusCommand[] }) => void>>(new Map());
+  const busReplyRequests = useRef<Map<number, (r: { ok: boolean; error?: string }) => void>>(new Map());
   // In-flight indicator fetches, resolved by `marketIndicatorsResult`.
   const indicatorRequests = useRef<Map<number, (r: { ok: boolean; indicators?: Indicators }) => void>>(new Map());
   // In-flight document-polish stages, resolved by `polished` (and streamed via `polishToken`).
@@ -716,6 +723,18 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           const resolve = pageRequests.current.get(msg.requestId);
           pageRequests.current.delete(msg.requestId);
           resolve?.({ ok: msg.ok, ...(msg.page ? { page: msg.page } : {}), ...(msg.error ? { error: msg.error } : {}) });
+          break;
+        }
+        case "remoteBusListed": {
+          const resolve = busListRequests.current.get(msg.requestId);
+          busListRequests.current.delete(msg.requestId);
+          resolve?.({ ok: msg.ok, ...(msg.commands ? { commands: msg.commands } : {}) });
+          break;
+        }
+        case "remoteBusReplied": {
+          const resolve = busReplyRequests.current.get(msg.requestId);
+          busReplyRequests.current.delete(msg.requestId);
+          resolve?.({ ok: msg.ok, ...(msg.error ? { error: msg.error } : {}) });
           break;
         }
         case "marketIndicatorsResult": {
@@ -1271,6 +1290,36 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const remoteBusList = useCallback(
+    (): Promise<{ ok: boolean; commands?: BusCommand[] }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (busListRequests.current.delete(requestId)) resolve({ ok: false });
+        }, 20_000);
+        busListRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "remoteBusList", requestId });
+      }),
+    [],
+  );
+  const remoteBusReply = useCallback(
+    (id: string, answer: string): Promise<{ ok: boolean; error?: string }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (busReplyRequests.current.delete(requestId)) resolve({ ok: false, error: "Timed out." });
+        }, 20_000);
+        busReplyRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "remoteBusReply", requestId, id, answer });
+      }),
+    [],
+  );
   const marketIndicators = useCallback(
     (symbol: string, interval?: string, range?: string): Promise<{ ok: boolean; indicators?: Indicators }> =>
       new Promise((resolve) => {
@@ -1378,6 +1427,8 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     loadCalendar,
     stockQuote,
     readPage,
+    remoteBusList,
+    remoteBusReply,
     marketIndicators,
     polishText,
     polishCancel,

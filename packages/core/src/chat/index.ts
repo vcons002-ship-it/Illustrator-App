@@ -9,6 +9,7 @@ export * from "./book-passage-search.js";
 export * from "./reader-memory.js";
 export * from "./skills.js";
 export * from "./skill-proposal.js";
+export * from "./remote-bus.js";
 export * from "./setup-guides.js";
 export * from "./settings-control.js";
 export * from "./tasks.js";

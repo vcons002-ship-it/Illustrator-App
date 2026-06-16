@@ -298,6 +298,8 @@ export function App() {
     loadCalendar,
     stockQuote,
     readPage,
+    remoteBusList,
+    remoteBusReply,
     marketIndicators,
     schwabConnect,
     schwabPlaceOrder,
@@ -2007,7 +2009,7 @@ export function App() {
     history: ChatTurn[],
     userText: string,
     userBubbleText?: string,
-  ): Promise<void> => {
+  ): Promise<string | undefined> => {
     const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
     if (userBubbleText !== undefined) appendBuddy({ role: "user", text: userBubbleText });
     setBuddyBusy(true);
@@ -2200,6 +2202,7 @@ export function App() {
       });
       if (openedBook) appendChat({ role: "assistant", text: res.text });
     }
+    return res.text || undefined;
   };
 
   const onBuddySend = useCallback(
@@ -2283,6 +2286,34 @@ export function App() {
     }, 60_000);
     return () => clearInterval(id);
   }, [libraryStore, onBuddySendText, refreshScheduled]);
+
+  // Remote bus (phone↔Google↔desktop): when enabled + Google's connected, poll the user's
+  // Google Tasks for "VR:" commands they added from their phone, run each through the buddy,
+  // write the answer back into the task, and mark it done. Reuses the existing buddy turn —
+  // no server, no always-on daemon (the app must be open). One command per tick, never while
+  // a turn is in flight, deduped so a slow run can't double-fire.
+  const busProcessed = useRef<Set<string>>(new Set());
+  const busPollingRef = useRef(false);
+  useEffect(() => {
+    if (!googleConnected || !settings.remoteBus) return;
+    const id = setInterval(() => {
+      if (busPollingRef.current || buddyBusyRef.current) return;
+      busPollingRef.current = true;
+      void (async () => {
+        const r = await remoteBusList();
+        const cmd = r.commands?.find((c) => !busProcessed.current.has(c.id));
+        if (!cmd) return;
+        busProcessed.current.add(cmd.id);
+        const answer = await dispatchBuddyTurn(chatTurnsOf(buddyMessages), cmd.text, `📱 ${cmd.text}`);
+        await remoteBusReply(cmd.id, answer ?? "(done — see the desktop app)").catch(() => {});
+      })()
+        .catch(() => {})
+        .finally(() => {
+          busPollingRef.current = false;
+        });
+    }, 45_000);
+    return () => clearInterval(id);
+  }, [googleConnected, settings.remoteBus, remoteBusList, remoteBusReply, buddyMessages]);
 
   // Price-alert runner: every ~minute, pull fresh indicators for each watched symbol,
   // evaluate the alerts, fire a notification on a trigger, and persist the new state
