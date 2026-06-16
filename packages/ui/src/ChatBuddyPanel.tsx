@@ -11,11 +11,23 @@ import {
 } from "./ChatPanel.js";
 import {
   buddySlashCommands,
+  speakableText,
   type BuddyPersona,
   type BuddyToolCall,
   type ContextUsage,
   type ProjectFile,
 } from "@visual-reader/core";
+
+/** Minimal shape of the Web Speech recognition API (not in TS's DOM lib). */
+interface SpeechRecognitionLike {
+  lang: string;
+  interimResults: boolean;
+  onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onend: (() => void) | null;
+  onerror: (() => void) | null;
+  start(): void;
+  stop(): void;
+}
 
 /**
  * The landing-page chat buddy. Pure presentation, like ChatPanel — but rendered
@@ -84,6 +96,57 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [props.messages.length, props.streamingText, props.activity, props.pendingTool]);
+
+  // Voice mode (optional, browser-only): dictate with the mic, hear replies read aloud.
+  const speechApi = useMemo(() => {
+    if (typeof window === "undefined") return undefined;
+    const w = window as unknown as {
+      SpeechRecognition?: new () => SpeechRecognitionLike;
+      webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+    };
+    return w.SpeechRecognition ?? w.webkitSpeechRecognition;
+  }, []);
+  const ttsSupported = typeof window !== "undefined" && "speechSynthesis" in window;
+  const [listening, setListening] = useState(false);
+  const [speakOn, setSpeakOn] = useState(false);
+  const recogRef = useRef<SpeechRecognitionLike | null>(null);
+  const toggleMic = () => {
+    if (listening) {
+      recogRef.current?.stop();
+      return;
+    }
+    if (!speechApi) return;
+    const r = new speechApi();
+    r.lang = (typeof navigator !== "undefined" && navigator.language) || "en-US";
+    r.interimResults = false;
+    r.onresult = (e) => {
+      let text = "";
+      for (let i = 0; i < e.results.length; i++) text += `${e.results[i]![0]!.transcript} `;
+      setDraft((d) => (d ? `${d} ` : "") + text.trim());
+    };
+    r.onend = () => setListening(false);
+    r.onerror = () => setListening(false);
+    recogRef.current = r;
+    r.start();
+    setListening(true);
+  };
+  // Speak each NEW assistant message while the toggle is on.
+  const spokenUpto = useRef(props.messages.length);
+  useEffect(() => {
+    if (!speakOn || !ttsSupported) {
+      spokenUpto.current = props.messages.length;
+      return;
+    }
+    for (let i = spokenUpto.current; i < props.messages.length; i++) {
+      const m = props.messages[i];
+      if (m?.role === "assistant" && m.text) window.speechSynthesis.speak(new SpeechSynthesisUtterance(speakableText(m.text)));
+    }
+    spokenUpto.current = props.messages.length;
+  }, [props.messages, speakOn, ttsSupported]);
+  const toggleSpeak = () => {
+    if (speakOn && ttsSupported) window.speechSynthesis.cancel();
+    setSpeakOn((s) => !s);
+  };
 
   const send = () => {
     const text = draft.trim();
@@ -356,6 +419,24 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           rows={2}
           style={textareaStyle}
         />
+        {speechApi ? (
+          <button
+            style={listening ? { ...smallButtonStyle, borderColor: "#ff8c8c", color: "#ff8c8c" } : smallButtonStyle}
+            onClick={toggleMic}
+            title={listening ? "Stop dictation" : "Dictate with your microphone"}
+          >
+            {listening ? "● Rec" : "🎤"}
+          </button>
+        ) : null}
+        {ttsSupported ? (
+          <button
+            style={speakOn ? { ...smallButtonStyle, borderColor: "rgba(90,209,155,0.6)", color: "#9be8c0" } : smallButtonStyle}
+            onClick={toggleSpeak}
+            title={speakOn ? "Stop reading replies aloud" : "Read replies aloud"}
+          >
+            {speakOn ? "🔊 On" : "🔈"}
+          </button>
+        ) : null}
         {props.busy ? (
           <button style={smallButtonStyle} onClick={props.onCancel}>
             Stop
