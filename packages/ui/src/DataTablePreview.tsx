@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import type { CellValue, DataTable } from "@visual-reader/core";
 
 /**
@@ -46,12 +46,36 @@ export const DataTablePreview = memo(function DataTablePreview({
   onDeleteColumn,
   onRenameColumn,
 }: DataTablePreviewProps) {
-  const rows = table.rows.slice(0, Math.max(0, maxRows));
-  const hidden = table.rows.length - rows.length;
   // Which cell is being edited + its in-progress draft (uncontrolled would lose focus).
   const [editing, setEditing] = useState<{ r: number; c: number; draft: string } | null>(null);
   // A header rename in progress (separate from cell edits; column index -1 = none).
   const [headerEdit, setHeaderEdit] = useState<{ c: number; draft: string } | null>(null);
+  // Display-only sort + filter: reorder/hide WHICH rows are shown without touching the
+  // underlying table, so formulas + data stay intact; edits map back to the real index.
+  const [sort, setSort] = useState<{ col: number; dir: "asc" | "desc" } | null>(null);
+  const [filter, setFilter] = useState("");
+  const viewIndexes = useMemo(() => {
+    let idx = table.rows.map((_, i) => i);
+    const q = filter.trim().toLowerCase();
+    if (q) idx = idx.filter((i) => table.rows[i]!.some((v) => v !== null && String(v).toLowerCase().includes(q)));
+    if (sort) {
+      const { col, dir } = sort;
+      const numeric = table.columns[col]?.type === "number";
+      idx = idx.slice().sort((a, b) => {
+        const va = table.rows[a]![col];
+        const vb = table.rows[b]![col];
+        const cmp = numeric
+          ? (typeof va === "number" ? va : Number(va) || 0) - (typeof vb === "number" ? vb : Number(vb) || 0)
+          : String(va ?? "").localeCompare(String(vb ?? ""));
+        return dir === "asc" ? cmp : -cmp;
+      });
+    }
+    return idx;
+  }, [table, filter, sort]);
+  const shown = viewIndexes.slice(0, Math.max(0, maxRows));
+  const hidden = viewIndexes.length - shown.length;
+  const cycleSort = (col: number) =>
+    setSort((s) => (s?.col !== col ? { col, dir: "asc" } : s.dir === "asc" ? { col, dir: "desc" } : null));
   const commit = () => {
     if (editing) onEditCell?.(editing.r, editing.c, editing.draft);
     setEditing(null);
@@ -64,6 +88,29 @@ export const DataTablePreview = memo(function DataTablePreview({
   return (
     <figure style={{ margin: 0 }}>
       {caption ? <figcaption style={captionStyle}>{caption}</figcaption> : null}
+      {table.rows.length > 4 ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter rows…"
+            style={filterInputStyle}
+          />
+          {filter || sort ? (
+            <button
+              onClick={() => {
+                setFilter("");
+                setSort(null);
+              }}
+              style={delBtnStyle}
+              title="Clear sort + filter"
+            >
+              clear
+            </button>
+          ) : null}
+          {filter ? <span style={{ fontSize: 11, opacity: 0.6 }}>{viewIndexes.length} match{viewIndexes.length === 1 ? "" : "es"}</span> : null}
+        </div>
+      ) : null}
       <div style={{ ...scrollStyle, maxHeight }}>
         <table style={tableStyle}>
           <thead>
@@ -94,6 +141,13 @@ export const DataTablePreview = memo(function DataTablePreview({
                         >
                           {c.name}
                         </span>
+                        <button
+                          onClick={() => cycleSort(i)}
+                          title={`Sort by "${c.name}"`}
+                          style={{ ...sortBtnStyle, opacity: sort?.col === i ? 1 : 0.45 }}
+                        >
+                          {sort?.col === i ? (sort.dir === "asc" ? "▲" : "▼") : "⇅"}
+                        </button>
                         {onDeleteColumn && table.columns.length > 1 ? (
                           <button onClick={() => onDeleteColumn(i)} title={`Delete column "${c.name}"`} style={delBtnStyle}>
                             ✕
@@ -107,7 +161,9 @@ export const DataTablePreview = memo(function DataTablePreview({
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, ri) => (
+            {shown.map((ri: number) => {
+              const r = table.rows[ri]!;
+              return (
               <tr key={ri}>
                 {showRowControls ? (
                   <td style={{ ...tdStyle, width: 22, padding: "2px", textAlign: "center" }}>
@@ -156,7 +212,8 @@ export const DataTablePreview = memo(function DataTablePreview({
                   );
                 })}
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -247,6 +304,26 @@ const cellInputStyle = {
   fontFamily: "inherit",
   outline: "none",
 } as const;
+
+const sortBtnStyle: React.CSSProperties = {
+  background: "transparent",
+  color: "inherit",
+  border: "none",
+  cursor: "pointer",
+  fontSize: 9,
+  padding: "0 1px",
+  lineHeight: 1,
+};
+const filterInputStyle: React.CSSProperties = {
+  background: "#0d1017",
+  color: "#fff",
+  border: "1px solid rgba(255,255,255,0.18)",
+  borderRadius: 6,
+  padding: "3px 8px",
+  fontSize: 12,
+  width: 180,
+  fontFamily: "inherit",
+};
 
 const captionStyle = { fontSize: 11, opacity: 0.6, margin: "0 0 4px" } as const;
 
