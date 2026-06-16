@@ -225,11 +225,24 @@ companion), and **Technical** (research companion):
   (a saved playbook) so it handles that kind of task better next time. New skills show up in
   the 🧠 Skills panel where you can review, edit, or delete them; nothing is saved silently
   with the toggle off. (You and the assistant can also write skills by hand any time.)
+- **Delegates subtasks** — for a chunky lookup it can hand a focused subtask to a short-lived
+  **read-only sub-agent** that runs its own research loop and returns a concise result, keeping
+  the main answer clean (the sub-agent can't change anything).
+- **Uses your MCP servers** — add **Model Context Protocol** servers in Settings (one per line:
+  `name https://host/mcp`) and the assistant lists their tools and calls them as part of a task,
+  inheriting whatever integrations you've set up.
+- **Voice** — a 🎤 button dictates into the chat with your microphone and a 🔈/🔊 toggle reads
+  replies aloud (browser-native; no key, appears when your browser supports it).
+- **Control from your phone** — leave instructions from anywhere via a `VR:` Google Task (the
+  desktop runs it and writes the answer back), or **🔗 Link phone** for a live thin client over
+  your Wi-Fi. Both opt-in, no cloud — see SETUP.md / REMOTE-LINK.md.
+- **OCR a scan** — drop in a photo/scan of a document and **🔤 Extract text** reads it with your
+  vision model, opening the transcription as a readable (and illustratable) document.
 - **Walks you through setup** — ask *"how do I set up image generation?"*, *"connect my
   calendar"*, or *"enable the task assistant"* and it pulls the app's built-in step-by-step
   guide for that feature and walks you through it one step at a time (image/local models, API
   keys, Google, the task workflow, whole-web figures, Wolfram, GitHub, the desktop tools,
-  mature mode).
+  Schwab/thinkorswim, the TradingView bridge, MCP servers, phone control, voice, mature mode).
 - **Changes settings by request** — just say *"set image quality to high"*, *"use portrait
   orientation"*, *"draw as a comic page"*, *"turn on mature mode"*, or *"enable auto task
   scheduling"* and it applies the change and confirms it (validated against the real options;

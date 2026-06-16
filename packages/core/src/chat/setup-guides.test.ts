@@ -26,6 +26,9 @@ describe("setup guides", () => {
     expect(findSetupGuide("add my anthropic api key")?.id).toBe("api-keys");
     expect(findSetupGuide("connect my schwab / thinkorswim account")?.id).toBe("schwab");
     expect(findSetupGuide("let the assistant control my tradingview chart")?.id).toBe("tradingview-bridge");
+    expect(findSetupGuide("how do I add an MCP server")?.id).toBe("mcp");
+    expect(findSetupGuide("control the assistant from my phone")?.id).toBe("phone-control");
+    expect(findSetupGuide("dictate with my microphone / read replies aloud")?.id).toBe("voice");
   });
 
   it("returns undefined when nothing relevant matches", () => {

@@ -384,6 +384,53 @@ Java app, not Electron; use the Schwab connection + generated thinkScript there.
 
 ---
 
+## Power-user extras (MCP, phone control, voice, OCR, in-app browser)
+
+All optional. The chat buddy can walk you through any of these — just ask *"how do I add an MCP
+server?"*, *"control the assistant from my phone"*, or *"set up voice"*.
+
+### MCP servers (extra tools)
+
+Let the assistant call tools from your own **Model Context Protocol** servers. Best on **desktop**
+(CORS-free access). Settings → **MCP servers** → add one per line as `name url` (HTTP / streamable
+endpoints), e.g. `weather https://my-mcp.example/mcp`. Then ask *"what tools does my weather server
+have?"* — it lists them (`mcp_tools`) and calls them (`mcp_call`) when a task matches. *(HTTP
+servers only for now; stdio servers that need a spawned process are a follow-up.)*
+
+### Control the assistant from your phone
+
+Two ways, both opt-in and cloud-free (your own Google / local network); the desktop app must be open:
+
+- **Anywhere, async (Google Tasks):** connect Google, then Settings → **"Run commands from my phone
+  (via Google Tasks)."** From your phone add a Google Task titled **`VR: …`** (e.g. *"VR: summarise
+  my unread email"*); the desktop picks it up, runs it, and writes the answer back into the task.
+- **Same Wi-Fi, live (LAN link):** click **🔗 Link phone** on the desktop home screen; open the URL
+  it shows on a phone on the same Wi-Fi. The phone becomes a thin client of the desktop's engine
+  (no keys/models on the phone). Experimental — see **[REMOTE-LINK.md](./REMOTE-LINK.md)** for the
+  current verification path (serving the app to the phone) and the security model.
+
+### Voice (dictate + hear replies)
+
+Built into the browser (best in Chrome/Edge) — no setup. In the chat composer, **🎤** dictates with
+your microphone and **🔈/🔊** toggles reading replies aloud. The buttons appear only when your
+browser supports the Web Speech API.
+
+### OCR a scan / photo of text
+
+Drop an image of a document into the app (it opens the photo panel) and click **🔤 Extract text** —
+it reads the text with your **vision model** (cloud Claude/Gemini/OpenAI or a local vision model)
+and opens the transcription as a document you can read or illustrate. Needs a vision-capable model
+configured (see the local/keys setup above).
+
+### In-app browser (desktop)
+
+Open **🌐 Browse**, enter a URL, and read any page's text + links right in the app (no scripts run);
+click links to navigate, **📖 Read & illustrate** it, or **🤖 Ask** the assistant about it. **🖥 Live**
+opens the real page (with scripts) in its own isolated window. Desktop only (it needs CORS-free
+access to fetch arbitrary sites).
+
+---
+
 ## Run images on your own GPU (AUTOMATIC1111 or ComfyUI)
 
 This is the path to **free, private, real** image generation today — no API keys,

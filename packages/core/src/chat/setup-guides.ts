@@ -150,6 +150,44 @@ export const SETUP_GUIDES: SetupGuide[] = [
     note: "thinkorswim runs on Schwab's backend, so this IS your thinkorswim account (watchlists sync across). The assistant NEVER submits a trade on its own — placing an order always needs you to tick a confirmation and click Place. Tokens stay on your device. Not financial advice.",
   },
   {
+    id: "mcp",
+    title: "Connect MCP servers (extra tools)",
+    aliases: ["mcp", "model context protocol", "mcp server", "mcp servers", "tools", "integrations", "plugins", "external tools"],
+    when: "You run (or have a URL for) Model Context Protocol servers and want the assistant to use their tools as part of a task.",
+    steps: [
+      "Use the desktop app (the assistant reaches servers through its CORS-free transport).",
+      "Get each server's HTTP endpoint URL (a streamable-HTTP / JSON-RPC MCP server, e.g. https://my-mcp.example/mcp).",
+      "Settings → MCP servers → add one per line as `name url` (e.g. `weather https://my-mcp.example/mcp`).",
+      "Ask the assistant to use it — it lists a server's tools (mcp_tools) and calls them (mcp_call) when a task matches. Try \"what tools does my weather server have?\"",
+    ],
+    note: "HTTP/streamable servers only for now (stdio servers that need a spawned process are a desktop follow-up). The assistant only calls tools you exposed; nothing runs without a matching request.",
+  },
+  {
+    id: "phone-control",
+    title: "Control the assistant from your phone",
+    aliases: ["phone", "mobile", "remote", "remote control", "phone link", "link phone", "from my phone", "remote bus", "vr task"],
+    when: "You want to drive the desktop assistant from your phone — either by leaving instructions (works anywhere) or a live link (same Wi-Fi).",
+    steps: [
+      "Anywhere (async, via Google): connect Google (the Google guide), then Settings → \"Run commands from my phone (via Google Tasks)\". From your phone, add a Google Task titled `VR: …` (e.g. \"VR: summarise my unread email\"); while the desktop app is open it runs it and writes the answer back into the task.",
+      "Same Wi-Fi (live): on the desktop click 🔗 Link phone — it shows a URL with a one-time code.",
+      "Open that URL on your phone (same Wi-Fi). The phone becomes a thin client of the desktop's engine — no keys or models on the phone.",
+      "Click 🔗 Phone linked → Stop when you're done.",
+    ],
+    note: "Both are opt-in and use only your own Google account / local network — no cloud relay. The desktop app must be open. The live link is experimental — see REMOTE-LINK.md.",
+  },
+  {
+    id: "voice",
+    title: "Talk to the assistant (voice)",
+    aliases: ["voice", "speak", "microphone", "mic", "dictate", "dictation", "text to speech", "read aloud", "speech"],
+    when: "You want to dictate to the chat with your microphone and/or hear replies read aloud.",
+    steps: [
+      "Use a browser that supports the Web Speech API (Chrome/Edge are the most complete).",
+      "In the chat composer, click 🎤 to dictate — speak, and your words fill the box; click again to stop.",
+      "Click 🔈 to toggle reading replies aloud (it turns 🔊 when on).",
+    ],
+    note: "Built into the browser — no key or setup. The buttons only appear when your browser supports them. Dictation may send audio to the browser vendor's speech service (Chrome).",
+  },
+  {
     id: "tradingview-bridge",
     title: "Let the assistant control your TradingView Desktop chart",
     aliases: [
