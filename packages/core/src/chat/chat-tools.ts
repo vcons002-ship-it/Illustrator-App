@@ -34,6 +34,9 @@ export type ToolCall =
   | { tool: "lookup_bible"; query: string }
   /** Save an illustrated copy of the current book (host-handled, no approval). */
   | { tool: "export_book"; format: "html" | "epub" }
+  /** Save the open spreadsheet/CSV as a real Excel workbook or CSV, optionally with a
+   * live formula totals row (SUM/AVERAGE/… across the numeric columns). */
+  | { tool: "export_data"; format: "xlsx" | "csv"; totals?: "sum" | "average" | "min" | "max" | "count" }
   /** Grounded analysis of the uploaded spreadsheet/CSV (the app computes over real
    * cells — group-by / pivot / aggregate / describe / filter — and optionally charts it). */
   | ({ tool: "analyze_data"; chart?: AnalyzeChart } & AnalyzeSpec)
@@ -68,6 +71,10 @@ export function dataToolsBlock(table: DataTable): string {
     '{"column","op","value"} (op is =/!=/>/</>=/<=/contains) applied first, and "chart" is "bar"/"line"/"pie"',
     "to chart the result. Use the EXACT column names above. The app computes it over the real cells (NEVER",
     "guess the numbers) and shows the reader the result table; you then narrate it.",
+    'To SAVE the sheet as a file when the reader asks to export/download it: {"tool":"export_data","format":"xlsx"}',
+    '(a real Excel workbook) or "csv". Add "totals":"sum" (or average/min/max/count) to append a row of LIVE Excel',
+    "formulas (=SUM(…) etc.) across the numeric columns — that's how you make an Excel file with working built-in",
+    "functions. The reader can also edit cells in the grid directly.",
   ].join("\n");
 }
 
@@ -146,6 +153,14 @@ export function parseToolCall(text: string): ToolCall | undefined {
   }
   if (tool === "export_book") {
     return { tool, format: obj.format === "epub" ? "epub" : "html" };
+  }
+  if (tool === "export_data") {
+    const format = obj.format === "csv" ? "csv" : "xlsx";
+    const totals =
+      obj.totals === "sum" || obj.totals === "average" || obj.totals === "min" || obj.totals === "max" || obj.totals === "count"
+        ? obj.totals
+        : undefined;
+    return { tool, format, ...(totals ? { totals } : {}) };
   }
   if (tool === "analyze_data") return parseAnalyzeData(obj);
   if (
@@ -246,6 +261,8 @@ export interface ToolResultPayload {
   skill?: { action: "read" | "missing" | "saved" | "forgot"; name: string; body?: string; count?: number };
   /** An export_book outcome (where it was saved + how many images). */
   export?: { ok: boolean; format: string; where: string; images: number; error?: string };
+  /** An export_data outcome (where the .xlsx/.csv was saved). */
+  dataExport?: { ok: boolean; format: string; where: string; totals?: string; error?: string };
   /** Whether an approved image generation succeeded. */
   image?: { ok: boolean; error?: string };
   /** A grounded analyze_data outcome — the computed result table + summary (+ chart). */
@@ -331,6 +348,13 @@ export function formatToolResult(call: ToolCall, result: ToolResultPayload): str
     return e.ok
       ? `[exported the book as ${e.format} with ${e.images} illustration${e.images === 1 ? "" : "s"} — saved ${e.where}] Confirm it briefly.`
       : `[export_book failed: ${e.error ?? "unknown error"}] Tell the reader.`;
+  }
+  if (call.tool === "export_data") {
+    const e = result.dataExport;
+    if (!e) return "[export_data did nothing]";
+    return e.ok
+      ? `[saved the data as ${e.format}${e.totals ? ` with a live ${e.totals} totals row` : ""} — ${e.where}] Confirm it briefly.`
+      : `[export_data failed: ${e.error ?? "unknown error"}] Tell the reader.`;
   }
   // generate_image: ran (or failed) after the reader's approval.
   return result.image?.ok

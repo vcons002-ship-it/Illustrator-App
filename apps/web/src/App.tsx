@@ -1387,6 +1387,12 @@ export function App() {
           void runChatExport(res.pendingTool.format, [{ role: "user", content: text }, ...res.transcript]);
           return;
         }
+        // export_data is a safe host action too — build the .xlsx/.csv and save it.
+        if (res.pendingTool.tool === "export_data") {
+          const { format, totals } = res.pendingTool;
+          void runChatDataExport(format, totals, [{ role: "user", content: text }, ...res.transcript]);
+          return;
+        }
         pendingTranscript.current = [{ role: "user", content: text }, ...res.transcript];
         setChatPendingTool(res.pendingTool);
         return;
@@ -2381,6 +2387,53 @@ export function App() {
         ? `⤓ Exported as ${format.toUpperCase()} with ${e.images} illustration${e.images === 1 ? "" : "s"}${e.where !== "your downloads" ? ` → ${e.where}` : " (check your downloads)"}`
         : `⚠ Export failed: ${e.error}`,
       turns: [...modelTurns, { role: "user", content: formatToolResult({ tool: "export_book", format }, payload) }],
+    });
+  };
+
+  // The in-book chat's export_data tool: save the open spreadsheet as a real .xlsx
+  // (the whole workbook when multi-sheet, optionally with a live formula totals row)
+  // or .csv, and feed the outcome back so the chat confirms it.
+  const runChatDataExport = async (
+    format: "xlsx" | "csv",
+    totals: "sum" | "average" | "min" | "max" | "count" | undefined,
+    modelTurns: ChatTurn[],
+  ): Promise<void> => {
+    if (!book?.data) return;
+    setChatBusy(true);
+    setChatActivity(`Saving as ${format.toUpperCase()}…`);
+    let payload: ToolResultPayload;
+    try {
+      const base = safeFileName(book.title || "data");
+      const sheets = book.dataSheets && book.dataSheets.length > 1 ? book.dataSheets : undefined;
+      let saved: string | true;
+      if (format === "csv") {
+        saved = await saveExportFile(`${base}.csv`, dataTableToCsv(book.data), "text/csv");
+      } else {
+        const bytes = sheets
+          ? buildXlsx(sheets.map((s) => sheetFromDataTable(s.name, s.table, totals ? { totals } : {})))
+          : dataTableToXlsx(book.data, totals ? { totals } : {});
+        saved = await saveExportFile(`${base}.xlsx`, bytes, XLSX_MIME);
+      }
+      payload = {
+        dataExport: {
+          ok: true,
+          format,
+          where: typeof saved === "string" ? saved : "your downloads",
+          ...(totals ? { totals } : {}),
+        },
+      };
+    } catch (err) {
+      payload = { dataExport: { ok: false, format, where: "", error: err instanceof Error ? err.message : String(err) } };
+    }
+    setChatBusy(false);
+    setChatActivity("");
+    const e = payload.dataExport!;
+    appendChat({
+      role: "tool",
+      text: e.ok
+        ? `⤓ Saved as ${format.toUpperCase()}${e.totals ? ` with a live ${e.totals} totals row` : ""}${e.where !== "your downloads" ? ` → ${e.where}` : " (check your downloads)"}`
+        : `⚠ Export failed: ${e.error}`,
+      turns: [...modelTurns, { role: "user", content: formatToolResult({ tool: "export_data", format, ...(totals ? { totals } : {}) }, payload) }],
     });
   };
 

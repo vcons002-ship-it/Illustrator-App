@@ -140,9 +140,9 @@ export async function runChatTurn(opts: {
     transcript.push({ role: "assistant", content: reply });
     messages.push({ role: "assistant", content: reply });
 
-    if (call.tool === "generate_image" || call.tool === "export_book") {
+    if (call.tool === "generate_image" || call.tool === "export_book" || call.tool === "export_data") {
       // Stops the loop: the host takes over — generate_image needs render approval;
-      // export_book is a main-thread action (gathers the rendered images + saves).
+      // export_book / export_data are main-thread actions (gather data/images + save).
       return { text: "", transcript, pendingTool: call, toolResults };
     }
     const result = await runChatTool(call, opts.tools);
@@ -157,7 +157,7 @@ export async function runChatTurn(opts: {
 /** Execute one auto-run tool (everything but generate_image). Exported for the
  * slash-command path, which runs tools directly without an LLM round. */
 export async function runChatTool(
-  call: Exclude<ToolCall, { tool: "generate_image" | "export_book" }>,
+  call: Exclude<ToolCall, { tool: "generate_image" | "export_book" | "export_data" }>,
   tools: ChatToolDeps,
 ): Promise<ToolResultPayload> {
   try {

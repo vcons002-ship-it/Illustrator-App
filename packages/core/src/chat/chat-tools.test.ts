@@ -66,6 +66,23 @@ describe("parseToolCall", () => {
     expect(parseToolCall('{"tool":"export_book","format":"pdf"}')).toEqual({ tool: "export_book", format: "html" });
   });
 
+  it("parses export_data (xlsx default, optional formula totals) and confirms the save", () => {
+    expect(parseToolCall('{"tool":"export_data","format":"csv"}')).toEqual({ tool: "export_data", format: "csv" });
+    expect(parseToolCall('{"tool":"export_data"}')).toEqual({ tool: "export_data", format: "xlsx" });
+    expect(parseToolCall('{"tool":"export_data","format":"xlsx","totals":"sum"}')).toEqual({
+      tool: "export_data",
+      format: "xlsx",
+      totals: "sum",
+    });
+    expect(parseToolCall('{"tool":"export_data","totals":"bogus"}')).toEqual({ tool: "export_data", format: "xlsx" });
+    expect(
+      formatToolResult(
+        { tool: "export_data", format: "xlsx", totals: "sum" },
+        { dataExport: { ok: true, format: "xlsx", where: "~/exports/data.xlsx", totals: "sum" } },
+      ),
+    ).toMatch(/live sum totals row/);
+  });
+
   it("parses an analyze_data spec (op/agg/columns/filters/chart)", () => {
     const call = parseToolCall(
       '{"tool":"analyze_data","op":"groupby","groupBy":"Region","agg":"sum","valueColumn":"Revenue",' +
