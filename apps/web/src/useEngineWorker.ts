@@ -15,6 +15,7 @@ import type {
   ImageSearchHit,
   CalendarEvent,
   StockQuote,
+  PageText,
   Indicators,
   ImportStats,
   PolishMode,
@@ -171,6 +172,8 @@ export interface EngineWorkerApi {
   loadCalendar: (timeMin: string, timeMax: string) => Promise<{ ok: boolean; events?: CalendarEvent[] }>;
   /** Fetch a keyless stock quote (Stooq via the CORS-exempt transport). */
   stockQuote: (symbol: string) => Promise<{ ok: boolean; quote?: StockQuote }>;
+  /** Fetch a URL's readable text + on-page links for the in-app browser. */
+  readPage: (url: string) => Promise<{ ok: boolean; page?: PageText; error?: string }>;
   /** Fetch keyless technical indicators (VWAP/MA/RSI/recent-move) for a symbol. */
   marketIndicators: (symbol: string, interval?: string, range?: string) => Promise<{ ok: boolean; indicators?: Indicators }>;
   /** Run one document-polish stage; returns the requestId (for cancel) + the result. */
@@ -381,6 +384,8 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const calendarRequests = useRef<Map<number, (r: { ok: boolean; events?: CalendarEvent[] }) => void>>(new Map());
   // In-flight stock-quote fetches, resolved by `stockQuoted`.
   const quoteRequests = useRef<Map<number, (r: { ok: boolean; quote?: StockQuote }) => void>>(new Map());
+  // In-flight page reads (in-app browser), resolved by `pageRead`.
+  const pageRequests = useRef<Map<number, (r: { ok: boolean; page?: PageText; error?: string }) => void>>(new Map());
   // In-flight indicator fetches, resolved by `marketIndicatorsResult`.
   const indicatorRequests = useRef<Map<number, (r: { ok: boolean; indicators?: Indicators }) => void>>(new Map());
   // In-flight document-polish stages, resolved by `polished` (and streamed via `polishToken`).
@@ -705,6 +710,12 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           const resolve = quoteRequests.current.get(msg.requestId);
           quoteRequests.current.delete(msg.requestId);
           resolve?.({ ok: msg.ok, ...(msg.quote ? { quote: msg.quote } : {}) });
+          break;
+        }
+        case "pageRead": {
+          const resolve = pageRequests.current.get(msg.requestId);
+          pageRequests.current.delete(msg.requestId);
+          resolve?.({ ok: msg.ok, ...(msg.page ? { page: msg.page } : {}), ...(msg.error ? { error: msg.error } : {}) });
           break;
         }
         case "marketIndicatorsResult": {
@@ -1245,6 +1256,21 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const readPage = useCallback(
+    (url: string): Promise<{ ok: boolean; page?: PageText; error?: string }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (pageRequests.current.delete(requestId)) resolve({ ok: false, error: "Timed out loading the page." });
+        }, 30_000);
+        pageRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "readPage", requestId, url });
+      }),
+    [],
+  );
   const marketIndicators = useCallback(
     (symbol: string, interval?: string, range?: string): Promise<{ ok: boolean; indicators?: Indicators }> =>
       new Promise((resolve) => {
@@ -1351,6 +1377,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     scanInbox,
     loadCalendar,
     stockQuote,
+    readPage,
     marketIndicators,
     polishText,
     polishCancel,

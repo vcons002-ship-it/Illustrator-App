@@ -71,6 +71,7 @@ import {
   type TaskCandidate,
   type CalendarEvent,
   type StockQuote,
+  type PageText,
   MAX_SKILL_NAME_CHARS,
   MAX_SKILL_DESC_CHARS,
   MAX_SKILL_BODY_CHARS,
@@ -130,6 +131,7 @@ import {
   ScheduledTasksPanel,
   CalendarPanel,
   StockChartPanel,
+  BrowserPanel,
   OrderReviewModal,
   type CalendarDeadline,
   DEFAULT_SETTINGS,
@@ -295,6 +297,7 @@ export function App() {
     scanInbox,
     loadCalendar,
     stockQuote,
+    readPage,
     marketIndicators,
     schwabConnect,
     schwabPlaceOrder,
@@ -1340,6 +1343,41 @@ export function App() {
     },
     [stockSymbol, loadStockQuote],
   );
+  // In-app browser (desktop): read a URL's text + links over the CORS-exempt transport.
+  const [showBrowser, setShowBrowser] = useState(false);
+  const [browserUrl, setBrowserUrl] = useState("");
+  const [browserPage, setBrowserPage] = useState<PageText | null>(null);
+  const [browserLoading, setBrowserLoading] = useState(false);
+  const [browserError, setBrowserError] = useState<string | null>(null);
+  const browserHistory = useRef<string[]>([]);
+  const loadPage = useCallback(
+    async (url: string, pushHistory = true) => {
+      if (pushHistory && browserUrl) browserHistory.current.push(browserUrl);
+      setBrowserUrl(url);
+      setBrowserLoading(true);
+      setBrowserError(null);
+      setBrowserPage(null);
+      try {
+        const r = await readPage(url);
+        if (r.ok && r.page) setBrowserPage(r.page);
+        else setBrowserError(r.error ?? "Couldn't load that page.");
+      } finally {
+        setBrowserLoading(false);
+      }
+    },
+    [browserUrl, readPage],
+  );
+  const openBrowser = useCallback(
+    (url?: string) => {
+      setShowBrowser(true);
+      if (url) void loadPage(url, false);
+    },
+    [loadPage],
+  );
+  const browserBack = useCallback(() => {
+    const prev = browserHistory.current.pop();
+    if (prev) void loadPage(prev, false);
+  }, [loadPage]);
   // Schwab connect (manual code-paste flow, no Rust loopback needed): open the consent
   // URL for the user's own Schwab app, then exchange the redirected ?code=… they paste.
   const [schwabConnected, setSchwabConnected] = useState(false);
@@ -2966,6 +3004,15 @@ export function App() {
           >
             📈 Markets
           </button>
+          {isDesktop && (
+            <button
+              style={styles.button}
+              onClick={() => openBrowser()}
+              title="Browse — read any web page (text + links) in the app, then illustrate it or ask the assistant about it"
+            >
+              🌐 Browse
+            </button>
+          )}
           <button
             style={styles.button}
             onClick={() => {
@@ -3642,6 +3689,30 @@ export function App() {
             );
           }}
           onClose={() => setShowStocks(false)}
+        />
+      )}
+
+      {showBrowser && (
+        <BrowserPanel
+          url={browserUrl}
+          page={browserPage}
+          loading={browserLoading}
+          error={browserError}
+          canBack={browserHistory.current.length > 0}
+          onUrl={(u) => void loadPage(u)}
+          onBack={browserBack}
+          onClickLink={(u) => void loadPage(u)}
+          onReadIllustrate={(u) => {
+            setShowBrowser(false);
+            onBuddySendText(`Open and illustrate this web page: ${u}`);
+          }}
+          onAskBuddy={(q) => {
+            setShowBrowser(false);
+            onBuddySendText(
+              `About this web page (${browserUrl}): ${q.trim() || "summarise it and tell me the key points."}`,
+            );
+          }}
+          onClose={() => setShowBrowser(false)}
         />
       )}
 

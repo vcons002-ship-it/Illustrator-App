@@ -15,13 +15,23 @@ import { base64ToBytes } from "./image/base64.js";
  *    no scraping proxy (see free-search.ts for the rationale).
  */
 
+export interface PageLink {
+  text: string;
+  url: string;
+}
+
 export interface PageText {
   title?: string;
   text: string;
+  /** On-page links (absolute), for the in-app browser to navigate. Generic HTML pages only. */
+  links?: PageLink[];
 }
 
 /** Upper bound on fetched text — keeps a mis-aimed URL from ballooning the worker. */
 export const MAX_PAGE_TEXT_CHARS = 1_500_000;
+
+/** Cap on extracted links so a link-farm page can't bloat the browse panel. */
+export const MAX_PAGE_LINKS = 60;
 
 /** Same sanctioned UA header the Wikimedia search clients send (free-search.ts). */
 const API_USER_AGENT = "VisualReader/1.0 (https://github.com/vcons002-ship-it/illustrator-app)";
@@ -139,7 +149,36 @@ export async function fetchPageText(
   const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(raw)?.[1]?.trim();
   const text = htmlToText(raw).slice(0, maxChars);
   if (!text) throw new Error(`No readable text found at ${url}`);
-  return { ...(title ? { title: decodeEntities(title) } : {}), text };
+  const links = extractLinks(raw, url);
+  return { ...(title ? { title: decodeEntities(title) } : {}), text, ...(links.length ? { links } : {}) };
+}
+
+/**
+ * Pull the navigable links out of a page's RAW html (before tags are stripped), for the
+ * in-app browser. Resolves relative hrefs against the page URL, drops non-navigations
+ * (javascript:/mailto:/tel:/in-page #anchors/empty), de-dupes by absolute URL, and caps the
+ * count. Pure — no DOM, regex over `<a href>` with its inner text tag-stripped.
+ */
+export function extractLinks(html: string, baseUrl: string): PageLink[] {
+  const out: PageLink[] = [];
+  const seen = new Set<string>();
+  const re = /<a\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) && out.length < MAX_PAGE_LINKS) {
+    const href = decodeEntities(m[1]!.trim());
+    if (!href || /^(javascript:|mailto:|tel:|#|data:)/i.test(href)) continue;
+    let abs: string;
+    try {
+      abs = new URL(href, baseUrl).toString();
+    } catch {
+      continue;
+    }
+    if (!/^https?:/i.test(abs) || seen.has(abs)) continue;
+    seen.add(abs);
+    const label = decodeEntities(m[2]!.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+    out.push({ text: label || abs, url: abs });
+  }
+  return out;
 }
 
 function looksLikeHtml(s: string): boolean {

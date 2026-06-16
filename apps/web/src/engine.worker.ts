@@ -661,6 +661,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "stockQuote":
       void handleStockQuote(msg);
       break;
+    case "readPage":
+      void handleReadPage(msg);
+      break;
     case "marketIndicators":
       void handleMarketIndicators(msg);
       break;
@@ -1365,6 +1368,21 @@ async function handleLoadCalendar(msg: Extract<MainToWorker, { type: "loadCalend
     post({ type: "calendarLoaded", requestId: msg.requestId, ok: true, events });
   } catch (err) {
     post({ type: "calendarLoaded", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function handleReadPage(msg: Extract<MainToWorker, { type: "readPage" }>): Promise<void> {
+  try {
+    const cf = corsFetch();
+    // Reading an arbitrary site is cross-origin; needs the CORS-exempt transport
+    // (desktop/extension). On plain web most sites fail — surfaced as a clear error.
+    const page = await fetchPageText(msg.url, {
+      maxChars: 200_000,
+      ...(cf ? { transport: new DirectTransport(cf) } : {}),
+    });
+    post({ type: "pageRead", requestId: msg.requestId, ok: true, page });
+  } catch (err) {
+    post({ type: "pageRead", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
   }
 }
 

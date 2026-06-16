@@ -8,6 +8,7 @@ import type {
   CalendarEvent,
   StockQuote,
   Indicators,
+  PageText,
   CharacterPatch,
   ChatTurn,
   ContextUsage,
@@ -122,6 +123,8 @@ export type MainToWorker =
   | { type: "loadCalendar"; requestId: number; timeMin: string; timeMax: string }
   | { type: "stockQuote"; requestId: number; symbol: string }
   | { type: "marketIndicators"; requestId: number; symbol: string; interval?: string; range?: string }
+  /** Fetch a URL's readable text + on-page links for the in-app browser panel. */
+  | { type: "readPage"; requestId: number; url: string }
   /** Exchange a Schwab OAuth consent code for tokens (manual-paste connect). */
   | { type: "schwabConnect"; requestId: number; code: string; redirectUri: string }
   /** Place a composed order against the connected Schwab account (host review action). */
@@ -304,6 +307,7 @@ export type WorkerToMain =
   | { type: "calendarLoaded"; requestId: number; ok: boolean; events?: CalendarEvent[]; error?: string }
   | { type: "stockQuoted"; requestId: number; ok: boolean; quote?: StockQuote; error?: string }
   | { type: "marketIndicatorsResult"; requestId: number; ok: boolean; indicators?: Indicators; error?: string }
+  | { type: "pageRead"; requestId: number; ok: boolean; page?: PageText; error?: string }
   | { type: "schwabConnected"; requestId: number; ok: boolean; error?: string }
   | { type: "schwabOrderPlaced"; requestId: number; ok: boolean; status?: number; error?: string }
   /** Streaming delta while the polish "produce" stage runs. */
