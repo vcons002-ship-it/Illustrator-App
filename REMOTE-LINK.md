@@ -45,16 +45,42 @@ phone (browser, thin client)  ⟷  ws://<desktop-ip>:8787  ⟷  desktop webview 
   - **Host bridge** — clicking 🔗 Link phone also bridges the desktop's real engine worker to the
     relay: phone requests are `postMessage`d to the worker; the worker's output is mirrored back to
     the phone. CORS-exempt fetches stay **local to the desktop** (`isLocalOnlyMessage` filter).
-- ⏳ **Serving the app to the phone.** The phone needs to LOAD the web app from the LAN. For now
-  the relay is a WebSocket channel only; to verify, serve the web app on your LAN (e.g.
-  `pnpm dev:web --host`, then open `http://<lan-ip>:5173/#vrlink=<token>` on the phone, where the
-  hash carries the token and the page host is where the relay listens). **Serving the bundled SPA
-  directly from the relay port is the remaining follow-up** so it works from the packaged desktop
-  app with no dev server.
+- ✅ **Serving the app to the phone (implemented; needs on-device test).** The relay now *also*
+  serves the bundled web app over HTTP on the **same port**: each connection is peeked
+  (non-consuming) and routed — a `Upgrade: websocket` request goes to the relay, any other HTTP
+  `GET` is answered from Tauri's embedded assets (`app.asset_resolver()`, SPA-fallback to
+  `index.html`). So the phone just opens the URL the desktop shows —
+  `http://<desktop-ip>:8787/#vrlink=<token>` — with **no dev server**. `cargo check` builds it;
+  the live serve + handshake-coexistence is the on-device check.
 - ⏳ **Runtime relay + two-device flow** — the live LAN socket, the phone connecting, and the
   end-to-end round-trip can't be exercised in CI (no socket/device); verify on a real desktop +
   phone. Assumes a **single user** (the same person on both devices) — the relay broadcasts between
   paired peers, so don't share the link.
+
+## How to test it (on a desktop + phone)
+
+**Required setup:** a desktop build that includes the relay (`cargo tauri build` / `cargo tauri
+dev` from `apps/desktop/src-tauri`), the desktop and phone on the **same Wi-Fi**, and the desktop
+firewall allowing inbound TCP on **8787** (you may get a one-time OS firewall prompt the first time
+you start the link — allow it on private networks).
+
+1. Desktop → **🔗 Link phone**; note the `http://<desktop-ip>:8787/#vrlink=<token>` URL.
+2. On the phone's browser, open that exact URL. The app should load **from the desktop** (served by
+   the relay) and show *"Linked to a desktop."*
+3. Run a buddy turn on the phone — it should execute on the **desktop's** engine (its keys/models),
+   streaming back to the phone. Try an image generation to exercise the ArrayBuffer path.
+4. **🔗 Phone linked → Stop** to shut the relay down.
+
+**Known checks for the on-device pass:**
+- HTTP serving vs. the WS handshake coexisting on one port (the peek-classify): confirm both the
+  page load *and* the WebSocket connect succeed.
+- Asset-resolver keys: the SPA fallback assumes `index.html` + `/assets/*`; confirm deep assets
+  resolve (check the browser console for 404s) and adjust the key normalisation in
+  `serve_http_asset` if a path form differs.
+- Same-origin: the phone loads from `http://<ip>:8787` and the relay WS is `ws://<ip>:8787` — same
+  host/port, so no cross-origin issue. (The CORS header is belt-and-braces.)
+- If the page won't load, fall back to a LAN dev server for the app while still using the relay for
+  control: `pnpm dev:web --host`, then open `http://<lan-ip>:5173/#vrlink=<token>`.
 
 ## Security
 

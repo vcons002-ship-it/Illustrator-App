@@ -480,6 +480,7 @@ fn local_ip() -> String {
 
 #[tauri::command]
 async fn start_remote_server(
+    app: AppHandle,
     request: StartRemoteRequest,
     state: State<'_, RemoteServerState>,
 ) -> Result<RemoteServerStatus, String> {
@@ -505,7 +506,7 @@ async fn start_remote_server(
     let bind = format!("0.0.0.0:{port}");
     let token_for_loop = token.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = run_remote_server(bind, token_for_loop, stop).await {
+        if let Err(e) = run_remote_server(bind, token_for_loop, stop, app).await {
             eprintln!("remote relay stopped: {e}");
         }
     });
@@ -568,12 +569,16 @@ async fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> 
     Ok(())
 }
 
-/// The relay loop: accept WS clients, authorize each by the pairing token (carried on
-/// every frame), and forward each peer's frames to the others via a broadcast channel.
+/// The relay loop: accept connections, classify each (peek the request bytes) as either a
+/// WebSocket upgrade (authorize by the pairing token, then relay frames between peers) or a
+/// plain HTTP GET (serve the bundled web app so the phone can LOAD it from this same port —
+/// no dev server, no cloud). `peek` doesn't consume the stream, so the WS handshake still
+/// reads cleanly afterwards.
 async fn run_remote_server(
     bind: String,
     token: String,
     stop: std::sync::Arc<tokio::sync::Notify>,
+    app: AppHandle,
 ) -> Result<(), String> {
     use futures_util::{SinkExt, StreamExt};
     let listener = tokio::net::TcpListener::bind(&bind).await.map_err(|e| e.to_string())?;
@@ -584,6 +589,21 @@ async fn run_remote_server(
             _ = stop.notified() => return Ok(()),
             accepted = listener.accept() => accepted.map_err(|e| e.to_string())?,
         };
+        // Peek (non-consuming) to tell a WebSocket upgrade from a plain HTTP request.
+        let mut head = [0u8; 1024];
+        let n = match stream.peek(&mut head).await {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        let head_str = String::from_utf8_lossy(&head[..n]).to_ascii_lowercase();
+        if !head_str.contains("upgrade: websocket") {
+            // Serve the bundled SPA so the phone can load the app from this port.
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                serve_http_asset(stream, &app).await;
+            });
+            continue;
+        }
         let peer_id = next_id;
         next_id += 1;
         let tx = tx.clone();
@@ -623,6 +643,53 @@ async fn run_remote_server(
             }
         });
     }
+}
+
+/// Serve one bundled web-app asset over a plain HTTP/1.1 response, so a phone can load the
+/// SPA from the relay port. Reads the request line for the path, resolves it from Tauri's
+/// embedded assets (SPA-fallback to index.html for extension-less routes), and writes the
+/// bytes back. The pairing token rides in the URL `#hash`, which the browser keeps client-side
+/// (never sent here) — so serving a file leaks nothing; the WS handshake still gates control.
+async fn serve_http_asset(mut stream: tokio::net::TcpStream, app: &AppHandle) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // Read the request head (enough for the request line + headers).
+    let mut buf = vec![0u8; 2048];
+    let n = match stream.read(&mut buf).await {
+        Ok(0) | Err(_) => return,
+        Ok(n) => n,
+    };
+    let req = String::from_utf8_lossy(&buf[..n]);
+    let raw_path = req
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .unwrap_or("/");
+    // Drop the query/fragment, normalise to an asset key.
+    let path = raw_path.split(['?', '#']).next().unwrap_or("/");
+    let mut key = path.trim_start_matches('/').to_string();
+    if key.is_empty() {
+        key = "index.html".to_string();
+    }
+    let resolver = app.asset_resolver();
+    let asset = resolver.get(format!("/{key}")).or_else(|| resolver.get(key.clone())).or_else(|| {
+        // SPA fallback: an extension-less route (e.g. a deep link) → index.html.
+        if key.contains('.') {
+            None
+        } else {
+            resolver.get("/index.html".to_string()).or_else(|| resolver.get("index.html".to_string()))
+        }
+    });
+    let (status, mime, body): (&str, String, Vec<u8>) = match asset {
+        Some(a) => ("200 OK", a.mime_type, a.bytes),
+        None => ("404 Not Found", "text/plain".to_string(), b"Not found".to_vec()),
+    };
+    let header = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(header.as_bytes()).await;
+    let _ = stream.write_all(&body).await;
+    let _ = stream.flush().await;
 }
 
 /// Save a generated artifact (illustrated HTML/EPUB export, or a single image) to

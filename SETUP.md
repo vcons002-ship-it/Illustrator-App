@@ -404,10 +404,12 @@ Two ways, both opt-in and cloud-free (your own Google / local network); the desk
 - **Anywhere, async (Google Tasks):** connect Google, then Settings → **"Run commands from my phone
   (via Google Tasks)."** From your phone add a Google Task titled **`VR: …`** (e.g. *"VR: summarise
   my unread email"*); the desktop picks it up, runs it, and writes the answer back into the task.
-- **Same Wi-Fi, live (LAN link):** click **🔗 Link phone** on the desktop home screen; open the URL
-  it shows on a phone on the same Wi-Fi. The phone becomes a thin client of the desktop's engine
-  (no keys/models on the phone). Experimental — see **[REMOTE-LINK.md](./REMOTE-LINK.md)** for the
-  current verification path (serving the app to the phone) and the security model.
+- **Same Wi-Fi, live (LAN link):** click **🔗 Link phone** on the desktop home screen, then open the
+  `http://<desktop-ip>:8787/#vrlink=…` URL it shows on a phone on the same Wi-Fi. The desktop serves
+  the app to the phone over that port (no dev server) and the phone becomes a thin client of the
+  desktop's engine — no keys/models on the phone. Experimental and **needs on-device testing**; the
+  desktop may show a one-time firewall prompt for port 8787 (allow it on private networks). See
+  **[REMOTE-LINK.md](./REMOTE-LINK.md)** for the test steps and security model.
 
 ### Voice (dictate + hear replies)
 
