@@ -32,6 +32,11 @@ import {
   formatFileSize,
   chartDatasetFromTable,
   setTableCell,
+  addRow,
+  removeRow,
+  addColumn,
+  removeColumn,
+  renameColumn,
   loadSkills,
   saveSkill,
   forgetSkill,
@@ -742,21 +747,19 @@ export function App() {
     [openInWorker, libraryStore],
   );
 
-  // Edit a cell in the open spreadsheet's grid: coerce to the column type, update the
-  // book (the active sheet, and `data` when it aliases that sheet), persist it, and
-  // push the edit to the worker so the chat's analyze_data uses the new values.
-  const onEditDataCell = useCallback(
-    (sheetIndex: number | null, row: number, col: number, raw: string) => {
+  // Apply an edit to the open spreadsheet's active table (the chosen sheet, and `data`
+  // when it aliases that sheet), persist the book, and push the new table(s) to the
+  // worker so the chat's analyze_data sees the change. All grid edits route through here.
+  const mutateBookTable = useCallback(
+    (sheetIndex: number | null, fn: (t: DataTable) => DataTable) => {
       setBook((prev) => {
         if (!prev) return prev;
         let next: BookSource;
         if (sheetIndex !== null && prev.dataSheets) {
-          const sheets = prev.dataSheets.map((s, i) =>
-            i === sheetIndex ? { ...s, table: setTableCell(s.table, row, col, raw) } : s,
-          );
+          const sheets = prev.dataSheets.map((s, i) => (i === sheetIndex ? { ...s, table: fn(s.table) } : s));
           next = { ...prev, dataSheets: sheets, ...(sheets[0] ? { data: sheets[0].table } : {}) };
         } else if (prev.data) {
-          next = { ...prev, data: setTableCell(prev.data, row, col, raw) };
+          next = { ...prev, data: fn(prev.data) };
         } else {
           return prev;
         }
@@ -769,6 +772,18 @@ export function App() {
       });
     },
     [libraryStore, updateBookData],
+  );
+  // Cell + structure edits for the data grid (sheetIndex is null for a single table).
+  const dataEdit = useMemo(
+    () => ({
+      onEditCell: (s: number | null, r: number, c: number, raw: string) => mutateBookTable(s, (t) => setTableCell(t, r, c, raw)),
+      onAddRow: (s: number | null) => mutateBookTable(s, (t) => addRow(t)),
+      onDeleteRow: (s: number | null, r: number) => mutateBookTable(s, (t) => removeRow(t, r)),
+      onAddColumn: (s: number | null) => mutateBookTable(s, (t) => addColumn(t)),
+      onDeleteColumn: (s: number | null, c: number) => mutateBookTable(s, (t) => removeColumn(t, c)),
+      onRenameColumn: (s: number | null, c: number, name: string) => mutateBookTable(s, (t) => renameColumn(t, c, name)),
+    }),
+    [mutateBookTable],
   );
 
   // Transient "✓ your click did X" feedback, so a Redo press is never ambiguous.
@@ -2978,7 +2993,7 @@ export function App() {
             unitIndex={unitIndex}
             pagesPerImage={pagesPerImage}
             registerParagraph={registerParagraph}
-            onEditDataCell={onEditDataCell}
+            dataEdit={dataEdit}
             {...(technicalSupport ? { technical: technicalSupport } : {})}
           />
 
@@ -3295,7 +3310,7 @@ const ReaderColumn = memo(function ReaderColumn({
   unitIndex,
   pagesPerImage,
   registerParagraph,
-  onEditDataCell,
+  dataEdit,
   technical,
 }: {
   book: BookSource;
@@ -3303,8 +3318,15 @@ const ReaderColumn = memo(function ReaderColumn({
   unitIndex: number;
   pagesPerImage: number | "chapter";
   registerParagraph: (id: string) => (el: HTMLElement | null) => void;
-  /** Edit a grid cell (sheetIndex is null for a single-table import). */
-  onEditDataCell?: (sheetIndex: number | null, row: number, col: number, raw: string) => void;
+  /** Edit the data grid (sheetIndex is null for a single-table import). */
+  dataEdit?: {
+    onEditCell: (s: number | null, r: number, c: number, raw: string) => void;
+    onAddRow: (s: number | null) => void;
+    onDeleteRow: (s: number | null, r: number) => void;
+    onAddColumn: (s: number | null) => void;
+    onDeleteColumn: (s: number | null, c: number) => void;
+    onRenameColumn: (s: number | null, c: number, name: string) => void;
+  };
   /** Present only in technical mode: concept marks + paragraph-anchored support. */
   technical?: TechnicalSupportData;
 }) {
@@ -3382,14 +3404,25 @@ const ReaderColumn = memo(function ReaderColumn({
               table={activeTable}
               maxRows={200}
               maxHeight={420}
-              {...(onEditDataCell
-                ? { onEditCell: (row, col, raw) => onEditDataCell(sheets ? Math.min(activeSheet, sheets.length - 1) : null, row, col, raw) }
+              {...(dataEdit
+                ? (() => {
+                    const si = sheets ? Math.min(activeSheet, sheets.length - 1) : null;
+                    return {
+                      onEditCell: (r: number, c: number, raw: string) => dataEdit.onEditCell(si, r, c, raw),
+                      onAddRow: () => dataEdit.onAddRow(si),
+                      onDeleteRow: (r: number) => dataEdit.onDeleteRow(si, r),
+                      onAddColumn: () => dataEdit.onAddColumn(si),
+                      onDeleteColumn: (c: number) => dataEdit.onDeleteColumn(si, c),
+                      onRenameColumn: (c: number, name: string) => dataEdit.onRenameColumn(si, c, name),
+                    };
+                  })()
                 : {})}
             />
           </div>
-          {onEditDataCell ? (
+          {dataEdit ? (
             <div style={{ fontSize: 11, opacity: 0.55, marginTop: 4 }}>
-              Click any cell to edit — changes save automatically and the chat re-analyses the new values.
+              Click a cell to edit, a header to rename it, ✕ to delete a row/column, or “+ Row / + Column” to add — changes
+              save automatically and the chat re-analyses them.
             </div>
           ) : null}
           {dataChart ? (
