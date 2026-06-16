@@ -1036,7 +1036,9 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       if (
         slash.call.tool === "generate_image" ||
         slash.call.tool === "export_book" ||
-        slash.call.tool === "export_data"
+        slash.call.tool === "export_data" ||
+        slash.call.tool === "set_cell" ||
+        slash.call.tool === "add_formula_column"
       ) {
         post({ type: "chatDone", requestId: msg.requestId, text: "", transcript: [], pendingTool: slash.call });
         return;

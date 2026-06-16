@@ -86,6 +86,24 @@ describe("parseToolCall", () => {
     ).toMatch(/live sum totals row/);
   });
 
+  it("parses set_cell / add_formula_column and confirms the edit", () => {
+    expect(parseToolCall('{"tool":"set_cell","ref":"C2","formula":"A2*B2"}')).toEqual({ tool: "set_cell", ref: "C2", formula: "A2*B2" });
+    expect(parseToolCall('{"tool":"set_cell","ref":"C2","value":42}')).toEqual({ tool: "set_cell", ref: "C2", value: 42 });
+    expect(parseToolCall('{"tool":"set_cell","ref":"C2"}')).toBeUndefined(); // needs a value or formula
+    expect(parseToolCall('{"tool":"add_formula_column","name":"Margin","formula":"B{r}-C{r}"}')).toEqual({
+      tool: "add_formula_column",
+      name: "Margin",
+      formula: "B{r}-C{r}",
+    });
+    expect(parseToolCall('{"tool":"add_formula_column","name":"X"}')).toBeUndefined(); // needs a formula
+    expect(
+      formatToolResult({ tool: "add_formula_column", name: "Margin", formula: "B{r}-C{r}" }, { dataEdit: { ok: true, summary: "Added a computed column" } }),
+    ).toMatch(/Added a computed column/);
+    expect(
+      formatToolResult({ tool: "set_cell", ref: "Z9", formula: "1" }, { dataEdit: { ok: false, error: "not a data cell" } }),
+    ).toMatch(/failed: not a data cell/);
+  });
+
   it("parses an analyze_data spec (op/agg/columns/filters/chart)", () => {
     const call = parseToolCall(
       '{"tool":"analyze_data","op":"groupby","groupBy":"Region","agg":"sum","valueColumn":"Revenue",' +

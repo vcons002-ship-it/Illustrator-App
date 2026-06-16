@@ -140,9 +140,16 @@ export async function runChatTurn(opts: {
     transcript.push({ role: "assistant", content: reply });
     messages.push({ role: "assistant", content: reply });
 
-    if (call.tool === "generate_image" || call.tool === "export_book" || call.tool === "export_data") {
+    if (
+      call.tool === "generate_image" ||
+      call.tool === "export_book" ||
+      call.tool === "export_data" ||
+      call.tool === "set_cell" ||
+      call.tool === "add_formula_column"
+    ) {
       // Stops the loop: the host takes over — generate_image needs render approval;
-      // export_book / export_data are main-thread actions (gather data/images + save).
+      // export_book/export_data save files; set_cell/add_formula_column mutate the
+      // open spreadsheet, which lives in the main thread's book state.
       return { text: "", transcript, pendingTool: call, toolResults };
     }
     const result = await runChatTool(call, opts.tools);
@@ -157,7 +164,7 @@ export async function runChatTurn(opts: {
 /** Execute one auto-run tool (everything but generate_image). Exported for the
  * slash-command path, which runs tools directly without an LLM round. */
 export async function runChatTool(
-  call: Exclude<ToolCall, { tool: "generate_image" | "export_book" | "export_data" }>,
+  call: Exclude<ToolCall, { tool: "generate_image" | "export_book" | "export_data" | "set_cell" | "add_formula_column" }>,
   tools: ChatToolDeps,
 ): Promise<ToolResultPayload> {
   try {
