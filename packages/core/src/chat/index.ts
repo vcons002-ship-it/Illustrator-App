@@ -11,6 +11,7 @@ export * from "./skills.js";
 export * from "./setup-guides.js";
 export * from "./settings-control.js";
 export * from "./tasks.js";
+export * from "./scheduled-tasks.js";
 export * from "./task-planner.js";
 export * from "./task-scan.js";
 export * from "./slash-commands.js";

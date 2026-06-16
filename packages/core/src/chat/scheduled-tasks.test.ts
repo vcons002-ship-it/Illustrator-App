@@ -1,0 +1,66 @@
+import { describe, expect, it } from "vitest";
+import {
+  advanceSchedule,
+  describeSchedule,
+  dueScheduledTasks,
+  nextDue,
+  normalizeScheduledTask,
+  type ScheduledTask,
+} from "./scheduled-tasks.js";
+
+const make = (over: Partial<ScheduledTask> = {}): ScheduledTask =>
+  normalizeScheduledTask({ title: "T", prompt: "do it", rule: "daily", time: "09:00", ...over }, new Date("2026-06-16T07:00:00"));
+
+describe("nextDue", () => {
+  it("daily: today's time if ahead, else tomorrow", () => {
+    const t = make({ time: "09:00" });
+    // from 07:00 → 09:00 today
+    expect(nextDue(t, new Date("2026-06-16T07:00:00")).toISOString()).toBe(new Date("2026-06-16T09:00:00").toISOString());
+    // from 10:00 → 09:00 tomorrow
+    expect(nextDue(t, new Date("2026-06-16T10:00:00")).toISOString()).toBe(new Date("2026-06-17T09:00:00").toISOString());
+  });
+
+  it("weekly: next occurrence of the weekday", () => {
+    const t = make({ rule: "weekly", weekday: 1, time: "08:00" }); // Monday
+    // 2026-06-16 is a Tuesday → next Monday is 2026-06-22
+    expect(nextDue(t, new Date("2026-06-16T07:00:00")).toISOString()).toBe(new Date("2026-06-22T08:00:00").toISOString());
+  });
+
+  it("monthly: the day-of-month, rolling to next month when past", () => {
+    const t = make({ rule: "monthly", dayOfMonth: 1, time: "06:00" });
+    // 2026-06-16 → day 1 already passed this month → 2026-07-01
+    expect(nextDue(t, new Date("2026-06-16T07:00:00")).toISOString()).toBe(new Date("2026-07-01T06:00:00").toISOString());
+  });
+});
+
+describe("normalize + due + advance", () => {
+  it("normalises, clamps the time, and computes a first due", () => {
+    const t = normalizeScheduledTask({ title: "  Recap  ", prompt: "x", rule: "daily", time: "25:99" }, new Date("2026-06-16T07:00:00"));
+    expect(t.title).toBe("Recap");
+    expect(t.time).toBe("23:59"); // clamped
+    expect(t.enabled).toBe(true);
+    expect(t.nextDueIso).toBeTruthy();
+  });
+
+  it("selects only due + enabled tasks", () => {
+    const due = make({ nextDueIso: new Date("2026-06-16T06:00:00").toISOString() });
+    const future = make({ nextDueIso: new Date("2026-06-17T09:00:00").toISOString() });
+    const disabled = make({ enabled: false, nextDueIso: new Date("2026-06-16T06:00:00").toISOString() });
+    const got = dueScheduledTasks([due, future, disabled], new Date("2026-06-16T07:00:00"));
+    expect(got).toEqual([due]);
+  });
+
+  it("advances a recurring task and disables a 'once' task", () => {
+    const daily = make({ rule: "daily", time: "09:00" });
+    const advanced = advanceSchedule(daily, new Date("2026-06-16T09:00:05"));
+    expect(advanced.lastRunIso).toBeTruthy();
+    expect(new Date(advanced.nextDueIso).toISOString()).toBe(new Date("2026-06-17T09:00:00").toISOString());
+    const once = make({ rule: "once", nextDueIso: new Date("2026-06-16T09:00:00").toISOString() });
+    expect(advanceSchedule(once).enabled).toBe(false);
+  });
+
+  it("describes the cadence", () => {
+    expect(describeSchedule(make({ rule: "daily", time: "09:00" }))).toBe("Daily at 09:00");
+    expect(describeSchedule(make({ rule: "weekly", weekday: 5, time: "17:00" }))).toContain("Friday");
+  });
+});
