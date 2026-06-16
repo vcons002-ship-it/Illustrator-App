@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   addColumn,
   addRow,
+  createDataTable,
   dataTableFromGrid,
   parseA1,
   removeColumn,
@@ -124,5 +125,31 @@ describe("A1 references + fill-down formulas", () => {
     const t = setColumnFormula(addColumn(base, "Double"), 2, "B{r}*2");
     expect(t.formulas).toEqual({ "0,2": "B2*2", "1,2": "B3*2" });
     expect(setColumnFormula(base, 9, "x")).toBe(base); // out-of-range column: no-op
+  });
+});
+
+describe("createDataTable (from scratch)", () => {
+  it("builds typed columns + rows, inferring types and parsing =formulas", () => {
+    const t = createDataTable(
+      [{ name: "Category" }, { name: "Budget" }, { name: "Spent", type: "number" }, { name: "Remaining" }],
+      [
+        ["Rent", 1500, 1500, "=B2-C2"],
+        ["Food", "400", 380, "=B3-C3"],
+      ],
+    );
+    expect(t.columns).toEqual([
+      { name: "Category", type: "string" },
+      { name: "Budget", type: "number" }, // inferred (1500 / "400")
+      { name: "Spent", type: "number" }, // explicit
+      { name: "Remaining", type: "string" }, // only formula cells → no literal values to infer number
+    ]);
+    expect(t.rows[0]).toEqual(["Rent", 1500, 1500, null]); // formula cell value blank
+    expect(t.formulas).toEqual({ "0,3": "B2-C2", "1,3": "B3-C3" });
+  });
+
+  it("de-dupes names, caps nothing weird, and always yields a column", () => {
+    const t = createDataTable([{ name: "A" }, { name: "A" }]);
+    expect(t.columns.map((c) => c.name)).toEqual(["A", "A (2)"]);
+    expect(createDataTable([]).columns).toHaveLength(1);
   });
 });

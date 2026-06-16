@@ -95,8 +95,10 @@ switches from a story Visual Bible to a **Visual Atlas**:
   section under the illustration. **Download any chart** as an SVG or PNG file.
 
 ### 📊 Spreadsheets & data (open, analyse, edit, export)
-Upload an Excel/CSV/TSV file (or tabular JSON) and the app keeps the real, typed grid —
-not just flattened text — so it can be worked with end to end:
+Upload an Excel/CSV/TSV file (or tabular JSON) — **or ask the assistant to build one from
+scratch** ("make me a monthly budget spreadsheet"; it asks the key questions first, then
+creates it) — and the app keeps the real, typed grid, not just flattened text, so it can be
+worked with end to end:
 - **Reads the whole workbook** — every worksheet (not just the first), each kept as a tab
   you can switch between, and **cell formulas are preserved** (they round-trip back out on
   export, with their computed values shown).
@@ -105,6 +107,9 @@ not just flattened text — so it can be worked with end to end:
 - **Edit live** — click any cell to change it (type `=A2*2` for a formula), rename a column
   header, add/delete rows and columns; every edit is typed-checked, saved, and the chat
   re-analyses the new numbers immediately (no re-upload).
+- **Build & extend by chat** — ask the assistant to *create* a sheet from scratch, *set* a
+  cell or formula (`set C2 to =A2*B2`), or *add a computed column* that fills down every row
+  (`add a Margin column = revenue − cost`) using real Excel functions (SUM/IF/SUMIF/VLOOKUP/…).
 - **Grounded analysis in chat** — ask for counts, sums, averages, group-bys, pivots,
   filters, distributions; the app computes them over the **real cells** (never guessed) and
   shows the result as a table + chart you can also download.
