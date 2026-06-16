@@ -165,12 +165,16 @@ A **Markets** panel for following and researching stocks:
   thinkScript** (VWAP cross, RSI threshold, MA cross, price-level break) — from verified
   templates, with a Save button and where to paste it.
 - **Connect Schwab (optional)** — link your own Charles Schwab developer app (the platform
-  behind thinkorswim) for **real quotes, option chains with Greeks + implied volatility, and
-  your positions** — the assistant uses them for genuine options analysis.
-- **Review-and-place orders** — ask it to buy/sell and it **composes** the exact order (equity
-  or option) and opens a review dialog showing precisely what will be sent; **you** check the
-  box and click *Place order* — the assistant never submits on its own. Real money, not
-  financial advice.
+  behind thinkorswim) for **real quotes, option chains with Greeks + implied volatility, your
+  positions, and your watchlists** — the assistant uses them for genuine options analysis.
+- **Trade ideas from your watchlists** — your thinkorswim watchlists sync to Schwab, so you can
+  say *"pull 3 possible trades from my tracked ideas with the best risk-reward"* and the
+  assistant reads the lists, pulls real quotes/option chains, and ranks the top picks each with
+  a proposed entry, target, stop and reward-to-risk ratio. Not financial advice.
+- **Review-and-place orders** — pick one of those ideas (or just ask it to buy/sell) and it
+  **composes** the exact order (equity or option) and opens a review dialog showing precisely
+  what will be sent; **you** check the box and click *Place order* — the assistant never submits
+  on its own. Real money, not financial advice.
 - **Ask the assistant** — one click hands the ticker to the chat for analysis and trade ideas
   (it searches the web for current data and is clear it isn't financial advice).
 - *(A linked broker account such as thinkorswim/Schwab is a separate, deferred enhancement; the

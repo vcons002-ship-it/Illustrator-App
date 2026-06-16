@@ -49,6 +49,7 @@ export interface BuddyDeps {
   schwabQuote?: (symbol: string) => Promise<import("../providers/schwab.js").SchwabQuote | undefined>;
   schwabOptions?: (symbol: string, opts?: { contractType?: "CALL" | "PUT" | "ALL"; strikeCount?: number }) => Promise<import("../providers/schwab.js").OptionChain | undefined>;
   schwabPositions?: () => Promise<import("../providers/schwab.js").SchwabPosition[]>;
+  schwabWatchlists?: () => Promise<import("../providers/schwab.js").SchwabWatchlist[]>;
   /** Random picks from the catalog's most-loved shelf ("surprise me"). */
   randomBooks?: () => Promise<BookSearchHit[]>;
   /** Open a library book by id; the host posts the BookSource to the UI itself. */
@@ -251,6 +252,10 @@ export async function runBuddyTool(
       case "schwab_positions": {
         if (!deps.schwabPositions) return { error: "Schwab isn't connected (connect it in Settings)." };
         return { positions: await deps.schwabPositions() };
+      }
+      case "schwab_watchlists": {
+        if (!deps.schwabWatchlists) return { error: "Schwab isn't connected (connect it in Settings)." };
+        return { watchlists: await deps.schwabWatchlists() };
       }
       case "trading_script": {
         // Pure: verified Pine/thinkScript templates, no host dependency.

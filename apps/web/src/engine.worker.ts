@@ -32,6 +32,7 @@ import {
   schwabQuote,
   schwabOptionChain,
   schwabPositions,
+  schwabWatchlists,
   schwabAccountNumbers,
   placeSchwabOrder,
   buildBuddySystemPrompt,
@@ -1630,6 +1631,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           schwabQuote: async (symbol: string) => schwabQuote(transport, await tok(), symbol),
           schwabOptions: async (symbol: string, opts) => schwabOptionChain(transport, await tok(), symbol, opts ?? {}),
           schwabPositions: async () => schwabPositions(transport, await tok()),
+          schwabWatchlists: async () => schwabWatchlists(transport, await tok()),
         };
       })()),
       randomBooks: () => books.random(),

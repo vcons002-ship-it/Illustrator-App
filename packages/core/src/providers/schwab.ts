@@ -290,6 +290,53 @@ export async function schwabPositions(transport: Transport, token: string): Prom
   return parseSchwabPositions(await res.json());
 }
 
+// ----------------------------------------------------------------- Watchlists
+
+export interface SchwabWatchlistItem {
+  symbol: string;
+  assetType?: string;
+}
+
+export interface SchwabWatchlist {
+  name: string;
+  id?: string;
+  accountNumber?: string;
+  items: SchwabWatchlistItem[];
+}
+
+/**
+ * Parse Schwab's `/accounts/watchlists` response — the reader's saved lists of symbols,
+ * i.e. their **tracked trade ideas** (thinkorswim watchlists sync to the same Schwab
+ * backend). Flattens each list to its name + symbols.
+ */
+export function parseSchwabWatchlists(json: unknown): SchwabWatchlist[] {
+  if (!Array.isArray(json)) return [];
+  const out: SchwabWatchlist[] = [];
+  for (const w of json as Record<string, unknown>[]) {
+    if (!w || typeof w !== "object") continue;
+    const items: SchwabWatchlistItem[] = [];
+    for (const it of (w["watchlistItems"] as Record<string, unknown>[] | undefined) ?? []) {
+      const inst = it?.["instrument"] as { symbol?: string; assetType?: string } | undefined;
+      if (!inst?.symbol) continue;
+      items.push({ symbol: inst.symbol, ...(typeof inst.assetType === "string" ? { assetType: inst.assetType } : {}) });
+    }
+    const acct = w["accountNumber"];
+    out.push({
+      name: typeof w["name"] === "string" ? (w["name"] as string) : "",
+      ...(typeof w["watchlistId"] === "string" ? { id: w["watchlistId"] as string } : {}),
+      ...(typeof acct === "string" || typeof acct === "number" ? { accountNumber: String(acct) } : {}),
+      items,
+    });
+  }
+  return out;
+}
+
+/** The reader's watchlists across their linked accounts (their tracked trade ideas). */
+export async function schwabWatchlists(transport: Transport, token: string): Promise<SchwabWatchlist[]> {
+  const res = await authGet(transport, `${TRADER}/accounts/watchlists`, token);
+  return parseSchwabWatchlists(await res.json());
+}
+
 // ----------------------------------------------------------------- Order PREP
 
 /**

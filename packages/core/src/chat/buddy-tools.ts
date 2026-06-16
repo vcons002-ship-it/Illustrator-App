@@ -10,7 +10,7 @@ import { controllableSettingsIndex } from "./settings-control.js";
 import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../providers/google.js";
 import { formatQuote, type StockQuote } from "../providers/stocks.js";
 import { formatIndicators, type Indicators } from "../providers/market-data.js";
-import type { OptionChain, SchwabPosition, SchwabQuote } from "../providers/schwab.js";
+import type { OptionChain, SchwabPosition, SchwabQuote, SchwabWatchlist } from "../providers/schwab.js";
 import type { TaskPlan } from "./tasks.js";
 
 /**
@@ -58,6 +58,8 @@ export type BuddyToolCall =
   | { tool: "schwab_quote"; symbol: string }
   | { tool: "schwab_options"; symbol: string; contractType?: "CALL" | "PUT" | "ALL"; strikeCount?: number }
   | { tool: "schwab_positions" }
+  /** The reader's watchlists — their tracked trade ideas (thinkorswim lists sync here). */
+  | { tool: "schwab_watchlists" }
   /** Compose a Schwab order for the reader to REVIEW + place (never auto-submitted).
    * Stops the loop so the host shows a confirm dialog. */
   | {
@@ -439,14 +441,21 @@ export function buildBuddySystemPrompt(opts: {
       : "") +
     (opts.canSchwab
       ? '- {"tool":"schwab_quote","symbol":"AAPL"} / {"tool":"schwab_options","symbol":"AAPL","contractType":"ALL",' +
-        '"strikeCount":10} / {"tool":"schwab_positions"} — the reader connected their Schwab account: real quotes, ' +
-        "OPTION CHAINS with Greeks (delta/gamma/theta/vega) + implied volatility, and their account positions. Prefer " +
-        "these over the keyless feeds for options analysis. Not financial advice.\n" +
+        '"strikeCount":10} / {"tool":"schwab_positions"} — the reader connected their Schwab account (the platform behind ' +
+        "thinkorswim): real quotes, OPTION CHAINS with Greeks (delta/gamma/theta/vega) + implied volatility, and their " +
+        "account positions. Prefer these over the keyless feeds for options analysis. Not financial advice.\n" +
+        '- {"tool":"schwab_watchlists"} — the reader\'s WATCHLISTS = their tracked trade ideas (thinkorswim watchlists sync ' +
+        'to Schwab). Use this when they refer to "my tracked ideas / my watchlist / my thinkorswim ideas" or ask you to ' +
+        'pull trades FROM them — e.g. "pull 3 possible trades from my tracked ideas with the best risk-reward." Workflow: ' +
+        "read the watchlists, then schwab_quote / schwab_options on the relevant symbols, weigh upside vs downside (and " +
+        "Greeks/IV for options), and present the top N ranked by reward-to-risk — each with a proposed entry, target, stop " +
+        "and the R:R ratio and a one-line rationale. Then offer to prep_order any they pick.\n" +
         '- {"tool":"prep_order","assetType":"EQUITY","symbol":"AAPL","instruction":"BUY","quantity":10,"orderType":' +
         '"LIMIT","price":200} — COMPOSE an order for the reader to REVIEW and place themselves (a confirm dialog opens; ' +
         "you NEVER place/submit it). EQUITY instruction BUY/SELL; for OPTION set assetType \"OPTION\", symbol = the OSI " +
-        "option symbol, instruction BUY_TO_OPEN/SELL_TO_OPEN/BUY_TO_CLOSE/SELL_TO_CLOSE. Only when the reader clearly " +
-        "asks to buy/sell/place an order; confirm the details with them first. Always note it isn't financial advice.\n"
+        "option symbol, instruction BUY_TO_OPEN/SELL_TO_OPEN/BUY_TO_CLOSE/SELL_TO_CLOSE. Use it whenever the reader picks " +
+        'one of your proposed trades or otherwise asks to buy/sell/place an order ("prep the AAPL one", "place that trade"); ' +
+        "confirm the details first. Always note it isn't financial advice.\n"
       : "") +
     '- {"tool":"market_analysis","symbol":"AAPL","interval":"5m","range":"1d"} — keyless TECHNICAL indicators (VWAP, ' +
     "SMA20/50, EMA12/26, RSI14, recent move). Use for intraday/technical questions — VWAP watch levels, trend vs the " +
@@ -607,6 +616,7 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
     return { tool, symbol, ...(contractType ? { contractType } : {}), ...(strikeCount !== undefined ? { strikeCount } : {}) };
   }
   if (tool === "schwab_positions") return { tool };
+  if (tool === "schwab_watchlists") return { tool };
   if (tool === "tv_chart") {
     const actions = ["set_symbol", "set_interval", "add_study", "remove_studies", "read_state", "inject_pine"];
     if (typeof obj.action !== "string" || !actions.includes(obj.action)) return undefined;
@@ -903,6 +913,7 @@ export interface BuddyToolResultPayload {
   schwabQuote?: SchwabQuote;
   optionChain?: OptionChain;
   positions?: SchwabPosition[];
+  watchlists?: SchwabWatchlist[];
   /** What set_visual_style actually applied (resolved style LABEL). */
   applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
   /** Whether an approved image generation succeeded. */
@@ -1060,6 +1071,17 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     const ps = result.positions ?? [];
     if (ps.length === 0) return "[schwab_positions: no open positions (or Schwab not connected)]";
     return "[schwab positions]\n" + ps.map((p) => `· ${p.symbol}: ${p.quantity}${p.marketValue !== undefined ? ` ($${p.marketValue})` : ""}${p.averagePrice !== undefined ? ` @ avg ${p.averagePrice}` : ""}`).join("\n");
+  }
+  if (call.tool === "schwab_watchlists") {
+    const wls = result.watchlists ?? [];
+    if (wls.length === 0) return "[schwab_watchlists: no watchlists (or Schwab not connected). thinkorswim watchlists sync to Schwab.]";
+    const rows = wls.map((w) => `· ${w.name || "(unnamed)"}: ${w.items.map((i) => i.symbol).join(", ") || "(empty)"}`).join("\n");
+    return (
+      `[schwab_watchlists — the reader's tracked trade ideas (thinkorswim/Schwab watchlists)]\n${rows}\n` +
+      "To surface the best risk-reward ideas: pull schwab_quote (and schwab_options for option plays) on the most relevant " +
+      "symbols, weigh upside vs downside / Greeks + IV, then present the top picks each with a proposed entry, target, stop and " +
+      "the reward-to-risk ratio, ranked. Offer to prep_order any the reader wants to place. Always note it isn't financial advice."
+    );
   }
   if (call.tool === "trading_script") {
     const t = result.tradingScript;

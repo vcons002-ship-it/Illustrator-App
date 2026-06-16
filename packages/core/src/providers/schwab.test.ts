@@ -8,8 +8,10 @@ import {
   parseOptionChain,
   parseSchwabPositions,
   parseSchwabQuote,
+  parseSchwabWatchlists,
   placeSchwabOrder,
   schwabAccountNumbers,
+  schwabWatchlists,
 } from "./schwab.js";
 import type { Transport, TransportRequest, TransportResponse } from "./transport/transport.js";
 
@@ -104,6 +106,40 @@ describe("parseSchwabPositions + buildEquityOrder", () => {
     const o = buildEquityOrder({ symbol: "aapl", quantity: 10, instruction: "BUY", orderType: "LIMIT", price: 200 });
     expect(o).toMatchObject({ orderType: "LIMIT", price: 200, orderStrategyType: "SINGLE" });
     expect((o.orderLegCollection as { instruction: string; instrument: { symbol: string } }[])[0]).toMatchObject({ instruction: "BUY", instrument: { symbol: "AAPL" } });
+  });
+});
+
+describe("watchlists (tracked trade ideas)", () => {
+  it("flattens each watchlist to its name + symbols", () => {
+    const json = [
+      {
+        name: "Swing ideas",
+        watchlistId: "wl1",
+        accountNumber: 12345,
+        watchlistItems: [
+          { sequenceId: 0, instrument: { symbol: "AAPL", assetType: "EQUITY" } },
+          { sequenceId: 1, instrument: { symbol: "NVDA", assetType: "EQUITY" } },
+          { sequenceId: 2, instrument: {} },
+        ],
+      },
+      { name: "Empty", watchlistItems: [] },
+    ];
+    const wls = parseSchwabWatchlists(json);
+    expect(wls).toHaveLength(2);
+    expect(wls[0]).toMatchObject({ name: "Swing ideas", id: "wl1", accountNumber: "12345" });
+    expect(wls[0]!.items.map((i) => i.symbol)).toEqual(["AAPL", "NVDA"]);
+    expect(wls[1]!.items).toEqual([]);
+    expect(parseSchwabWatchlists({})).toEqual([]);
+    expect(parseSchwabWatchlists(null)).toEqual([]);
+  });
+
+  it("GETs the account-agnostic watchlists endpoint with the bearer token", async () => {
+    const t = new FakeTransport([{ name: "L", watchlistItems: [{ instrument: { symbol: "TSLA" } }] }]);
+    const wls = await schwabWatchlists(t, "tok");
+    expect(wls[0]!.items[0]!.symbol).toBe("TSLA");
+    const req = t.requests[0]!;
+    expect(req.url).toContain("/trader/v1/accounts/watchlists");
+    expect(req.headers?.authorization).toBe("Bearer tok");
   });
 });
 
