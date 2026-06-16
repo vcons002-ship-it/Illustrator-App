@@ -175,6 +175,61 @@ export function setTableCell(table: DataTable, rowIndex: number, colIndex: numbe
   return withFormulas({ columns, rows }, formulas);
 }
 
+/** A column for a from-scratch table: a name and (optionally) an explicit type. */
+export interface NewColumnSpec {
+  name: string;
+  type?: ColumnType;
+}
+
+/**
+ * Build a DataTable FROM SCRATCH (the "generate a spreadsheet" path) from a column
+ * spec and optional seed rows. A cell string that starts with "=" becomes a FORMULA
+ * (stored in the formulas map; cached value left blank for Excel to compute). Column
+ * types are taken from the spec, else inferred from the non-formula cells. Bounded by
+ * the table caps. Always returns at least one column.
+ */
+export function createDataTable(cols: NewColumnSpec[], rows: (string | number | null)[][] = []): DataTable {
+  const specs = cols.slice(0, MAX_TABLE_COLS);
+  const columns: DataColumn[] = [];
+  for (const c of specs) {
+    columns.push({ name: uniqueColumnName(columns, c.name), type: c.type ?? "string" });
+  }
+  if (columns.length === 0) return { columns: [{ name: "Column 1", type: "string" }], rows: [] };
+  const boundedRows = rows.slice(0, MAX_TABLE_ROWS);
+  // Infer a type for columns without an explicit one (number when every non-empty,
+  // non-formula cell is numeric).
+  specs.forEach((spec, c) => {
+    if (spec.type) return;
+    let sawValue = false;
+    let allNumeric = true;
+    for (const row of boundedRows) {
+      const cell = row[c];
+      if (cell === null || cell === undefined || cell === "" || (typeof cell === "string" && cell.startsWith("="))) continue;
+      sawValue = true;
+      const n = typeof cell === "number" ? cell : parseNumericCell(String(cell));
+      if (n === undefined) {
+        allNumeric = false;
+        break;
+      }
+    }
+    columns[c]!.type = sawValue && allNumeric ? "number" : "string";
+  });
+  const formulas: Record<string, string> = {};
+  const outRows: CellValue[][] = boundedRows.map((row, r) =>
+    columns.map((col, c) => {
+      const cell = row[c] ?? null;
+      if (typeof cell === "string" && cell.trim().startsWith("=") && cell.trim().length > 1) {
+        formulas[formulaKey(r, c)] = cell.trim().slice(1);
+        return null;
+      }
+      if (cell === null || cell === "") return null;
+      if (col.type === "number") return typeof cell === "number" ? cell : (parseNumericCell(String(cell)) ?? null);
+      return String(cell);
+    }),
+  );
+  return withFormulas({ columns, rows: outRows }, formulas);
+}
+
 /** Case-insensitive column lookup; returns -1 when absent. */
 export function columnIndexByName(table: DataTable, name: string): number {
   const key = name.trim().toLowerCase();

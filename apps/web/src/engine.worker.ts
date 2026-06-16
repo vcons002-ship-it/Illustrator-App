@@ -17,6 +17,8 @@ import {
   CHAT_CONTEXT_BUDGET_CHARS,
   LocalServerLLMProvider,
   analyzeData,
+  createDataTable,
+  tableToText,
   buildBuddySystemPrompt,
   buildProducePrompt,
   buildUnderstandPrompt,
@@ -1558,6 +1560,14 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       },
       openPastedText: async (call) =>
         opened(bookFromText(call.title, call.text, call.mode, "Pasted in chat"), call.visuals),
+      createSpreadsheet: async (call) => {
+        // Build the typed table from the spec, then open it as a TECHNICAL data book
+        // (the pipe-text is what the pipeline reads; `data` powers the grid + chat tools).
+        const table = createDataTable(call.columns, call.rows ?? []);
+        const text = tableToText(table, table.rows.length) || call.title;
+        const book = bookFromText(call.title || "Spreadsheet", text, "technical", "Generated in chat");
+        return opened({ ...book, data: table }, false);
+      },
       removeLibraryBook: async (call) => {
         const book = await store.getBook(call.id);
         if (!book) return {};

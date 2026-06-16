@@ -44,6 +44,8 @@ export interface BuddyDeps {
   openWebText: (call: Extract<BuddyToolCall, { tool: "open_web_text" }>) => Promise<BuddyOpenedInfo>;
   /** Build a BookSource from chat-pasted text and open it (host-side). */
   openPastedText: (call: Extract<BuddyToolCall, { tool: "open_pasted_text" }>) => Promise<BuddyOpenedInfo>;
+  /** Generate a new spreadsheet from a column/row spec and open it (host-side). */
+  createSpreadsheet?: (call: Extract<BuddyToolCall, { tool: "create_spreadsheet" }>) => Promise<BuddyOpenedInfo>;
   /** Remove a library book by id; returns its title (undefined when absent). */
   removeLibraryBook: (
     call: Extract<BuddyToolCall, { tool: "remove_library_book" }>,
@@ -201,6 +203,9 @@ export async function runBuddyTool(
         return { opened: await deps.openWebText(call) };
       case "open_pasted_text":
         return { opened: await deps.openPastedText(call) };
+      case "create_spreadsheet":
+        if (!deps.createSpreadsheet) return { error: "creating spreadsheets isn't available right now" };
+        return { opened: await deps.createSpreadsheet(call) };
       case "remove_library_book":
         return await deps.removeLibraryBook(call);
       case "set_visual_style":

@@ -386,6 +386,34 @@ describe("update_setting tool", () => {
   });
 });
 
+describe("create_spreadsheet tool", () => {
+  it("parses a column/row spec, coercing cells and dropping invalid columns", () => {
+    const call = parseBuddyToolCall(
+      JSON.stringify({
+        tool: "create_spreadsheet",
+        title: "Budget",
+        columns: [{ name: "Category" }, { name: "Budget", type: "number" }, { name: "" }, { bad: 1 }],
+        rows: [["Rent", 1500, "=B2"], "nope", [{}, true, 9]],
+      }),
+    );
+    expect(call).toEqual({
+      tool: "create_spreadsheet",
+      title: "Budget",
+      columns: [{ name: "Category" }, { name: "Budget", type: "number" }],
+      rows: [
+        ["Rent", 1500],
+        [null, null],
+      ],
+    });
+  });
+
+  it("requires at least one valid column, and is advertised", () => {
+    expect(parseBuddyToolCall('{"tool":"create_spreadsheet","title":"x","columns":[]}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"create_spreadsheet","title":"x"}')).toBeUndefined();
+    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"create_spreadsheet"');
+  });
+});
+
 describe("setup_help tool", () => {
   it("parses setup_help and always advertises it", () => {
     expect(parseBuddyToolCall('{"tool":"setup_help","topic":"image generation"}')).toEqual({

@@ -47,6 +47,15 @@ export type BuddyToolCall =
     }
   /** Open text the reader pasted/dictated into the chat (a poem, an excerpt). */
   | { tool: "open_pasted_text"; text: string; title: string; mode: "fiction" | "technical"; visuals: boolean }
+  /** Generate a NEW spreadsheet from scratch (e.g. a budget) and open it in the data
+   * view, where it can be filled in, formula-ed, analysed, and exported. A seed cell
+   * starting with "=" is a formula. ASK the reader the key questions FIRST. */
+  | {
+      tool: "create_spreadsheet";
+      title: string;
+      columns: { name: string; type?: "number" | "string" }[];
+      rows?: (string | number | null)[][];
+    }
   /** Remove a book (and its bible/images/chat) from the library by id. */
   | { tool: "remove_library_book"; id: string }
   /** Change the app's art style and/or illustration cadence (settings). */
@@ -301,6 +310,14 @@ export function buildBuddySystemPrompt(opts: {
     '- {"tool":"open_pasted_text","text":"…","title":"…","mode":"fiction","visuals":false} — open text the reader ' +
     'PASTED or wrote into the chat (a poem, lyrics, an excerpt). Put the passage itself in "text" (not an instruction ' +
     "about it). For anything book-length, ask them to use the upload button instead.\n" +
+    '- {"tool":"create_spreadsheet","title":"Monthly Budget","columns":[{"name":"Category"},{"name":"Budget","type":"number"},' +
+    '{"name":"Spent","type":"number"},{"name":"Remaining","type":"number"}],"rows":[["Rent",1500,1200,"=B2-C2"]]} — ' +
+    "GENERATE a new spreadsheet from scratch and open it in the data view (a budget, tracker, planner, schedule, " +
+    'invoice…). Give "columns" (name + optional "number"/"string" type) and optional seed "rows"; a cell starting with ' +
+    '"=" is an Excel formula (use {r}-free explicit refs here, e.g. "=B2-C2"). FIRST ask the reader the important ' +
+    "questions about how to construct it (purpose, the columns/categories, the period, currency, any totals or formulas " +
+    "they want) — offer sensible defaults — and only call this once you know enough to build something useful. After it " +
+    "opens, refine it conversationally with set_cell / add_formula_column / analyze_data / export_data.\n" +
     '- {"tool":"remove_library_book","id":"…"} — delete a library book (and its illustrations) by its id from the list above.\n' +
     `- {"tool":"set_visual_style","style":"…","pagesPerImage":3,"illustrateAfter":"book"} — set the app's art style ` +
     `(one of: ${styles}), how often it illustrates ("pagesPerImage": a page count, or "chapter" for one image per ` +
@@ -608,6 +625,31 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
       visuals: obj.visuals === true,
     };
   }
+  if (tool === "create_spreadsheet") {
+    if (!Array.isArray(obj.columns)) return undefined;
+    const columns = obj.columns
+      .map((c) => {
+        const name = strArg((c as { name?: unknown })?.name, MAX_NAME_CHARS);
+        const type = (c as { type?: unknown })?.type;
+        return name ? { name, ...(type === "number" || type === "string" ? { type } : {}) } : undefined;
+      })
+      .filter((c): c is { name: string; type?: "number" | "string" } => !!c)
+      .slice(0, 64);
+    if (columns.length === 0) return undefined;
+    const rows = Array.isArray(obj.rows)
+      ? obj.rows
+          .slice(0, 5000)
+          .filter((r): r is unknown[] => Array.isArray(r))
+          .map((r) =>
+            r.slice(0, columns.length).map((cell): string | number | null => {
+              if (typeof cell === "number" && Number.isFinite(cell)) return cell;
+              if (typeof cell === "string") return cell.slice(0, 400);
+              return null;
+            }),
+          )
+      : undefined;
+    return { tool, title: strArg(obj.title, MAX_TITLE_CHARS) ?? "Spreadsheet", columns, ...(rows ? { rows } : {}) };
+  }
   return undefined;
 }
 
@@ -898,6 +940,16 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     return result.image?.ok
       ? "[tool generate_image: the image was generated and is shown to the reader]"
       : `[tool generate_image failed: ${result.image?.error ?? "unknown error"}]`;
+  }
+  if (call.tool === "create_spreadsheet") {
+    const o = result.opened;
+    if (!o) return `[create_spreadsheet failed: ${result.error ?? "couldn't build the sheet"}] Tell the reader.`;
+    return (
+      `[created the spreadsheet "${o.title}" and opened it in the data view (${call.columns.length} columns` +
+      `${call.rows?.length ? `, ${call.rows.length} seed rows` : ""}). The reader can now fill it in, and you can ` +
+      "set_cell / add_formula_column / analyze_data / export_data on it.] Confirm it warmly and suggest the next step " +
+      "(e.g. add a totals row or a computed column)."
+    );
   }
   // open_library_book / open_web_text / open_pasted_text
   const o = result.opened;
