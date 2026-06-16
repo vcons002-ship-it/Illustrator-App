@@ -306,6 +306,8 @@ export function App() {
     readPage,
     remoteBusList,
     remoteBusReply,
+    startHostBridge,
+    stopHostBridge,
     marketIndicators,
     schwabConnect,
     schwabPlaceOrder,
@@ -1414,12 +1416,17 @@ export function App() {
   const [remoteLink, setRemoteLink] = useState<RemoteServerStatus | null>(null);
   const toggleRemoteLink = useCallback(async () => {
     if (remoteLink?.running) {
+      stopHostBridge();
       await stopRemoteServer();
       setRemoteLink(null);
       return;
     }
-    setRemoteLink(await startRemoteServer(generatePairingToken()));
-  }, [remoteLink]);
+    const token = generatePairingToken();
+    const status = await startRemoteServer(token);
+    setRemoteLink(status);
+    // Bridge this desktop's engine worker to the relay (so the phone client drives it).
+    if (status.running && status.port) startHostBridge(`ws://127.0.0.1:${status.port}/`, token);
+  }, [remoteLink, startHostBridge, stopHostBridge]);
   // Schwab connect (manual code-paste flow, no Rust loopback needed): open the consent
   // URL for the user's own Schwab app, then exchange the redirected ?code=… they paste.
   const [schwabConnected, setSchwabConnected] = useState(false);

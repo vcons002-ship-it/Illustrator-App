@@ -65,3 +65,68 @@ export function decodeFrame(data: string, expectedToken: string): unknown | unde
     return undefined;
   }
 }
+
+// --------------------------------------------------------------- thin client
+
+/** When the app is opened via a `#vrlink=…` link (the phone), the relay URL + token to use. */
+export interface RemoteMode {
+  wsUrl: string;
+  token: string;
+}
+
+/**
+ * Detect "phone client" mode from the page URL: a `#vrlink=<token>` hash means this tab should
+ * drive a remote desktop engine over the relay instead of a local Web Worker. `host` is the
+ * page's host (e.g. "192.168.1.20:8787"); the relay listens on the same host as the served app.
+ */
+export function remoteModeFromHash(hash: string, host: string): RemoteMode | undefined {
+  const token = parseLinkToken(hash);
+  if (!token || !host) return undefined;
+  return { wsUrl: `ws://${host}/`, token };
+}
+
+/**
+ * Worker-protocol messages that must stay LOCAL to whichever side owns the engine — the
+ * desktop host handles its own CORS-exempt fetches; they're never relayed to the phone.
+ */
+export const LOCAL_ONLY_MESSAGE_TYPES: ReadonlySet<string> = new Set(["corsFetch", "corsFetchResult"]);
+
+/** True when a worker-protocol message should NOT cross the relay (handled on the engine side). */
+export function isLocalOnlyMessage(msg: unknown): boolean {
+  const t = (msg as { type?: string })?.type;
+  return typeof t === "string" && LOCAL_ONLY_MESSAGE_TYPES.has(t);
+}
+
+// ArrayBuffers (image bytes) can't ride in JSON — tag them so the other side rebuilds them.
+function abTag(b64: string): { __ab: string } {
+  return { __ab: b64 };
+}
+function transform(value: unknown, fn: (v: unknown) => unknown): unknown {
+  const v = fn(value);
+  if (v === value && v && typeof v === "object") {
+    if (Array.isArray(v)) return v.map((x) => transform(x, fn));
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v)) out[k] = transform(val, fn);
+    return out;
+  }
+  return v;
+}
+
+/**
+ * Make a worker-protocol message JSON-safe by base64-tagging any ArrayBuffer (image bytes
+ * can't ride in JSON). Returns a VALUE, so it composes with `encodeFrame(token, …)`.
+ */
+export function serializeForRemote(msg: unknown, bytesToBase64: (b: ArrayBuffer) => string): unknown {
+  return transform(msg, (v) => (v instanceof ArrayBuffer ? abTag(bytesToBase64(v)) : v));
+}
+
+/** Reverse `serializeForRemote`: a decoded frame payload → the message with real ArrayBuffers. */
+export function deserializeFromRemote(value: unknown, base64ToBytes: (b: string) => ArrayBuffer): unknown {
+  return transform(value, (v) => {
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const tag = (v as { __ab?: unknown }).__ab;
+      if (typeof tag === "string") return base64ToBytes(tag);
+    }
+    return v;
+  });
+}

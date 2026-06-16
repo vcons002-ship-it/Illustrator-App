@@ -34,14 +34,27 @@ phone (browser, thin client)  ⟷  ws://<desktop-ip>:8787  ⟷  desktop webview 
 
 ## Status & what needs on-device verification
 
-- ✅ **Compiles** — `cargo check` builds the relay; the pure foundations are unit-tested
-  (`remote-link.test.ts`); the TypeScript wiring (runtime bridge, the desktop UI) typechecks/builds.
-- ⏳ **Runtime relay** — the live LAN socket + a second peer connecting can't be exercised in CI
-  (no listening socket / no device), so the relay behavior is verified on a real desktop.
-- ⏳ **Phone thin-client** — the phone-side transport (sending the worker-protocol frames over the
-  socket instead of to a local Web Worker) and serving the app to the phone are the **remaining
-  step**; until then the relay + pairing are in place but a phone won't yet drive the engine
-  end-to-end. This is the documented next increment.
+- ✅ **Compiles + built** — `cargo check` builds the relay; the pure foundations (pairing token,
+  frame envelope, message (de)serialization incl. ArrayBuffer↔base64, link/host parsing) are
+  unit-tested (`remote-link.test.ts`); the TypeScript thin-client typechecks + builds.
+- ✅ **Thin-client implemented (guarded).** `useEngineWorker` now has two extra, opt-in paths that
+  leave the normal local-worker path byte-for-byte unchanged:
+  - **Phone mode** — when the tab is opened via a `#vrlink=…` link it creates **no local worker**;
+    it frames every `MainToWorker` message over the relay and feeds `WorkerToMain` replies from the
+    relay into the same handler. No engine, no keys on the phone.
+  - **Host bridge** — clicking 🔗 Link phone also bridges the desktop's real engine worker to the
+    relay: phone requests are `postMessage`d to the worker; the worker's output is mirrored back to
+    the phone. CORS-exempt fetches stay **local to the desktop** (`isLocalOnlyMessage` filter).
+- ⏳ **Serving the app to the phone.** The phone needs to LOAD the web app from the LAN. For now
+  the relay is a WebSocket channel only; to verify, serve the web app on your LAN (e.g.
+  `pnpm dev:web --host`, then open `http://<lan-ip>:5173/#vrlink=<token>` on the phone, where the
+  hash carries the token and the page host is where the relay listens). **Serving the bundled SPA
+  directly from the relay port is the remaining follow-up** so it works from the packaged desktop
+  app with no dev server.
+- ⏳ **Runtime relay + two-device flow** — the live LAN socket, the phone connecting, and the
+  end-to-end round-trip can't be exercised in CI (no socket/device); verify on a real desktop +
+  phone. Assumes a **single user** (the same person on both devices) — the relay broadcasts between
+  paired peers, so don't share the link.
 
 ## Security
 

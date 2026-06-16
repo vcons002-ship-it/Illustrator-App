@@ -1,4 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  base64ToBytes,
+  bytesToBase64,
+  decodeFrame,
+  deserializeFromRemote,
+  encodeFrame,
+  isLocalOnlyMessage,
+  remoteModeFromHash,
+  serializeForRemote,
+  type RemoteMode,
+} from "@visual-reader/core";
 import type {
   BookPassage,
   BookSearchHit,
@@ -178,6 +189,11 @@ export interface EngineWorkerApi {
   /** Remote bus: list pending "VR:" Google-Task commands; write an answer back + complete one. */
   remoteBusList: () => Promise<{ ok: boolean; commands?: BusCommand[] }>;
   remoteBusReply: (id: string, answer: string) => Promise<{ ok: boolean; error?: string }>;
+  /** LAN phone link: bridge this desktop's engine worker to the relay (start/stop with the link). */
+  startHostBridge: (wsUrl: string, token: string) => void;
+  stopHostBridge: () => void;
+  /** True when THIS tab is a phone client driving a remote desktop (opened via a #vrlink). */
+  isRemoteClient: boolean;
   /** Fetch keyless technical indicators (VWAP/MA/RSI/recent-move) for a symbol. */
   marketIndicators: (symbol: string, interval?: string, range?: string) => Promise<{ ok: boolean; indicators?: Indicators }>;
   /** Run one document-polish stage; returns the requestId (for cancel) + the result. */
@@ -400,32 +416,54 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     Map<number, { onToken?: (delta: string) => void; resolve: (r: PolishResult) => void }>
   >(new Map());
 
-  const send = (msg: MainToWorker, transfer: Transferable[] = []) =>
-    workerRef.current?.postMessage(msg, transfer);
+  // PHONE-CLIENT MODE: when opened via a #vrlink=… link, this tab drives a remote desktop
+  // engine over the relay instead of a local Web Worker. Detected once. (Undefined normally —
+  // the default local-worker path below is unchanged.)
+  const remoteRef = useRef<RemoteMode | undefined>(
+    typeof window !== "undefined" ? remoteModeFromHash(window.location.hash, window.location.host) : undefined,
+  );
+  const phoneWsRef = useRef<WebSocket | undefined>(undefined);
+  // HOST-BRIDGE: on the desktop, when a phone is linked, mirror the engine worker to the relay.
+  const hostBridgeRef = useRef<{ ws: WebSocket; token: string } | undefined>(undefined);
 
-  useEffect(() => {
-    let worker: Worker;
-    try {
-      worker = new Worker(new URL("./engine.worker.ts", import.meta.url), {
-        type: "module",
-      });
-    } catch (err) {
-      setStatus(
-        `Error: couldn't start the engine worker — ${err instanceof Error ? err.message : String(err)}`,
-      );
+  const send = (msg: MainToWorker, transfer: Transferable[] = []) => {
+    const remote = remoteRef.current;
+    if (remote && phoneWsRef.current) {
+      // No local worker on the phone — frame the request to the desktop over the relay.
+      if (phoneWsRef.current.readyState === WebSocket.OPEN) {
+        phoneWsRef.current.send(encodeFrame(remote.token, serializeForRemote(msg, bytesToBase64)));
+      }
       return;
     }
-    // Surface worker load/runtime crashes instead of failing silently (a dead
-    // worker = no badges, no generation, endless "painting…").
-    worker.onerror = (e: ErrorEvent) => {
-      setStatus(
-        `Error: engine worker crashed — ${e.message || "module failed to load"}` +
-          (e.filename ? ` (${e.filename}:${e.lineno})` : ""),
-      );
+    workerRef.current?.postMessage(msg, transfer);
+  };
+  const startHostBridge = useCallback((wsUrl: string, token: string) => {
+    hostBridgeRef.current?.ws.close();
+    const ws = new WebSocket(wsUrl);
+    ws.onmessage = (e) => {
+      // A request from the linked phone — run it on the desktop's real engine worker.
+      if (typeof e.data !== "string") return;
+      const payload = decodeFrame(e.data, token);
+      if (payload && !isLocalOnlyMessage(payload)) workerRef.current?.postMessage(deserializeFromRemote(payload, base64ToBytes));
     };
-    worker.onmessageerror = () => setStatus("Error: engine worker sent an undecodable message");
-    worker.onmessage = (event: MessageEvent<WorkerToMain>) => {
-      const msg = event.data;
+    ws.onclose = () => {
+      if (hostBridgeRef.current?.ws === ws) hostBridgeRef.current = undefined;
+    };
+    hostBridgeRef.current = { ws, token };
+  }, []);
+  const stopHostBridge = useCallback(() => {
+    hostBridgeRef.current?.ws.close();
+    hostBridgeRef.current = undefined;
+  }, []);
+
+  useEffect(() => {
+    // The entire message-handling switch, reused by both the local worker and the phone WS.
+    const handleMsg = (msg: WorkerToMain) => {
+      // Host bridge: mirror the engine's output to a linked phone (skip local-only CORS msgs).
+      const hb = hostBridgeRef.current;
+      if (hb && hb.ws.readyState === WebSocket.OPEN && !isLocalOnlyMessage(msg)) {
+        hb.ws.send(encodeFrame(hb.token, serializeForRemote(msg, bytesToBase64)));
+      }
       switch (msg.type) {
         case "corsFetch": {
           // Worker → Rust shell relay (workers can't reach the Tauri bridge).
@@ -766,6 +804,44 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           break;
       }
     };
+
+    // PHONE-CLIENT MODE: no local worker — drive the desktop engine over the relay.
+    const remote = remoteRef.current;
+    if (remote) {
+      const ws = new WebSocket(remote.wsUrl);
+      ws.onopen = () => setStatus("Linked to a desktop");
+      ws.onclose = () => setStatus("Disconnected from the desktop");
+      ws.onerror = () => setStatus("Error: couldn't reach the desktop on this network");
+      ws.onmessage = (e) => {
+        if (typeof e.data !== "string") return;
+        const payload = decodeFrame(e.data, remote.token);
+        if (payload && !isLocalOnlyMessage(payload)) handleMsg(deserializeFromRemote(payload, base64ToBytes) as WorkerToMain);
+      };
+      phoneWsRef.current = ws;
+      return () => ws.close();
+    }
+
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL("./engine.worker.ts", import.meta.url), {
+        type: "module",
+      });
+    } catch (err) {
+      setStatus(
+        `Error: couldn't start the engine worker — ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    // Surface worker load/runtime crashes instead of failing silently (a dead
+    // worker = no badges, no generation, endless "painting…").
+    worker.onerror = (e: ErrorEvent) => {
+      setStatus(
+        `Error: engine worker crashed — ${e.message || "module failed to load"}` +
+          (e.filename ? ` (${e.filename}:${e.lineno})` : ""),
+      );
+    };
+    worker.onmessageerror = () => setStatus("Error: engine worker sent an undecodable message");
+    worker.onmessage = (event: MessageEvent<WorkerToMain>) => handleMsg(event.data);
     workerRef.current = worker;
     return () => worker.terminate();
   }, []);
@@ -1429,6 +1505,9 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     readPage,
     remoteBusList,
     remoteBusReply,
+    startHostBridge,
+    stopHostBridge,
+    isRemoteClient: !!remoteRef.current,
     marketIndicators,
     polishText,
     polishCancel,

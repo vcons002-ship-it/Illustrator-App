@@ -2,11 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   buildLinkUrl,
   decodeFrame,
+  deserializeFromRemote,
   encodeFrame,
   generatePairingToken,
+  isLocalOnlyMessage,
   parseLinkToken,
+  remoteModeFromHash,
   REMOTE_LINK_PORT,
+  serializeForRemote,
 } from "./remote-link.js";
+import { base64ToBytes, bytesToBase64 } from "../providers/image/base64.js";
 
 describe("generatePairingToken", () => {
   it("produces a token of the requested length from the safe alphabet, and varies", () => {
@@ -34,5 +39,29 @@ describe("encodeFrame / decodeFrame", () => {
     expect(decodeFrame(frame, "wrong")).toBeUndefined();
     expect(decodeFrame("not json", "secret")).toBeUndefined();
     expect(decodeFrame(JSON.stringify({ payload: 1 }), "secret")).toBeUndefined();
+  });
+});
+
+describe("thin-client helpers", () => {
+  it("remoteModeFromHash builds a ws URL from the link hash + host", () => {
+    expect(remoteModeFromHash("#vrlink=abc", "192.168.1.20:8787")).toEqual({ wsUrl: "ws://192.168.1.20:8787/", token: "abc" });
+    expect(remoteModeFromHash("#nope", "host")).toBeUndefined();
+  });
+
+  it("flags local-only (CORS) messages so they never cross the relay", () => {
+    expect(isLocalOnlyMessage({ type: "corsFetch" })).toBe(true);
+    expect(isLocalOnlyMessage({ type: "buddyChat" })).toBe(false);
+  });
+
+  it("round-trips a message with an ArrayBuffer through serialize/deserialize (+ a frame)", () => {
+    const bytes = new Uint8Array([1, 2, 3, 250]).buffer;
+    const safe = serializeForRemote({ type: "image", requestId: 5, bytes, nested: { also: bytes } }, bytesToBase64);
+    // Composes with the token frame (encode → decode → deserialize).
+    const payload = decodeFrame(encodeFrame("tok", safe), "tok");
+    const back = deserializeFromRemote(payload, base64ToBytes) as { type: string; requestId: number; bytes: ArrayBuffer; nested: { also: ArrayBuffer } };
+    expect(back.type).toBe("image");
+    expect(back.requestId).toBe(5);
+    expect(new Uint8Array(back.bytes)).toEqual(new Uint8Array([1, 2, 3, 250]));
+    expect(new Uint8Array(back.nested.also)).toEqual(new Uint8Array([1, 2, 3, 250]));
   });
 });
