@@ -1,5 +1,16 @@
-import { memo, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import type { CellValue, DataTable } from "@visual-reader/core";
+
+/** 0 → "A", 26 → "AA" (for the formula-bar cell reference). */
+function colLetter(index: number): string {
+  let n = index;
+  let out = "";
+  do {
+    out = String.fromCharCode(65 + (n % 26)) + out;
+    n = Math.floor(n / 26) - 1;
+  } while (n >= 0);
+  return out;
+}
 
 /**
  * A spreadsheet/CSV table shown AS a table — the structured `DataTable` we already
@@ -50,6 +61,19 @@ export const DataTablePreview = memo(function DataTablePreview({
   const [editing, setEditing] = useState<{ r: number; c: number; draft: string } | null>(null);
   // A header rename in progress (separate from cell edits; column index -1 = none).
   const [headerEdit, setHeaderEdit] = useState<{ c: number; draft: string } | null>(null);
+  // The selected cell (drives the formula bar) + the bar's editable draft.
+  const [selected, setSelected] = useState<{ r: number; c: number } | null>(null);
+  const [barDraft, setBarDraft] = useState("");
+  // Reflect the selected cell's formula (or value) into the bar when selection changes.
+  const selectedFormula = selected ? table.formulas?.[`${selected.r},${selected.c}`] : undefined;
+  const selectedValue = selected ? table.rows[selected.r]?.[selected.c] ?? null : null;
+  useEffect(() => {
+    if (!selected) return;
+    setBarDraft(selectedFormula ? `=${selectedFormula}` : selectedValue === null ? "" : String(selectedValue));
+  }, [selected, selectedFormula, selectedValue]);
+  const commitBar = () => {
+    if (selected) onEditCell?.(selected.r, selected.c, barDraft);
+  };
   // Display-only sort + filter: reorder/hide WHICH rows are shown without touching the
   // underlying table, so formulas + data stay intact; edits map back to the real index.
   const [sort, setSort] = useState<{ col: number; dir: "asc" | "desc" } | null>(null);
@@ -88,6 +112,26 @@ export const DataTablePreview = memo(function DataTablePreview({
   return (
     <figure style={{ margin: 0 }}>
       {caption ? <figcaption style={captionStyle}>{caption}</figcaption> : null}
+      {onEditCell ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+          <span style={fxRefStyle}>{selected ? `${colLetter(selected.c)}${selected.r + 2}` : "fx"}</span>
+          <input
+            value={barDraft}
+            disabled={!selected}
+            onChange={(e) => setBarDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                commitBar();
+                (e.target as HTMLInputElement).blur();
+              }
+            }}
+            onBlur={commitBar}
+            placeholder={selected ? "value or =formula" : "select a cell…"}
+            style={fxInputStyle}
+            title="Formula bar — edit the selected cell's value or =formula"
+          />
+        </div>
+      ) : null}
       {table.rows.length > 4 ? (
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
           <input
@@ -194,17 +238,20 @@ export const DataTablePreview = memo(function DataTablePreview({
                       </td>
                     );
                   }
-                  const titleText = formula ? `=${formula}${v !== null ? ` → ${formatCell(v)}` : ""}` : onEditCell ? "Click to edit" : text;
+                  const titleText = formula ? `=${formula}${v !== null ? ` → ${formatCell(v)}` : ""}` : onEditCell ? "Click to select, double-click to edit" : text;
+                  const isSelected = selected?.r === ri && selected?.c === ci;
                   return (
                     <td
                       key={ci}
                       title={titleText}
-                      onClick={onEditCell ? () => setEditing({ r: ri, c: ci, draft: formula ? `=${formula}` : v === null ? "" : String(v) }) : undefined}
+                      onClick={onEditCell ? () => setSelected({ r: ri, c: ci }) : undefined}
+                      onDoubleClick={onEditCell ? () => setEditing({ r: ri, c: ci, draft: formula ? `=${formula}` : v === null ? "" : String(v) }) : undefined}
                       style={{
                         ...tdStyle,
                         textAlign: align,
                         ...(onEditCell ? { cursor: "cell" } : {}),
                         ...(formula ? { color: "#9fd2ff" } : {}),
+                        ...(isSelected ? { outline: "2px solid rgba(122,162,255,0.9)", outlineOffset: "-2px" } : {}),
                       }}
                     >
                       {text}
@@ -313,6 +360,24 @@ const sortBtnStyle: React.CSSProperties = {
   fontSize: 9,
   padding: "0 1px",
   lineHeight: 1,
+};
+const fxRefStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 600,
+  opacity: 0.7,
+  minWidth: 28,
+  textAlign: "center",
+  fontStyle: "italic",
+};
+const fxInputStyle: React.CSSProperties = {
+  flex: 1,
+  background: "#0d1017",
+  color: "#fff",
+  border: "1px solid rgba(122,162,255,0.4)",
+  borderRadius: 6,
+  padding: "3px 8px",
+  fontSize: 12,
+  fontFamily: "ui-monospace, monospace",
 };
 const filterInputStyle: React.CSSProperties = {
   background: "#0d1017",
