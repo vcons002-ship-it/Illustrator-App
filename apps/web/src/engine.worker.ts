@@ -32,6 +32,8 @@ import {
   schwabQuote,
   schwabOptionChain,
   schwabPositions,
+  schwabAccountNumbers,
+  placeSchwabOrder,
   buildBuddySystemPrompt,
   buildProducePrompt,
   buildUnderstandPrompt,
@@ -661,6 +663,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "schwabConnect":
       void handleSchwabConnect(msg);
+      break;
+    case "schwabPlaceOrder":
+      void handleSchwabPlaceOrder(msg);
       break;
     case "polish":
       void handlePolish(msg);
@@ -1409,6 +1414,25 @@ async function handleSchwabConnect(msg: Extract<MainToWorker, { type: "schwabCon
   }
 }
 
+async function handleSchwabPlaceOrder(msg: Extract<MainToWorker, { type: "schwabPlaceOrder" }>): Promise<void> {
+  try {
+    const clientId = settings?.keys?.schwabClientId;
+    const clientSecret = settings?.keys?.schwabClientSecret;
+    if (!clientId || !clientSecret) throw new Error("Schwab isn't connected.");
+    const store = memoryStore();
+    const transport = new DirectTransport(corsFetch());
+    const token = await getFreshSchwabToken(store, { clientId, clientSecret, transport });
+    const accounts = await schwabAccountNumbers(transport, token);
+    const hash = accounts[0]?.hashValue;
+    if (!hash) throw new Error("No Schwab account found.");
+    const r = await placeSchwabOrder(transport, token, hash, msg.order);
+    if (!r.ok) throw new Error(`Schwab rejected the order (HTTP ${r.status}).`);
+    post({ type: "schwabOrderPlaced", requestId: msg.requestId, ok: true, status: r.status });
+  } catch (err) {
+    post({ type: "schwabOrderPlaced", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
 async function handleSummarize(msg: Extract<MainToWorker, { type: "summarize" }>): Promise<void> {
   try {
     const { llm } = chatProviders();
@@ -1785,7 +1809,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         slash.call.tool === "find_files" ||
         slash.call.tool === "run_command" ||
         slash.call.tool === "screenshot" ||
-        slash.call.tool === "plan_task"
+        slash.call.tool === "plan_task" ||
+        slash.call.tool === "prep_order"
       ) {
         post({ type: "buddyDone", requestId: msg.requestId, text: "", transcript: [], pendingTool: slash.call });
         return;

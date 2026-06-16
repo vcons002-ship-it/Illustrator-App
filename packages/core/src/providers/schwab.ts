@@ -312,3 +312,59 @@ export function buildEquityOrder(opts: { symbol: string; quantity: number; instr
     ],
   };
 }
+
+export type OptionInstruction = "BUY_TO_OPEN" | "SELL_TO_OPEN" | "BUY_TO_CLOSE" | "SELL_TO_CLOSE";
+
+/** Build a single-leg OPTION order for review (never auto-submitted). `optionSymbol`
+ * is Schwab's OSI symbol, e.g. "AAPL  260620C00200000". */
+export function buildOptionOrder(opts: { optionSymbol: string; quantity: number; instruction: OptionInstruction; orderType: "MARKET" | "LIMIT" | "NET_DEBIT" | "NET_CREDIT"; price?: number }): Record<string, unknown> {
+  return {
+    orderType: opts.orderType,
+    session: "NORMAL",
+    duration: "DAY",
+    orderStrategyType: "SINGLE",
+    complexOrderStrategyType: "NONE",
+    ...(opts.orderType !== "MARKET" && opts.price !== undefined ? { price: opts.price } : {}),
+    orderLegCollection: [
+      {
+        instruction: opts.instruction,
+        quantity: opts.quantity,
+        instrument: { symbol: opts.optionSymbol, assetType: "OPTION" },
+      },
+    ],
+  };
+}
+
+/** A one-line human summary of a built order, for the review modal + the chat. */
+export function describeOrder(order: Record<string, unknown>): string {
+  const leg = (order.orderLegCollection as { instruction?: string; quantity?: number; instrument?: { symbol?: string; assetType?: string } }[] | undefined)?.[0];
+  const type = order.orderType as string;
+  const price = order.price !== undefined ? ` @ ${order.price}` : "";
+  return `${leg?.instruction ?? "?"} ${leg?.quantity ?? "?"} ${leg?.instrument?.symbol ?? "?"} (${leg?.instrument?.assetType ?? "?"}) — ${type}${price}, DAY`;
+}
+
+export interface SchwabAccountRef {
+  accountNumber: string;
+  hashValue: string;
+}
+
+/** Account numbers + their hash values (orders are placed against the hash). */
+export async function schwabAccountNumbers(transport: Transport, token: string): Promise<SchwabAccountRef[]> {
+  const res = await authGet(transport, `${TRADER}/accounts/accountNumbers`, token);
+  const arr = (await res.json<{ accountNumber?: string; hashValue?: string }[]>()) ?? [];
+  return arr.filter((a): a is SchwabAccountRef => !!a.accountNumber && !!a.hashValue);
+}
+
+/**
+ * Place an order against an account hash. Called ONLY from the host's explicit
+ * "Place order" review action — never auto-run by the assistant. Returns ok + status.
+ */
+export async function placeSchwabOrder(transport: Transport, token: string, accountHash: string, order: Record<string, unknown>): Promise<{ ok: boolean; status: number }> {
+  const res = await transport.send({
+    url: `${TRADER}/accounts/${encodeURIComponent(accountHash)}/orders`,
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: order,
+  });
+  return { ok: res.ok, status: res.status };
+}
