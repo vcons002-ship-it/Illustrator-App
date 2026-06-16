@@ -63,6 +63,11 @@ import {
   loadScheduledTasks,
   deleteScheduledTask,
   describeSchedule,
+  normalizePriceAlert,
+  upsertPriceAlert,
+  loadPriceAlerts,
+  deletePriceAlert,
+  describeAlert,
   updateTaskStep,
   advanceStep,
   nextReadyStep,
@@ -643,6 +648,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "stockQuote":
       void handleStockQuote(msg);
+      break;
+    case "marketIndicators":
+      void handleMarketIndicators(msg);
       break;
     case "polish":
       void handlePolish(msg);
@@ -1359,6 +1367,24 @@ async function handleStockQuote(msg: Extract<MainToWorker, { type: "stockQuote" 
   }
 }
 
+async function handleMarketIndicators(msg: Extract<MainToWorker, { type: "marketIndicators" }>): Promise<void> {
+  try {
+    const cf = corsFetch();
+    if (!cf) {
+      post({ type: "marketIndicatorsResult", requestId: msg.requestId, ok: true });
+      return;
+    }
+    const res = await new DirectTransport(cf).send({
+      url: yahooChartUrl(msg.symbol, { interval: msg.interval || "5m", range: msg.range || "1d" }),
+      method: "GET",
+    });
+    const indicators = computeIndicators(msg.symbol, parseYahooChart(await res.json()));
+    post({ type: "marketIndicatorsResult", requestId: msg.requestId, ok: true, ...(indicators ? { indicators } : {}) });
+  } catch (err) {
+    post({ type: "marketIndicatorsResult", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
 async function handleSummarize(msg: Extract<MainToWorker, { type: "summarize" }>): Promise<void> {
   try {
     const { llm } = chatProviders();
@@ -1612,6 +1638,20 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       cancelScheduled: async (id) => {
         await deleteScheduledTask(store, id);
         post({ type: "buddyScheduledChanged", requestId: msg.requestId });
+        return true;
+      },
+      // In-app price alerts over the shared store (the host's runner checks + fires them).
+      setPriceAlert: async (call) => {
+        const alert = normalizePriceAlert({ symbol: call.symbol, type: call.type, ...(call.value !== undefined ? { value: call.value } : {}), ...(call.note ? { note: call.note } : {}) });
+        if (!alert) return undefined;
+        await upsertPriceAlert(store, alert);
+        post({ type: "buddyAlertsChanged", requestId: msg.requestId });
+        return { id: alert.id, describe: describeAlert(alert) };
+      },
+      listAlerts: async () => (await loadPriceAlerts(store)).map((a) => ({ id: a.id, describe: describeAlert(a), enabled: a.enabled })),
+      cancelAlert: async (id) => {
+        await deletePriceAlert(store, id);
+        post({ type: "buddyAlertsChanged", requestId: msg.requestId });
         return true;
       },
       openLibraryBook: async (call) => {

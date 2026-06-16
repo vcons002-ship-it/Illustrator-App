@@ -42,6 +42,17 @@ export type BuddyToolCall =
   /** Keyless technical indicators (VWAP, moving averages, RSI, recent move) over a bar
    * window, for grounded watch-levels / entry analysis. interval e.g. "5m"/"1d". */
   | { tool: "market_analysis"; symbol: string; interval?: string; range?: string }
+  /** Set an in-app price/indicator alert that fires a notification while the app is open
+   * (price crosses a level/VWAP, a ±% move, or an RSI threshold). */
+  | {
+      tool: "set_price_alert";
+      symbol: string;
+      type: "above" | "below" | "cross_vwap" | "pct_move" | "rsi_above" | "rsi_below";
+      value?: number;
+      note?: string;
+    }
+  | { tool: "list_alerts" }
+  | { tool: "cancel_alert"; id: string }
   | { tool: "open_library_book"; id: string; visuals: boolean }
   | {
       tool: "open_web_text";
@@ -379,6 +390,11 @@ export function buildBuddySystemPrompt(opts: {
     '- {"tool":"market_analysis","symbol":"AAPL","interval":"5m","range":"1d"} — keyless TECHNICAL indicators (VWAP, ' +
     "SMA20/50, EMA12/26, RSI14, recent move). Use for intraday/technical questions — VWAP watch levels, trend vs the " +
     'moving averages, momentum, entry points. "interval"/"range" default to intraday ("5m"/"1d"); use "1d"/"6mo" for swing.\n' +
+    '- {"tool":"set_price_alert","symbol":"AAPL","type":"cross_vwap"} — set a WATCH/alert that fires a notification while ' +
+    'the app is open. "type": "above"/"below" (needs "value" = price), "cross_vwap" (price crosses VWAP, no value), ' +
+    '"pct_move" ("value" = percent, ± either way), "rsi_above"/"rsi_below" ("value" = 0–100). Use when the reader says ' +
+    '"alert/tell/ping me when…", "watch …", "let me know if …". {"tool":"list_alerts"} to show them; ' +
+    '{"tool":"cancel_alert","id":"…"} to remove one.\n' +
     googleBlock +
     githubBlock +
     '- {"tool":"plan_task","request":"…"} — when the reader asks you to PLAN or organize a real-world MULTI-STEP task ' +
@@ -497,6 +513,21 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
     const interval = strArg(obj.interval, 8);
     const range = strArg(obj.range, 8);
     return { tool, symbol, ...(interval ? { interval } : {}), ...(range ? { range } : {}) };
+  }
+  if (tool === "set_price_alert") {
+    const symbol = strArg(obj.symbol, MAX_NAME_CHARS);
+    const type = obj.type;
+    const valid = ["above", "below", "cross_vwap", "pct_move", "rsi_above", "rsi_below"];
+    if (!symbol || typeof type !== "string" || !valid.includes(type)) return undefined;
+    const value = typeof obj.value === "number" && Number.isFinite(obj.value) ? obj.value : undefined;
+    if (type !== "cross_vwap" && value === undefined) return undefined;
+    const note = strArg(obj.note, MAX_QUERY_CHARS);
+    return { tool, symbol, type: type as "above", ...(value !== undefined ? { value } : {}), ...(note ? { note } : {}) };
+  }
+  if (tool === "list_alerts") return { tool };
+  if (tool === "cancel_alert") {
+    const id = strArg(obj.id, MAX_ID_CHARS);
+    return id ? { tool, id } : undefined;
   }
   if (tool === "remember") {
     const note = strArg(obj.note, MAX_MEMORY_NOTE_CHARS);
@@ -742,6 +773,9 @@ export interface BuddyToolResultPayload {
   quote?: StockQuote;
   /** Keyless technical indicators (or absent when unavailable). */
   indicators?: Indicators;
+  /** Price-alert outcomes. */
+  alert?: { id: string; describe: string };
+  alertsList?: { id: string; describe: string; enabled: boolean }[];
   /** What set_visual_style actually applied (resolved style LABEL). */
   applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
   /** Whether an approved image generation succeeded. */
@@ -865,6 +899,18 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
       "Use these real numbers in your analysis; for news/fundamentals add search_web. Always note this isn't financial advice."
     );
   }
+  if (call.tool === "set_price_alert") {
+    return result.alert
+      ? `[alert set — ${result.alert.describe}. It fires a notification while the app is open; confirm to the reader and ` +
+          "mention they can manage alerts in the 📈 Markets panel.]"
+      : "[set_price_alert did nothing — check the symbol + a numeric level/percent]";
+  }
+  if (call.tool === "list_alerts") {
+    const list = result.alertsList ?? [];
+    if (list.length === 0) return "[list_alerts: no price alerts set]";
+    return "[price alerts]\n" + list.map((a) => `· ${a.describe}${a.enabled ? "" : " (done/paused)"} (id: ${a.id})`).join("\n");
+  }
+  if (call.tool === "cancel_alert") return "[cancel_alert done] Confirm briefly.";
   if (call.tool === "market_analysis") {
     if (!result.indicators) {
       return `[market_analysis: no keyless bar data for "${call.symbol}" (needs the desktop app or extension). Use search_web instead.]`;

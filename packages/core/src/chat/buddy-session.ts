@@ -40,6 +40,10 @@ export interface BuddyDeps {
   stockQuote?: (symbol: string) => Promise<import("../providers/stocks.js").StockQuote | undefined>;
   /** Keyless technical indicators over a bar window, or undefined when unavailable. */
   marketIndicators?: (symbol: string, interval?: string, range?: string) => Promise<import("../providers/market-data.js").Indicators | undefined>;
+  /** In-app price alerts — set/list/cancel over the shared store. */
+  setPriceAlert?: (call: Extract<BuddyToolCall, { tool: "set_price_alert" }>) => Promise<{ id: string; describe: string } | undefined>;
+  listAlerts?: () => Promise<{ id: string; describe: string; enabled: boolean }[]>;
+  cancelAlert?: (id: string) => Promise<boolean>;
   /** Random picks from the catalog's most-loved shelf ("surprise me"). */
   randomBooks?: () => Promise<BookSearchHit[]>;
   /** Open a library book by id; the host posts the BookSource to the UI itself. */
@@ -215,6 +219,18 @@ export async function runBuddyTool(
         const indicators = await deps.marketIndicators(call.symbol, call.interval, call.range);
         return indicators ? { indicators } : {};
       }
+      case "set_price_alert": {
+        if (!deps.setPriceAlert) return { error: "price alerts aren't available right now" };
+        const alert = await deps.setPriceAlert(call);
+        return alert ? { alert } : {};
+      }
+      case "list_alerts":
+        if (!deps.listAlerts) return { error: "price alerts aren't available right now" };
+        return { alertsList: await deps.listAlerts() };
+      case "cancel_alert":
+        if (!deps.cancelAlert) return { error: "price alerts aren't available right now" };
+        await deps.cancelAlert(call.id);
+        return {};
       case "open_library_book":
         return { opened: await deps.openLibraryBook(call) };
       case "open_web_text":
