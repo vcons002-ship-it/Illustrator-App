@@ -100,6 +100,27 @@ describe("evaluateFormula — lookups, logic, multi-criteria, math/text", () => 
     expect(evaluateFormula('MAXIFS(C2:C4,A2:A4,"food")', g)).toBe(30);
   });
 
+  it("XLOOKUP, FIND/SEARCH/REPT/PROPER/EXACT", () => {
+    expect(evaluateFormula('XLOOKUP("pear",A2:A4,C2:C4)', grid)).toBe(2);
+    expect(evaluateFormula('XLOOKUP("nope",A2:A4,C2:C4,-1)', grid)).toBe(-1); // ifNotFound
+    expect(evaluateFormula('FIND("pl","apple plum")', grid)).toBe(3); // "apple" already has "pl"
+    expect(evaluateFormula('SEARCH("PLUM","apple plum")', grid)).toBe(7); // case-insensitive
+    expect(evaluateFormula('REPT("ab",3)', grid)).toBe("ababab");
+    expect(evaluateFormula('PROPER("hello WORLD")', grid)).toBe("Hello World");
+    expect(evaluateFormula('EXACT("a","A")', grid)).toBe(false);
+  });
+
+  it("date functions over ISO date strings", () => {
+    expect(evaluateFormula("DATE(2026,6,16)", grid)).toBe("2026-06-16");
+    expect(evaluateFormula('YEAR("2026-06-16")', grid)).toBe(2026);
+    expect(evaluateFormula('MONTH("2026-06-16")', grid)).toBe(6);
+    expect(evaluateFormula('DAYS("2026-06-16","2026-06-01")', grid)).toBe(15);
+    expect(evaluateFormula('DATEDIF("2024-01-15","2026-03-20","Y")', grid)).toBe(2);
+    expect(evaluateFormula('EDATE("2026-01-31",1)', grid)).toBe("2026-03-03"); // Jan 31 + 1mo overflows
+    expect(evaluateFormula('EOMONTH("2026-02-10",0)', grid)).toBe("2026-02-28");
+    expect(evaluateFormula("LEN(TODAY())", grid)).toBe(10); // TODAY() → YYYY-MM-DD
+  });
+
   it("math + stats + text helpers", () => {
     expect(evaluateFormula("ROUNDUP(2.1,0)", grid)).toBe(3);
     expect(evaluateFormula("CEILING(7,5)", grid)).toBe(10);

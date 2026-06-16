@@ -430,6 +430,27 @@ function percentile(sorted: number[], p: number): number {
   return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (idx - lo);
 }
 
+// Dates ride as ISO "YYYY-MM-DD" strings (readable, no serial-number formatting needed);
+// date math goes through DAYS / DATEDIF rather than raw subtraction.
+function parseDate(v: FormulaValue): Date | null {
+  if (v === null || v === "") return null;
+  const s = String(v).trim();
+  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
+  const d = iso ? new Date(Date.UTC(+iso[1]!, +iso[2]! - 1, +iso[3]!)) : new Date(Date.parse(s));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+function fmtDate(d: Date): string {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+function needDate(v: FormulaValue): Date {
+  const d = parseDate(v);
+  if (!d) throw new Error("#VALUE!");
+  return d;
+}
+function properCase(s: string): string {
+  return s.replace(/\b\w/g, (c) => c.toUpperCase()).replace(/\B\w/g, (c) => c.toLowerCase());
+}
+
 // ---- Functions -------------------------------------------------------------
 
 function callFn(name: string, args: Node[], ctx: FormulaContext): Value {
@@ -730,6 +751,83 @@ function callFn(name: string, args: Node[], ctx: FormulaContext): Value {
       return regression(numsOf([ev(1)]), numsOf([ev(0)])).intercept;
     case "RSQ":
       return regression(numsOf([ev(0)]), numsOf([ev(1)])).r ** 2;
+    case "SUMSQ":
+      return numsOf(all()).reduce((a, b) => a + b * b, 0);
+
+    // --- More lookup ---
+    case "XLOOKUP": {
+      // XLOOKUP(lookup, lookupArray, returnArray, [ifNotFound], [matchMode])
+      const key = sc(0);
+      const lookupArr = cellsOf(ev(1));
+      const returnArr = cellsOf(ev(2));
+      const matchMode = args.length > 4 ? toNum(sc(4)) : 0; // 0 = exact (default)
+      let at = lookupArr.findIndex((v) => compare("=", v, key));
+      if (at < 0 && matchMode !== 0) at = lookupIndex(lookupArr, key, false);
+      if (at < 0) {
+        if (args.length > 3) return ev(3);
+        throw new Error("#N/A");
+      }
+      return returnArr[at] ?? null;
+    }
+
+    // --- Text (more) ---
+    case "FIND": {
+      const at = toStr(sc(1)).indexOf(toStr(sc(0)), args.length > 2 ? toNum(sc(2)) - 1 : 0);
+      if (at < 0) throw new Error("#VALUE!");
+      return at + 1;
+    }
+    case "SEARCH": {
+      const at = toStr(sc(1)).toLowerCase().indexOf(toStr(sc(0)).toLowerCase(), args.length > 2 ? toNum(sc(2)) - 1 : 0);
+      if (at < 0) throw new Error("#VALUE!");
+      return at + 1;
+    }
+    case "REPT":
+      return toStr(sc(0)).repeat(Math.max(0, Math.floor(toNum(sc(1)))));
+    case "PROPER":
+      return properCase(toStr(sc(0)));
+    case "EXACT":
+      return toStr(sc(0)) === toStr(sc(1));
+
+    // --- Date / time (dates are ISO "YYYY-MM-DD" strings) ---
+    case "TODAY": {
+      const n = new Date();
+      return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
+    }
+    case "NOW":
+      return new Date().toISOString().slice(0, 16).replace("T", " ");
+    case "DATE":
+      return fmtDate(new Date(Date.UTC(toNum(sc(0)), toNum(sc(1)) - 1, toNum(sc(2)))));
+    case "YEAR":
+      return needDate(sc(0)).getUTCFullYear();
+    case "MONTH":
+      return needDate(sc(0)).getUTCMonth() + 1;
+    case "DAY":
+      return needDate(sc(0)).getUTCDate();
+    case "WEEKDAY":
+      return needDate(sc(0)).getUTCDay() + 1; // 1 = Sunday
+    case "DAYS":
+      return Math.round((needDate(sc(0)).getTime() - needDate(sc(1)).getTime()) / 86400000);
+    case "DATEDIF": {
+      const a = needDate(sc(0));
+      const b = needDate(sc(1));
+      const unit = toStr(sc(2)).toUpperCase();
+      if (unit === "D") return Math.round((b.getTime() - a.getTime()) / 86400000);
+      let years = b.getUTCFullYear() - a.getUTCFullYear();
+      let months = years * 12 + (b.getUTCMonth() - a.getUTCMonth());
+      if (b.getUTCDate() < a.getUTCDate()) months -= 1;
+      if (unit === "M") return months;
+      years = Math.floor(months / 12);
+      if (unit === "Y") return years;
+      throw new Error("#NUM!");
+    }
+    case "EDATE": {
+      const d = needDate(sc(0));
+      return fmtDate(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + toNum(sc(1)), d.getUTCDate())));
+    }
+    case "EOMONTH": {
+      const d = needDate(sc(0));
+      return fmtDate(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + toNum(sc(1)) + 1, 0)));
+    }
 
     default:
       throw new Error(`unsupported function ${name}()`);
