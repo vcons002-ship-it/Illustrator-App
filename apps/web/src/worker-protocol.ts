@@ -6,6 +6,7 @@ import type {
   BuddyPersona,
   BuddyToolCall,
   CalendarEvent,
+  StockQuote,
   CharacterPatch,
   ChatTurn,
   ContextUsage,
@@ -118,6 +119,7 @@ export type MainToWorker =
   | { type: "scanInbox"; requestId: number }
   /** Load events across all the user's Google calendars in a window (the calendar view). */
   | { type: "loadCalendar"; requestId: number; timeMin: string; timeMax: string }
+  | { type: "stockQuote"; requestId: number; symbol: string }
   /** Faithful document polish (two stages); answered by `polished` (+ `polishToken`
    * deltas while producing). Cancel via `chatCancel` (shares the abort map). */
   | {
@@ -287,6 +289,7 @@ export type WorkerToMain =
   | { type: "planned"; requestId: number; ok: boolean; plan?: TaskPlan; error?: string }
   | { type: "scanned"; requestId: number; ok: boolean; candidates?: TaskCandidate[]; error?: string }
   | { type: "calendarLoaded"; requestId: number; ok: boolean; events?: CalendarEvent[]; error?: string }
+  | { type: "stockQuoted"; requestId: number; ok: boolean; quote?: StockQuote; error?: string }
   /** Streaming delta while the polish "produce" stage runs. */
   | { type: "polishToken"; requestId: number; text: string }
   /** Reply to `polish`: the understood plan (+ optional question), or the produced text. */

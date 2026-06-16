@@ -134,6 +134,18 @@ worked with end to end:
   Any analysis result (a pivot/aggregate) downloads as Excel/CSV too, and any on-screen chart
   saves as SVG/PNG.
 
+### 📈 Markets (stock charts & analysis)
+A **Markets** panel for following and researching stocks:
+- **TradingView chart** — type any ticker and get TradingView's free, interactive advanced
+  chart (candles, indicators, drawing tools) embedded right in the app — **no account, no key**.
+- **Live quote** — a keyless quote snapshot (last/open/high/low/volume + change) alongside the
+  chart (the quote feed uses the desktop app or extension's CORS-free access; the chart works
+  everywhere).
+- **Ask the assistant** — one click hands the ticker to the chat for analysis and trade ideas
+  (it searches the web for current data and is clear it isn't financial advice).
+- *(A linked broker account such as thinkorswim/Schwab is a separate, deferred enhancement; the
+  chart + quote + analysis work with zero setup.)*
+
 ### 🤝 Chat buddy (the home screen)
 The landing page **is** a full-window chat assistant. Three voices — **Freeform**
 (default: a general assistant that runs the app on request), **Entertainment** (book-club

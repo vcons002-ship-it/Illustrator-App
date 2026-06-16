@@ -20,6 +20,7 @@ export * from "./SettingsPanel.js";
 export * from "./SkillsPanel.js";
 export * from "./TasksPanel.js";
 export * from "./CalendarPanel.js";
+export * from "./StockChartPanel.js";
 export * from "./FirstRunWizard.js";
 export * from "./buildProviders.js";
 export * from "./settingsKeys.js";
