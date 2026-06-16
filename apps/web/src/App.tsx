@@ -918,6 +918,29 @@ export function App() {
     [libraryStore],
   );
 
+  // OCR: read the text out of a scanned image with the configured vision model, then open it
+  // as a (technical) document via the paste modal. Reuses the screenshot tool's vision path —
+  // needs a vision-capable model (cloud Claude/Gemini/OpenAI, or a local vision model).
+  const extractTextFromImage = useCallback(
+    async (img: { name: string; bytes: ArrayBuffer; mimeType: string }) => {
+      setShowPhoto(false);
+      setPhotoInitial(undefined);
+      setLocalError("Reading the text in the image…");
+      const r = await assessImage(
+        { bytes: img.bytes.slice(0), mimeType: img.mimeType },
+        "Transcribe ALL text in this image exactly as written, preserving line breaks and reading order. Output only the transcribed text with no commentary. If there is no readable text, reply exactly: (no text found).",
+      );
+      setLocalError("");
+      const text = r.text?.trim();
+      if (r.error || !text || /^\(no text found\)\.?$/i.test(text)) {
+        setLocalError(r.error ? `Couldn't read the image: ${r.error}` : "No readable text found (OCR needs a vision-capable model — see Settings).");
+        return;
+      }
+      setPasteInitial({ title: img.name.replace(/\.[^.]+$/, "") || "Scanned text", text, mode: "technical" });
+      setShowPasteText(true);
+    },
+    [assessImage],
+  );
   const onUpload = useCallback(
     async (file: File) => {
       try {
@@ -3580,6 +3603,7 @@ export function App() {
           {...(photoInitial ? { initial: photoInitial } : {})}
           onRender={(text, opts) => testRender(text, opts)}
           onAddToChat={onAddImageToChat}
+          onExtractText={(img) => void extractTextFromImage(img)}
           onClose={() => {
             setShowPhoto(false);
             setPhotoInitial(undefined);
@@ -4634,6 +4658,7 @@ function PhotoTransformModal({
   initial,
   onRender,
   onAddToChat,
+  onExtractText,
   onClose,
 }: {
   initial?: { name: string; bytes: ArrayBuffer; mimeType: string } | undefined;
@@ -4648,6 +4673,8 @@ function PhotoTransformModal({
   ) => Promise<TestRenderResult>;
   /** Drop the transformed image into the chat conversation. */
   onAddToChat?: (image: { bytes: ArrayBuffer; mimeType: string }) => void;
+  /** Extract the text from the image (OCR via the vision model) and open it as a document. */
+  onExtractText?: (img: { name: string; bytes: ArrayBuffer; mimeType: string }) => void;
   onClose: () => void;
 }) {
   const [base, setBase] = useState<{ name: string; bytes: ArrayBuffer; mimeType: string } | undefined>(initial);
@@ -4798,6 +4825,16 @@ function PhotoTransformModal({
               {progress !== undefined ? `Rendering… ${Math.round(progress * 100)}%` : "Rendering…"}
             </span>
           )}
+          {onExtractText ? (
+            <button
+              style={styles.button}
+              disabled={busy || !base}
+              onClick={() => base && onExtractText({ name: base.name, bytes: base.bytes, mimeType: base.mimeType })}
+              title="Read the text in this image (OCR via your vision model) and open it as a document"
+            >
+              🔤 Extract text
+            </button>
+          ) : null}
           <button style={styles.buttonPrimary} disabled={busy || !base || !text.trim()} onClick={() => void run()}>
             {busy ? "Working…" : "Transform"}
           </button>
