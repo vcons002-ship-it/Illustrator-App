@@ -12,6 +12,7 @@ export * from "./skill-proposal.js";
 export * from "./remote-bus.js";
 export * from "./remote-link.js";
 export * from "./mcp.js";
+export * from "./subagent.js";
 export * from "./setup-guides.js";
 export * from "./settings-control.js";
 export * from "./tasks.js";

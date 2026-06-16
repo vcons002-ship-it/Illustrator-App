@@ -1901,7 +1901,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         slash.call.tool === "screenshot" ||
         slash.call.tool === "plan_task" ||
         slash.call.tool === "prep_order" ||
-        slash.call.tool === "tv_chart"
+        slash.call.tool === "tv_chart" ||
+        slash.call.tool === "delegate"
       ) {
         post({ type: "buddyDone", requestId: msg.requestId, text: "", transcript: [], pendingTool: slash.call });
         return;

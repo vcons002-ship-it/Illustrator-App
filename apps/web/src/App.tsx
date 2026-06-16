@@ -73,6 +73,7 @@ import {
   type StockQuote,
   type PageText,
   generatePairingToken,
+  buildDelegatePrompt,
   MAX_SKILL_NAME_CHARS,
   MAX_SKILL_DESC_CHARS,
   MAX_SKILL_BODY_CHARS,
@@ -2019,6 +2020,26 @@ export function App() {
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
+  // Run a delegated subtask: an ISOLATED, read-only sub-agent turn (its own tool loop, empty
+  // history), then feed only its concise result back to the parent conversation. Reuses the
+  // normal buddy turn — the sub-agent can't change anything (read-only by instruction).
+  const runDelegate = async (task: string): Promise<void> => {
+    setBuddyPendingTool(undefined);
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+    setBuddyBusy(true);
+    setBuddyActivity(`Delegating: ${task.slice(0, 60)}…`);
+    const sub = await buddyChat([], buildDelegatePrompt(task), buddyPersona, library, () => {});
+    setBuddyBusy(false);
+    setBuddyActivity("");
+    const answer = sub.text || sub.error || "(the sub-agent returned nothing usable)";
+    appendBuddy({ role: "tool", text: `🔹 Delegated subtask: ${task}\n\n${answer}` });
+    const feedback = `[delegate done — the sub-agent's result for "${task}":]\n${answer}\nUse this to continue your answer.`;
+    await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+  };
+
   // (when set) is shown as the reader's message; a continuation passes none — its
   // "input" is the tool feedback, recorded in the visible result above it.
   const dispatchBuddyTurn = async (
@@ -2205,6 +2226,9 @@ export function App() {
       } else if (res.pendingTool.tool === "tv_chart") {
         // Drive the reader's TradingView Desktop chart via the CDP bridge (chart-only).
         void runTvChart(res.pendingTool, [{ role: "user", content: userText }, ...res.transcript]);
+      } else if (res.pendingTool.tool === "delegate") {
+        // Hand the subtask to an isolated read-only sub-agent, then feed its result back.
+        void runDelegate(res.pendingTool.task);
       } else {
         setBuddyPendingTool(res.pendingTool);
       }

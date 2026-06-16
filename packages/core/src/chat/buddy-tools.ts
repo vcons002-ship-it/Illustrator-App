@@ -185,7 +185,9 @@ export type BuddyToolCall =
   | { tool: "get_task_plan"; id: string }
   /** Call the reader's own MCP servers (when configured): list a server's tools, or call one. */
   | { tool: "mcp_tools"; server: string }
-  | { tool: "mcp_call"; server: string; toolName: string; args?: Record<string, unknown> };
+  | { tool: "mcp_call"; server: string; toolName: string; args?: Record<string, unknown> }
+  /** Hand a focused subtask to a read-only sub-agent (host-run; stops the loop). */
+  | { tool: "delegate"; task: string };
 
 /** Generous: a "style + random pick + open + prose" flow is three tools deep. */
 export const MAX_BUDDY_TOOL_ROUNDS = 5;
@@ -514,6 +516,10 @@ export function buildBuddySystemPrompt(opts: {
     '- {"tool":"market_analysis","symbol":"AAPL","interval":"5m","range":"1d"} — keyless TECHNICAL indicators (VWAP, ' +
     "SMA20/50, EMA12/26, RSI14, recent move). Use for intraday/technical questions — VWAP watch levels, trend vs the " +
     'moving averages, momentum, entry points. "interval"/"range" default to intraday ("5m"/"1d"); use "1d"/"6mo" for swing.\n' +
+    '- {"tool":"delegate","task":"…"} — hand a focused, self-contained SUBTASK to a read-only ' +
+    "sub-agent that runs its own research loop and returns a concise result (e.g. \"research the top 3 EU " +
+    "photonics firms by revenue\"). Use it to parallelise/offload a chunky lookup so your main answer stays " +
+    "clean; the sub-agent can't change anything. Don't delegate trivial things you can answer directly.\n" +
     "- THEME/SCREEN requests (e.g. \"the 3 best photonics stocks to buy on earnings growth + P/E\") work even with no broker " +
     "connected: use search_web/read_url to find the candidate tickers and the fundamentals asked for (P/E, earnings growth, " +
     "margins…), stock_quote/market_analysis for price + technicals, then rank the top N against the reader's criteria with a " +
@@ -861,6 +867,10 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
       }
     }
     return { tool, server, toolName, ...(args ? { args } : {}) };
+  }
+  if (tool === "delegate") {
+    const task = strArg(obj.task, MAX_PASTE_CHARS);
+    return task ? { tool, task } : undefined;
   }
   if (tool === "remove_library_book") {
     const id = strArg(obj.id, MAX_ID_CHARS);
