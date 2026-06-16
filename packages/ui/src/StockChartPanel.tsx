@@ -25,6 +25,8 @@ export interface StockChartPanelProps {
   /** Schwab account (real quotes / option chains + Greeks / positions) connect state. */
   schwabConnected?: boolean;
   onConnectSchwab?: () => void;
+  /** TradingView Desktop bridge (when enabled): connection status + a re-check. */
+  tvBridge?: { status: string | null; onTest: () => void };
   onClose: () => void;
 }
 
@@ -42,6 +44,7 @@ export const StockChartPanel = memo(function StockChartPanel({
   onRemoveAlert,
   schwabConnected,
   onConnectSchwab,
+  tvBridge,
   onClose,
 }: StockChartPanelProps) {
   const [draft, setDraft] = useState(symbol);
@@ -210,6 +213,21 @@ export const StockChartPanel = memo(function StockChartPanel({
           </div>
         ) : null}
 
+        {tvBridge ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 12 }}>
+            <span style={{ fontWeight: 600 }}>🔌 TV bridge</span>
+            <span style={{ opacity: 0.75, color: tvBridge.status?.startsWith("Connected") ? "#5dd19b" : "#ffcf8b" }}>
+              {tvBridge.status ?? "—"}
+            </span>
+            <button style={miniBtn} onClick={tvBridge.onTest}>
+              Test bridge
+            </button>
+            <span style={{ fontSize: 11, opacity: 0.5 }}>
+              Launch TradingView Desktop with remote debugging — see MARKETS-BRIDGE.md. Then ask the assistant to set up
+              your chart.
+            </span>
+          </div>
+        ) : null}
         <div style={{ fontSize: 11, opacity: 0.5, marginTop: 6 }}>
           Charts by TradingView (free, no account). Quotes from Stooq (keyless). Alerts run while the app is open. Not
           investment advice.

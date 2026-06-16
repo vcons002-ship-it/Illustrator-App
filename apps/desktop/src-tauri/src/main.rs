@@ -349,6 +349,87 @@ fn http_fetch_blocking(req: HttpFetchRequest) -> Result<HttpFetchResult, String>
     })
 }
 
+/// TradingView Desktop bridge (experimental, opt-in): discover the TradingView page
+/// target on the Chrome DevTools port and run one JS expression in it via
+/// `Runtime.evaluate`, returning the JSON-stringified result value. Used by the
+/// Markets bridge so the assistant can drive the user's TradingView chart (set symbol,
+/// add studies, read state). Chart-only — it never trades. See MARKETS-BRIDGE.md.
+#[derive(serde::Deserialize)]
+struct TvCdpRequest {
+    port: Option<u16>,
+    expression: String,
+}
+#[derive(serde::Serialize)]
+struct TvCdpResult {
+    ok: bool,
+    value: Option<String>,
+    error: Option<String>,
+}
+#[tauri::command]
+async fn tv_cdp_eval(request: TvCdpRequest) -> Result<TvCdpResult, String> {
+    tauri::async_runtime::spawn_blocking(move || tv_cdp_eval_blocking(request))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn tv_cdp_eval_blocking(req: TvCdpRequest) -> Result<TvCdpResult, String> {
+    let port = req.port.unwrap_or(9222);
+    // Discover the TradingView page target (HTTP), then evaluate over its websocket.
+    let list_url = format!("http://127.0.0.1:{port}/json/list");
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let targets: serde_json::Value = client
+        .get(&list_url)
+        .send()
+        .map_err(|_| "TradingView Desktop isn't reachable on the debug port. Launch it with --remote-debugging-port=9222 (see MARKETS-BRIDGE.md).".to_string())?
+        .json()
+        .map_err(|e| e.to_string())?;
+    let ws_url = targets
+        .as_array()
+        .and_then(|arr| {
+            arr.iter().find(|t| {
+                t["type"] == "page"
+                    && (t["url"].as_str().unwrap_or("").to_lowercase().contains("tradingview")
+                        || t["title"].as_str().unwrap_or("").to_lowercase().contains("tradingview"))
+            })
+        })
+        .and_then(|t| t["webSocketDebuggerUrl"].as_str())
+        .ok_or_else(|| "Couldn't find a TradingView page on the debug port (is a chart open?).".to_string())?
+        .to_string();
+    let (mut socket, _) = tungstenite::connect(&ws_url).map_err(|e| e.to_string())?;
+    let msg = serde_json::json!({
+        "id": 1,
+        "method": "Runtime.evaluate",
+        "params": { "expression": req.expression, "returnByValue": true, "awaitPromise": true }
+    });
+    socket
+        .send(tungstenite::Message::Text(msg.to_string()))
+        .map_err(|e| e.to_string())?;
+    for _ in 0..100 {
+        match socket.read().map_err(|e| e.to_string())? {
+            tungstenite::Message::Text(txt) => {
+                let v: serde_json::Value = serde_json::from_str(&txt).map_err(|e| e.to_string())?;
+                if v["id"] == 1 {
+                    if !v["result"]["exceptionDetails"].is_null() {
+                        let text = v["result"]["exceptionDetails"]["exception"]["description"]
+                            .as_str()
+                            .unwrap_or("evaluation error")
+                            .to_string();
+                        return Ok(TvCdpResult { ok: false, value: None, error: Some(text) });
+                    }
+                    let value = v["result"]["result"]["value"].clone();
+                    return Ok(TvCdpResult { ok: true, value: Some(value.to_string()), error: None });
+                }
+            }
+            tungstenite::Message::Close(_) => break,
+            _ => {}
+        }
+    }
+    Err("No CDP response from TradingView.".into())
+}
+
 /// Save a generated artifact (illustrated HTML/EPUB export, or a single image) to
 /// disk. Writes into `~/VisualReader/exports` (created on demand) and returns the
 /// full path — the renderer shows it to the reader. Deliberately uses a fixed,
@@ -1353,7 +1434,8 @@ fn main() {
             run_command,
             capture_screen,
             pick_folder,
-            oauth_loopback
+            oauth_loopback,
+            tv_cdp_eval
         ])
         .build(tauri::generate_context!())
         .expect("error while building Visual Reader")

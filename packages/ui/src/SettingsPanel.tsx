@@ -207,6 +207,10 @@ export interface ReaderSettings {
    * & Calendar reminders, run inbox scans, research, draft docs) without asking each
    * time. Never submits forms, pays, or sends. Default off. */
   allowTaskAutomation?: boolean;
+  /** Desktop only, OFF by default: let the assistant drive your TradingView Desktop chart
+   * (set symbol, add studies, read state, inject Pine) via its DevTools bridge. Chart-only
+   * — it never trades. Requires TradingView Desktop launched with remote debugging. */
+  allowTradingViewBridge?: boolean;
   /** Transient: base URL of the app-managed local engine (desktop; not persisted). */
   engineBaseUrl?: string;
 }
@@ -841,6 +845,23 @@ export function SettingsPanel({
                       if you understand that approved commands run on your computer with your
                       permissions. (Opening files from your computer is always available and asks per
                       session.)
+                    </span>
+                  </span>
+                </label>
+                <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={value.allowTradingViewBridge ?? false}
+                    onChange={(e) => set({ allowTradingViewBridge: e.target.checked })}
+                  />
+                  <span>
+                    Let the assistant control my TradingView Desktop chart (experimental)
+                    <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                      Connects to <b>TradingView Desktop</b> via its developer/debug port so the assistant can set the
+                      symbol, add studies (VWAP, RSI…), read the chart state, and inject Pine — <b>chart-only, it never
+                      trades</b>. Requires launching TradingView Desktop with remote debugging on; it’s version-sensitive
+                      and may conflict with TradingView’s Terms. Off by default. Setup + update steps in
+                      <b> MARKETS-BRIDGE.md</b>.
                     </span>
                   </span>
                 </label>

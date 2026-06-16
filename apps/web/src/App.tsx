@@ -85,6 +85,7 @@ import {
   buildEquityOrder,
   buildOptionOrder,
   describeOrder,
+  tvActionScript,
   POLISH_PRESETS,
   type ConceptIntro,
   type DataTable,
@@ -169,6 +170,7 @@ import {
   runCommand,
   pickFolder,
   googleOauthLoopback,
+  tvBridgeEval,
   saveExportFile,
   searchLocalFiles,
 } from "./runtime.js";
@@ -1343,6 +1345,17 @@ export function App() {
   useEffect(() => {
     void libraryStore.getMemo?.("schwab-tokens").then((t) => setSchwabConnected(!!t)).catch(() => {});
   }, [libraryStore]);
+  // TradingView Desktop bridge status (probed on startup + when opening Markets).
+  const [tvBridgeStatus, setTvBridgeStatus] = useState<string | null>(null);
+  const tvBridgeEnabled = isDesktop && !!settings.allowTradingViewBridge;
+  const testTvBridge = useCallback(async () => {
+    setTvBridgeStatus("checking…");
+    const r = await tvBridgeEval(tvActionScript("read_state"));
+    setTvBridgeStatus(r.ok ? "Connected to TradingView" : r.error ?? "TradingView not detected");
+  }, []);
+  useEffect(() => {
+    if (tvBridgeEnabled) void testTvBridge();
+  }, [tvBridgeEnabled, testTvBridge]);
   // Order review-and-place gate (the assistant preps; the reader places). Never auto-submits.
   const [orderReview, setOrderReview] = useState<{ summary: string; order: Record<string, unknown> } | null>(null);
   const [orderPlacing, setOrderPlacing] = useState(false);
@@ -1365,6 +1378,29 @@ export function App() {
       setOrderPlacing(false);
     }
   }, [orderReview, schwabPlaceOrder]);
+  // Run one TradingView Desktop chart action via the CDP bridge, then report back.
+  const runTvChart = async (call: Extract<BuddyToolCall, { tool: "tv_chart" }>, modelTurns: ChatTurn[]): Promise<void> => {
+    const script = tvActionScript(call.action, {
+      ...(call.symbol ? { symbol: call.symbol } : {}),
+      ...(call.interval ? { interval: call.interval } : {}),
+      ...(call.study ? { study: call.study } : {}),
+      ...(call.pine ? { pine: call.pine } : {}),
+    });
+    const r = await tvBridgeEval(script);
+    appendBuddy({
+      role: "tool",
+      text: r.ok ? `📈 TradingView: ${r.value ?? "done"}` : `⚠ TradingView bridge: ${r.error ?? "failed"}`,
+      turns: [
+        ...modelTurns,
+        {
+          role: "user",
+          content: r.ok
+            ? `[tv_chart ${call.action} ok: ${r.value ?? "done"}] Confirm it to the reader briefly.`
+            : `[tv_chart failed: ${r.error}] Tell the reader to open a chart in TradingView Desktop (launched with remote debugging) — see the Markets panel — or that the bridge needs the desktop app.`,
+        },
+      ],
+    });
+  };
   const connectSchwab = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
     const clientId = settings.keys?.schwabClientId;
     if (!clientId || !settings.keys?.schwabClientSecret) return { ok: false, error: "Add your Schwab app key + secret in Settings first." };
@@ -2102,6 +2138,9 @@ export function App() {
       } else if (res.pendingTool.tool === "prep_order") {
         // The assistant composed an order — open the review-and-place gate (never auto-submits).
         openOrderReview(res.pendingTool);
+      } else if (res.pendingTool.tool === "tv_chart") {
+        // Drive the reader's TradingView Desktop chart via the CDP bridge (chart-only).
+        void runTvChart(res.pendingTool, [{ role: "user", content: userText }, ...res.transcript]);
       } else {
         setBuddyPendingTool(res.pendingTool);
       }
@@ -3587,6 +3626,7 @@ export function App() {
               if (!r.ok && r.error) setLocalError(r.error);
             });
           }}
+          {...(tvBridgeEnabled ? { tvBridge: { status: tvBridgeStatus, onTest: () => void testTvBridge() } } : {})}
           onAnalyze={(s) => {
             setShowStocks(false);
             onBuddySendText(
