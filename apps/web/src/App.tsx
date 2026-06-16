@@ -177,6 +177,7 @@ import {
   tvBridgeEval,
   startRemoteServer,
   stopRemoteServer,
+  openBrowserWindow,
   type RemoteServerStatus,
   saveExportFile,
   searchLocalFiles,
@@ -3757,6 +3758,15 @@ export function App() {
           onUrl={(u) => void loadPage(u)}
           onBack={browserBack}
           onClickLink={(u) => void loadPage(u)}
+          {...(isDesktop
+            ? {
+                onOpenLive: (u: string) => {
+                  void openBrowserWindow(u).then((r) => {
+                    if (!r.ok && r.error) setLocalError(r.error);
+                  });
+                },
+              }
+            : {})}
           onReadIllustrate={(u) => {
             setShowBrowser(false);
             onBuddySendText(`Open and illustrate this web page: ${u}`);

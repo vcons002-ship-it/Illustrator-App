@@ -20,6 +20,8 @@ export interface BrowserPanelProps {
   onClickLink: (url: string) => void;
   onReadIllustrate: (url: string) => void;
   onAskBuddy: (question: string) => void;
+  /** Open the live page in its own desktop window (when supported); omitted on web. */
+  onOpenLive?: (url: string) => void;
   onClose: () => void;
 }
 
@@ -34,6 +36,7 @@ export const BrowserPanel = memo(function BrowserPanel({
   onClickLink,
   onReadIllustrate,
   onAskBuddy,
+  onOpenLive,
   onClose,
 }: BrowserPanelProps) {
   const [draft, setDraft] = useState(url);
@@ -62,6 +65,11 @@ export const BrowserPanel = memo(function BrowserPanel({
           <button style={btn} onClick={go}>
             Go
           </button>
+          {onOpenLive ? (
+            <button style={btn} onClick={() => onOpenLive(url)} disabled={!url} title="Open the live page (with scripts) in its own window">
+              🖥 Live
+            </button>
+          ) : null}
           <button style={{ ...btn, marginLeft: "auto" }} onClick={onClose}>
             Close
           </button>

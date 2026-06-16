@@ -214,7 +214,9 @@ companion), and **Technical** (research companion):
 - **In-app browser (desktop)** — a 🌐 Browse panel reads any web page right in the app
   (readable text + its links, no scripts run), lets you click through links, and then
   **📖 Read & illustrate** it in the reader or **🤖 Ask the assistant** about it — the same
-  illustrate-the-web idea as the Chrome extension, built into the desktop app.
+  illustrate-the-web idea as the Chrome extension, built into the desktop app. Want the real
+  page? **🖥 Live** opens it in its own window (with scripts), isolated from the app, while the
+  panel keeps the illustrate/ask actions beside it.
 - **Remembers what you like** — tell it "I prefer watercolor" or "never spoil endings" and
   it keeps a **long-term memory** that applies in every future conversation and book (you
   can ask it to forget, too).

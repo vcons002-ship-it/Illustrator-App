@@ -544,6 +544,30 @@ fn remote_server_status(state: State<'_, RemoteServerState>) -> RemoteServerStat
     RemoteServerStatus { running: false, url: None, token: None, port: None, error: None }
 }
 
+/// Open a live web page in its OWN Tauri webview window — the in-app browser's "live" mode
+/// (the readable-text panel stays in the main window for illustrate/analyse). The external
+/// page runs in a separate webview with **no Visual Reader APIs exposed to it**, so a hostile
+/// site can't reach the engine, the filesystem, or your keys. http(s) only. Reuses one window
+/// ("vr-browser"): if it's already open, just navigate it to the new URL.
+#[tauri::command]
+async fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> {
+    let parsed = tauri::Url::parse(&url).map_err(|e| e.to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("Only http(s) pages can be opened.".into());
+    }
+    if let Some(win) = app.get_webview_window("vr-browser") {
+        win.navigate(parsed).map_err(|e| e.to_string())?;
+        let _ = win.set_focus();
+        return Ok(());
+    }
+    tauri::WebviewWindowBuilder::new(&app, "vr-browser", tauri::WebviewUrl::External(parsed))
+        .title("Visual Reader — Browse")
+        .inner_size(1024.0, 800.0)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// The relay loop: accept WS clients, authorize each by the pairing token (carried on
 /// every frame), and forward each peer's frames to the others via a broadcast channel.
 async fn run_remote_server(
@@ -1610,7 +1634,8 @@ fn main() {
             tv_cdp_eval,
             start_remote_server,
             stop_remote_server,
-            remote_server_status
+            remote_server_status,
+            open_browser_window
         ])
         .build(tauri::generate_context!())
         .expect("error while building Visual Reader")

@@ -327,6 +327,21 @@ export async function stopRemoteServer(): Promise<void> {
 }
 
 /**
+ * Open a live web page in its own desktop window (the in-app browser's "live" mode). The page
+ * runs isolated — no Visual Reader APIs are exposed to it. Best-effort: needs a desktop build
+ * with the `open_browser_window` command; degrades to a clear error on web / older builds.
+ */
+export async function openBrowserWindow(url: string): Promise<{ ok: boolean; error?: string }> {
+  if (!isDesktop) return { ok: false, error: "Opening a live page needs the desktop app." };
+  try {
+    await invoke("open_browser_window", { url });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Live browser unavailable (rebuild the desktop app)." };
+  }
+}
+
+/**
  * Capture a screenshot to PNG bytes (desktop), for the chat's screenshot tool.
  * `window` (a title substring) captures just that window — e.g. a game — even when
  * the app is focused; omit it to capture the primary screen. Only reached after the
