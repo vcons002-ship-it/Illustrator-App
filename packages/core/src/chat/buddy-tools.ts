@@ -9,6 +9,7 @@ import { formatSetupGuide, type SetupGuide } from "./setup-guides.js";
 import { controllableSettingsIndex } from "./settings-control.js";
 import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../providers/google.js";
 import { formatQuote, type StockQuote } from "../providers/stocks.js";
+import { formatIndicators, type Indicators } from "../providers/market-data.js";
 import type { TaskPlan } from "./tasks.js";
 
 /**
@@ -38,6 +39,9 @@ export type BuddyToolCall =
   | { tool: "wolfram"; query: string }
   /** A keyless stock quote (Stooq) to ground market analysis in real numbers. */
   | { tool: "stock_quote"; symbol: string }
+  /** Keyless technical indicators (VWAP, moving averages, RSI, recent move) over a bar
+   * window, for grounded watch-levels / entry analysis. interval e.g. "5m"/"1d". */
+  | { tool: "market_analysis"; symbol: string; interval?: string; range?: string }
   | { tool: "open_library_book"; id: string; visuals: boolean }
   | {
       tool: "open_web_text";
@@ -372,6 +376,9 @@ export function buildBuddySystemPrompt(opts: {
     '- {"tool":"stock_quote","symbol":"AAPL"} — fetch the latest KEYLESS stock quote (price/open/high/low/volume) to ' +
     "ground market analysis in real numbers when the reader asks about a stock/ticker. Pair it with search_web for news " +
     "and fundamentals, then give a balanced read (bull + bear) and any ideas — and always note it isn't financial advice.\n" +
+    '- {"tool":"market_analysis","symbol":"AAPL","interval":"5m","range":"1d"} — keyless TECHNICAL indicators (VWAP, ' +
+    "SMA20/50, EMA12/26, RSI14, recent move). Use for intraday/technical questions — VWAP watch levels, trend vs the " +
+    'moving averages, momentum, entry points. "interval"/"range" default to intraday ("5m"/"1d"); use "1d"/"6mo" for swing.\n' +
     googleBlock +
     githubBlock +
     '- {"tool":"plan_task","request":"…"} — when the reader asks you to PLAN or organize a real-world MULTI-STEP task ' +
@@ -483,6 +490,13 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
   if (tool === "stock_quote") {
     const symbol = strArg(obj.symbol, MAX_NAME_CHARS);
     return symbol ? { tool, symbol } : undefined;
+  }
+  if (tool === "market_analysis") {
+    const symbol = strArg(obj.symbol, MAX_NAME_CHARS);
+    if (!symbol) return undefined;
+    const interval = strArg(obj.interval, 8);
+    const range = strArg(obj.range, 8);
+    return { tool, symbol, ...(interval ? { interval } : {}), ...(range ? { range } : {}) };
   }
   if (tool === "remember") {
     const note = strArg(obj.note, MAX_MEMORY_NOTE_CHARS);
@@ -726,6 +740,8 @@ export interface BuddyToolResultPayload {
   wolfram?: { query: string; answer: string };
   /** A keyless stock quote (or absent when unavailable). */
   quote?: StockQuote;
+  /** Keyless technical indicators (or absent when unavailable). */
+  indicators?: Indicators;
   /** What set_visual_style actually applied (resolved style LABEL). */
   applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
   /** Whether an approved image generation succeeded. */
@@ -847,6 +863,16 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     return (
       `[stock_quote — latest for ${result.quote.symbol}]\n${formatQuote(result.quote)}\n` +
       "Use these real numbers in your analysis; for news/fundamentals add search_web. Always note this isn't financial advice."
+    );
+  }
+  if (call.tool === "market_analysis") {
+    if (!result.indicators) {
+      return `[market_analysis: no keyless bar data for "${call.symbol}" (needs the desktop app or extension). Use search_web instead.]`;
+    }
+    return (
+      `[market_analysis — ${result.indicators.bars} bars]\n${formatIndicators(result.indicators)}\n` +
+      "Read the price vs VWAP and the moving averages for trend, RSI for momentum/overbought-oversold, and the recent " +
+      "move for context; call out concrete watch levels (e.g. VWAP, recent high/low). Add search_web for news. Not financial advice."
     );
   }
   if (call.tool === "remember" || call.tool === "forget") {

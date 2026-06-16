@@ -396,6 +396,22 @@ describe("stock_quote tool", () => {
     expect(out).toMatch(/financial advice/i);
     expect(formatBuddyToolResult({ tool: "stock_quote", symbol: "ZZ" }, {})).toMatch(/no keyless quote/i);
   });
+
+  it("parses + advertises market_analysis and feeds indicators back with watch levels", () => {
+    expect(parseBuddyToolCall('{"tool":"market_analysis","symbol":"AAPL","interval":"5m","range":"1d"}')).toEqual({
+      tool: "market_analysis",
+      symbol: "AAPL",
+      interval: "5m",
+      range: "1d",
+    });
+    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"market_analysis"');
+    const out = formatBuddyToolResult(
+      { tool: "market_analysis", symbol: "AAPL" },
+      { indicators: { symbol: "AAPL", bars: 78, last: 204, vwap: 202, rsi14: 61 } },
+    );
+    expect(out).toContain("VWAP 202");
+    expect(out).toMatch(/watch levels/i);
+  });
 });
 
 describe("create_spreadsheet tool", () => {
