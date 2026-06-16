@@ -4,7 +4,9 @@ import type { BookSearchHit } from "../providers/book-search.js";
 import {
   MAX_BUDDY_TOOL_ROUNDS,
   formatBuddyToolResult,
+  isRetryableError,
   parseBuddyToolCall,
+  toolLimitNudge,
   type BuddyOpenedInfo,
   type BuddyToolCall,
   type BuddyToolResultPayload,
@@ -167,10 +169,17 @@ export async function runBuddyTurn(opts: {
       // the main thread runs after the reader confirms.
       return { text: "", transcript, pendingTool: call, toolResults };
     }
-    const result = await runBuddyTool(call, opts.deps);
+    let result = await runBuddyTool(call, opts.deps);
+    // One automatic retry for a transient (network/timeout/rate-limit) failure before the
+    // error is shown to the model — turns a flaky blip into a silent recovery.
+    if (result.error && isRetryableError(result.error)) {
+      result = await runBuddyTool(call, opts.deps);
+    }
     toolResults.push({ call, result });
     opts.onEvent?.({ kind: "toolResult", round, call, result });
-    const feedback = formatBuddyToolResult(call, result);
+    // On the final tool round, append a wrap-up nudge so the model answers now instead of
+    // spending its last round on a tool whose result it can't follow up on.
+    const feedback = formatBuddyToolResult(call, result) + toolLimitNudge(round);
     transcript.push({ role: "user", content: feedback });
     messages.push({ role: "user", content: feedback });
   }

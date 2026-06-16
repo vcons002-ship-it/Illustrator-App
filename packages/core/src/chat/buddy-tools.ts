@@ -186,6 +186,42 @@ export type BuddyToolCall =
 /** Generous: a "style + random pick + open + prose" flow is three tools deep. */
 export const MAX_BUDDY_TOOL_ROUNDS = 5;
 
+/**
+ * A model-facing directive for when a HOST-run tool (run_command, screenshot, plan_task…)
+ * fails, so the buddy explains the failure and proposes a next step instead of dead-ending
+ * in a silent "⚠ …" bubble. Mirrors the error wording `formatBuddyToolResult` uses for
+ * auto-run tools, but tailored to actions (not "another source / paste the text").
+ */
+export function toolFailureDirective(tool: string, message: string): string {
+  return (
+    `[tool ${tool} failed: ${message}] Tell the reader plainly what went wrong, then suggest ONE ` +
+    "concrete next step — fix it and try again, take a different approach, or ask them how they'd " +
+    "like to proceed. Do not silently retry the same thing."
+  );
+}
+
+/**
+ * When the buddy is about to exhaust its per-turn tool budget, nudge it to answer now rather
+ * than burn the final round on a tool whose result it can't act on. Appended to the last
+ * tool feedback; returns "" when not near the cap.
+ */
+export function toolLimitNudge(round: number, max = MAX_BUDDY_TOOL_ROUNDS): string {
+  return round >= max - 1
+    ? "\n\n[You've reached your tool-call limit for this turn — do NOT call another tool. Give the " +
+        "reader your best answer now with what you have, and note briefly what's still open, if anything.]"
+    : "";
+}
+
+/**
+ * Whether a tool error reads as transient (network blip / timeout / rate limit) and is worth
+ * exactly ONE automatic retry before the failure is surfaced to the model.
+ */
+export function isRetryableError(message: string): boolean {
+  return /\b(timed?\s?out|timeout|network|fetch failed|econnreset|etimedout|enotfound|temporar(y|ily)|rate.?limit|too many requests|429|503|504|connection (reset|refused|closed))\b/i.test(
+    message,
+  );
+}
+
 /** Injection guards (mirrors chat-tools.ts). */
 const MAX_QUERY_CHARS = 200;
 const MAX_URL_CHARS = 600;

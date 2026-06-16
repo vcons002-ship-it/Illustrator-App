@@ -25,6 +25,7 @@ import {
   toRenderUnits,
   formatToolResult,
   formatBuddyToolResult,
+  toolFailureDirective,
   bestParagraphIndex,
   conceptIntroductions,
   subjectFromCaption,
@@ -1854,13 +1855,11 @@ export function App() {
       // session's chosen working folder (or the default workspace when unset).
       r = await runCommand(call.command, settings.keys?.github || undefined, buddyWorkingDir || undefined);
     } catch (err) {
-      setBuddyBusy(false);
-      setBuddyActivity("");
-      appendBuddy({
-        role: "tool",
-        text: `⚠ Couldn't run the command: ${err instanceof Error ? err.message : String(err)}`,
-        turns: [],
-      });
+      // Feed the failure back so the buddy explains it + offers a next step (don't dead-end).
+      const message = err instanceof Error ? err.message : String(err);
+      const fail = toolFailureDirective("run_command", message);
+      appendBuddy({ role: "tool", text: `⚠ Couldn't run the command: ${message}`, turns: [...pre, { role: "user", content: fail }] });
+      await dispatchBuddyTurn([...preHistory, ...pre], fail);
       return;
     }
     const feedback = formatBuddyToolResult(call, { command: r });
@@ -1900,9 +1899,11 @@ export function App() {
       if (r.error) throw new Error(r.error);
       observation = r.text ?? "(the vision model returned nothing)";
     } catch (err) {
-      setBuddyBusy(false);
-      setBuddyActivity("");
-      appendBuddy({ role: "tool", text: `⚠ Screenshot failed: ${err instanceof Error ? err.message : String(err)}`, turns: [] });
+      // Feed the failure back so the buddy explains it + offers a next step (don't dead-end).
+      const message = err instanceof Error ? err.message : String(err);
+      const fail = toolFailureDirective("screenshot", message);
+      appendBuddy({ role: "tool", text: `⚠ Screenshot failed: ${message}`, turns: [...pre, { role: "user", content: fail }] });
+      await dispatchBuddyTurn([...preHistory, ...pre], fail);
       return;
     }
     const feedback = formatBuddyToolResult(call, { observation });
@@ -1936,7 +1937,11 @@ export function App() {
     setBuddyBusy(false);
     setBuddyActivity("");
     if (!res.ok || !res.plan) {
-      appendBuddy({ role: "tool", text: `⚠ Couldn't plan that: ${res.error ?? "unknown error"}`, turns: [] });
+      // Feed the failure back so the buddy explains it + offers a next step (don't dead-end).
+      const message = res.error ?? "unknown error";
+      const fail = toolFailureDirective("plan_task", message);
+      appendBuddy({ role: "tool", text: `⚠ Couldn't plan that: ${message}`, turns: [...pre, { role: "user", content: fail }] });
+      await dispatchBuddyTurn([...preHistory, ...pre], fail);
       return;
     }
     const plan = res.plan;
