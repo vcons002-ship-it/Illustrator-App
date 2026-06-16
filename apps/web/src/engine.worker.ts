@@ -1517,6 +1517,14 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             },
           }
         : {}),
+      // Keyless stock quotes (Stooq CSV) over the CORS-exempt transport; undefined on
+      // plain web (no proxy) so the model falls back to search_web.
+      stockQuote: async (symbol: string) => {
+        const cf = corsFetch();
+        if (!cf) return undefined;
+        const res = await new DirectTransport(cf).send({ url: stooqQuoteUrl(symbol), method: "GET" });
+        return parseStooqQuote(await res.text(), symbol);
+      },
       randomBooks: () => books.random(),
       remember: async (n) => (await rememberNote(store, n)).length,
       forget: async (m) => (await forgetNote(store, m)).length,
