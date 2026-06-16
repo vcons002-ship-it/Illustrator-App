@@ -75,6 +75,7 @@ describe("parseToolCall", () => {
       totals: "sum",
     });
     expect(parseToolCall('{"tool":"export_data","totals":"bogus"}')).toEqual({ tool: "export_data", format: "xlsx" });
+    expect(parseToolCall('{"tool":"export_data","analyze":true}')).toEqual({ tool: "export_data", format: "xlsx", analyze: true });
     expect(
       formatToolResult(
         { tool: "export_data", format: "xlsx", totals: "sum" },

@@ -31,6 +31,7 @@ import {
   rankLocalFiles,
   formatFileSize,
   chartDatasetFromTable,
+  buildAnalysisTable,
   setTableCell,
   addRow,
   removeRow,
@@ -1404,8 +1405,8 @@ export function App() {
         }
         // export_data is a safe host action too — build the .xlsx/.csv and save it.
         if (res.pendingTool.tool === "export_data") {
-          const { format, totals } = res.pendingTool;
-          void runChatDataExport(format, totals, [{ role: "user", content: text }, ...res.transcript]);
+          const { format, totals, analyze } = res.pendingTool;
+          void runChatDataExport(format, totals, !!analyze, [{ role: "user", content: text }, ...res.transcript]);
           return;
         }
         pendingTranscript.current = [{ role: "user", content: text }, ...res.transcript];
@@ -2411,6 +2412,7 @@ export function App() {
   const runChatDataExport = async (
     format: "xlsx" | "csv",
     totals: "sum" | "average" | "min" | "max" | "count" | undefined,
+    analyze: boolean,
     modelTurns: ChatTurn[],
   ): Promise<void> => {
     if (!book?.data) return;
@@ -2419,14 +2421,11 @@ export function App() {
     let payload: ToolResultPayload;
     try {
       const base = safeFileName(book.title || "data");
-      const sheets = book.dataSheets && book.dataSheets.length > 1 ? book.dataSheets : undefined;
       let saved: string | true;
       if (format === "csv") {
         saved = await saveExportFile(`${base}.csv`, dataTableToCsv(book.data), "text/csv");
       } else {
-        const bytes = sheets
-          ? buildXlsx(sheets.map((s) => sheetFromDataTable(s.name, s.table, totals ? { totals } : {})))
-          : dataTableToXlsx(book.data, totals ? { totals } : {});
+        const bytes = buildSpreadsheetXlsx(book.data, book.dataSheets, { ...(totals ? { totals } : {}), analyze });
         saved = await saveExportFile(`${base}.xlsx`, bytes, XLSX_MIME);
       }
       payload = {
@@ -2435,6 +2434,7 @@ export function App() {
           format,
           where: typeof saved === "string" ? saved : "your downloads",
           ...(totals ? { totals } : {}),
+          ...(analyze && format === "xlsx" ? { analyze: true } : {}),
         },
       };
     } catch (err) {
@@ -2446,9 +2446,9 @@ export function App() {
     appendChat({
       role: "tool",
       text: e.ok
-        ? `⤓ Saved as ${format.toUpperCase()}${e.totals ? ` with a live ${e.totals} totals row` : ""}${e.where !== "your downloads" ? ` → ${e.where}` : " (check your downloads)"}`
+        ? `⤓ Saved as ${format.toUpperCase()}${e.totals ? ` with a live ${e.totals} totals row` : ""}${e.analyze ? " + an Analysis sheet of live formulas" : ""}${e.where !== "your downloads" ? ` → ${e.where}` : " (check your downloads)"}`
         : `⚠ Export failed: ${e.error}`,
-      turns: [...modelTurns, { role: "user", content: formatToolResult({ tool: "export_data", format, ...(totals ? { totals } : {}) }, payload) }],
+      turns: [...modelTurns, { role: "user", content: formatToolResult({ tool: "export_data", format, ...(totals ? { totals } : {}), ...(analyze ? { analyze: true } : {}) }, payload) }],
     });
   };
 
@@ -3294,6 +3294,27 @@ interface TechnicalSupportData {
   figuresByPage?: Map<number, { unitIndex: number; paragraphIndex: number; result: DisplayResult }[]>;
 }
 
+/**
+ * Assemble the .xlsx bytes for a spreadsheet export: the data sheet(s) (named, so an
+ * analysis sheet's cross-sheet formula references resolve), an optional formula totals
+ * row, and an optional "Analysis" sheet of live statistical formulas over the primary
+ * sheet. Shared by the data-view buttons and the chat's export_data tool.
+ */
+function buildSpreadsheetXlsx(
+  data: DataTable,
+  dataSheets: { name: string; table: DataTable }[] | undefined,
+  opts: { totals?: "sum" | "average" | "min" | "max" | "count"; analyze?: boolean },
+): Uint8Array {
+  const sheets = dataSheets && dataSheets.length > 1 ? dataSheets : [{ name: "Sheet1", table: data }];
+  const xlsxSheets = sheets.map((s) => sheetFromDataTable(s.name, s.table, opts.totals ? { totals: opts.totals } : {}));
+  if (opts.analyze) {
+    const primary = sheets[0]!;
+    const analysis = buildAnalysisTable(primary.table, primary.name);
+    if (analysis) xlsxSheets.push(sheetFromDataTable("Analysis", analysis));
+  }
+  return buildXlsx(xlsxSheets);
+}
+
 /** Auto-chart a data card ONLY for a clean label+value shape (a Key/Value table, a
  * numeric list, a small label/value list) — never a wide multi-numeric sheet, where
  * an auto-picked series would be noise. Charting stays on-demand via chat for those. */
@@ -3387,6 +3408,24 @@ const ReaderColumn = memo(function ReaderColumn({
             >
               ⬇ Excel (.xlsx){sheets ? " — all sheets" : ""}
             </button>
+            {activeTable.columns.some((c) => c.type === "number") ? (
+              <button
+                style={styles.smallButton}
+                title="Excel with an Analysis sheet of live formulas (stats, correlation, regression) over this sheet"
+                onClick={() => {
+                  const base = (book.title || "data").replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "data";
+                  const name = sheets ? (sheets[Math.min(activeSheet, sheets.length - 1)]?.name ?? "Sheet1") : "Sheet1";
+                  const analysis = buildAnalysisTable(activeTable, name);
+                  const xlsxSheets = [
+                    sheetFromDataTable(name, activeTable),
+                    ...(analysis ? [sheetFromDataTable("Analysis", analysis)] : []),
+                  ];
+                  void saveExportFile(`${base}-analysis.xlsx`, buildXlsx(xlsxSheets), XLSX_MIME);
+                }}
+              >
+                ⬇ + Analysis
+              </button>
+            ) : null}
             <button
               style={styles.smallButton}
               title={sheets ? "Download the current sheet as CSV" : "Download this table as CSV"}
