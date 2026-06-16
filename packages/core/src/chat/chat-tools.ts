@@ -95,9 +95,11 @@ export function dataToolsBlock(table: DataTable): string {
     "TO EDIT/EXTEND the sheet on request: {\"tool\":\"set_cell\",\"ref\":\"C2\",\"formula\":\"A2*B2\"} sets one cell by its",
     'A1 reference (use "value" for a literal, "formula" for an Excel formula without the =). {"tool":"add_formula_',
     'column","name":"Margin","formula":"B{r}-C{r}"} adds a COMPUTED column that fills down every row — write "{r}"',
-    "for the current row's Excel row number (data starts at row 2), e.g. B{r}*C{r} or IF(D{r}>100,1,0). Use real",
-    "Excel functions (SUM/IF/SUMIF/SUMPRODUCT/VLOOKUP/ROUND/…) and double quotes for any text literals inside a",
-    "formula. The reader can also edit cells (and type =formulas) in the grid directly.",
+    "for the current row's Excel row number (data starts at row 2), e.g. B{r}*C{r} or IF(D{r}>100,1,0). Formulas",
+    "compute LIVE in the app and support a broad function set — math (ROUND/CEILING/MOD/POWER/…), logic (IF/IFS/",
+    "IFERROR/AND/OR), lookup (VLOOKUP/HLOOKUP/INDEX/MATCH/CHOOSE), conditional aggregates (SUMIF/SUMIFS/COUNTIFS/",
+    "AVERAGEIFS/MAXIFS), stats (MEDIAN/STDEV/PERCENTILE/RANK/LARGE/CORREL/SLOPE), and text (CONCAT/TEXTJOIN/LEFT/MID).",
+    "Use double quotes for text literals inside a formula. The reader can also edit cells (and type =formulas) directly.",
   ].join("\n");
 }
 
