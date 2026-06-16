@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from "react";
+import { memo, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_LAYOUT,
   barRects,
@@ -35,6 +35,65 @@ const FAINT = "rgba(255,255,255,0.5)";
 export const DataChart = memo(function DataChart({ dataset }: DataChartProps) {
   const [kind, setKind] = useState<(typeof KINDS)[number]>(dataset.kind);
   const layout = DEFAULT_LAYOUT;
+  const svgRef = useRef<SVGSVGElement>(null);
+
+  // Serialize the live SVG into a standalone file: namespaced, explicitly sized, and
+  // on a dark background (the chart text is light, so a transparent export would be
+  // invisible on a white viewer).
+  const standaloneSvg = (): string => {
+    const node = svgRef.current;
+    if (!node) return "";
+    const clone = node.cloneNode(true) as SVGSVGElement;
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    clone.setAttribute("width", String(layout.width));
+    clone.setAttribute("height", String(layout.height));
+    const bg = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    bg.setAttribute("width", String(layout.width));
+    bg.setAttribute("height", String(layout.height));
+    bg.setAttribute("fill", "#13161e");
+    clone.insertBefore(bg, clone.firstChild);
+    return `<?xml version="1.0" encoding="UTF-8"?>\n${new XMLSerializer().serializeToString(clone)}`;
+  };
+  const fileBase = (dataset.title || "chart").replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "chart";
+  const triggerDownload = (url: string, name: string) => {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+  };
+  const downloadSvg = () => {
+    const svg = standaloneSvg();
+    if (!svg) return;
+    const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+    triggerDownload(url, `${fileBase}.svg`);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const downloadPng = () => {
+    const svg = standaloneSvg();
+    if (!svg) return;
+    const svgUrl = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+    const img = new Image();
+    const scale = 2; // crisp on hi-dpi
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = layout.width * scale;
+      canvas.height = layout.height * scale;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+          if (blob) {
+            const url = URL.createObjectURL(blob);
+            triggerDownload(url, `${fileBase}.png`);
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+          }
+        }, "image/png");
+      }
+      URL.revokeObjectURL(svgUrl);
+    };
+    img.onerror = () => URL.revokeObjectURL(svgUrl);
+    img.src = svgUrl;
+  };
   const { area, stats, ticks, yScale, dots, bars } = useMemo(() => {
     const area = plotArea(layout);
     const stats = computeStats(dataset.points);
@@ -75,10 +134,17 @@ export const DataChart = memo(function DataChart({ dataset }: DataChartProps) {
               {k}
             </button>
           ))}
+          <button onClick={downloadSvg} title="Download this chart as an SVG file" style={exportBtnStyle}>
+            ⬇ SVG
+          </button>
+          <button onClick={downloadPng} title="Download this chart as a PNG image" style={exportBtnStyle}>
+            ⬇ PNG
+          </button>
         </span>
       </figcaption>
 
       <svg
+        ref={svgRef}
         viewBox={`0 0 ${layout.width} ${layout.height}`}
         style={{ width: "100%", height: "auto", display: "block" }}
         role="img"
@@ -153,6 +219,16 @@ export const DataChart = memo(function DataChart({ dataset }: DataChartProps) {
     </figure>
   );
 });
+
+const exportBtnStyle: React.CSSProperties = {
+  background: "transparent",
+  color: FAINT,
+  border: `1px solid ${GRID}`,
+  borderRadius: 4,
+  padding: "1px 6px",
+  fontSize: 10,
+  cursor: "pointer",
+};
 
 function truncateLabel(s: string): string {
   return s.length > 10 ? `${s.slice(0, 9)}…` : s;
