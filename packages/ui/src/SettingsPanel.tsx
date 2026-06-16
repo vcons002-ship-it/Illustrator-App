@@ -905,6 +905,31 @@ export function SettingsPanel({
                     </span>
                   </label>
                 )}
+                <div style={{ marginTop: 12, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+                  <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 4 }}>📈 Schwab (markets · options · positions)</div>
+                  <p style={{ opacity: 0.55, fontSize: 11, margin: "0 0 6px" }}>
+                    Connect your own Charles Schwab developer app (the platform behind thinkorswim) for real quotes,
+                    option chains with Greeks, and your positions. Register an app at developer.schwab.com (set the
+                    callback URL to <code>https://127.0.0.1</code>), paste its key + secret here, then click
+                    <b> Connect Schwab</b> in the 📈 Markets panel. The assistant only reads/analyses — it never trades.
+                  </p>
+                  <label style={rowStyle}>
+                    <span>Schwab app key</span>
+                    <input
+                      type="password"
+                      value={value.keys.schwabClientId ?? ""}
+                      onChange={(e) => setKey("schwabClientId", e.target.value.trim())}
+                    />
+                  </label>
+                  <label style={rowStyle}>
+                    <span>Schwab app secret</span>
+                    <input
+                      type="password"
+                      value={value.keys.schwabClientSecret ?? ""}
+                      onChange={(e) => setKey("schwabClientSecret", e.target.value.trim())}
+                    />
+                  </label>
+                </div>
               </>
             )}
           </Group>

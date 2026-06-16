@@ -164,6 +164,10 @@ A **Markets** panel for following and researching stocks:
   and the assistant writes ready-to-paste **TradingView Pine Script** or **thinkorswim
   thinkScript** (VWAP cross, RSI threshold, MA cross, price-level break) — from verified
   templates, with a Save button and where to paste it.
+- **Connect Schwab (optional)** — link your own Charles Schwab developer app (the platform
+  behind thinkorswim) for **real quotes, option chains with Greeks + implied volatility, and
+  your positions** — the assistant uses them for genuine options analysis. Read-only: it
+  never places a trade (do that in your Schwab/thinkorswim app).
 - **Ask the assistant** — one click hands the ticker to the chat for analysis and trade ideas
   (it searches the web for current data and is clear it isn't financial advice).
 - *(A linked broker account such as thinkorswim/Schwab is a separate, deferred enhancement; the

@@ -22,6 +22,9 @@ export interface StockChartPanelProps {
   describeAlert?: (a: PriceAlert) => string;
   onAddAlert?: (symbol: string, type: PriceAlert["type"], value?: number) => void;
   onRemoveAlert?: (id: string) => void;
+  /** Schwab account (real quotes / option chains + Greeks / positions) connect state. */
+  schwabConnected?: boolean;
+  onConnectSchwab?: () => void;
   onClose: () => void;
 }
 
@@ -37,6 +40,8 @@ export const StockChartPanel = memo(function StockChartPanel({
   describeAlert,
   onAddAlert,
   onRemoveAlert,
+  schwabConnected,
+  onConnectSchwab,
   onClose,
 }: StockChartPanelProps) {
   const [draft, setDraft] = useState(symbol);
@@ -107,6 +112,15 @@ export const StockChartPanel = memo(function StockChartPanel({
           <a style={{ ...btn, textDecoration: "none" }} href={`https://www.tradingview.com/symbols/${encodeURIComponent(symbol)}/`} target="_blank" rel="noreferrer">
             Open in TradingView ↗
           </a>
+          {onConnectSchwab ? (
+            schwabConnected ? (
+              <span style={{ ...btn, borderColor: "rgba(90,209,155,0.6)", color: "#9be8c0" }}>✓ Schwab</span>
+            ) : (
+              <button style={btn} onClick={onConnectSchwab} title="Connect your Schwab account for real quotes, option chains + Greeks, and positions">
+                Connect Schwab
+              </button>
+            )
+          ) : null}
           <button style={{ ...btn, marginLeft: "auto" }} onClick={onClose}>
             Close
           </button>

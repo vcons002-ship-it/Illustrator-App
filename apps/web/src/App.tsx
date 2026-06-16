@@ -81,6 +81,7 @@ import {
   generatePkce,
   clearGoogleTokens,
   GOOGLE_SCOPES,
+  buildSchwabAuthUrl,
   POLISH_PRESETS,
   type ConceptIntro,
   type DataTable,
@@ -288,6 +289,7 @@ export function App() {
     loadCalendar,
     stockQuote,
     marketIndicators,
+    schwabConnect,
     setActiveUnit,
     polishText,
     polishCancel,
@@ -1330,6 +1332,31 @@ export function App() {
     },
     [stockSymbol, loadStockQuote],
   );
+  // Schwab connect (manual code-paste flow, no Rust loopback needed): open the consent
+  // URL for the user's own Schwab app, then exchange the redirected ?code=… they paste.
+  const [schwabConnected, setSchwabConnected] = useState(false);
+  useEffect(() => {
+    void libraryStore.getMemo?.("schwab-tokens").then((t) => setSchwabConnected(!!t)).catch(() => {});
+  }, [libraryStore]);
+  const connectSchwab = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
+    const clientId = settings.keys?.schwabClientId;
+    if (!clientId || !settings.keys?.schwabClientSecret) return { ok: false, error: "Add your Schwab app key + secret in Settings first." };
+    const redirectUri = "https://127.0.0.1";
+    try {
+      const url = buildSchwabAuthUrl({ clientId, redirectUri, state: crypto.randomUUID() });
+      window.open(url, "_blank", "noopener");
+      const pasted = window.prompt(
+        "A Schwab login opened in your browser. After you approve, it redirects to https://127.0.0.1/?code=… (the page may show an error — that's fine). Paste the FULL redirected URL (or just the code) here:",
+      );
+      if (!pasted) return { ok: false, error: "Cancelled." };
+      const code = /[?&]code=([^&]+)/.exec(pasted)?.[1] ?? pasted.trim();
+      const res = await schwabConnect({ code: decodeURIComponent(code), redirectUri });
+      if (res.ok) setSchwabConnected(true);
+      return res;
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }, [settings.keys?.schwabClientId, settings.keys?.schwabClientSecret, schwabConnect]);
   // Overlay the assistant's planned deadlines (plan-level + each dated step) onto the grid.
   const calendarDeadlines = useMemo<CalendarDeadline[]>(() => {
     const out: CalendarDeadline[] = [];
@@ -3524,6 +3551,12 @@ export function App() {
           describeAlert={describeAlert}
           onAddAlert={(s, type, value) => void addAlert(s, type, value)}
           onRemoveAlert={(id) => void removeAlert(id)}
+          schwabConnected={schwabConnected}
+          onConnectSchwab={() => {
+            void connectSchwab().then((r) => {
+              if (!r.ok && r.error) setLocalError(r.error);
+            });
+          }}
           onAnalyze={(s) => {
             setShowStocks(false);
             onBuddySendText(
