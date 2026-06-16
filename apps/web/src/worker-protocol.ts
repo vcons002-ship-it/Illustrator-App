@@ -261,6 +261,8 @@ export type WorkerToMain =
   | { type: "buddyOpened"; requestId: number; book: BookSource; visuals: boolean }
   /** remove_library_book deleted a book — the main thread refreshes its library list. */
   | { type: "buddyLibraryChanged"; requestId: number }
+  /** A scheduled task was created/cancelled by the chat — the host refreshes its list. */
+  | { type: "buddyScheduledChanged"; requestId: number }
   /** set_visual_style resolved against the catalog — the main thread (settings
    * owner) commits it. Arrives mid-turn, before the tool result. */
   | {

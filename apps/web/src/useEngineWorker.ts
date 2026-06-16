@@ -205,6 +205,8 @@ export type BuddyStreamEvent =
   | { kind: "usage"; usage: ContextUsage }
   /** remove_library_book deleted a book — the app should refresh its library. */
   | { kind: "libraryChanged" }
+  /** schedule_task/cancel_scheduled changed the scheduled-task list — refresh it. */
+  | { kind: "scheduledChanged" }
   /** set_visual_style resolved — the app (settings owner) should commit it. */
   | {
       kind: "settings";
@@ -591,6 +593,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
         }
         case "buddyLibraryChanged": {
           buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "libraryChanged" });
+          break;
+        }
+        case "buddyScheduledChanged": {
+          buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "scheduledChanged" });
           break;
         }
         case "buddySettings": {
