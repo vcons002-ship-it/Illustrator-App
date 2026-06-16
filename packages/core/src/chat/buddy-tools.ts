@@ -53,6 +53,18 @@ export type BuddyToolCall =
     }
   | { tool: "list_alerts" }
   | { tool: "cancel_alert"; id: string }
+  /** Generate a ready-to-paste TradingView Pine Script or thinkorswim thinkScript
+   * alert/study (the reader pastes it into their own platform). */
+  | {
+      tool: "trading_script";
+      platform: "pine" | "thinkscript";
+      kind: "vwap_cross" | "rsi" | "ma_cross" | "price_level";
+      level?: number;
+      length?: number;
+      fast?: number;
+      slow?: number;
+      maType?: "sma" | "ema";
+    }
   | { tool: "open_library_book"; id: string; visuals: boolean }
   | {
       tool: "open_web_text";
@@ -390,6 +402,11 @@ export function buildBuddySystemPrompt(opts: {
     '- {"tool":"market_analysis","symbol":"AAPL","interval":"5m","range":"1d"} — keyless TECHNICAL indicators (VWAP, ' +
     "SMA20/50, EMA12/26, RSI14, recent move). Use for intraday/technical questions — VWAP watch levels, trend vs the " +
     'moving averages, momentum, entry points. "interval"/"range" default to intraday ("5m"/"1d"); use "1d"/"6mo" for swing.\n' +
+    '- {"tool":"trading_script","platform":"pine","kind":"vwap_cross"} — generate a ready-to-paste TradingView Pine ' +
+    'Script (platform "pine") or thinkorswim thinkScript (platform "thinkscript") ALERT/study. kinds: "vwap_cross", ' +
+    '"rsi" (level/length), "ma_cross" (fast/slow/maType "sma"|"ema"), "price_level" (level). Use when the reader wants ' +
+    "the watch/alert/indicator set up INSIDE TradingView or thinkorswim itself. Present the returned script in a fenced " +
+    "code block and tell them where to paste it.\n" +
     '- {"tool":"set_price_alert","symbol":"AAPL","type":"cross_vwap"} — set a WATCH/alert that fires a notification while ' +
     'the app is open. "type": "above"/"below" (needs "value" = price), "cross_vwap" (price crosses VWAP, no value), ' +
     '"pct_move" ("value" = percent, ± either way), "rsi_above"/"rsi_below" ("value" = 0–100). Use when the reader says ' +
@@ -528,6 +545,27 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
   if (tool === "cancel_alert") {
     const id = strArg(obj.id, MAX_ID_CHARS);
     return id ? { tool, id } : undefined;
+  }
+  if (tool === "trading_script") {
+    const platform = obj.platform === "thinkscript" ? "thinkscript" : "pine";
+    const kinds = ["vwap_cross", "rsi", "ma_cross", "price_level"];
+    if (typeof obj.kind !== "string" || !kinds.includes(obj.kind)) return undefined;
+    const numArg = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+    const level = numArg(obj.level);
+    const length = numArg(obj.length);
+    const fast = numArg(obj.fast);
+    const slow = numArg(obj.slow);
+    const maType = obj.maType === "ema" ? "ema" : obj.maType === "sma" ? "sma" : undefined;
+    return {
+      tool,
+      platform,
+      kind: obj.kind as "rsi",
+      ...(level !== undefined ? { level } : {}),
+      ...(length !== undefined ? { length } : {}),
+      ...(fast !== undefined ? { fast } : {}),
+      ...(slow !== undefined ? { slow } : {}),
+      ...(maType ? { maType } : {}),
+    };
   }
   if (tool === "remember") {
     const note = strArg(obj.note, MAX_MEMORY_NOTE_CHARS);
@@ -776,6 +814,8 @@ export interface BuddyToolResultPayload {
   /** Price-alert outcomes. */
   alert?: { id: string; describe: string };
   alertsList?: { id: string; describe: string; enabled: boolean }[];
+  /** A generated Pine/thinkScript study + where to paste it. */
+  tradingScript?: { lang: string; script: string; where: string };
   /** What set_visual_style actually applied (resolved style LABEL). */
   applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
   /** Whether an approved image generation succeeded. */
@@ -911,6 +951,14 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     return "[price alerts]\n" + list.map((a) => `· ${a.describe}${a.enabled ? "" : " (done/paused)"} (id: ${a.id})`).join("\n");
   }
   if (call.tool === "cancel_alert") return "[cancel_alert done] Confirm briefly.";
+  if (call.tool === "trading_script") {
+    const t = result.tradingScript;
+    if (!t) return "[trading_script did nothing]";
+    return (
+      `[generated a ${call.platform} script. Present it to the reader in a fenced \`\`\`${t.lang} code block (so they ` +
+      `get a Save button), then tell them where to paste it: ${t.where}. Keep your prose short.]\n${t.script}`
+    );
+  }
   if (call.tool === "market_analysis") {
     if (!result.indicators) {
       return `[market_analysis: no keyless bar data for "${call.symbol}" (needs the desktop app or extension). Use search_web instead.]`;

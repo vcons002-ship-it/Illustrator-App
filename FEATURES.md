@@ -160,6 +160,10 @@ A **Markets** panel for following and researching stocks:
 - **Price alerts / watch levels** — *"alert me when AAPL crosses VWAP"*, *"tell me if TSLA
   drops below 200"*, *"ping me if NVDA moves ±3% or RSI tops 70"* → a watch that fires a
   notification while the app is open (set them in chat or from quick buttons in the panel).
+- **Generate Pine Script & thinkScript** — ask for a watch/alert *inside* your real platform
+  and the assistant writes ready-to-paste **TradingView Pine Script** or **thinkorswim
+  thinkScript** (VWAP cross, RSI threshold, MA cross, price-level break) — from verified
+  templates, with a Save button and where to paste it.
 - **Ask the assistant** — one click hands the ticker to the chat for analysis and trade ideas
   (it searches the web for current data and is clear it isn't financial advice).
 - *(A linked broker account such as thinkorswim/Schwab is a separate, deferred enhancement; the
