@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { setTableCell, type DataTable } from "./data-table.js";
+import {
+  addColumn,
+  addRow,
+  removeColumn,
+  removeRow,
+  renameColumn,
+  setTableCell,
+  type DataTable,
+} from "./data-table.js";
 
 const base: DataTable = {
   columns: [
@@ -34,5 +42,33 @@ describe("setTableCell", () => {
   it("ignores out-of-range indices", () => {
     expect(setTableCell(base, 9, 0, "x")).toBe(base);
     expect(setTableCell(base, 0, 5, "x")).toBe(base);
+  });
+});
+
+describe("row/column structure edits", () => {
+  it("adds and removes rows (immutably, with bounds)", () => {
+    const added = addRow(base);
+    expect(added.rows).toHaveLength(3);
+    expect(added.rows[2]).toEqual([null, null]);
+    expect(base.rows).toHaveLength(2); // original untouched
+    expect(addRow(base, 0).rows[0]).toEqual([null, null]);
+    expect(removeRow(base, 0).rows).toEqual([["Bergen", 280000]]);
+    expect(removeRow(base, 9)).toBe(base);
+  });
+
+  it("adds a uniquely-named empty column and removes one (with cells)", () => {
+    const withCol = addColumn(base, "City");
+    expect(withCol.columns.map((c) => c.name)).toEqual(["City", "Pop", "City (2)"]); // de-duped
+    expect(withCol.columns[2]).toEqual({ name: "City (2)", type: "string" });
+    expect(withCol.rows[0]).toEqual(["Oslo", 700000, null]);
+    const dropped = removeColumn(base, 1);
+    expect(dropped.columns.map((c) => c.name)).toEqual(["City"]);
+    expect(dropped.rows).toEqual([["Oslo"], ["Bergen"]]);
+    expect(removeColumn(dropped, 0)).toBe(dropped); // never remove the last column
+  });
+
+  it("renames a column, keeping names unique", () => {
+    expect(renameColumn(base, 1, "Population").columns[1]!.name).toBe("Population");
+    expect(renameColumn(base, 1, "City").columns[1]!.name).toBe("City (2)"); // collides with col 0
   });
 });

@@ -25,6 +25,13 @@ export interface DataTablePreviewProps {
   /** When set, cells become editable: click one, type, and commit (Enter/blur) to
    * fire this with the raw text. The host coerces + persists (see setTableCell). */
   onEditCell?: (rowIndex: number, colIndex: number, raw: string) => void;
+  /** Structure edits (shown only when provided): add/remove rows + columns, rename a
+   * column. The host applies them to the DataTable and persists. */
+  onAddRow?: () => void;
+  onDeleteRow?: (rowIndex: number) => void;
+  onAddColumn?: () => void;
+  onDeleteColumn?: (colIndex: number) => void;
+  onRenameColumn?: (colIndex: number, name: string) => void;
 }
 
 export const DataTablePreview = memo(function DataTablePreview({
@@ -33,15 +40,27 @@ export const DataTablePreview = memo(function DataTablePreview({
   maxHeight = 360,
   caption,
   onEditCell,
+  onAddRow,
+  onDeleteRow,
+  onAddColumn,
+  onDeleteColumn,
+  onRenameColumn,
 }: DataTablePreviewProps) {
   const rows = table.rows.slice(0, Math.max(0, maxRows));
   const hidden = table.rows.length - rows.length;
   // Which cell is being edited + its in-progress draft (uncontrolled would lose focus).
   const [editing, setEditing] = useState<{ r: number; c: number; draft: string } | null>(null);
+  // A header rename in progress (separate from cell edits; column index -1 = none).
+  const [headerEdit, setHeaderEdit] = useState<{ c: number; draft: string } | null>(null);
   const commit = () => {
     if (editing) onEditCell?.(editing.r, editing.c, editing.draft);
     setEditing(null);
   };
+  const commitHeader = () => {
+    if (headerEdit) onRenameColumn?.(headerEdit.c, headerEdit.draft);
+    setHeaderEdit(null);
+  };
+  const showRowControls = !!onDeleteRow;
   return (
     <figure style={{ margin: 0 }}>
       {caption ? <figcaption style={captionStyle}>{caption}</figcaption> : null}
@@ -49,16 +68,54 @@ export const DataTablePreview = memo(function DataTablePreview({
         <table style={tableStyle}>
           <thead>
             <tr>
-              {table.columns.map((c, i) => (
-                <th key={i} style={{ ...thStyle, textAlign: c.type === "number" ? "right" : "left" }}>
-                  {c.name}
-                </th>
-              ))}
+              {showRowControls ? <th style={{ ...thStyle, width: 22, padding: "4px 2px" }} aria-label="row controls" /> : null}
+              {table.columns.map((c, i) => {
+                const isHeaderEditing = headerEdit?.c === i;
+                return (
+                  <th key={i} style={{ ...thStyle, textAlign: c.type === "number" ? "right" : "left" }}>
+                    {isHeaderEditing ? (
+                      <input
+                        autoFocus
+                        value={headerEdit.draft}
+                        onChange={(e) => setHeaderEdit({ c: i, draft: e.target.value })}
+                        onBlur={commitHeader}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") commitHeader();
+                          else if (e.key === "Escape") setHeaderEdit(null);
+                        }}
+                        style={{ ...cellInputStyle, textAlign: "left" }}
+                      />
+                    ) : (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                        <span
+                          onClick={onRenameColumn ? () => setHeaderEdit({ c: i, draft: c.name }) : undefined}
+                          style={onRenameColumn ? { cursor: "text" } : undefined}
+                          title={onRenameColumn ? "Click to rename column" : c.name}
+                        >
+                          {c.name}
+                        </span>
+                        {onDeleteColumn && table.columns.length > 1 ? (
+                          <button onClick={() => onDeleteColumn(i)} title={`Delete column "${c.name}"`} style={delBtnStyle}>
+                            ✕
+                          </button>
+                        ) : null}
+                      </span>
+                    )}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
             {rows.map((r, ri) => (
               <tr key={ri}>
+                {showRowControls ? (
+                  <td style={{ ...tdStyle, width: 22, padding: "2px", textAlign: "center" }}>
+                    <button onClick={() => onDeleteRow?.(ri)} title="Delete this row" style={delBtnStyle}>
+                      ✕
+                    </button>
+                  </td>
+                ) : null}
                 {r.map((v, ci) => {
                   const text = formatCell(v);
                   const isEditing = editing?.r === ri && editing?.c === ci;
@@ -103,9 +160,43 @@ export const DataTablePreview = memo(function DataTablePreview({
       {hidden > 0 ? (
         <div style={moreStyle}>…{hidden.toLocaleString("en-US")} more row{hidden === 1 ? "" : "s"}</div>
       ) : null}
+      {onAddRow || onAddColumn ? (
+        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+          {onAddRow ? (
+            <button onClick={onAddRow} style={addBtnStyle} title="Add a blank row at the end">
+              + Row
+            </button>
+          ) : null}
+          {onAddColumn ? (
+            <button onClick={onAddColumn} style={addBtnStyle} title="Add a new column">
+              + Column
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </figure>
   );
 });
+
+const delBtnStyle: React.CSSProperties = {
+  background: "transparent",
+  color: "rgba(255,140,140,0.85)",
+  border: "none",
+  cursor: "pointer",
+  fontSize: 10,
+  padding: "0 2px",
+  lineHeight: 1,
+};
+
+const addBtnStyle: React.CSSProperties = {
+  background: "rgba(90,209,155,0.12)",
+  color: "inherit",
+  border: "1px solid rgba(90,209,155,0.5)",
+  borderRadius: 6,
+  padding: "2px 9px",
+  fontSize: 11,
+  cursor: "pointer",
+};
 
 function formatCell(v: CellValue): string {
   if (v === null) return "";

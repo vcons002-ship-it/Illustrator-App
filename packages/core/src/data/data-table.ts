@@ -122,6 +122,60 @@ export function columnIndexByName(table: DataTable, name: string): number {
   return table.columns.findIndex((c) => c.name.toLowerCase() === key);
 }
 
+/** A unique, trimmed column name (appends " (2)", " (3)" on collision). */
+function uniqueColumnName(existing: readonly DataColumn[], desired: string): string {
+  const base = desired.trim() || `Column ${existing.length + 1}`;
+  const taken = new Set(existing.map((c) => c.name.toLowerCase()));
+  if (!taken.has(base.toLowerCase())) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base} (${n})`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+}
+
+/** Insert a blank row at `atIndex` (default: append), returning a NEW table. */
+export function addRow(table: DataTable, atIndex?: number): DataTable {
+  const blank: CellValue[] = table.columns.map(() => null);
+  const at = atIndex === undefined ? table.rows.length : Math.max(0, Math.min(atIndex, table.rows.length));
+  const rows = [...table.rows.slice(0, at), blank, ...table.rows.slice(at)];
+  return { columns: table.columns, rows };
+}
+
+/** Remove the row at `index` (no-op out of range), returning a NEW table. */
+export function removeRow(table: DataTable, index: number): DataTable {
+  if (index < 0 || index >= table.rows.length) return table;
+  return { columns: table.columns, rows: table.rows.filter((_, i) => i !== index) };
+}
+
+/** Insert a new (empty, string-typed) column at `atIndex` (default: append). */
+export function addColumn(table: DataTable, name?: string, atIndex?: number): DataTable {
+  const col: DataColumn = { name: uniqueColumnName(table.columns, name ?? `Column ${table.columns.length + 1}`), type: "string" };
+  const at = atIndex === undefined ? table.columns.length : Math.max(0, Math.min(atIndex, table.columns.length));
+  const columns = [...table.columns.slice(0, at), col, ...table.columns.slice(at)];
+  const rows = table.rows.map((r) => [...r.slice(0, at), null, ...r.slice(at)]);
+  return { columns, rows };
+}
+
+/** Remove the column at `index` and its cells (no-op out of range / last column). */
+export function removeColumn(table: DataTable, index: number): DataTable {
+  if (index < 0 || index >= table.columns.length || table.columns.length <= 1) return table;
+  return {
+    columns: table.columns.filter((_, i) => i !== index),
+    rows: table.rows.map((r) => r.filter((_, i) => i !== index)),
+  };
+}
+
+/** Rename the column at `index` (keeping names unique), returning a NEW table. */
+export function renameColumn(table: DataTable, index: number, name: string): DataTable {
+  if (index < 0 || index >= table.columns.length) return table;
+  const others = table.columns.filter((_, i) => i !== index);
+  const unique = uniqueColumnName(others, name);
+  return {
+    columns: table.columns.map((c, i) => (i === index ? { ...c, name: unique } : c)),
+    rows: table.rows,
+  };
+}
+
 /** A compact text preview of a table (header + first `maxRows`) for a model/summary. */
 export function tableToText(table: DataTable, maxRows = 20): string {
   const head = table.columns.map((c) => c.name).join(" | ");
