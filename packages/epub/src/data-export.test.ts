@@ -80,6 +80,44 @@ describe("buildXlsx", () => {
     expect(sheet).toContain("<f>A3*B2</f>");
   });
 
+  it("embeds a native chart with its parts, rels, and content-type overrides", () => {
+    const t: DataTable = {
+      columns: [{ name: "City", type: "string" }, { name: "Pop", type: "number" }],
+      rows: [["Oslo", 700000], ["Bergen", 280000]],
+    };
+    const bytes = buildXlsx([sheetFromDataTable("Data", t, { chart: "bar" })]);
+    const files = unzipSync(bytes);
+    for (const part of [
+      "xl/charts/chart1.xml",
+      "xl/drawings/drawing1.xml",
+      "xl/drawings/_rels/drawing1.xml.rels",
+      "xl/worksheets/_rels/sheet1.xml.rels",
+    ]) {
+      expect(files[part], `missing ${part}`).toBeTruthy();
+    }
+    const sheet = strFromU8(files["xl/worksheets/sheet1.xml"]!);
+    expect(sheet).toContain("<drawing r:id=\"rId1\"/>");
+    const chart = strFromU8(files["xl/charts/chart1.xml"]!);
+    expect(chart).toContain("<c:barChart>");
+    // categories = the string column (A2:A3), values = the numeric column (B2:B3)
+    expect(chart).toContain("'Data'!$A$2:$A$3");
+    expect(chart).toContain("'Data'!$B$2:$B$3");
+    expect(chart).toContain("'Data'!$B$1"); // series name from the header
+    const ct = strFromU8(files["[Content_Types].xml"]!);
+    expect(ct).toContain("/xl/charts/chart1.xml");
+    expect(ct).toContain("drawingml.chart+xml");
+  });
+
+  it("excludes a totals row from the chart's data range", () => {
+    const t: DataTable = {
+      columns: [{ name: "City", type: "string" }, { name: "Pop", type: "number" }],
+      rows: [["Oslo", 700000], ["Bergen", 280000]],
+    };
+    const chart = strFromU8(unzipSync(buildXlsx([sheetFromDataTable("Data", t, { totals: "sum", chart: "bar" })]))["xl/charts/chart1.xml"]!);
+    expect(chart).toContain("'Data'!$B$2:$B$3"); // rows 2-3 only, not the totals row 4
+    expect(chart).not.toContain("$B$4");
+  });
+
   it("escapes XML-special characters in strings", () => {
     const t: DataTable = { columns: [{ name: "A & B", type: "string" }], rows: [["<x>"]] };
     const sheet = strFromU8(unzipSync(dataTableToXlsx(t))["xl/worksheets/sheet1.xml"]!);
