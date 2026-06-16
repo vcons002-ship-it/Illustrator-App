@@ -1,5 +1,5 @@
 import { zipSync, strToU8 } from "fflate";
-import type { DataTable } from "@visual-reader/core";
+import { formulaKey, type DataTable } from "@visual-reader/core";
 
 /**
  * Write a real Excel `.xlsx` workbook — the counterpart to `data-import.ts`'s
@@ -207,8 +207,13 @@ export function sheetFromDataTable(
   opts: { totals?: XlsxAggregation; totalsLabel?: string } = {},
 ): XlsxSheet {
   const header: XlsxCellInput[] = table.columns.map((c) => ({ value: c.name, bold: true }));
-  const body: XlsxCellInput[][] = table.rows.map((row) =>
-    row.map((v, c) => (table.columns[c]?.type === "number" && typeof v === "number" ? v : v)),
+  // Body cells: emit an imported/edited formula where present (with its cached value),
+  // otherwise the literal value. Header is row 1, so data row r sits on sheet row r+2.
+  const body: XlsxCellInput[][] = table.rows.map((row, r) =>
+    row.map((v, c): XlsxCellInput => {
+      const f = table.formulas?.[formulaKey(r, c)];
+      return f ? { formula: f, ...(v !== null ? { value: v } : {}) } : v;
+    }),
   );
   const rows: XlsxCellInput[][] = [header, ...body];
 

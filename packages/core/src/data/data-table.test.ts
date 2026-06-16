@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   addColumn,
   addRow,
+  dataTableFromGrid,
   removeColumn,
   removeRow,
   renameColumn,
@@ -70,5 +71,38 @@ describe("row/column structure edits", () => {
   it("renames a column, keeping names unique", () => {
     expect(renameColumn(base, 1, "Population").columns[1]!.name).toBe("Population");
     expect(renameColumn(base, 1, "City").columns[1]!.name).toBe("City (2)"); // collides with col 0
+  });
+});
+
+describe("formulas", () => {
+  const withF: DataTable = { ...base, formulas: { "1,1": "B2*2" } }; // a formula on row 1, col 1
+
+  it("imports formulas aligned to the surviving data rows", () => {
+    // grid has a blank row that gets filtered — formulas must still line up.
+    const grid = [
+      ["City", "Pop"],
+      ["Oslo", "700000"],
+      ["", ""],
+      ["Bergen", "280000"],
+    ];
+    const formulaGrid = [[], [], [], [undefined, "B2+B3"]];
+    const t = dataTableFromGrid(grid, formulaGrid)!;
+    expect(t.rows).toHaveLength(2);
+    expect(t.formulas).toEqual({ "1,1": "B2+B3" }); // Bergen's row is data-row 1
+  });
+
+  it("stores an =formula edit and clears it when a literal is typed", () => {
+    const f = setTableCell(base, 0, 1, "=A2*2");
+    expect(f.formulas).toEqual({ "0,1": "A2*2" });
+    expect(f.rows[0]![1]).toBeNull(); // value unknown until Excel recalcs
+    expect(setTableCell(f, 0, 1, "42").formulas).toBeUndefined(); // literal clears the formula
+  });
+
+  it("remaps formula coordinates across row/column edits (and drops deleted cells)", () => {
+    expect(addRow(withF, 0).formulas).toEqual({ "2,1": "B2*2" }); // pushed down
+    expect(removeRow(withF, 0).formulas).toEqual({ "0,1": "B2*2" }); // shifted up
+    expect(removeRow(withF, 1).formulas).toBeUndefined(); // the formula row itself removed
+    expect(addColumn(withF, "X", 0).formulas).toEqual({ "1,2": "B2*2" }); // pushed right
+    expect(removeColumn(withF, 1).formulas).toBeUndefined(); // the formula column removed
   });
 });

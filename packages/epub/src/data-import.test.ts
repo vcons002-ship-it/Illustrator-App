@@ -104,6 +104,18 @@ describe("xlsxToWorkbook", () => {
     expect(wb).toHaveLength(1);
     expect(wb[0]!.grid).toEqual([["7"]]);
   });
+
+  it("captures each cell's <f> formula, aligned to the value grid", () => {
+    const sheet =
+      "<worksheet><sheetData>" +
+      '<row><c r="A1" t="inlineStr"><is><t>Total</t></is></c></row>' +
+      '<row><c r="A2"><f>SUM(B1:B9)</f><v>15</v></c></row>' +
+      "</sheetData></worksheet>";
+    const [s] = xlsxToWorkbook(zipSync({ "xl/worksheets/sheet1.xml": strToU8(sheet) }));
+    expect(s!.grid).toEqual([["Total"], ["15"]]); // cached value
+    expect(s!.formulas[1]![0]).toBe("SUM(B1:B9)");
+    expect(s!.formulas[0]![0]).toBeUndefined();
+  });
 });
 
 describe("csvToText", () => {

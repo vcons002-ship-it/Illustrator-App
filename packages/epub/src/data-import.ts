@@ -88,14 +88,19 @@ function sharedStrings(files: Record<string, Uint8Array>): string[] {
   return shared;
 }
 
-/** One worksheet's XML → its raw cell grid, resolving shared/inline/numeric cells. */
-function parseSheetGrid(sheetXml: string, shared: string[]): string[][] {
+/**
+ * One worksheet's XML → its raw cell value grid PLUS an aligned sparse formula grid
+ * (the `<f>` expression per cell, undefined when none). The cached `<v>` is read even
+ * for formula cells (Excel stores the computed value alongside the `<f>`).
+ */
+function parseSheetGrid(sheetXml: string, shared: string[]): { grid: string[][]; formulas: (string | undefined)[][] } {
   const rows: string[][] = [];
+  const formulaRows: (string | undefined)[][] = [];
   // Both real cells (<c …>…</c>) and self-closing empty cells (<c r="B1"/>) — the
-  // latter keep column alignment when a row skips a column. A cell's cached <v> is
-  // read even when it carries an <f> formula (Excel stores the computed value too).
+  // latter keep column alignment when a row skips a column.
   for (const rowXml of (sheetXml.match(/<row[\s\S]*?<\/row>/g) ?? []).slice(0, MAX_TABLE_ROWS)) {
     const cells: string[] = [];
+    const formulaCells: (string | undefined)[] = [];
     for (const c of rowXml.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
       const attrs = c[1]!;
       const inner = c[2] ?? "";
@@ -111,19 +116,28 @@ function parseSheetGrid(sheetXml: string, shared: string[]): string[][] {
       } else {
         value = decodeXmlEntities(/<v>([\s\S]*?)<\/v>/.exec(inner)?.[1] ?? "");
       }
+      // A formula cell: capture the expression (shared formulas without a body resolve
+      // to their master elsewhere; we keep only inline <f>…</f> text).
+      const fMatch = /<f\b[^>]*>([\s\S]*?)<\/f>/.exec(inner);
       const col = ref ? columnIndex(ref) : cells.length;
-      if (col < MAX_TABLE_COLS) cells[col] = value;
+      if (col < MAX_TABLE_COLS) {
+        cells[col] = value;
+        if (fMatch && fMatch[1]) formulaCells[col] = decodeXmlEntities(fMatch[1]);
+      }
     }
     for (let i = 0; i < cells.length; i++) cells[i] ??= "";
     rows.push(cells);
+    formulaRows.push(formulaCells);
   }
-  return rows;
+  return { grid: rows, formulas: formulaRows };
 }
 
-/** One imported worksheet: its tab name + raw cell grid. */
+/** One imported worksheet: its tab name + raw cell grid + an aligned formula grid. */
 export interface XlsxSheetGrid {
   name: string;
   grid: string[][];
+  /** Sparse Excel formula (without "=") per cell, aligned to `grid`. */
+  formulas: (string | undefined)[][];
 }
 
 /** Cap on how many worksheets one import reads (sanity bound). */
@@ -136,7 +150,7 @@ export function xlsxToGrid(input: ArrayBuffer | Uint8Array): string[][] {
   if (!sheet) {
     throw new Error("Couldn't read this .xlsx (unusual structure). Tip: in Excel, Save As → CSV.");
   }
-  return parseSheetGrid(sheet, sharedStrings(files));
+  return parseSheetGrid(sheet, sharedStrings(files)).grid;
 }
 
 /**
@@ -157,11 +171,11 @@ export function xlsxToWorkbook(input: ArrayBuffer | Uint8Array): XlsxSheetGrid[]
     const target = rid ? new RegExp(`<Relationship\\b[^>]*Id="${rid}"[^>]*Target="([^"]+)"`).exec(rels)?.[1] : undefined;
     const key = target ? `xl/${target.replace(/^\.?\//, "").replace(/^\/+/, "")}` : "";
     const xml = key && files[key] ? strFromU8(files[key]!) : "";
-    if (xml) out.push({ name, grid: parseSheetGrid(xml, shared) });
+    if (xml) out.push({ name, ...parseSheetGrid(xml, shared) });
   }
   if (out.length === 0) {
     const sheet = strFromU8(firstWorksheet(files));
-    if (sheet) out.push({ name: "Sheet 1", grid: parseSheetGrid(sheet, shared) });
+    if (sheet) out.push({ name: "Sheet 1", ...parseSheetGrid(sheet, shared) });
   }
   return out;
 }
