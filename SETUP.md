@@ -315,6 +315,124 @@ The whole feature is built so the worst unattended action is an **extra reminder
 
 ---
 
+## Markets & trading (stocks, options, thinkorswim/Schwab)
+
+The **📈 Markets** panel (open it from the home screen) follows and researches stocks. Most of
+it is **keyless — no account, no setup**; two optional opt-ins ground it in your real broker and
+your TradingView chart. **None of it is financial advice, and the assistant never places a trade
+on its own.**
+
+> **Tip:** you don't have to read this section — just ask the chat *"how do I connect Schwab?"*
+> or *"set up the TradingView bridge"* and the assistant walks you through it one step at a time.
+
+### Works with zero setup (keyless)
+
+- **TradingView chart + live quote** — type any ticker for TradingView's free advanced chart and
+  a keyless quote snapshot.
+- **Keyless technical analysis** — VWAP, moving averages, RSI and recent-move stats computed from
+  real price bars (*"what are the watch levels on SPY?"*).
+- **Price alerts / watch levels** — *"alert me when AAPL crosses VWAP"* fires a notification while
+  the app is open.
+- **Generate Pine Script & thinkScript** — *"give me a thinkScript that alerts when SPY crosses
+  VWAP"* → a ready-to-paste script with a Save button and where to paste it.
+- **Theme/sector screens** — *"the 3 best photonics stocks on earnings growth + P/E"* via web
+  research (grounded further by Schwab fundamentals when connected).
+
+### Connect Schwab / thinkorswim (optional — real account data + orders)
+
+thinkorswim runs on **Schwab's** backend, so connecting Schwab gives the assistant your real
+account: **live quotes, option chains with Greeks + implied volatility, your positions, your
+watchlists (tracked trade ideas), fundamentals (P/E, EPS, yield), and review-and-place order
+prep.** Best in the **desktop app** (the account API needs CORS-free access a browser tab can't
+give). One-time setup:
+
+1. **Create your own Schwab developer app** — go to **[developer.schwab.com](https://developer.schwab.com/)**,
+   register, and create an app with the **Accounts and Trading** + **Market Data** APIs. Set the
+   **callback URL** to exactly **`https://127.0.0.1`**.
+2. After Schwab **approves** the app (this can take a little while), copy its **App Key**
+   (client id) and **Secret**.
+3. In Visual Reader: **Settings → 📈 Markets / Schwab** → paste the **App Key + Secret**.
+4. Open the **📈 Markets** panel and click **Connect Schwab**. It opens Schwab's consent page for
+   *your* app; sign in and approve, then **paste the redirected `https://127.0.0.1/?code=…` URL**
+   back when asked. The app exchanges it for a token and refreshes it automatically.
+5. Now ask: *"option chain + Greeks on AAPL"*, *"pull 3 trades from my tracked ideas with the best
+   risk-reward"*, or *"buy 10 AAPL at limit 200"*.
+
+**Placing an order is always yours to confirm.** When you ask to buy/sell, the assistant only
+**composes** the order and opens a **review dialog** showing exactly what will be sent — **you**
+tick a confirmation box and click **Place order**. The assistant never submits, and the token
+never leaves your device. *Not financial advice.*
+
+### Let the assistant control your TradingView Desktop chart (experimental, opt-in)
+
+On the desktop app you can let the assistant set things up **directly in TradingView Desktop** —
+set the symbol/interval, add studies (VWAP, RSI…), read the chart, inject Pine (*"put VWAP on my
+chart"*, *"switch to AAPL 5-min"*). It talks to TradingView over a local debug port, so it's
+**desktop-only**, **off by default**, and **chart-only — it can never place a trade**. Quick
+version:
+
+1. Rebuild the **desktop app** so the bridge command is present.
+2. **Settings → 🛠 Assistant abilities → "Let the assistant control my TradingView Desktop chart."**
+3. Launch **TradingView Desktop with `--remote-debugging-port=9222`** and open a chart.
+4. In **📈 Markets**, click **Test bridge** → *"Connected to TradingView."*
+
+Full setup, the per-OS launch commands, an "auto check on startup" note, **how to update it if a
+TradingView change breaks an action**, and troubleshooting are in
+**[MARKETS-BRIDGE.md](./MARKETS-BRIDGE.md)**. It's version-sensitive and may conflict with
+TradingView's Terms — use at your discretion. *(thinkorswim has no equivalent bridge — it's a
+Java app, not Electron; use the Schwab connection + generated thinkScript there.)*
+
+---
+
+## Power-user extras (MCP, phone control, voice, OCR, in-app browser)
+
+All optional. The chat buddy can walk you through any of these — just ask *"how do I add an MCP
+server?"*, *"control the assistant from my phone"*, or *"set up voice"*.
+
+### MCP servers (extra tools)
+
+Let the assistant call tools from your own **Model Context Protocol** servers. Best on **desktop**
+(CORS-free access). Settings → **MCP servers** → add one per line as `name url` (HTTP / streamable
+endpoints), e.g. `weather https://my-mcp.example/mcp`. Then ask *"what tools does my weather server
+have?"* — it lists them (`mcp_tools`) and calls them (`mcp_call`) when a task matches. *(HTTP
+servers only for now; stdio servers that need a spawned process are a follow-up.)*
+
+### Control the assistant from your phone
+
+Two ways, both opt-in and cloud-free (your own Google / local network); the desktop app must be open:
+
+- **Anywhere, async (Google Tasks):** connect Google, then Settings → **"Run commands from my phone
+  (via Google Tasks)."** From your phone add a Google Task titled **`VR: …`** (e.g. *"VR: summarise
+  my unread email"*); the desktop picks it up, runs it, and writes the answer back into the task.
+- **Same Wi-Fi, live (LAN link):** click **🔗 Link phone** on the desktop home screen, then open the
+  `http://<desktop-ip>:8787/#vrlink=…` URL it shows on a phone on the same Wi-Fi. The desktop serves
+  the app to the phone over that port (no dev server) and the phone becomes a thin client of the
+  desktop's engine — no keys/models on the phone. Experimental and **needs on-device testing**; the
+  desktop may show a one-time firewall prompt for port 8787 (allow it on private networks). See
+  **[REMOTE-LINK.md](./REMOTE-LINK.md)** for the test steps and security model.
+
+### Voice (dictate + hear replies)
+
+Built into the browser (best in Chrome/Edge) — no setup. In the chat composer, **🎤** dictates with
+your microphone and **🔈/🔊** toggles reading replies aloud. The buttons appear only when your
+browser supports the Web Speech API.
+
+### OCR a scan / photo of text
+
+Drop an image of a document into the app (it opens the photo panel) and click **🔤 Extract text** —
+it reads the text with your **vision model** (cloud Claude/Gemini/OpenAI or a local vision model)
+and opens the transcription as a document you can read or illustrate. Needs a vision-capable model
+configured (see the local/keys setup above).
+
+### In-app browser (desktop)
+
+Open **🌐 Browse**, enter a URL, and read any page's text + links right in the app (no scripts run);
+click links to navigate, **📖 Read & illustrate** it, or **🤖 Ask** the assistant about it. **🖥 Live**
+opens the real page (with scripts) in its own isolated window. Desktop only (it needs CORS-free
+access to fetch arbitrary sites).
+
+---
+
 ## Run images on your own GPU (AUTOMATIC1111 or ComfyUI)
 
 This is the path to **free, private, real** image generation today — no API keys,

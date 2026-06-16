@@ -11,7 +11,32 @@ describe("decodeEntities", () => {
   });
 });
 import type { Transport, TransportRequest } from "./transport/transport.js";
-import { fetchPageText } from "./page-text.js";
+import { extractLinks, fetchPageText } from "./page-text.js";
+
+describe("extractLinks", () => {
+  const base = "https://ex.com/dir/page.html";
+  it("resolves relative + absolute hrefs and tag-strips the label", () => {
+    const html = '<a href="/a">A</a> <a href="sub/b">B</a> <a href="https://other.com/c"><b>C</b> link</a>';
+    expect(extractLinks(html, base)).toEqual([
+      { text: "A", url: "https://ex.com/a" },
+      { text: "B", url: "https://ex.com/dir/sub/b" },
+      { text: "C link", url: "https://other.com/c" },
+    ]);
+  });
+
+  it("drops js/mailto/tel/in-page anchors + non-http, and de-dupes", () => {
+    const html =
+      '<a href="javascript:void(0)">x</a><a href="mailto:a@b.c">m</a><a href="tel:123">t</a>' +
+      '<a href="#top">top</a><a href="/dup">one</a><a href="/dup">two</a>';
+    expect(extractLinks(html, base)).toEqual([{ text: "one", url: "https://ex.com/dup" }]);
+  });
+
+  it("falls back to the URL when the label is empty and caps the count", () => {
+    expect(extractLinks('<a href="/x"><img></a>', base)).toEqual([{ text: "https://ex.com/x", url: "https://ex.com/x" }]);
+    const many = Array.from({ length: 100 }, (_, i) => `<a href="/p${i}">${i}</a>`).join("");
+    expect(extractLinks(many, base).length).toBe(60);
+  });
+});
 
 function fakeTransport(body: string | unknown, ok = true, status = 200): Transport & { requests: TransportRequest[] } {
   const requests: TransportRequest[] = [];
@@ -105,6 +130,14 @@ describe("fetchPageText", () => {
     expect(page.text).not.toContain("color: red");
     // Block boundaries became line breaks.
     expect(page.text.indexOf("First paragraph.")).toBeGreaterThan(page.text.indexOf("The Article"));
+  });
+
+  it("surfaces on-page links for an HTML page (absolute), none for plain text", async () => {
+    const html = '<!doctype html><html><body><p>hi</p><a href="/next">Next page</a></body></html>';
+    const page = await fetchPageText("https://example.test/dir/article", { transport: fakeTransport(html) });
+    expect(page.links).toEqual([{ text: "Next page", url: "https://example.test/next" }]);
+    const plain = await fetchPageText("https://example.test/raw.txt", { transport: fakeTransport("just text") });
+    expect(plain.links).toBeUndefined();
   });
 
   it("caps the returned text length", async () => {

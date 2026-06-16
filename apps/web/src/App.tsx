@@ -25,6 +25,7 @@ import {
   toRenderUnits,
   formatToolResult,
   formatBuddyToolResult,
+  toolFailureDirective,
   bestParagraphIndex,
   conceptIntroductions,
   subjectFromCaption,
@@ -70,6 +71,9 @@ import {
   type TaskCandidate,
   type CalendarEvent,
   type StockQuote,
+  type PageText,
+  generatePairingToken,
+  buildDelegatePrompt,
   MAX_SKILL_NAME_CHARS,
   MAX_SKILL_DESC_CHARS,
   MAX_SKILL_BODY_CHARS,
@@ -129,6 +133,7 @@ import {
   ScheduledTasksPanel,
   CalendarPanel,
   StockChartPanel,
+  BrowserPanel,
   OrderReviewModal,
   type CalendarDeadline,
   DEFAULT_SETTINGS,
@@ -171,6 +176,10 @@ import {
   pickFolder,
   googleOauthLoopback,
   tvBridgeEval,
+  startRemoteServer,
+  stopRemoteServer,
+  openBrowserWindow,
+  type RemoteServerStatus,
   saveExportFile,
   searchLocalFiles,
 } from "./runtime.js";
@@ -294,6 +303,11 @@ export function App() {
     scanInbox,
     loadCalendar,
     stockQuote,
+    readPage,
+    remoteBusList,
+    remoteBusReply,
+    startHostBridge,
+    stopHostBridge,
     marketIndicators,
     schwabConnect,
     schwabPlaceOrder,
@@ -906,6 +920,29 @@ export function App() {
     [libraryStore],
   );
 
+  // OCR: read the text out of a scanned image with the configured vision model, then open it
+  // as a (technical) document via the paste modal. Reuses the screenshot tool's vision path —
+  // needs a vision-capable model (cloud Claude/Gemini/OpenAI, or a local vision model).
+  const extractTextFromImage = useCallback(
+    async (img: { name: string; bytes: ArrayBuffer; mimeType: string }) => {
+      setShowPhoto(false);
+      setPhotoInitial(undefined);
+      setLocalError("Reading the text in the image…");
+      const r = await assessImage(
+        { bytes: img.bytes.slice(0), mimeType: img.mimeType },
+        "Transcribe ALL text in this image exactly as written, preserving line breaks and reading order. Output only the transcribed text with no commentary. If there is no readable text, reply exactly: (no text found).",
+      );
+      setLocalError("");
+      const text = r.text?.trim();
+      if (r.error || !text || /^\(no text found\)\.?$/i.test(text)) {
+        setLocalError(r.error ? `Couldn't read the image: ${r.error}` : "No readable text found (OCR needs a vision-capable model — see Settings).");
+        return;
+      }
+      setPasteInitial({ title: img.name.replace(/\.[^.]+$/, "") || "Scanned text", text, mode: "technical" });
+      setShowPasteText(true);
+    },
+    [assessImage],
+  );
   const onUpload = useCallback(
     async (file: File) => {
       try {
@@ -1339,6 +1376,57 @@ export function App() {
     },
     [stockSymbol, loadStockQuote],
   );
+  // In-app browser (desktop): read a URL's text + links over the CORS-exempt transport.
+  const [showBrowser, setShowBrowser] = useState(false);
+  const [browserUrl, setBrowserUrl] = useState("");
+  const [browserPage, setBrowserPage] = useState<PageText | null>(null);
+  const [browserLoading, setBrowserLoading] = useState(false);
+  const [browserError, setBrowserError] = useState<string | null>(null);
+  const browserHistory = useRef<string[]>([]);
+  const loadPage = useCallback(
+    async (url: string, pushHistory = true) => {
+      if (pushHistory && browserUrl) browserHistory.current.push(browserUrl);
+      setBrowserUrl(url);
+      setBrowserLoading(true);
+      setBrowserError(null);
+      setBrowserPage(null);
+      try {
+        const r = await readPage(url);
+        if (r.ok && r.page) setBrowserPage(r.page);
+        else setBrowserError(r.error ?? "Couldn't load that page.");
+      } finally {
+        setBrowserLoading(false);
+      }
+    },
+    [browserUrl, readPage],
+  );
+  const openBrowser = useCallback(
+    (url?: string) => {
+      setShowBrowser(true);
+      if (url) void loadPage(url, false);
+    },
+    [loadPage],
+  );
+  const browserBack = useCallback(() => {
+    const prev = browserHistory.current.pop();
+    if (prev) void loadPage(prev, false);
+  }, [loadPage]);
+  // Remote link (LAN, desktop): start/stop the WebSocket relay so a phone on the same Wi-Fi
+  // can drive the assistant. Clicking it IS the opt-in (nothing listens until you start it).
+  const [remoteLink, setRemoteLink] = useState<RemoteServerStatus | null>(null);
+  const toggleRemoteLink = useCallback(async () => {
+    if (remoteLink?.running) {
+      stopHostBridge();
+      await stopRemoteServer();
+      setRemoteLink(null);
+      return;
+    }
+    const token = generatePairingToken();
+    const status = await startRemoteServer(token);
+    setRemoteLink(status);
+    // Bridge this desktop's engine worker to the relay (so the phone client drives it).
+    if (status.running && status.port) startHostBridge(`ws://127.0.0.1:${status.port}/`, token);
+  }, [remoteLink, startHostBridge, stopHostBridge]);
   // Schwab connect (manual code-paste flow, no Rust loopback needed): open the consent
   // URL for the user's own Schwab app, then exchange the redirected ?code=… they paste.
   const [schwabConnected, setSchwabConnected] = useState(false);
@@ -1854,13 +1942,11 @@ export function App() {
       // session's chosen working folder (or the default workspace when unset).
       r = await runCommand(call.command, settings.keys?.github || undefined, buddyWorkingDir || undefined);
     } catch (err) {
-      setBuddyBusy(false);
-      setBuddyActivity("");
-      appendBuddy({
-        role: "tool",
-        text: `⚠ Couldn't run the command: ${err instanceof Error ? err.message : String(err)}`,
-        turns: [],
-      });
+      // Feed the failure back so the buddy explains it + offers a next step (don't dead-end).
+      const message = err instanceof Error ? err.message : String(err);
+      const fail = toolFailureDirective("run_command", message);
+      appendBuddy({ role: "tool", text: `⚠ Couldn't run the command: ${message}`, turns: [...pre, { role: "user", content: fail }] });
+      await dispatchBuddyTurn([...preHistory, ...pre], fail);
       return;
     }
     const feedback = formatBuddyToolResult(call, { command: r });
@@ -1900,9 +1986,11 @@ export function App() {
       if (r.error) throw new Error(r.error);
       observation = r.text ?? "(the vision model returned nothing)";
     } catch (err) {
-      setBuddyBusy(false);
-      setBuddyActivity("");
-      appendBuddy({ role: "tool", text: `⚠ Screenshot failed: ${err instanceof Error ? err.message : String(err)}`, turns: [] });
+      // Feed the failure back so the buddy explains it + offers a next step (don't dead-end).
+      const message = err instanceof Error ? err.message : String(err);
+      const fail = toolFailureDirective("screenshot", message);
+      appendBuddy({ role: "tool", text: `⚠ Screenshot failed: ${message}`, turns: [...pre, { role: "user", content: fail }] });
+      await dispatchBuddyTurn([...preHistory, ...pre], fail);
       return;
     }
     const feedback = formatBuddyToolResult(call, { observation });
@@ -1936,7 +2024,11 @@ export function App() {
     setBuddyBusy(false);
     setBuddyActivity("");
     if (!res.ok || !res.plan) {
-      appendBuddy({ role: "tool", text: `⚠ Couldn't plan that: ${res.error ?? "unknown error"}`, turns: [] });
+      // Feed the failure back so the buddy explains it + offers a next step (don't dead-end).
+      const message = res.error ?? "unknown error";
+      const fail = toolFailureDirective("plan_task", message);
+      appendBuddy({ role: "tool", text: `⚠ Couldn't plan that: ${message}`, turns: [...pre, { role: "user", content: fail }] });
+      await dispatchBuddyTurn([...preHistory, ...pre], fail);
       return;
     }
     const plan = res.plan;
@@ -1958,13 +2050,33 @@ export function App() {
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
+  // Run a delegated subtask: an ISOLATED, read-only sub-agent turn (its own tool loop, empty
+  // history), then feed only its concise result back to the parent conversation. Reuses the
+  // normal buddy turn — the sub-agent can't change anything (read-only by instruction).
+  const runDelegate = async (task: string): Promise<void> => {
+    setBuddyPendingTool(undefined);
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+    setBuddyBusy(true);
+    setBuddyActivity(`Delegating: ${task.slice(0, 60)}…`);
+    const sub = await buddyChat([], buildDelegatePrompt(task), buddyPersona, library, () => {});
+    setBuddyBusy(false);
+    setBuddyActivity("");
+    const answer = sub.text || sub.error || "(the sub-agent returned nothing usable)";
+    appendBuddy({ role: "tool", text: `🔹 Delegated subtask: ${task}\n\n${answer}` });
+    const feedback = `[delegate done — the sub-agent's result for "${task}":]\n${answer}\nUse this to continue your answer.`;
+    await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+  };
+
   // (when set) is shown as the reader's message; a continuation passes none — its
   // "input" is the tool feedback, recorded in the visible result above it.
   const dispatchBuddyTurn = async (
     history: ChatTurn[],
     userText: string,
     userBubbleText?: string,
-  ): Promise<void> => {
+  ): Promise<string | undefined> => {
     const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
     if (userBubbleText !== undefined) appendBuddy({ role: "user", text: userBubbleText });
     setBuddyBusy(true);
@@ -2044,6 +2156,9 @@ export function App() {
         refreshScheduled();
       } else if (e.kind === "alertsChanged") {
         refreshAlerts();
+      } else if (e.kind === "skillLearned") {
+        appendBuddy({ role: "tool", text: `📌 Learned a skill: “${e.name}” — review or edit it in 🧠 Skills.` });
+        refreshSkills();
       } else if (e.kind === "opened") {
         openedBook = true;
         buddyHandoff.current = [...buddyMessages, { role: "user" as const, text: userBubbleText ?? userText, at: Date.now() }]
@@ -2141,6 +2256,9 @@ export function App() {
       } else if (res.pendingTool.tool === "tv_chart") {
         // Drive the reader's TradingView Desktop chart via the CDP bridge (chart-only).
         void runTvChart(res.pendingTool, [{ role: "user", content: userText }, ...res.transcript]);
+      } else if (res.pendingTool.tool === "delegate") {
+        // Hand the subtask to an isolated read-only sub-agent, then feed its result back.
+        void runDelegate(res.pendingTool.task);
       } else {
         setBuddyPendingTool(res.pendingTool);
       }
@@ -2154,6 +2272,7 @@ export function App() {
       });
       if (openedBook) appendChat({ role: "assistant", text: res.text });
     }
+    return res.text || undefined;
   };
 
   const onBuddySend = useCallback(
@@ -2237,6 +2356,34 @@ export function App() {
     }, 60_000);
     return () => clearInterval(id);
   }, [libraryStore, onBuddySendText, refreshScheduled]);
+
+  // Remote bus (phone↔Google↔desktop): when enabled + Google's connected, poll the user's
+  // Google Tasks for "VR:" commands they added from their phone, run each through the buddy,
+  // write the answer back into the task, and mark it done. Reuses the existing buddy turn —
+  // no server, no always-on daemon (the app must be open). One command per tick, never while
+  // a turn is in flight, deduped so a slow run can't double-fire.
+  const busProcessed = useRef<Set<string>>(new Set());
+  const busPollingRef = useRef(false);
+  useEffect(() => {
+    if (!googleConnected || !settings.remoteBus) return;
+    const id = setInterval(() => {
+      if (busPollingRef.current || buddyBusyRef.current) return;
+      busPollingRef.current = true;
+      void (async () => {
+        const r = await remoteBusList();
+        const cmd = r.commands?.find((c) => !busProcessed.current.has(c.id));
+        if (!cmd) return;
+        busProcessed.current.add(cmd.id);
+        const answer = await dispatchBuddyTurn(chatTurnsOf(buddyMessages), cmd.text, `📱 ${cmd.text}`);
+        await remoteBusReply(cmd.id, answer ?? "(done — see the desktop app)").catch(() => {});
+      })()
+        .catch(() => {})
+        .finally(() => {
+          busPollingRef.current = false;
+        });
+    }, 45_000);
+    return () => clearInterval(id);
+  }, [googleConnected, settings.remoteBus, remoteBusList, remoteBusReply, buddyMessages]);
 
   // Price-alert runner: every ~minute, pull fresh indicators for each watched symbol,
   // evaluate the alerts, fire a notification on a trigger, and persist the new state
@@ -2958,6 +3105,24 @@ export function App() {
           >
             📈 Markets
           </button>
+          {isDesktop && (
+            <button
+              style={styles.button}
+              onClick={() => openBrowser()}
+              title="Browse — read any web page (text + links) in the app, then illustrate it or ask the assistant about it"
+            >
+              🌐 Browse
+            </button>
+          )}
+          {isDesktop && (
+            <button
+              style={remoteLink?.running ? { ...styles.button, borderColor: "rgba(90,209,155,0.6)", color: "#9be8c0" } : styles.button}
+              onClick={() => void toggleRemoteLink()}
+              title="Link a phone on your Wi-Fi to drive the assistant (experimental — see REMOTE-LINK.md)"
+            >
+              {remoteLink?.running ? "🔗 Phone linked" : "🔗 Link phone"}
+            </button>
+          )}
           <button
             style={styles.button}
             onClick={() => {
@@ -3445,6 +3610,7 @@ export function App() {
           {...(photoInitial ? { initial: photoInitial } : {})}
           onRender={(text, opts) => testRender(text, opts)}
           onAddToChat={onAddImageToChat}
+          onExtractText={(img) => void extractTextFromImage(img)}
           onClose={() => {
             setShowPhoto(false);
             setPhotoInitial(undefined);
@@ -3635,6 +3801,80 @@ export function App() {
           }}
           onClose={() => setShowStocks(false)}
         />
+      )}
+
+      {showBrowser && (
+        <BrowserPanel
+          url={browserUrl}
+          page={browserPage}
+          loading={browserLoading}
+          error={browserError}
+          canBack={browserHistory.current.length > 0}
+          onUrl={(u) => void loadPage(u)}
+          onBack={browserBack}
+          onClickLink={(u) => void loadPage(u)}
+          {...(isDesktop
+            ? {
+                onOpenLive: (u: string) => {
+                  void openBrowserWindow(u).then((r) => {
+                    if (!r.ok && r.error) setLocalError(r.error);
+                  });
+                },
+              }
+            : {})}
+          onReadIllustrate={(u) => {
+            setShowBrowser(false);
+            onBuddySendText(`Open and illustrate this web page: ${u}`);
+          }}
+          onAskBuddy={(q) => {
+            setShowBrowser(false);
+            onBuddySendText(
+              `About this web page (${browserUrl}): ${q.trim() || "summarise it and tell me the key points."}`,
+            );
+          }}
+          onClose={() => setShowBrowser(false)}
+        />
+      )}
+
+      {remoteLink && (
+        <div
+          style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(8,9,13,0.7)", backdropFilter: "blur(6px)", zIndex: 100, padding: 20 }}
+          onClick={() => setRemoteLink(null)}
+        >
+          <div
+            style={{ width: "min(460px, 100%)", background: "#16181d", color: "#e6e6e6", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12, padding: 18, fontFamily: "system-ui, sans-serif" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <strong style={{ fontSize: 15 }}>🔗 Link a phone</strong>
+            {remoteLink.running ? (
+              <>
+                <p style={{ fontSize: 13, opacity: 0.8, marginTop: 8 }}>
+                  On a phone on the <b>same Wi-Fi</b>, open this address (it carries a one-time pairing code):
+                </p>
+                <code style={{ display: "block", background: "#0d1017", padding: "8px 10px", borderRadius: 6, fontSize: 12, wordBreak: "break-all" }}>
+                  {remoteLink.url}
+                </code>
+                <p style={{ fontSize: 11, opacity: 0.55, marginTop: 8 }}>
+                  Experimental — needs a desktop build with the phone-link command and on-device verification (see
+                  REMOTE-LINK.md). LAN-only; nothing leaves your network. Closing this keeps it running; use 🔗 Phone
+                  linked to stop.
+                </p>
+              </>
+            ) : (
+              <p style={{ fontSize: 13, color: "#ff8c8c", marginTop: 8 }}>⚠ {remoteLink.error ?? "Couldn't start the phone link."}</p>
+            )}
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              {remoteLink.running ? (
+                <button style={styles.button} onClick={() => void toggleRemoteLink()}>
+                  Stop
+                </button>
+              ) : null}
+              <button style={{ ...styles.button, marginLeft: "auto" }} onClick={() => setRemoteLink(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {orderReview && (
@@ -4425,6 +4665,7 @@ function PhotoTransformModal({
   initial,
   onRender,
   onAddToChat,
+  onExtractText,
   onClose,
 }: {
   initial?: { name: string; bytes: ArrayBuffer; mimeType: string } | undefined;
@@ -4439,6 +4680,8 @@ function PhotoTransformModal({
   ) => Promise<TestRenderResult>;
   /** Drop the transformed image into the chat conversation. */
   onAddToChat?: (image: { bytes: ArrayBuffer; mimeType: string }) => void;
+  /** Extract the text from the image (OCR via the vision model) and open it as a document. */
+  onExtractText?: (img: { name: string; bytes: ArrayBuffer; mimeType: string }) => void;
   onClose: () => void;
 }) {
   const [base, setBase] = useState<{ name: string; bytes: ArrayBuffer; mimeType: string } | undefined>(initial);
@@ -4589,6 +4832,16 @@ function PhotoTransformModal({
               {progress !== undefined ? `Rendering… ${Math.round(progress * 100)}%` : "Rendering…"}
             </span>
           )}
+          {onExtractText ? (
+            <button
+              style={styles.button}
+              disabled={busy || !base}
+              onClick={() => base && onExtractText({ name: base.name, bytes: base.bytes, mimeType: base.mimeType })}
+              title="Read the text in this image (OCR via your vision model) and open it as a document"
+            >
+              🔤 Extract text
+            </button>
+          ) : null}
           <button style={styles.buttonPrimary} disabled={busy || !base || !text.trim()} onClick={() => void run()}>
             {busy ? "Working…" : "Transform"}
           </button>

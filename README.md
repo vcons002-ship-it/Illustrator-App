@@ -83,6 +83,15 @@ EPUB ──▶ segment ──▶ Visual Bible (LLM pre-pass) ──▶ pipeline 
   and **`export_book`** (save an illustrated copy of the open book as a self-contained
   HTML page or an EPUB). `run_command`/`screenshot` are off by default behind a Settings
   flag; filesystem and screen access ask per session.
+- **Markets (stocks & trading)** — a **📈 Markets** panel with a keyless TradingView chart +
+  quote, plus chat tools for technical analysis (VWAP/MA/RSI), price-alert watches, and
+  Pine/thinkScript generation — all no-account. Optional opt-ins: connect **Schwab**
+  (the platform behind **thinkorswim**) for real quotes, option chains with Greeks, positions,
+  watchlists (tracked trade ideas), fundamentals, and **review-and-place order prep** (the
+  assistant composes an order; you confirm and click *Place* — it never submits on its own);
+  and an experimental **TradingView Desktop bridge** (CDP) so it can set up your chart directly
+  (chart-only, never trades — see [MARKETS-BRIDGE.md](./MARKETS-BRIDGE.md)). The chat buddy walks
+  you through connecting either one step by step. Not financial advice.
 
 ## Architecture
 
@@ -224,6 +233,8 @@ v1 covers the fiction scene-illustration path end to end, plus the technical
 companion with tools, slash commands, long-term memory, and clarify-when-ambiguous
 prompting), the agentic desktop tools (file find/create, `run_command` with
 test-and-fix iteration, vision screenshots), illustrated HTML/EPUB export, expanded
-import formats + photo transform, keyless web/book search, and opt-in mature mode.
+import formats + photo transform, keyless web/book search, a Markets panel (keyless
+charts/analysis/alerts + optional Schwab/thinkorswim account and TradingView Desktop
+bridge), and opt-in mature mode.
 Deliberately deferred (seams in place): info-graphics output, sanitized-HTML
 article rendering, a hosted backend/billing, and the full local-WebGPU image tier.

@@ -8,6 +8,8 @@ import type {
   CalendarEvent,
   StockQuote,
   Indicators,
+  PageText,
+  BusCommand,
   CharacterPatch,
   ChatTurn,
   ContextUsage,
@@ -122,6 +124,11 @@ export type MainToWorker =
   | { type: "loadCalendar"; requestId: number; timeMin: string; timeMax: string }
   | { type: "stockQuote"; requestId: number; symbol: string }
   | { type: "marketIndicators"; requestId: number; symbol: string; interval?: string; range?: string }
+  /** Fetch a URL's readable text + on-page links for the in-app browser panel. */
+  | { type: "readPage"; requestId: number; url: string }
+  /** Remote bus: list pending "VR:" Google-Task commands; write an answer back + complete one. */
+  | { type: "remoteBusList"; requestId: number }
+  | { type: "remoteBusReply"; requestId: number; id: string; answer: string }
   /** Exchange a Schwab OAuth consent code for tokens (manual-paste connect). */
   | { type: "schwabConnect"; requestId: number; code: string; redirectUri: string }
   /** Place a composed order against the connected Schwab account (host review action). */
@@ -271,6 +278,9 @@ export type WorkerToMain =
   | { type: "buddyScheduledChanged"; requestId: number }
   /** A price alert was created/cancelled by the chat — the host refreshes its list. */
   | { type: "buddyAlertsChanged"; requestId: number }
+  /** The buddy distilled + saved a reusable skill from the turn — the host announces it
+   * and refreshes the Skills list. Arrives just before buddyDone. */
+  | { type: "buddySkillLearned"; requestId: number; name: string }
   /** set_visual_style resolved against the catalog — the main thread (settings
    * owner) commits it. Arrives mid-turn, before the tool result. */
   | {
@@ -301,6 +311,9 @@ export type WorkerToMain =
   | { type: "calendarLoaded"; requestId: number; ok: boolean; events?: CalendarEvent[]; error?: string }
   | { type: "stockQuoted"; requestId: number; ok: boolean; quote?: StockQuote; error?: string }
   | { type: "marketIndicatorsResult"; requestId: number; ok: boolean; indicators?: Indicators; error?: string }
+  | { type: "pageRead"; requestId: number; ok: boolean; page?: PageText; error?: string }
+  | { type: "remoteBusListed"; requestId: number; ok: boolean; commands?: BusCommand[]; error?: string }
+  | { type: "remoteBusReplied"; requestId: number; ok: boolean; error?: string }
   | { type: "schwabConnected"; requestId: number; ok: boolean; error?: string }
   | { type: "schwabOrderPlaced"; requestId: number; ok: boolean; status?: number; error?: string }
   /** Streaming delta while the polish "produce" stage runs. */

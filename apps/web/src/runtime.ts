@@ -293,6 +293,54 @@ export async function tvBridgeEval(expression: string, port?: number): Promise<{
   }
 }
 
+/** Remote-link (LAN) server status: running + the URL/token to show as text/QR. */
+export interface RemoteServerStatus {
+  running: boolean;
+  url?: string;
+  token?: string;
+  port?: number;
+  error?: string;
+}
+
+/**
+ * Start the desktop LAN relay so a phone on the same Wi-Fi can drive the assistant.
+ * Best-effort: needs a desktop build that includes the `remote_server` command (rebuild the
+ * desktop app), and real-device verification. On the web / older builds it degrades to a clear
+ * error instead of throwing.
+ */
+export async function startRemoteServer(token: string, port?: number): Promise<RemoteServerStatus> {
+  if (!isDesktop) return { running: false, error: "The phone link needs the desktop app." };
+  try {
+    return await invoke<RemoteServerStatus>("start_remote_server", { request: { token, ...(port ? { port } : {}) } });
+  } catch (err) {
+    return { running: false, error: err instanceof Error ? err.message : "Phone-link backend unavailable (rebuild the desktop app)." };
+  }
+}
+
+export async function stopRemoteServer(): Promise<void> {
+  if (!isDesktop) return;
+  try {
+    await invoke("stop_remote_server");
+  } catch {
+    /* already stopped or not present */
+  }
+}
+
+/**
+ * Open a live web page in its own desktop window (the in-app browser's "live" mode). The page
+ * runs isolated — no Visual Reader APIs are exposed to it. Best-effort: needs a desktop build
+ * with the `open_browser_window` command; degrades to a clear error on web / older builds.
+ */
+export async function openBrowserWindow(url: string): Promise<{ ok: boolean; error?: string }> {
+  if (!isDesktop) return { ok: false, error: "Opening a live page needs the desktop app." };
+  try {
+    await invoke("open_browser_window", { url });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Live browser unavailable (rebuild the desktop app)." };
+  }
+}
+
 /**
  * Capture a screenshot to PNG bytes (desktop), for the chat's screenshot tool.
  * `window` (a title substring) captures just that window — e.g. a game — even when

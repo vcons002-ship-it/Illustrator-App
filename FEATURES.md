@@ -171,14 +171,25 @@ A **Markets** panel for following and researching stocks:
   say *"pull 3 possible trades from my tracked ideas with the best risk-reward"* and the
   assistant reads the lists, pulls real quotes/option chains, and ranks the top picks each with
   a proposed entry, target, stop and reward-to-risk ratio. Not financial advice.
+- **Theme / sector screens (not just your watchlist)** — *"give me the 3 best photonics stocks
+  to buy on earnings growth + current P/E"* works too: it discovers the names via web research,
+  grounds the fundamentals (P/E, EPS, dividend yield come straight from your Schwab quote when
+  connected) and technicals, and ranks the top picks. Works keyless (pure web research) with no
+  broker connected.
 - **Review-and-place orders** — pick one of those ideas (or just ask it to buy/sell) and it
   **composes** the exact order (equity or option) and opens a review dialog showing precisely
   what will be sent; **you** check the box and click *Place order* — the assistant never submits
   on its own. Real money, not financial advice.
+- **Control your TradingView Desktop chart (experimental, opt-in)** — on the desktop app you can
+  let the assistant set things up *directly in TradingView Desktop*: set the symbol/interval, add
+  studies (VWAP, RSI…), read the chart, inject Pine — *"put VWAP on my chart"*, *"switch to AAPL
+  5-min"*. **Chart-only — it can never place a trade.** Off by default; setup, per-OS launch
+  flags, and update instructions are in [MARKETS-BRIDGE.md](./MARKETS-BRIDGE.md).
 - **Ask the assistant** — one click hands the ticker to the chat for analysis and trade ideas
   (it searches the web for current data and is clear it isn't financial advice).
-- *(A linked broker account such as thinkorswim/Schwab is a separate, deferred enhancement; the
-  chart + quote + analysis work with zero setup.)*
+- *The chart + quote + keyless analysis work with zero setup; connecting Schwab/thinkorswim and
+  the TradingView bridge are optional opt-ins. Ask the assistant "how do I connect Schwab?" and
+  it walks you through it step by step.*
 
 ### 🤝 Chat buddy (the home screen)
 The landing page **is** a full-window chat assistant. Three voices — **Freeform**
@@ -200,14 +211,38 @@ companion), and **Technical** (research companion):
 - **Reads a page or repo for you** — point it at a URL (or a GitHub repo, where it reads
   the README + file list, or a single file) and it pulls the text into the chat to learn
   from before answering or writing code.
+- **In-app browser (desktop)** — a 🌐 Browse panel reads any web page right in the app
+  (readable text + its links, no scripts run), lets you click through links, and then
+  **📖 Read & illustrate** it in the reader or **🤖 Ask the assistant** about it — the same
+  illustrate-the-web idea as the Chrome extension, built into the desktop app. Want the real
+  page? **🖥 Live** opens it in its own window (with scripts), isolated from the app, while the
+  panel keeps the illustrate/ask actions beside it.
 - **Remembers what you like** — tell it "I prefer watercolor" or "never spoil endings" and
   it keeps a **long-term memory** that applies in every future conversation and book (you
   can ask it to forget, too).
+- **Learns skills from experience (opt-in)** — turn on *"let the assistant learn skills from
+  experience"* and, after it works through a multi-step task, it distils a reusable **skill**
+  (a saved playbook) so it handles that kind of task better next time. New skills show up in
+  the 🧠 Skills panel where you can review, edit, or delete them; nothing is saved silently
+  with the toggle off. (You and the assistant can also write skills by hand any time.)
+- **Delegates subtasks** — for a chunky lookup it can hand a focused subtask to a short-lived
+  **read-only sub-agent** that runs its own research loop and returns a concise result, keeping
+  the main answer clean (the sub-agent can't change anything).
+- **Uses your MCP servers** — add **Model Context Protocol** servers in Settings (one per line:
+  `name https://host/mcp`) and the assistant lists their tools and calls them as part of a task,
+  inheriting whatever integrations you've set up.
+- **Voice** — a 🎤 button dictates into the chat with your microphone and a 🔈/🔊 toggle reads
+  replies aloud (browser-native; no key, appears when your browser supports it).
+- **Control from your phone** — leave instructions from anywhere via a `VR:` Google Task (the
+  desktop runs it and writes the answer back), or **🔗 Link phone** for a live thin client over
+  your Wi-Fi. Both opt-in, no cloud — see SETUP.md / REMOTE-LINK.md.
+- **OCR a scan** — drop in a photo/scan of a document and **🔤 Extract text** reads it with your
+  vision model, opening the transcription as a readable (and illustratable) document.
 - **Walks you through setup** — ask *"how do I set up image generation?"*, *"connect my
   calendar"*, or *"enable the task assistant"* and it pulls the app's built-in step-by-step
   guide for that feature and walks you through it one step at a time (image/local models, API
   keys, Google, the task workflow, whole-web figures, Wolfram, GitHub, the desktop tools,
-  mature mode).
+  Schwab/thinkorswim, the TradingView bridge, MCP servers, phone control, voice, mature mode).
 - **Changes settings by request** — just say *"set image quality to high"*, *"use portrait
   orientation"*, *"draw as a comic page"*, *"turn on mature mode"*, or *"enable auto task
   scheduling"* and it applies the change and confirms it (validated against the real options;

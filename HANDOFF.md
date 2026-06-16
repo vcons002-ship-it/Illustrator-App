@@ -6,7 +6,52 @@ Paste-in pointer for a fresh session:
 > work branch, then PR + merge into the default branch (the user's installers
 > and `git pull` track it; `main` was deleted). Read `HANDOFF.md` first.
 
-## Newest session: agentic tools, export, formats & docs
+## Newest session: assistant roadmap (Phases 1–5) on PR #132
+
+All on `claude/chat-context-pull-2l6pkv` (PR #132), each phase its own commit; typecheck + lint +
+tests (875) + web build + `cargo check` green throughout. Things needing **on-device** verification
+are flagged in the commits/docs (no device or listening socket in CI).
+
+- **P1 buddy failure-feedback** (`buddy-tools.ts` toolFailureDirective/toolLimitNudge/
+  isRetryableError; App feeds run_command/screenshot/plan_task failures back).
+- **P2 self-improving skills** (`skill-proposal.ts`; worker reflection pass after a turn, opt-in
+  `autoLearnSkills`; surfaces in the Skills panel).
+- **P3 in-app browser** (`page-text.ts` extractLinks; `readPage` worker op; `BrowserPanel.tsx`;
+  Rust `open_browser_window` for the 🖥 Live isolated webview).
+- **P4 mobile/remote**: 4a `remote-bus.ts` (VR: Google-Task channel; `patchTask` notes), 4b
+  `remote-link.ts` + Rust `start/stop/remote_server_status` (tokio-tungstenite relay) + the
+  **phone thin-client + host bridge** in `useEngineWorker` (guarded; default path unchanged).
+  Remaining: serve the SPA from the relay port; verify two-device.
+- **P5**: `mcp.ts` (MCP HTTP client + mcp_tools/mcp_call), `subagent.ts` (read-only delegate),
+  `voice.ts` + ChatBuddyPanel mic/TTS, OCR via the vision model (PhotoTransformModal 🔤 Extract).
+- **Docs**: SETUP "Power-user extras" + "Markets & trading"; FEATURES bullets; REMOTE-LINK.md +
+  MARKETS-BRIDGE.md; new `setup-guides.ts` entries (schwab, tradingview-bridge, mcp, phone-control,
+  voice) so the buddy walks users through each. Fixed a pre-existing TV-bridge build error
+  (reqwest needed `json`).
+
+## Earlier session: Markets — trading, watchlists, screens, TradingView bridge
+
+PRs #126–#131 (merged) built the **📈 Markets** stack: keyless analytics (VWAP/MA/RSI) +
+in-app price alerts, Pine/thinkScript generation, the **Schwab Trader API** connect (real
+quotes, option chains + Greeks/IV, positions), and **review-and-place order prep** (assistant
+composes → `OrderReviewModal` → user ticks confirm + clicks Place; never auto-submitted).
+
+Open **PR #132** (`claude/chat-context-pull-2l6pkv` → default) adds three follow-ups:
+- **TradingView Desktop chart bridge** (CDP, chart-only, opt-in `allowTradingViewBridge`):
+  `packages/core/src/providers/tv-bridge.ts` (pure, tested — `tvActionScript()` is the single
+  update surface when TV changes), Rust `tv_cdp_eval` + `tungstenite` (needs desktop rebuild /
+  device verification), `tv_chart` buddy tool, `runtime.tvBridgeEval`, settings flag + Markets
+  status row, `MARKETS-BRIDGE.md`.
+- **Schwab watchlists** = tracked trade ideas: `schwabWatchlists`/`parseSchwabWatchlists`,
+  `schwab_watchlists` buddy tool + the "pull N best risk-reward from my tracked ideas" workflow.
+- **Grounded screens**: `schwab_quote` now pulls `fundamental` (P/E, EPS, yield); prompt teaches
+  theme/sector screens (e.g. "best photonics on earnings growth + P/E"), keyless or connected.
+- **Docs/walkthroughs**: two new `setup-guides.ts` entries (`schwab`, `tradingview-bridge`) so the
+  buddy walks users through connecting either step by step; SETUP.md "Markets & trading" section;
+  README + FEATURES Markets updates. Still needs live-account / real-device verification for the
+  Schwab `/accounts/watchlists` + `fundamental` field names and the Rust CDP path.
+
+## Earlier this session: agentic tools, export, formats & docs
 
 Branch `claude/chat-context-pull-2l6pkv`; each piece PR'd and squash-merged into the
 default branch, then merged back to keep the work branch in sync. What landed:

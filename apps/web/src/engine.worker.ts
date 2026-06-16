@@ -48,6 +48,13 @@ import {
   memoryPromptBlock,
   readSkillBody,
   saveSkill,
+  runSkillProposal,
+  worthLearning,
+  busCommands,
+  formatBusReply,
+  parseMcpServers,
+  mcpListTools,
+  mcpCallTool,
   skillsIndexBlock,
   parseBuddySlashCommand,
   parseUnderstanding,
@@ -658,6 +665,15 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "stockQuote":
       void handleStockQuote(msg);
+      break;
+    case "readPage":
+      void handleReadPage(msg);
+      break;
+    case "remoteBusList":
+      void handleRemoteBusList(msg);
+      break;
+    case "remoteBusReply":
+      void handleRemoteBusReply(msg);
       break;
     case "marketIndicators":
       void handleMarketIndicators(msg);
@@ -1366,6 +1382,58 @@ async function handleLoadCalendar(msg: Extract<MainToWorker, { type: "loadCalend
   }
 }
 
+// Remote bus: shared helper to build a Google transport + fresh token, or undefined when
+// Google isn't connected (the host just skips the poll then).
+async function googleAuth(): Promise<{ transport: DirectTransport; token: string } | undefined> {
+  const store = memoryStore();
+  const googleId = settings?.keys?.googleClientId;
+  const googleSecret = settings?.keys?.googleClientSecret;
+  if (!googleId || !googleSecret || !(await loadGoogleTokens(store))) return undefined;
+  const transport = new DirectTransport(corsFetch());
+  const token = await getFreshAccessToken(store, { clientId: googleId, clientSecret: googleSecret, transport });
+  return { transport, token };
+}
+
+async function handleRemoteBusList(msg: Extract<MainToWorker, { type: "remoteBusList" }>): Promise<void> {
+  try {
+    const auth = await googleAuth();
+    if (!auth) {
+      post({ type: "remoteBusListed", requestId: msg.requestId, ok: true, commands: [] });
+      return;
+    }
+    const tasks = await listTasks(auth.transport, auth.token, 30);
+    post({ type: "remoteBusListed", requestId: msg.requestId, ok: true, commands: busCommands(tasks) });
+  } catch (err) {
+    post({ type: "remoteBusListed", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function handleRemoteBusReply(msg: Extract<MainToWorker, { type: "remoteBusReply" }>): Promise<void> {
+  try {
+    const auth = await googleAuth();
+    if (!auth) throw new Error("Google isn't connected.");
+    await patchTask(auth.transport, auth.token, msg.id, { status: "completed", notes: formatBusReply(msg.answer) });
+    post({ type: "remoteBusReplied", requestId: msg.requestId, ok: true });
+  } catch (err) {
+    post({ type: "remoteBusReplied", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function handleReadPage(msg: Extract<MainToWorker, { type: "readPage" }>): Promise<void> {
+  try {
+    const cf = corsFetch();
+    // Reading an arbitrary site is cross-origin; needs the CORS-exempt transport
+    // (desktop/extension). On plain web most sites fail — surfaced as a clear error.
+    const page = await fetchPageText(msg.url, {
+      maxChars: 200_000,
+      ...(cf ? { transport: new DirectTransport(cf) } : {}),
+    });
+    post({ type: "pageRead", requestId: msg.requestId, ok: true, page });
+  } catch (err) {
+    post({ type: "pageRead", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
 async function handleStockQuote(msg: Extract<MainToWorker, { type: "stockQuote" }>): Promise<void> {
   try {
     const cf = corsFetch();
@@ -1600,6 +1668,26 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             },
           }
         : {}),
+      // MCP servers the reader configured (HTTP/streamable). Resolve a server name → URL and
+      // call it over the CORS-exempt transport; undefined name (or no proxy) → no result.
+      ...((): Partial<BuddyDeps> => {
+        const servers = parseMcpServers(settings?.mcpServers);
+        if (servers.length === 0) return {};
+        const cf = corsFetch();
+        if (!cf) return {};
+        const transport = new DirectTransport(cf);
+        const urlOf = (name: string) => servers.find((s) => s.name.toLowerCase() === name.toLowerCase())?.url;
+        return {
+          mcpTools: async (server: string) => {
+            const url = urlOf(server);
+            return url ? mcpListTools(transport, url, ac.signal) : undefined;
+          },
+          mcpCall: async (server: string, toolName: string, args: Record<string, unknown>) => {
+            const url = urlOf(server);
+            return url ? mcpCallTool(transport, url, toolName, args, ac.signal) : undefined;
+          },
+        };
+      })(),
       // Keyless stock quotes (Stooq CSV) over the CORS-exempt transport; undefined on
       // plain web (no proxy) so the model falls back to search_web.
       stockQuote: async (symbol: string) => {
@@ -1813,7 +1901,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         slash.call.tool === "screenshot" ||
         slash.call.tool === "plan_task" ||
         slash.call.tool === "prep_order" ||
-        slash.call.tool === "tv_chart"
+        slash.call.tool === "tv_chart" ||
+        slash.call.tool === "delegate"
       ) {
         post({ type: "buddyDone", requestId: msg.requestId, text: "", transcript: [], pendingTool: slash.call });
         return;
@@ -1878,6 +1967,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           : {}),
         // TradingView Desktop bridge when enabled (desktop + opt-in).
         ...(corsProxyAvailable && settings?.allowTradingViewBridge ? { canTvBridge: true } : {}),
+        // MCP servers the reader configured (advertise their tools), when a proxy can reach them.
+        ...(corsProxyAvailable && parseMcpServers(settings?.mcpServers).length > 0
+          ? { mcpServers: parseMcpServers(settings?.mcpServers).map((s) => s.name) }
+          : {}),
       }) +
       (memory ? `\n\n${memory}` : "") +
       (skills ? `\n\n${skills}` : "") +
@@ -1933,6 +2026,21 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       },
       signal: ac.signal,
     }));
+    // Self-improving skills (opt-in): after a substantive completed turn, look back and
+    // distill a reusable playbook, saving it for next time (the reader reviews/edits it in
+    // the Skills panel). Dedup by name; a failed reflection never breaks the turn.
+    if (!outcome.pendingTool && settings?.autoLearnSkills && worthLearning(outcome.toolResults)) {
+      try {
+        post({ type: "buddyThinking", requestId: msg.requestId, text: "Reflecting on what I learned…" });
+        const candidate = await runSkillProposal(llm, { goal: msg.userText, transcript: outcome.transcript, signal: ac.signal });
+        if (candidate && !(await loadSkills(store)).some((s) => s.name.toLowerCase() === candidate.name.toLowerCase())) {
+          await saveSkill(store, candidate);
+          post({ type: "buddySkillLearned", requestId: msg.requestId, name: candidate.name });
+        }
+      } catch {
+        // Reflection is best-effort — skip silently on any failure.
+      }
+    }
     post({
       type: "buddyDone",
       requestId: msg.requestId,

@@ -11,6 +11,7 @@ import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../provid
 import { formatQuote, type StockQuote } from "../providers/stocks.js";
 import { formatIndicators, type Indicators } from "../providers/market-data.js";
 import type { OptionChain, SchwabPosition, SchwabQuote, SchwabWatchlist } from "../providers/schwab.js";
+import { formatMcpTools, type McpTool } from "./mcp.js";
 import type { TaskPlan } from "./tasks.js";
 
 /**
@@ -181,10 +182,51 @@ export type BuddyToolCall =
   | { tool: "mark_step_done"; planId: string; stepId: string }
   | { tool: "update_task_step"; planId: string; stepId: string; status?: string; notes?: string }
   | { tool: "list_task_plans" }
-  | { tool: "get_task_plan"; id: string };
+  | { tool: "get_task_plan"; id: string }
+  /** Call the reader's own MCP servers (when configured): list a server's tools, or call one. */
+  | { tool: "mcp_tools"; server: string }
+  | { tool: "mcp_call"; server: string; toolName: string; args?: Record<string, unknown> }
+  /** Hand a focused subtask to a read-only sub-agent (host-run; stops the loop). */
+  | { tool: "delegate"; task: string };
 
 /** Generous: a "style + random pick + open + prose" flow is three tools deep. */
 export const MAX_BUDDY_TOOL_ROUNDS = 5;
+
+/**
+ * A model-facing directive for when a HOST-run tool (run_command, screenshot, plan_task…)
+ * fails, so the buddy explains the failure and proposes a next step instead of dead-ending
+ * in a silent "⚠ …" bubble. Mirrors the error wording `formatBuddyToolResult` uses for
+ * auto-run tools, but tailored to actions (not "another source / paste the text").
+ */
+export function toolFailureDirective(tool: string, message: string): string {
+  return (
+    `[tool ${tool} failed: ${message}] Tell the reader plainly what went wrong, then suggest ONE ` +
+    "concrete next step — fix it and try again, take a different approach, or ask them how they'd " +
+    "like to proceed. Do not silently retry the same thing."
+  );
+}
+
+/**
+ * When the buddy is about to exhaust its per-turn tool budget, nudge it to answer now rather
+ * than burn the final round on a tool whose result it can't act on. Appended to the last
+ * tool feedback; returns "" when not near the cap.
+ */
+export function toolLimitNudge(round: number, max = MAX_BUDDY_TOOL_ROUNDS): string {
+  return round >= max - 1
+    ? "\n\n[You've reached your tool-call limit for this turn — do NOT call another tool. Give the " +
+        "reader your best answer now with what you have, and note briefly what's still open, if anything.]"
+    : "";
+}
+
+/**
+ * Whether a tool error reads as transient (network blip / timeout / rate limit) and is worth
+ * exactly ONE automatic retry before the failure is surfaced to the model.
+ */
+export function isRetryableError(message: string): boolean {
+  return /\b(timed?\s?out|timeout|network|fetch failed|econnreset|etimedout|enotfound|temporar(y|ily)|rate.?limit|too many requests|429|503|504|connection (reset|refused|closed))\b/i.test(
+    message,
+  );
+}
 
 /** Injection guards (mirrors chat-tools.ts). */
 const MAX_QUERY_CHARS = 200;
@@ -229,6 +271,8 @@ export function buildBuddySystemPrompt(opts: {
   canSchwab?: boolean;
   /** TradingView Desktop bridge is enabled: advertise the tv_chart control tool. */
   canTvBridge?: boolean;
+  /** Configured MCP server names — advertise mcp_tools / mcp_call for them. */
+  mcpServers?: string[];
   /** Task automation opted in: create reminders directly without per-item confirm. */
   canAutomateTasks?: boolean;
   /** The active task plan's context (this chat opened a task) — enables the step tools. */
@@ -439,6 +483,13 @@ export function buildBuddySystemPrompt(opts: {
         "controls the CHART only — never trades. If it reports the chart/API wasn't found, tell them to open a chart in " +
         "TradingView Desktop (launched with remote debugging — see the Markets panel).\n"
       : "") +
+    (opts.mcpServers && opts.mcpServers.length > 0
+      ? `- {"tool":"mcp_tools","server":"${opts.mcpServers[0]}"} / {"tool":"mcp_call","server":"${opts.mcpServers[0]}",` +
+        '"toolName":"…","args":{…}} — the reader connected their own MCP servers: ' +
+        opts.mcpServers.join(", ") +
+        ". Call mcp_tools first to see a server's tools + their arguments, then mcp_call to run one and use its " +
+        "result in your answer. Use when the task matches an MCP tool the reader has (integrations they set up).\n"
+      : "") +
     (opts.canSchwab
       ? '- {"tool":"schwab_quote","symbol":"AAPL"} / {"tool":"schwab_options","symbol":"AAPL","contractType":"ALL",' +
         '"strikeCount":10} / {"tool":"schwab_positions"} — the reader connected their Schwab account (the platform behind ' +
@@ -465,6 +516,10 @@ export function buildBuddySystemPrompt(opts: {
     '- {"tool":"market_analysis","symbol":"AAPL","interval":"5m","range":"1d"} — keyless TECHNICAL indicators (VWAP, ' +
     "SMA20/50, EMA12/26, RSI14, recent move). Use for intraday/technical questions — VWAP watch levels, trend vs the " +
     'moving averages, momentum, entry points. "interval"/"range" default to intraday ("5m"/"1d"); use "1d"/"6mo" for swing.\n' +
+    '- {"tool":"delegate","task":"…"} — hand a focused, self-contained SUBTASK to a read-only ' +
+    "sub-agent that runs its own research loop and returns a concise result (e.g. \"research the top 3 EU " +
+    "photonics firms by revenue\"). Use it to parallelise/offload a chunky lookup so your main answer stays " +
+    "clean; the sub-agent can't change anything. Don't delegate trivial things you can answer directly.\n" +
     "- THEME/SCREEN requests (e.g. \"the 3 best photonics stocks to buy on earnings growth + P/E\") work even with no broker " +
     "connected: use search_web/read_url to find the candidate tickers and the fundamentals asked for (P/E, earnings growth, " +
     "margins…), stock_quote/market_analysis for price + technicals, then rank the top N against the reader's criteria with a " +
@@ -794,6 +849,29 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
     const id = strArg(obj.id, MAX_ID_CHARS);
     return id ? { tool, id } : undefined;
   }
+  if (tool === "mcp_tools") {
+    const server = strArg(obj.server, MAX_NAME_CHARS);
+    return server ? { tool, server } : undefined;
+  }
+  if (tool === "mcp_call") {
+    const server = strArg(obj.server, MAX_NAME_CHARS);
+    const toolName = strArg(obj.toolName, MAX_NAME_CHARS);
+    if (!server || !toolName) return undefined;
+    // Pass the args object through, but bound its serialized size so a runaway arg can't bloat.
+    let args: Record<string, unknown> | undefined;
+    if (obj.args && typeof obj.args === "object" && !Array.isArray(obj.args)) {
+      try {
+        if (JSON.stringify(obj.args).length <= MAX_PASTE_CHARS) args = obj.args as Record<string, unknown>;
+      } catch {
+        /* unserialisable args — drop */
+      }
+    }
+    return { tool, server, toolName, ...(args ? { args } : {}) };
+  }
+  if (tool === "delegate") {
+    const task = strArg(obj.task, MAX_PASTE_CHARS);
+    return task ? { tool, task } : undefined;
+  }
   if (tool === "remove_library_book") {
     const id = strArg(obj.id, MAX_ID_CHARS);
     return id ? { tool, id } : undefined;
@@ -923,6 +1001,9 @@ export interface BuddyToolResultPayload {
   optionChain?: OptionChain;
   positions?: SchwabPosition[];
   watchlists?: SchwabWatchlist[];
+  /** MCP outcomes (when servers are configured). */
+  mcpToolsList?: { server: string; tools: McpTool[] };
+  mcpResult?: { server: string; tool: string; text: string };
   /** What set_visual_style actually applied (resolved style LABEL). */
   applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
   /** Whether an approved image generation succeeded. */
@@ -1249,6 +1330,16 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
         .map((s, i) => `${i + 1}. [${s.status}] ${s.title} (${s.actor === "ai_prep" ? "AI preps" : "reader does"}) (step id: ${s.id})`)
         .join("\n")
     );
+  }
+  if (call.tool === "mcp_tools") {
+    const r = result.mcpToolsList;
+    if (!r) return `[mcp_tools: no server named "${call.server}" (check Settings → MCP servers), or it returned nothing]`;
+    return formatMcpTools(r.server, r.tools) + "\nCall one with mcp_call (server, toolName, args).";
+  }
+  if (call.tool === "mcp_call") {
+    const r = result.mcpResult;
+    if (!r) return `[mcp_call failed: no server "${call.server}" or the call errored] Tell the reader plainly and suggest checking the server/tool name.`;
+    return `[mcp ${r.server}/${r.tool} result]\n${r.text || "(empty)"}\nUse this to answer the reader.`;
   }
   if (call.tool === "find_files") {
     const files = result.files ?? [];

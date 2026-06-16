@@ -211,6 +211,14 @@ export interface ReaderSettings {
    * (set symbol, add studies, read state, inject Pine) via its DevTools bridge. Chart-only
    * — it never trades. Requires TradingView Desktop launched with remote debugging. */
   allowTradingViewBridge?: boolean;
+  /** OFF by default: after a multi-step task the buddy distills a reusable "skill" (playbook)
+   * and saves it so it does that kind of task better next time. Reviewable in the Skills panel. */
+  autoLearnSkills?: boolean;
+  /** OFF by default: drive the desktop assistant from your phone via Google Tasks — add a to-do
+   * starting "VR:" and the app (while open) runs it and writes the answer back. Needs Google. */
+  remoteBus?: boolean;
+  /** Optional MCP servers the buddy can call — one per line: `name https://host/mcp`. */
+  mcpServers?: string;
   /** Transient: base URL of the app-managed local engine (desktop; not persisted). */
   engineBaseUrl?: string;
 }
@@ -666,6 +674,53 @@ export function SettingsPanel({
                 the adjustable safety filters on Gemini and Flux and tells the models not to
                 sanitise; Claude and OpenAI still apply their own policies regardless.
               </span>
+            </span>
+          </label>
+          <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+            <input
+              type="checkbox"
+              checked={value.autoLearnSkills ?? false}
+              onChange={(e) => set({ autoLearnSkills: e.target.checked })}
+            />
+            <span>
+              Let the assistant learn skills from experience
+              <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                After it works through a multi-step task, the assistant distils a reusable
+                “skill” (a saved playbook) so it handles that kind of task better next time. New
+                skills appear in the 🧠 Skills panel where you can review, edit, or delete them.
+                Off by default; it adds a short reflection step at the end of those turns.
+              </span>
+            </span>
+          </label>
+          <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+            <input
+              type="checkbox"
+              checked={value.remoteBus ?? false}
+              onChange={(e) => set({ remoteBus: e.target.checked })}
+            />
+            <span>
+              Run commands from my phone (via Google Tasks)
+              <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                Add a to-do in Google Tasks whose title starts with <b>VR:</b> (e.g. “VR: summarise
+                my unread email”) from your phone; while this app is open it picks it up, runs it,
+                writes the answer back into the task, and marks it done — so you read the result on
+                your phone. No server, no cloud — it uses your own Google account. Needs Google
+                connected; off by default.
+              </span>
+            </span>
+          </label>
+          <label style={{ ...rowStyle, marginTop: 8 }}>
+            <span>MCP servers (optional)</span>
+            <textarea
+              value={value.mcpServers ?? ""}
+              onChange={(e) => set({ mcpServers: e.target.value })}
+              placeholder={"one per line:  name https://host/mcp\nweather https://my-mcp.example/mcp"}
+              rows={2}
+              style={{ fontFamily: "monospace", fontSize: 12, resize: "vertical", width: "100%" }}
+            />
+            <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+              Let the assistant call your own <b>Model Context Protocol</b> servers (HTTP). It lists a server’s
+              tools and calls them as part of a task. Best on desktop (CORS-free access).
             </span>
           </label>
           </Group>

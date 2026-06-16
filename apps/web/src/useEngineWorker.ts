@@ -1,4 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  base64ToBytes,
+  bytesToBase64,
+  decodeFrame,
+  deserializeFromRemote,
+  encodeFrame,
+  isLocalOnlyMessage,
+  remoteModeFromHash,
+  serializeForRemote,
+  type RemoteMode,
+} from "@visual-reader/core";
 import type {
   BookPassage,
   BookSearchHit,
@@ -15,6 +26,8 @@ import type {
   ImageSearchHit,
   CalendarEvent,
   StockQuote,
+  PageText,
+  BusCommand,
   Indicators,
   ImportStats,
   PolishMode,
@@ -171,6 +184,16 @@ export interface EngineWorkerApi {
   loadCalendar: (timeMin: string, timeMax: string) => Promise<{ ok: boolean; events?: CalendarEvent[] }>;
   /** Fetch a keyless stock quote (Stooq via the CORS-exempt transport). */
   stockQuote: (symbol: string) => Promise<{ ok: boolean; quote?: StockQuote }>;
+  /** Fetch a URL's readable text + on-page links for the in-app browser. */
+  readPage: (url: string) => Promise<{ ok: boolean; page?: PageText; error?: string }>;
+  /** Remote bus: list pending "VR:" Google-Task commands; write an answer back + complete one. */
+  remoteBusList: () => Promise<{ ok: boolean; commands?: BusCommand[] }>;
+  remoteBusReply: (id: string, answer: string) => Promise<{ ok: boolean; error?: string }>;
+  /** LAN phone link: bridge this desktop's engine worker to the relay (start/stop with the link). */
+  startHostBridge: (wsUrl: string, token: string) => void;
+  stopHostBridge: () => void;
+  /** True when THIS tab is a phone client driving a remote desktop (opened via a #vrlink). */
+  isRemoteClient: boolean;
   /** Fetch keyless technical indicators (VWAP/MA/RSI/recent-move) for a symbol. */
   marketIndicators: (symbol: string, interval?: string, range?: string) => Promise<{ ok: boolean; indicators?: Indicators }>;
   /** Run one document-polish stage; returns the requestId (for cancel) + the result. */
@@ -216,6 +239,8 @@ export type BuddyStreamEvent =
   | { kind: "scheduledChanged" }
   /** set_price_alert/cancel_alert changed the alerts list — refresh it. */
   | { kind: "alertsChanged" }
+  /** The buddy distilled + saved a reusable skill — announce it + refresh the Skills list. */
+  | { kind: "skillLearned"; name: string }
   /** set_visual_style resolved — the app (settings owner) should commit it. */
   | {
       kind: "settings";
@@ -379,6 +404,11 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const calendarRequests = useRef<Map<number, (r: { ok: boolean; events?: CalendarEvent[] }) => void>>(new Map());
   // In-flight stock-quote fetches, resolved by `stockQuoted`.
   const quoteRequests = useRef<Map<number, (r: { ok: boolean; quote?: StockQuote }) => void>>(new Map());
+  // In-flight page reads (in-app browser), resolved by `pageRead`.
+  const pageRequests = useRef<Map<number, (r: { ok: boolean; page?: PageText; error?: string }) => void>>(new Map());
+  // In-flight remote-bus list/reply ops (phone↔Google↔desktop).
+  const busListRequests = useRef<Map<number, (r: { ok: boolean; commands?: BusCommand[] }) => void>>(new Map());
+  const busReplyRequests = useRef<Map<number, (r: { ok: boolean; error?: string }) => void>>(new Map());
   // In-flight indicator fetches, resolved by `marketIndicatorsResult`.
   const indicatorRequests = useRef<Map<number, (r: { ok: boolean; indicators?: Indicators }) => void>>(new Map());
   // In-flight document-polish stages, resolved by `polished` (and streamed via `polishToken`).
@@ -386,32 +416,54 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     Map<number, { onToken?: (delta: string) => void; resolve: (r: PolishResult) => void }>
   >(new Map());
 
-  const send = (msg: MainToWorker, transfer: Transferable[] = []) =>
-    workerRef.current?.postMessage(msg, transfer);
+  // PHONE-CLIENT MODE: when opened via a #vrlink=… link, this tab drives a remote desktop
+  // engine over the relay instead of a local Web Worker. Detected once. (Undefined normally —
+  // the default local-worker path below is unchanged.)
+  const remoteRef = useRef<RemoteMode | undefined>(
+    typeof window !== "undefined" ? remoteModeFromHash(window.location.hash, window.location.host) : undefined,
+  );
+  const phoneWsRef = useRef<WebSocket | undefined>(undefined);
+  // HOST-BRIDGE: on the desktop, when a phone is linked, mirror the engine worker to the relay.
+  const hostBridgeRef = useRef<{ ws: WebSocket; token: string } | undefined>(undefined);
 
-  useEffect(() => {
-    let worker: Worker;
-    try {
-      worker = new Worker(new URL("./engine.worker.ts", import.meta.url), {
-        type: "module",
-      });
-    } catch (err) {
-      setStatus(
-        `Error: couldn't start the engine worker — ${err instanceof Error ? err.message : String(err)}`,
-      );
+  const send = (msg: MainToWorker, transfer: Transferable[] = []) => {
+    const remote = remoteRef.current;
+    if (remote && phoneWsRef.current) {
+      // No local worker on the phone — frame the request to the desktop over the relay.
+      if (phoneWsRef.current.readyState === WebSocket.OPEN) {
+        phoneWsRef.current.send(encodeFrame(remote.token, serializeForRemote(msg, bytesToBase64)));
+      }
       return;
     }
-    // Surface worker load/runtime crashes instead of failing silently (a dead
-    // worker = no badges, no generation, endless "painting…").
-    worker.onerror = (e: ErrorEvent) => {
-      setStatus(
-        `Error: engine worker crashed — ${e.message || "module failed to load"}` +
-          (e.filename ? ` (${e.filename}:${e.lineno})` : ""),
-      );
+    workerRef.current?.postMessage(msg, transfer);
+  };
+  const startHostBridge = useCallback((wsUrl: string, token: string) => {
+    hostBridgeRef.current?.ws.close();
+    const ws = new WebSocket(wsUrl);
+    ws.onmessage = (e) => {
+      // A request from the linked phone — run it on the desktop's real engine worker.
+      if (typeof e.data !== "string") return;
+      const payload = decodeFrame(e.data, token);
+      if (payload && !isLocalOnlyMessage(payload)) workerRef.current?.postMessage(deserializeFromRemote(payload, base64ToBytes));
     };
-    worker.onmessageerror = () => setStatus("Error: engine worker sent an undecodable message");
-    worker.onmessage = (event: MessageEvent<WorkerToMain>) => {
-      const msg = event.data;
+    ws.onclose = () => {
+      if (hostBridgeRef.current?.ws === ws) hostBridgeRef.current = undefined;
+    };
+    hostBridgeRef.current = { ws, token };
+  }, []);
+  const stopHostBridge = useCallback(() => {
+    hostBridgeRef.current?.ws.close();
+    hostBridgeRef.current = undefined;
+  }, []);
+
+  useEffect(() => {
+    // The entire message-handling switch, reused by both the local worker and the phone WS.
+    const handleMsg = (msg: WorkerToMain) => {
+      // Host bridge: mirror the engine's output to a linked phone (skip local-only CORS msgs).
+      const hb = hostBridgeRef.current;
+      if (hb && hb.ws.readyState === WebSocket.OPEN && !isLocalOnlyMessage(msg)) {
+        hb.ws.send(encodeFrame(hb.token, serializeForRemote(msg, bytesToBase64)));
+      }
       switch (msg.type) {
         case "corsFetch": {
           // Worker → Rust shell relay (workers can't reach the Tauri bridge).
@@ -616,6 +668,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "alertsChanged" });
           break;
         }
+        case "buddySkillLearned": {
+          buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "skillLearned", name: msg.name });
+          break;
+        }
         case "buddySettings": {
           buddyRequests.current.get(msg.requestId)?.onEvent({
             kind: "settings",
@@ -701,6 +757,24 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           resolve?.({ ok: msg.ok, ...(msg.quote ? { quote: msg.quote } : {}) });
           break;
         }
+        case "pageRead": {
+          const resolve = pageRequests.current.get(msg.requestId);
+          pageRequests.current.delete(msg.requestId);
+          resolve?.({ ok: msg.ok, ...(msg.page ? { page: msg.page } : {}), ...(msg.error ? { error: msg.error } : {}) });
+          break;
+        }
+        case "remoteBusListed": {
+          const resolve = busListRequests.current.get(msg.requestId);
+          busListRequests.current.delete(msg.requestId);
+          resolve?.({ ok: msg.ok, ...(msg.commands ? { commands: msg.commands } : {}) });
+          break;
+        }
+        case "remoteBusReplied": {
+          const resolve = busReplyRequests.current.get(msg.requestId);
+          busReplyRequests.current.delete(msg.requestId);
+          resolve?.({ ok: msg.ok, ...(msg.error ? { error: msg.error } : {}) });
+          break;
+        }
         case "marketIndicatorsResult": {
           const resolve = indicatorRequests.current.get(msg.requestId);
           indicatorRequests.current.delete(msg.requestId);
@@ -730,6 +804,44 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           break;
       }
     };
+
+    // PHONE-CLIENT MODE: no local worker — drive the desktop engine over the relay.
+    const remote = remoteRef.current;
+    if (remote) {
+      const ws = new WebSocket(remote.wsUrl);
+      ws.onopen = () => setStatus("Linked to a desktop");
+      ws.onclose = () => setStatus("Disconnected from the desktop");
+      ws.onerror = () => setStatus("Error: couldn't reach the desktop on this network");
+      ws.onmessage = (e) => {
+        if (typeof e.data !== "string") return;
+        const payload = decodeFrame(e.data, remote.token);
+        if (payload && !isLocalOnlyMessage(payload)) handleMsg(deserializeFromRemote(payload, base64ToBytes) as WorkerToMain);
+      };
+      phoneWsRef.current = ws;
+      return () => ws.close();
+    }
+
+    let worker: Worker;
+    try {
+      worker = new Worker(new URL("./engine.worker.ts", import.meta.url), {
+        type: "module",
+      });
+    } catch (err) {
+      setStatus(
+        `Error: couldn't start the engine worker — ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    // Surface worker load/runtime crashes instead of failing silently (a dead
+    // worker = no badges, no generation, endless "painting…").
+    worker.onerror = (e: ErrorEvent) => {
+      setStatus(
+        `Error: engine worker crashed — ${e.message || "module failed to load"}` +
+          (e.filename ? ` (${e.filename}:${e.lineno})` : ""),
+      );
+    };
+    worker.onmessageerror = () => setStatus("Error: engine worker sent an undecodable message");
+    worker.onmessage = (event: MessageEvent<WorkerToMain>) => handleMsg(event.data);
     workerRef.current = worker;
     return () => worker.terminate();
   }, []);
@@ -1239,6 +1351,51 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const readPage = useCallback(
+    (url: string): Promise<{ ok: boolean; page?: PageText; error?: string }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (pageRequests.current.delete(requestId)) resolve({ ok: false, error: "Timed out loading the page." });
+        }, 30_000);
+        pageRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "readPage", requestId, url });
+      }),
+    [],
+  );
+  const remoteBusList = useCallback(
+    (): Promise<{ ok: boolean; commands?: BusCommand[] }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (busListRequests.current.delete(requestId)) resolve({ ok: false });
+        }, 20_000);
+        busListRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "remoteBusList", requestId });
+      }),
+    [],
+  );
+  const remoteBusReply = useCallback(
+    (id: string, answer: string): Promise<{ ok: boolean; error?: string }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (busReplyRequests.current.delete(requestId)) resolve({ ok: false, error: "Timed out." });
+        }, 20_000);
+        busReplyRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "remoteBusReply", requestId, id, answer });
+      }),
+    [],
+  );
   const marketIndicators = useCallback(
     (symbol: string, interval?: string, range?: string): Promise<{ ok: boolean; indicators?: Indicators }> =>
       new Promise((resolve) => {
@@ -1345,6 +1502,12 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     scanInbox,
     loadCalendar,
     stockQuote,
+    readPage,
+    remoteBusList,
+    remoteBusReply,
+    startHostBridge,
+    stopHostBridge,
+    isRemoteClient: !!remoteRef.current,
     marketIndicators,
     polishText,
     polishCancel,

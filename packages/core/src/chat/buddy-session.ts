@@ -4,7 +4,9 @@ import type { BookSearchHit } from "../providers/book-search.js";
 import {
   MAX_BUDDY_TOOL_ROUNDS,
   formatBuddyToolResult,
+  isRetryableError,
   parseBuddyToolCall,
+  toolLimitNudge,
   type BuddyOpenedInfo,
   type BuddyToolCall,
   type BuddyToolResultPayload,
@@ -50,6 +52,9 @@ export interface BuddyDeps {
   schwabOptions?: (symbol: string, opts?: { contractType?: "CALL" | "PUT" | "ALL"; strikeCount?: number }) => Promise<import("../providers/schwab.js").OptionChain | undefined>;
   schwabPositions?: () => Promise<import("../providers/schwab.js").SchwabPosition[]>;
   schwabWatchlists?: () => Promise<import("../providers/schwab.js").SchwabWatchlist[]>;
+  /** MCP servers (present only when the reader configured some). */
+  mcpTools?: (server: string) => Promise<import("./mcp.js").McpTool[] | undefined>;
+  mcpCall?: (server: string, toolName: string, args: Record<string, unknown>) => Promise<string | undefined>;
   /** Random picks from the catalog's most-loved shelf ("surprise me"). */
   randomBooks?: () => Promise<BookSearchHit[]>;
   /** Open a library book by id; the host posts the BookSource to the UI itself. */
@@ -159,7 +164,8 @@ export async function runBuddyTurn(opts: {
       call.tool === "screenshot" ||
       call.tool === "plan_task" ||
       call.tool === "prep_order" ||
-      call.tool === "tv_chart"
+      call.tool === "tv_chart" ||
+      call.tool === "delegate"
     ) {
       // Stops the loop for the host/UI: generate_image needs render approval;
       // find_files needs the reader's OK before any filesystem access; run_command
@@ -167,10 +173,17 @@ export async function runBuddyTurn(opts: {
       // the main thread runs after the reader confirms.
       return { text: "", transcript, pendingTool: call, toolResults };
     }
-    const result = await runBuddyTool(call, opts.deps);
+    let result = await runBuddyTool(call, opts.deps);
+    // One automatic retry for a transient (network/timeout/rate-limit) failure before the
+    // error is shown to the model — turns a flaky blip into a silent recovery.
+    if (result.error && isRetryableError(result.error)) {
+      result = await runBuddyTool(call, opts.deps);
+    }
     toolResults.push({ call, result });
     opts.onEvent?.({ kind: "toolResult", round, call, result });
-    const feedback = formatBuddyToolResult(call, result);
+    // On the final tool round, append a wrap-up nudge so the model answers now instead of
+    // spending its last round on a tool whose result it can't follow up on.
+    const feedback = formatBuddyToolResult(call, result) + toolLimitNudge(round);
     transcript.push({ role: "user", content: feedback });
     messages.push({ role: "user", content: feedback });
   }
@@ -179,7 +192,7 @@ export async function runBuddyTurn(opts: {
 /** Execute one auto-run buddy tool (everything but generate_image). Exported for
  * the slash-command path, which runs tools directly without an LLM round. */
 export async function runBuddyTool(
-  call: Exclude<BuddyToolCall, { tool: "generate_image" | "find_files" | "run_command" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" }>,
+  call: Exclude<BuddyToolCall, { tool: "generate_image" | "find_files" | "run_command" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" }>,
   deps: BuddyDeps,
 ): Promise<BuddyToolResultPayload> {
   try {
@@ -256,6 +269,16 @@ export async function runBuddyTool(
       case "schwab_watchlists": {
         if (!deps.schwabWatchlists) return { error: "Schwab isn't connected (connect it in Settings)." };
         return { watchlists: await deps.schwabWatchlists() };
+      }
+      case "mcp_tools": {
+        if (!deps.mcpTools) return { error: "No MCP servers are configured (add some in Settings)." };
+        const tools = await deps.mcpTools(call.server);
+        return tools ? { mcpToolsList: { server: call.server, tools } } : {};
+      }
+      case "mcp_call": {
+        if (!deps.mcpCall) return { error: "No MCP servers are configured (add some in Settings)." };
+        const text = await deps.mcpCall(call.server, call.toolName, call.args ?? {});
+        return text !== undefined ? { mcpResult: { server: call.server, tool: call.toolName, text } } : {};
       }
       case "trading_script": {
         // Pure: verified Pine/thinkScript templates, no host dependency.

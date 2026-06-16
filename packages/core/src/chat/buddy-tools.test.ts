@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_BUDDY_TOOL_ROUNDS,
   buildBuddySystemPrompt,
   formatBuddyToolResult,
+  isRetryableError,
   parseBuddyToolCall,
+  toolFailureDirective,
+  toolLimitNudge,
 } from "./buddy-tools.js";
 
 describe("parseBuddyToolCall", () => {
@@ -676,5 +680,31 @@ describe("find_files tool", () => {
     expect(hit).toContain("Don't invent file names");
     const miss = formatBuddyToolResult({ tool: "find_files", query: "x" }, { files: [] });
     expect(miss).toContain("found nothing");
+  });
+});
+
+describe("failure feedback helpers", () => {
+  it("toolFailureDirective names the tool + error and asks for a next step", () => {
+    const d = toolFailureDirective("run_command", "ENOENT: no such file");
+    expect(d).toContain("run_command failed: ENOENT: no such file");
+    expect(d).toMatch(/next step/i);
+    expect(d).toMatch(/do not silently retry/i);
+  });
+
+  it("toolLimitNudge fires only on the final round", () => {
+    expect(toolLimitNudge(0)).toBe("");
+    expect(toolLimitNudge(MAX_BUDDY_TOOL_ROUNDS - 2)).toBe("");
+    expect(toolLimitNudge(MAX_BUDDY_TOOL_ROUNDS - 1)).toMatch(/tool-call limit/i);
+    expect(toolLimitNudge(MAX_BUDDY_TOOL_ROUNDS)).toMatch(/tool-call limit/i);
+  });
+
+  it("isRetryableError catches transient blips but not logic errors", () => {
+    expect(isRetryableError("fetch failed")).toBe(true);
+    expect(isRetryableError("Request timed out")).toBe(true);
+    expect(isRetryableError("429 Too Many Requests")).toBe(true);
+    expect(isRetryableError("ETIMEDOUT")).toBe(true);
+    expect(isRetryableError("connection refused")).toBe(true);
+    expect(isRetryableError("Schwab isn't connected")).toBe(false);
+    expect(isRetryableError("invalid symbol")).toBe(false);
   });
 });
