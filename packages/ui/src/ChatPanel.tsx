@@ -118,6 +118,7 @@ const LANG_EXT: Record<string, string> = {
   markdown: "md", md: "md", yaml: "yaml", yml: "yml", sql: "sql",
   sh: "sh", bash: "sh", shell: "sh", java: "java", c: "c", cpp: "cpp", "c++": "cpp",
   cs: "cs", go: "go", rust: "rs", rs: "rs", rb: "rb", ruby: "rb", php: "php", toml: "toml", ini: "ini",
+  pine: "pine", pinescript: "pine", thinkscript: "ts", tos: "ts",
 };
 /** Extension + a friendly default base name for a code block's language. */
 export function fileForLang(lang: string): { ext: string; base: string; mime: string } {

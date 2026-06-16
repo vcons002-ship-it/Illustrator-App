@@ -13,6 +13,7 @@ export * from "./settings-control.js";
 export * from "./tasks.js";
 export * from "./scheduled-tasks.js";
 export * from "./price-alerts.js";
+export * from "./trading-scripts.js";
 export * from "./task-planner.js";
 export * from "./task-scan.js";
 export * from "./slash-commands.js";

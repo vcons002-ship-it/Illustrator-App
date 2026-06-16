@@ -412,6 +412,24 @@ describe("stock_quote tool", () => {
     expect(out).toContain("VWAP 202");
     expect(out).toMatch(/watch levels/i);
   });
+
+  it("parses + advertises trading_script and returns it in a fenced block", () => {
+    expect(parseBuddyToolCall('{"tool":"trading_script","platform":"pine","kind":"rsi","level":80,"length":9}')).toEqual({
+      tool: "trading_script",
+      platform: "pine",
+      kind: "rsi",
+      level: 80,
+      length: 9,
+    });
+    expect(parseBuddyToolCall('{"tool":"trading_script","platform":"pine","kind":"bogus"}')).toBeUndefined();
+    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"trading_script"');
+    const out = formatBuddyToolResult(
+      { tool: "trading_script", platform: "thinkscript", kind: "vwap_cross" },
+      { tradingScript: { lang: "ts", script: "# VWAP\nAlert(...)", where: "thinkorswim → Studies" } },
+    );
+    expect(out).toContain("```ts");
+    expect(out).toContain("thinkorswim → Studies");
+  });
 });
 
 describe("create_spreadsheet tool", () => {

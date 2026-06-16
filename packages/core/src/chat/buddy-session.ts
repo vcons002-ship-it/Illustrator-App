@@ -12,6 +12,7 @@ import {
 import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../providers/google.js";
 import type { TaskPlan } from "./tasks.js";
 import { findSetupGuide, setupGuideTopics } from "./setup-guides.js";
+import { buildTradingScript, scriptLanguage } from "./trading-scripts.js";
 import { parseSettingChange } from "./settings-control.js";
 import { evaluateExpression, formatCalcResult } from "./calculator.js";
 import { evaluateMath } from "./math-engine.js";
@@ -231,6 +232,18 @@ export async function runBuddyTool(
         if (!deps.cancelAlert) return { error: "price alerts aren't available right now" };
         await deps.cancelAlert(call.id);
         return {};
+      case "trading_script": {
+        // Pure: verified Pine/thinkScript templates, no host dependency.
+        const { lang, where } = scriptLanguage(call.platform);
+        const script = buildTradingScript(call.platform, call.kind, {
+          ...(call.level !== undefined ? { level: call.level } : {}),
+          ...(call.length !== undefined ? { length: call.length } : {}),
+          ...(call.fast !== undefined ? { fast: call.fast } : {}),
+          ...(call.slow !== undefined ? { slow: call.slow } : {}),
+          ...(call.maType ? { maType: call.maType } : {}),
+        });
+        return { tradingScript: { lang, script, where } };
+      }
       case "open_library_book":
         return { opened: await deps.openLibraryBook(call) };
       case "open_web_text":
