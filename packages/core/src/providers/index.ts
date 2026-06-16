@@ -4,6 +4,7 @@ export * from "./wolfram.js";
 export * from "./stocks.js";
 export * from "./market-data.js";
 export * from "./schwab.js";
+export * from "./tv-bridge.js";
 export * from "./google.js";
 export * from "./gemini-safety.js";
 export * from "./llm/llm-provider.js";

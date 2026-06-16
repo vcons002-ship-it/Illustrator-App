@@ -69,6 +69,16 @@ export type BuddyToolCall =
       orderType: "MARKET" | "LIMIT";
       price?: number;
     }
+  /** Drive the reader's TradingView Desktop chart (when the bridge is on): set symbol/
+   * interval, add/clear studies, read state, inject Pine. Host-run (stops the loop). */
+  | {
+      tool: "tv_chart";
+      action: "set_symbol" | "set_interval" | "add_study" | "remove_studies" | "read_state" | "inject_pine";
+      symbol?: string;
+      interval?: string;
+      study?: string;
+      pine?: string;
+    }
   /** Generate a ready-to-paste TradingView Pine Script or thinkorswim thinkScript
    * alert/study (the reader pastes it into their own platform). */
   | {
@@ -215,6 +225,8 @@ export function buildBuddySystemPrompt(opts: {
   canGoogle?: boolean;
   /** Schwab is connected: advertise the real quote / option-chain / positions tools. */
   canSchwab?: boolean;
+  /** TradingView Desktop bridge is enabled: advertise the tv_chart control tool. */
+  canTvBridge?: boolean;
   /** Task automation opted in: create reminders directly without per-item confirm. */
   canAutomateTasks?: boolean;
   /** The active task plan's context (this chat opened a task) — enables the step tools. */
@@ -417,6 +429,14 @@ export function buildBuddySystemPrompt(opts: {
     '- {"tool":"stock_quote","symbol":"AAPL"} — fetch the latest KEYLESS stock quote (price/open/high/low/volume) to ' +
     "ground market analysis in real numbers when the reader asks about a stock/ticker. Pair it with search_web for news " +
     "and fundamentals, then give a balanced read (bull + bear) and any ideas — and always note it isn't financial advice.\n" +
+    (opts.canTvBridge
+      ? '- {"tool":"tv_chart","action":"add_study","study":"Volume Weighted Average Price"} — DRIVE the reader\'s ' +
+        'TradingView Desktop chart directly (the bridge is on). actions: "set_symbol" (symbol), "set_interval" ' +
+        '(interval e.g. "60"/"D"), "add_study" (study name), "remove_studies", "read_state", "inject_pine" (pine). Use ' +
+        'when they ask to set up/change their TradingView chart ("put VWAP on my chart", "switch to AAPL 5-min"). It ' +
+        "controls the CHART only — never trades. If it reports the chart/API wasn't found, tell them to open a chart in " +
+        "TradingView Desktop (launched with remote debugging — see the Markets panel).\n"
+      : "") +
     (opts.canSchwab
       ? '- {"tool":"schwab_quote","symbol":"AAPL"} / {"tool":"schwab_options","symbol":"AAPL","contractType":"ALL",' +
         '"strikeCount":10} / {"tool":"schwab_positions"} — the reader connected their Schwab account: real quotes, ' +
@@ -587,6 +607,18 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
     return { tool, symbol, ...(contractType ? { contractType } : {}), ...(strikeCount !== undefined ? { strikeCount } : {}) };
   }
   if (tool === "schwab_positions") return { tool };
+  if (tool === "tv_chart") {
+    const actions = ["set_symbol", "set_interval", "add_study", "remove_studies", "read_state", "inject_pine"];
+    if (typeof obj.action !== "string" || !actions.includes(obj.action)) return undefined;
+    return {
+      tool,
+      action: obj.action as "read_state",
+      ...(strArg(obj.symbol, MAX_NAME_CHARS) ? { symbol: strArg(obj.symbol, MAX_NAME_CHARS)! } : {}),
+      ...(strArg(obj.interval, 8) ? { interval: strArg(obj.interval, 8)! } : {}),
+      ...(strArg(obj.study, MAX_TITLE_CHARS) ? { study: strArg(obj.study, MAX_TITLE_CHARS)! } : {}),
+      ...(strArg(obj.pine, MAX_PASTE_CHARS) ? { pine: strArg(obj.pine, MAX_PASTE_CHARS)! } : {}),
+    };
+  }
   if (tool === "prep_order") {
     const symbol = strArg(obj.symbol, MAX_NAME_CHARS);
     const instruction = strArg(obj.instruction, MAX_NAME_CHARS);

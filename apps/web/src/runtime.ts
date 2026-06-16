@@ -280,6 +280,20 @@ export function googleOauthLoopback(args: {
 }
 
 /**
+ * TradingView Desktop bridge (desktop only): run one JS expression in the user's
+ * TradingView Desktop chart via its Chrome DevTools port and return the JSON value.
+ * Inert (reports unavailable) on the web and on older desktop builds. See MARKETS-BRIDGE.md.
+ */
+export async function tvBridgeEval(expression: string, port?: number): Promise<{ ok: boolean; value?: string; error?: string }> {
+  if (!isDesktop) return { ok: false, error: "The TradingView bridge needs the desktop app." };
+  try {
+    return await invoke<{ ok: boolean; value?: string; error?: string }>("tv_cdp_eval", { request: { expression, ...(port ? { port } : {}) } });
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "TradingView bridge backend unavailable (rebuild the desktop app)." };
+  }
+}
+
+/**
  * Capture a screenshot to PNG bytes (desktop), for the chat's screenshot tool.
  * `window` (a title substring) captures just that window — e.g. a game — even when
  * the app is focused; omit it to capture the primary screen. Only reached after the

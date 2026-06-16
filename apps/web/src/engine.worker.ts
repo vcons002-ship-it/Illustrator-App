@@ -1810,7 +1810,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         slash.call.tool === "run_command" ||
         slash.call.tool === "screenshot" ||
         slash.call.tool === "plan_task" ||
-        slash.call.tool === "prep_order"
+        slash.call.tool === "prep_order" ||
+        slash.call.tool === "tv_chart"
       ) {
         post({ type: "buddyDone", requestId: msg.requestId, text: "", transcript: [], pendingTool: slash.call });
         return;
@@ -1873,6 +1874,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         ...(settings?.keys?.schwabClientId && settings?.keys?.schwabClientSecret && (await loadSchwabTokens(store))
           ? { canSchwab: true }
           : {}),
+        // TradingView Desktop bridge when enabled (desktop + opt-in).
+        ...(corsProxyAvailable && settings?.allowTradingViewBridge ? { canTvBridge: true } : {}),
       }) +
       (memory ? `\n\n${memory}` : "") +
       (skills ? `\n\n${skills}` : "") +
