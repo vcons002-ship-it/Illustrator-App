@@ -110,6 +110,10 @@ worked with end to end:
 - **Build & extend by chat** — ask the assistant to *create* a sheet from scratch, *set* a
   cell or formula (`set C2 to =A2*B2`), or *add a computed column* that fills down every row
   (`add a Margin column = revenue − cost`) using real Excel functions (SUM/IF/SUMIF/VLOOKUP/…).
+- **Formulas compute live** — a built-in evaluator runs your formulas right in the grid
+  (`=B2-C2` shows its number, chained cells and ranges resolve, results feed the chat's
+  analysis), so you see answers immediately — no need to open Excel. Anything it can't
+  evaluate keeps the value Excel already computed.
 - **Grounded analysis in chat** — ask for counts, sums, averages, group-bys, pivots,
   filters, distributions; the app computes them over the **real cells** (never guessed) and
   shows the result as a table + chart you can also download.

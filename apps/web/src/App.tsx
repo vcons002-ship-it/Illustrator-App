@@ -32,6 +32,7 @@ import {
   formatFileSize,
   chartDatasetFromTable,
   buildAnalysisTable,
+  recalcTable,
   setTableCell,
   setColumnFormula,
   parseA1,
@@ -755,14 +756,16 @@ export function App() {
   // worker so the chat's analyze_data sees the change. All grid edits route through here.
   const mutateBookTable = useCallback(
     (sheetIndex: number | null, fn: (t: DataTable) => DataTable) => {
+      // Edit, then recompute formula cells so the grid + chat see live results.
+      const apply = (t: DataTable) => recalcTable(fn(t));
       setBook((prev) => {
         if (!prev) return prev;
         let next: BookSource;
         if (sheetIndex !== null && prev.dataSheets) {
-          const sheets = prev.dataSheets.map((s, i) => (i === sheetIndex ? { ...s, table: fn(s.table) } : s));
+          const sheets = prev.dataSheets.map((s, i) => (i === sheetIndex ? { ...s, table: apply(s.table) } : s));
           next = { ...prev, dataSheets: sheets, ...(sheets[0] ? { data: sheets[0].table } : {}) };
         } else if (prev.data) {
-          next = { ...prev, data: fn(prev.data) };
+          next = { ...prev, data: apply(prev.data) };
         } else {
           return prev;
         }

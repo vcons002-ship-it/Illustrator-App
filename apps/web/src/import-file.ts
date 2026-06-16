@@ -2,6 +2,7 @@ import {
   classifyJson,
   dataTableFromGrid,
   parseJsonValue,
+  recalcTable,
   tableToText,
   type BookSource,
   type DataTable,
@@ -108,7 +109,11 @@ export async function importBookFile(file: File): Promise<ImportedFile> {
       // Read EVERY worksheet, not just the first. The primary table (`data`) drives
       // the chat's analyze_data; `dataSheets` keeps all tabs for viewing / re-export.
       const sheets = xlsxToWorkbook(await file.arrayBuffer())
-        .map((s) => ({ name: s.name, table: dataTableFromGrid(s.grid, s.formulas) }))
+        .map((s) => {
+          const table = dataTableFromGrid(s.grid, s.formulas);
+          // Recompute supported formulas live; unsupported ones keep Excel's cached value.
+          return { name: s.name, table: table ? recalcTable(table) : undefined };
+        })
         .filter((s): s is { name: string; table: DataTable } => !!s.table);
       const data = sheets[0]?.table;
       // Text the extraction reads: each sheet labelled, so multi-sheet context is kept.
