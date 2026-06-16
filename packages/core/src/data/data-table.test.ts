@@ -3,9 +3,11 @@ import {
   addColumn,
   addRow,
   dataTableFromGrid,
+  parseA1,
   removeColumn,
   removeRow,
   renameColumn,
+  setColumnFormula,
   setTableCell,
   type DataTable,
 } from "./data-table.js";
@@ -104,5 +106,23 @@ describe("formulas", () => {
     expect(removeRow(withF, 1).formulas).toBeUndefined(); // the formula row itself removed
     expect(addColumn(withF, "X", 0).formulas).toEqual({ "1,2": "B2*2" }); // pushed right
     expect(removeColumn(withF, 1).formulas).toBeUndefined(); // the formula column removed
+  });
+});
+
+describe("A1 references + fill-down formulas", () => {
+  it("parses A1 refs to data coords and rejects the header / out-of-range", () => {
+    expect(parseA1(base, "A2")).toEqual({ row: 0, col: 0 }); // first data cell
+    expect(parseA1(base, "B3")).toEqual({ row: 1, col: 1 });
+    expect(parseA1(base, "$B$2")).toEqual({ row: 0, col: 1 }); // absolute refs ok
+    expect(parseA1(base, "B1")).toBeUndefined(); // header row
+    expect(parseA1(base, "C2")).toBeUndefined(); // no column C
+    expect(parseA1(base, "A9")).toBeUndefined(); // beyond the data
+    expect(parseA1(base, "nope")).toBeUndefined();
+  });
+
+  it("fills a {r}-templated formula down a column with each row's Excel row", () => {
+    const t = setColumnFormula(addColumn(base, "Double"), 2, "B{r}*2");
+    expect(t.formulas).toEqual({ "0,2": "B2*2", "1,2": "B3*2" });
+    expect(setColumnFormula(base, 9, "x")).toBe(base); // out-of-range column: no-op
   });
 });

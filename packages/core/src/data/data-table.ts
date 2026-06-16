@@ -181,6 +181,45 @@ export function columnIndexByName(table: DataTable, name: string): number {
   return table.columns.findIndex((c) => c.name.toLowerCase() === key);
 }
 
+/** "A"/"BC" → 0-based column index. */
+function lettersToColumn(letters: string): number {
+  let n = 0;
+  for (const ch of letters.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+
+/**
+ * Parse an Excel A1 reference into 0-based DATA-table coordinates. The header is Excel
+ * row 1, so data row `r` is Excel row `r + 2`. Returns undefined for the header row,
+ * out-of-range cells, or malformed input — so a chat-authored cell edit can't land
+ * outside the table.
+ */
+export function parseA1(table: DataTable, ref: string): { row: number; col: number } | undefined {
+  const m = /^([A-Za-z]+)\$?(\d+)$/.exec(ref.trim().replace(/\$/g, ""));
+  if (!m) return undefined;
+  const col = lettersToColumn(m[1]!);
+  const excelRow = Number(m[2]);
+  if (excelRow < 2) return undefined; // header or above — not a data cell
+  const row = excelRow - 2;
+  if (col < 0 || col >= table.columns.length || row >= table.rows.length) return undefined;
+  return { row, col };
+}
+
+/**
+ * Set a `{r}`-templated formula on EVERY data row of a column — Excel "fill down": the
+ * `{r}` placeholder becomes each row's Excel row number (data row 0 → row 2). E.g.
+ * `"B{r}*C{r}"` yields `=B2*C2`, `=B3*C3`, … Reuses setTableCell, so the formula map
+ * is maintained. Out-of-range column returns the table unchanged.
+ */
+export function setColumnFormula(table: DataTable, colIndex: number, template: string): DataTable {
+  if (colIndex < 0 || colIndex >= table.columns.length) return table;
+  let next = table;
+  for (let r = 0; r < table.rows.length; r++) {
+    next = setTableCell(next, r, colIndex, `=${template.replace(/\{r\}/g, String(r + 2))}`);
+  }
+  return next;
+}
+
 /** A unique, trimmed column name (appends " (2)", " (3)" on collision). */
 function uniqueColumnName(existing: readonly DataColumn[], desired: string): string {
   const base = desired.trim() || `Column ${existing.length + 1}`;

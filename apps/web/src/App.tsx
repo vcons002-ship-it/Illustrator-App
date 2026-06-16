@@ -33,6 +33,8 @@ import {
   chartDatasetFromTable,
   buildAnalysisTable,
   setTableCell,
+  setColumnFormula,
+  parseA1,
   addRow,
   removeRow,
   addColumn,
@@ -1409,6 +1411,11 @@ export function App() {
           void runChatDataExport(format, totals, !!analyze, chart, [{ role: "user", content: text }, ...res.transcript]);
           return;
         }
+        // set_cell / add_formula_column edit the open spreadsheet in place.
+        if (res.pendingTool.tool === "set_cell" || res.pendingTool.tool === "add_formula_column") {
+          void runChatDataEdit(res.pendingTool, [{ role: "user", content: text }, ...res.transcript]);
+          return;
+        }
         pendingTranscript.current = [{ role: "user", content: text }, ...res.transcript];
         setChatPendingTool(res.pendingTool);
         return;
@@ -2451,6 +2458,41 @@ export function App() {
         ? `⤓ Saved as ${format.toUpperCase()}${e.totals ? ` with a live ${e.totals} totals row` : ""}${e.analyze ? " + an Analysis sheet of live formulas" : ""}${e.chart ? ` + an embedded ${e.chart} chart` : ""}${e.where !== "your downloads" ? ` → ${e.where}` : " (check your downloads)"}`
         : `⚠ Export failed: ${e.error}`,
       turns: [...modelTurns, { role: "user", content: formatToolResult({ tool: "export_data", format, ...(totals ? { totals } : {}), ...(analyze ? { analyze: true } : {}), ...(chart ? { chart } : {}) }, payload) }],
+    });
+  };
+
+  // The in-book chat's set_cell / add_formula_column tools: author a value or formula
+  // into the open spreadsheet (the primary table), persist it, and sync it to the chat.
+  const runChatDataEdit = (
+    call:
+      | { tool: "set_cell"; ref: string; value?: string | number; formula?: string }
+      | { tool: "add_formula_column"; name: string; formula: string },
+    modelTurns: ChatTurn[],
+  ): void => {
+    if (!book?.data) return;
+    const multi = !!(book.dataSheets && book.dataSheets.length > 1);
+    const sheetIndex = multi ? 0 : null;
+    const target = multi ? book.dataSheets![0]!.table : book.data;
+    let summary = "";
+    let error = "";
+    if (call.tool === "set_cell") {
+      const at = parseA1(target, call.ref);
+      if (!at) {
+        error = `"${call.ref}" isn't an editable data cell in this sheet`;
+      } else {
+        const raw = call.formula !== undefined ? `=${call.formula}` : String(call.value ?? "");
+        mutateBookTable(sheetIndex, (t) => setTableCell(t, at.row, at.col, raw));
+        summary = call.formula !== undefined ? `Set ${call.ref} to =${call.formula}` : `Set ${call.ref} to ${call.value ?? ""}`;
+      }
+    } else {
+      mutateBookTable(sheetIndex, (t) => setColumnFormula(addColumn(t, call.name), t.columns.length, call.formula));
+      summary = `Added a computed column “${call.name}” = ${call.formula}`;
+    }
+    const payload: ToolResultPayload = { dataEdit: error ? { ok: false, error } : { ok: true, summary } };
+    appendChat({
+      role: "tool",
+      text: error ? `⚠ ${error}` : `✎ ${summary}`,
+      turns: [...modelTurns, { role: "user", content: formatToolResult(call, payload) }],
     });
   };
 

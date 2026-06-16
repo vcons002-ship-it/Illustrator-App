@@ -45,6 +45,12 @@ export type ToolCall =
       /** Embed a native (editable) Excel chart over the data. */
       chart?: "bar" | "line" | "pie";
     }
+  /** Author a value or formula into ONE data cell by its A1 reference (e.g. set C2 to
+   * "=A2*B2"). Edits the open spreadsheet in place. */
+  | { tool: "set_cell"; ref: string; value?: string | number; formula?: string }
+  /** Add a new COMPUTED column whose formula fills down every data row — use "{r}" for
+   * the current row's Excel row number, e.g. "B{r}*C{r}" or "IF(D{r}>100,\"high\",\"low\")". */
+  | { tool: "add_formula_column"; name: string; formula: string }
   /** Grounded analysis of the uploaded spreadsheet/CSV (the app computes over real
    * cells — group-by / pivot / aggregate / describe / filter — and optionally charts it). */
   | ({ tool: "analyze_data"; chart?: AnalyzeChart } & AnalyzeSpec)
@@ -85,8 +91,13 @@ export function dataToolsBlock(table: DataTable): string {
     "sheet of live Excel formulas (count/sum/average/median/min/max/stdev/variance per column + correlation and",
     "linear-regression slope/intercept/R² across the first two numeric columns) — that's how you make an Excel file",
     "with working built-in functions that analyses the data natively. Add \"chart\":\"bar\" (or \"line\"/\"pie\") to",
-    "embed a NATIVE, editable Excel chart over the data. The reader can also edit cells (and type =formulas) in the",
-    "grid directly.",
+    "embed a NATIVE, editable Excel chart over the data.",
+    "TO EDIT/EXTEND the sheet on request: {\"tool\":\"set_cell\",\"ref\":\"C2\",\"formula\":\"A2*B2\"} sets one cell by its",
+    'A1 reference (use "value" for a literal, "formula" for an Excel formula without the =). {"tool":"add_formula_',
+    'column","name":"Margin","formula":"B{r}-C{r}"} adds a COMPUTED column that fills down every row — write "{r}"',
+    "for the current row's Excel row number (data starts at row 2), e.g. B{r}*C{r} or IF(D{r}>100,1,0). Use real",
+    "Excel functions (SUM/IF/SUMIF/SUMPRODUCT/VLOOKUP/ROUND/…) and double quotes for any text literals inside a",
+    "formula. The reader can also edit cells (and type =formulas) in the grid directly.",
   ].join("\n");
 }
 
@@ -180,6 +191,19 @@ export function parseToolCall(text: string): ToolCall | undefined {
       ...(obj.analyze === true ? { analyze: true } : {}),
       ...(chart ? { chart } : {}),
     };
+  }
+  if (tool === "set_cell") {
+    const ref = strArg(obj.ref, 12);
+    if (!ref) return undefined;
+    const formula = strArg(obj.formula, 400);
+    const value = typeof obj.value === "number" ? obj.value : strArg(obj.value, 400);
+    if (formula === undefined && value === undefined) return undefined;
+    return { tool, ref, ...(formula !== undefined ? { formula } : {}), ...(value !== undefined ? { value } : {}) };
+  }
+  if (tool === "add_formula_column") {
+    const name = strArg(obj.name, 80);
+    const formula = strArg(obj.formula, 400);
+    return name && formula ? { tool, name, formula } : undefined;
   }
   if (tool === "analyze_data") return parseAnalyzeData(obj);
   if (
@@ -282,6 +306,8 @@ export interface ToolResultPayload {
   export?: { ok: boolean; format: string; where: string; images: number; error?: string };
   /** An export_data outcome (where the .xlsx/.csv was saved). */
   dataExport?: { ok: boolean; format: string; where: string; totals?: string; analyze?: boolean; chart?: string; error?: string };
+  /** A set_cell / add_formula_column outcome (applied to the open spreadsheet). */
+  dataEdit?: { ok: boolean; summary?: string; error?: string };
   /** Whether an approved image generation succeeded. */
   image?: { ok: boolean; error?: string };
   /** A grounded analyze_data outcome — the computed result table + summary (+ chart). */
@@ -367,6 +393,13 @@ export function formatToolResult(call: ToolCall, result: ToolResultPayload): str
     return e.ok
       ? `[exported the book as ${e.format} with ${e.images} illustration${e.images === 1 ? "" : "s"} — saved ${e.where}] Confirm it briefly.`
       : `[export_book failed: ${e.error ?? "unknown error"}] Tell the reader.`;
+  }
+  if (call.tool === "set_cell" || call.tool === "add_formula_column") {
+    const e = result.dataEdit;
+    if (!e) return `[${call.tool} did nothing]`;
+    return e.ok
+      ? `[${e.summary ?? "updated the spreadsheet"}] Confirm the change to the reader briefly; the grid + chat now reflect it.`
+      : `[${call.tool} failed: ${e.error ?? "couldn't apply that edit"}] Tell the reader.`;
   }
   if (call.tool === "export_data") {
     const e = result.dataExport;
