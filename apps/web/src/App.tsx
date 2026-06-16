@@ -3561,8 +3561,9 @@ const ReaderColumn = memo(function ReaderColumn({
           </div>
           {dataEdit ? (
             <div style={{ fontSize: 11, opacity: 0.55, marginTop: 4 }}>
-              Click a cell to edit, a header to rename it, ✕ to delete a row/column, or “+ Row / + Column” to add — changes
-              save automatically and the chat re-analyses them.
+              Click a cell to select it (edit its value or =formula in the bar above), double-click to edit inline, a
+              header to rename, ✕ to delete a row/column, ⇅ to sort — changes save automatically and the chat re-analyses
+              them.
             </div>
           ) : null}
           {dataChart ? (
