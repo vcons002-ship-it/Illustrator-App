@@ -498,6 +498,17 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "open":
       void handleOpen(msg.book);
       break;
+    case "updateBookData":
+      // Grid edits: patch the cached book's table(s) so analyze_data uses the new
+      // values immediately (no costly re-open / bible rebuild).
+      if (currentBook) {
+        currentBook = {
+          ...currentBook,
+          ...(msg.data ? { data: msg.data } : {}),
+          ...(msg.dataSheets ? { dataSheets: msg.dataSheets } : {}),
+        };
+      }
+      break;
     case "close":
       handleClose();
       break;

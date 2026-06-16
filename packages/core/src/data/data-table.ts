@@ -79,6 +79,43 @@ export function dataTableFromGrid(grid: string[][]): DataTable | undefined {
   return { columns: names.map((name, c) => ({ name, type: types[c]! })), rows };
 }
 
+/**
+ * Set one cell from a raw (edited) string, returning a NEW table (immutable). The
+ * value is coerced to the column's type: a number column parses the input (blank →
+ * null); if a number column gets non-numeric text, that column is downgraded to
+ * "string" so the edit is kept faithfully rather than silently dropped. Out-of-range
+ * indices return the table unchanged.
+ */
+export function setTableCell(table: DataTable, rowIndex: number, colIndex: number, raw: string): DataTable {
+  if (rowIndex < 0 || rowIndex >= table.rows.length || colIndex < 0 || colIndex >= table.columns.length) {
+    return table;
+  }
+  const trimmed = raw.trim();
+  const col = table.columns[colIndex]!;
+  let columns = table.columns;
+  let value: CellValue;
+  if (col.type === "number") {
+    if (trimmed === "") {
+      value = null;
+    } else {
+      const n = parseNumericCell(trimmed);
+      if (n === undefined) {
+        // Non-numeric input into a number column: keep it, demote the column to text.
+        value = trimmed;
+        columns = table.columns.map((c, i) => (i === colIndex ? { ...c, type: "string" as const } : c));
+      } else {
+        value = n;
+      }
+    }
+  } else {
+    value = trimmed === "" ? null : trimmed;
+  }
+  const rows = table.rows.map((r, ri) =>
+    ri === rowIndex ? r.map((v, ci) => (ci === colIndex ? value : v)) : r,
+  );
+  return { columns, rows };
+}
+
 /** Case-insensitive column lookup; returns -1 when absent. */
 export function columnIndexByName(table: DataTable, name: string): number {
   const key = name.trim().toLowerCase();

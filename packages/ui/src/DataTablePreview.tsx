@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import type { CellValue, DataTable } from "@visual-reader/core";
 
 /**
@@ -22,6 +22,9 @@ export interface DataTablePreviewProps {
   maxHeight?: number;
   /** Optional caption above the table, e.g. "Spreadsheet — 1,240 rows × 8 columns". */
   caption?: string;
+  /** When set, cells become editable: click one, type, and commit (Enter/blur) to
+   * fire this with the raw text. The host coerces + persists (see setTableCell). */
+  onEditCell?: (rowIndex: number, colIndex: number, raw: string) => void;
 }
 
 export const DataTablePreview = memo(function DataTablePreview({
@@ -29,9 +32,16 @@ export const DataTablePreview = memo(function DataTablePreview({
   maxRows = 100,
   maxHeight = 360,
   caption,
+  onEditCell,
 }: DataTablePreviewProps) {
   const rows = table.rows.slice(0, Math.max(0, maxRows));
   const hidden = table.rows.length - rows.length;
+  // Which cell is being edited + its in-progress draft (uncontrolled would lose focus).
+  const [editing, setEditing] = useState<{ r: number; c: number; draft: string } | null>(null);
+  const commit = () => {
+    if (editing) onEditCell?.(editing.r, editing.c, editing.draft);
+    setEditing(null);
+  };
   return (
     <figure style={{ margin: 0 }}>
       {caption ? <figcaption style={captionStyle}>{caption}</figcaption> : null}
@@ -51,11 +61,35 @@ export const DataTablePreview = memo(function DataTablePreview({
               <tr key={ri}>
                 {r.map((v, ci) => {
                   const text = formatCell(v);
+                  const isEditing = editing?.r === ri && editing?.c === ci;
+                  const align = table.columns[ci]?.type === "number" ? "right" : "left";
+                  if (isEditing) {
+                    return (
+                      <td key={ci} style={{ ...tdStyle, padding: 0, textAlign: align }}>
+                        <input
+                          autoFocus
+                          value={editing.draft}
+                          onChange={(e) => setEditing({ r: ri, c: ci, draft: e.target.value })}
+                          onBlur={commit}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") commit();
+                            else if (e.key === "Escape") setEditing(null);
+                          }}
+                          style={{ ...cellInputStyle, textAlign: align }}
+                        />
+                      </td>
+                    );
+                  }
                   return (
                     <td
                       key={ci}
-                      title={text}
-                      style={{ ...tdStyle, textAlign: table.columns[ci]?.type === "number" ? "right" : "left" }}
+                      title={onEditCell ? "Click to edit" : text}
+                      onClick={onEditCell ? () => setEditing({ r: ri, c: ci, draft: v === null ? "" : String(v) }) : undefined}
+                      style={{
+                        ...tdStyle,
+                        textAlign: align,
+                        ...(onEditCell ? { cursor: "cell" } : {}),
+                      }}
                     >
                       {text}
                     </td>
@@ -105,6 +139,19 @@ const tdStyle = {
   maxWidth: 260,
   overflow: "hidden",
   textOverflow: "ellipsis",
+} as const;
+
+const cellInputStyle = {
+  width: "100%",
+  boxSizing: "border-box",
+  background: "#0d1017",
+  color: "#fff",
+  border: "1px solid rgba(122,162,255,0.8)",
+  borderRadius: 3,
+  padding: "2px 7px",
+  fontSize: 12,
+  fontFamily: "inherit",
+  outline: "none",
 } as const;
 
 const captionStyle = { fontSize: 11, opacity: 0.6, margin: "0 0 4px" } as const;

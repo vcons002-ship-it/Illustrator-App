@@ -31,6 +31,7 @@ import {
   rankLocalFiles,
   formatFileSize,
   chartDatasetFromTable,
+  setTableCell,
   loadSkills,
   saveSkill,
   forgetSkill,
@@ -223,6 +224,7 @@ export function App() {
     paused,
     openBook: openInWorker,
     closeBook,
+    updateBookData,
     startGeneration,
     resume,
     pauseBible,
@@ -738,6 +740,35 @@ export function App() {
         .catch(() => {});
     },
     [openInWorker, libraryStore],
+  );
+
+  // Edit a cell in the open spreadsheet's grid: coerce to the column type, update the
+  // book (the active sheet, and `data` when it aliases that sheet), persist it, and
+  // push the edit to the worker so the chat's analyze_data uses the new values.
+  const onEditDataCell = useCallback(
+    (sheetIndex: number | null, row: number, col: number, raw: string) => {
+      setBook((prev) => {
+        if (!prev) return prev;
+        let next: BookSource;
+        if (sheetIndex !== null && prev.dataSheets) {
+          const sheets = prev.dataSheets.map((s, i) =>
+            i === sheetIndex ? { ...s, table: setTableCell(s.table, row, col, raw) } : s,
+          );
+          next = { ...prev, dataSheets: sheets, ...(sheets[0] ? { data: sheets[0].table } : {}) };
+        } else if (prev.data) {
+          next = { ...prev, data: setTableCell(prev.data, row, col, raw) };
+        } else {
+          return prev;
+        }
+        void libraryStore.putBook(next).catch(() => {});
+        updateBookData({
+          ...(next.data ? { data: next.data } : {}),
+          ...(next.dataSheets ? { dataSheets: next.dataSheets } : {}),
+        });
+        return next;
+      });
+    },
+    [libraryStore, updateBookData],
   );
 
   // Transient "✓ your click did X" feedback, so a Redo press is never ambiguous.
@@ -2894,6 +2925,7 @@ export function App() {
             unitIndex={unitIndex}
             pagesPerImage={pagesPerImage}
             registerParagraph={registerParagraph}
+            onEditDataCell={onEditDataCell}
             {...(technicalSupport ? { technical: technicalSupport } : {})}
           />
 
@@ -3210,6 +3242,7 @@ const ReaderColumn = memo(function ReaderColumn({
   unitIndex,
   pagesPerImage,
   registerParagraph,
+  onEditDataCell,
   technical,
 }: {
   book: BookSource;
@@ -3217,6 +3250,8 @@ const ReaderColumn = memo(function ReaderColumn({
   unitIndex: number;
   pagesPerImage: number | "chapter";
   registerParagraph: (id: string) => (el: HTMLElement | null) => void;
+  /** Edit a grid cell (sheetIndex is null for a single-table import). */
+  onEditDataCell?: (sheetIndex: number | null, row: number, col: number, raw: string) => void;
   /** Present only in technical mode: concept marks + paragraph-anchored support. */
   technical?: TechnicalSupportData;
 }) {
@@ -3290,8 +3325,20 @@ const ReaderColumn = memo(function ReaderColumn({
             </button>
           </div>
           <div style={{ marginTop: 8 }}>
-            <DataTablePreview table={activeTable} maxRows={200} maxHeight={420} />
+            <DataTablePreview
+              table={activeTable}
+              maxRows={200}
+              maxHeight={420}
+              {...(onEditDataCell
+                ? { onEditCell: (row, col, raw) => onEditDataCell(sheets ? Math.min(activeSheet, sheets.length - 1) : null, row, col, raw) }
+                : {})}
+            />
           </div>
+          {onEditDataCell ? (
+            <div style={{ fontSize: 11, opacity: 0.55, marginTop: 4 }}>
+              Click any cell to edit — changes save automatically and the chat re-analyses the new values.
+            </div>
+          ) : null}
           {dataChart ? (
             <div style={{ marginTop: 8 }}>
               <DataChart dataset={dataChart} />

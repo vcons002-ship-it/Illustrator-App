@@ -45,6 +45,9 @@ export type MainToWorker =
    */
   | { type: "tune"; settings: ReaderSettings }
   | { type: "open"; book: BookSource }
+  /** Patch the open book's edited data table(s) in place (no re-init), so the chat's
+   * analyze_data sees edits made in the grid. Lightweight sibling of "open". */
+  | { type: "updateBookData"; data?: DataTable; dataSheets?: { name: string; table: DataTable }[] }
   /** Exit the current book to the landing page: dispose the engine, drop the book. */
   | { type: "close" }
   | { type: "start" }

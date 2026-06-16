@@ -73,6 +73,8 @@ export interface EngineWorkerApi {
   openBook: (book: BookSource) => void;
   /** Exit the current book back to the landing page (disposes the worker engine). */
   closeBook: () => void;
+  /** Push edited spreadsheet table(s) so the chat's analyze_data sees grid edits. */
+  updateBookData: (patch: { data?: DataTable; dataSheets?: { name: string; table: DataTable }[] }) => void;
   startGeneration: () => void;
   pause: () => void;
   resume: () => void;
@@ -734,6 +736,22 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     [settings],
   );
 
+  // Push edited table(s) to the worker so the chat's analyze_data uses the new
+  // values (the worker caches the opened book; a grid edit must refresh that copy).
+  const updateBookData = useCallback(
+    (patch: { data?: DataTable; dataSheets?: { name: string; table: DataTable }[] }) => {
+      if (lastBook.current) {
+        lastBook.current = {
+          ...lastBook.current,
+          ...(patch.data ? { data: patch.data } : {}),
+          ...(patch.dataSheets ? { dataSheets: patch.dataSheets } : {}),
+        };
+      }
+      send({ type: "updateBookData", ...patch });
+    },
+    [],
+  );
+
   const closeBook = useCallback(() => {
     // Forget the book so a later settings change can't re-open it, reset the
     // local view, and tell the worker to dispose its engine.
@@ -1176,6 +1194,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     paused,
     openBook,
     closeBook,
+    updateBookData,
     startGeneration,
     pause,
     resume,
