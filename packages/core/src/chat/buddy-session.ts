@@ -38,6 +38,8 @@ export interface BuddyDeps {
   wolfram?: (query: string) => Promise<string>;
   /** A keyless stock quote (Stooq), or undefined when unavailable. */
   stockQuote?: (symbol: string) => Promise<import("../providers/stocks.js").StockQuote | undefined>;
+  /** Keyless technical indicators over a bar window, or undefined when unavailable. */
+  marketIndicators?: (symbol: string, interval?: string, range?: string) => Promise<import("../providers/market-data.js").Indicators | undefined>;
   /** Random picks from the catalog's most-loved shelf ("surprise me"). */
   randomBooks?: () => Promise<BookSearchHit[]>;
   /** Open a library book by id; the host posts the BookSource to the UI itself. */
@@ -207,6 +209,11 @@ export async function runBuddyTool(
         if (!deps.stockQuote) return { error: "stock quotes aren't available right now" };
         const quote = await deps.stockQuote(call.symbol);
         return quote ? { quote } : {};
+      }
+      case "market_analysis": {
+        if (!deps.marketIndicators) return { error: "market analytics aren't available right now" };
+        const indicators = await deps.marketIndicators(call.symbol, call.interval, call.range);
+        return indicators ? { indicators } : {};
       }
       case "open_library_book":
         return { opened: await deps.openLibraryBook(call) };

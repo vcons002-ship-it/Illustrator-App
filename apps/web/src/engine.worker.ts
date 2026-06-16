@@ -22,6 +22,9 @@ import {
   tableToText,
   stooqQuoteUrl,
   parseStooqQuote,
+  yahooChartUrl,
+  parseYahooChart,
+  computeIndicators,
   buildBuddySystemPrompt,
   buildProducePrompt,
   buildUnderstandPrompt,
@@ -1529,6 +1532,17 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         if (!cf) return undefined;
         const res = await new DirectTransport(cf).send({ url: stooqQuoteUrl(symbol), method: "GET" });
         return parseStooqQuote(await res.text(), symbol);
+      },
+      // Keyless technical indicators from Yahoo's chart JSON (over the CORS-exempt
+      // transport; undefined on plain web).
+      marketIndicators: async (symbol: string, interval?: string, range?: string) => {
+        const cf = corsFetch();
+        if (!cf) return undefined;
+        const res = await new DirectTransport(cf).send({
+          url: yahooChartUrl(symbol, { interval: interval || "5m", range: range || "1d" }),
+          method: "GET",
+        });
+        return computeIndicators(symbol, parseYahooChart(await res.json()));
       },
       randomBooks: () => books.random(),
       remember: async (n) => (await rememberNote(store, n)).length,

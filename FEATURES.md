@@ -153,6 +153,10 @@ A **Markets** panel for following and researching stocks:
 - **Live quote** — a keyless quote snapshot (last/open/high/low/volume + change) alongside the
   chart (the quote feed uses the desktop app or extension's CORS-free access; the chart works
   everywhere).
+- **Keyless technical analysis** — the assistant computes **VWAP, moving averages, RSI, and
+  recent-move** stats from real price bars to ground its read (trend vs the MAs, momentum,
+  watch levels like VWAP and the recent high/low) — no account, no key. The embedded chart
+  preloads VWAP + RSI so it matches.
 - **Ask the assistant** — one click hands the ticker to the chat for analysis and trade ideas
   (it searches the web for current data and is clear it isn't financial advice).
 - *(A linked broker account such as thinkorswim/Schwab is a separate, deferred enhancement; the

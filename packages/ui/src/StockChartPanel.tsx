@@ -59,6 +59,8 @@ export const StockChartPanel = memo(function StockChartPanel({
       hide_side_toolbar: false,
       allow_symbol_change: true,
       withdateranges: true,
+      // Preload the watch studies so the chart matches the assistant's analysis.
+      studies: ["STD;VWAP", "STD;RSI"],
     });
     container.appendChild(script);
     el.appendChild(container);
