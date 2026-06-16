@@ -7,6 +7,7 @@ import type {
   BuddyToolCall,
   CalendarEvent,
   StockQuote,
+  Indicators,
   CharacterPatch,
   ChatTurn,
   ContextUsage,
@@ -120,6 +121,7 @@ export type MainToWorker =
   /** Load events across all the user's Google calendars in a window (the calendar view). */
   | { type: "loadCalendar"; requestId: number; timeMin: string; timeMax: string }
   | { type: "stockQuote"; requestId: number; symbol: string }
+  | { type: "marketIndicators"; requestId: number; symbol: string; interval?: string; range?: string }
   /** Faithful document polish (two stages); answered by `polished` (+ `polishToken`
    * deltas while producing). Cancel via `chatCancel` (shares the abort map). */
   | {
@@ -263,6 +265,8 @@ export type WorkerToMain =
   | { type: "buddyLibraryChanged"; requestId: number }
   /** A scheduled task was created/cancelled by the chat — the host refreshes its list. */
   | { type: "buddyScheduledChanged"; requestId: number }
+  /** A price alert was created/cancelled by the chat — the host refreshes its list. */
+  | { type: "buddyAlertsChanged"; requestId: number }
   /** set_visual_style resolved against the catalog — the main thread (settings
    * owner) commits it. Arrives mid-turn, before the tool result. */
   | {
@@ -292,6 +296,7 @@ export type WorkerToMain =
   | { type: "scanned"; requestId: number; ok: boolean; candidates?: TaskCandidate[]; error?: string }
   | { type: "calendarLoaded"; requestId: number; ok: boolean; events?: CalendarEvent[]; error?: string }
   | { type: "stockQuoted"; requestId: number; ok: boolean; quote?: StockQuote; error?: string }
+  | { type: "marketIndicatorsResult"; requestId: number; ok: boolean; indicators?: Indicators; error?: string }
   /** Streaming delta while the polish "produce" stage runs. */
   | { type: "polishToken"; requestId: number; text: string }
   /** Reply to `polish`: the understood plan (+ optional question), or the produced text. */

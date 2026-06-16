@@ -157,6 +157,9 @@ A **Markets** panel for following and researching stocks:
   recent-move** stats from real price bars to ground its read (trend vs the MAs, momentum,
   watch levels like VWAP and the recent high/low) — no account, no key. The embedded chart
   preloads VWAP + RSI so it matches.
+- **Price alerts / watch levels** — *"alert me when AAPL crosses VWAP"*, *"tell me if TSLA
+  drops below 200"*, *"ping me if NVDA moves ±3% or RSI tops 70"* → a watch that fires a
+  notification while the app is open (set them in chat or from quick buttons in the panel).
 - **Ask the assistant** — one click hands the ticker to the chat for analysis and trade ideas
   (it searches the web for current data and is clear it isn't financial advice).
 - *(A linked broker account such as thinkorswim/Schwab is a separate, deferred enhancement; the

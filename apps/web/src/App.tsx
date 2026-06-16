@@ -55,6 +55,14 @@ import {
   dueScheduledTasks,
   describeSchedule,
   type ScheduledTask,
+  loadPriceAlerts,
+  upsertPriceAlert,
+  deletePriceAlert,
+  normalizePriceAlert,
+  evaluateAlert,
+  advanceAlert,
+  describeAlert,
+  type PriceAlert,
   advanceStep,
   addIgnore,
   sourceFrom,
@@ -279,6 +287,7 @@ export function App() {
     scanInbox,
     loadCalendar,
     stockQuote,
+    marketIndicators,
     setActiveUnit,
     polishText,
     polishCancel,
@@ -1270,6 +1279,35 @@ export function App() {
   const [stockSymbol, setStockSymbol] = useState("AAPL");
   const [stockQuoteData, setStockQuoteData] = useState<StockQuote | null>(null);
   const [stockLoading, setStockLoading] = useState(false);
+  // In-app price alerts / watch levels.
+  const [priceAlerts, setPriceAlerts] = useState<PriceAlert[]>([]);
+  const refreshAlerts = useCallback(() => {
+    void loadPriceAlerts(libraryStore).then(setPriceAlerts).catch(() => {});
+  }, [libraryStore]);
+  const addAlert = useCallback(
+    async (symbol: string, type: PriceAlert["type"], value?: number) => {
+      const a = normalizePriceAlert({ symbol, type, ...(value !== undefined ? { value } : {}) });
+      if (!a) return;
+      try {
+        if (typeof Notification !== "undefined" && Notification.permission === "default") void Notification.requestPermission();
+      } catch {
+        /* notifications optional */
+      }
+      await upsertPriceAlert(libraryStore, a);
+      refreshAlerts();
+    },
+    [libraryStore, refreshAlerts],
+  );
+  const removeAlert = useCallback(
+    async (id: string) => {
+      await deletePriceAlert(libraryStore, id);
+      refreshAlerts();
+    },
+    [libraryStore, refreshAlerts],
+  );
+  useEffect(() => {
+    refreshAlerts();
+  }, [refreshAlerts]);
   const loadStockQuote = useCallback(
     async (symbol: string) => {
       setStockLoading(true);
@@ -1914,6 +1952,8 @@ export function App() {
         void libraryStore.listBooks().then(setLibrary).catch(() => {});
       } else if (e.kind === "scheduledChanged") {
         refreshScheduled();
+      } else if (e.kind === "alertsChanged") {
+        refreshAlerts();
       } else if (e.kind === "opened") {
         openedBook = true;
         buddyHandoff.current = [...buddyMessages, { role: "user" as const, text: userBubbleText ?? userText, at: Date.now() }]
@@ -2101,6 +2141,42 @@ export function App() {
     }, 60_000);
     return () => clearInterval(id);
   }, [libraryStore, onBuddySendText, refreshScheduled]);
+
+  // Price-alert runner: every ~minute, pull fresh indicators for each watched symbol,
+  // evaluate the alerts, fire a notification on a trigger, and persist the new state
+  // (one-shot thresholds disable; VWAP-cross keeps watching). Runs while the app is open.
+  const notifyAlert = useCallback(
+    (title: string, body: string) => {
+      try {
+        if (typeof Notification !== "undefined" && Notification.permission === "granted") new Notification(title, { body });
+      } catch {
+        /* notifications optional */
+      }
+      noteAction(`🔔 ${title}: ${body}`);
+    },
+    [noteAction],
+  );
+  useEffect(() => {
+    const id = setInterval(() => {
+      void (async () => {
+        const enabled = (await loadPriceAlerts(libraryStore)).filter((a) => a.enabled);
+        if (enabled.length === 0) return;
+        const symbols = [...new Set(enabled.map((a) => a.symbol))];
+        for (const sym of symbols) {
+          const r = await marketIndicators(sym);
+          if (!r.indicators) continue;
+          for (const a of enabled.filter((x) => x.symbol === sym)) {
+            const res = evaluateAlert(a, r.indicators);
+            const advanced = advanceAlert(a, res, new Date().toISOString());
+            if (advanced !== a) await upsertPriceAlert(libraryStore, advanced).catch(() => {});
+            if (res.fired) notifyAlert(`${a.symbol}`, res.message ?? describeAlert(a));
+          }
+        }
+        refreshAlerts();
+      })();
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [libraryStore, marketIndicators, notifyAlert, refreshAlerts]);
   // Approved buddy render: the worker's chatTool path serves both chats (the
   // buddy's generate_image call has the identical shape by design).
   const onApproveBuddyTool = useCallback(async () => {
@@ -3444,6 +3520,10 @@ export function App() {
           onSymbol={(s) => openStocks(s)}
           quote={stockQuoteData}
           loading={stockLoading}
+          alerts={priceAlerts}
+          describeAlert={describeAlert}
+          onAddAlert={(s, type, value) => void addAlert(s, type, value)}
+          onRemoveAlert={(id) => void removeAlert(id)}
           onAnalyze={(s) => {
             setShowStocks(false);
             onBuddySendText(

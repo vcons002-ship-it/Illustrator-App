@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
-import type { StockQuote } from "@visual-reader/core";
+import type { PriceAlert, StockQuote } from "@visual-reader/core";
 
 /**
  * A Markets panel: TradingView's free, keyless **advanced chart** widget for a symbol,
@@ -17,6 +17,11 @@ export interface StockChartPanelProps {
   loading?: boolean;
   /** "Ask the assistant to analyse SYMBOL" — seeds a buddy message. */
   onAnalyze: (symbol: string) => void;
+  /** In-app price alerts (all symbols) + add/remove. The host runs + describes them. */
+  alerts?: PriceAlert[];
+  describeAlert?: (a: PriceAlert) => string;
+  onAddAlert?: (symbol: string, type: PriceAlert["type"], value?: number) => void;
+  onRemoveAlert?: (id: string) => void;
   onClose: () => void;
 }
 
@@ -28,9 +33,14 @@ export const StockChartPanel = memo(function StockChartPanel({
   quote,
   loading,
   onAnalyze,
+  alerts,
+  describeAlert,
+  onAddAlert,
+  onRemoveAlert,
   onClose,
 }: StockChartPanelProps) {
   const [draft, setDraft] = useState(symbol);
+  const [levelDraft, setLevelDraft] = useState("");
   const holder = useRef<HTMLDivElement>(null);
 
   // (Re)mount the TradingView widget whenever the symbol changes. The embed script reads
@@ -127,8 +137,68 @@ export const StockChartPanel = memo(function StockChartPanel({
         </div>
 
         <div ref={holder} style={chartHolder} />
+
+        {onAddAlert ? (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, fontWeight: 600 }}>⏿ Alerts</span>
+              <button style={miniBtn} onClick={() => onAddAlert(symbol, "cross_vwap")} title={`Notify when ${symbol} crosses VWAP`}>
+                {symbol} crosses VWAP
+              </button>
+              <input
+                value={levelDraft}
+                onChange={(e) => setLevelDraft(e.target.value)}
+                placeholder="level"
+                inputMode="decimal"
+                style={{ ...tickerInput, width: 70, textTransform: "none" }}
+              />
+              <button
+                style={miniBtn}
+                onClick={() => {
+                  const v = Number(levelDraft);
+                  if (Number.isFinite(v)) {
+                    onAddAlert(symbol, "above", v);
+                    setLevelDraft("");
+                  }
+                }}
+              >
+                above
+              </button>
+              <button
+                style={miniBtn}
+                onClick={() => {
+                  const v = Number(levelDraft);
+                  if (Number.isFinite(v)) {
+                    onAddAlert(symbol, "below", v);
+                    setLevelDraft("");
+                  }
+                }}
+              >
+                below
+              </button>
+              <span style={{ fontSize: 11, opacity: 0.5 }}>or ask the assistant (“alert me when … moves ±3% / RSI &gt; 70”)</span>
+            </div>
+            {alerts && alerts.length > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 6 }}>
+                {alerts.map((a) => (
+                  <div key={a.id} style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 8, opacity: a.enabled ? 1 : 0.5 }}>
+                    <span>🔔 {describeAlert ? describeAlert(a) : a.symbol}</span>
+                    {a.enabled ? null : <span style={{ fontSize: 10, color: "#ffcf8b" }}>triggered</span>}
+                    {onRemoveAlert ? (
+                      <button style={{ ...miniBtn, marginLeft: "auto", color: "#ff9c9c" }} onClick={() => onRemoveAlert(a.id)}>
+                        ✕
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
         <div style={{ fontSize: 11, opacity: 0.5, marginTop: 6 }}>
-          Charts by TradingView (free, no account). Quotes from Stooq (keyless). Not investment advice.
+          Charts by TradingView (free, no account). Quotes from Stooq (keyless). Alerts run while the app is open. Not
+          investment advice.
         </div>
       </div>
     </div>
@@ -182,5 +252,14 @@ const btn: React.CSSProperties = {
   borderRadius: 6,
   padding: "5px 10px",
   fontSize: 12,
+  cursor: "pointer",
+};
+const miniBtn: React.CSSProperties = {
+  background: "rgba(255,255,255,0.08)",
+  color: "inherit",
+  border: "1px solid rgba(255,255,255,0.2)",
+  borderRadius: 6,
+  padding: "2px 8px",
+  fontSize: 11,
   cursor: "pointer",
 };

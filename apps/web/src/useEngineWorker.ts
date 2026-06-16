@@ -15,6 +15,7 @@ import type {
   ImageSearchHit,
   CalendarEvent,
   StockQuote,
+  Indicators,
   ImportStats,
   PolishMode,
   TaskCandidate,
@@ -166,6 +167,8 @@ export interface EngineWorkerApi {
   loadCalendar: (timeMin: string, timeMax: string) => Promise<{ ok: boolean; events?: CalendarEvent[] }>;
   /** Fetch a keyless stock quote (Stooq via the CORS-exempt transport). */
   stockQuote: (symbol: string) => Promise<{ ok: boolean; quote?: StockQuote }>;
+  /** Fetch keyless technical indicators (VWAP/MA/RSI/recent-move) for a symbol. */
+  marketIndicators: (symbol: string, interval?: string, range?: string) => Promise<{ ok: boolean; indicators?: Indicators }>;
   /** Run one document-polish stage; returns the requestId (for cancel) + the result. */
   polishText: (args: {
     stage: "understand" | "produce";
@@ -207,6 +210,8 @@ export type BuddyStreamEvent =
   | { kind: "libraryChanged" }
   /** schedule_task/cancel_scheduled changed the scheduled-task list — refresh it. */
   | { kind: "scheduledChanged" }
+  /** set_price_alert/cancel_alert changed the alerts list — refresh it. */
+  | { kind: "alertsChanged" }
   /** set_visual_style resolved — the app (settings owner) should commit it. */
   | {
       kind: "settings";
@@ -368,6 +373,8 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const calendarRequests = useRef<Map<number, (r: { ok: boolean; events?: CalendarEvent[] }) => void>>(new Map());
   // In-flight stock-quote fetches, resolved by `stockQuoted`.
   const quoteRequests = useRef<Map<number, (r: { ok: boolean; quote?: StockQuote }) => void>>(new Map());
+  // In-flight indicator fetches, resolved by `marketIndicatorsResult`.
+  const indicatorRequests = useRef<Map<number, (r: { ok: boolean; indicators?: Indicators }) => void>>(new Map());
   // In-flight document-polish stages, resolved by `polished` (and streamed via `polishToken`).
   const polishRequests = useRef<
     Map<number, { onToken?: (delta: string) => void; resolve: (r: PolishResult) => void }>
@@ -599,6 +606,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "scheduledChanged" });
           break;
         }
+        case "buddyAlertsChanged": {
+          buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "alertsChanged" });
+          break;
+        }
         case "buddySettings": {
           buddyRequests.current.get(msg.requestId)?.onEvent({
             kind: "settings",
@@ -670,6 +681,12 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           const resolve = quoteRequests.current.get(msg.requestId);
           quoteRequests.current.delete(msg.requestId);
           resolve?.({ ok: msg.ok, ...(msg.quote ? { quote: msg.quote } : {}) });
+          break;
+        }
+        case "marketIndicatorsResult": {
+          const resolve = indicatorRequests.current.get(msg.requestId);
+          indicatorRequests.current.delete(msg.requestId);
+          resolve?.({ ok: msg.ok, ...(msg.indicators ? { indicators: msg.indicators } : {}) });
           break;
         }
         case "polishToken": {
@@ -1174,6 +1191,21 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const marketIndicators = useCallback(
+    (symbol: string, interval?: string, range?: string): Promise<{ ok: boolean; indicators?: Indicators }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (indicatorRequests.current.delete(requestId)) resolve({ ok: false });
+        }, 20_000);
+        indicatorRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "marketIndicators", requestId, symbol, ...(interval ? { interval } : {}), ...(range ? { range } : {}) });
+      }),
+    [],
+  );
   const polishText = useCallback(
     (args: {
       stage: "understand" | "produce";
@@ -1263,6 +1295,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     scanInbox,
     loadCalendar,
     stockQuote,
+    marketIndicators,
     polishText,
     polishCancel,
   };
