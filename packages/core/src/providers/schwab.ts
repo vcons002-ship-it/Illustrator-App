@@ -146,11 +146,15 @@ export interface SchwabQuote {
   netChange?: number;
   netPercentChange?: number;
   volume?: number;
+  /** Fundamentals (from the quote's `fundamental` block): trailing P/E, EPS, dividend yield %. */
+  peRatio?: number;
+  eps?: number;
+  divYield?: number;
 }
 
 /** Parse Schwab's `/quotes` response (keyed by symbol) for one symbol. */
 export function parseSchwabQuote(json: unknown, symbol: string): SchwabQuote | undefined {
-  const entry = (json as Record<string, { quote?: Record<string, number>; regular?: Record<string, number> }>)?.[symbol.toUpperCase()];
+  const entry = (json as Record<string, { quote?: Record<string, number>; fundamental?: Record<string, number>; regular?: Record<string, number> }>)?.[symbol.toUpperCase()];
   const q = entry?.quote;
   if (!q) return undefined;
   const num = (k: string): number | undefined => (typeof q[k] === "number" && Number.isFinite(q[k]) ? q[k] : undefined);
@@ -164,11 +168,20 @@ export function parseSchwabQuote(json: unknown, symbol: string): SchwabQuote | u
     const v = num(key);
     if (v !== undefined) (out as unknown as Record<string, number | string>)[field] = v;
   }
+  const f = entry?.fundamental;
+  if (f) {
+    const fnum = (k: string): number | undefined => (typeof f[k] === "number" && Number.isFinite(f[k]) ? f[k] : undefined);
+    const fmap: [keyof SchwabQuote, string][] = [["peRatio", "peRatio"], ["eps", "eps"], ["divYield", "divYield"]];
+    for (const [field, key] of fmap) {
+      const v = fnum(key);
+      if (v !== undefined) (out as unknown as Record<string, number | string>)[field] = v;
+    }
+  }
   return out;
 }
 
 export async function schwabQuote(transport: Transport, token: string, symbol: string): Promise<SchwabQuote | undefined> {
-  const res = await authGet(transport, `${MARKETDATA}/quotes?symbols=${encodeURIComponent(symbol.toUpperCase())}`, token);
+  const res = await authGet(transport, `${MARKETDATA}/quotes?symbols=${encodeURIComponent(symbol.toUpperCase())}&fields=quote,fundamental`, token);
   return parseSchwabQuote(await res.json(), symbol);
 }
 

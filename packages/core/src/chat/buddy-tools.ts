@@ -442,14 +442,19 @@ export function buildBuddySystemPrompt(opts: {
     (opts.canSchwab
       ? '- {"tool":"schwab_quote","symbol":"AAPL"} / {"tool":"schwab_options","symbol":"AAPL","contractType":"ALL",' +
         '"strikeCount":10} / {"tool":"schwab_positions"} — the reader connected their Schwab account (the platform behind ' +
-        "thinkorswim): real quotes, OPTION CHAINS with Greeks (delta/gamma/theta/vega) + implied volatility, and their " +
-        "account positions. Prefer these over the keyless feeds for options analysis. Not financial advice.\n" +
+        "thinkorswim): real quotes (incl. FUNDAMENTALS — trailing P/E, EPS, dividend yield), OPTION CHAINS with Greeks " +
+        "(delta/gamma/theta/vega) + implied volatility, and their account positions. Prefer these over the keyless feeds. " +
+        "Not financial advice.\n" +
         '- {"tool":"schwab_watchlists"} — the reader\'s WATCHLISTS = their tracked trade ideas (thinkorswim watchlists sync ' +
         'to Schwab). Use this when they refer to "my tracked ideas / my watchlist / my thinkorswim ideas" or ask you to ' +
         'pull trades FROM them — e.g. "pull 3 possible trades from my tracked ideas with the best risk-reward." Workflow: ' +
         "read the watchlists, then schwab_quote / schwab_options on the relevant symbols, weigh upside vs downside (and " +
         "Greeks/IV for options), and present the top N ranked by reward-to-risk — each with a proposed entry, target, stop " +
         "and the R:R ratio and a one-line rationale. Then offer to prep_order any they pick.\n" +
+        "  Screens are NOT limited to watchlists: for a THEME/SECTOR ask (e.g. \"give me the 3 best photonics stocks to buy " +
+        'on earnings growth + current P/E"), use search_web to discover the candidate tickers and any metric a feed lacks ' +
+        "(earnings-growth rates, analyst targets), schwab_quote for grounded price + P/E + EPS + yield, then rank the top N " +
+        "against the reader's stated criteria with a one-line rationale each, and offer to prep_order the picks.\n" +
         '- {"tool":"prep_order","assetType":"EQUITY","symbol":"AAPL","instruction":"BUY","quantity":10,"orderType":' +
         '"LIMIT","price":200} — COMPOSE an order for the reader to REVIEW and place themselves (a confirm dialog opens; ' +
         "you NEVER place/submit it). EQUITY instruction BUY/SELL; for OPTION set assetType \"OPTION\", symbol = the OSI " +
@@ -460,6 +465,10 @@ export function buildBuddySystemPrompt(opts: {
     '- {"tool":"market_analysis","symbol":"AAPL","interval":"5m","range":"1d"} — keyless TECHNICAL indicators (VWAP, ' +
     "SMA20/50, EMA12/26, RSI14, recent move). Use for intraday/technical questions — VWAP watch levels, trend vs the " +
     'moving averages, momentum, entry points. "interval"/"range" default to intraday ("5m"/"1d"); use "1d"/"6mo" for swing.\n' +
+    "- THEME/SCREEN requests (e.g. \"the 3 best photonics stocks to buy on earnings growth + P/E\") work even with no broker " +
+    "connected: use search_web/read_url to find the candidate tickers and the fundamentals asked for (P/E, earnings growth, " +
+    "margins…), stock_quote/market_analysis for price + technicals, then rank the top N against the reader's criteria with a " +
+    "one-line rationale each. Always state your sources briefly and that it isn't financial advice.\n" +
     '- {"tool":"trading_script","platform":"pine","kind":"vwap_cross"} — generate a ready-to-paste TradingView Pine ' +
     'Script (platform "pine") or thinkorswim thinkScript (platform "thinkscript") ALERT/study. kinds: "vwap_cross", ' +
     '"rsi" (level/length), "ma_cross" (fast/slow/maType "sma"|"ema"), "price_level" (level). Use when the reader wants ' +
@@ -1053,7 +1062,12 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     const q = result.schwabQuote;
     if (!q) return `[schwab_quote: no quote for "${call.symbol}" (is Schwab connected? is the symbol valid?)]`;
     const chg = q.netChange !== undefined ? ` ${q.netChange >= 0 ? "+" : ""}${q.netChange} (${q.netPercentChange ?? "?"}%)` : "";
-    return `[schwab_quote — ${q.symbol}] last ${q.last ?? "?"}${chg} · bid ${q.bid ?? "?"}/ask ${q.ask ?? "?"} · vol ${q.volume ?? "?"}. Use these real numbers; not financial advice.`;
+    const fund = [
+      q.peRatio !== undefined ? `P/E ${q.peRatio}` : "",
+      q.eps !== undefined ? `EPS ${q.eps}` : "",
+      q.divYield !== undefined ? `yield ${q.divYield}%` : "",
+    ].filter(Boolean).join(" · ");
+    return `[schwab_quote — ${q.symbol}] last ${q.last ?? "?"}${chg} · bid ${q.bid ?? "?"}/ask ${q.ask ?? "?"} · vol ${q.volume ?? "?"}${fund ? ` · ${fund}` : ""}. Use these real numbers; not financial advice.`;
   }
   if (call.tool === "schwab_options") {
     const chain = result.optionChain;

@@ -66,6 +66,11 @@ describe("parseSchwabQuote", () => {
     expect(parseSchwabQuote(json, "aapl")).toEqual({ symbol: "AAPL", last: 204.25, bid: 204.2, ask: 204.3, netChange: 4, netPercentChange: 2, volume: 51_000_000 });
     expect(parseSchwabQuote({}, "AAPL")).toBeUndefined();
   });
+
+  it("pulls fundamentals (P/E, EPS, yield) from the fundamental block", () => {
+    const json = { AAPL: { quote: { lastPrice: 204.25 }, fundamental: { peRatio: 31.2, eps: 6.55, divYield: 0.44 } } };
+    expect(parseSchwabQuote(json, "AAPL")).toMatchObject({ symbol: "AAPL", last: 204.25, peRatio: 31.2, eps: 6.55, divYield: 0.44 });
+  });
 });
 
 describe("parseOptionChain", () => {
