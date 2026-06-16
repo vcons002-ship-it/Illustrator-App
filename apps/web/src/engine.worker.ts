@@ -25,6 +25,13 @@ import {
   yahooChartUrl,
   parseYahooChart,
   computeIndicators,
+  exchangeSchwabCode,
+  saveSchwabTokens,
+  loadSchwabTokens,
+  getFreshSchwabToken,
+  schwabQuote,
+  schwabOptionChain,
+  schwabPositions,
   buildBuddySystemPrompt,
   buildProducePrompt,
   buildUnderstandPrompt,
@@ -651,6 +658,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "marketIndicators":
       void handleMarketIndicators(msg);
+      break;
+    case "schwabConnect":
+      void handleSchwabConnect(msg);
       break;
     case "polish":
       void handlePolish(msg);
@@ -1385,6 +1395,20 @@ async function handleMarketIndicators(msg: Extract<MainToWorker, { type: "market
   }
 }
 
+async function handleSchwabConnect(msg: Extract<MainToWorker, { type: "schwabConnect" }>): Promise<void> {
+  try {
+    const clientId = settings?.keys?.schwabClientId;
+    const clientSecret = settings?.keys?.schwabClientSecret;
+    if (!clientId || !clientSecret) throw new Error("Add your Schwab app key + secret first.");
+    const transport = new DirectTransport(corsFetch());
+    const tokens = await exchangeSchwabCode({ transport, clientId, clientSecret, code: msg.code, redirectUri: msg.redirectUri });
+    await saveSchwabTokens(memoryStore(), tokens);
+    post({ type: "schwabConnected", requestId: msg.requestId, ok: true });
+  } catch (err) {
+    post({ type: "schwabConnected", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
 async function handleSummarize(msg: Extract<MainToWorker, { type: "summarize" }>): Promise<void> {
   try {
     const { llm } = chatProviders();
@@ -1570,6 +1594,20 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         });
         return computeIndicators(symbol, parseYahooChart(await res.json()));
       },
+      // Schwab Trader API (real quotes, option chains + Greeks, positions) — wired only
+      // when the user connected their own Schwab app. A fresh access token per call.
+      ...(await (async (): Promise<Partial<BuddyDeps>> => {
+        const sid = settings?.keys?.schwabClientId;
+        const ssec = settings?.keys?.schwabClientSecret;
+        if (!sid || !ssec || !(await loadSchwabTokens(store))) return {};
+        const transport = new DirectTransport(corsFetch());
+        const tok = () => getFreshSchwabToken(store, { clientId: sid, clientSecret: ssec, transport });
+        return {
+          schwabQuote: async (symbol: string) => schwabQuote(transport, await tok(), symbol),
+          schwabOptions: async (symbol: string, opts) => schwabOptionChain(transport, await tok(), symbol, opts ?? {}),
+          schwabPositions: async () => schwabPositions(transport, await tok()),
+        };
+      })()),
       randomBooks: () => books.random(),
       remember: async (n) => (await rememberNote(store, n)).length,
       forget: async (m) => (await forgetNote(store, m)).length,
@@ -1806,6 +1844,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         ...(googleConnected ? { canGoogle: true } : {}),
         // Auto-approval: create reminders without per-item confirm when opted in.
         ...(googleConnected && settings?.allowTaskAutomation ? { canAutomateTasks: true } : {}),
+        // Schwab tools when the user connected their own Schwab app.
+        ...(settings?.keys?.schwabClientId && settings?.keys?.schwabClientSecret && (await loadSchwabTokens(store))
+          ? { canSchwab: true }
+          : {}),
       }) +
       (memory ? `\n\n${memory}` : "") +
       (skills ? `\n\n${skills}` : "") +

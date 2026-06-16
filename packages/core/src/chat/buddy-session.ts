@@ -45,6 +45,10 @@ export interface BuddyDeps {
   setPriceAlert?: (call: Extract<BuddyToolCall, { tool: "set_price_alert" }>) => Promise<{ id: string; describe: string } | undefined>;
   listAlerts?: () => Promise<{ id: string; describe: string; enabled: boolean }[]>;
   cancelAlert?: (id: string) => Promise<boolean>;
+  /** Schwab Trader API (present only when connected). */
+  schwabQuote?: (symbol: string) => Promise<import("../providers/schwab.js").SchwabQuote | undefined>;
+  schwabOptions?: (symbol: string, opts?: { contractType?: "CALL" | "PUT" | "ALL"; strikeCount?: number }) => Promise<import("../providers/schwab.js").OptionChain | undefined>;
+  schwabPositions?: () => Promise<import("../providers/schwab.js").SchwabPosition[]>;
   /** Random picks from the catalog's most-loved shelf ("surprise me"). */
   randomBooks?: () => Promise<BookSearchHit[]>;
   /** Open a library book by id; the host posts the BookSource to the UI itself. */
@@ -232,6 +236,20 @@ export async function runBuddyTool(
         if (!deps.cancelAlert) return { error: "price alerts aren't available right now" };
         await deps.cancelAlert(call.id);
         return {};
+      case "schwab_quote": {
+        if (!deps.schwabQuote) return { error: "Schwab isn't connected (connect it in Settings)." };
+        const q = await deps.schwabQuote(call.symbol);
+        return q ? { schwabQuote: q } : {};
+      }
+      case "schwab_options": {
+        if (!deps.schwabOptions) return { error: "Schwab isn't connected (connect it in Settings)." };
+        const chain = await deps.schwabOptions(call.symbol, { ...(call.contractType ? { contractType: call.contractType } : {}), ...(call.strikeCount !== undefined ? { strikeCount: call.strikeCount } : {}) });
+        return chain ? { optionChain: chain } : {};
+      }
+      case "schwab_positions": {
+        if (!deps.schwabPositions) return { error: "Schwab isn't connected (connect it in Settings)." };
+        return { positions: await deps.schwabPositions() };
+      }
       case "trading_script": {
         // Pure: verified Pine/thinkScript templates, no host dependency.
         const { lang, where } = scriptLanguage(call.platform);

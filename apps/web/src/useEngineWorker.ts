@@ -159,6 +159,8 @@ export interface EngineWorkerApi {
   summarize: (turns: ChatTurn[]) => Promise<{ text?: string; error?: string }>;
   /** Finish Google OAuth in the worker (exchange the consent code for tokens). */
   googleConnect: (args: { code: string; redirectUri: string; codeVerifier: string }) => Promise<{ ok: boolean; email?: string; error?: string }>;
+  /** Exchange a pasted Schwab consent code for tokens (manual connect). */
+  schwabConnect: (args: { code: string; redirectUri: string }) => Promise<{ ok: boolean; error?: string }>;
   /** Research + plan a task into a persisted TaskPlan (progress streamed via onProgress). */
   planTask: (args: { source: TaskSource; sourceText: string; onProgress?: (phase: string, note?: string) => void }) => Promise<{ ok: boolean; plan?: TaskPlan; error?: string }>;
   /** Idle scan: actionable email/calendar items as task candidates. */
@@ -363,6 +365,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const googleConnectRequests = useRef<Map<number, (r: { ok: boolean; email?: string; error?: string }) => void>>(
     new Map(),
   );
+  const schwabConnectRequests = useRef<Map<number, (r: { ok: boolean; error?: string }) => void>>(new Map());
   // In-flight task-plan requests (resolved by `planned`, progress via `planProgress`).
   const planRequests = useRef<
     Map<number, { resolve: (r: { ok: boolean; plan?: TaskPlan; error?: string }) => void; onProgress?: (phase: string, note?: string) => void }>
@@ -649,6 +652,12 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           const resolve = googleConnectRequests.current.get(msg.requestId);
           googleConnectRequests.current.delete(msg.requestId);
           resolve?.({ ok: msg.ok, ...(msg.email ? { email: msg.email } : {}), ...(msg.error ? { error: msg.error } : {}) });
+          break;
+        }
+        case "schwabConnected": {
+          const resolve = schwabConnectRequests.current.get(msg.requestId);
+          schwabConnectRequests.current.delete(msg.requestId);
+          resolve?.({ ok: msg.ok, ...(msg.error ? { error: msg.error } : {}) });
           break;
         }
         case "planProgress": {
@@ -1124,6 +1133,21 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const schwabConnect = useCallback(
+    (args: { code: string; redirectUri: string }): Promise<{ ok: boolean; error?: string }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (schwabConnectRequests.current.delete(requestId)) resolve({ ok: false, error: "Connecting timed out." });
+        }, 60_000);
+        schwabConnectRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "schwabConnect", requestId, ...args });
+      }),
+    [],
+  );
   const planTask = useCallback(
     (args: {
       source: TaskSource;
@@ -1291,6 +1315,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     buddyCancel,
     summarize,
     googleConnect,
+    schwabConnect,
     planTask,
     scanInbox,
     loadCalendar,

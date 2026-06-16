@@ -10,6 +10,7 @@ import { controllableSettingsIndex } from "./settings-control.js";
 import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../providers/google.js";
 import { formatQuote, type StockQuote } from "../providers/stocks.js";
 import { formatIndicators, type Indicators } from "../providers/market-data.js";
+import type { OptionChain, SchwabPosition, SchwabQuote } from "../providers/schwab.js";
 import type { TaskPlan } from "./tasks.js";
 
 /**
@@ -53,6 +54,10 @@ export type BuddyToolCall =
     }
   | { tool: "list_alerts" }
   | { tool: "cancel_alert"; id: string }
+  /** Schwab Trader API (when connected): real quote, option chain with Greeks, positions. */
+  | { tool: "schwab_quote"; symbol: string }
+  | { tool: "schwab_options"; symbol: string; contractType?: "CALL" | "PUT" | "ALL"; strikeCount?: number }
+  | { tool: "schwab_positions" }
   /** Generate a ready-to-paste TradingView Pine Script or thinkorswim thinkScript
    * alert/study (the reader pastes it into their own platform). */
   | {
@@ -197,6 +202,8 @@ export function buildBuddySystemPrompt(opts: {
   now?: string;
   /** Google is connected: advertise the Gmail/Calendar/Tasks tools. */
   canGoogle?: boolean;
+  /** Schwab is connected: advertise the real quote / option-chain / positions tools. */
+  canSchwab?: boolean;
   /** Task automation opted in: create reminders directly without per-item confirm. */
   canAutomateTasks?: boolean;
   /** The active task plan's context (this chat opened a task) — enables the step tools. */
@@ -399,6 +406,13 @@ export function buildBuddySystemPrompt(opts: {
     '- {"tool":"stock_quote","symbol":"AAPL"} — fetch the latest KEYLESS stock quote (price/open/high/low/volume) to ' +
     "ground market analysis in real numbers when the reader asks about a stock/ticker. Pair it with search_web for news " +
     "and fundamentals, then give a balanced read (bull + bear) and any ideas — and always note it isn't financial advice.\n" +
+    (opts.canSchwab
+      ? '- {"tool":"schwab_quote","symbol":"AAPL"} / {"tool":"schwab_options","symbol":"AAPL","contractType":"ALL",' +
+        '"strikeCount":10} / {"tool":"schwab_positions"} — the reader connected their Schwab account: real quotes, ' +
+        "OPTION CHAINS with Greeks (delta/gamma/theta/vega) + implied volatility, and their account positions. Prefer " +
+        "these over the keyless feeds for options analysis. NEVER place or submit a trade — you only read/analyse; if " +
+        "they want to trade, tell them to do it in their Schwab/thinkorswim app. Not financial advice.\n"
+      : "") +
     '- {"tool":"market_analysis","symbol":"AAPL","interval":"5m","range":"1d"} — keyless TECHNICAL indicators (VWAP, ' +
     "SMA20/50, EMA12/26, RSI14, recent move). Use for intraday/technical questions — VWAP watch levels, trend vs the " +
     'moving averages, momentum, entry points. "interval"/"range" default to intraday ("5m"/"1d"); use "1d"/"6mo" for swing.\n' +
@@ -546,6 +560,18 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
     const id = strArg(obj.id, MAX_ID_CHARS);
     return id ? { tool, id } : undefined;
   }
+  if (tool === "schwab_quote") {
+    const symbol = strArg(obj.symbol, MAX_NAME_CHARS);
+    return symbol ? { tool, symbol } : undefined;
+  }
+  if (tool === "schwab_options") {
+    const symbol = strArg(obj.symbol, MAX_NAME_CHARS);
+    if (!symbol) return undefined;
+    const contractType = obj.contractType === "CALL" || obj.contractType === "PUT" || obj.contractType === "ALL" ? obj.contractType : undefined;
+    const strikeCount = typeof obj.strikeCount === "number" && Number.isFinite(obj.strikeCount) ? Math.min(50, Math.max(1, Math.round(obj.strikeCount))) : undefined;
+    return { tool, symbol, ...(contractType ? { contractType } : {}), ...(strikeCount !== undefined ? { strikeCount } : {}) };
+  }
+  if (tool === "schwab_positions") return { tool };
   if (tool === "trading_script") {
     const platform = obj.platform === "thinkscript" ? "thinkscript" : "pine";
     const kinds = ["vwap_cross", "rsi", "ma_cross", "price_level"];
@@ -816,6 +842,10 @@ export interface BuddyToolResultPayload {
   alertsList?: { id: string; describe: string; enabled: boolean }[];
   /** A generated Pine/thinkScript study + where to paste it. */
   tradingScript?: { lang: string; script: string; where: string };
+  /** Schwab outcomes (when connected). */
+  schwabQuote?: SchwabQuote;
+  optionChain?: OptionChain;
+  positions?: SchwabPosition[];
   /** What set_visual_style actually applied (resolved style LABEL). */
   applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
   /** Whether an approved image generation succeeded. */
@@ -951,6 +981,29 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     return "[price alerts]\n" + list.map((a) => `· ${a.describe}${a.enabled ? "" : " (done/paused)"} (id: ${a.id})`).join("\n");
   }
   if (call.tool === "cancel_alert") return "[cancel_alert done] Confirm briefly.";
+  if (call.tool === "schwab_quote") {
+    const q = result.schwabQuote;
+    if (!q) return `[schwab_quote: no quote for "${call.symbol}" (is Schwab connected? is the symbol valid?)]`;
+    const chg = q.netChange !== undefined ? ` ${q.netChange >= 0 ? "+" : ""}${q.netChange} (${q.netPercentChange ?? "?"}%)` : "";
+    return `[schwab_quote — ${q.symbol}] last ${q.last ?? "?"}${chg} · bid ${q.bid ?? "?"}/ask ${q.ask ?? "?"} · vol ${q.volume ?? "?"}. Use these real numbers; not financial advice.`;
+  }
+  if (call.tool === "schwab_options") {
+    const chain = result.optionChain;
+    if (!chain || chain.contracts.length === 0) return `[schwab_options: no chain for "${call.symbol}" (Schwab connected?)]`;
+    const rows = chain.contracts
+      .slice(0, 40)
+      .map((c) => `${c.type} ${c.strike}${c.expiration ? ` ${c.expiration}` : ""}: bid ${c.bid ?? "?"}/ask ${c.ask ?? "?"} Δ${c.delta ?? "?"} Θ${c.theta ?? "?"} ν${c.vega ?? "?"} IV ${c.iv ?? "?"}%`)
+      .join("\n");
+    return (
+      `[schwab_options — ${chain.symbol}${chain.underlyingPrice ? ` (underlying ${chain.underlyingPrice})` : ""}, ${chain.contracts.length} contracts]\n${rows}\n` +
+      "Analyse with the Greeks (delta = direction/exposure, theta = time decay, vega = IV sensitivity) and IV; suggest structures if asked. Not financial advice."
+    );
+  }
+  if (call.tool === "schwab_positions") {
+    const ps = result.positions ?? [];
+    if (ps.length === 0) return "[schwab_positions: no open positions (or Schwab not connected)]";
+    return "[schwab positions]\n" + ps.map((p) => `· ${p.symbol}: ${p.quantity}${p.marketValue !== undefined ? ` ($${p.marketValue})` : ""}${p.averagePrice !== undefined ? ` @ avg ${p.averagePrice}` : ""}`).join("\n");
+  }
   if (call.tool === "trading_script") {
     const t = result.tradingScript;
     if (!t) return "[trading_script did nothing]";
