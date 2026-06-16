@@ -72,6 +72,7 @@ import {
   type CalendarEvent,
   type StockQuote,
   type PageText,
+  generatePairingToken,
   MAX_SKILL_NAME_CHARS,
   MAX_SKILL_DESC_CHARS,
   MAX_SKILL_BODY_CHARS,
@@ -174,6 +175,9 @@ import {
   pickFolder,
   googleOauthLoopback,
   tvBridgeEval,
+  startRemoteServer,
+  stopRemoteServer,
+  type RemoteServerStatus,
   saveExportFile,
   searchLocalFiles,
 } from "./runtime.js";
@@ -1380,6 +1384,17 @@ export function App() {
     const prev = browserHistory.current.pop();
     if (prev) void loadPage(prev, false);
   }, [loadPage]);
+  // Remote link (LAN, desktop): start/stop the WebSocket relay so a phone on the same Wi-Fi
+  // can drive the assistant. Clicking it IS the opt-in (nothing listens until you start it).
+  const [remoteLink, setRemoteLink] = useState<RemoteServerStatus | null>(null);
+  const toggleRemoteLink = useCallback(async () => {
+    if (remoteLink?.running) {
+      await stopRemoteServer();
+      setRemoteLink(null);
+      return;
+    }
+    setRemoteLink(await startRemoteServer(generatePairingToken()));
+  }, [remoteLink]);
   // Schwab connect (manual code-paste flow, no Rust loopback needed): open the consent
   // URL for the user's own Schwab app, then exchange the redirected ?code=… they paste.
   const [schwabConnected, setSchwabConnected] = useState(false);
@@ -3044,6 +3059,15 @@ export function App() {
               🌐 Browse
             </button>
           )}
+          {isDesktop && (
+            <button
+              style={remoteLink?.running ? { ...styles.button, borderColor: "rgba(90,209,155,0.6)", color: "#9be8c0" } : styles.button}
+              onClick={() => void toggleRemoteLink()}
+              title="Link a phone on your Wi-Fi to drive the assistant (experimental — see REMOTE-LINK.md)"
+            >
+              {remoteLink?.running ? "🔗 Phone linked" : "🔗 Link phone"}
+            </button>
+          )}
           <button
             style={styles.button}
             onClick={() => {
@@ -3745,6 +3769,47 @@ export function App() {
           }}
           onClose={() => setShowBrowser(false)}
         />
+      )}
+
+      {remoteLink && (
+        <div
+          style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(8,9,13,0.7)", backdropFilter: "blur(6px)", zIndex: 100, padding: 20 }}
+          onClick={() => setRemoteLink(null)}
+        >
+          <div
+            style={{ width: "min(460px, 100%)", background: "#16181d", color: "#e6e6e6", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12, padding: 18, fontFamily: "system-ui, sans-serif" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <strong style={{ fontSize: 15 }}>🔗 Link a phone</strong>
+            {remoteLink.running ? (
+              <>
+                <p style={{ fontSize: 13, opacity: 0.8, marginTop: 8 }}>
+                  On a phone on the <b>same Wi-Fi</b>, open this address (it carries a one-time pairing code):
+                </p>
+                <code style={{ display: "block", background: "#0d1017", padding: "8px 10px", borderRadius: 6, fontSize: 12, wordBreak: "break-all" }}>
+                  {remoteLink.url}
+                </code>
+                <p style={{ fontSize: 11, opacity: 0.55, marginTop: 8 }}>
+                  Experimental — needs a desktop build with the phone-link command and on-device verification (see
+                  REMOTE-LINK.md). LAN-only; nothing leaves your network. Closing this keeps it running; use 🔗 Phone
+                  linked to stop.
+                </p>
+              </>
+            ) : (
+              <p style={{ fontSize: 13, color: "#ff8c8c", marginTop: 8 }}>⚠ {remoteLink.error ?? "Couldn't start the phone link."}</p>
+            )}
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              {remoteLink.running ? (
+                <button style={styles.button} onClick={() => void toggleRemoteLink()}>
+                  Stop
+                </button>
+              ) : null}
+              <button style={{ ...styles.button, marginLeft: "auto" }} onClick={() => setRemoteLink(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {orderReview && (

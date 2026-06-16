@@ -293,6 +293,39 @@ export async function tvBridgeEval(expression: string, port?: number): Promise<{
   }
 }
 
+/** Remote-link (LAN) server status: running + the URL/token to show as text/QR. */
+export interface RemoteServerStatus {
+  running: boolean;
+  url?: string;
+  token?: string;
+  port?: number;
+  error?: string;
+}
+
+/**
+ * Start the desktop LAN relay so a phone on the same Wi-Fi can drive the assistant.
+ * Best-effort: needs a desktop build that includes the `remote_server` command (rebuild the
+ * desktop app), and real-device verification. On the web / older builds it degrades to a clear
+ * error instead of throwing.
+ */
+export async function startRemoteServer(token: string, port?: number): Promise<RemoteServerStatus> {
+  if (!isDesktop) return { running: false, error: "The phone link needs the desktop app." };
+  try {
+    return await invoke<RemoteServerStatus>("start_remote_server", { request: { token, ...(port ? { port } : {}) } });
+  } catch (err) {
+    return { running: false, error: err instanceof Error ? err.message : "Phone-link backend unavailable (rebuild the desktop app)." };
+  }
+}
+
+export async function stopRemoteServer(): Promise<void> {
+  if (!isDesktop) return;
+  try {
+    await invoke("stop_remote_server");
+  } catch {
+    /* already stopped or not present */
+  }
+}
+
 /**
  * Capture a screenshot to PNG bytes (desktop), for the chat's screenshot tool.
  * `window` (a title substring) captures just that window — e.g. a game — even when

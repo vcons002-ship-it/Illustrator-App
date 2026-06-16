@@ -430,6 +430,177 @@ fn tv_cdp_eval_blocking(req: TvCdpRequest) -> Result<TvCdpResult, String> {
     Err("No CDP response from TradingView.".into())
 }
 
+// ---------------------------------------------------------------------------
+// Remote link (LAN): a small WebSocket relay so a phone on the same Wi-Fi can
+// drive the assistant in real time (see REMOTE-LINK.md). The desktop webview and
+// the phone both connect as WS clients; this server just relays token-gated frames
+// between paired peers — it holds no engine itself. Opt-in, LAN-only.
+//
+// NEEDS REAL-DEVICE VERIFICATION: there is no listening socket in CI, so this async
+// relay is written to the idiomatic tokio-tungstenite + broadcast pattern but is
+// verified on a real desktop, not here. (Same posture as the GPU/CDP code above.)
+
+/// Stop-handle + advertised URL for a running relay; cleared by `stop_remote_server`.
+#[derive(Default)]
+struct RemoteServerState {
+    inner: Mutex<Option<RemoteHandle>>,
+}
+struct RemoteHandle {
+    stop: std::sync::Arc<tokio::sync::Notify>,
+    url: String,
+    token: String,
+    port: u16,
+}
+
+#[derive(serde::Deserialize)]
+struct StartRemoteRequest {
+    token: String,
+    port: Option<u16>,
+}
+#[derive(serde::Serialize, Clone)]
+struct RemoteServerStatus {
+    running: bool,
+    url: Option<String>,
+    token: Option<String>,
+    port: Option<u16>,
+    error: Option<String>,
+}
+
+/// Best-effort LAN IP of this machine (no DNS): open a UDP socket "towards" a public
+/// address and read back which local interface the OS picked. Falls back to localhost.
+fn local_ip() -> String {
+    use std::net::UdpSocket;
+    UdpSocket::bind("0.0.0.0:0")
+        .and_then(|s| {
+            s.connect("8.8.8.8:80")?;
+            Ok(s.local_addr()?.ip().to_string())
+        })
+        .unwrap_or_else(|_| "127.0.0.1".to_string())
+}
+
+#[tauri::command]
+async fn start_remote_server(
+    request: StartRemoteRequest,
+    state: State<'_, RemoteServerState>,
+) -> Result<RemoteServerStatus, String> {
+    let port = request.port.unwrap_or(8787);
+    let token = request.token;
+    let host = local_ip();
+    let url = format!("http://{host}:{port}/#vrlink={token}");
+    let stop = std::sync::Arc::new(tokio::sync::Notify::new());
+
+    // Replace any prior server (signal the old one to stop first).
+    if let Ok(mut guard) = state.inner.lock() {
+        if let Some(prev) = guard.take() {
+            prev.stop.notify_waiters();
+        }
+        *guard = Some(RemoteHandle {
+            stop: stop.clone(),
+            url: url.clone(),
+            token: token.clone(),
+            port,
+        });
+    }
+
+    let bind = format!("0.0.0.0:{port}");
+    let token_for_loop = token.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = run_remote_server(bind, token_for_loop, stop).await {
+            eprintln!("remote relay stopped: {e}");
+        }
+    });
+
+    Ok(RemoteServerStatus {
+        running: true,
+        url: Some(url),
+        token: Some(token),
+        port: Some(port),
+        error: None,
+    })
+}
+
+#[tauri::command]
+fn stop_remote_server(state: State<'_, RemoteServerState>) {
+    if let Ok(mut guard) = state.inner.lock() {
+        if let Some(h) = guard.take() {
+            h.stop.notify_waiters();
+        }
+    }
+}
+
+#[tauri::command]
+fn remote_server_status(state: State<'_, RemoteServerState>) -> RemoteServerStatus {
+    if let Ok(guard) = state.inner.lock() {
+        if let Some(h) = guard.as_ref() {
+            return RemoteServerStatus {
+                running: true,
+                url: Some(h.url.clone()),
+                token: Some(h.token.clone()),
+                port: Some(h.port),
+                error: None,
+            };
+        }
+    }
+    RemoteServerStatus { running: false, url: None, token: None, port: None, error: None }
+}
+
+/// The relay loop: accept WS clients, authorize each by the pairing token (carried on
+/// every frame), and forward each peer's frames to the others via a broadcast channel.
+async fn run_remote_server(
+    bind: String,
+    token: String,
+    stop: std::sync::Arc<tokio::sync::Notify>,
+) -> Result<(), String> {
+    use futures_util::{SinkExt, StreamExt};
+    let listener = tokio::net::TcpListener::bind(&bind).await.map_err(|e| e.to_string())?;
+    let (tx, _rx) = tokio::sync::broadcast::channel::<(u64, String)>(256);
+    let mut next_id: u64 = 0;
+    loop {
+        let (stream, _addr) = tokio::select! {
+            _ = stop.notified() => return Ok(()),
+            accepted = listener.accept() => accepted.map_err(|e| e.to_string())?,
+        };
+        let peer_id = next_id;
+        next_id += 1;
+        let tx = tx.clone();
+        let mut rx = tx.subscribe();
+        let token = token.clone();
+        tauri::async_runtime::spawn(async move {
+            let ws = match tokio_tungstenite::accept_async(stream).await {
+                Ok(ws) => ws,
+                Err(_) => return,
+            };
+            let (mut write, mut read) = ws.split();
+            // Authorize: the first frame must carry the pairing token.
+            let mut authorized = false;
+            loop {
+                tokio::select! {
+                    incoming = read.next() => {
+                        let Some(Ok(msg)) = incoming else { break };
+                        if let tokio_tungstenite::tungstenite::Message::Text(txt) = msg {
+                            if !authorized {
+                                let ok = serde_json::from_str::<serde_json::Value>(&txt)
+                                    .ok()
+                                    .and_then(|v| v.get("token").and_then(|t| t.as_str()).map(|s| s == token))
+                                    .unwrap_or(false);
+                                if !ok { break; }
+                                authorized = true;
+                            }
+                            // Relay this peer's frame to the others.
+                            let _ = tx.send((peer_id, txt));
+                        }
+                    }
+                    bcast = rx.recv() => {
+                        let Ok((from, txt)) = bcast else { continue };
+                        if from == peer_id || !authorized { continue; }
+                        if write.send(tokio_tungstenite::tungstenite::Message::Text(txt)).await.is_err() { break; }
+                    }
+                }
+            }
+        });
+    }
+}
+
 /// Save a generated artifact (illustrated HTML/EPUB export, or a single image) to
 /// disk. Writes into `~/VisualReader/exports` (created on demand) and returns the
 /// full path — the renderer shows it to the reader. Deliberately uses a fixed,
@@ -1418,6 +1589,7 @@ fn main() {
     tauri::Builder::default()
         .manage(EngineState::default())
         .manage(LlmState::default())
+        .manage(RemoteServerState::default())
         .invoke_handler(tauri::generate_handler![
             ensure_engine,
             ensure_llm,
@@ -1435,7 +1607,10 @@ fn main() {
             capture_screen,
             pick_folder,
             oauth_loopback,
-            tv_cdp_eval
+            tv_cdp_eval,
+            start_remote_server,
+            stop_remote_server,
+            remote_server_status
         ])
         .build(tauri::generate_context!())
         .expect("error while building Visual Reader")
