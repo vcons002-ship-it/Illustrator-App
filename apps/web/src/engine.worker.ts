@@ -1033,7 +1033,11 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
     const slash = parseChatSlashCommand(msg.userText);
     if (slash) {
       if ("error" in slash) throw new Error(slash.error);
-      if (slash.call.tool === "generate_image" || slash.call.tool === "export_book") {
+      if (
+        slash.call.tool === "generate_image" ||
+        slash.call.tool === "export_book" ||
+        slash.call.tool === "export_data"
+      ) {
         post({ type: "chatDone", requestId: msg.requestId, text: "", transcript: [], pendingTool: slash.call });
         return;
       }

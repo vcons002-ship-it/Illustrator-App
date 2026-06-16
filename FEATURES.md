@@ -92,7 +92,25 @@ switches from a story Visual Bible to a **Visual Atlas**:
   table, results, a comparison), the analysis captures it and the reader shows a true
   bar/line/scatter chart drawn by the app (exact axes and values — never an AI's
   imagined numbers) plus min/max/mean/median and the trend, in a collapsible **Data**
-  section under the illustration.
+  section under the illustration. **Download any chart** as an SVG or PNG file.
+
+### 📊 Spreadsheets & data (open, analyse, edit, export)
+Upload an Excel/CSV/TSV file (or tabular JSON) and the app keeps the real, typed grid —
+not just flattened text — so it can be worked with end to end:
+- **Reads the whole workbook** — every worksheet (not just the first), each kept as a tab
+  you can switch between; formula cells import their computed values.
+- **View it as a real grid** — aligned, scrollable, with the sheet's row/column counts;
+  simple tables auto-chart.
+- **Edit live** — click any cell to change it; the edit is typed-checked, saved, and the
+  chat re-analyses the new numbers immediately (no re-upload).
+- **Grounded analysis in chat** — ask for counts, sums, averages, group-bys, pivots,
+  filters, distributions; the app computes them over the **real cells** (never guessed) and
+  shows the result as a table + chart you can also download.
+- **Export to real Excel** — save the sheet (or the whole multi-sheet workbook) as a true
+  **`.xlsx`**, or as CSV — from the data view or by asking the chat. Ask for **column totals**
+  and it writes **live Excel formulas** (`=SUM(…)`, `=AVERAGE(…)`), so the file has working
+  built-in functions, not baked numbers. Any analysis result (a pivot/aggregate) downloads
+  as Excel/CSV too.
 
 ### 🤝 Chat buddy (the home screen)
 The landing page **is** a full-window chat assistant. Three voices — **Freeform**
@@ -353,6 +371,11 @@ Open **Chat** while reading to discuss the book with an AI that actually knows i
 - **Hosted option** — an optional managed backend so you don't need your own keys/GPU.
 
 **Done recently**
+- **Spreadsheets end to end** — Excel/CSV import now reads every worksheet (switchable
+  tabs, computed formula values), the grid is **editable** (edits persist and the chat
+  re-analyses them live), and you can **export a real `.xlsx`** (whole workbook, optionally
+  with live `=SUM/=AVERAGE` formula totals) or CSV — from the data view, from any chat
+  analysis result, or by asking the assistant. Charts download as SVG/PNG.
 - **Task Orchestrator** — connect Google and the assistant plans real-world tasks end to
   end: it researches the deadline/steps/cost/official site, writes an ordered multi-step
   plan, auto-creates Google Tasks/Calendar reminders and prepped documents (safe internal
