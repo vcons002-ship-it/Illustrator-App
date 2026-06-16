@@ -714,13 +714,17 @@ export function SettingsPanel({
             <textarea
               value={value.mcpServers ?? ""}
               onChange={(e) => set({ mcpServers: e.target.value })}
-              placeholder={"one per line:  name https://host/mcp\nweather https://my-mcp.example/mcp"}
-              rows={2}
+              placeholder={"one per line — an HTTP URL or a local command:\nweather https://my-mcp.example/mcp\nfiles npx -y @modelcontextprotocol/server-filesystem /home/me"}
+              rows={3}
               style={{ fontFamily: "monospace", fontSize: 12, resize: "vertical", width: "100%" }}
             />
             <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
-              Let the assistant call your own <b>Model Context Protocol</b> servers (HTTP). It lists a server’s
-              tools and calls them as part of a task. Best on desktop (CORS-free access).
+              Let the assistant call your own <b>Model Context Protocol</b> servers. Two kinds, one per line:
+              an <b>HTTP</b> server (<code>name https://host/mcp</code>) or a <b>stdio</b> server — a local command
+              the desktop app runs (<code>name npx -y @scope/server …</code>), like the official filesystem/git
+              servers. It lists a server’s tools and calls them as part of a task. Desktop only (it needs CORS-free
+              access for HTTP, and to spawn a process for stdio — which runs with your permissions, so only add
+              servers you trust).
             </span>
           </label>
           </Group>

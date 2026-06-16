@@ -14,8 +14,8 @@
 /** Default port for the desktop LAN relay. */
 export const REMOTE_LINK_PORT = 8787;
 
-/** Crockford-ish alphabet (no look-alikes) for a short, typo-resistant token. */
-const TOKEN_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789abcdefghijkmnpqrstuvwxyz";
+/** Crockford-ish alphabet (no 0/O/1/I/i/l look-alikes) for a short, typo-resistant token. */
+const TOKEN_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789abcdefghjkmnpqrstuvwxyz";
 
 /** A URL-safe pairing token. Uses Web Crypto when available, else falls back to Math.random. */
 export function generatePairingToken(len = 24): string {

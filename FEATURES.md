@@ -125,8 +125,10 @@ The landing page **is** a full-window chat assistant, in three voices — **Free
   saved playbook) so it does that kind of task better next time; review/edit/delete in the 🧠 Skills panel. *(opt-in)*
 - **Delegates subtasks** — hands a chunky lookup to a short-lived **read-only sub-agent** that
   researches and returns a concise result, keeping the main answer clean (it can't change anything).
-- **Uses your MCP servers** — add **Model Context Protocol** servers in Settings (`name https://host/mcp`)
-  and it lists + calls their tools as part of a task. *(needs your own MCP server URL; best on desktop)*
+- **Uses your MCP servers** — add **Model Context Protocol** servers in Settings and the assistant
+  lists + calls their tools as part of a task. Both kinds: **HTTP** servers (`name https://host/mcp`)
+  and **stdio** servers — a local command the desktop runs, like the official filesystem/git servers
+  (`name npx -y @modelcontextprotocol/server-filesystem /path`). *(desktop; stdio runs a local program, so only add servers you trust)*
 - **Changes settings by request** — *"set image quality to high"*, *"draw as a comic page"*, *"turn
   on mature mode"* — it applies and confirms (double-checking sensitive toggles first).
 - **Asks instead of guessing** — if a request is ambiguous it asks one short question or offers a couple of options.

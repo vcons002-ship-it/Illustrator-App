@@ -155,6 +155,8 @@ export type MainToWorker =
       bodyBase64?: string;
       error?: string;
     }
+  /** Reply to a worker `mcpStdio` (the spawned server's stdout lines, or an error). */
+  | { type: "mcpStdioResult"; callId: number; ok: boolean; lines?: string[]; error?: string }
   /**
    * Landing-page buddy: one user message BEFORE any book is open. `library` is the
    * reader's book list (for open_library_book); `persona` picks the entertainment
@@ -185,6 +187,9 @@ export type WorkerToMain =
       fetchId: number;
       request: { url: string; method: string; headers: Record<string, string>; bodyBase64?: string };
     }
+  /** Run a stdio MCP server (spawn the command, pipe JSON-RPC lines). Desktop only; answered
+   * by `mcpStdioResult` with the same callId. */
+  | { type: "mcpStdio"; callId: number; command: string; args: string[]; input: string[] }
   | { type: "status"; message: string }
   | { type: "providers"; diagnostics: ProvidersDiagnostics }
   | { type: "generating"; value: boolean }

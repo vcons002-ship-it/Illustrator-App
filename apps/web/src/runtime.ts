@@ -327,6 +327,15 @@ export async function stopRemoteServer(): Promise<void> {
 }
 
 /**
+ * Run a stdio MCP server (desktop): spawn the command, write the JSON-RPC request lines to its
+ * stdin, and return the server's stdout lines. Rejects on web / older builds (no command).
+ */
+export async function mcpStdioExchange(command: string, args: string[], input: string[]): Promise<string[]> {
+  if (!isDesktop) throw new Error("stdio MCP servers need the desktop app.");
+  return invoke<string[]>("mcp_stdio_exchange", { request: { command, args, input } });
+}
+
+/**
  * Open a live web page in its own desktop window (the in-app browser's "live" mode). The page
  * runs isolated — no Visual Reader APIs are exposed to it. Best-effort: needs a desktop build
  * with the `open_browser_window` command; degrades to a clear error on web / older builds.

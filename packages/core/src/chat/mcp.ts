@@ -9,23 +9,38 @@ import type { Transport } from "../providers/transport/transport.js";
  * Transport. (stdio servers — which need a spawned process — are a desktop follow-up.)
  */
 
-export interface McpServer {
-  name: string;
-  url: string;
-}
+export type McpServer =
+  | { name: string; kind: "http"; url: string }
+  | { name: string; kind: "stdio"; command: string; args: string[] };
 export interface McpTool {
   name: string;
   description?: string;
   inputSchema?: unknown;
 }
 
-/** Parse the Settings "MCP servers" text — one server per line: `name https://host/mcp`. */
+/**
+ * Parse the Settings "MCP servers" text — one server per line:
+ *   `name https://host/mcp`           → an HTTP / streamable-HTTP server, or
+ *   `name npx -y @scope/server arg…`  → a stdio server (a local command the desktop spawns).
+ * Whether the value starts with http(s):// decides the kind. Lines starting with # are comments.
+ */
 export function parseMcpServers(text: string | undefined): McpServer[] {
   if (!text) return [];
   const out: McpServer[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    const m = /^\s*([^\s=]+)\s*[=\s]\s*(https?:\/\/\S+?)\s*$/.exec(line);
-    if (m && !out.some((s) => s.name === m[1])) out.push({ name: m[1]!, url: m[2]! });
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const m = /^([^\s=]+)\s*(?:=\s*|\s+)(.+)$/.exec(line);
+    if (!m) continue;
+    const name = m[1]!;
+    const rest = m[2]!.trim();
+    if (out.some((s) => s.name === name)) continue;
+    if (/^https?:\/\//i.test(rest)) {
+      out.push({ name, kind: "http", url: rest.split(/\s+/)[0]! });
+    } else {
+      const parts = rest.split(/\s+/);
+      out.push({ name, kind: "stdio", command: parts[0]!, args: parts.slice(1) });
+    }
   }
   return out;
 }
@@ -129,4 +144,43 @@ export async function mcpCallTool(
   signal?: AbortSignal,
 ): Promise<string> {
   return parseToolCallText(await rpc(transport, url, "tools/call", { name, arguments: args }, signal));
+}
+
+// ----------------------------------------------------------- stdio servers
+
+/**
+ * The newline-delimited JSON-RPC lines for a one-shot **stdio** exchange: `initialize` (id 1),
+ * the `notifications/initialized` notification, then the real request (id 2). The desktop
+ * transport writes these to the spawned server's stdin (one per line) and returns its stdout
+ * lines; pick the id-2 response with `pickStdioResult`. Stateless per call — robust + simple.
+ */
+export function buildStdioExchange(method: string, params: unknown): { lines: string[]; resultId: number } {
+  const init = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "VisualReader", version: "1.0" } },
+  };
+  const initialized = { jsonrpc: "2.0", method: "notifications/initialized" };
+  const req = { jsonrpc: "2.0", id: 2, method, ...(params !== undefined ? { params } : {}) };
+  return { lines: [JSON.stringify(init), JSON.stringify(initialized), JSON.stringify(req)], resultId: 2 };
+}
+
+/**
+ * Find the JSON-RPC response with `id` among a stdio server's stdout lines (skipping log lines
+ * and notifications) and unwrap its result — throwing the server's error, or a clear message
+ * when there's no response at all.
+ */
+export function pickStdioResult(lines: readonly string[], id: number): unknown {
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t || t[0] !== "{") continue;
+    try {
+      const obj = JSON.parse(t) as { id?: number };
+      if (obj.id === id) return parseJsonRpcResult(obj);
+    } catch {
+      /* a log line that happened to start with "{" — skip it */
+    }
+  }
+  throw new Error("the MCP server returned no response (check the command, and that it's an MCP stdio server)");
 }
