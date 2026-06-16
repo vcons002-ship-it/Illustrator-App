@@ -14,6 +14,7 @@ import type {
   DataTable,
   ImageSearchHit,
   CalendarEvent,
+  StockQuote,
   ImportStats,
   PolishMode,
   TaskCandidate,
@@ -163,6 +164,8 @@ export interface EngineWorkerApi {
   scanInbox: () => Promise<{ ok: boolean; candidates?: TaskCandidate[] }>;
   /** Load events across all Google calendars in a window (the calendar grid). */
   loadCalendar: (timeMin: string, timeMax: string) => Promise<{ ok: boolean; events?: CalendarEvent[] }>;
+  /** Fetch a keyless stock quote (Stooq via the CORS-exempt transport). */
+  stockQuote: (symbol: string) => Promise<{ ok: boolean; quote?: StockQuote }>;
   /** Run one document-polish stage; returns the requestId (for cancel) + the result. */
   polishText: (args: {
     stage: "understand" | "produce";
@@ -361,6 +364,8 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const scanRequests = useRef<Map<number, (r: { ok: boolean; candidates?: TaskCandidate[] }) => void>>(new Map());
   // In-flight calendar loads, resolved by `calendarLoaded`.
   const calendarRequests = useRef<Map<number, (r: { ok: boolean; events?: CalendarEvent[] }) => void>>(new Map());
+  // In-flight stock-quote fetches, resolved by `stockQuoted`.
+  const quoteRequests = useRef<Map<number, (r: { ok: boolean; quote?: StockQuote }) => void>>(new Map());
   // In-flight document-polish stages, resolved by `polished` (and streamed via `polishToken`).
   const polishRequests = useRef<
     Map<number, { onToken?: (delta: string) => void; resolve: (r: PolishResult) => void }>
@@ -653,6 +658,12 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           const resolve = calendarRequests.current.get(msg.requestId);
           calendarRequests.current.delete(msg.requestId);
           resolve?.({ ok: msg.ok, ...(msg.events ? { events: msg.events } : {}) });
+          break;
+        }
+        case "stockQuoted": {
+          const resolve = quoteRequests.current.get(msg.requestId);
+          quoteRequests.current.delete(msg.requestId);
+          resolve?.({ ok: msg.ok, ...(msg.quote ? { quote: msg.quote } : {}) });
           break;
         }
         case "polishToken": {
@@ -1142,6 +1153,21 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const stockQuote = useCallback(
+    (symbol: string): Promise<{ ok: boolean; quote?: StockQuote }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (quoteRequests.current.delete(requestId)) resolve({ ok: false });
+        }, 20_000);
+        quoteRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "stockQuote", requestId, symbol });
+      }),
+    [],
+  );
   const polishText = useCallback(
     (args: {
       stage: "understand" | "produce";
@@ -1230,6 +1256,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     planTask,
     scanInbox,
     loadCalendar,
+    stockQuote,
     polishText,
     polishCancel,
   };

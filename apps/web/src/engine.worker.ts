@@ -20,6 +20,8 @@ import {
   createDataTable,
   recalcTable,
   tableToText,
+  stooqQuoteUrl,
+  parseStooqQuote,
   buildBuddySystemPrompt,
   buildProducePrompt,
   buildUnderstandPrompt,
@@ -630,6 +632,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "loadCalendar":
       void handleLoadCalendar(msg);
+      break;
+    case "stockQuote":
+      void handleStockQuote(msg);
       break;
     case "polish":
       void handlePolish(msg);
@@ -1326,6 +1331,23 @@ async function handleLoadCalendar(msg: Extract<MainToWorker, { type: "loadCalend
     post({ type: "calendarLoaded", requestId: msg.requestId, ok: true, events });
   } catch (err) {
     post({ type: "calendarLoaded", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+async function handleStockQuote(msg: Extract<MainToWorker, { type: "stockQuote" }>): Promise<void> {
+  try {
+    const cf = corsFetch();
+    // Stooq's CSV is cross-origin; the keyless quote needs the CORS-exempt transport
+    // (desktop/extension). On plain web we return no quote (the chart still embeds).
+    if (!cf) {
+      post({ type: "stockQuoted", requestId: msg.requestId, ok: true });
+      return;
+    }
+    const res = await new DirectTransport(cf).send({ url: stooqQuoteUrl(msg.symbol), method: "GET" });
+    const quote = parseStooqQuote(await res.text(), msg.symbol);
+    post({ type: "stockQuoted", requestId: msg.requestId, ok: true, ...(quote ? { quote } : {}) });
+  } catch (err) {
+    post({ type: "stockQuoted", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
   }
 }
 

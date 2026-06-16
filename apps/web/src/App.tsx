@@ -54,6 +54,7 @@ import {
   type TaskPlan,
   type TaskCandidate,
   type CalendarEvent,
+  type StockQuote,
   MAX_SKILL_NAME_CHARS,
   MAX_SKILL_DESC_CHARS,
   MAX_SKILL_BODY_CHARS,
@@ -106,6 +107,7 @@ import {
   SkillsPanel,
   TasksPanel,
   CalendarPanel,
+  StockChartPanel,
   type CalendarDeadline,
   DEFAULT_SETTINGS,
   DocumentPolishPanel,
@@ -268,6 +270,7 @@ export function App() {
     planTask,
     scanInbox,
     loadCalendar,
+    stockQuote,
     setActiveUnit,
     polishText,
     polishCancel,
@@ -1229,6 +1232,33 @@ export function App() {
       });
     },
     [loadCalendarFor],
+  );
+  // Markets panel: a TradingView chart for a ticker + a keyless quote snapshot.
+  const [showStocks, setShowStocks] = useState(false);
+  const [stockSymbol, setStockSymbol] = useState("AAPL");
+  const [stockQuoteData, setStockQuoteData] = useState<StockQuote | null>(null);
+  const [stockLoading, setStockLoading] = useState(false);
+  const loadStockQuote = useCallback(
+    async (symbol: string) => {
+      setStockLoading(true);
+      setStockQuoteData(null);
+      try {
+        const r = await stockQuote(symbol);
+        setStockQuoteData(r.quote ?? null);
+      } finally {
+        setStockLoading(false);
+      }
+    },
+    [stockQuote],
+  );
+  const openStocks = useCallback(
+    (symbol?: string) => {
+      const s = (symbol ?? stockSymbol).toUpperCase();
+      setStockSymbol(s);
+      setShowStocks(true);
+      void loadStockQuote(s);
+    },
+    [stockSymbol, loadStockQuote],
   );
   // Overlay the assistant's planned deadlines (plan-level + each dated step) onto the grid.
   const calendarDeadlines = useMemo<CalendarDeadline[]>(() => {
@@ -2693,6 +2723,13 @@ export function App() {
           >
             📅 Calendar
           </button>
+          <button
+            style={styles.button}
+            onClick={() => openStocks()}
+            title="Markets — a TradingView chart for any ticker plus a quote, and the assistant's analysis/ideas"
+          >
+            📈 Markets
+          </button>
           <button style={styles.button} onClick={() => openBook(loadSampleBook())}>
             Load sample
           </button>
@@ -3332,6 +3369,22 @@ export function App() {
             void openTaskInChat(id);
           }}
           onClose={() => setShowCalendar(false)}
+        />
+      )}
+
+      {showStocks && (
+        <StockChartPanel
+          symbol={stockSymbol}
+          onSymbol={(s) => openStocks(s)}
+          quote={stockQuoteData}
+          loading={stockLoading}
+          onAnalyze={(s) => {
+            setShowStocks(false);
+            onBuddySendText(
+              `Analyse ${s} stock: summarise its recent performance and key levels, the bull and bear case, and any trade ideas — search the web for current data and be clear this isn't financial advice.`,
+            );
+          }}
+          onClose={() => setShowStocks(false)}
         />
       )}
     </div>
