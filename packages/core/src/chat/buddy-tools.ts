@@ -8,6 +8,7 @@ import { MAX_SKILL_BODY_CHARS, MAX_SKILL_DESC_CHARS, MAX_SKILL_NAME_CHARS } from
 import { formatSetupGuide, type SetupGuide } from "./setup-guides.js";
 import { controllableSettingsIndex } from "./settings-control.js";
 import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../providers/google.js";
+import { formatQuote, type StockQuote } from "../providers/stocks.js";
 import type { TaskPlan } from "./tasks.js";
 
 /**
@@ -35,6 +36,8 @@ export type BuddyToolCall =
   | { tool: "calculate"; expression: string }
   /** Wolfram|Alpha: real-world data + computation (optional, needs an AppID). */
   | { tool: "wolfram"; query: string }
+  /** A keyless stock quote (Stooq) to ground market analysis in real numbers. */
+  | { tool: "stock_quote"; symbol: string }
   | { tool: "open_library_book"; id: string; visuals: boolean }
   | {
       tool: "open_web_text";
@@ -353,6 +356,9 @@ export function buildBuddySystemPrompt(opts: {
     commandTool +
     workingFolderNote +
     wolframTool +
+    '- {"tool":"stock_quote","symbol":"AAPL"} — fetch the latest KEYLESS stock quote (price/open/high/low/volume) to ' +
+    "ground market analysis in real numbers when the reader asks about a stock/ticker. Pair it with search_web for news " +
+    "and fundamentals, then give a balanced read (bull + bear) and any ideas — and always note it isn't financial advice.\n" +
     googleBlock +
     githubBlock +
     '- {"tool":"plan_task","request":"…"} — when the reader asks you to PLAN or organize a real-world MULTI-STEP task ' +
@@ -454,6 +460,10 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
   if (tool === "wolfram") {
     const query = strArg(obj.query, MAX_QUERY_CHARS);
     return query ? { tool, query } : undefined;
+  }
+  if (tool === "stock_quote") {
+    const symbol = strArg(obj.symbol, MAX_NAME_CHARS);
+    return symbol ? { tool, symbol } : undefined;
   }
   if (tool === "remember") {
     const note = strArg(obj.note, MAX_MEMORY_NOTE_CHARS);
@@ -672,6 +682,8 @@ export interface BuddyToolResultPayload {
   calc?: { expression: string; result: string };
   /** A Wolfram|Alpha answer (plain text). */
   wolfram?: { query: string; answer: string };
+  /** A keyless stock quote (or absent when unavailable). */
+  quote?: StockQuote;
   /** What set_visual_style actually applied (resolved style LABEL). */
   applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
   /** Whether an approved image generation succeeded. */
@@ -779,6 +791,18 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
       ? `[Wolfram|Alpha — authoritative answer for "${result.wolfram.query}"]\n${result.wolfram.answer}\n` +
           "Use these facts/values in your answer; cite Wolfram|Alpha."
       : "[wolfram returned nothing]";
+  }
+  if (call.tool === "stock_quote") {
+    if (!result.quote) {
+      return (
+        `[stock_quote: no keyless quote for "${call.symbol}" right now (the quote feed needs the desktop app or ` +
+        "extension, or the symbol may be unknown). Use search_web for current prices instead, and proceed.]"
+      );
+    }
+    return (
+      `[stock_quote — latest for ${result.quote.symbol}]\n${formatQuote(result.quote)}\n` +
+      "Use these real numbers in your analysis; for news/fundamentals add search_web. Always note this isn't financial advice."
+    );
   }
   if (call.tool === "remember" || call.tool === "forget") {
     return result.memory

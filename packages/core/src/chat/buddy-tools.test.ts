@@ -386,6 +386,18 @@ describe("update_setting tool", () => {
   });
 });
 
+describe("stock_quote tool", () => {
+  it("parses + advertises stock_quote, and feeds the quote back for analysis", () => {
+    expect(parseBuddyToolCall('{"tool":"stock_quote","symbol":"AAPL"}')).toEqual({ tool: "stock_quote", symbol: "AAPL" });
+    expect(parseBuddyToolCall('{"tool":"stock_quote","symbol":"  "}')).toBeUndefined();
+    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"stock_quote"');
+    const out = formatBuddyToolResult({ tool: "stock_quote", symbol: "AAPL" }, { quote: { symbol: "AAPL", close: 204, open: 200 } });
+    expect(out).toContain("AAPL: 204");
+    expect(out).toMatch(/financial advice/i);
+    expect(formatBuddyToolResult({ tool: "stock_quote", symbol: "ZZ" }, {})).toMatch(/no keyless quote/i);
+  });
+});
+
 describe("create_spreadsheet tool", () => {
   it("parses a column/row spec, coercing cells and dropping invalid columns", () => {
     const call = parseBuddyToolCall(
