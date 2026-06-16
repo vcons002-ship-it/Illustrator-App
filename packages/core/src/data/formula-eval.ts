@@ -17,8 +17,10 @@ import type { CellValue, DataTable } from "./data-table.js";
 export type FormulaValue = number | string | boolean | null;
 
 export interface FormulaContext {
-  /** A cell's value by 0-based column + 1-based Excel row (row 1 = the header). */
-  cell(col: number, excelRow: number): FormulaValue;
+  /** A cell's value by 0-based column + 1-based Excel row (row 1 = the header). An
+   * optional sheet name resolves a cross-sheet reference (`'Data'!B2`); undefined =
+   * the current sheet. */
+  cell(col: number, excelRow: number, sheet?: string): FormulaValue;
 }
 
 /** A rectangular range result, row-major. */
@@ -38,6 +40,7 @@ type Token =
   | { t: "num"; v: number }
   | { t: "str"; v: string }
   | { t: "cell"; col: number; row: number }
+  | { t: "sheet"; name: string }
   | { t: "ident"; v: string }
   | { t: "op"; v: string }
   | { t: "punc"; v: "(" | ")" | "," | ":" };
@@ -75,6 +78,19 @@ function tokenize(input: string): Token[] {
       }
       tokens.push({ t: "str", v: str });
       i = j + 1;
+      continue;
+    }
+    // A cross-sheet prefix: 'Quoted Name'! or BareName! (before the cell/ident match).
+    const sheetQuoted = /^'((?:[^']|'')*)'!/.exec(s.slice(i));
+    if (sheetQuoted) {
+      tokens.push({ t: "sheet", name: sheetQuoted[1]!.replace(/''/g, "'") });
+      i += sheetQuoted[0].length;
+      continue;
+    }
+    const sheetBare = /^([A-Za-z_][A-Za-z0-9_.]*)!/.exec(s.slice(i));
+    if (sheetBare) {
+      tokens.push({ t: "sheet", name: sheetBare[1]! });
+      i += sheetBare[0].length;
       continue;
     }
     const cell = /^\$?([A-Za-z]{1,3})\$?(\d+)/.exec(s.slice(i));
@@ -122,8 +138,8 @@ type Node =
   | { k: "num"; v: number }
   | { k: "str"; v: string }
   | { k: "name"; v: string }
-  | { k: "cell"; col: number; row: number }
-  | { k: "range"; c1: number; r1: number; c2: number; r2: number }
+  | { k: "cell"; col: number; row: number; sheet?: string }
+  | { k: "range"; c1: number; r1: number; c2: number; r2: number; sheet?: string }
   | { k: "unary"; op: string; x: Node }
   | { k: "binary"; op: string; a: Node; b: Node }
   | { k: "call"; name: string; args: Node[] };
@@ -207,23 +223,31 @@ class Parser {
       if (!(close.t === "punc" && close.v === ")")) throw new Error("expected )");
       return n;
     }
-    if (t.t === "cell") {
+    // A cross-sheet prefix qualifies the cell/range that follows.
+    let sheet: string | undefined;
+    let head: Token = t;
+    if (t.t === "sheet") {
+      sheet = t.name;
+      head = this.eat();
+    }
+    if (head.t === "cell") {
       const next = this.peek();
       if (next?.t === "punc" && next.v === ":") {
         this.eat();
         const end = this.eat();
         if (end.t !== "cell") throw new Error("expected a cell after :");
-        return { k: "range", c1: t.col, r1: t.row, c2: end.col, r2: end.row };
+        return { k: "range", c1: head.col, r1: head.row, c2: end.col, r2: end.row, ...(sheet ? { sheet } : {}) };
       }
-      return { k: "cell", col: t.col, row: t.row };
+      return { k: "cell", col: head.col, row: head.row, ...(sheet ? { sheet } : {}) };
     }
-    if (t.t === "ident") {
+    if (sheet) throw new Error("expected a cell after a sheet reference");
+    if (head.t === "ident") {
       const next = this.peek();
       if (next?.t === "punc" && next.v === "(") {
         this.eat();
-        return { k: "call", name: t.v.toUpperCase(), args: this.args() };
+        return { k: "call", name: head.v.toUpperCase(), args: this.args() };
       }
-      return { k: "name", v: t.v.toUpperCase() };
+      return { k: "name", v: head.v.toUpperCase() };
     }
     throw new Error("unexpected token");
   }
@@ -256,14 +280,14 @@ function evalNode(node: Node, ctx: FormulaContext): Value {
       if (node.v === "FALSE") return false;
       throw new Error(`unknown name "${node.v}"`);
     case "cell":
-      return ctx.cell(node.col, node.row);
+      return ctx.cell(node.col, node.row, node.sheet);
     case "range": {
       const c1 = Math.min(node.c1, node.c2);
       const c2 = Math.max(node.c1, node.c2);
       const r1 = Math.min(node.r1, node.r2);
       const r2 = Math.max(node.r1, node.r2);
       const cells: FormulaValue[] = [];
-      for (let r = r1; r <= r2; r++) for (let c = c1; c <= c2; c++) cells.push(ctx.cell(c, r));
+      for (let r = r1; r <= r2; r++) for (let c = c1; c <= c2; c++) cells.push(ctx.cell(c, r, node.sheet));
       return { width: c2 - c1 + 1, height: r2 - r1 + 1, cells };
     }
     case "unary": {
@@ -805,4 +829,60 @@ export function recalcTable(table: DataTable): DataTable {
     }),
   );
   return changed ? { ...table, rows } : table;
+}
+
+/**
+ * Recompute formula cells across a whole WORKBOOK, resolving cross-sheet references
+ * (`'Data'!B2`). Like `recalcTable` but the cell accessor can hop to any sheet by name
+ * (case-insensitive); memoisation + cycle detection span all sheets. Returns a new
+ * sheet list (same references where a sheet didn't change).
+ */
+export function recalcWorkbook(sheets: { name: string; table: DataTable }[]): { name: string; table: DataTable }[] {
+  const byName = new Map(sheets.map((s) => [s.name.toLowerCase(), s.table]));
+  const memo = new Map<string, FormulaValue>();
+  const stack = new Set<string>();
+
+  const cellIn = (sheetName: string, col: number, excelRow: number, refSheet?: string): FormulaValue => {
+    const tName = refSheet ?? sheetName;
+    const table = byName.get(tName.toLowerCase());
+    if (!table) return null;
+    if (excelRow === 1) return table.columns[col]?.name ?? null;
+    const r = excelRow - 2;
+    if (r < 0 || r >= table.rows.length || col < 0 || col >= table.columns.length) return null;
+    const f = table.formulas?.[`${r},${col}`];
+    if (f === undefined) return table.rows[r]![col] ?? null;
+    const key = `${tName.toLowerCase()}|${r},${col}`;
+    if (memo.has(key)) return memo.get(key)!;
+    if (stack.has(key)) throw new Error("#REF! (circular)");
+    stack.add(key);
+    try {
+      const v = evaluateFormula(f, { cell: (c2, r2, s2) => cellIn(tName, c2, r2, s2) });
+      memo.set(key, v);
+      return v;
+    } finally {
+      stack.delete(key);
+    }
+  };
+
+  return sheets.map((s) => {
+    const fmap = s.table.formulas;
+    if (!fmap || Object.keys(fmap).length === 0) return s;
+    let changed = false;
+    const rows = s.table.rows.map((row, r) =>
+      row.map((v, c): CellValue => {
+        if (fmap[`${r},${c}`] === undefined) return v;
+        let computed: FormulaValue;
+        try {
+          computed = cellIn(s.name, c, r + 2);
+        } catch {
+          return v;
+        }
+        if ((computed === null || (typeof computed === "number" && !Number.isFinite(computed))) && v !== null) return v;
+        const out: CellValue = typeof computed === "boolean" ? (computed ? "TRUE" : "FALSE") : computed;
+        if (out !== v) changed = true;
+        return out;
+      }),
+    );
+    return changed ? { name: s.name, table: { ...s.table, rows } } : s;
+  });
 }

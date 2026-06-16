@@ -33,6 +33,7 @@ import {
   chartDatasetFromTable,
   buildAnalysisTable,
   recalcTable,
+  recalcWorkbook,
   setTableCell,
   setColumnFormula,
   parseA1,
@@ -791,6 +792,26 @@ export function App() {
     }),
     [mutateBookTable],
   );
+
+  // Add a LIVE statistical Analysis sheet to the open workbook: a new tab whose
+  // cells are cross-sheet formulas over the primary sheet's data, recomputed in place
+  // (so it updates as the data changes). Converts a single-table import into a
+  // two-sheet workbook; re-running replaces the existing Analysis tab.
+  const addAnalysisSheet = useCallback(() => {
+    setBook((prev) => {
+      if (!prev?.data) return prev;
+      const base = prev.dataSheets && prev.dataSheets.length > 0 ? prev.dataSheets : [{ name: "Sheet1", table: prev.data }];
+      const primary = base[0]!;
+      const analysis = buildAnalysisTable(primary.table, primary.name);
+      if (!analysis) return prev; // nothing numeric to analyse
+      const withoutOld = base.filter((s) => s.name !== "Analysis");
+      const sheets = recalcWorkbook([...withoutOld, { name: "Analysis", table: analysis }]);
+      const next: BookSource = { ...prev, dataSheets: sheets, ...(sheets[0] ? { data: sheets[0].table } : {}) };
+      void libraryStore.putBook(next).catch(() => {});
+      updateBookData({ ...(next.data ? { data: next.data } : {}), dataSheets: sheets });
+      return next;
+    });
+  }, [libraryStore, updateBookData]);
 
   // Transient "✓ your click did X" feedback, so a Redo press is never ambiguous.
   // (Declared up here because handlers below — mode toggle, redo — depend on it.)
@@ -3041,6 +3062,7 @@ export function App() {
             pagesPerImage={pagesPerImage}
             registerParagraph={registerParagraph}
             dataEdit={dataEdit}
+            onAddAnalysisSheet={addAnalysisSheet}
             {...(technicalSupport ? { technical: technicalSupport } : {})}
           />
 
@@ -3385,6 +3407,7 @@ const ReaderColumn = memo(function ReaderColumn({
   pagesPerImage,
   registerParagraph,
   dataEdit,
+  onAddAnalysisSheet,
   technical,
 }: {
   book: BookSource;
@@ -3401,6 +3424,8 @@ const ReaderColumn = memo(function ReaderColumn({
     onDeleteColumn: (s: number | null, c: number) => void;
     onRenameColumn: (s: number | null, c: number, name: string) => void;
   };
+  /** Append a live statistical Analysis sheet (cross-sheet formulas) to the workbook. */
+  onAddAnalysisSheet?: () => void;
   /** Present only in technical mode: concept marks + paragraph-anchored support. */
   technical?: TechnicalSupportData;
 }) {
@@ -3491,6 +3516,15 @@ const ReaderColumn = memo(function ReaderColumn({
                 }}
               >
                 ⬇ + Chart
+              </button>
+            ) : null}
+            {onAddAnalysisSheet && activeTable.columns.some((c) => c.type === "number") ? (
+              <button
+                style={styles.smallButton}
+                title="Add a live Analysis sheet — stats/correlation/regression as formulas that update with your data"
+                onClick={onAddAnalysisSheet}
+              >
+                ➕ Analysis sheet
               </button>
             ) : null}
             <button

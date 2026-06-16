@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluateFormula, recalcTable, type FormulaContext } from "./formula-eval.js";
+import { evaluateFormula, recalcTable, recalcWorkbook, type FormulaContext } from "./formula-eval.js";
 import type { DataTable } from "./data-table.js";
 
 /** A context backed by a fixed grid: cellAt[excelRow][col]. Row 1 is the header. */
@@ -148,5 +148,35 @@ describe("recalcTable", () => {
   it("returns the same reference when there are no formulas", () => {
     const t: DataTable = { columns: [{ name: "A", type: "number" }], rows: [[1]] };
     expect(recalcTable(t)).toBe(t);
+  });
+});
+
+describe("recalcWorkbook (cross-sheet references)", () => {
+  it("resolves 'Sheet'!Range formulas on another sheet, live", () => {
+    const data: DataTable = {
+      columns: [{ name: "City", type: "string" }, { name: "Pop", type: "number" }],
+      rows: [["Oslo", 700000], ["Bergen", 280000]],
+    };
+    const analysis: DataTable = {
+      columns: [{ name: "Stat", type: "string" }, { name: "Pop", type: "number" }],
+      rows: [["Total", null], ["Average", null]],
+      formulas: { "0,1": "SUM('Data'!B2:B3)", "1,1": "AVERAGE('Data'!B2:B3)" },
+    };
+    const out = recalcWorkbook([{ name: "Data", table: data }, { name: "Analysis", table: analysis }]);
+    expect(out[1]!.table.rows[0]![1]).toBe(980000);
+    expect(out[1]!.table.rows[1]![1]).toBe(490000);
+    expect(out[0]).toEqual({ name: "Data", table: data }); // the data sheet is unchanged
+  });
+
+  it("handles a quoted sheet name and a bare name, case-insensitively", () => {
+    const a: DataTable = { columns: [{ name: "X", type: "number" }], rows: [[5]] };
+    const b: DataTable = {
+      columns: [{ name: "Y", type: "number" }],
+      rows: [[null], [null]],
+      formulas: { "0,0": "data!A2*2", "1,0": "'DATA'!A2+1" }, // bare + quoted, mixed case
+    };
+    const out = recalcWorkbook([{ name: "Data", table: a }, { name: "Calc", table: b }]);
+    expect(out[1]!.table.rows[0]![0]).toBe(10);
+    expect(out[1]!.table.rows[1]![0]).toBe(6);
   });
 });
