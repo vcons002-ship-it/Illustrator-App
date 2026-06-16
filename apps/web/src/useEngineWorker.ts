@@ -161,6 +161,8 @@ export interface EngineWorkerApi {
   googleConnect: (args: { code: string; redirectUri: string; codeVerifier: string }) => Promise<{ ok: boolean; email?: string; error?: string }>;
   /** Exchange a pasted Schwab consent code for tokens (manual connect). */
   schwabConnect: (args: { code: string; redirectUri: string }) => Promise<{ ok: boolean; error?: string }>;
+  /** Place a reviewed order via Schwab (called only from the order-review modal). */
+  schwabPlaceOrder: (order: Record<string, unknown>) => Promise<{ ok: boolean; status?: number; error?: string }>;
   /** Research + plan a task into a persisted TaskPlan (progress streamed via onProgress). */
   planTask: (args: { source: TaskSource; sourceText: string; onProgress?: (phase: string, note?: string) => void }) => Promise<{ ok: boolean; plan?: TaskPlan; error?: string }>;
   /** Idle scan: actionable email/calendar items as task candidates. */
@@ -366,6 +368,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     new Map(),
   );
   const schwabConnectRequests = useRef<Map<number, (r: { ok: boolean; error?: string }) => void>>(new Map());
+  const schwabOrderRequests = useRef<Map<number, (r: { ok: boolean; status?: number; error?: string }) => void>>(new Map());
   // In-flight task-plan requests (resolved by `planned`, progress via `planProgress`).
   const planRequests = useRef<
     Map<number, { resolve: (r: { ok: boolean; plan?: TaskPlan; error?: string }) => void; onProgress?: (phase: string, note?: string) => void }>
@@ -658,6 +661,12 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           const resolve = schwabConnectRequests.current.get(msg.requestId);
           schwabConnectRequests.current.delete(msg.requestId);
           resolve?.({ ok: msg.ok, ...(msg.error ? { error: msg.error } : {}) });
+          break;
+        }
+        case "schwabOrderPlaced": {
+          const resolve = schwabOrderRequests.current.get(msg.requestId);
+          schwabOrderRequests.current.delete(msg.requestId);
+          resolve?.({ ok: msg.ok, ...(msg.status !== undefined ? { status: msg.status } : {}), ...(msg.error ? { error: msg.error } : {}) });
           break;
         }
         case "planProgress": {
@@ -1148,6 +1157,21 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const schwabPlaceOrder = useCallback(
+    (order: Record<string, unknown>): Promise<{ ok: boolean; status?: number; error?: string }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (schwabOrderRequests.current.delete(requestId)) resolve({ ok: false, error: "Order timed out." });
+        }, 30_000);
+        schwabOrderRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "schwabPlaceOrder", requestId, order });
+      }),
+    [],
+  );
   const planTask = useCallback(
     (args: {
       source: TaskSource;
@@ -1316,6 +1340,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     summarize,
     googleConnect,
     schwabConnect,
+    schwabPlaceOrder,
     planTask,
     scanInbox,
     loadCalendar,

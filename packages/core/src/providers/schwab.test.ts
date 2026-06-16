@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   buildEquityOrder,
+  buildOptionOrder,
+  describeOrder,
   buildSchwabAuthUrl,
   exchangeSchwabCode,
   parseOptionChain,
   parseSchwabPositions,
   parseSchwabQuote,
+  placeSchwabOrder,
+  schwabAccountNumbers,
 } from "./schwab.js";
 import type { Transport, TransportRequest, TransportResponse } from "./transport/transport.js";
 
@@ -100,5 +104,27 @@ describe("parseSchwabPositions + buildEquityOrder", () => {
     const o = buildEquityOrder({ symbol: "aapl", quantity: 10, instruction: "BUY", orderType: "LIMIT", price: 200 });
     expect(o).toMatchObject({ orderType: "LIMIT", price: 200, orderStrategyType: "SINGLE" });
     expect((o.orderLegCollection as { instruction: string; instrument: { symbol: string } }[])[0]).toMatchObject({ instruction: "BUY", instrument: { symbol: "AAPL" } });
+  });
+});
+
+describe("option order + place", () => {
+  it("builds an option order and describes it", () => {
+    const o = buildOptionOrder({ optionSymbol: "AAPL  260620C00200000", quantity: 1, instruction: "BUY_TO_OPEN", orderType: "LIMIT", price: 6.25 });
+    expect(o).toMatchObject({ orderType: "LIMIT", price: 6.25, complexOrderStrategyType: "NONE" });
+    expect((o.orderLegCollection as { instruction: string; instrument: { assetType: string } }[])[0]).toMatchObject({ instruction: "BUY_TO_OPEN", instrument: { assetType: "OPTION" } });
+    expect(describeOrder(o)).toMatch(/BUY_TO_OPEN 1 AAPL.*OPTION.*LIMIT @ 6.25/);
+  });
+
+  it("reads account numbers + posts an order to the account hash", async () => {
+    const accts = new FakeTransport([{ accountNumber: "123", hashValue: "HASH123" }]);
+    expect(await schwabAccountNumbers(accts, "tok")).toEqual([{ accountNumber: "123", hashValue: "HASH123" }]);
+
+    const place = new FakeTransport({});
+    const r = await placeSchwabOrder(place, "tok", "HASH123", buildEquityOrder({ symbol: "AAPL", quantity: 1, instruction: "BUY", orderType: "MARKET" }));
+    expect(r.ok).toBe(true);
+    const req = place.requests[0]!;
+    expect(req.method).toBe("POST");
+    expect(req.url).toContain("/accounts/HASH123/orders");
+    expect(req.headers?.authorization).toBe("Bearer tok");
   });
 });

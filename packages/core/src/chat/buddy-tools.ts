@@ -58,6 +58,17 @@ export type BuddyToolCall =
   | { tool: "schwab_quote"; symbol: string }
   | { tool: "schwab_options"; symbol: string; contractType?: "CALL" | "PUT" | "ALL"; strikeCount?: number }
   | { tool: "schwab_positions" }
+  /** Compose a Schwab order for the reader to REVIEW + place (never auto-submitted).
+   * Stops the loop so the host shows a confirm dialog. */
+  | {
+      tool: "prep_order";
+      assetType: "EQUITY" | "OPTION";
+      symbol: string;
+      instruction: string;
+      quantity: number;
+      orderType: "MARKET" | "LIMIT";
+      price?: number;
+    }
   /** Generate a ready-to-paste TradingView Pine Script or thinkorswim thinkScript
    * alert/study (the reader pastes it into their own platform). */
   | {
@@ -410,8 +421,12 @@ export function buildBuddySystemPrompt(opts: {
       ? '- {"tool":"schwab_quote","symbol":"AAPL"} / {"tool":"schwab_options","symbol":"AAPL","contractType":"ALL",' +
         '"strikeCount":10} / {"tool":"schwab_positions"} — the reader connected their Schwab account: real quotes, ' +
         "OPTION CHAINS with Greeks (delta/gamma/theta/vega) + implied volatility, and their account positions. Prefer " +
-        "these over the keyless feeds for options analysis. NEVER place or submit a trade — you only read/analyse; if " +
-        "they want to trade, tell them to do it in their Schwab/thinkorswim app. Not financial advice.\n"
+        "these over the keyless feeds for options analysis. Not financial advice.\n" +
+        '- {"tool":"prep_order","assetType":"EQUITY","symbol":"AAPL","instruction":"BUY","quantity":10,"orderType":' +
+        '"LIMIT","price":200} — COMPOSE an order for the reader to REVIEW and place themselves (a confirm dialog opens; ' +
+        "you NEVER place/submit it). EQUITY instruction BUY/SELL; for OPTION set assetType \"OPTION\", symbol = the OSI " +
+        "option symbol, instruction BUY_TO_OPEN/SELL_TO_OPEN/BUY_TO_CLOSE/SELL_TO_CLOSE. Only when the reader clearly " +
+        "asks to buy/sell/place an order; confirm the details with them first. Always note it isn't financial advice.\n"
       : "") +
     '- {"tool":"market_analysis","symbol":"AAPL","interval":"5m","range":"1d"} — keyless TECHNICAL indicators (VWAP, ' +
     "SMA20/50, EMA12/26, RSI14, recent move). Use for intraday/technical questions — VWAP watch levels, trend vs the " +
@@ -572,6 +587,16 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
     return { tool, symbol, ...(contractType ? { contractType } : {}), ...(strikeCount !== undefined ? { strikeCount } : {}) };
   }
   if (tool === "schwab_positions") return { tool };
+  if (tool === "prep_order") {
+    const symbol = strArg(obj.symbol, MAX_NAME_CHARS);
+    const instruction = strArg(obj.instruction, MAX_NAME_CHARS);
+    const quantity = typeof obj.quantity === "number" && Number.isFinite(obj.quantity) ? Math.abs(Math.round(obj.quantity)) : undefined;
+    if (!symbol || !instruction || !quantity) return undefined;
+    const assetType = obj.assetType === "OPTION" ? "OPTION" : "EQUITY";
+    const orderType = obj.orderType === "LIMIT" ? "LIMIT" : "MARKET";
+    const price = typeof obj.price === "number" && Number.isFinite(obj.price) ? obj.price : undefined;
+    return { tool, assetType, symbol, instruction, quantity, orderType, ...(price !== undefined ? { price } : {}) };
+  }
   if (tool === "trading_script") {
     const platform = obj.platform === "thinkscript" ? "thinkscript" : "pine";
     const kinds = ["vwap_cross", "rsi", "ma_cross", "price_level"];

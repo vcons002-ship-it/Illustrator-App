@@ -82,6 +82,9 @@ import {
   clearGoogleTokens,
   GOOGLE_SCOPES,
   buildSchwabAuthUrl,
+  buildEquityOrder,
+  buildOptionOrder,
+  describeOrder,
   POLISH_PRESETS,
   type ConceptIntro,
   type DataTable,
@@ -125,6 +128,7 @@ import {
   ScheduledTasksPanel,
   CalendarPanel,
   StockChartPanel,
+  OrderReviewModal,
   type CalendarDeadline,
   DEFAULT_SETTINGS,
   DocumentPolishPanel,
@@ -290,6 +294,7 @@ export function App() {
     stockQuote,
     marketIndicators,
     schwabConnect,
+    schwabPlaceOrder,
     setActiveUnit,
     polishText,
     polishCancel,
@@ -1338,6 +1343,28 @@ export function App() {
   useEffect(() => {
     void libraryStore.getMemo?.("schwab-tokens").then((t) => setSchwabConnected(!!t)).catch(() => {});
   }, [libraryStore]);
+  // Order review-and-place gate (the assistant preps; the reader places). Never auto-submits.
+  const [orderReview, setOrderReview] = useState<{ summary: string; order: Record<string, unknown> } | null>(null);
+  const [orderPlacing, setOrderPlacing] = useState(false);
+  const [orderResult, setOrderResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const openOrderReview = useCallback((call: Extract<BuddyToolCall, { tool: "prep_order" }>) => {
+    const order =
+      call.assetType === "OPTION"
+        ? buildOptionOrder({ optionSymbol: call.symbol, quantity: call.quantity, instruction: call.instruction as "BUY_TO_OPEN", orderType: call.orderType, ...(call.price !== undefined ? { price: call.price } : {}) })
+        : buildEquityOrder({ symbol: call.symbol, quantity: call.quantity, instruction: call.instruction === "SELL" ? "SELL" : "BUY", orderType: call.orderType, ...(call.price !== undefined ? { price: call.price } : {}) });
+    setOrderResult(null);
+    setOrderReview({ summary: describeOrder(order), order });
+  }, []);
+  const placeReviewedOrder = useCallback(async () => {
+    if (!orderReview) return;
+    setOrderPlacing(true);
+    try {
+      const r = await schwabPlaceOrder(orderReview.order);
+      setOrderResult({ ok: r.ok, message: r.ok ? "✓ Order placed at Schwab. Check your Schwab/thinkorswim app to confirm." : `⚠ ${r.error ?? "Order failed."}` });
+    } finally {
+      setOrderPlacing(false);
+    }
+  }, [orderReview, schwabPlaceOrder]);
   const connectSchwab = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
     const clientId = settings.keys?.schwabClientId;
     if (!clientId || !settings.keys?.schwabClientSecret) return { ok: false, error: "Add your Schwab app key + secret in Settings first." };
@@ -2072,6 +2099,9 @@ export function App() {
         // Planning is a safe, host-run operation (research + build a plan) — no approval
         // click; run it with progress and report back.
         void runPlanTask(res.pendingTool.request);
+      } else if (res.pendingTool.tool === "prep_order") {
+        // The assistant composed an order — open the review-and-place gate (never auto-submits).
+        openOrderReview(res.pendingTool);
       } else {
         setBuddyPendingTool(res.pendingTool);
       }
@@ -3564,6 +3594,21 @@ export function App() {
             );
           }}
           onClose={() => setShowStocks(false)}
+        />
+      )}
+
+      {orderReview && (
+        <OrderReviewModal
+          summary={orderReview.summary}
+          order={orderReview.order}
+          connected={schwabConnected}
+          placing={orderPlacing}
+          result={orderResult}
+          onPlace={() => void placeReviewedOrder()}
+          onClose={() => {
+            setOrderReview(null);
+            setOrderResult(null);
+          }}
         />
       )}
 
