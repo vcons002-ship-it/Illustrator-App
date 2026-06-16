@@ -115,8 +115,12 @@ worked with end to end:
   analysis), so you see answers immediately — no need to open Excel. It covers a broad Excel
   function set: math, logic (IF/IFS/IFERROR), **lookups (VLOOKUP/HLOOKUP/INDEX/MATCH)**,
   **multi-criteria aggregates (SUMIFS/COUNTIFS/AVERAGEIFS/MAXIFS)**, stats
-  (MEDIAN/STDEV/PERCENTILE/RANK/CORREL/SLOPE), and text (CONCAT/TEXTJOIN/LEFT/MID). Anything
-  it can't evaluate keeps the value Excel already computed.
+  (MEDIAN/STDEV/PERCENTILE/RANK/CORREL/SLOPE), and text (CONCAT/TEXTJOIN/LEFT/MID), with
+  **cross-sheet references** (`'Data'!B2:B11`) resolving across the workbook. Anything it
+  can't evaluate keeps the value Excel already computed.
+- **Live Analysis sheet** — one click adds an **Analysis** tab whose cells are cross-sheet
+  formulas (count/sum/average/median/stdev, correlation, regression) over your data — so the
+  stats recompute automatically as you edit, right in the app, and export as real formulas.
 - **Grounded analysis in chat** — ask for counts, sums, averages, group-bys, pivots,
   filters, distributions; the app computes them over the **real cells** (never guessed) and
   shows the result as a table + chart you can also download.
