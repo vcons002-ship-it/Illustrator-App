@@ -70,6 +70,16 @@ describe("buildXlsx", () => {
     expect(dataTableToCsv(t)).toBe('Name,Note\r\n"Acme, Inc.","say ""hi"""\r\nBeta,"line1\nline2"');
   });
 
+  it("writes imported cell formulas back out (round-trip)", () => {
+    const t: DataTable = {
+      columns: [{ name: "A", type: "number" }, { name: "B", type: "number" }],
+      rows: [[2, 3], [4, null]],
+      formulas: { "1,1": "A3*B2" }, // data-row 1, col 1 → sheet cell B3
+    };
+    const sheet = strFromU8(unzipSync(dataTableToXlsx(t))["xl/worksheets/sheet1.xml"]!);
+    expect(sheet).toContain("<f>A3*B2</f>");
+  });
+
   it("escapes XML-special characters in strings", () => {
     const t: DataTable = { columns: [{ name: "A & B", type: "string" }], rows: [["<x>"]] };
     const sheet = strFromU8(unzipSync(dataTableToXlsx(t))["xl/worksheets/sheet1.xml"]!);

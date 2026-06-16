@@ -20,6 +20,37 @@ export interface DataTable {
   columns: DataColumn[];
   /** Row-major: `rows[r][c]` aligns with `columns[c]`. Numbers in number columns. */
   rows: CellValue[][];
+  /**
+   * Sparse map of cell FORMULAS (Excel expressions WITHOUT the leading "="), keyed by
+   * `"row,col"` over the same indices as `rows`. Carried from an .xlsx import and
+   * written back on export so formulas survive a round-trip; the cached computed value
+   * lives in `rows` (what the chat/charts read). Absent when the table has no formulas.
+   */
+  formulas?: Record<string, string>;
+}
+
+/** The `formulas` map key for a cell at data-row `r`, column `c`. */
+export function formulaKey(r: number, c: number): string {
+  return `${r},${c}`;
+}
+
+/** Attach a non-empty formula map to a table (omitted entirely when empty). */
+function withFormulas(table: DataTable, formulas: Record<string, string>): DataTable {
+  return Object.keys(formulas).length > 0 ? { ...table, formulas } : { columns: table.columns, rows: table.rows };
+}
+
+/** Remap a formula map's coordinates through `move` (return null to drop a cell). */
+function remapFormulas(
+  formulas: Record<string, string> | undefined,
+  move: (r: number, c: number) => [number, number] | null,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, expr] of Object.entries(formulas ?? {})) {
+    const [r, c] = key.split(",").map(Number) as [number, number];
+    const moved = move(r, c);
+    if (moved) out[formulaKey(moved[0], moved[1])] = expr;
+  }
+  return out;
 }
 
 /** Caps so a giant sheet can't blow memory / context (mirrors the text importer). */
@@ -41,10 +72,12 @@ export function parseNumericCell(raw: string): number | undefined {
  * column is "number" when EVERY non-empty cell parses as a number; otherwise it's
  * "string". Empty cells become `null`. Returns undefined when there's no usable grid.
  */
-export function dataTableFromGrid(grid: string[][]): DataTable | undefined {
-  const rowsRaw = grid.filter((r) => r.some((c) => (c ?? "").trim() !== ""));
-  if (rowsRaw.length < 2) return undefined; // need a header + at least one data row
-  const header = rowsRaw[0]!.slice(0, MAX_TABLE_COLS);
+export function dataTableFromGrid(grid: string[][], formulaGrid?: (string | undefined)[][]): DataTable | undefined {
+  // Keep the ORIGINAL grid indices of the non-empty rows so an aligned formula grid
+  // can be filtered in lockstep (formulas map to the surviving data rows).
+  const keptIdx = grid.map((_, i) => i).filter((i) => grid[i]!.some((c) => (c ?? "").trim() !== ""));
+  if (keptIdx.length < 2) return undefined; // need a header + at least one data row
+  const header = grid[keptIdx[0]!]!.slice(0, MAX_TABLE_COLS);
   const ncols = header.length;
   if (ncols === 0) return undefined;
   // Unique, trimmed, non-empty column names.
@@ -56,7 +89,8 @@ export function dataTableFromGrid(grid: string[][]): DataTable | undefined {
     if (count > 0) name = `${name} (${count + 1})`;
     return name;
   });
-  const dataRows = rowsRaw.slice(1, 1 + MAX_TABLE_ROWS);
+  const dataIdx = keptIdx.slice(1, 1 + MAX_TABLE_ROWS);
+  const dataRows = dataIdx.map((i) => grid[i]!);
   // Infer each column's type from its data cells.
   const types: ColumnType[] = names.map((_, c) => {
     let sawValue = false;
@@ -76,15 +110,31 @@ export function dataTableFromGrid(grid: string[][]): DataTable | undefined {
       return cell;
     }),
   );
-  return { columns: names.map((name, c) => ({ name, type: types[c]! })), rows };
+  const table: DataTable = { columns: names.map((name, c) => ({ name, type: types[c]! })), rows };
+  // Carry any imported formulas, keyed by the FINAL data-row/col indices.
+  if (formulaGrid) {
+    const formulas: Record<string, string> = {};
+    dataIdx.forEach((gridRow, r) => {
+      const fr = formulaGrid[gridRow];
+      if (!fr) return;
+      for (let c = 0; c < ncols; c++) {
+        const expr = fr[c];
+        if (expr) formulas[formulaKey(r, c)] = expr;
+      }
+    });
+    return withFormulas(table, formulas);
+  }
+  return table;
 }
 
 /**
  * Set one cell from a raw (edited) string, returning a NEW table (immutable). The
  * value is coerced to the column's type: a number column parses the input (blank →
  * null); if a number column gets non-numeric text, that column is downgraded to
- * "string" so the edit is kept faithfully rather than silently dropped. Out-of-range
- * indices return the table unchanged.
+ * "string" so the edit is kept faithfully rather than silently dropped. An input that
+ * starts with "=" is stored as a FORMULA (computed by Excel on export; the cell shows
+ * blank until then); editing a former formula cell with a literal clears its formula.
+ * Out-of-range indices return the table unchanged.
  */
 export function setTableCell(table: DataTable, rowIndex: number, colIndex: number, raw: string): DataTable {
   if (rowIndex < 0 || rowIndex >= table.rows.length || colIndex < 0 || colIndex >= table.columns.length) {
@@ -92,28 +142,37 @@ export function setTableCell(table: DataTable, rowIndex: number, colIndex: numbe
   }
   const trimmed = raw.trim();
   const col = table.columns[colIndex]!;
+  const key = formulaKey(rowIndex, colIndex);
+  const formulas = { ...(table.formulas ?? {}) };
   let columns = table.columns;
   let value: CellValue;
-  if (col.type === "number") {
-    if (trimmed === "") {
-      value = null;
-    } else {
-      const n = parseNumericCell(trimmed);
-      if (n === undefined) {
-        // Non-numeric input into a number column: keep it, demote the column to text.
-        value = trimmed;
-        columns = table.columns.map((c, i) => (i === colIndex ? { ...c, type: "string" as const } : c));
-      } else {
-        value = n;
-      }
-    }
+  if (trimmed.startsWith("=") && trimmed.length > 1) {
+    // A formula: store the expression; the cached value is unknown until Excel recalcs.
+    formulas[key] = trimmed.slice(1);
+    value = null;
   } else {
-    value = trimmed === "" ? null : trimmed;
+    delete formulas[key]; // a literal now (or cleared) — no formula on this cell
+    if (col.type === "number") {
+      if (trimmed === "") {
+        value = null;
+      } else {
+        const n = parseNumericCell(trimmed);
+        if (n === undefined) {
+          // Non-numeric input into a number column: keep it, demote the column to text.
+          value = trimmed;
+          columns = table.columns.map((c, i) => (i === colIndex ? { ...c, type: "string" as const } : c));
+        } else {
+          value = n;
+        }
+      }
+    } else {
+      value = trimmed === "" ? null : trimmed;
+    }
   }
   const rows = table.rows.map((r, ri) =>
     ri === rowIndex ? r.map((v, ci) => (ci === colIndex ? value : v)) : r,
   );
-  return { columns, rows };
+  return withFormulas({ columns, rows }, formulas);
 }
 
 /** Case-insensitive column lookup; returns -1 when absent. */
@@ -138,13 +197,14 @@ export function addRow(table: DataTable, atIndex?: number): DataTable {
   const blank: CellValue[] = table.columns.map(() => null);
   const at = atIndex === undefined ? table.rows.length : Math.max(0, Math.min(atIndex, table.rows.length));
   const rows = [...table.rows.slice(0, at), blank, ...table.rows.slice(at)];
-  return { columns: table.columns, rows };
+  return withFormulas({ columns: table.columns, rows }, remapFormulas(table.formulas, (r, c) => [r >= at ? r + 1 : r, c]));
 }
 
 /** Remove the row at `index` (no-op out of range), returning a NEW table. */
 export function removeRow(table: DataTable, index: number): DataTable {
   if (index < 0 || index >= table.rows.length) return table;
-  return { columns: table.columns, rows: table.rows.filter((_, i) => i !== index) };
+  const rows = table.rows.filter((_, i) => i !== index);
+  return withFormulas({ columns: table.columns, rows }, remapFormulas(table.formulas, (r, c) => (r === index ? null : [r > index ? r - 1 : r, c])));
 }
 
 /** Insert a new (empty, string-typed) column at `atIndex` (default: append). */
@@ -153,16 +213,15 @@ export function addColumn(table: DataTable, name?: string, atIndex?: number): Da
   const at = atIndex === undefined ? table.columns.length : Math.max(0, Math.min(atIndex, table.columns.length));
   const columns = [...table.columns.slice(0, at), col, ...table.columns.slice(at)];
   const rows = table.rows.map((r) => [...r.slice(0, at), null, ...r.slice(at)]);
-  return { columns, rows };
+  return withFormulas({ columns, rows }, remapFormulas(table.formulas, (r, c) => [r, c >= at ? c + 1 : c]));
 }
 
 /** Remove the column at `index` and its cells (no-op out of range / last column). */
 export function removeColumn(table: DataTable, index: number): DataTable {
   if (index < 0 || index >= table.columns.length || table.columns.length <= 1) return table;
-  return {
-    columns: table.columns.filter((_, i) => i !== index),
-    rows: table.rows.map((r) => r.filter((_, i) => i !== index)),
-  };
+  const columns = table.columns.filter((_, i) => i !== index);
+  const rows = table.rows.map((r) => r.filter((_, i) => i !== index));
+  return withFormulas({ columns, rows }, remapFormulas(table.formulas, (r, c) => (c === index ? null : [r, c > index ? c - 1 : c])));
 }
 
 /** Rename the column at `index` (keeping names unique), returning a NEW table. */
@@ -170,10 +229,10 @@ export function renameColumn(table: DataTable, index: number, name: string): Dat
   if (index < 0 || index >= table.columns.length) return table;
   const others = table.columns.filter((_, i) => i !== index);
   const unique = uniqueColumnName(others, name);
-  return {
-    columns: table.columns.map((c, i) => (i === index ? { ...c, name: unique } : c)),
-    rows: table.rows,
-  };
+  return withFormulas(
+    { columns: table.columns.map((c, i) => (i === index ? { ...c, name: unique } : c)), rows: table.rows },
+    { ...(table.formulas ?? {}) },
+  );
 }
 
 /** A compact text preview of a table (header + first `maxRows`) for a model/summary. */

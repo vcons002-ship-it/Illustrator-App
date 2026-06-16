@@ -117,7 +117,8 @@ export const DataTablePreview = memo(function DataTablePreview({
                   </td>
                 ) : null}
                 {r.map((v, ci) => {
-                  const text = formatCell(v);
+                  const formula = table.formulas?.[`${ri},${ci}`];
+                  const text = formula && v === null ? "ƒ" : formatCell(v);
                   const isEditing = editing?.r === ri && editing?.c === ci;
                   const align = table.columns[ci]?.type === "number" ? "right" : "left";
                   if (isEditing) {
@@ -137,15 +138,17 @@ export const DataTablePreview = memo(function DataTablePreview({
                       </td>
                     );
                   }
+                  const titleText = formula ? `=${formula}${v !== null ? ` → ${formatCell(v)}` : ""}` : onEditCell ? "Click to edit" : text;
                   return (
                     <td
                       key={ci}
-                      title={onEditCell ? "Click to edit" : text}
-                      onClick={onEditCell ? () => setEditing({ r: ri, c: ci, draft: v === null ? "" : String(v) }) : undefined}
+                      title={titleText}
+                      onClick={onEditCell ? () => setEditing({ r: ri, c: ci, draft: formula ? `=${formula}` : v === null ? "" : String(v) }) : undefined}
                       style={{
                         ...tdStyle,
                         textAlign: align,
                         ...(onEditCell ? { cursor: "cell" } : {}),
+                        ...(formula ? { color: "#9fd2ff" } : {}),
                       }}
                     >
                       {text}
