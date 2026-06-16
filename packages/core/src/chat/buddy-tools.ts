@@ -11,6 +11,7 @@ import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../provid
 import { formatQuote, type StockQuote } from "../providers/stocks.js";
 import { formatIndicators, type Indicators } from "../providers/market-data.js";
 import type { OptionChain, SchwabPosition, SchwabQuote, SchwabWatchlist } from "../providers/schwab.js";
+import { formatMcpTools, type McpTool } from "./mcp.js";
 import type { TaskPlan } from "./tasks.js";
 
 /**
@@ -181,7 +182,10 @@ export type BuddyToolCall =
   | { tool: "mark_step_done"; planId: string; stepId: string }
   | { tool: "update_task_step"; planId: string; stepId: string; status?: string; notes?: string }
   | { tool: "list_task_plans" }
-  | { tool: "get_task_plan"; id: string };
+  | { tool: "get_task_plan"; id: string }
+  /** Call the reader's own MCP servers (when configured): list a server's tools, or call one. */
+  | { tool: "mcp_tools"; server: string }
+  | { tool: "mcp_call"; server: string; toolName: string; args?: Record<string, unknown> };
 
 /** Generous: a "style + random pick + open + prose" flow is three tools deep. */
 export const MAX_BUDDY_TOOL_ROUNDS = 5;
@@ -265,6 +269,8 @@ export function buildBuddySystemPrompt(opts: {
   canSchwab?: boolean;
   /** TradingView Desktop bridge is enabled: advertise the tv_chart control tool. */
   canTvBridge?: boolean;
+  /** Configured MCP server names — advertise mcp_tools / mcp_call for them. */
+  mcpServers?: string[];
   /** Task automation opted in: create reminders directly without per-item confirm. */
   canAutomateTasks?: boolean;
   /** The active task plan's context (this chat opened a task) — enables the step tools. */
@@ -474,6 +480,13 @@ export function buildBuddySystemPrompt(opts: {
         'when they ask to set up/change their TradingView chart ("put VWAP on my chart", "switch to AAPL 5-min"). It ' +
         "controls the CHART only — never trades. If it reports the chart/API wasn't found, tell them to open a chart in " +
         "TradingView Desktop (launched with remote debugging — see the Markets panel).\n"
+      : "") +
+    (opts.mcpServers && opts.mcpServers.length > 0
+      ? `- {"tool":"mcp_tools","server":"${opts.mcpServers[0]}"} / {"tool":"mcp_call","server":"${opts.mcpServers[0]}",` +
+        '"toolName":"…","args":{…}} — the reader connected their own MCP servers: ' +
+        opts.mcpServers.join(", ") +
+        ". Call mcp_tools first to see a server's tools + their arguments, then mcp_call to run one and use its " +
+        "result in your answer. Use when the task matches an MCP tool the reader has (integrations they set up).\n"
       : "") +
     (opts.canSchwab
       ? '- {"tool":"schwab_quote","symbol":"AAPL"} / {"tool":"schwab_options","symbol":"AAPL","contractType":"ALL",' +
@@ -830,6 +843,25 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
     const id = strArg(obj.id, MAX_ID_CHARS);
     return id ? { tool, id } : undefined;
   }
+  if (tool === "mcp_tools") {
+    const server = strArg(obj.server, MAX_NAME_CHARS);
+    return server ? { tool, server } : undefined;
+  }
+  if (tool === "mcp_call") {
+    const server = strArg(obj.server, MAX_NAME_CHARS);
+    const toolName = strArg(obj.toolName, MAX_NAME_CHARS);
+    if (!server || !toolName) return undefined;
+    // Pass the args object through, but bound its serialized size so a runaway arg can't bloat.
+    let args: Record<string, unknown> | undefined;
+    if (obj.args && typeof obj.args === "object" && !Array.isArray(obj.args)) {
+      try {
+        if (JSON.stringify(obj.args).length <= MAX_PASTE_CHARS) args = obj.args as Record<string, unknown>;
+      } catch {
+        /* unserialisable args — drop */
+      }
+    }
+    return { tool, server, toolName, ...(args ? { args } : {}) };
+  }
   if (tool === "remove_library_book") {
     const id = strArg(obj.id, MAX_ID_CHARS);
     return id ? { tool, id } : undefined;
@@ -959,6 +991,9 @@ export interface BuddyToolResultPayload {
   optionChain?: OptionChain;
   positions?: SchwabPosition[];
   watchlists?: SchwabWatchlist[];
+  /** MCP outcomes (when servers are configured). */
+  mcpToolsList?: { server: string; tools: McpTool[] };
+  mcpResult?: { server: string; tool: string; text: string };
   /** What set_visual_style actually applied (resolved style LABEL). */
   applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
   /** Whether an approved image generation succeeded. */
@@ -1285,6 +1320,16 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
         .map((s, i) => `${i + 1}. [${s.status}] ${s.title} (${s.actor === "ai_prep" ? "AI preps" : "reader does"}) (step id: ${s.id})`)
         .join("\n")
     );
+  }
+  if (call.tool === "mcp_tools") {
+    const r = result.mcpToolsList;
+    if (!r) return `[mcp_tools: no server named "${call.server}" (check Settings → MCP servers), or it returned nothing]`;
+    return formatMcpTools(r.server, r.tools) + "\nCall one with mcp_call (server, toolName, args).";
+  }
+  if (call.tool === "mcp_call") {
+    const r = result.mcpResult;
+    if (!r) return `[mcp_call failed: no server "${call.server}" or the call errored] Tell the reader plainly and suggest checking the server/tool name.`;
+    return `[mcp ${r.server}/${r.tool} result]\n${r.text || "(empty)"}\nUse this to answer the reader.`;
   }
   if (call.tool === "find_files") {
     const files = result.files ?? [];

@@ -37,6 +37,7 @@ export const TUNING_FIELDS = [
   "allowTradingViewBridge",
   "autoLearnSkills",
   "remoteBus",
+  "mcpServers",
 ] as const satisfies readonly (keyof ReaderSettings)[];
 
 /** Settings the engine never needs at all (pure presentation). */

@@ -52,6 +52,9 @@ export interface BuddyDeps {
   schwabOptions?: (symbol: string, opts?: { contractType?: "CALL" | "PUT" | "ALL"; strikeCount?: number }) => Promise<import("../providers/schwab.js").OptionChain | undefined>;
   schwabPositions?: () => Promise<import("../providers/schwab.js").SchwabPosition[]>;
   schwabWatchlists?: () => Promise<import("../providers/schwab.js").SchwabWatchlist[]>;
+  /** MCP servers (present only when the reader configured some). */
+  mcpTools?: (server: string) => Promise<import("./mcp.js").McpTool[] | undefined>;
+  mcpCall?: (server: string, toolName: string, args: Record<string, unknown>) => Promise<string | undefined>;
   /** Random picks from the catalog's most-loved shelf ("surprise me"). */
   randomBooks?: () => Promise<BookSearchHit[]>;
   /** Open a library book by id; the host posts the BookSource to the UI itself. */
@@ -265,6 +268,16 @@ export async function runBuddyTool(
       case "schwab_watchlists": {
         if (!deps.schwabWatchlists) return { error: "Schwab isn't connected (connect it in Settings)." };
         return { watchlists: await deps.schwabWatchlists() };
+      }
+      case "mcp_tools": {
+        if (!deps.mcpTools) return { error: "No MCP servers are configured (add some in Settings)." };
+        const tools = await deps.mcpTools(call.server);
+        return tools ? { mcpToolsList: { server: call.server, tools } } : {};
+      }
+      case "mcp_call": {
+        if (!deps.mcpCall) return { error: "No MCP servers are configured (add some in Settings)." };
+        const text = await deps.mcpCall(call.server, call.toolName, call.args ?? {});
+        return text !== undefined ? { mcpResult: { server: call.server, tool: call.toolName, text } } : {};
       }
       case "trading_script": {
         // Pure: verified Pine/thinkScript templates, no host dependency.

@@ -217,6 +217,8 @@ export interface ReaderSettings {
   /** OFF by default: drive the desktop assistant from your phone via Google Tasks — add a to-do
    * starting "VR:" and the app (while open) runs it and writes the answer back. Needs Google. */
   remoteBus?: boolean;
+  /** Optional MCP servers the buddy can call — one per line: `name https://host/mcp`. */
+  mcpServers?: string;
   /** Transient: base URL of the app-managed local engine (desktop; not persisted). */
   engineBaseUrl?: string;
 }
@@ -705,6 +707,20 @@ export function SettingsPanel({
                 your phone. No server, no cloud — it uses your own Google account. Needs Google
                 connected; off by default.
               </span>
+            </span>
+          </label>
+          <label style={{ ...rowStyle, marginTop: 8 }}>
+            <span>MCP servers (optional)</span>
+            <textarea
+              value={value.mcpServers ?? ""}
+              onChange={(e) => set({ mcpServers: e.target.value })}
+              placeholder={"one per line:  name https://host/mcp\nweather https://my-mcp.example/mcp"}
+              rows={2}
+              style={{ fontFamily: "monospace", fontSize: 12, resize: "vertical", width: "100%" }}
+            />
+            <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+              Let the assistant call your own <b>Model Context Protocol</b> servers (HTTP). It lists a server’s
+              tools and calls them as part of a task. Best on desktop (CORS-free access).
             </span>
           </label>
           </Group>

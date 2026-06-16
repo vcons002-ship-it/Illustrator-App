@@ -52,6 +52,9 @@ import {
   worthLearning,
   busCommands,
   formatBusReply,
+  parseMcpServers,
+  mcpListTools,
+  mcpCallTool,
   skillsIndexBlock,
   parseBuddySlashCommand,
   parseUnderstanding,
@@ -1665,6 +1668,26 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             },
           }
         : {}),
+      // MCP servers the reader configured (HTTP/streamable). Resolve a server name → URL and
+      // call it over the CORS-exempt transport; undefined name (or no proxy) → no result.
+      ...((): Partial<BuddyDeps> => {
+        const servers = parseMcpServers(settings?.mcpServers);
+        if (servers.length === 0) return {};
+        const cf = corsFetch();
+        if (!cf) return {};
+        const transport = new DirectTransport(cf);
+        const urlOf = (name: string) => servers.find((s) => s.name.toLowerCase() === name.toLowerCase())?.url;
+        return {
+          mcpTools: async (server: string) => {
+            const url = urlOf(server);
+            return url ? mcpListTools(transport, url, ac.signal) : undefined;
+          },
+          mcpCall: async (server: string, toolName: string, args: Record<string, unknown>) => {
+            const url = urlOf(server);
+            return url ? mcpCallTool(transport, url, toolName, args, ac.signal) : undefined;
+          },
+        };
+      })(),
       // Keyless stock quotes (Stooq CSV) over the CORS-exempt transport; undefined on
       // plain web (no proxy) so the model falls back to search_web.
       stockQuote: async (symbol: string) => {
@@ -1943,6 +1966,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           : {}),
         // TradingView Desktop bridge when enabled (desktop + opt-in).
         ...(corsProxyAvailable && settings?.allowTradingViewBridge ? { canTvBridge: true } : {}),
+        // MCP servers the reader configured (advertise their tools), when a proxy can reach them.
+        ...(corsProxyAvailable && parseMcpServers(settings?.mcpServers).length > 0
+          ? { mcpServers: parseMcpServers(settings?.mcpServers).map((s) => s.name) }
+          : {}),
       }) +
       (memory ? `\n\n${memory}` : "") +
       (skills ? `\n\n${skills}` : "") +
