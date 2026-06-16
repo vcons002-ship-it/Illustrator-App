@@ -171,14 +171,25 @@ A **Markets** panel for following and researching stocks:
   say *"pull 3 possible trades from my tracked ideas with the best risk-reward"* and the
   assistant reads the lists, pulls real quotes/option chains, and ranks the top picks each with
   a proposed entry, target, stop and reward-to-risk ratio. Not financial advice.
+- **Theme / sector screens (not just your watchlist)** — *"give me the 3 best photonics stocks
+  to buy on earnings growth + current P/E"* works too: it discovers the names via web research,
+  grounds the fundamentals (P/E, EPS, dividend yield come straight from your Schwab quote when
+  connected) and technicals, and ranks the top picks. Works keyless (pure web research) with no
+  broker connected.
 - **Review-and-place orders** — pick one of those ideas (or just ask it to buy/sell) and it
   **composes** the exact order (equity or option) and opens a review dialog showing precisely
   what will be sent; **you** check the box and click *Place order* — the assistant never submits
   on its own. Real money, not financial advice.
+- **Control your TradingView Desktop chart (experimental, opt-in)** — on the desktop app you can
+  let the assistant set things up *directly in TradingView Desktop*: set the symbol/interval, add
+  studies (VWAP, RSI…), read the chart, inject Pine — *"put VWAP on my chart"*, *"switch to AAPL
+  5-min"*. **Chart-only — it can never place a trade.** Off by default; setup, per-OS launch
+  flags, and update instructions are in [MARKETS-BRIDGE.md](./MARKETS-BRIDGE.md).
 - **Ask the assistant** — one click hands the ticker to the chat for analysis and trade ideas
   (it searches the web for current data and is clear it isn't financial advice).
-- *(A linked broker account such as thinkorswim/Schwab is a separate, deferred enhancement; the
-  chart + quote + analysis work with zero setup.)*
+- *The chart + quote + keyless analysis work with zero setup; connecting Schwab/thinkorswim and
+  the TradingView bridge are optional opt-ins. Ask the assistant "how do I connect Schwab?" and
+  it walks you through it step by step.*
 
 ### 🤝 Chat buddy (the home screen)
 The landing page **is** a full-window chat assistant. Three voices — **Freeform**

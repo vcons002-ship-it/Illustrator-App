@@ -131,6 +131,42 @@ export const SETUP_GUIDES: SetupGuide[] = [
     note: "It won't force-push, delete history, or change repo settings unless you explicitly ask, and it never prints or commits your token.",
   },
   {
+    id: "schwab",
+    title: "Connect Schwab / thinkorswim (real quotes, options, watchlists, orders)",
+    aliases: [
+      "schwab", "thinkorswim", "tos", "broker", "brokerage", "trading", "trade", "stocks", "options",
+      "option chain", "greeks", "watchlist", "watchlists", "tracked ideas", "trade ideas", "place order",
+      "buy", "sell", "markets account", "connect broker",
+    ],
+    when: "You want the Markets assistant grounded in your real Schwab/thinkorswim account — live quotes, option chains with Greeks + implied volatility, your positions, your watchlists (tracked trade ideas), fundamentals (P/E, EPS, yield), and review-and-place order prep.",
+    steps: [
+      "Use the desktop app — the account API needs the CORS-free access a browser tab can't provide.",
+      "Create your own Schwab developer app: developer.schwab.com → register → create an app and add the 'Accounts and Trading' + 'Market Data' APIs. Set the callback URL to exactly https://127.0.0.1 .",
+      "After Schwab approves the app (this can take a little while), copy its App Key (client id) and Secret.",
+      "In the app: Settings → 📈 Markets / Schwab → paste the App Key + Secret.",
+      "Open the 📈 Markets panel and click Connect Schwab: it opens Schwab's consent page for YOUR app; sign in and approve, then paste the redirected https://127.0.0.1/?code=… URL back when asked. The app exchanges it for a token (refreshed automatically).",
+      "Now ask things like \"option chain + Greeks on AAPL\", \"pull 3 trades from my tracked ideas with the best risk-reward\", or \"buy 10 AAPL at limit 200\" — an order opens a review dialog you confirm and place yourself.",
+    ],
+    note: "thinkorswim runs on Schwab's backend, so this IS your thinkorswim account (watchlists sync across). The assistant NEVER submits a trade on its own — placing an order always needs you to tick a confirmation and click Place. Tokens stay on your device. Not financial advice.",
+  },
+  {
+    id: "tradingview-bridge",
+    title: "Let the assistant control your TradingView Desktop chart",
+    aliases: [
+      "tradingview", "trading view", "tradingview bridge", "tv bridge", "chart bridge", "tradingview desktop",
+      "tradingview mcp", "control my chart", "set up my chart", "remote debugging", "cdp",
+    ],
+    when: "You want the assistant to set things up directly in your TradingView Desktop chart — set the symbol/interval, add studies (VWAP, RSI…), read the chart, inject Pine — instead of only generating scripts to paste. Chart-only: it can never place trades.",
+    steps: [
+      "Use the desktop app and rebuild it so the bridge command is present (it talks to TradingView over a local debug port a browser can't reach) — see MARKETS-BRIDGE.md.",
+      "Enable it: Settings → 🛠 Assistant abilities → \"Let the assistant control my TradingView Desktop chart\" (off by default).",
+      "Launch TradingView Desktop with remote debugging on — add --remote-debugging-port=9222 to how you start it (per-OS commands are in MARKETS-BRIDGE.md) — then open a chart.",
+      "In the 📈 Markets panel, click Test bridge; you should see \"Connected to TradingView.\"",
+      "Ask things like \"put VWAP on my chart\" or \"switch my chart to AAPL 5-min.\"",
+    ],
+    note: "Experimental and version-sensitive (it drives TradingView's internal chart API) and may conflict with TradingView's Terms — use at your discretion. It controls the CHART only and can never place, modify, or cancel a trade. Full setup, per-OS launch flags, and how to update it if TradingView changes are in MARKETS-BRIDGE.md. (thinkorswim has no equivalent bridge — it's a Java app; use the Schwab connection + generated thinkScript there.)",
+  },
+  {
     id: "hands-on-tools",
     title: "Enable the hands-on desktop tools",
     aliases: ["hands-on", "run command", "commands", "screenshot", "find files", "desktop tools", "terminal", "vision"],

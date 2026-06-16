@@ -315,6 +315,75 @@ The whole feature is built so the worst unattended action is an **extra reminder
 
 ---
 
+## Markets & trading (stocks, options, thinkorswim/Schwab)
+
+The **📈 Markets** panel (open it from the home screen) follows and researches stocks. Most of
+it is **keyless — no account, no setup**; two optional opt-ins ground it in your real broker and
+your TradingView chart. **None of it is financial advice, and the assistant never places a trade
+on its own.**
+
+> **Tip:** you don't have to read this section — just ask the chat *"how do I connect Schwab?"*
+> or *"set up the TradingView bridge"* and the assistant walks you through it one step at a time.
+
+### Works with zero setup (keyless)
+
+- **TradingView chart + live quote** — type any ticker for TradingView's free advanced chart and
+  a keyless quote snapshot.
+- **Keyless technical analysis** — VWAP, moving averages, RSI and recent-move stats computed from
+  real price bars (*"what are the watch levels on SPY?"*).
+- **Price alerts / watch levels** — *"alert me when AAPL crosses VWAP"* fires a notification while
+  the app is open.
+- **Generate Pine Script & thinkScript** — *"give me a thinkScript that alerts when SPY crosses
+  VWAP"* → a ready-to-paste script with a Save button and where to paste it.
+- **Theme/sector screens** — *"the 3 best photonics stocks on earnings growth + P/E"* via web
+  research (grounded further by Schwab fundamentals when connected).
+
+### Connect Schwab / thinkorswim (optional — real account data + orders)
+
+thinkorswim runs on **Schwab's** backend, so connecting Schwab gives the assistant your real
+account: **live quotes, option chains with Greeks + implied volatility, your positions, your
+watchlists (tracked trade ideas), fundamentals (P/E, EPS, yield), and review-and-place order
+prep.** Best in the **desktop app** (the account API needs CORS-free access a browser tab can't
+give). One-time setup:
+
+1. **Create your own Schwab developer app** — go to **[developer.schwab.com](https://developer.schwab.com/)**,
+   register, and create an app with the **Accounts and Trading** + **Market Data** APIs. Set the
+   **callback URL** to exactly **`https://127.0.0.1`**.
+2. After Schwab **approves** the app (this can take a little while), copy its **App Key**
+   (client id) and **Secret**.
+3. In Visual Reader: **Settings → 📈 Markets / Schwab** → paste the **App Key + Secret**.
+4. Open the **📈 Markets** panel and click **Connect Schwab**. It opens Schwab's consent page for
+   *your* app; sign in and approve, then **paste the redirected `https://127.0.0.1/?code=…` URL**
+   back when asked. The app exchanges it for a token and refreshes it automatically.
+5. Now ask: *"option chain + Greeks on AAPL"*, *"pull 3 trades from my tracked ideas with the best
+   risk-reward"*, or *"buy 10 AAPL at limit 200"*.
+
+**Placing an order is always yours to confirm.** When you ask to buy/sell, the assistant only
+**composes** the order and opens a **review dialog** showing exactly what will be sent — **you**
+tick a confirmation box and click **Place order**. The assistant never submits, and the token
+never leaves your device. *Not financial advice.*
+
+### Let the assistant control your TradingView Desktop chart (experimental, opt-in)
+
+On the desktop app you can let the assistant set things up **directly in TradingView Desktop** —
+set the symbol/interval, add studies (VWAP, RSI…), read the chart, inject Pine (*"put VWAP on my
+chart"*, *"switch to AAPL 5-min"*). It talks to TradingView over a local debug port, so it's
+**desktop-only**, **off by default**, and **chart-only — it can never place a trade**. Quick
+version:
+
+1. Rebuild the **desktop app** so the bridge command is present.
+2. **Settings → 🛠 Assistant abilities → "Let the assistant control my TradingView Desktop chart."**
+3. Launch **TradingView Desktop with `--remote-debugging-port=9222`** and open a chart.
+4. In **📈 Markets**, click **Test bridge** → *"Connected to TradingView."*
+
+Full setup, the per-OS launch commands, an "auto check on startup" note, **how to update it if a
+TradingView change breaks an action**, and troubleshooting are in
+**[MARKETS-BRIDGE.md](./MARKETS-BRIDGE.md)**. It's version-sensitive and may conflict with
+TradingView's Terms — use at your discretion. *(thinkorswim has no equivalent bridge — it's a
+Java app, not Electron; use the Schwab connection + generated thinkScript there.)*
+
+---
+
 ## Run images on your own GPU (AUTOMATIC1111 or ComfyUI)
 
 This is the path to **free, private, real** image generation today — no API keys,

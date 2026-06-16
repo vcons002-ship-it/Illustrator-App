@@ -24,6 +24,8 @@ describe("setup guides", () => {
     expect(findSetupGuide("enable the task assistant / auto planning")?.id).toBe("task-workflow");
     expect(findSetupGuide("run a model locally with ollama")?.id).toBe("local-text-model");
     expect(findSetupGuide("add my anthropic api key")?.id).toBe("api-keys");
+    expect(findSetupGuide("connect my schwab / thinkorswim account")?.id).toBe("schwab");
+    expect(findSetupGuide("let the assistant control my tradingview chart")?.id).toBe("tradingview-bridge");
   });
 
   it("returns undefined when nothing relevant matches", () => {
