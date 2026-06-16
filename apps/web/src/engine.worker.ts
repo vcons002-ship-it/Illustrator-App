@@ -55,6 +55,11 @@ import {
   runTaskPlanning,
   upsertTaskPlan,
   loadTaskPlans,
+  normalizeScheduledTask,
+  upsertScheduledTask,
+  loadScheduledTasks,
+  deleteScheduledTask,
+  describeSchedule,
   updateTaskStep,
   advanceStep,
   nextReadyStep,
@@ -1573,6 +1578,28 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             };
           }),
       getTaskPlan: async (id) => (await loadTaskPlans(store)).find((p) => p.id === id),
+      // Scheduled/periodic tasks over the shared store (the host's while-open loop fires
+      // the due ones into the chat).
+      scheduleTask: async (call) => {
+        const task = normalizeScheduledTask({
+          title: call.title,
+          prompt: call.prompt,
+          rule: call.rule,
+          ...(call.time ? { time: call.time } : {}),
+          ...(call.weekday !== undefined ? { weekday: call.weekday } : {}),
+          ...(call.dayOfMonth !== undefined ? { dayOfMonth: call.dayOfMonth } : {}),
+        });
+        await upsertScheduledTask(store, task);
+        post({ type: "buddyScheduledChanged", requestId: msg.requestId });
+        return { id: task.id, title: task.title, describe: describeSchedule(task) };
+      },
+      listScheduled: async () =>
+        (await loadScheduledTasks(store)).map((t) => ({ id: t.id, title: t.title, describe: describeSchedule(t), enabled: t.enabled })),
+      cancelScheduled: async (id) => {
+        await deleteScheduledTask(store, id);
+        post({ type: "buddyScheduledChanged", requestId: msg.requestId });
+        return true;
+      },
       openLibraryBook: async (call) => {
         const book = await store.getBook(call.id);
         if (!book) throw new Error("that id isn't in the library");

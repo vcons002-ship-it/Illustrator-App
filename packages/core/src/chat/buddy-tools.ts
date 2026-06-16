@@ -109,6 +109,19 @@ export type BuddyToolCall =
   /** Plan a multi-step real-world task from a natural-language request (the host
    * researches it, builds a step plan, schedules reminders, and opens it). */
   | { tool: "plan_task"; request: string }
+  /** Schedule a RECURRING action the assistant runs on a cadence while the app is open
+   * (e.g. "every morning summarise my unread email"). `prompt` is what to do each time. */
+  | {
+      tool: "schedule_task";
+      title: string;
+      prompt: string;
+      rule: "daily" | "weekly" | "monthly" | "once";
+      time?: string;
+      weekday?: number;
+      dayOfMonth?: number;
+    }
+  | { tool: "list_scheduled" }
+  | { tool: "cancel_scheduled"; id: string }
   /** Execute/track an active task plan (in its preloaded chat). */
   | { tool: "mark_step_done"; planId: string; stepId: string }
   | { tool: "update_task_step"; planId: string; stepId: string; status?: string; notes?: string }
@@ -367,6 +380,12 @@ export function buildBuddySystemPrompt(opts: {
     'step-by-step plan, schedules reminders, prepares documents, and opens it for the reader. Put the task in "request" ' +
     "(include any specifics you learned). Use it for genuine multi-step tasks with a deadline — not for a one-off " +
     "question you can just answer.\n" +
+    '- {"tool":"schedule_task","title":"Morning email recap","prompt":"Summarise my unread email from the last day",' +
+    '"rule":"daily","time":"08:00"} — schedule a RECURRING action the assistant runs automatically while the app is open ' +
+    '(daily/weekly/monthly/once). Use when the reader says "every morning/day/week/Friday…", "remind me to…", "each ' +
+    'month…". "prompt" is exactly what you should DO when it fires (a self-contained instruction). For weekly add ' +
+    '"weekday" (0=Sun…6=Sat); for monthly add "dayOfMonth" (1–31); "time" is 24h "HH:MM". ' +
+    '{"tool":"list_scheduled"} to show them; {"tool":"cancel_scheduled","id":"…"} to remove one.\n' +
     (opts.activeTask
       ? `${opts.activeTask}\nThis chat is working the task above. Help the reader finish the CURRENT step — do the ` +
         'prep parts yourself, walk them through the parts only they can do. {"tool":"mark_step_done","planId":"…",' +
@@ -545,6 +564,29 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
     const request = strArg(obj.request, MAX_PASTE_CHARS);
     return request ? { tool, request } : undefined;
   }
+  if (tool === "schedule_task") {
+    const title = strArg(obj.title, MAX_QUERY_CHARS);
+    const prompt = strArg(obj.prompt, MAX_PASTE_CHARS);
+    if (!title || !prompt) return undefined;
+    const rule = obj.rule === "weekly" || obj.rule === "monthly" || obj.rule === "once" ? obj.rule : "daily";
+    const time = strArg(obj.time, 8);
+    const weekday = typeof obj.weekday === "number" && Number.isFinite(obj.weekday) ? Math.min(6, Math.max(0, Math.round(obj.weekday))) : undefined;
+    const dayOfMonth = typeof obj.dayOfMonth === "number" && Number.isFinite(obj.dayOfMonth) ? Math.min(31, Math.max(1, Math.round(obj.dayOfMonth))) : undefined;
+    return {
+      tool,
+      title,
+      prompt,
+      rule,
+      ...(time ? { time } : {}),
+      ...(weekday !== undefined ? { weekday } : {}),
+      ...(dayOfMonth !== undefined ? { dayOfMonth } : {}),
+    };
+  }
+  if (tool === "list_scheduled") return { tool };
+  if (tool === "cancel_scheduled") {
+    const id = strArg(obj.id, MAX_ID_CHARS);
+    return id ? { tool, id } : undefined;
+  }
   if (tool === "mark_step_done") {
     const planId = strArg(obj.planId, MAX_ID_CHARS);
     const stepId = strArg(obj.stepId, MAX_ID_CHARS);
@@ -703,6 +745,9 @@ export interface BuddyToolResultPayload {
   eventCreated?: CalendarEvent;
   tasks?: TaskItem[];
   taskCreated?: TaskItem;
+  /** Scheduled-task outcomes. */
+  scheduled?: { id: string; title: string; describe: string };
+  scheduledList?: { id: string; title: string; describe: string; enabled: boolean }[];
   /** Task-plan execution outcomes. */
   taskAction?: { planTitle: string; nextStep?: string; completed?: boolean };
   taskPlansList?: { id: string; title: string; status: string; nextStep?: string; deadlineIso?: string }[];
@@ -889,6 +934,23 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
   }
   if (call.tool === "create_task") {
     return result.taskCreated ? `[added to-do "${result.taskCreated.title}"] Confirm it to the reader.` : "[create_task did nothing]";
+  }
+  if (call.tool === "schedule_task") {
+    return result.scheduled
+      ? `[scheduled "${result.scheduled.title}" — ${result.scheduled.describe}. It runs automatically while the app is ` +
+          "open; confirm it to the reader and mention they can manage it in the ⏰ Scheduled panel.]"
+      : "[schedule_task did nothing]";
+  }
+  if (call.tool === "list_scheduled") {
+    const list = result.scheduledList ?? [];
+    if (list.length === 0) return "[list_scheduled: no scheduled tasks yet]";
+    return (
+      "[scheduled tasks]\n" +
+      list.map((t) => `· ${t.title} — ${t.describe}${t.enabled ? "" : " (paused)"} (id: ${t.id})`).join("\n")
+    );
+  }
+  if (call.tool === "cancel_scheduled") {
+    return "[cancel_scheduled done] Confirm briefly.";
   }
   if (call.tool === "mark_step_done") {
     const a = result.taskAction;

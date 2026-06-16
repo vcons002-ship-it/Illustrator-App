@@ -134,6 +134,18 @@ worked with end to end:
   Any analysis result (a pivot/aggregate) downloads as Excel/CSV too, and any on-screen chart
   saves as SVG/PNG.
 
+### ⏰ Scheduled & periodic tasks
+Ask the assistant to do something on a cadence and it runs **automatically while the app is
+open**:
+- **Natural-language scheduling** — *"every morning summarise my unread email"*, *"every
+  Friday at 4pm give me a market recap"*, *"on the 1st of each month review my budget"* →
+  the assistant creates a recurring task (daily / weekly / monthly / once).
+- **It just runs** — a built-in runner fires each due task's instruction into the chat at its
+  time (no always-on server needed; for phone-side alerts, ask it to add a Google Calendar/
+  Tasks reminder too).
+- **Manage them** — the **⏰ Scheduled** panel lists every task with its cadence and next run;
+  pause/resume or delete any of them.
+
 ### 📈 Markets (stock charts & analysis)
 A **Markets** panel for following and researching stocks:
 - **TradingView chart** — type any ticker and get TradingView's free, interactive advanced

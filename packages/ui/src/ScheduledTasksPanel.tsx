@@ -1,0 +1,108 @@
+import { memo } from "react";
+import type { ScheduledTask } from "@visual-reader/core";
+
+/**
+ * Manage scheduled / periodic tasks — recurring actions the assistant runs on a cadence
+ * while the app is open. Presentational: the host owns the store + the runner. Create
+ * new ones by asking the assistant ("every morning summarise my unread email"); this
+ * panel lists them with their cadence + next run, and lets you pause/resume or delete.
+ */
+export interface ScheduledTasksPanelProps {
+  tasks: ScheduledTask[];
+  /** Human cadence label per task (host passes describeSchedule). */
+  describe: (task: ScheduledTask) => string;
+  onToggle: (id: string, enabled: boolean) => void;
+  onDelete: (id: string) => void;
+  onClose: () => void;
+}
+
+export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({ tasks, describe, onToggle, onDelete, onClose }: ScheduledTasksPanelProps) {
+  return (
+    <div style={overlay} onClick={onClose}>
+      <div style={panel} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+          <strong style={{ fontSize: 15 }}>⏰ Scheduled tasks</strong>
+          <span style={{ fontSize: 12, opacity: 0.6 }}>· {tasks.length}</span>
+          <button style={{ ...btn, marginLeft: "auto" }} onClick={onClose}>
+            Close
+          </button>
+        </div>
+
+        {tasks.length === 0 ? (
+          <div style={{ fontSize: 13, opacity: 0.65, padding: "8px 2px" }}>
+            No scheduled tasks yet. Ask the assistant something like <em>“every morning summarise my unread email”</em> or
+            <em> “every Friday at 4pm give me a market recap”</em> and it’ll create one here. They run automatically while
+            the app is open.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {tasks.map((t) => (
+              <div key={t.id} style={{ ...card, opacity: t.enabled ? 1 : 0.55 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                  <strong style={{ fontSize: 13 }}>{t.title}</strong>
+                  <span style={{ fontSize: 11, opacity: 0.7 }}>{describe(t)}</span>
+                  {t.enabled ? null : <span style={{ fontSize: 11, color: "#ffcf8b" }}>paused</span>}
+                  <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                    <button style={btn} onClick={() => onToggle(t.id, !t.enabled)}>
+                      {t.enabled ? "Pause" : "Resume"}
+                    </button>
+                    <button style={{ ...btn, color: "#ff9c9c" }} onClick={() => onDelete(t.id)}>
+                      Delete
+                    </button>
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>{t.prompt}</div>
+                <div style={{ fontSize: 11, opacity: 0.5, marginTop: 3 }}>
+                  Next: {t.enabled ? new Date(t.nextDueIso).toLocaleString() : "—"}
+                  {t.lastRunIso ? ` · last ran ${new Date(t.lastRunIso).toLocaleString()}` : ""}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ fontSize: 11, opacity: 0.5, marginTop: 10 }}>
+          Scheduled tasks run while the app is open (there’s no always-on server). For phone-side reminders, ask the
+          assistant to also add a Google Calendar/Tasks reminder.
+        </div>
+      </div>
+    </div>
+  );
+});
+
+const overlay: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  background: "rgba(8,9,13,0.7)",
+  backdropFilter: "blur(6px)",
+  zIndex: 100,
+  padding: 20,
+};
+const panel: React.CSSProperties = {
+  width: "min(640px, 100%)",
+  maxHeight: "88vh",
+  overflowY: "auto",
+  background: "#16181d",
+  color: "#e6e6e6",
+  border: "1px solid rgba(255,255,255,0.12)",
+  borderRadius: 12,
+  padding: 18,
+  fontFamily: "system-ui, sans-serif",
+};
+const card: React.CSSProperties = {
+  background: "rgba(255,255,255,0.04)",
+  border: "1px solid rgba(255,255,255,0.1)",
+  borderRadius: 8,
+  padding: "8px 10px",
+};
+const btn: React.CSSProperties = {
+  background: "rgba(255,255,255,0.08)",
+  color: "inherit",
+  border: "1px solid rgba(255,255,255,0.2)",
+  borderRadius: 6,
+  padding: "3px 9px",
+  fontSize: 12,
+  cursor: "pointer",
+};

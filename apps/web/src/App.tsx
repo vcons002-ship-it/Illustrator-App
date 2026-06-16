@@ -48,6 +48,13 @@ import {
   loadTaskPlans,
   deleteTaskPlan,
   upsertTaskPlan,
+  loadScheduledTasks,
+  upsertScheduledTask,
+  deleteScheduledTask,
+  advanceSchedule,
+  dueScheduledTasks,
+  describeSchedule,
+  type ScheduledTask,
   advanceStep,
   addIgnore,
   sourceFrom,
@@ -106,6 +113,7 @@ import {
   JsonTreeView,
   SkillsPanel,
   TasksPanel,
+  ScheduledTasksPanel,
   CalendarPanel,
   StockChartPanel,
   type CalendarDeadline,
@@ -1233,6 +1241,30 @@ export function App() {
     },
     [loadCalendarFor],
   );
+  // Scheduled / periodic tasks (recurring agentic actions fired while the app is open).
+  const [showScheduled, setShowScheduled] = useState(false);
+  const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
+  const refreshScheduled = useCallback(() => {
+    void loadScheduledTasks(libraryStore).then(setScheduledTasks).catch(() => {});
+  }, [libraryStore]);
+  const toggleScheduled = useCallback(
+    async (id: string, enabled: boolean) => {
+      const t = (await loadScheduledTasks(libraryStore)).find((x) => x.id === id);
+      if (t) await upsertScheduledTask(libraryStore, { ...t, enabled });
+      refreshScheduled();
+    },
+    [libraryStore, refreshScheduled],
+  );
+  const removeScheduled = useCallback(
+    async (id: string) => {
+      await deleteScheduledTask(libraryStore, id);
+      refreshScheduled();
+    },
+    [libraryStore, refreshScheduled],
+  );
+  useEffect(() => {
+    refreshScheduled();
+  }, [refreshScheduled]);
   // Markets panel: a TradingView chart for a ticker + a keyless quote snapshot.
   const [showStocks, setShowStocks] = useState(false);
   const [stockSymbol, setStockSymbol] = useState("AAPL");
@@ -1880,6 +1912,8 @@ export function App() {
         else appendBuddy({ role: "tool", text: `🎨 ${parts.join(" · ")}` });
       } else if (e.kind === "libraryChanged") {
         void libraryStore.listBooks().then(setLibrary).catch(() => {});
+      } else if (e.kind === "scheduledChanged") {
+        refreshScheduled();
       } else if (e.kind === "opened") {
         openedBook = true;
         buddyHandoff.current = [...buddyMessages, { role: "user" as const, text: userBubbleText ?? userText, at: Date.now() }]
@@ -2045,6 +2079,28 @@ export function App() {
     [buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration, libraryStore, hasSearchKey],
   );
   const onBuddySendText = useCallback((text: string) => void onBuddySend(text), [onBuddySend]);
+
+  // Scheduled-task runner: while the app is open, every ~minute fire the FIRST due task
+  // into the buddy chat (so the assistant executes its instruction), then advance its
+  // schedule. One per tick, and never while a turn is in flight, so it can't stampede.
+  const buddyBusyRef = useRef(buddyBusy);
+  buddyBusyRef.current = buddyBusy;
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (buddyBusyRef.current) return;
+      void (async () => {
+        const tasks = await loadScheduledTasks(libraryStore);
+        const due = dueScheduledTasks(tasks);
+        if (due.length === 0) return;
+        const task = due[0]!;
+        // Advance first (so a slow turn can't double-fire), then run it.
+        await upsertScheduledTask(libraryStore, advanceSchedule(task)).catch(() => {});
+        refreshScheduled();
+        onBuddySendText(`⏰ Scheduled task “${task.title}”. Do this now: ${task.prompt}`);
+      })();
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [libraryStore, onBuddySendText, refreshScheduled]);
   // Approved buddy render: the worker's chatTool path serves both chats (the
   // buddy's generate_image call has the identical shape by design).
   const onApproveBuddyTool = useCallback(async () => {
@@ -2730,6 +2786,16 @@ export function App() {
           >
             📈 Markets
           </button>
+          <button
+            style={styles.button}
+            onClick={() => {
+              refreshScheduled();
+              setShowScheduled(true);
+            }}
+            title="Scheduled tasks — recurring actions the assistant runs on a cadence while the app is open"
+          >
+            ⏰ Scheduled{scheduledTasks.some((t) => t.enabled) ? ` · ${scheduledTasks.filter((t) => t.enabled).length}` : ""}
+          </button>
           <button style={styles.button} onClick={() => openBook(loadSampleBook())}>
             Load sample
           </button>
@@ -3385,6 +3451,16 @@ export function App() {
             );
           }}
           onClose={() => setShowStocks(false)}
+        />
+      )}
+
+      {showScheduled && (
+        <ScheduledTasksPanel
+          tasks={scheduledTasks}
+          describe={describeSchedule}
+          onToggle={(id, enabled) => void toggleScheduled(id, enabled)}
+          onDelete={(id) => void removeScheduled(id)}
+          onClose={() => setShowScheduled(false)}
         />
       )}
     </div>

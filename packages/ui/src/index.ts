@@ -19,6 +19,7 @@ export * from "./LibraryPanel.js";
 export * from "./SettingsPanel.js";
 export * from "./SkillsPanel.js";
 export * from "./TasksPanel.js";
+export * from "./ScheduledTasksPanel.js";
 export * from "./CalendarPanel.js";
 export * from "./StockChartPanel.js";
 export * from "./FirstRunWizard.js";

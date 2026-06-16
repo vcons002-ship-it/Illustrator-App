@@ -73,6 +73,10 @@ export interface BuddyDeps {
   createEvent?: (ev: { summary: string; start: string; end: string; description?: string; location?: string }) => Promise<CalendarEvent>;
   listTasks?: (max?: number) => Promise<TaskItem[]>;
   createTask?: (t: { title: string; notes?: string; due?: string }) => Promise<TaskItem>;
+  /** Scheduled/periodic tasks — created/listed/cancelled over the shared store. */
+  scheduleTask?: (call: Extract<BuddyToolCall, { tool: "schedule_task" }>) => Promise<{ id: string; title: string; describe: string }>;
+  listScheduled?: () => Promise<{ id: string; title: string; describe: string; enabled: boolean }[]>;
+  cancelScheduled?: (id: string) => Promise<boolean>;
   /** Task-plan execution (the orchestrator) — wired over the shared store. */
   markStepDone?: (planId: string, stepId: string) => Promise<{ planTitle: string; nextStep?: string; completed: boolean } | undefined>;
   updateTaskStep?: (planId: string, stepId: string, patch: { status?: string; notes?: string }) => Promise<{ planTitle: string } | undefined>;
@@ -301,6 +305,16 @@ export async function runBuddyTool(
         });
         return r ? { taskAction: { planTitle: r.planTitle } } : {};
       }
+      case "schedule_task":
+        if (!deps.scheduleTask) return { error: "scheduled tasks aren't available right now" };
+        return { scheduled: await deps.scheduleTask(call) };
+      case "list_scheduled":
+        if (!deps.listScheduled) return { error: "scheduled tasks aren't available right now" };
+        return { scheduledList: await deps.listScheduled() };
+      case "cancel_scheduled":
+        if (!deps.cancelScheduled) return { error: "scheduled tasks aren't available right now" };
+        await deps.cancelScheduled(call.id);
+        return {};
       case "list_task_plans":
         if (!deps.listTaskPlans) return { error: "task plans aren't available" };
         return { taskPlansList: await deps.listTaskPlans() };
