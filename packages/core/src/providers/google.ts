@@ -206,8 +206,16 @@ export interface EmailSummary {
   date: string;
   snippet: string;
 }
+/** A file attached to an email — its id lets us download the bytes via gmailGetAttachment. */
+export interface EmailAttachment {
+  attachmentId: string;
+  filename: string;
+  mimeType: string;
+}
 export interface EmailFull extends EmailSummary {
   body: string;
+  /** Attached files (omitted when none) — so the agent can SEE what's attached and pull it in. */
+  attachments?: EmailAttachment[];
 }
 
 interface GmailHeader {
@@ -216,7 +224,9 @@ interface GmailHeader {
 }
 interface GmailPart {
   mimeType?: string;
-  body?: { data?: string };
+  /** Set on attachment parts (a real file); empty on inline body parts. */
+  filename?: string;
+  body?: { data?: string; attachmentId?: string };
   parts?: GmailPart[];
 }
 interface GmailMessage {
@@ -225,12 +235,16 @@ interface GmailMessage {
   payload?: { headers?: GmailHeader[] } & GmailPart;
 }
 
-/** Decode Gmail's base64url body data to a UTF-8 string. */
-export function decodeBase64Url(data: string): string {
+/** Decode Gmail's base64url to raw bytes (attachments + binary bodies). */
+export function decodeBase64UrlBytes(data: string): Uint8Array {
   const b64 = data.replace(/-/g, "+").replace(/_/g, "/");
   const bin = atob(b64);
-  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
-  return new TextDecoder().decode(bytes);
+  return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+}
+
+/** Decode Gmail's base64url body data to a UTF-8 string. */
+export function decodeBase64Url(data: string): string {
+  return new TextDecoder().decode(decodeBase64UrlBytes(data));
 }
 
 function header(headers: GmailHeader[] | undefined, name: string): string {
@@ -251,9 +265,24 @@ function bodyText(part: GmailPart | undefined): string {
   return "";
 }
 
+/** Collect every attachment part (a part with a filename + attachmentId) from the MIME tree. */
+function collectAttachments(part: GmailPart | undefined, out: EmailAttachment[] = []): EmailAttachment[] {
+  if (!part) return out;
+  if (part.filename && part.body?.attachmentId) {
+    out.push({
+      attachmentId: part.body.attachmentId,
+      filename: part.filename,
+      mimeType: part.mimeType ?? "application/octet-stream",
+    });
+  }
+  for (const child of part.parts ?? []) collectAttachments(child, out);
+  return out;
+}
+
 /** Pure: a Gmail message JSON → a structured email (PURE — unit-tested). */
 export function parseGmailMessage(msg: GmailMessage): EmailFull {
   const headers = msg.payload?.headers;
+  const attachments = collectAttachments(msg.payload);
   return {
     id: msg.id,
     from: header(headers, "From"),
@@ -261,6 +290,7 @@ export function parseGmailMessage(msg: GmailMessage): EmailFull {
     date: header(headers, "Date"),
     snippet: msg.snippet ?? "",
     body: bodyText(msg.payload).trim(),
+    ...(attachments.length ? { attachments } : {}),
   };
 }
 
@@ -297,6 +327,21 @@ export async function gmailSearch(
 /** Full text of one email (for pulling into the chat to summarize/re-work). */
 export async function gmailReadEmail(transport: Transport, token: string, id: string): Promise<EmailFull> {
   return parseGmailMessage(await apiGet<GmailMessage>(transport, token, `${GMAIL}/messages/${id}?format=full`));
+}
+
+/** Download one attachment's raw bytes (by the ids from `EmailFull.attachments`). */
+export async function gmailGetAttachment(
+  transport: Transport,
+  token: string,
+  messageId: string,
+  attachmentId: string,
+): Promise<Uint8Array> {
+  const data = await apiGet<{ data?: string }>(
+    transport,
+    token,
+    `${GMAIL}/messages/${messageId}/attachments/${attachmentId}`,
+  );
+  return decodeBase64UrlBytes(data.data ?? "");
 }
 
 /** The connected account's email address (also verifies the token works). */

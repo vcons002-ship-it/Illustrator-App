@@ -76,6 +76,8 @@ import {
   getFreshAccessToken,
   gmailSearch,
   gmailReadEmail,
+  gmailGetAttachment,
+  extractAttachmentText,
   listEvents,
   createEvent,
   listTasks,
@@ -1305,6 +1307,21 @@ async function handleGoogleConnect(msg: Extract<MainToWorker, { type: "googleCon
 
 /** Plan a task: bounded research (web + Gmail/Calendar) then a structured plan, persisted.
  * Reuses the buddy research tools + the CORS proxy; cancellable via the shared chatAborts. */
+/** The readAttachment dep: re-read the email to resolve the attachment's name/type, download
+ * its bytes, and extract text for text-like files (text/HTML/CSV/JSON). Auto-run, NO approval —
+ * pulling a file in is safe "gather" work. (PDF/binary text extraction lands in a follow-up.) */
+function makeReadAttachment(transport: DirectTransport, tok: () => Promise<string>) {
+  return async (messageId: string, attachmentId: string) => {
+    const email = await gmailReadEmail(transport, await tok(), messageId);
+    const meta = email.attachments?.find((a) => a.attachmentId === attachmentId);
+    const bytes = await gmailGetAttachment(transport, await tok(), messageId, attachmentId);
+    const filename = meta?.filename ?? "attachment";
+    const mimeType = meta?.mimeType ?? "application/octet-stream";
+    const text = extractAttachmentText(bytes, mimeType, filename);
+    return { filename, mimeType, bytesLen: bytes.length, ...(text ? { text: text.slice(0, 16_000) } : {}) };
+  };
+}
+
 async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>): Promise<void> {
   const ac = new AbortController();
   chatAborts.set(msg.requestId, ac);
@@ -1327,6 +1344,7 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
         ? {
             gmailSearch: async (q: string, max?: number) => gmailSearch(transport, await tok(), q, max),
             readEmail: async (id: string) => gmailReadEmail(transport, await tok(), id),
+            readAttachment: makeReadAttachment(transport, tok),
             listEvents: async (o: { max?: number; timeMin?: string; timeMax?: string }) =>
               listEvents(transport, await tok(), o),
           }
@@ -1682,6 +1700,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           return {
             gmailSearch: async (q: string, max?: number) => gmailSearch(transport, await tok(), q, max),
             readEmail: async (id: string) => gmailReadEmail(transport, await tok(), id),
+            readAttachment: makeReadAttachment(transport, tok),
             listEvents: async (o: { max?: number; timeMin?: string; timeMax?: string }) =>
               listEvents(transport, await tok(), o),
             createEvent: async (ev) => createEvent(transport, await tok(), ev),

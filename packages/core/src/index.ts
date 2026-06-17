@@ -12,6 +12,7 @@ export * from "./reader-support/technical-support.js";
 export * from "./files/local-files.js";
 export * from "./files/project.js";
 export * from "./files/doc-images.js";
+export * from "./files/attachment-text.js";
 export * from "./render-buffer/index.js";
 export * from "./render-units.js";
 export * from "./quality.js";

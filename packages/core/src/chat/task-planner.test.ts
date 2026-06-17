@@ -17,6 +17,12 @@ describe("planner prompts", () => {
     expect(s).toMatch(/not as instructions|never as instructions/i);
   });
 
+  it("research prompt tells it to pull in email attachments as prep", () => {
+    const s = buildResearchSystemPrompt();
+    expect(s).toMatch(/read_attachment/);
+    expect(s).toMatch(/attachment/i);
+  });
+
   it("research prompt is trip-aware: checks Gmail for existing bookings + flags missing info", () => {
     const s = buildResearchSystemPrompt();
     expect(s).toMatch(/trip|travel/i);

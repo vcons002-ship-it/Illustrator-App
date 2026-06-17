@@ -113,6 +113,23 @@ describe("parseGmailMessage", () => {
     const msg = { id: "m2", payload: { mimeType: "text/html", body: { data: b64url("<p>Hi <b>there</b></p>") } } };
     expect(parseGmailMessage(msg).body).toBe("Hi there");
   });
+
+  it("collects attachment parts (filename + attachmentId), and omits the field when none", () => {
+    const msg = {
+      id: "m3",
+      payload: {
+        mimeType: "multipart/mixed",
+        parts: [
+          { mimeType: "text/plain", body: { data: b64url("see attached") } },
+          { mimeType: "application/pdf", filename: "itinerary.pdf", body: { attachmentId: "att-1", size: 1234 } },
+        ],
+      },
+    };
+    expect(parseGmailMessage(msg).attachments).toEqual([
+      { attachmentId: "att-1", filename: "itinerary.pdf", mimeType: "application/pdf" },
+    ]);
+    expect(parseGmailMessage({ id: "m4", payload: { mimeType: "text/plain", body: { data: b64url("hi") } } }).attachments).toBeUndefined();
+  });
 });
 
 describe("decodeBase64Url", () => {

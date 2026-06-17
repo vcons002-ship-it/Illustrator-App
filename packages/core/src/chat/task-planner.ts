@@ -45,7 +45,11 @@ export function buildResearchSystemPrompt(): string {
     "start — e.g. mail-in renewals that take weeks), the exact STEPS required, the COST, and the " +
     "OFFICIAL website. If the task came from an email or a calendar item, read it for specifics " +
     "(dates, account numbers, what's being asked). Pull any relevant facts from the reader's Gmail " +
-    "(e.g. a prior confirmation, a reference number). Always prefer the authoritative/official " +
+    "(e.g. a prior confirmation, a reference number). When an email LISTS ATTACHMENTS that matter " +
+    "(an itinerary, a form, a statement, a prior filing), READ them with read_attachment and use " +
+    "their contents — that's exactly the prep a person would gather. Think broadly about everything " +
+    "needed and gather it with the safe read/search tools; don't guess when you can check. " +
+    "Always prefer the authoritative/official " +
     "source and capture its URL. Be concise; gather facts, don't write the plan yet. " +
     "If the task is a TRIP or TRAVEL (a calendar event in another city, a 'trip to …', a visit/" +
     "conference/wedding away from home): work out the PREREQUISITES it implies — transport (flights/" +
@@ -186,15 +190,27 @@ export function parsePlan(raw: string): ParsedPlan | undefined {
 
 // ------------------------------------------------------------- planning driver
 
-/** Research tools the planner may auto-run (all are auto-run buddy tools). */
+/**
+ * Tools the planner may auto-run while researching. The rule is the AUTONOMY BOUNDARY, not a
+ * hand-picked list: every SAFE-READ / GATHER capability (search, read a page/email/attachment,
+ * list calendar/tasks, do math) is fair game so the agent can work out what's needed and pull
+ * it in — just as a person with time would — while EXTERNAL/IRREVERSIBLE actions stay out (those
+ * become `user_action` steps). `find_files`/`read_file` join this set on desktop (see the worker).
+ */
 const RESEARCH_TOOLS = new Set<BuddyToolCall["tool"]>([
   "search_web",
   "read_url",
   "gmail_search",
   "read_email",
+  "read_attachment",
   "list_events",
+  "list_tasks",
+  "calculate",
 ]);
-type ResearchCall = Extract<BuddyToolCall, { tool: "search_web" | "read_url" | "gmail_search" | "read_email" | "list_events" }>;
+type ResearchCall = Extract<
+  BuddyToolCall,
+  { tool: "search_web" | "read_url" | "gmail_search" | "read_email" | "read_attachment" | "list_events" | "list_tasks" | "calculate" }
+>;
 
 export interface TaskPlanningOpts {
   llm: ChatCapable;

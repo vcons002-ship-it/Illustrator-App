@@ -515,6 +515,39 @@ describe("google tools", () => {
     expect(parseBuddyToolCall('{"tool":"create_task"}')).toBeUndefined(); // no title
   });
 
+  it("parses read_attachment and rejects it without both ids", () => {
+    expect(parseBuddyToolCall('{"tool":"read_attachment","messageId":"m1","attachmentId":"att-1","filename":"itinerary.pdf"}')).toEqual({
+      tool: "read_attachment",
+      messageId: "m1",
+      attachmentId: "att-1",
+      filename: "itinerary.pdf",
+    });
+    expect(parseBuddyToolCall('{"tool":"read_attachment","messageId":"m1"}')).toBeUndefined(); // no attachmentId
+  });
+
+  it("read_email lists attachments with the ids needed to pull them in", () => {
+    const out = formatBuddyToolResult(
+      { tool: "read_email", id: "m1" },
+      { emailFull: { id: "m1", from: "United", subject: "Your itinerary", date: "d", body: "see attached", attachments: [{ attachmentId: "att-1", filename: "itinerary.pdf", mimeType: "application/pdf" }] } },
+    );
+    expect(out).toContain("ATTACHMENTS");
+    expect(out).toContain("itinerary.pdf");
+    expect(out).toContain("attachmentId=att-1");
+  });
+
+  it("formats a pulled text attachment as prep data, and notes a binary one", () => {
+    const text = formatBuddyToolResult(
+      { tool: "read_attachment", messageId: "m1", attachmentId: "att-1" },
+      { attachment: { filename: "details.txt", mimeType: "text/plain", text: "Confirmation #ABC123", bytesLen: 20 } },
+    );
+    expect(text).toContain("Confirmation #ABC123");
+    const binary = formatBuddyToolResult(
+      { tool: "read_attachment", messageId: "m1", attachmentId: "att-2" },
+      { attachment: { filename: "scan.pdf", mimeType: "application/pdf", bytesLen: 99000 } },
+    );
+    expect(binary).toMatch(/can't be extracted inline|reference it by name/i);
+  });
+
   it("parses a date-scoped list_events for 'this week / today' schedule questions", () => {
     expect(
       parseBuddyToolCall('{"tool":"list_events","timeMin":"2026-06-15T00:00:00-04:00","timeMax":"2026-06-22T00:00:00-04:00"}'),
