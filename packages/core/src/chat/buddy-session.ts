@@ -88,6 +88,10 @@ export interface BuddyDeps {
   readEmail?: (id: string) => Promise<EmailFull>;
   /** Download + read an email attachment's text (auto-run; safe internal "gather" work). */
   readAttachment?: (messageId: string, attachmentId: string) => Promise<{ filename: string; mimeType: string; text?: string; bytesLen: number }>;
+  /** Search the reader's computer (planner; gated by the autonomous-file-search setting). */
+  findFiles?: (query: string) => Promise<{ name: string; path: string }[]>;
+  /** Read a local file's text (planner; gated by the auto-pull-files setting). */
+  readFile?: (path: string) => Promise<string>;
   listEvents?: (opts: { max?: number; timeMin?: string; timeMax?: string }) => Promise<CalendarEvent[]>;
   createEvent?: (ev: { summary: string; start: string; end: string; description?: string; location?: string }) => Promise<CalendarEvent>;
   listTasks?: (max?: number) => Promise<TaskItem[]>;
@@ -349,6 +353,9 @@ export async function runBuddyTool(
       case "read_attachment":
         if (!deps.readAttachment) return { error: "Google isn't connected (connect it in Settings)." };
         return { attachment: await deps.readAttachment(call.messageId, call.attachmentId) };
+      case "read_file":
+        if (!deps.readFile) return { error: "reading local files isn't enabled (turn on file pulling in Settings, on desktop)." };
+        return { fileText: await deps.readFile(call.path) };
       case "list_events":
         if (!deps.listEvents) return { error: "Google isn't connected (connect it in Settings)." };
         return {

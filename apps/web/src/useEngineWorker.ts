@@ -53,7 +53,8 @@ export interface ImportResult {
   error?: string;
 }
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
-import { desktopHttpFetch, mcpStdioExchange, isDesktop } from "./runtime.js";
+import { desktopHttpFetch, mcpStdioExchange, isDesktop, searchLocalFiles, readLocalFile } from "./runtime.js";
+import { pdfToText } from "./import-file.js";
 
 /**
  * How long the chat may stay COMPLETELY silent (no token, reasoning, tool, or status
@@ -480,6 +481,31 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             .catch((err: unknown) =>
               send({ type: "mcpStdioResult", callId: msg.callId, ok: false, error: err instanceof Error ? err.message : String(err) }),
             );
+          break;
+        }
+        case "hostFile": {
+          // Worker → main relay for local files: the Tauri bridge (search/read) + pdfjs (PDF text)
+          // live here, not in the worker. The worker has already gated this on the reader's
+          // settings, so we just run it. PDF-from-bytes works on web too (no Tauri needed).
+          const reply = (r: { ok: boolean; files?: { name: string; path: string }[]; text?: string; error?: string }) =>
+            send({ type: "hostFileResult", callId: msg.callId, ...r });
+          void (async () => {
+            try {
+              if (msg.op === "search") {
+                const files = await searchLocalFiles(msg.query ?? "");
+                reply({ ok: true, files: files.slice(0, 20).map((f) => ({ name: f.name, path: f.path })) });
+              } else if (msg.op === "read") {
+                const file = await readLocalFile(msg.path ?? "");
+                const bytes = new Uint8Array(await file.arrayBuffer());
+                const text = /\.pdf$/i.test(file.name) ? await pdfToText(bytes) : new TextDecoder().decode(bytes);
+                reply({ ok: true, text: text.slice(0, 200_000) });
+              } else {
+                reply({ ok: true, text: (await pdfToText(new Uint8Array(base64ToBytes(msg.bytesBase64 ?? "")))).slice(0, 200_000) });
+              }
+            } catch (err) {
+              reply({ ok: false, error: err instanceof Error ? err.message : String(err) });
+            }
+          })();
           break;
         }
         case "status":

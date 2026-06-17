@@ -188,7 +188,7 @@ function parseEpubOffMain(bytes: ArrayBuffer, id: string): Promise<BookSource> {
  * Extract a PDF's text with pdf.js, page by page. Lazy-imported so the (large) pdf.js
  * bundle is only fetched when someone actually imports a PDF.
  */
-async function pdfToText(data: Uint8Array): Promise<string> {
+export async function pdfToText(data: Uint8Array): Promise<string> {
   const pdfjs = await import("pdfjs-dist");
   const worker = await import("pdfjs-dist/build/pdf.worker.min.mjs?url");
   pdfjs.GlobalWorkerOptions.workerSrc = worker.default;

@@ -1,7 +1,7 @@
 import type { ChatCapable, ChatTurn } from "../providers/llm/chat.js";
 import { stripThink } from "../providers/llm/extraction.js";
 import { FAITHFULNESS_RULES } from "./document-polish.js";
-import { formatBuddyToolResult, parseBuddyToolCall, type BuddyToolCall } from "./buddy-tools.js";
+import { formatBuddyToolResult, parseBuddyToolCall, type BuddyToolCall, type BuddyToolResultPayload } from "./buddy-tools.js";
 import { runBuddyTool, type BuddyDeps } from "./buddy-session.js";
 import { normalizeTaskPlan, type TaskPlan, type TaskPlanInput, type TaskSource, type TaskStep } from "./tasks.js";
 
@@ -47,7 +47,9 @@ export function buildResearchSystemPrompt(): string {
     "(dates, account numbers, what's being asked). Pull any relevant facts from the reader's Gmail " +
     "(e.g. a prior confirmation, a reference number). When an email LISTS ATTACHMENTS that matter " +
     "(an itinerary, a form, a statement, a prior filing), READ them with read_attachment and use " +
-    "their contents — that's exactly the prep a person would gather. Think broadly about everything " +
+    "their contents — that's exactly the prep a person would gather. If the reader's COMPUTER is " +
+    "searchable, you can find_files and read_file to pull in a document they ALREADY have (a prior " +
+    "form, a statement, an itinerary) rather than make them dig it out. Think broadly about everything " +
     "needed and gather it with the safe read/search tools; don't guess when you can check. " +
     "Always prefer the authoritative/official " +
     "source and capture its URL. Be concise; gather facts, don't write the plan yet. " +
@@ -206,10 +208,14 @@ const RESEARCH_TOOLS = new Set<BuddyToolCall["tool"]>([
   "list_events",
   "list_tasks",
   "calculate",
+  "find_files",
+  "read_file",
 ]);
+/** The subset dispatched through `runBuddyTool` — `find_files` is handled separately (it's
+ * excluded from runBuddyTool and backed by a host round-trip dep, gated by the reader's settings). */
 type ResearchCall = Extract<
   BuddyToolCall,
-  { tool: "search_web" | "read_url" | "gmail_search" | "read_email" | "read_attachment" | "list_events" | "list_tasks" | "calculate" }
+  { tool: "search_web" | "read_url" | "gmail_search" | "read_email" | "read_attachment" | "list_events" | "list_tasks" | "calculate" | "read_file" }
 >;
 
 export interface TaskPlanningOpts {
@@ -238,7 +244,17 @@ async function gatherResearch(opts: TaskPlanningOpts): Promise<string> {
     if (!call || !RESEARCH_TOOLS.has(call.tool)) return stripThink(reply).trim();
     opts.onPhase?.("research", call.tool);
     messages.push({ role: "assistant", content: reply });
-    const result = await runBuddyTool(call as ResearchCall, opts.research);
+    // find_files reaches the reader's disk via a host round-trip dep the worker only wires when
+    // the autonomous-file-search setting is on; everything else is a normal in-worker buddy tool
+    // (read_file included — it's backed by deps.readFile, gated by the auto-pull-files setting).
+    let result: BuddyToolResultPayload;
+    if (call.tool === "find_files") {
+      result = opts.research.findFiles
+        ? { files: (await opts.research.findFiles(call.query)).map((f) => ({ name: f.name, path: f.path })) }
+        : { error: "searching the reader's computer isn't enabled (they can turn on autonomous file search in Settings)." };
+    } else {
+      result = await runBuddyTool(call as ResearchCall, opts.research);
+    }
     messages.push({ role: "user", content: formatBuddyToolResult(call, result) });
   }
   // Hit the cap — ask for the summary explicitly.

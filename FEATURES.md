@@ -178,6 +178,11 @@ Connect Google and the assistant becomes a **persistent task planner**. *(needs 
 - **It does the safe prep itself** — research, drafting documents, and creating **Google Tasks /
   Calendar reminders**. Risky/irreversible actions (submit, pay, send) are only **prepped** for you —
   it **never** submits, pays, or sends (Google access is read-and-create only).
+- **Gathers the documents it needs** — while planning it can **read an email attachment** (an itinerary
+  PDF, a form, a statement) and, on desktop, **find and read a file you already have** — pulling the
+  contents in as prep, the way you would. Reading is autonomous (no click); searching your computer is
+  opt-in. Governed by the same boundary: it gathers/reads freely but never runs commands, pays, or sends.
+  *(toggles in Settings: pull files in — on; search my computer while planning — off)*
 - **Auto-pilot, if you want it** — a Settings opt-in lets the safe steps run **without a click each**. *(opt-in)*
 - **Finds tasks before you ask** — while the app is open and you're away, it scans recent mail +
   calendar for actionable items (skipping newsletters) and pre-plans them; **"ignore this sender"**
