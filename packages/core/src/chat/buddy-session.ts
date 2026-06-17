@@ -86,6 +86,8 @@ export interface BuddyDeps {
   /** Google (Gmail read; Calendar + Tasks read/create) — present when connected. */
   gmailSearch?: (query: string, max?: number) => Promise<EmailSummary[]>;
   readEmail?: (id: string) => Promise<EmailFull>;
+  /** Download + read an email attachment's text (auto-run; safe internal "gather" work). */
+  readAttachment?: (messageId: string, attachmentId: string) => Promise<{ filename: string; mimeType: string; text?: string; bytesLen: number }>;
   listEvents?: (opts: { max?: number; timeMin?: string; timeMax?: string }) => Promise<CalendarEvent[]>;
   createEvent?: (ev: { summary: string; start: string; end: string; description?: string; location?: string }) => Promise<CalendarEvent>;
   listTasks?: (max?: number) => Promise<TaskItem[]>;
@@ -344,6 +346,9 @@ export async function runBuddyTool(
       case "read_email":
         if (!deps.readEmail) return { error: "Google isn't connected (connect it in Settings)." };
         return { emailFull: await deps.readEmail(call.id) };
+      case "read_attachment":
+        if (!deps.readAttachment) return { error: "Google isn't connected (connect it in Settings)." };
+        return { attachment: await deps.readAttachment(call.messageId, call.attachmentId) };
       case "list_events":
         if (!deps.listEvents) return { error: "Google isn't connected (connect it in Settings)." };
         return {
