@@ -169,7 +169,9 @@ export const SkillsPanel = memo(function SkillsPanel({ skills, onSave, onDelete,
                       {s.description ? (
                         <div style={{ fontSize: 12, opacity: 0.7 }}>{s.description}</div>
                       ) : null}
-                      <div style={{ fontSize: 11, opacity: 0.45 }}>{s.body.length} chars</div>
+                      <div style={{ fontSize: 11, opacity: 0.45 }}>
+                        {s.body.length} chars{s.useCount ? ` · used ${s.useCount}×` : ""}
+                      </div>
                     </div>
                     <span style={{ display: "flex", gap: 6, flexShrink: 0 }}>
                       <button style={btn} onClick={() => startEdit(s)}>

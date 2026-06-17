@@ -11,8 +11,28 @@ import {
   readSkillBody,
   saveSkill,
   skillsIndexBlock,
+  touchSkill,
   type Skill,
 } from "./skills.js";
+
+describe("touchSkill (reuse tracking)", () => {
+  it("bumps useCount + lastUsedAt on a match, keeps reuse stats when refined", async () => {
+    const store = new InMemoryStore();
+    await saveSkill(store, { name: "do-x", description: "when x", body: "steps" });
+    const hit = await touchSkill(store, "do-x");
+    expect(hit?.name).toBe("do-x");
+    let saved = (await loadSkills(store)).find((s) => s.name === "do-x")!;
+    expect(saved.useCount).toBe(1);
+    expect(saved.lastUsedAt).toBeGreaterThan(0);
+    await touchSkill(store, "do-x");
+    // Refining the skill in place preserves the earned use count.
+    await saveSkill(store, { name: "do-x", description: "when x", body: "better steps" });
+    saved = (await loadSkills(store)).find((s) => s.name === "do-x")!;
+    expect(saved.useCount).toBe(2);
+    expect(saved.body).toBe("better steps");
+    expect(await touchSkill(store, "nope")).toBeUndefined();
+  });
+});
 
 const mk = (name: string, description = "", body = "steps"): Skill => ({ name, description, body, at: 1 });
 

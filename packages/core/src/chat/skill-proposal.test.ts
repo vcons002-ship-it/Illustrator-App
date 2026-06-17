@@ -2,10 +2,21 @@ import { describe, expect, it } from "vitest";
 import type { ChatTurn } from "../providers/llm/chat.js";
 import {
   buildSkillProposalPrompt,
+  isDuplicateSkill,
   parseSkillProposal,
   runSkillProposal,
   worthLearning,
 } from "./skill-proposal.js";
+
+describe("isDuplicateSkill", () => {
+  const existing = [{ name: "compare-stocks", description: "weigh two tickers by risk-reward" }];
+  it("flags same name or strong topic overlap, allows genuinely new skills", () => {
+    expect(isDuplicateSkill({ name: "compare-stocks", description: "x" }, existing)).toBe(true); // same name
+    expect(isDuplicateSkill({ name: "stock-comparison", description: "compare tickers on risk reward" }, existing)).toBe(true); // overlap
+    expect(isDuplicateSkill({ name: "draw-flowchart", description: "make a process diagram" }, existing)).toBe(false);
+    expect(isDuplicateSkill({ name: "x", description: "y" }, [])).toBe(false);
+  });
+});
 
 describe("worthLearning", () => {
   it("needs at least two successful tool steps", () => {

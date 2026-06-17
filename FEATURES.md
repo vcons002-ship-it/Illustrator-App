@@ -126,8 +126,10 @@ The landing page **is** a full-window chat assistant, in three voices — **Free
 - **The conversation follows you** — when it opens a book, the discussion continues in the book chat, context intact.
 - **Remembers what you like** — *"I prefer watercolor"*, *"never spoil endings"* → a **long-term
   memory** applied in every future chat (ask it to forget, too).
-- **Learns skills from experience** — after a multi-step task it distils a reusable **skill** (a
-  saved playbook) so it does that kind of task better next time; review/edit/delete in the 🧠 Skills panel. *(opt-in)*
+- **Learns skills from experience** — when you do a similar multi-step task **more than once**, it
+  distils a reusable **skill** (a saved playbook) and **offers it for you to Keep or Dismiss** —
+  nothing is saved silently, and near-duplicates are skipped. The skills you actually reuse stay put
+  as the list fills; review/edit/delete (and see each one's use count) in the 🧠 Skills panel. *(opt-in)*
 - **Delegates subtasks** — hands a chunky lookup to a short-lived **read-only sub-agent** that
   researches and returns a concise result, keeping the main answer clean (it can't change anything).
 - **Uses your MCP servers** — add **Model Context Protocol** servers in Settings and the assistant

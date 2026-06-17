@@ -685,9 +685,10 @@ export function SettingsPanel({
             <span>
               Let the assistant learn skills from experience
               <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
-                After it works through a multi-step task, the assistant distils a reusable
-                “skill” (a saved playbook) so it handles that kind of task better next time. New
-                skills appear in the 🧠 Skills panel where you can review, edit, or delete them.
+                When you do a similar multi-step task <b>more than once</b>, the assistant distils a
+                reusable “skill” (a saved playbook) and <b>offers it for you to Keep or Dismiss</b> —
+                nothing is saved without your say-so, and near-duplicates are skipped. Skills you keep
+                show in the 🧠 Skills panel, and the ones you actually reuse stay put as the list fills.
                 Off by default; it adds a short reflection step at the end of those turns.
               </span>
             </span>
