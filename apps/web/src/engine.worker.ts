@@ -46,10 +46,14 @@ import {
   loadMemory,
   loadSkills,
   memoryPromptBlock,
-  readSkillBody,
   saveSkill,
   runSkillProposal,
   worthLearning,
+  isDuplicateSkill,
+  touchSkill,
+  loadTaskHistory,
+  recordTask,
+  taskRecurred,
   busCommands,
   formatBusReply,
   parseMcpServers,
@@ -1211,7 +1215,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
         readUrl: readUrlText(ac.signal),
         remember: async (n) => (await rememberNote(memoryStore(), n)).length,
         forget: async (m) => (await forgetNote(memoryStore(), m)).length,
-        readSkill: async (name) => readSkillBody(await loadSkills(memoryStore()), name),
+        readSkill: async (name) => (await touchSkill(memoryStore(), name))?.body ?? "",
         saveSkill: async (name, description, body) => (await saveSkill(memoryStore(), { name, description, body })).length,
         forgetSkill: async (m) => (await forgetSkill(memoryStore(), m)).length,
         ...(book.data ? { analyzeData: (spec) => analyzeData(book.data!, spec) } : {}),
@@ -1760,7 +1764,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       randomBooks: () => books.random(),
       remember: async (n) => (await rememberNote(store, n)).length,
       forget: async (m) => (await forgetNote(store, m)).length,
-      readSkill: async (name) => readSkillBody(await loadSkills(store), name),
+      readSkill: async (name) => (await touchSkill(store, name))?.body ?? "",
       saveSkill: async (name, description, body) => (await saveSkill(store, { name, description, body })).length,
       forgetSkill: async (m) => (await forgetSkill(store, m)).length,
       // Task-plan execution: advance/update steps + read plans over the shared store,
@@ -2066,16 +2070,21 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       },
       signal: ac.signal,
     }));
-    // Self-improving skills (opt-in): after a substantive completed turn, look back and
-    // distill a reusable playbook, saving it for next time (the reader reviews/edits it in
-    // the Skills panel). Dedup by name; a failed reflection never breaks the turn.
-    if (!outcome.pendingTool && settings?.autoLearnSkills && worthLearning(outcome.toolResults)) {
+    // Self-improving skills (opt-in): after a substantive, USER-initiated multi-step turn,
+    // record the task; only when a SIMILAR task has RECURRED (so a playbook will actually pay
+    // off next time) distil a candidate skill and OFFER it for the reader to keep — never saved
+    // silently, never a near-duplicate. A failed reflection never breaks the turn.
+    const isUserGoal = !!msg.userText && !msg.userText.startsWith("[");
+    if (!outcome.pendingTool && settings?.autoLearnSkills && worthLearning(outcome.toolResults) && isUserGoal) {
       try {
-        post({ type: "buddyThinking", requestId: msg.requestId, text: "Reflecting on what I learned…" });
-        const candidate = await runSkillProposal(llm, { goal: msg.userText, transcript: outcome.transcript, signal: ac.signal });
-        if (candidate && !(await loadSkills(store)).some((s) => s.name.toLowerCase() === candidate.name.toLowerCase())) {
-          await saveSkill(store, candidate);
-          post({ type: "buddySkillLearned", requestId: msg.requestId, name: candidate.name });
+        const recurred = taskRecurred(await loadTaskHistory(store), msg.userText);
+        await recordTask(store, msg.userText);
+        if (recurred) {
+          post({ type: "buddyThinking", requestId: msg.requestId, text: "Reflecting on what I learned…" });
+          const candidate = await runSkillProposal(llm, { goal: msg.userText, transcript: outcome.transcript, signal: ac.signal });
+          if (candidate && !isDuplicateSkill(candidate, await loadSkills(store))) {
+            post({ type: "buddySkillProposed", requestId: msg.requestId, skill: candidate });
+          }
         }
       } catch {
         // Reflection is best-effort — skip silently on any failure.

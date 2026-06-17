@@ -1,6 +1,7 @@
 import { stripThink } from "../providers/llm/extraction.js";
 import type { ChatCapable, ChatTurn } from "../providers/llm/chat.js";
 import { normalizeSkill } from "./skills.js";
+import { sharedTopicCount } from "./task-history.js";
 
 /**
  * SELF-IMPROVING SKILLS — after the buddy finishes a multi-step task, it can look back at
@@ -30,6 +31,20 @@ function stripFences(s: string): string {
  */
 export function worthLearning(toolResults: readonly { result: { error?: string } }[]): boolean {
   return toolResults.filter((t) => !t.result.error).length >= 2;
+}
+
+/**
+ * Whether a proposed skill already exists in spirit — same name, or its name+description share
+ * enough significant words with an existing skill — so we don't churn out near-duplicates.
+ */
+export function isDuplicateSkill(
+  candidate: { name: string; description: string },
+  existing: readonly { name: string; description: string }[],
+): boolean {
+  const cText = `${candidate.name} ${candidate.description}`;
+  return existing.some(
+    (s) => s.name.toLowerCase() === candidate.name.toLowerCase() || sharedTopicCount(`${s.name} ${s.description}`, cText) >= 2,
+  );
 }
 
 /** The prompt that asks the model to distill a reusable playbook from the transcript (or decline). */

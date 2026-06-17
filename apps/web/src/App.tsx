@@ -352,6 +352,14 @@ export function App() {
     await loadSkills(libraryStore).then(setSkills).catch(() => {});
     setShowSkills(true);
   }, [libraryStore]);
+  // A skill the buddy distilled from a recurring task, awaiting the reader's Keep/Dismiss.
+  const [pendingSkill, setPendingSkill] = useState<{ name: string; description: string; body: string } | null>(null);
+  const keepPendingSkill = useCallback(async () => {
+    if (!pendingSkill) return;
+    await saveSkill(libraryStore, pendingSkill).catch(() => {});
+    setPendingSkill(null);
+    refreshSkills();
+  }, [pendingSkill, libraryStore, refreshSkills]);
   const [showTasks, setShowTasks] = useState(false);
   const [taskPlans, setTaskPlans] = useState<TaskPlan[]>([]);
   const [planningCount, setPlanningCount] = useState(0);
@@ -2182,9 +2190,9 @@ export function App() {
         refreshScheduled();
       } else if (e.kind === "alertsChanged") {
         refreshAlerts();
-      } else if (e.kind === "skillLearned") {
-        appendBuddy({ role: "tool", text: `📌 Learned a skill: “${e.name}” — review or edit it in 🧠 Skills.` });
-        refreshSkills();
+      } else if (e.kind === "skillProposed") {
+        // Offer the distilled skill — the reader is the value judge (never saved silently).
+        setPendingSkill(e.skill);
       } else if (e.kind === "opened") {
         openedBook = true;
         buddyHandoff.current = [...buddyMessages, { role: "user" as const, text: userBubbleText ?? userText, at: Date.now() }]
@@ -3862,6 +3870,42 @@ export function App() {
           }}
           onClose={() => setShowBrowser(false)}
         />
+      )}
+
+      {pendingSkill && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 16,
+            left: "50%",
+            transform: "translateX(-50%)",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            maxWidth: "min(560px, 94vw)",
+            background: "#16181d",
+            color: "#e6e6e6",
+            border: "1px solid rgba(90,209,155,0.4)",
+            borderRadius: 10,
+            padding: "10px 14px",
+            boxShadow: "0 6px 24px rgba(0,0,0,0.4)",
+            zIndex: 120,
+            fontFamily: "system-ui, sans-serif",
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>📌 Learn a skill: “{pendingSkill.name}”?</div>
+            <div style={{ fontSize: 12, opacity: 0.7, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {pendingSkill.description || "a reusable playbook for tasks like this"}
+            </div>
+          </div>
+          <button style={{ ...styles.button, borderColor: "rgba(90,209,155,0.6)", color: "#9be8c0" }} onClick={() => void keepPendingSkill()}>
+            Keep
+          </button>
+          <button style={styles.button} onClick={() => setPendingSkill(null)}>
+            Dismiss
+          </button>
+        </div>
       )}
 
       {remoteLink && (

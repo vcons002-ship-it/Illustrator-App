@@ -26,13 +26,34 @@ export interface Skill {
   description: string;
   /** The full playbook (markdown), fetched on demand. */
   body: string;
-  /** ms epoch of the last write (recency drives eviction at the cap). */
+  /** ms epoch of the last write. */
   at: number;
+  /** ms epoch this skill was last USED (read_skill matched it); drives eviction so a
+   * frequently-reused skill isn't dropped just for being old. Defaults to `at`. */
+  lastUsedAt?: number;
+  /** How many times this skill has been loaded/applied — a "has it earned its place" signal. */
+  useCount?: number;
 }
 
 function isSkill(v: unknown): v is Skill {
   const s = v as Skill;
   return s != null && typeof s.name === "string" && typeof s.body === "string";
+}
+
+/** When a skill was last touched (used, else written) — the eviction key. */
+function usedAt(s: Skill): number {
+  return s.lastUsedAt ?? s.at;
+}
+
+/** Keep the MAX_SKILLS most-recently-USED (not merely most-recently-written) skills; on a tie,
+ * the later-inserted one wins (so identical timestamps fall back to insertion order). */
+function evictByUse(skills: Skill[]): Skill[] {
+  if (skills.length <= MAX_SKILLS) return skills;
+  const ranked = skills
+    .map((s, i) => ({ s, i }))
+    .sort((a, b) => usedAt(b.s) - usedAt(a.s) || b.i - a.i);
+  const keep = new Set(ranked.slice(0, MAX_SKILLS).map((r) => r.s));
+  return skills.filter((s) => keep.has(s)); // preserve original order among survivors
 }
 
 export async function loadSkills(store: VisualReaderStore): Promise<Skill[]> {
@@ -41,14 +62,14 @@ export async function loadSkills(store: VisualReaderStore): Promise<Skill[]> {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isSkill).slice(0, MAX_SKILLS);
+    return evictByUse(parsed.filter(isSkill));
   } catch {
     return [];
   }
 }
 
 async function persist(store: VisualReaderStore, skills: Skill[]): Promise<void> {
-  await store.putMemo?.(READER_SKILLS_KEY, JSON.stringify(skills.slice(-MAX_SKILLS)));
+  await store.putMemo?.(READER_SKILLS_KEY, JSON.stringify(evictByUse(skills)));
 }
 
 /** Clean + bound a skill's fields; returns undefined when there's no usable name/body. */
@@ -77,11 +98,26 @@ export async function saveSkill(
   if (!skill) throw new Error("a skill needs a name and a body");
   const skills = await loadSkills(store);
   const key = skill.name.toLowerCase();
+  const prior = skills.find((s) => s.name.toLowerCase() === key);
   const kept = skills.filter((s) => s.name.toLowerCase() !== key);
-  kept.push(skill);
-  const bounded = kept.slice(-MAX_SKILLS);
+  // Refining a skill in place keeps its earned reuse stats.
+  kept.push({ ...skill, lastUsedAt: skill.at, useCount: prior?.useCount ?? 0 });
+  const bounded = evictByUse(kept);
   await persist(store, bounded);
   return bounded;
+}
+
+/** Record that a skill was USED (read_skill matched it): bump its use count + recency so reuse
+ * keeps it from being evicted. No-op when nothing matches. Returns the matched skill, if any. */
+export async function touchSkill(store: VisualReaderStore, query: string): Promise<Skill | undefined> {
+  const skills = await loadSkills(store);
+  const hit = findSkill(skills, query);
+  if (!hit) return undefined;
+  const updated = skills.map((s) =>
+    s === hit ? { ...s, lastUsedAt: Date.now(), useCount: (s.useCount ?? 0) + 1 } : s,
+  );
+  await persist(store, updated);
+  return hit;
 }
 
 /** Remove every skill whose name contains `match` (case-insensitive); throws when none

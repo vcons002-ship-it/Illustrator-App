@@ -239,8 +239,8 @@ export type BuddyStreamEvent =
   | { kind: "scheduledChanged" }
   /** set_price_alert/cancel_alert changed the alerts list — refresh it. */
   | { kind: "alertsChanged" }
-  /** The buddy distilled + saved a reusable skill — announce it + refresh the Skills list. */
-  | { kind: "skillLearned"; name: string }
+  /** The buddy distilled a reusable skill from a recurring task — offer it to keep. */
+  | { kind: "skillProposed"; skill: { name: string; description: string; body: string } }
   /** set_visual_style resolved — the app (settings owner) should commit it. */
   | {
       kind: "settings";
@@ -677,8 +677,8 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "alertsChanged" });
           break;
         }
-        case "buddySkillLearned": {
-          buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "skillLearned", name: msg.name });
+        case "buddySkillProposed": {
+          buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "skillProposed", skill: msg.skill });
           break;
         }
         case "buddySettings": {
