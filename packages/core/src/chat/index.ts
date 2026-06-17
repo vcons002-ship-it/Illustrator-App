@@ -18,6 +18,7 @@ export * from "./voice.js";
 export * from "./setup-guides.js";
 export * from "./settings-control.js";
 export * from "./tasks.js";
+export * from "./tasks-gantt.js";
 export * from "./scheduled-tasks.js";
 export * from "./price-alerts.js";
 export * from "./trading-scripts.js";

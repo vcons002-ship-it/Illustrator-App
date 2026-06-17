@@ -126,6 +126,10 @@ export const CLAUDE_EXTRACTION_SCHEMA = z.object({
       edges: z.array(z.object({ from: z.string(), to: z.string(), label: z.string() })),
       parts: z.array(z.object({ label: z.string(), note: z.string() })),
       caption: z.string(),
+      unit: z.string().default(""),
+      tasks: z
+        .array(z.object({ id: z.string(), label: z.string(), start: z.number(), end: z.number() }))
+        .default([]),
     }),
   ),
 });

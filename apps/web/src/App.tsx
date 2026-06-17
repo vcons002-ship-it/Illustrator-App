@@ -50,6 +50,7 @@ import {
   loadTaskPlans,
   deleteTaskPlan,
   upsertTaskPlan,
+  updateTaskStep,
   loadScheduledTasks,
   upsertScheduledTask,
   deleteScheduledTask,
@@ -411,6 +412,36 @@ export function App() {
       }
     },
     [libraryStore, refreshTaskPlans],
+  );
+  // Toggle ONE specific step done/undone (the timeline checkbox + the detail ticks) — unlike
+  // onAdvanceTaskStep this targets any step, not just the next-due one.
+  const onToggleStepDone = useCallback(
+    async (planId: string, stepId: string, done: boolean) => {
+      await updateTaskStep(libraryStore, planId, stepId, { status: done ? "done" : "ready" });
+      refreshTaskPlans();
+    },
+    [libraryStore, refreshTaskPlans],
+  );
+  // Add a task with an optional due date: the assistant researches it and plans the steps
+  // (the worker persists the plan), then we honour the user's explicit deadline.
+  const [creatingTask, setCreatingTask] = useState(false);
+  const onCreateTask = useCallback(
+    async (title: string, dueIso?: string) => {
+      setCreatingTask(true);
+      try {
+        const sourceText = dueIso ? `${title}\n\nHard deadline: ${dueIso}.` : title;
+        const res = await planTask({ source: { kind: "typed", text: title }, sourceText });
+        if (res.ok && res.plan) {
+          if (dueIso && res.plan.deadlineIso !== dueIso) {
+            await upsertTaskPlan(libraryStore, { ...res.plan, deadlineIso: dueIso });
+          }
+          refreshTaskPlans();
+        }
+      } finally {
+        setCreatingTask(false);
+      }
+    },
+    [planTask, libraryStore, refreshTaskPlans],
   );
   // Faithful document-polish panel + an optional prefill (from upload or a home click).
   const [showPolish, setShowPolish] = useState(false);
@@ -3784,8 +3815,11 @@ export function App() {
         <TasksPanel
           plans={taskPlans}
           planning={planningCount}
+          creatingTask={creatingTask}
+          onCreateTask={(title, dueIso) => void onCreateTask(title, dueIso)}
           onOpenTask={(id) => void openTaskInChat(id)}
           onAdvanceStep={onAdvanceTaskStep}
+          onToggleStepDone={onToggleStepDone}
           onIgnoreSender={ignorePlanSender}
           onDelete={async (id) => {
             await deleteTaskPlan(libraryStore, id);

@@ -25,6 +25,7 @@ export * from "./StockChartPanel.js";
 export * from "./BrowserPanel.js";
 export * from "./HtmlParagraph.js";
 export * from "./Infographic.js";
+export * from "./GanttChart.js";
 export * from "./OrderReviewModal.js";
 export * from "./FirstRunWizard.js";
 export * from "./buildProviders.js";

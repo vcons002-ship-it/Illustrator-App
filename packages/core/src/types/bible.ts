@@ -274,7 +274,15 @@ export type InfographicSpec =
       nodes: { id: string; label: string; shape: "start" | "step" | "decision" | "end" }[];
       edges: { from: string; to: string; label?: string }[];
     }
-  | { kind: "diagram"; parts: { label: string; note?: string }[]; caption?: string };
+  | { kind: "diagram"; parts: { label: string; note?: string }[]; caption?: string }
+  | {
+      /** A timeline/schedule/roadmap: phases or milestones on a shared numeric axis. `unit`
+       * names the axis ("weeks", "days", "phases"); each task's `start`/`end` are inclusive
+       * positions on it. Rendered as a Gantt by the shared `layoutGantt` geometry. */
+      kind: "gantt";
+      unit: string;
+      tasks: { id: string; label: string; start: number; end: number }[];
+    };
 
 export interface ChapterInfographic {
   id: string;
