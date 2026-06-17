@@ -146,6 +146,8 @@ import {
   useScrollDepth,
   ConceptCard,
   ConceptText,
+  HtmlParagraph,
+  ARTICLE_HTML_STYLE,
   InlineFigure,
   SupportRow,
   type DisplayResult,
@@ -1023,6 +1025,12 @@ export function App() {
   useEffect(() => setActiveUnit(unitIndex), [unitIndex, setActiveUnit]);
 
   const activePage = book?.pages[activePageIndex];
+  // Original-layout view (web articles that carry sanitized HTML per paragraph). Off by default.
+  const [articleLayout, setArticleLayout] = useState(false);
+  const bookHasHtml = useMemo(
+    () => !!book?.pages.some((p) => p.paragraphs.some((pr) => pr.html)),
+    [book],
+  );
   const pageEntities =
     book && bible && activePage ? resolvePageEntities(bible, activePage) : undefined;
   const pageSpoilerIds = pageEntities?.spoilerIds ?? [];
@@ -3034,6 +3042,15 @@ export function App() {
               ← Exit book
             </button>
           )}
+          {bookHasHtml && (
+            <button
+              style={articleLayout ? { ...styles.button, borderColor: "rgba(90,209,155,0.6)", color: "#9be8c0" } : styles.button}
+              onClick={() => setArticleLayout((v) => !v)}
+              title="Toggle between the original article layout (headings, images, lists) and clean reader text"
+            >
+              {articleLayout ? "📄 Original layout" : "📄 Clean text"}
+            </button>
+          )}
           {library.length > 0 && (
             <button
               style={styles.button}
@@ -3504,6 +3521,7 @@ export function App() {
             dataEdit={dataEdit}
             onAddAnalysisSheet={addAnalysisSheet}
             {...(technicalSupport ? { technical: technicalSupport } : {})}
+            layoutHtml={articleLayout}
           />
 
           <aside style={styles.aside}>
@@ -3976,6 +3994,7 @@ const ReaderColumn = memo(function ReaderColumn({
   dataEdit,
   onAddAnalysisSheet,
   technical,
+  layoutHtml,
 }: {
   book: BookSource;
   pageToUnit: number[] | undefined;
@@ -3995,6 +4014,8 @@ const ReaderColumn = memo(function ReaderColumn({
   onAddAnalysisSheet?: () => void;
   /** Present only in technical mode: concept marks + paragraph-anchored support. */
   technical?: TechnicalSupportData;
+  /** Render web-article paragraphs in their original (sanitized) HTML layout. */
+  layoutHtml?: boolean;
 }) {
   const chaptersById = useMemo(() => new Map(book.chapters.map((c) => [c.id, c])), [book]);
   // Multi-sheet workbook: let the reader pick which tab to view/chart/download.
@@ -4004,6 +4025,7 @@ const ReaderColumn = memo(function ReaderColumn({
   const dataChart = useMemo(() => (activeTable ? autoChartDataset(activeTable) : undefined), [activeTable]);
   return (
     <article style={styles.column}>
+      {layoutHtml && <style>{ARTICLE_HTML_STYLE}</style>}
       {/* An uploaded spreadsheet/CSV/tabular-JSON: show the REAL grid as an aligned
           table up top (the flattened "a | b | c" pipe-text below is what the
           illustration/extraction pipeline reads, but it's no way to look at a sheet).
@@ -4181,17 +4203,21 @@ const ReaderColumn = memo(function ReaderColumn({
                   (paraConcepts?.length ?? 0) > 0 || (paraFigures?.length ?? 0) > 0;
                 return (
                   <Fragment key={para.id}>
-                    <p ref={registerParagraph(para.id)} style={styles.paragraph}>
-                      {technical?.terms?.length && technical.definitions ? (
-                        <ConceptText
-                          text={para.text}
-                          terms={technical.terms}
-                          definitions={technical.definitions}
-                        />
-                      ) : (
-                        para.text
-                      )}
-                    </p>
+                    {layoutHtml && para.html ? (
+                      <HtmlParagraph html={para.html} innerRef={registerParagraph(para.id)} />
+                    ) : (
+                      <p ref={registerParagraph(para.id)} style={styles.paragraph}>
+                        {technical?.terms?.length && technical.definitions ? (
+                          <ConceptText
+                            text={para.text}
+                            terms={technical.terms}
+                            definitions={technical.definitions}
+                          />
+                        ) : (
+                          para.text
+                        )}
+                      </p>
+                    )}
                     {support && (
                       <SupportRow>
                         {paraFigures?.map((f) => (

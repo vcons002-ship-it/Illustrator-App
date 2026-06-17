@@ -12,6 +12,8 @@ export interface Paragraph {
   /** Zero-based index of this paragraph within its page. */
   index: number;
   text: string;
+  /** Sanitized HTML for the optional "original layout" view (web articles). Absent → render text. */
+  html?: string;
 }
 
 export interface Page {

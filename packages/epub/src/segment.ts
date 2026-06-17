@@ -1,10 +1,18 @@
 import type { BookSource, Chapter, Page, Paragraph } from "@visual-reader/core";
 
+/** One paragraph's content: plain text, optionally with its sanitized HTML (layout view). */
+export interface ParagraphInput {
+  text: string;
+  html?: string;
+}
+
 /** Raw chapter input: a title and its prose, before segmentation. */
 export interface RawChapter {
   title: string;
   /** Plain text; paragraphs separated by blank lines. */
   text: string;
+  /** Pre-split paragraphs (with HTML) — used instead of splitting `text` when present (web articles). */
+  paragraphs?: ParagraphInput[];
   /** Whether this is story prose (vs. front/back matter). Default true. */
   isStory?: boolean;
 }
@@ -45,13 +53,15 @@ export function segmentBook(
       ...(raw.isStory === false ? { isStory: false } : {}),
     });
 
-    const paragraphs = splitParagraphs(raw.text);
+    const paragraphs: ParagraphInput[] =
+      raw.paragraphs ?? splitParagraphs(raw.text).map((text) => ({ text }));
     for (const group of groupByWordBudget(paragraphs, wordsPerPage)) {
       const pageId = `pg-${pageCounter}`;
-      const pageParas: Paragraph[] = group.map((text, i) => ({
+      const pageParas: Paragraph[] = group.map((p, i) => ({
         id: `${pageId}-${i}`,
         index: i,
-        text,
+        text: p.text,
+        ...(p.html ? { html: p.html } : {}),
       }));
       pages.push({ id: pageId, index: pageCounter, chapterId, paragraphs: pageParas });
       pageCounter++;
@@ -75,12 +85,12 @@ function splitParagraphs(text: string): string[] {
 }
 
 /** Greedily pack paragraphs into pages, keeping paragraphs whole. */
-function groupByWordBudget(paragraphs: string[], wordsPerPage: number): string[][] {
-  const pages: string[][] = [];
-  let current: string[] = [];
+function groupByWordBudget(paragraphs: ParagraphInput[], wordsPerPage: number): ParagraphInput[][] {
+  const pages: ParagraphInput[][] = [];
+  let current: ParagraphInput[] = [];
   let count = 0;
   for (const para of paragraphs) {
-    const words = countWords(para);
+    const words = countWords(para.text);
     if (current.length > 0 && count + words > wordsPerPage) {
       pages.push(current);
       current = [];
@@ -90,7 +100,7 @@ function groupByWordBudget(paragraphs: string[], wordsPerPage: number): string[]
     count += words;
   }
   if (current.length > 0) pages.push(current);
-  return pages.length > 0 ? pages : [[""]];
+  return pages.length > 0 ? pages : [[{ text: "" }]];
 }
 
 function countWords(s: string): number {

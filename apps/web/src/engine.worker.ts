@@ -123,7 +123,7 @@ import {
   type ToolCall,
   type VisualBible,
 } from "@visual-reader/core";
-import { bookFromText } from "@visual-reader/epub";
+import { bookFromText, bookFromHtml } from "@visual-reader/epub";
 // Import buildProviders via the React-free subpath: pulling it from the package
 // index would drag the React UI components into the worker, which can crash the
 // worker on load (no `window`/DOM) under dev's cross-origin isolation.
@@ -1855,7 +1855,12 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           ...(cf ? { transport: new DirectTransport(cf) } : {}),
         });
         const title = call.title ?? page.title ?? call.url;
-        return opened(bookFromText(title, page.text, call.mode, "Chat buddy"), call.visuals);
+        // Web articles carry sanitized HTML so the reader can offer an "original layout" view;
+        // fall back to plain text (pasted/keyless) when there's no HTML.
+        const book = page.html
+          ? bookFromHtml(title, page.text, page.html, call.mode, "Chat buddy")
+          : bookFromText(title, page.text, call.mode, "Chat buddy");
+        return opened(book, call.visuals);
       },
       openPastedText: async (call) =>
         opened(bookFromText(call.title, call.text, call.mode, "Pasted in chat"), call.visuals),

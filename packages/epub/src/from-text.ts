@@ -1,5 +1,5 @@
-import type { BookSource } from "@visual-reader/core";
-import { segmentBook, type RawChapter } from "./segment.js";
+import { splitHtmlBlocks, type BookSource } from "@visual-reader/core";
+import { segmentBook, type ParagraphInput, type RawChapter } from "./segment.js";
 
 /**
  * Build a `BookSource` from a title + raw text (a pasted article, an imported .txt/.md/
@@ -23,6 +23,45 @@ export function bookFromText(
   const book = segmentBook(
     { id, title: title.trim() || "Pasted text", ...(author ? { author } : {}) },
     splitChapters(title, body),
+  );
+  return contentMode === "technical" ? { ...book, contentMode } : book;
+}
+
+/**
+ * Build a `BookSource` from a web article that ALSO carries sanitized HTML per paragraph (for the
+ * optional "original layout" view). Uses the SAME content-hash id as `bookFromText(title, text)`,
+ * so an article has one stable identity whether or not the layout HTML is present. Chapters split
+ * at heading (`<h1>`/`<h2>`) blocks; paragraphs carry both `.text` (analysis/anchoring) and `.html`.
+ */
+export function bookFromHtml(
+  title: string,
+  text: string,
+  html: string,
+  contentMode?: "fiction" | "technical",
+  author?: string,
+): BookSource {
+  const body = text.replace(/\r\n?/g, "\n").trim();
+  const blocks = splitHtmlBlocks(html);
+  if (!body || blocks.length === 0) return bookFromText(title, text, contentMode, author);
+  const id = `text-${contentHash(`${title}\n${body}`)}`;
+  const chapters: RawChapter[] = [];
+  let cur: ParagraphInput[] = [];
+  let curTitle: string | undefined;
+  const flush = (): void => {
+    if (cur.length) chapters.push({ title: curTitle ?? title, text: cur.map((p) => p.text).join("\n\n"), paragraphs: cur });
+    cur = [];
+  };
+  for (const b of blocks) {
+    if (/^<h[12]\b/i.test(b.html)) {
+      flush();
+      curTitle = b.text;
+    }
+    cur.push(b);
+  }
+  flush();
+  const book = segmentBook(
+    { id, title: title.trim() || "Web article", ...(author ? { author } : {}) },
+    chapters.length > 0 ? chapters : [{ title, text: body, paragraphs: blocks }],
   );
   return contentMode === "technical" ? { ...book, contentMode } : book;
 }
