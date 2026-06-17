@@ -55,6 +55,10 @@ import {
   parseMcpServers,
   mcpListTools,
   mcpCallTool,
+  buildStdioExchange,
+  pickStdioResult,
+  parseToolsList,
+  parseToolCallText,
   skillsIndexBlock,
   parseBuddySlashCommand,
   parseUnderstanding,
@@ -307,6 +311,25 @@ const corsProxyFetch: typeof fetch = async (input, init) => {
 /** The CORS-exempt fetch when the host has one (else undefined → page CORS rules). */
 function corsFetch(): typeof fetch | undefined {
   return corsProxyAvailable ? corsProxyFetch : undefined;
+}
+
+// Run a stdio MCP server via the desktop shell (worker → main → Rust round-trip): the worker
+// can't spawn a process, so it asks the main thread, which invokes the Tauri command.
+const mcpStdioPending = new Map<number, (r: { ok: boolean; lines?: string[]; error?: string }) => void>();
+let nextMcpStdioCallId = 1;
+function mcpStdioExchange(command: string, args: string[], input: string[]): Promise<string[]> {
+  return new Promise((resolve, reject) => {
+    const callId = nextMcpStdioCallId++;
+    const timeout = setTimeout(() => {
+      if (mcpStdioPending.delete(callId)) reject(new Error("the MCP server timed out"));
+    }, 35_000);
+    mcpStdioPending.set(callId, (r) => {
+      clearTimeout(timeout);
+      if (r.ok && r.lines) resolve(r.lines);
+      else reject(new Error(r.error ?? "the MCP server failed"));
+    });
+    post({ type: "mcpStdio", callId, command, args, input });
+  });
 }
 
 /** Broadcast the current (independent) bible/image pause state + clear status lines. */
@@ -700,6 +723,12 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "corsFetchResult": {
       const resolve = corsFetchPending.get(msg.fetchId);
       corsFetchPending.delete(msg.fetchId);
+      resolve?.(msg);
+      break;
+    }
+    case "mcpStdioResult": {
+      const resolve = mcpStdioPending.get(msg.callId);
+      mcpStdioPending.delete(msg.callId);
       resolve?.(msg);
       break;
     }
@@ -1674,17 +1703,23 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         const servers = parseMcpServers(settings?.mcpServers);
         if (servers.length === 0) return {};
         const cf = corsFetch();
-        if (!cf) return {};
+        if (!cf) return {}; // both transports (HTTP proxy / stdio spawn) need the desktop/extension shell
         const transport = new DirectTransport(cf);
-        const urlOf = (name: string) => servers.find((s) => s.name.toLowerCase() === name.toLowerCase())?.url;
+        const find = (name: string) => servers.find((s) => s.name.toLowerCase() === name.toLowerCase());
         return {
           mcpTools: async (server: string) => {
-            const url = urlOf(server);
-            return url ? mcpListTools(transport, url, ac.signal) : undefined;
+            const s = find(server);
+            if (!s) return undefined;
+            if (s.kind === "http") return mcpListTools(transport, s.url, ac.signal);
+            const { lines, resultId } = buildStdioExchange("tools/list", {});
+            return parseToolsList(pickStdioResult(await mcpStdioExchange(s.command, s.args, lines), resultId));
           },
           mcpCall: async (server: string, toolName: string, args: Record<string, unknown>) => {
-            const url = urlOf(server);
-            return url ? mcpCallTool(transport, url, toolName, args, ac.signal) : undefined;
+            const s = find(server);
+            if (!s) return undefined;
+            if (s.kind === "http") return mcpCallTool(transport, s.url, toolName, args, ac.signal);
+            const { lines, resultId } = buildStdioExchange("tools/call", { name: toolName, arguments: args });
+            return parseToolCallText(pickStdioResult(await mcpStdioExchange(s.command, s.args, lines), resultId));
           },
         };
       })(),

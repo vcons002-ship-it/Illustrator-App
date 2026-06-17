@@ -1,22 +1,50 @@
 import { describe, expect, it } from "vitest";
 import {
   buildJsonRpc,
+  buildStdioExchange,
   formatMcpTools,
   parseJsonRpcResult,
   parseMaybeSse,
   parseMcpServers,
   parseToolCallText,
   parseToolsList,
+  pickStdioResult,
 } from "./mcp.js";
 
 describe("parseMcpServers", () => {
-  it("parses name/url lines (space or =), dedupes, ignores junk", () => {
-    const text = "weather https://w.example/mcp\ngithub=https://gh.example/mcp\n# note\nbad-line\nweather https://dup/mcp";
+  it("parses HTTP (url) and stdio (command) servers, dedupes, ignores comments/junk", () => {
+    const text =
+      "weather https://w.example/mcp\n" +
+      "github=https://gh.example/mcp\n" +
+      "files npx -y @modelcontextprotocol/server-filesystem /home/me\n" +
+      "# a comment\n" +
+      "\n" +
+      "weather https://dup/mcp";
     expect(parseMcpServers(text)).toEqual([
-      { name: "weather", url: "https://w.example/mcp" },
-      { name: "github", url: "https://gh.example/mcp" },
+      { name: "weather", kind: "http", url: "https://w.example/mcp" },
+      { name: "github", kind: "http", url: "https://gh.example/mcp" },
+      { name: "files", kind: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/me"] },
     ]);
     expect(parseMcpServers(undefined)).toEqual([]);
+  });
+});
+
+describe("stdio exchange", () => {
+  it("builds the init + initialized + request lines and picks the id-2 result", () => {
+    const { lines, resultId } = buildStdioExchange("tools/list", {});
+    expect(resultId).toBe(2);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ id: 1, method: "initialize" });
+    expect(JSON.parse(lines[1]!)).toMatchObject({ method: "notifications/initialized" });
+    expect(JSON.parse(lines[2]!)).toMatchObject({ id: 2, method: "tools/list" });
+    const stdout = [
+      "starting server…", // a log line, ignored
+      JSON.stringify({ jsonrpc: "2.0", id: 1, result: { capabilities: {} } }),
+      JSON.stringify({ jsonrpc: "2.0", id: 2, result: { tools: [{ name: "read_file" }] } }),
+    ];
+    expect(parseToolsList(pickStdioResult(stdout, 2))).toEqual([{ name: "read_file" }]);
+  });
+  it("throws when there's no matching response", () => {
+    expect(() => pickStdioResult(["log only"], 2)).toThrow(/no response/i);
   });
 });
 

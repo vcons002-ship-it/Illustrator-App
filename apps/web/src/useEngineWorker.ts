@@ -53,7 +53,7 @@ export interface ImportResult {
   error?: string;
 }
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
-import { desktopHttpFetch, isDesktop } from "./runtime.js";
+import { desktopHttpFetch, mcpStdioExchange, isDesktop } from "./runtime.js";
 
 /**
  * How long the chat may stay COMPLETELY silent (no token, reasoning, tool, or status
@@ -471,6 +471,15 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           void desktopHttpFetch(msg.request).then((r) =>
             send({ type: "corsFetchResult", fetchId: msg.fetchId, ...r }),
           );
+          break;
+        }
+        case "mcpStdio": {
+          // Worker → Rust shell relay: spawn a stdio MCP server and pipe JSON-RPC lines.
+          void mcpStdioExchange(msg.command, msg.args, msg.input)
+            .then((lines) => send({ type: "mcpStdioResult", callId: msg.callId, ok: true, lines }))
+            .catch((err: unknown) =>
+              send({ type: "mcpStdioResult", callId: msg.callId, ok: false, error: err instanceof Error ? err.message : String(err) }),
+            );
           break;
         }
         case "status":

@@ -569,6 +569,61 @@ async fn open_browser_window(app: AppHandle, url: String) -> Result<(), String> 
     Ok(())
 }
 
+/// Run a **stdio MCP server** for one exchange: spawn `command args`, write the JSON-RPC request
+/// lines to its stdin (newline-delimited), close stdin so the server finishes + exits, and return
+/// its stdout lines (bounded by a 30s read timeout). The command is user-authored in Settings —
+/// the same trust model as the run-command tool — and a browser can't spawn a process, so this is
+/// desktop-only. The JSON-RPC protocol itself lives in the TS core (mcp.ts); this is a dumb pipe.
+#[derive(serde::Deserialize)]
+struct McpStdioRequest {
+    command: String,
+    args: Vec<String>,
+    input: Vec<String>,
+}
+#[tauri::command]
+async fn mcp_stdio_exchange(request: McpStdioRequest) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || mcp_stdio_blocking(request))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn mcp_stdio_blocking(req: McpStdioRequest) -> Result<Vec<String>, String> {
+    use std::io::{BufRead, BufReader, Write};
+    let mut child = Command::new(&req.command)
+        .args(&req.args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("couldn't start MCP server '{}': {e}", req.command))?;
+    {
+        let mut stdin = child.stdin.take().ok_or("no stdin on the MCP server")?;
+        for line in &req.input {
+            writeln!(stdin, "{line}").map_err(|e| e.to_string())?;
+        }
+        // stdin dropped here → the server reads EOF and should respond + exit.
+    }
+    let stdout = child.stdout.take().ok_or("no stdout on the MCP server")?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut lines = Vec::new();
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            lines.push(line);
+        }
+        let _ = tx.send(lines);
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(30)) {
+        Ok(lines) => {
+            let _ = child.wait();
+            Ok(lines)
+        }
+        Err(_) => {
+            let _ = child.kill();
+            Err("the MCP server timed out (no response in 30s)".into())
+        }
+    }
+}
+
 /// The relay loop: accept connections, classify each (peek the request bytes) as either a
 /// WebSocket upgrade (authorize by the pairing token, then relay frames between peers) or a
 /// plain HTTP GET (serve the bundled web app so the phone can LOAD it from this same port —
@@ -1702,7 +1757,8 @@ fn main() {
             start_remote_server,
             stop_remote_server,
             remote_server_status,
-            open_browser_window
+            open_browser_window,
+            mcp_stdio_exchange
         ])
         .build(tauri::generate_context!())
         .expect("error while building Visual Reader")

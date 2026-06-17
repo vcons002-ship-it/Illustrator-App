@@ -21,388 +21,259 @@ then follows you into the book to keep talking about it.
 
 ---
 
-## Feature list
+## Features
 
-### 📖 Reading & illustrations
-- **Open almost any document** — EPUB, plain text (`.txt`), Markdown, HTML, PDF, **Word
-  (`.docx`)**, **Excel (`.xlsx`)**, **CSV/TSV**, **RTF**, and **JSON**; or **Paste text** to
-  read/illustrate any article or excerpt. (Or click *Load sample* to try it instantly.)
-  Spreadsheets and data files open in technical mode automatically.
-- **Transform a photo** — drop an image file (`.png/.jpg/.webp/.gif`) and the app opens a
-  **photo-transform** panel instead: restyle or reimagine that picture through your image
-  model (cloud Gemini/OpenAI or your local ComfyUI) — it keeps the photo's composition and
-  doesn't force the book's global art style onto it.
-- **Export an illustrated copy** — save the open book (its text + the art rendered so far)
-  as a **self-contained HTML page** or an **EPUB** — from the toolbar or just by asking the
-  chat ("export this as an epub").
-- **Test image** — type any prompt and render one image with the current model/style to
-  quickly try providers, styles, and LoRAs without opening a book.
-- **Clean reader** with chapter headings and page dividers.
-- **One illustration per page-group** — you choose how many pages share an image
-  (any number), or one image per chapter. Fewer pages = more frequent, quicker art;
-  more pages = rarer, richer art.
-- **Reveal as you read** — each picture gently un-blurs ("blooms") as you move through
-  its pages, so the image arrives with the moment.
-- **Click to reveal** — click any illustration to show it in full immediately; click
-  again to hand control back to your reading. (Resets when you turn the page.)
-- **On-image description** — each illustration shows the exact prompt it was rendered
-  from (stored with the image, so it never changes afterwards — and doubles as prompt
-  troubleshooting). Until it renders, the unit's pre-written scene prompt shows instead.
-- **Bigger image panel** sized to your window.
+Each feature notes **what it needs** in *(italics)*. A quick key:
 
-### 🧠 Understanding the story (the "Visual Bible")
-The app builds a structured memory of the book so art stays consistent:
-- **Characters** with easy-to-read appearance fields (hair, eyes, gender, physique,
-  height, skin tone, age, distinguishing marks) plus their outfits/fashion. **Every**
-  named character with a description is tracked.
-- **Locations** captured by name with detailed descriptions that **grow over the book** —
-  so a place described once still looks right when a later chapter only mentions it.
-- **Per-chapter storyboard** — what happens, the single key moment to illustrate, and
-  **where** it happens — tracked **per image**, beat by beat, so even when a chapter
-  moves between places each illustration knows the one place its own moment happens.
-- **World glossary** — recurring world rules ("riders wear flight leathers", tech level,
-  materials) applied as defaults in every picture.
-- **World style** — one auto-derived genre/art-direction line for the whole book
-  (e.g. "high-fantasy military academy, dark, painterly") applied to **every**
-  illustration, so even a scene with no stated clothing or setting stays in-genre.
-- **Illustration prompts written as it reads** — each chapter's analysis also produces
-  that chapter's scene prompts (stored in the Bible), so images render from stored
-  prompts and never wait on the AI mid-read.
-- **Spoilers** flagged so their imagery stays hidden until you reach them.
-- **Skips non-story pages** — title page, copyright, table of contents, dedication,
-  "about the author", etc. are read past, not illustrated.
+- *(no setup)* — works out of the box, no keys.
+- **Baseline:** anything the AI does needs a **text model** — either a cloud key
+  (Claude / Gemini / OpenAI) **or** a free local model (on-device or Ollama/LM Studio).
+  Set this up once; it's assumed below and only *extra* requirements are tagged.
+- *(image model)* — needs image generation: a cloud image key (Flux/Gemini/OpenAI) **or** your own GPU (ComfyUI/AUTOMATIC1111).
+- *(vision model)* — needs a model that can see images (cloud Claude/Gemini/OpenAI, or a local vision model).
+- *(desktop)* — the desktop app only. *(opt-in)* — off by default, a Settings toggle.
+- *(Google)* — connect Gmail/Calendar/Tasks. *(Schwab key)* — your own Schwab developer app.
+- *(browser)* — a browser-provided capability (works where your browser supports it).
 
-### 🔬 Technical / scientific mode (non-fiction)
-Import a book as **technical** (a toggle on the Paste-text / file flow) and the app
-switches from a story Visual Bible to a **Visual Atlas**:
-- **Tracks structures, systems, and data** instead of characters/outfits — recurring
-  apparatus get consistent visual descriptions, and key definitions, quantities, and
-  findings are captured as a glossary.
-- **A visualization plan** decides what's worth drawing per passage (quantitative results
-  and comparisons → mechanisms/processes → structures → a visual metaphor for abstractions).
-- **Real figures first** — fetches an authoritative existing diagram before generating
-  one; falls back to AI generation. Works with **zero setup** via free Wikimedia Commons
-  search; add a Google Programmable Search key for whole-web figures (your Gemini key can
-  double as the search key — enable Custom Search API on its project).
-- **Sourced facts** — grounds the analysis in a web search and cites the sources in the
-  glossary. Keyless via free Wikipedia search, or whole-web with a Custom Search key.
-  Works with the Gemini reader (built-in grounding) **or** any other reader, including a
-  local LLM. See SETUP.md → *Scientific sources*.
-- **Computed charts & statistics** — when a chapter states a real numeric series (a
-  table, results, a comparison), the analysis captures it and the reader shows a true
-  bar/line/scatter chart drawn by the app (exact axes and values — never an AI's
-  imagined numbers) plus min/max/mean/median and the trend, in a collapsible **Data**
-  section under the illustration. **Download any chart** as an SVG or PNG file.
+---
 
-### 📊 Spreadsheets & data (open, analyse, edit, export)
-Upload an Excel/CSV/TSV file (or tabular JSON) — **or ask the assistant to build one from
-scratch** ("make me a monthly budget spreadsheet"; it asks the key questions first, then
-creates it) — and the app keeps the real, typed grid, not just flattened text, so it can be
-worked with end to end:
-- **Reads the whole workbook** — every worksheet (not just the first), each kept as a tab
-  you can switch between, and **cell formulas are preserved** (they round-trip back out on
-  export, with their computed values shown).
-- **View it as a real grid** — aligned, scrollable, with the sheet's row/column counts;
-  simple tables auto-chart.
-- **Edit live** — click any cell to change it (type `=A2*2` for a formula), rename a column
-  header, add/delete rows and columns; every edit is typed-checked, saved, and the chat
-  re-analyses the new numbers immediately (no re-upload).
-- **Build & extend by chat** — ask the assistant to *create* a sheet from scratch, *set* a
-  cell or formula (`set C2 to =A2*B2`), or *add a computed column* that fills down every row
-  (`add a Margin column = revenue − cost`) using real Excel functions (SUM/IF/SUMIF/VLOOKUP/…).
-- **Formulas compute live** — a built-in evaluator runs your formulas right in the grid
-  (`=B2-C2` shows its number, chained cells and 2-D ranges resolve, results feed the chat's
-  analysis), so you see answers immediately — no need to open Excel. It covers a broad Excel
-  function set: math, logic (IF/IFS/IFERROR), **lookups (VLOOKUP/HLOOKUP/INDEX/MATCH)**,
-  **multi-criteria aggregates (SUMIFS/COUNTIFS/AVERAGEIFS/MAXIFS)**, stats
-  (MEDIAN/STDEV/PERCENTILE/RANK/CORREL/SLOPE), and text (CONCAT/TEXTJOIN/LEFT/MID), with
-  **cross-sheet references** (`'Data'!B2:B11`) resolving across the workbook. Anything it
-  can't evaluate keeps the value Excel already computed.
-- **Live Analysis sheet** — one click adds an **Analysis** tab whose cells are cross-sheet
-  formulas (count/sum/average/median/stdev, correlation, regression) over your data — so the
-  stats recompute automatically as you edit, right in the app, and export as real formulas.
-- **Grounded analysis in chat** — ask for counts, sums, averages, group-bys, pivots,
-  filters, distributions; the app computes them over the **real cells** (never guessed) and
-  shows the result as a table + chart you can also download.
-- **Export to real Excel** — save the sheet (or the whole multi-sheet workbook) as a true
-  **`.xlsx`**, or as CSV — from the data view or by asking the chat. Options:
-  - **column totals** → a row of **live Excel formulas** (`=SUM(…)`, `=AVERAGE(…)`);
-  - a full **statistical Analysis sheet** of live formulas (count/sum/average/median/min/max/
-    stdev/variance per column, plus correlation and linear-regression slope/intercept/R²) —
-    a workbook that analyses *itself* with built-in functions;
-  - an embedded **native, editable Excel chart** (bar/line/pie) over the data.
-  Any analysis result (a pivot/aggregate) downloads as Excel/CSV too, and any on-screen chart
-  saves as SVG/PNG.
+### 📖 Reading & illustrating books
 
-### ⏰ Scheduled & periodic tasks
-Ask the assistant to do something on a cadence and it runs **automatically while the app is
-open**:
-- **Natural-language scheduling** — *"every morning summarise my unread email"*, *"every
-  Friday at 4pm give me a market recap"*, *"on the 1st of each month review my budget"* →
-  the assistant creates a recurring task (daily / weekly / monthly / once).
-- **It just runs** — a built-in runner fires each due task's instruction into the chat at its
-  time (no always-on server needed; for phone-side alerts, ask it to add a Google Calendar/
-  Tasks reminder too).
-- **Manage them** — the **⏰ Scheduled** panel lists every task with its cadence and next run;
-  pause/resume or delete any of them.
+- **Open almost any document** — EPUB, plain text, Markdown, HTML, PDF, **Word (.docx)**,
+  **Excel (.xlsx)**, **CSV/TSV**, **RTF**, **JSON**, or **paste text** to read any article or
+  excerpt. Data files open in technical mode automatically. *(no setup — placeholder art needs nothing)*
+- **One illustration per page-group** — you choose how many pages share an image (any number,
+  or one per chapter): fewer pages = more frequent, quicker art; more pages = rarer, richer art. *(image model)*
+- **Reveal as you read** — each picture gently un-blurs ("blooms") as you move through its pages,
+  so the image arrives with the moment; **click any image** to reveal it fully, click again to read on. *(no setup)*
+- **On-image prompt** — every illustration shows the exact prompt it was made from (stored with the
+  image, so it never changes — handy for troubleshooting). *(no setup)*
+- **Clean reader** — chapter headings, page dividers, and an image panel sized to your window. *(no setup)*
+- **Test image** — type a prompt and render one image with the current model/style to try
+  providers/styles/LoRAs without opening a book. *(image model)*
+- **Transform a photo** — drop in a picture and restyle/reimagine it through your image model,
+  keeping its composition (doesn't force the book's art style onto it). *(image model)*
+- **Export an illustrated copy** — save the open book (text + art so far) as a **self-contained
+  HTML page** or an **EPUB**, from the toolbar or by asking the chat. *(no setup)*
 
-### 📈 Markets (stock charts & analysis)
-A **Markets** panel for following and researching stocks:
-- **TradingView chart** — type any ticker and get TradingView's free, interactive advanced
-  chart (candles, indicators, drawing tools) embedded right in the app — **no account, no key**.
-- **Live quote** — a keyless quote snapshot (last/open/high/low/volume + change) alongside the
-  chart (the quote feed uses the desktop app or extension's CORS-free access; the chart works
-  everywhere).
-- **Keyless technical analysis** — the assistant computes **VWAP, moving averages, RSI, and
-  recent-move** stats from real price bars to ground its read (trend vs the MAs, momentum,
-  watch levels like VWAP and the recent high/low) — no account, no key. The embedded chart
-  preloads VWAP + RSI so it matches.
-- **Price alerts / watch levels** — *"alert me when AAPL crosses VWAP"*, *"tell me if TSLA
-  drops below 200"*, *"ping me if NVDA moves ±3% or RSI tops 70"* → a watch that fires a
-  notification while the app is open (set them in chat or from quick buttons in the panel).
-- **Generate Pine Script & thinkScript** — ask for a watch/alert *inside* your real platform
-  and the assistant writes ready-to-paste **TradingView Pine Script** or **thinkorswim
-  thinkScript** (VWAP cross, RSI threshold, MA cross, price-level break) — from verified
-  templates, with a Save button and where to paste it.
-- **Connect Schwab (optional)** — link your own Charles Schwab developer app (the platform
-  behind thinkorswim) for **real quotes, option chains with Greeks + implied volatility, your
-  positions, and your watchlists** — the assistant uses them for genuine options analysis.
-- **Trade ideas from your watchlists** — your thinkorswim watchlists sync to Schwab, so you can
-  say *"pull 3 possible trades from my tracked ideas with the best risk-reward"* and the
-  assistant reads the lists, pulls real quotes/option chains, and ranks the top picks each with
-  a proposed entry, target, stop and reward-to-risk ratio. Not financial advice.
-- **Theme / sector screens (not just your watchlist)** — *"give me the 3 best photonics stocks
-  to buy on earnings growth + current P/E"* works too: it discovers the names via web research,
-  grounds the fundamentals (P/E, EPS, dividend yield come straight from your Schwab quote when
-  connected) and technicals, and ranks the top picks. Works keyless (pure web research) with no
-  broker connected.
-- **Review-and-place orders** — pick one of those ideas (or just ask it to buy/sell) and it
-  **composes** the exact order (equity or option) and opens a review dialog showing precisely
-  what will be sent; **you** check the box and click *Place order* — the assistant never submits
-  on its own. Real money, not financial advice.
-- **Control your TradingView Desktop chart (experimental, opt-in)** — on the desktop app you can
-  let the assistant set things up *directly in TradingView Desktop*: set the symbol/interval, add
-  studies (VWAP, RSI…), read the chart, inject Pine — *"put VWAP on my chart"*, *"switch to AAPL
-  5-min"*. **Chart-only — it can never place a trade.** Off by default; setup, per-OS launch
-  flags, and update instructions are in [MARKETS-BRIDGE.md](./MARKETS-BRIDGE.md).
-- **Ask the assistant** — one click hands the ticker to the chat for analysis and trade ideas
-  (it searches the web for current data and is clear it isn't financial advice).
-- *The chart + quote + keyless analysis work with zero setup; connecting Schwab/thinkorswim and
-  the TradingView bridge are optional opt-ins. Ask the assistant "how do I connect Schwab?" and
-  it walks you through it step by step.*
+### 🧠 Keeping the art consistent (the "Visual Bible")
 
-### 🤝 Chat buddy (the home screen)
-The landing page **is** a full-window chat assistant. Three voices — **Freeform**
-(default: a general assistant that runs the app on request), **Entertainment** (book-club
-companion), and **Technical** (research companion):
-- **Talk about anything** — questions, brainstorming and invention help, working through
-  ideas; it does **real math** with a built-in calculator tool (never guessed arithmetic).
-- **Finds things to read**: your **library** (it knows your books), **Project Gutenberg**
-  (~75k public-domain books — "open Frankenstein", or "surprise me" for a random classic),
-  **web articles** by search or URL, or text you **paste straight into the chat** (a poem,
-  an excerpt) — and opens any of them in the reader.
-- **Runs the app by voice**: set the art style and illustration cadence ("…in oil painting
-  style, one image per chapter"), start illustrating ("…and illustrate it"), generate
-  one-off images (with your approval), find real figures/diagrams, manage the library
-  ("remove Dune"). It knows your current default settings and only overrides them when
-  you ask.
-- **The conversation follows you** — when it opens a book, the discussion continues
-  inside the reader's book chat, context intact.
-- **Reads a page or repo for you** — point it at a URL (or a GitHub repo, where it reads
-  the README + file list, or a single file) and it pulls the text into the chat to learn
-  from before answering or writing code.
-- **In-app browser (desktop)** — a 🌐 Browse panel reads any web page right in the app
-  (readable text + its links, no scripts run), lets you click through links, and then
-  **📖 Read & illustrate** it in the reader or **🤖 Ask the assistant** about it — the same
-  illustrate-the-web idea as the Chrome extension, built into the desktop app. Want the real
-  page? **🖥 Live** opens it in its own window (with scripts), isolated from the app, while the
-  panel keeps the illustrate/ask actions beside it.
-- **Remembers what you like** — tell it "I prefer watercolor" or "never spoil endings" and
-  it keeps a **long-term memory** that applies in every future conversation and book (you
-  can ask it to forget, too).
-- **Learns skills from experience (opt-in)** — turn on *"let the assistant learn skills from
-  experience"* and, after it works through a multi-step task, it distils a reusable **skill**
-  (a saved playbook) so it handles that kind of task better next time. New skills show up in
-  the 🧠 Skills panel where you can review, edit, or delete them; nothing is saved silently
-  with the toggle off. (You and the assistant can also write skills by hand any time.)
-- **Delegates subtasks** — for a chunky lookup it can hand a focused subtask to a short-lived
-  **read-only sub-agent** that runs its own research loop and returns a concise result, keeping
-  the main answer clean (the sub-agent can't change anything).
-- **Uses your MCP servers** — add **Model Context Protocol** servers in Settings (one per line:
-  `name https://host/mcp`) and the assistant lists their tools and calls them as part of a task,
-  inheriting whatever integrations you've set up.
-- **Voice** — a 🎤 button dictates into the chat with your microphone and a 🔈/🔊 toggle reads
-  replies aloud (browser-native; no key, appears when your browser supports it).
-- **Control from your phone** — leave instructions from anywhere via a `VR:` Google Task (the
-  desktop runs it and writes the answer back), or **🔗 Link phone** for a live thin client over
-  your Wi-Fi. Both opt-in, no cloud — see SETUP.md / REMOTE-LINK.md.
-- **OCR a scan** — drop in a photo/scan of a document and **🔤 Extract text** reads it with your
-  vision model, opening the transcription as a readable (and illustratable) document.
-- **Walks you through setup** — ask *"how do I set up image generation?"*, *"connect my
-  calendar"*, or *"enable the task assistant"* and it pulls the app's built-in step-by-step
-  guide for that feature and walks you through it one step at a time (image/local models, API
-  keys, Google, the task workflow, whole-web figures, Wolfram, GitHub, the desktop tools,
-  Schwab/thinkorswim, the TradingView bridge, MCP servers, phone control, voice, mature mode).
-- **Changes settings by request** — just say *"set image quality to high"*, *"use portrait
-  orientation"*, *"draw as a comic page"*, *"turn on mature mode"*, or *"enable auto task
-  scheduling"* and it applies the change and confirms it (validated against the real options;
-  it double-checks the sensitive toggles like mature mode and command execution first). For
-  provider/key/model changes that need a Settings screen, it walks you through them instead.
-- **Asks instead of guessing** — if a request is ambiguous (which book, which window, which
-  export format), it asks one short question or offers a couple of concrete options.
-- **Type `/` for commands** — a slash-command menu runs any tool directly: `/web`, `/books`,
-  `/random`, `/open`, `/images`, `/draw`, `/calc`, `/style`, `/remember`, and (desktop)
-  `/find`. The book chat has its own set (`/bible`, `/book`, `/web`, `/draw`, …).
-- **Makes files** — ask for a worksheet, a quiz, a CSV, or "code me a landing page" and it
-  writes the complete content with a one-click **Save** button.
-- **Searches the web keylessly** — Wikipedia out of the box; full-web DuckDuckGo where
-  the platform allows it (extension / desktop); your Google Custom Search key upgrades it
-  to whole-web everywhere.
+The app builds a structured memory of the book so art stays consistent. *(builds automatically while reading — needs a text model)*
+
+- **Characters** — every named character is tracked with appearance fields (hair, eyes, build,
+  height, skin tone, age, marks) plus their outfits; editable in the Character Bible.
+- **Locations** — captured by name with descriptions that **grow over the book**, so a place
+  described once still looks right when a later chapter only mentions it.
+- **Per-chapter storyboard** — what happens, the single key moment to illustrate, and **where** it
+  happens — tracked per image, so each picture commits to the one place its moment occurs.
+- **World glossary & world style** — recurring world rules ("riders wear flight leathers") and one
+  auto-derived genre/art-direction line are applied to every illustration so nothing drifts.
+- **Reference photos** — upload up to **three photos per character** (different angles of one face)
+  for tighter likeness. *(used by ComfyUI's IP-Adapter when installed, or cloud one-API native mode)*
+- **Spoiler-safe** — spoiler imagery stays hidden until you reach it; title/copyright/ToC pages are skipped.
+
+### 🔬 Non-fiction & technical mode (the "Visual Atlas")
+
+Import a book as **technical** and the app illustrates concepts and data instead of story scenes.
+
+- **Tracks structures, systems & data** — recurring apparatus get consistent visuals; key
+  definitions, quantities, and findings become a glossary. *(text model)*
+- **Real figures first** — fetches an authoritative existing diagram before generating one.
+  *(no setup via free Wikimedia Commons; whole-web figures need a Google Custom Search key)*
+- **Sourced facts** — grounds the analysis in a web search and cites the sources.
+  *(no setup via Wikipedia; whole-web needs a Custom Search key, or the Gemini reader's built-in grounding)*
+- **Computed charts & statistics** — when a chapter states real numbers, the app draws a true
+  bar/line/scatter chart (exact values, never an AI's guess) with min/max/mean/median + trend, and
+  you can **download** it as SVG/PNG. *(no setup)*
+
+### 📊 Spreadsheets & data
+
+Open an Excel/CSV/TSV/JSON file — or **ask the assistant to build one from scratch** — and the app
+keeps the real, typed grid (not flattened text).
+
+- **Reads the whole workbook** — every worksheet as a switchable tab; **cell formulas preserved**
+  (they round-trip on export, with computed values shown). *(no setup)*
+- **Edit live** — click any cell to change it (type `=A2*2` for a formula), rename headers, add/delete
+  rows & columns; every edit is type-checked, saved, and re-analysed by the chat immediately. *(no setup to edit)*
+- **Build & extend by chat** — *"make me a monthly budget"*, *"set C2 to =A2*B2"*, *"add a Margin
+  column = revenue − cost"* using real Excel functions. *(text model)*
+- **Formulas compute live** — a built-in evaluator runs math, logic (IF/IFS), **lookups
+  (VLOOKUP/INDEX/MATCH)**, **multi-criteria aggregates (SUMIFS/COUNTIFS)**, stats
+  (MEDIAN/STDEV/CORREL/SLOPE), text, and **cross-sheet references** right in the grid. *(no setup)*
+- **Grounded analysis in chat** — ask for counts, sums, averages, group-bys, pivots, filters; it
+  computes over the **real cells** (never guessed) and shows a table + chart. *(text model)*
+- **One-click Analysis sheet** — adds a tab of live cross-sheet formulas (count/sum/avg/median/stdev,
+  correlation, regression) that recompute as you edit. *(no setup)*
+- **Export to real Excel** — save as a true **.xlsx** (or CSV), optionally with **live formula
+  totals**, a full **statistical Analysis sheet**, or a **native editable Excel chart**. *(no setup)*
+
+### 🤝 The chat assistant (home screen)
+
+The landing page **is** a full-window chat assistant, in three voices — **Freeform** (general),
+**Entertainment** (book-club), **Technical** (research). *(text model)*
+
+- **Talk about anything** — questions, brainstorming, working through ideas; it does **real math**
+  with a built-in calculator (never guessed arithmetic).
+- **Finds things to read** — your **library**, **Project Gutenberg** (~75k public-domain books;
+  *"open Frankenstein"* / *"surprise me"*), **web articles** by search or URL, or text you **paste**.
+- **Runs the app by voice** — set the art style + cadence, start illustrating, generate one-off
+  images (with approval), manage the library — it knows your current settings and only overrides on request.
+- **The conversation follows you** — when it opens a book, the discussion continues in the book chat, context intact.
+- **Remembers what you like** — *"I prefer watercolor"*, *"never spoil endings"* → a **long-term
+  memory** applied in every future chat (ask it to forget, too).
+- **Learns skills from experience** — after a multi-step task it distils a reusable **skill** (a
+  saved playbook) so it does that kind of task better next time; review/edit/delete in the 🧠 Skills panel. *(opt-in)*
+- **Delegates subtasks** — hands a chunky lookup to a short-lived **read-only sub-agent** that
+  researches and returns a concise result, keeping the main answer clean (it can't change anything).
+- **Uses your MCP servers** — add **Model Context Protocol** servers in Settings and the assistant
+  lists + calls their tools as part of a task. Both kinds: **HTTP** servers (`name https://host/mcp`)
+  and **stdio** servers — a local command the desktop runs, like the official filesystem/git servers
+  (`name npx -y @modelcontextprotocol/server-filesystem /path`). *(desktop; stdio runs a local program, so only add servers you trust)*
+- **Changes settings by request** — *"set image quality to high"*, *"draw as a comic page"*, *"turn
+  on mature mode"* — it applies and confirms (double-checking sensitive toggles first).
+- **Asks instead of guessing** — if a request is ambiguous it asks one short question or offers a couple of options.
+- **Type `/` for commands** — a slash menu runs any tool directly (`/web`, `/books`, `/draw`, `/calc`,
+  `/style`, `/remember`, and *(desktop)* `/find`).
+- **Makes files** — ask for a worksheet, quiz, CSV, or *"code me a landing page"* and it writes the full content with a **Save** button.
+- **Walks you through setup** — *"how do I set up image generation?"*, *"connect my calendar"*,
+  *"how do I connect Schwab?"* → it pulls the built-in step-by-step guide and walks you through it one step at a time. *(no setup)*
+
+### 🌐 Web & research
+
+- **Reads a page or repo for you** — point it at a URL (or a GitHub repo — README + file list, or a
+  single file) and it pulls the text into the chat. *(full web access needs the desktop app or extension; Wikipedia works anywhere)*
+- **In-app browser** — a 🌐 Browse panel reads any web page (text + links, no scripts run), lets you
+  click through links, then **📖 Read & illustrate** or **🤖 Ask** about it; **🖥 Live** opens the real
+  page (with scripts) in its own isolated window. *(desktop)*
+- **Keyless web search** — Wikipedia/Commons out of the box; **full-web DuckDuckGo** through the
+  desktop app or extension; a **Google Custom Search key** upgrades to whole-web everywhere. *(no setup; key optional)*
+
+### 🗣 Voice
+
+- **Dictate** — a 🎤 button fills the chat box from your microphone. *(browser)*
+- **Read replies aloud** — a 🔈/🔊 toggle speaks the assistant's answers. *(browser)*
 
 ### 📋 Task Orchestrator (agentic, multi-step planning)
-Connect Google (Gmail · Calendar · Tasks) and the assistant becomes a **persistent task
-planner** — it takes a real-world to-do, researches it, lays out the steps, schedules the
-reminders, and preps the documents, then tracks it across sessions and over time:
-- **Plan anything in plain language** — say *"plan my car registration renewal"* (or
-  *"plan this"* right after it reads an email) and it runs a dedicated planning pass:
-  researches the deadline, lead time, cost, official site, and the actual steps; writes an
-  ordered, multi-step plan; and opens it ready to work.
-- **It does the safe prep itself** — research, drafting the documents each step needs, and
-  creating **Google Tasks / Calendar reminders** are done for you. The riskier, irreversible
-  actions — submitting a form, paying, sending — are only **prepped** and handed to you to
-  finalize. **It never submits, pays, or sends on its own** (the Google connection is
-  read-and-create only, so the worst it can ever do unattended is add an extra reminder).
-- **Auto-pilot, if you want it** — a Settings opt-in (*Let the Task Assistant schedule &
-  prep automatically*, **off by default**) lets those safe steps run **without a click each**,
-  so the scheduling is actually hands-off. With it off, planning still produces the plan and
-  drafts and waits for your go-ahead.
-- **Finds tasks before you ask** — while the app is open and you've stepped away, it
-  periodically scans recent mail + calendar for **actionable items** (ignoring newsletters
-  and marketing) and quietly plans them, so they're waiting for you. It only scans when
-  idle, never mid-work, and there's no always-on background server.
-- **Won't nag you twice** — dismiss a junk suggestion with **"ignore this sender"** (or item)
-  and it's blocked from ever re-surfacing; ads and bloat don't come back.
-- **Open a task = a preloaded chat** — clicking a plan opens a chat session with everything
-  already loaded: the summary, the next ready step, its prepped docs and official links, and
-  the research. Mark a step done and the plan advances — and the matching Google Task is
-  checked off too (a phone-side completion syncs back on the next scan, using Google as a
-  simple remote bus).
-- **📅 Calendar view** — a built-in month calendar synced with **all** your Google
-  calendars (each event coloured by its source calendar) and overlaid with your **planned
-  task deadlines**, so your real schedule and the assistant's plan live in one view. Click a
-  day for its full agenda; click a deadline to jump straight into that task.
 
-The Task Orchestrator needs a Google connection (see **[SETUP.md → Agentic task
-workflow](./SETUP.md#agentic-task-workflow-gmail--calendar--tasks)**). Research-only plans
-work without it; scheduling and inbox scanning light up once you connect.
+Connect Google and the assistant becomes a **persistent task planner**. *(needs Google; research-only plans work without it)*
 
-### 🛠 Hands-on tools (desktop, opt-in & always approved)
-On the desktop app the assistant can reach your machine to actually *do* things — every
-step is shown and waits for your click, and the riskier tools are off until you turn them
-on in Settings:
-- **Find a file on your computer** — "open the PDF in my downloads" → it searches and shows
-  the matches as clickable items (you approve filesystem access once per session).
-- **Run a command and react to it** — install dependencies, run a build or tests, or execute
-  a script it just wrote — in a dedicated `VisualReader` workspace folder. You approve each
-  command; its output comes back so the assistant can **test code, see what failed, fix it,
-  and try again** on its own.
-- **Look at your screen** — it can take a screenshot (the whole screen, or just one window
-  by name — handy for a running game) and **assess it with a vision model** to check whether
-  what it built actually works. Vision can be a cloud model *or* a fully local one, so the
-  picture never has to leave your machine. You approve the first capture and can allow the
-  rest for the session.
+- **Plan anything in plain language** — *"plan my car registration renewal"* (or *"plan this"* after
+  it reads an email) → it researches the deadline/lead-time/cost/official site/steps, writes an
+  ordered plan, and opens it ready to work.
+- **It does the safe prep itself** — research, drafting documents, and creating **Google Tasks /
+  Calendar reminders**. Risky/irreversible actions (submit, pay, send) are only **prepped** for you —
+  it **never** submits, pays, or sends (Google access is read-and-create only).
+- **Auto-pilot, if you want it** — a Settings opt-in lets the safe steps run **without a click each**. *(opt-in)*
+- **Finds tasks before you ask** — while the app is open and you're away, it scans recent mail +
+  calendar for actionable items (skipping newsletters) and pre-plans them; **"ignore this sender"**
+  blocks junk for good. *(opt-in; desktop recommended)*
+- **Open a task = a preloaded chat** — clicking a plan opens a chat with the summary, next ready step,
+  prepped docs, and links loaded; mark a step done and it advances + checks off the Google Task.
+- **📅 Calendar view** — a month calendar synced with **all** your Google calendars plus your planned
+  deadlines, in one view. *(needs Google)*
+
+### ⏰ Scheduled & periodic tasks
+
+- **Natural-language scheduling** — *"every morning summarise my unread email"*, *"every Friday give
+  me a market recap"* → a recurring task (daily/weekly/monthly/once). *(text model; the task itself may need Google/etc.)*
+- **It just runs** — a built-in runner fires each due task into the chat at its time *(while the app is open — no always-on server)*.
+- **Manage them** — the ⏰ Scheduled panel lists each task's cadence + next run; pause/resume or delete. *(no setup)*
+
+### 📈 Markets & trading
+
+A **📈 Markets** panel for following and researching stocks. *Not financial advice.*
+
+- **TradingView chart** — type any ticker for TradingView's free interactive chart, embedded. *(no setup)*
+- **Live quote** — a keyless last/open/high/low/volume snapshot. *(desktop or extension for the quote feed; chart works anywhere)*
+- **Keyless technical analysis** — VWAP, moving averages, RSI, recent-move computed from real bars
+  for watch levels + trend/momentum. *(no setup)*
+- **Price alerts / watch levels** — *"alert me when AAPL crosses VWAP"*, *"ping me if NVDA moves ±3%"*
+  → a notification while the app is open. *(no setup)*
+- **Generate Pine Script & thinkScript** — ready-to-paste alerts/studies for TradingView or
+  thinkorswim, from verified templates, with where to paste. *(no setup)*
+- **Connect Schwab / thinkorswim** — real quotes, **option chains with Greeks + implied volatility**,
+  positions, and your **watchlists**. *(Schwab key; desktop)*
+- **Trade ideas from your watchlists** — *"pull 3 trades from my tracked ideas with the best
+  risk-reward"* → it ranks picks with entry/target/stop + R:R. *(Schwab key)*
+- **Theme / sector screens** — *"the 3 best photonics stocks on earnings growth + P/E"* via web
+  research + grounded P/E/EPS/yield. *(no setup keyless; richer with a Schwab key)*
+- **Review-and-place orders** — it **composes** the exact order and opens a review dialog; **you**
+  tick a box and click *Place order* — it never submits on its own. *(Schwab key; desktop)*
+- **Control your TradingView Desktop chart** — set the symbol/interval, add studies, inject Pine —
+  *"put VWAP on my chart"*. **Chart-only — never trades.** See [MARKETS-BRIDGE.md](./MARKETS-BRIDGE.md). *(desktop · opt-in; TradingView Desktop with remote debugging)*
+
+### 📱 Remote & mobile control
+
+Drive the desktop assistant from your phone — no cloud.
+
+- **From anywhere (Google Tasks)** — add a Google Task titled `VR: …` (e.g. *"VR: summarise my unread
+  email"*); the desktop runs it and writes the answer back into the task. *(needs Google · opt-in · desktop must be open)*
+- **Live link over Wi-Fi** — **🔗 Link phone** shows a URL; open it on a phone on the same Wi-Fi and it
+  becomes a thin client of the desktop's engine (no keys/models on the phone). See [REMOTE-LINK.md](./REMOTE-LINK.md). *(desktop · same Wi-Fi · experimental)*
+
+### 🛠 Hands-on desktop tools
+
+The assistant can reach your machine to actually *do* things — every step is shown and waits for your click. *(desktop)*
+
+- **Find a file on your computer** — *"open the PDF in my downloads"* → clickable matches. *(approve filesystem access once per session)*
+- **Run a command and react to it** — install deps, run a build/tests, or run a script it wrote in a
+  `VisualReader` workspace; output comes back so it can **test code, see failures, fix, and retry**. *(opt-in)*
+- **Look at your screen** — screenshot the screen or one window and **assess it with a vision model**
+  to check what it built works. *(opt-in · vision model)*
+- **Work with your GitHub repos** — clone, branch, commit, push, open PRs, manage issues. *(opt-in · a GitHub token or your own `gh` login · runs through the command tool)*
+- **OCR a scan** — drop a photo/scan of text and **🔤 Extract text** reads it and opens the
+  transcription as a document. *(vision model)*
 
 ### 💬 Book chat (reading companion)
-Open **Chat** while reading to discuss the book with an AI that actually knows it:
-- **Spoiler-safe by default** (fiction) — the chat only sees the book up to your current
-  position and says so if you ask about later events; an *allow spoilers* toggle unlocks
-  the whole book. Technical books are always fully visible.
-- **Fast on simple requests, deep when asked** — the chat keeps the text around your
-  position in view and **looks passages up on demand** (a `search the book` tool) when a
-  question needs another chapter, instead of re-reading the whole book every message.
-- **Knows the app's analysis** — the glossary, structures/locations, chapter summaries,
-  the actual image prompts, and any extracted datasets (the "technical bible").
-- **Can use the app's tools**: search the book, search the web for sources, **read a web
-  page** into the chat (`read_url`), find real images/diagrams (shown inline with links),
-  **generate images** with your image models (always with your approval), **export** the
-  illustrated book, and keep a **long-term memory** of your preferences. Type `/` for the
-  command menu (`/bible`, `/book`, `/web`, `/images`, `/draw`, `/remember`, …), or ask for a
-  file/quiz/summary and it writes it with a Save button.
-- **Ask for render settings in plain chat** — "draw a truck, 20 steps, flux 2" picks the
-  named *installed* model, step count, and style for that one render — and if a name
-  doesn't match anything installed, it tells you what is installed instead of silently
-  using the default.
-- **Its own model choice** — the chat defaults to a local model (free & private) and can
-  use any downloaded Ollama/WebLLM model independently of the book reader, or an API
-  provider; image generation likewise defaults to the local engine (Settings → *Book chat*).
-- **Context you can see** — a "Context: ~N tokens" line above the chat expands into a
-  donut showing exactly where the model's window is going (book text / visual bible /
-  history / your message / instructions), with a warning as you near a small local
-  model's limit. Local models are budgeted to their **actual** context window.
-- **Manage the conversation** — per-book history that survives reloads, **delete any
-  single message** (✕ on the bubble), or **Compact** the chat into a summary the model
-  continues from (frees a small model's memory without losing the thread).
+
+Open **Chat** while reading to discuss the book with an AI that actually knows it. *(text model)*
+
+- **Spoiler-safe by default** (fiction) — only sees the book up to your position; an *allow spoilers*
+  toggle unlocks the whole book. Technical books are fully visible.
+- **Fast on simple requests, deep when asked** — keeps the text near your position in view and
+  **looks passages up on demand** when a question needs another chapter.
+- **Knows the app's analysis** — the glossary, structures/locations, chapter summaries, the actual
+  image prompts, and any extracted datasets.
+- **Can use the app's tools** — search the book/web, **read a web page**, find figures, **generate
+  images** (with approval), **export**, and keep long-term memory; `/` opens its command menu.
+- **Ask for render settings in plain chat** — *"draw a truck, 20 steps, flux 2"* picks the named
+  *installed* model/steps/style for that render (and tells you what's installed if a name doesn't match). *(image model)*
+- **Its own model choice** — defaults to a local model (free & private), independent of the book reader. *(local or a key)*
+- **Context you can see** — a token-usage donut shows where the model's window is going, sized to a
+  local model's **actual** limit; **delete** any message or **Compact** the chat into a summary. *(no setup)*
 
 ### ✏️ Control & correction
-- **Begin generating** button — start illustrating when you're ready; reuses anything
-  made in past sessions.
-- **← Exit book** — close the reader back to the home screen anytime (generation stops;
-  the book stays in your Library and reopens instantly).
-- **Character Bible editor** — open *Characters*, see every character's appearance, and
-  fix any mistake. Saved instantly (existing images stay until you re-render).
-- **Pause / Resume** generation anytime.
-- **Re-generate** in three scopes: the **storyboard** (re-run the analysis, e.g. after
-  switching models), **all images**, or just **this image** (re-roll the one you're on).
-- **Pre-render the whole book** in one go.
-- **Pick frequency & quality** — pages-per-image, and Auto/Draft/Standard/High/Ultra
-  (Auto scales quality up as pages-per-image grows: 1→Draft, 2–4→Standard, 5–7→High,
-  8+/whole-chapter→Ultra). The picker shows what Auto resolves to and each level's
-  canvas size, so you can drop to a faster level or one your GPU can handle; advanced
-  users can also override sampler steps and CFG/guidance on a local engine.
-- **Progress you can see** — "Building the Visual Bible… 3/12 chapters · 24% · pages
-  40/210 · 23 characters", plus live token/percent feedback; illustration prompts
-  advance chapter by chapter as the book is read.
 
-### 🔌 Providers & privacy (bring your own, or run local)
-- **Text (story understanding):** Claude, Gemini, or OpenAI with your key — **or local**:
-  on-device (WebGPU, no key, nothing leaves your machine) or your own local LLM server
-  (Ollama / LM Studio / llama.cpp). **Ollama models download from the Settings menu**
-  with a live progress bar — no terminal.
-- **Images:** a Flux-style API, Gemini, or OpenAI with your key — **or local** on your
-  own GPU via ComfyUI or AUTOMATIC1111 (SD 1.5 / SDXL / Flux.1, plus **Z-Image Turbo**,
-  **Flux.2 Klein** and **Qwen-Image** on ComfyUI). The **desktop app can auto-manage**
-  ComfyUI and downloads every file a model needs (split files included, resumable).
-- **Vision (seeing images):** the screenshot tool and "what's in this image?" need a
-  vision-capable model. **Claude, Gemini, and OpenAI** all see images; **locally**, a vision
-  model does too — Ollama `llama3.2-vision` / `llava` / `qwen2-vl`, or an LM Studio vision
-  model — so screen assessment can stay fully offline. Settings calls out which of your
-  models can see (text-only local models can't).
-- **One-API native mode:** when the same vendor (Gemini/OpenAI) runs text **and** images,
-  opt into its **multimodal** image model so your uploaded character reference photos guide
-  cloud renders — the consistency a local IP-Adapter gives, with just a key.
-- **What you need to run it:** **cloud** needs nothing but a key and any laptop. **Local
-  text** ranges from tiny on-device models (Llama 3.2 1B/3B, Qwen2.5 3B) up to Qwen 3 14B /
-  Gemma 3 12B for the best prompts; **local images** from SD 1.5 on ~4 GB VRAM up through
-  SDXL, Flux.1, **Z-Image Turbo** (the recommended default), Flux.2 Klein, and Qwen-Image on
-  bigger GPUs. See **[README → Minimum & recommended specs](./README.md#minimum--recommended-specs)**
-  for the full breakdown.
-- **No keys? Still works** — built-in placeholder art shows the whole flow.
-- **Keys are encrypted** on your device; local/on-device options keep everything private.
-- **Mature mode (adults only, off by default)** — a Settings toggle for intentionally
-  adult fiction: relaxes the adjustable safety filters (Gemini text+image, Flux) and tells
-  the models to illustrate and discuss explicit/violent source material faithfully instead
-  of sanitising it. Claude/OpenAI expose no such control and keep their own policies; local
-  models have no external filter at all.
+- **Begin / Pause / Resume** generation, and **← Exit book** anytime (the book stays in your Library). *(no setup)*
+- **Character Bible editor** — fix any character's appearance; saved instantly. *(no setup)*
+- **Re-generate** the **storyboard** (re-run analysis), **all images**, or **just this image**. *(image model / text model)*
+- **Pre-render the whole book** in one go. *(image model)*
+- **Pick frequency & quality** — pages-per-image and Auto/Draft/Standard/High/Ultra (Auto scales with
+  page-group size); advanced users can override sampler steps + CFG on a local engine. *(image model)*
+- **Progress you can see** — live "Building the Visual Bible… 3/12 chapters · pages 40/210" with token/percent feedback. *(no setup)*
+
+### 🔌 Models, providers & privacy
+
+- **Text (story understanding):** Claude, Gemini, or OpenAI with your key — **or local** (on-device
+  WebGPU, or Ollama/LM Studio/llama.cpp). **Ollama models download from Settings** with a progress bar. *(a key or local model)*
+- **Images:** a Flux-style API, Gemini, or OpenAI — **or local** on your GPU via ComfyUI/AUTOMATIC1111
+  (SD 1.5 / SDXL / Flux.1, plus **Z-Image Turbo**, **Flux.2 Klein**, **Qwen-Image** on ComfyUI). The
+  **desktop app can auto-manage** ComfyUI and fetch every file a model needs. *(a key or a GPU)*
+- **Vision (seeing images):** Claude/Gemini/OpenAI all see images; **locally** a vision model does too
+  (Ollama llama3.2-vision/llava/qwen2-vl, or LM Studio). *(a vision-capable model)*
+- **One-API native mode** — when one vendor (Gemini/OpenAI) runs text **and** images, opt into its
+  multimodal model so your character reference photos guide cloud renders. *(one Gemini or OpenAI key · opt-in)*
+- **No keys? Still works** — built-in placeholder art shows the whole flow. *(no setup)*
+- **Privacy** — keys are **encrypted on your device**; local/on-device options keep everything private.
+- **Mature mode (adults only)** — relaxes the adjustable safety filters (Gemini text+image, Flux) for
+  intentionally adult fiction. Claude/OpenAI keep their own policies; local models have no filter. *(opt-in)*
 
 ### 💻 Where it runs
-- **Web app** — the main reader.
-- **Desktop app** (Tauri) — same reader, plus it can set up and launch a local GPU image
-  engine for you, gives the chat buddy **unrestricted web access** (news front pages,
-  DuckDuckGo search) that a browser tab's CORS rules would block, and unlocks the **hands-on
-  tools** — finding files on your computer, running commands in a workspace, and taking
-  screenshots for a vision model to assess (all approval-gated).
-- **Chrome extension** — illustrates articles you read on the web (shares the same
-  engine; its background worker provides the same CORS-free web access).
+
+- **Web app** — the main reader. *(no install)*
+- **Desktop app** (Tauri) — the same reader, **plus** a managed local GPU image engine, **CORS-free web
+  access** for the chat, and the **hands-on tools** (files, commands, screenshots, GitHub, browser, phone link). *(install)*
+- **Chrome extension** — illustrates articles you read on the web (same engine; its background worker gives CORS-free access). *(load unpacked)*
 
 ---
 
@@ -472,83 +343,54 @@ Open **Chat** while reading to discuss the book with an AI that actually knows i
   already has a slot for new output types).
 - **Full on-device image generation** (WebGPU) — image models running entirely in-browser.
 - **Hosted option** — an optional managed backend so you don't need your own keys/GPU.
+- **Cloud relay for the phone link** — today the phone link is LAN-only; an opt-in relay
+  would let it work away from home (needs a server + end-to-end encryption).
 
 **Done recently**
-- **Spreadsheets end to end** — Excel/CSV import now reads every worksheet (switchable
-  tabs, computed formula values), the grid is **editable** (edits persist and the chat
-  re-analyses them live), and you can **export a real `.xlsx`** (whole workbook, optionally
-  with live `=SUM/=AVERAGE` formula totals) or CSV — from the data view, from any chat
-  analysis result, or by asking the assistant. Charts download as SVG/PNG.
-- **Task Orchestrator** — connect Google and the assistant plans real-world tasks end to
-  end: it researches the deadline/steps/cost/official site, writes an ordered multi-step
-  plan, auto-creates Google Tasks/Calendar reminders and prepped documents (safe internal
-  actions only — it never submits, pays, or sends), and tracks each plan across sessions.
-  An opt-in auto-pilot runs the safe steps without a click each; an idle inbox/calendar scan
-  surfaces and pre-plans actionable items (with a persistent "ignore this sender" so junk
-  never returns); opening a task gives you a preloaded chat with the ready step; and a
-  built-in **Calendar** view shows all your Google calendars plus your planned deadlines.
-- **Hands-on desktop tools** — the assistant can (with per-step approval) find files on your
-  computer, run commands in a `VisualReader` workspace to build/test code and fix it
-  iteratively from the output, and take screenshots that a **cloud or local vision model**
-  assesses — so it can verify a game or UI it just built. The command and screenshot tools
-  are off by default behind a Settings flag.
-- **Illustrated export** — save the open book as a self-contained **HTML page** or an
-  **EPUB**, from the toolbar or by asking the chat.
-- **More ways in** — open Word, Excel, CSV/TSV, RTF, and JSON files (data files default to
-  technical mode); drop an image to **transform a photo** through your image model.
-- **Slash commands, memory & read-a-page** — type `/` in either chat for a command menu;
-  a **long-term memory** keeps your preferences across books; `read_url` pulls a web page or
-  GitHub repo into the chat; and both chats **ask a clarifying question** instead of guessing
-  when a request is ambiguous.
-- **The chat buddy home screen** — a full-window assistant (Freeform / Entertainment /
-  Technical voices) that finds books (library · Project Gutenberg · web · pasted text),
-  opens and illustrates them by voice (style + cadence included), generates images with
-  approval, retrieves real figures, does real math, manages the library, and hands the
-  conversation off into the book chat when a book opens.
-- **Chat that knows the book lazily** — a recent window plus an on-demand book search
-  tool, so simple requests are instant and deep questions can reach the whole book.
-- **Context window transparency** — provider-aware context budgets (local models sized to
-  their *actual* window via Ollama), a usage donut showing where every token goes, message
-  delete, and a one-click **Compact** that summarizes the conversation in place.
-- **Keyless web search everywhere it's possible** — Wikipedia/Commons out of the box,
-  DuckDuckGo full-web through the extension's and desktop app's CORS-free shells, and a
-  Project Gutenberg catalog (with random-classic picks) for whole books.
-- **Mature mode (adults only)** — opt-in unfiltered illustration + discussion of adult
-  fiction (relaxed Gemini/Flux safety settings + faithful-depiction prompts end to end).
-- **Smarter prompt naming** — locations now track the epithets the text uses ("the
-  fortress" → Basgiliath), so indirect references get the right place's visual details.
-- **One-API "native" mode** — when the same vendor (Gemini or OpenAI) serves text **and**
-  images, opt into rendering through that vendor's **multimodal** model, which takes your
-  uploaded character reference photos inline — cloud character-consistency without a local
-  IP-Adapter. Includes an experimental **one-shot** sub-mode where the model reads each
-  passage and draws it directly.
-- **Multi-view character references** — upload up to three photos per character
-  (different angles of the same face); they condition each image together for a more
-  robust likeness, with thumbnails and per-photo remove in the Character Bible.
-  Crowded scenes auto-throttle so several characters' references never blur together.
-- **Exact mid-chapter location changes per image** — the setting is now tracked beat by
-  beat: every illustration records the ONE place its own moment happens (not just the
-  chapter's main location), so when a chapter moves (tavern → road → castle) each image
-  commits to the right place, and the picture is pinned to it at render.
-- **One-click local model downloads** — curated image models (incl. Z-Image Turbo,
-  Flux.2 Klein, Qwen-Image) and Ollama text models download straight from Settings with
-  a live progress bar; split-file models fetch every component (resumable) — no terminal.
-- **Read-ahead prompts** — scene prompts are written with each chapter's analysis and
-  stored; images render purely from stored prompts (no AI call at render time).
-- **Name → appearance expansion** — prompts reference characters/outfits/places by
-  their Bible names, expanded into full visual descriptions per image model at render.
-- **World style** — an auto-derived genre/art-direction line applied to every image.
-- **User-uploaded character reference images** (IP-Adapter), replacing auto-capture.
-- **Family-correct rendering** — per-family sampler settings (Flux embedded guidance,
-  Z-Image 8-step turbo, Qwen-Image CFG/shift) and separate-loader graphs for the
-  split-file generation (Flux.2 / Z-Image / Qwen-Image) with catalog-exact text
-  encoder + VAE resolution, plus per-family resolution limits.
-- Whole-book storyboard with action-driven, location-aware prompts.
-- Structured, **editable** character appearance + world glossary.
-- Detailed, accumulating location descriptions; skip non-story pages.
-- Pick any pages-per-image; auto quality scaling; bigger captioned image.
-- Click-to-reveal; faster, spoiler-safe bloom; pause/resume & three regenerate scopes.
-- On-device (WebGPU) and local-server text models; local Stable Diffusion images.
+- **Assistant roadmap (Phases 1–5)** — clearer **failure feedback** (the buddy explains a failed tool
+  and suggests a next step), **self-improving skills** (opt-in; it distils reusable playbooks),
+  an **in-app browser** (readable text + a live isolated webview), **phone/remote control** (a `VR:`
+  Google-Task bus + a LAN thin-client link), **MCP client** (call your own MCP servers),
+  **sub-agent delegation**, **voice** (dictate + read aloud), and **OCR** (extract text from a scan).
+- **Markets & trading** — keyless analytics + alerts, Pine/thinkScript generation, a **Schwab/
+  thinkorswim** connection (quotes, option chains + Greeks, positions, watchlists), watchlist trade
+  ideas + theme screens, **review-and-place orders** (you always confirm), and an experimental
+  **TradingView Desktop** chart bridge.
+- **Spreadsheets end to end** — Excel/CSV import reads every worksheet (computed formula values), the
+  grid is **editable** (edits persist + re-analyse live), and you can **export a real .xlsx** (with
+  optional live-formula totals/analysis sheet/native chart) or CSV. Charts download as SVG/PNG.
+- **Task Orchestrator** — connect Google and it plans real-world tasks end to end (research → ordered
+  plan → auto-created Google Tasks/Calendar reminders + prepped docs, never submitting/paying/sending),
+  with an opt-in auto-pilot, an idle inbox/calendar scan (persistent "ignore this sender"),
+  open-a-task-as-a-preloaded-chat, and a built-in **Calendar** view.
+- **Hands-on desktop tools** — with per-step approval: find files, run commands to build/test code and
+  fix it iteratively, take screenshots a **cloud or local vision model** assesses, and GitHub repo work.
+- **Illustrated export** — save the open book as a self-contained **HTML page** or an **EPUB**.
+- **More ways in** — open Word, Excel, CSV/TSV, RTF, and JSON; drop an image to **transform a photo**.
+- **Slash commands, memory & read-a-page** — `/` command menus, a **long-term memory** across books,
+  `read_url` for web pages/GitHub repos, and **clarify-when-ambiguous** prompting.
+- **The chat buddy home screen** — a full-window assistant (Freeform / Entertainment / Technical) that
+  finds books, opens + illustrates them by voice, generates images with approval, does real math, and
+  hands the conversation into the book chat when a book opens.
+- **Chat that knows the book lazily** — a recent window plus an on-demand book-search tool.
+- **Context window transparency** — provider-aware budgets (local models sized to their actual
+  window), a usage donut, message delete, and a one-click **Compact**.
+- **Keyless web search everywhere it's possible** — Wikipedia/Commons out of the box, DuckDuckGo
+  full-web through the extension and desktop shells, and a Project Gutenberg catalog.
+- **Mature mode (adults only)** — opt-in unfiltered illustration + discussion of adult fiction.
+- **One-API "native" mode** — render through a vendor's multimodal model so character reference photos
+  guide cloud renders (with an experimental one-shot sub-mode).
+- **Multi-view character references** — up to three photos per character condition each image together.
+- **Exact mid-chapter location changes per image** — each illustration records the one place its moment happens.
+- **One-click local model downloads** — curated image models (Z-Image Turbo, Flux.2 Klein, Qwen-Image)
+  and Ollama text models download from Settings with a progress bar (split files included, resumable).
+- **Read-ahead prompts** — scene prompts written with each chapter's analysis and stored; images render
+  from stored prompts (no AI call at render time).
+- **Name → appearance expansion**, **world style**, user-uploaded character references (IP-Adapter),
+  and **family-correct rendering** (per-family sampler settings + split-file loader graphs).
+- Whole-book storyboard; structured editable character/world data; accumulating locations; skip
+  non-story pages; pick any pages-per-image; auto quality scaling; click-to-reveal; spoiler-safe bloom;
+  pause/resume + three regenerate scopes; on-device (WebGPU) and local-server text; local Stable Diffusion images.
 
 ---
 
