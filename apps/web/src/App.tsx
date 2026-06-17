@@ -2307,7 +2307,7 @@ export function App() {
       // auto-react. `userText` is in `history` for a continuation; not for a typed turn.
       pendingBuddyHistory.current = history;
       pendingBuddyTranscript.current = [{ role: "user", content: userText }, ...res.transcript];
-      if (res.pendingTool.tool === "find_files" && fileAccessGranted.current) {
+      if (res.pendingTool.tool === "find_files" && (fileAccessGranted.current || settings.autonomousFileSearch)) {
         approveFindFiles(res.pendingTool);
       } else if (res.pendingTool.tool === "screenshot" && screenCaptureGranted.current) {
         void approveScreenshot(res.pendingTool);

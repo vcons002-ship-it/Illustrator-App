@@ -157,6 +157,9 @@ export type MainToWorker =
     }
   /** Reply to a worker `mcpStdio` (the spawned server's stdout lines, or an error). */
   | { type: "mcpStdioResult"; callId: number; ok: boolean; lines?: string[]; error?: string }
+  /** Reply to a worker `hostFile` (local-file search/read + PDF text extraction — main thread
+   * owns the Tauri bridge + pdfjs). */
+  | { type: "hostFileResult"; callId: number; ok: boolean; files?: { name: string; path: string }[]; text?: string; error?: string }
   /**
    * Landing-page buddy: one user message BEFORE any book is open. `library` is the
    * reader's book list (for open_library_book); `persona` picks the entertainment
@@ -190,6 +193,10 @@ export type WorkerToMain =
   /** Run a stdio MCP server (spawn the command, pipe JSON-RPC lines). Desktop only; answered
    * by `mcpStdioResult` with the same callId. */
   | { type: "mcpStdio"; callId: number; command: string; args: string[]; input: string[] }
+  /** Local-file op the worker can't do itself (Tauri bridge + pdfjs live on the main thread):
+   * search the disk, read a file's text, or extract text from attachment PDF bytes. Answered by
+   * `hostFileResult` with the same callId. */
+  | { type: "hostFile"; callId: number; op: "search" | "read" | "pdftext"; query?: string; path?: string; bytesBase64?: string }
   | { type: "status"; message: string }
   | { type: "providers"; diagnostics: ProvidersDiagnostics }
   | { type: "generating"; value: boolean }

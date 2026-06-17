@@ -338,6 +338,25 @@ function mcpStdioExchange(command: string, args: string[], input: string[]): Pro
   });
 }
 
+// Local-file ops via the main thread (worker → main round-trip): the worker can't reach the
+// Tauri bridge or pdfjs, so it asks the main thread to search/read a file or extract PDF text.
+type HostFileReply = { ok: boolean; files?: { name: string; path: string }[]; text?: string; error?: string };
+const hostFilePending = new Map<number, (r: HostFileReply) => void>();
+let nextHostFileId = 1;
+function hostFile(req: { op: "search" | "read" | "pdftext"; query?: string; path?: string; bytesBase64?: string }): Promise<HostFileReply> {
+  return new Promise((resolve) => {
+    const callId = nextHostFileId++;
+    const timeout = setTimeout(() => {
+      if (hostFilePending.delete(callId)) resolve({ ok: false, error: "the file operation timed out" });
+    }, 30_000);
+    hostFilePending.set(callId, (r) => {
+      clearTimeout(timeout);
+      resolve(r);
+    });
+    post({ type: "hostFile", callId, ...req });
+  });
+}
+
 /** Broadcast the current (independent) bible/image pause state + clear status lines. */
 function postPaused(): void {
   const biblePaused = engine?.isBiblePaused() ?? false;
@@ -735,6 +754,12 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "mcpStdioResult": {
       const resolve = mcpStdioPending.get(msg.callId);
       mcpStdioPending.delete(msg.callId);
+      resolve?.(msg);
+      break;
+    }
+    case "hostFileResult": {
+      const resolve = hostFilePending.get(msg.callId);
+      hostFilePending.delete(msg.callId);
       resolve?.(msg);
       break;
     }
@@ -1307,9 +1332,9 @@ async function handleGoogleConnect(msg: Extract<MainToWorker, { type: "googleCon
 
 /** Plan a task: bounded research (web + Gmail/Calendar) then a structured plan, persisted.
  * Reuses the buddy research tools + the CORS proxy; cancellable via the shared chatAborts. */
-/** The readAttachment dep: re-read the email to resolve the attachment's name/type, download
- * its bytes, and extract text for text-like files (text/HTML/CSV/JSON). Auto-run, NO approval —
- * pulling a file in is safe "gather" work. (PDF/binary text extraction lands in a follow-up.) */
+/** The readAttachment dep: re-read the email to resolve the attachment's name/type, download its
+ * bytes, and extract text — text-like files inline, PDFs via the main thread (pdfjs). Auto-run,
+ * NO approval — pulling a file in is safe "gather" work. */
 function makeReadAttachment(transport: DirectTransport, tok: () => Promise<string>) {
   return async (messageId: string, attachmentId: string) => {
     const email = await gmailReadEmail(transport, await tok(), messageId);
@@ -1317,8 +1342,38 @@ function makeReadAttachment(transport: DirectTransport, tok: () => Promise<strin
     const bytes = await gmailGetAttachment(transport, await tok(), messageId, attachmentId);
     const filename = meta?.filename ?? "attachment";
     const mimeType = meta?.mimeType ?? "application/octet-stream";
-    const text = extractAttachmentText(bytes, mimeType, filename);
+    let text = extractAttachmentText(bytes, mimeType, filename);
+    if (!text && (/pdf/i.test(mimeType) || /\.pdf$/i.test(filename))) {
+      const r = await hostFile({ op: "pdftext", bytesBase64: bytesToBase64(bytes.buffer as ArrayBuffer) });
+      if (r.ok && r.text) text = r.text;
+    }
     return { filename, mimeType, bytesLen: bytes.length, ...(text ? { text: text.slice(0, 16_000) } : {}) };
+  };
+}
+
+/** Local-file research deps for the planner/chat, GATED by the reader's settings: disk SEARCH only
+ * when autonomous file search is on; reading a file when auto-pull-files is on (default). Both reach
+ * the disk via the host round-trip (Tauri lives on the main thread); empty on the web. */
+function fileResearchDeps(): Partial<BuddyDeps> {
+  return {
+    ...(settings?.autonomousFileSearch
+      ? {
+          findFiles: async (query: string) => {
+            const r = await hostFile({ op: "search", query });
+            if (!r.ok) throw new Error(r.error ?? "file search failed");
+            return r.files ?? [];
+          },
+        }
+      : {}),
+    ...((settings?.autoPullFiles ?? true)
+      ? {
+          readFile: async (path: string) => {
+            const r = await hostFile({ op: "read", path });
+            if (!r.ok) throw new Error(r.error ?? "couldn't read that file");
+            return r.text ?? "";
+          },
+        }
+      : {}),
   };
 }
 
@@ -1338,6 +1393,7 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
       throw new Error("not available during planning");
     };
     const research: BuddyDeps = {
+      ...fileResearchDeps(),
       searchWeb: (q) => imageSearch.searchWeb(q),
       readUrl: readUrlText(ac.signal),
       ...(googleConnected
@@ -1711,6 +1767,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       : {};
     const deps: BuddyDeps = {
       ...googleDeps,
+      ...fileResearchDeps(),
       searchWeb: (q) => imageSearch.searchWeb(q),
       searchBooks: (q) => books.search(q),
       searchImages: (q) => imageSearch.search(q),

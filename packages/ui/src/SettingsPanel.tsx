@@ -214,6 +214,13 @@ export interface ReaderSettings {
   /** OFF by default: after a multi-step task the buddy distills a reusable "skill" (playbook)
    * and saves it so it does that kind of task better next time. Reviewable in the Skills panel. */
   autoLearnSkills?: boolean;
+  /** ON by default: let the assistant PULL FILES IN on its own — read an email attachment, or read
+   * a local file it found — as prep, without asking each time (reading is safe "gather" work). */
+  autoPullFiles?: boolean;
+  /** OFF by default (desktop): let the assistant SEARCH your computer for relevant files on its own
+   * while planning, without the per-session approval prompt. Reading is still bounded; it never runs
+   * commands. Turn on so the agent can fully plan from documents you already have. */
+  autonomousFileSearch?: boolean;
   /** OFF by default: drive the desktop assistant from your phone via Google Tasks — add a to-do
    * starting "VR:" and the app (while open) runs it and writes the answer back. Needs Google. */
   remoteBus?: boolean;
@@ -690,6 +697,36 @@ export function SettingsPanel({
                 nothing is saved without your say-so, and near-duplicates are skipped. Skills you keep
                 show in the 🧠 Skills panel, and the ones you actually reuse stay put as the list fills.
                 Off by default; it adds a short reflection step at the end of those turns.
+              </span>
+            </span>
+          </label>
+          <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+            <input
+              type="checkbox"
+              checked={value.autoPullFiles ?? true}
+              onChange={(e) => set({ autoPullFiles: e.target.checked })}
+            />
+            <span>
+              Let the assistant pull files in on its own
+              <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                When planning a task, the assistant can <b>read an email attachment</b> (an itinerary, a form,
+                a statement) or <b>read a local file it found</b> and use it as prep — without asking each time.
+                Reading is safe “gather” work; it never sends, pays, submits, or runs commands. <b>On by default.</b>
+              </span>
+            </span>
+          </label>
+          <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+            <input
+              type="checkbox"
+              checked={value.autonomousFileSearch ?? false}
+              onChange={(e) => set({ autonomousFileSearch: e.target.checked })}
+            />
+            <span>
+              Let the assistant search my computer while planning (desktop)
+              <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                Lets the assistant <b>search your files on its own</b> while planning a task — to find a document
+                you already have — instead of stopping to ask each time. It only searches and reads; it never runs
+                commands. <b>Off by default;</b> turn it on so the agent can fully plan from your own documents.
               </span>
             </span>
           </label>

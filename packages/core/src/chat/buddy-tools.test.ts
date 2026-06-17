@@ -528,7 +528,7 @@ describe("google tools", () => {
   it("read_email lists attachments with the ids needed to pull them in", () => {
     const out = formatBuddyToolResult(
       { tool: "read_email", id: "m1" },
-      { emailFull: { id: "m1", from: "United", subject: "Your itinerary", date: "d", body: "see attached", attachments: [{ attachmentId: "att-1", filename: "itinerary.pdf", mimeType: "application/pdf" }] } },
+      { emailFull: { id: "m1", from: "United", subject: "Your itinerary", date: "d", snippet: "", body: "see attached", attachments: [{ attachmentId: "att-1", filename: "itinerary.pdf", mimeType: "application/pdf" }] } },
     );
     expect(out).toContain("ATTACHMENTS");
     expect(out).toContain("itinerary.pdf");
@@ -635,6 +635,23 @@ describe("google tools", () => {
     expect(auto).toContain("without asking each time");
     expect(auto).toMatch(/NEVER submit forms, pay, or send/);
     expect(auto).not.toMatch(/confirm the details/i); // the confirm sentence is replaced
+  });
+});
+
+describe("read_file tool", () => {
+  it("parses read_file and formats its text (or a couldn't-read note)", () => {
+    expect(parseBuddyToolCall('{"tool":"read_file","path":"/home/u/form.txt"}')).toEqual({ tool: "read_file", path: "/home/u/form.txt" });
+    expect(parseBuddyToolCall('{"tool":"read_file"}')).toBeUndefined();
+    expect(formatBuddyToolResult({ tool: "read_file", path: "/home/u/form.txt" }, { fileText: "Policy #123" })).toContain("Policy #123");
+    expect(formatBuddyToolResult({ tool: "read_file", path: "/x" }, {})).toMatch(/couldn't read/i);
+  });
+  it("find_files now surfaces paths so read_file can target a result", () => {
+    const out = formatBuddyToolResult(
+      { tool: "find_files", query: "passport" },
+      { files: [{ name: "passport.pdf", path: "/home/u/docs/passport.pdf" }] },
+    );
+    expect(out).toContain("/home/u/docs/passport.pdf");
+    expect(out).toMatch(/read_file/);
   });
 });
 
