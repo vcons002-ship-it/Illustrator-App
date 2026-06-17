@@ -1,21 +1,29 @@
-import { memo } from "react";
-import { sourceFrom, type TaskPlan, type TaskStep } from "@visual-reader/core";
+import { memo, useMemo, useState } from "react";
+import { dayToIso, ganttRowRef, plansToGanttRows, sourceFrom, type TaskPlan, type TaskStep } from "@visual-reader/core";
+import { GanttChart } from "./GanttChart.js";
 
 /**
- * The Task Orchestrator's panel — the durable plans the assistant built, with their
- * steps, deadlines, attached prep documents, official links, and progress. Each step
- * is badged "AI can prep" vs "you do this"; the next actionable step is highlighted.
- * Pure presentation (open/delete injected); plans are loaded/saved by App, the same
- * store the worker reads.
+ * The Task Orchestrator's panel — the durable plans the assistant built, shown two ways:
+ * a **Timeline** (a Gantt of every task and its sub-tasks on one calendar, the headline
+ * view) and a **List** of detail cards. You add a task with a due date and the assistant
+ * researches it and lays the steps out across the timeline; click a task to open its detail,
+ * tick a step right on the Gantt to complete it, or open it in chat to work it. Pure
+ * presentation (create/open/advance/delete injected); plans are the same store the worker reads.
  */
 export interface TasksPanelProps {
   plans: TaskPlan[];
   /** How many inbox-found tasks are being auto-planned right now (a notice). */
   planning?: number;
+  /** A user-entered task is being researched + planned right now (the AI builds its Gantt). */
+  creatingTask?: boolean;
   /** Open a plan to work it in a preloaded chat session. */
   onOpenTask: (planId: string) => void;
   /** Mark the current step done and advance the plan (best-effort Google write-back). */
   onAdvanceStep: (planId: string, stepId: string) => Promise<void> | void;
+  /** Toggle ONE specific step done/undone — the timeline checkbox + detail ticks. */
+  onToggleStepDone: (planId: string, stepId: string, done: boolean) => Promise<void> | void;
+  /** Add a task with an optional due date; the assistant plans it into dated sub-tasks. */
+  onCreateTask: (title: string, dueIso?: string) => void;
   /** "This auto-planned task was junk" — block its sender and delete it. */
   onIgnoreSender?: (planId: string) => void;
   onDelete: (planId: string) => Promise<void> | void;
@@ -30,12 +38,14 @@ function PlanCard({
   plan,
   onOpen,
   onAdvance,
+  onToggleStep,
   onIgnoreSender,
   onDelete,
 }: {
   plan: TaskPlan;
   onOpen: () => void;
   onAdvance: (stepId: string) => void;
+  onToggleStep: (stepId: string, done: boolean) => void;
   onIgnoreSender?: () => void;
   onDelete: () => void;
 }) {
@@ -66,7 +76,13 @@ function PlanCard({
                 opacity: s.status === "done" ? 0.55 : 1,
               }}
             >
-              <span style={{ opacity: 0.7 }}>{statusDot(s.status)} </span>
+              <button
+                onClick={() => onToggleStep(s.id, s.status !== "done")}
+                title={s.status === "done" ? "Mark not done" : "Mark done"}
+                style={checkBtn}
+              >
+                {statusDot(s.status)}
+              </button>
               <span style={{ textDecoration: s.status === "done" ? "line-through" : "none" }}>{s.title}</span>
               <span
                 style={{
@@ -90,7 +106,7 @@ function PlanCard({
           );
         })}
       </ol>
-      <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+      <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
         <button style={btnPrimary} onClick={onOpen}>
           Open &amp; work it →
         </button>
@@ -115,48 +131,147 @@ function PlanCard({
 export const TasksPanel = memo(function TasksPanel({
   plans,
   planning = 0,
+  creatingTask = false,
   onOpenTask,
   onAdvanceStep,
+  onToggleStepDone,
+  onCreateTask,
   onIgnoreSender,
   onDelete,
   onClose,
 }: TasksPanelProps) {
-  const active = plans.filter((p) => p.status !== "archived").sort((a, b) => b.updatedAt - a.updatedAt);
+  const active = useMemo(
+    () => plans.filter((p) => p.status !== "archived").sort((a, b) => b.updatedAt - a.updatedAt),
+    [plans],
+  );
+  const [view, setView] = useState<"timeline" | "list">("timeline");
+  const [selectedId, setSelectedId] = useState<string | undefined>();
+  const [adding, setAdding] = useState(false);
+  const [title, setTitle] = useState("");
+  const [due, setDue] = useState("");
+
+  const selected = active.find((p) => p.id === selectedId);
+  // Sort so the Gantt's rows track the panel's recency order; pure, memoised.
+  const rows = useMemo(() => plansToGanttRows(active), [active]);
+
+  const submit = () => {
+    const t = title.trim();
+    if (!t) return;
+    onCreateTask(t, due || undefined);
+    setTitle("");
+    setDue("");
+    setAdding(false);
+  };
+
+  const cardFor = (p: TaskPlan) => (
+    <PlanCard
+      key={p.id}
+      plan={p}
+      onOpen={() => onOpenTask(p.id)}
+      onAdvance={(stepId) => void onAdvanceStep(p.id, stepId)}
+      onToggleStep={(stepId, done) => void onToggleStepDone(p.id, stepId, done)}
+      {...(onIgnoreSender ? { onIgnoreSender: () => onIgnoreSender(p.id) } : {})}
+      onDelete={() => void onDelete(p.id)}
+    />
+  );
+
   return (
     <div style={overlay} onClick={onClose}>
       <div style={panel} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-          <strong>📋 Tasks — your planned to-dos</strong>
-          <button style={btn} onClick={onClose}>
-            Close
-          </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <strong>📋 Tasks — your to-do timeline</strong>
+          <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
+            {(["timeline", "list"] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => {
+                  setView(v);
+                  setSelectedId(undefined);
+                }}
+                style={view === v ? toggleOn : toggleOff}
+              >
+                {v === "timeline" ? "📊 Timeline" : "☰ List"}
+              </button>
+            ))}
+            <button style={btn} onClick={onClose}>
+              Close
+            </button>
+          </span>
         </div>
+
+        {/* Add a task → the assistant plans it into a Gantt. */}
+        {adding ? (
+          <div style={addBox}>
+            <input
+              autoFocus
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+              placeholder="What do you need to get done? e.g. renew my passport"
+              style={addInput}
+            />
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.85 }}>
+              Due
+              <input type="date" value={due} onChange={(e) => setDue(e.target.value)} style={dateInput} />
+            </label>
+            <button style={btnPrimary} onClick={submit} disabled={!title.trim()}>
+              Plan it →
+            </button>
+            <button style={btn} onClick={() => setAdding(false)}>
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <button style={btnPrimary} onClick={() => setAdding(true)}>
+              + Add task
+            </button>
+            <span style={{ fontSize: 12, opacity: 0.65 }}>
+              The assistant researches it and lays the steps out on your timeline.
+            </span>
+          </div>
+        )}
+
+        {creatingTask && (
+          <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 8 }}>🔄 Researching &amp; building your Gantt…</div>
+        )}
         {planning > 0 && (
           <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 8 }}>
             🔄 Auto-planning {planning} task{planning === 1 ? "" : "s"} found in your inbox/calendar…
           </div>
         )}
-        <p style={{ fontSize: 12, opacity: 0.7, margin: "0 0 8px" }}>
-          Multi-step tasks the assistant researched and planned. Open one to work it with everything preloaded — the AI
-          handles the prep steps and walks you through the ones only you can do. Ask it to “plan …” anything to add more.
-        </p>
+
         {active.length === 0 ? (
           <div style={{ opacity: 0.6, fontSize: 13, padding: "16px 0" }}>
-            No tasks yet. In chat, say “plan my car registration renewal” (or “plan this” after it reads an email).
+            No tasks yet. Click <strong>+ Add task</strong> (with a due date) and the assistant will plan it — or in chat
+            say “plan my car registration renewal”.
+          </div>
+        ) : selected ? (
+          // Individual task view — opened from a timeline bar or a list card.
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <button style={btn} onClick={() => setSelectedId(undefined)}>
+              ← Back to {view === "timeline" ? "timeline" : "list"}
+            </button>
+            {cardFor(selected)}
+          </div>
+        ) : view === "timeline" ? (
+          <div style={{ overflowX: "auto" }}>
+            <GanttChart
+              rows={rows}
+              tickLabel={(u) => dayToIso(u).slice(5)}
+              width={620}
+              onRowClick={(id) => setSelectedId(ganttRowRef(id).planId)}
+              onToggleDone={(id, done) => {
+                const { planId, stepId } = ganttRowRef(id);
+                if (stepId) void onToggleStepDone(planId, stepId, done);
+              }}
+            />
+            <div style={{ fontSize: 11, opacity: 0.5, marginTop: 4 }}>
+              Click a task to open it · tick a sub-task's box to complete it.
+            </div>
           </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {active.map((p) => (
-              <PlanCard
-                key={p.id}
-                plan={p}
-                onOpen={() => onOpenTask(p.id)}
-                onAdvance={(stepId) => void onAdvanceStep(p.id, stepId)}
-                {...(onIgnoreSender ? { onIgnoreSender: () => onIgnoreSender(p.id) } : {})}
-                onDelete={() => void onDelete(p.id)}
-              />
-            ))}
-          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{active.map(cardFor)}</div>
         )}
       </div>
     </div>
@@ -203,4 +318,46 @@ const btnPrimary: React.CSSProperties = {
   ...btn,
   background: "rgba(122,162,255,0.25)",
   border: "1px solid rgba(122,162,255,0.6)",
+};
+const toggleOff: React.CSSProperties = { ...btn, padding: "4px 8px" };
+const toggleOn: React.CSSProperties = { ...btnPrimary, padding: "4px 8px" };
+const checkBtn: React.CSSProperties = {
+  background: "transparent",
+  border: "none",
+  color: "inherit",
+  cursor: "pointer",
+  fontSize: 12,
+  padding: 0,
+  marginRight: 6,
+  opacity: 0.75,
+};
+const addBox: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  flexWrap: "wrap",
+  marginBottom: 8,
+  padding: 10,
+  border: "1px solid rgba(122,162,255,0.4)",
+  background: "rgba(122,162,255,0.06)",
+  borderRadius: 8,
+};
+const addInput: React.CSSProperties = {
+  flex: 1,
+  minWidth: 220,
+  background: "rgba(255,255,255,0.06)",
+  color: "inherit",
+  border: "1px solid rgba(255,255,255,0.15)",
+  borderRadius: 6,
+  padding: "6px 8px",
+  fontSize: 13,
+};
+const dateInput: React.CSSProperties = {
+  background: "rgba(255,255,255,0.06)",
+  color: "inherit",
+  border: "1px solid rgba(255,255,255,0.15)",
+  borderRadius: 6,
+  padding: "5px 6px",
+  fontSize: 12,
+  colorScheme: "dark",
 };

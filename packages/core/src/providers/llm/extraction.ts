@@ -87,7 +87,7 @@ export interface RawExtraction {
   }[];
   /** Structured info-graphics (flat shape for strict schemas; fields for the unused kind are empty). */
   infographics?: {
-    kind: string; // "flowchart" | "diagram" | "summary"
+    kind: string; // "flowchart" | "diagram" | "summary" | "gantt"
     title: string;
     anchor: string;
     bullets: string[];
@@ -95,6 +95,9 @@ export interface RawExtraction {
     edges: { from: string; to: string; label: string }[];
     parts: { label: string; note: string }[];
     caption: string;
+    /** gantt only — the axis unit ("weeks"/"days"/"phases") and its dated tasks. */
+    unit?: string;
+    tasks?: { id: string; label: string; start: number; end: number }[];
   }[];
 }
 
@@ -237,8 +240,11 @@ export const TECHNICAL_EXTRACTION_SYSTEM =
   "with an optional short 'label' like 'yes'/'no'); leave 'bullets', 'parts', and 'caption' empty. " +
   "For a 'diagram' (the named parts/components of one structure), fill 'parts' (each a 'label' and a " +
   "short 'note') and optionally 'caption'; leave the others empty. For a 'summary' (a section's key " +
-  "takeaways), fill 'bullets' (3–6 concise points); leave the others empty. Use ONLY what the text " +
-  "states; emit an EMPTY list when nothing fits (common). " +
+  "takeaways), fill 'bullets' (3–6 concise points); leave the others empty. For a 'gantt' (a timeline, " +
+  "schedule, roadmap, or phased plan the text lays out), set 'unit' to the axis unit ('weeks' | 'days' | " +
+  "'phases' | 'months') and fill 'tasks' (each a short 'id', a concise 'label', and INCLUSIVE numeric " +
+  "'start'/'end' positions on that axis — e.g. a phase running weeks 2–4 is start:2, end:4); leave the " +
+  "others empty. Use ONLY what the text states; emit an EMPTY list when nothing fits (common). " +
   "Finally set 'worldStyle': one concise art-direction line applied to EVERY " +
   "illustration of this text — e.g. 'clean modern scientific illustration, precise " +
   "linework, soft studio lighting, neutral background, restrained technical palette'. " +
@@ -502,8 +508,23 @@ export const EXTRACTION_JSON_SCHEMA = {
             },
           },
           caption: { type: "string" },
+          unit: { type: "string" },
+          tasks: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                id: { type: "string" },
+                label: { type: "string" },
+                start: { type: "number" },
+                end: { type: "number" },
+              },
+              required: ["id", "label", "start", "end"],
+            },
+          },
         },
-        required: ["kind", "title", "anchor", "bullets", "nodes", "edges", "parts", "caption"],
+        required: ["kind", "title", "anchor", "bullets", "nodes", "edges", "parts", "caption", "unit", "tasks"],
       },
     },
   },
@@ -701,7 +722,7 @@ function nodeShape(s: string | undefined): "start" | "step" | "decision" | "end"
 /** Validate one chapter's raw info-graphics into the stored discriminated shape (flowchart needs
  * ≥2 nodes; summary needs bullets; diagram needs parts; otherwise dropped). */
 function sanitizeInfographics(raw: RawExtraction["infographics"], chapterIndex: number): ChapterInfographic[] {
-  const MAX = 4, MAX_NODES = 24, MAX_PARTS = 20, MAX_BULLETS = 8, CAP = 160;
+  const MAX = 4, MAX_NODES = 24, MAX_PARTS = 20, MAX_BULLETS = 8, MAX_TASKS = 30, CAP = 160;
   const out: ChapterInfographic[] = [];
   for (const g of (raw ?? []).slice(0, MAX)) {
     const title = (g.title ?? "").trim();
@@ -734,6 +755,16 @@ function sanitizeInfographics(raw: RawExtraction["infographics"], chapterIndex: 
         .filter((p) => p.label);
       const caption = (g.caption ?? "").trim().slice(0, 300);
       if (parts.length > 0) spec = { kind: "diagram", parts, ...(caption ? { caption } : {}) };
+    } else if (kind === "gantt") {
+      const tasks = (g.tasks ?? [])
+        .slice(0, MAX_TASKS)
+        .map((t, i) => {
+          const start = Number.isFinite(t.start) ? Math.round(t.start) : 0;
+          const end = Number.isFinite(t.end) ? Math.round(t.end) : start;
+          return { id: (t.id ?? "").trim() || `t${i}`, label: (t.label ?? "").trim().slice(0, CAP), start, end: Math.max(start, end) };
+        })
+        .filter((t) => t.label);
+      if (tasks.length >= 2) spec = { kind: "gantt", unit: (g.unit ?? "").trim().slice(0, 24), tasks };
     }
     if (!spec) continue;
     out.push({ id: `info-${chapterIndex}-${slug(title) || out.length}`, chapterIndex, title, anchor: (g.anchor ?? "").trim().slice(0, 200), spec });

@@ -1,5 +1,6 @@
 import { memo, useRef } from "react";
-import { layoutFlowchart, type ChapterInfographic, type InfographicSpec } from "@visual-reader/core";
+import { layoutFlowchart, type ChapterInfographic, type GanttRow, type InfographicSpec } from "@visual-reader/core";
+import { GanttChart } from "./GanttChart.js";
 
 /**
  * Render a structured info-graphic extracted from a technical chapter: a **summary** card, a
@@ -37,11 +38,25 @@ export const Infographic = memo(function Infographic({ data }: { data: ChapterIn
         </>
       )}
       {spec.kind === "flowchart" && <Flowchart spec={spec} title={title} />}
+      {spec.kind === "gantt" && <GanttView spec={spec} title={title} />}
     </div>
   );
 });
 
-const ICON: Record<InfographicSpec["kind"], string> = { summary: "📝", diagram: "🧩", flowchart: "🔀" };
+const ICON: Record<InfographicSpec["kind"], string> = { summary: "📝", diagram: "🧩", flowchart: "🔀", gantt: "📅" };
+
+/** A `gantt` info-graphic: the chapter's described timeline/schedule, drawn with the shared
+ * Gantt renderer. Read-only (no due dates to tick) — `start`/`end` are unitless positions. */
+function GanttView({ spec, title }: { spec: Extract<InfographicSpec, { kind: "gantt" }>; title: string }) {
+  const rows: GanttRow[] = spec.tasks.map((t) => ({ id: t.id, label: t.label, start: t.start, end: t.end, depth: 0 }));
+  const unit = spec.unit.trim();
+  return (
+    <div>
+      <GanttChart rows={rows} title={title} fileBase={title} {...(unit ? { tickLabel: (u: number) => `${u}` } : {})} />
+      {unit ? <div style={captionStyle}>axis: {unit}</div> : null}
+    </div>
+  );
+}
 
 function Flowchart({ spec, title }: { spec: Extract<InfographicSpec, { kind: "flowchart" }>; title: string }) {
   const svgRef = useRef<SVGSVGElement>(null);

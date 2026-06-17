@@ -11,7 +11,9 @@ import type { Page } from "../types/book.js";
 // present — EXCEPT v5–v7, migrated forward in place (see `migrateBible`) so analysis
 // isn't lost.
 // v9 adds `infographics` (structured flowchart/diagram/summary from technical chapters).
-export const BIBLE_VERSION = 9;
+// v10 adds the `gantt` info-graphic kind (timelines/schedules) — a new variant inside the
+// existing `infographics` array, so the bump only forces a re-extraction to pick it up.
+export const BIBLE_VERSION = 10;
 
 /**
  * Bring a cached bible up to the current schema WITHOUT losing data, where possible.
@@ -25,9 +27,10 @@ export const BIBLE_VERSION = 9;
  */
 export function migrateBible(stored: VisualBible): VisualBible | undefined {
   if (stored.version === BIBLE_VERSION) return stored;
-  if (stored.version === 8) return migrateTo9(stored);
-  if (stored.version === 7) return migrateTo9(migrateTo8(stored));
-  if (stored.version === 5 || stored.version === 6) return migrateTo9(migrateTo8(migrateTo7(stored)));
+  if (stored.version === 9) return migrateTo10(stored);
+  if (stored.version === 8) return migrateTo10(migrateTo9(stored));
+  if (stored.version === 7) return migrateTo10(migrateTo9(migrateTo8(stored)));
+  if (stored.version === 5 || stored.version === 6) return migrateTo10(migrateTo9(migrateTo8(migrateTo7(stored))));
   return undefined; // older schemas predate fields we can't backfill → rebuild
 }
 
@@ -49,6 +52,12 @@ function migrateTo8(stored: VisualBible): VisualBible {
 }
 
 function migrateTo9(stored: VisualBible): VisualBible {
+  return { ...stored, version: 9, infographics: stored.infographics ?? [] };
+}
+
+/** v9 → v10 is purely additive: the `gantt` kind is a new variant inside the existing
+ * `infographics` array, so nothing is backfilled — re-analysing a chapter can add one. */
+function migrateTo10(stored: VisualBible): VisualBible {
   return { ...stored, version: BIBLE_VERSION, infographics: stored.infographics ?? [] };
 }
 

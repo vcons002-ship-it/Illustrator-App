@@ -87,9 +87,10 @@ Import a book as **technical** and the app illustrates concepts and data instead
   **anchored next to the paragraph it comes from** (it scrolls with that text, so there's no doubt
   what it refers to), and downloadable as SVG/PNG. *(no setup)*
 - **Info-graphics** — for non-fiction the analysis also distils **flowcharts** (a process drawn as
-  SVG, exact boxes + arrows — no AI-garbled text), **diagrams** (a structure's labeled parts), and
-  **summaries** (a section's key takeaways) from what the text actually says — each **placed beside
-  the paragraph it illustrates** and scrolling with it; flowcharts download as SVG. *(no setup)*
+  SVG, exact boxes + arrows — no AI-garbled text), **diagrams** (a structure's labeled parts),
+  **summaries** (a section's key takeaways), and **Gantt timelines** (a schedule/roadmap's phases on
+  one axis) from what the text actually says — each **placed beside the paragraph it illustrates** and
+  scrolling with it; flowcharts and Gantts download as SVG/PNG. *(no setup)*
 
 ### 📊 Spreadsheets & data
 
@@ -169,7 +170,11 @@ Connect Google and the assistant becomes a **persistent task planner**. *(needs 
 
 - **Plan anything in plain language** — *"plan my car registration renewal"* (or *"plan this"* after
   it reads an email) → it researches the deadline/lead-time/cost/official site/steps, writes an
-  ordered plan, and opens it ready to work.
+  ordered plan, and opens it ready to work. Or **add a task with a due date** right in the Tasks panel
+  and the assistant plans the sub-steps for you.
+- **📊 Gantt timeline** — every task and its sub-steps laid out on one calendar (the Tasks panel's
+  default view): click a task to open it, tick a sub-step's box to complete it right on the chart, or
+  switch to the list view. Downloads as SVG/PNG.
 - **It does the safe prep itself** — research, drafting documents, and creating **Google Tasks /
   Calendar reminders**. Risky/irreversible actions (submit, pay, send) are only **prepped** for you —
   it **never** submits, pays, or sends (Google access is read-and-create only).
@@ -349,8 +354,6 @@ Open **Chat** while reading to discuss the book with an AI that actually knows i
   Character Bible editor are in the web/desktop reader first.
 
 **Designed-for, deliberately later**
-- **Info-graphics** — diagrams, flowcharts, and summaries for non-fiction (the pipeline
-  already has a slot for new output types).
 - **Full on-device image generation** (WebGPU) — image models running entirely in-browser.
 - **Hosted option** — an optional managed backend so you don't need your own keys/GPU.
 - **Cloud relay for the phone link** — today the phone link is LAN-only; an opt-in relay
@@ -372,7 +375,8 @@ Open **Chat** while reading to discuss the book with an AI that actually knows i
 - **Task Orchestrator** — connect Google and it plans real-world tasks end to end (research → ordered
   plan → auto-created Google Tasks/Calendar reminders + prepped docs, never submitting/paying/sending),
   with an opt-in auto-pilot, an idle inbox/calendar scan (persistent "ignore this sender"),
-  open-a-task-as-a-preloaded-chat, and a built-in **Calendar** view.
+  open-a-task-as-a-preloaded-chat, a **Gantt timeline** of every task + sub-step (add a task with a
+  due date and it plans the steps; tick them off on the chart), and a built-in **Calendar** view.
 - **Hands-on desktop tools** — with per-step approval: find files, run commands to build/test code and
   fix it iteratively, take screenshots a **cloud or local vision model** assesses, and GitHub repo work.
 - **Illustrated export** — save the open book as a self-contained **HTML page** or an **EPUB**.
