@@ -191,6 +191,16 @@ export type BuddyToolCall =
   /** Hand a focused subtask to a read-only sub-agent (host-run; stops the loop). */
   | { tool: "delegate"; task: string };
 
+/**
+ * The HARD danger floor: tools that ALWAYS require explicit human approval — even when the reader
+ * has opted into "full autonomy". These are the irreversible / dangerous primitives:
+ *  - `run_command` — executes a program in a shell (this is what could run a downloaded `.exe`);
+ *  - `prep_order` — places a financial trade.
+ * The host must NEVER auto-run these. "Full autonomy" only relaxes the medium-risk gates
+ * (generate an image, take a screenshot, search files); this set is the line it can't cross.
+ */
+export const ALWAYS_GATED_TOOLS: ReadonlySet<BuddyToolCall["tool"]> = new Set(["run_command", "prep_order"]);
+
 /** Generous: a "style + random pick + open + prose" flow is three tools deep. */
 export const MAX_BUDDY_TOOL_ROUNDS = 5;
 
