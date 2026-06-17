@@ -61,6 +61,19 @@ function PlanCard({
         </span>
       </div>
       {plan.summary ? <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>{plan.summary}</div> : null}
+      {plan.clarifyingQuestions?.length ? (
+        <div style={questionsBox}>
+          <div style={{ fontWeight: 600, marginBottom: 2 }}>❔ Needs your input to finalize:</div>
+          <ul style={{ margin: "0 0 0 1.1em", padding: 0 }}>
+            {plan.clarifyingQuestions.map((q, i) => (
+              <li key={i} style={{ margin: "1px 0" }}>
+                {q}
+              </li>
+            ))}
+          </ul>
+          <div style={{ opacity: 0.7, marginTop: 2 }}>Open &amp; work it to answer — the assistant refines the plan.</div>
+        </div>
+      ) : null}
       <ol style={{ margin: "8px 0 0", paddingLeft: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 4 }}>
         {plan.steps.map((s) => {
           const ready = s.status === "ready";
@@ -321,6 +334,14 @@ const btnPrimary: React.CSSProperties = {
 };
 const toggleOff: React.CSSProperties = { ...btn, padding: "4px 8px" };
 const toggleOn: React.CSSProperties = { ...btnPrimary, padding: "4px 8px" };
+const questionsBox: React.CSSProperties = {
+  marginTop: 6,
+  padding: "6px 8px",
+  fontSize: 12,
+  borderRadius: 6,
+  border: "1px solid rgba(255,207,139,0.4)",
+  background: "rgba(255,207,139,0.08)",
+};
 const checkBtn: React.CSSProperties = {
   background: "transparent",
   border: "none",

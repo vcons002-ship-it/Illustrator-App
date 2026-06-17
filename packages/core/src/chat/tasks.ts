@@ -19,6 +19,7 @@ export const TASK_IGNORE_KEY = "task-ignore";
 export const MAX_TASK_PLANS = 50;
 export const MAX_STEPS_PER_PLAN = 25;
 export const MAX_LINKS_PER_STEP = 6;
+export const MAX_CLARIFYING_QS = 6;
 export const MAX_IGNORE_RULES = 300;
 const MAX_TITLE_CHARS = 200;
 const MAX_DETAIL_CHARS = 1000;
@@ -81,6 +82,10 @@ export interface TaskPlan {
   estCost?: string;
   steps: TaskStep[];
   researchNotes?: string;
+  /** Questions the planner still needs answered to finalize the plan (e.g. "which city are
+   * you flying from?", "what's your budget?"). Surfaced in the panel and asked when the task
+   * is opened in chat — this is how the agent "asks what it needs" to plan, e.g. a trip. */
+  clarifyingQuestions?: string[];
   createdAt: number;
   updatedAt: number;
   /** The buddy chat session that executes this plan (reuses multi-session chat). */
@@ -176,6 +181,7 @@ export interface TaskPlanInput {
   estCost?: string;
   steps?: (Partial<TaskStep> & { title: string })[];
   researchNotes?: string;
+  clarifyingQuestions?: string[];
   createdAt?: number;
   sessionId?: string;
 }
@@ -197,6 +203,10 @@ export function normalizeTaskPlan(input: TaskPlanInput): TaskPlan {
     ...(input.estCost ? { estCost: cap(input.estCost, 60) } : {}),
     steps,
     ...(input.researchNotes ? { researchNotes: cap(input.researchNotes, MAX_NOTES_CHARS) } : {}),
+    ...(() => {
+      const qs = (input.clarifyingQuestions ?? []).map((q) => cap(q, MAX_DETAIL_CHARS)).filter(Boolean).slice(0, MAX_CLARIFYING_QS);
+      return qs.length ? { clarifyingQuestions: qs } : {};
+    })(),
     createdAt: input.createdAt ?? now,
     updatedAt: now,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
@@ -288,6 +298,11 @@ export function tasksIndexBlock(plan: TaskPlan): string {
   const lines = [
     `ACTIVE TASK: ${plan.title}${plan.deadlineIso ? ` — deadline ${plan.deadlineIso}` : ""} (plan id: ${plan.id})`,
     plan.summary ? plan.summary : "",
+    plan.clarifyingQuestions?.length
+      ? "OPEN QUESTIONS you still need answered to finalize this plan — ASK the reader these FIRST, " +
+        "then refine the plan with their answers:\n" +
+        plan.clarifyingQuestions.map((q) => `- ${q}`).join("\n")
+      : "",
     ready
       ? `Current step (${ready.actor === "ai_prep" ? "you can prep this" : "the reader does this"}, step id: ${ready.id}): ` +
         `${ready.title}${ready.detail ? ` — ${ready.detail}` : ""}` +

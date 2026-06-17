@@ -2630,12 +2630,16 @@ export function App() {
       setActiveBuddyId(sessionId);
       void libraryStore.putMemo?.("buddy-active-session", sessionId).catch(() => {});
       const ready = plan.steps.find((s) => s.status === "ready") ?? plan.steps.find((s) => s.status !== "done");
+      const questions = plan.clarifyingQuestions ?? [];
       const primer = [
         `📋 ${plan.title}${plan.deadlineIso ? ` — due ${plan.deadlineIso}` : ""}`,
         plan.summary,
+        questions.length
+          ? `❔ Before I finalize this, I need a few things from you:\n${questions.map((q) => `• ${q}`).join("\n")}`
+          : "",
         ready ? `Current step: ${ready.title}${ready.detail ? ` — ${ready.detail}` : ""}` : "All steps are done. 🎉",
         ready?.links.length ? `Links: ${ready.links.map((l) => l.url).join("  ")}` : "",
-        "Ask me to help with this step.",
+        questions.length ? "Answer above and I'll refine the plan; or ask me to help with this step." : "Ask me to help with this step.",
       ].filter(Boolean);
       setBuddyMessages([{ role: "tool", text: primer.join("\n"), at: Date.now() }]);
     },
