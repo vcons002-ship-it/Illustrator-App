@@ -10,7 +10,8 @@ import type { Page } from "../types/book.js";
 // an older version are rebuilt (see Engine.openBook) so the new fields are always
 // present — EXCEPT v5–v7, migrated forward in place (see `migrateBible`) so analysis
 // isn't lost.
-export const BIBLE_VERSION = 8;
+// v9 adds `infographics` (structured flowchart/diagram/summary from technical chapters).
+export const BIBLE_VERSION = 9;
 
 /**
  * Bring a cached bible up to the current schema WITHOUT losing data, where possible.
@@ -24,8 +25,9 @@ export const BIBLE_VERSION = 8;
  */
 export function migrateBible(stored: VisualBible): VisualBible | undefined {
   if (stored.version === BIBLE_VERSION) return stored;
-  if (stored.version === 7) return migrateTo8(stored);
-  if (stored.version === 5 || stored.version === 6) return migrateTo8(migrateTo7(stored));
+  if (stored.version === 8) return migrateTo9(stored);
+  if (stored.version === 7) return migrateTo9(migrateTo8(stored));
+  if (stored.version === 5 || stored.version === 6) return migrateTo9(migrateTo8(migrateTo7(stored)));
   return undefined; // older schemas predate fields we can't backfill → rebuild
 }
 
@@ -43,7 +45,11 @@ function migrateTo7(stored: VisualBible): VisualBible {
 }
 
 function migrateTo8(stored: VisualBible): VisualBible {
-  return { ...stored, version: BIBLE_VERSION, datasets: stored.datasets ?? [] };
+  return { ...stored, version: 8, datasets: stored.datasets ?? [] };
+}
+
+function migrateTo9(stored: VisualBible): VisualBible {
+  return { ...stored, version: BIBLE_VERSION, infographics: stored.infographics ?? [] };
 }
 
 export function createEmptyBible(bookId: string): VisualBible {
@@ -57,6 +63,7 @@ export function createEmptyBible(bookId: string): VisualBible {
     storyboard: [],
     glossary: [],
     datasets: [],
+    infographics: [],
     worldStyle: "",
     processedChapters: [],
   };

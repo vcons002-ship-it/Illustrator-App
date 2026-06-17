@@ -261,6 +261,30 @@ export interface ChapterDataset {
   source: string;
 }
 
+/**
+ * A structured INFO-GRAPHIC extracted from one TECHNICAL chapter — a process (flowchart), a
+ * labeled structure (diagram), or a section's key takeaways (summary). Rendered as SVG/cards by
+ * the app (never a diffusion image), anchored near its source paragraph. Like `ChapterDataset`,
+ * these carry only what the text states.
+ */
+export type InfographicSpec =
+  | { kind: "summary"; bullets: string[] }
+  | {
+      kind: "flowchart";
+      nodes: { id: string; label: string; shape: "start" | "step" | "decision" | "end" }[];
+      edges: { from: string; to: string; label?: string }[];
+    }
+  | { kind: "diagram"; parts: { label: string; note?: string }[]; caption?: string };
+
+export interface ChapterInfographic {
+  id: string;
+  chapterIndex: number;
+  title: string;
+  /** Subject/keyword text used to anchor it near the matching paragraph (bestParagraphIndex). */
+  anchor: string;
+  spec: InfographicSpec;
+}
+
 export interface VisualBible {
   bookId: string;
   /** Schema version, so cached Bibles can be migrated. */
@@ -276,6 +300,8 @@ export interface VisualBible {
   glossary: GlossaryEntry[];
   /** Numeric series extracted from technical chapters (computed-chart data). */
   datasets?: ChapterDataset[];
+  /** Structured info-graphics (flowchart/diagram/summary) extracted from technical chapters. */
+  infographics?: ChapterInfographic[];
   /**
    * One concise genre/art-style line for the whole book (e.g. "high-fantasy military
    * academy, dark, painterly"), auto-derived during analysis and applied to EVERY image

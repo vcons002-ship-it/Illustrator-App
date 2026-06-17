@@ -1,5 +1,7 @@
 import type {
   ChapterDataset,
+  ChapterInfographic,
+  InfographicSpec,
   Character,
   CharacterAppearance,
   ChapterScene,
@@ -83,6 +85,17 @@ export interface RawExtraction {
     points: { label: string; x?: number; y: number }[];
     source?: string;
   }[];
+  /** Structured info-graphics (flat shape for strict schemas; fields for the unused kind are empty). */
+  infographics?: {
+    kind: string; // "flowchart" | "diagram" | "summary"
+    title: string;
+    anchor: string;
+    bullets: string[];
+    nodes: { id: string; label: string; shape: string }[];
+    edges: { from: string; to: string; label: string }[];
+    parts: { label: string; note: string }[];
+    caption: string;
+  }[];
 }
 
 export const EXTRACTION_SYSTEM =
@@ -156,7 +169,7 @@ export const EXTRACTION_SYSTEM =
   "art direction to apply to EVERY illustration — e.g. 'high-fantasy military academy, dark, " +
   "painterly, dramatic lighting' or 'cosy contemporary romance, warm, soft watercolour'. Cover " +
   "genre, era/setting, mood, and a rendering style. Refine it as the book reveals more (keep the " +
-  "most specific version). Leave 'datasets' as an empty list (it is for non-fiction data only).";
+  "most specific version). Leave 'datasets' and 'infographics' as empty lists (non-fiction only).";
 
 /**
  * Extraction system prompt for TECHNICAL / non-fiction books (papers, textbooks,
@@ -216,6 +229,16 @@ export const TECHNICAL_EXTRACTION_SYSTEM =
   "stated in the text — never invent, estimate, or interpolate values; at most ~20 points " +
   "per dataset; emit an EMPTY list when the chapter has no clean numeric series (most " +
   "chapters don't — an empty list is the normal answer). " +
+  "Capture 'infographics': up to 3 STRUCTURED visuals the chapter's text directly supports. " +
+  "Each has a 'kind' ('flowchart' | 'diagram' | 'summary'), a short 'title', and an 'anchor' (a " +
+  "few words quoted from the text where it belongs, for placement). For a 'flowchart' (a process, " +
+  "algorithm, or cycle described step by step), fill 'nodes' (each a short 'id', a concise 'label', " +
+  "and a 'shape': 'start' | 'step' | 'decision' | 'end') and 'edges' (each 'from'/'to' a node id, " +
+  "with an optional short 'label' like 'yes'/'no'); leave 'bullets', 'parts', and 'caption' empty. " +
+  "For a 'diagram' (the named parts/components of one structure), fill 'parts' (each a 'label' and a " +
+  "short 'note') and optionally 'caption'; leave the others empty. For a 'summary' (a section's key " +
+  "takeaways), fill 'bullets' (3–6 concise points); leave the others empty. Use ONLY what the text " +
+  "states; emit an EMPTY list when nothing fits (common). " +
   "Finally set 'worldStyle': one concise art-direction line applied to EVERY " +
   "illustration of this text — e.g. 'clean modern scientific illustration, precise " +
   "linework, soft studio lighting, neutral background, restrained technical palette'. " +
@@ -441,6 +464,48 @@ export const EXTRACTION_JSON_SCHEMA = {
         required: ["title", "unit", "xLabel", "yLabel", "kind", "points", "source"],
       },
     },
+    infographics: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          kind: { type: "string" },
+          title: { type: "string" },
+          anchor: { type: "string" },
+          bullets: { type: "array", items: { type: "string" } },
+          nodes: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: { id: { type: "string" }, label: { type: "string" }, shape: { type: "string" } },
+              required: ["id", "label", "shape"],
+            },
+          },
+          edges: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: { from: { type: "string" }, to: { type: "string" }, label: { type: "string" } },
+              required: ["from", "to", "label"],
+            },
+          },
+          parts: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: { label: { type: "string" }, note: { type: "string" } },
+              required: ["label", "note"],
+            },
+          },
+          caption: { type: "string" },
+        },
+        required: ["kind", "title", "anchor", "bullets", "nodes", "edges", "parts", "caption"],
+      },
+    },
   },
   required: [
     "characters",
@@ -455,6 +520,7 @@ export const EXTRACTION_JSON_SCHEMA = {
     "keyEvents",
     "worldStyle",
     "datasets",
+    "infographics",
   ],
 } as const;
 
@@ -628,6 +694,53 @@ function sanitizeDatasets(
   return out;
 }
 
+function nodeShape(s: string | undefined): "start" | "step" | "decision" | "end" {
+  return s === "start" || s === "decision" || s === "end" ? s : "step";
+}
+
+/** Validate one chapter's raw info-graphics into the stored discriminated shape (flowchart needs
+ * ≥2 nodes; summary needs bullets; diagram needs parts; otherwise dropped). */
+function sanitizeInfographics(raw: RawExtraction["infographics"], chapterIndex: number): ChapterInfographic[] {
+  const MAX = 4, MAX_NODES = 24, MAX_PARTS = 20, MAX_BULLETS = 8, CAP = 160;
+  const out: ChapterInfographic[] = [];
+  for (const g of (raw ?? []).slice(0, MAX)) {
+    const title = (g.title ?? "").trim();
+    if (!title) continue;
+    const kind = (g.kind ?? "").toLowerCase();
+    let spec: InfographicSpec | undefined;
+    if (kind === "summary") {
+      const bullets = (g.bullets ?? []).map((b) => (b ?? "").trim()).filter(Boolean).slice(0, MAX_BULLETS).map((b) => b.slice(0, 300));
+      if (bullets.length > 0) spec = { kind: "summary", bullets };
+    } else if (kind === "flowchart") {
+      const nodes = (g.nodes ?? [])
+        .slice(0, MAX_NODES)
+        .map((n) => ({ id: (n.id ?? "").trim(), label: (n.label ?? "").trim().slice(0, CAP), shape: nodeShape(n.shape) }))
+        .filter((n) => n.id && n.label);
+      const ids = new Set(nodes.map((n) => n.id));
+      const edges = (g.edges ?? [])
+        .map((e) => {
+          const label = (e.label ?? "").trim().slice(0, 40);
+          return { from: (e.from ?? "").trim(), to: (e.to ?? "").trim(), ...(label ? { label } : {}) };
+        })
+        .filter((e) => ids.has(e.from) && ids.has(e.to));
+      if (nodes.length >= 2) spec = { kind: "flowchart", nodes, edges };
+    } else if (kind === "diagram") {
+      const parts = (g.parts ?? [])
+        .slice(0, MAX_PARTS)
+        .map((p) => {
+          const note = (p.note ?? "").trim().slice(0, 300);
+          return { label: (p.label ?? "").trim().slice(0, CAP), ...(note ? { note } : {}) };
+        })
+        .filter((p) => p.label);
+      const caption = (g.caption ?? "").trim().slice(0, 300);
+      if (parts.length > 0) spec = { kind: "diagram", parts, ...(caption ? { caption } : {}) };
+    }
+    if (!spec) continue;
+    out.push({ id: `info-${chapterIndex}-${slug(title) || out.length}`, chapterIndex, title, anchor: (g.anchor ?? "").trim().slice(0, 200), spec });
+  }
+  return out;
+}
+
 export function mergeExtraction(
   existing: VisualBible,
   raw: RawExtraction,
@@ -643,6 +756,7 @@ export function mergeExtraction(
     storyboard: [...(existing.storyboard ?? [])],
     glossary: [...(existing.glossary ?? [])],
     datasets: [...(existing.datasets ?? [])],
+    infographics: [...(existing.infographics ?? [])],
     processedChapters: [...existing.processedChapters],
   };
   const knownTerms = new Set(bible.glossary.map((g) => g.term.toLowerCase()));
@@ -799,6 +913,14 @@ export function mergeExtraction(
     bible.datasets = [
       ...(bible.datasets ?? []).filter((d) => d.chapterIndex !== chapterIndex),
       ...incomingData,
+    ].sort((a, b) => a.chapterIndex - b.chapterIndex);
+  }
+
+  const incomingInfo = sanitizeInfographics(raw.infographics, chapterIndex);
+  if (incomingInfo.length > 0 || (raw.infographics?.length ?? 0) > 0) {
+    bible.infographics = [
+      ...(bible.infographics ?? []).filter((g) => g.chapterIndex !== chapterIndex),
+      ...incomingInfo,
     ].sort((a, b) => a.chapterIndex - b.chapterIndex);
   }
 
