@@ -221,6 +221,10 @@ export interface ReaderSettings {
    * while planning, without the per-session approval prompt. Reading is still bounded; it never runs
    * commands. Turn on so the agent can fully plan from documents you already have. */
   autonomousFileSearch?: boolean;
+  /** OFF by default: FULL AUTONOMY — the assistant runs its medium-risk actions (generate an image,
+   * take a screenshot, search your files) without asking. The hard danger floor still always asks:
+   * it NEVER runs a command/executable or places a trade on its own (see ALWAYS_GATED_TOOLS). */
+  fullAutonomy?: boolean;
   /** OFF by default: drive the desktop assistant from your phone via Google Tasks — add a to-do
    * starting "VR:" and the app (while open) runs it and writes the answer back. Needs Google. */
   remoteBus?: boolean;
@@ -727,6 +731,22 @@ export function SettingsPanel({
                 Lets the assistant <b>search your files on its own</b> while planning a task — to find a document
                 you already have — instead of stopping to ask each time. It only searches and reads; it never runs
                 commands. <b>Off by default;</b> turn it on so the agent can fully plan from your own documents.
+              </span>
+            </span>
+          </label>
+          <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+            <input
+              type="checkbox"
+              checked={value.fullAutonomy ?? false}
+              onChange={(e) => set({ fullAutonomy: e.target.checked })}
+            />
+            <span>
+              Full autonomy — act without asking (advanced)
+              <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                The assistant runs its <b>medium-risk</b> actions on its own — generate an image, take a screenshot,
+                search your files — without an approval click. A <b>hard danger floor remains</b>: it will{" "}
+                <b>always</b> ask before <b>running a command/executable</b> (so an <code>.exe</code> from an email is
+                never run on its own) or <b>placing a trade</b>. <b>Off by default.</b>
               </span>
             </span>
           </label>

@@ -2068,7 +2068,30 @@ export function App() {
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
-  // One buddy model turn (streaming + tool events + result). Shared by the normal
+  // Run an approved generate_image call: render it, show it, and feed the outcome back.
+  // Shared by the approval modal and full-autonomy auto-run.
+  const approveGenerateImage = async (call: Extract<BuddyToolCall, { tool: "generate_image" }>): Promise<void> => {
+    setBuddyPendingTool(undefined);
+    setBuddyBusy(true);
+    setBuddyActivity("Generating the image…");
+    const out = await chatTool(call, {
+      onProgress: (f) => setBuddyActivity(`Generating the image… ${Math.round(f * 100)}%`),
+    });
+    setBuddyBusy(false);
+    setBuddyActivity("");
+    const feedback = formatToolResult(call, {
+      image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
+    });
+    appendBuddy({
+      role: "tool",
+      text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
+      ...(out.image ? { image: out.image } : {}),
+      turns: [...pendingBuddyTranscript.current, { role: "user", content: feedback }],
+    });
+    pendingBuddyTranscript.current = [];
+  };
+
+
   // send and the auto-react continuation after an approved command. `userBubbleText`
   // Natural-language planning: the model emitted plan_task; research + build the plan
   // in the worker (no approval click — it's a safe host op), show it, and continue the
@@ -2307,10 +2330,14 @@ export function App() {
       // auto-react. `userText` is in `history` for a continuation; not for a typed turn.
       pendingBuddyHistory.current = history;
       pendingBuddyTranscript.current = [{ role: "user", content: userText }, ...res.transcript];
-      if (res.pendingTool.tool === "find_files" && (fileAccessGranted.current || settings.autonomousFileSearch)) {
+      if (res.pendingTool.tool === "find_files" && (fileAccessGranted.current || settings.autonomousFileSearch || settings.fullAutonomy)) {
         approveFindFiles(res.pendingTool);
-      } else if (res.pendingTool.tool === "screenshot" && screenCaptureGranted.current) {
+      } else if (res.pendingTool.tool === "screenshot" && (screenCaptureGranted.current || settings.fullAutonomy)) {
         void approveScreenshot(res.pendingTool);
+      } else if (res.pendingTool.tool === "generate_image" && settings.fullAutonomy) {
+        // Full autonomy: render without a click. The hard danger floor (run_command, prep_order)
+        // is NEVER reached here — those are routed to their gates above / below.
+        void approveGenerateImage(res.pendingTool);
       } else if (res.pendingTool.tool === "plan_task") {
         // Planning is a safe, host-run operation (research + build a plan) — no approval
         // click; run it with progress and report back.
@@ -2502,24 +2529,7 @@ export function App() {
       return;
     }
     if (!call || call.tool !== "generate_image") return;
-    setBuddyPendingTool(undefined);
-    setBuddyBusy(true);
-    setBuddyActivity("Generating the image…");
-    const out = await chatTool(call, {
-      onProgress: (f) => setBuddyActivity(`Generating the image… ${Math.round(f * 100)}%`),
-    });
-    setBuddyBusy(false);
-    setBuddyActivity("");
-    const feedback = formatToolResult(call, {
-      image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
-    });
-    appendBuddy({
-      role: "tool",
-      text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
-      ...(out.image ? { image: out.image } : {}),
-      turns: [...pendingBuddyTranscript.current, { role: "user", content: feedback }],
-    });
-    pendingBuddyTranscript.current = [];
+    await approveGenerateImage(call);
   }, [buddyPendingTool, chatTool]);
   const onApproveBuddyPendingTool = useCallback(() => void onApproveBuddyTool(), [onApproveBuddyTool]);
   // "Allow this session": grant the pending capability (file search OR screen

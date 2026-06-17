@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ALWAYS_GATED_TOOLS,
   MAX_BUDDY_TOOL_ROUNDS,
   buildBuddySystemPrompt,
   formatBuddyToolResult,
@@ -635,6 +636,16 @@ describe("google tools", () => {
     expect(auto).toContain("without asking each time");
     expect(auto).toMatch(/NEVER submit forms, pay, or send/);
     expect(auto).not.toMatch(/confirm the details/i); // the confirm sentence is replaced
+  });
+});
+
+describe("ALWAYS_GATED_TOOLS (the full-autonomy danger floor)", () => {
+  it("always gates running a command/executable and placing a trade — never the medium-risk tools", () => {
+    expect(ALWAYS_GATED_TOOLS.has("run_command")).toBe(true); // could run a downloaded .exe
+    expect(ALWAYS_GATED_TOOLS.has("prep_order")).toBe(true); // places a financial trade
+    expect(ALWAYS_GATED_TOOLS.has("generate_image")).toBe(false);
+    expect(ALWAYS_GATED_TOOLS.has("find_files")).toBe(false);
+    expect(ALWAYS_GATED_TOOLS.has("read_attachment")).toBe(false);
   });
 });
 

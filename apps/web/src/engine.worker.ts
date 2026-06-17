@@ -1356,7 +1356,7 @@ function makeReadAttachment(transport: DirectTransport, tok: () => Promise<strin
  * the disk via the host round-trip (Tauri lives on the main thread); empty on the web. */
 function fileResearchDeps(): Partial<BuddyDeps> {
   return {
-    ...(settings?.autonomousFileSearch
+    ...(settings?.autonomousFileSearch || settings?.fullAutonomy
       ? {
           findFiles: async (query: string) => {
             const r = await hostFile({ op: "search", query });
@@ -1365,7 +1365,7 @@ function fileResearchDeps(): Partial<BuddyDeps> {
           },
         }
       : {}),
-    ...((settings?.autoPullFiles ?? true)
+    ...((settings?.autoPullFiles ?? true) || settings?.fullAutonomy
       ? {
           readFile: async (path: string) => {
             const r = await hostFile({ op: "read", path });
