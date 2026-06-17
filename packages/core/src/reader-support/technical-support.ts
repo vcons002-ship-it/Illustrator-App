@@ -103,6 +103,47 @@ export interface TextSegment {
   term?: string;
 }
 
+export interface PageAnchored<T> {
+  /** Paragraph (within that page) the item belongs next to. */
+  paragraphIndex: number;
+  item: T;
+}
+
+/**
+ * Anchor per-chapter items (data charts, info-graphics) to the (page, paragraph) they belong
+ * NEXT TO, so they scroll with the text instead of sitting in a detached pane. For each item we
+ * search only ITS chapter's paragraphs for the best match of its anchor text, then key the result
+ * by the GLOBAL page index (the reader renders every page, so the item shows wherever its
+ * paragraph is). Pure — mirrors how figures/concepts anchor.
+ */
+export function anchorByParagraph<T>(
+  pages: readonly { chapterIndex: number; paragraphs: readonly { text: string }[] }[],
+  items: readonly T[],
+  itemChapter: (item: T) => number,
+  itemAnchor: (item: T) => string,
+): Map<number, PageAnchored<T>[]> {
+  const pagesOfChapter = new Map<number, number[]>();
+  pages.forEach((p, idx) => {
+    const list = pagesOfChapter.get(p.chapterIndex) ?? [];
+    list.push(idx);
+    pagesOfChapter.set(p.chapterIndex, list);
+  });
+  const result = new Map<number, PageAnchored<T>[]>();
+  for (const item of items) {
+    const chapterPages = pagesOfChapter.get(itemChapter(item));
+    if (!chapterPages || chapterPages.length === 0) continue;
+    const flat: { page: number; para: number; text: string }[] = [];
+    for (const p of chapterPages) pages[p]!.paragraphs.forEach((pr, i) => flat.push({ page: p, para: i, text: pr.text }));
+    if (flat.length === 0) continue;
+    const hit = flat[bestParagraphIndex(flat.map((f) => f.text), itemAnchor(item))] ?? flat[0]!;
+    const list = result.get(hit.page) ?? [];
+    list.push({ paragraphIndex: hit.para, item });
+    result.set(hit.page, list);
+  }
+  for (const list of result.values()) list.sort((a, b) => a.paragraphIndex - b.paragraphIndex);
+  return result;
+}
+
 /**
  * Split a paragraph into plain/highlighted segments for <mark>-style rendering
  * of the bible's concepts. Whole-word, case-insensitive, longest term wins at a

@@ -1,10 +1,31 @@
 import { describe, expect, it } from "vitest";
 import {
+  anchorByParagraph,
   bestParagraphIndex,
   conceptIntroductions,
   segmentByTerms,
   subjectFromCaption,
 } from "./technical-support.js";
+
+describe("anchorByParagraph", () => {
+  const anchorPages = [
+    { chapterIndex: 0, paragraphs: [{ text: "Intro about cells." }, { text: "The Krebs cycle releases energy." }] },
+    { chapterIndex: 1, paragraphs: [{ text: "Photosynthesis happens in chloroplasts." }] },
+  ];
+  it("anchors each item to the best paragraph within its OWN chapter, keyed by global page index", () => {
+    const items = [
+      { chapterIndex: 0, anchor: "Krebs cycle energy" },
+      { chapterIndex: 1, anchor: "photosynthesis chloroplast" },
+    ];
+    const map = anchorByParagraph(anchorPages, items, (i) => i.chapterIndex, (i) => i.anchor);
+    expect(map.get(0)).toEqual([{ paragraphIndex: 1, item: items[0] }]);
+    expect(map.get(1)).toEqual([{ paragraphIndex: 0, item: items[1] }]);
+  });
+  it("skips items whose chapter has no pages", () => {
+    const map = anchorByParagraph(anchorPages, [{ chapterIndex: 9, anchor: "x" }], (i) => i.chapterIndex, (i) => i.anchor);
+    expect(map.size).toBe(0);
+  });
+});
 
 const pages = [
   {
