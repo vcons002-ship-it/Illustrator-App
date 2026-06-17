@@ -26,6 +26,7 @@ import {
   formatToolResult,
   formatBuddyToolResult,
   toolFailureDirective,
+  anchorByParagraph,
   bestParagraphIndex,
   conceptIntroductions,
   subjectFromCaption,
@@ -92,6 +93,8 @@ import {
   tvActionScript,
   POLISH_PRESETS,
   type ConceptIntro,
+  type PageAnchored,
+  type ChapterInfographic,
   type DataTable,
   type JsonValue,
   type ProjectFile,
@@ -125,7 +128,6 @@ import {
   ChatBuddyPanel,
   ChatPanel,
   DataChart,
-  DataSection,
   Infographic,
   DataTablePreview,
   JsonTreeView,
@@ -1037,23 +1039,26 @@ export function App() {
   const pageSpoilerIds = pageEntities?.spoilerIds ?? [];
   // The story-chapter index of the page being read (keys the bible's per-chapter
   // storyboard/datasets) — same mapping the engine uses.
-  const activeChapterIndex = useMemo(
-    () => book?.chapters.find((c) => c.id === activePage?.chapterId)?.index ?? 0,
-    [book, activePage],
-  );
-  const activeDatasets = useMemo(
+  // Pages tagged with their chapter index, for anchoring per-chapter data/info-graphics to the
+  // paragraph they belong next to (so they scroll WITH the text, like figures + concept cards).
+  const techPagesWithChapter = useMemo(() => {
+    if (!book) return [];
+    const idxById = new Map(book.chapters.map((c) => [c.id, c.index]));
+    return book.pages.map((p) => ({ chapterIndex: idxById.get(p.chapterId) ?? 0, paragraphs: p.paragraphs }));
+  }, [book]);
+  const techDatasetsByPage = useMemo(
     () =>
-      book?.contentMode === "technical" && bible?.datasets
-        ? bible.datasets.filter((d) => d.chapterIndex === activeChapterIndex)
-        : [],
-    [book, bible, activeChapterIndex],
+      book?.contentMode === "technical" && bible?.datasets?.length
+        ? anchorByParagraph(techPagesWithChapter, bible.datasets, (d) => d.chapterIndex, (d) => d.source || d.title)
+        : undefined,
+    [book, bible?.datasets, techPagesWithChapter],
   );
-  const activeInfographics = useMemo(
+  const techInfographicsByPage = useMemo(
     () =>
-      book?.contentMode === "technical" && bible?.infographics
-        ? bible.infographics.filter((g) => g.chapterIndex === activeChapterIndex)
-        : [],
-    [book, bible, activeChapterIndex],
+      book?.contentMode === "technical" && bible?.infographics?.length
+        ? anchorByParagraph(techPagesWithChapter, bible.infographics, (g) => g.chapterIndex, (g) => g.anchor || g.title)
+        : undefined,
+    [book, bible?.infographics, techPagesWithChapter],
   );
 
   // --- Technical-mode reading support (inline, anchored to source paragraphs) --
@@ -1098,9 +1103,14 @@ export function App() {
   const technicalSupport = useMemo<TechnicalSupportData | undefined>(
     () =>
       book?.contentMode === "technical"
-        ? { ...(techConcepts ?? {}), ...(techFiguresByPage ? { figuresByPage: techFiguresByPage } : {}) }
+        ? {
+            ...(techConcepts ?? {}),
+            ...(techFiguresByPage ? { figuresByPage: techFiguresByPage } : {}),
+            ...(techDatasetsByPage ? { datasetsByPage: techDatasetsByPage } : {}),
+            ...(techInfographicsByPage ? { infographicsByPage: techInfographicsByPage } : {}),
+          }
         : undefined,
-    [book, techConcepts, techFiguresByPage],
+    [book, techConcepts, techFiguresByPage, techDatasetsByPage, techInfographicsByPage],
   );
 
   // --- Reading-companion chat ------------------------------------------------
@@ -3571,24 +3581,6 @@ export function App() {
                   )}
                 </div>
               )}
-              <DataSection
-                datasets={activeDatasets}
-                sourceLabel={
-                  book.chapters.find((c) => c.index === activeChapterIndex)?.title ||
-                  `chapter ${activeChapterIndex + 1}`
-                }
-                defaultOpen={isTechnical}
-              />
-              {activeInfographics.length > 0 && (
-                <details open={isTechnical} style={{ marginTop: 8 }}>
-                  <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, opacity: 0.85 }}>
-                    Info-graphics ({activeInfographics.length})
-                  </summary>
-                  {activeInfographics.map((g) => (
-                    <Infographic key={g.id} data={g} />
-                  ))}
-                </details>
-              )}
               <div style={styles.caption}>
                 {pagesPerImage === "chapter"
                   ? `Chapter ${unitIndex + 1} of ${totalUnits}`
@@ -3964,6 +3956,10 @@ interface TechnicalSupportData {
   conceptsByPage?: Map<number, ConceptIntro[]>;
   /** Retrieved figures / skip notes anchored to their source paragraph. */
   figuresByPage?: Map<number, { unitIndex: number; paragraphIndex: number; result: DisplayResult }[]>;
+  /** Computed data charts anchored to the paragraph they reference. */
+  datasetsByPage?: Map<number, PageAnchored<ChapterDataset>[]>;
+  /** Info-graphics (flowchart/diagram/summary) anchored to their paragraph. */
+  infographicsByPage?: Map<number, PageAnchored<ChapterInfographic>[]>;
 }
 
 /**
@@ -4204,6 +4200,8 @@ const ReaderColumn = memo(function ReaderColumn({
           pagesPerImage !== "chapter" && next !== undefined && next.chapterId === page.chapterId;
         const concepts = technical?.conceptsByPage?.get(i);
         const figures = technical?.figuresByPage?.get(i);
+        const datasets = technical?.datasetsByPage?.get(i);
+        const infographics = technical?.infographicsByPage?.get(i);
         return (
           <Fragment key={page.id}>
             {newChapter && (
@@ -4217,8 +4215,13 @@ const ReaderColumn = memo(function ReaderColumn({
                 // its source text instead of living in a detached side pane.
                 const paraConcepts = concepts?.filter((c) => c.paragraphIndex === pi);
                 const paraFigures = figures?.filter((f) => f.paragraphIndex === pi);
+                const paraDatasets = datasets?.filter((d) => d.paragraphIndex === pi);
+                const paraInfographics = infographics?.filter((g) => g.paragraphIndex === pi);
                 const support =
-                  (paraConcepts?.length ?? 0) > 0 || (paraFigures?.length ?? 0) > 0;
+                  (paraConcepts?.length ?? 0) > 0 ||
+                  (paraFigures?.length ?? 0) > 0 ||
+                  (paraDatasets?.length ?? 0) > 0 ||
+                  (paraInfographics?.length ?? 0) > 0;
                 return (
                   <Fragment key={para.id}>
                     {layoutHtml && para.html ? (
@@ -4240,6 +4243,12 @@ const ReaderColumn = memo(function ReaderColumn({
                       <SupportRow>
                         {paraFigures?.map((f) => (
                           <InlineFigure key={`fig-${f.unitIndex}`} result={f.result} />
+                        ))}
+                        {paraInfographics?.map((g) => (
+                          <Infographic key={g.item.id} data={g.item} />
+                        ))}
+                        {paraDatasets?.map((d) => (
+                          <DataChart key={d.item.id} dataset={d.item} />
                         ))}
                         {paraConcepts?.map((c) => (
                           <ConceptCard key={c.term} term={c.term} definition={c.definition} />

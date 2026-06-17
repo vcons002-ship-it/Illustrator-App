@@ -83,12 +83,13 @@ Import a book as **technical** and the app illustrates concepts and data instead
 - **Sourced facts** — grounds the analysis in a web search and cites the sources.
   *(no setup via Wikipedia; whole-web needs a Custom Search key, or the Gemini reader's built-in grounding)*
 - **Computed charts & statistics** — when a chapter states real numbers, the app draws a true
-  bar/line/scatter chart (exact values, never an AI's guess) with min/max/mean/median + trend, and
-  you can **download** it as SVG/PNG. *(no setup)*
+  bar/line/scatter chart (exact values, never an AI's guess) with min/max/mean/median + trend,
+  **anchored next to the paragraph it comes from** (it scrolls with that text, so there's no doubt
+  what it refers to), and downloadable as SVG/PNG. *(no setup)*
 - **Info-graphics** — for non-fiction the analysis also distils **flowcharts** (a process drawn as
   SVG, exact boxes + arrows — no AI-garbled text), **diagrams** (a structure's labeled parts), and
-  **summaries** (a section's key takeaways) from what the text actually says; flowcharts download as
-  SVG. *(no setup)*
+  **summaries** (a section's key takeaways) from what the text actually says — each **placed beside
+  the paragraph it illustrates** and scrolling with it; flowcharts download as SVG. *(no setup)*
 
 ### 📊 Spreadsheets & data
 
