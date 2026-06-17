@@ -17,6 +17,15 @@ describe("buildScanPrompt", () => {
     expect(user!.content).toContain("[email:m1]");
     expect(user!.content).toContain("[event:e1]");
   });
+
+  it("also flags trips/events that need planning ahead, using emails as booking evidence", () => {
+    const [sys] = buildScanPrompt(emails, events, "2026-06-15");
+    expect(sys!.content).toMatch(/trip|travel/i);
+    expect(sys!.content).toMatch(/prerequisite|flight|lodging/i);
+    expect(sys!.content).toMatch(/already booked|GAP|evidence/i); // cross-references the emails
+    expect(sys!.content).toMatch(/arrange-by|before the event/i); // a buy-by date, not the event date
+    expect(sys!.content).toContain("Today is 2026-06-15");
+  });
 });
 
 describe("parseCandidates", () => {

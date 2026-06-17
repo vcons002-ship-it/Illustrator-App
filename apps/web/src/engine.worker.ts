@@ -1376,15 +1376,23 @@ async function handleScanInbox(msg: Extract<MainToWorker, { type: "scanInbox" }>
     }
     const transport = new DirectTransport(corsFetch());
     const token = await getFreshAccessToken(store, { clientId: googleId, clientSecret: googleSecret, transport });
-    const [emails, events] = await Promise.all([
+    const now = new Date();
+    // Look ~45 days out so TRIPS that need booking ahead of time are visible (not just the
+    // next few days). Pull recent actionable mail PLUS travel/booking confirmations, so the
+    // classifier can tell whether a trip's flight/hotel is already arranged.
+    const horizon = new Date(now.getTime() + 45 * 86_400_000);
+    const [recent, travel, events] = await Promise.all([
       gmailSearch(transport, token, "newer_than:2d -category:promotions -category:social", 15).catch(() => []),
-      listEvents(transport, token, { max: 10 }).catch(() => []),
+      gmailSearch(transport, token, "newer_than:60d (flight OR hotel OR reservation OR itinerary OR booking OR confirmation)", 12).catch(() => []),
+      listEvents(transport, token, { max: 25, timeMin: now.toISOString(), timeMax: horizon.toISOString() }).catch(() => []),
     ]);
+    const seen = new Set<string>();
+    const emails = [...recent, ...travel].filter((e) => e.id && !seen.has(e.id) && seen.add(e.id));
     if (emails.length === 0 && events.length === 0) {
       post({ type: "scanned", requestId: msg.requestId, ok: true, candidates: [] });
       return;
     }
-    const reply = await llm.chat(buildScanPrompt(emails, events), { maxTokens: 1024 });
+    const reply = await llm.chat(buildScanPrompt(emails, events, now.toISOString().slice(0, 10)), { maxTokens: 1024 });
     const candidates = dedupeCandidates(
       parseCandidates(reply, emails, events),
       await loadTaskPlans(store),

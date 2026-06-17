@@ -14,9 +14,10 @@ import { isIgnored, sourceId, type IgnoreRule, type TaskCandidate, type TaskPlan
 
 export const MAX_SCAN_CANDIDATES = 8;
 
-/** Present recent emails + upcoming events to the classifier, asking only for
- * actionable items (with the source id echoed so we can map the reply back). */
-export function buildScanPrompt(emails: EmailSummary[], events: CalendarEvent[]): ChatTurn[] {
+/** Present recent emails + upcoming events to the classifier, asking for both one-off
+ * to-dos AND upcoming events that need PLANNING/PREP ahead of time (with the source id
+ * echoed so we can map the reply back). `todayIso` lets it pick sensible "arrange by" dates. */
+export function buildScanPrompt(emails: EmailSummary[], events: CalendarEvent[], todayIso?: string): ChatTurn[] {
   const emailLines = emails
     .map((e) => `[email:${e.id}] from ${e.from} — ${e.subject} — ${e.snippet.slice(0, 200)}`)
     .join("\n");
@@ -25,13 +26,22 @@ export function buildScanPrompt(emails: EmailSummary[], events: CalendarEvent[])
     .map((e) => `[event:${e.id}] ${e.summary} — ${e.start}`)
     .join("\n");
   const system =
-    "You triage a reader's recent email and upcoming calendar for things that genuinely NEED " +
-    "ACTION with a deadline or required steps — renewals, appointments to prep for, bills/payments " +
-    "due, forms to file, RSVPs, confirmations needing a reply. IGNORE newsletters, marketing, " +
-    "promotions, social notifications, receipts, and pure FYI. Be conservative — only flag a real " +
-    "to-do. For each, echo its exact id. Respond with ONLY a JSON array (empty array if nothing):\n" +
-    '[{"id": "email:..." | "event:...", "title": "short task name", "reason": "why it needs action", ' +
-    '"suggestedDeadlineIso": "ISO date or empty"}]';
+    `${todayIso ? `Today is ${todayIso}. ` : ""}You triage a reader's recent email and upcoming ` +
+    "calendar into two kinds of task:\n" +
+    "(A) ONE-OFF TO-DOS with a deadline or required steps — renewals, appointments to prep for, " +
+    "bills/payments due, forms to file, RSVPs, confirmations needing a reply.\n" +
+    "(B) UPCOMING EVENTS THAT NEED PLANNING/PREP ahead of time — above all TRIPS and TRAVEL (a 'trip " +
+    "to …', a calendar event in another city, a visit/conference/wedding away from home): these imply " +
+    "PREREQUISITES (flights/transport, lodging, local transport) that must be arranged in advance. Use " +
+    "the EMAILS as evidence of what is already booked — only flag the GAP (e.g. a trip with NO flight/" +
+    "hotel confirmation visible). For these, set 'suggestedDeadlineIso' to a sensible ARRANGE-BY date " +
+    "BEFORE the event (book flights/lodging early), not the event date itself, and name the gap in the " +
+    "title (e.g. 'Plan travel for the Iowa trip — no flight booked yet').\n" +
+    "IGNORE newsletters, marketing, promotions, social notifications, receipts, and pure FYI. Be " +
+    "conservative — only flag a real to-do or a genuine planning need; an empty array is fine. For " +
+    "each, echo its exact id. Respond with ONLY a JSON array (empty array if nothing):\n" +
+    '[{"id": "email:..." | "event:...", "title": "short task name", "reason": "why it needs action ' +
+    'or what prep is missing", "suggestedDeadlineIso": "ISO date or empty"}]';
   const user =
     `RECENT EMAILS:\n${emailLines || "(none)"}\n\nUPCOMING EVENTS:\n${eventLines || "(none)"}`;
   return [

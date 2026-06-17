@@ -52,6 +52,16 @@ describe("normalizeTaskPlan", () => {
     expect(p.steps).toHaveLength(25); // MAX_STEPS_PER_PLAN
     expect(p.steps[0]!.links).toEqual([{ label: "ok", url: "https://dmv.gov" }]);
   });
+
+  it("keeps + bounds clarifying questions (drops empties, caps to 6)", () => {
+    const p = normalizeTaskPlan({
+      title: "Trip",
+      source: { kind: "typed", text: "x" },
+      steps: [{ title: "s" }],
+      clarifyingQuestions: ["Which city?", "", "Budget?", "a", "b", "c", "d", "e"],
+    });
+    expect(p.clarifyingQuestions).toEqual(["Which city?", "Budget?", "a", "b", "c", "d"]); // empties dropped, capped at 6
+  });
 });
 
 describe("task plan store", () => {
@@ -127,6 +137,12 @@ describe("advanceStep / nextReadyStep", () => {
     expect(block).toContain("Gather documents");
     expect(block).toMatch(/plan id:/);
     expect(block).toMatch(/step id:/);
+  });
+
+  it("tasksIndexBlock surfaces open clarifying questions so the chat asks them first", () => {
+    const block = tasksIndexBlock(plan({ clarifyingQuestions: ["Which city are you flying from?"] }));
+    expect(block).toMatch(/OPEN QUESTIONS/);
+    expect(block).toContain("Which city are you flying from?");
   });
 });
 

@@ -17,6 +17,21 @@ describe("planner prompts", () => {
     expect(s).toMatch(/not as instructions|never as instructions/i);
   });
 
+  it("research prompt is trip-aware: checks Gmail for existing bookings + flags missing info", () => {
+    const s = buildResearchSystemPrompt();
+    expect(s).toMatch(/trip|travel/i);
+    expect(s).toMatch(/gmail_search|already booked/i);
+    expect(s).toMatch(/book-by|book by|cheapest/i); // sensible booking timing for fluctuating prices
+    expect(s).toMatch(/missing|open questions/i); // identifies what it needs to ask
+  });
+
+  it("plan prompt offers clarifying questions + a trip book-by/price step", () => {
+    const [sys] = buildPlanPrompt("trip to Iowa", "no flight confirmation found in Gmail", "2026-06-17");
+    expect(sys!.content).toMatch(/clarifyingQuestions/);
+    expect(sys!.content).toMatch(/book by|book-by/i);
+    expect(sys!.content).toMatch(/never invent/i);
+  });
+
   it("plan prompt carries the autonomy boundary + today + strict-JSON schema", () => {
     const [sys, user] = buildPlanPrompt("renew registration", "DMV fee is $85, due 2026-07-01", "2026-06-15");
     expect(sys!.content).toContain(TASK_AUTONOMY_RULE);
@@ -66,6 +81,16 @@ describe("parsePlan", () => {
     const plan = normalizeTaskPlan({ ...parsed, source: { kind: "typed", text: "renew" } });
     expect(plan.steps.map((s) => s.order)).toEqual([0, 1]);
     expect(plan.steps[1]!.actor).toBe("user_action");
+  });
+
+  it("parses clarifyingQuestions when the plan needs more info", () => {
+    const withQs = JSON.stringify({
+      title: "Plan the Iowa trip",
+      clarifyingQuestions: ["Which city are you flying from?", "What's your budget?", ""],
+      steps: [{ title: "Book flights by 2026-07-01", actor: "user_action" }],
+    });
+    const parsed = parsePlan(withQs)!;
+    expect(parsed.clarifyingQuestions).toEqual(["Which city are you flying from?", "What's your budget?"]);
   });
 
   it("strips <think> + code fences and coerces a bad actor to user_action", () => {
