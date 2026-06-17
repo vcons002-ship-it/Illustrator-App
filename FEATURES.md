@@ -145,6 +145,9 @@ The landing page **is** a full-window chat assistant, in three voices — **Free
 - **In-app browser** — a 🌐 Browse panel reads any web page (text + links, no scripts run), lets you
   click through links, then **📖 Read & illustrate** or **🤖 Ask** about it; **🖥 Live** opens the real
   page (with scripts) in its own isolated window. *(desktop)*
+- **Original article layout** — when you open a web article, a **📄 Original layout ↔ Clean text**
+  toggle keeps its headings, images, and lists (safely sanitized — no scripts), with the app's
+  illustrations still anchored to the right paragraphs. Defaults to clean reader text. *(no setup)*
 - **Keyless web search** — Wikipedia/Commons out of the box; **full-web DuckDuckGo** through the
   desktop app or extension; a **Google Custom Search key** upgrades to whole-web everywhere. *(no setup; key optional)*
 

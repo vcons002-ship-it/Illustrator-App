@@ -24,6 +24,7 @@ export * from "./image/free-search.js";
 export * from "./image/ddg-search.js";
 export * from "./book-search.js";
 export * from "./page-text.js";
+export * from "./article-html.js";
 export * from "./image/bible-injection.js";
 export * from "./image/base64.js";
 export * from "./image/mock-image-provider.js";

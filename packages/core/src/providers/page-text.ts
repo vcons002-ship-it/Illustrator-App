@@ -1,5 +1,6 @@
 import { DirectTransport, type Transport } from "./transport/transport.js";
 import { base64ToBytes } from "./image/base64.js";
+import { sanitizeArticleHtml } from "./article-html.js";
 
 /**
  * Fetch a URL's readable text so the buddy can open web articles/books as a
@@ -25,6 +26,8 @@ export interface PageText {
   text: string;
   /** On-page links (absolute), for the in-app browser to navigate. Generic HTML pages only. */
   links?: PageLink[];
+  /** Sanitized article HTML for the optional "original layout" reader view. Generic HTML only. */
+  html?: string;
 }
 
 /** Upper bound on fetched text — keeps a mis-aimed URL from ballooning the worker. */
@@ -150,7 +153,13 @@ export async function fetchPageText(
   const text = htmlToText(raw).slice(0, maxChars);
   if (!text) throw new Error(`No readable text found at ${url}`);
   const links = extractLinks(raw, url);
-  return { ...(title ? { title: decodeEntities(title) } : {}), text, ...(links.length ? { links } : {}) };
+  const html = sanitizeArticleHtml(raw, url).slice(0, maxChars * 4);
+  return {
+    ...(title ? { title: decodeEntities(title) } : {}),
+    text,
+    ...(links.length ? { links } : {}),
+    ...(html ? { html } : {}),
+  };
 }
 
 /**
