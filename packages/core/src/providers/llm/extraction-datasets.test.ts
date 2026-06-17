@@ -12,6 +12,34 @@ function rawWith(datasets: RawExtraction["datasets"]): RawExtraction {
 const series = (n: number) =>
   Array.from({ length: n }, (_, i) => ({ label: `s${i}`, y: i * 10 }));
 
+describe("mergeExtraction infographics", () => {
+  it("stores flowchart/summary/diagram and drops malformed ones", () => {
+    const raw: RawExtraction = {
+      characters: [],
+      environments: [],
+      spoilers: [],
+      infographics: [
+        { kind: "flowchart", title: "Glycolysis", anchor: "glucose", bullets: [], nodes: [{ id: "a", label: "Glucose", shape: "start" }, { id: "b", label: "G6P", shape: "step" }], edges: [{ from: "a", to: "b", label: "" }], parts: [], caption: "" },
+        { kind: "summary", title: "Key points", anchor: "", bullets: ["one", "two"], nodes: [], edges: [], parts: [], caption: "" },
+        { kind: "diagram", title: "Cell parts", anchor: "", bullets: [], nodes: [], edges: [], parts: [{ label: "Nucleus", note: "DNA" }], caption: "a cell" },
+        { kind: "flowchart", title: "Too small", anchor: "", bullets: [], nodes: [{ id: "x", label: "only", shape: "step" }], edges: [], parts: [], caption: "" },
+      ],
+    };
+    const bible = mergeExtraction(createEmptyBible("b"), raw, 0);
+    expect(bible.infographics!.map((g) => g.spec.kind)).toEqual(["flowchart", "summary", "diagram"]);
+    const fc = bible.infographics![0]!.spec;
+    expect(fc.kind === "flowchart" && fc.nodes).toHaveLength(2);
+  });
+
+  it("re-running a chapter replaces its infographics", () => {
+    const raw1: RawExtraction = { characters: [], environments: [], spoilers: [], infographics: [{ kind: "summary", title: "A", anchor: "", bullets: ["x"], nodes: [], edges: [], parts: [], caption: "" }] };
+    const raw2: RawExtraction = { characters: [], environments: [], spoilers: [], infographics: [{ kind: "summary", title: "B", anchor: "", bullets: ["y"], nodes: [], edges: [], parts: [], caption: "" }] };
+    const once = mergeExtraction(createEmptyBible("b"), raw1, 0);
+    const twice = mergeExtraction(once, raw2, 0);
+    expect(twice.infographics!.map((g) => g.title)).toEqual(["B"]);
+  });
+});
+
 describe("mergeExtraction datasets", () => {
   it("stores a chapter's datasets on the bible with a stable id", () => {
     const bible = mergeExtraction(
@@ -216,9 +244,18 @@ describe("bible v8 migration", () => {
     expect(m.datasets).toEqual([]);
   });
 
-  it("a fresh bible is already v8 with an empty datasets list", () => {
+  it("a fresh bible is at the current version with empty datasets + infographics", () => {
     const b = createEmptyBible("b");
-    expect(b.version).toBe(8);
+    expect(b.version).toBe(BIBLE_VERSION);
     expect(b.datasets).toEqual([]);
+    expect(b.infographics).toEqual([]);
+  });
+
+  it("v8 → v9 is additive: datasets kept, empty infographics added", () => {
+    const v8 = { ...createEmptyBible("b"), version: 8 };
+    delete (v8 as { infographics?: unknown }).infographics;
+    const m = migrateBible(v8)!;
+    expect(m.version).toBe(BIBLE_VERSION);
+    expect(m.infographics).toEqual([]);
   });
 });

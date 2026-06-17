@@ -116,6 +116,18 @@ export const CLAUDE_EXTRACTION_SCHEMA = z.object({
       source: z.string(),
     }),
   ),
+  infographics: z.array(
+    z.object({
+      kind: z.string(),
+      title: z.string(),
+      anchor: z.string(),
+      bullets: z.array(z.string()),
+      nodes: z.array(z.object({ id: z.string(), label: z.string(), shape: z.string() })),
+      edges: z.array(z.object({ from: z.string(), to: z.string(), label: z.string() })),
+      parts: z.array(z.object({ label: z.string(), note: z.string() })),
+      caption: z.string(),
+    }),
+  ),
 });
 
 export interface ClaudeProviderOptions {

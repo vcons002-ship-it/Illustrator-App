@@ -126,6 +126,7 @@ import {
   ChatPanel,
   DataChart,
   DataSection,
+  Infographic,
   DataTablePreview,
   JsonTreeView,
   SkillsPanel,
@@ -1044,6 +1045,13 @@ export function App() {
     () =>
       book?.contentMode === "technical" && bible?.datasets
         ? bible.datasets.filter((d) => d.chapterIndex === activeChapterIndex)
+        : [],
+    [book, bible, activeChapterIndex],
+  );
+  const activeInfographics = useMemo(
+    () =>
+      book?.contentMode === "technical" && bible?.infographics
+        ? bible.infographics.filter((g) => g.chapterIndex === activeChapterIndex)
         : [],
     [book, bible, activeChapterIndex],
   );
@@ -3571,6 +3579,16 @@ export function App() {
                 }
                 defaultOpen={isTechnical}
               />
+              {activeInfographics.length > 0 && (
+                <details open={isTechnical} style={{ marginTop: 8 }}>
+                  <summary style={{ cursor: "pointer", fontSize: 12, fontWeight: 600, opacity: 0.85 }}>
+                    Info-graphics ({activeInfographics.length})
+                  </summary>
+                  {activeInfographics.map((g) => (
+                    <Infographic key={g.id} data={g} />
+                  ))}
+                </details>
+              )}
               <div style={styles.caption}>
                 {pagesPerImage === "chapter"
                   ? `Chapter ${unitIndex + 1} of ${totalUnits}`
