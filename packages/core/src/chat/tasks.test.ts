@@ -11,6 +11,7 @@ import {
   nextReadyStep,
   normalizeTaskPlan,
   needsPlanning,
+  reconcileGoogleSubtasks,
   taskStubFromCandidate,
   tasksIndexBlock,
   updateTaskStep,
@@ -71,6 +72,35 @@ describe("normalizeTaskPlan", () => {
     const real = normalizeTaskPlan({ title: "x", source: { kind: "typed", text: "x" }, planned: false, steps: [{ title: "s" }] });
     expect(needsPlanning(real)).toBe(false);
     expect(real.planned).toBeUndefined();
+  });
+
+  it("reconcileGoogleSubtasks: reuses by title/id, marks done complete, never duplicates or deletes", () => {
+    const existing = [
+      { id: "g1", title: "Tailor resume", status: "needsAction" },
+      { id: "g2", title: "Submit application", status: "completed" },
+      { id: "g3", title: "An old superseded step", status: "needsAction" }, // orphan — left alone
+    ];
+    const steps = [
+      { title: "Tailor resume", status: "done" as const }, // matches g1 by title; now done → complete it
+      { title: "Submit application", status: "done" as const }, // matches g2, already completed → no-op
+      { title: "Write cover letter", status: "pending" as const, googleTaskId: undefined }, // new → create
+      { title: "tailor RESUME", status: "pending" as const }, // same title as step 1 (and g1) → must NOT reuse g1 again
+    ];
+    const a = reconcileGoogleSubtasks(steps, existing);
+    expect(a[0]).toEqual({ title: "Tailor resume", existingId: "g1", create: false, needsComplete: true });
+    expect(a[1]).toEqual({ title: "Submit application", existingId: "g2", create: false, needsComplete: false });
+    expect(a[2]).toEqual({ title: "Write cover letter", create: true, needsComplete: false });
+    expect(a[3]).toEqual({ title: "tailor RESUME", create: true, needsComplete: false }); // g1 already used → create
+    // It proposes NOTHING for the orphan g3 (we never delete superseded sub-tasks).
+    expect(a.some((x) => x.existingId === "g3")).toBe(false);
+  });
+
+  it("reconcileGoogleSubtasks: a stored googleTaskId wins even if the title changed", () => {
+    const a = reconcileGoogleSubtasks(
+      [{ title: "Renamed step", status: "pending", googleTaskId: "g9" }],
+      [{ id: "g9", title: "Original wording", status: "needsAction" }],
+    );
+    expect(a[0]).toEqual({ title: "Renamed step", existingId: "g9", create: false, needsComplete: false });
   });
 
   it("carries the Google Task link (parent) + per-step Google sub-task ids", () => {

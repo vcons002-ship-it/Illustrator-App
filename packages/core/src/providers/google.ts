@@ -485,6 +485,8 @@ interface RawTask {
   notes?: string;
   due?: string;
   status?: string;
+  /** Present on a sub-task — the id of the task it's nested under. */
+  parent?: string;
 }
 
 /** Pure: a Tasks API item → a TaskItem (PURE — unit-tested). */
@@ -508,6 +510,23 @@ export async function listTasks(transport: Transport, token: string, max = 20): 
     `${TASKS}?showCompleted=false&maxResults=${Math.min(50, Math.max(1, max))}`,
   );
   return (data.items ?? []).map(parseTask);
+}
+
+/** All sub-tasks under a parent task, INCLUDING completed/hidden ones — so a re-plan can reconcile
+ * against what's already in Google without creating duplicates or losing completed history. */
+export async function listSubtasks(
+  transport: Transport,
+  token: string,
+  parentId: string,
+): Promise<{ id: string; title: string; status?: string }[]> {
+  const data = await apiGet<{ items?: RawTask[] }>(
+    transport,
+    token,
+    `${TASKS}?showCompleted=true&showHidden=true&maxResults=100`,
+  );
+  return (data.items ?? [])
+    .filter((t): t is RawTask & { id: string } => t.parent === parentId && !!t.id)
+    .map((t) => ({ id: t.id, title: t.title ?? "", ...(t.status ? { status: t.status } : {}) }));
 }
 
 /** Add a to-do. `due` is an RFC 3339 timestamp (date part honoured). */
