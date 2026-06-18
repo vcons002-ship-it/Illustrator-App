@@ -190,6 +190,7 @@ import {
   tvBridgeEval,
   startRemoteServer,
   stopRemoteServer,
+  remoteServerStatus,
   openBrowserWindow,
   type RemoteServerStatus,
   saveExportFile,
@@ -1560,20 +1561,49 @@ export function App() {
   }, [loadPage]);
   // Remote link (LAN, desktop): start/stop the WebSocket relay so a phone on the same Wi-Fi
   // can drive the assistant. Clicking it IS the opt-in (nothing listens until you start it).
+  // `remoteLink` is the running server (kept while the panel is closed, so the URL + pairing
+  // token stay CONSTANT across re-opens); `showRemoteLink` only controls the modal's visibility.
   const [remoteLink, setRemoteLink] = useState<RemoteServerStatus | null>(null);
-  const toggleRemoteLink = useCallback(async () => {
-    if (remoteLink?.running) {
-      stopHostBridge();
-      await stopRemoteServer();
-      setRemoteLink(null);
+  const [showRemoteLink, setShowRemoteLink] = useState(false);
+  const bridgeToRelay = useCallback(
+    (status: RemoteServerStatus, token: string) => {
+      if (status.running && status.port) startHostBridge(`ws://127.0.0.1:${status.port}/`, token);
+    },
+    [startHostBridge],
+  );
+  // On desktop startup, adopt an already-running relay so a reload doesn't lose (or duplicate) it.
+  useEffect(() => {
+    if (!isDesktop) return;
+    void remoteServerStatus().then((s) => {
+      if (s.running) {
+        setRemoteLink(s);
+        if (s.token) bridgeToRelay(s, s.token);
+      }
+    });
+  }, [bridgeToRelay]);
+  // Open the panel WITHOUT restarting a live server: reuse the running one (same URL/token) and
+  // only mint a new token + start a server when nothing is listening yet.
+  const openRemoteLink = useCallback(async () => {
+    const existing = remoteLink?.running ? remoteLink : await remoteServerStatus();
+    if (existing.running) {
+      setRemoteLink(existing);
+      setShowRemoteLink(true);
+      if (existing.token) bridgeToRelay(existing, existing.token);
       return;
     }
     const token = generatePairingToken();
     const status = await startRemoteServer(token);
     setRemoteLink(status);
-    // Bridge this desktop's engine worker to the relay (so the phone client drives it).
-    if (status.running && status.port) startHostBridge(`ws://127.0.0.1:${status.port}/`, token);
-  }, [remoteLink, startHostBridge, stopHostBridge]);
+    setShowRemoteLink(true);
+    bridgeToRelay(status, token);
+  }, [remoteLink, bridgeToRelay]);
+  // Explicit stop (the only thing that rotates the link): tear down the bridge + server.
+  const stopRemoteLink = useCallback(async () => {
+    stopHostBridge();
+    await stopRemoteServer();
+    setRemoteLink(null);
+    setShowRemoteLink(false);
+  }, [stopHostBridge]);
   // Schwab connect (manual code-paste flow, no Rust loopback needed): open the consent
   // URL for the user's own Schwab app, then exchange the redirected ?code=… they paste.
   const [schwabConnected, setSchwabConnected] = useState(false);
@@ -3301,7 +3331,7 @@ export function App() {
           {isDesktop && (
             <button
               style={remoteLink?.running ? { ...styles.button, borderColor: "rgba(90,209,155,0.6)", color: "#9be8c0" } : styles.button}
-              onClick={() => void toggleRemoteLink()}
+              onClick={() => void openRemoteLink()}
               title="Link a phone on your Wi-Fi to drive the assistant (experimental — see REMOTE-LINK.md)"
             >
               {remoteLink?.running ? "🔗 Phone linked" : "🔗 Link phone"}
@@ -4055,10 +4085,10 @@ export function App() {
         </div>
       )}
 
-      {remoteLink && (
+      {showRemoteLink && remoteLink && (
         <div
           style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(8,9,13,0.7)", backdropFilter: "blur(6px)", zIndex: 100, padding: 20 }}
-          onClick={() => setRemoteLink(null)}
+          onClick={() => setShowRemoteLink(false)}
         >
           <div
             style={{ width: "min(460px, 100%)", background: "#16181d", color: "#e6e6e6", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 12, padding: 18, fontFamily: "system-ui, sans-serif" }}
@@ -4075,8 +4105,8 @@ export function App() {
                 </code>
                 <p style={{ fontSize: 11, opacity: 0.55, marginTop: 8 }}>
                   Experimental — needs a desktop build with the phone-link command and on-device verification (see
-                  REMOTE-LINK.md). LAN-only; nothing leaves your network. Closing this keeps it running; use 🔗 Phone
-                  linked to stop.
+                  REMOTE-LINK.md). LAN-only; nothing leaves your network. Closing this keeps the server running and the
+                  address stable — re-opening shows the same link. Use Stop to end it (which rotates the pairing code).
                 </p>
               </>
             ) : (
@@ -4084,11 +4114,11 @@ export function App() {
             )}
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
               {remoteLink.running ? (
-                <button style={styles.button} onClick={() => void toggleRemoteLink()}>
+                <button style={styles.button} onClick={() => void stopRemoteLink()}>
                   Stop
                 </button>
               ) : null}
-              <button style={{ ...styles.button, marginLeft: "auto" }} onClick={() => setRemoteLink(null)}>
+              <button style={{ ...styles.button, marginLeft: "auto" }} onClick={() => setShowRemoteLink(false)}>
                 Close
               </button>
             </div>
