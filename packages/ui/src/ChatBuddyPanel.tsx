@@ -58,6 +58,8 @@ export interface ChatBuddyPanelProps {
   activeSessionId?: string;
   onSwitchSession?: (id: string) => void;
   onNewSession?: () => void;
+  /** Rename the active session (empty string clears back to the folder/"Chat N" fallback). */
+  onRenameSession?: (id: string, label: string) => void;
   onDeleteSession?: (id: string) => void;
   onSend: (text: string) => void;
   onApprovePendingTool: () => void;
@@ -191,6 +193,19 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             {props.onNewSession && (
               <button style={smallButtonStyle} title="New chat session" onClick={props.onNewSession}>
                 ＋
+              </button>
+            )}
+            {props.onRenameSession && props.activeSessionId && (
+              <button
+                style={smallButtonStyle}
+                title="Rename this chat"
+                onClick={() => {
+                  const cur = props.sessions?.find((s) => s.id === props.activeSessionId)?.label ?? "";
+                  const next = window.prompt("Rename this chat (leave blank to reset):", cur);
+                  if (next !== null) props.onRenameSession!(props.activeSessionId!, next);
+                }}
+              >
+                ✎
               </button>
             )}
             {props.onDeleteSession && props.sessions.length > 1 && props.activeSessionId && (
