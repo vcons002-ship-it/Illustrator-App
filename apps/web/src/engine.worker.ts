@@ -81,8 +81,10 @@ import {
   listEvents,
   createEvent,
   listTasks,
+  listSubtasks,
   createTask,
   createTaskGroup,
+  reconcileGoogleSubtasks,
   runTaskPlanning,
   normalizeTaskPlan,
   upsertTaskPlan,
@@ -1383,34 +1385,50 @@ function fileResearchDeps(force = false): Partial<BuddyDeps> {
   };
 }
 
-/** Push a planned task's steps to Google Tasks as SUB-TASKS under its parent (those not already
- * linked), in order, and refresh the parent's notes with the summary. Best-effort; returns the plan
- * with each step's new googleTaskId. (Google access is read-and-create only — re-planning ADDS new
- * sub-tasks; it can't delete superseded ones.) */
+/** Sync a planned task's steps to Google Tasks as SUB-TASKS under its parent, RECONCILING against
+ * what's already there (match by stored id, then title) so a re-plan never duplicates; completed
+ * steps are marked complete; superseded sub-tasks are LEFT IN PLACE (never deleted — kept for
+ * history, and Google access is read-and-create only). Refreshes the parent's notes. Best-effort;
+ * returns the plan with each step's googleTaskId. */
 async function syncPlanToGoogleTasks(plan: TaskPlan, transport: DirectTransport, tok: () => Promise<string>): Promise<TaskPlan> {
   const parentId = plan.googleTaskId;
   if (!parentId) return plan;
+  let existing: { id: string; title: string; status?: string }[] = [];
+  try {
+    existing = await listSubtasks(transport, await tok(), parentId);
+  } catch {
+    /* best-effort — without the list we just won't reconnect to existing ones */
+  }
+  const actions = reconcileGoogleSubtasks(plan.steps, existing);
   const steps: TaskStep[] = [];
   let previous: string | undefined;
-  for (const step of plan.steps) {
-    if (step.googleTaskId) {
-      steps.push(step);
-      previous = step.googleTaskId;
-      continue;
+  for (let i = 0; i < plan.steps.length; i++) {
+    const step = plan.steps[i]!;
+    const action = actions[i]!;
+    let gid = action.existingId;
+    if (action.create) {
+      try {
+        const child = await createTask(transport, await tok(), {
+          title: step.title,
+          ...(step.detail ? { notes: step.detail } : {}),
+          ...(step.dueIso ? { due: step.dueIso } : {}),
+          parent: parentId,
+          ...(previous ? { previous } : {}),
+        });
+        gid = child.id;
+      } catch {
+        /* keep the in-app step even if its Google write failed */
+      }
     }
-    try {
-      const child = await createTask(transport, await tok(), {
-        title: step.title,
-        ...(step.detail ? { notes: step.detail } : {}),
-        ...(step.dueIso ? { due: step.dueIso } : {}),
-        parent: parentId,
-        ...(previous ? { previous } : {}),
-      });
-      steps.push(child.id ? { ...step, googleTaskId: child.id } : step);
-      if (child.id) previous = child.id;
-    } catch {
-      steps.push(step); // keep the in-app step even if its Google write failed
+    if (gid && action.needsComplete) {
+      try {
+        await patchTask(transport, await tok(), gid, { status: "completed" });
+      } catch {
+        /* best-effort */
+      }
     }
+    steps.push(gid ? { ...step, googleTaskId: gid } : step);
+    if (gid) previous = gid;
   }
   if (plan.summary) {
     try {

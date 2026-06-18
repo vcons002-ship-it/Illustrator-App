@@ -299,6 +299,51 @@ export function advanceStep(plan: TaskPlan): { plan: TaskPlan; ready?: TaskStep 
   };
 }
 
+/** What to do with each plan step when syncing to Google Tasks: reuse an existing sub-task or
+ * create one, and whether to mark it completed. Pure so the matching is unit-tested; the host runs
+ * the create/patch calls. Never proposes a DELETE — superseded sub-tasks are kept for history. */
+export interface GoogleSubtaskAction {
+  /** The plan step's title (for creating a new sub-task). */
+  title: string;
+  /** Reuse this existing Google sub-task id (matched by stored id, then by title). */
+  existingId?: string;
+  /** Create a new sub-task (no existing match). */
+  create: boolean;
+  /** Patch the (existing or new) sub-task to "completed" — the step is done but Google isn't. */
+  needsComplete: boolean;
+}
+
+const normTaskTitle = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, " ");
+
+/** Reconcile a plan's steps against the parent's existing Google sub-tasks: match by the step's
+ * stored googleTaskId first, else by normalized title (so a re-plan reuses what's there instead of
+ * duplicating); completed steps are marked complete; anything unmatched is a fresh create. */
+export function reconcileGoogleSubtasks(
+  steps: readonly { title: string; status: TaskStep["status"]; googleTaskId?: string }[],
+  existing: readonly { id: string; title: string; status?: string }[],
+): GoogleSubtaskAction[] {
+  const byId = new Map(existing.map((t) => [t.id, t]));
+  const byTitle = new Map<string, { id: string; title: string; status?: string }>();
+  for (const t of existing) {
+    const k = normTaskTitle(t.title);
+    if (!byTitle.has(k)) byTitle.set(k, t);
+  }
+  const used = new Set<string>();
+  return steps.map((step) => {
+    const done = step.status === "done";
+    let match = step.googleTaskId ? byId.get(step.googleTaskId) : undefined;
+    if (!match) {
+      const m = byTitle.get(normTaskTitle(step.title));
+      if (m && !used.has(m.id)) match = m;
+    }
+    if (match) {
+      used.add(match.id);
+      return { title: step.title, existingId: match.id, create: false, needsComplete: done && match.status !== "completed" };
+    }
+    return { title: step.title, create: true, needsComplete: done };
+  });
+}
+
 /** A scan-surfaced task still awaiting its step-by-step plan (a stub: planned===false, no steps). */
 export function needsPlanning(plan: TaskPlan): boolean {
   return plan.planned === false;
