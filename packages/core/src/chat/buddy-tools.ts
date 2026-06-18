@@ -451,9 +451,11 @@ export function buildBuddySystemPrompt(opts: {
     '- {"tool":"open_web_text","url":"…","title":"…","mode":"fiction","visuals":false} — fetch a text/article/news ' +
     'URL (or a search hit\'s URL) and open it in the reader. "mode" picks the illustration pipeline: "fiction" for ' +
     'stories/novels, "technical" for articles, papers, news and non-fiction.\n' +
-    '- {"tool":"open_pasted_text","text":"…","title":"…","mode":"fiction","visuals":false} — open text the reader ' +
-    'PASTED or wrote into the chat (a poem, lyrics, an excerpt). Put the passage itself in "text" (not an instruction ' +
-    "about it). For anything book-length, ask them to use the upload button instead.\n" +
+    '- {"tool":"open_pasted_text","text":"…","title":"…","mode":"fiction","visuals":false} — open PROSE the reader ' +
+    'PASTED or wrote into the chat (a poem, lyrics, an excerpt, an article) so they can READ/illustrate it. Put the ' +
+    'passage ITSELF in "text" — never a how-to, a list of steps, or an explanation ABOUT something, and never code/HTML ' +
+    "you generated (that belongs in a fenced ```code``` block they can SAVE, not a book). For anything book-length, ask " +
+    "them to use the upload button instead.\n" +
     '- {"tool":"create_spreadsheet","title":"Monthly Budget","columns":[{"name":"Category"},{"name":"Budget","type":"number"},' +
     '{"name":"Spent","type":"number"},{"name":"Remaining","type":"number"}],"rows":[["Rent",1500,1200,"=B2-C2"]]} — ' +
     "GENERATE a new spreadsheet from scratch and open it in the data view (a budget, tracker, planner, schedule, " +
