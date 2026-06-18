@@ -143,6 +143,7 @@ import {
   TasksPanel,
   ScheduledTasksPanel,
   CalendarPanel,
+  ActivityCenter,
   StockChartPanel,
   BrowserPanel,
   OrderReviewModal,
@@ -170,6 +171,7 @@ import {
 import type { LocalTextServerId } from "@visual-reader/core";
 import { loadSampleBook } from "./sample.js";
 import { useEngineWorker, type ImportResult, type TestRenderResult } from "./useEngineWorker.js";
+import { useActivityLog } from "./useActivityLog.js";
 import type { SyncToPhone } from "./remote-sync.js";
 import {
   downloadLora,
@@ -335,6 +337,11 @@ export function App() {
     polishText,
     polishCancel,
   } = useEngineWorker(settings, libraryStore);
+  // App-wide activity log (the status center) + a way to drop a reference line into the buddy chat
+  // when an out-of-chat button does something, so you can always see what worked. `buddyNoteRef` is
+  // a ref so callbacks defined ABOVE the chat plumbing can post a note without a forward reference.
+  const { activities, begin: beginActivity } = useActivityLog();
+  const buddyNoteRef = useRef<(text: string) => void>(() => {});
   const [showCharacters, setShowCharacters] = useState(false);
   const [showData, setShowData] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -400,9 +407,12 @@ export function App() {
   // Shared by the per-task "Plan" button (userInitiated → may use the reader's files) and the
   // periodic sweep (background → file access stays gated by the settings).
   const planOneTask = useCallback(
-    async (planId: string, userInitiated = true) => {
+    // `track` registers a status-center entry (+ a buddy note); the sweep passes false because it
+    // owns the whole queue's entries itself (so each task shows queued → active → done in order).
+    async (planId: string, userInitiated = true, track = true) => {
       const plan = (await loadTaskPlans(libraryStore)).find((p) => p.id === planId);
       if (!plan) return;
+      const act = track ? beginActivity(`Planning: ${plan.title}`) : undefined;
       setPlanningCount((n) => n + 1);
       try {
         const sourceText = [plan.title, plan.summary, plan.deadlineIso ? `Hard deadline: ${plan.deadlineIso}.` : ""]
@@ -410,24 +420,37 @@ export function App() {
           .join(" ");
         const res = await planTask({ source: plan.source, sourceText, planId, ...(userInitiated ? { allowFiles: true } : {}) });
         if (res.ok) refreshTaskPlans();
+        if (act) {
+          const n = res.plan?.steps.length ?? 0;
+          act.finish(res.ok ? { detail: `${n} step${n === 1 ? "" : "s"}` } : { status: "error", detail: res.error ?? "failed" });
+          if (res.ok) buddyNoteRef.current(`🧩 Planned “${plan.title}” — ${n} step${n === 1 ? "" : "s"}.`);
+        }
       } finally {
         setPlanningCount((n) => Math.max(0, n - 1));
       }
     },
-    [libraryStore, planTask, refreshTaskPlans],
+    [libraryStore, planTask, refreshTaskPlans, beginActivity],
   );
   // Plan the backlog of unplanned stubs, up to `limit` per sweep, SEQUENTIALLY. `keepGoing` lets
   // the caller stop early (e.g. the reader came back) so a long sweep yields instead of grinding on.
+  // Every pending item is registered up-front as QUEUED so the status center shows the whole line-up
+  // (1. active, 2. queued, 3. queued…) even after you leave the Tasks window.
   const planPendingTasks = useCallback(
     async (limit: number, keepGoing?: () => boolean) => {
       if (limit <= 0) return;
       const pending = (await loadTaskPlans(libraryStore)).filter(needsPlanning).slice(0, limit);
-      for (const p of pending) {
-        if (keepGoing && !keepGoing()) break;
-        await planOneTask(p.id, false); // background sweep — keep file access gated by settings
+      const handles = pending.map((p) => beginActivity(`Planning: ${p.title}`, "queued"));
+      for (let i = 0; i < pending.length; i++) {
+        if (keepGoing && !keepGoing()) {
+          handles.slice(i).forEach((h) => h.finish()); // clear the not-reached queue entries
+          break;
+        }
+        handles[i]!.activate();
+        await planOneTask(pending[i]!.id, false, false); // the sweep owns this entry (track=false)
+        handles[i]!.finish();
       }
     },
-    [libraryStore, planOneTask],
+    [libraryStore, planOneTask, beginActivity],
   );
   // "Don't surface this again" — add the most precise ignore rule we can (the exact email/event
   // item, else its sender, else its title as a phrase), then delete the plan. Future scans skip it
@@ -480,6 +503,7 @@ export function App() {
   const onCreateTask = useCallback(
     async (title: string, dueIso?: string) => {
       setCreatingTask(true);
+      const act = beginActivity(`Creating task: ${title}`);
       try {
         const sourceText = dueIso ? `${title}\n\nHard deadline: ${dueIso}.` : title;
         const res = await planTask({ source: { kind: "typed", text: title }, sourceText, allowFiles: true });
@@ -488,12 +512,17 @@ export function App() {
             await upsertTaskPlan(libraryStore, { ...res.plan, deadlineIso: dueIso });
           }
           refreshTaskPlans();
+          const n = res.plan.steps.length;
+          act.finish({ detail: `${n} step${n === 1 ? "" : "s"}` });
+          buddyNoteRef.current(`🗂️ Created & planned task “${title}” — ${n} step${n === 1 ? "" : "s"}.`);
+        } else {
+          act.finish({ status: "error", detail: res.error ?? "couldn't plan" });
         }
       } finally {
         setCreatingTask(false);
       }
     },
-    [planTask, libraryStore, refreshTaskPlans],
+    [planTask, libraryStore, refreshTaskPlans, beginActivity],
   );
   // Faithful document-polish panel + an optional prefill (from upload or a home click).
   const [showPolish, setShowPolish] = useState(false);
@@ -1533,6 +1562,7 @@ export function App() {
     scanningNowRef.current = true;
     setScanningNow(true);
     setScanMessage(undefined);
+    const act = beginActivity("Searching email & calendar");
     try {
       // Run both Google reads; surface the first real error rather than swallowing it.
       const [scan, imported] = await Promise.all([scanInbox(), importGoogleTasks()]);
@@ -1542,6 +1572,8 @@ export function App() {
       const err = scan.error || imported.error || cal?.error;
       if (err) {
         setScanMessage(`⚠ Scan failed: ${err}`);
+        act.finish({ status: "error", detail: err });
+        buddyNoteRef.current(`🔍 Scan failed: ${err}`);
       } else {
         const found = scan.candidates?.length ?? 0;
         const added = imported.imported ?? 0;
@@ -1551,15 +1583,21 @@ export function App() {
           added ? `${added} Google task${added === 1 ? "" : "s"} imported` : "",
           `${events} calendar event${events === 1 ? "" : "s"} synced`,
         ].filter(Boolean);
-        setScanMessage(found || added ? `✓ ${bits.join(" · ")}` : `✓ Up to date — ${bits.join(" · ")}`);
+        const summary = bits.join(" · ");
+        setScanMessage(found || added ? `✓ ${summary}` : `✓ Up to date — ${summary}`);
+        act.finish({ detail: summary });
+        buddyNoteRef.current(`🔍 Scanned email & calendar — ${summary}.`);
       }
     } catch (e) {
-      setScanMessage(`⚠ Scan failed: ${e instanceof Error ? e.message : String(e)}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      setScanMessage(`⚠ Scan failed: ${msg}`);
+      act.finish({ status: "error", detail: msg });
+      buddyNoteRef.current(`🔍 Scan failed: ${msg}`);
     } finally {
       scanningNowRef.current = false;
       setScanningNow(false);
     }
-  }, [googleConnected, scanInbox, importGoogleTasks, addCandidatesAsTasks, refreshTaskPlans, loadCalendarFor]);
+  }, [googleConnected, scanInbox, importGoogleTasks, addCandidatesAsTasks, refreshTaskPlans, loadCalendarFor, beginActivity]);
   const openCalendar = useCallback(() => {
     setShowCalendar(true);
     void loadCalendarFor(calendarMonth);
@@ -2158,6 +2196,10 @@ export function App() {
 
   const appendBuddy = (msg: Omit<StoredChatMessage, "at">) =>
     setBuddyMessages((prev) => [...prev, { ...msg, at: Date.now() }]);
+  // A reference line posted to the buddy chat when an out-of-chat button does something (scan,
+  // plan, create task), so the buddy thread is a running record of "what worked". A `tool`-role
+  // note renders as a system line (like a delegated-subtask note), not as the assistant talking.
+  buddyNoteRef.current = (text: string) => appendBuddy({ role: "tool", text });
 
   // Open a local file the desktop `/find` surfaced: read its bytes via the Rust
   // bridge, then run it through the SAME importer as an upload.
@@ -3800,6 +3842,10 @@ export function App() {
       ) : (
         <ProviderBadges providers={providers} engineStatus={engineStatus} />
       )}
+
+      {/* Status center: what the app is doing right now + the queue behind it (task planning keeps
+          running after you leave the Tasks window, so this is how you keep an eye on it). */}
+      <ActivityCenter activities={activities} />
 
       {!book && (status || localError) && (
         <div style={styles.status}>{localError || status}</div>
