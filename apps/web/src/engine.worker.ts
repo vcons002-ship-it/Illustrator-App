@@ -104,6 +104,7 @@ import {
   deletePriceAlert,
   describeAlert,
   updateTaskStep,
+  applyStepEdits,
   advanceStep,
   nextReadyStep,
   tasksIndexBlock,
@@ -2104,6 +2105,26 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           ...(patch.notes ? { researchNotes: patch.notes } : {}),
         });
         return { planTitle: plan.title };
+      },
+      // Capture sub-tasks the reader worked out in chat onto the EXISTING (active) plan, then mirror
+      // to Google Tasks. planId defaults to the task this chat is working (msg.taskPlanId).
+      addTaskSteps: async ({ planId, steps, replace }) => {
+        const id = planId ?? msg.taskPlanId;
+        if (!id) return undefined;
+        const plan = (await loadTaskPlans(store)).find((p) => p.id === id);
+        if (!plan) return undefined;
+        let next = applyStepEdits(plan, steps, { ...(replace ? { replace: true } : {}) });
+        if (plan.googleTaskId && googleConnected) {
+          try {
+            const t = new DirectTransport(corsFetch());
+            const tk = () => getFreshAccessToken(store, { clientId: googleId!, clientSecret: googleSecret!, transport: t });
+            next = await syncPlanToGoogleTasks(next, t, tk);
+          } catch {
+            /* best-effort — the in-app steps are saved regardless */
+          }
+        }
+        await upsertTaskPlan(store, next);
+        return { planTitle: next.title, count: steps.length, replaced: !!replace };
       },
       listTaskPlans: async () =>
         (await loadTaskPlans(store))

@@ -386,6 +386,23 @@ export async function updateTaskStep(
   return next;
 }
 
+/** Add or replace a plan's steps (the chat "add a step / refine these steps" path). `replace`
+ * swaps the whole list; otherwise the edits are appended. Each edit is normalized (fresh id +
+ * order unless an id is supplied, which is preserved), capped at MAX_STEPS_PER_PLAN. A stub's
+ * `planned:false` is cleared once it has steps, so the background sweep won't wipe chat-added work.
+ * PURE. */
+export function applyStepEdits(
+  plan: TaskPlan,
+  edits: readonly (Partial<TaskStep> & { title: string })[],
+  opts: { replace?: boolean } = {},
+): TaskPlan {
+  const base = opts.replace ? [] : plan.steps;
+  const steps = [...base, ...edits].slice(0, MAX_STEPS_PER_PLAN).map((s, i) => normalizeStep(s, i));
+  const next: TaskPlan = { ...plan, steps, updatedAt: Date.now() };
+  if (next.planned === false && steps.length > 0) delete next.planned;
+  return next;
+}
+
 // ------------------------------------------------------------- pure selectors
 
 /** Mark the current (first non-done) step done and set the next one ready. Pure —

@@ -2741,7 +2741,7 @@ export function App() {
         setBuddyActivity("");
         // The agent just read/wrote the calendar or tasks — reflect it in the app's views.
         if (e.kind === "toolResult" && (e.call.tool === "create_event" || e.call.tool === "list_events")) refreshCalendar();
-        if (e.kind === "toolResult" && (e.call.tool === "add_task_group" || e.call.tool === "create_task")) refreshTaskPlans();
+        if (e.kind === "toolResult" && (e.call.tool === "add_task_group" || e.call.tool === "create_task" || e.call.tool === "add_task_steps" || e.call.tool === "mark_step_done" || e.call.tool === "update_task_step")) refreshTaskPlans();
         const typed = userBubbleText ?? "";
         if (e.hits?.length) {
           appendBuddy({

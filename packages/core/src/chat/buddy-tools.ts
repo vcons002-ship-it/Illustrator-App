@@ -184,6 +184,9 @@ export type BuddyToolCall =
   /** Execute/track an active task plan (in its preloaded chat). */
   | { tool: "mark_step_done"; planId: string; stepId: string }
   | { tool: "update_task_step"; planId: string; stepId: string; status?: string; notes?: string }
+  /** Add (or replace) the sub-tasks of an EXISTING plan — captures planning the reader worked out
+   * in chat. `planId` defaults to the active task; `replace` swaps the whole step list. */
+  | { tool: "add_task_steps"; planId?: string; steps: { title: string; detail?: string; actor?: "ai_prep" | "user_action"; dueIso?: string }[]; replace?: boolean }
   | { tool: "list_task_plans" }
   | { tool: "get_task_plan"; id: string }
   /** Call the reader's own MCP servers (when configured): list a server's tools, or call one. */
@@ -580,10 +583,13 @@ export function buildBuddySystemPrompt(opts: {
         'prep parts yourself, walk them through the parts only they can do. {"tool":"mark_step_done","planId":"…",' +
         '"stepId":"…"} when they finish a step (it advances the plan); {"tool":"update_task_step","planId":"…",' +
         '"stepId":"…","status":"blocked","notes":"…"} to note a blocker; {"tool":"list_task_plans"} / ' +
-        '{"tool":"get_task_plan","id":"…"} to check state. When the reader says "plan/redo/refine/update this" (or once ' +
-        "they've answered the OPEN QUESTIONS), re-plan THIS task in place with plan_task — don't ask which task they mean " +
-        "or start a new one; it's the task above. When all steps are done, offer to re-plan it, mark a step not-done to " +
-        "redo it, or wrap up.\n"
+        '{"tool":"get_task_plan","id":"…"} to check state. To ADD or change a few specific sub-tasks you worked out ' +
+        'with the reader (without redoing the whole plan), use {"tool":"add_task_steps","steps":[{"title":"Call the ' +
+        'vendor","detail":"…","actor":"user_action","dueIso":"2026-07-01"}]} — it appends to the task above (add ' +
+        '"replace":true to swap the whole list). When the reader says "plan/redo/refine/update this" (or once ' +
+        "they've answered the OPEN QUESTIONS) and the plan needs a full rebuild, re-plan THIS task in place with " +
+        "plan_task — don't ask which task they mean or start a new one; it's the task above. When all steps are done, " +
+        "offer to re-plan it, mark a step not-done to redo it, or wrap up.\n"
       : "") +
     "GROUNDED IN TRUTH: don't guess at facts, APIs, library names, syntax, or current details you're unsure of. " +
     "First check your SKILLS for a matching playbook (read_skill it); then, when knowledge may be stale, version-" +
@@ -961,6 +967,32 @@ function parseToolObject(obj: Record<string, unknown>): BuddyToolCall | undefine
       ...(strArg(obj.notes, MAX_GOOGLE_TEXT_CHARS) ? { notes: strArg(obj.notes, MAX_GOOGLE_TEXT_CHARS)! } : {}),
     };
   }
+  if (tool === "add_task_steps") {
+    const steps = Array.isArray(obj.steps)
+      ? obj.steps
+          .map((s) => {
+            const st = (s ?? {}) as Record<string, unknown>;
+            const title = strArg(st.title, MAX_QUERY_CHARS);
+            if (!title) return undefined;
+            const actor = st.actor === "ai_prep" ? "ai_prep" : st.actor === "user_action" ? "user_action" : undefined;
+            return {
+              title,
+              ...(strArg(st.detail, MAX_GOOGLE_TEXT_CHARS) ? { detail: strArg(st.detail, MAX_GOOGLE_TEXT_CHARS)! } : {}),
+              ...(actor ? { actor } : {}),
+              ...(strArg(st.dueIso, MAX_NAME_CHARS) ? { dueIso: strArg(st.dueIso, MAX_NAME_CHARS)! } : {}),
+            };
+          })
+          .filter((s): s is { title: string; detail?: string; actor?: "ai_prep" | "user_action"; dueIso?: string } => !!s)
+          .slice(0, 25)
+      : [];
+    if (steps.length === 0) return undefined;
+    return {
+      tool,
+      steps,
+      ...(strArg(obj.planId, MAX_ID_CHARS) ? { planId: strArg(obj.planId, MAX_ID_CHARS)! } : {}),
+      ...(obj.replace === true ? { replace: true } : {}),
+    };
+  }
   if (tool === "list_task_plans") return { tool };
   if (tool === "get_task_plan") {
     const id = strArg(obj.id, MAX_ID_CHARS);
@@ -1149,6 +1181,8 @@ export interface BuddyToolResultPayload {
   scheduledList?: { id: string; title: string; describe: string; enabled: boolean }[];
   /** Task-plan execution outcomes. */
   taskAction?: { planTitle: string; nextStep?: string; completed?: boolean };
+  /** add_task_steps outcome: which plan got steps and how many. */
+  stepsAdded?: { planTitle: string; count: number; replaced: boolean };
   taskPlansList?: { id: string; title: string; status: string; nextStep?: string; deadlineIso?: string }[];
   taskPlan?: TaskPlan;
   /** Local files found by an approved find_files search (names fed back to the model). */
@@ -1457,6 +1491,11 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
   }
   if (call.tool === "update_task_step") {
     return result.taskAction ? `[updated the step in "${result.taskAction.planTitle}"] Confirm briefly.` : "[update_task_step: not found]";
+  }
+  if (call.tool === "add_task_steps") {
+    const a = result.stepsAdded;
+    if (!a) return "[add_task_steps: no active task to add to — open a task first]";
+    return `[${a.replaced ? "replaced the steps of" : `added ${a.count} step${a.count === 1 ? "" : "s"} to`} "${a.planTitle}"] Confirm briefly to the reader.`;
   }
   if (call.tool === "list_task_plans") {
     const list = result.taskPlansList ?? [];
