@@ -813,8 +813,15 @@ struct FoundFile {
 
 /// File types the importer can read (mirrors the web importer's accept list).
 const SEARCHABLE_EXTS: &[&str] = &[
-    "epub", "pdf", "txt", "md", "markdown", "html", "htm", "docx", "rtf", "csv", "tsv", "json",
-    "xlsx", "png", "jpg", "jpeg", "webp", "gif",
+    // Documents (a resume is often .doc/.odt/.pages, not just .docx — those were missing).
+    "epub", "pdf", "txt", "md", "markdown", "html", "htm", "rtf", "tex",
+    "doc", "docx", "odt", "pages", "wpd", "wps",
+    // Slides + sheets.
+    "ppt", "pptx", "key", "odp", "xls", "xlsx", "ods", "numbers", "csv", "tsv",
+    // Data + code-ish text the reader may want to find.
+    "json", "xml", "yaml", "yml", "ini", "log", "ics",
+    // Images.
+    "png", "jpg", "jpeg", "webp", "gif",
 ];
 /// Bounds so a broad walk stays fast and can't wander into heavy caches forever.
 const MAX_RESULTS: usize = 100;

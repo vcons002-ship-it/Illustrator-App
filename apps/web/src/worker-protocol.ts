@@ -117,7 +117,7 @@ export type MainToWorker =
   /** Plan a task: research it, produce a structured TaskPlan, and persist it (worker has
    * the CORS proxy + Google deps + store). `sourceText` is the typed ask or the source
    * email/event content the host already read. */
-  | { type: "planTask"; requestId: number; source: TaskSource; sourceText: string; planId?: string }
+  | { type: "planTask"; requestId: number; source: TaskSource; sourceText: string; planId?: string; allowFiles?: boolean }
   /** Idle scan: surface actionable email/calendar items as task candidates (Phase 2). */
   | { type: "scanInbox"; requestId: number }
   /** Load events across all the user's Google calendars in a window (the calendar view). */

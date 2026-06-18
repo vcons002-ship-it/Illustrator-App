@@ -1356,9 +1356,12 @@ function makeReadAttachment(transport: DirectTransport, tok: () => Promise<strin
 /** Local-file research deps for the planner/chat, GATED by the reader's settings: disk SEARCH only
  * when autonomous file search is on; reading a file when auto-pull-files is on (default). Both reach
  * the disk via the host round-trip (Tauri lives on the main thread); empty on the web. */
-function fileResearchDeps(): Partial<BuddyDeps> {
+/** `force` wires file search/read regardless of the background-autonomy settings — used when the
+ * reader EXPLICITLY asked for a plan that involves their files (a typed "plan this, my resume is on
+ * my PC"). The idle sweep stays gated by the settings. */
+function fileResearchDeps(force = false): Partial<BuddyDeps> {
   return {
-    ...(settings?.autonomousFileSearch || settings?.fullAutonomy
+    ...(force || settings?.autonomousFileSearch || settings?.fullAutonomy
       ? {
           findFiles: async (query: string) => {
             const r = await hostFile({ op: "search", query });
@@ -1367,7 +1370,7 @@ function fileResearchDeps(): Partial<BuddyDeps> {
           },
         }
       : {}),
-    ...((settings?.autoPullFiles ?? true) || settings?.fullAutonomy
+    ...(force || (settings?.autoPullFiles ?? true) || settings?.fullAutonomy
       ? {
           readFile: async (path: string) => {
             const r = await hostFile({ op: "read", path });
@@ -1395,7 +1398,7 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
       throw new Error("not available during planning");
     };
     const research: BuddyDeps = {
-      ...fileResearchDeps(),
+      ...fileResearchDeps(msg.allowFiles),
       searchWeb: (q) => imageSearch.searchWeb(q),
       readUrl: readUrlText(ac.signal),
       ...(googleConnected
@@ -1770,7 +1773,21 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
               listEvents(transport, await tok(), o),
             createEvent: async (ev) => createEvent(transport, await tok(), ev),
             listTasks: async (max?: number) => listTasks(transport, await tok(), max),
-            createTask: async (t) => createTask(transport, await tok(), t),
+            // Create the Google Task AND mirror it as a simple in-app task so it shows in the 📋
+            // panel (0 steps → it carries a "Plan it" button to break it down later).
+            createTask: async (t) => {
+              const item = await createTask(transport, await tok(), t);
+              await upsertTaskPlan(
+                memoryStore(),
+                normalizeTaskPlan({
+                  title: t.title,
+                  source: { kind: "typed", text: t.title },
+                  ...(t.due ? { deadlineIso: t.due } : {}),
+                  steps: [],
+                }),
+              );
+              return item;
+            },
             // A parent + nested sub-tasks: write them to Google Tasks AND mirror as one in-app
             // plan (parent = the task, sub-tasks = its steps) so both surfaces show the hierarchy.
             addTaskGroup: async (group) => {

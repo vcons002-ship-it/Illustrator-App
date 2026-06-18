@@ -389,9 +389,10 @@ export function App() {
     [libraryStore, refreshTaskPlans],
   );
   // Plan ONE task in place (a scan stub, or a refresh): research + fill its steps, keeping its id.
-  // Shared by the per-task "Plan" button and the periodic sweep.
+  // Shared by the per-task "Plan" button (userInitiated → may use the reader's files) and the
+  // periodic sweep (background → file access stays gated by the settings).
   const planOneTask = useCallback(
-    async (planId: string) => {
+    async (planId: string, userInitiated = true) => {
       const plan = (await loadTaskPlans(libraryStore)).find((p) => p.id === planId);
       if (!plan) return;
       setPlanningCount((n) => n + 1);
@@ -399,7 +400,7 @@ export function App() {
         const sourceText = [plan.title, plan.summary, plan.deadlineIso ? `Hard deadline: ${plan.deadlineIso}.` : ""]
           .filter(Boolean)
           .join(" ");
-        const res = await planTask({ source: plan.source, sourceText, planId });
+        const res = await planTask({ source: plan.source, sourceText, planId, ...(userInitiated ? { allowFiles: true } : {}) });
         if (res.ok) refreshTaskPlans();
       } finally {
         setPlanningCount((n) => Math.max(0, n - 1));
@@ -415,7 +416,7 @@ export function App() {
       const pending = (await loadTaskPlans(libraryStore)).filter(needsPlanning).slice(0, limit);
       for (const p of pending) {
         if (keepGoing && !keepGoing()) break;
-        await planOneTask(p.id);
+        await planOneTask(p.id, false); // background sweep — keep file access gated by settings
       }
     },
     [libraryStore, planOneTask],
@@ -465,7 +466,7 @@ export function App() {
       setCreatingTask(true);
       try {
         const sourceText = dueIso ? `${title}\n\nHard deadline: ${dueIso}.` : title;
-        const res = await planTask({ source: { kind: "typed", text: title }, sourceText });
+        const res = await planTask({ source: { kind: "typed", text: title }, sourceText, allowFiles: true });
         if (res.ok && res.plan) {
           if (dueIso && res.plan.deadlineIso !== dueIso) {
             await upsertTaskPlan(libraryStore, { ...res.plan, deadlineIso: dueIso });
@@ -2188,6 +2189,7 @@ export function App() {
     const res = await planTask({
       source: { kind: "typed", text: request },
       sourceText: request,
+      allowFiles: true, // the reader typed this plan request — let the planner search/read their files
       onProgress: (phase) => setBuddyActivity(phase === "plan" ? "Building the plan…" : "Researching the task…"),
     });
     setBuddyBusy(false);
@@ -2348,7 +2350,7 @@ export function App() {
         setBuddyActivity("");
         // The agent just read/wrote the calendar or tasks — reflect it in the app's views.
         if (e.kind === "toolResult" && (e.call.tool === "create_event" || e.call.tool === "list_events")) refreshCalendar();
-        if (e.kind === "toolResult" && e.call.tool === "add_task_group") refreshTaskPlans();
+        if (e.kind === "toolResult" && (e.call.tool === "add_task_group" || e.call.tool === "create_task")) refreshTaskPlans();
         const typed = userBubbleText ?? "";
         if (e.hits?.length) {
           appendBuddy({

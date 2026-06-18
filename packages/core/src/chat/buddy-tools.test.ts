@@ -281,6 +281,15 @@ describe("buildBuddySystemPrompt", () => {
     expect(desktop).toContain("OWN COMPUTER");
   });
 
+  it("routes a compose-the-steps request (research + files + drafting) to plan_task", () => {
+    const g = buildBuddySystemPrompt({ persona: "freeform", library: [], canGoogle: true });
+    expect(g).toContain('"tool":"plan_task"');
+    // It should tell the model to hand a multi-source job (e.g. job posting + resume on disk) to
+    // plan_task in ONE call instead of doing it inline and giving up.
+    expect(g).toMatch(/resume/i);
+    expect(g).toMatch(/in ONE call|the WHOLE thing/);
+  });
+
   it("advertises GitHub repo work only when a token is configured (canGithub)", () => {
     const off = buildBuddySystemPrompt({ persona: "freeform", library: [] });
     expect(off).not.toContain("GITHUB:");

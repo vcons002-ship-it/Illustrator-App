@@ -558,12 +558,15 @@ export function buildBuddySystemPrompt(opts: {
     '{"tool":"cancel_alert","id":"…"} to remove one.\n' +
     googleBlock +
     githubBlock +
-    '- {"tool":"plan_task","request":"…"} — when the reader asks you to PLAN or organize a real-world MULTI-STEP task ' +
-    '(e.g. "plan my car registration renewal", "help me get ready for the trip", or "plan this" after you read an ' +
-    "email/event), use this. The app researches the deadline, lead time, steps, cost and official site, builds a dated " +
-    'step-by-step plan, schedules reminders, prepares documents, and opens it for the reader. Put the task in "request" ' +
-    "(include any specifics you learned). Use it for genuine multi-step tasks with a deadline — not for a one-off " +
-    "question you can just answer.\n" +
+    '- {"tool":"plan_task","request":"…"} — when the reader asks you to PLAN, organize, or "help me figure out what I ' +
+    'need to do" for a real-world MULTI-STEP task (e.g. "plan my car registration renewal", "help me get ready for the ' +
+    'trip", "help me apply for this job", or "plan this" after you read an email/event). Use this WHENEVER fulfilling ' +
+    "the ask would take several chained steps across sources — e.g. look up a job posting on the web, FIND and READ the " +
+    "reader's resume on their computer, and draft tailored edits. DON'T try to do that yourself one tool at a time and " +
+    "give up if one step fails — hand the WHOLE thing to plan_task in ONE call: it can research the web, read the " +
+    "reader's email/attachments, AND search + read files on their computer, then build a dated step-by-step plan with " +
+    'prepped documents. Put everything you know in "request" (the goal, any URL, the file they mentioned, constraints). ' +
+    "Reserve inline answers for genuine one-offs you can settle in a sentence.\n" +
     '- {"tool":"schedule_task","title":"Morning email recap","prompt":"Summarise my unread email from the last day",' +
     '"rule":"daily","time":"08:00"} — schedule a RECURRING action the assistant runs automatically while the app is open ' +
     '(daily/weekly/monthly/once). Use when the reader says "every morning/day/week/Friday…", "remind me to…", "each ' +

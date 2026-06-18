@@ -59,22 +59,24 @@ function PlanCard({
 }) {
   const doneCount = plan.steps.filter((s) => s.status === "done").length;
   const current = plan.steps.find((s) => s.status === "ready") ?? plan.steps.find((s) => s.status !== "done");
-  const unplanned = needsPlanning(plan);
+  const noSteps = plan.steps.length === 0; // a simple to-do or a scan stub — no step-by-step plan yet
+  const autoPlanning = needsPlanning(plan); // a scan stub the background sweep will plan on its own
   return (
     <div style={card}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
         <strong style={{ fontSize: 14 }}>{plan.title}</strong>
         {plan.deadlineIso ? <span style={{ fontSize: 11, color: "#ffcf8b" }}>due {plan.deadlineIso}</span> : null}
-        {unplanned ? <span style={{ fontSize: 10, padding: "0 5px", borderRadius: 4, background: "rgba(255,207,139,0.2)", color: "#ffcf8b" }}>not planned yet</span> : null}
+        {noSteps ? <span style={{ fontSize: 10, padding: "0 5px", borderRadius: 4, background: "rgba(255,207,139,0.2)", color: "#ffcf8b" }}>no plan yet</span> : null}
         <span style={{ marginLeft: "auto", fontSize: 11, opacity: 0.6 }}>
-          {unplanned ? "awaiting plan" : `${doneCount}/${plan.steps.length} done${plan.status === "completed" ? " · complete" : ""}`}
+          {noSteps ? "no steps" : `${doneCount}/${plan.steps.length} done${plan.status === "completed" ? " · complete" : ""}`}
         </span>
       </div>
       {plan.summary ? <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>{plan.summary}</div> : null}
-      {unplanned ? (
+      {noSteps ? (
         <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
-          Surfaced from your inbox/calendar — not broken into steps yet. It'll be planned automatically on the next
-          background sweep, or hit <strong>⚡ Plan now</strong>.
+          {autoPlanning
+            ? "Surfaced from your inbox/calendar — it'll be broken into steps automatically on the next background sweep, or hit ⚡ Plan now."
+            : "A simple to-do. Hit ⚡ Plan it to research it and break it into a step-by-step plan (with your files, the web, etc.)."}
         </div>
       ) : null}
       {plan.clarifyingQuestions?.length ? (
@@ -136,8 +138,8 @@ function PlanCard({
         })}
       </ol>
       <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-        <button style={unplanned ? btnPrimary : btn} onClick={onPlan} title={unplanned ? "Research it and break it into steps" : "Re-plan from scratch"}>
-          {unplanned ? "⚡ Plan now" : "↻ Refresh plan"}
+        <button style={noSteps ? btnPrimary : btn} onClick={onPlan} title={noSteps ? "Research it and break it into steps" : "Re-plan from scratch"}>
+          {noSteps ? "⚡ Plan it" : "↻ Refresh plan"}
         </button>
         <button style={btnPrimary} onClick={onOpen}>
           Open &amp; work it →
