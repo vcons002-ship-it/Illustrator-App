@@ -94,6 +94,9 @@ export interface TaskPlan {
   updatedAt: number;
   /** The buddy chat session that executes this plan (reuses multi-session chat). */
   sessionId?: string;
+  /** The PARENT Google Task this plan mirrors (set when created via create_task/add_task_group),
+   * so planning can push its steps back as sub-tasks under it. */
+  googleTaskId?: string;
 }
 
 /** A possible task the scan surfaced, before the user turns it into a plan. */
@@ -190,6 +193,7 @@ export interface TaskPlanInput {
   planned?: boolean;
   createdAt?: number;
   sessionId?: string;
+  googleTaskId?: string;
 }
 
 /** Clean + bound a whole plan (assigns step order, caps step count). */
@@ -219,6 +223,7 @@ export function normalizeTaskPlan(input: TaskPlanInput): TaskPlan {
     createdAt: input.createdAt ?? now,
     updatedAt: now,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    ...(input.googleTaskId ? { googleTaskId: input.googleTaskId } : {}),
   };
 }
 

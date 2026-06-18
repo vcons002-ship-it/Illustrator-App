@@ -137,6 +137,7 @@ import { bookFromText, bookFromHtml } from "@visual-reader/epub";
 // worker on load (no `window`/DOM) under dev's cross-origin isolation.
 import { buildProviders } from "@visual-reader/ui/providers";
 import type { ReaderSettings } from "@visual-reader/ui";
+import type { TaskPlan, TaskStep } from "@visual-reader/core";
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
 
 /**
@@ -1382,6 +1383,45 @@ function fileResearchDeps(force = false): Partial<BuddyDeps> {
   };
 }
 
+/** Push a planned task's steps to Google Tasks as SUB-TASKS under its parent (those not already
+ * linked), in order, and refresh the parent's notes with the summary. Best-effort; returns the plan
+ * with each step's new googleTaskId. (Google access is read-and-create only — re-planning ADDS new
+ * sub-tasks; it can't delete superseded ones.) */
+async function syncPlanToGoogleTasks(plan: TaskPlan, transport: DirectTransport, tok: () => Promise<string>): Promise<TaskPlan> {
+  const parentId = plan.googleTaskId;
+  if (!parentId) return plan;
+  const steps: TaskStep[] = [];
+  let previous: string | undefined;
+  for (const step of plan.steps) {
+    if (step.googleTaskId) {
+      steps.push(step);
+      previous = step.googleTaskId;
+      continue;
+    }
+    try {
+      const child = await createTask(transport, await tok(), {
+        title: step.title,
+        ...(step.detail ? { notes: step.detail } : {}),
+        ...(step.dueIso ? { due: step.dueIso } : {}),
+        parent: parentId,
+        ...(previous ? { previous } : {}),
+      });
+      steps.push(child.id ? { ...step, googleTaskId: child.id } : step);
+      if (child.id) previous = child.id;
+    } catch {
+      steps.push(step); // keep the in-app step even if its Google write failed
+    }
+  }
+  if (plan.summary) {
+    try {
+      await patchTask(transport, await tok(), parentId, { notes: plan.summary });
+    } catch {
+      /* best-effort */
+    }
+  }
+  return { ...plan, steps };
+}
+
 async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>): Promise<void> {
   const ac = new AbortController();
   chatAborts.set(msg.requestId, ac);
@@ -1430,9 +1470,14 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
     // Re-planning an existing task (a scan stub, or a refresh) keeps its id + chat session so the
     // planned version REPLACES the stub in place instead of adding a duplicate.
     const existing = msg.planId ? (await loadTaskPlans(store)).find((p) => p.id === msg.planId) : undefined;
-    const finalPlan = existing
+    let finalPlan = existing
       ? { ...plan, id: existing.id, ...(existing.sessionId ? { sessionId: existing.sessionId } : {}), createdAt: existing.createdAt }
       : plan;
+    // If this task is mirrored to a Google Task, push the freshly-planned steps back as SUB-TASKS
+    // under it and refresh its notes — so the Google Task reflects the plan, not just a flat title.
+    if (existing?.googleTaskId && googleConnected) {
+      finalPlan = await syncPlanToGoogleTasks({ ...finalPlan, googleTaskId: existing.googleTaskId }, transport, tok);
+    }
     await upsertTaskPlan(store, finalPlan);
     post({ type: "planned", requestId: msg.requestId, ok: true, plan: finalPlan });
   } catch (err) {
@@ -1783,6 +1828,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
                   title: t.title,
                   source: { kind: "typed", text: t.title },
                   ...(t.due ? { deadlineIso: t.due } : {}),
+                  ...(item.id ? { googleTaskId: item.id } : {}), // link so planning can add sub-tasks under it
                   steps: [],
                 }),
               );
@@ -1791,15 +1837,17 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             // A parent + nested sub-tasks: write them to Google Tasks AND mirror as one in-app
             // plan (parent = the task, sub-tasks = its steps) so both surfaces show the hierarchy.
             addTaskGroup: async (group) => {
-              await createTaskGroup(transport, await tok(), group);
+              const { parent, subtasks } = await createTaskGroup(transport, await tok(), group);
               const plan = normalizeTaskPlan({
                 title: group.title,
                 source: { kind: "typed", text: group.title },
                 ...(group.due ? { deadlineIso: group.due } : {}),
-                steps: group.subtasks.map((s) => ({
+                ...(parent.id ? { googleTaskId: parent.id } : {}),
+                steps: group.subtasks.map((s, i) => ({
                   title: s.title,
                   actor: "user_action",
                   ...(s.due ? { dueIso: s.due } : {}),
+                  ...(subtasks[i]?.id ? { googleTaskId: subtasks[i]!.id } : {}),
                 })),
               });
               await upsertTaskPlan(memoryStore(), plan);

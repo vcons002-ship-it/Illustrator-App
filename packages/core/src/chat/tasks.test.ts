@@ -73,6 +73,21 @@ describe("normalizeTaskPlan", () => {
     expect(real.planned).toBeUndefined();
   });
 
+  it("carries the Google Task link (parent) + per-step Google sub-task ids", () => {
+    const p = normalizeTaskPlan({
+      title: "Apply to the job",
+      source: { kind: "typed", text: "apply" },
+      googleTaskId: "gt-parent",
+      steps: [
+        { title: "Tailor resume", googleTaskId: "gt-sub-1" },
+        { title: "Submit", actor: "user_action" },
+      ],
+    });
+    expect(p.googleTaskId).toBe("gt-parent");
+    expect(p.steps[0]!.googleTaskId).toBe("gt-sub-1");
+    expect(p.steps[1]!.googleTaskId).toBeUndefined(); // an unsynced step
+  });
+
   it("keeps + bounds clarifying questions (drops empties, caps to 6)", () => {
     const p = normalizeTaskPlan({
       title: "Trip",
