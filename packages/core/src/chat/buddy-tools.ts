@@ -657,14 +657,24 @@ export function looksLikeToolJson(text: string): boolean {
   return cleaned.startsWith("{") && /"tool"\s*:/.test(cleaned);
 }
 
+/** Remove tool-call JSON objects (those with a `"tool"` field) from a reply, leaving the prose —
+ * so when a model mixes a briefing WITH a tool call, the raw JSON never reaches the reader. */
+export function stripToolCallJson(text: string): string {
+  let out = stripThink(text);
+  for (const chunk of extractJsonObjects(out)) {
+    if (/"tool"\s*:/.test(chunk)) out = out.replace(chunk, "");
+  }
+  return out.replace(/```(?:json)?\s*```/gi, "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 /**
- * Parse a model reply into buddy tool calls. The model is told to emit ONE JSON object, but
- * capable models sometimes BATCH several (one per line) in a single turn — so we recover them
- * ALL and the caller runs them in order, instead of leaking the raw JSON into the chat.
+ * Parse a model reply into buddy tool calls. The model is told to emit ONE JSON object, but real
+ * models routinely (a) BATCH several and (b) put a tool call AFTER some prose (a briefing, "let me
+ * check…"). We recover EVERY valid tool call wherever it appears — only objects with a KNOWN tool —
+ * so the call runs instead of the raw JSON leaking into the chat. The prose is shown separately.
  */
 export function parseBuddyToolCalls(text: string): BuddyToolCall[] {
-  const cleaned = stripFences(stripThink(text)).trim();
-  if (!cleaned.startsWith("{")) return [];
+  const cleaned = stripFences(stripThink(text));
   const out: BuddyToolCall[] = [];
   for (const chunk of extractJsonObjects(cleaned)) {
     let obj: Record<string, unknown>;

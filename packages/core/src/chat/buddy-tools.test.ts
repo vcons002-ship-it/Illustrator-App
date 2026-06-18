@@ -8,6 +8,7 @@ import {
   looksLikeToolJson,
   parseBuddyToolCall,
   parseBuddyToolCalls,
+  stripToolCallJson,
   toolFailureDirective,
   toolLimitNudge,
 } from "./buddy-tools.js";
@@ -117,12 +118,23 @@ describe("parseBuddyToolCall", () => {
     expect(parseBuddyToolCall('{"tool":"remove_library_book"}')).toBeUndefined();
   });
 
-  it("only fires when the entire reply is one JSON object", () => {
-    expect(
-      parseBuddyToolCall('Sure! {"tool":"search_books","query":"dracula"}'),
-    ).toBeUndefined();
+  it("recovers a tool call even when the model writes PROSE before it (the briefing bug)", () => {
+    // The model often narrates ("let me check…") then appends the call — run it, don't leak it.
+    expect(parseBuddyToolCall('Sure! {"tool":"search_books","query":"dracula"}')).toEqual({
+      tool: "search_books",
+      query: "dracula",
+    });
+    expect(parseBuddyToolCall('### Tasks\nLet me pull that up now…\n\n{"tool":"list_tasks","max":20}')).toEqual({
+      tool: "list_tasks",
+      max: 20,
+    });
     expect(parseBuddyToolCall("just prose")).toBeUndefined();
-    expect(parseBuddyToolCall('{"tool":"unknown_tool","query":"x"}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"unknown_tool","query":"x"}')).toBeUndefined(); // unknown tool ignored
+  });
+
+  it("stripToolCallJson leaves the prose, drops the tool JSON", () => {
+    expect(stripToolCallJson('Here is your briefing.\n\n{"tool":"list_tasks","max":20}')).toBe("Here is your briefing.");
+    expect(stripToolCallJson("plain answer, no tools")).toBe("plain answer, no tools");
   });
 
   it("accepts a fenced JSON reply and caps argument lengths", () => {
