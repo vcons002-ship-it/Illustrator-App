@@ -568,6 +568,13 @@ export function tasksIndexBlock(plan: TaskPlan): string {
   return lines.join("\n");
 }
 
+/** The id of the plan whose execution chat is `activeSessionId` (the task currently being
+ * "worked" in chat), or undefined when that session isn't tied to a plan. */
+export function resolveActiveTaskPlanId(plans: TaskPlan[], activeSessionId: string | undefined): string | undefined {
+  if (!activeSessionId) return undefined;
+  return plans.find((p) => p.sessionId === activeSessionId)?.id;
+}
+
 // ------------------------------------------------------------------- ignore list
 
 function isIgnoreRule(v: unknown): v is IgnoreRule {
