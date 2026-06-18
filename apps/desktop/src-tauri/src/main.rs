@@ -1052,6 +1052,11 @@ async fn oauth_loopback(
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    // The listener is non-blocking (so accept() can time out), but the accepted
+                    // socket inherits that flag on Windows — a non-blocking read would return
+                    // WouldBlock before the browser's request bytes arrive and fail the connect.
+                    // Force the stream back to blocking so the read waits for the redirect.
+                    let _ = stream.set_nonblocking(false);
                     let mut buf = [0u8; 4096];
                     let n = stream.read(&mut buf).map_err(|e| e.to_string())?;
                     let req = String::from_utf8_lossy(&buf[..n]);
