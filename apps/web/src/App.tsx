@@ -406,11 +406,16 @@ export function App() {
     },
     [libraryStore, planTask, refreshTaskPlans],
   );
-  // Plan the backlog of unplanned stubs, a FEW per sweep so it never hammers the model at once.
+  // Plan the backlog of unplanned stubs, up to `limit` per sweep, SEQUENTIALLY. `keepGoing` lets
+  // the caller stop early (e.g. the reader came back) so a long sweep yields instead of grinding on.
   const planPendingTasks = useCallback(
-    async (limit: number) => {
+    async (limit: number, keepGoing?: () => boolean) => {
+      if (limit <= 0) return;
       const pending = (await loadTaskPlans(libraryStore)).filter(needsPlanning).slice(0, limit);
-      for (const p of pending) await planOneTask(p.id);
+      for (const p of pending) {
+        if (keepGoing && !keepGoing()) break;
+        await planOneTask(p.id);
+      }
     },
     [libraryStore, planOneTask],
   );
@@ -1333,6 +1338,7 @@ export function App() {
     // backlog — so heavy planning happens in the background while you're away, not on demand.
     if (!googleConnected || settings.autoTaskScan === false) return;
     const IDLE_MS = 3 * 60_000;
+    const rate = settings.backgroundPlanRate ?? 2;
     const id = setInterval(() => {
       if (scanningRef.current || Date.now() - lastInputAt.current < IDLE_MS) return;
       scanningRef.current = true;
@@ -1340,7 +1346,8 @@ export function App() {
         .then(async (r) => {
           if (r.candidates?.length) await addCandidatesAsTasks(r.candidates);
           refreshCalendarRef.current(); // the scan just scraped the calendar — sync the app's view
-          await planPendingTasks(2); // chip away at the unplanned backlog
+          // Plan up to `rate` of the unplanned backlog, but stop early if the reader comes back.
+          await planPendingTasks(rate, () => Date.now() - lastInputAt.current >= IDLE_MS);
         })
         .catch(() => {})
         .finally(() => {
@@ -1348,7 +1355,7 @@ export function App() {
         });
     }, 90_000);
     return () => clearInterval(id);
-  }, [googleConnected, settings.autoTaskScan, scanInbox, addCandidatesAsTasks, planPendingTasks]);
+  }, [googleConnected, settings.autoTaskScan, settings.backgroundPlanRate, scanInbox, addCandidatesAsTasks, planPendingTasks]);
 
   // In-app calendar synced with the user's Google calendar(s). `calendarMonth` is the
   // first day of the visible month; `loadCalendarFor` pulls the events spanning the whole
