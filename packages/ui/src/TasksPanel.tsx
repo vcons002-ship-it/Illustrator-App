@@ -30,6 +30,8 @@ export interface TasksPanelProps {
   onScanNow?: () => void;
   /** An on-demand scan is running right now (the button shows a spinner + disables). */
   scanning?: boolean;
+  /** The last scan's outcome (count found/imported/synced, or an error) — shown under the button. */
+  scanMessage?: string;
   /** "This auto-planned task was junk" — block its sender and delete it. */
   onIgnoreSender?: (planId: string) => void;
   onDelete: (planId: string) => Promise<void> | void;
@@ -173,6 +175,7 @@ export const TasksPanel = memo(function TasksPanel({
   onPlanTask,
   onScanNow,
   scanning = false,
+  scanMessage,
   onIgnoreSender,
   onDelete,
   onClose,
@@ -285,6 +288,12 @@ export const TasksPanel = memo(function TasksPanel({
             <span style={{ fontSize: 12, opacity: 0.65 }}>
               The assistant researches it and lays the steps out on your timeline.
             </span>
+          </div>
+        )}
+
+        {scanMessage && (
+          <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 8, color: scanMessage.startsWith("⚠") ? "#ff9b9b" : "#9be8c0" }}>
+            {scanMessage}
           </div>
         )}
 

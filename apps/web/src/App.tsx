@@ -314,6 +314,7 @@ export function App() {
     googleConnect,
     planTask,
     scanInbox,
+    importGoogleTasks,
     loadCalendar,
     stockQuote,
     readPage,
@@ -1353,6 +1354,9 @@ export function App() {
       void scanInbox()
         .then(async (r) => {
           if (r.candidates?.length) await addCandidatesAsTasks(r.candidates);
+          // Pull any Google Tasks not yet mirrored locally (e.g. created on another device).
+          const imp = await importGoogleTasks().catch(() => ({ imported: 0 }));
+          if ((imp.imported ?? 0) > 0) refreshTaskPlans();
           refreshCalendarRef.current(); // the scan just scraped the calendar — sync the app's view
           // Plan up to `rate` of the unplanned backlog, but stop early if the reader comes back.
           await planPendingTasks(rate, () => Date.now() - lastInputAt.current >= IDLE_MS);
@@ -1363,7 +1367,7 @@ export function App() {
         });
     }, 90_000);
     return () => clearInterval(id);
-  }, [googleConnected, settings.autoTaskScan, settings.backgroundPlanRate, scanInbox, addCandidatesAsTasks, planPendingTasks]);
+  }, [googleConnected, settings.autoTaskScan, settings.backgroundPlanRate, scanInbox, importGoogleTasks, addCandidatesAsTasks, refreshTaskPlans, planPendingTasks]);
 
   // In-app calendar synced with the user's Google calendar(s). `calendarMonth` is the
   // first day of the visible month; `loadCalendarFor` pulls the events spanning the whole
@@ -1375,9 +1379,10 @@ export function App() {
   });
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [calendarLoading, setCalendarLoading] = useState(false);
+  const [calendarError, setCalendarError] = useState<string | undefined>();
   const loadCalendarFor = useCallback(
-    async (month: Date, silent = false) => {
-      if (!googleConnected) return;
+    async (month: Date, silent = false): Promise<{ ok: boolean; count: number; error?: string }> => {
+      if (!googleConnected) return { ok: false, count: 0 };
       // Cover the 6×7 grid: from the Sunday on/before the 1st to ~42 days later.
       const first = new Date(month.getFullYear(), month.getMonth(), 1);
       const start = new Date(first);
@@ -1387,7 +1392,14 @@ export function App() {
       if (!silent) setCalendarLoading(true);
       try {
         const res = await loadCalendar(start.toISOString(), end.toISOString());
-        if (res.ok && res.events) setCalendarEvents(res.events);
+        if (res.ok && res.events) {
+          setCalendarEvents(res.events);
+          setCalendarError(undefined);
+          return { ok: true, count: res.events.length };
+        }
+        // A failed load shouldn't wipe the last-good view; just record why it's not updating.
+        if (!res.ok) setCalendarError(res.error ?? "Couldn't load your Google calendar.");
+        return { ok: res.ok, count: res.events?.length ?? 0, ...(res.error ? { error: res.error } : {}) };
       } finally {
         if (!silent) setCalendarLoading(false);
       }
@@ -1411,19 +1423,42 @@ export function App() {
   // per-task "Plan" button, so a manual scan is fast and never kicks off long LLM work.
   const scanningNowRef = useRef(false);
   const [scanningNow, setScanningNow] = useState(false);
+  // A short outcome line shown under the Scan button so a manual scan never looks like it "did
+  // nothing": it reports what it found/synced, or surfaces the actual Google error instead of
+  // failing silently.
+  const [scanMessage, setScanMessage] = useState<string | undefined>();
   const scanNow = useCallback(async () => {
     if (!googleConnected || scanningNowRef.current) return;
     scanningNowRef.current = true;
     setScanningNow(true);
+    setScanMessage(undefined);
     try {
-      const r = await scanInbox();
-      if (r.candidates?.length) await addCandidatesAsTasks(r.candidates);
-      refreshCalendar();
+      // Run both Google reads; surface the first real error rather than swallowing it.
+      const [scan, imported] = await Promise.all([scanInbox(), importGoogleTasks()]);
+      if (scan.candidates?.length) await addCandidatesAsTasks(scan.candidates);
+      if ((imported.imported ?? 0) > 0) refreshTaskPlans();
+      const cal = await loadCalendarFor(calendarMonthRef.current, true);
+      const err = scan.error || imported.error || cal?.error;
+      if (err) {
+        setScanMessage(`⚠ Scan failed: ${err}`);
+      } else {
+        const found = scan.candidates?.length ?? 0;
+        const added = imported.imported ?? 0;
+        const events = cal?.count ?? 0;
+        const bits = [
+          found ? `${found} new item${found === 1 ? "" : "s"} from email/calendar` : "",
+          added ? `${added} Google task${added === 1 ? "" : "s"} imported` : "",
+          `${events} calendar event${events === 1 ? "" : "s"} synced`,
+        ].filter(Boolean);
+        setScanMessage(found || added ? `✓ ${bits.join(" · ")}` : `✓ Up to date — ${bits.join(" · ")}`);
+      }
+    } catch (e) {
+      setScanMessage(`⚠ Scan failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       scanningNowRef.current = false;
       setScanningNow(false);
     }
-  }, [googleConnected, scanInbox, addCandidatesAsTasks, refreshCalendar]);
+  }, [googleConnected, scanInbox, importGoogleTasks, addCandidatesAsTasks, refreshTaskPlans, loadCalendarFor]);
   const openCalendar = useCallback(() => {
     setShowCalendar(true);
     void loadCalendarFor(calendarMonth);
@@ -3959,6 +3994,7 @@ export function App() {
           creatingTask={creatingTask}
           onCreateTask={(title, dueIso) => void onCreateTask(title, dueIso)}
           {...(googleConnected ? { onScanNow: () => void scanNow(), scanning: scanningNow } : {})}
+          {...(scanMessage ? { scanMessage } : {})}
           onPlanTask={(id) => void planOneTask(id)}
           onOpenTask={(id) => void openTaskInChat(id)}
           onAdvanceStep={onAdvanceTaskStep}
@@ -3978,6 +4014,7 @@ export function App() {
           deadlines={calendarDeadlines}
           month={calendarMonth}
           loading={calendarLoading}
+          {...(calendarError ? { error: calendarError } : {})}
           onPrev={() => shiftCalendarMonth(-1)}
           onNext={() => shiftCalendarMonth(1)}
           onToday={() => shiftCalendarMonth("today")}

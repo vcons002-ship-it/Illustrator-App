@@ -30,6 +30,8 @@ export interface CalendarPanelProps {
   onOpenTask?: (planId: string) => void;
   onClose: () => void;
   loading?: boolean;
+  /** When set, the last Google sync failed — shown in the header (the last-good grid stays). */
+  error?: string;
 }
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -70,6 +72,7 @@ export const CalendarPanel = memo(function CalendarPanel({
   onOpenTask,
   onClose,
   loading = false,
+  error,
 }: CalendarPanelProps) {
   const [selected, setSelected] = useState<string | null>(null);
 
@@ -123,6 +126,11 @@ export const CalendarPanel = memo(function CalendarPanel({
             {MONTHS[month.getMonth()]} {month.getFullYear()}
           </span>
           {loading ? <span style={{ fontSize: 11, opacity: 0.6 }}>· syncing…</span> : null}
+          {!loading && error ? (
+            <span style={{ fontSize: 11, color: "#ff9b9b" }} title={error}>
+              · sync failed
+            </span>
+          ) : null}
           <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
             <button style={btn} onClick={onPrev} title="Previous month">
               ‹

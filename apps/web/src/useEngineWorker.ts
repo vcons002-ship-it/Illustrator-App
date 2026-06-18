@@ -180,9 +180,11 @@ export interface EngineWorkerApi {
   /** Research + plan a task into a persisted TaskPlan (progress streamed via onProgress). */
   planTask: (args: { source: TaskSource; sourceText: string; planId?: string; allowFiles?: boolean; onProgress?: (phase: string, note?: string) => void }) => Promise<{ ok: boolean; plan?: TaskPlan; error?: string }>;
   /** Idle scan: actionable email/calendar items as task candidates. */
-  scanInbox: () => Promise<{ ok: boolean; candidates?: TaskCandidate[] }>;
+  scanInbox: () => Promise<{ ok: boolean; candidates?: TaskCandidate[]; error?: string }>;
+  /** Mirror existing Google Tasks into the app's task list; resolves with how many were imported. */
+  importGoogleTasks: () => Promise<{ ok: boolean; imported?: number; error?: string }>;
   /** Load events across all Google calendars in a window (the calendar grid). */
-  loadCalendar: (timeMin: string, timeMax: string) => Promise<{ ok: boolean; events?: CalendarEvent[] }>;
+  loadCalendar: (timeMin: string, timeMax: string) => Promise<{ ok: boolean; events?: CalendarEvent[]; error?: string }>;
   /** Fetch a keyless stock quote (Stooq via the CORS-exempt transport). */
   stockQuote: (symbol: string) => Promise<{ ok: boolean; quote?: StockQuote }>;
   /** Fetch a URL's readable text + on-page links for the in-app browser. */
@@ -400,9 +402,11 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     Map<number, { resolve: (r: { ok: boolean; plan?: TaskPlan; error?: string }) => void; onProgress?: (phase: string, note?: string) => void }>
   >(new Map());
   // In-flight idle scans, resolved by `scanned`.
-  const scanRequests = useRef<Map<number, (r: { ok: boolean; candidates?: TaskCandidate[] }) => void>>(new Map());
+  const scanRequests = useRef<Map<number, (r: { ok: boolean; candidates?: TaskCandidate[]; error?: string }) => void>>(new Map());
+  // In-flight Google-Task imports, resolved by `googleTasksImported`.
+  const importTaskRequests = useRef<Map<number, (r: { ok: boolean; imported?: number; error?: string }) => void>>(new Map());
   // In-flight calendar loads, resolved by `calendarLoaded`.
-  const calendarRequests = useRef<Map<number, (r: { ok: boolean; events?: CalendarEvent[] }) => void>>(new Map());
+  const calendarRequests = useRef<Map<number, (r: { ok: boolean; events?: CalendarEvent[]; error?: string }) => void>>(new Map());
   // In-flight stock-quote fetches, resolved by `stockQuoted`.
   const quoteRequests = useRef<Map<number, (r: { ok: boolean; quote?: StockQuote }) => void>>(new Map());
   // In-flight page reads (in-app browser), resolved by `pageRead`.
@@ -777,13 +781,19 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
         case "scanned": {
           const resolve = scanRequests.current.get(msg.requestId);
           scanRequests.current.delete(msg.requestId);
-          resolve?.({ ok: msg.ok, ...(msg.candidates ? { candidates: msg.candidates } : {}) });
+          resolve?.({ ok: msg.ok, ...(msg.candidates ? { candidates: msg.candidates } : {}), ...(msg.error ? { error: msg.error } : {}) });
+          break;
+        }
+        case "googleTasksImported": {
+          const resolve = importTaskRequests.current.get(msg.requestId);
+          importTaskRequests.current.delete(msg.requestId);
+          resolve?.({ ok: msg.ok, ...(typeof msg.imported === "number" ? { imported: msg.imported } : {}), ...(msg.error ? { error: msg.error } : {}) });
           break;
         }
         case "calendarLoaded": {
           const resolve = calendarRequests.current.get(msg.requestId);
           calendarRequests.current.delete(msg.requestId);
-          resolve?.({ ok: msg.ok, ...(msg.events ? { events: msg.events } : {}) });
+          resolve?.({ ok: msg.ok, ...(msg.events ? { events: msg.events } : {}), ...(msg.error ? { error: msg.error } : {}) });
           break;
         }
         case "stockQuoted": {
@@ -1350,17 +1360,32 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     [],
   );
   const scanInbox = useCallback(
-    (): Promise<{ ok: boolean; candidates?: TaskCandidate[] }> =>
+    (): Promise<{ ok: boolean; candidates?: TaskCandidate[]; error?: string }> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
         const timeout = setTimeout(() => {
-          if (scanRequests.current.delete(requestId)) resolve({ ok: false });
+          if (scanRequests.current.delete(requestId)) resolve({ ok: false, error: "Scan timed out." });
         }, 60_000);
         scanRequests.current.set(requestId, (r) => {
           clearTimeout(timeout);
           resolve(r);
         });
         send({ type: "scanInbox", requestId });
+      }),
+    [],
+  );
+  const importGoogleTasks = useCallback(
+    (): Promise<{ ok: boolean; imported?: number; error?: string }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (importTaskRequests.current.delete(requestId)) resolve({ ok: false, error: "Importing Google Tasks timed out." });
+        }, 60_000);
+        importTaskRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "importGoogleTasks", requestId });
       }),
     [],
   );
@@ -1543,6 +1568,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     schwabPlaceOrder,
     planTask,
     scanInbox,
+    importGoogleTasks,
     loadCalendar,
     stockQuote,
     readPage,
