@@ -2406,6 +2406,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       text: outcome.text,
       transcript: outcome.transcript,
       ...(outcome.pendingTool ? { pendingTool: outcome.pendingTool } : {}),
+      ...(outcome.thinking ? { thinking: outcome.thinking } : {}),
     });
   } catch (err) {
     post({

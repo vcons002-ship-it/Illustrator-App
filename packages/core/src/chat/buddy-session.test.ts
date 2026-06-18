@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatCapable, ChatTurn } from "../providers/llm/chat.js";
-import { runBuddyTurn, type BuddyTurnEvent } from "./buddy-session.js";
+import { runBuddyTurn, nonEmptyAnswer, type BuddyTurnEvent } from "./buddy-session.js";
 import { MAX_BUDDY_TOOL_ROUNDS, type BuddyOpenedInfo } from "./buddy-tools.js";
 
 /** ChatCapable that replays scripted replies and records what it was sent. */
@@ -16,6 +16,58 @@ function scriptedLlm(replies: string[]): ChatCapable & { calls: ChatTurn[][] } {
 }
 
 const opened = (title: string): BuddyOpenedInfo => ({ title, chapters: 3, pages: 12, visuals: true });
+
+const baseDeps = {
+  openLibraryBook: async () => {
+    throw new Error("nope");
+  },
+  openWebText: async () => {
+    throw new Error("nope");
+  },
+  openPastedText: async (call: { title: string }) => opened(call.title),
+  removeLibraryBook: async () => ({ removed: "x" }),
+  setVisualStyle: async () => ({}),
+};
+
+describe("nonEmptyAnswer", () => {
+  it("keeps real text, falls back on empty (tool-aware)", () => {
+    expect(nonEmptyAnswer("hello", false)).toBe("hello");
+    expect(nonEmptyAnswer("  ", true)).toMatch(/results/i);
+    expect(nonEmptyAnswer("", false)).toMatch(/rephrase/i);
+  });
+});
+
+describe("runBuddyTurn — never-empty answer + thinking", () => {
+  it("re-prompts for a plain-text wrap-up when a tool round ends with no prose", async () => {
+    const llm = scriptedLlm(['{"tool":"search_books","query":"x"}', "", "All set — nothing notable came back."]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "look something up" }],
+      deps: { ...baseDeps, searchBooks: async () => [] },
+    });
+    expect(outcome.text).toBe("All set — nothing notable came back."); // not an empty bubble
+    expect(outcome.toolResults).toHaveLength(1);
+  });
+
+  it("falls back to a non-empty line when even the wrap-up is blank", async () => {
+    const llm = scriptedLlm(["", ""]); // blank, then blank again after the wrap-up nudge
+    const outcome = await runBuddyTurn({ llm, system: "sys", history: [{ role: "user", content: "hi" }], deps: baseDeps });
+    expect(outcome.text).toMatch(/rephrase/i);
+  });
+
+  it("carries the turn's thinking onto the outcome", async () => {
+    const llm: ChatCapable = {
+      async chat(_messages, opts) {
+        opts?.onThinking?.("weighing the options…");
+        return "Go with the blue one.";
+      },
+    };
+    const outcome = await runBuddyTurn({ llm, system: "sys", history: [{ role: "user", content: "which?" }], deps: baseDeps, onEvent: () => {} });
+    expect(outcome.text).toBe("Go with the blue one.");
+    expect(outcome.thinking).toBe("weighing the options…");
+  });
+});
 
 describe("runBuddyTurn", () => {
   it("returns plain prose without touching any tool", async () => {
@@ -362,9 +414,11 @@ describe("runBuddyTurn", () => {
         setVisualStyle: async () => ({}),
       },
     });
-    // Round cap reached: the final (still-JSON) reply is returned as text rather
-    // than executed again.
+    // Round cap reached: the tool stops executing (toolResults capped). The final still-JSON reply
+    // strips to empty, so instead of an empty bubble we make ONE plain-text wrap-up attempt; it's
+    // still JSON, so the answer falls back to a short non-empty line.
     expect(outcome.toolResults).toHaveLength(MAX_BUDDY_TOOL_ROUNDS);
-    expect(llm.calls).toHaveLength(MAX_BUDDY_TOOL_ROUNDS + 1);
+    expect(llm.calls).toHaveLength(MAX_BUDDY_TOOL_ROUNDS + 2); // +1 cap round, +1 wrap-up
+    expect(outcome.text.trim()).not.toBe(""); // never an empty answer
   });
 });
