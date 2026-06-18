@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from "react";
-import { dayToIso, ganttRowRef, needsPlanning, plansToGanttRows, sourceFrom, type TaskPlan, type TaskStep } from "@visual-reader/core";
+import { dayToIso, ganttRowRef, needsPlanning, plansToGanttRows, type TaskPlan, type TaskStep } from "@visual-reader/core";
 import { GanttChart } from "./GanttChart.js";
 
 /**
@@ -32,8 +32,9 @@ export interface TasksPanelProps {
   scanning?: boolean;
   /** The last scan's outcome (count found/imported/synced, or an error) — shown under the button. */
   scanMessage?: string;
-  /** "This auto-planned task was junk" — block its sender and delete it. */
-  onIgnoreSender?: (planId: string) => void;
+  /** "Don't surface this again" — add an ignore rule (the item, else its sender, else its title)
+   * so future scans skip it, and delete the plan. Shown on auto-surfaced (scan/email/calendar) tasks. */
+  onIgnoreTask?: (planId: string) => void;
   onDelete: (planId: string) => Promise<void> | void;
   onClose: () => void;
 }
@@ -48,7 +49,7 @@ function PlanCard({
   onPlan,
   onAdvance,
   onToggleStep,
-  onIgnoreSender,
+  onIgnoreTask,
   onDelete,
 }: {
   plan: TaskPlan;
@@ -56,7 +57,7 @@ function PlanCard({
   onPlan: () => void;
   onAdvance: (stepId: string) => void;
   onToggleStep: (stepId: string, done: boolean) => void;
-  onIgnoreSender?: () => void;
+  onIgnoreTask?: () => void;
   onDelete: () => void;
 }) {
   const doneCount = plan.steps.filter((s) => s.status === "done").length;
@@ -151,9 +152,9 @@ function PlanCard({
             ✓ Mark step done
           </button>
         ) : null}
-        {onIgnoreSender && sourceFrom(plan.source) ? (
-          <button style={btn} onClick={onIgnoreSender} title={`Junk? Ignore ${sourceFrom(plan.source)} & remove`}>
-            🚫 Ignore sender
+        {onIgnoreTask && (plan.source.kind === "scan" || plan.source.kind === "email" || plan.source.kind === "calendar") ? (
+          <button style={btn} onClick={onIgnoreTask} title="Don't surface this again — future inbox/calendar scans will skip it (Delete alone lets it re-appear)">
+            🚫 Ignore
           </button>
         ) : null}
         <button style={btn} onClick={onDelete} title="Delete this plan">
@@ -176,7 +177,7 @@ export const TasksPanel = memo(function TasksPanel({
   onScanNow,
   scanning = false,
   scanMessage,
-  onIgnoreSender,
+  onIgnoreTask,
   onDelete,
   onClose,
 }: TasksPanelProps) {
@@ -224,7 +225,7 @@ export const TasksPanel = memo(function TasksPanel({
       onPlan={() => onPlanTask(p.id)}
       onAdvance={(stepId) => void onAdvanceStep(p.id, stepId)}
       onToggleStep={(stepId, done) => void onToggleStepDone(p.id, stepId, done)}
-      {...(onIgnoreSender ? { onIgnoreSender: () => onIgnoreSender(p.id) } : {})}
+      {...(onIgnoreTask ? { onIgnoreTask: () => onIgnoreTask(p.id) } : {})}
       onDelete={() => void onDelete(p.id)}
     />
   );

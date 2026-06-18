@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildGoogleAuthUrl,
   createTask,
+  toTaskDue,
   patchTask,
   decodeBase64Url,
   exchangeGoogleCode,
@@ -205,6 +206,29 @@ describe("listEvents / createTask network shape", () => {
     expect(task.title).toBe("Call dentist");
     expect(t.requests[0]!.method).toBe("POST");
     expect(t.requests[0]!.body).toMatchObject({ title: "Call dentist", due: "2026-06-20T00:00:00Z" });
+  });
+
+  it("createTask widens a bare date deadline to RFC 3339 (Google rejects YYYY-MM-DD)", async () => {
+    const t = new FakeTransport({ id: "t2b", title: "Tailor resume" });
+    await createTask(t, "tok", { title: "Tailor resume", due: "2026-07-01" });
+    expect(t.requests[0]!.body).toMatchObject({ title: "Tailor resume", due: "2026-07-01T00:00:00.000Z" });
+  });
+
+  it("createTask nests a sub-task via the parent/previous query params (no malformed due dropped)", async () => {
+    const t = new FakeTransport({ id: "sub1", title: "Submit application" });
+    await createTask(t, "tok", { title: "Submit application", due: "not-a-date", parent: "p1", previous: "sub0" });
+    expect(t.requests[0]!.url).toMatch(/parent=p1/);
+    expect(t.requests[0]!.url).toMatch(/previous=sub0/);
+    expect(t.requests[0]!.body).not.toHaveProperty("due"); // unrecognised due omitted, insert still succeeds
+  });
+
+  it("toTaskDue normalises bare dates, passes through date-times, drops junk", () => {
+    expect(toTaskDue("2026-07-01")).toBe("2026-07-01T00:00:00.000Z");
+    expect(toTaskDue("2026-07-01T09:30:00-04:00")).toBe("2026-07-01T09:30:00-04:00");
+    expect(toTaskDue("2026-07-01T00:00:00Z")).toBe("2026-07-01T00:00:00Z");
+    expect(toTaskDue("next week")).toBeUndefined();
+    expect(toTaskDue("")).toBeUndefined();
+    expect(toTaskDue(undefined)).toBeUndefined();
   });
 
   it("patchTask PATCHes the completion status (remote-bus write-back)", async () => {

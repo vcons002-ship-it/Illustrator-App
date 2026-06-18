@@ -558,7 +558,20 @@ export async function listTaskTree(
     }));
 }
 
-/** Add a to-do. `due` is an RFC 3339 timestamp (date part honoured). */
+/** Google Tasks wants an RFC 3339 timestamp for `due` (it only honours the date part). Plans
+ * carry a bare `YYYY-MM-DD` deadline, which the API REJECTS with a 400 — silently dropping the
+ * task (or sub-task) whose write then fails. Widen a bare date to midnight UTC, pass through a
+ * value that already has a time, and omit anything unrecognisable rather than send a malformed
+ * `due`. PURE — unit-tested. */
+export function toTaskDue(due: string | undefined): string | undefined {
+  if (!due) return undefined;
+  const s = due.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s}T00:00:00.000Z`;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) return s; // already a date-time
+  return undefined; // unrecognised — better to omit than have Google reject the whole insert
+}
+
+/** Add a to-do. `due` is a date or RFC 3339 timestamp (normalised; the API honours the date part). */
 export async function createTask(
   transport: Transport,
   token: string,
@@ -569,10 +582,11 @@ export async function createTask(
   if (t.parent) params.set("parent", t.parent);
   if (t.previous) params.set("previous", t.previous);
   const url = params.toString() ? `${TASKS}?${params.toString()}` : TASKS;
+  const due = toTaskDue(t.due);
   const body = {
     title: t.title,
     ...(t.notes ? { notes: t.notes } : {}),
-    ...(t.due ? { due: t.due } : {}),
+    ...(due ? { due } : {}),
   };
   return parseTask(await apiPost<RawTask>(transport, token, url, body));
 }
