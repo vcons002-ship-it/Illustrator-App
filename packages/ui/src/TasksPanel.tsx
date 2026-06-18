@@ -35,7 +35,12 @@ export interface TasksPanelProps {
   /** "Don't surface this again" — add an ignore rule (the item, else its sender, else its title)
    * so future scans skip it, and delete the plan. Shown on auto-surfaced (scan/email/calendar) tasks. */
   onIgnoreTask?: (planId: string) => void;
+  /** Soft-remove a task (archives it to the undoable "Removed" list). */
   onDelete: (planId: string) => Promise<void> | void;
+  /** Restore a removed/ignored task back to active (undo). */
+  onRestore?: (planId: string) => void;
+  /** Permanently delete a task from the Removed list. */
+  onDeleteForever?: (planId: string) => void;
   onClose: () => void;
 }
 
@@ -179,12 +184,12 @@ function PlanCard({
           </button>
         ) : null}
         {onIgnoreTask && (plan.source.kind === "scan" || plan.source.kind === "email" || plan.source.kind === "calendar") ? (
-          <button style={btn} onClick={onIgnoreTask} title="Don't surface this again — future inbox/calendar scans will skip it (Delete alone lets it re-appear)">
+          <button style={btn} onClick={onIgnoreTask} title="Don't surface this again — also tells future scans/imports to skip it. Undo from the Removed list.">
             🚫 Ignore
           </button>
         ) : null}
-        <button style={btn} onClick={onDelete} title="Delete this plan">
-          Delete
+        <button style={btn} onClick={onDelete} title="Remove this task (kept in the Removed list — you can undo)">
+          ✕ Remove
         </button>
       </div>
     </div>
@@ -205,12 +210,20 @@ export const TasksPanel = memo(function TasksPanel({
   scanMessage,
   onIgnoreTask,
   onDelete,
+  onRestore,
+  onDeleteForever,
   onClose,
 }: TasksPanelProps) {
   const active = useMemo(
     () => plans.filter((p) => p.status !== "archived").sort((a, b) => b.updatedAt - a.updatedAt),
     [plans],
   );
+  // Removed/ignored tasks — the undoable trash, newest first.
+  const removed = useMemo(
+    () => plans.filter((p) => p.status === "archived").sort((a, b) => (b.archivedAt ?? b.updatedAt) - (a.archivedAt ?? a.updatedAt)),
+    [plans],
+  );
+  const [showRemoved, setShowRemoved] = useState(false);
   const [view, setView] = useState<"timeline" | "list">("timeline");
   const [selectedId, setSelectedId] = useState<string | undefined>();
   // Which parent tasks are expanded to show their sub-tasks inline in the all-tasks Gantt.
@@ -391,6 +404,39 @@ export const TasksPanel = memo(function TasksPanel({
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{active.map((p) => cardFor(p))}</div>
         )}
+
+        {/* Removed/ignored tasks — the undoable trash. Restore brings one back (and un-ignores it);
+            Delete forever drops it for good. */}
+        {removed.length > 0 ? (
+          <div style={{ marginTop: 14, borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 8 }}>
+            <button style={{ ...btn, fontSize: 12 }} onClick={() => setShowRemoved((v) => !v)}>
+              🗑 Removed ({removed.length}) {showRemoved ? "▾" : "▸"}
+            </button>
+            {showRemoved ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
+                {removed.map((p) => (
+                  <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, opacity: 0.85 }}>
+                    <span style={{ flex: 1 }}>
+                      {p.archivedReason === "ignored" ? "🚫 " : "✕ "}
+                      {p.title}
+                      <span style={{ opacity: 0.5 }}> · {p.archivedReason === "ignored" ? "ignored" : "removed"}</span>
+                    </span>
+                    {onRestore ? (
+                      <button style={btn} onClick={() => onRestore(p.id)} title="Bring this task back (and un-ignore it)">
+                        ↩ Restore
+                      </button>
+                    ) : null}
+                    {onDeleteForever ? (
+                      <button style={btn} onClick={() => onDeleteForever(p.id)} title="Delete permanently (cannot undo)">
+                        Delete forever
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   );

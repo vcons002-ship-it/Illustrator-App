@@ -5,6 +5,9 @@ import {
   addIgnore,
   advanceStep,
   deleteTaskPlan,
+  archiveTaskPlan,
+  restoreTaskPlan,
+  removeIgnore,
   isIgnored,
   loadIgnored,
   loadTaskPlans,
@@ -206,6 +209,32 @@ describe("task plan store", () => {
     expect(loaded[0]!.title).toBe("Renew (edited)");
     await deleteTaskPlan(store, p.id);
     expect(await loadTaskPlans(store)).toEqual([]);
+  });
+
+  it("archive soft-removes (keeps the plan, hidden from active), restore brings it back", async () => {
+    const store = new InMemoryStore();
+    const p = plan();
+    await upsertTaskPlan(store, p);
+    await archiveTaskPlan(store, p.id, "ignored");
+    const removed = (await loadTaskPlans(store))[0]!;
+    expect(removed.status).toBe("archived"); // still in the store (so it won't re-surface/re-import)
+    expect(removed.archivedReason).toBe("ignored");
+    expect(removed.archivedAt).toBeGreaterThan(0);
+    await restoreTaskPlan(store, p.id);
+    const back = (await loadTaskPlans(store))[0]!;
+    expect(back.status).toBe("active");
+    expect(back.archivedReason).toBeUndefined();
+    expect(back.archivedAt).toBeUndefined();
+  });
+
+  it("removeIgnore deletes a rule (the undo for a restored ignore)", async () => {
+    const store = new InMemoryStore();
+    await addIgnore(store, { kind: "sender", value: "spam@x.com" });
+    await addIgnore(store, { kind: "phrase", value: "sale" });
+    await removeIgnore(store, { kind: "sender", value: "SPAM@x.com" }); // case-insensitive
+    const rules = await loadIgnored(store);
+    expect(rules).toHaveLength(1);
+    expect(rules[0]!.kind).toBe("phrase");
   });
 
   it("evicts the oldest plan past the cap", async () => {

@@ -50,6 +50,9 @@ import {
   forgetSkill,
   loadTaskPlans,
   deleteTaskPlan,
+  archiveTaskPlan,
+  restoreTaskPlan,
+  removeIgnore,
   upsertTaskPlan,
   updateTaskStep,
   loadScheduledTasks,
@@ -472,20 +475,55 @@ export function App() {
     },
     [libraryStore, planOneTask, beginActivity],
   );
-  // "Don't surface this again" — add the most precise ignore rule we can (the exact email/event
-  // item, else its sender, else its title as a phrase), then delete the plan. Future scans skip it
-  // (see dedupeCandidates/isIgnored), so a recurring inbox/calendar item stays gone instead of
-  // re-appearing on the next sweep — which plain Delete can't do.
+  // The most precise "don't surface this" rule for a plan: the exact email/event item, else its
+  // sender, else its title as a phrase. Shared by Ignore (adds it) and Restore (removes it).
+  const ignoreRuleFor = useCallback((plan: TaskPlan): { kind: "item" | "sender" | "phrase"; value: string } | undefined => {
+    const id = sourceId(plan.source);
+    const from = sourceFrom(plan.source);
+    if (id) return { kind: "item", value: id };
+    if (from) return { kind: "sender", value: from };
+    if (plan.title) return { kind: "phrase", value: plan.title };
+    return undefined;
+  }, []);
+  // "Don't surface this again" — record the ignore rule AND soft-remove the plan (archive, not hard
+  // delete) so it lands in the undoable "Removed" list. Because the archived plan stays "known",
+  // future scans/imports skip it too (dedupeCandidates/importableGoogleTasks see ALL plans).
   const ignoreTask = useCallback(
     async (planId: string) => {
       const plan = (await loadTaskPlans(libraryStore)).find((p) => p.id === planId);
-      if (plan) {
-        const id = sourceId(plan.source);
-        const from = sourceFrom(plan.source);
-        if (id) await addIgnore(libraryStore, { kind: "item", value: id }).catch(() => {});
-        else if (from) await addIgnore(libraryStore, { kind: "sender", value: from }).catch(() => {});
-        else if (plan.title) await addIgnore(libraryStore, { kind: "phrase", value: plan.title }).catch(() => {});
+      const rule = plan ? ignoreRuleFor(plan) : undefined;
+      if (rule) await addIgnore(libraryStore, rule).catch(() => {});
+      await archiveTaskPlan(libraryStore, planId, "ignored");
+      refreshTaskPlans();
+    },
+    [libraryStore, refreshTaskPlans, ignoreRuleFor],
+  );
+  // Soft-remove (the per-card "Remove" button) — archive without a broad ignore rule. Undoable.
+  const removeTask = useCallback(
+    async (planId: string) => {
+      await archiveTaskPlan(libraryStore, planId, "removed");
+      refreshTaskPlans();
+    },
+    [libraryStore, refreshTaskPlans],
+  );
+  // Undo a removal: un-archive, and if it had been Ignored, drop the ignore rule too so it can
+  // surface again.
+  const restoreTask = useCallback(
+    async (planId: string) => {
+      const plan = (await loadTaskPlans(libraryStore)).find((p) => p.id === planId);
+      if (plan?.archivedReason === "ignored") {
+        const rule = ignoreRuleFor(plan);
+        if (rule) await removeIgnore(libraryStore, rule).catch(() => {});
       }
+      await restoreTaskPlan(libraryStore, planId);
+      refreshTaskPlans();
+    },
+    [libraryStore, refreshTaskPlans, ignoreRuleFor],
+  );
+  // Permanently delete (from the Removed list) — gone for good (a fresh scan/import could surface
+  // a still-existing source again later).
+  const deleteTaskForever = useCallback(
+    async (planId: string) => {
       await deleteTaskPlan(libraryStore, planId);
       refreshTaskPlans();
     },
@@ -4177,10 +4215,9 @@ export function App() {
           onAdvanceStep={onAdvanceTaskStep}
           onToggleStepDone={onToggleStepDone}
           onIgnoreTask={ignoreTask}
-          onDelete={async (id) => {
-            await deleteTaskPlan(libraryStore, id);
-            refreshTaskPlans();
-          }}
+          onDelete={(id) => void removeTask(id)}
+          onRestore={(id) => void restoreTask(id)}
+          onDeleteForever={(id) => void deleteTaskForever(id)}
           onClose={() => setShowTasks(false)}
         />
       )}
