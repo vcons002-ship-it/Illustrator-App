@@ -82,7 +82,9 @@ import {
   createEvent,
   listTasks,
   createTask,
+  createTaskGroup,
   runTaskPlanning,
+  normalizeTaskPlan,
   upsertTaskPlan,
   loadTaskPlans,
   normalizeScheduledTask,
@@ -1763,6 +1765,23 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             createEvent: async (ev) => createEvent(transport, await tok(), ev),
             listTasks: async (max?: number) => listTasks(transport, await tok(), max),
             createTask: async (t) => createTask(transport, await tok(), t),
+            // A parent + nested sub-tasks: write them to Google Tasks AND mirror as one in-app
+            // plan (parent = the task, sub-tasks = its steps) so both surfaces show the hierarchy.
+            addTaskGroup: async (group) => {
+              await createTaskGroup(transport, await tok(), group);
+              const plan = normalizeTaskPlan({
+                title: group.title,
+                source: { kind: "typed", text: group.title },
+                ...(group.due ? { deadlineIso: group.due } : {}),
+                steps: group.subtasks.map((s) => ({
+                  title: s.title,
+                  actor: "user_action",
+                  ...(s.due ? { dueIso: s.due } : {}),
+                })),
+              });
+              await upsertTaskPlan(memoryStore(), plan);
+              return { title: group.title, count: group.subtasks.length };
+            },
           };
         })()
       : {};

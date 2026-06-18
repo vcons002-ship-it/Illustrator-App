@@ -2242,6 +2242,7 @@ export function App() {
           : c.tool === "create_event" ? "Adding a calendar event…"
           : c.tool === "list_tasks" ? "Checking your to-dos…"
           : c.tool === "create_task" ? "Adding a to-do to Google Tasks…"
+          : c.tool === "add_task_group" ? "Adding a task with its sub-tasks…"
           : c.tool === "schedule_task" ? "Scheduling a task…"
           : c.tool === "mark_step_done" || c.tool === "update_task_step" ? "Updating the plan…"
           : c.tool === "open_web_text" ? "Fetching the text and opening it…"
@@ -2288,8 +2289,9 @@ export function App() {
         setShowChat(true);
       } else {
         setBuddyActivity("");
-        // The agent just wrote to the calendar — reflect it in the app's calendar view.
+        // The agent just wrote to the calendar / tasks — reflect it in the app's views.
         if (e.kind === "toolResult" && e.call.tool === "create_event") refreshCalendar();
+        if (e.kind === "toolResult" && e.call.tool === "add_task_group") refreshTaskPlans();
         const typed = userBubbleText ?? "";
         if (e.hits?.length) {
           appendBuddy({

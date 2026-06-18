@@ -514,14 +514,47 @@ export async function listTasks(transport: Transport, token: string, max = 20): 
 export async function createTask(
   transport: Transport,
   token: string,
-  t: { title: string; notes?: string; due?: string },
+  t: { title: string; notes?: string; due?: string; parent?: string; previous?: string },
 ): Promise<TaskItem> {
+  // `parent` nests this task under another (a sub-task); `previous` keeps insertion order.
+  const params = new URLSearchParams();
+  if (t.parent) params.set("parent", t.parent);
+  if (t.previous) params.set("previous", t.previous);
+  const url = params.toString() ? `${TASKS}?${params.toString()}` : TASKS;
   const body = {
     title: t.title,
     ...(t.notes ? { notes: t.notes } : {}),
     ...(t.due ? { due: t.due } : {}),
   };
-  return parseTask(await apiPost<RawTask>(transport, token, TASKS, body));
+  return parseTask(await apiPost<RawTask>(transport, token, url, body));
+}
+
+/** Create a PARENT task plus nested SUB-TASKS in Google Tasks, preserving order. Google Tasks
+ * supports a single level of nesting (parent + children), which is exactly this shape. */
+export async function createTaskGroup(
+  transport: Transport,
+  token: string,
+  group: { title: string; notes?: string; due?: string; subtasks: { title: string; notes?: string; due?: string }[] },
+): Promise<{ parent: TaskItem; subtasks: TaskItem[] }> {
+  const parent = await createTask(transport, token, {
+    title: group.title,
+    ...(group.notes ? { notes: group.notes } : {}),
+    ...(group.due ? { due: group.due } : {}),
+  });
+  const subtasks: TaskItem[] = [];
+  let previous: string | undefined;
+  for (const st of group.subtasks) {
+    const child = await createTask(transport, token, {
+      title: st.title,
+      ...(st.notes ? { notes: st.notes } : {}),
+      ...(st.due ? { due: st.due } : {}),
+      ...(parent.id ? { parent: parent.id } : {}),
+      ...(previous ? { previous } : {}),
+    });
+    subtasks.push(child);
+    if (child.id) previous = child.id;
+  }
+  return { parent, subtasks };
 }
 
 /** Flip a to-do's completion and/or update its notes (the remote-bus write-back when a
