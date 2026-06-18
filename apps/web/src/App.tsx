@@ -396,6 +396,9 @@ export function App() {
   const [showTasks, setShowTasks] = useState(false);
   const [taskPlans, setTaskPlans] = useState<TaskPlan[]>([]);
   const [planningCount, setPlanningCount] = useState(0);
+  // The last per-task plan's outcome (success/steps, or the actual error) — shown in the Tasks
+  // panel so clicking "Plan" is never a silent no-op.
+  const [planMessage, setPlanMessage] = useState<string | undefined>();
   const refreshTaskPlans = useCallback(() => {
     void loadTaskPlans(libraryStore).then(setTaskPlans).catch(() => {});
   }, [libraryStore]);
@@ -439,6 +442,7 @@ export function App() {
       const plan = (await loadTaskPlans(libraryStore)).find((p) => p.id === planId);
       if (!plan) return;
       const act = track ? beginActivity(`Planning: ${plan.title}`) : undefined;
+      if (track) setPlanMessage(`🔄 Planning “${plan.title}”…`);
       setPlanningCount((n) => n + 1);
       try {
         const sourceText = [plan.title, plan.summary, plan.deadlineIso ? `Hard deadline: ${plan.deadlineIso}.` : ""]
@@ -446,11 +450,18 @@ export function App() {
           .join(" ");
         const res = await planTask({ source: plan.source, sourceText, planId, ...(userInitiated ? { allowFiles: true } : {}) });
         if (res.ok) refreshTaskPlans();
-        if (act) {
-          const n = res.plan?.steps.length ?? 0;
-          act.finish(res.ok ? { detail: `${n} step${n === 1 ? "" : "s"}` } : { status: "error", detail: res.error ?? "failed" });
-          if (res.ok) buddyNoteRef.current(`🧩 Planned “${plan.title}” — ${n} step${n === 1 ? "" : "s"}.`);
+        const n = res.plan?.steps.length ?? 0;
+        act?.finish(res.ok ? { detail: `${n} step${n === 1 ? "" : "s"}` } : { status: "error", detail: res.error ?? "failed" });
+        if (res.ok && n > 0) buddyNoteRef.current(`🧩 Planned “${plan.title}” — ${n} step${n === 1 ? "" : "s"}.`);
+        // Always tell the user the outcome — a per-task plan used to fail/return nothing silently.
+        if (track) {
+          if (!res.ok) setPlanMessage(`⚠ Couldn't plan “${plan.title}”: ${res.error ?? "the planner failed. Check that a text model is set up in Settings."}`);
+          else if (n === 0) setPlanMessage(`⚠ The planner returned no steps for “${plan.title}” — try rephrasing it or adding detail.`);
+          else setPlanMessage(`✓ Planned “${plan.title}” — ${n} step${n === 1 ? "" : "s"}. Click it to see the steps.`);
         }
+      } catch (e) {
+        if (track) setPlanMessage(`⚠ Couldn't plan “${plan.title}”: ${e instanceof Error ? e.message : String(e)}`);
+        act?.finish({ status: "error", detail: e instanceof Error ? e.message : String(e) });
       } finally {
         setPlanningCount((n) => Math.max(0, n - 1));
       }
@@ -4249,6 +4260,7 @@ export function App() {
           onCreateTask={(title, dueIso, recurrence) => void onCreateTask(title, dueIso, recurrence)}
           {...(googleConnected ? { onScanNow: () => void scanNow(), scanning: scanningNow } : {})}
           {...(scanMessage ? { scanMessage } : {})}
+          {...(planMessage ? { planMessage } : {})}
           onPlanTask={(id) => void planOneTask(id)}
           onOpenTask={(id) => void openTaskInChat(id)}
           onAdvanceStep={onAdvanceTaskStep}
