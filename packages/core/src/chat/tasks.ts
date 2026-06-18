@@ -349,6 +349,31 @@ export function needsPlanning(plan: TaskPlan): boolean {
   return plan.planned === false;
 }
 
+/** Render a plan as readable notes for the PARENT Google Task, so the whole plan — summary, the
+ * numbered steps (with who does each + due dates), and the deadline — is visible right in Google
+ * Tasks, not just as a bare title with child rows. Bounded to Google's notes limit (~8 KB). PURE. */
+export function formatPlanForGoogleNotes(plan: {
+  summary?: string;
+  deadlineIso?: string;
+  steps: readonly { title: string; detail?: string; actor: StepActor; status: StepStatus; dueIso?: string }[];
+}): string {
+  const lines: string[] = [];
+  if (plan.summary) lines.push(plan.summary.trim(), "");
+  if (plan.steps.length) {
+    lines.push(`PLAN — ${plan.steps.length} step${plan.steps.length === 1 ? "" : "s"}:`);
+    plan.steps.forEach((s, i) => {
+      const mark = s.status === "done" ? "[x]" : "[ ]";
+      const who = s.actor === "ai_prep" ? "AI preps" : "you do";
+      const due = s.dueIso ? `, due ${s.dueIso}` : "";
+      lines.push(`${i + 1}. ${mark} ${s.title} (${who}${due})`);
+      if (s.detail) lines.push(`     ${s.detail.trim()}`);
+    });
+  }
+  if (plan.deadlineIso) lines.push("", `Deadline: ${plan.deadlineIso}`);
+  lines.push("", "— planned by Visual Reader");
+  return lines.join("\n").slice(0, 8000);
+}
+
 /** A top-level Google Task plus its sub-tasks — the shape `listTaskTree` returns. */
 export interface GoogleTaskTree {
   id: string;

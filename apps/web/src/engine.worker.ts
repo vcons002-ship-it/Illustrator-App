@@ -86,6 +86,7 @@ import {
   createTask,
   createTaskGroup,
   reconcileGoogleSubtasks,
+  formatPlanForGoogleNotes,
   planFromGoogleTask,
   importableGoogleTasks,
   runTaskPlanning,
@@ -1436,12 +1437,12 @@ async function syncPlanToGoogleTasks(plan: TaskPlan, transport: DirectTransport,
     steps.push(gid ? { ...step, googleTaskId: gid } : step);
     if (gid) previous = gid;
   }
-  if (plan.summary) {
-    try {
-      await patchTask(transport, await tok(), parentId, { notes: plan.summary });
-    } catch {
-      /* best-effort */
-    }
+  // Write the WHOLE plan into the parent task's notes, so the current plan (summary + numbered
+  // steps + deadline) is readable right in Google Tasks — not just a title with child rows.
+  try {
+    await patchTask(transport, await tok(), parentId, { notes: formatPlanForGoogleNotes({ ...plan, steps }) });
+  } catch {
+    /* best-effort */
   }
   return { ...plan, steps };
 }
@@ -1497,10 +1498,23 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
     let finalPlan = existing
       ? { ...plan, id: existing.id, ...(existing.sessionId ? { sessionId: existing.sessionId } : {}), createdAt: existing.createdAt }
       : plan;
-    // If this task is mirrored to a Google Task, push the freshly-planned steps back as SUB-TASKS
-    // under it and refresh its notes — so the Google Task reflects the plan, not just a flat title.
+    // Mirror the plan to Google Tasks so the current plan is visible there. If it's already linked
+    // to a parent task, push the freshly-planned steps back as SUB-TASKS + refresh its notes. If
+    // it's a user-initiated plan with no Google parent yet, CREATE one (title + deadline) and sync
+    // — so a task you plan shows up in Google Tasks. Background sweeps (no allowFiles) don't, to
+    // avoid silently spawning a Google task for every scanned item.
     if (existing?.googleTaskId && googleConnected) {
       finalPlan = await syncPlanToGoogleTasks({ ...finalPlan, googleTaskId: existing.googleTaskId }, transport, tok);
+    } else if (googleConnected && msg.allowFiles && finalPlan.steps.length > 0 && !finalPlan.googleTaskId) {
+      try {
+        const parent = await createTask(transport, await tok(), {
+          title: finalPlan.title,
+          ...(finalPlan.deadlineIso ? { due: finalPlan.deadlineIso } : {}),
+        });
+        if (parent.id) finalPlan = await syncPlanToGoogleTasks({ ...finalPlan, googleTaskId: parent.id }, transport, tok);
+      } catch {
+        /* best-effort — keep the in-app plan even if the Google write failed */
+      }
     }
     await upsertTaskPlan(store, finalPlan);
     post({ type: "planned", requestId: msg.requestId, ok: true, plan: finalPlan });

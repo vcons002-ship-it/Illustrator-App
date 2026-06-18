@@ -14,6 +14,7 @@ import {
   reconcileGoogleSubtasks,
   planFromGoogleTask,
   importableGoogleTasks,
+  formatPlanForGoogleNotes,
   taskStubFromCandidate,
   tasksIndexBlock,
   updateTaskStep,
@@ -162,6 +163,24 @@ describe("normalizeTaskPlan", () => {
       { id: "", title: "No id", subtasks: [] }, // malformed → skip
     ];
     expect(importableGoogleTasks(trees, existing).map((t) => t.id)).toEqual(["gt-2"]);
+  });
+
+  it("formatPlanForGoogleNotes renders the whole plan for the parent task's notes", () => {
+    const notes = formatPlanForGoogleNotes({
+      summary: "Apply to the data scientist role",
+      deadlineIso: "2026-07-10",
+      steps: [
+        { title: "Tailor resume", detail: "Match the JD keywords", actor: "ai_prep", status: "done", dueIso: "2026-07-01" },
+        { title: "Submit application", actor: "user_action", status: "pending" },
+      ],
+    });
+    expect(notes).toContain("Apply to the data scientist role");
+    expect(notes).toContain("PLAN — 2 steps:");
+    expect(notes).toContain("1. [x] Tailor resume (AI preps, due 2026-07-01)");
+    expect(notes).toContain("Match the JD keywords");
+    expect(notes).toContain("2. [ ] Submit application (you do)");
+    expect(notes).toContain("Deadline: 2026-07-10");
+    expect(notes.length).toBeLessThanOrEqual(8000);
   });
 
   it("keeps + bounds clarifying questions (drops empties, caps to 6)", () => {

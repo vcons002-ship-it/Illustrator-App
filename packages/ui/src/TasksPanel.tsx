@@ -45,6 +45,7 @@ function statusDot(status: TaskStep["status"]): string {
 
 function PlanCard({
   plan,
+  detailed = false,
   onOpen,
   onPlan,
   onAdvance,
@@ -53,6 +54,8 @@ function PlanCard({
   onDelete,
 }: {
   plan: TaskPlan;
+  /** The single-task detail view — show the captured work (step details, research, drafts) in full. */
+  detailed?: boolean;
   onOpen: () => void;
   onPlan: () => void;
   onAdvance: (stepId: string) => void;
@@ -136,10 +139,33 @@ function PlanCard({
                   {l.official ? "official ↗" : "link ↗"}
                 </a>
               ))}
+              {/* The actual work: what to do for this step + (in the detail view) any research note. */}
+              {s.detail ? <div style={{ marginLeft: 26, opacity: 0.75, marginTop: 1 }}>{s.detail}</div> : null}
+              {detailed && s.researchNotes ? (
+                <div style={{ marginLeft: 26, marginTop: 2, fontSize: 11, opacity: 0.6, whiteSpace: "pre-wrap" }}>🔬 {s.researchNotes}</div>
+              ) : null}
             </li>
           );
         })}
       </ol>
+      {/* The work the planner captured — research it gathered and any documents it drafted — shown
+          here so you can read it WITHOUT opening the task in chat. */}
+      {detailed && plan.researchNotes ? (
+        <details style={workBox}>
+          <summary style={{ cursor: "pointer", fontWeight: 600 }}>🔬 Research notes</summary>
+          <div style={{ whiteSpace: "pre-wrap", marginTop: 4, opacity: 0.85 }}>{plan.researchNotes}</div>
+        </details>
+      ) : null}
+      {detailed
+        ? plan.steps.flatMap((s) => s.docs.map((d) => ({ step: s.title, doc: d }))).map(({ step, doc }, i) => (
+            <details key={`${doc.title}-${i}`} style={workBox}>
+              <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+                📄 {doc.title} <span style={{ opacity: 0.5, fontWeight: 400 }}>· {doc.kind} · for “{step}”</span>
+              </summary>
+              <pre style={draftPre}>{doc.body}</pre>
+            </details>
+          ))
+        : null}
       <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
         <button style={noSteps ? btnPrimary : btn} onClick={onPlan} title={noSteps ? "Research it and break it into steps" : "Re-plan from scratch"}>
           {noSteps ? "⚡ Plan it" : "↻ Refresh plan"}
@@ -217,10 +243,11 @@ export const TasksPanel = memo(function TasksPanel({
     setAdding(false);
   };
 
-  const cardFor = (p: TaskPlan) => (
+  const cardFor = (p: TaskPlan, detailed = false) => (
     <PlanCard
       key={p.id}
       plan={p}
+      detailed={detailed}
       onOpen={() => onOpenTask(p.id)}
       onPlan={() => onPlanTask(p.id)}
       onAdvance={(stepId) => void onAdvanceStep(p.id, stepId)}
@@ -332,7 +359,7 @@ export const TasksPanel = memo(function TasksPanel({
                 />
               </div>
             ) : null}
-            {cardFor(selected)}
+            {cardFor(selected, true)}
           </div>
         ) : view === "timeline" ? (
           <div>
@@ -362,7 +389,7 @@ export const TasksPanel = memo(function TasksPanel({
             </div>
           </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{active.map(cardFor)}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{active.map((p) => cardFor(p))}</div>
         )}
       </div>
     </div>
@@ -419,6 +446,24 @@ const questionsBox: React.CSSProperties = {
   borderRadius: 6,
   border: "1px solid rgba(255,207,139,0.4)",
   background: "rgba(255,207,139,0.08)",
+};
+const workBox: React.CSSProperties = {
+  marginTop: 6,
+  padding: "6px 8px",
+  fontSize: 12,
+  borderRadius: 6,
+  border: "1px solid rgba(255,255,255,0.1)",
+  background: "rgba(255,255,255,0.03)",
+};
+const draftPre: React.CSSProperties = {
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+  margin: "6px 0 0",
+  maxHeight: 280,
+  overflow: "auto",
+  fontSize: 11,
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  opacity: 0.9,
 };
 const checkBtn: React.CSSProperties = {
   background: "transparent",
