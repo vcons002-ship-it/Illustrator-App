@@ -723,6 +723,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "createGoogleTask":
       void handleCreateGoogleTask(msg);
       break;
+    case "createEvent":
+      void handleCreateEvent(msg);
+      break;
     case "loadCalendar":
       void handleLoadCalendar(msg);
       break;
@@ -1637,6 +1640,31 @@ async function handleCreateGoogleTask(msg: Extract<MainToWorker, { type: "create
     post({ type: "googleTaskCreated", requestId: msg.requestId, ok: true, ...(item.id ? { id: item.id } : {}) });
   } catch (err) {
     post({ type: "googleTaskCreated", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/** Create a Google Calendar event on the primary calendar (the manual "+ Add event" path). */
+async function handleCreateEvent(msg: Extract<MainToWorker, { type: "createEvent" }>): Promise<void> {
+  try {
+    const store = memoryStore();
+    const googleId = settings?.keys?.googleClientId;
+    const googleSecret = settings?.keys?.googleClientSecret;
+    if (!googleId || !googleSecret || !(await loadGoogleTokens(store))) {
+      post({ type: "eventCreated", requestId: msg.requestId, ok: false, error: "Connect Google first." });
+      return;
+    }
+    const transport = new DirectTransport(corsFetch());
+    const token = await getFreshAccessToken(store, { clientId: googleId, clientSecret: googleSecret, transport });
+    const ev = await createEvent(transport, token, {
+      summary: msg.summary,
+      start: msg.start,
+      end: msg.end,
+      ...(msg.description ? { description: msg.description } : {}),
+      ...(msg.location ? { location: msg.location } : {}),
+    });
+    post({ type: "eventCreated", requestId: msg.requestId, ok: true, ...(ev.id ? { id: ev.id } : {}) });
+  } catch (err) {
+    post({ type: "eventCreated", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
   }
 }
 
