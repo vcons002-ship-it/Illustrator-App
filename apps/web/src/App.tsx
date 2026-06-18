@@ -319,6 +319,7 @@ export function App() {
     planTask,
     scanInbox,
     importGoogleTasks,
+    createGoogleTask,
     loadCalendar,
     stockQuote,
     readPage,
@@ -342,6 +343,10 @@ export function App() {
   // a ref so callbacks defined ABOVE the chat plumbing can post a note without a forward reference.
   const { activities, begin: beginActivity } = useActivityLog();
   const buddyNoteRef = useRef<(text: string) => void>(() => {});
+  // Google connection status (loaded from stored tokens in an effect below) — declared here so the
+  // task-surfacing/planning callbacks can mirror scanned items to Google Tasks.
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [googleEmail, setGoogleEmail] = useState<string | undefined>();
   const [showCharacters, setShowCharacters] = useState(false);
   const [showData, setShowData] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -391,17 +396,32 @@ export function App() {
   // SURFACE the actionable items a scan found as UNPLANNED stubs — they appear in the task list
   // (and their dates on the calendar) with NO LLM work. Planning happens later (the periodic
   // sweep below, or the per-task "Plan" button). Deduped so a re-scan never adds the same item twice.
+  // When Google is connected, each new stub is ALSO created as a Google Task right away (a bare
+  // parent), so you stay updated on new to-dos on your phone — and because the stub is then linked
+  // by googleTaskId, the background planner pushes its sub-tasks + the plan under that same task.
   const addCandidatesAsTasks = useCallback(
     async (cands: TaskCandidate[]) => {
       if (cands.length === 0) return;
       const existing = await loadTaskPlans(libraryStore);
       const fresh = dedupeCandidates(cands, existing, await loadIgnored(libraryStore));
       for (const c of fresh.slice(0, 8)) {
-        await upsertTaskPlan(libraryStore, normalizeTaskPlan(taskStubFromCandidate(c)));
+        let googleTaskId: string | undefined;
+        if (googleConnected) {
+          const created = await createGoogleTask({
+            title: c.title,
+            ...(c.reason ? { notes: c.reason } : {}),
+            ...(c.suggestedDeadlineIso ? { due: c.suggestedDeadlineIso } : {}),
+          }).catch(() => ({ id: undefined }));
+          googleTaskId = created.id;
+        }
+        await upsertTaskPlan(
+          libraryStore,
+          normalizeTaskPlan({ ...taskStubFromCandidate(c), ...(googleTaskId ? { googleTaskId } : {}) }),
+        );
       }
       if (fresh.length) refreshTaskPlans();
     },
-    [libraryStore, refreshTaskPlans],
+    [libraryStore, refreshTaskPlans, googleConnected, createGoogleTask],
   );
   // Plan ONE task in place (a scan stub, or a refresh): research + fill its steps, keeping its id.
   // Shared by the per-task "Plan" button (userInitiated → may use the reader's files) and the
@@ -1412,9 +1432,9 @@ export function App() {
     else void saveExportFile(`${base}.xlsx`, dataTableToXlsx(table), XLSX_MIME);
   }, []);
 
-  // Google (Gmail/Calendar/Tasks) connection status, derived from the stored tokens.
-  const [googleConnected, setGoogleConnected] = useState(false);
-  const [googleEmail, setGoogleEmail] = useState<string | undefined>();
+  // Google (Gmail/Calendar/Tasks) connection status, derived from the stored tokens. (Declared up
+  // by the engine hook so task surfacing/planning can mirror to Google Tasks; loaded below.)
+
   useEffect(() => {
     void libraryStore.getMemo?.("google-tokens").then((t) => setGoogleConnected(!!t)).catch(() => {});
     void libraryStore.getMemo?.("google-email").then((e) => setGoogleEmail(e || undefined)).catch(() => {});
