@@ -508,6 +508,8 @@ export function App() {
   const buddyStreamingRef = useRef("");
   const [buddyThinking, setBuddyThinking] = useState("");
   const [buddyActivity, setBuddyActivity] = useState("");
+  // A running log of the steps (tools) the buddy takes this turn, so its process is visible.
+  const [buddySteps, setBuddySteps] = useState<string[]>([]);
   const [buddyPersona, setBuddyPersona] = useState<BuddyPersona>("freeform");
   // Multiple landing-page chat SESSIONS — each with its own history (keyed by id) and
   // (desktop) working folder, while skills/memory stay global. Persisted so they
@@ -2251,6 +2253,7 @@ export function App() {
     buddyStreamingRef.current = "";
     setBuddyThinking("");
     setBuddyActivity("");
+    setBuddySteps([]);
     setBuddyPendingTool(undefined);
     let openedBook = false;
     const res = await buddyChat(history, userText, buddyPersona, library, (e) => {
@@ -2301,6 +2304,7 @@ export function App() {
           : c.tool === "open_web_text" ? "Fetching the text and opening it…"
           : "Working…";
         setBuddyActivity(label);
+        setBuddySteps((prev) => [...prev, label.replace(/…$/, "")]); // keep a visible trace of each step
       } else if (e.kind === "settings") {
         // set_visual_style fields + a generic update_setting patch both land here; App
         // owns ReaderSettings, so committing via setSettings runs the normal tune-vs-
@@ -2654,8 +2658,10 @@ export function App() {
     buddyCancel();
     setBuddyBusy(false);
     setBuddyStreaming("");
+    buddyStreamingRef.current = "";
     setBuddyThinking("");
     setBuddyActivity("");
+    setBuddySteps([]);
     setBuddyPendingTool(undefined);
     pendingBuddyTranscript.current = [];
     pendingBuddyHistory.current = [];
@@ -3637,6 +3643,7 @@ export function App() {
             {...(buddyThinking ? { thinking: buddyThinking } : {})}
             busy={buddyBusy}
             {...(buddyActivity ? { activity: buddyActivity } : {})}
+            {...(buddySteps.length ? { steps: buddySteps } : {})}
             {...(buddyPendingTool ? { pendingTool: buddyPendingTool } : {})}
             persona={buddyPersona}
             onPersonaChange={setBuddyPersona}

@@ -46,6 +46,9 @@ export interface ChatBuddyPanelProps {
   busy: boolean;
   /** Transient activity line ("searching Project Gutenberg…"). */
   activity?: string;
+  /** A running log of the steps the buddy has taken this turn (tools it called), so its
+   * process is visible instead of a single flickering status line. */
+  steps?: string[];
   /** An un-executed generate_image awaiting the reader's approval. */
   pendingTool?: BuddyToolCall;
   persona: BuddyPersona;
@@ -280,6 +283,19 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         {props.streamingText ? (
           <MessageBubble message={{ role: "assistant", text: props.streamingText }} />
         ) : null}
+        {props.steps && props.steps.length > 0 ? (
+          <div style={stepsBoxStyle}>
+            {props.steps.map((s, i) => {
+              const last = i === props.steps!.length - 1;
+              return (
+                <div key={i} style={{ fontSize: 12, padding: "1px 0", opacity: last && props.busy ? 0.9 : 0.55 }}>
+                  <span style={{ opacity: 0.6 }}>{last && props.busy ? "▸ " : "✓ "}</span>
+                  {s}
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
         {props.activity ? (
           <div style={{ opacity: 0.6, fontSize: 12, padding: "2px 8px" }}>{props.activity}</div>
         ) : null}
@@ -510,6 +526,14 @@ const smallButtonStyle = {
   padding: "6px 10px",
   fontSize: 12,
   cursor: "pointer",
+} as const;
+
+const stepsBoxStyle = {
+  margin: "2px 8px",
+  padding: "6px 10px",
+  borderRadius: 8,
+  background: "rgba(122,162,255,0.06)",
+  border: "1px solid rgba(122,162,255,0.18)",
 } as const;
 
 const sessionSelectStyle = {
