@@ -28,6 +28,8 @@ export interface CalendarPanelProps {
   onToday: () => void;
   /** Jump to a plan when its deadline marker is clicked. */
   onOpenTask?: (planId: string) => void;
+  /** Create a calendar event on the selected day (shown only when present, i.e. Google connected). */
+  onCreateEvent?: (ev: { summary: string; start: string; end: string; description?: string; location?: string }) => Promise<{ ok: boolean; error?: string }>;
   onClose: () => void;
   loading?: boolean;
   /** When set, the last Google sync failed — shown in the header (the last-good grid stays). */
@@ -70,11 +72,45 @@ export const CalendarPanel = memo(function CalendarPanel({
   onNext,
   onToday,
   onOpenTask,
+  onCreateEvent,
   onClose,
   loading = false,
   error,
 }: CalendarPanelProps) {
   const [selected, setSelected] = useState<string | null>(null);
+  // Inline "+ Add event" form (for the selected day): summary + times + optional location.
+  const [adding, setAdding] = useState(false);
+  const [evSummary, setEvSummary] = useState("");
+  const [evStart, setEvStart] = useState("09:00");
+  const [evEnd, setEvEnd] = useState("10:00");
+  const [evLocation, setEvLocation] = useState("");
+  const [evBusy, setEvBusy] = useState(false);
+  const [evError, setEvError] = useState<string | null>(null);
+  const submitEvent = async () => {
+    if (!onCreateEvent || !selected || !evSummary.trim()) return;
+    const start = new Date(`${selected}T${evStart || "09:00"}`);
+    const end = new Date(`${selected}T${evEnd || evStart || "10:00"}`);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+      setEvError("Pick a valid start before end.");
+      return;
+    }
+    setEvBusy(true);
+    setEvError(null);
+    const res = await onCreateEvent({
+      summary: evSummary.trim(),
+      start: start.toISOString(),
+      end: end.toISOString(),
+      ...(evLocation.trim() ? { location: evLocation.trim() } : {}),
+    });
+    setEvBusy(false);
+    if (res.ok) {
+      setAdding(false);
+      setEvSummary("");
+      setEvLocation("");
+    } else {
+      setEvError(res.error ?? "Couldn't create the event.");
+    }
+  };
 
   // Build the 6×7 grid of days covering the visible month (leading/trailing spill).
   const cells = useMemo(() => {
@@ -223,6 +259,26 @@ export const CalendarPanel = memo(function CalendarPanel({
                 ))}
               </div>
             )}
+            {onCreateEvent ? (
+              adding ? (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 8 }}>
+                  <input autoFocus value={evSummary} onChange={(e) => setEvSummary(e.target.value)} placeholder="Event title" style={evInput} />
+                  <input type="time" value={evStart} onChange={(e) => setEvStart(e.target.value)} style={evTime} title="Start" />
+                  <span style={{ opacity: 0.5 }}>→</span>
+                  <input type="time" value={evEnd} onChange={(e) => setEvEnd(e.target.value)} style={evTime} title="End" />
+                  <input value={evLocation} onChange={(e) => setEvLocation(e.target.value)} placeholder="Location (optional)" style={evInput} />
+                  <button style={btn} onClick={() => void submitEvent()} disabled={evBusy || !evSummary.trim()}>
+                    {evBusy ? "Adding…" : "Add"}
+                  </button>
+                  <button style={btn} onClick={() => { setAdding(false); setEvError(null); }}>Cancel</button>
+                  {evError ? <span style={{ fontSize: 11, color: "#ff9b9b", width: "100%" }}>⚠ {evError}</span> : null}
+                </div>
+              ) : (
+                <button style={{ ...btn, marginTop: 8 }} onClick={() => setAdding(true)} title={`Add an event on ${selected}`}>
+                  ＋ Add event
+                </button>
+              )
+            ) : null}
           </div>
         ) : (
           <div style={{ fontSize: 11, opacity: 0.55, marginTop: 10 }}>
@@ -294,4 +350,22 @@ const btn: React.CSSProperties = {
   padding: "5px 10px",
   fontSize: 12,
   cursor: "pointer",
+};
+const evInput: React.CSSProperties = {
+  background: "rgba(0,0,0,0.25)",
+  color: "inherit",
+  border: "1px solid rgba(255,255,255,0.2)",
+  borderRadius: 6,
+  padding: "5px 8px",
+  fontSize: 12,
+  minWidth: 120,
+  flex: "1 1 120px",
+};
+const evTime: React.CSSProperties = {
+  background: "rgba(0,0,0,0.25)",
+  color: "inherit",
+  border: "1px solid rgba(255,255,255,0.2)",
+  borderRadius: 6,
+  padding: "4px 6px",
+  fontSize: 12,
 };

@@ -329,6 +329,7 @@ export function App() {
     scanInbox,
     importGoogleTasks,
     createGoogleTask,
+    createEvent: createCalendarEvent,
     loadCalendar,
     stockQuote,
     readPage,
@@ -1707,6 +1708,18 @@ export function App() {
   useEffect(() => {
     refreshCalendarRef.current = refreshCalendar;
   }, [refreshCalendar]);
+  // Manually add an event to the (Google) calendar from the in-app grid, then refresh so it shows.
+  const onCreateCalendarEvent = useCallback(
+    async (ev: { summary: string; start: string; end: string; description?: string; location?: string }): Promise<{ ok: boolean; error?: string }> => {
+      const res = await createCalendarEvent(ev);
+      if (res.ok) {
+        refreshCalendar();
+        buddyNoteRef.current(`📅 Added event “${ev.summary}”.`);
+      }
+      return { ok: res.ok, ...(res.error ? { error: res.error } : {}) };
+    },
+    [createCalendarEvent, refreshCalendar],
+  );
   // On-demand: scan email + calendar for tasks right now and SURFACE them (as unplanned stubs) +
   // refresh the in-app calendar. It does NOT plan — planning is left to the background sweep or the
   // per-task "Plan" button, so a manual scan is fast and never kicks off long LLM work.
@@ -4355,6 +4368,7 @@ export function App() {
             setShowCalendar(false);
             void openTaskInChat(id);
           }}
+          {...(googleConnected ? { onCreateEvent: onCreateCalendarEvent } : {})}
           onClose={() => setShowCalendar(false)}
         />
       )}

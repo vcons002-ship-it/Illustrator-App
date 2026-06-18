@@ -187,6 +187,8 @@ export interface EngineWorkerApi {
   importGoogleTasks: () => Promise<{ ok: boolean; imported?: number; error?: string }>;
   /** Create a bare Google Task (parent) for a surfaced stub; resolves with its id when connected. */
   createGoogleTask: (args: { title: string; notes?: string; due?: string }) => Promise<{ ok: boolean; id?: string; error?: string }>;
+  /** Create a Google Calendar event (manual "+ Add event"); resolves with its id when connected. */
+  createEvent: (args: { summary: string; start: string; end: string; description?: string; location?: string }) => Promise<{ ok: boolean; id?: string; error?: string }>;
   /** Load events across all Google calendars in a window (the calendar grid). */
   loadCalendar: (timeMin: string, timeMax: string) => Promise<{ ok: boolean; events?: CalendarEvent[]; error?: string }>;
   /** Fetch a keyless stock quote (Stooq via the CORS-exempt transport). */
@@ -417,6 +419,8 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const importTaskRequests = useRef<Map<number, (r: { ok: boolean; imported?: number; error?: string }) => void>>(new Map());
   // In-flight Google-Task creations (for surfaced stubs), resolved by `googleTaskCreated`.
   const createTaskRequests = useRef<Map<number, (r: { ok: boolean; id?: string; error?: string }) => void>>(new Map());
+  // In-flight manual calendar-event creations, resolved by `eventCreated`.
+  const createEventRequests = useRef<Map<number, (r: { ok: boolean; id?: string; error?: string }) => void>>(new Map());
   // In-flight calendar loads, resolved by `calendarLoaded`.
   const calendarRequests = useRef<Map<number, (r: { ok: boolean; events?: CalendarEvent[]; error?: string }) => void>>(new Map());
   // In-flight stock-quote fetches, resolved by `stockQuoted`.
@@ -828,6 +832,12 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
         case "googleTaskCreated": {
           const resolve = createTaskRequests.current.get(msg.requestId);
           createTaskRequests.current.delete(msg.requestId);
+          resolve?.({ ok: msg.ok, ...(msg.id ? { id: msg.id } : {}), ...(msg.error ? { error: msg.error } : {}) });
+          break;
+        }
+        case "eventCreated": {
+          const resolve = createEventRequests.current.get(msg.requestId);
+          createEventRequests.current.delete(msg.requestId);
           resolve?.({ ok: msg.ok, ...(msg.id ? { id: msg.id } : {}), ...(msg.error ? { error: msg.error } : {}) });
           break;
         }
@@ -1459,6 +1469,29 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const createEvent = useCallback(
+    (args: { summary: string; start: string; end: string; description?: string; location?: string }): Promise<{ ok: boolean; id?: string; error?: string }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (createEventRequests.current.delete(requestId)) resolve({ ok: false, error: "Creating the event timed out." });
+        }, 30_000);
+        createEventRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({
+          type: "createEvent",
+          requestId,
+          summary: args.summary,
+          start: args.start,
+          end: args.end,
+          ...(args.description ? { description: args.description } : {}),
+          ...(args.location ? { location: args.location } : {}),
+        });
+      }),
+    [],
+  );
   const loadCalendar = useCallback(
     (timeMin: string, timeMax: string): Promise<{ ok: boolean; events?: CalendarEvent[] }> =>
       new Promise((resolve) => {
@@ -1640,6 +1673,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     scanInbox,
     importGoogleTasks,
     createGoogleTask,
+    createEvent,
     loadCalendar,
     stockQuote,
     readPage,
