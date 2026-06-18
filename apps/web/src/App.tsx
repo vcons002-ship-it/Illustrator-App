@@ -76,6 +76,7 @@ import {
   sourceFrom,
   sourceId,
   normalizeTaskPlan,
+  exportFilename,
   nextOccurrence,
   describeRecurrence,
   type TaskRecurrence,
@@ -151,6 +152,7 @@ import {
   ScheduledTasksPanel,
   CalendarPanel,
   ActivityCenter,
+  RenameExportModal,
   StockChartPanel,
   BrowserPanel,
   OrderReviewModal,
@@ -1557,20 +1559,42 @@ export function App() {
   const appendChat = (msg: Omit<StoredChatMessage, "at">) =>
     setChatMessages((prev) => [...prev, { ...msg, at: Date.now() }]);
 
+  // Rename-before-save: open a modal with a content-derived default name and resolve with the
+  // chosen name (or null on cancel). Every export routes through this so the reader names the file.
+  const [renameModal, setRenameModal] = useState<{ defaultName: string; what?: string; resolve: (n: string | null) => void } | undefined>();
+  const promptExportName = useCallback(
+    (defaultName: string, what?: string): Promise<string | null> =>
+      new Promise((resolve) => setRenameModal({ defaultName, ...(what ? { what } : {}), resolve })),
+    [],
+  );
+  // Save through the rename modal: prompt with `default`, then write (no-op on cancel).
+  const saveNamed = useCallback(
+    async (defaultName: string, data: string | Uint8Array, mime: string, what?: string): Promise<string | true | undefined> => {
+      const name = await promptExportName(defaultName, what);
+      if (!name) return undefined;
+      return saveExportFile(name, data, mime);
+    },
+    [promptExportName],
+  );
   // Save a file the assistant wrote in a code block (a webpage, CSV worksheet,
   // script…) — desktop writes to ~/VisualReader/exports, web downloads it.
   const onSaveChatFile = useCallback(
-    (filename: string, content: string, mime: string): Promise<string | true> =>
-      saveExportFile(filename, content, mime),
-    [],
+    async (filename: string, content: string, mime: string): Promise<string | true> => {
+      const name = await promptExportName(filename, "Save the assistant's file");
+      return name ? saveExportFile(name, content, mime) : true; // cancel → treated as handled
+    },
+    [promptExportName],
   );
   // Download a grounded analysis-result table (a pivot/aggregate the chat computed)
   // as a real Excel workbook or CSV — built in the host from the typed DataTable.
-  const onDownloadData = useCallback((table: DataTable, name: string, format: "xlsx" | "csv") => {
-    const base = (name || "data").replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "data";
-    if (format === "csv") void saveExportFile(`${base}.csv`, dataTableToCsv(table), "text/csv");
-    else void saveExportFile(`${base}.xlsx`, dataTableToXlsx(table), XLSX_MIME);
-  }, []);
+  const onDownloadData = useCallback(
+    (table: DataTable, name: string, format: "xlsx" | "csv") => {
+      const base = exportFilename(name || "data", format, "data");
+      if (format === "csv") void saveNamed(base, dataTableToCsv(table), "text/csv", "Analysis (CSV)");
+      else void saveNamed(base, dataTableToXlsx(table), XLSX_MIME, "Analysis (Excel)");
+    },
+    [saveNamed],
+  );
 
   // Google (Gmail/Calendar/Tasks) connection status, derived from the stored tokens. (Declared up
   // by the engine hook so task surfacing/planning can mirror to Google Tasks; loaded below.)
@@ -2046,9 +2070,11 @@ export function App() {
   // Bundle a multi-file answer (its named code blocks) into one project.zip — keeps a
   // linked HTML/CSS/JS site or small script project together with its relative paths.
   const onSaveProject = useCallback(
-    (files: ProjectFile[]): Promise<string | true> =>
-      saveExportFile("project.zip", zipProject(files), PROJECT_ZIP_MIME),
-    [],
+    async (files: ProjectFile[]): Promise<string | true> => {
+      const name = await promptExportName("project.zip", "Save project (zip)");
+      return name ? saveExportFile(name, zipProject(files), PROJECT_ZIP_MIME) : true;
+    },
+    [promptExportName],
   );
   // A designed document (invite, flyer, card): generate each `data-generate` image via
   // the normal render path and embed it as a self-contained data: URI, so the finished
@@ -3362,22 +3388,17 @@ export function App() {
         const images = await gatherExportImages();
         const styleNote = `Illustrated with Visual Reader · ${getImageStyle(settings.imageStyle).label} style · ${images.size} image${images.size === 1 ? "" : "s"}`;
         const opts = { styleNote };
-        const base = safeFileName(book.title);
-        const result =
-          format === "html"
-            ? await saveExportFile(`${base}.html`, buildIllustratedHtml(book, images, opts), "text/html")
-            : await saveExportFile(
-                `${base}.epub`,
-                buildIllustratedEpub(book, images, opts),
-                "application/epub+zip",
-              );
+        const data = format === "html" ? buildIllustratedHtml(book, images, opts) : buildIllustratedEpub(book, images, opts);
+        const mime = format === "html" ? "text/html" : "application/epub+zip";
+        const result = await saveNamed(exportFilename(book.title, format), data, mime, `Illustrated ${format.toUpperCase()}`);
+        if (result === undefined) return; // cancelled
         const where = typeof result === "string" ? ` to ${result}` : " (check your downloads)";
         noteAction(`✓ Exported ${format.toUpperCase()} with ${images.size} illustration${images.size === 1 ? "" : "s"}${where}.`);
       } catch (err) {
         setLocalError(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [book, gatherExportImages, settings.imageStyle, noteAction],
+    [book, gatherExportImages, settings.imageStyle, noteAction, saveNamed],
   );
 
   // The in-book chat's export_book tool: export the current book and feed the
@@ -4101,6 +4122,7 @@ export function App() {
             registerParagraph={registerParagraph}
             dataEdit={dataEdit}
             onAddAnalysisSheet={addAnalysisSheet}
+            saveNamed={saveNamed}
             {...(technicalSupport ? { technical: technicalSupport } : {})}
             layoutHtml={articleLayout}
           />
@@ -4375,6 +4397,21 @@ export function App() {
         />
       )}
 
+      {renameModal && (
+        <RenameExportModal
+          defaultName={renameModal.defaultName}
+          {...(renameModal.what ? { what: renameModal.what } : {})}
+          onConfirm={(name) => {
+            renameModal.resolve(name);
+            setRenameModal(undefined);
+          }}
+          onCancel={() => {
+            renameModal.resolve(null);
+            setRenameModal(undefined);
+          }}
+        />
+      )}
+
       {showStocks && (
         <StockChartPanel
           symbol={stockSymbol}
@@ -4614,6 +4651,7 @@ const ReaderColumn = memo(function ReaderColumn({
   registerParagraph,
   dataEdit,
   onAddAnalysisSheet,
+  saveNamed,
   technical,
   layoutHtml,
 }: {
@@ -4633,6 +4671,8 @@ const ReaderColumn = memo(function ReaderColumn({
   };
   /** Append a live statistical Analysis sheet (cross-sheet formulas) to the workbook. */
   onAddAnalysisSheet?: () => void;
+  /** Save a data export through the rename-before-save modal. */
+  saveNamed: (defaultName: string, data: string | Uint8Array, mime: string, what?: string) => Promise<string | true | undefined>;
   /** Present only in technical mode: concept marks + paragraph-anchored support. */
   technical?: TechnicalSupportData;
   /** Render web-article paragraphs in their original (sanitized) HTML layout. */
@@ -4687,11 +4727,10 @@ const ReaderColumn = memo(function ReaderColumn({
               style={styles.smallButton}
               title={sheets ? "Download a real Excel workbook (.xlsx) of ALL sheets" : "Download a real Excel workbook (.xlsx) of this table"}
               onClick={() => {
-                const base = (book.title || "data").replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "data";
                 const bytes = sheets
                   ? buildXlsx(sheets.map((s) => sheetFromDataTable(s.name, s.table)))
                   : dataTableToXlsx(activeTable);
-                void saveExportFile(`${base}.xlsx`, bytes, XLSX_MIME);
+                void saveNamed(exportFilename(book.title || "data", "xlsx", "data"), bytes, XLSX_MIME, "Excel workbook");
               }}
             >
               ⬇ Excel (.xlsx){sheets ? " — all sheets" : ""}
@@ -4701,14 +4740,13 @@ const ReaderColumn = memo(function ReaderColumn({
                 style={styles.smallButton}
                 title="Excel with an Analysis sheet of live formulas (stats, correlation, regression) over this sheet"
                 onClick={() => {
-                  const base = (book.title || "data").replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "data";
                   const name = sheets ? (sheets[Math.min(activeSheet, sheets.length - 1)]?.name ?? "Sheet1") : "Sheet1";
                   const analysis = buildAnalysisTable(activeTable, name);
                   const xlsxSheets = [
                     sheetFromDataTable(name, activeTable),
                     ...(analysis ? [sheetFromDataTable("Analysis", analysis)] : []),
                   ];
-                  void saveExportFile(`${base}-analysis.xlsx`, buildXlsx(xlsxSheets), XLSX_MIME);
+                  void saveNamed(exportFilename(`${book.title || "data"}-analysis`, "xlsx", "data-analysis"), buildXlsx(xlsxSheets), XLSX_MIME, "Excel + Analysis");
                 }}
               >
                 ⬇ + Analysis
@@ -4719,10 +4757,9 @@ const ReaderColumn = memo(function ReaderColumn({
                 style={styles.smallButton}
                 title="Excel with a native, editable chart embedded over this sheet's data"
                 onClick={() => {
-                  const base = (book.title || "data").replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "data";
                   const name = sheets ? (sheets[Math.min(activeSheet, sheets.length - 1)]?.name ?? "Sheet1") : "Sheet1";
                   const kind: "bar" | "line" | "pie" = dataChart?.kind === "line" ? "line" : "bar";
-                  void saveExportFile(`${base}-chart.xlsx`, buildXlsx([sheetFromDataTable(name, activeTable, { chart: kind })]), XLSX_MIME);
+                  void saveNamed(exportFilename(`${book.title || "data"}-chart`, "xlsx", "data-chart"), buildXlsx([sheetFromDataTable(name, activeTable, { chart: kind })]), XLSX_MIME, "Excel + Chart");
                 }}
               >
                 ⬇ + Chart
@@ -4741,9 +4778,8 @@ const ReaderColumn = memo(function ReaderColumn({
               style={styles.smallButton}
               title={sheets ? "Download the current sheet as CSV" : "Download this table as CSV"}
               onClick={() => {
-                const base = (book.title || "data").replace(/[^\w.-]+/g, "_").replace(/^_+|_+$/g, "") || "data";
-                const suffix = sheets ? `-${(sheets[Math.min(activeSheet, sheets.length - 1)]?.name ?? "sheet").replace(/[^\w.-]+/g, "_")}` : "";
-                void saveExportFile(`${base}${suffix}.csv`, dataTableToCsv(activeTable), "text/csv");
+                const suffix = sheets ? `-${sheets[Math.min(activeSheet, sheets.length - 1)]?.name ?? "sheet"}` : "";
+                void saveNamed(exportFilename(`${book.title || "data"}${suffix}`, "csv", "data"), dataTableToCsv(activeTable), "text/csv", "CSV");
               }}
             >
               ⬇ CSV{sheets ? " (this sheet)" : ""}
