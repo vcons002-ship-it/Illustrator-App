@@ -22,6 +22,7 @@ export * from "./TasksPanel.js";
 export * from "./ScheduledTasksPanel.js";
 export * from "./CalendarPanel.js";
 export * from "./ActivityCenter.js";
+export * from "./ActionHistoryPanel.js";
 export * from "./StockChartPanel.js";
 export * from "./BrowserPanel.js";
 export * from "./HtmlParagraph.js";

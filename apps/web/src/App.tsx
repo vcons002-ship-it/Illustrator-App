@@ -77,6 +77,14 @@ import {
   sourceId,
   normalizeTaskPlan,
   exportFilename,
+  recordAction,
+  loadActionHistory,
+  getActionsViewedAt,
+  markActionsViewed,
+  clearActionHistory,
+  unseenCount,
+  type ActionEntry,
+  type ActionKind,
   nextOccurrence,
   describeRecurrence,
   type TaskRecurrence,
@@ -152,6 +160,7 @@ import {
   ScheduledTasksPanel,
   CalendarPanel,
   ActivityCenter,
+  ActionHistoryPanel,
   RenameExportModal,
   StockChartPanel,
   BrowserPanel,
@@ -355,6 +364,27 @@ export function App() {
   // a ref so callbacks defined ABOVE the chat plumbing can post a note without a forward reference.
   const { activities, begin: beginActivity } = useActivityLog();
   const buddyNoteRef = useRef<(text: string) => void>(() => {});
+  // Persistent agent-action history (survives reloads; the transient activity pill does not). The
+  // header badge counts entries since the reader last opened the log.
+  const [actionHistory, setActionHistory] = useState<ActionEntry[]>([]);
+  const [actionsViewedAt, setActionsViewedAt] = useState(0);
+  const [panelNewSince, setPanelNewSince] = useState(0); // snapshot at open: highlights what's new
+  const [showActionHistory, setShowActionHistory] = useState(false);
+  useEffect(() => {
+    void loadActionHistory(libraryStore).then(setActionHistory).catch(() => {});
+    void getActionsViewedAt(libraryStore).then(setActionsViewedAt).catch(() => {});
+  }, [libraryStore]);
+  const logAction = useCallback(
+    (kind: ActionKind, label: string, detail?: string) => {
+      void recordAction(libraryStore, { kind, label, ...(detail ? { detail } : {}) })
+        .then(() => loadActionHistory(libraryStore))
+        .then(setActionHistory)
+        .catch(() => {});
+    },
+    [libraryStore],
+  );
+  const logActionRef = useRef(logAction);
+  logActionRef.current = logAction;
   // Google connection status (loaded from stored tokens in an effect below) — declared here so the
   // task-surfacing/planning callbacks can mirror scanned items to Google Tasks.
   const [googleConnected, setGoogleConnected] = useState(false);
@@ -459,6 +489,7 @@ export function App() {
         const n = res.plan?.steps.length ?? 0;
         act?.finish(res.ok ? { detail: `${n} step${n === 1 ? "" : "s"}` } : { status: "error", detail: res.error ?? "failed" });
         if (res.ok && n > 0) buddyNoteRef.current(`🧩 Planned “${plan.title}” — ${n} step${n === 1 ? "" : "s"}.`);
+        if (res.ok) logActionRef.current("plan", `Planned: ${plan.title}`, `${n} step${n === 1 ? "" : "s"}`);
         // Always tell the user the outcome — a per-task plan used to fail/return nothing silently.
         if (track) {
           if (!res.ok) setPlanMessage(`⚠ Couldn't plan “${plan.title}”: ${res.error ?? "the planner failed. Check that a text model is set up in Settings."}`);
@@ -630,6 +661,7 @@ export function App() {
         );
         refreshTaskPlans();
         buddyNoteRef.current(`🗂️ Added to-do “${title}”.`);
+        logActionRef.current("create_task", `Added to-do: ${title}`);
         return;
       }
       setCreatingTask(true);
@@ -650,6 +682,7 @@ export function App() {
           const n = res.plan.steps.length;
           act.finish({ detail: `${n} step${n === 1 ? "" : "s"}` });
           buddyNoteRef.current(`🗂️ Created & planned task “${title}” — ${n} step${n === 1 ? "" : "s"}.`);
+          logActionRef.current("create_task", `Created & planned: ${title}`, `${n} step${n === 1 ? "" : "s"}`);
         } else {
           act.finish({ status: "error", detail: res.error ?? "couldn't plan" });
         }
@@ -1739,6 +1772,7 @@ export function App() {
       if (res.ok) {
         refreshCalendar();
         buddyNoteRef.current(`📅 Added event “${ev.summary}”.`);
+        logActionRef.current("calendar", `Added event: ${ev.summary}`);
       }
       return { ok: res.ok, ...(res.error ? { error: res.error } : {}) };
     },
@@ -1783,6 +1817,7 @@ export function App() {
         setScanMessage(found || added ? `✓ ${summary}` : `✓ Up to date — ${summary}`);
         act.finish({ detail: summary });
         buddyNoteRef.current(`🔍 Scanned email & calendar — ${summary}.`);
+        logActionRef.current("scan", "Scanned email & calendar", summary);
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -2955,6 +2990,7 @@ export function App() {
         // Advance first (so a slow turn can't double-fire), then run it.
         await upsertScheduledTask(libraryStore, advanceSchedule(task)).catch(() => {});
         refreshScheduled();
+        logActionRef.current("scheduled_run", `Ran scheduled: ${task.title}`);
         onBuddySendText(`⏰ Scheduled task “${task.title}”. Do this now: ${task.prompt}`);
       })();
     }, 60_000);
@@ -4057,6 +4093,20 @@ export function App() {
       {/* Status center: what the app is doing right now + the queue behind it (task planning keeps
           running after you leave the Tasks window, so this is how you keep an eye on it). */}
       <ActivityCenter activities={activities} />
+      {actionHistory.length > 0 && (
+        <button
+          style={{ ...styles.badge, ...styles.badgeOk, cursor: "pointer" }}
+          title="What the assistant did (scans, planning, scheduled tasks) since you last looked"
+          onClick={() => {
+            setPanelNewSince(actionsViewedAt); // highlight entries newer than the PREVIOUS view
+            setShowActionHistory(true);
+            void markActionsViewed(libraryStore).catch(() => {});
+            setActionsViewedAt(Date.now()); // badge now reads 0 new
+          }}
+        >
+          🗒️ Activity{unseenCount(actionHistory, actionsViewedAt) > 0 ? ` (${unseenCount(actionHistory, actionsViewedAt)} new)` : ""}
+        </button>
+      )}
 
       {!book && (status || localError) && (
         <div style={styles.status}>{localError || status}</div>
@@ -4394,6 +4444,17 @@ export function App() {
           }}
           {...(googleConnected ? { onCreateEvent: onCreateCalendarEvent } : {})}
           onClose={() => setShowCalendar(false)}
+        />
+      )}
+
+      {showActionHistory && (
+        <ActionHistoryPanel
+          entries={actionHistory}
+          newSince={panelNewSince}
+          onClear={() => {
+            void clearActionHistory(libraryStore).then(() => setActionHistory([])).catch(() => {});
+          }}
+          onClose={() => setShowActionHistory(false)}
         />
       )}
 
