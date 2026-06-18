@@ -32,6 +32,8 @@ export interface TasksPanelProps {
   scanning?: boolean;
   /** The last scan's outcome (count found/imported/synced, or an error) — shown under the button. */
   scanMessage?: string;
+  /** The last per-task plan's outcome (steps planned, or the actual error) — shown under the button. */
+  planMessage?: string;
   /** "Don't surface this again" — add an ignore rule (the item, else its sender, else its title)
    * so future scans skip it, and delete the plan. Shown on auto-surfaced (scan/email/calendar) tasks. */
   onIgnoreTask?: (planId: string) => void;
@@ -213,6 +215,7 @@ export const TasksPanel = memo(function TasksPanel({
   onScanNow,
   scanning = false,
   scanMessage,
+  planMessage,
   onIgnoreTask,
   onDelete,
   onRestore,
@@ -351,6 +354,11 @@ export const TasksPanel = memo(function TasksPanel({
         {scanMessage && (
           <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 8, color: scanMessage.startsWith("⚠") ? "#ff9b9b" : "#9be8c0" }}>
             {scanMessage}
+          </div>
+        )}
+        {planMessage && (
+          <div style={{ fontSize: 12, opacity: 0.9, marginBottom: 8, color: planMessage.startsWith("⚠") ? "#ff9b9b" : planMessage.startsWith("✓") ? "#9be8c0" : "#cdd6f4" }}>
+            {planMessage}
           </div>
         )}
 

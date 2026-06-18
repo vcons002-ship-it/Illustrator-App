@@ -1496,31 +1496,45 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
     });
     if (!plan) throw new Error("Couldn't produce a usable plan — try rephrasing the task.");
     // Re-planning an existing task (a scan stub, or a refresh) keeps its id + chat session so the
-    // planned version REPLACES the stub in place instead of adding a duplicate.
+    // planned version REPLACES the stub in place instead of adding a duplicate — and PRESERVES its
+    // Google link + repeat rule (runTaskPlanning doesn't know about them).
     const existing = msg.planId ? (await loadTaskPlans(store)).find((p) => p.id === msg.planId) : undefined;
-    let finalPlan = existing
-      ? { ...plan, id: existing.id, ...(existing.sessionId ? { sessionId: existing.sessionId } : {}), createdAt: existing.createdAt }
+    const finalPlan: TaskPlan = existing
+      ? {
+          ...plan,
+          id: existing.id,
+          createdAt: existing.createdAt,
+          ...(existing.sessionId ? { sessionId: existing.sessionId } : {}),
+          ...(existing.googleTaskId ? { googleTaskId: existing.googleTaskId } : {}),
+          ...(existing.recurrence ? { recurrence: existing.recurrence } : {}),
+        }
       : plan;
-    // Mirror the plan to Google Tasks so the current plan is visible there. If it's already linked
-    // to a parent task — scanned stubs get one the moment they're surfaced, so this is the usual
-    // path — push the freshly-planned steps back as SUB-TASKS under it + refresh its notes. If it's
-    // a user-typed plan with no Google parent yet (e.g. "+ Add task"), CREATE one (title + deadline)
-    // and sync, so a task you plan still shows up in Google Tasks.
-    if (existing?.googleTaskId && googleConnected) {
-      finalPlan = await syncPlanToGoogleTasks({ ...finalPlan, googleTaskId: existing.googleTaskId }, transport, tok);
-    } else if (googleConnected && finalPlan.steps.length > 0 && !finalPlan.googleTaskId) {
-      try {
-        const parent = await createTask(transport, await tok(), {
-          title: finalPlan.title,
-          ...(finalPlan.deadlineIso ? { due: finalPlan.deadlineIso } : {}),
-        });
-        if (parent.id) finalPlan = await syncPlanToGoogleTasks({ ...finalPlan, googleTaskId: parent.id }, transport, tok);
-      } catch {
-        /* best-effort — keep the in-app plan even if the Google write failed */
-      }
-    }
+    // SAVE + return the plan FIRST, so the steps show in the app immediately and can't be lost to a
+    // slow/hung Google call. The Google mirror is then best-effort in the BACKGROUND (below).
     await upsertTaskPlan(store, finalPlan);
     post({ type: "planned", requestId: msg.requestId, ok: true, plan: finalPlan });
+    // Mirror to Google Tasks in the background: sync sub-tasks + notes under the existing parent, or
+    // create a parent first for a user-typed plan with none yet. Re-saves with the Google ids when
+    // done (skipped if the plan was deleted meanwhile). Never blocks the plan from saving/showing.
+    if (googleConnected && finalPlan.steps.length > 0) {
+      void (async () => {
+        try {
+          let synced = finalPlan;
+          if (finalPlan.googleTaskId) {
+            synced = await syncPlanToGoogleTasks(finalPlan, transport, tok);
+          } else {
+            const parent = await createTask(transport, await tok(), {
+              title: finalPlan.title,
+              ...(finalPlan.deadlineIso ? { due: finalPlan.deadlineIso } : {}),
+            });
+            if (parent.id) synced = await syncPlanToGoogleTasks({ ...finalPlan, googleTaskId: parent.id }, transport, tok);
+          }
+          if ((await loadTaskPlans(store)).some((p) => p.id === finalPlan.id)) await upsertTaskPlan(store, synced);
+        } catch {
+          /* best-effort — the in-app plan is already saved */
+        }
+      })();
+    }
   } catch (err) {
     post({
       type: "planned",
