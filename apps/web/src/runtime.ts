@@ -327,6 +327,20 @@ export async function stopRemoteServer(): Promise<void> {
 }
 
 /**
+ * Current LAN relay status — so the UI can reuse an already-running server (same URL + pairing
+ * token) instead of restarting it (which would mint a new token and drop any paired phone).
+ * Returns `running: false` on the web / older builds.
+ */
+export async function remoteServerStatus(): Promise<RemoteServerStatus> {
+  if (!isDesktop) return { running: false };
+  try {
+    return await invoke<RemoteServerStatus>("remote_server_status");
+  } catch {
+    return { running: false };
+  }
+}
+
+/**
  * Run a stdio MCP server (desktop): spawn the command, write the JSON-RPC request lines to its
  * stdin, and return the server's stdout lines. Rejects on web / older builds (no command).
  */
