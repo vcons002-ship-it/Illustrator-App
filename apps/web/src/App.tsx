@@ -516,6 +516,7 @@ export function App() {
   // Soft-remove (the per-card "Remove" button) — archive without a broad ignore rule. Undoable.
   const removeTask = useCallback(
     async (planId: string) => {
+      if (!window.confirm("Remove this task? You can restore it from the Removed list.")) return;
       await archiveTaskPlan(libraryStore, planId, "removed");
       refreshTaskPlans();
     },
@@ -539,6 +540,7 @@ export function App() {
   // a still-existing source again later).
   const deleteTaskForever = useCallback(
     async (planId: string) => {
+      if (!window.confirm("Permanently delete this task? This can't be undone.")) return;
       await deleteTaskPlan(libraryStore, planId);
       refreshTaskPlans();
     },
