@@ -70,6 +70,7 @@ import {
   advanceStep,
   addIgnore,
   sourceFrom,
+  sourceId,
   normalizeTaskPlan,
   dedupeCandidates,
   loadIgnored,
@@ -428,12 +429,20 @@ export function App() {
     },
     [libraryStore, planOneTask],
   );
-  // "This auto-planned task was junk" — block the sender and delete the plan.
-  const ignorePlanSender = useCallback(
+  // "Don't surface this again" — add the most precise ignore rule we can (the exact email/event
+  // item, else its sender, else its title as a phrase), then delete the plan. Future scans skip it
+  // (see dedupeCandidates/isIgnored), so a recurring inbox/calendar item stays gone instead of
+  // re-appearing on the next sweep — which plain Delete can't do.
+  const ignoreTask = useCallback(
     async (planId: string) => {
       const plan = (await loadTaskPlans(libraryStore)).find((p) => p.id === planId);
-      const from = plan ? sourceFrom(plan.source) : undefined;
-      if (from) await addIgnore(libraryStore, { kind: "sender", value: from }).catch(() => {});
+      if (plan) {
+        const id = sourceId(plan.source);
+        const from = sourceFrom(plan.source);
+        if (id) await addIgnore(libraryStore, { kind: "item", value: id }).catch(() => {});
+        else if (from) await addIgnore(libraryStore, { kind: "sender", value: from }).catch(() => {});
+        else if (plan.title) await addIgnore(libraryStore, { kind: "phrase", value: plan.title }).catch(() => {});
+      }
       await deleteTaskPlan(libraryStore, planId);
       refreshTaskPlans();
     },
@@ -4101,7 +4110,7 @@ export function App() {
           onOpenTask={(id) => void openTaskInChat(id)}
           onAdvanceStep={onAdvanceTaskStep}
           onToggleStepDone={onToggleStepDone}
-          onIgnoreSender={ignorePlanSender}
+          onIgnoreTask={ignoreTask}
           onDelete={async (id) => {
             await deleteTaskPlan(libraryStore, id);
             refreshTaskPlans();
