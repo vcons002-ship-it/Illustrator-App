@@ -718,7 +718,8 @@ async fn serve_http_asset(mut stream: tokio::net::TcpStream, app: &AppHandle) {
         .lines()
         .next()
         .and_then(|l| l.split_whitespace().nth(1))
-        .unwrap_or("/");
+        .unwrap_or("/")
+        .to_string();
     // Drop the query/fragment, normalise to an asset key.
     let path = raw_path.split(['?', '#']).next().unwrap_or("/");
     let mut key = path.trim_start_matches('/').to_string();
@@ -736,7 +737,19 @@ async fn serve_http_asset(mut stream: tokio::net::TcpStream, app: &AppHandle) {
     });
     let (status, mime, body): (&str, String, Vec<u8>) = match asset {
         Some(a) => ("200 OK", a.mime_type, a.bytes),
-        None => ("404 Not Found", "text/plain".to_string(), b"Not found".to_vec()),
+        // No embedded asset. In a `tauri dev` build the web UI is served by the Vite dev server
+        // (devUrl), not bundled into the binary, so the resolver is empty and every phone request
+        // would 404. Proxy the request to the dev server so the phone link still works in
+        // development; if there's no reachable dev server, show an actionable guidance page
+        // instead of a bare "Not found".
+        None => match proxy_dev_asset(app, &raw_path).await {
+            Some((m, b)) => ("200 OK", m, b),
+            None => (
+                "503 Service Unavailable",
+                "text/html; charset=utf-8".to_string(),
+                phone_link_help_html().into_bytes(),
+            ),
+        },
     };
     let header = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
@@ -745,6 +758,78 @@ async fn serve_http_asset(mut stream: tokio::net::TcpStream, app: &AppHandle) {
     let _ = stream.write_all(header.as_bytes()).await;
     let _ = stream.write_all(&body).await;
     let _ = stream.flush().await;
+}
+
+/// In a `tauri dev` build the web UI is served by the Vite dev server (`devUrl`) rather than
+/// embedded in the binary, so `asset_resolver()` is empty and the phone link would 404 on
+/// every request. Proxy the request straight through to the dev server (same path) so the
+/// phone link works in development too. Returns `(mime, bytes)` on success, or `None` when
+/// there's no reachable dev server (a packaged build, or the dev server isn't running) — in
+/// which case the caller shows a guidance page. http(s) only; mirrors the existing
+/// `reqwest::blocking` usage elsewhere in this file.
+async fn proxy_dev_asset(app: &AppHandle, req_path: &str) -> Option<(String, Vec<u8>)> {
+    let base = app
+        .config()
+        .build
+        .dev_url
+        .as_ref()
+        .map(|u| u.to_string())
+        .unwrap_or_else(|| "http://localhost:5173/".to_string());
+    let base = base.trim_end_matches('/').to_string();
+    let path = if req_path.starts_with('/') {
+        req_path.to_string()
+    } else {
+        format!("/{req_path}")
+    };
+    let target = format!("{base}{path}");
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .ok()?;
+        let resp = client.get(&target).send().ok()?;
+        if !resp.status().is_success() {
+            return None;
+        }
+        // Read the content-type before consuming the body.
+        let mime = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_string();
+        let bytes = resp.bytes().ok()?.to_vec();
+        Some((mime, bytes))
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// A small, self-contained guidance page shown when the phone link can't be served: either a
+/// `tauri dev` build whose Vite dev server isn't running, or some other reason the SPA bytes
+/// aren't available. Explains the two requirements (a packaged build + same Wi-Fi) so the
+/// reader isn't left staring at a bare "Not found".
+fn phone_link_help_html() -> String {
+    "<!doctype html><html><head><meta charset=\"utf-8\">\
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+<title>Visual Reader — Phone link</title>\
+<style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#11131a;\
+color:#e7e9ee;margin:0;padding:2rem;line-height:1.5}main{max-width:34rem;margin:0 auto}\
+h1{font-size:1.25rem}code{background:#1d2130;padding:.1rem .35rem;border-radius:.3rem}\
+li{margin:.4rem 0}.muted{color:#9aa0ad;font-size:.9rem}</style></head><body><main>\
+<h1>Phone link isn't ready yet</h1>\
+<p>The desktop app is reachable on this address, but it can't serve the reader UI to your phone right now.</p>\
+<ul>\
+<li>Use a <strong>packaged build</strong> of the desktop app (<code>pnpm build:desktop</code>), not <code>tauri dev</code>. \
+In dev mode the UI is served by the Vite dev server, which your phone can't reach.</li>\
+<li>Keep your phone and computer on the <strong>same Wi-Fi network</strong>.</li>\
+<li>Re-open the phone link from the desktop app to get a fresh address and pairing code.</li>\
+</ul>\
+<p class=\"muted\">If you're a developer running <code>tauri dev</code>, make sure the Vite dev server is running \
+and reachable — the desktop app will proxy phone requests to it.</p>\
+</main></body></html>"
+        .to_string()
 }
 
 /// Save a generated artifact (illustrated HTML/EPUB export, or a single image) to
