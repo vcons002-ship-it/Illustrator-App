@@ -97,6 +97,10 @@ export interface TaskPlan {
   /** The PARENT Google Task this plan mirrors (set when created via create_task/add_task_group),
    * so planning can push its steps back as sub-tasks under it. */
   googleTaskId?: string;
+  /** Why this plan was archived (soft-removed) — shown in the "Removed" list; cleared on restore. */
+  archivedReason?: "removed" | "ignored";
+  /** When it was archived (ms epoch), for sorting the Removed list. */
+  archivedAt?: number;
 }
 
 /** A possible task the scan surfaced, before the user turns it into a plan. */
@@ -243,6 +247,32 @@ export async function deleteTaskPlan(store: VisualReaderStore, id: string): Prom
   return kept;
 }
 
+/** Soft-remove a plan: mark it `archived` (kept in the store, hidden from the active list). Because
+ * the plan stays "known", a removed item won't re-surface from a scan or re-import from Google Tasks
+ * (both dedupe against ALL plans) — and it can be Restored. `reason` records why it was removed. */
+export async function archiveTaskPlan(
+  store: VisualReaderStore,
+  id: string,
+  reason: "removed" | "ignored" = "removed",
+): Promise<TaskPlan[]> {
+  const next = (await loadTaskPlans(store)).map((p) =>
+    p.id === id ? { ...p, status: "archived" as const, archivedReason: reason, archivedAt: Date.now(), updatedAt: Date.now() } : p,
+  );
+  await persistPlans(store, next);
+  return next;
+}
+
+/** Undo a removal: flip an archived plan back to active (clearing the archive metadata). */
+export async function restoreTaskPlan(store: VisualReaderStore, id: string): Promise<TaskPlan[]> {
+  const next = (await loadTaskPlans(store)).map((p) => {
+    if (p.id !== id) return p;
+    const { archivedReason: _r, archivedAt: _a, ...rest } = p;
+    return { ...rest, status: "active" as const, updatedAt: Date.now() };
+  });
+  await persistPlans(store, next);
+  return next;
+}
+
 /** Patch one step (status/notes/google ids); bumps updatedAt. Returns the saved plans. */
 export async function updateTaskStep(
   store: VisualReaderStore,
@@ -347,6 +377,31 @@ export function reconcileGoogleSubtasks(
 /** A scan-surfaced task still awaiting its step-by-step plan (a stub: planned===false, no steps). */
 export function needsPlanning(plan: TaskPlan): boolean {
   return plan.planned === false;
+}
+
+/** Render a plan as readable notes for the PARENT Google Task, so the whole plan — summary, the
+ * numbered steps (with who does each + due dates), and the deadline — is visible right in Google
+ * Tasks, not just as a bare title with child rows. Bounded to Google's notes limit (~8 KB). PURE. */
+export function formatPlanForGoogleNotes(plan: {
+  summary?: string;
+  deadlineIso?: string;
+  steps: readonly { title: string; detail?: string; actor: StepActor; status: StepStatus; dueIso?: string }[];
+}): string {
+  const lines: string[] = [];
+  if (plan.summary) lines.push(plan.summary.trim(), "");
+  if (plan.steps.length) {
+    lines.push(`PLAN — ${plan.steps.length} step${plan.steps.length === 1 ? "" : "s"}:`);
+    plan.steps.forEach((s, i) => {
+      const mark = s.status === "done" ? "[x]" : "[ ]";
+      const who = s.actor === "ai_prep" ? "AI preps" : "you do";
+      const due = s.dueIso ? `, due ${s.dueIso}` : "";
+      lines.push(`${i + 1}. ${mark} ${s.title} (${who}${due})`);
+      if (s.detail) lines.push(`     ${s.detail.trim()}`);
+    });
+  }
+  if (plan.deadlineIso) lines.push("", `Deadline: ${plan.deadlineIso}`);
+  lines.push("", "— planned by Visual Reader");
+  return lines.join("\n").slice(0, 8000);
 }
 
 /** A top-level Google Task plus its sub-tasks — the shape `listTaskTree` returns. */
@@ -461,6 +516,15 @@ export async function addIgnore(store: VisualReaderStore, rule: { kind: IgnoreRu
   const bounded = kept.slice(-MAX_IGNORE_RULES);
   await store.putMemo?.(TASK_IGNORE_KEY, JSON.stringify(bounded));
   return bounded;
+}
+
+/** Remove an ignore rule (by kind+value, case-insensitive) — the undo when a removed task is
+ * restored, so a sender/phrase you'd suppressed can surface again. */
+export async function removeIgnore(store: VisualReaderStore, rule: { kind: IgnoreRule["kind"]; value: string }): Promise<IgnoreRule[]> {
+  const key = `${rule.kind}:${rule.value.trim().toLowerCase()}`;
+  const kept = (await loadIgnored(store)).filter((r) => `${r.kind}:${r.value.toLowerCase()}` !== key);
+  await store.putMemo?.(TASK_IGNORE_KEY, JSON.stringify(kept));
+  return kept;
 }
 
 /** The source's email/event id, for ignore-by-item and plan dedup. */

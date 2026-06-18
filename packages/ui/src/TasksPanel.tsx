@@ -35,7 +35,12 @@ export interface TasksPanelProps {
   /** "Don't surface this again" — add an ignore rule (the item, else its sender, else its title)
    * so future scans skip it, and delete the plan. Shown on auto-surfaced (scan/email/calendar) tasks. */
   onIgnoreTask?: (planId: string) => void;
+  /** Soft-remove a task (archives it to the undoable "Removed" list). */
   onDelete: (planId: string) => Promise<void> | void;
+  /** Restore a removed/ignored task back to active (undo). */
+  onRestore?: (planId: string) => void;
+  /** Permanently delete a task from the Removed list. */
+  onDeleteForever?: (planId: string) => void;
   onClose: () => void;
 }
 
@@ -45,6 +50,7 @@ function statusDot(status: TaskStep["status"]): string {
 
 function PlanCard({
   plan,
+  detailed = false,
   onOpen,
   onPlan,
   onAdvance,
@@ -53,6 +59,8 @@ function PlanCard({
   onDelete,
 }: {
   plan: TaskPlan;
+  /** The single-task detail view — show the captured work (step details, research, drafts) in full. */
+  detailed?: boolean;
   onOpen: () => void;
   onPlan: () => void;
   onAdvance: (stepId: string) => void;
@@ -136,10 +144,33 @@ function PlanCard({
                   {l.official ? "official ↗" : "link ↗"}
                 </a>
               ))}
+              {/* The actual work: what to do for this step + (in the detail view) any research note. */}
+              {s.detail ? <div style={{ marginLeft: 26, opacity: 0.75, marginTop: 1 }}>{s.detail}</div> : null}
+              {detailed && s.researchNotes ? (
+                <div style={{ marginLeft: 26, marginTop: 2, fontSize: 11, opacity: 0.6, whiteSpace: "pre-wrap" }}>🔬 {s.researchNotes}</div>
+              ) : null}
             </li>
           );
         })}
       </ol>
+      {/* The work the planner captured — research it gathered and any documents it drafted — shown
+          here so you can read it WITHOUT opening the task in chat. */}
+      {detailed && plan.researchNotes ? (
+        <details style={workBox}>
+          <summary style={{ cursor: "pointer", fontWeight: 600 }}>🔬 Research notes</summary>
+          <div style={{ whiteSpace: "pre-wrap", marginTop: 4, opacity: 0.85 }}>{plan.researchNotes}</div>
+        </details>
+      ) : null}
+      {detailed
+        ? plan.steps.flatMap((s) => s.docs.map((d) => ({ step: s.title, doc: d }))).map(({ step, doc }, i) => (
+            <details key={`${doc.title}-${i}`} style={workBox}>
+              <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+                📄 {doc.title} <span style={{ opacity: 0.5, fontWeight: 400 }}>· {doc.kind} · for “{step}”</span>
+              </summary>
+              <pre style={draftPre}>{doc.body}</pre>
+            </details>
+          ))
+        : null}
       <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
         <button style={noSteps ? btnPrimary : btn} onClick={onPlan} title={noSteps ? "Research it and break it into steps" : "Re-plan from scratch"}>
           {noSteps ? "⚡ Plan it" : "↻ Refresh plan"}
@@ -153,12 +184,12 @@ function PlanCard({
           </button>
         ) : null}
         {onIgnoreTask && (plan.source.kind === "scan" || plan.source.kind === "email" || plan.source.kind === "calendar") ? (
-          <button style={btn} onClick={onIgnoreTask} title="Don't surface this again — future inbox/calendar scans will skip it (Delete alone lets it re-appear)">
+          <button style={btn} onClick={onIgnoreTask} title="Don't surface this again — also tells future scans/imports to skip it. Undo from the Removed list.">
             🚫 Ignore
           </button>
         ) : null}
-        <button style={btn} onClick={onDelete} title="Delete this plan">
-          Delete
+        <button style={btn} onClick={onDelete} title="Remove this task (kept in the Removed list — you can undo)">
+          ✕ Remove
         </button>
       </div>
     </div>
@@ -179,12 +210,20 @@ export const TasksPanel = memo(function TasksPanel({
   scanMessage,
   onIgnoreTask,
   onDelete,
+  onRestore,
+  onDeleteForever,
   onClose,
 }: TasksPanelProps) {
   const active = useMemo(
     () => plans.filter((p) => p.status !== "archived").sort((a, b) => b.updatedAt - a.updatedAt),
     [plans],
   );
+  // Removed/ignored tasks — the undoable trash, newest first.
+  const removed = useMemo(
+    () => plans.filter((p) => p.status === "archived").sort((a, b) => (b.archivedAt ?? b.updatedAt) - (a.archivedAt ?? a.updatedAt)),
+    [plans],
+  );
+  const [showRemoved, setShowRemoved] = useState(false);
   const [view, setView] = useState<"timeline" | "list">("timeline");
   const [selectedId, setSelectedId] = useState<string | undefined>();
   // Which parent tasks are expanded to show their sub-tasks inline in the all-tasks Gantt.
@@ -217,10 +256,11 @@ export const TasksPanel = memo(function TasksPanel({
     setAdding(false);
   };
 
-  const cardFor = (p: TaskPlan) => (
+  const cardFor = (p: TaskPlan, detailed = false) => (
     <PlanCard
       key={p.id}
       plan={p}
+      detailed={detailed}
       onOpen={() => onOpenTask(p.id)}
       onPlan={() => onPlanTask(p.id)}
       onAdvance={(stepId) => void onAdvanceStep(p.id, stepId)}
@@ -332,7 +372,7 @@ export const TasksPanel = memo(function TasksPanel({
                 />
               </div>
             ) : null}
-            {cardFor(selected)}
+            {cardFor(selected, true)}
           </div>
         ) : view === "timeline" ? (
           <div>
@@ -362,8 +402,41 @@ export const TasksPanel = memo(function TasksPanel({
             </div>
           </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{active.map(cardFor)}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{active.map((p) => cardFor(p))}</div>
         )}
+
+        {/* Removed/ignored tasks — the undoable trash. Restore brings one back (and un-ignores it);
+            Delete forever drops it for good. */}
+        {removed.length > 0 ? (
+          <div style={{ marginTop: 14, borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 8 }}>
+            <button style={{ ...btn, fontSize: 12 }} onClick={() => setShowRemoved((v) => !v)}>
+              🗑 Removed ({removed.length}) {showRemoved ? "▾" : "▸"}
+            </button>
+            {showRemoved ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
+                {removed.map((p) => (
+                  <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, opacity: 0.85 }}>
+                    <span style={{ flex: 1 }}>
+                      {p.archivedReason === "ignored" ? "🚫 " : "✕ "}
+                      {p.title}
+                      <span style={{ opacity: 0.5 }}> · {p.archivedReason === "ignored" ? "ignored" : "removed"}</span>
+                    </span>
+                    {onRestore ? (
+                      <button style={btn} onClick={() => onRestore(p.id)} title="Bring this task back (and un-ignore it)">
+                        ↩ Restore
+                      </button>
+                    ) : null}
+                    {onDeleteForever ? (
+                      <button style={btn} onClick={() => onDeleteForever(p.id)} title="Delete permanently (cannot undo)">
+                        Delete forever
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -419,6 +492,24 @@ const questionsBox: React.CSSProperties = {
   borderRadius: 6,
   border: "1px solid rgba(255,207,139,0.4)",
   background: "rgba(255,207,139,0.08)",
+};
+const workBox: React.CSSProperties = {
+  marginTop: 6,
+  padding: "6px 8px",
+  fontSize: 12,
+  borderRadius: 6,
+  border: "1px solid rgba(255,255,255,0.1)",
+  background: "rgba(255,255,255,0.03)",
+};
+const draftPre: React.CSSProperties = {
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+  margin: "6px 0 0",
+  maxHeight: 280,
+  overflow: "auto",
+  fontSize: 11,
+  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+  opacity: 0.9,
 };
 const checkBtn: React.CSSProperties = {
   background: "transparent",

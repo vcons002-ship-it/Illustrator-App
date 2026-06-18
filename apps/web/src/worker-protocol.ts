@@ -122,6 +122,9 @@ export type MainToWorker =
   | { type: "scanInbox"; requestId: number }
   /** Mirror the user's existing Google Tasks INTO the app's task list (those not already present). */
   | { type: "importGoogleTasks"; requestId: number }
+  /** Create a bare Google Task (parent) for a freshly-surfaced scan stub, so it shows up in Google
+   * Tasks right away; planning later pushes its sub-tasks + the plan under this parent. */
+  | { type: "createGoogleTask"; requestId: number; title: string; notes?: string; due?: string }
   /** Load events across all the user's Google calendars in a window (the calendar view). */
   | { type: "loadCalendar"; requestId: number; timeMin: string; timeMax: string }
   | { type: "stockQuote"; requestId: number; symbol: string }
@@ -323,6 +326,7 @@ export type WorkerToMain =
   | { type: "planned"; requestId: number; ok: boolean; plan?: TaskPlan; error?: string }
   | { type: "scanned"; requestId: number; ok: boolean; candidates?: TaskCandidate[]; error?: string }
   | { type: "googleTasksImported"; requestId: number; ok: boolean; imported?: number; error?: string }
+  | { type: "googleTaskCreated"; requestId: number; ok: boolean; id?: string; error?: string }
   | { type: "calendarLoaded"; requestId: number; ok: boolean; events?: CalendarEvent[]; error?: string }
   | { type: "stockQuoted"; requestId: number; ok: boolean; quote?: StockQuote; error?: string }
   | { type: "marketIndicatorsResult"; requestId: number; ok: boolean; indicators?: Indicators; error?: string }

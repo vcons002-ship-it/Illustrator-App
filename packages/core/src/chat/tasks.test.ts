@@ -5,6 +5,9 @@ import {
   addIgnore,
   advanceStep,
   deleteTaskPlan,
+  archiveTaskPlan,
+  restoreTaskPlan,
+  removeIgnore,
   isIgnored,
   loadIgnored,
   loadTaskPlans,
@@ -14,6 +17,7 @@ import {
   reconcileGoogleSubtasks,
   planFromGoogleTask,
   importableGoogleTasks,
+  formatPlanForGoogleNotes,
   taskStubFromCandidate,
   tasksIndexBlock,
   updateTaskStep,
@@ -164,6 +168,24 @@ describe("normalizeTaskPlan", () => {
     expect(importableGoogleTasks(trees, existing).map((t) => t.id)).toEqual(["gt-2"]);
   });
 
+  it("formatPlanForGoogleNotes renders the whole plan for the parent task's notes", () => {
+    const notes = formatPlanForGoogleNotes({
+      summary: "Apply to the data scientist role",
+      deadlineIso: "2026-07-10",
+      steps: [
+        { title: "Tailor resume", detail: "Match the JD keywords", actor: "ai_prep", status: "done", dueIso: "2026-07-01" },
+        { title: "Submit application", actor: "user_action", status: "pending" },
+      ],
+    });
+    expect(notes).toContain("Apply to the data scientist role");
+    expect(notes).toContain("PLAN — 2 steps:");
+    expect(notes).toContain("1. [x] Tailor resume (AI preps, due 2026-07-01)");
+    expect(notes).toContain("Match the JD keywords");
+    expect(notes).toContain("2. [ ] Submit application (you do)");
+    expect(notes).toContain("Deadline: 2026-07-10");
+    expect(notes.length).toBeLessThanOrEqual(8000);
+  });
+
   it("keeps + bounds clarifying questions (drops empties, caps to 6)", () => {
     const p = normalizeTaskPlan({
       title: "Trip",
@@ -187,6 +209,32 @@ describe("task plan store", () => {
     expect(loaded[0]!.title).toBe("Renew (edited)");
     await deleteTaskPlan(store, p.id);
     expect(await loadTaskPlans(store)).toEqual([]);
+  });
+
+  it("archive soft-removes (keeps the plan, hidden from active), restore brings it back", async () => {
+    const store = new InMemoryStore();
+    const p = plan();
+    await upsertTaskPlan(store, p);
+    await archiveTaskPlan(store, p.id, "ignored");
+    const removed = (await loadTaskPlans(store))[0]!;
+    expect(removed.status).toBe("archived"); // still in the store (so it won't re-surface/re-import)
+    expect(removed.archivedReason).toBe("ignored");
+    expect(removed.archivedAt).toBeGreaterThan(0);
+    await restoreTaskPlan(store, p.id);
+    const back = (await loadTaskPlans(store))[0]!;
+    expect(back.status).toBe("active");
+    expect(back.archivedReason).toBeUndefined();
+    expect(back.archivedAt).toBeUndefined();
+  });
+
+  it("removeIgnore deletes a rule (the undo for a restored ignore)", async () => {
+    const store = new InMemoryStore();
+    await addIgnore(store, { kind: "sender", value: "spam@x.com" });
+    await addIgnore(store, { kind: "phrase", value: "sale" });
+    await removeIgnore(store, { kind: "sender", value: "SPAM@x.com" }); // case-insensitive
+    const rules = await loadIgnored(store);
+    expect(rules).toHaveLength(1);
+    expect(rules[0]!.kind).toBe("phrase");
   });
 
   it("evicts the oldest plan past the cap", async () => {

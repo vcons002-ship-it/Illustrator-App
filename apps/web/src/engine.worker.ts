@@ -86,6 +86,7 @@ import {
   createTask,
   createTaskGroup,
   reconcileGoogleSubtasks,
+  formatPlanForGoogleNotes,
   planFromGoogleTask,
   importableGoogleTasks,
   runTaskPlanning,
@@ -718,6 +719,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "importGoogleTasks":
       void handleImportGoogleTasks(msg);
+      break;
+    case "createGoogleTask":
+      void handleCreateGoogleTask(msg);
       break;
     case "loadCalendar":
       void handleLoadCalendar(msg);
@@ -1436,12 +1440,12 @@ async function syncPlanToGoogleTasks(plan: TaskPlan, transport: DirectTransport,
     steps.push(gid ? { ...step, googleTaskId: gid } : step);
     if (gid) previous = gid;
   }
-  if (plan.summary) {
-    try {
-      await patchTask(transport, await tok(), parentId, { notes: plan.summary });
-    } catch {
-      /* best-effort */
-    }
+  // Write the WHOLE plan into the parent task's notes, so the current plan (summary + numbered
+  // steps + deadline) is readable right in Google Tasks — not just a title with child rows.
+  try {
+    await patchTask(transport, await tok(), parentId, { notes: formatPlanForGoogleNotes({ ...plan, steps }) });
+  } catch {
+    /* best-effort */
   }
   return { ...plan, steps };
 }
@@ -1497,10 +1501,23 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
     let finalPlan = existing
       ? { ...plan, id: existing.id, ...(existing.sessionId ? { sessionId: existing.sessionId } : {}), createdAt: existing.createdAt }
       : plan;
-    // If this task is mirrored to a Google Task, push the freshly-planned steps back as SUB-TASKS
-    // under it and refresh its notes — so the Google Task reflects the plan, not just a flat title.
+    // Mirror the plan to Google Tasks so the current plan is visible there. If it's already linked
+    // to a parent task — scanned stubs get one the moment they're surfaced, so this is the usual
+    // path — push the freshly-planned steps back as SUB-TASKS under it + refresh its notes. If it's
+    // a user-typed plan with no Google parent yet (e.g. "+ Add task"), CREATE one (title + deadline)
+    // and sync, so a task you plan still shows up in Google Tasks.
     if (existing?.googleTaskId && googleConnected) {
       finalPlan = await syncPlanToGoogleTasks({ ...finalPlan, googleTaskId: existing.googleTaskId }, transport, tok);
+    } else if (googleConnected && finalPlan.steps.length > 0 && !finalPlan.googleTaskId) {
+      try {
+        const parent = await createTask(transport, await tok(), {
+          title: finalPlan.title,
+          ...(finalPlan.deadlineIso ? { due: finalPlan.deadlineIso } : {}),
+        });
+        if (parent.id) finalPlan = await syncPlanToGoogleTasks({ ...finalPlan, googleTaskId: parent.id }, transport, tok);
+      } catch {
+        /* best-effort — keep the in-app plan even if the Google write failed */
+      }
     }
     await upsertTaskPlan(store, finalPlan);
     post({ type: "planned", requestId: msg.requestId, ok: true, plan: finalPlan });
@@ -1581,6 +1598,31 @@ async function handleImportGoogleTasks(msg: Extract<MainToWorker, { type: "impor
     post({ type: "googleTasksImported", requestId: msg.requestId, ok: true, imported: toImport.length });
   } catch (err) {
     post({ type: "googleTasksImported", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/** Create a bare Google Task (parent) for a surfaced scan stub, returning its id so the in-app
+ * stub can be linked to it. Planning later pushes the sub-tasks + plan notes under this parent.
+ * Best-effort: no-op (ok, no id) when Google isn't connected — the stub just stays in-app. */
+async function handleCreateGoogleTask(msg: Extract<MainToWorker, { type: "createGoogleTask" }>): Promise<void> {
+  try {
+    const store = memoryStore();
+    const googleId = settings?.keys?.googleClientId;
+    const googleSecret = settings?.keys?.googleClientSecret;
+    if (!googleId || !googleSecret || !(await loadGoogleTokens(store))) {
+      post({ type: "googleTaskCreated", requestId: msg.requestId, ok: true });
+      return;
+    }
+    const transport = new DirectTransport(corsFetch());
+    const token = await getFreshAccessToken(store, { clientId: googleId, clientSecret: googleSecret, transport });
+    const item = await createTask(transport, token, {
+      title: msg.title,
+      ...(msg.notes ? { notes: msg.notes } : {}),
+      ...(msg.due ? { due: msg.due } : {}),
+    });
+    post({ type: "googleTaskCreated", requestId: msg.requestId, ok: true, ...(item.id ? { id: item.id } : {}) });
+  } catch (err) {
+    post({ type: "googleTaskCreated", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
   }
 }
 

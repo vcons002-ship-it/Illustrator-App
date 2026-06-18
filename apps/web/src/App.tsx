@@ -50,6 +50,9 @@ import {
   forgetSkill,
   loadTaskPlans,
   deleteTaskPlan,
+  archiveTaskPlan,
+  restoreTaskPlan,
+  removeIgnore,
   upsertTaskPlan,
   updateTaskStep,
   loadScheduledTasks,
@@ -319,6 +322,7 @@ export function App() {
     planTask,
     scanInbox,
     importGoogleTasks,
+    createGoogleTask,
     loadCalendar,
     stockQuote,
     readPage,
@@ -342,6 +346,10 @@ export function App() {
   // a ref so callbacks defined ABOVE the chat plumbing can post a note without a forward reference.
   const { activities, begin: beginActivity } = useActivityLog();
   const buddyNoteRef = useRef<(text: string) => void>(() => {});
+  // Google connection status (loaded from stored tokens in an effect below) — declared here so the
+  // task-surfacing/planning callbacks can mirror scanned items to Google Tasks.
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [googleEmail, setGoogleEmail] = useState<string | undefined>();
   const [showCharacters, setShowCharacters] = useState(false);
   const [showData, setShowData] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -391,17 +399,32 @@ export function App() {
   // SURFACE the actionable items a scan found as UNPLANNED stubs — they appear in the task list
   // (and their dates on the calendar) with NO LLM work. Planning happens later (the periodic
   // sweep below, or the per-task "Plan" button). Deduped so a re-scan never adds the same item twice.
+  // When Google is connected, each new stub is ALSO created as a Google Task right away (a bare
+  // parent), so you stay updated on new to-dos on your phone — and because the stub is then linked
+  // by googleTaskId, the background planner pushes its sub-tasks + the plan under that same task.
   const addCandidatesAsTasks = useCallback(
     async (cands: TaskCandidate[]) => {
       if (cands.length === 0) return;
       const existing = await loadTaskPlans(libraryStore);
       const fresh = dedupeCandidates(cands, existing, await loadIgnored(libraryStore));
       for (const c of fresh.slice(0, 8)) {
-        await upsertTaskPlan(libraryStore, normalizeTaskPlan(taskStubFromCandidate(c)));
+        let googleTaskId: string | undefined;
+        if (googleConnected) {
+          const created = await createGoogleTask({
+            title: c.title,
+            ...(c.reason ? { notes: c.reason } : {}),
+            ...(c.suggestedDeadlineIso ? { due: c.suggestedDeadlineIso } : {}),
+          }).catch(() => ({ id: undefined }));
+          googleTaskId = created.id;
+        }
+        await upsertTaskPlan(
+          libraryStore,
+          normalizeTaskPlan({ ...taskStubFromCandidate(c), ...(googleTaskId ? { googleTaskId } : {}) }),
+        );
       }
       if (fresh.length) refreshTaskPlans();
     },
-    [libraryStore, refreshTaskPlans],
+    [libraryStore, refreshTaskPlans, googleConnected, createGoogleTask],
   );
   // Plan ONE task in place (a scan stub, or a refresh): research + fill its steps, keeping its id.
   // Shared by the per-task "Plan" button (userInitiated → may use the reader's files) and the
@@ -452,20 +475,55 @@ export function App() {
     },
     [libraryStore, planOneTask, beginActivity],
   );
-  // "Don't surface this again" — add the most precise ignore rule we can (the exact email/event
-  // item, else its sender, else its title as a phrase), then delete the plan. Future scans skip it
-  // (see dedupeCandidates/isIgnored), so a recurring inbox/calendar item stays gone instead of
-  // re-appearing on the next sweep — which plain Delete can't do.
+  // The most precise "don't surface this" rule for a plan: the exact email/event item, else its
+  // sender, else its title as a phrase. Shared by Ignore (adds it) and Restore (removes it).
+  const ignoreRuleFor = useCallback((plan: TaskPlan): { kind: "item" | "sender" | "phrase"; value: string } | undefined => {
+    const id = sourceId(plan.source);
+    const from = sourceFrom(plan.source);
+    if (id) return { kind: "item", value: id };
+    if (from) return { kind: "sender", value: from };
+    if (plan.title) return { kind: "phrase", value: plan.title };
+    return undefined;
+  }, []);
+  // "Don't surface this again" — record the ignore rule AND soft-remove the plan (archive, not hard
+  // delete) so it lands in the undoable "Removed" list. Because the archived plan stays "known",
+  // future scans/imports skip it too (dedupeCandidates/importableGoogleTasks see ALL plans).
   const ignoreTask = useCallback(
     async (planId: string) => {
       const plan = (await loadTaskPlans(libraryStore)).find((p) => p.id === planId);
-      if (plan) {
-        const id = sourceId(plan.source);
-        const from = sourceFrom(plan.source);
-        if (id) await addIgnore(libraryStore, { kind: "item", value: id }).catch(() => {});
-        else if (from) await addIgnore(libraryStore, { kind: "sender", value: from }).catch(() => {});
-        else if (plan.title) await addIgnore(libraryStore, { kind: "phrase", value: plan.title }).catch(() => {});
+      const rule = plan ? ignoreRuleFor(plan) : undefined;
+      if (rule) await addIgnore(libraryStore, rule).catch(() => {});
+      await archiveTaskPlan(libraryStore, planId, "ignored");
+      refreshTaskPlans();
+    },
+    [libraryStore, refreshTaskPlans, ignoreRuleFor],
+  );
+  // Soft-remove (the per-card "Remove" button) — archive without a broad ignore rule. Undoable.
+  const removeTask = useCallback(
+    async (planId: string) => {
+      await archiveTaskPlan(libraryStore, planId, "removed");
+      refreshTaskPlans();
+    },
+    [libraryStore, refreshTaskPlans],
+  );
+  // Undo a removal: un-archive, and if it had been Ignored, drop the ignore rule too so it can
+  // surface again.
+  const restoreTask = useCallback(
+    async (planId: string) => {
+      const plan = (await loadTaskPlans(libraryStore)).find((p) => p.id === planId);
+      if (plan?.archivedReason === "ignored") {
+        const rule = ignoreRuleFor(plan);
+        if (rule) await removeIgnore(libraryStore, rule).catch(() => {});
       }
+      await restoreTaskPlan(libraryStore, planId);
+      refreshTaskPlans();
+    },
+    [libraryStore, refreshTaskPlans, ignoreRuleFor],
+  );
+  // Permanently delete (from the Removed list) — gone for good (a fresh scan/import could surface
+  // a still-existing source again later).
+  const deleteTaskForever = useCallback(
+    async (planId: string) => {
       await deleteTaskPlan(libraryStore, planId);
       refreshTaskPlans();
     },
@@ -1412,9 +1470,9 @@ export function App() {
     else void saveExportFile(`${base}.xlsx`, dataTableToXlsx(table), XLSX_MIME);
   }, []);
 
-  // Google (Gmail/Calendar/Tasks) connection status, derived from the stored tokens.
-  const [googleConnected, setGoogleConnected] = useState(false);
-  const [googleEmail, setGoogleEmail] = useState<string | undefined>();
+  // Google (Gmail/Calendar/Tasks) connection status, derived from the stored tokens. (Declared up
+  // by the engine hook so task surfacing/planning can mirror to Google Tasks; loaded below.)
+
   useEffect(() => {
     void libraryStore.getMemo?.("google-tokens").then((t) => setGoogleConnected(!!t)).catch(() => {});
     void libraryStore.getMemo?.("google-email").then((e) => setGoogleEmail(e || undefined)).catch(() => {});
@@ -4157,10 +4215,9 @@ export function App() {
           onAdvanceStep={onAdvanceTaskStep}
           onToggleStepDone={onToggleStepDone}
           onIgnoreTask={ignoreTask}
-          onDelete={async (id) => {
-            await deleteTaskPlan(libraryStore, id);
-            refreshTaskPlans();
-          }}
+          onDelete={(id) => void removeTask(id)}
+          onRestore={(id) => void restoreTask(id)}
+          onDeleteForever={(id) => void deleteTaskForever(id)}
           onClose={() => setShowTasks(false)}
         />
       )}
