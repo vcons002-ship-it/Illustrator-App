@@ -518,6 +518,25 @@ describe("google tools", () => {
     expect(parseBuddyToolCall('{"tool":"create_task"}')).toBeUndefined(); // no title
   });
 
+  it("parses add_task_group (parent + sub-tasks) and rejects it without a title or sub-tasks", () => {
+    expect(
+      parseBuddyToolCall('{"tool":"add_task_group","title":"Iowa trip","due":"2026-07-14T00:00:00Z","subtasks":[{"title":"Book outbound flight","due":"2026-06-30T00:00:00Z"},{"title":"Book return flight"}]}'),
+    ).toEqual({
+      tool: "add_task_group",
+      title: "Iowa trip",
+      due: "2026-07-14T00:00:00Z",
+      subtasks: [{ title: "Book outbound flight", due: "2026-06-30T00:00:00Z" }, { title: "Book return flight" }],
+    });
+    expect(parseBuddyToolCall('{"tool":"add_task_group","title":"x","subtasks":[]}')).toBeUndefined(); // no sub-tasks
+    expect(parseBuddyToolCall('{"tool":"add_task_group","subtasks":[{"title":"a"}]}')).toBeUndefined(); // no title
+    const out = formatBuddyToolResult(
+      { tool: "add_task_group", title: "Iowa trip", subtasks: [{ title: "a" }, { title: "b" }] },
+      { taskGroup: { title: "Iowa trip", count: 2 } },
+    );
+    expect(out).toContain("Iowa trip");
+    expect(out).toContain("2 sub-tasks");
+  });
+
   it("parses read_attachment and rejects it without both ids", () => {
     expect(parseBuddyToolCall('{"tool":"read_attachment","messageId":"m1","attachmentId":"att-1","filename":"itinerary.pdf"}')).toEqual({
       tool: "read_attachment",

@@ -164,6 +164,7 @@ export type BuddyToolCall =
   /** Google Tasks (read + create). */
   | { tool: "list_tasks"; max?: number }
   | { tool: "create_task"; title: string; notes?: string; due?: string }
+  | { tool: "add_task_group"; title: string; due?: string; subtasks: { title: string; due?: string }[] }
   /** Plan a multi-step real-world task from a natural-language request (the host
    * researches it, builds a step plan, schedules reminders, and opens it). */
   | { tool: "plan_task"; request: string }
@@ -375,7 +376,12 @@ export function buildBuddySystemPrompt(opts: {
       '- {"tool":"create_event","summary":"…","start":"2026-06-18T14:00:00-04:00",' +
       '"end":"2026-06-18T15:00:00-04:00","description":"…","location":"…"} — add an event (ISO 8601 with offset).\n' +
       '- {"tool":"list_tasks","max":20} — open to-dos. - {"tool":"create_task","title":"…","notes":"…",' +
-      '"due":"2026-06-20T00:00:00Z"} — add a to-do.\n' +
+      '"due":"2026-06-20T00:00:00Z"} — add a SINGLE to-do.\n' +
+      '- {"tool":"add_task_group","title":"Iowa trip","due":"…","subtasks":[{"title":"Book outbound flight",' +
+      '"due":"…"},{"title":"Book return flight"}]} — when the reader wants SEVERAL related to-dos added, use ' +
+      "THIS (one PARENT task with nested SUB-TASKS) instead of many separate create_task calls — it nests them " +
+      "in Google Tasks AND shows as one task with its steps in the app. (For a task that needs RESEARCH/planning, " +
+      "use plan_task instead.)\n" +
       "ANSWERING SCHEDULE/MAIL QUESTIONS: \"what do I have going on this week?\" / \"what does my day look " +
       'like?" → list_events for that window, then summarize it plainly. "when do I need to do X by?" → check ' +
       "list_tasks and the task plans (list_task_plans / get_task_plan) for a deadline, and list_events / " +
@@ -878,6 +884,21 @@ function parseToolObject(obj: Record<string, unknown>): BuddyToolCall | undefine
       ...(strArg(obj.due, MAX_NAME_CHARS) ? { due: strArg(obj.due, MAX_NAME_CHARS)! } : {}),
     };
   }
+  if (tool === "add_task_group") {
+    const title = strArg(obj.title, MAX_QUERY_CHARS);
+    const subtasks = Array.isArray(obj.subtasks)
+      ? obj.subtasks
+          .map((s) => {
+            const st = (s ?? {}) as Record<string, unknown>;
+            const stTitle = strArg(st.title, MAX_QUERY_CHARS);
+            return stTitle ? { title: stTitle, ...(strArg(st.due, MAX_NAME_CHARS) ? { due: strArg(st.due, MAX_NAME_CHARS)! } : {}) } : undefined;
+          })
+          .filter((s): s is { title: string; due?: string } => !!s)
+          .slice(0, 50)
+      : [];
+    if (!title || subtasks.length === 0) return undefined;
+    return { tool, title, subtasks, ...(strArg(obj.due, MAX_NAME_CHARS) ? { due: strArg(obj.due, MAX_NAME_CHARS)! } : {}) };
+  }
   if (tool === "plan_task") {
     const request = strArg(obj.request, MAX_PASTE_CHARS);
     return request ? { tool, request } : undefined;
@@ -1103,6 +1124,8 @@ export interface BuddyToolResultPayload {
   eventCreated?: CalendarEvent;
   tasks?: TaskItem[];
   taskCreated?: TaskItem;
+  /** add_task_group outcome: the parent task title + how many sub-tasks were nested under it. */
+  taskGroup?: { title: string; count: number };
   /** Scheduled-task outcomes. */
   scheduled?: { id: string; title: string; describe: string };
   scheduledList?: { id: string; title: string; describe: string; enabled: boolean }[];
@@ -1381,6 +1404,12 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
   }
   if (call.tool === "create_task") {
     return result.taskCreated ? `[added to-do "${result.taskCreated.title}"] Confirm it to the reader.` : "[create_task did nothing]";
+  }
+  if (call.tool === "add_task_group") {
+    return result.taskGroup
+      ? `[added "${result.taskGroup.title}" with ${result.taskGroup.count} sub-task${result.taskGroup.count === 1 ? "" : "s"} — ` +
+          "nested in Google Tasks and shown in the 📋 Tasks panel as one task with its steps] Confirm it to the reader."
+      : "[add_task_group did nothing]";
   }
   if (call.tool === "schedule_task") {
     return result.scheduled

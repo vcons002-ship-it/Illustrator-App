@@ -97,6 +97,8 @@ export interface BuddyDeps {
   createEvent?: (ev: { summary: string; start: string; end: string; description?: string; location?: string }) => Promise<CalendarEvent>;
   listTasks?: (max?: number) => Promise<TaskItem[]>;
   createTask?: (t: { title: string; notes?: string; due?: string }) => Promise<TaskItem>;
+  /** Create a PARENT to-do with nested SUB-TASKS (Google Tasks + a mirrored in-app plan). */
+  addTaskGroup?: (group: { title: string; due?: string; subtasks: { title: string; due?: string }[] }) => Promise<{ title: string; count: number }>;
   /** Scheduled/periodic tasks — created/listed/cancelled over the shared store. */
   scheduleTask?: (call: Extract<BuddyToolCall, { tool: "schedule_task" }>) => Promise<{ id: string; title: string; describe: string }>;
   listScheduled?: () => Promise<{ id: string; title: string; describe: string; enabled: boolean }[]>;
@@ -430,6 +432,15 @@ export async function runBuddyTool(
             title: call.title,
             ...(call.notes ? { notes: call.notes } : {}),
             ...(call.due ? { due: call.due } : {}),
+          }),
+        };
+      case "add_task_group":
+        if (!deps.addTaskGroup) return { error: "Google isn't connected (connect it in Settings)." };
+        return {
+          taskGroup: await deps.addTaskGroup({
+            title: call.title,
+            ...(call.due ? { due: call.due } : {}),
+            subtasks: call.subtasks,
           }),
         };
       case "mark_step_done": {
