@@ -1005,8 +1005,14 @@ fn query_param(path: &str, key: &str) -> Option<String> {
 }
 
 fn open_browser(url: &str) {
+    // NOT `cmd /C start`: cmd treats `&` as a command separator (so it drops every query
+    // parameter after the first — e.g. an OAuth URL loses response_type/redirect_uri/scope and
+    // Google rejects it) and also expands `%xx` sequences, corrupting percent-encoded URLs.
+    // rundll32 receives the URL as a direct argument (no shell parsing), so it stays intact.
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    let _ = std::process::Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", url])
+        .spawn();
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open").arg(url).spawn();
     #[cfg(target_os = "linux")]
