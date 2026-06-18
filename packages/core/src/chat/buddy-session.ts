@@ -107,6 +107,8 @@ export interface BuddyDeps {
   /** Task-plan execution (the orchestrator) — wired over the shared store. */
   markStepDone?: (planId: string, stepId: string) => Promise<{ planTitle: string; nextStep?: string; completed: boolean } | undefined>;
   updateTaskStep?: (planId: string, stepId: string, patch: { status?: string; notes?: string }) => Promise<{ planTitle: string } | undefined>;
+  /** Add/replace the steps of an existing plan (defaults to the active task when planId omitted). */
+  addTaskSteps?: (args: { planId?: string; steps: { title: string; detail?: string; actor?: "ai_prep" | "user_action"; dueIso?: string }[]; replace?: boolean }) => Promise<{ planTitle: string; count: number; replaced: boolean } | undefined>;
   listTaskPlans?: () => Promise<{ id: string; title: string; status: string; nextStep?: string; deadlineIso?: string }[]>;
   getTaskPlan?: (id: string) => Promise<TaskPlan | undefined>;
 }
@@ -486,6 +488,11 @@ export async function runBuddyTool(
           ...(call.notes ? { notes: call.notes } : {}),
         });
         return r ? { taskAction: { planTitle: r.planTitle } } : {};
+      }
+      case "add_task_steps": {
+        if (!deps.addTaskSteps) return { error: "task plans aren't available" };
+        const r = await deps.addTaskSteps({ steps: call.steps, ...(call.planId ? { planId: call.planId } : {}), ...(call.replace ? { replace: true } : {}) });
+        return r ? { stepsAdded: r } : {};
       }
       case "schedule_task":
         if (!deps.scheduleTask) return { error: "scheduled tasks aren't available right now" };

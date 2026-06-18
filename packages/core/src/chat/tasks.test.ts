@@ -18,6 +18,7 @@ import {
   nextReadyStep,
   normalizeTaskPlan,
   needsPlanning,
+  applyStepEdits,
   reconcileGoogleSubtasks,
   planFromGoogleTask,
   importableGoogleTasks,
@@ -189,6 +190,25 @@ describe("normalizeTaskPlan", () => {
     expect(notes).toContain("2. [ ] Submit application (you do)");
     expect(notes).toContain("Deadline: 2026-07-10");
     expect(notes.length).toBeLessThanOrEqual(8000);
+  });
+
+  it("applyStepEdits: appends by default, replaces on demand, re-orders, clears a stub's planned flag", () => {
+    const p = plan(); // 3 steps
+    const appended = applyStepEdits(p, [{ title: "Call the vendor", actor: "user_action" }]);
+    expect(appended.steps).toHaveLength(4);
+    expect(appended.steps[3]!.title).toBe("Call the vendor");
+    expect(appended.steps.map((s) => s.order)).toEqual([0, 1, 2, 3]);
+
+    const replaced = applyStepEdits(p, [{ title: "Only step" }], { replace: true });
+    expect(replaced.steps).toHaveLength(1);
+    expect(replaced.steps[0]!.title).toBe("Only step");
+
+    // A stub (planned:false, 0 steps) loses `planned` once it gains steps (so the sweep won't wipe it).
+    const stub = normalizeTaskPlan({ title: "x", source: { kind: "typed", text: "x" }, planned: false, steps: [] });
+    expect(needsPlanning(stub)).toBe(true);
+    const filled = applyStepEdits(stub, [{ title: "a step" }]);
+    expect(needsPlanning(filled)).toBe(false);
+    expect(filled.planned).toBeUndefined();
   });
 
   it("keeps + bounds clarifying questions (drops empties, caps to 6)", () => {
