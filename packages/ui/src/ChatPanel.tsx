@@ -38,6 +38,8 @@ export interface ChatMessageVM {
   files?: { path: string; name: string }[];
   /** Quick-reply action buttons (e.g. what to do with a pasted link). */
   actions?: { label: string; send: string }[];
+  /** The model's reasoning for this turn, shown as a collapsed "Reasoning" disclosure. */
+  thinking?: string;
 }
 
 export type MessageBlock =
@@ -564,6 +566,7 @@ export const MessageBubble = memo(function MessageBubble({
           ✕
         </button>
       )}
+      {!isUser && message.thinking ? <ThinkingBlock text={message.thinking} open={false} label="💭 Reasoning" /> : null}
       {blocks
         ? blocks.map((b, i) =>
             b.type === "code" ? (
@@ -730,15 +733,15 @@ function ImageGallery({ items }: { items: { thumb: string; full: string; title?:
  * (so a long reason-before-answering reads as visible progress, not a frozen hang).
  * Collapsible — the reasoning isn't the answer, so it stays out of the way.
  */
-export function ThinkingBlock({ text }: { text: string }) {
+export function ThinkingBlock({ text, open = true, label = "💭 Thinking…" }: { text: string; open?: boolean; label?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = ref.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [text]);
+    if (el && open) el.scrollTop = el.scrollHeight;
+  }, [text, open]);
   return (
-    <details open style={thinkingStyle}>
-      <summary style={{ cursor: "pointer", fontSize: 11, opacity: 0.7 }}>💭 Thinking…</summary>
+    <details open={open} style={thinkingStyle}>
+      <summary style={{ cursor: "pointer", fontSize: 11, opacity: 0.7 }}>{label}</summary>
       <div
         ref={ref}
         style={{

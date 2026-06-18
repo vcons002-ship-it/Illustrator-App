@@ -32,6 +32,9 @@ export interface StoredChatMessage {
   files?: { path: string; name: string }[];
   /** Quick-reply action buttons (e.g. what to do with a pasted link). */
   actions?: { label: string; send: string }[];
+  /** The model's reasoning for this turn (a thinking model's scratchpad), shown as a collapsible
+   * on the settled message so it isn't lost when the turn ends. */
+  thinking?: string;
   /**
    * The MODEL-FACING turns this message represents (tool messages carry the model's
    * JSON call + the formatted result; plain messages omit this and map 1:1). Keeps

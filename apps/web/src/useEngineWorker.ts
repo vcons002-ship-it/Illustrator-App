@@ -273,6 +273,8 @@ export interface BuddyDoneResult {
   transcript: ChatTurn[];
   /** An un-executed generate_image awaiting the reader's approval. */
   pendingTool?: BuddyToolCall;
+  /** The turn's reasoning, persisted onto the settled message as a collapsible. */
+  thinking?: string;
   error?: string;
 }
 
@@ -769,6 +771,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             text: msg.text,
             transcript: msg.transcript,
             ...(msg.pendingTool ? { pendingTool: msg.pendingTool } : {}),
+            ...(msg.thinking ? { thinking: msg.thinking } : {}),
           });
           break;
         }

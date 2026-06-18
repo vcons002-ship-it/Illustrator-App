@@ -319,6 +319,8 @@ export type WorkerToMain =
       transcript: ChatTurn[];
       /** An un-executed generate_image awaiting the reader's approval. */
       pendingTool?: BuddyToolCall;
+      /** The turn's reasoning, persisted onto the settled message. */
+      thinking?: string;
     }
   | { type: "buddyError"; requestId: number; message: string }
   /** Reply to `summarize`: the compact brief, or why it failed. */

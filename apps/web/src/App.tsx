@@ -2846,6 +2846,7 @@ export function App() {
         role: "assistant",
         text: res.text,
         turns: [{ role: "user", content: userText }, ...res.transcript],
+        ...(res.thinking ? { thinking: res.thinking } : {}),
       });
       if (openedBook) appendChat({ role: "assistant", text: res.text });
     }
@@ -3199,6 +3200,7 @@ export function App() {
         ...(m.gallery ? { gallery: m.gallery } : {}),
         ...(m.files ? { files: m.files } : {}),
         ...(m.actions ? { actions: m.actions } : {}),
+        ...(m.thinking ? { thinking: m.thinking } : {}),
       })),
     [buddyMessages],
   );

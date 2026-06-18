@@ -119,13 +119,24 @@ export type BuddyTurnEvent =
   | { kind: "toolResult"; round: number; call: BuddyToolCall; result: BuddyToolResultPayload };
 
 export interface BuddyTurnOutcome {
-  /** Final assistant prose (empty when the round ended on a pending tool). */
+  /** Final assistant prose (empty ONLY when the round ended on a pending tool). */
   text: string;
   /** Turns appended THIS round, ready to extend the stored history. */
   transcript: ChatTurn[];
   /** An un-executed generate_image awaiting the reader's approval. */
   pendingTool?: BuddyToolCall;
   toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[];
+  /** The turn's reasoning (a thinking model's scratchpad), kept so the UI can show it as a
+   * collapsible on the settled message instead of losing it when the turn ends. */
+  thinking?: string;
+}
+
+/** A user-facing answer is never empty: a model that ended on a tool/blank with no prose would
+ * otherwise show an empty bubble. Fall back to a short line (acknowledging tools if any ran). PURE. */
+export function nonEmptyAnswer(text: string, hadTools: boolean): string {
+  const t = text.trim();
+  if (t) return t;
+  return hadTools ? "Done — see the results above." : "I didn't catch that — could you rephrase?";
 }
 
 /** Tools that stop the auto-run loop for the host/UI (approval, a render, a main-thread run, or
@@ -170,6 +181,8 @@ export async function runBuddyTurn(opts: {
   const messages: ChatTurn[] = [{ role: "system", content: opts.system }, ...opts.history];
   const transcript: ChatTurn[] = [];
   const toolResults: BuddyTurnOutcome["toolResults"] = [];
+  let lastThinking = ""; // the latest round's reasoning, persisted onto the settled message
+  let wrappedUp = false; // guard: only re-prompt for a plain-text wrap-up once
 
   for (let round = 0; ; round++) {
     const reply = await opts.llm.chat(messages, {
@@ -177,7 +190,10 @@ export async function runBuddyTurn(opts: {
       ...(opts.onEvent
         ? {
             onToken: jsonGatedTokenSink((text) => opts.onEvent?.({ kind: "token", text })),
-            onThinking: (text: string) => opts.onEvent?.({ kind: "thinking", text }),
+            onThinking: (text: string) => {
+              lastThinking = text;
+              opts.onEvent?.({ kind: "thinking", text });
+            },
           }
         : {}),
       ...(opts.signal ? { signal: opts.signal } : {}),
@@ -185,6 +201,8 @@ export async function runBuddyTurn(opts: {
       ...(opts.cachePrefix ? { cachePrefix: opts.cachePrefix } : {}),
     });
     const calls = round < MAX_BUDDY_TOOL_ROUNDS ? parseBuddyToolCalls(reply) : [];
+    const withThinking = (out: BuddyTurnOutcome): BuddyTurnOutcome =>
+      lastThinking.trim() ? { ...out, thinking: lastThinking.trim() } : out;
     if (calls.length === 0) {
       // A reply that LOOKED like tool JSON but didn't parse into any known call must NOT be
       // dumped to the reader as prose (that's the raw-JSON-in-chat bug). Nudge the model to
@@ -200,8 +218,19 @@ export async function runBuddyTurn(opts: {
         continue;
       }
       transcript.push({ role: "assistant", content: reply });
-      // Safety net: never hand the reader stray tool-call JSON in the final answer.
-      return { text: stripToolCallJson(reply), transcript, toolResults };
+      const clean = stripToolCallJson(reply).trim();
+      // The model ended on a tool/blank with NO prose. Ask once for a plain-text wrap-up so the
+      // reader never gets an empty bubble; if it's still empty, fall back to a short line.
+      if (!clean && !wrappedUp) {
+        wrappedUp = true;
+        const wrap =
+          "[Now reply to the reader in plain text — briefly say what you did or found. No tool calls.]";
+        messages.push({ role: "user", content: wrap });
+        transcript.push({ role: "user", content: wrap });
+        continue;
+      }
+      // Safety net: never hand the reader stray tool-call JSON or an empty string.
+      return withThinking({ text: nonEmptyAnswer(clean, toolResults.length > 0), transcript, toolResults });
     }
     transcript.push({ role: "assistant", content: reply });
     messages.push({ role: "assistant", content: reply });
