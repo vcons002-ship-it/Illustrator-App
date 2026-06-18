@@ -359,6 +359,10 @@ Open **Chat** while reading to discuss the book with an AI that actually knows i
   Character Bible editor are in the web/desktop reader first.
 
 **Designed-for, deliberately later**
+- **Task pruning (Google Tasks two-way)** — today a re-plan reconciles sub-tasks (reuse by id/title,
+  mark completed ones done, never duplicate) but **can't remove obsolete sub-tasks**: the app's Google
+  access is read-and-create only, so superseded ones linger (kept as history). True pruning needs the
+  Google Tasks **delete** scope — a bigger consent/verification step — so it's deferred.
 - **Full on-device image generation** (WebGPU) — image models running entirely in-browser.
 - **Hosted option** — an optional managed backend so you don't need your own keys/GPU.
 - **Cloud relay for the phone link** — today the phone link is LAN-only; an opt-in relay
