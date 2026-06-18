@@ -1327,15 +1327,11 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     }): Promise<{ ok: boolean; plan?: TaskPlan; error?: string }> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
-        const timeout = setTimeout(() => {
-          if (planRequests.current.delete(requestId))
-            resolve({ ok: false, error: "Planning timed out — try again, or a faster text model." });
-        }, 420_000); // 7 min: the research loop can be up to ~9 model round-trips on a slow model
+        // NO timeout: deep planning can take a long time, and it usually runs while you're away,
+        // so a long run is fine. The worker always answers with `planned` (ok or error), and the
+        // turn is cancellable, so the request can't leak.
         planRequests.current.set(requestId, {
-          resolve: (r) => {
-            clearTimeout(timeout);
-            resolve(r);
-          },
+          resolve,
           ...(args.onProgress ? { onProgress: args.onProgress } : {}),
         });
         send({ type: "planTask", requestId, source: args.source, sourceText: args.sourceText });

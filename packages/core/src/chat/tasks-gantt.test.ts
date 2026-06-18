@@ -66,6 +66,21 @@ describe("plansToGanttRows", () => {
     expect(dayToIso(rows[0]!.end)).toBe("2026-06-20");
   });
 
+  it("collapses to just the parent bar, or expands to show sub-tasks", () => {
+    const today = isoToDay("2026-06-11")!;
+    // Collapsed: only the group (parent) row, flagged collapsible + collapsed; no sub-task rows.
+    const collapsed = plansToGanttRows([p], { todayDay: today, expandedPlanIds: new Set<string>() });
+    expect(collapsed.map((r) => r.id)).toEqual(["task-1"]);
+    expect(collapsed[0]!.collapsible).toBe(true);
+    expect(collapsed[0]!.collapsed).toBe(true);
+    // The parent bar still spans its (hidden) sub-tasks' full range.
+    expect(dayToIso(collapsed[0]!.end)).toBe("2026-06-20");
+    // Expanded: parent + its sub-tasks, parent flagged not-collapsed.
+    const open = plansToGanttRows([p], { todayDay: today, expandedPlanIds: new Set(["task-1"]) });
+    expect(open.map((r) => r.id)).toEqual(["task-1", "task-1::s1", "task-1::s2"]);
+    expect(open[0]!.collapsed).toBe(false);
+  });
+
   it("falls back to an ordered sequence when steps have no due dates", () => {
     const undated = plan({
       deadlineIso: "2026-06-20",

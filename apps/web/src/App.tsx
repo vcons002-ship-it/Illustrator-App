@@ -1359,6 +1359,23 @@ export function App() {
   useEffect(() => {
     refreshCalendarRef.current = refreshCalendar;
   }, [refreshCalendar]);
+  // On-demand: scan email + calendar for tasks right now (plan what's found) and refresh the
+  // in-app calendar — the manual version of the idle background scan.
+  const scanningNowRef = useRef(false);
+  const [scanningNow, setScanningNow] = useState(false);
+  const scanNow = useCallback(async () => {
+    if (!googleConnected || scanningNowRef.current) return;
+    scanningNowRef.current = true;
+    setScanningNow(true);
+    try {
+      const r = await scanInbox();
+      if (r.candidates?.length) await autoPlanScan(r.candidates);
+      refreshCalendar();
+    } finally {
+      scanningNowRef.current = false;
+      setScanningNow(false);
+    }
+  }, [googleConnected, scanInbox, autoPlanScan, refreshCalendar]);
   const openCalendar = useCallback(() => {
     setShowCalendar(true);
     void loadCalendarFor(calendarMonth);
@@ -3847,6 +3864,7 @@ export function App() {
           planning={planningCount}
           creatingTask={creatingTask}
           onCreateTask={(title, dueIso) => void onCreateTask(title, dueIso)}
+          {...(googleConnected ? { onScanNow: () => void scanNow(), scanning: scanningNow } : {})}
           onOpenTask={(id) => void openTaskInChat(id)}
           onAdvanceStep={onAdvanceTaskStep}
           onToggleStepDone={onToggleStepDone}

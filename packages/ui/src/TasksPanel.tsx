@@ -24,6 +24,10 @@ export interface TasksPanelProps {
   onToggleStepDone: (planId: string, stepId: string, done: boolean) => Promise<void> | void;
   /** Add a task with an optional due date; the assistant plans it into dated sub-tasks. */
   onCreateTask: (title: string, dueIso?: string) => void;
+  /** On-demand: scan email + calendar for tasks now (and refresh the calendar). Shown when present. */
+  onScanNow?: () => void;
+  /** An on-demand scan is running right now (the button shows a spinner + disables). */
+  scanning?: boolean;
   /** "This auto-planned task was junk" — block its sender and delete it. */
   onIgnoreSender?: (planId: string) => void;
   onDelete: (planId: string) => Promise<void> | void;
@@ -149,6 +153,8 @@ export const TasksPanel = memo(function TasksPanel({
   onAdvanceStep,
   onToggleStepDone,
   onCreateTask,
+  onScanNow,
+  scanning = false,
   onIgnoreSender,
   onDelete,
   onClose,
@@ -159,13 +165,26 @@ export const TasksPanel = memo(function TasksPanel({
   );
   const [view, setView] = useState<"timeline" | "list">("timeline");
   const [selectedId, setSelectedId] = useState<string | undefined>();
+  // Which parent tasks are expanded to show their sub-tasks inline in the all-tasks Gantt.
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
 
   const selected = active.find((p) => p.id === selectedId);
-  // Sort so the Gantt's rows track the panel's recency order; pure, memoised.
-  const rows = useMemo(() => plansToGanttRows(active), [active]);
+  // All-tasks Gantt: a parent bar per task, expanded ones revealing their sub-task bars inline.
+  const rows = useMemo(() => plansToGanttRows(active, { expandedPlanIds: expanded }), [active, expanded]);
+  // Individual-task Gantt: just the selected task with all its sub-tasks shown.
+  const selectedRows = useMemo(() => (selected ? plansToGanttRows([selected], { expandedPlanIds: "all" }) : []), [selected]);
+  const toggleExpand = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const expandAll = () => setExpanded(new Set(active.map((p) => p.id)));
+  const collapseAll = () => setExpanded(new Set());
 
   const submit = () => {
     const t = title.trim();
@@ -235,10 +254,15 @@ export const TasksPanel = memo(function TasksPanel({
             </button>
           </div>
         ) : (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
             <button style={btnPrimary} onClick={() => setAdding(true)}>
               + Add task
             </button>
+            {onScanNow ? (
+              <button style={btn} onClick={onScanNow} disabled={scanning} title="Scan recent email + your calendar for tasks now">
+                {scanning ? "🔄 Scanning…" : "🔄 Scan email & calendar"}
+              </button>
+            ) : null}
             <span style={{ fontSize: 12, opacity: 0.65 }}>
               The assistant researches it and lays the steps out on your timeline.
             </span>
@@ -260,27 +284,52 @@ export const TasksPanel = memo(function TasksPanel({
             say “plan my car registration renewal”.
           </div>
         ) : selected ? (
-          // Individual task view — opened from a timeline bar or a list card.
+          // Individual task view — the one task's sub-tasks on their own Gantt + the detail card.
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <button style={btn} onClick={() => setSelectedId(undefined)}>
-              ← Back to {view === "timeline" ? "timeline" : "list"}
+              ← Back to all tasks
             </button>
+            {view === "timeline" ? (
+              <div style={{ overflowX: "auto" }}>
+                <GanttChart
+                  rows={selectedRows}
+                  title={selected.title}
+                  tickLabel={(u) => dayToIso(u).slice(5)}
+                  width={620}
+                  onToggleDone={(id, done) => {
+                    const { planId, stepId } = ganttRowRef(id);
+                    if (stepId) void onToggleStepDone(planId, stepId, done);
+                  }}
+                />
+              </div>
+            ) : null}
             {cardFor(selected)}
           </div>
         ) : view === "timeline" ? (
-          <div style={{ overflowX: "auto" }}>
-            <GanttChart
-              rows={rows}
-              tickLabel={(u) => dayToIso(u).slice(5)}
-              width={620}
-              onRowClick={(id) => setSelectedId(ganttRowRef(id).planId)}
-              onToggleDone={(id, done) => {
-                const { planId, stepId } = ganttRowRef(id);
-                if (stepId) void onToggleStepDone(planId, stepId, done);
-              }}
-            />
+          <div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+              <button style={btn} onClick={expandAll} title="Show every task's sub-tasks">
+                ▾ Expand all
+              </button>
+              <button style={btn} onClick={collapseAll} title="Show only the main tasks">
+                ▸ Collapse all
+              </button>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <GanttChart
+                rows={rows}
+                tickLabel={(u) => dayToIso(u).slice(5)}
+                width={620}
+                onRowClick={(id) => setSelectedId(ganttRowRef(id).planId)}
+                onToggleExpand={toggleExpand}
+                onToggleDone={(id, done) => {
+                  const { planId, stepId } = ganttRowRef(id);
+                  if (stepId) void onToggleStepDone(planId, stepId, done);
+                }}
+              />
+            </div>
             <div style={{ fontSize: 11, opacity: 0.5, marginTop: 4 }}>
-              Click a task to open it · tick a sub-task's box to complete it.
+              ▸ expand a task to show its sub-tasks · click a task to open it · tick a sub-task to complete it.
             </div>
           </div>
         ) : (
