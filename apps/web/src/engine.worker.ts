@@ -1424,8 +1424,14 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
         post({ type: "planProgress", requestId: msg.requestId, phase, ...(note ? { note } : {}) }),
     });
     if (!plan) throw new Error("Couldn't produce a usable plan — try rephrasing the task.");
-    await upsertTaskPlan(store, plan);
-    post({ type: "planned", requestId: msg.requestId, ok: true, plan });
+    // Re-planning an existing task (a scan stub, or a refresh) keeps its id + chat session so the
+    // planned version REPLACES the stub in place instead of adding a duplicate.
+    const existing = msg.planId ? (await loadTaskPlans(store)).find((p) => p.id === msg.planId) : undefined;
+    const finalPlan = existing
+      ? { ...plan, id: existing.id, ...(existing.sessionId ? { sessionId: existing.sessionId } : {}), createdAt: existing.createdAt }
+      : plan;
+    await upsertTaskPlan(store, finalPlan);
+    post({ type: "planned", requestId: msg.requestId, ok: true, plan: finalPlan });
   } catch (err) {
     post({
       type: "planned",

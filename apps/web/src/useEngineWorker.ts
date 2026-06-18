@@ -178,7 +178,7 @@ export interface EngineWorkerApi {
   /** Place a reviewed order via Schwab (called only from the order-review modal). */
   schwabPlaceOrder: (order: Record<string, unknown>) => Promise<{ ok: boolean; status?: number; error?: string }>;
   /** Research + plan a task into a persisted TaskPlan (progress streamed via onProgress). */
-  planTask: (args: { source: TaskSource; sourceText: string; onProgress?: (phase: string, note?: string) => void }) => Promise<{ ok: boolean; plan?: TaskPlan; error?: string }>;
+  planTask: (args: { source: TaskSource; sourceText: string; planId?: string; onProgress?: (phase: string, note?: string) => void }) => Promise<{ ok: boolean; plan?: TaskPlan; error?: string }>;
   /** Idle scan: actionable email/calendar items as task candidates. */
   scanInbox: () => Promise<{ ok: boolean; candidates?: TaskCandidate[] }>;
   /** Load events across all Google calendars in a window (the calendar grid). */
@@ -1323,6 +1323,8 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     (args: {
       source: TaskSource;
       sourceText: string;
+      /** Re-plan an existing task in place (a scan stub or a refresh) instead of adding a new one. */
+      planId?: string;
       onProgress?: (phase: string, note?: string) => void;
     }): Promise<{ ok: boolean; plan?: TaskPlan; error?: string }> =>
       new Promise((resolve) => {
@@ -1334,7 +1336,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           resolve,
           ...(args.onProgress ? { onProgress: args.onProgress } : {}),
         });
-        send({ type: "planTask", requestId, source: args.source, sourceText: args.sourceText });
+        send({ type: "planTask", requestId, source: args.source, sourceText: args.sourceText, ...(args.planId ? { planId: args.planId } : {}) });
       }),
     [],
   );

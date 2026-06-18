@@ -86,6 +86,10 @@ export interface TaskPlan {
    * you flying from?", "what's your budget?"). Surfaced in the panel and asked when the task
    * is opened in chat — this is how the agent "asks what it needs" to plan, e.g. a trip. */
   clarifyingQuestions?: string[];
+  /** `false` for a scan-surfaced STUB that's in the list but hasn't been planned yet (no steps);
+   * omitted/true once it has a real step-by-step plan. The periodic sweep (or the "Plan" button)
+   * turns stubs into full plans. */
+  planned?: boolean;
   createdAt: number;
   updatedAt: number;
   /** The buddy chat session that executes this plan (reuses multi-session chat). */
@@ -182,6 +186,8 @@ export interface TaskPlanInput {
   steps?: (Partial<TaskStep> & { title: string })[];
   researchNotes?: string;
   clarifyingQuestions?: string[];
+  /** Pass `false` to mark a scan stub awaiting planning; defaults to "has steps". */
+  planned?: boolean;
   createdAt?: number;
   sessionId?: string;
 }
@@ -196,6 +202,9 @@ export function normalizeTaskPlan(input: TaskPlanInput): TaskPlan {
     status: input.status === "completed" || input.status === "archived" ? input.status : "active",
     source: input.source,
     summary: cap(input.summary, MAX_DETAIL_CHARS),
+    // Stored only when this is a stub awaiting planning; a real plan (input.planned !== false, or
+    // it already has steps) leaves it omitted so `needsPlanning` is false.
+    ...(input.planned === false && steps.length === 0 ? { planned: false } : {}),
     ...(input.deadlineIso ? { deadlineIso: cap(input.deadlineIso, 40) } : {}),
     ...(typeof input.leadTimeDays === "number" && Number.isFinite(input.leadTimeDays)
       ? { leadTimeDays: Math.max(0, Math.round(input.leadTimeDays)) }
@@ -282,6 +291,24 @@ export function advanceStep(plan: TaskPlan): { plan: TaskPlan; ready?: TaskStep 
   return {
     plan: { ...plan, steps, status: allDone ? "completed" : plan.status, updatedAt: Date.now() },
     ...(ready ? { ready } : {}),
+  };
+}
+
+/** A scan-surfaced task still awaiting its step-by-step plan (a stub: planned===false, no steps). */
+export function needsPlanning(plan: TaskPlan): boolean {
+  return plan.planned === false;
+}
+
+/** Build an UNPLANNED task stub from a scan candidate — it goes straight into the list/calendar
+ * sweep without any LLM work; planning happens later (periodic sweep or the Plan button). */
+export function taskStubFromCandidate(c: TaskCandidate): TaskPlanInput {
+  return {
+    title: c.title,
+    source: c.source,
+    planned: false,
+    steps: [],
+    ...(c.reason ? { summary: c.reason } : {}),
+    ...(c.suggestedDeadlineIso ? { deadlineIso: c.suggestedDeadlineIso } : {}),
   };
 }
 

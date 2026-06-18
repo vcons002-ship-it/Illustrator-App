@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from "react";
-import { dayToIso, ganttRowRef, plansToGanttRows, sourceFrom, type TaskPlan, type TaskStep } from "@visual-reader/core";
+import { dayToIso, ganttRowRef, needsPlanning, plansToGanttRows, sourceFrom, type TaskPlan, type TaskStep } from "@visual-reader/core";
 import { GanttChart } from "./GanttChart.js";
 
 /**
@@ -24,6 +24,8 @@ export interface TasksPanelProps {
   onToggleStepDone: (planId: string, stepId: string, done: boolean) => Promise<void> | void;
   /** Add a task with an optional due date; the assistant plans it into dated sub-tasks. */
   onCreateTask: (title: string, dueIso?: string) => void;
+  /** Plan (or re-plan) ONE task now — research it + fill its sub-tasks. */
+  onPlanTask: (planId: string) => void;
   /** On-demand: scan email + calendar for tasks now (and refresh the calendar). Shown when present. */
   onScanNow?: () => void;
   /** An on-demand scan is running right now (the button shows a spinner + disables). */
@@ -41,6 +43,7 @@ function statusDot(status: TaskStep["status"]): string {
 function PlanCard({
   plan,
   onOpen,
+  onPlan,
   onAdvance,
   onToggleStep,
   onIgnoreSender,
@@ -48,6 +51,7 @@ function PlanCard({
 }: {
   plan: TaskPlan;
   onOpen: () => void;
+  onPlan: () => void;
   onAdvance: (stepId: string) => void;
   onToggleStep: (stepId: string, done: boolean) => void;
   onIgnoreSender?: () => void;
@@ -55,16 +59,24 @@ function PlanCard({
 }) {
   const doneCount = plan.steps.filter((s) => s.status === "done").length;
   const current = plan.steps.find((s) => s.status === "ready") ?? plan.steps.find((s) => s.status !== "done");
+  const unplanned = needsPlanning(plan);
   return (
     <div style={card}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
         <strong style={{ fontSize: 14 }}>{plan.title}</strong>
         {plan.deadlineIso ? <span style={{ fontSize: 11, color: "#ffcf8b" }}>due {plan.deadlineIso}</span> : null}
+        {unplanned ? <span style={{ fontSize: 10, padding: "0 5px", borderRadius: 4, background: "rgba(255,207,139,0.2)", color: "#ffcf8b" }}>not planned yet</span> : null}
         <span style={{ marginLeft: "auto", fontSize: 11, opacity: 0.6 }}>
-          {doneCount}/{plan.steps.length} done{plan.status === "completed" ? " · complete" : ""}
+          {unplanned ? "awaiting plan" : `${doneCount}/${plan.steps.length} done${plan.status === "completed" ? " · complete" : ""}`}
         </span>
       </div>
       {plan.summary ? <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>{plan.summary}</div> : null}
+      {unplanned ? (
+        <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+          Surfaced from your inbox/calendar — not broken into steps yet. It'll be planned automatically on the next
+          background sweep, or hit <strong>⚡ Plan now</strong>.
+        </div>
+      ) : null}
       {plan.clarifyingQuestions?.length ? (
         <div style={questionsBox}>
           <div style={{ fontWeight: 600, marginBottom: 2 }}>❔ Needs your input to finalize:</div>
@@ -124,6 +136,9 @@ function PlanCard({
         })}
       </ol>
       <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+        <button style={unplanned ? btnPrimary : btn} onClick={onPlan} title={unplanned ? "Research it and break it into steps" : "Re-plan from scratch"}>
+          {unplanned ? "⚡ Plan now" : "↻ Refresh plan"}
+        </button>
         <button style={btnPrimary} onClick={onOpen}>
           Open &amp; work it →
         </button>
@@ -153,6 +168,7 @@ export const TasksPanel = memo(function TasksPanel({
   onAdvanceStep,
   onToggleStepDone,
   onCreateTask,
+  onPlanTask,
   onScanNow,
   scanning = false,
   onIgnoreSender,
@@ -200,6 +216,7 @@ export const TasksPanel = memo(function TasksPanel({
       key={p.id}
       plan={p}
       onOpen={() => onOpenTask(p.id)}
+      onPlan={() => onPlanTask(p.id)}
       onAdvance={(stepId) => void onAdvanceStep(p.id, stepId)}
       onToggleStep={(stepId, done) => void onToggleStepDone(p.id, stepId, done)}
       {...(onIgnoreSender ? { onIgnoreSender: () => onIgnoreSender(p.id) } : {})}

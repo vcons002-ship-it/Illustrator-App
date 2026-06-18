@@ -10,6 +10,8 @@ import {
   loadTaskPlans,
   nextReadyStep,
   normalizeTaskPlan,
+  needsPlanning,
+  taskStubFromCandidate,
   tasksIndexBlock,
   updateTaskStep,
   upsertTaskPlan,
@@ -51,6 +53,24 @@ describe("normalizeTaskPlan", () => {
     });
     expect(p.steps).toHaveLength(25); // MAX_STEPS_PER_PLAN
     expect(p.steps[0]!.links).toEqual([{ label: "ok", url: "https://dmv.gov" }]);
+  });
+
+  it("marks a scan stub as unplanned, and a real plan as planned", () => {
+    const stub = normalizeTaskPlan(taskStubFromCandidate({
+      source: { kind: "scan", eventId: "e1" },
+      title: "Plan the Iowa trip",
+      reason: "trip on the calendar with no flight booked",
+      suggestedDeadlineIso: "2026-07-10",
+    }));
+    expect(needsPlanning(stub)).toBe(true);
+    expect(stub.planned).toBe(false);
+    expect(stub.steps).toHaveLength(0);
+    expect(stub.deadlineIso).toBe("2026-07-10");
+    expect(stub.summary).toBe("trip on the calendar with no flight booked");
+    // A plan WITH steps is never marked unplanned (even if planned:false is passed by mistake).
+    const real = normalizeTaskPlan({ title: "x", source: { kind: "typed", text: "x" }, planned: false, steps: [{ title: "s" }] });
+    expect(needsPlanning(real)).toBe(false);
+    expect(real.planned).toBeUndefined();
   });
 
   it("keeps + bounds clarifying questions (drops empties, caps to 6)", () => {
