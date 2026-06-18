@@ -82,9 +82,12 @@ import {
   createEvent,
   listTasks,
   listSubtasks,
+  listTaskTree,
   createTask,
   createTaskGroup,
   reconcileGoogleSubtasks,
+  planFromGoogleTask,
+  importableGoogleTasks,
   runTaskPlanning,
   normalizeTaskPlan,
   upsertTaskPlan,
@@ -712,6 +715,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "scanInbox":
       void handleScanInbox(msg);
+      break;
+    case "importGoogleTasks":
+      void handleImportGoogleTasks(msg);
       break;
     case "loadCalendar":
       void handleLoadCalendar(msg);
@@ -1549,6 +1555,32 @@ async function handleScanInbox(msg: Extract<MainToWorker, { type: "scanInbox" }>
     post({ type: "scanned", requestId: msg.requestId, ok: true, candidates });
   } catch (err) {
     post({ type: "scanned", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/** Mirror the user's existing Google Tasks INTO the app's task list: read the Google Tasks tree
+ * (parents + sub-tasks), then upsert a planned TaskPlan for any whose id isn't already linked to a
+ * local plan — so a task the app created in Google (or the user added there) shows up in the app
+ * even if its local plan was never written / got evicted. Read-only against Google; never deletes. */
+async function handleImportGoogleTasks(msg: Extract<MainToWorker, { type: "importGoogleTasks" }>): Promise<void> {
+  try {
+    const store = memoryStore();
+    const googleId = settings?.keys?.googleClientId;
+    const googleSecret = settings?.keys?.googleClientSecret;
+    if (!googleId || !googleSecret || !(await loadGoogleTokens(store))) {
+      post({ type: "googleTasksImported", requestId: msg.requestId, ok: true, imported: 0 });
+      return;
+    }
+    const transport = new DirectTransport(corsFetch());
+    const token = await getFreshAccessToken(store, { clientId: googleId, clientSecret: googleSecret, transport });
+    const trees = await listTaskTree(transport, token, 100);
+    const toImport = importableGoogleTasks(trees, await loadTaskPlans(store));
+    for (const tree of toImport) {
+      await upsertTaskPlan(store, normalizeTaskPlan(planFromGoogleTask(tree)));
+    }
+    post({ type: "googleTasksImported", requestId: msg.requestId, ok: true, imported: toImport.length });
+  } catch (err) {
+    post({ type: "googleTasksImported", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
   }
 }
 

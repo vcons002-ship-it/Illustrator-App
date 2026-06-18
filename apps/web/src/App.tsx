@@ -169,6 +169,7 @@ import {
 import type { LocalTextServerId } from "@visual-reader/core";
 import { loadSampleBook } from "./sample.js";
 import { useEngineWorker, type ImportResult, type TestRenderResult } from "./useEngineWorker.js";
+import type { SyncToPhone } from "./remote-sync.js";
 import {
   downloadLora,
   downloadModel,
@@ -314,6 +315,7 @@ export function App() {
     googleConnect,
     planTask,
     scanInbox,
+    importGoogleTasks,
     loadCalendar,
     stockQuote,
     readPage,
@@ -321,6 +323,10 @@ export function App() {
     remoteBusReply,
     startHostBridge,
     stopHostBridge,
+    isRemoteClient,
+    setAppSyncHandler,
+    sendAppSync,
+    setBible,
     marketIndicators,
     schwabConnect,
     schwabPlaceOrder,
@@ -985,6 +991,11 @@ export function App() {
   const onPickBook = useCallback(
     async (id: string) => {
       if (!id || id === book?.id) return;
+      // On a linked phone, opening happens on the DESKTOP (which then pushes the book back).
+      if (isRemoteClient) {
+        sendAppSync({ type: "vrcmd:open", bookId: id });
+        return;
+      }
       try {
         const source = await libraryStore.getBook(id);
         if (source) openBook(source);
@@ -992,7 +1003,7 @@ export function App() {
         /* ignore */
       }
     },
-    [book, libraryStore, openBook],
+    [book, libraryStore, openBook, isRemoteClient, sendAppSync],
   );
 
   const onRemoveBook = useCallback(
@@ -1005,6 +1016,88 @@ export function App() {
     },
     [libraryStore],
   );
+
+  // PHONE MIRROR: a linked phone shows exactly what THIS desktop shows — its library, the open
+  // book, that book's analysis (bible), and the render-affecting settings. The desktop is the
+  // source of truth and pushes its state down the relay; the phone renders it and sends back
+  // high-level commands (open a library book, go home). The engine stays on the desktop, so
+  // illustrate/analyse/chat the phone triggers run here and stream their results back — the phone
+  // never needs its own image model or data. (`isRemoteClient` ⇒ this tab IS the phone.)
+  const [remoteHost, setRemoteHost] = useState<string | undefined>();
+  const buildSnapshot = useCallback(
+    (): SyncToPhone => ({
+      type: "vrsync:state",
+      host: "this desktop",
+      library,
+      settings,
+      ...(book ? { book } : {}),
+      ...(bible ? { bible } : {}),
+    }),
+    [library, settings, book, bible],
+  );
+  const buildSnapshotRef = useRef(buildSnapshot);
+  buildSnapshotRef.current = buildSnapshot;
+  // Register the relay handler once: the PHONE applies the desktop's state pushes; the DESKTOP
+  // answers the phone's commands. (Reads live refs so the single registration stays current.)
+  useEffect(() => {
+    setAppSyncHandler((msg) => {
+      if (isRemoteClient) {
+        switch (msg.type) {
+          case "vrsync:state":
+            setLibrary(msg.library);
+            setSettings(msg.settings);
+            setBook(msg.book);
+            setBible(msg.bible);
+            setRemoteHost(msg.host);
+            break;
+          case "vrsync:library":
+            setLibrary(msg.library);
+            break;
+          case "vrsync:settings":
+            setSettings(msg.settings);
+            break;
+          case "vrsync:book":
+            setBook(msg.book);
+            setBible(msg.bible);
+            break;
+          default:
+            break; // commands are desktop-bound
+        }
+      } else {
+        switch (msg.type) {
+          case "vrcmd:hello":
+            sendAppSync(buildSnapshotRef.current());
+            break;
+          case "vrcmd:open":
+            void libraryStore
+              .getBook(msg.bookId)
+              .then((s) => {
+                if (s) openBook(s);
+              })
+              .catch(() => {});
+            break;
+          case "vrcmd:home":
+            setBook(undefined);
+            closeBook();
+            break;
+          default:
+            break;
+        }
+      }
+    });
+  }, [isRemoteClient, setAppSyncHandler, sendAppSync, setBible, libraryStore, openBook, closeBook]);
+  // Desktop: push each slice of state to a linked phone as it changes — granularly, so a settings
+  // tweak doesn't resend the whole book (no-op without a linked phone: `sendAppSync` only writes
+  // when the host bridge is open).
+  useEffect(() => {
+    if (!isRemoteClient) sendAppSync({ type: "vrsync:library", library });
+  }, [isRemoteClient, sendAppSync, library]);
+  useEffect(() => {
+    if (!isRemoteClient) sendAppSync({ type: "vrsync:settings", settings });
+  }, [isRemoteClient, sendAppSync, settings]);
+  useEffect(() => {
+    if (!isRemoteClient) sendAppSync({ type: "vrsync:book", ...(book ? { book } : {}), ...(bible ? { bible } : {}) });
+  }, [isRemoteClient, sendAppSync, book, bible]);
 
   // OCR: read the text out of a scanned image with the configured vision model, then open it
   // as a (technical) document via the paste modal. Reuses the screenshot tool's vision path —
@@ -1353,6 +1446,9 @@ export function App() {
       void scanInbox()
         .then(async (r) => {
           if (r.candidates?.length) await addCandidatesAsTasks(r.candidates);
+          // Pull any Google Tasks not yet mirrored locally (e.g. created on another device).
+          const imp = await importGoogleTasks().catch(() => ({ imported: 0 }));
+          if ((imp.imported ?? 0) > 0) refreshTaskPlans();
           refreshCalendarRef.current(); // the scan just scraped the calendar — sync the app's view
           // Plan up to `rate` of the unplanned backlog, but stop early if the reader comes back.
           await planPendingTasks(rate, () => Date.now() - lastInputAt.current >= IDLE_MS);
@@ -1363,7 +1459,7 @@ export function App() {
         });
     }, 90_000);
     return () => clearInterval(id);
-  }, [googleConnected, settings.autoTaskScan, settings.backgroundPlanRate, scanInbox, addCandidatesAsTasks, planPendingTasks]);
+  }, [googleConnected, settings.autoTaskScan, settings.backgroundPlanRate, scanInbox, importGoogleTasks, addCandidatesAsTasks, refreshTaskPlans, planPendingTasks]);
 
   // In-app calendar synced with the user's Google calendar(s). `calendarMonth` is the
   // first day of the visible month; `loadCalendarFor` pulls the events spanning the whole
@@ -1375,9 +1471,10 @@ export function App() {
   });
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [calendarLoading, setCalendarLoading] = useState(false);
+  const [calendarError, setCalendarError] = useState<string | undefined>();
   const loadCalendarFor = useCallback(
-    async (month: Date, silent = false) => {
-      if (!googleConnected) return;
+    async (month: Date, silent = false): Promise<{ ok: boolean; count: number; error?: string }> => {
+      if (!googleConnected) return { ok: false, count: 0 };
       // Cover the 6×7 grid: from the Sunday on/before the 1st to ~42 days later.
       const first = new Date(month.getFullYear(), month.getMonth(), 1);
       const start = new Date(first);
@@ -1387,7 +1484,14 @@ export function App() {
       if (!silent) setCalendarLoading(true);
       try {
         const res = await loadCalendar(start.toISOString(), end.toISOString());
-        if (res.ok && res.events) setCalendarEvents(res.events);
+        if (res.ok && res.events) {
+          setCalendarEvents(res.events);
+          setCalendarError(undefined);
+          return { ok: true, count: res.events.length };
+        }
+        // A failed load shouldn't wipe the last-good view; just record why it's not updating.
+        if (!res.ok) setCalendarError(res.error ?? "Couldn't load your Google calendar.");
+        return { ok: res.ok, count: res.events?.length ?? 0, ...(res.error ? { error: res.error } : {}) };
       } finally {
         if (!silent) setCalendarLoading(false);
       }
@@ -1411,19 +1515,42 @@ export function App() {
   // per-task "Plan" button, so a manual scan is fast and never kicks off long LLM work.
   const scanningNowRef = useRef(false);
   const [scanningNow, setScanningNow] = useState(false);
+  // A short outcome line shown under the Scan button so a manual scan never looks like it "did
+  // nothing": it reports what it found/synced, or surfaces the actual Google error instead of
+  // failing silently.
+  const [scanMessage, setScanMessage] = useState<string | undefined>();
   const scanNow = useCallback(async () => {
     if (!googleConnected || scanningNowRef.current) return;
     scanningNowRef.current = true;
     setScanningNow(true);
+    setScanMessage(undefined);
     try {
-      const r = await scanInbox();
-      if (r.candidates?.length) await addCandidatesAsTasks(r.candidates);
-      refreshCalendar();
+      // Run both Google reads; surface the first real error rather than swallowing it.
+      const [scan, imported] = await Promise.all([scanInbox(), importGoogleTasks()]);
+      if (scan.candidates?.length) await addCandidatesAsTasks(scan.candidates);
+      if ((imported.imported ?? 0) > 0) refreshTaskPlans();
+      const cal = await loadCalendarFor(calendarMonthRef.current, true);
+      const err = scan.error || imported.error || cal?.error;
+      if (err) {
+        setScanMessage(`⚠ Scan failed: ${err}`);
+      } else {
+        const found = scan.candidates?.length ?? 0;
+        const added = imported.imported ?? 0;
+        const events = cal?.count ?? 0;
+        const bits = [
+          found ? `${found} new item${found === 1 ? "" : "s"} from email/calendar` : "",
+          added ? `${added} Google task${added === 1 ? "" : "s"} imported` : "",
+          `${events} calendar event${events === 1 ? "" : "s"} synced`,
+        ].filter(Boolean);
+        setScanMessage(found || added ? `✓ ${bits.join(" · ")}` : `✓ Up to date — ${bits.join(" · ")}`);
+      }
+    } catch (e) {
+      setScanMessage(`⚠ Scan failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       scanningNowRef.current = false;
       setScanningNow(false);
     }
-  }, [googleConnected, scanInbox, addCandidatesAsTasks, refreshCalendar]);
+  }, [googleConnected, scanInbox, importGoogleTasks, addCandidatesAsTasks, refreshTaskPlans, loadCalendarFor]);
   const openCalendar = useCallback(() => {
     setShowCalendar(true);
     void loadCalendarFor(calendarMonth);
@@ -3649,11 +3776,21 @@ export function App() {
         )}
       </header>
 
-      {!settings.configured && (
+      {!settings.configured && !isRemoteClient && (
         <FirstRunWizard current={settings} onComplete={setSettings} isDesktop={isDesktop} />
       )}
 
-      <ProviderBadges providers={providers} engineStatus={engineStatus} />
+      {/* On a linked phone the engine lives on the desktop — show the link, not a "set up a model"
+          nag or local-provider badges (those reflect a model the phone will never run). */}
+      {isRemoteClient ? (
+        <div style={styles.badges}>
+          <span style={{ ...styles.badge, ...styles.badgeOk }} title="This phone is mirroring your desktop over the LAN; the engine runs there.">
+            🔗 Linked to {remoteHost ?? "your desktop"} — engine runs on the desktop
+          </span>
+        </div>
+      ) : (
+        <ProviderBadges providers={providers} engineStatus={engineStatus} />
+      )}
 
       {!book && (status || localError) && (
         <div style={styles.status}>{localError || status}</div>
@@ -3959,6 +4096,7 @@ export function App() {
           creatingTask={creatingTask}
           onCreateTask={(title, dueIso) => void onCreateTask(title, dueIso)}
           {...(googleConnected ? { onScanNow: () => void scanNow(), scanning: scanningNow } : {})}
+          {...(scanMessage ? { scanMessage } : {})}
           onPlanTask={(id) => void planOneTask(id)}
           onOpenTask={(id) => void openTaskInChat(id)}
           onAdvanceStep={onAdvanceTaskStep}
@@ -3978,6 +4116,7 @@ export function App() {
           deadlines={calendarDeadlines}
           month={calendarMonth}
           loading={calendarLoading}
+          {...(calendarError ? { error: calendarError } : {})}
           onPrev={() => shiftCalendarMonth(-1)}
           onNext={() => shiftCalendarMonth(1)}
           onToday={() => shiftCalendarMonth("today")}

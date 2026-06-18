@@ -12,6 +12,8 @@ import {
   normalizeTaskPlan,
   needsPlanning,
   reconcileGoogleSubtasks,
+  planFromGoogleTask,
+  importableGoogleTasks,
   taskStubFromCandidate,
   tasksIndexBlock,
   updateTaskStep,
@@ -83,7 +85,7 @@ describe("normalizeTaskPlan", () => {
     const steps = [
       { title: "Tailor resume", status: "done" as const }, // matches g1 by title; now done → complete it
       { title: "Submit application", status: "done" as const }, // matches g2, already completed → no-op
-      { title: "Write cover letter", status: "pending" as const, googleTaskId: undefined }, // new → create
+      { title: "Write cover letter", status: "pending" as const }, // no googleTaskId → new → create
       { title: "tailor RESUME", status: "pending" as const }, // same title as step 1 (and g1) → must NOT reuse g1 again
     ];
     const a = reconcileGoogleSubtasks(steps, existing);
@@ -116,6 +118,50 @@ describe("normalizeTaskPlan", () => {
     expect(p.googleTaskId).toBe("gt-parent");
     expect(p.steps[0]!.googleTaskId).toBe("gt-sub-1");
     expect(p.steps[1]!.googleTaskId).toBeUndefined(); // an unsynced step
+  });
+
+  it("planFromGoogleTask: mirrors a Google task (+ sub-tasks) into a planned plan with ids", () => {
+    const p = normalizeTaskPlan(
+      planFromGoogleTask({
+        id: "gt-1",
+        title: "Apply to the data scientist job",
+        notes: "Posting on USAJobs",
+        due: "2026-07-01T00:00:00Z",
+        status: "needsAction",
+        subtasks: [
+          { id: "gt-1a", title: "Tailor resume", status: "needsAction" },
+          { id: "gt-1b", title: "Submit application", status: "completed" },
+        ],
+      }),
+    );
+    expect(p.title).toBe("Apply to the data scientist job");
+    expect(p.googleTaskId).toBe("gt-1"); // linked, so a re-import won't duplicate it
+    expect(p.summary).toBe("Posting on USAJobs");
+    expect(p.deadlineIso).toBe("2026-07-01"); // date part only
+    expect(needsPlanning(p)).toBe(false); // a real (planned) task, not a stub the sweep would plan
+    expect(p.steps.map((s) => s.googleTaskId)).toEqual(["gt-1a", "gt-1b"]);
+    expect(p.steps[0]!.status).toBe("pending");
+    expect(p.steps[1]!.status).toBe("done"); // completed in Google → done in-app
+  });
+
+  it("planFromGoogleTask: a completed Google task maps to a completed plan; missing title is safe", () => {
+    const p = normalizeTaskPlan(planFromGoogleTask({ id: "gt-9", title: "", status: "completed", subtasks: [] }));
+    expect(p.status).toBe("completed");
+    expect(p.title).toBe("Google task");
+    expect(p.steps).toHaveLength(0);
+  });
+
+  it("importableGoogleTasks: only returns trees not already linked to a local plan", () => {
+    const existing = [
+      normalizeTaskPlan({ title: "Already here", source: { kind: "typed", text: "x" }, googleTaskId: "gt-1", steps: [{ title: "s" }] }),
+      normalizeTaskPlan({ title: "No google link", source: { kind: "typed", text: "y" }, steps: [{ title: "s" }] }),
+    ];
+    const trees = [
+      { id: "gt-1", title: "Already here", subtasks: [] }, // linked → skip
+      { id: "gt-2", title: "New from Google", subtasks: [] }, // not linked → import
+      { id: "", title: "No id", subtasks: [] }, // malformed → skip
+    ];
+    expect(importableGoogleTasks(trees, existing).map((t) => t.id)).toEqual(["gt-2"]);
   });
 
   it("keeps + bounds clarifying questions (drops empties, caps to 6)", () => {

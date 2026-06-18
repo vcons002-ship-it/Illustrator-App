@@ -6,6 +6,7 @@ import {
   encodeFrame,
   generatePairingToken,
   isLocalOnlyMessage,
+  isAppSyncMessage,
   parseLinkToken,
   remoteModeFromHash,
   REMOTE_LINK_PORT,
@@ -51,6 +52,14 @@ describe("thin-client helpers", () => {
   it("flags local-only (CORS) messages so they never cross the relay", () => {
     expect(isLocalOnlyMessage({ type: "corsFetch" })).toBe(true);
     expect(isLocalOnlyMessage({ type: "buddyChat" })).toBe(false);
+  });
+
+  it("distinguishes app-state mirror frames from engine messages by their type prefix", () => {
+    expect(isAppSyncMessage({ type: "vrsync:state" })).toBe(true);
+    expect(isAppSyncMessage({ type: "vrcmd:open" })).toBe(true);
+    expect(isAppSyncMessage({ type: "buddyChat" })).toBe(false); // an engine message
+    expect(isAppSyncMessage({ type: "update" })).toBe(false);
+    expect(isAppSyncMessage(undefined)).toBe(false);
   });
 
   it("round-trips a message with an ArrayBuffer through serialize/deserialize (+ a frame)", () => {

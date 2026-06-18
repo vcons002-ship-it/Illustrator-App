@@ -349,6 +349,48 @@ export function needsPlanning(plan: TaskPlan): boolean {
   return plan.planned === false;
 }
 
+/** A top-level Google Task plus its sub-tasks — the shape `listTaskTree` returns. */
+export interface GoogleTaskTree {
+  id: string;
+  title: string;
+  notes?: string;
+  due?: string;
+  status?: string;
+  subtasks: { id: string; title: string; status?: string }[];
+}
+
+/** Pure: build a PLANNED TaskPlan from a Google Task (one the app created, or the user added in
+ * Google), carrying the parent + per-step Google ids so a later sync reconciles in place rather
+ * than duplicating. This mirrors Google Tasks back INTO the app list — the reverse of pushing a
+ * plan out — so a task that lives in Google shows up in the app even if its local plan is gone. */
+export function planFromGoogleTask(node: GoogleTaskTree): TaskPlanInput {
+  return {
+    title: node.title || "Google task",
+    // Reuse the `typed` source (no new ripple through dedupe/ignore); the googleTaskId is the link.
+    source: { kind: "typed", text: node.title || "Google task" },
+    googleTaskId: node.id,
+    status: node.status === "completed" ? "completed" : "active",
+    ...(node.notes ? { summary: node.notes } : {}),
+    ...(node.due ? { deadlineIso: node.due.slice(0, 10) } : {}),
+    steps: node.subtasks.map((s) => ({
+      title: s.title || "(untitled)",
+      actor: "user_action" as const,
+      status: (s.status === "completed" ? "done" : "pending") as StepStatus,
+      googleTaskId: s.id,
+    })),
+  };
+}
+
+/** Pure: which Google Tasks aren't yet mirrored in the app's plans — matched by the stored
+ * parent googleTaskId, so re-running an import never duplicates a task already in the list. */
+export function importableGoogleTasks(
+  trees: readonly GoogleTaskTree[],
+  existing: readonly TaskPlan[],
+): GoogleTaskTree[] {
+  const known = new Set(existing.map((p) => p.googleTaskId).filter((id): id is string => !!id));
+  return trees.filter((t) => !!t.id && !known.has(t.id));
+}
+
 /** Build an UNPLANNED task stub from a scan candidate — it goes straight into the list/calendar
  * sweep without any LLM work; planning happens later (periodic sweep or the Plan button). */
 export function taskStubFromCandidate(c: TaskCandidate): TaskPlanInput {

@@ -529,6 +529,35 @@ export async function listSubtasks(
     .map((t) => ({ id: t.id, title: t.title ?? "", ...(t.status ? { status: t.status } : {}) }));
 }
 
+/** Top-level to-dos from the default list, each with its nested sub-tasks (a single Google Tasks
+ * read; the API returns parents + children flat, re-joined here by `parent`). Includes completed/
+ * hidden items and all ids so the app can mirror Google Tasks back into its own list and reconcile
+ * against what it created (matching by id) instead of duplicating. */
+export async function listTaskTree(
+  transport: Transport,
+  token: string,
+  max = 100,
+): Promise<{ id: string; title: string; notes?: string; due?: string; status?: string; subtasks: { id: string; title: string; status?: string }[] }[]> {
+  const data = await apiGet<{ items?: RawTask[] }>(
+    transport,
+    token,
+    `${TASKS}?showCompleted=true&showHidden=true&maxResults=${Math.min(100, Math.max(1, max))}`,
+  );
+  const items = data.items ?? [];
+  return items
+    .filter((t): t is RawTask & { id: string } => !!t.id && !t.parent)
+    .map((t) => ({
+      id: t.id,
+      title: t.title ?? "(untitled)",
+      ...(t.notes ? { notes: t.notes } : {}),
+      ...(t.due ? { due: t.due } : {}),
+      ...(t.status ? { status: t.status } : {}),
+      subtasks: items
+        .filter((s): s is RawTask & { id: string } => s.parent === t.id && !!s.id)
+        .map((s) => ({ id: s.id, title: s.title ?? "", ...(s.status ? { status: s.status } : {}) })),
+    }));
+}
+
 /** Add a to-do. `due` is an RFC 3339 timestamp (date part honoured). */
 export async function createTask(
   transport: Transport,
