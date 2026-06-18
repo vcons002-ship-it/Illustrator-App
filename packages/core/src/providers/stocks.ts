@@ -1,12 +1,16 @@
 /**
- * Keyless stock-quote support. Quotes come from Stooq's free CSV endpoint (no API
- * key), fetched through the app's CORS-exempt transport (desktop/extension) so the
- * assistant can ground its market analysis in real numbers, and the Markets panel can
- * show a live snapshot. Charts themselves are TradingView's free embeddable widget
- * (UI side) — also keyless. A broker account (thinkorswim / Schwab) is a separate,
- * keyed, deferred enhancement; this module is the no-setup baseline.
+ * Keyless stock-quote support. Quotes come from Yahoo's free chart endpoint (no API key,
+ * the same source the market-analysis indicators use), fetched through the app's CORS-exempt
+ * transport (desktop/extension) so the assistant can ground its market analysis in real
+ * numbers, and the Markets panel can show a live snapshot. Charts themselves are TradingView's
+ * free embeddable widget (UI side) — also keyless. A broker account (thinkorswim / Schwab) is a
+ * separate, keyed, deferred enhancement; this module is the no-setup baseline.
  *
- * Pure: URL building + CSV parsing, unit-tested. The network call lives in the host.
+ * (Stooq's CSV was the original source but blocks non-browser User-Agents — it times out from
+ * the desktop proxy — and rate-limits even with one, so quotes now ride Yahoo. The Stooq
+ * URL/parse helpers are kept for the extension/tests.)
+ *
+ * Pure: URL building + parsing, unit-tested. The network call lives in the host.
  */
 
 export interface StockQuote {
@@ -67,6 +71,54 @@ export function parseStooqQuote(csv: string, requested: string): StockQuote | un
     ...(low !== undefined ? { low } : {}),
     close,
     ...(volume !== undefined ? { volume } : {}),
+  };
+}
+
+/** Yahoo's keyless chart URL for a single-day quote (works with the desktop proxy's UA,
+ * unlike Stooq). The `meta` block carries the live price + day range we surface. */
+export function yahooQuoteUrl(symbol: string): string {
+  return `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol.trim().toUpperCase())}?interval=1d&range=1d`;
+}
+
+function fin(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+/**
+ * Parse Yahoo's chart JSON into a quote from its `meta` block (live price, day high/low,
+ * volume, time), with the session open pulled from the day's bar. Returns undefined when
+ * there's no usable price (unknown/blank symbol).
+ */
+export function parseYahooQuote(json: unknown, requested: string): StockQuote | undefined {
+  const result = (json as { chart?: { result?: unknown[] } })?.chart?.result?.[0] as
+    | {
+        meta?: {
+          symbol?: string;
+          regularMarketPrice?: number;
+          regularMarketOpen?: number;
+          regularMarketDayHigh?: number;
+          regularMarketDayLow?: number;
+          regularMarketVolume?: number;
+          regularMarketTime?: number;
+        };
+        indicators?: { quote?: { open?: (number | null)[] }[] };
+      }
+    | undefined;
+  const m = result?.meta;
+  const close = fin(m?.regularMarketPrice);
+  if (!m || close === undefined) return undefined;
+  const openArr = result?.indicators?.quote?.[0]?.open ?? [];
+  const open = fin(m.regularMarketOpen) ?? fin(openArr[openArr.length - 1]);
+  const t = fin(m.regularMarketTime);
+  const iso = t !== undefined ? new Date(t * 1000).toISOString() : undefined;
+  return {
+    symbol: (m.symbol || requested).toUpperCase(),
+    ...(iso ? { date: iso.slice(0, 10), time: iso.slice(11, 16) } : {}),
+    ...(open !== undefined ? { open } : {}),
+    ...(fin(m.regularMarketDayHigh) !== undefined ? { high: m.regularMarketDayHigh } : {}),
+    ...(fin(m.regularMarketDayLow) !== undefined ? { low: m.regularMarketDayLow } : {}),
+    close,
+    ...(fin(m.regularMarketVolume) !== undefined ? { volume: m.regularMarketVolume } : {}),
   };
 }
 

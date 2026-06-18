@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatQuote, parseStooqQuote, stooqQuoteUrl, stooqSymbol } from "./stocks.js";
+import { formatQuote, parseStooqQuote, parseYahooQuote, stooqQuoteUrl, stooqSymbol, yahooQuoteUrl } from "./stocks.js";
 
 describe("stooqSymbol", () => {
   it("lower-cases and adds .us for bare US tickers", () => {
@@ -37,5 +37,45 @@ describe("parseStooqQuote", () => {
     expect(s).toContain("AAPL: 204");
     expect(s).toContain("+4.00 (+2.00% vs open)");
     expect(s).toContain("H 205 / L 199");
+  });
+});
+
+describe("yahooQuoteUrl / parseYahooQuote (the keyless quote source)", () => {
+  it("builds the keyless chart URL", () => {
+    expect(yahooQuoteUrl("aapl")).toBe("https://query1.finance.yahoo.com/v8/finance/chart/AAPL?interval=1d&range=1d");
+  });
+
+  it("pulls a quote from Yahoo's chart `meta` block (price, day range, volume, time)", () => {
+    const json = {
+      chart: {
+        result: [
+          {
+            meta: {
+              symbol: "AAPL",
+              regularMarketPrice: 295.95,
+              regularMarketDayHigh: 302.07,
+              regularMarketDayLow: 294.38,
+              regularMarketVolume: 42329351,
+              regularMarketTime: 1781726401,
+            },
+            indicators: { quote: [{ open: [298.5] }] },
+          },
+        ],
+      },
+    };
+    const q = parseYahooQuote(json, "AAPL")!;
+    expect(q.symbol).toBe("AAPL");
+    expect(q.close).toBe(295.95);
+    expect(q.high).toBe(302.07);
+    expect(q.low).toBe(294.38);
+    expect(q.open).toBe(298.5); // from the day's bar when meta has no regularMarketOpen
+    expect(q.volume).toBe(42329351);
+    expect(q.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("returns undefined when there's no usable price", () => {
+    expect(parseYahooQuote({ chart: { result: [{ meta: {} }] } }, "ZZZZ")).toBeUndefined();
+    expect(parseYahooQuote({ chart: { result: [] } }, "X")).toBeUndefined();
+    expect(parseYahooQuote("not json", "X")).toBeUndefined();
   });
 });

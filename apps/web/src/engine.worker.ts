@@ -20,8 +20,8 @@ import {
   createDataTable,
   recalcTable,
   tableToText,
-  stooqQuoteUrl,
-  parseStooqQuote,
+  yahooQuoteUrl,
+  parseYahooQuote,
   yahooChartUrl,
   parseYahooChart,
   computeIndicators,
@@ -1552,14 +1552,15 @@ async function handleReadPage(msg: Extract<MainToWorker, { type: "readPage" }>):
 async function handleStockQuote(msg: Extract<MainToWorker, { type: "stockQuote" }>): Promise<void> {
   try {
     const cf = corsFetch();
-    // Stooq's CSV is cross-origin; the keyless quote needs the CORS-exempt transport
-    // (desktop/extension). On plain web we return no quote (the chart still embeds).
+    // The keyless quote needs the CORS-exempt transport (desktop/extension); on plain web we
+    // return no quote (the chart still embeds). Yahoo's chart endpoint (same source as the
+    // analysis indicators) works with the proxy's UA — Stooq blocks it and times out.
     if (!cf) {
       post({ type: "stockQuoted", requestId: msg.requestId, ok: true });
       return;
     }
-    const res = await new DirectTransport(cf).send({ url: stooqQuoteUrl(msg.symbol), method: "GET" });
-    const quote = parseStooqQuote(await res.text(), msg.symbol);
+    const res = await new DirectTransport(cf).send({ url: yahooQuoteUrl(msg.symbol), method: "GET" });
+    const quote = parseYahooQuote(await res.json(), msg.symbol);
     post({ type: "stockQuoted", requestId: msg.requestId, ok: true, ...(quote ? { quote } : {}) });
   } catch (err) {
     post({ type: "stockQuoted", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
@@ -1811,13 +1812,14 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           },
         };
       })(),
-      // Keyless stock quotes (Stooq CSV) over the CORS-exempt transport; undefined on
-      // plain web (no proxy) so the model falls back to search_web.
+      // Keyless stock quotes (Yahoo's chart endpoint, like the indicators below) over the
+      // CORS-exempt transport; undefined on plain web (no proxy) so the model falls back to
+      // search_web. Yahoo works with the proxy's UA — Stooq blocks it and times out.
       stockQuote: async (symbol: string) => {
         const cf = corsFetch();
         if (!cf) return undefined;
-        const res = await new DirectTransport(cf).send({ url: stooqQuoteUrl(symbol), method: "GET" });
-        return parseStooqQuote(await res.text(), symbol);
+        const res = await new DirectTransport(cf).send({ url: yahooQuoteUrl(symbol), method: "GET" });
+        return parseYahooQuote(await res.json(), symbol);
       },
       // Keyless technical indicators from Yahoo's chart JSON (over the CORS-exempt
       // transport; undefined on plain web).
