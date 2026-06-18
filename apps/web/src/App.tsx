@@ -69,6 +69,11 @@ import {
   advanceStep,
   addIgnore,
   sourceFrom,
+  normalizeTaskPlan,
+  dedupeCandidates,
+  loadIgnored,
+  needsPlanning,
+  taskStubFromCandidate,
   type TaskPlan,
   type TaskCandidate,
   type CalendarEvent,
@@ -367,23 +372,47 @@ export function App() {
   const refreshTaskPlans = useCallback(() => {
     void loadTaskPlans(libraryStore).then(setTaskPlans).catch(() => {});
   }, [libraryStore]);
-  // AUTO-plan + prep the actionable items the scan found (no click needed). Bounded per
-  // scan so a busy inbox can't stampede; each item is planned once (then deduped out of
-  // future scans). The finished plans appear in the panel; unwanted ones are removed with
-  // "Ignore sender" (which also blocks the sender going forward).
-  const autoPlanScan = useCallback(
+  // SURFACE the actionable items a scan found as UNPLANNED stubs — they appear in the task list
+  // (and their dates on the calendar) with NO LLM work. Planning happens later (the periodic
+  // sweep below, or the per-task "Plan" button). Deduped so a re-scan never adds the same item twice.
+  const addCandidatesAsTasks = useCallback(
     async (cands: TaskCandidate[]) => {
-      const queue = cands.slice(0, 3);
-      if (queue.length === 0) return;
-      setPlanningCount((n) => n + queue.length);
-      for (const c of queue) {
-        const source: TaskCandidate["source"] = { ...c.source, ...(c.from ? { from: c.from } : {}) };
-        const res = await planTask({ source, sourceText: `${c.title}. ${c.reason}` });
-        setPlanningCount((n) => Math.max(0, n - 1));
+      if (cands.length === 0) return;
+      const existing = await loadTaskPlans(libraryStore);
+      const fresh = dedupeCandidates(cands, existing, await loadIgnored(libraryStore));
+      for (const c of fresh.slice(0, 8)) {
+        await upsertTaskPlan(libraryStore, normalizeTaskPlan(taskStubFromCandidate(c)));
+      }
+      if (fresh.length) refreshTaskPlans();
+    },
+    [libraryStore, refreshTaskPlans],
+  );
+  // Plan ONE task in place (a scan stub, or a refresh): research + fill its steps, keeping its id.
+  // Shared by the per-task "Plan" button and the periodic sweep.
+  const planOneTask = useCallback(
+    async (planId: string) => {
+      const plan = (await loadTaskPlans(libraryStore)).find((p) => p.id === planId);
+      if (!plan) return;
+      setPlanningCount((n) => n + 1);
+      try {
+        const sourceText = [plan.title, plan.summary, plan.deadlineIso ? `Hard deadline: ${plan.deadlineIso}.` : ""]
+          .filter(Boolean)
+          .join(" ");
+        const res = await planTask({ source: plan.source, sourceText, planId });
         if (res.ok) refreshTaskPlans();
+      } finally {
+        setPlanningCount((n) => Math.max(0, n - 1));
       }
     },
-    [planTask, refreshTaskPlans],
+    [libraryStore, planTask, refreshTaskPlans],
+  );
+  // Plan the backlog of unplanned stubs, a FEW per sweep so it never hammers the model at once.
+  const planPendingTasks = useCallback(
+    async (limit: number) => {
+      const pending = (await loadTaskPlans(libraryStore)).filter(needsPlanning).slice(0, limit);
+      for (const p of pending) await planOneTask(p.id);
+    },
+    [libraryStore, planOneTask],
   );
   // "This auto-planned task was junk" — block the sender and delete the plan.
   const ignorePlanSender = useCallback(
@@ -1299,16 +1328,19 @@ export function App() {
   }, []);
   useEffect(() => {
     // Runs by DEFAULT once Google is connected (set autoTaskScan=false to stop background scans).
-    // The scan + auto-plan are read/research-only — no external email or calendar writes.
+    // Each idle sweep does TWO things, read/research-only (no email/calendar writes): (1) scan for
+    // new items and surface them as unplanned stubs, then (2) PLAN a couple of the still-unplanned
+    // backlog — so heavy planning happens in the background while you're away, not on demand.
     if (!googleConnected || settings.autoTaskScan === false) return;
     const IDLE_MS = 3 * 60_000;
     const id = setInterval(() => {
       if (scanningRef.current || Date.now() - lastInputAt.current < IDLE_MS) return;
       scanningRef.current = true;
       void scanInbox()
-        .then((r) => {
-          if (r.candidates?.length) void autoPlanScan(r.candidates);
+        .then(async (r) => {
+          if (r.candidates?.length) await addCandidatesAsTasks(r.candidates);
           refreshCalendarRef.current(); // the scan just scraped the calendar — sync the app's view
+          await planPendingTasks(2); // chip away at the unplanned backlog
         })
         .catch(() => {})
         .finally(() => {
@@ -1316,7 +1348,7 @@ export function App() {
         });
     }, 90_000);
     return () => clearInterval(id);
-  }, [googleConnected, settings.autoTaskScan, scanInbox, autoPlanScan]);
+  }, [googleConnected, settings.autoTaskScan, scanInbox, addCandidatesAsTasks, planPendingTasks]);
 
   // In-app calendar synced with the user's Google calendar(s). `calendarMonth` is the
   // first day of the visible month; `loadCalendarFor` pulls the events spanning the whole
@@ -1359,8 +1391,9 @@ export function App() {
   useEffect(() => {
     refreshCalendarRef.current = refreshCalendar;
   }, [refreshCalendar]);
-  // On-demand: scan email + calendar for tasks right now (plan what's found) and refresh the
-  // in-app calendar — the manual version of the idle background scan.
+  // On-demand: scan email + calendar for tasks right now and SURFACE them (as unplanned stubs) +
+  // refresh the in-app calendar. It does NOT plan — planning is left to the background sweep or the
+  // per-task "Plan" button, so a manual scan is fast and never kicks off long LLM work.
   const scanningNowRef = useRef(false);
   const [scanningNow, setScanningNow] = useState(false);
   const scanNow = useCallback(async () => {
@@ -1369,13 +1402,13 @@ export function App() {
     setScanningNow(true);
     try {
       const r = await scanInbox();
-      if (r.candidates?.length) await autoPlanScan(r.candidates);
+      if (r.candidates?.length) await addCandidatesAsTasks(r.candidates);
       refreshCalendar();
     } finally {
       scanningNowRef.current = false;
       setScanningNow(false);
     }
-  }, [googleConnected, scanInbox, autoPlanScan, refreshCalendar]);
+  }, [googleConnected, scanInbox, addCandidatesAsTasks, refreshCalendar]);
   const openCalendar = useCallback(() => {
     setShowCalendar(true);
     void loadCalendarFor(calendarMonth);
@@ -3867,6 +3900,7 @@ export function App() {
           creatingTask={creatingTask}
           onCreateTask={(title, dueIso) => void onCreateTask(title, dueIso)}
           {...(googleConnected ? { onScanNow: () => void scanNow(), scanning: scanningNow } : {})}
+          onPlanTask={(id) => void planOneTask(id)}
           onOpenTask={(id) => void openTaskInChat(id)}
           onAdvanceStep={onAdvanceTaskStep}
           onToggleStepDone={onToggleStepDone}
