@@ -5,7 +5,9 @@ import {
   buildBuddySystemPrompt,
   formatBuddyToolResult,
   isRetryableError,
+  looksLikeToolJson,
   parseBuddyToolCall,
+  parseBuddyToolCalls,
   toolFailureDirective,
   toolLimitNudge,
 } from "./buddy-tools.js";
@@ -646,6 +648,36 @@ describe("ALWAYS_GATED_TOOLS (the full-autonomy danger floor)", () => {
     expect(ALWAYS_GATED_TOOLS.has("generate_image")).toBe(false);
     expect(ALWAYS_GATED_TOOLS.has("find_files")).toBe(false);
     expect(ALWAYS_GATED_TOOLS.has("read_attachment")).toBe(false);
+  });
+});
+
+describe("parseBuddyToolCalls (batched tool calls)", () => {
+  it("recovers EVERY tool call when the model emits several JSON objects in one message", () => {
+    // The exact shape that leaked as raw text before: multiple objects, one per line.
+    const batched =
+      '{"tool":"create_task","title":"Book Outbound Flight to Iowa City","due":"2026-06-30T23:59:59Z"}\n' +
+      '{"tool":"create_task","title":"Book Return Flight","due":"2026-06-30T23:59:59Z"}\n' +
+      '{"tool":"search_web","query":"nonstop flights DC to Iowa City"}';
+    const calls = parseBuddyToolCalls(batched);
+    expect(calls.map((c) => c.tool)).toEqual(["create_task", "create_task", "search_web"]);
+    expect(calls[0]).toEqual({ tool: "create_task", title: "Book Outbound Flight to Iowa City", due: "2026-06-30T23:59:59Z" });
+    expect(parseBuddyToolCall(batched)).toEqual(calls[0]); // singular helper = first
+  });
+
+  it("handles a fenced batch and skips an unparseable object", () => {
+    const fenced = '```json\n{"tool":"list_tasks"}\n{"tool":"create_task"}\n{"tool":"search_web","query":"x"}\n```';
+    // create_task with no title is dropped; the other two survive.
+    expect(parseBuddyToolCalls(fenced).map((c) => c.tool)).toEqual(["list_tasks", "search_web"]);
+  });
+
+  it("still parses a single object and ignores prose", () => {
+    expect(parseBuddyToolCalls('{"tool":"search_web","query":"x"}')).toHaveLength(1);
+    expect(parseBuddyToolCalls("just a normal sentence")).toEqual([]);
+  });
+
+  it("looksLikeToolJson flags a tool-shaped reply so raw JSON isn't shown as prose", () => {
+    expect(looksLikeToolJson('{"tool":"create_task","title":"x"}')).toBe(true);
+    expect(looksLikeToolJson("hello there, here is my answer")).toBe(false);
   });
 });
 

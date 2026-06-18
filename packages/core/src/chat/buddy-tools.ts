@@ -614,19 +614,71 @@ export function buildBuddySystemPrompt(opts: {
   );
 }
 
-/**
- * Parse a model reply as a buddy tool call — same deliberate strictness as
- * `parseToolCall`: the ENTIRE reply must be one JSON object with a known tool.
- */
-export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
-  const cleaned = stripFences(stripThink(text));
-  if (!cleaned.startsWith("{") || !cleaned.endsWith("}")) return undefined;
-  let obj: Record<string, unknown>;
-  try {
-    obj = JSON.parse(cleaned) as Record<string, unknown>;
-  } catch {
-    return undefined;
+/** Pull every top-level JSON object out of a string (brace-matched, string-aware), so a batch
+ * of tool calls the model put on separate lines is recovered individually. */
+function extractJsonObjects(s: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!;
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (c === "}" && depth > 0) {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        out.push(s.slice(start, i + 1));
+        start = -1;
+      }
+    }
   }
+  return out;
+}
+
+/** Whether a reply was MEANT to be tool JSON (so a parse miss isn't shown to the reader as prose). */
+export function looksLikeToolJson(text: string): boolean {
+  const cleaned = stripFences(stripThink(text)).trim();
+  return cleaned.startsWith("{") && /"tool"\s*:/.test(cleaned);
+}
+
+/**
+ * Parse a model reply into buddy tool calls. The model is told to emit ONE JSON object, but
+ * capable models sometimes BATCH several (one per line) in a single turn — so we recover them
+ * ALL and the caller runs them in order, instead of leaking the raw JSON into the chat.
+ */
+export function parseBuddyToolCalls(text: string): BuddyToolCall[] {
+  const cleaned = stripFences(stripThink(text)).trim();
+  if (!cleaned.startsWith("{")) return [];
+  const out: BuddyToolCall[] = [];
+  for (const chunk of extractJsonObjects(cleaned)) {
+    let obj: Record<string, unknown>;
+    try {
+      obj = JSON.parse(chunk) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const call = parseToolObject(obj);
+    if (call) out.push(call);
+  }
+  return out;
+}
+
+/** The first tool call in a reply (back-compat — the planner runs one tool at a time). */
+export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
+  return parseBuddyToolCalls(text)[0];
+}
+
+function parseToolObject(obj: Record<string, unknown>): BuddyToolCall | undefined {
   const tool = obj.tool;
   if (tool === "search_web" || tool === "search_books" || tool === "search_images") {
     const query = strArg(obj.query, MAX_QUERY_CHARS);

@@ -289,6 +289,64 @@ describe("runBuddyTurn", () => {
     expect(noDep.toolResults[0]!.result.error).toContain("memory isn't available");
   });
 
+  it("executes EVERY tool call when the model BATCHES several in one reply (one round)", async () => {
+    const created: string[] = [];
+    const searched: string[] = [];
+    const llm = scriptedLlm([
+      '{"tool":"create_task","title":"Book outbound flight"}\n' +
+        '{"tool":"create_task","title":"Book return flight"}\n' +
+        '{"tool":"search_web","query":"flights to Iowa City"}',
+      "Added both to-dos and here are flight options.",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "add the flight tasks and find flights" }],
+      deps: {
+        createTask: async (t) => {
+          created.push(t.title);
+          return { id: String(created.length), title: t.title };
+        },
+        searchWeb: async (q) => {
+          searched.push(q);
+          return [];
+        },
+        openLibraryBook: async () => opened("?"),
+        openWebText: async () => opened("?"),
+        openPastedText: async (call) => opened(call.title),
+        removeLibraryBook: async () => ({ removed: "x" }),
+        setVisualStyle: async () => ({}),
+      },
+    });
+    expect(created).toEqual(["Book outbound flight", "Book return flight"]);
+    expect(searched).toEqual(["flights to Iowa City"]);
+    expect(outcome.toolResults.map((r) => r.call.tool)).toEqual(["create_task", "create_task", "search_web"]);
+    expect(llm.calls).toHaveLength(2); // all three ran in ONE round, then the final prose
+    expect(outcome.text).toContain("flight options");
+  });
+
+  it("doesn't leak an unparseable tool-shaped reply as prose — nudges instead", async () => {
+    const llm = scriptedLlm([
+      '{"tool":"totally_unknown_tool","x":1}', // looks like a tool call, but isn't one we run
+      "Okay, here's a plain answer instead.",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "do the thing" }],
+      deps: {
+        openLibraryBook: async () => opened("?"),
+        openWebText: async () => opened("?"),
+        openPastedText: async (call) => opened(call.title),
+        removeLibraryBook: async () => ({ removed: "x" }),
+        setVisualStyle: async () => ({}),
+      },
+    });
+    expect(outcome.text).toBe("Okay, here's a plain answer instead."); // NOT the raw JSON
+    expect(llm.calls).toHaveLength(2); // it was nudged to retry
+    expect(llm.calls[1]!.some((t) => t.role === "user" && t.content.includes("tool call"))).toBe(true);
+  });
+
   it("stops tool-looping after MAX_BUDDY_TOOL_ROUNDS", async () => {
     const llm = scriptedLlm(['{"tool":"search_web","query":"loop"}']);
     const outcome = await runBuddyTurn({
