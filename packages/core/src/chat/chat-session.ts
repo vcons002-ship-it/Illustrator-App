@@ -56,17 +56,36 @@ export function jsonGatedTokenSink(emit: (text: string) => void): (delta: string
   let buffer = "";
   let mode: "hold" | "live" | "mute" = "hold";
   return (delta) => {
-    if (mode === "live") return emit(delta);
     if (mode === "mute") return;
     buffer += delta;
-    const lead = buffer.trimStart();
-    if (!lead) return;
-    if (lead.startsWith("{") || lead.startsWith("`")) {
+    if (mode === "hold") {
+      const lead = buffer.trimStart();
+      if (!lead) return; // only whitespace so far
+      // A reply that OPENS like a tool call / code fence is all tool JSON — show nothing.
+      if (lead.startsWith("{") || lead.startsWith("`")) {
+        mode = "mute";
+        return;
+      }
+      mode = "live";
+    }
+    // Live prose. If a tool call (or fence) starts on its OWN line — the model appended one after a
+    // briefing — emit the prose up to it and mute the rest so the raw JSON never shows.
+    const boundary = /\n[ \t]*(\{|```)/.exec(buffer);
+    if (boundary) {
+      if (boundary.index > 0) emit(buffer.slice(0, boundary.index));
+      buffer = "";
       mode = "mute";
       return;
     }
-    mode = "live";
-    emit(buffer);
+    // Otherwise stream eagerly, but HOLD a trailing "\n   " (it could be the start of "\n{…}").
+    const tail = /\n[ \t]*$/.exec(buffer);
+    if (tail) {
+      if (tail.index > 0) emit(buffer.slice(0, tail.index));
+      buffer = buffer.slice(tail.index);
+    } else {
+      emit(buffer);
+      buffer = "";
+    }
   };
 }
 

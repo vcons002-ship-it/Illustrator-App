@@ -7,6 +7,7 @@ import {
   isRetryableError,
   looksLikeToolJson,
   parseBuddyToolCalls,
+  stripToolCallJson,
   toolLimitNudge,
   type BuddyOpenedInfo,
   type BuddyToolCall,
@@ -199,7 +200,8 @@ export async function runBuddyTurn(opts: {
         continue;
       }
       transcript.push({ role: "assistant", content: reply });
-      return { text: reply, transcript, toolResults };
+      // Safety net: never hand the reader stray tool-call JSON in the final answer.
+      return { text: stripToolCallJson(reply), transcript, toolResults };
     }
     transcript.push({ role: "assistant", content: reply });
     messages.push({ role: "assistant", content: reply });

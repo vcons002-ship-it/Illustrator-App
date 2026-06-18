@@ -25,6 +25,7 @@ import {
   toRenderUnits,
   formatToolResult,
   formatBuddyToolResult,
+  stripToolCallJson,
   toolFailureDirective,
   anchorByParagraph,
   bestParagraphIndex,
@@ -502,6 +503,9 @@ export function App() {
   const [buddyMessages, setBuddyMessages] = useState<StoredChatMessage[]>([]);
   const [buddyBusy, setBuddyBusy] = useState(false);
   const [buddyStreaming, setBuddyStreaming] = useState("");
+  // Mirror of the live stream, so when a tool fires mid-message we can KEEP any prose the model
+  // said first (a briefing) instead of losing it when the turn's final answer replaces the stream.
+  const buddyStreamingRef = useRef("");
   const [buddyThinking, setBuddyThinking] = useState("");
   const [buddyActivity, setBuddyActivity] = useState("");
   const [buddyPersona, setBuddyPersona] = useState<BuddyPersona>("freeform");
@@ -2244,18 +2248,27 @@ export function App() {
     if (userBubbleText !== undefined) appendBuddy({ role: "user", text: userBubbleText });
     setBuddyBusy(true);
     setBuddyStreaming("");
+    buddyStreamingRef.current = "";
     setBuddyThinking("");
     setBuddyActivity("");
     setBuddyPendingTool(undefined);
     let openedBook = false;
     const res = await buddyChat(history, userText, buddyPersona, library, (e) => {
       if (e.kind === "token") {
-        setBuddyStreaming((prev) => prev + e.text);
+        buddyStreamingRef.current += e.text;
+        setBuddyStreaming(buddyStreamingRef.current);
         setBuddyActivity(""); // visible text replaces any "Reasoning…" status
       } else if (e.kind === "thinking") setBuddyThinking(e.text);
       else if (e.kind === "activity") setBuddyActivity(e.text);
       else if (e.kind === "usage") setBuddyUsage(e.usage);
       else if (e.kind === "tool") {
+        // Keep any prose the model said before this tool call (a briefing) as its own message.
+        const said = stripToolCallJson(buddyStreamingRef.current).trim();
+        if (said) {
+          appendBuddy({ role: "assistant", text: said });
+          buddyStreamingRef.current = "";
+          setBuddyStreaming("");
+        }
         const c = e.call;
         const label =
           c.tool === "search_books" ? `Searching Project Gutenberg for “${c.query}”…`
@@ -2329,8 +2342,8 @@ export function App() {
         setShowChat(true);
       } else {
         setBuddyActivity("");
-        // The agent just wrote to the calendar / tasks — reflect it in the app's views.
-        if (e.kind === "toolResult" && e.call.tool === "create_event") refreshCalendar();
+        // The agent just read/wrote the calendar or tasks — reflect it in the app's views.
+        if (e.kind === "toolResult" && (e.call.tool === "create_event" || e.call.tool === "list_events")) refreshCalendar();
         if (e.kind === "toolResult" && e.call.tool === "add_task_group") refreshTaskPlans();
         const typed = userBubbleText ?? "";
         if (e.hits?.length) {

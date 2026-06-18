@@ -234,6 +234,16 @@ describe("jsonGatedTokenSink", () => {
       expect(out).toEqual([]);
     }
   });
+
+  it("streams the prose but mutes a tool call the model appends on its own line", async () => {
+    const { jsonGatedTokenSink } = await import("./chat-session.js");
+    const out: string[] = [];
+    const sink = jsonGatedTokenSink((t) => out.push(t));
+    // Token-by-token so the "\n{" boundary is split across deltas (the real streaming case).
+    for (const ch of 'Here is your briefing.\n\n{"tool":"list_tasks","max":20}') sink(ch);
+    expect(out.join("").trim()).toBe("Here is your briefing.");
+    expect(out.join("")).not.toContain("{");
+  });
 });
 
 describe("trimChatHistory", () => {
