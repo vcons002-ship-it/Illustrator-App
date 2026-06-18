@@ -1283,6 +1283,9 @@ export function App() {
   // for actionable items — so it never interrupts active work (no always-on daemon).
   const lastInputAt = useRef(Date.now());
   const scanningRef = useRef(false);
+  // Set once the calendar refresher is defined below; lets the scan sync the app calendar
+  // without a forward reference / re-subscribing the interval.
+  const refreshCalendarRef = useRef<() => void>(() => {});
   useEffect(() => {
     const bump = () => {
       lastInputAt.current = Date.now();
@@ -1295,7 +1298,9 @@ export function App() {
     };
   }, []);
   useEffect(() => {
-    if (!googleConnected || !settings.allowTaskAutomation) return;
+    // Runs by DEFAULT once Google is connected (set autoTaskScan=false to stop background scans).
+    // The scan + auto-plan are read/research-only — no external email or calendar writes.
+    if (!googleConnected || settings.autoTaskScan === false) return;
     const IDLE_MS = 3 * 60_000;
     const id = setInterval(() => {
       if (scanningRef.current || Date.now() - lastInputAt.current < IDLE_MS) return;
@@ -1303,6 +1308,7 @@ export function App() {
       void scanInbox()
         .then((r) => {
           if (r.candidates?.length) void autoPlanScan(r.candidates);
+          refreshCalendarRef.current(); // the scan just scraped the calendar — sync the app's view
         })
         .catch(() => {})
         .finally(() => {
@@ -1310,7 +1316,7 @@ export function App() {
         });
     }, 90_000);
     return () => clearInterval(id);
-  }, [googleConnected, settings.allowTaskAutomation, scanInbox, autoPlanScan]);
+  }, [googleConnected, settings.autoTaskScan, scanInbox, autoPlanScan]);
 
   // In-app calendar synced with the user's Google calendar(s). `calendarMonth` is the
   // first day of the visible month; `loadCalendarFor` pulls the events spanning the whole
@@ -1323,7 +1329,7 @@ export function App() {
   const [calendarEvents, setCalendarEvents] = useState<CalendarEvent[]>([]);
   const [calendarLoading, setCalendarLoading] = useState(false);
   const loadCalendarFor = useCallback(
-    async (month: Date) => {
+    async (month: Date, silent = false) => {
       if (!googleConnected) return;
       // Cover the 6×7 grid: from the Sunday on/before the 1st to ~42 days later.
       const first = new Date(month.getFullYear(), month.getMonth(), 1);
@@ -1331,16 +1337,28 @@ export function App() {
       start.setDate(1 - first.getDay());
       const end = new Date(start);
       end.setDate(start.getDate() + 42);
-      setCalendarLoading(true);
+      if (!silent) setCalendarLoading(true);
       try {
         const res = await loadCalendar(start.toISOString(), end.toISOString());
         if (res.ok && res.events) setCalendarEvents(res.events);
       } finally {
-        setCalendarLoading(false);
+        if (!silent) setCalendarLoading(false);
       }
     },
     [googleConnected, loadCalendar],
   );
+  // Keep the in-app calendar in sync without a visible reload — used after the agent creates an
+  // event and after the idle scan scrapes the calendar, so the app's calendar reflects Google.
+  const calendarMonthRef = useRef(calendarMonth);
+  useEffect(() => {
+    calendarMonthRef.current = calendarMonth;
+  }, [calendarMonth]);
+  const refreshCalendar = useCallback(() => {
+    if (googleConnected) void loadCalendarFor(calendarMonthRef.current, true);
+  }, [googleConnected, loadCalendarFor]);
+  useEffect(() => {
+    refreshCalendarRef.current = refreshCalendar;
+  }, [refreshCalendar]);
   const openCalendar = useCallback(() => {
     setShowCalendar(true);
     void loadCalendarFor(calendarMonth);
@@ -2253,6 +2271,8 @@ export function App() {
         setShowChat(true);
       } else {
         setBuddyActivity("");
+        // The agent just wrote to the calendar — reflect it in the app's calendar view.
+        if (e.kind === "toolResult" && e.call.tool === "create_event") refreshCalendar();
         const typed = userBubbleText ?? "";
         if (e.hits?.length) {
           appendBuddy({
