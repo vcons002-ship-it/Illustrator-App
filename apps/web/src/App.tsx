@@ -169,6 +169,7 @@ import {
 import type { LocalTextServerId } from "@visual-reader/core";
 import { loadSampleBook } from "./sample.js";
 import { useEngineWorker, type ImportResult, type TestRenderResult } from "./useEngineWorker.js";
+import type { SyncToPhone } from "./remote-sync.js";
 import {
   downloadLora,
   downloadModel,
@@ -322,6 +323,10 @@ export function App() {
     remoteBusReply,
     startHostBridge,
     stopHostBridge,
+    isRemoteClient,
+    setAppSyncHandler,
+    sendAppSync,
+    setBible,
     marketIndicators,
     schwabConnect,
     schwabPlaceOrder,
@@ -986,6 +991,11 @@ export function App() {
   const onPickBook = useCallback(
     async (id: string) => {
       if (!id || id === book?.id) return;
+      // On a linked phone, opening happens on the DESKTOP (which then pushes the book back).
+      if (isRemoteClient) {
+        sendAppSync({ type: "vrcmd:open", bookId: id });
+        return;
+      }
       try {
         const source = await libraryStore.getBook(id);
         if (source) openBook(source);
@@ -993,7 +1003,7 @@ export function App() {
         /* ignore */
       }
     },
-    [book, libraryStore, openBook],
+    [book, libraryStore, openBook, isRemoteClient, sendAppSync],
   );
 
   const onRemoveBook = useCallback(
@@ -1006,6 +1016,88 @@ export function App() {
     },
     [libraryStore],
   );
+
+  // PHONE MIRROR: a linked phone shows exactly what THIS desktop shows — its library, the open
+  // book, that book's analysis (bible), and the render-affecting settings. The desktop is the
+  // source of truth and pushes its state down the relay; the phone renders it and sends back
+  // high-level commands (open a library book, go home). The engine stays on the desktop, so
+  // illustrate/analyse/chat the phone triggers run here and stream their results back — the phone
+  // never needs its own image model or data. (`isRemoteClient` ⇒ this tab IS the phone.)
+  const [remoteHost, setRemoteHost] = useState<string | undefined>();
+  const buildSnapshot = useCallback(
+    (): SyncToPhone => ({
+      type: "vrsync:state",
+      host: "this desktop",
+      library,
+      settings,
+      ...(book ? { book } : {}),
+      ...(bible ? { bible } : {}),
+    }),
+    [library, settings, book, bible],
+  );
+  const buildSnapshotRef = useRef(buildSnapshot);
+  buildSnapshotRef.current = buildSnapshot;
+  // Register the relay handler once: the PHONE applies the desktop's state pushes; the DESKTOP
+  // answers the phone's commands. (Reads live refs so the single registration stays current.)
+  useEffect(() => {
+    setAppSyncHandler((msg) => {
+      if (isRemoteClient) {
+        switch (msg.type) {
+          case "vrsync:state":
+            setLibrary(msg.library);
+            setSettings(msg.settings);
+            setBook(msg.book);
+            setBible(msg.bible);
+            setRemoteHost(msg.host);
+            break;
+          case "vrsync:library":
+            setLibrary(msg.library);
+            break;
+          case "vrsync:settings":
+            setSettings(msg.settings);
+            break;
+          case "vrsync:book":
+            setBook(msg.book);
+            setBible(msg.bible);
+            break;
+          default:
+            break; // commands are desktop-bound
+        }
+      } else {
+        switch (msg.type) {
+          case "vrcmd:hello":
+            sendAppSync(buildSnapshotRef.current());
+            break;
+          case "vrcmd:open":
+            void libraryStore
+              .getBook(msg.bookId)
+              .then((s) => {
+                if (s) openBook(s);
+              })
+              .catch(() => {});
+            break;
+          case "vrcmd:home":
+            setBook(undefined);
+            closeBook();
+            break;
+          default:
+            break;
+        }
+      }
+    });
+  }, [isRemoteClient, setAppSyncHandler, sendAppSync, setBible, libraryStore, openBook, closeBook]);
+  // Desktop: push each slice of state to a linked phone as it changes — granularly, so a settings
+  // tweak doesn't resend the whole book (no-op without a linked phone: `sendAppSync` only writes
+  // when the host bridge is open).
+  useEffect(() => {
+    if (!isRemoteClient) sendAppSync({ type: "vrsync:library", library });
+  }, [isRemoteClient, sendAppSync, library]);
+  useEffect(() => {
+    if (!isRemoteClient) sendAppSync({ type: "vrsync:settings", settings });
+  }, [isRemoteClient, sendAppSync, settings]);
+  useEffect(() => {
+    if (!isRemoteClient) sendAppSync({ type: "vrsync:book", ...(book ? { book } : {}), ...(bible ? { bible } : {}) });
+  }, [isRemoteClient, sendAppSync, book, bible]);
 
   // OCR: read the text out of a scanned image with the configured vision model, then open it
   // as a (technical) document via the paste modal. Reuses the screenshot tool's vision path —
@@ -3684,11 +3776,21 @@ export function App() {
         )}
       </header>
 
-      {!settings.configured && (
+      {!settings.configured && !isRemoteClient && (
         <FirstRunWizard current={settings} onComplete={setSettings} isDesktop={isDesktop} />
       )}
 
-      <ProviderBadges providers={providers} engineStatus={engineStatus} />
+      {/* On a linked phone the engine lives on the desktop — show the link, not a "set up a model"
+          nag or local-provider badges (those reflect a model the phone will never run). */}
+      {isRemoteClient ? (
+        <div style={styles.badges}>
+          <span style={{ ...styles.badge, ...styles.badgeOk }} title="This phone is mirroring your desktop over the LAN; the engine runs there.">
+            🔗 Linked to {remoteHost ?? "your desktop"} — engine runs on the desktop
+          </span>
+        </div>
+      ) : (
+        <ProviderBadges providers={providers} engineStatus={engineStatus} />
+      )}
 
       {!book && (status || localError) && (
         <div style={styles.status}>{localError || status}</div>

@@ -97,6 +97,21 @@ export function isLocalOnlyMessage(msg: unknown): boolean {
   return typeof t === "string" && LOCAL_ONLY_MESSAGE_TYPES.has(t);
 }
 
+/**
+ * APP-STATE MIRROR frames ride the SAME relay socket as engine messages, but are routed to the
+ * app-sync handler (library/open-book/bible/settings) instead of the engine worker. They're tagged
+ * by a `type` prefix so the transport can tell them apart from worker-protocol messages:
+ *   - `vrsync:*` — desktop → phone state pushes (the desktop is the source of truth).
+ *   - `vrcmd:*`  — phone → desktop commands (open a library book, request a fresh snapshot).
+ */
+export const APP_SYNC_PREFIXES = ["vrsync:", "vrcmd:"] as const;
+
+/** True when a relay frame payload is an app-state mirror message (not an engine message). */
+export function isAppSyncMessage(msg: unknown): boolean {
+  const t = (msg as { type?: string })?.type;
+  return typeof t === "string" && APP_SYNC_PREFIXES.some((p) => t.startsWith(p));
+}
+
 // ArrayBuffers (image bytes) can't ride in JSON — tag them so the other side rebuilds them.
 function abTag(b64: string): { __ab: string } {
   return { __ab: b64 };

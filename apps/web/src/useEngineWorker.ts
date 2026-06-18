@@ -5,6 +5,7 @@ import {
   decodeFrame,
   deserializeFromRemote,
   encodeFrame,
+  isAppSyncMessage,
   isLocalOnlyMessage,
   remoteModeFromHash,
   serializeForRemote,
@@ -53,6 +54,7 @@ export interface ImportResult {
   error?: string;
 }
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
+import type { AppSyncMessage } from "./remote-sync.js";
 import { desktopHttpFetch, mcpStdioExchange, isDesktop, searchLocalFiles, readLocalFile } from "./runtime.js";
 import { pdfToText } from "./import-file.js";
 
@@ -197,6 +199,12 @@ export interface EngineWorkerApi {
   stopHostBridge: () => void;
   /** True when THIS tab is a phone client driving a remote desktop (opened via a #vrlink). */
   isRemoteClient: boolean;
+  /** Register the handler for app-state mirror frames (library/book/bible/settings + commands). */
+  setAppSyncHandler: (fn: (msg: AppSyncMessage) => void) => void;
+  /** Send an app-state mirror frame to the other side of the link (phone⇄desktop). */
+  sendAppSync: (msg: AppSyncMessage) => void;
+  /** Apply a synced visual bible (a linked phone rendering the desktop's open book). */
+  setBible: (bible: VisualBible | undefined) => void;
   /** Fetch keyless technical indicators (VWAP/MA/RSI/recent-move) for a symbol. */
   marketIndicators: (symbol: string, interval?: string, range?: string) => Promise<{ ok: boolean; indicators?: Indicators }>;
   /** Run one document-polish stage; returns the requestId (for cancel) + the result. */
@@ -430,6 +438,25 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const phoneWsRef = useRef<WebSocket | undefined>(undefined);
   // HOST-BRIDGE: on the desktop, when a phone is linked, mirror the engine worker to the relay.
   const hostBridgeRef = useRef<{ ws: WebSocket; token: string } | undefined>(undefined);
+  // APP-STATE MIRROR: a handler (set by App) for incoming library/book/bible/settings frames, so
+  // the phone renders the desktop's content and the desktop answers the phone's commands.
+  const appSyncRef = useRef<((msg: AppSyncMessage) => void) | undefined>(undefined);
+  const setAppSyncHandler = useCallback((fn: (msg: AppSyncMessage) => void) => {
+    appSyncRef.current = fn;
+  }, []);
+  // Send an app-state mirror frame to the other side: the phone sends commands up its relay socket;
+  // the desktop pushes state down the host-bridge socket. No-op when this side isn't linked.
+  const sendAppSync = useCallback((msg: AppSyncMessage) => {
+    const remote = remoteRef.current;
+    if (remote && phoneWsRef.current?.readyState === WebSocket.OPEN) {
+      phoneWsRef.current.send(encodeFrame(remote.token, serializeForRemote(msg, bytesToBase64)));
+      return;
+    }
+    const hb = hostBridgeRef.current;
+    if (hb && hb.ws.readyState === WebSocket.OPEN) {
+      hb.ws.send(encodeFrame(hb.token, serializeForRemote(msg, bytesToBase64)));
+    }
+  }, []);
 
   const send = (msg: MainToWorker, transfer: Transferable[] = []) => {
     const remote = remoteRef.current;
@@ -446,10 +473,14 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     hostBridgeRef.current?.ws.close();
     const ws = new WebSocket(wsUrl);
     ws.onmessage = (e) => {
-      // A request from the linked phone — run it on the desktop's real engine worker.
+      // A frame from the linked phone: either an app-sync COMMAND (open a book / ask for a
+      // snapshot) handled by App, or an engine request to run on the desktop's real worker.
       if (typeof e.data !== "string") return;
       const payload = decodeFrame(e.data, token);
-      if (payload && !isLocalOnlyMessage(payload)) workerRef.current?.postMessage(deserializeFromRemote(payload, base64ToBytes));
+      if (!payload) return;
+      const msg = deserializeFromRemote(payload, base64ToBytes);
+      if (isAppSyncMessage(msg)) appSyncRef.current?.(msg as AppSyncMessage);
+      else if (!isLocalOnlyMessage(msg)) workerRef.current?.postMessage(msg);
     };
     ws.onclose = () => {
       if (hostBridgeRef.current?.ws === ws) hostBridgeRef.current = undefined;
@@ -854,13 +885,22 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     const remote = remoteRef.current;
     if (remote) {
       const ws = new WebSocket(remote.wsUrl);
-      ws.onopen = () => setStatus("Linked to a desktop");
+      ws.onopen = () => {
+        setStatus("Linked to a desktop");
+        // Ask the desktop for a full snapshot of what it's showing (library/book/bible/settings).
+        ws.send(encodeFrame(remote.token, { type: "vrcmd:hello" }));
+      };
       ws.onclose = () => setStatus("Disconnected from the desktop");
       ws.onerror = () => setStatus("Error: couldn't reach the desktop on this network");
       ws.onmessage = (e) => {
         if (typeof e.data !== "string") return;
         const payload = decodeFrame(e.data, remote.token);
-        if (payload && !isLocalOnlyMessage(payload)) handleMsg(deserializeFromRemote(payload, base64ToBytes) as WorkerToMain);
+        if (!payload) return;
+        const msg = deserializeFromRemote(payload, base64ToBytes);
+        // App-sync state pushes (library/book/bible/settings) go to App; everything else is an
+        // engine message streamed from the desktop's worker.
+        if (isAppSyncMessage(msg)) appSyncRef.current?.(msg as AppSyncMessage);
+        else if (!isLocalOnlyMessage(msg)) handleMsg(msg as WorkerToMain);
       };
       phoneWsRef.current = ws;
       return () => ws.close();
@@ -906,6 +946,9 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
 
   const identityApplied = useRef(false);
   useEffect(() => {
+    // On a linked phone the engine lives on the DESKTOP — never push init/open/tune up the relay
+    // (it would clobber the desktop's own engine + open book). The desktop owns its settings.
+    if (remoteRef.current) return;
     const apply = (): void => {
       send({ type: "init", settings: settingsRef.current, ...(isDesktop ? { corsProxy: true } : {}) });
       if (lastBook.current) {
@@ -928,6 +971,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   }, [identityKey]); // deliberately keyed on the identity FIELDS, not the settings object
 
   useEffect(() => {
+    if (remoteRef.current) return; // the desktop tunes its own engine (see the identity effect)
     send({ type: "tune", settings: settingsRef.current });
   }, [tuningKey]); // deliberately keyed on the tuning FIELDS, not the settings object
 
@@ -939,6 +983,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       setResults(new Map());
       reloadingRef.current.clear();
       activeUnitRef.current = 0;
+      if (remoteRef.current) return; // a linked phone opens books on the desktop via vrcmd:open
       send({ type: "init", settings, ...(isDesktop ? { corsProxy: true } : {}) });
       send({ type: "open", book });
     },
@@ -1577,6 +1622,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     startHostBridge,
     stopHostBridge,
     isRemoteClient: !!remoteRef.current,
+    setAppSyncHandler,
+    sendAppSync,
+    /** Set the open book's bible directly — used by a linked phone to apply a synced snapshot. */
+    setBible,
     marketIndicators,
     polishText,
     polishCancel,
