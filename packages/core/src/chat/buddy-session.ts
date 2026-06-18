@@ -5,7 +5,8 @@ import {
   MAX_BUDDY_TOOL_ROUNDS,
   formatBuddyToolResult,
   isRetryableError,
-  parseBuddyToolCall,
+  looksLikeToolJson,
+  parseBuddyToolCalls,
   toolLimitNudge,
   type BuddyOpenedInfo,
   type BuddyToolCall,
@@ -124,6 +125,32 @@ export interface BuddyTurnOutcome {
   toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[];
 }
 
+/** Tools that stop the auto-run loop for the host/UI (approval, a render, a main-thread run, or
+ * a research pass). They can't run inside the worker turn, so they're handed up as a pendingTool. */
+type HostToolName =
+  | "generate_image"
+  | "find_files"
+  | "run_command"
+  | "screenshot"
+  | "plan_task"
+  | "prep_order"
+  | "tv_chart"
+  | "delegate";
+const HOST_TOOLS = new Set<HostToolName>([
+  "generate_image",
+  "find_files",
+  "run_command",
+  "screenshot",
+  "plan_task",
+  "prep_order",
+  "tv_chart",
+  "delegate",
+]);
+/** Type-guard so the non-host branch narrows to the tools `runBuddyTool` can execute. */
+function isHostTool(call: BuddyToolCall): call is Extract<BuddyToolCall, { tool: HostToolName }> {
+  return (HOST_TOOLS as Set<string>).has(call.tool);
+}
+
 export async function runBuddyTurn(opts: {
   llm: ChatCapable;
   system: string;
@@ -154,42 +181,59 @@ export async function runBuddyTurn(opts: {
       ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
       ...(opts.cachePrefix ? { cachePrefix: opts.cachePrefix } : {}),
     });
-    const call = round < MAX_BUDDY_TOOL_ROUNDS ? parseBuddyToolCall(reply) : undefined;
-    if (!call) {
+    const calls = round < MAX_BUDDY_TOOL_ROUNDS ? parseBuddyToolCalls(reply) : [];
+    if (calls.length === 0) {
+      // A reply that LOOKED like tool JSON but didn't parse into any known call must NOT be
+      // dumped to the reader as prose (that's the raw-JSON-in-chat bug). Nudge the model to
+      // re-issue it properly; otherwise it's a normal plain-text answer.
+      if (round < MAX_BUDDY_TOOL_ROUNDS && looksLikeToolJson(reply)) {
+        transcript.push({ role: "assistant", content: reply });
+        messages.push({ role: "assistant", content: reply });
+        const nudge =
+          "[That looked like a tool call but wasn't something I could run. Re-issue each tool call " +
+          "as its own JSON object (one per line, no prose around them), or just answer in plain text.]";
+        transcript.push({ role: "user", content: nudge });
+        messages.push({ role: "user", content: nudge });
+        continue;
+      }
       transcript.push({ role: "assistant", content: reply });
       return { text: reply, transcript, toolResults };
     }
-    opts.onEvent?.({ kind: "tool", round, call });
     transcript.push({ role: "assistant", content: reply });
     messages.push({ role: "assistant", content: reply });
 
-    if (
-      call.tool === "generate_image" ||
-      call.tool === "find_files" ||
-      call.tool === "run_command" ||
-      call.tool === "screenshot" ||
-      call.tool === "plan_task" ||
-      call.tool === "prep_order" ||
-      call.tool === "tv_chart" ||
-      call.tool === "delegate"
-    ) {
-      // Stops the loop for the host/UI: generate_image needs render approval;
-      // find_files needs the reader's OK before any filesystem access; run_command
-      // needs the reader to approve executing it. Each comes back as a pendingTool
-      // the main thread runs after the reader confirms.
-      return { text: "", transcript, pendingTool: call, toolResults };
+    // Run every tool the model batched this round, in order. A host/UI tool (needs approval or a
+    // main-thread run) stops the batch: if it's first, hand it up as a pendingTool (as before);
+    // if auto-run tools already ran this round, defer it so their results aren't lost — the model
+    // re-issues it next round.
+    const feedbacks: string[] = [];
+    let deferred = false;
+    for (const call of calls) {
+      if (isHostTool(call)) {
+        if (feedbacks.length === 0) {
+          opts.onEvent?.({ kind: "tool", round, call });
+          return { text: "", transcript, pendingTool: call, toolResults };
+        }
+        deferred = true;
+        break;
+      }
+      opts.onEvent?.({ kind: "tool", round, call });
+      let result = await runBuddyTool(call, opts.deps);
+      // One automatic retry for a transient (network/timeout/rate-limit) failure before the
+      // error is shown to the model — turns a flaky blip into a silent recovery.
+      if (result.error && isRetryableError(result.error)) {
+        result = await runBuddyTool(call, opts.deps);
+      }
+      toolResults.push({ call, result });
+      opts.onEvent?.({ kind: "toolResult", round, call, result });
+      feedbacks.push(formatBuddyToolResult(call, result));
     }
-    let result = await runBuddyTool(call, opts.deps);
-    // One automatic retry for a transient (network/timeout/rate-limit) failure before the
-    // error is shown to the model — turns a flaky blip into a silent recovery.
-    if (result.error && isRetryableError(result.error)) {
-      result = await runBuddyTool(call, opts.deps);
-    }
-    toolResults.push({ call, result });
-    opts.onEvent?.({ kind: "toolResult", round, call, result });
     // On the final tool round, append a wrap-up nudge so the model answers now instead of
     // spending its last round on a tool whose result it can't follow up on.
-    const feedback = formatBuddyToolResult(call, result) + toolLimitNudge(round);
+    const feedback =
+      feedbacks.join("\n\n") +
+      (deferred ? "\n\n[Re-issue the remaining host tool (image/command/plan/etc.) now if you still need it.]" : "") +
+      toolLimitNudge(round);
     transcript.push({ role: "user", content: feedback });
     messages.push({ role: "user", content: feedback });
   }

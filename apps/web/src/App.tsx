@@ -2181,41 +2181,37 @@ export function App() {
       else if (e.kind === "activity") setBuddyActivity(e.text);
       else if (e.kind === "usage") setBuddyUsage(e.usage);
       else if (e.kind === "tool") {
-        setBuddyActivity(
-          e.call.tool === "search_books"
-            ? `Searching Project Gutenberg for “${e.call.query}”…`
-            : e.call.tool === "random_books"
-              ? "Pulling some classics off the shelf…"
-              : e.call.tool === "search_web"
-                ? `Searching for “${e.call.query}”…`
-                : e.call.tool === "read_url"
-                  ? `Reading ${e.call.url}…`
-                  : e.call.tool === "search_images"
-                    ? `Looking for images of “${e.call.query}”…`
-                    : e.call.tool === "calculate"
-                      ? "Calculating…"
-                      : e.call.tool === "remember" || e.call.tool === "forget"
-                        ? "Updating memory…"
-                        : e.call.tool === "set_visual_style"
-                          ? "Updating the visual settings…"
-                          : e.call.tool === "update_setting"
-                          ? "Updating a setting…"
-                          : e.call.tool === "open_library_book"
-                            ? "Opening from your library…"
-                            : e.call.tool === "open_pasted_text"
-                              ? "Opening your text…"
-                              : e.call.tool === "remove_library_book"
-                                ? "Removing from your library…"
-                                : e.call.tool === "generate_image"
-                                  ? "Preparing an image…"
-                                  : e.call.tool === "find_files"
-                                    ? "Asking to search your files…"
-                                    : e.call.tool === "run_command"
-                                      ? "Proposing a command…"
-                                      : e.call.tool === "screenshot"
-                                        ? "Asking to see your screen…"
-                                        : "Fetching the text and opening it…",
-        );
+        const c = e.call;
+        const label =
+          c.tool === "search_books" ? `Searching Project Gutenberg for “${c.query}”…`
+          : c.tool === "random_books" ? "Pulling some classics off the shelf…"
+          : c.tool === "search_web" ? `Searching for “${c.query}”…`
+          : c.tool === "read_url" ? `Reading ${c.url}…`
+          : c.tool === "search_images" ? `Looking for images of “${c.query}”…`
+          : c.tool === "calculate" ? "Calculating…"
+          : c.tool === "remember" || c.tool === "forget" ? "Updating memory…"
+          : c.tool === "set_visual_style" ? "Updating the visual settings…"
+          : c.tool === "update_setting" ? "Updating a setting…"
+          : c.tool === "open_library_book" ? "Opening from your library…"
+          : c.tool === "open_pasted_text" ? "Opening your text…"
+          : c.tool === "remove_library_book" ? "Removing from your library…"
+          : c.tool === "generate_image" ? "Preparing an image…"
+          : c.tool === "find_files" ? "Searching your files…"
+          : c.tool === "read_file" ? "Reading a file…"
+          : c.tool === "run_command" ? "Proposing a command…"
+          : c.tool === "screenshot" ? "Asking to see your screen…"
+          : c.tool === "gmail_search" ? "Searching your email…"
+          : c.tool === "read_email" ? "Reading an email…"
+          : c.tool === "read_attachment" ? "Reading an attachment…"
+          : c.tool === "list_events" ? "Checking your calendar…"
+          : c.tool === "create_event" ? "Adding a calendar event…"
+          : c.tool === "list_tasks" ? "Checking your to-dos…"
+          : c.tool === "create_task" ? "Adding a to-do to Google Tasks…"
+          : c.tool === "schedule_task" ? "Scheduling a task…"
+          : c.tool === "mark_step_done" || c.tool === "update_task_step" ? "Updating the plan…"
+          : c.tool === "open_web_text" ? "Fetching the text and opening it…"
+          : "Working…";
+        setBuddyActivity(label);
       } else if (e.kind === "settings") {
         // set_visual_style fields + a generic update_setting patch both land here; App
         // owns ReaderSettings, so committing via setSettings runs the normal tune-vs-
