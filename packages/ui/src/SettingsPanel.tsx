@@ -211,6 +211,10 @@ export interface ReaderSettings {
    * periodically scan recent email + the calendar for tasks worth planning, and pre-plan them
    * into the 📋 Tasks panel (research only — no external writes). Set false to stop background scans. */
   autoTaskScan?: boolean;
+  /** How many UNPLANNED tasks each idle background sweep plans (deep research, sequential). 0 =
+   * never auto-plan in the background (surface only; plan via the per-task button). Default 2.
+   * Sweeps never overlap and yield when you return, so this is a throughput knob, not a timeout. */
+  backgroundPlanRate?: number;
   /** Desktop only, OFF by default: let the assistant drive your TradingView Desktop chart
    * (set symbol, add studies, read state, inject Pine) via its DevTools bridge. Chart-only
    * — it never trades. Requires TradingView Desktop launched with remote debugging. */
@@ -1041,10 +1045,38 @@ export function SettingsPanel({
                       Scan my inbox &amp; calendar for tasks while idle
                       <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
                         While the desktop app is open and you&apos;re away, periodically check recent email + your
-                        calendar for things that need planning (renewals, trips, deadlines) and pre-plan them into the
+                        calendar for things that need planning (renewals, trips, deadlines) and surface them into the
                         📋 Tasks panel. Read &amp; research only — it makes <b>no</b> changes to your email/calendar.
                         <b> On by default</b> when Google is connected.
                       </span>
+                    </span>
+                  </label>
+                )}
+                {onConnectGoogle && (value.autoTaskScan ?? true) && (
+                  <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 }}>
+                    <span>Plan per background sweep</span>
+                    <select
+                      value={value.backgroundPlanRate ?? 2}
+                      onChange={(e) => set({ backgroundPlanRate: Number(e.target.value) })}
+                      style={{
+                        background: "rgba(255,255,255,0.06)",
+                        color: "inherit",
+                        border: "1px solid rgba(255,255,255,0.15)",
+                        borderRadius: 6,
+                        padding: "4px 6px",
+                        fontSize: 12,
+                      }}
+                    >
+                      <option value={0}>Off — surface only</option>
+                      <option value={1}>1 task</option>
+                      <option value={2}>2 tasks (default)</option>
+                      <option value={3}>3 tasks</option>
+                      <option value={5}>5 tasks</option>
+                      <option value={10}>10 tasks</option>
+                    </select>
+                    <span style={{ opacity: 0.55, fontSize: 11 }}>
+                      how many unplanned tasks each idle sweep researches + plans (sequentially; it yields when you
+                      return). Higher = the backlog clears faster but uses more model time.
                     </span>
                   </label>
                 )}
