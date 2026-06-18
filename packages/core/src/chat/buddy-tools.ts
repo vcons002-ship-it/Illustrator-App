@@ -566,7 +566,9 @@ export function buildBuddySystemPrompt(opts: {
     "give up if one step fails — hand the WHOLE thing to plan_task in ONE call: it can research the web, read the " +
     "reader's email/attachments, AND search + read files on their computer, then build a dated step-by-step plan with " +
     'prepped documents. Put everything you know in "request" (the goal, any URL, the file they mentioned, constraints). ' +
-    "Reserve inline answers for genuine one-offs you can settle in a sentence.\n" +
+    "Reserve inline answers for genuine one-offs you can settle in a sentence. If a task is already active (see ACTIVE " +
+    "TASK below), calling this re-plans THAT task in place — use it to refine, redo, or fold in the reader's answers, " +
+    "not to start a new one.\n" +
     '- {"tool":"schedule_task","title":"Morning email recap","prompt":"Summarise my unread email from the last day",' +
     '"rule":"daily","time":"08:00"} — schedule a RECURRING action the assistant runs automatically while the app is open ' +
     '(daily/weekly/monthly/once). Use when the reader says "every morning/day/week/Friday…", "remind me to…", "each ' +
@@ -578,7 +580,10 @@ export function buildBuddySystemPrompt(opts: {
         'prep parts yourself, walk them through the parts only they can do. {"tool":"mark_step_done","planId":"…",' +
         '"stepId":"…"} when they finish a step (it advances the plan); {"tool":"update_task_step","planId":"…",' +
         '"stepId":"…","status":"blocked","notes":"…"} to note a blocker; {"tool":"list_task_plans"} / ' +
-        '{"tool":"get_task_plan","id":"…"} to check state.\n'
+        '{"tool":"get_task_plan","id":"…"} to check state. When the reader says "plan/redo/refine/update this" (or once ' +
+        "they've answered the OPEN QUESTIONS), re-plan THIS task in place with plan_task — don't ask which task they mean " +
+        "or start a new one; it's the task above. When all steps are done, offer to re-plan it, mark a step not-done to " +
+        "redo it, or wrap up.\n"
       : "") +
     "GROUNDED IN TRUTH: don't guess at facts, APIs, library names, syntax, or current details you're unsure of. " +
     "First check your SKILLS for a matching playbook (read_skill it); then, when knowledge may be stale, version-" +

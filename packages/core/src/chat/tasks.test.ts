@@ -20,6 +20,7 @@ import {
   formatPlanForGoogleNotes,
   taskStubFromCandidate,
   tasksIndexBlock,
+  resolveActiveTaskPlanId,
   updateTaskStep,
   upsertTaskPlan,
   type TaskPlan,
@@ -302,6 +303,26 @@ describe("advanceStep / nextReadyStep", () => {
     const block = tasksIndexBlock(plan({ clarifyingQuestions: ["Which city are you flying from?"] }));
     expect(block).toMatch(/OPEN QUESTIONS/);
     expect(block).toContain("Which city are you flying from?");
+  });
+
+  it("tasksIndexBlock reports an all-done plan but still carries the plan id (so it can be re-planned)", () => {
+    const done = plan({
+      steps: [
+        { title: "Gather documents", actor: "ai_prep", status: "done" },
+        { title: "Pay the fee online", actor: "user_action", status: "done" },
+      ],
+    });
+    const block = tasksIndexBlock(done);
+    expect(block).toContain("All steps are done.");
+    expect(block).toMatch(/plan id:/);
+  });
+
+  it("resolveActiveTaskPlanId returns the plan whose session is active, else undefined", () => {
+    const a = plan({ id: "task-a", sessionId: "buddy-1" });
+    const b = plan({ id: "task-b", sessionId: "buddy-2" });
+    expect(resolveActiveTaskPlanId([a, b], "buddy-2")).toBe("task-b");
+    expect(resolveActiveTaskPlanId([a, b], "buddy-9")).toBeUndefined();
+    expect(resolveActiveTaskPlanId([a, b], undefined)).toBeUndefined();
   });
 });
 

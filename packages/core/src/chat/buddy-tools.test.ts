@@ -642,6 +642,14 @@ describe("google tools", () => {
     const active = buildBuddySystemPrompt({ persona: "freeform", library: [], activeTask: "ACTIVE TASK: Renew (plan id: t1)" });
     expect(active).toContain("ACTIVE TASK: Renew");
     expect(active).toContain('"tool":"mark_step_done"');
+    // With a task active, "plan/redo this" re-plans THAT task in place (no fork), and an
+    // all-done task gets offered options instead of a generic "which task?" question.
+    expect(active).toMatch(/re-plan THIS task in place/i);
+    expect(active).toMatch(/all steps are done/i);
+  });
+
+  it("tells the model that plan_task refines the ACTIVE task in place (no duplicate fork)", () => {
+    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toMatch(/re-plans THAT task in place/i);
   });
 
   it("feeds an email back as the reader's DATA, and confirms a created event/task", () => {

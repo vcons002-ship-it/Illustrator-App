@@ -55,6 +55,7 @@ import {
   removeIgnore,
   upsertTaskPlan,
   updateTaskStep,
+  resolveActiveTaskPlanId,
   loadScheduledTasks,
   upsertScheduledTask,
   deleteScheduledTask,
@@ -621,6 +622,15 @@ export function App() {
   const [buddySessions, setBuddySessions] = useState<BuddySession[]>([{ id: BUDDY_CHAT_ID, workingDir: "" }]);
   const [activeBuddyId, setActiveBuddyId] = useState(BUDDY_CHAT_ID);
   const buddyWorkingDir = buddySessions.find((s) => s.id === activeBuddyId)?.workingDir ?? "";
+  // Live mirrors: a turn dispatched right after opening a task runs before the async
+  // refreshTaskPlans lands AND through a useCallback whose deps omit these — reading the
+  // refs resolves the active plan from FRESH state instead of a stale captured closure.
+  const taskPlansRef = useRef(taskPlans);
+  taskPlansRef.current = taskPlans;
+  const activeBuddyIdRef = useRef(activeBuddyId);
+  activeBuddyIdRef.current = activeBuddyId;
+  /** The plan whose execution chat is the active session (the task being "worked"), if any. */
+  const activeTaskPlanId = () => resolveActiveTaskPlanId(taskPlansRef.current, activeBuddyIdRef.current);
   const persistSessions = useCallback(
     (sessions: BuddySession[]) => void libraryStore.putMemo?.("buddy-sessions", JSON.stringify(sessions)).catch(() => {}),
     [libraryStore],
@@ -2452,9 +2462,20 @@ export function App() {
     pendingBuddyHistory.current = [];
     setBuddyBusy(true);
     setBuddyActivity("Researching the task…");
+    // If this chat is already working a task, re-plan THAT plan in place (keep its id, so the
+    // worker replaces it instead of forking a duplicate) and feed the existing plan into the
+    // request so the re-plan is informed — mirrors planOneTask's enriched sourceText.
+    const planId = activeTaskPlanId();
+    const activePlan = planId ? taskPlansRef.current.find((p) => p.id === planId) : undefined;
+    const sourceText = activePlan
+      ? [activePlan.title, activePlan.summary, activePlan.deadlineIso ? `Hard deadline: ${activePlan.deadlineIso}.` : "", request]
+          .filter(Boolean)
+          .join(" ")
+      : request;
     const res = await planTask({
-      source: { kind: "typed", text: request },
-      sourceText: request,
+      source: activePlan ? activePlan.source : { kind: "typed", text: request },
+      sourceText,
+      ...(activePlan ? { planId: activePlan.id } : {}),
       allowFiles: true, // the reader typed this plan request — let the planner search/read their files
       onProgress: (phase) => setBuddyActivity(phase === "plan" ? "Building the plan…" : "Researching the task…"),
     });
@@ -2675,7 +2696,7 @@ export function App() {
           appendBuddy({ role: "tool", text: "🔍 No results." });
         }
       }
-    }, buddyWorkingDir || undefined, taskPlans.find((p) => p.sessionId === activeBuddyId)?.id);
+    }, buddyWorkingDir || undefined, activeTaskPlanId());
     if (buddyTurnSeq.current !== seq) return;
     setBuddyBusy(false);
     setBuddyStreaming("");
@@ -3013,6 +3034,11 @@ export function App() {
         ready?.links.length ? `Links: ${ready.links.map((l) => l.url).join("  ")}` : "",
         questions.length ? "Answer above and I'll refine the plan; or ask me to help with this step." : "Ask me to help with this step.",
       ].filter(Boolean);
+      // The primer is shown to the reader only; the MODEL gets this same task context from the
+      // system prompt's ACTIVE TASK block (tasksIndexBlock) on every turn — see the worker's
+      // buildBuddySystemPrompt({ activeTask }) path, reached now that activeTaskPlanId() resolves
+      // reliably. We deliberately do NOT seed it into history: a leading assistant/tool turn would
+      // be rejected by providers (e.g. Anthropic requires the first message to be "user").
       setBuddyMessages([{ role: "tool", text: primer.join("\n"), at: Date.now() }]);
     },
     [libraryStore, buddySessions, persistSessions, resetBuddyView, refreshTaskPlans],
