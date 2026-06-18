@@ -8,6 +8,10 @@ import {
   archiveTaskPlan,
   restoreTaskPlan,
   removeIgnore,
+  normalizeRecurrence,
+  describeRecurrence,
+  shiftIso,
+  nextOccurrence,
   isIgnored,
   loadIgnored,
   loadTaskPlans,
@@ -225,6 +229,38 @@ describe("task plan store", () => {
     expect(back.status).toBe("active");
     expect(back.archivedReason).toBeUndefined();
     expect(back.archivedAt).toBeUndefined();
+  });
+
+  it("recurrence: normalize/describe/shift and nextOccurrence roll a completed task forward", () => {
+    expect(normalizeRecurrence({ freq: "weekly", interval: 2 })).toEqual({ freq: "weekly", interval: 2 });
+    expect(normalizeRecurrence({ freq: "weekly", interval: 0 })).toEqual({ freq: "weekly", interval: 1 }); // clamped
+    expect(normalizeRecurrence({ freq: "yearly" })).toBeUndefined(); // unknown freq dropped
+    expect(describeRecurrence({ freq: "daily", interval: 1 })).toBe("every day"); // label
+    expect(describeRecurrence({ freq: "weekly", interval: 2 })).toBe("every 2 weeks");
+    expect(shiftIso("2026-07-01", { freq: "weekly", interval: 1 })).toBe("2026-07-08");
+    expect(shiftIso("2026-01-31", { freq: "monthly", interval: 1 })).toBe("2026-03-03"); // JS month roll
+
+    const weekly = plan({
+      deadlineIso: "2026-07-01",
+      recurrence: { freq: "weekly", interval: 1 },
+      steps: [
+        { title: "Pay the fee", status: "done", dueIso: "2026-06-30" },
+        { title: "File it", status: "done", dueIso: "2026-07-01" },
+      ],
+    });
+    // Completed on 2026-07-05 → next occurrence is the following week, steps reset to pending.
+    const next = normalizeTaskPlan({ ...nextOccurrence(weekly, "2026-07-05")!, id: weekly.id });
+    expect(next.id).toBe(weekly.id); // rolls in place
+    expect(next.deadlineIso).toBe("2026-07-08");
+    expect(next.status).toBe("active");
+    expect(next.recurrence).toEqual({ freq: "weekly", interval: 1 });
+    expect(next.steps.every((s) => s.status !== "done")).toBe(true);
+    expect(next.steps[0]!.dueIso).toBe("2026-07-07"); // step due shifted by the same week
+    expect(next.googleTaskId).toBeUndefined(); // new cycle gets its own Google task
+  });
+
+  it("nextOccurrence returns undefined for a non-recurring plan", () => {
+    expect(nextOccurrence(plan(), "2026-07-05")).toBeUndefined();
   });
 
   it("removeIgnore deletes a rule (the undo for a restored ignore)", async () => {
