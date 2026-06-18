@@ -75,6 +75,9 @@ import {
   sourceFrom,
   sourceId,
   normalizeTaskPlan,
+  nextOccurrence,
+  describeRecurrence,
+  type TaskRecurrence,
   dedupeCandidates,
   loadIgnored,
   needsPlanning,
@@ -533,6 +536,35 @@ export function App() {
     await loadTaskPlans(libraryStore).then(setTaskPlans).catch(() => {});
     setShowTasks(true);
   }, [libraryStore]);
+  // App-managed recurrence: when every step of a REPEATING task is done, roll it forward in place
+  // to the next occurrence (steps reset to pending, deadline + step dues shifted by the rule) and
+  // create a fresh Google Task for the new cycle — so a repeating to-do comes back once, on cadence,
+  // instead of piling up as duplicates. No-op for one-off tasks.
+  const maybeRollRecurring = useCallback(
+    async (planId: string) => {
+      const plan = (await loadTaskPlans(libraryStore)).find((p) => p.id === planId);
+      if (!plan?.recurrence) return;
+      const allDone = plan.steps.length > 0 && plan.steps.every((s) => s.status === "done");
+      if (!allDone && plan.status !== "completed") return;
+      const next = nextOccurrence(plan, new Date().toISOString().slice(0, 10));
+      if (!next) return;
+      let googleTaskId: string | undefined;
+      if (googleConnected) {
+        const created = await createGoogleTask({
+          title: next.title,
+          ...(next.summary ? { notes: next.summary } : {}),
+          ...(next.deadlineIso ? { due: next.deadlineIso } : {}),
+        }).catch(() => ({ id: undefined }));
+        googleTaskId = created.id;
+      }
+      await upsertTaskPlan(libraryStore, normalizeTaskPlan({ ...next, id: plan.id, ...(googleTaskId ? { googleTaskId } : {}) }));
+      buddyNoteRef.current(
+        `🔁 “${plan.title}” repeats ${describeRecurrence(plan.recurrence)} — rolled to the next occurrence (due ${next.deadlineIso}).`,
+      );
+      refreshTaskPlans();
+    },
+    [libraryStore, refreshTaskPlans, googleConnected, createGoogleTask],
+  );
   const onAdvanceTaskStep = useCallback(
     async (planId: string, stepId: string) => {
       const plan = (await loadTaskPlans(libraryStore)).find((p) => p.id === planId);
@@ -542,9 +574,10 @@ export function App() {
       if (step && step.status !== "done") {
         await upsertTaskPlan(libraryStore, advanceStep(plan).plan);
         refreshTaskPlans();
+        await maybeRollRecurring(planId);
       }
     },
-    [libraryStore, refreshTaskPlans],
+    [libraryStore, refreshTaskPlans, maybeRollRecurring],
   );
   // Toggle ONE specific step done/undone (the timeline checkbox + the detail ticks) — unlike
   // onAdvanceTaskStep this targets any step, not just the next-due one.
@@ -552,22 +585,28 @@ export function App() {
     async (planId: string, stepId: string, done: boolean) => {
       await updateTaskStep(libraryStore, planId, stepId, { status: done ? "done" : "ready" });
       refreshTaskPlans();
+      if (done) await maybeRollRecurring(planId);
     },
-    [libraryStore, refreshTaskPlans],
+    [libraryStore, refreshTaskPlans, maybeRollRecurring],
   );
   // Add a task with an optional due date: the assistant researches it and plans the steps
   // (the worker persists the plan), then we honour the user's explicit deadline.
   const [creatingTask, setCreatingTask] = useState(false);
   const onCreateTask = useCallback(
-    async (title: string, dueIso?: string) => {
+    async (title: string, dueIso?: string, recurrence?: TaskRecurrence) => {
       setCreatingTask(true);
       const act = beginActivity(`Creating task: ${title}`);
       try {
-        const sourceText = dueIso ? `${title}\n\nHard deadline: ${dueIso}.` : title;
+        const repeatNote = recurrence ? `\n\nThis is a recurring task (${describeRecurrence(recurrence)}).` : "";
+        const sourceText = (dueIso ? `${title}\n\nHard deadline: ${dueIso}.` : title) + repeatNote;
         const res = await planTask({ source: { kind: "typed", text: title }, sourceText, allowFiles: true });
         if (res.ok && res.plan) {
-          if (dueIso && res.plan.deadlineIso !== dueIso) {
-            await upsertTaskPlan(libraryStore, { ...res.plan, deadlineIso: dueIso });
+          if ((dueIso && res.plan.deadlineIso !== dueIso) || recurrence) {
+            await upsertTaskPlan(libraryStore, {
+              ...res.plan,
+              ...(dueIso ? { deadlineIso: dueIso } : {}),
+              ...(recurrence ? { recurrence } : {}),
+            });
           }
           refreshTaskPlans();
           const n = res.plan.steps.length;
@@ -4207,7 +4246,7 @@ export function App() {
           plans={taskPlans}
           planning={planningCount}
           creatingTask={creatingTask}
-          onCreateTask={(title, dueIso) => void onCreateTask(title, dueIso)}
+          onCreateTask={(title, dueIso, recurrence) => void onCreateTask(title, dueIso, recurrence)}
           {...(googleConnected ? { onScanNow: () => void scanNow(), scanning: scanningNow } : {})}
           {...(scanMessage ? { scanMessage } : {})}
           onPlanTask={(id) => void planOneTask(id)}

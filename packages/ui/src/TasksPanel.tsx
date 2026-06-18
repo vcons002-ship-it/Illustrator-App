@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from "react";
-import { dayToIso, ganttRowRef, needsPlanning, plansToGanttRows, type TaskPlan, type TaskStep } from "@visual-reader/core";
+import { dayToIso, describeRecurrence, ganttRowRef, needsPlanning, plansToGanttRows, type TaskPlan, type TaskRecurrence, type TaskStep } from "@visual-reader/core";
 import { GanttChart } from "./GanttChart.js";
 
 /**
@@ -22,8 +22,8 @@ export interface TasksPanelProps {
   onAdvanceStep: (planId: string, stepId: string) => Promise<void> | void;
   /** Toggle ONE specific step done/undone — the timeline checkbox + detail ticks. */
   onToggleStepDone: (planId: string, stepId: string, done: boolean) => Promise<void> | void;
-  /** Add a task with an optional due date; the assistant plans it into dated sub-tasks. */
-  onCreateTask: (title: string, dueIso?: string) => void;
+  /** Add a task with an optional due date + repeat rule; the assistant plans it into dated sub-tasks. */
+  onCreateTask: (title: string, dueIso?: string, recurrence?: TaskRecurrence) => void;
   /** Plan (or re-plan) ONE task now — research it + fill its sub-tasks. */
   onPlanTask: (planId: string) => void;
   /** On-demand: scan email + calendar for tasks now (and refresh the calendar). Shown when present. */
@@ -77,6 +77,11 @@ function PlanCard({
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
         <strong style={{ fontSize: 14 }}>{plan.title}</strong>
         {plan.deadlineIso ? <span style={{ fontSize: 11, color: "#ffcf8b" }}>due {plan.deadlineIso}</span> : null}
+        {plan.recurrence ? (
+          <span style={{ fontSize: 10, padding: "0 5px", borderRadius: 4, background: "rgba(122,162,255,0.2)", color: "#bcd4ff" }}>
+            🔁 {describeRecurrence(plan.recurrence)}
+          </span>
+        ) : null}
         {noSteps ? <span style={{ fontSize: 10, padding: "0 5px", borderRadius: 4, background: "rgba(255,207,139,0.2)", color: "#ffcf8b" }}>no plan yet</span> : null}
         <span style={{ marginLeft: "auto", fontSize: 11, opacity: 0.6 }}>
           {noSteps ? "no steps" : `${doneCount}/${plan.steps.length} done${plan.status === "completed" ? " · complete" : ""}`}
@@ -231,6 +236,7 @@ export const TasksPanel = memo(function TasksPanel({
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
+  const [repeat, setRepeat] = useState<"" | "daily" | "weekly" | "monthly">("");
 
   const selected = active.find((p) => p.id === selectedId);
   // All-tasks Gantt: a parent bar per task, expanded ones revealing their sub-task bars inline.
@@ -250,9 +256,10 @@ export const TasksPanel = memo(function TasksPanel({
   const submit = () => {
     const t = title.trim();
     if (!t) return;
-    onCreateTask(t, due || undefined);
+    onCreateTask(t, due || undefined, repeat ? { freq: repeat, interval: 1 } : undefined);
     setTitle("");
     setDue("");
+    setRepeat("");
     setAdding(false);
   };
 
@@ -308,6 +315,15 @@ export const TasksPanel = memo(function TasksPanel({
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.85 }}>
               Due
               <input type="date" value={due} onChange={(e) => setDue(e.target.value)} style={dateInput} />
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, opacity: 0.85 }} title="A repeating task rolls forward to the next occurrence when you complete it">
+              Repeat
+              <select value={repeat} onChange={(e) => setRepeat(e.target.value as typeof repeat)} style={dateInput}>
+                <option value="">No</option>
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
+              </select>
             </label>
             <button style={btnPrimary} onClick={submit} disabled={!title.trim()}>
               Plan it →

@@ -31,6 +31,14 @@ export type StepActor = "ai_prep" | "user_action";
 export type StepStatus = "pending" | "ready" | "in_progress" | "blocked" | "done";
 export type PlanStatus = "active" | "completed" | "archived";
 
+/** An app-managed repeat rule: when a recurring task is completed, the app rolls it forward to the
+ * next occurrence (see `nextOccurrence`) instead of leaving a pile of duplicates. */
+export interface TaskRecurrence {
+  freq: "daily" | "weekly" | "monthly";
+  /** Every N periods (>=1). */
+  interval: number;
+}
+
 export type TaskSource =
   | { kind: "typed"; text: string }
   | { kind: "email"; emailId: string; subject?: string; from?: string }
@@ -101,6 +109,8 @@ export interface TaskPlan {
   archivedReason?: "removed" | "ignored";
   /** When it was archived (ms epoch), for sorting the Removed list. */
   archivedAt?: number;
+  /** An app-managed repeat rule; on completion the task rolls forward to the next occurrence. */
+  recurrence?: TaskRecurrence;
 }
 
 /** A possible task the scan surfaced, before the user turns it into a plan. */
@@ -198,6 +208,7 @@ export interface TaskPlanInput {
   createdAt?: number;
   sessionId?: string;
   googleTaskId?: string;
+  recurrence?: TaskRecurrence;
 }
 
 /** Clean + bound a whole plan (assigns step order, caps step count). */
@@ -228,6 +239,77 @@ export function normalizeTaskPlan(input: TaskPlanInput): TaskPlan {
     updatedAt: now,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.googleTaskId ? { googleTaskId: input.googleTaskId } : {}),
+    ...(() => {
+      const rec = input.recurrence ? normalizeRecurrence(input.recurrence) : undefined;
+      return rec ? { recurrence: rec } : {};
+    })(),
+  };
+}
+
+/** Validate + clamp a repeat rule (unknown freq → dropped; interval forced to 1–52). PURE. */
+export function normalizeRecurrence(r: { freq?: string; interval?: number }): TaskRecurrence | undefined {
+  const freq = r.freq === "daily" || r.freq === "weekly" || r.freq === "monthly" ? r.freq : undefined;
+  if (!freq) return undefined;
+  const interval =
+    typeof r.interval === "number" && Number.isFinite(r.interval) ? Math.min(52, Math.max(1, Math.round(r.interval))) : 1;
+  return { freq, interval };
+}
+
+/** A human label for a repeat rule, e.g. "every week" or "every 2 days". PURE. */
+export function describeRecurrence(rec: TaskRecurrence): string {
+  const unit = rec.freq === "daily" ? "day" : rec.freq === "weekly" ? "week" : "month";
+  return rec.interval === 1 ? `every ${unit}` : `every ${rec.interval} ${unit}s`;
+}
+
+/** Shift a YYYY-MM-DD date forward by ONE recurrence period (UTC). PURE. */
+export function shiftIso(iso: string, rec: TaskRecurrence): string {
+  const d = new Date(`${iso.slice(0, 10)}T00:00:00Z`);
+  const n = Math.max(1, rec.interval);
+  if (rec.freq === "daily") d.setUTCDate(d.getUTCDate() + n);
+  else if (rec.freq === "weekly") d.setUTCDate(d.getUTCDate() + 7 * n);
+  else d.setUTCMonth(d.getUTCMonth() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * The NEXT occurrence of a recurring plan once it's completed: roll the deadline (and every dated
+ * step) forward by the recurrence until it lands after `todayIso`, reset all steps to pending, and
+ * drop the Google links so the new cycle gets its own Google task. Returns a `TaskPlanInput` — the
+ * caller sets the id (pass the old id to roll the task in place). PURE. Returns undefined when the
+ * plan doesn't repeat.
+ */
+export function nextOccurrence(plan: TaskPlan, todayIso: string): TaskPlanInput | undefined {
+  if (!plan.recurrence) return undefined;
+  const rec = plan.recurrence;
+  const base = plan.deadlineIso ? plan.deadlineIso.slice(0, 10) : todayIso;
+  let deadline = shiftIso(base, rec);
+  let shifts = 1;
+  while (deadline <= todayIso && shifts < 1000) {
+    deadline = shiftIso(deadline, rec);
+    shifts++;
+  }
+  const shiftN = (iso: string): string => {
+    let r = iso.slice(0, 10);
+    for (let i = 0; i < shifts; i++) r = shiftIso(r, rec);
+    return r;
+  };
+  return {
+    title: plan.title,
+    source: plan.source,
+    deadlineIso: deadline,
+    recurrence: rec,
+    ...(plan.summary ? { summary: plan.summary } : {}),
+    steps: plan.steps.map((s) => ({
+      title: s.title,
+      detail: s.detail,
+      actor: s.actor,
+      status: "pending" as StepStatus,
+      links: s.links,
+      docs: s.docs,
+      ...(s.dueIso ? { dueIso: shiftN(s.dueIso) } : {}),
+      ...(typeof s.leadTimeDays === "number" ? { leadTimeDays: s.leadTimeDays } : {}),
+      ...(s.estCost ? { estCost: s.estCost } : {}),
+    })),
   };
 }
 
