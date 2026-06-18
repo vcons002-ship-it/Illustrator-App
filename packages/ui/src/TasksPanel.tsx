@@ -22,8 +22,9 @@ export interface TasksPanelProps {
   onAdvanceStep: (planId: string, stepId: string) => Promise<void> | void;
   /** Toggle ONE specific step done/undone — the timeline checkbox + detail ticks. */
   onToggleStepDone: (planId: string, stepId: string, done: boolean) => Promise<void> | void;
-  /** Add a task with an optional due date + repeat rule; the assistant plans it into dated sub-tasks. */
-  onCreateTask: (title: string, dueIso?: string, recurrence?: TaskRecurrence) => void;
+  /** Add a task with an optional due date + repeat rule. `planNow` true → the assistant plans it
+   * into dated sub-tasks; false → add a plain stub (no planning) the user can plan later. */
+  onCreateTask: (title: string, dueIso?: string, recurrence?: TaskRecurrence, planNow?: boolean) => void;
   /** Plan (or re-plan) ONE task now — research it + fill its sub-tasks. */
   onPlanTask: (planId: string) => void;
   /** On-demand: scan email + calendar for tasks now (and refresh the calendar). Shown when present. */
@@ -256,10 +257,10 @@ export const TasksPanel = memo(function TasksPanel({
   const expandAll = () => setExpanded(new Set(active.map((p) => p.id)));
   const collapseAll = () => setExpanded(new Set());
 
-  const submit = () => {
+  const submit = (planNow: boolean) => {
     const t = title.trim();
     if (!t) return;
-    onCreateTask(t, due || undefined, repeat ? { freq: repeat, interval: 1 } : undefined);
+    onCreateTask(t, due || undefined, repeat ? { freq: repeat, interval: 1 } : undefined, planNow);
     setTitle("");
     setDue("");
     setRepeat("");
@@ -311,7 +312,7 @@ export const TasksPanel = memo(function TasksPanel({
               autoFocus
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && submit()}
+              onKeyDown={(e) => e.key === "Enter" && submit(false)}
               placeholder="What do you need to get done? e.g. renew my passport"
               style={addInput}
             />
@@ -328,7 +329,10 @@ export const TasksPanel = memo(function TasksPanel({
                 <option value="monthly">Monthly</option>
               </select>
             </label>
-            <button style={btnPrimary} onClick={submit} disabled={!title.trim()}>
+            <button style={btn} onClick={() => submit(false)} disabled={!title.trim()} title="Add a plain to-do now — no planning (you can hit ⚡ Plan it later)">
+              + Add as-is
+            </button>
+            <button style={btnPrimary} onClick={() => submit(true)} disabled={!title.trim()} title="Research it and build a step-by-step plan">
               Plan it →
             </button>
             <button style={btn} onClick={() => setAdding(false)}>

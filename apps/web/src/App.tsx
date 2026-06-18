@@ -605,7 +605,26 @@ export function App() {
   // (the worker persists the plan), then we honour the user's explicit deadline.
   const [creatingTask, setCreatingTask] = useState(false);
   const onCreateTask = useCallback(
-    async (title: string, dueIso?: string, recurrence?: TaskRecurrence) => {
+    async (title: string, dueIso?: string, recurrence?: TaskRecurrence, planNow = true) => {
+      // "Add as-is": drop a plain to-do straight onto the list — no planner, no LLM. We deliberately
+      // leave `planned` UNSET (not false): a `planned:false` stub is what the background sweep auto-
+      // plans, but a manual to-do must stay as-is until the user hits "⚡ Plan it". With 0 steps it
+      // still shows that button.
+      if (!planNow) {
+        await upsertTaskPlan(
+          libraryStore,
+          normalizeTaskPlan({
+            title,
+            source: { kind: "typed", text: title },
+            steps: [],
+            ...(dueIso ? { deadlineIso: dueIso } : {}),
+            ...(recurrence ? { recurrence } : {}),
+          }),
+        );
+        refreshTaskPlans();
+        buddyNoteRef.current(`🗂️ Added to-do “${title}”.`);
+        return;
+      }
       setCreatingTask(true);
       const act = beginActivity(`Creating task: ${title}`);
       try {
@@ -4283,7 +4302,7 @@ export function App() {
           plans={taskPlans}
           planning={planningCount}
           creatingTask={creatingTask}
-          onCreateTask={(title, dueIso, recurrence) => void onCreateTask(title, dueIso, recurrence)}
+          onCreateTask={(title, dueIso, recurrence, planNow) => void onCreateTask(title, dueIso, recurrence, planNow)}
           {...(googleConnected ? { onScanNow: () => void scanNow(), scanning: scanningNow } : {})}
           {...(scanMessage ? { scanMessage } : {})}
           {...(planMessage ? { planMessage } : {})}
