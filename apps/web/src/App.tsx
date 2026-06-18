@@ -216,6 +216,8 @@ const BUDDY_CHAT_ID = "__buddy__";
 interface BuddySession {
   id: string;
   workingDir: string;
+  /** A user-set display name; falls back to the folder name, then "Chat N". */
+  label?: string;
 }
 
 /** Last path segment, for a session's display label (so a folder-bound session reads
@@ -705,6 +707,24 @@ export function App() {
   const persistSessions = useCallback(
     (sessions: BuddySession[]) => void libraryStore.putMemo?.("buddy-sessions", JSON.stringify(sessions)).catch(() => {}),
     [libraryStore],
+  );
+  // Rename a chat session (a user-set label that overrides the folder/"Chat N" fallback). Empty
+  // clears it back to the fallback.
+  const onRenameBuddySession = useCallback(
+    (id: string, label: string) => {
+      const trimmed = label.trim().slice(0, 60);
+      setBuddySessions((prev) => {
+        const next = prev.map((s) => {
+          if (s.id !== id) return s;
+          if (trimmed) return { ...s, label: trimmed };
+          const { label: _drop, ...rest } = s; // clear → fall back to folder/"Chat N"
+          return rest;
+        });
+        persistSessions(next);
+        return next;
+      });
+    },
+    [persistSessions],
   );
   // The active session's working folder ("" = the default VisualReader workspace).
   const setWorkingDir = useCallback(
@@ -4028,11 +4048,12 @@ export function App() {
             onPersonaChange={setBuddyPersona}
             sessions={buddySessions.map((s, i) => ({
               id: s.id,
-              label: s.workingDir ? lastPathSegment(s.workingDir) : `Chat ${i + 1}`,
+              label: s.label || (s.workingDir ? lastPathSegment(s.workingDir) : `Chat ${i + 1}`),
             }))}
             activeSessionId={activeBuddyId}
             onSwitchSession={onSwitchBuddySession}
             onNewSession={onNewBuddySession}
+            onRenameSession={onRenameBuddySession}
             onDeleteSession={onDeleteBuddySession}
             onSend={onBuddySendText}
             onApprovePendingTool={onApproveBuddyPendingTool}
