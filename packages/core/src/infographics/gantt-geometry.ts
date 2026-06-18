@@ -26,6 +26,10 @@ export interface GanttRow {
   depth?: number;
   done?: boolean;
   accent?: GanttAccent;
+  /** A parent row that has children that can be shown/hidden (draws a ▸/▾ chevron). */
+  collapsible?: boolean;
+  /** Whether such a parent is currently collapsed (children hidden). */
+  collapsed?: boolean;
 }
 
 export interface GanttBar {
@@ -40,6 +44,8 @@ export interface GanttBar {
   depth: number;
   done: boolean;
   accent: GanttAccent;
+  collapsible: boolean;
+  collapsed: boolean;
 }
 export interface GanttTick {
   x: number;
@@ -107,6 +113,8 @@ export function layoutGantt(rows: readonly GanttRow[], opts: GanttOptions = {}):
       depth,
       done: !!r.done,
       accent: r.accent ?? (r.done ? "done" : depth === 0 ? "group" : "todo"),
+      collapsible: !!r.collapsible,
+      collapsed: !!r.collapsed,
     };
   });
 

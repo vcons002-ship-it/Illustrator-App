@@ -18,6 +18,8 @@ export interface GanttChartProps {
   onRowClick?: (id: string) => void;
   /** When set, depth-1 (sub-task) rows show a checkbox to toggle done. */
   onToggleDone?: (id: string, done: boolean) => void;
+  /** When set, collapsible parent rows show a ▸/▾ chevron that toggles their sub-tasks. */
+  onToggleExpand?: (id: string) => void;
   /** Download file base name (defaults to the title). */
   fileBase?: string;
 }
@@ -42,6 +44,7 @@ export const GanttChart = memo(function GanttChart({
   width = 600,
   onRowClick,
   onToggleDone,
+  onToggleExpand,
   fileBase,
 }: GanttChartProps) {
   const svgRef = useRef<SVGSVGElement>(null);
@@ -121,8 +124,9 @@ export const GanttChart = memo(function GanttChart({
         {layout.bars.map((bar) => {
           const colors = ACCENT[bar.accent] ?? ACCENT.todo!;
           const indent = 6 + bar.depth * 12;
+          const hasChevron = !!onToggleExpand && bar.collapsible;
           const hasBox = !!onToggleDone && bar.depth === 1;
-          const labelX = indent + (hasBox ? 16 : 0);
+          const labelX = indent + (hasChevron ? 14 : 0) + (hasBox ? 16 : 0);
           const maxChars = Math.max(4, Math.floor((labelWidth - labelX - 6) / 6.1));
           return (
             <g
@@ -131,6 +135,22 @@ export const GanttChart = memo(function GanttChart({
               style={{ cursor: onRowClick ? "pointer" : "default" }}
             >
               <rect x={0} y={bar.y - 5} width={layout.width} height={bar.h + 10} fill="transparent" />
+              {hasChevron ? (
+                <text
+                  x={indent}
+                  y={bar.midY}
+                  dominantBaseline="middle"
+                  fontSize={10}
+                  fill="#9aa3b8"
+                  style={{ cursor: "pointer" }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleExpand!(bar.id);
+                  }}
+                >
+                  {bar.collapsed ? "▸" : "▾"}
+                </text>
+              ) : null}
               {hasBox ? (
                 <text
                   x={indent}

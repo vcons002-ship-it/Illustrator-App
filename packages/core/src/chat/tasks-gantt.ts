@@ -48,9 +48,13 @@ function stepAccent(status: TaskStep["status"]): GanttAccent {
  * `todayDay` (the current day number) is injectable for deterministic tests. */
 export function plansToGanttRows(
   plans: readonly TaskPlan[],
-  opts: { todayDay?: number } = {},
+  opts: { todayDay?: number; expandedPlanIds?: ReadonlySet<string> | "all" } = {},
 ): GanttRow[] {
   const today = opts.todayDay ?? Math.floor(Date.now() / DAY);
+  // Which plans show their sub-task rows. Undefined / "all" = every plan expanded (back-compat);
+  // a Set = only those ids expanded (the rest collapse to just their parent bar).
+  const expanded = opts.expandedPlanIds;
+  const isExpanded = (id: string): boolean => expanded === undefined || expanded === "all" || expanded.has(id);
   const rows: GanttRow[] = [];
   for (const plan of plans) {
     const created = Math.floor(plan.createdAt / DAY);
@@ -83,6 +87,7 @@ export function plansToGanttRows(
       planDue ?? startBase,
       ...(stepRows.length ? stepRows.map((r) => r.end) : [fallbackEnd]),
     );
+    const open = isExpanded(plan.id);
     rows.push({
       id: plan.id,
       label: plan.title,
@@ -91,8 +96,10 @@ export function plansToGanttRows(
       depth: 0,
       done: plan.status === "completed",
       accent: plan.status === "completed" ? "done" : "group",
+      ...(stepRows.length ? { collapsible: true, collapsed: !open } : {}),
     });
-    rows.push(...stepRows);
+    // The parent bar always spans its sub-tasks; the sub-task rows themselves show only when expanded.
+    if (open) rows.push(...stepRows);
   }
   return rows;
 }
