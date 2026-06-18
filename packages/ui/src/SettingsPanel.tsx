@@ -207,6 +207,10 @@ export interface ReaderSettings {
    * & Calendar reminders, run inbox scans, research, draft docs) without asking each
    * time. Never submits forms, pays, or sends. Default off. */
   allowTaskAutomation?: boolean;
+  /** ON by default (when Google is connected): while the desktop app is open and you're idle,
+   * periodically scan recent email + the calendar for tasks worth planning, and pre-plan them
+   * into the 📋 Tasks panel (research only — no external writes). Set false to stop background scans. */
+  autoTaskScan?: boolean;
   /** Desktop only, OFF by default: let the assistant drive your TradingView Desktop chart
    * (set symbol, add studies, read state, inject Pine) via its DevTools bridge. Chart-only
    * — it never trades. Requires TradingView Desktop launched with remote debugging. */
@@ -1030,15 +1034,33 @@ export function SettingsPanel({
                   <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
                     <input
                       type="checkbox"
+                      checked={value.autoTaskScan ?? true}
+                      onChange={(e) => set({ autoTaskScan: e.target.checked })}
+                    />
+                    <span>
+                      Scan my inbox &amp; calendar for tasks while idle
+                      <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                        While the desktop app is open and you&apos;re away, periodically check recent email + your
+                        calendar for things that need planning (renewals, trips, deadlines) and pre-plan them into the
+                        📋 Tasks panel. Read &amp; research only — it makes <b>no</b> changes to your email/calendar.
+                        <b> On by default</b> when Google is connected.
+                      </span>
+                    </span>
+                  </label>
+                )}
+                {onConnectGoogle && (
+                  <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+                    <input
+                      type="checkbox"
                       checked={value.allowTaskAutomation ?? false}
                       onChange={(e) => set({ allowTaskAutomation: e.target.checked })}
                     />
                     <span>
-                      Let the Task Assistant schedule &amp; prep automatically
+                      Let the Task Assistant create reminders without asking
                       <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
-                        When planning a task, create/update Google Tasks &amp; Calendar reminders, run inbox scans,
-                        research, and draft documents <b>without asking each time</b>. It will <b>never</b> submit
-                        forms, pay, or send email — those stay your action. Off by default; needs Google connected.
+                        When working a task, create/update Google Tasks &amp; Calendar reminders, research, and draft
+                        documents <b>without confirming each one</b>. It will <b>never</b> submit forms, pay, or send
+                        email — those stay your action. <b>Off by default</b> (it asks first); needs Google connected.
                       </span>
                     </span>
                   </label>

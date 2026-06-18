@@ -1328,8 +1328,9 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
         const timeout = setTimeout(() => {
-          if (planRequests.current.delete(requestId)) resolve({ ok: false, error: "Planning timed out." });
-        }, 240_000);
+          if (planRequests.current.delete(requestId))
+            resolve({ ok: false, error: "Planning timed out — try again, or a faster text model." });
+        }, 420_000); // 7 min: the research loop can be up to ~9 model round-trips on a slow model
         planRequests.current.set(requestId, {
           resolve: (r) => {
             clearTimeout(timeout);
