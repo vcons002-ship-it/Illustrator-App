@@ -247,6 +247,9 @@ function lastPathSegment(p: string): string {
 const IMAGE_URL_RE = /\.(png|jpe?g|webp|gif|bmp|svg|avif)(\?|#|$)/i;
 /** Excel workbook MIME for downloads (the OOXML spreadsheet type). */
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+/** Per-attachment text cap for a chat-attached document — generous (a long report) but bounded
+ * so several attachments can't blow the chat's context budget. */
+const ATTACH_DOC_MAX_CHARS = 30_000;
 
 /**
  * If a message is really a request to just SHOW a web image (a bare image link, or
@@ -285,6 +288,19 @@ export function App() {
   // Settings dropdowns + the model-aware suggestion. Empty for an all-in-one (A1111) engine.
   const [installedTextEncoders, setInstalledTextEncoders] = useState<string[]>([]);
   const [installedVaes, setInstalledVaes] = useState<string[]>([]);
+  // Files attached to the next buddy message — docs become text context, images become a
+  // vision-model description; both are read by the buddy. Cleared when the message is sent.
+  const [buddyAttachments, setBuddyAttachments] = useState<
+    {
+      id: string;
+      name: string;
+      kind: "doc" | "image";
+      status: "reading" | "ready" | "error";
+      error?: string;
+      text?: string;
+      image?: { bytes: ArrayBuffer; mimeType: string };
+    }[]
+  >([]);
   const [connectingLocal, setConnectingLocal] = useState(false);
   const [textModels, setTextModels] = useState<InstalledModel[]>([]);
   const [connectingLocalText, setConnectingLocalText] = useState(false);
@@ -3036,6 +3052,74 @@ export function App() {
   );
   const onBuddySendText = useCallback((text: string) => void onBuddySend(text), [onBuddySend]);
 
+  // Attach a file to the next buddy message. Documents (PDF/Word/Excel/CSV/text/EPUB) are
+  // extracted to text via the same importer the "Open a document" path uses; images are held
+  // for the vision model to describe at send time. All in the main thread — no new worker wiring.
+  const onAttachBuddyFile = useCallback(async (file: File) => {
+    const id = `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const looksImage = file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(file.name);
+    setBuddyAttachments((a) => [...a, { id, name: file.name, kind: looksImage ? "image" : "doc", status: "reading" }]);
+    try {
+      const imported = await importBookFile(file);
+      setBuddyAttachments((a) =>
+        a.map((x) => {
+          if (x.id !== id) return x;
+          if (imported.kind === "image") {
+            return { id, name: file.name, kind: "image", status: "ready", image: { bytes: imported.bytes, mimeType: imported.mimeType } };
+          }
+          const raw =
+            imported.kind === "book"
+              ? imported.book.pages.flatMap((p) => p.paragraphs.map((par) => par.text)).join("\n")
+              : imported.text;
+          const text = (raw ?? "").trim();
+          const name = imported.kind === "book" ? imported.book.title : imported.title || file.name;
+          if (!text) return { id, name, kind: "doc", status: "error", error: "No readable text in this file." };
+          return { id, name, kind: "doc", status: "ready", text: text.slice(0, ATTACH_DOC_MAX_CHARS) };
+        }),
+      );
+    } catch (e) {
+      setBuddyAttachments((a) =>
+        a.map((x) => (x.id === id ? { ...x, status: "error", error: e instanceof Error ? e.message : String(e) } : x)),
+      );
+    }
+  }, []);
+
+  const onRemoveBuddyAttachment = useCallback((id: string) => {
+    setBuddyAttachments((a) => a.filter((x) => x.id !== id));
+  }, []);
+
+  // Send with attachments: docs inline as labeled text blocks, images via the vision model
+  // (using the typed message as the question). The model gets the full content; the chat bubble
+  // shows just a "📎 filenames" line + the question, so a big doc doesn't flood the transcript.
+  const onBuddySendWithAttachments = useCallback(
+    async (text: string) => {
+      const ready = buddyAttachments.filter((x) => x.status === "ready");
+      if (ready.length === 0) {
+        onBuddySendText(text);
+        return;
+      }
+      setBuddyAttachments([]);
+      const userText = text.trim() || "Please look at the attached file(s) and help me with them.";
+      const parts: string[] = [];
+      for (const att of ready) {
+        if (att.kind === "image" && att.image) {
+          const r = await assessImage({ bytes: att.image.bytes.slice(0), mimeType: att.image.mimeType }, userText);
+          parts.push(
+            r.text
+              ? `[Attached image "${att.name}" — what it shows]\n${r.text}`
+              : `[Attached image "${att.name}" — couldn't read it: ${r.error ?? "no vision-capable model is set"}]`,
+          );
+        } else if (att.kind === "doc" && att.text) {
+          parts.push(`[Attached file "${att.name}"]\n${att.text}`);
+        }
+      }
+      const combined = parts.length ? `${parts.join("\n\n")}\n\n${userText}` : userText;
+      const bubble = `📎 ${ready.map((a) => a.name).join(", ")}\n${userText}`;
+      await dispatchBuddyTurn(chatTurnsOf(buddyMessages), combined, bubble);
+    },
+    [buddyAttachments, assessImage, onBuddySendText, buddyMessages],
+  );
+
   // Scheduled-task runner: while the app is open, every ~minute fire the FIRST due task
   // into the buddy chat (so the assistant executes its instruction), then advance its
   // schedule. One per tick, and never while a turn is in flight, so it can't stampede.
@@ -4206,7 +4290,16 @@ export function App() {
             onNewSession={onNewBuddySession}
             onRenameSession={onRenameBuddySession}
             onDeleteSession={onDeleteBuddySession}
-            onSend={onBuddySendText}
+            onSend={onBuddySendWithAttachments}
+            onAttachFile={onAttachBuddyFile}
+            attachments={buddyAttachments.map((a) => ({
+              id: a.id,
+              name: a.name,
+              kind: a.kind,
+              status: a.status,
+              ...(a.error ? { error: a.error } : {}),
+            }))}
+            onRemoveAttachment={onRemoveBuddyAttachment}
             onApprovePendingTool={onApproveBuddyPendingTool}
             onApprovePendingToolAlways={onAllowBuddyAlways}
             onDismissPendingTool={onDismissBuddyPendingTool}
