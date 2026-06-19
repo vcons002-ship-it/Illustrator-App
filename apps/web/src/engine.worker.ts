@@ -1531,6 +1531,9 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
           ...(existing.sessionId ? { sessionId: existing.sessionId } : {}),
           ...(existing.googleTaskId ? { googleTaskId: existing.googleTaskId } : {}),
           ...(existing.recurrence ? { recurrence: existing.recurrence } : {}),
+          // Keep the reader's added details as context (sourceText already folded them in); dropping
+          // `needsReplan` here is what CLEARS the re-attack flag once the refined plan is produced.
+          ...(existing.userNotes ? { userNotes: existing.userNotes } : {}),
         }
       : plan;
     // SAVE + return the plan FIRST, so the steps show in the app immediately and can't be lost to a

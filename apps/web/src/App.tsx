@@ -92,7 +92,7 @@ import {
   type TaskRecurrence,
   dedupeCandidates,
   loadIgnored,
-  needsPlanning,
+  needsAttention,
   taskStubFromCandidate,
   type TaskPlan,
   type TaskCandidate,
@@ -515,7 +515,13 @@ export function App() {
       if (track) setPlanMessage(`🔄 Planning “${plan.title}”…`);
       setPlanningCount((n) => n + 1);
       try {
-        const sourceText = [plan.title, plan.summary, plan.deadlineIso ? `Hard deadline: ${plan.deadlineIso}.` : ""]
+        const sourceText = [
+          plan.title,
+          plan.summary,
+          plan.deadlineIso ? `Hard deadline: ${plan.deadlineIso}.` : "",
+          // Details the reader added (answers to clarifying questions / new context) — refine with them.
+          plan.userNotes ? `Details the reader added (use these to refine the plan): ${plan.userNotes}` : "",
+        ]
           .filter(Boolean)
           .join(" ");
         // Background plans (the sweep, userInitiated=false) get a safety timeout so one wedged plan
@@ -553,7 +559,7 @@ export function App() {
   const planPendingTasks = useCallback(
     async (limit: number, keepGoing?: () => boolean) => {
       if (limit <= 0) return;
-      const pending = (await loadTaskPlans(libraryStore)).filter(needsPlanning).slice(0, limit);
+      const pending = (await loadTaskPlans(libraryStore)).filter(needsAttention).slice(0, limit);
       const handles = pending.map((p) => beginActivity(`Planning: ${p.title}`, "queued"));
       for (let i = 0; i < pending.length; i++) {
         if (keepGoing && !keepGoing()) {
@@ -572,7 +578,7 @@ export function App() {
   // Google Tasks. Surfaces progress in the status center + the panel message.
   const planAllPending = useCallback(async () => {
     markUserRequest();
-    const pending = (await loadTaskPlans(libraryStore)).filter(needsPlanning);
+    const pending = (await loadTaskPlans(libraryStore)).filter(needsAttention);
     if (pending.length === 0) {
       setPlanMessage("✓ Nothing to plan — no unplanned tasks in the backlog.");
       return;
@@ -626,6 +632,22 @@ export function App() {
       refreshTaskPlans();
     },
     [libraryStore, refreshTaskPlans, ignoreRuleFor],
+  );
+  // Re-attack with new info: the reader adds details to a task (answers to clarifying questions, new
+  // context). Store them + flag needsReplan, so the background sweep refines the plan with them at the
+  // next opportunity. The detail also goes into the Google Task notes on the next sync (formatPlan…).
+  const onAddTaskDetails = useCallback(
+    async (planId: string, text: string) => {
+      const detail = text.trim();
+      if (!detail) return;
+      const plan = (await loadTaskPlans(libraryStore)).find((p) => p.id === planId);
+      if (!plan) return;
+      const userNotes = [plan.userNotes, detail].filter(Boolean).join("\n").slice(0, 4000);
+      await upsertTaskPlan(libraryStore, { ...plan, userNotes, needsReplan: true });
+      refreshTaskPlans();
+      setPlanMessage(`✓ Got it — I'll refine “${plan.title}” with that at the next planning sweep (or click ↻ Refresh plan now).`);
+    },
+    [libraryStore, refreshTaskPlans],
   );
   // Permanently delete (from the Removed list) — gone for good (a fresh scan/import could surface
   // a still-existing source again later).
@@ -2542,7 +2564,7 @@ export function App() {
   // Run a local-file search and present the matches as clickable chips. `modelTurns`
   // (the conversational find_files path) bakes a model-facing feedback turn into the
   // result so the buddy can follow up; the direct `/find` path passes none.
-  const runFileSearch = async (query: string, modelTurns?: ChatTurn[]): Promise<void> => {
+  const runFileSearch = async (query: string, modelTurns?: ChatTurn[], preHistory?: ChatTurn[]): Promise<void> => {
     if (!isDesktop) {
       appendBuddy({ role: "tool", text: "🔒 Searching your computer needs the desktop app.", ...(modelTurns ? { turns: [] } : {}) });
       return;
@@ -2551,20 +2573,11 @@ export function App() {
     setBuddyActivity(`Searching your files for “${query}”…`);
     try {
       const ranked = rankLocalFiles(query, await searchLocalFiles(query, buddyWorkingDir || undefined), 15);
-      const baked = modelTurns
-        ? {
-            turns: [
-              ...modelTurns,
-              {
-                role: "user" as const,
-                content: formatBuddyToolResult(
-                  { tool: "find_files", query },
-                  { files: ranked.map((f) => ({ path: f.path, name: f.name })) },
-                ),
-              },
-            ],
-          }
-        : {};
+      // The model-facing result of the search, fed back so the buddy can read/open the file next.
+      const feedback = modelTurns
+        ? formatBuddyToolResult({ tool: "find_files", query }, { files: ranked.map((f) => ({ path: f.path, name: f.name })) })
+        : undefined;
+      const baked = feedback ? { turns: [...modelTurns!, { role: "user" as const, content: feedback }] } : {};
       if (ranked.length === 0) {
         appendBuddy({ role: "tool", text: `No importable files matched “${query}”.`, ...baked });
       } else {
@@ -2579,6 +2592,12 @@ export function App() {
           ...baked,
         });
       }
+      // AUTO-REACT: when the MODEL asked for the search (not the user's /find command), continue the
+      // turn so it reads/opens the file it was looking for, instead of stopping until the user says
+      // "continue". Mirrors approveRunCommand. The /find path (no modelTurns) just shows the results.
+      if (feedback) {
+        await dispatchBuddyTurn([...(preHistory ?? []), ...modelTurns!], feedback);
+      }
     } catch (err) {
       appendBuddy({
         role: "tool",
@@ -2591,12 +2610,15 @@ export function App() {
     }
   };
 
-  // Approve a buddy-requested find_files: run it with the pending transcript baked in.
+  // Approve a buddy-requested find_files: run it, then AUTO-REACT (continue the turn) so the model
+  // opens/reads the file it found. Carries the pending transcript + history for the continuation.
   const approveFindFiles = (call: Extract<BuddyToolCall, { tool: "find_files" }>): void => {
     setBuddyPendingTool(undefined);
     const turns = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
     pendingBuddyTranscript.current = [];
-    void runFileSearch(call.query, turns);
+    pendingBuddyHistory.current = [];
+    void runFileSearch(call.query, turns, preHistory);
   };
 
   // Approve a buddy-requested shell command: run it (desktop), show the output, and
@@ -4644,6 +4666,7 @@ export function App() {
           onAdvanceStep={onAdvanceTaskStep}
           onToggleStepDone={onToggleStepDone}
           onIgnoreTask={ignoreTask}
+          onAddTaskDetails={(planId, text) => void onAddTaskDetails(planId, text)}
           onDelete={(id) => void removeTask(id)}
           onRestore={(id) => void restoreTask(id)}
           onDeleteForever={(id) => void deleteTaskForever(id)}

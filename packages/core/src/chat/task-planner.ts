@@ -74,12 +74,18 @@ export function buildPlanPrompt(sourceText: string, researchNotes: string, today
     `Today is ${todayIso}. Schedule realistically: set each step's dueIso (ISO date), and if the ` +
     "task needs lead time, set the plan's leadTimeDays and an earlier first-step due date. Keep " +
     "steps concrete and minimal (typically 3–8). Put the OFFICIAL site as a link with " +
-    '"official": true. For a TRIP, include a dated "book by" step for anything not yet booked ' +
-    "(flights/lodging) with a price-comparison link (e.g. Google Flights for the route/dates), and " +
-    'a short watch-and-rebook reminder if prices may drop. When KEY FACTS are missing that you need ' +
-    "to finalize, DO NOT invent them — list them in \"clarifyingQuestions\" (short, specific, only " +
-    "what you genuinely need: e.g. departure city, exact dates, budget, travellers) and base the plan " +
-    "on reasonable placeholders meanwhile.\n" +
+    '"official": true. BE PROACTIVE AND CREATIVE — build the most useful COMPLETE plan you can from ' +
+    "whatever you have, using your general knowledge of how these things work; don't wait for the " +
+    "reader to supply everything. For a TRIP, a DATE + DESTINATION is enough to lay out the whole " +
+    "timeline from typical lead times: book flights early (often cheapest ~6–8 weeks out, climbing " +
+    "close in) → reserve lodging early for popular spots/dates → arrange local transport (car/transit) " +
+    "→ a prep/packing + documents checklist in the final week. Give each a sensible dated 'book by' / " +
+    "'arrange by' step (work backward from the trip date) and a price-comparison link (e.g. Google " +
+    "Flights for the route/dates), only for what isn't already booked. When KEY FACTS are missing that " +
+    "would refine it (departure city, exact dates, budget, travellers, hotel area), DON'T stall or " +
+    "invent them — build on reasonable placeholders NOW and list what you need in \"clarifyingQuestions\" " +
+    "(short, specific). The reader can answer those (in the app or the Google Task notes) and the plan " +
+    "is re-run with their answers — so a thin plan with the right questions is far better than none.\n" +
     'LINK + ATTACH what you pulled, to spare the reader the legwork: put source/official URLs in a step\'s "links". ' +
     "When your research RETRIEVED a document they'll need — the key details from a confirmation/itinerary email, a " +
     "calendar invite's logistics (address, time, dial-in, parking), or the required fields/instructions from a web " +
