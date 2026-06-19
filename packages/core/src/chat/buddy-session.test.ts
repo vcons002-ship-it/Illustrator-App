@@ -37,6 +37,40 @@ describe("nonEmptyAnswer", () => {
   });
 });
 
+describe("runBuddyTurn — spawn_agents parallel fan-out", () => {
+  it("runs the subtasks via runSubAgents and feeds all results back to synthesize", async () => {
+    const llm = scriptedLlm([
+      '{"tool":"spawn_agents","tasks":["research A","research B"]}',
+      "A is bigger than B.",
+    ]);
+    let gotTasks: string[] = [];
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "compare A and B" }],
+      deps: baseDeps,
+      runSubAgents: async (tasks) => {
+        gotTasks = tasks;
+        return tasks.map((t) => ({ task: t, result: `result for ${t}` }));
+      },
+    });
+    expect(gotTasks).toEqual(["research A", "research B"]);
+    expect(outcome.text).toBe("A is bigger than B.");
+    expect(outcome.toolResults).toHaveLength(1);
+    // The synthesis round was given both sub-agent results.
+    const fedBack = llm.calls[1]!.map((t) => t.content).join("\n");
+    expect(fedBack).toContain("result for research A");
+    expect(fedBack).toContain("result for research B");
+  });
+
+  it("reports unavailable when no runSubAgents is wired", async () => {
+    const llm = scriptedLlm(['{"tool":"spawn_agents","tasks":["x","y"]}', "Done."]);
+    const outcome = await runBuddyTurn({ llm, system: "sys", history: [{ role: "user", content: "go" }], deps: baseDeps });
+    expect(llm.calls[1]!.some((t) => /aren't available/.test(t.content))).toBe(true);
+    expect(outcome.text).toBe("Done.");
+  });
+});
+
 describe("runBuddyTurn — never-empty answer + thinking", () => {
   it("re-prompts for a plain-text wrap-up when a tool round ends with no prose", async () => {
     const llm = scriptedLlm(['{"tool":"search_books","query":"x"}', "", "All set — nothing notable came back."]);

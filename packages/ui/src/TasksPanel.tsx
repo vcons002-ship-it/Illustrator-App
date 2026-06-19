@@ -31,6 +31,11 @@ export interface TasksPanelProps {
   onScanNow?: () => void;
   /** An on-demand scan is running right now (the button shows a spinner + disables). */
   scanning?: boolean;
+  /** Plan EVERY unplanned stub now (the same agentic planning the background sweep runs) + mirror to
+   * Google Tasks — a manual way to run/verify the backlog planner without waiting for the idle sweep. */
+  onPlanPending?: () => void;
+  /** A plan is running right now (the button shows a spinner + disables). */
+  planningPending?: boolean;
   /** The last scan's outcome (count found/imported/synced, or an error) — shown under the button. */
   scanMessage?: string;
   /** The last per-task plan's outcome (steps planned, or the actual error) — shown under the button. */
@@ -215,6 +220,8 @@ export const TasksPanel = memo(function TasksPanel({
   onPlanTask,
   onScanNow,
   scanning = false,
+  onPlanPending,
+  planningPending = false,
   scanMessage,
   planMessage,
   onIgnoreTask,
@@ -227,6 +234,8 @@ export const TasksPanel = memo(function TasksPanel({
     () => plans.filter((p) => p.status !== "archived").sort((a, b) => b.updatedAt - a.updatedAt),
     [plans],
   );
+  // Unplanned stubs (the backlog the background sweep / "Plan all pending" works on).
+  const pendingCount = useMemo(() => active.filter(needsPlanning).length, [active]);
   // Removed/ignored tasks — the undoable trash, newest first.
   const removed = useMemo(
     () => plans.filter((p) => p.status === "archived").sort((a, b) => (b.archivedAt ?? b.updatedAt) - (a.archivedAt ?? a.updatedAt)),
@@ -347,6 +356,16 @@ export const TasksPanel = memo(function TasksPanel({
             {onScanNow ? (
               <button style={btn} onClick={onScanNow} disabled={scanning} title="Scan recent email + your calendar for tasks now">
                 {scanning ? "🔄 Scanning…" : "🔄 Scan email & calendar"}
+              </button>
+            ) : null}
+            {onPlanPending && pendingCount > 0 ? (
+              <button
+                style={btn}
+                onClick={onPlanPending}
+                disabled={planningPending}
+                title="Plan every unplanned task now (the same agentic planning the background sweep runs) and push the sub-tasks to Google Tasks"
+              >
+                {planningPending ? "🔄 Planning…" : `⚡ Plan all pending (${pendingCount})`}
               </button>
             ) : null}
             <span style={{ fontSize: 12, opacity: 0.65 }}>
