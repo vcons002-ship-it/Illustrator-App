@@ -36,6 +36,8 @@ import {
   schwabAccountNumbers,
   placeSchwabOrder,
   buildBuddySystemPrompt,
+  buildDelegatePrompt,
+  mapWithConcurrency,
   buildProducePrompt,
   buildUnderstandPrompt,
   chapterText,
@@ -2285,6 +2287,12 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         post({ type: "buddyDone", requestId: msg.requestId, text: "", transcript: [], pendingTool: slash.call });
         return;
       }
+      if (slash.call.tool === "spawn_agents") {
+        // Parallel fan-out only makes sense inside an LLM turn (the model writes the subtasks) — not
+        // as a one-shot slash command, which has no runSubAgents orchestration here.
+        post({ type: "buddyDone", requestId: msg.requestId, text: "Ask me in chat to split the work — I'll fan it out to parallel sub-agents.", transcript: [] });
+        return;
+      }
       const result = await runBuddyTool(slash.call, deps);
       post({
         type: "buddyToolResult",
@@ -2382,6 +2390,26 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       history,
       maxTokens: budgets.reply,
       deps,
+      // PARALLEL SUB-AGENTS: the model's `spawn_agents` tool fans independent read-only subtasks out
+      // concurrently. Capped by the `agentConcurrency` setting (default 2 — sized for one local GPU;
+      // raise it for cloud or a batched server). Each runs the SAME provider for now; a future tier
+      // could point sub-agents at a smaller/faster local endpoint for true 5090 parallelism.
+      runSubAgents: (tasks) =>
+        mapWithConcurrency(tasks, settings?.agentConcurrency ?? 2, async (task) => {
+          try {
+            const sub = await runBuddyTurn({
+              llm,
+              system: buildDelegatePrompt(task),
+              history: [{ role: "user", content: "Complete the subtask above and report back concisely." }],
+              deps, // read-only by instruction (buildDelegatePrompt); no runSubAgents ⇒ no nested fan-out
+              maxTokens: budgets.reply,
+              signal: ac.signal,
+            });
+            return { task, result: sub.text || "(the sub-agent returned nothing usable)" };
+          } catch (e) {
+            return { task, result: `(sub-agent failed: ${e instanceof Error ? e.message : String(e)})` };
+          }
+        }),
       onEvent: (e) => {
         if (e.kind === "token") post({ type: "buddyToken", requestId: msg.requestId, text: e.text });
         else if (e.kind === "thinking") thinking(e.text);

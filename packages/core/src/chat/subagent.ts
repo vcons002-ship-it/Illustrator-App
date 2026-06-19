@@ -17,3 +17,29 @@ export function buildDelegatePrompt(task: string): string {
     `result the main assistant can use directly.\n\nSUBTASK: ${task.trim()}`
   );
 }
+
+/**
+ * Run `fn` over `items` with at most `limit` in flight at once — a tiny concurrency pool used to
+ * fan independent sub-agents (or any latency-tolerant unit of work) out in parallel without
+ * unbounded load. Preserves input ORDER in the result. A failing item resolves to whatever `fn`'s
+ * rejection is mapped to by the caller (callers wrap their own try/catch). PURE (no I/O of its own).
+ */
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const cap = Math.max(1, Math.floor(limit) || 1);
+  const results = new Array<R>(items.length);
+  let next = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]!, i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(cap, items.length) }, () => worker()));
+  return results;
+}
+

@@ -180,6 +180,9 @@ export async function runBuddyTurn(opts: {
   /** Response budget (tokens); unset = the provider's default. */
   maxTokens?: number;
   onEvent?: (e: BuddyTurnEvent) => void;
+  /** Run `spawn_agents` subtasks as concurrent read-only sub-agents (host-provided so it owns the
+   * concurrency cap + which model tier the sub-agents use). Absent ⇒ the tool reports unavailable. */
+  runSubAgents?: (tasks: string[]) => Promise<{ task: string; result: string }[]>;
   signal?: AbortSignal;
 }): Promise<BuddyTurnOutcome> {
   const messages: ChatTurn[] = [{ role: "system", content: opts.system }, ...opts.history];
@@ -246,6 +249,19 @@ export async function runBuddyTurn(opts: {
     const feedbacks: string[] = [];
     let deferred = false;
     for (const call of calls) {
+      // Parallel fan-out: run the independent subtasks as concurrent read-only sub-agents (the host
+      // caps how many run at once) and feed all their results back at once.
+      if (call.tool === "spawn_agents") {
+        opts.onEvent?.({ kind: "tool", round, call });
+        const subAgents = opts.runSubAgents ? await opts.runSubAgents(call.tasks) : undefined;
+        const result: BuddyToolResultPayload = subAgents
+          ? { subAgents }
+          : { error: "parallel sub-agents aren't available here" };
+        toolResults.push({ call, result });
+        opts.onEvent?.({ kind: "toolResult", round, call, result });
+        feedbacks.push(formatBuddyToolResult(call, result));
+        continue;
+      }
       if (isHostTool(call)) {
         if (feedbacks.length === 0) {
           opts.onEvent?.({ kind: "tool", round, call });
@@ -279,7 +295,7 @@ export async function runBuddyTurn(opts: {
 /** Execute one auto-run buddy tool (everything but generate_image). Exported for
  * the slash-command path, which runs tools directly without an LLM round. */
 export async function runBuddyTool(
-  call: Exclude<BuddyToolCall, { tool: "generate_image" | "find_files" | "run_command" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" }>,
+  call: Exclude<BuddyToolCall, { tool: "generate_image" | "find_files" | "run_command" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" }>,
   deps: BuddyDeps,
 ): Promise<BuddyToolResultPayload> {
   try {

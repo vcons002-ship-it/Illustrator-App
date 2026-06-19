@@ -195,7 +195,10 @@ export type BuddyToolCall =
   | { tool: "mcp_tools"; server: string }
   | { tool: "mcp_call"; server: string; toolName: string; args?: Record<string, unknown> }
   /** Hand a focused subtask to a read-only sub-agent (host-run; stops the loop). */
-  | { tool: "delegate"; task: string };
+  | { tool: "delegate"; task: string }
+  /** Fan SEVERAL independent subtasks out to read-only sub-agents that run IN PARALLEL, then get
+   * all their results back at once (auto-run; concurrency-capped by the app). */
+  | { tool: "spawn_agents"; tasks: string[] };
 
 /**
  * The HARD danger floor: tools that ALWAYS require explicit human approval — even when the reader
@@ -554,6 +557,10 @@ export function buildBuddySystemPrompt(opts: {
     "sub-agent that runs its own research loop and returns a concise result (e.g. \"research the top 3 EU " +
     "photonics firms by revenue\"). Use it to parallelise/offload a chunky lookup so your main answer stays " +
     "clean; the sub-agent can't change anything. Don't delegate trivial things you can answer directly.\n" +
+    '- {"tool":"spawn_agents","tasks":["research firm A\'s funding","research firm B\'s funding","research firm C\'s funding"]} ' +
+    "— when a job splits into 2+ INDEPENDENT read-only subtasks, run them as PARALLEL sub-agents and get all results at " +
+    "once (faster than delegating one at a time). Use it for fan-out research/lookups (compare N options, gather facts on " +
+    "several items, plan several tasks); keep each subtask self-contained. The app caps how many run at once.\n" +
     "- THEME/SCREEN requests (e.g. \"the 3 best photonics stocks to buy on earnings growth + P/E\") work even with no broker " +
     "connected: use search_web/read_url to find the candidate tickers and the fundamentals asked for (P/E, earnings growth, " +
     "margins…), stock_quote/market_analysis for price + technicals, then rank the top N against the reader's criteria with a " +
@@ -1030,6 +1037,12 @@ function parseToolObject(obj: Record<string, unknown>): BuddyToolCall | undefine
     const task = strArg(obj.task, MAX_PASTE_CHARS);
     return task ? { tool, task } : undefined;
   }
+  if (tool === "spawn_agents") {
+    const tasks = Array.isArray(obj.tasks)
+      ? obj.tasks.map((t) => strArg(t, MAX_PASTE_CHARS)).filter((t): t is string => !!t).slice(0, 8)
+      : [];
+    return tasks.length >= 2 ? { tool, tasks } : undefined; // 1 task → use plain `delegate`
+  }
   if (tool === "remove_library_book") {
     const id = strArg(obj.id, MAX_ID_CHARS);
     return id ? { tool, id } : undefined;
@@ -1203,6 +1216,8 @@ export interface BuddyToolResultPayload {
   taskAction?: { planTitle: string; nextStep?: string; completed?: boolean };
   /** add_task_steps outcome: which plan got steps and how many. */
   stepsAdded?: { planTitle: string; count: number; replaced: boolean };
+  /** spawn_agents outcome: each parallel sub-agent's task + its concise result. */
+  subAgents?: { task: string; result: string }[];
   taskPlansList?: { id: string; title: string; status: string; nextStep?: string; deadlineIso?: string }[];
   taskPlan?: TaskPlan;
   /** Local files found by an approved find_files search (names fed back to the model). */
@@ -1222,6 +1237,12 @@ export interface BuddyToolResultPayload {
 export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResultPayload): string {
   if (result.error) {
     return `[tool ${call.tool} failed: ${result.error}] Tell the reader plainly and suggest an alternative (another source, or pasting/uploading the text).`;
+  }
+  if (call.tool === "spawn_agents") {
+    const rs = result.subAgents ?? [];
+    if (rs.length === 0) return "[spawn_agents: no sub-agent results came back]";
+    const blocks = rs.map((r, i) => `--- agent ${i + 1}: "${r.task}" ---\n${r.result}`);
+    return `[parallel agents done — ${rs.length} subtasks ran concurrently]\n${blocks.join("\n\n")}\n\nSynthesize these into your answer.`;
   }
   if (call.tool === "search_web") {
     const hits = (result.hits ?? []).slice(0, 5);

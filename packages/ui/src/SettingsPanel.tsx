@@ -215,6 +215,10 @@ export interface ReaderSettings {
    * never auto-plan in the background (surface only; plan via the per-task button). Default 2.
    * Sweeps never overlap and yield when you return, so this is a throughput knob, not a timeout. */
   backgroundPlanRate?: number;
+  /** How many read-only sub-agents the assistant's `spawn_agents` fan-out runs at once. Sized for a
+   * single local GPU (default 2 — they share it); raise it for cloud providers or a batched local
+   * server where concurrent requests genuinely parallelize. 1 = effectively sequential. */
+  agentConcurrency?: number;
   /** Desktop only, OFF by default: let the assistant drive your TradingView Desktop chart
    * (set symbol, add studies, read state, inject Pine) via its DevTools bridge. Chart-only
    * — it never trades. Requires TradingView Desktop launched with remote debugging. */
@@ -1080,6 +1084,33 @@ export function SettingsPanel({
                     </span>
                   </label>
                 )}
+                <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 }}>
+                  <span>Parallel sub-agents</span>
+                  <select
+                    value={value.agentConcurrency ?? 2}
+                    onChange={(e) => set({ agentConcurrency: Number(e.target.value) })}
+                    style={{
+                      background: "rgba(255,255,255,0.06)",
+                      color: "inherit",
+                      border: "1px solid rgba(255,255,255,0.15)",
+                      borderRadius: 6,
+                      padding: "4px 6px",
+                      fontSize: 12,
+                    }}
+                  >
+                    <option value={1}>1 — sequential</option>
+                    <option value={2}>2 (default)</option>
+                    <option value={3}>3</option>
+                    <option value={4}>4</option>
+                    <option value={6}>6</option>
+                    <option value={8}>8</option>
+                  </select>
+                  <span style={{ opacity: 0.55, fontSize: 11 }}>
+                    how many read-only sub-agents the assistant runs at once when it fans a job out (its <code>spawn_agents</code>
+                    {" "}tool). Keep low (1–2) for a single local GPU; raise it for cloud or a batched local server where
+                    concurrent requests truly parallelize.
+                  </span>
+                </label>
                 {onConnectGoogle && (
                   <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
                     <input
