@@ -186,11 +186,12 @@ export function buildReferenceBlock(
   bookTitle?: string,
 ): string {
   const hasTerms = terms.some((t) => t.descriptor.trim());
+  const style = sanitizeWorldStyle(worldStyle);
   // A title on its own isn't worth a block — only add context when there are terms or a style.
-  if (!hasTerms && !(worldStyle && worldStyle.trim())) return "";
+  if (!hasTerms && !style) return "";
   const lines: string[] = [];
   if (bookTitle && bookTitle.trim()) lines.push(`Title: ${bookTitle.trim()}.`);
-  if (worldStyle && worldStyle.trim()) lines.push(`Style: ${worldStyle.trim()}.`);
+  if (style) lines.push(`Style: ${style}.`);
   for (const kind of ["character", "creature", "outfit", "location"] as const) {
     const ofKind = terms.filter((t) => t.kind === kind && t.descriptor.trim());
     if (ofKind.length === 0) continue;
@@ -200,9 +201,36 @@ export function buildReferenceBlock(
   return lines.join(" ");
 }
 
+/**
+ * Strip model/checkpoint junk that must never appear in an art-direction line. A book's
+ * `worldStyle` is meant to be prose like "moody cinematic sci-fi" — but it can get
+ * contaminated with a model filename or id (e.g. "SD_XL_Base_1_0", "flux1-dev.safetensors"),
+ * which then rides into EVERY image prompt as a `Style:` clause and looks like the chosen
+ * model changed. This removes filenames (`*.safetensors/.ckpt/.gguf/.pt/.bin`) and bare
+ * base-model ids (sd_xl_base_1.0, sdxl, sd15, flux1-dev, …), leaving real style words. Pure;
+ * returns "" if nothing usable remains. Applied at both read time (fixes existing books
+ * without re-extraction) and write time (extraction).
+ */
+export function sanitizeWorldStyle(worldStyle?: string): string {
+  if (!worldStyle) return "";
+  const out = worldStyle
+    // checkpoint/model weight filenames
+    .replace(/\b[\w.-]*\.(safetensors|ckpt|gguf|pt|bin)\b/gi, " ")
+    // bare base-model ids commonly echoed by a model: sd_xl_base_1.0, SD_XL_Base_1_0, sdxl_base
+    .replace(/\bsd[_\s.-]?xl[_\s.-]?(base|refiner|turbo)?[_\s.-]?[\d._]*\b/gi, " ")
+    // other bare family/version ids that aren't art direction
+    .replace(/\b(sd[_\s.-]?1[._-]?5|sd15|flux[_\s.-]?\d?[_\s.-]?(dev|schnell|klein|pro)?|juggernaut\w*|realvis\w*)\b/gi, " ")
+    // tidy up the separators left behind
+    .replace(/\s*,\s*,\s*/g, ", ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/^[\s,;.\-_]+|[\s,;.\-_]+$/g, "")
+    .trim();
+  return out;
+}
+
 /** The world-style clause appended to an injected (CLIP/T5) prompt. "" when unset. */
 export function worldStyleClause(worldStyle?: string): string {
-  return worldStyle && worldStyle.trim() ? worldStyle.trim() : "";
+  return sanitizeWorldStyle(worldStyle);
 }
 
 /** Paragraph prefixes that are machine scaffolding, not scene description. */

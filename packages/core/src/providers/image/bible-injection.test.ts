@@ -6,6 +6,8 @@ import {
   expandPrompt,
   findBibleTermsInText,
   injectBibleTerms,
+  sanitizeWorldStyle,
+  worldStyleClause,
   type SceneTerm,
 } from "./bible-injection.js";
 import { createEmptyBible } from "../../visual-bible/bible.js";
@@ -149,6 +151,33 @@ describe("describeCharacterIdentity", () => {
     expect(describeCharacterIdentity(c)).toContain("silver");
     const bare = character({ name: "Bo", persistentTraits: ["wiry", "one-eyed"] });
     expect(describeCharacterIdentity(bare)).toBe("wiry, one-eyed");
+  });
+});
+
+describe("sanitizeWorldStyle", () => {
+  it("keeps a real art-direction line untouched", () => {
+    expect(sanitizeWorldStyle("moody cinematic sci-fi, painterly")).toBe("moody cinematic sci-fi, painterly");
+  });
+  it("strips a bare base-model id (the reported bug)", () => {
+    expect(sanitizeWorldStyle("SD_XL_Base_1_0")).toBe("");
+    expect(sanitizeWorldStyle("sd_xl_base_1.0")).toBe("");
+  });
+  it("strips a model filename but keeps surrounding style words", () => {
+    expect(sanitizeWorldStyle("painterly, flux1-dev.safetensors")).toBe("painterly");
+    expect(sanitizeWorldStyle("juggernautXL, dramatic lighting")).toBe("dramatic lighting");
+  });
+  it("handles empty / undefined", () => {
+    expect(sanitizeWorldStyle(undefined)).toBe("");
+    expect(sanitizeWorldStyle("")).toBe("");
+  });
+  it("worldStyleClause runs the sanitizer (existing books are fixed at read time)", () => {
+    expect(worldStyleClause("SD_XL_Base_1_0")).toBe("");
+    expect(worldStyleClause("watercolor")).toBe("watercolor");
+  });
+  it("buildReferenceBlock (Flux path) drops a contaminated style", () => {
+    const block = buildReferenceBlock([], "SD_XL_Base_1_0", "My Book");
+    expect(block).not.toContain("SD_XL_Base_1_0");
+    expect(block).not.toContain("Style:");
   });
 });
 
