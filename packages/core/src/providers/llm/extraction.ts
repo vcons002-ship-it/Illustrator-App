@@ -250,8 +250,44 @@ export const TECHNICAL_EXTRACTION_SYSTEM =
   "linework, soft studio lighting, neutral background, restrained technical palette'. " +
   "Keep it consistent with the field (medicine, astronomy, engineering…).";
 
+export const CODE_EXTRACTION_SYSTEM =
+  "You are building a 'Code Atlas' for SOURCE CODE being read file-section by section, to help a " +
+  "developer understand it. You are given what was already recorded from earlier sections. Work " +
+  "INCREMENTALLY: capture what THIS section adds; do NOT repeat what is already recorded. " +
+  "This is not a story: leave 'characters', 'creatures', and 'spoilers' as EMPTY lists, and give no " +
+  "outfits. Also leave 'datasets' EMPTY (code has no numeric series). " +
+  "Use 'environments' for every recurring STRUCTURAL UNIT — a module/file, a class, a major " +
+  "component or subsystem — named by its identifier, with a short description of its responsibility " +
+  "and how it connects to the others (what it imports/exports, calls, or is called by). Reuse names; " +
+  "only add NEW detail for known entries. " +
+  "Build the 'glossary' as the section's KEY SYMBOLS: the important functions/methods, types, and " +
+  "constants — each a short term (the identifier, e.g. `parsePlan()`) plus a PLAIN-LANGUAGE " +
+  "explanation (1–3 sentences: what it does, its inputs/outputs, and why it matters here). These are " +
+  "shown beside the code as study aids, so make each genuinely explanatory (omit ones already listed). " +
+  "Write a 'summary' of what THIS section does, and a 'keyMoment': its single most important idea as " +
+  "one concrete, visualizable sentence. Set 'location' to the section's primary unit (file/class name) " +
+  "and 'locationChange' to '' unless it shifts mid-section. " +
+  "Write 'keyEvents' as the VISUALIZATION PLAN: the section is illustrated as a fixed number of " +
+  "images over consecutive stretches in READING ORDER — you are told how many. For each, choose the " +
+  "ONE most illustration-worthy item: (1) CONTROL FLOW or an algorithm — show its steps/branches " +
+  "flowing top-to-bottom; (2) DATA FLOW or a call/dependency relationship — show what passes between " +
+  "units; (3) a STRUCTURE — show a module/class's parts and how they relate; (4) an abstract idea — one " +
+  "concrete visual metaphor. Fill 'subject' (the function/structure shown), 'action' (the flow/branch/" +
+  "relationship demonstrated), 'environment' (the visual FORM: control-flow diagram, call graph, module " +
+  "map, layered-architecture view…), 'mood' ('clean, high-contrast, neutral background'), 'composition', " +
+  "and 'location' (the unit this stretch concerns). Never request rendered text/labels in the image. " +
+  "Capture 'infographics': up to 3 STRUCTURED visuals the code directly supports, each with a 'kind' " +
+  "('flowchart' | 'diagram' | 'summary'), a 'title', and an 'anchor' (a few words quoted from the code " +
+  "where it belongs). Prefer a 'flowchart' for a function's control flow or an algorithm (fill 'nodes' " +
+  "with 'shape' start/step/decision/end and 'edges' with yes/no labels), a 'diagram' for a module/class's " +
+  "parts (fill 'parts' label+note), and a 'summary' for a file's responsibilities (3–6 'bullets'). Leave " +
+  "the unused fields empty; emit an EMPTY list when nothing fits. " +
+  "Finally set 'worldStyle': one art-direction line for every diagram — e.g. 'clean software-architecture " +
+  "diagram, monospace-labelled boxes and arrows, flat muted palette, high contrast, neutral background'.";
+
 /** The entity-extraction system prompt for a book's content mode. */
 export function extractionSystemFor(contentMode?: string): string {
+  if (contentMode === "code") return CODE_EXTRACTION_SYSTEM;
   return contentMode === "technical" ? TECHNICAL_EXTRACTION_SYSTEM : EXTRACTION_SYSTEM;
 }
 

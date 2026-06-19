@@ -1,4 +1,4 @@
-import type { BookSource } from "./types/book.js";
+import { isNonFiction, type BookSource } from "./types/book.js";
 import type { ChapterScene, CharacterAppearance, IdentityAnchor, Outfit, VisualBible } from "./types/bible.js";
 import { MAX_CHARACTER_REFS, referenceIdsOf } from "./types/bible.js";
 import type { ImageResult } from "./types/content.js";
@@ -436,7 +436,7 @@ export class Engine {
       // sources are cited in the glossary below. Best-effort: any failure just skips it.
       let groundingContext = "";
       let groundingSources: string[] = [];
-      if (this.opts.webSearch && this.book?.contentMode === "technical") {
+      if (this.opts.webSearch && isNonFiction(this.book?.contentMode)) {
         const query = groundingQuery(this.book.chapters[chapterIndex]?.title, text, this.book.title);
         if (query) {
           try {

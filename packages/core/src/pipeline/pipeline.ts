@@ -1,4 +1,4 @@
-import type { BookSource, Page } from "../types/book.js";
+import { isNonFiction, type BookSource, type Page } from "../types/book.js";
 import type { Character, VisualBible } from "../types/bible.js";
 import { referenceIdsOf } from "../types/bible.js";
 import { isSupportedKind, type ImageResult, type VisualRequest } from "../types/content.js";
@@ -68,7 +68,7 @@ export class RenderPipeline {
     return {
       // Technical books (papers/textbooks, chosen at import) illustrate the passage's
       // CONCEPT instead of a story scene — the LLM picks its prompt template by kind.
-      kind: this.deps.book.contentMode === "technical" ? "technical_illustration" : "scene_illustration",
+      kind: isNonFiction(this.deps.book.contentMode) ? "technical_illustration" : "scene_illustration",
       bookId: this.deps.book.id,
       ...(this.deps.book.title ? { bookTitle: this.deps.book.title } : {}),
       pageId: page.id,

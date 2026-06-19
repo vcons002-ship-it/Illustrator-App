@@ -1,4 +1,5 @@
 import type { VisualBible } from "../../types/bible.js";
+import type { ContentMode } from "../../types/book.js";
 import type { VisualRequest } from "../../types/content.js";
 
 /**
@@ -27,11 +28,10 @@ export interface EntityExtractionInput {
   unitRanges?: [number, number][];
   sceneCount?: number;
   /**
-   * The book's content mode: "technical" routes extraction through the Visual-Atlas
-   * system prompt (structures/data/visualization plan) instead of the fiction Visual
-   * Bible (characters/outfits/scenes). Absent = fiction.
+   * The book's content mode: "technical"/"code" route extraction through a factual system prompt
+   * (Visual Atlas / code atlas) instead of the fiction Visual Bible. Absent = fiction.
    */
-  contentMode?: "fiction" | "technical";
+  contentMode?: ContentMode;
   /**
    * Provider-agnostic grounding (technical books): web-search reference snippets for this
    * chapter's topic, injected into the prompt so ANY reader — local LLM included — grounds
