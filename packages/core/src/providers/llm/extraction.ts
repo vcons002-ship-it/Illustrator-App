@@ -16,6 +16,7 @@ import type { EntityExtractionInput } from "./llm-provider.js";
 import type { VisualRequest } from "../../types/content.js";
 import { deterministicSeed } from "./mock-llm-provider.js";
 import { resolveKeyEvent } from "../../visual-bible/key-events.js";
+import { sanitizeWorldStyle } from "../image/bible-injection.js";
 
 /**
  * Shared building blocks for the cloud LLM providers (Claude / Gemini / OpenAI).
@@ -993,7 +994,7 @@ export function mergeExtraction(
 
   // World style: adopt it, preferring the most specific (longest) version seen so far so
   // a later chapter can enrich it but a terse mention never overwrites a richer one.
-  const newStyle = (raw.worldStyle ?? "").trim();
+  const newStyle = sanitizeWorldStyle(raw.worldStyle);
   if (newStyle && newStyle.length > (bible.worldStyle ?? "").trim().length) {
     bible.worldStyle = newStyle;
   }
