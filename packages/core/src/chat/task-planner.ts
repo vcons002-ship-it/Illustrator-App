@@ -74,18 +74,21 @@ export function buildPlanPrompt(sourceText: string, researchNotes: string, today
     `Today is ${todayIso}. Schedule realistically: set each step's dueIso (ISO date), and if the ` +
     "task needs lead time, set the plan's leadTimeDays and an earlier first-step due date. Keep " +
     "steps concrete and minimal (typically 3–8). Put the OFFICIAL site as a link with " +
-    '"official": true. BE PROACTIVE AND CREATIVE — build the most useful COMPLETE plan you can from ' +
-    "whatever you have, using your general knowledge of how these things work; don't wait for the " +
-    "reader to supply everything. For a TRIP, a DATE + DESTINATION is enough to lay out the whole " +
-    "timeline from typical lead times: book flights early (often cheapest ~6–8 weeks out, climbing " +
-    "close in) → reserve lodging early for popular spots/dates → arrange local transport (car/transit) " +
-    "→ a prep/packing + documents checklist in the final week. Give each a sensible dated 'book by' / " +
-    "'arrange by' step (work backward from the trip date) and a price-comparison link (e.g. Google " +
-    "Flights for the route/dates), only for what isn't already booked. When KEY FACTS are missing that " +
-    "would refine it (departure city, exact dates, budget, travellers, hotel area), DON'T stall or " +
-    "invent them — build on reasonable placeholders NOW and list what you need in \"clarifyingQuestions\" " +
-    "(short, specific). The reader can answer those (in the app or the Google Task notes) and the plan " +
-    "is re-run with their answers — so a thin plan with the right questions is far better than none.\n" +
+    '"official": true. BE PROACTIVE AND CREATIVE on EVERY task — not only trips. Use your general ' +
+    "knowledge of how the thing actually works to build the most useful COMPLETE plan you can from " +
+    "whatever you have; don't wait for the reader to supply every detail. Infer the usual PREREQUISITES, " +
+    "typical LEAD TIMES and the right ORDER, and lay them out as dated steps working BACKWARD from the " +
+    "deadline. For example: a passport/licence renewal (mail-in processing takes weeks → photo → form → " +
+    "fee, or the expedite route); a job application (resume → tailor it → line up references → submit " +
+    "before the close date); a home/car repair (diagnose → get quotes → schedule → parts lead time); a " +
+    "party/event (lock venue + invites early → catering → supplies → day-of run sheet); a trip (a DATE + " +
+    "DESTINATION is enough — book flights ~6–8 weeks out → lodging early → local transport → prep/packing " +
+    "checklist). For anything with a fluctuating price or limited slots (flights, hotels, appointments, " +
+    "permits), add a sensible dated 'book by' / 'arrange by' step with a comparison/booking link, only for " +
+    "what isn't already done. When KEY FACTS are missing that would refine it, DON'T stall or invent them " +
+    "— build on reasonable placeholders NOW and list what you need in \"clarifyingQuestions\" (short, " +
+    "specific). The reader answers those (in the app or the Google Task notes) and the plan is re-run with " +
+    "their answers — a thin plan with the right questions beats none.\n" +
     'LINK + ATTACH what you pulled, to spare the reader the legwork: put source/official URLs in a step\'s "links". ' +
     "When your research RETRIEVED a document they'll need — the key details from a confirmation/itinerary email, a " +
     "calendar invite's logistics (address, time, dial-in, parking), or the required fields/instructions from a web " +
