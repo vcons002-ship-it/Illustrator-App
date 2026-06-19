@@ -1130,8 +1130,9 @@ export function SettingsPanel({
                   <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginBottom: 4 }}>
                     Optional. An OpenAI-compatible endpoint + model id (e.g. a <b>vLLM</b> server running a small fast model
                     like Qwen3-4B) that the parallel sub-agents use INSTEAD of your main model — so a single GPU can run them
-                    concurrently while the main model does the hard reasoning. Leave blank to use the main model. See
-                    VLLM-SETUP.md. Falls back to the main model if unreachable.
+                    concurrently while the main model does the hard reasoning. Leave blank to use the main model. Falls
+                    back to the main model if unreachable. New to this? See VLLM-SETUP.md, or just ask the chat{" "}
+                    <b>"walk me through vLLM setup"</b> and it'll guide you step by step.
                   </span>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     <input
