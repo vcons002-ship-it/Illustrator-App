@@ -311,6 +311,8 @@ export interface SettingsPanelProps {
   onPullTextModel?: (model: string) => void;
   /** Live pull progress per Ollama model id. */
   pullProgress?: Record<string, { status: string; percent?: number }>;
+  /** Ping the sub-agent "worker" endpoint and report whether it's reachable + which models it serves. */
+  onTestSubAgentEndpoint?: (url: string) => Promise<{ ok: boolean; models?: string[]; error?: string }>;
 }
 
 export function SettingsPanel({
@@ -333,6 +335,7 @@ export function SettingsPanel({
   connectingLocalText = false,
   onPullTextModel,
   pullProgress = {},
+  onTestSubAgentEndpoint,
   googleConnected,
   googleEmail,
   onConnectGoogle,
@@ -341,6 +344,8 @@ export function SettingsPanel({
   const [open, setOpen] = useState(false);
   // Settings filter: typing hides non-matching groups and force-opens matches.
   const [query, setQuery] = useState("");
+  // Worker-endpoint connection test: status for the "Test" button under the sub-agent settings.
+  const [subTest, setSubTest] = useState<{ state: "idle" | "testing" | "ok" | "err"; msg?: string }>({ state: "idle" });
   const set = (patch: Partial<ReaderSettings>) => onChange({ ...value, ...patch });
   const setKey = (id: string, key: string) => set({ keys: { ...value.keys, [id]: key } });
 
@@ -1142,6 +1147,52 @@ export function SettingsPanel({
                       onChange={(e) => set({ subAgentModel: e.target.value })}
                     />
                   </div>
+                  {onTestSubAgentEndpoint && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        disabled={subTest.state === "testing"}
+                        onClick={async () => {
+                          const url = (value.subAgentServerUrl ?? "").trim();
+                          if (!url) {
+                            setSubTest({ state: "err", msg: "Enter the endpoint URL first." });
+                            return;
+                          }
+                          setSubTest({ state: "testing" });
+                          try {
+                            const r = await onTestSubAgentEndpoint(url);
+                            if (!r.ok) {
+                              setSubTest({ state: "err", msg: r.error || "Couldn't reach the endpoint." });
+                              return;
+                            }
+                            const models = r.models ?? [];
+                            const want = (value.subAgentModel ?? "").trim();
+                            if (want && !models.includes(want)) {
+                              setSubTest({
+                                state: "err",
+                                msg: `Reachable, but “${want}” isn't loaded. Server has: ${models.slice(0, 6).join(", ") || "(none)"}`,
+                              });
+                            } else {
+                              setSubTest({
+                                state: "ok",
+                                msg: want
+                                  ? `Reachable — “${want}” is loaded ✓`
+                                  : `Reachable — serving ${models.length} model(s): ${models.slice(0, 4).join(", ")}`,
+                              });
+                            }
+                          } catch (e) {
+                            setSubTest({ state: "err", msg: e instanceof Error ? e.message : String(e) });
+                          }
+                        }}
+                        style={{ padding: "3px 10px", fontSize: 12, cursor: subTest.state === "testing" ? "default" : "pointer" }}
+                      >
+                        {subTest.state === "testing" ? "Testing…" : "Test connection"}
+                      </button>
+                      {subTest.state !== "idle" && subTest.state !== "testing" && (
+                        <span style={{ fontSize: 11, color: subTest.state === "ok" ? "#6ee7a8" : "#f0a868" }}>{subTest.msg}</span>
+                      )}
+                    </div>
+                  )}
                   {(() => {
                     // Honest, rough VRAM read for the chosen worker + (local) main model, so you can
                     // tell at a glance whether the combo fits your card before launching a server.
