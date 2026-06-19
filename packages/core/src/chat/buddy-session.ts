@@ -65,6 +65,8 @@ export interface BuddyDeps {
   openWebText: (call: Extract<BuddyToolCall, { tool: "open_web_text" }>) => Promise<BuddyOpenedInfo>;
   /** Build a BookSource from chat-pasted text and open it (host-side). */
   openPastedText: (call: Extract<BuddyToolCall, { tool: "open_pasted_text" }>) => Promise<BuddyOpenedInfo>;
+  /** Build a `code` BookSource from chat-shared source and open it (host-side). */
+  openCode?: (call: Extract<BuddyToolCall, { tool: "open_code" }>) => Promise<BuddyOpenedInfo>;
   /** Generate a new spreadsheet from a column/row spec and open it (host-side). */
   createSpreadsheet?: (call: Extract<BuddyToolCall, { tool: "create_spreadsheet" }>) => Promise<BuddyOpenedInfo>;
   /** Remove a library book by id; returns its title (undefined when absent). */
@@ -383,6 +385,9 @@ export async function runBuddyTool(
         return { opened: await deps.openWebText(call) };
       case "open_pasted_text":
         return { opened: await deps.openPastedText(call) };
+      case "open_code":
+        if (!deps.openCode) return { error: "opening code isn't available right now" };
+        return { opened: await deps.openCode(call) };
       case "create_spreadsheet":
         if (!deps.createSpreadsheet) return { error: "creating spreadsheets isn't available right now" };
         return { opened: await deps.createSpreadsheet(call) };

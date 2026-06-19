@@ -1,5 +1,38 @@
 import { describe, it, expect } from "vitest";
-import { bookFromText } from "./from-text.js";
+import { bookFromText, bookFromCode } from "./from-text.js";
+
+describe("bookFromCode", () => {
+  const SRC = [
+    "import { x } from './x';",
+    "",
+    "export function parse(input: string): number {",
+    "  return input.length;",
+    "}",
+    "",
+    "class Widget {",
+    "  render() {",
+    "    return null;",
+    "  }",
+    "}",
+  ].join("\n");
+
+  it("opens code as a `code` book, splitting at top-level definitions", () => {
+    const book = bookFromCode("auth.ts", SRC, "ts");
+    expect(book.contentMode).toBe("code");
+    expect(book.language).toBe("ts");
+    expect(book.id).toMatch(/^code-/);
+    // imports, the function, and the class → at least 3 sections (chapters).
+    expect(book.chapters.length).toBeGreaterThanOrEqual(3);
+    // code whitespace is preserved (a paragraph keeps its indentation/newlines).
+    const allText = book.pages.flatMap((p) => p.paragraphs.map((q) => q.text)).join("\n");
+    expect(allText).toContain("  return input.length;");
+  });
+
+  it("is stable by content hash and rejects empty input", () => {
+    expect(bookFromCode("a", SRC).id).toBe(bookFromCode("a", SRC).id);
+    expect(() => bookFromCode("a", "   \n  ")).toThrow();
+  });
+});
 
 describe("bookFromText", () => {
   it("builds a readable book from plain text (single chapter, paged)", () => {

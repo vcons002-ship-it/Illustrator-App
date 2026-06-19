@@ -106,6 +106,8 @@ export type BuddyToolCall =
     }
   /** Open text the reader pasted/dictated into the chat (a poem, an excerpt). */
   | { tool: "open_pasted_text"; text: string; title: string; mode: "fiction" | "technical"; visuals: boolean }
+  /** Open SOURCE CODE as a readable, illustrate-able "code book" (its own analysis + code view). */
+  | { tool: "open_code"; code: string; title: string; language?: string; visuals: boolean }
   /** Generate a NEW spreadsheet from scratch (e.g. a budget) and open it in the data
    * view, where it can be filled in, formula-ed, analysed, and exported. A seed cell
    * starting with "=" is a formula. ASK the reader the key questions FIRST. */
@@ -456,6 +458,11 @@ export function buildBuddySystemPrompt(opts: {
     'passage ITSELF in "text" — never a how-to, a list of steps, or an explanation ABOUT something, and never code/HTML ' +
     "you generated (that belongs in a fenced ```code``` block they can SAVE, not a book). For anything book-length, ask " +
     "them to use the upload button instead.\n" +
+    '- {"tool":"open_code","code":"…","title":"auth.ts","language":"ts","visuals":true} — open SOURCE CODE ' +
+    "the reader shared (or that YOU wrote and they want to study) as a 'code book': it gets its own analysis " +
+    "(a glossary of functions, module map, control-/data-flow diagrams) and a syntax-highlighted reader view. " +
+    'Put the ACTUAL code in "code" (never a description of it). Use this — NOT open_pasted_text — for anything ' +
+    "that is code/markup/config.\n" +
     '- {"tool":"create_spreadsheet","title":"Monthly Budget","columns":[{"name":"Category"},{"name":"Budget","type":"number"},' +
     '{"name":"Spent","type":"number"},{"name":"Remaining","type":"number"}],"rows":[["Rent",1500,1200,"=B2-C2"]]} — ' +
     "GENERATE a new spreadsheet from scratch and open it in the data view (a budget, tracker, planner, schedule, " +
@@ -1088,6 +1095,17 @@ function parseToolObject(obj: Record<string, unknown>): BuddyToolCall | undefine
       text,
       title: strArg(obj.title, MAX_TITLE_CHARS) ?? "Pasted text",
       mode: obj.mode === "technical" ? "technical" : "fiction",
+      visuals: obj.visuals === true,
+    };
+  }
+  if (tool === "open_code") {
+    const code = strArg(obj.code, MAX_PASTE_CHARS);
+    if (!code) return undefined;
+    return {
+      tool,
+      code,
+      title: strArg(obj.title, MAX_TITLE_CHARS) ?? "Code",
+      ...(strArg(obj.language, MAX_NAME_CHARS) ? { language: strArg(obj.language, MAX_NAME_CHARS)! } : {}),
       visuals: obj.visuals === true,
     };
   }

@@ -77,6 +77,8 @@ import {
   sourceId,
   normalizeTaskPlan,
   exportFilename,
+  isNonFiction,
+  type ContentMode,
   recordAction,
   loadActionHistory,
   getActionsViewedAt,
@@ -137,6 +139,7 @@ import {
 } from "@visual-reader/core";
 import {
   bookFromText,
+  bookFromCode,
   buildIllustratedEpub,
   buildIllustratedHtml,
   buildXlsx,
@@ -1455,14 +1458,14 @@ export function App() {
   }, [book]);
   const techDatasetsByPage = useMemo(
     () =>
-      book?.contentMode === "technical" && bible?.datasets?.length
+      isNonFiction(book?.contentMode) && bible?.datasets?.length
         ? anchorByParagraph(techPagesWithChapter, bible.datasets, (d) => d.chapterIndex, (d) => d.source || d.title)
         : undefined,
     [book, bible?.datasets, techPagesWithChapter],
   );
   const techInfographicsByPage = useMemo(
     () =>
-      book?.contentMode === "technical" && bible?.infographics?.length
+      isNonFiction(book?.contentMode) && bible?.infographics?.length
         ? anchorByParagraph(techPagesWithChapter, bible.infographics, (g) => g.chapterIndex, (g) => g.anchor || g.title)
         : undefined,
     [book, bible?.infographics, techPagesWithChapter],
@@ -1472,7 +1475,7 @@ export function App() {
   // Key concepts marked in the text + first-appearance explanation cards. Depends
   // only on the book + glossary, so it survives result churn untouched.
   const techConcepts = useMemo(() => {
-    if (book?.contentMode !== "technical" || !bible?.glossary.length) return undefined;
+    if (!book || !isNonFiction(book.contentMode) || !bible?.glossary.length) return undefined;
     const definitions = new Map(bible.glossary.map((g) => [g.term.toLowerCase(), g.definition]));
     return {
       terms: bible.glossary.map((g) => g.term),
@@ -1483,7 +1486,7 @@ export function App() {
   // Each unit's retrieved figure (or its "no verified figure" note), anchored to
   // the paragraph that best matches the figure's subject on the unit's first page.
   const techFiguresByPage = useMemo(() => {
-    if (book?.contentMode !== "technical" || !units) return undefined;
+    if (!book || !isNonFiction(book.contentMode) || !units) return undefined;
     const byPage = new Map<number, { unitIndex: number; paragraphIndex: number; result: DisplayResult }[]>();
     const firstPageOfUnit = new Map<number, number>();
     units.pageToUnit.forEach((u, page) => {
@@ -1509,7 +1512,7 @@ export function App() {
   }, [book, units, results]);
   const technicalSupport = useMemo<TechnicalSupportData | undefined>(
     () =>
-      book?.contentMode === "technical"
+      isNonFiction(book?.contentMode)
         ? {
             ...(techConcepts ?? {}),
             ...(techFiguresByPage ? { figuresByPage: techFiguresByPage } : {}),
@@ -1521,7 +1524,7 @@ export function App() {
   );
 
   // --- Reading-companion chat ------------------------------------------------
-  const isTechnical = book?.contentMode === "technical";
+  const isTechnical = isNonFiction(book?.contentMode);
   // Load this book's chat history; reset transient chat state on book change.
   // A buddy-initiated open seeds the history with the handed-off landing
   // conversation, then the stored history is PREPENDED when it loads (it's
@@ -4223,9 +4226,11 @@ export function App() {
                       singlePage ? "" : ` · image ${unitIndex + 1}/${totalUnits}`
                     }`}
                 {bible
-                  ? book.contentMode === "technical"
-                    ? ` · ${bible.glossary.length} concepts · ${bible.environments.length} structures tracked`
-                    : ` · ${bible.characters.length} characters tracked`
+                  ? book.contentMode === "code"
+                    ? ` · ${bible.glossary.length} symbols · ${bible.environments.length} modules tracked`
+                    : book.contentMode === "technical"
+                      ? ` · ${bible.glossary.length} concepts · ${bible.environments.length} structures tracked`
+                      : ` · ${bible.characters.length} characters tracked`
                   : ""}
               </div>
             </div>
@@ -4315,7 +4320,9 @@ export function App() {
           onCreate={(title, text, mode) => {
             try {
               // Library provenance: did this text come from a file or a raw paste?
-              const created = bookFromText(title, text, mode, pasteInitial ? "Imported file" : "Pasted text");
+              const provenance = pasteInitial ? "Imported file" : "Pasted text";
+              const created =
+                mode === "code" ? bookFromCode(title, text, undefined, provenance) : bookFromText(title, text, mode, provenance);
               // Carry the structured view onto the book: a spreadsheet/tabular grid (chat
               // analyze_data + the table card) or a nested-JSON tree (the tree card).
               openBook({
@@ -4928,7 +4935,11 @@ const ReaderColumn = memo(function ReaderColumn({
                   (paraInfographics?.length ?? 0) > 0;
                 return (
                   <Fragment key={para.id}>
-                    {layoutHtml && para.html ? (
+                    {book.contentMode === "code" ? (
+                      <pre ref={registerParagraph(para.id)} style={styles.codeBlock}>
+                        <code>{para.text}</code>
+                      </pre>
+                    ) : layoutHtml && para.html ? (
                       <HtmlParagraph html={para.html} innerRef={registerParagraph(para.id)} />
                     ) : (
                       <p ref={registerParagraph(para.id)} style={styles.paragraph}>
@@ -5205,16 +5216,16 @@ function PasteTextModal({
 }: {
   /** Prefill when the text came from an opened file (PDF/Word/CSV/…). */
   initial?:
-    | { title: string; text: string; mode?: "fiction" | "technical"; data?: DataTable; tree?: JsonValue }
+    | { title: string; text: string; mode?: ContentMode; data?: DataTable; tree?: JsonValue }
     | undefined;
-  onCreate: (title: string, text: string, mode: "fiction" | "technical") => void;
+  onCreate: (title: string, text: string, mode: ContentMode) => void;
   /** Switch to the faithful summarize/rework flow with the current title + text. */
   onPolish?: (title: string, text: string) => void;
   onClose: () => void;
 }) {
   const [title, setTitle] = useState(initial?.title ?? "");
   const [text, setText] = useState(initial?.text ?? "");
-  const [mode, setMode] = useState<"fiction" | "technical">(initial?.mode ?? "fiction");
+  const [mode, setMode] = useState<ContentMode>(initial?.mode ?? "fiction");
   const words = text.trim() ? text.trim().split(/\s+/).length : 0;
   return (
     <div style={styles.modalOverlay} onClick={onClose}>
@@ -5259,16 +5270,14 @@ function PasteTextModal({
           spellCheck={false}
           onChange={(e) => setText(e.target.value)}
         />
-        <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, margin: "6px 0" }}>
-          <input
-            type="checkbox"
-            checked={mode === "technical"}
-            onChange={(e) => setMode(e.target.checked ? "technical" : "fiction")}
-          />
-          <span>
-            Technical / non-fiction (papers, textbooks) — illustrate concepts and diagrams
-            instead of story scenes <em style={{ opacity: 0.6 }}>(experimental)</em>
-          </span>
+        <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, margin: "6px 0", flexWrap: "wrap" }}>
+          <span>Treat as</span>
+          <select value={mode} onChange={(e) => setMode(e.target.value as ContentMode)} style={{ fontSize: 13 }}>
+            <option value="fiction">Story / fiction — illustrate scenes</option>
+            <option value="technical">Technical / non-fiction — concepts &amp; diagrams</option>
+            <option value="code">Code — glossary, module map &amp; flow diagrams</option>
+          </select>
+          <em style={{ opacity: 0.6 }}>(experimental)</em>
         </label>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
           <span style={{ opacity: 0.6, fontSize: 12 }}>{words ? `${words} words` : ""}</span>
@@ -6024,6 +6033,19 @@ const styles: Record<string, React.CSSProperties> = {
     fontFamily: "system-ui, sans-serif",
   },
   paragraph: { fontSize: 19, lineHeight: 1.8, margin: "0 0 18px" },
+  codeBlock: {
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    fontSize: 14,
+    lineHeight: 1.6,
+    margin: "0 0 14px",
+    padding: "10px 14px",
+    background: "rgba(0,0,0,0.28)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 8,
+    overflowX: "auto" as const,
+    whiteSpace: "pre" as const,
+    tabSize: 2,
+  },
   aside: {},
   // The aside is sticky; when its content (image + data charts on technical
   // books) exceeds the viewport it must scroll INTERNALLY — a sticky element's

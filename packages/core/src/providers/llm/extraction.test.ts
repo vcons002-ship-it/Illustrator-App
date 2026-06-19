@@ -10,6 +10,7 @@ import {
   PROMPT_SYSTEM,
   stripThink,
   TECHNICAL_EXTRACTION_SYSTEM,
+  CODE_EXTRACTION_SYSTEM,
   TECHNICAL_PROMPT_SYSTEM,
 } from "./extraction.js";
 import { createEmptyBible } from "../../visual-bible/bible.js";
@@ -948,6 +949,11 @@ describe("extractionSystemFor", () => {
     expect(extractionSystemFor("technical")).toBe(TECHNICAL_EXTRACTION_SYSTEM);
     expect(extractionSystemFor("fiction")).toBe(EXTRACTION_SYSTEM);
     expect(extractionSystemFor(undefined)).toBe(EXTRACTION_SYSTEM);
+  });
+
+  it("picks the Code-Atlas template for code books", () => {
+    expect(extractionSystemFor("code")).toBe(CODE_EXTRACTION_SYSTEM);
+    expect(extractionSystemFor("code")).toContain("Code Atlas");
   });
 
   it("the technical template remaps the schema: structures + data, no characters", () => {

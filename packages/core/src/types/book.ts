@@ -6,6 +6,19 @@
 import type { DataTable } from "../data/data-table.js";
 import type { JsonValue } from "../data/json-shape.js";
 
+/**
+ * What kind of writing a book is, chosen at import — it selects the analysis + illustration path.
+ * "fiction" illustrates story scenes; "technical" (papers, non-fiction) and "code" (source files)
+ * are the FACTUAL modes (see `isNonFiction`) that use the concept/diagram path instead, with code
+ * getting its own extraction prompt + reader view.
+ */
+export type ContentMode = "fiction" | "technical" | "code";
+
+/** The factual modes (technical + code) — they share the non-story analysis, chat, and UI gates. */
+export function isNonFiction(mode?: ContentMode): boolean {
+  return mode === "technical" || mode === "code";
+}
+
 export interface Paragraph {
   /** Stable id, unique within the book. */
   id: string;
@@ -50,12 +63,10 @@ export interface BookSource {
   author?: string;
   chapters: Chapter[];
   pages: Page[];
-  /**
-   * What kind of writing this is, chosen at import. "fiction" (default) illustrates
-   * story scenes; "technical" (papers, textbooks, non-fiction) uses the concept/
-   * diagram prompt template instead. Experimental.
-   */
-  contentMode?: "fiction" | "technical";
+  /** What kind of writing this is, chosen at import (default "fiction"). See `ContentMode`. */
+  contentMode?: ContentMode;
+  /** For a `code` book: the source language (e.g. "ts", "python"), for the reader's code view. */
+  language?: string;
   /** Structured grid for a spreadsheet/CSV import — powers the chat's `analyze_data`
    * tool (group-by / pivots / aggregates over real cells). Absent for prose. For a
    * multi-sheet workbook this is the FIRST sheet (`dataSheets` holds them all). */

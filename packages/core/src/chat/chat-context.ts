@@ -7,6 +7,7 @@ import {
 } from "../providers/image/bible-injection.js";
 import { CHAT_TOOLS_SYSTEM, dataToolsBlock } from "./chat-tools.js";
 import { POLISH_CHAT_GUIDANCE } from "./document-polish.js";
+import { isNonFiction, type ContentMode } from "../types/book.js";
 import type { DataTable } from "../data/data-table.js";
 
 /**
@@ -26,7 +27,7 @@ export interface ChatPosition {
 
 export interface ChatContextInput {
   bookTitle: string;
-  contentMode: "fiction" | "technical";
+  contentMode: ContentMode;
   /** Story chapters in order (index = the bible's chapterIndex keying). */
   chapters: { index: number; title: string; text: string }[];
   bible?: VisualBible;
@@ -59,7 +60,7 @@ export interface ChatContextSection {
 /** The system prompt as its labelled sections, in order (empty ones included as
  * "" so callers can decide; `buildChatSystemPrompt` drops them). */
 export function chatContextSections(input: ChatContextInput): ChatContextSection[] {
-  const technical = input.contentMode === "technical";
+  const technical = isNonFiction(input.contentMode);
   const fullView = technical || input.allowSpoilers;
   const budget = input.budgetChars ?? CHAT_CONTEXT_BUDGET_CHARS;
   const text = fullView ? fullBookText(input, budget) : readSoFarText(input, budget);
@@ -215,7 +216,7 @@ function renderChapter(c: { index: number; title: string; text: string }): strin
 function bibleSlice(input: ChatContextInput, fullView: boolean): string {
   const bible = input.bible;
   if (!bible) return "";
-  const technical = input.contentMode === "technical";
+  const technical = isNonFiction(input.contentMode);
   const cur = input.position.chapterIndex;
   const seen = <T extends { firstSeenChapter: number }>(list: readonly T[]): T[] =>
     fullView ? [...list] : list.filter((e) => e.firstSeenChapter <= cur);
@@ -264,7 +265,7 @@ function bibleSlice(input: ChatContextInput, fullView: boolean): string {
 export function lookupBible(
   bible: VisualBible,
   query: string,
-  opts: { fullView: boolean; chapterIndex: number; contentMode: "fiction" | "technical" },
+  opts: { fullView: boolean; chapterIndex: number; contentMode: ContentMode },
 ): string {
   const q = query.trim().toLowerCase();
   if (!q) return "";

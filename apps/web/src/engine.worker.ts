@@ -135,10 +135,11 @@ import {
   type ImageProvider,
   type LLMProvider,
   type TierConfig,
+  isNonFiction,
   type ToolCall,
   type VisualBible,
 } from "@visual-reader/core";
-import { bookFromText, bookFromHtml } from "@visual-reader/epub";
+import { bookFromText, bookFromHtml, bookFromCode } from "@visual-reader/epub";
 // Import buildProviders via the React-free subpath: pulling it from the package
 // index would drag the React UI components into the worker, which can crash the
 // worker on load (no `window`/DOM) under dev's cross-origin isolation.
@@ -1132,7 +1133,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       }))
       .sort((a, b) => a.index - b.index);
     const pos = chatPosition(book, msg.position);
-    const fullView = (book.contentMode ?? "fiction") === "technical" || msg.allowSpoilers;
+    const fullView = isNonFiction(book.contentMode) || msg.allowSpoilers;
     // Spoiler-gated chapters the search_book tool may reach: everything up to the
     // reader's position (current chapter cut at the offset) unless spoilers are on.
     const searchableChapters = fullView
@@ -2199,6 +2200,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       },
       openPastedText: async (call) =>
         opened(bookFromText(call.title, call.text, call.mode, "Pasted in chat"), call.visuals),
+      openCode: async (call) =>
+        opened(bookFromCode(call.title, call.code, call.language, "Code in chat"), call.visuals),
       createSpreadsheet: async (call) => {
         // Build the typed table from the spec, then open it as a TECHNICAL data book
         // (the pipe-text is what the pipeline reads; `data` powers the grid + chat tools).

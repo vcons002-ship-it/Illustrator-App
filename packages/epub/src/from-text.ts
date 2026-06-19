@@ -1,4 +1,4 @@
-import { splitHtmlBlocks, type BookSource } from "@visual-reader/core";
+import { splitHtmlBlocks, type BookSource, type ContentMode } from "@visual-reader/core";
 import { segmentBook, type ParagraphInput, type RawChapter } from "./segment.js";
 
 /**
@@ -13,7 +13,7 @@ import { segmentBook, type ParagraphInput, type RawChapter } from "./segment.js"
 export function bookFromText(
   title: string,
   text: string,
-  contentMode?: "fiction" | "technical",
+  contentMode?: ContentMode,
   /** Shown in the library as provenance (e.g. "Pasted text", "Imported file"). */
   author?: string,
 ): BookSource {
@@ -24,7 +24,7 @@ export function bookFromText(
     { id, title: title.trim() || "Pasted text", ...(author ? { author } : {}) },
     splitChapters(title, body),
   );
-  return contentMode === "technical" ? { ...book, contentMode } : book;
+  return contentMode && contentMode !== "fiction" ? { ...book, contentMode } : book;
 }
 
 /**
@@ -37,7 +37,7 @@ export function bookFromHtml(
   title: string,
   text: string,
   html: string,
-  contentMode?: "fiction" | "technical",
+  contentMode?: ContentMode,
   author?: string,
 ): BookSource {
   const body = text.replace(/\r\n?/g, "\n").trim();
@@ -63,7 +63,59 @@ export function bookFromHtml(
     { id, title: title.trim() || "Web article", ...(author ? { author } : {}) },
     chapters.length > 0 ? chapters : [{ title, text: body, paragraphs: blocks }],
   );
-  return contentMode === "technical" ? { ...book, contentMode } : book;
+  return contentMode && contentMode !== "fiction" ? { ...book, contentMode } : book;
+}
+
+/**
+ * Build a `code` BookSource from a source file: open it as a readable, illustrate-able document
+ * with its own (code) analysis path. Sections split at TOP-LEVEL definitions (not Markdown
+ * headings — `#` is a comment in many languages), and paragraphs are blank-line-separated code
+ * blocks (whitespace preserved) so diagrams anchor to real lines. Stable content-hash id.
+ */
+export function bookFromCode(title: string, code: string, language?: string, author?: string): BookSource {
+  const body = code.replace(/\r\n?/g, "\n").replace(/[ \t]+$/gm, "");
+  if (!body.trim()) throw new Error("There's no code to open.");
+  const id = `code-${contentHash(`${title}\n${body}`)}`;
+  const book = segmentBook(
+    { id, title: title.trim() || "Code", ...(author ? { author } : {}) },
+    splitCodeSections(title.trim() || "Code", body),
+  );
+  return { ...book, contentMode: "code", ...(language ? { language } : {}) };
+}
+
+/** A top-level (column-0) definition that starts a new code section. */
+const CODE_SECTION =
+  /^(?:export\s+)?(?:default\s+)?(?:public\s+|private\s+|protected\s+|abstract\s+)?(?:async\s+)?(?:function|class|interface|type|enum|struct|impl|trait|def|fn|module|namespace|component|service)\b/;
+
+/** Blank-line-separated code blocks → paragraphs (code whitespace preserved). */
+function codeParagraphs(text: string): ParagraphInput[] {
+  return text
+    .split(/\n{2,}/)
+    .map((b) => b.replace(/\s+$/, ""))
+    .filter((b) => b.trim().length > 0)
+    .map((b) => ({ text: b }));
+}
+
+/** Split source into sections at top-level definitions; one section when none are found. */
+function splitCodeSections(title: string, body: string): RawChapter[] {
+  const lines = body.split("\n");
+  const chapters: RawChapter[] = [];
+  let curTitle: string | undefined;
+  let buf: string[] = [];
+  const flush = (): void => {
+    const text = buf.join("\n").replace(/^\n+|\n+$/g, "");
+    if (text.trim()) chapters.push({ title: curTitle ?? title, text, paragraphs: codeParagraphs(text) });
+    buf = [];
+  };
+  for (const line of lines) {
+    if (CODE_SECTION.test(line) && buf.some((l) => l.trim().length > 0)) {
+      flush();
+      curTitle = line.trim().slice(0, 80);
+    }
+    buf.push(line);
+  }
+  flush();
+  return chapters.length > 0 ? chapters : [{ title, text: body, paragraphs: codeParagraphs(body) }];
 }
 
 /** A line that starts a new chapter: a Markdown heading or a "Chapter/Part N" line. */
