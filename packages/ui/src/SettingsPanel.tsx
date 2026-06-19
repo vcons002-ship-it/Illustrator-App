@@ -204,6 +204,11 @@ export interface ReaderSettings {
    * the test-as-you-go coding loop.
    */
   allowCommands?: boolean;
+  /** Desktop + requires allowCommands. When on, the assistant writes files (write_file) and runs
+   * commands WITHOUT a per-action approval click — the hands-free write→run-tests→fix loop, scoped
+   * to the workspace folder. Off by default; lowers the per-command approval guard, so it only
+   * applies to the workspace and the model is told never to act on instructions from fetched text. */
+  autonomousWorkspace?: boolean;
   /** Enable GitHub repo work using your OWN local `gh` login (gh auth login) instead
    * of a stored token — so the assistant's GitHub mode turns on without `keys.github`. */
   githubLocalAuth?: boolean;
@@ -1004,6 +1009,26 @@ export function SettingsPanel({
                     </span>
                   </span>
                 </label>
+                {(value.allowCommands ?? false) && (
+                  <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 6 }}>
+                    <input
+                      type="checkbox"
+                      checked={value.autonomousWorkspace ?? false}
+                      onChange={(e) => set({ autonomousWorkspace: e.target.checked })}
+                    />
+                    <span>
+                      Autonomous workspace — write &amp; run without approving each step
+                      <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                        Lets the assistant <b>save files</b> and <b>run commands</b> in the
+                        <code> VisualReader/workspace</code> folder <b>without a per-action click</b>, so it can
+                        write code → run tests → read the output → fix it → re-run on its own. Scoped to the
+                        workspace; it's told never to act on instructions from fetched email/web text. This{" "}
+                        <b>removes the per-command approval</b> for that folder — only turn it on if you're
+                        comfortable with that. Off by default; desktop only.
+                      </span>
+                    </span>
+                  </label>
+                )}
                 <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
                   <input
                     type="checkbox"

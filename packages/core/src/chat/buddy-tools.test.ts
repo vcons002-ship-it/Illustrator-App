@@ -803,6 +803,39 @@ describe("run_command tool", () => {
   });
 });
 
+describe("write_file tool", () => {
+  it("parses a write_file call (path + content) and requires both", () => {
+    expect(parseBuddyToolCall('{"tool":"write_file","path":"a.py","content":"print(1)"}')).toEqual({
+      tool: "write_file",
+      path: "a.py",
+      content: "print(1)",
+    });
+    // Empty content is valid (an empty file); a missing path is not.
+    expect(parseBuddyToolCall('{"tool":"write_file","path":"a.py","content":""}')).toEqual({
+      tool: "write_file",
+      path: "a.py",
+      content: "",
+    });
+    expect(parseBuddyToolCall('{"tool":"write_file","content":"x"}')).toBeUndefined();
+  });
+
+  it("advertises write_file + the autonomy note only when Autonomous workspace is on", () => {
+    const cmds = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true });
+    expect(cmds).not.toContain('"tool":"write_file"');
+    const auto = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true, canAutonomousWorkspace: true });
+    expect(auto).toContain('"tool":"write_file"');
+    expect(auto).toMatch(/AUTONOMOUS WORKSPACE is ON/);
+  });
+
+  it("feeds the saved path back so the model can run it", () => {
+    const ok = formatBuddyToolResult({ tool: "write_file", path: "a.py", content: "x" }, { writeFile: { path: "/ws/a.py", ok: true } });
+    expect(ok).toContain("/ws/a.py");
+    expect(ok).toContain("run_command");
+    const bad = formatBuddyToolResult({ tool: "write_file", path: "a.py", content: "x" }, { writeFile: { path: "a.py", ok: false, error: "denied" } });
+    expect(bad).toContain("failed");
+  });
+});
+
 describe("find_files tool", () => {
   it("parses a find_files call and caps the query", () => {
     expect(parseBuddyToolCall('{"tool":"find_files","query":"thermo notes"}')).toEqual({

@@ -854,6 +854,60 @@ async fn save_file(app: AppHandle, filename: String, body_base64: String) -> Res
     .map_err(|e| e.to_string())?
 }
 
+/// Write a file the assistant authored INTO the workspace (or the session's chosen folder) so it can
+/// then be run via `run_command` — the autonomous write→run→fix loop. `rel_path` is workspace-relative
+/// and sanitized component-by-component (`..`, `.`, absolute parts and illegal chars are dropped) so it
+/// can NEVER escape the base directory. Only reached when Autonomous workspace is on (the write_file
+/// tool). Returns the absolute path written. Mirrors `run_command`'s base-dir resolution.
+#[tauri::command]
+async fn write_workspace_file(
+    app: AppHandle,
+    rel_path: String,
+    content_base64: String,
+    cwd: Option<String>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(content_base64.as_bytes())
+            .map_err(|e| e.to_string())?;
+        // Base: the session's working folder when it's a real directory, else the sandbox workspace.
+        let base = match cwd
+            .filter(|c| !c.is_empty())
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.is_dir())
+        {
+            Some(p) => p,
+            None => {
+                let d = workspace_dir(&app);
+                std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+                d
+            }
+        };
+        // Sanitize each component so the result stays INSIDE base (no traversal / absolute paths).
+        let mut dest = base.clone();
+        let mut any = false;
+        for part in rel_path.split(['/', '\\']) {
+            let p = part.trim();
+            if p.is_empty() || p == "." || p == ".." {
+                continue;
+            }
+            dest.push(sanitize_filename(p));
+            any = true;
+        }
+        if !any {
+            return Err("invalid file path".to_string());
+        }
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&dest, &bytes).map_err(|e| e.to_string())?;
+        Ok(dest.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Strip any path separators / parent refs so a renderer-supplied name can only
 /// ever land a file INSIDE the exports dir (never traverse out of it).
 fn sanitize_filename(name: &str) -> String {
@@ -1850,6 +1904,7 @@ fn main() {
             gpu_info,
             http_fetch,
             save_file,
+            write_workspace_file,
             search_files,
             read_file,
             run_command,

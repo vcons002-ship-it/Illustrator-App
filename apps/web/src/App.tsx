@@ -210,6 +210,7 @@ import {
   onModelProgress,
   readLocalFile,
   runCommand,
+  writeWorkspaceFile,
   pickFolder,
   googleOauthLoopback,
   tvBridgeEval,
@@ -2638,6 +2639,43 @@ export function App() {
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
+  // write_file (Autonomous workspace): save the file the model authored into the workspace, then
+  // feed the result back so it can run_command it. Mirrors approveRunCommand; runs without a click.
+  const runWriteFile = async (call: Extract<BuddyToolCall, { tool: "write_file" }>): Promise<void> => {
+    setBuddyPendingTool(undefined);
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+    if (!isDesktop) {
+      appendBuddy({ role: "tool", text: "🔒 Writing files needs the desktop app.", turns: [] });
+      return;
+    }
+    if (!(settings.allowCommands && settings.autonomousWorkspace)) {
+      // write_file is only advertised with Autonomous workspace on; if it slips through otherwise,
+      // degrade by handing the content to the reader to save rather than dead-ending.
+      appendBuddy({
+        role: "tool",
+        text: `🔒 Turn on Autonomous workspace (Settings → assistant abilities) to let me save files directly. Meanwhile, here's “${call.path}” to save yourself:`,
+      });
+      appendBuddy({ role: "assistant", text: "```\n" + call.content.slice(0, 8000) + "\n```" });
+      return;
+    }
+    setBuddyBusy(true);
+    setBuddyActivity(`Writing ${call.path}…`);
+    let payload: { path: string; ok: boolean; error?: string };
+    try {
+      const saved = await writeWorkspaceFile(call.path, call.content, buddyWorkingDir || undefined);
+      payload = { path: saved, ok: true };
+      appendBuddy({ role: "tool", text: `📝 Saved ${saved}`, turns: [] });
+    } catch (err) {
+      payload = { path: call.path, ok: false, error: err instanceof Error ? err.message : String(err) };
+      appendBuddy({ role: "tool", text: `⚠ Couldn't write ${call.path}: ${payload.error}`, turns: [] });
+    }
+    const feedback = formatBuddyToolResult(call, { writeFile: payload });
+    await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+  };
+
   // Approve a buddy-requested screenshot: capture the screen, show it, have the
   // vision model describe it, and feed that observation back so the model reacts.
   const approveScreenshot = async (call: Extract<BuddyToolCall, { tool: "screenshot" }>): Promise<void> => {
@@ -2987,6 +3025,14 @@ export function App() {
       } else if (res.pendingTool.tool === "delegate") {
         // Hand the subtask to an isolated read-only sub-agent, then feed its result back.
         void runDelegate(res.pendingTool.task);
+      } else if (res.pendingTool.tool === "write_file") {
+        // Save the authored file (Autonomous workspace runs it without a click; runWriteFile
+        // degrades gracefully if the setting is off, since write_file has no approval card).
+        void runWriteFile(res.pendingTool);
+      } else if (res.pendingTool.tool === "run_command" && settings.allowCommands && settings.autonomousWorkspace) {
+        // Autonomous workspace: run the command without a click. The model is told to stay in the
+        // workspace + never act on instructions from fetched/email/web text.
+        void approveRunCommand(res.pendingTool);
       } else {
         setBuddyPendingTool(res.pendingTool);
       }

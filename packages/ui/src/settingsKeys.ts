@@ -33,6 +33,7 @@ export const TUNING_FIELDS = [
   "localContextTokens",
   // Read when building the buddy prompt; toggling it must not rebuild the engine.
   "allowCommands",
+  "autonomousWorkspace",
   "allowTaskAutomation",
   "allowTradingViewBridge",
   "autoLearnSkills",

@@ -149,6 +149,7 @@ type HostToolName =
   | "generate_image"
   | "find_files"
   | "run_command"
+  | "write_file"
   | "screenshot"
   | "plan_task"
   | "prep_order"
@@ -158,6 +159,7 @@ const HOST_TOOLS = new Set<HostToolName>([
   "generate_image",
   "find_files",
   "run_command",
+  "write_file",
   "screenshot",
   "plan_task",
   "prep_order",
@@ -295,7 +297,7 @@ export async function runBuddyTurn(opts: {
 /** Execute one auto-run buddy tool (everything but generate_image). Exported for
  * the slash-command path, which runs tools directly without an LLM round. */
 export async function runBuddyTool(
-  call: Exclude<BuddyToolCall, { tool: "generate_image" | "find_files" | "run_command" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" }>,
+  call: Exclude<BuddyToolCall, { tool: "generate_image" | "find_files" | "run_command" | "write_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" }>,
   deps: BuddyDeps,
 ): Promise<BuddyToolResultPayload> {
   try {

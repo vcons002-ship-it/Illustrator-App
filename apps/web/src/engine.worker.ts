@@ -2295,6 +2295,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         slash.call.tool === "generate_image" ||
         slash.call.tool === "find_files" ||
         slash.call.tool === "run_command" ||
+        slash.call.tool === "write_file" ||
         slash.call.tool === "screenshot" ||
         slash.call.tool === "plan_task" ||
         slash.call.tool === "prep_order" ||
@@ -2351,6 +2352,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         ...(corsProxyAvailable ? { canSearchFiles: true } : {}),
         // Desktop + explicit opt-in: the run_command tool executes shell commands.
         ...(corsProxyAvailable && settings?.allowCommands ? { canRunCommands: true } : {}),
+        // Autonomous workspace: write_file + run_command run without a per-action click.
+        ...(corsProxyAvailable && settings?.allowCommands && settings?.autonomousWorkspace
+          ? { canAutonomousWorkspace: true }
+          : {}),
         // Wolfram|Alpha grounding when an AppID is configured.
         ...(settings?.keys?.wolfram ? { canWolfram: true } : {}),
         // GitHub repo work rides run_command (desktop + commands), authenticated by a
