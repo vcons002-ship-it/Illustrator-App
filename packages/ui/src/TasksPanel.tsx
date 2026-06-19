@@ -234,6 +234,15 @@ export const TasksPanel = memo(function TasksPanel({
     () => plans.filter((p) => p.status !== "archived").sort((a, b) => b.updatedAt - a.updatedAt),
     [plans],
   );
+  // Completed tasks are hidden by default so the timeline shows what's still to do; a toggle
+  // brings them back. `visible` is what the timeline/list render from; `active` stays the full
+  // non-archived set for counts + resolving a directly-selected task.
+  const [hideCompleted, setHideCompleted] = useState(true);
+  const completedCount = useMemo(() => active.filter((p) => p.status === "completed").length, [active]);
+  const visible = useMemo(
+    () => (hideCompleted ? active.filter((p) => p.status !== "completed") : active),
+    [active, hideCompleted],
+  );
   // Unplanned stubs (the backlog the background sweep / "Plan all pending" works on).
   const pendingCount = useMemo(() => active.filter(needsPlanning).length, [active]);
   // Removed/ignored tasks — the undoable trash, newest first.
@@ -253,7 +262,7 @@ export const TasksPanel = memo(function TasksPanel({
 
   const selected = active.find((p) => p.id === selectedId);
   // All-tasks Gantt: a parent bar per task, expanded ones revealing their sub-task bars inline.
-  const rows = useMemo(() => plansToGanttRows(active, { expandedPlanIds: expanded }), [active, expanded]);
+  const rows = useMemo(() => plansToGanttRows(visible, { expandedPlanIds: expanded }), [visible, expanded]);
   // Individual-task Gantt: just the selected task with all its sub-tasks shown.
   const selectedRows = useMemo(() => (selected ? plansToGanttRows([selected], { expandedPlanIds: "all" }) : []), [selected]);
   const toggleExpand = (id: string) =>
@@ -263,7 +272,7 @@ export const TasksPanel = memo(function TasksPanel({
       else next.add(id);
       return next;
     });
-  const expandAll = () => setExpanded(new Set(active.map((p) => p.id)));
+  const expandAll = () => setExpanded(new Set(visible.map((p) => p.id)));
   const collapseAll = () => setExpanded(new Set());
 
   const submit = (planNow: boolean) => {
@@ -368,6 +377,15 @@ export const TasksPanel = memo(function TasksPanel({
                 {planningPending ? "🔄 Planning…" : `⚡ Plan all pending (${pendingCount})`}
               </button>
             ) : null}
+            {completedCount > 0 ? (
+              <button
+                style={hideCompleted ? btn : toggleOn}
+                onClick={() => setHideCompleted((v) => !v)}
+                title={hideCompleted ? "Show completed tasks on the timeline" : "Hide completed tasks"}
+              >
+                {hideCompleted ? `✓ Show completed (${completedCount})` : `Hide completed (${completedCount})`}
+              </button>
+            ) : null}
             <span style={{ fontSize: 12, opacity: 0.65 }}>
               The assistant researches it and lays the steps out on your timeline.
             </span>
@@ -394,12 +412,7 @@ export const TasksPanel = memo(function TasksPanel({
           </div>
         )}
 
-        {active.length === 0 ? (
-          <div style={{ opacity: 0.6, fontSize: 13, padding: "16px 0" }}>
-            No tasks yet. Click <strong>+ Add task</strong> (with a due date) and the assistant will plan it — or in chat
-            say “plan my car registration renewal”.
-          </div>
-        ) : selected ? (
+        {selected ? (
           // Individual task view — the one task's sub-tasks on their own Gantt + the detail card.
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <button style={btn} onClick={() => setSelectedId(undefined)}>
@@ -420,6 +433,20 @@ export const TasksPanel = memo(function TasksPanel({
               </div>
             ) : null}
             {cardFor(selected, true)}
+          </div>
+        ) : visible.length === 0 ? (
+          <div style={{ opacity: 0.6, fontSize: 13, padding: "16px 0" }}>
+            {active.length === 0 ? (
+              <>
+                No tasks yet. Click <strong>+ Add task</strong> (with a due date) and the assistant will plan it — or in
+                chat say “plan my car registration renewal”.
+              </>
+            ) : (
+              <>
+                All caught up — {completedCount} completed task{completedCount === 1 ? "" : "s"} hidden. Use{" "}
+                <strong>Show completed</strong> above to see {completedCount === 1 ? "it" : "them"}.
+              </>
+            )}
           </div>
         ) : view === "timeline" ? (
           <div>
@@ -449,7 +476,7 @@ export const TasksPanel = memo(function TasksPanel({
             </div>
           </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{active.map((p) => cardFor(p))}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{visible.map((p) => cardFor(p))}</div>
         )}
 
         {/* Removed/ignored tasks — the undoable trash. Restore brings one back (and un-ignores it);

@@ -211,8 +211,11 @@ async function handleAssessImage(
 function readUrlText(signal: AbortSignal): (url: string) => Promise<{ title?: string; text: string }> {
   return async (url) => {
     const cf = corsFetch();
+    // Cap the readable text pulled into chat. Big enough for a full long article (a 16K cap
+    // could stop inside a large page's header/nav before the body); still bounded so a
+    // mis-aimed URL can't blow the chat context.
     const page = await fetchPageText(url, {
-      maxChars: 16_000,
+      maxChars: 50_000,
       signal,
       ...(cf ? { transport: new DirectTransport(cf) } : {}),
     });

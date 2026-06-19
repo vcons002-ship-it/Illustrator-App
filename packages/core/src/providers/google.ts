@@ -13,10 +13,22 @@ import type { VisualReaderStore } from "../storage/store.js";
  * the network functions take an injected Transport so they're testable with a fake.
  */
 
-/** Read Gmail + read/create Calendar events + read/create Tasks. */
+/**
+ * Read Gmail + read/create Calendar events + read/create Tasks.
+ *
+ * `calendar.events` grants reading/creating events, but NOT listing the user's calendars
+ * (`calendarList.list` → 403 "insufficient authentication scopes"), which the calendar grid
+ * and the email+calendar sweep both need. `calendar.readonly` supplies that calendar-list read
+ * (and read of events on every calendar) while `calendar.events` keeps the create path —
+ * read-everything + create-events, never delete, matching the app's Google posture.
+ *
+ * NOTE: this list changed — anyone who connected Google before it did has a token without the
+ * new scope and must reconnect (Settings → Google → disconnect, then Connect) to clear the 403.
+ */
 export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/calendar.events",
+  "https://www.googleapis.com/auth/calendar.readonly",
   "https://www.googleapis.com/auth/tasks",
 ] as const;
 

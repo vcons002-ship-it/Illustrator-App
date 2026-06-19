@@ -39,7 +39,7 @@ class FakeTransport implements Transport {
 const b64url = (s: string) => btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 
 describe("buildGoogleAuthUrl", () => {
-  it("requests offline access + PKCE with all three scopes", () => {
+  it("requests offline access + PKCE with all scopes (incl. calendar.readonly for calendarList)", () => {
     const url = new URL(
       buildGoogleAuthUrl({ clientId: "cid", redirectUri: "http://127.0.0.1:5555", codeChallenge: "chal", state: "st" }),
     );
@@ -51,6 +51,9 @@ describe("buildGoogleAuthUrl", () => {
     expect(p.get("code_challenge_method")).toBe("S256");
     expect(p.get("access_type")).toBe("offline");
     expect(p.get("scope")).toBe(GOOGLE_SCOPES.join(" "));
+    // calendarList.list (the calendar grid + email/calendar sweep) needs a calendar-list read
+    // scope — calendar.events alone 403s. Lock that in.
+    expect(GOOGLE_SCOPES).toContain("https://www.googleapis.com/auth/calendar.readonly");
   });
 });
 
