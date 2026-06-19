@@ -525,6 +525,9 @@ describe("google tools", () => {
       query: "is:unread",
       max: 5,
     });
+    // An empty/missing query means "newest emails" → defaults to in:inbox instead of being rejected.
+    expect(parseBuddyToolCall('{"tool":"gmail_search","query":""}')).toEqual({ tool: "gmail_search", query: "in:inbox" });
+    expect(parseBuddyToolCall('{"tool":"gmail_search"}')).toEqual({ tool: "gmail_search", query: "in:inbox" });
     expect(parseBuddyToolCall('{"tool":"read_email","id":"abc"}')).toEqual({ tool: "read_email", id: "abc" });
     expect(parseBuddyToolCall('{"tool":"list_events"}')).toEqual({ tool: "list_events" });
     expect(
@@ -797,6 +800,39 @@ describe("run_command tool", () => {
     );
     expect(fail).toContain("exit code 1");
     expect(fail).toContain("SyntaxError");
+  });
+});
+
+describe("write_file tool", () => {
+  it("parses a write_file call (path + content) and requires both", () => {
+    expect(parseBuddyToolCall('{"tool":"write_file","path":"a.py","content":"print(1)"}')).toEqual({
+      tool: "write_file",
+      path: "a.py",
+      content: "print(1)",
+    });
+    // Empty content is valid (an empty file); a missing path is not.
+    expect(parseBuddyToolCall('{"tool":"write_file","path":"a.py","content":""}')).toEqual({
+      tool: "write_file",
+      path: "a.py",
+      content: "",
+    });
+    expect(parseBuddyToolCall('{"tool":"write_file","content":"x"}')).toBeUndefined();
+  });
+
+  it("advertises write_file + the autonomy note only when Autonomous workspace is on", () => {
+    const cmds = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true });
+    expect(cmds).not.toContain('"tool":"write_file"');
+    const auto = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true, canAutonomousWorkspace: true });
+    expect(auto).toContain('"tool":"write_file"');
+    expect(auto).toMatch(/AUTONOMOUS WORKSPACE is ON/);
+  });
+
+  it("feeds the saved path back so the model can run it", () => {
+    const ok = formatBuddyToolResult({ tool: "write_file", path: "a.py", content: "x" }, { writeFile: { path: "/ws/a.py", ok: true } });
+    expect(ok).toContain("/ws/a.py");
+    expect(ok).toContain("run_command");
+    const bad = formatBuddyToolResult({ tool: "write_file", path: "a.py", content: "x" }, { writeFile: { path: "a.py", ok: false, error: "denied" } });
+    expect(bad).toContain("failed");
   });
 });
 

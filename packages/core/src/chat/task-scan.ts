@@ -26,20 +26,18 @@ export function buildScanPrompt(emails: EmailSummary[], events: CalendarEvent[],
     .map((e) => `[event:${e.id}] ${e.summary} — ${e.start}`)
     .join("\n");
   const system =
-    `${todayIso ? `Today is ${todayIso}. ` : ""}You triage a reader's recent email and upcoming ` +
-    "calendar into two kinds of task:\n" +
-    "(A) ONE-OFF TO-DOS with a deadline or required steps — renewals, appointments to prep for, " +
-    "bills/payments due, forms to file, RSVPs, confirmations needing a reply.\n" +
-    "(B) UPCOMING EVENTS THAT NEED PLANNING/PREP ahead of time — above all TRIPS and TRAVEL (a 'trip " +
-    "to …', a calendar event in another city, a visit/conference/wedding away from home): these imply " +
-    "PREREQUISITES (flights/transport, lodging, local transport) that must be arranged in advance. Use " +
-    "the EMAILS as evidence of what is already booked — only flag the GAP (e.g. a trip with NO flight/" +
-    "hotel confirmation visible). For these, set 'suggestedDeadlineIso' to a sensible ARRANGE-BY date " +
-    "BEFORE the event (book flights/lodging early), not the event date itself, and name the gap in the " +
-    "title (e.g. 'Plan travel for the Iowa trip — no flight booked yet').\n" +
-    "IGNORE newsletters, marketing, promotions, social notifications, receipts, and pure FYI. Be " +
-    "conservative — only flag a real to-do or a genuine planning need; an empty array is fine. For " +
-    "each, echo its exact id. Respond with ONLY a JSON array (empty array if nothing):\n" +
+    `${todayIso ? `Today is ${todayIso}. ` : ""}You triage a reader's recent email and upcoming calendar and ` +
+    "surface anything that's a GENUINE TASK for THIS person — use your own judgment about what they need to act " +
+    "on, decide, reply to, or plan. There's no fixed checklist: it spans one-off to-dos with a deadline or steps " +
+    "(renewals, appointments, bills/payments due, forms, RSVPs, replies someone is waiting on) AND upcoming things " +
+    "that need PLANNING/PREP ahead of time — especially TRIPS and TRAVEL: use the EMAILS as evidence of what is " +
+    "already booked and flag the GAP (e.g. a trip with NO flight/lodging confirmation visible), naming the gap in " +
+    "the title and setting 'suggestedDeadlineIso' to a sensible ARRANGE-BY date BEFORE the event (book flights/" +
+    "lodging early), not the event date.\n" +
+    "Skip obvious marketing, newsletters, promotions, social notifications, and pure receipts/FYI with no action. " +
+    "But DON'T be over-conservative — if something plausibly needs an action, a decision, a reply, or planning, " +
+    "surface it; a borderline item the reader can dismiss beats a missed obligation. For each, echo its exact id. " +
+    "Respond with ONLY a JSON array (empty if nothing genuinely needs action):\n" +
     '[{"id": "email:..." | "event:...", "title": "short task name", "reason": "why it needs action ' +
     'or what prep is missing", "suggestedDeadlineIso": "ISO date or empty"}]';
   const user =

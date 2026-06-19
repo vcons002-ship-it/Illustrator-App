@@ -260,6 +260,18 @@ export function runCommand(command: string, githubToken?: string, cwd?: string):
   });
 }
 
+/**
+ * Write a file the assistant authored (a script, data, config) INTO the desktop workspace so it can
+ * then be run via {@link runCommand}. `relPath` is workspace-relative; the Rust side sanitizes it so
+ * it can never escape the workspace folder. `cwd` pins the session's chosen working folder (else the
+ * default workspace). Returns the absolute path written. Rejects on the web (no filesystem). Only
+ * reached when Autonomous workspace is on (no per-write click) — see the write_file tool.
+ */
+export function writeWorkspaceFile(relPath: string, content: string, cwd?: string): Promise<string> {
+  const contentBase64 = bytesToBase64(new TextEncoder().encode(content));
+  return invoke<string>("write_workspace_file", { relPath, contentBase64, ...(cwd ? { cwd } : {}) });
+}
+
 /** Native "choose a folder" dialog (desktop). Resolves to the path, or undefined on
  * cancel / on the web. */
 export async function pickFolder(): Promise<string | undefined> {

@@ -89,6 +89,29 @@ describe("parsePlan", () => {
     expect(plan.steps[1]!.actor).toBe("user_action");
   });
 
+  it("attaches pulled reference docs to the step (item: link docs to tasks)", () => {
+    const withDocs = JSON.stringify({
+      title: "Iowa trip",
+      steps: [
+        {
+          title: "Confirm hotel",
+          actor: "user_action",
+          links: [{ label: "Booking", url: "https://booking.example/abc" }],
+          docs: [
+            { title: "Hotel confirmation details", kind: "reference", body: "Check-in 6/20, conf# AB123, 123 Main St.", fence: "md" },
+            { title: "no body", kind: "reference" }, // dropped — must have body
+          ],
+        },
+      ],
+    });
+    const parsed = parsePlan(withDocs)!;
+    expect(parsed.steps![0]!.docs).toHaveLength(1);
+    expect(parsed.steps![0]!.docs![0]).toMatchObject({ title: "Hotel confirmation details", kind: "reference" });
+    const plan = normalizeTaskPlan({ ...parsed, source: { kind: "typed", text: "iowa" } });
+    expect(plan.steps[0]!.docs[0]!.body).toContain("AB123");
+    expect(plan.steps[0]!.links[0]!.url).toBe("https://booking.example/abc");
+  });
+
   it("parses clarifyingQuestions when the plan needs more info", () => {
     const withQs = JSON.stringify({
       title: "Plan the Iowa trip",
