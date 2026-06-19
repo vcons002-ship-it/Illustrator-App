@@ -20,6 +20,9 @@ import {
   resolveAssetName,
   resolveQuality,
   styleLoraDownload,
+  comboVramGb,
+  combFitsCard,
+  RECOMMENDED_WORKER_COMBOS,
   type LocalTextServerId,
   type ProviderInfo,
 } from "@visual-reader/core";
@@ -1138,6 +1141,49 @@ export function SettingsPanel({
                       value={value.subAgentModel ?? ""}
                       onChange={(e) => set({ subAgentModel: e.target.value })}
                     />
+                  </div>
+                  {(() => {
+                    // Honest, rough VRAM read for the chosen worker + (local) main model, so you can
+                    // tell at a glance whether the combo fits your card before launching a server.
+                    const cardGb = value.gpuVramMb ? Math.round(value.gpuVramMb / 1024) : 32; // default = a 5090
+                    const mainId = (value.chatLocalModel ?? value.localTextModel ?? "").trim();
+                    const workerId = (value.subAgentModel ?? "").trim();
+                    const v = comboVramGb(mainId, workerId);
+                    if (v.workerGb === undefined && v.mainGb === undefined) return null;
+                    const fit = combFitsCard(v.totalGb, cardGb);
+                    return (
+                      <div style={{ fontSize: 11, opacity: 0.8, marginTop: 6 }}>
+                        {v.workerGb !== undefined && <>Worker ≈ <b>{v.workerGb} GB</b> (Q4)</>}
+                        {v.mainGb !== undefined && (
+                          <>
+                            {" "}
+                            · main ≈ <b>{v.mainGb} GB</b> · total ≈ <b>{v.totalGb} GB</b> on your {cardGb} GB card —{" "}
+                            <span style={{ color: fit.fits ? "#6ee7a8" : "#f0a868" }}>
+                              {fit.fits ? `fits, ~${fit.headroomGb} GB free for KV cache` : `tight (~${fit.headroomGb} GB left)`}
+                            </span>
+                          </>
+                        )}
+                        {v.mainGb === undefined && v.workerGb !== undefined && (
+                          <span style={{ opacity: 0.7 }}> · set a local main model to see the combined total</span>
+                        )}
+                      </div>
+                    );
+                  })()}
+                  <div style={{ fontSize: 11, opacity: 0.6, marginTop: 6 }}>
+                    Recommended combos (Q4, ~32 GB card):
+                    <div style={{ marginTop: 3, display: "grid", gap: 2 }}>
+                      {RECOMMENDED_WORKER_COMBOS.map((c) => {
+                        const cv = comboVramGb(c.main, c.worker);
+                        return (
+                          <div key={`${c.main}/${c.worker}`} style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            <span style={{ fontFamily: "monospace" }}>
+                              {c.main} + {c.worker}
+                            </span>
+                            <span style={{ opacity: 0.75 }}>≈ {cv.totalGb} GB — {c.note}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 </label>
                 {onConnectGoogle && (

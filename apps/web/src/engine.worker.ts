@@ -2413,6 +2413,22 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             maxTokens: budgets.reply,
             signal: ac.signal,
           });
+        // LIVE STATUS: parallel sub-agents are invisible (they don't stream into the chat), so report
+        // progress on the buddy-activity line — which tier is running them and how many have finished.
+        const total = tasks.length;
+        const tier = workerLlm ? `worker model (${subModel})` : "main model";
+        const concurrency = Math.max(1, Math.min(settings?.agentConcurrency ?? 2, total));
+        let done = 0;
+        const announce = () =>
+          post({
+            type: "buddyActivity",
+            requestId: msg.requestId,
+            text:
+              done < total
+                ? `Running ${total} sub-agents on the ${tier} (${concurrency} at a time)… ${done}/${total} done`
+                : `Sub-agents finished (${total}/${total}) — synthesizing…`,
+          });
+        announce();
         return mapWithConcurrency(tasks, settings?.agentConcurrency ?? 2, async (task) => {
           try {
             const sub = await runOne(workerLlm ?? llm, task);
@@ -2428,6 +2444,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
               }
             }
             return { task, result: `(sub-agent failed: ${e instanceof Error ? e.message : String(e)})` };
+          } finally {
+            done++;
+            announce();
           }
         });
       },
