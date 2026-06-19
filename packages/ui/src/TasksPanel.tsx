@@ -196,8 +196,12 @@ function PlanCard({
             ✓ Mark step done
           </button>
         ) : null}
-        {onIgnoreTask && (plan.source.kind === "scan" || plan.source.kind === "email" || plan.source.kind === "calendar") ? (
-          <button style={btn} onClick={onIgnoreTask} title="Don't surface this again — also tells future scans/imports to skip it. Undo from the Removed list.">
+        {onIgnoreTask ? (
+          <button
+            style={btn}
+            onClick={onIgnoreTask}
+            title="Ignore this task — archives it and stops it coming back (a recurring task won't repeat; scans/imports skip it). Undo from the Removed list."
+          >
             🚫 Ignore
           </button>
         ) : null}

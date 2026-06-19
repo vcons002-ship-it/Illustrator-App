@@ -637,6 +637,8 @@ export function App() {
     async (planId: string) => {
       const plan = (await loadTaskPlans(libraryStore)).find((p) => p.id === planId);
       if (!plan?.recurrence) return;
+      // An ignored/removed recurring task must never roll forward — ignoring it stops it for good.
+      if (plan.status === "archived") return;
       const allDone = plan.steps.length > 0 && plan.steps.every((s) => s.status === "done");
       if (!allDone && plan.status !== "completed") return;
       const next = nextOccurrence(plan, new Date().toISOString().slice(0, 10));
