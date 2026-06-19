@@ -10,9 +10,10 @@ const emails: EmailSummary[] = [
 const events: CalendarEvent[] = [{ id: "e1", summary: "Dentist", start: "2026-06-20T14:00:00Z", end: "2026-06-20T15:00:00Z" }];
 
 describe("buildScanPrompt", () => {
-  it("lists emails+events with ids and asks only for actionable items", () => {
+  it("lists emails+events with ids and asks for genuine tasks, with LLM judgment", () => {
     const [sys, user] = buildScanPrompt(emails, events);
-    expect(sys!.content).toMatch(/IGNORE newsletters, marketing/);
+    expect(sys!.content).toMatch(/skip obvious marketing|newsletters/i);
+    expect(sys!.content).toMatch(/your own judgment|don't be over-conservative/i); // freedom, not a fixed checklist
     expect(sys!.content).toMatch(/JSON array/);
     expect(user!.content).toContain("[email:m1]");
     expect(user!.content).toContain("[event:e1]");

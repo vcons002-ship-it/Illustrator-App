@@ -3,7 +3,7 @@ import { stripThink } from "../providers/llm/extraction.js";
 import { FAITHFULNESS_RULES } from "./document-polish.js";
 import { formatBuddyToolResult, parseBuddyToolCall, type BuddyToolCall, type BuddyToolResultPayload } from "./buddy-tools.js";
 import { runBuddyTool, type BuddyDeps } from "./buddy-session.js";
-import { normalizeTaskPlan, type TaskPlan, type TaskPlanInput, type TaskSource, type TaskStep } from "./tasks.js";
+import { normalizeTaskPlan, type TaskDoc, type TaskPlan, type TaskPlanInput, type TaskSource, type TaskStep } from "./tasks.js";
 
 /**
  * Task PLANNER — the prompt + parse layer for the orchestrator. Given a real-world
@@ -79,11 +79,19 @@ export function buildPlanPrompt(sourceText: string, researchNotes: string, today
     'a short watch-and-rebook reminder if prices may drop. When KEY FACTS are missing that you need ' +
     "to finalize, DO NOT invent them — list them in \"clarifyingQuestions\" (short, specific, only " +
     "what you genuinely need: e.g. departure city, exact dates, budget, travellers) and base the plan " +
-    "on reasonable placeholders meanwhile. Output ONLY this JSON (no prose, no code fence):\n" +
+    "on reasonable placeholders meanwhile.\n" +
+    'LINK + ATTACH what you pulled, to spare the reader the legwork: put source/official URLs in a step\'s "links". ' +
+    "When your research RETRIEVED a document they'll need — the key details from a confirmation/itinerary email, a " +
+    "calendar invite's logistics (address, time, dial-in, parking), or the required fields/instructions from a web " +
+    'form or official page — ATTACH it to the relevant step as a "reference" doc (a short title + the retrieved ' +
+    'content as "body", fence "md"), so they don\'t have to dig it back up. Attach ONLY what you actually ' +
+    "retrieved; never fabricate a document's contents.\n" +
+    "Output ONLY this JSON (no prose, no code fence):\n" +
     '{"title": string, "summary": string, "deadlineIso": string, "leadTimeDays": number, ' +
     '"estCost": string, "clarifyingQuestions": [string], "steps": [{"title": string, "detail": ' +
     'string, "actor": "ai_prep" | "user_action", "dueIso": string, "estCost": string, "links": ' +
-    '[{"label": string, "url": string, "official": boolean}], "researchNotes": string}]}\n' +
+    '[{"label": string, "url": string, "official": boolean}], "docs": [{"title": string, "kind": ' +
+    '"reference" | "checklist", "body": string, "fence": string}], "researchNotes": string}]}\n' +
     "Omit a field rather than inventing it. Base every fact on the research below — never invent " +
     "deadlines, costs, URLs or steps.";
   const user =
@@ -140,6 +148,21 @@ function parseStep(v: unknown): (Partial<TaskStep> & { title: string }) | undefi
         })
         .filter((l): l is { label: string; url: string; official?: boolean } => !!l)
     : [];
+  // Reference/checklist docs the planner pulled (an email's details, an invite's logistics, a form's
+  // instructions) and attached to the step, so they ride on the task. normalizeStep caps the body.
+  const docs = Array.isArray(o.docs)
+    ? o.docs
+        .map((d) => {
+          const dd = d as Record<string, unknown>;
+          const title2 = str(dd.title);
+          const body = str(dd.body);
+          if (!title2 || !body) return undefined;
+          const kind = dd.kind === "checklist" || dd.kind === "draft" ? dd.kind : ("reference" as const);
+          return { title: title2, kind, body, ...(str(dd.fence) ? { fence: str(dd.fence)! } : {}) };
+        })
+        .filter((d): d is TaskDoc => !!d)
+        .slice(0, 6)
+    : [];
   return {
     title,
     ...(str(o.detail) ? { detail: str(o.detail)! } : {}),
@@ -148,6 +171,7 @@ function parseStep(v: unknown): (Partial<TaskStep> & { title: string }) | undefi
     ...(num(o.leadTimeDays) !== undefined ? { leadTimeDays: num(o.leadTimeDays)! } : {}),
     ...(str(o.estCost) ? { estCost: str(o.estCost)! } : {}),
     links,
+    ...(docs.length ? { docs } : {}),
     ...(str(o.researchNotes) ? { researchNotes: str(o.researchNotes)! } : {}),
   };
 }
