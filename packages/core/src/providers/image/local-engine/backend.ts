@@ -21,9 +21,24 @@ export interface LocalModelDescriptor {
   sizeGB: number;
 }
 
+/**
+ * The separate component files a split-file diffusion model loads (Flux.2 / Z-Image /
+ * Qwen-Image / UNET-only Flux.1): the text encoders and VAEs the engine has on disk. Empty
+ * for an all-in-one engine (AUTOMATIC1111 SD/SDXL) where the checkpoint bundles them. Drives
+ * the Settings dropdowns + the "which one works with this model" suggestion.
+ */
+export interface LocalEngineComponents {
+  /** Text-encoder filenames the engine exposes (CLIPLoader + DualCLIPLoader, deduped). */
+  textEncoders: string[];
+  /** VAE filenames the engine exposes (VAELoader). */
+  vaes: string[];
+}
+
 export interface LocalEngineBackend {
   /** Models the running engine has available right now. */
   listModels(): Promise<LocalModelDescriptor[]>;
+  /** Separate text-encoder + VAE files the engine has (empty for all-in-one engines). */
+  listComponents(): Promise<LocalEngineComponents>;
   /** Generate one image with the given checkpoint. */
   generate(input: ImageGenerationInput, model: string): Promise<ImageGenerationOutput>;
 }

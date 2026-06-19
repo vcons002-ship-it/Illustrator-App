@@ -281,6 +281,10 @@ export function App() {
   const [book, setBook] = useState<BookSource | undefined>();
   const [localError, setLocalError] = useState<string>("");
   const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
+  // Split-file component files (text encoders / VAEs) the local engine has, for the
+  // Settings dropdowns + the model-aware suggestion. Empty for an all-in-one (A1111) engine.
+  const [installedTextEncoders, setInstalledTextEncoders] = useState<string[]>([]);
+  const [installedVaes, setInstalledVaes] = useState<string[]>([]);
   const [connectingLocal, setConnectingLocal] = useState(false);
   const [textModels, setTextModels] = useState<InstalledModel[]>([]);
   const [connectingLocalText, setConnectingLocalText] = useState(false);
@@ -929,6 +933,17 @@ export function App() {
         setInstalledModels(models);
         setInstalledLoras(loras);
         setLoraFamilyMap(families);
+        // The managed engine is ComfyUI — read its text-encoder + VAE files over the HTTP API
+        // (same as the web "connect" path) so the split-file dropdowns are populated on desktop too.
+        try {
+          const comps = await new ComfyUIBackend({ baseUrl }).listComponents();
+          if (!cancelled) {
+            setInstalledTextEncoders(comps.textEncoders);
+            setInstalledVaes(comps.vaes);
+          }
+        } catch {
+          /* leave components empty — the fields fall back to manual entry */
+        }
         setSettings((s) => ({ ...s, engineBaseUrl: baseUrl, ...(vram ? { gpuVramMb: vram } : {}) }));
       } catch (err) {
         if (!cancelled) {
@@ -1076,6 +1091,15 @@ export function App() {
         backend === "a1111" ? new Automatic1111Backend({ baseUrl: url }) : new ComfyUIBackend({ baseUrl: url });
       const models = await engine.listModels();
       setInstalledModels(models);
+      // Also list the separate text-encoder + VAE files (for the split-file dropdowns).
+      // Best-effort: a failure just leaves the dropdowns as manual entry.
+      try {
+        const comps = await engine.listComponents();
+        setInstalledTextEncoders(comps.textEncoders);
+        setInstalledVaes(comps.vaes);
+      } catch {
+        /* leave components empty */
+      }
       setSettings((s) => {
         const keep = s.localModel && models.some((m) => m.id === s.localModel);
         const localModel = keep ? s.localModel : models[0]?.id;
@@ -4074,6 +4098,8 @@ export function App() {
             onChange={setSettings}
             isDesktop={isDesktop}
             installedModels={installedModels}
+            installedTextEncoders={installedTextEncoders}
+            installedVaes={installedVaes}
             onDownloadModel={onDownloadModel}
             onDownloadModelUrl={onDownloadModelUrl}
             downloadProgress={modelProgress}

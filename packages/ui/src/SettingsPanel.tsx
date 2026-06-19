@@ -23,6 +23,7 @@ import {
   comboVramGb,
   combFitsCard,
   RECOMMENDED_WORKER_COMBOS,
+  suggestComponents,
   type LocalTextServerId,
   type ProviderInfo,
 } from "@visual-reader/core";
@@ -274,6 +275,10 @@ export interface SettingsPanelProps {
   isDesktop?: boolean;
   /** Models the running engine has downloaded. */
   installedModels?: InstalledModel[];
+  /** Text-encoder files the local engine exposes (for the split-file dropdown). */
+  installedTextEncoders?: string[];
+  /** VAE files the local engine exposes (for the split-file dropdown). */
+  installedVaes?: string[];
   /** Start downloading a curated model; desktop only. */
   onDownloadModel?: (id: string) => void;
   /** Download a checkpoint from a pasted URL into the managed engine. */
@@ -320,6 +325,8 @@ export function SettingsPanel({
   onChange,
   isDesktop = false,
   installedModels = [],
+  installedTextEncoders = [],
+  installedVaes = [],
   onDownloadModel,
   onDownloadModelUrl,
   downloadProgress = {},
@@ -361,6 +368,12 @@ export function SettingsPanel({
   );
   const localBaseSampler = catalogEntryForModel(value.localModel ?? "")?.sampler ?? samplerFor(localFamily);
   const defaultCfg = localBaseSampler.guidance ?? localBaseSampler.cfg;
+  // Which text encoder + VAE the chosen image model wants, matched against the files the engine
+  // actually has — drives the split-file dropdowns + the "use this one" hint.
+  const componentHint = suggestComponents(value.localModel ?? "", localFamily, {
+    textEncoders: installedTextEncoders,
+    vaes: installedVaes,
+  });
 
   return (
     <div style={{ fontSize: 13, position: "relative" }}>
@@ -1392,26 +1405,74 @@ export function SettingsPanel({
               </summary>
               <p style={{ opacity: 0.6, fontSize: 11, margin: "4px 0 8px" }}>
                 Split-file models (Flux.2 / Z-Image / Qwen-Image) load a separate text encoder +
-                VAE — the app auto-detects them, but you can pin the exact filename (as ComfyUI
-                lists it in <code>models/text_encoders</code> / <code>models/vae</code>). The
-                sampler fields override the per-model defaults. Leave any field blank to auto.
+                VAE. The app suggests the ones that fit your chosen image model and picks them on
+                Auto — or pin a specific file below. The sampler fields override the per-model
+                defaults. Leave any field blank/Auto to let the app decide.
               </p>
-              <label style={rowStyle}>
-                <span>Text encoder file</span>
-                <input
-                  value={value.localTextEncoder ?? ""}
-                  placeholder="auto — e.g. qwen_3_8b_fp8mixed.safetensors"
-                  onChange={(e) => set({ localTextEncoder: e.target.value.trim() })}
-                />
-              </label>
-              <label style={rowStyle}>
-                <span>VAE file</span>
-                <input
-                  value={value.localVae ?? ""}
-                  placeholder="auto — e.g. full_encoder_small_decoder.safetensors"
-                  onChange={(e) => set({ localVae: e.target.value.trim() })}
-                />
-              </label>
+              {/* What the chosen image model needs — and whether a matching file is installed. */}
+              <p
+                style={{
+                  fontSize: 11,
+                  margin: "0 0 8px",
+                  padding: "6px 8px",
+                  borderRadius: 6,
+                  background: "rgba(120,160,255,0.08)",
+                  border: "1px solid rgba(120,160,255,0.18)",
+                }}
+              >
+                <b>For “{value.localModel || "your model"}”:</b> {componentHint.note}
+                {componentHint.usesComponents &&
+                  installedTextEncoders.length === 0 &&
+                  installedVaes.length === 0 && (
+                    <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
+                      Connect to your engine (Connect button above) to list installed files — then these
+                      become dropdowns.
+                    </span>
+                  )}
+              </p>
+              {!componentHint.usesComponents ? null : componentHint.encoderApplies ? (
+                installedTextEncoders.length > 0 ? (
+                  <ComponentSelect
+                    label="Text encoder file"
+                    valueId={value.localTextEncoder ?? ""}
+                    options={installedTextEncoders}
+                    recommended={componentHint.recommendedEncoder}
+                    onPick={(id) => set({ localTextEncoder: id })}
+                  />
+                ) : (
+                  <label style={rowStyle}>
+                    <span>Text encoder file</span>
+                    <input
+                      value={value.localTextEncoder ?? ""}
+                      placeholder={`auto${componentHint.recommendedEncoder ? ` — e.g. ${componentHint.recommendedEncoder}` : " — e.g. qwen_3_8b_fp8mixed.safetensors"}`}
+                      onChange={(e) => set({ localTextEncoder: e.target.value.trim() })}
+                    />
+                  </label>
+                )
+              ) : (
+                <p style={{ fontSize: 11, opacity: 0.55, margin: "0 0 8px" }}>
+                  Text encoders are auto-detected for this model (t5xxl + clip_l) — no need to pick one.
+                </p>
+              )}
+              {componentHint.vaeApplies &&
+                (installedVaes.length > 0 ? (
+                  <ComponentSelect
+                    label="VAE file"
+                    valueId={value.localVae ?? ""}
+                    options={installedVaes}
+                    recommended={componentHint.recommendedVae}
+                    onPick={(id) => set({ localVae: id })}
+                  />
+                ) : (
+                  <label style={rowStyle}>
+                    <span>VAE file</span>
+                    <input
+                      value={value.localVae ?? ""}
+                      placeholder={`auto${componentHint.recommendedVae ? ` — e.g. ${componentHint.recommendedVae}` : " — e.g. ae.safetensors"}`}
+                      onChange={(e) => set({ localVae: e.target.value.trim() })}
+                    />
+                  </label>
+                ))}
               <label style={rowStyle}>
                 <span>Sampler steps</span>
                 <input
@@ -2245,3 +2306,39 @@ const sectionHintStyle = {
   fontSize: 11,
   opacity: 0.6,
 } as const;
+
+/**
+ * A split-file component picker (text encoder / VAE): a dropdown of the files the engine has,
+ * with an "Auto (recommended: …)" default that maps to "" (let the backend resolve), the
+ * suggested file flagged inline, and any pinned-but-absent value still shown so it isn't lost.
+ */
+function ComponentSelect({
+  label,
+  valueId,
+  options,
+  recommended,
+  onPick,
+}: {
+  label: string;
+  valueId: string;
+  options: readonly string[];
+  recommended: string | undefined;
+  onPick: (id: string) => void;
+}) {
+  return (
+    <label style={rowStyle}>
+      <span>{label}</span>
+      <select value={valueId} onChange={(e) => onPick(e.target.value)}>
+        <option value="">{recommended ? `Auto — recommended: ${recommended}` : "Auto (best match)"}</option>
+        {options.map((o) => (
+          <option key={o} value={o}>
+            {o === recommended ? `${o}  ✓ recommended` : o}
+          </option>
+        ))}
+        {valueId && !options.includes(valueId) && (
+          <option value={valueId}>{valueId} (not in engine list)</option>
+        )}
+      </select>
+    </label>
+  );
+}
