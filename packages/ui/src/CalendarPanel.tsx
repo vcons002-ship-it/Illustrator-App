@@ -50,11 +50,41 @@ function dayKey(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-/** Bucket an event onto its (local) start day. All-day dates are already YYYY-MM-DD. */
-function eventDayKey(ev: CalendarEvent): string {
+/** The (local) start day of an event. All-day dates are already YYYY-MM-DD. */
+function eventStartDay(ev: CalendarEvent): string {
   if (ev.allDay) return ev.start.slice(0, 10);
   const t = Date.parse(ev.start);
   return Number.isNaN(t) ? ev.start.slice(0, 10) : dayKey(new Date(t));
+}
+
+/**
+ * EVERY local day an event covers, so a multi-day event (a week-long trip) shows across all its
+ * days, not just the start. All-day events use Google's EXCLUSIVE end date (the end is the day
+ * AFTER the last day), so we step back one day for the last covered day. Capped at 366 days so a
+ * malformed event can't blow up the grid. Returns at least the start day.
+ */
+function eventDayKeys(ev: CalendarEvent): string[] {
+  const startKey = eventStartDay(ev);
+  let endKey = startKey;
+  if (ev.end) {
+    if (ev.allDay) {
+      const endExcl = new Date(`${ev.end.slice(0, 10)}T00:00:00`);
+      endExcl.setDate(endExcl.getDate() - 1); // all-day end is exclusive
+      endKey = dayKey(endExcl);
+    } else {
+      const t = Date.parse(ev.end);
+      if (!Number.isNaN(t)) endKey = dayKey(new Date(t));
+    }
+  }
+  if (endKey <= startKey) return [startKey];
+  const keys: string[] = [];
+  const cur = new Date(`${startKey}T00:00:00`);
+  const last = new Date(`${endKey}T00:00:00`);
+  for (let i = 0; i < 366 && cur <= last; i++) {
+    keys.push(dayKey(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return keys.length ? keys : [startKey];
 }
 
 function timeLabel(ev: CalendarEvent): string {
@@ -127,10 +157,12 @@ export const CalendarPanel = memo(function CalendarPanel({
   const eventsByDay = useMemo(() => {
     const m = new Map<string, CalendarEvent[]>();
     for (const ev of events) {
-      const k = eventDayKey(ev);
-      const arr = m.get(k) ?? [];
-      arr.push(ev);
-      m.set(k, arr);
+      // A multi-day event lands on EVERY day it spans (so a week-long trip shows across the week).
+      for (const k of eventDayKeys(ev)) {
+        const arr = m.get(k) ?? [];
+        arr.push(ev);
+        m.set(k, arr);
+      }
     }
     for (const arr of m.values()) {
       arr.sort((a, b) => (a.allDay === b.allDay ? a.start.localeCompare(b.start) : a.allDay ? -1 : 1));

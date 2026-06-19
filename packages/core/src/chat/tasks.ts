@@ -94,6 +94,12 @@ export interface TaskPlan {
    * you flying from?", "what's your budget?"). Surfaced in the panel and asked when the task
    * is opened in chat — this is how the agent "asks what it needs" to plan, e.g. a trip. */
   clarifyingQuestions?: string[];
+  /** Extra details the reader added (answers to clarifyingQuestions, new context). Fed into the
+   * next (re-)plan's source so the agent refines the plan with them. */
+  userNotes?: string;
+  /** Set when the reader added details to a PLANNED task — the background sweep re-plans it in
+   * place to incorporate them, then clears the flag (the "re-attack with new info" loop). */
+  needsReplan?: boolean;
   /** `false` for a scan-surfaced STUB that's in the list but hasn't been planned yet (no steps);
    * omitted/true once it has a real step-by-step plan. The periodic sweep (or the "Plan" button)
    * turns stubs into full plans. */
@@ -203,6 +209,8 @@ export interface TaskPlanInput {
   steps?: (Partial<TaskStep> & { title: string })[];
   researchNotes?: string;
   clarifyingQuestions?: string[];
+  userNotes?: string;
+  needsReplan?: boolean;
   /** Pass `false` to mark a scan stub awaiting planning; defaults to "has steps". */
   planned?: boolean;
   createdAt?: number;
@@ -235,6 +243,8 @@ export function normalizeTaskPlan(input: TaskPlanInput): TaskPlan {
       const qs = (input.clarifyingQuestions ?? []).map((q) => cap(q, MAX_DETAIL_CHARS)).filter(Boolean).slice(0, MAX_CLARIFYING_QS);
       return qs.length ? { clarifyingQuestions: qs } : {};
     })(),
+    ...(input.userNotes && input.userNotes.trim() ? { userNotes: cap(input.userNotes, MAX_NOTES_CHARS) } : {}),
+    ...(input.needsReplan ? { needsReplan: true } : {}),
     createdAt: input.createdAt ?? now,
     updatedAt: now,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
@@ -478,6 +488,12 @@ export function needsPlanning(plan: TaskPlan): boolean {
   return plan.planned === false;
 }
 
+/** A task the background sweep should (re-)plan: an unplanned stub OR a planned task the reader
+ * added details to (needsReplan) — so the "re-attack with new info" loop runs at the next sweep. */
+export function needsAttention(plan: TaskPlan): boolean {
+  return plan.planned === false || plan.needsReplan === true;
+}
+
 /** Render a plan as readable notes for the PARENT Google Task, so the whole plan — summary, the
  * numbered steps (with who does each + due dates), and the deadline — is visible right in Google
  * Tasks, not just as a bare title with child rows. Bounded to Google's notes limit (~8 KB). PURE. */
@@ -485,9 +501,18 @@ export function formatPlanForGoogleNotes(plan: {
   summary?: string;
   deadlineIso?: string;
   steps: readonly { title: string; detail?: string; actor: StepActor; status: StepStatus; dueIso?: string }[];
+  clarifyingQuestions?: readonly string[];
 }): string {
   const lines: string[] = [];
   if (plan.summary) lines.push(plan.summary.trim(), "");
+  // Surface what the planner still needs from the reader RIGHT in the task notes — so they can fill
+  // it in here (or in the app) and the planner re-attacks with it. Worded as a prompt to answer.
+  const qs = (plan.clarifyingQuestions ?? []).map((q) => q.trim()).filter(Boolean);
+  if (qs.length) {
+    lines.push("NEEDS FROM YOU (add answers below and the app will refine the plan):");
+    qs.forEach((q) => lines.push(`• ${q}`));
+    lines.push("");
+  }
   if (plan.steps.length) {
     lines.push(`PLAN — ${plan.steps.length} step${plan.steps.length === 1 ? "" : "s"}:`);
     plan.steps.forEach((s, i) => {

@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from "react";
-import { dayToIso, describeRecurrence, ganttRowRef, needsPlanning, plansToGanttRows, type TaskPlan, type TaskRecurrence, type TaskStep } from "@visual-reader/core";
+import { dayToIso, describeRecurrence, ganttRowRef, needsAttention, needsPlanning, plansToGanttRows, type TaskPlan, type TaskRecurrence, type TaskStep } from "@visual-reader/core";
 import { GanttChart } from "./GanttChart.js";
 
 /**
@@ -43,6 +43,8 @@ export interface TasksPanelProps {
   /** "Don't surface this again" — add an ignore rule (the item, else its sender, else its title)
    * so future scans skip it, and delete the plan. Shown on auto-surfaced (scan/email/calendar) tasks. */
   onIgnoreTask?: (planId: string) => void;
+  /** Add details/answers to a task — stored + re-planned with at the next background sweep. */
+  onAddTaskDetails?: (planId: string, text: string) => void;
   /** Soft-remove a task (archives it to the undoable "Removed" list). */
   onDelete: (planId: string) => Promise<void> | void;
   /** Restore a removed/ignored task back to active (undo). */
@@ -65,6 +67,7 @@ function PlanCard({
   onToggleStep,
   onIgnoreTask,
   onDelete,
+  onAddDetails,
 }: {
   plan: TaskPlan;
   /** The single-task detail view — show the captured work (step details, research, drafts) in full. */
@@ -75,7 +78,10 @@ function PlanCard({
   onToggleStep: (stepId: string, done: boolean) => void;
   onIgnoreTask?: () => void;
   onDelete: () => void;
+  /** Add details/answers — stored on the task and re-planned with at the next sweep. */
+  onAddDetails?: (text: string) => void;
 }) {
+  const [detailDraft, setDetailDraft] = useState("");
   const doneCount = plan.steps.filter((s) => s.status === "done").length;
   const current = plan.steps.find((s) => s.status === "ready") ?? plan.steps.find((s) => s.status !== "done");
   const noSteps = plan.steps.length === 0; // a simple to-do or a scan stub — no step-by-step plan yet
@@ -113,7 +119,34 @@ function PlanCard({
               </li>
             ))}
           </ul>
-          <div style={{ opacity: 0.7, marginTop: 2 }}>Open &amp; work it to answer — the assistant refines the plan.</div>
+          <div style={{ opacity: 0.7, marginTop: 2 }}>Answer below (or in the Google Task notes) — the assistant re-attacks the plan with it.</div>
+        </div>
+      ) : null}
+      {onAddDetails && !noSteps ? (
+        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+          <input
+            value={detailDraft}
+            onChange={(e) => setDetailDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && detailDraft.trim()) {
+                onAddDetails(detailDraft.trim());
+                setDetailDraft("");
+              }
+            }}
+            placeholder={plan.clarifyingQuestions?.length ? "Answer / add details — refines the plan" : "Add a detail or new info — refines the plan"}
+            style={{ flex: 1, fontSize: 12, padding: "4px 8px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.18)", background: "rgba(255,255,255,0.06)", color: "inherit" }}
+          />
+          <button
+            style={{ ...btn, fontSize: 12 }}
+            disabled={!detailDraft.trim()}
+            onClick={() => {
+              onAddDetails(detailDraft.trim());
+              setDetailDraft("");
+            }}
+            title="Save these details — the planner re-attacks the task with them at the next sweep"
+          >
+            ➕ Add
+          </button>
         </div>
       ) : null}
       <ol style={{ margin: "8px 0 0", paddingLeft: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 4 }}>
@@ -229,6 +262,7 @@ export const TasksPanel = memo(function TasksPanel({
   scanMessage,
   planMessage,
   onIgnoreTask,
+  onAddTaskDetails,
   onDelete,
   onRestore,
   onDeleteForever,
@@ -248,7 +282,7 @@ export const TasksPanel = memo(function TasksPanel({
     [active, hideCompleted],
   );
   // Unplanned stubs (the backlog the background sweep / "Plan all pending" works on).
-  const pendingCount = useMemo(() => active.filter(needsPlanning).length, [active]);
+  const pendingCount = useMemo(() => active.filter(needsAttention).length, [active]);
   // Removed/ignored tasks — the undoable trash, newest first.
   const removed = useMemo(
     () => plans.filter((p) => p.status === "archived").sort((a, b) => (b.archivedAt ?? b.updatedAt) - (a.archivedAt ?? a.updatedAt)),
@@ -299,6 +333,7 @@ export const TasksPanel = memo(function TasksPanel({
       onAdvance={(stepId) => void onAdvanceStep(p.id, stepId)}
       onToggleStep={(stepId, done) => void onToggleStepDone(p.id, stepId, done)}
       {...(onIgnoreTask ? { onIgnoreTask: () => onIgnoreTask(p.id) } : {})}
+      {...(onAddTaskDetails ? { onAddDetails: (text: string) => onAddTaskDetails(p.id, text) } : {})}
       onDelete={() => void onDelete(p.id)}
     />
   );

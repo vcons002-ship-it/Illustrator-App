@@ -18,6 +18,7 @@ import {
   nextReadyStep,
   normalizeTaskPlan,
   needsPlanning,
+  needsAttention,
   applyStepEdits,
   reconcileGoogleSubtasks,
   planFromGoogleTask,
@@ -84,6 +85,33 @@ describe("normalizeTaskPlan", () => {
     const real = normalizeTaskPlan({ title: "x", source: { kind: "typed", text: "x" }, planned: false, steps: [{ title: "s" }] });
     expect(needsPlanning(real)).toBe(false);
     expect(real.planned).toBeUndefined();
+  });
+
+  it("keeps userNotes + needsReplan for the re-attack loop; needsAttention covers both cases", () => {
+    const stub = normalizeTaskPlan({ title: "s", source: { kind: "typed", text: "s" }, planned: false, steps: [] });
+    const planned = normalizeTaskPlan({ title: "p", source: { kind: "typed", text: "p" }, steps: [{ title: "a" }] });
+    const withNotes = normalizeTaskPlan({
+      title: "trip",
+      source: { kind: "typed", text: "trip" },
+      steps: [{ title: "book flights" }],
+      userNotes: "Flying from Boston, budget $800",
+      needsReplan: true,
+    });
+    expect(needsAttention(stub)).toBe(true); // an unplanned stub
+    expect(needsAttention(planned)).toBe(false); // a finished plan, no new info
+    expect(needsAttention(withNotes)).toBe(true); // planned, but the reader added details
+    expect(withNotes.userNotes).toContain("Boston");
+    expect(withNotes.needsReplan).toBe(true);
+  });
+
+  it("formatPlanForGoogleNotes surfaces clarifying questions as 'needs from you'", () => {
+    const notes = formatPlanForGoogleNotes({
+      summary: "Plan the Iowa trip",
+      steps: [{ title: "Book flights", actor: "user_action", status: "pending" }],
+      clarifyingQuestions: ["Which city are you flying from?", "What's your budget?"],
+    });
+    expect(notes).toMatch(/NEEDS FROM YOU/);
+    expect(notes).toContain("Which city are you flying from?");
   });
 
   it("reconcileGoogleSubtasks: reuses by title/id, marks done complete, never duplicates or deletes", () => {
