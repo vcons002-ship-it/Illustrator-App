@@ -487,7 +487,14 @@ export function App() {
         const sourceText = [plan.title, plan.summary, plan.deadlineIso ? `Hard deadline: ${plan.deadlineIso}.` : ""]
           .filter(Boolean)
           .join(" ");
-        const res = await planTask({ source: plan.source, sourceText, planId, ...(userInitiated ? { allowFiles: true } : {}) });
+        // Background plans (the sweep, userInitiated=false) get a safety timeout so one wedged plan
+        // can't stall the whole backlog loop; explicit "Plan it" clicks keep deep planning untimed.
+        const res = await planTask({
+          source: plan.source,
+          sourceText,
+          planId,
+          ...(userInitiated ? { allowFiles: true } : { timeoutMs: 4 * 60_000 }),
+        });
         if (res.ok) refreshTaskPlans();
         const n = res.plan?.steps.length ?? 0;
         act?.finish(res.ok ? { detail: `${n} step${n === 1 ? "" : "s"}` } : { status: "error", detail: res.error ?? "failed" });
@@ -529,6 +536,19 @@ export function App() {
     },
     [libraryStore, planOneTask, beginActivity],
   );
+  // Manual "plan the backlog now": plan EVERY unplanned stub on demand (no idle gate), so you can
+  // verify the background planner end-to-end — each one researches, fills its steps, and mirrors to
+  // Google Tasks. Surfaces progress in the status center + the panel message.
+  const planAllPending = useCallback(async () => {
+    const pending = (await loadTaskPlans(libraryStore)).filter(needsPlanning);
+    if (pending.length === 0) {
+      setPlanMessage("✓ Nothing to plan — no unplanned tasks in the backlog.");
+      return;
+    }
+    setPlanMessage(`🔄 Planning ${pending.length} pending task${pending.length === 1 ? "" : "s"}… (mirrors to Google Tasks)`);
+    await planPendingTasks(pending.length); // no keepGoing → plan the whole backlog
+    setPlanMessage(`✓ Planned ${pending.length} task${pending.length === 1 ? "" : "s"} — check Google Tasks for the sub-tasks.`);
+  }, [libraryStore, planPendingTasks]);
   // The most precise "don't surface this" rule for a plan: the exact email/event item, else its
   // sender, else its title as a phrase. Shared by Ignore (adds it) and Restore (removes it).
   const ignoreRuleFor = useCallback((plan: TaskPlan): { kind: "item" | "sender" | "phrase"; value: string } | undefined => {
@@ -4421,6 +4441,8 @@ export function App() {
           creatingTask={creatingTask}
           onCreateTask={(title, dueIso, recurrence, planNow) => void onCreateTask(title, dueIso, recurrence, planNow)}
           {...(googleConnected ? { onScanNow: () => void scanNow(), scanning: scanningNow } : {})}
+          onPlanPending={() => void planAllPending()}
+          planningPending={planningCount > 0}
           {...(scanMessage ? { scanMessage } : {})}
           {...(planMessage ? { planMessage } : {})}
           onPlanTask={(id) => void planOneTask(id)}

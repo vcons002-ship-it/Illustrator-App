@@ -180,7 +180,7 @@ export interface EngineWorkerApi {
   /** Place a reviewed order via Schwab (called only from the order-review modal). */
   schwabPlaceOrder: (order: Record<string, unknown>) => Promise<{ ok: boolean; status?: number; error?: string }>;
   /** Research + plan a task into a persisted TaskPlan (progress streamed via onProgress). */
-  planTask: (args: { source: TaskSource; sourceText: string; planId?: string; allowFiles?: boolean; onProgress?: (phase: string, note?: string) => void }) => Promise<{ ok: boolean; plan?: TaskPlan; error?: string }>;
+  planTask: (args: { source: TaskSource; sourceText: string; planId?: string; allowFiles?: boolean; timeoutMs?: number; onProgress?: (phase: string, note?: string) => void }) => Promise<{ ok: boolean; plan?: TaskPlan; error?: string }>;
   /** Idle scan: actionable email/calendar items as task candidates. */
   scanInbox: () => Promise<{ ok: boolean; candidates?: TaskCandidate[]; error?: string }>;
   /** Mirror existing Google Tasks into the app's task list; resolves with how many were imported. */
@@ -1405,15 +1405,30 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       planId?: string;
       /** The reader explicitly asked for this plan, so let the planner search/read their files. */
       allowFiles?: boolean;
+      /** Optional safety timeout (ms). The background sweep sets one so a single wedged plan can't
+       * hang the whole queue forever; the manual/user path leaves it off (deep planning is fine). */
+      timeoutMs?: number;
       onProgress?: (phase: string, note?: string) => void;
     }): Promise<{ ok: boolean; plan?: TaskPlan; error?: string }> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
-        // NO timeout: deep planning can take a long time, and it usually runs while you're away,
-        // so a long run is fine. The worker always answers with `planned` (ok or error), and the
-        // turn is cancellable, so the request can't leak.
+        // NO timeout by default: deep planning can take a long time, and it usually runs while
+        // you're away. A timeoutMs (the background sweep) caps a wedged run so it can't stall the
+        // sweep loop forever — the worker still answers later (ignored), and the turn is cancellable.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        if (args.timeoutMs) {
+          timer = setTimeout(() => {
+            if (planRequests.current.delete(requestId)) {
+              send({ type: "chatCancel", requestId });
+              resolve({ ok: false, error: "Planning timed out." });
+            }
+          }, args.timeoutMs);
+        }
         planRequests.current.set(requestId, {
-          resolve,
+          resolve: (r) => {
+            if (timer) clearTimeout(timer);
+            resolve(r);
+          },
           ...(args.onProgress ? { onProgress: args.onProgress } : {}),
         });
         send({
