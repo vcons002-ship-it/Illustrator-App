@@ -19,6 +19,7 @@ import {
   normalizeTaskPlan,
   needsPlanning,
   needsAttention,
+  googleNotesUserEdit,
   applyStepEdits,
   reconcileGoogleSubtasks,
   planFromGoogleTask,
@@ -102,6 +103,19 @@ describe("normalizeTaskPlan", () => {
     expect(needsAttention(withNotes)).toBe(true); // planned, but the reader added details
     expect(withNotes.userNotes).toContain("Boston");
     expect(withNotes.needsReplan).toBe(true);
+  });
+
+  it("googleNotesUserEdit captures lines the reader added in Google Tasks (for the re-plan loop)", () => {
+    const synced = "Plan the Iowa trip\n\nNEEDS FROM YOU:\n• Which city are you flying from?\n\nPLAN — 2 steps:\n— planned by Visual Reader";
+    // The reader appended an answer line in Google Tasks.
+    const edited = synced + "\nFlying from Boston, budget about $800, just me";
+    expect(googleNotesUserEdit(edited, synced)).toBe("Flying from Boston, budget about $800, just me");
+    // No change → nothing captured.
+    expect(googleNotesUserEdit(synced, synced)).toBe("");
+    // No baseline yet → don't mistake the existing notes for an edit.
+    expect(googleNotesUserEdit(synced, undefined)).toBe("");
+    // Missing notes → empty.
+    expect(googleNotesUserEdit(undefined, synced)).toBe("");
   });
 
   it("formatPlanForGoogleNotes surfaces clarifying questions as 'needs from you'", () => {
