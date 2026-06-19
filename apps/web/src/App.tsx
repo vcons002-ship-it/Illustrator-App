@@ -1127,6 +1127,21 @@ export function App() {
     }
   }, []);
 
+  // Ping the sub-agent "worker" endpoint (vLLM/llama.cpp/Ollama) and report the models it serves, so
+  // Settings can confirm the tier is live before you rely on it. Same direct-fetch path as the local
+  // text-server connect above (the browser calls localhost); GET /models is the OpenAI-compatible probe.
+  const onTestSubAgentEndpoint = useCallback(
+    async (url: string): Promise<{ ok: boolean; models?: string[]; error?: string }> => {
+      try {
+        const models = await LocalServerLLMProvider.listModels(url);
+        return { ok: true, models: models.map((m) => m.id) };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+    [],
+  );
+
   const openBook = useCallback(
     (source: BookSource) => {
       setLocalError("");
@@ -4074,6 +4089,7 @@ export function App() {
             connectingLocalText={connectingLocalText}
             onPullTextModel={onPullTextModel}
             pullProgress={pullProgress}
+            onTestSubAgentEndpoint={onTestSubAgentEndpoint}
             googleConnected={googleConnected}
             {...(googleEmail ? { googleEmail } : {})}
             onConnectGoogle={onConnectGoogle}

@@ -227,6 +227,26 @@ export const SETUP_GUIDES: SetupGuide[] = [
     ],
     note: "Claude/OpenAI expose no such control and keep their own policies; fully local models have no external filter at all.",
   },
+  {
+    id: "worker-tier",
+    title: "Set up parallel sub-agents (vLLM / llama.cpp / Ollama worker model)",
+    aliases: [
+      "vllm", "vllm setup", "worker model", "worker tier", "worker endpoint", "sub agent", "sub-agent",
+      "sub agents", "subagents", "parallel agents", "parallel sub agents", "spawn agents", "fan out",
+      "tier router", "second model", "small model", "batching", "kv cache", "concurrent agents",
+      "llama.cpp", "llama cpp", "5090", "true parallelism", "agent concurrency",
+    ],
+    when: "You want the assistant's parallel sub-agents to run concurrently on a small, fast 'worker' model (on one GPU via a batching server) while your main model handles the hard reasoning.",
+    steps: [
+      "Decide the tier split: keep your strong model as the MAIN reasoner (Settings → Text), and pick a small fast WORKER model for the parallel subtasks (Qwen3-4B is a good default; Qwen3-1.7B for the simplest fan-out).",
+      "Pick a backend that actually runs requests concurrently (this is what makes it parallel, not the app): vLLM is best (continuous batching + KV cache); llama.cpp server (--parallel) is a lighter option; Ollama (OLLAMA_NUM_PARALLEL) is easiest but more limited. Any cloud endpoint also parallelizes.",
+      "Install & serve it. For vLLM: `pip install vllm`, then `vllm serve Qwen/Qwen3-4B --port 8000 --max-model-len 8192 --gpu-memory-utilization 0.45 --max-num-seqs 8 --enable-auto-tool-choice --tool-call-parser hermes`. Lower --gpu-memory-utilization so your main model still fits; --max-num-seqs ≈ how many sub-agents batch together. Full guide: VLLM-SETUP.md.",
+      "Point the app at it: Settings → Sub-agent 'worker' model (advanced) → endpoint `http://localhost:8000/v1` and the model id you served (e.g. `Qwen/Qwen3-4B`). The VRAM line shows whether the combo fits your card.",
+      "Click Test connection (next to those fields) — it should say the endpoint is reachable and your model is loaded. Then set Parallel sub-agents to match --max-num-seqs (start 4–6).",
+      "Try it: in chat, ask for something with several independent parts (\"research these 3 topics and compare\"). The activity line shows the sub-agents running on the worker model; the main model writes the final synthesis.",
+    ],
+    note: "Optional — with no worker endpoint set, sub-agents just run on your main model (correct, but serialized: no speedup). The worker tier is what gives true single-GPU parallelism behind a batching server, and it falls back to the main model automatically if the worker is unreachable.",
+  },
 ];
 
 /**

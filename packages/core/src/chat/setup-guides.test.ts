@@ -29,6 +29,8 @@ describe("setup guides", () => {
     expect(findSetupGuide("how do I add an MCP server")?.id).toBe("mcp");
     expect(findSetupGuide("control the assistant from my phone")?.id).toBe("phone-control");
     expect(findSetupGuide("dictate with my microphone / read replies aloud")?.id).toBe("voice");
+    expect(findSetupGuide("how do I set up vLLM for parallel sub-agents?")?.id).toBe("worker-tier");
+    expect(findSetupGuide("set up a worker model on my 5090")?.id).toBe("worker-tier");
   });
 
   it("returns undefined when nothing relevant matches", () => {

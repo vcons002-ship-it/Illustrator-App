@@ -495,7 +495,8 @@ export function buildBuddySystemPrompt(opts: {
     '- {"tool":"setup_help","topic":"…"} — get the app\'s built-in, step-by-step SETUP guide for a feature and walk ' +
     'the reader through it. Use whenever they ask how to set up / enable / configure / connect / "get started with" ' +
     "ANY of the app's capabilities — image generation, a local text model, an API key, Google (Gmail/Calendar/Tasks), " +
-    "the task assistant, whole-web figures, Wolfram, GitHub, the desktop tools, mature mode. Pass what they want in " +
+    "the task assistant, whole-web figures, Wolfram, GitHub, the desktop tools, mature mode, parallel sub-agents / a " +
+    "vLLM (or llama.cpp/Ollama) worker model. Pass what they want in " +
     '"topic"; you get the real steps back to walk through one at a time (don\'t invent setup steps — fetch them).\n' +
     '- {"tool":"read_skill","name":"…"} — load the FULL steps of one of your saved skills (listed in the SKILLS ' +
     "index, when present) before you start a task it covers. Your skills are durable playbooks you keep across every " +

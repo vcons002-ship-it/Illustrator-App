@@ -20,6 +20,9 @@ import {
   resolveAssetName,
   resolveQuality,
   styleLoraDownload,
+  comboVramGb,
+  combFitsCard,
+  RECOMMENDED_WORKER_COMBOS,
   type LocalTextServerId,
   type ProviderInfo,
 } from "@visual-reader/core";
@@ -308,6 +311,8 @@ export interface SettingsPanelProps {
   onPullTextModel?: (model: string) => void;
   /** Live pull progress per Ollama model id. */
   pullProgress?: Record<string, { status: string; percent?: number }>;
+  /** Ping the sub-agent "worker" endpoint and report whether it's reachable + which models it serves. */
+  onTestSubAgentEndpoint?: (url: string) => Promise<{ ok: boolean; models?: string[]; error?: string }>;
 }
 
 export function SettingsPanel({
@@ -330,6 +335,7 @@ export function SettingsPanel({
   connectingLocalText = false,
   onPullTextModel,
   pullProgress = {},
+  onTestSubAgentEndpoint,
   googleConnected,
   googleEmail,
   onConnectGoogle,
@@ -338,6 +344,8 @@ export function SettingsPanel({
   const [open, setOpen] = useState(false);
   // Settings filter: typing hides non-matching groups and force-opens matches.
   const [query, setQuery] = useState("");
+  // Worker-endpoint connection test: status for the "Test" button under the sub-agent settings.
+  const [subTest, setSubTest] = useState<{ state: "idle" | "testing" | "ok" | "err"; msg?: string }>({ state: "idle" });
   const set = (patch: Partial<ReaderSettings>) => onChange({ ...value, ...patch });
   const setKey = (id: string, key: string) => set({ keys: { ...value.keys, [id]: key } });
 
@@ -1122,8 +1130,9 @@ export function SettingsPanel({
                   <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginBottom: 4 }}>
                     Optional. An OpenAI-compatible endpoint + model id (e.g. a <b>vLLM</b> server running a small fast model
                     like Qwen3-4B) that the parallel sub-agents use INSTEAD of your main model — so a single GPU can run them
-                    concurrently while the main model does the hard reasoning. Leave blank to use the main model. See
-                    VLLM-SETUP.md. Falls back to the main model if unreachable.
+                    concurrently while the main model does the hard reasoning. Leave blank to use the main model. Falls
+                    back to the main model if unreachable. New to this? See VLLM-SETUP.md, or just ask the chat{" "}
+                    <b>"walk me through vLLM setup"</b> and it'll guide you step by step.
                   </span>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     <input
@@ -1138,6 +1147,95 @@ export function SettingsPanel({
                       value={value.subAgentModel ?? ""}
                       onChange={(e) => set({ subAgentModel: e.target.value })}
                     />
+                  </div>
+                  {onTestSubAgentEndpoint && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        disabled={subTest.state === "testing"}
+                        onClick={async () => {
+                          const url = (value.subAgentServerUrl ?? "").trim();
+                          if (!url) {
+                            setSubTest({ state: "err", msg: "Enter the endpoint URL first." });
+                            return;
+                          }
+                          setSubTest({ state: "testing" });
+                          try {
+                            const r = await onTestSubAgentEndpoint(url);
+                            if (!r.ok) {
+                              setSubTest({ state: "err", msg: r.error || "Couldn't reach the endpoint." });
+                              return;
+                            }
+                            const models = r.models ?? [];
+                            const want = (value.subAgentModel ?? "").trim();
+                            if (want && !models.includes(want)) {
+                              setSubTest({
+                                state: "err",
+                                msg: `Reachable, but “${want}” isn't loaded. Server has: ${models.slice(0, 6).join(", ") || "(none)"}`,
+                              });
+                            } else {
+                              setSubTest({
+                                state: "ok",
+                                msg: want
+                                  ? `Reachable — “${want}” is loaded ✓`
+                                  : `Reachable — serving ${models.length} model(s): ${models.slice(0, 4).join(", ")}`,
+                              });
+                            }
+                          } catch (e) {
+                            setSubTest({ state: "err", msg: e instanceof Error ? e.message : String(e) });
+                          }
+                        }}
+                        style={{ padding: "3px 10px", fontSize: 12, cursor: subTest.state === "testing" ? "default" : "pointer" }}
+                      >
+                        {subTest.state === "testing" ? "Testing…" : "Test connection"}
+                      </button>
+                      {subTest.state !== "idle" && subTest.state !== "testing" && (
+                        <span style={{ fontSize: 11, color: subTest.state === "ok" ? "#6ee7a8" : "#f0a868" }}>{subTest.msg}</span>
+                      )}
+                    </div>
+                  )}
+                  {(() => {
+                    // Honest, rough VRAM read for the chosen worker + (local) main model, so you can
+                    // tell at a glance whether the combo fits your card before launching a server.
+                    const cardGb = value.gpuVramMb ? Math.round(value.gpuVramMb / 1024) : 32; // default = a 5090
+                    const mainId = (value.chatLocalModel ?? value.localTextModel ?? "").trim();
+                    const workerId = (value.subAgentModel ?? "").trim();
+                    const v = comboVramGb(mainId, workerId);
+                    if (v.workerGb === undefined && v.mainGb === undefined) return null;
+                    const fit = combFitsCard(v.totalGb, cardGb);
+                    return (
+                      <div style={{ fontSize: 11, opacity: 0.8, marginTop: 6 }}>
+                        {v.workerGb !== undefined && <>Worker ≈ <b>{v.workerGb} GB</b> (Q4)</>}
+                        {v.mainGb !== undefined && (
+                          <>
+                            {" "}
+                            · main ≈ <b>{v.mainGb} GB</b> · total ≈ <b>{v.totalGb} GB</b> on your {cardGb} GB card —{" "}
+                            <span style={{ color: fit.fits ? "#6ee7a8" : "#f0a868" }}>
+                              {fit.fits ? `fits, ~${fit.headroomGb} GB free for KV cache` : `tight (~${fit.headroomGb} GB left)`}
+                            </span>
+                          </>
+                        )}
+                        {v.mainGb === undefined && v.workerGb !== undefined && (
+                          <span style={{ opacity: 0.7 }}> · set a local main model to see the combined total</span>
+                        )}
+                      </div>
+                    );
+                  })()}
+                  <div style={{ fontSize: 11, opacity: 0.6, marginTop: 6 }}>
+                    Recommended combos (Q4, ~32 GB card):
+                    <div style={{ marginTop: 3, display: "grid", gap: 2 }}>
+                      {RECOMMENDED_WORKER_COMBOS.map((c) => {
+                        const cv = comboVramGb(c.main, c.worker);
+                        return (
+                          <div key={`${c.main}/${c.worker}`} style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            <span style={{ fontFamily: "monospace" }}>
+                              {c.main} + {c.worker}
+                            </span>
+                            <span style={{ opacity: 0.75 }}>≈ {cv.totalGb} GB — {c.note}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 </label>
                 {onConnectGoogle && (

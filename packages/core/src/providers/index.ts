@@ -16,6 +16,7 @@ export * from "./llm/gemini-provider.js";
 export * from "./llm/openai-provider.js";
 export * from "./llm/webllm-provider.js";
 export * from "./llm/local-server-provider.js";
+export * from "./llm/vram.js";
 export * from "./image/image-provider.js";
 export * from "./image/sd-prompt.js";
 export * from "./image/lora-detect.js";
