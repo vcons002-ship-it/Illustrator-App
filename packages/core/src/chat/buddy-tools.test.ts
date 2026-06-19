@@ -525,6 +525,9 @@ describe("google tools", () => {
       query: "is:unread",
       max: 5,
     });
+    // An empty/missing query means "newest emails" → defaults to in:inbox instead of being rejected.
+    expect(parseBuddyToolCall('{"tool":"gmail_search","query":""}')).toEqual({ tool: "gmail_search", query: "in:inbox" });
+    expect(parseBuddyToolCall('{"tool":"gmail_search"}')).toEqual({ tool: "gmail_search", query: "in:inbox" });
     expect(parseBuddyToolCall('{"tool":"read_email","id":"abc"}')).toEqual({ tool: "read_email", id: "abc" });
     expect(parseBuddyToolCall('{"tool":"list_events"}')).toEqual({ tool: "list_events" });
     expect(

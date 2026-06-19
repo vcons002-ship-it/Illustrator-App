@@ -1355,6 +1355,20 @@ async function handleGoogleConnect(msg: Extract<MainToWorker, { type: "googleCon
   }
 }
 
+/** The buddy's gmail_search dep (chat + task-planning research): a normal search, but an empty query
+ * means "newest emails" (→ in:inbox), and if a TARGETED query finds nothing it widens ONCE to include
+ * Promotions/Spam/Trash (a message the reader is hunting for can be mis-filed there) — so "show my
+ * recent emails" and "find the email from X" both work. The background task SCAN does NOT use this; it
+ * calls gmailSearch directly with its own narrow queries (it must never plan from spam/trash). */
+function makeBuddyGmailSearch(transport: DirectTransport, tok: () => Promise<string>) {
+  return async (q: string, max?: number) => {
+    const query = q.trim() || "in:inbox";
+    const results = await gmailSearch(transport, await tok(), query, max);
+    if (results.length > 0 || /\bin:(anywhere|spam|trash)\b/i.test(query)) return results;
+    return gmailSearch(transport, await tok(), `${query} in:anywhere`, max);
+  };
+}
+
 /** Plan a task: bounded research (web + Gmail/Calendar) then a structured plan, persisted.
  * Reuses the buddy research tools + the CORS proxy; cancellable via the shared chatAborts. */
 /** The readAttachment dep: re-read the email to resolve the attachment's name/type, download its
@@ -1481,7 +1495,7 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
       readUrl: readUrlText(ac.signal),
       ...(googleConnected
         ? {
-            gmailSearch: async (q: string, max?: number) => gmailSearch(transport, await tok(), q, max),
+            gmailSearch: makeBuddyGmailSearch(transport, tok),
             readEmail: async (id: string) => gmailReadEmail(transport, await tok(), id),
             readAttachment: makeReadAttachment(transport, tok),
             listEvents: async (o: { max?: number; timeMin?: string; timeMax?: string }) =>
@@ -1952,7 +1966,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           const transport = new DirectTransport(corsFetch());
           const tok = () => getFreshAccessToken(store, { clientId: googleId!, clientSecret: googleSecret!, transport });
           return {
-            gmailSearch: async (q: string, max?: number) => gmailSearch(transport, await tok(), q, max),
+            gmailSearch: makeBuddyGmailSearch(transport, tok),
             readEmail: async (id: string) => gmailReadEmail(transport, await tok(), id),
             readAttachment: makeReadAttachment(transport, tok),
             listEvents: async (o: { max?: number; timeMin?: string; timeMax?: string }) =>
