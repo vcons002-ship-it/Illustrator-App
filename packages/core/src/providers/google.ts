@@ -453,7 +453,16 @@ export async function listAllEvents(
   token: string,
   opts: { timeMin: string; timeMax: string; maxCalendars?: number },
 ): Promise<CalendarEvent[]> {
-  const calendars = (await listCalendars(transport, token)).slice(0, opts.maxCalendars ?? 12);
+  // calendarList.list needs a calendar-list read scope (calendar.readonly). A token issued
+  // before that scope was added (or a user who hasn't reconnected) 403s here — so fall back to
+  // just the PRIMARY calendar, which calendar.events already covers. The calendar still loads
+  // instead of failing the whole sweep; reconnecting unlocks every calendar.
+  let calendars: GoogleCalendar[];
+  try {
+    calendars = (await listCalendars(transport, token)).slice(0, opts.maxCalendars ?? 12);
+  } catch {
+    calendars = [{ id: "primary", summary: "Primary", primary: true }];
+  }
   const lists = await Promise.all(
     calendars.map((c) =>
       listEvents(transport, token, { calendarId: c.id, timeMin: opts.timeMin, timeMax: opts.timeMax, max: 250 })

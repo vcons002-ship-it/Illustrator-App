@@ -184,6 +184,28 @@ describe("calendar + tasks parsers", () => {
     expect(evs[0]).toMatchObject({ summary: "Standup", calendarId: "primary", color: "#3366cc" });
   });
 
+  it("listAllEvents falls back to the primary calendar when calendarList is forbidden (403 scopes)", async () => {
+    // First request = calendarList → 403 (calendar.events lacks calendar-list read); the fallback
+    // then reads the primary calendar's events directly (covered by calendar.events).
+    const t = new (class implements Transport {
+      n = 0;
+      readonly urls: string[] = [];
+      send(req: TransportRequest): Promise<TransportResponse> {
+        this.urls.push(req.url);
+        if (this.n++ === 0) {
+          return Promise.resolve({ ok: false, status: 403, json: <T>() => Promise.resolve({} as T), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)), text: () => Promise.resolve("insufficient scopes") });
+        }
+        const body = { items: [{ id: "ev1", summary: "Standup", start: { dateTime: "2026-06-16T09:00:00Z" }, end: { dateTime: "2026-06-16T09:15:00Z" } }] };
+        return Promise.resolve({ ok: true, status: 200, json: <T>() => Promise.resolve(body as T), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)), text: () => Promise.resolve("") });
+      }
+    })();
+    const evs = await listAllEvents(t, "tok", { timeMin: "2026-06-01T00:00:00Z", timeMax: "2026-06-30T00:00:00Z" });
+    expect(evs).toHaveLength(1);
+    expect(evs[0]).toMatchObject({ summary: "Standup", calendarId: "primary" });
+    // It read the primary calendar's events after the calendarList 403.
+    expect(t.urls.some((u) => u.includes("/calendars/primary/events"))).toBe(true);
+  });
+
   it("parseTask keeps title/notes/due", () => {
     expect(parseTask({ id: "t1", title: "File taxes", due: "2026-04-15T00:00:00Z" })).toEqual({
       id: "t1",
