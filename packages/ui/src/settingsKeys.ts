@@ -38,6 +38,10 @@ export const TUNING_FIELDS = [
   "autoLearnSkills",
   "remoteBus",
   "mcpServers",
+  // Read per turn when fanning sub-agents out; changing them must not rebuild the engine.
+  "agentConcurrency",
+  "subAgentServerUrl",
+  "subAgentModel",
 ] as const satisfies readonly (keyof ReaderSettings)[];
 
 /** Settings the engine never needs at all (pure presentation). */

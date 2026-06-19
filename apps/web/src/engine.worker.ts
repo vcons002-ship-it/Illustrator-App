@@ -2391,25 +2391,46 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       maxTokens: budgets.reply,
       deps,
       // PARALLEL SUB-AGENTS: the model's `spawn_agents` tool fans independent read-only subtasks out
-      // concurrently. Capped by the `agentConcurrency` setting (default 2 — sized for one local GPU;
-      // raise it for cloud or a batched server). Each runs the SAME provider for now; a future tier
-      // could point sub-agents at a smaller/faster local endpoint for true 5090 parallelism.
-      runSubAgents: (tasks) =>
-        mapWithConcurrency(tasks, settings?.agentConcurrency ?? 2, async (task) => {
+      // concurrently. Capped by `agentConcurrency` (default 2). TIER ROUTING: when a sub-agent
+      // endpoint is configured (e.g. a vLLM server running a small fast model), sub-agents run on
+      // THAT "worker" model — leaving the main model for the hard reasoning — which is what lets one
+      // GPU do real parallel sub-agent work behind a batching server. Falls back to the main model
+      // when unset OR if the worker endpoint errors (so a down server degrades, never breaks).
+      runSubAgents: (tasks) => {
+        const sf = corsFetch();
+        const subUrl = settings?.subAgentServerUrl?.trim();
+        const subModel = settings?.subAgentModel?.trim();
+        const workerLlm =
+          sf && subUrl && subModel
+            ? new LocalServerLLMProvider({ baseUrl: subUrl, model: subModel, transport: new DirectTransport(sf), fetchImpl: sf })
+            : undefined;
+        const runOne = (useLlm: typeof llm | LocalServerLLMProvider, task: string) =>
+          runBuddyTurn({
+            llm: useLlm,
+            system: buildDelegatePrompt(task),
+            history: [{ role: "user", content: "Complete the subtask above and report back concisely." }],
+            deps, // read-only by instruction; no runSubAgents ⇒ no nested fan-out
+            maxTokens: budgets.reply,
+            signal: ac.signal,
+          });
+        return mapWithConcurrency(tasks, settings?.agentConcurrency ?? 2, async (task) => {
           try {
-            const sub = await runBuddyTurn({
-              llm,
-              system: buildDelegatePrompt(task),
-              history: [{ role: "user", content: "Complete the subtask above and report back concisely." }],
-              deps, // read-only by instruction (buildDelegatePrompt); no runSubAgents ⇒ no nested fan-out
-              maxTokens: budgets.reply,
-              signal: ac.signal,
-            });
+            const sub = await runOne(workerLlm ?? llm, task);
             return { task, result: sub.text || "(the sub-agent returned nothing usable)" };
           } catch (e) {
+            // Worker endpoint unreachable? fall back to the main model once before giving up.
+            if (workerLlm) {
+              try {
+                const sub = await runOne(llm, task);
+                return { task, result: sub.text || "(the sub-agent returned nothing usable)" };
+              } catch {
+                /* fall through to the error */
+              }
+            }
             return { task, result: `(sub-agent failed: ${e instanceof Error ? e.message : String(e)})` };
           }
-        }),
+        });
+      },
       onEvent: (e) => {
         if (e.kind === "token") post({ type: "buddyToken", requestId: msg.requestId, text: e.text });
         else if (e.kind === "thinking") thinking(e.text);
