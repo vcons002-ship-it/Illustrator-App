@@ -184,7 +184,7 @@ export interface EngineWorkerApi {
   /** Idle scan: actionable email/calendar items as task candidates. */
   scanInbox: () => Promise<{ ok: boolean; candidates?: TaskCandidate[]; error?: string }>;
   /** Mirror existing Google Tasks into the app's task list; resolves with how many were imported. */
-  importGoogleTasks: () => Promise<{ ok: boolean; imported?: number; error?: string }>;
+  importGoogleTasks: () => Promise<{ ok: boolean; imported?: number; edited?: number; error?: string }>;
   /** Create a bare Google Task (parent) for a surfaced stub; resolves with its id when connected. */
   createGoogleTask: (args: { title: string; notes?: string; due?: string }) => Promise<{ ok: boolean; id?: string; error?: string }>;
   /** Create a Google Calendar event (manual "+ Add event"); resolves with its id when connected. */
@@ -418,7 +418,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   // In-flight idle scans, resolved by `scanned`.
   const scanRequests = useRef<Map<number, (r: { ok: boolean; candidates?: TaskCandidate[]; error?: string }) => void>>(new Map());
   // In-flight Google-Task imports, resolved by `googleTasksImported`.
-  const importTaskRequests = useRef<Map<number, (r: { ok: boolean; imported?: number; error?: string }) => void>>(new Map());
+  const importTaskRequests = useRef<Map<number, (r: { ok: boolean; imported?: number; edited?: number; error?: string }) => void>>(new Map());
   // In-flight Google-Task creations (for surfaced stubs), resolved by `googleTaskCreated`.
   const createTaskRequests = useRef<Map<number, (r: { ok: boolean; id?: string; error?: string }) => void>>(new Map());
   // In-flight manual calendar-event creations, resolved by `eventCreated`.
@@ -829,7 +829,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
         case "googleTasksImported": {
           const resolve = importTaskRequests.current.get(msg.requestId);
           importTaskRequests.current.delete(msg.requestId);
-          resolve?.({ ok: msg.ok, ...(typeof msg.imported === "number" ? { imported: msg.imported } : {}), ...(msg.error ? { error: msg.error } : {}) });
+          resolve?.({ ok: msg.ok, ...(typeof msg.imported === "number" ? { imported: msg.imported } : {}), ...(typeof msg.edited === "number" ? { edited: msg.edited } : {}), ...(msg.error ? { error: msg.error } : {}) });
           break;
         }
         case "googleTaskCreated": {
@@ -1458,7 +1458,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     [],
   );
   const importGoogleTasks = useCallback(
-    (): Promise<{ ok: boolean; imported?: number; error?: string }> =>
+    (): Promise<{ ok: boolean; imported?: number; edited?: number; error?: string }> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
         const timeout = setTimeout(() => {

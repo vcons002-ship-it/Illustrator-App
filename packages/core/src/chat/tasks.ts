@@ -100,6 +100,10 @@ export interface TaskPlan {
   /** Set when the reader added details to a PLANNED task — the background sweep re-plans it in
    * place to incorporate them, then clears the flag (the "re-attack with new info" loop). */
   needsReplan?: boolean;
+  /** The exact notes string the app last WROTE to this task's parent Google Task. The baseline for
+   * detecting edits the reader makes directly in Google Tasks (see `googleNotesUserEdit`): anything
+   * present now but not here is treated as their added detail → userNotes + needsReplan. */
+  googleNotesSynced?: string;
   /** `false` for a scan-surfaced STUB that's in the list but hasn't been planned yet (no steps);
    * omitted/true once it has a real step-by-step plan. The periodic sweep (or the "Plan" button)
    * turns stubs into full plans. */
@@ -211,6 +215,7 @@ export interface TaskPlanInput {
   clarifyingQuestions?: string[];
   userNotes?: string;
   needsReplan?: boolean;
+  googleNotesSynced?: string;
   /** Pass `false` to mark a scan stub awaiting planning; defaults to "has steps". */
   planned?: boolean;
   createdAt?: number;
@@ -245,6 +250,7 @@ export function normalizeTaskPlan(input: TaskPlanInput): TaskPlan {
     })(),
     ...(input.userNotes && input.userNotes.trim() ? { userNotes: cap(input.userNotes, MAX_NOTES_CHARS) } : {}),
     ...(input.needsReplan ? { needsReplan: true } : {}),
+    ...(input.googleNotesSynced !== undefined ? { googleNotesSynced: input.googleNotesSynced.slice(0, 8000) } : {}),
     createdAt: input.createdAt ?? now,
     updatedAt: now,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
@@ -492,6 +498,27 @@ export function needsPlanning(plan: TaskPlan): boolean {
  * added details to (needsReplan) — so the "re-attack with new info" loop runs at the next sweep. */
 export function needsAttention(plan: TaskPlan): boolean {
   return plan.planned === false || plan.needsReplan === true;
+}
+
+/**
+ * The text the reader ADDED to a Google Task's notes since the app last wrote them — the bridge for
+ * "edit it in Google Tasks → re-plan". Returns the lines present in `current` but NOT in the
+ * `synced` baseline (trimmed, non-empty, order preserved, de-duped). Empty when nothing was added.
+ * Returns "" when there is NO baseline yet (`synced === undefined`) so a plan synced before this
+ * feature doesn't have its whole existing notes mistaken for a fresh edit. PURE.
+ */
+export function googleNotesUserEdit(current: string | undefined, synced: string | undefined): string {
+  if (!current || synced === undefined) return "";
+  const known = new Set(synced.split("\n").map((l) => l.trim()));
+  const seen = new Set<string>();
+  const added: string[] = [];
+  for (const raw of current.split("\n")) {
+    const line = raw.trim();
+    if (!line || known.has(line) || seen.has(line)) continue;
+    seen.add(line);
+    added.push(line);
+  }
+  return added.join("\n").trim();
 }
 
 /** Render a plan as readable notes for the PARENT Google Task, so the whole plan — summary, the

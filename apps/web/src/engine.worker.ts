@@ -91,6 +91,7 @@ import {
   formatPlanForGoogleNotes,
   planFromGoogleTask,
   importableGoogleTasks,
+  googleNotesUserEdit,
   runTaskPlanning,
   normalizeTaskPlan,
   upsertTaskPlan,
@@ -1465,13 +1466,17 @@ async function syncPlanToGoogleTasks(plan: TaskPlan, transport: DirectTransport,
     if (gid) previous = gid;
   }
   // Write the WHOLE plan into the parent task's notes, so the current plan (summary + numbered
-  // steps + deadline) is readable right in Google Tasks — not just a title with child rows.
+  // steps + deadline) is readable right in Google Tasks — not just a title with child rows. Remember
+  // the exact string as the baseline so a later edit the reader makes in Google Tasks is detectable.
+  const notes = formatPlanForGoogleNotes({ ...plan, steps });
+  let googleNotesSynced = plan.googleNotesSynced;
   try {
-    await patchTask(transport, await tok(), parentId, { notes: formatPlanForGoogleNotes({ ...plan, steps }) });
+    await patchTask(transport, await tok(), parentId, { notes });
+    googleNotesSynced = notes;
   } catch {
-    /* best-effort */
+    /* best-effort — keep the previous baseline if the write failed */
   }
-  return { ...plan, steps };
+  return { ...plan, steps, ...(googleNotesSynced !== undefined ? { googleNotesSynced } : {}) };
 }
 
 async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>): Promise<void> {
@@ -1632,11 +1637,33 @@ async function handleImportGoogleTasks(msg: Extract<MainToWorker, { type: "impor
     const transport = new DirectTransport(corsFetch());
     const token = await getFreshAccessToken(store, { clientId: googleId, clientSecret: googleSecret, transport });
     const trees = await listTaskTree(transport, token, 100);
-    const toImport = importableGoogleTasks(trees, await loadTaskPlans(store));
+    const existingPlans = await loadTaskPlans(store);
+    const toImport = importableGoogleTasks(trees, existingPlans);
     for (const tree of toImport) {
       await upsertTaskPlan(store, normalizeTaskPlan(planFromGoogleTask(tree)));
     }
-    post({ type: "googleTasksImported", requestId: msg.requestId, ok: true, imported: toImport.length });
+    // DETECT GOOGLE-TASKS EDITS → re-plan: for each LINKED plan, compare its parent's current notes
+    // to the baseline the app last wrote. New lines = the reader's added detail → fold into userNotes
+    // + flag needsReplan, so the sweep re-attacks the plan with it. First time (no baseline) just
+    // records one, so pre-existing notes aren't mistaken for an edit. Never writes to Google here.
+    const treeById = new Map(trees.map((t) => [t.id, t]));
+    let edited = 0;
+    for (const plan of existingPlans) {
+      if (!plan.googleTaskId || plan.status === "archived") continue;
+      const tree = treeById.get(plan.googleTaskId);
+      if (!tree) continue;
+      if (plan.googleNotesSynced === undefined) {
+        await upsertTaskPlan(store, { ...plan, googleNotesSynced: tree.notes ?? "" });
+        continue;
+      }
+      const added = googleNotesUserEdit(tree.notes, plan.googleNotesSynced);
+      if (!added) continue;
+      const userNotes = [plan.userNotes, added].filter(Boolean).join("\n").slice(0, 4000);
+      // Re-baseline to the current notes so the same edit isn't captured twice before the re-plan.
+      await upsertTaskPlan(store, { ...plan, userNotes, needsReplan: true, googleNotesSynced: tree.notes ?? "" });
+      edited++;
+    }
+    post({ type: "googleTasksImported", requestId: msg.requestId, ok: true, imported: toImport.length, ...(edited ? { edited } : {}) });
   } catch (err) {
     post({ type: "googleTasksImported", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
   }
