@@ -254,7 +254,10 @@ const MAX_QUERY_CHARS = 200;
 const MAX_URL_CHARS = 600;
 const MAX_TITLE_CHARS = 120;
 const MAX_ID_CHARS = 120;
-const MAX_PROMPT_CHARS = 600;
+/** Image-generation prompts: natural-language models (Flux.2, Gemini, GPT-image) reward long,
+ * detailed prompts, so give them real room — a 600-char cap visibly truncated both the render
+ * prompt AND the "Generate this image?" preview. */
+const MAX_PROMPT_CHARS = 2_000;
 const MAX_NAME_CHARS = 80;
 /** Pasted-text passages: a poem or excerpt, not a whole book (use upload for that). */
 const MAX_PASTE_CHARS = 12_000;

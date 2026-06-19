@@ -1011,6 +1011,7 @@ describe("createImageProvider local", () => {
     let usedModel = "";
     const backend: LocalEngineBackend = {
       listModels: () => Promise.resolve([]),
+      listComponents: () => Promise.resolve({ textEncoders: [], vaes: [] }),
       generate: (_input, model) => {
         usedModel = model;
         return Promise.resolve({ bytes: new ArrayBuffer(0), mimeType: "image/png" });

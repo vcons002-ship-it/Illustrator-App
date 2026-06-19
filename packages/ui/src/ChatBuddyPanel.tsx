@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import {
   CommandHelp,
   MessageBubble,
@@ -37,6 +37,16 @@ interface SpeechRecognitionLike {
  * recommendations) and technical (articles, papers, research).
  */
 
+/** A file attached to the next chat message: a document read as text, or an image the
+ * vision model describes. `status` drives the chip (spinner → ready → error). */
+export interface ChatAttachmentChip {
+  id: string;
+  name: string;
+  kind: "doc" | "image";
+  status: "reading" | "ready" | "error";
+  error?: string;
+}
+
 export interface ChatBuddyPanelProps {
   messages: ChatMessageVM[];
   /** In-flight assistant text (streaming providers), shown as a live bubble. */
@@ -62,6 +72,12 @@ export interface ChatBuddyPanelProps {
   onRenameSession?: (id: string, label: string) => void;
   onDeleteSession?: (id: string) => void;
   onSend: (text: string) => void;
+  /** Attach a file (document or image) to the next message — read into the chat as context. */
+  onAttachFile?: (file: File) => void;
+  /** Pending attachments, shown as removable chips above the composer. */
+  attachments?: ChatAttachmentChip[];
+  /** Remove a pending attachment before sending. */
+  onRemoveAttachment?: (id: string) => void;
   onApprovePendingTool: () => void;
   /** Grant filesystem access for the session (find_files approval only). */
   onApprovePendingToolAlways?: () => void;
@@ -153,11 +169,19 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     setSpeakOn((s) => !s);
   };
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const hasReadyAttachment = (props.attachments ?? []).some((a) => a.status === "ready");
   const send = () => {
     const text = draft.trim();
-    if (!text || props.busy) return;
+    // Allow sending with only attachments (the host supplies a default ask); never while busy.
+    if ((!text && !hasReadyAttachment) || props.busy) return;
     setDraft("");
     props.onSend(text);
+  };
+  const pickFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    for (const f of files) props.onAttachFile?.(f);
+    e.target.value = ""; // allow re-attaching the same file
   };
 
   const personaButton = (p: BuddyPersona, label: string, title: string) => (
@@ -424,7 +448,63 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
       </div>
 
       <SlashMenu draft={draft} commands={commands} onPick={setDraft} />
+      {props.onAttachFile && (props.attachments?.length ?? 0) > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "0 10px 4px" }}>
+          {props.attachments!.map((a) => (
+            <span
+              key={a.id}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 12,
+                padding: "3px 8px",
+                borderRadius: 12,
+                background: a.status === "error" ? "rgba(255,120,120,0.12)" : "rgba(122,162,255,0.12)",
+                border: `1px solid ${a.status === "error" ? "rgba(255,120,120,0.4)" : "rgba(122,162,255,0.35)"}`,
+              }}
+              title={a.error ?? a.name}
+            >
+              <span>{a.kind === "image" ? "🖼" : "📄"}</span>
+              <span style={{ maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {a.name}
+              </span>
+              <span style={{ opacity: 0.7 }}>
+                {a.status === "reading" ? "…" : a.status === "error" ? "⚠" : ""}
+              </span>
+              {props.onRemoveAttachment && (
+                <button
+                  onClick={() => props.onRemoveAttachment!(a.id)}
+                  style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", padding: 0, opacity: 0.7 }}
+                  title="Remove"
+                >
+                  ✕
+                </button>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
       <div style={inputRowStyle}>
+        {props.onAttachFile && (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".pdf,.docx,.xlsx,.csv,.tsv,.txt,.md,.markdown,.rtf,.json,.html,.htm,.epub,.png,.jpg,.jpeg,.webp,.gif"
+              style={{ display: "none" }}
+              onChange={pickFile}
+            />
+            <button
+              style={smallButtonStyle}
+              onClick={() => fileInputRef.current?.click()}
+              title="Attach a file (PDF, Word, Excel, CSV, text, or image) for me to read"
+            >
+              📎
+            </button>
+          </>
+        )}
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -473,7 +553,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             Stop
           </button>
         ) : (
-          <button style={smallButtonStyle} onClick={send} disabled={!draft.trim()}>
+          <button style={smallButtonStyle} onClick={send} disabled={!draft.trim() && !hasReadyAttachment}>
             Send
           </button>
         )}

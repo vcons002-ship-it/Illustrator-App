@@ -140,6 +140,30 @@ export class ComfyUIBackend implements LocalEngineBackend {
     return names.map((id) => ({ id, label: id, sizeGB: 0 }));
   }
 
+  /**
+   * The separate text-encoder + VAE files ComfyUI has on disk — for the Settings dropdowns +
+   * the model-aware suggestion. Text encoders are the union of the single CLIPLoader
+   * (`clip_name`, used by Flux.2 / Z-Image / Qwen-Image) and the DualCLIPLoader
+   * (`clip_name1`, used by UNET-only Flux.1), deduped case-insensitively. Best-effort:
+   * a node ComfyUI doesn't expose just contributes nothing.
+   */
+  async listComponents(): Promise<{ textEncoders: string[]; vaes: string[] }> {
+    const [clip, dualClip, vaes] = await Promise.all([
+      this.enumValues("CLIPLoader", "clip_name"),
+      this.enumValues("DualCLIPLoader", "clip_name1"),
+      this.enumValues("VAELoader", "vae_name"),
+    ]);
+    const seen = new Set<string>();
+    const textEncoders: string[] = [];
+    for (const name of [...clip, ...dualClip]) {
+      const k = name.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      textEncoders.push(name);
+    }
+    return { textEncoders, vaes };
+  }
+
   /** A node's `/object_info` schema, cached per session (failures evicted). */
   private nodeInfo(node: string): Promise<NodeSchema | undefined> {
     const cached = this.nodeInfoCache.get(node);

@@ -93,6 +93,12 @@ export class Automatic1111Backend implements LocalEngineBackend {
     return (data ?? []).map((m) => ({ id: m.title, label: m.model_name || m.title, sizeGB: 0 }));
   }
 
+  /** AUTOMATIC1111 serves all-in-one SD/SDXL checkpoints — the text encoder + VAE are baked
+   * into the checkpoint, so there are no separate component files to pick. */
+  async listComponents(): Promise<{ textEncoders: string[]; vaes: string[] }> {
+    return { textEncoders: [], vaes: [] };
+  }
+
   async generate(input: ImageGenerationInput, model: string): Promise<ImageGenerationOutput> {
     const seed = input.seed ?? input.anchors[0]?.seed ?? Math.floor(Math.random() * 1_000_000_000);
 
