@@ -455,6 +455,15 @@ export function App() {
   const [showTasks, setShowTasks] = useState(false);
   const [taskPlans, setTaskPlans] = useState<TaskPlan[]>([]);
   const [planningCount, setPlanningCount] = useState(0);
+  // Background-planning idle gate. IDLE = no in-flight process (chat turn / planning / scan / image
+  // generation) AND no chat message or user request for IDLE_MS. `lastRequestAt` is bumped by those
+  // user actions (NOT raw clicks/scrolling); `processActiveRef` mirrors the in-flight signals so the
+  // 90s sweep can read both without re-subscribing. `markUserRequest` is called from each user entry.
+  const lastRequestAt = useRef(Date.now());
+  const markUserRequest = useCallback(() => {
+    lastRequestAt.current = Date.now();
+  }, []);
+  const processActiveRef = useRef(false);
   // The last per-task plan's outcome (success/steps, or the actual error) — shown in the Tasks
   // panel so clicking "Plan" is never a silent no-op.
   const [planMessage, setPlanMessage] = useState<string | undefined>();
@@ -498,6 +507,7 @@ export function App() {
     // `track` registers a status-center entry (+ a buddy note); the sweep passes false because it
     // owns the whole queue's entries itself (so each task shows queued → active → done in order).
     async (planId: string, userInitiated = true, track = true) => {
+      if (userInitiated) markUserRequest();
       const plan = (await loadTaskPlans(libraryStore)).find((p) => p.id === planId);
       if (!plan) return;
       const act = track ? beginActivity(`Planning: ${plan.title}`) : undefined;
@@ -533,7 +543,7 @@ export function App() {
         setPlanningCount((n) => Math.max(0, n - 1));
       }
     },
-    [libraryStore, planTask, refreshTaskPlans, beginActivity],
+    [libraryStore, planTask, refreshTaskPlans, beginActivity, markUserRequest],
   );
   // Plan the backlog of unplanned stubs, up to `limit` per sweep, SEQUENTIALLY. `keepGoing` lets
   // the caller stop early (e.g. the reader came back) so a long sweep yields instead of grinding on.
@@ -560,6 +570,7 @@ export function App() {
   // verify the background planner end-to-end — each one researches, fills its steps, and mirrors to
   // Google Tasks. Surfaces progress in the status center + the panel message.
   const planAllPending = useCallback(async () => {
+    markUserRequest();
     const pending = (await loadTaskPlans(libraryStore)).filter(needsPlanning);
     if (pending.length === 0) {
       setPlanMessage("✓ Nothing to plan — no unplanned tasks in the backlog.");
@@ -568,7 +579,7 @@ export function App() {
     setPlanMessage(`🔄 Planning ${pending.length} pending task${pending.length === 1 ? "" : "s"}… (mirrors to Google Tasks)`);
     await planPendingTasks(pending.length); // no keepGoing → plan the whole backlog
     setPlanMessage(`✓ Planned ${pending.length} task${pending.length === 1 ? "" : "s"} — check Google Tasks for the sub-tasks.`);
-  }, [libraryStore, planPendingTasks]);
+  }, [libraryStore, planPendingTasks, markUserRequest]);
   // The most precise "don't surface this" rule for a plan: the exact email/event item, else its
   // sender, else its title as a phrase. Shared by Ignore (adds it) and Restore (removes it).
   const ignoreRuleFor = useCallback((plan: TaskPlan): { kind: "item" | "sender" | "phrase"; value: string } | undefined => {
@@ -689,6 +700,7 @@ export function App() {
   const [creatingTask, setCreatingTask] = useState(false);
   const onCreateTask = useCallback(
     async (title: string, dueIso?: string, recurrence?: TaskRecurrence, planNow = true) => {
+      markUserRequest();
       // "Add as-is": drop a plain to-do straight onto the list — no planner, no LLM. We deliberately
       // leave `planned` UNSET (not false): a `planned:false` stub is what the background sweep auto-
       // plans, but a manual to-do must stay as-is until the user hits "⚡ Plan it". With 0 steps it
@@ -1748,25 +1760,13 @@ export function App() {
     void libraryStore.deleteMemo?.("google-email").catch(() => {});
   }, [libraryStore]);
 
-  // Phase-2 idle scan: while the app is open, Google's connected, automation is on, AND
-  // the reader has been inactive a few minutes, periodically scan recent email + calendar
-  // for actionable items — so it never interrupts active work (no always-on daemon).
-  const lastInputAt = useRef(Date.now());
+  // Phase-2 idle scan: while the app is open, Google's connected, automation is on, AND the app is
+  // IDLE — no in-flight process and no chat/request for IDLE_MS — periodically scan recent email +
+  // calendar for actionable items, then plan a couple. Never interrupts active work (no daemon).
   const scanningRef = useRef(false);
   // Set once the calendar refresher is defined below; lets the scan sync the app calendar
   // without a forward reference / re-subscribing the interval.
   const refreshCalendarRef = useRef<() => void>(() => {});
-  useEffect(() => {
-    const bump = () => {
-      lastInputAt.current = Date.now();
-    };
-    window.addEventListener("pointerdown", bump);
-    window.addEventListener("keydown", bump);
-    return () => {
-      window.removeEventListener("pointerdown", bump);
-      window.removeEventListener("keydown", bump);
-    };
-  }, []);
   useEffect(() => {
     // Runs by DEFAULT once Google is connected (set autoTaskScan=false to stop background scans).
     // Each idle sweep does TWO things, read/research-only (no email/calendar writes): (1) scan for
@@ -1776,7 +1776,9 @@ export function App() {
     const IDLE_MS = 3 * 60_000;
     const rate = settings.backgroundPlanRate ?? 2;
     const id = setInterval(() => {
-      if (scanningRef.current || Date.now() - lastInputAt.current < IDLE_MS) return;
+      // IDLE = this sweep isn't already running, nothing else is in flight (chat/plan/scan/render),
+      // and no chat message or user request within IDLE_MS.
+      if (scanningRef.current || processActiveRef.current || Date.now() - lastRequestAt.current < IDLE_MS) return;
       scanningRef.current = true;
       void scanInbox()
         .then(async (r) => {
@@ -1785,8 +1787,9 @@ export function App() {
           const imp = await importGoogleTasks().catch(() => ({ imported: 0 }));
           if ((imp.imported ?? 0) > 0) refreshTaskPlans();
           refreshCalendarRef.current(); // the scan just scraped the calendar — sync the app's view
-          // Plan up to `rate` of the unplanned backlog, but stop early if the reader comes back.
-          await planPendingTasks(rate, () => Date.now() - lastInputAt.current >= IDLE_MS);
+          // Plan up to `rate` of the unplanned backlog, but stop early the moment the reader sends a
+          // message or makes a request (lastRequestAt bumps → this returns false → the sweep yields).
+          await planPendingTasks(rate, () => Date.now() - lastRequestAt.current >= IDLE_MS);
         })
         .catch(() => {})
         .finally(() => {
@@ -1863,12 +1866,18 @@ export function App() {
   // per-task "Plan" button, so a manual scan is fast and never kicks off long LLM work.
   const scanningNowRef = useRef(false);
   const [scanningNow, setScanningNow] = useState(false);
+  // Mirror the "a process is in flight" signals into a ref the idle sweep reads each tick: a chat
+  // turn, planning, a manual scan, or image generation. While any is true the app is NOT idle.
+  useEffect(() => {
+    processActiveRef.current = buddyBusy || planningCount > 0 || scanningNow || generating;
+  }, [buddyBusy, planningCount, scanningNow, generating]);
   // A short outcome line shown under the Scan button so a manual scan never looks like it "did
   // nothing": it reports what it found/synced, or surfaces the actual Google error instead of
   // failing silently.
   const [scanMessage, setScanMessage] = useState<string | undefined>();
   const scanNow = useCallback(async () => {
     if (!googleConnected || scanningNowRef.current) return;
+    markUserRequest();
     scanningNowRef.current = true;
     setScanningNow(true);
     setScanMessage(undefined);
@@ -2234,6 +2243,7 @@ export function App() {
   const onChatSend = useCallback(
     async (text: string) => {
       if (!book) return;
+      markUserRequest();
       // A pasted/typed image URL just gets DISPLAYED — don't feed a .jpg to the LLM
       // (which would try to read it as a page or re-search).
       const directImg = pastedImageUrl(text);
@@ -3095,6 +3105,7 @@ export function App() {
   // shows just a "📎 filenames" line + the question, so a big doc doesn't flood the transcript.
   const onBuddySendWithAttachments = useCallback(
     async (text: string) => {
+      markUserRequest();
       const ready = buddyAttachments.filter((x) => x.status === "ready");
       if (ready.length === 0) {
         onBuddySendText(text);
