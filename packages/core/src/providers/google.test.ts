@@ -9,6 +9,7 @@ import {
   gmailReadEmail,
   listEvents,
   listAllEvents,
+  listTaskTree,
   parseCalendarEvent,
   parseGmailMessage,
   parseTask,
@@ -204,6 +205,27 @@ describe("calendar + tasks parsers", () => {
     expect(evs[0]).toMatchObject({ summary: "Standup", calendarId: "primary" });
     // It read the primary calendar's events after the calendarList 403.
     expect(t.urls.some((u) => u.includes("/calendars/primary/events"))).toBe(true);
+  });
+
+  it("listTaskTree paginates (page count includes sub-tasks) and nests sub-tasks across pages", async () => {
+    // Page 1: a parent + a nextPageToken. Page 2: that parent's sub-task (on a later page).
+    const t = new (class implements Transport {
+      n = 0;
+      readonly urls: string[] = [];
+      send(req: TransportRequest): Promise<TransportResponse> {
+        this.urls.push(req.url);
+        const body =
+          this.n++ === 0
+            ? { items: [{ id: "p1", title: "Parent" }], nextPageToken: "PAGE2" }
+            : { items: [{ id: "s1", title: "Child", parent: "p1", status: "completed" }] };
+        return Promise.resolve({ ok: true, status: 200, json: <T>() => Promise.resolve(body as T), arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)), text: () => Promise.resolve("") });
+      }
+    })();
+    const trees = await listTaskTree(t, "tok", 500);
+    expect(trees).toHaveLength(1);
+    expect(trees[0]).toMatchObject({ id: "p1", title: "Parent" });
+    expect(trees[0]!.subtasks).toEqual([{ id: "s1", title: "Child", status: "completed" }]);
+    expect(t.urls[1]).toContain("pageToken=PAGE2"); // followed the page token
   });
 
   it("parseTask keeps title/notes/due", () => {

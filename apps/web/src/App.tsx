@@ -1807,10 +1807,11 @@ export function App() {
         .then(async (r) => {
           if (r.candidates?.length) await addCandidatesAsTasks(r.candidates);
           // Pull any Google Tasks not yet mirrored locally (e.g. created on another device).
-          const imp = await importGoogleTasks().catch(() => ({ imported: 0, edited: 0 }));
-          // `edited` = tasks whose Google notes the reader changed (now flagged needsReplan, so the
-          // planPendingTasks call below re-attacks them this same sweep).
-          if ((imp.imported ?? 0) > 0 || ((imp as { edited?: number }).edited ?? 0) > 0) refreshTaskPlans();
+          const imp = await importGoogleTasks().catch(() => ({ imported: 0, edited: 0, mirrored: 0 }));
+          // `edited` = notes the reader changed (now flagged needsReplan → re-planned below this same
+          // sweep); `mirrored` = ignore/complete/delete mirrored back from Google Tasks.
+          const i = imp as { imported?: number; edited?: number; mirrored?: number };
+          if ((i.imported ?? 0) > 0 || (i.edited ?? 0) > 0 || (i.mirrored ?? 0) > 0) refreshTaskPlans();
           refreshCalendarRef.current(); // the scan just scraped the calendar — sync the app's view
           // Plan up to `rate` of the unplanned backlog, but stop early the moment the reader sends a
           // message or makes a request (lastRequestAt bumps → this returns false → the sweep yields).
@@ -1912,7 +1913,8 @@ export function App() {
       const [scan, imported] = await Promise.all([scanInbox(), importGoogleTasks()]);
       if (scan.candidates?.length) await addCandidatesAsTasks(scan.candidates);
       const editedInGoogle = imported.edited ?? 0;
-      if ((imported.imported ?? 0) > 0 || editedInGoogle > 0) refreshTaskPlans();
+      const mirroredFromGoogle = imported.mirrored ?? 0;
+      if ((imported.imported ?? 0) > 0 || editedInGoogle > 0 || mirroredFromGoogle > 0) refreshTaskPlans();
       const cal = await loadCalendarFor(calendarMonthRef.current, true);
       const err = scan.error || imported.error || cal?.error;
       if (err) {
@@ -1927,10 +1929,11 @@ export function App() {
           found ? `${found} new item${found === 1 ? "" : "s"} from email/calendar` : "",
           added ? `${added} Google task${added === 1 ? "" : "s"} imported` : "",
           editedInGoogle ? `${editedInGoogle} edited in Google Tasks — re-planning` : "",
+          mirroredFromGoogle ? `${mirroredFromGoogle} mirrored from Google Tasks (done/removed/ignored)` : "",
           `${events} calendar event${events === 1 ? "" : "s"} synced`,
         ].filter(Boolean);
         const summary = bits.join(" · ");
-        setScanMessage(found || added || editedInGoogle ? `✓ ${summary}` : `✓ Up to date — ${summary}`);
+        setScanMessage(found || added || editedInGoogle || mirroredFromGoogle ? `✓ ${summary}` : `✓ Up to date — ${summary}`);
         act.finish({ detail: summary });
         buddyNoteRef.current(`🔍 Scanned email & calendar — ${summary}.`);
         logActionRef.current("scan", "Scanned email & calendar", summary);

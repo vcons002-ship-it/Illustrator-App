@@ -92,7 +92,7 @@ export const SETUP_GUIDES: SetupGuide[] = [
       "Use the 📋 Tasks panel (open & work a plan in a preloaded chat, mark steps done) and the 📅 Calendar button (your Google calendars + planned deadlines).",
       "Leave the desktop app open and idle (auto-pilot on) and it quietly pre-plans actionable items; dismiss junk with \"Ignore sender\" so it never returns.",
     ],
-    note: "It only ever PREPS irreversible actions (submitting, paying, sending) for you to finalize — it never does them itself. The app must be open to scan (no background daemon yet).",
+    note: "It only ever PREPS irreversible actions (submitting, paying, sending) for you to finalize — it never does them itself. The app must be open to scan (no background daemon yet). Two-way with Google Tasks: add [skip] (or [ignore]) to a Google Task's TITLE and the app won't manage it; marking a task complete or deleting it in Google mirrors back into the app's list on the next scan; and answers you type into a task's Google notes are read back and refine the plan.",
   },
   {
     id: "scientific-sources",
