@@ -56,6 +56,7 @@ import {
   upsertTaskPlan,
   updateTaskStep,
   resolveActiveTaskPlanId,
+  sessionLabelForPlan,
   loadScheduledTasks,
   upsertScheduledTask,
   deleteScheduledTask,
@@ -2811,7 +2812,22 @@ export function App() {
       await dispatchBuddyTurn([...preHistory, ...pre], fail);
       return;
     }
-    const plan = res.plan;
+    // Bind this plan to the chat it was planned in, so work continues here and the Tasks panel's
+    // "open in chat" reuses this very session. Re-asserted on every (re-)plan so the link can't
+    // drift. Name the chat after the task, but never clobber a label the reader set themselves.
+    const session = activeBuddyIdRef.current;
+    let plan = res.plan;
+    if (session) {
+      plan = { ...plan, sessionId: session };
+      await upsertTaskPlan(libraryStore, plan);
+      setBuddySessions((prev) => {
+        const next = prev.map((s) =>
+          s.id === session && !s.label ? { ...s, label: sessionLabelForPlan(plan) } : s,
+        );
+        persistSessions(next);
+        return next;
+      });
+    }
     refreshTaskPlans();
     const summary =
       `📋 Planned: ${plan.title}${plan.deadlineIso ? ` (deadline ${plan.deadlineIso})` : ""}\n` +
@@ -3413,7 +3429,8 @@ export function App() {
         const sid = `${BUDDY_CHAT_ID}-${Date.now().toString(36)}`;
         sessionId = sid;
         setBuddySessions((prev) => {
-          const next = [...prev, { id: sid, workingDir: "" }];
+          // Name the task's dedicated chat after the task, so the session list reads as the task.
+          const next = [...prev, { id: sid, workingDir: "", label: sessionLabelForPlan(plan) }];
           persistSessions(next);
           return next;
         });

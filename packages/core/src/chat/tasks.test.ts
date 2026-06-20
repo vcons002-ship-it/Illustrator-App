@@ -32,6 +32,7 @@ import {
   taskStubFromCandidate,
   tasksIndexBlock,
   resolveActiveTaskPlanId,
+  sessionLabelForPlan,
   updateTaskStep,
   upsertTaskPlan,
   type TaskPlan,
@@ -476,6 +477,17 @@ describe("advanceStep / nextReadyStep", () => {
     expect(resolveActiveTaskPlanId([a, b], "buddy-2")).toBe("task-b");
     expect(resolveActiveTaskPlanId([a, b], "buddy-9")).toBeUndefined();
     expect(resolveActiveTaskPlanId([a, b], undefined)).toBeUndefined();
+  });
+
+  it("sessionLabelForPlan names the chat after the task, capped and trimmed", () => {
+    expect(sessionLabelForPlan({ title: "Book the dentist" })).toBe("Book the dentist");
+    expect(sessionLabelForPlan({ title: "  Plan   the   party  " })).toBe("Plan the party");
+    expect(sessionLabelForPlan({ title: "" })).toBe("Task");
+    expect(sessionLabelForPlan({})).toBe("Task");
+    const long = "Organize the entire end-of-year fundraising gala including catering and venue booking";
+    const label = sessionLabelForPlan({ title: long });
+    expect(label.length).toBeLessThanOrEqual(60);
+    expect(label.endsWith("…")).toBe(true);
   });
 });
 
