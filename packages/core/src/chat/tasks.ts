@@ -43,7 +43,27 @@ export type TaskSource =
   | { kind: "typed"; text: string }
   | { kind: "email"; emailId: string; subject?: string; from?: string }
   | { kind: "calendar"; eventId: string; summary?: string }
-  | { kind: "scan"; emailId?: string; eventId?: string; from?: string };
+  | { kind: "scan"; emailId?: string; eventId?: string; from?: string }
+  /** A task that originated as a MANUAL entry in Google Tasks (imported), as opposed to a `typed`
+   * task entered in the app (VR). Kept distinct only so the source tag can tell them apart. */
+  | { kind: "google"; taskId: string };
+
+/** Short human tag for where a task came from — Gmail, Calendar, VR (typed in the app), or Google
+ * Tasks (typed in Google). Shown on the task so its origin is clear at a glance. PURE. */
+export function sourceTag(source: TaskSource): "Gmail" | "Calendar" | "VR" | "Google Tasks" {
+  switch (source.kind) {
+    case "email":
+      return "Gmail";
+    case "calendar":
+      return "Calendar";
+    case "scan":
+      return source.emailId ? "Gmail" : source.eventId ? "Calendar" : "Gmail";
+    case "google":
+      return "Google Tasks";
+    default:
+      return "VR";
+  }
+}
 
 export interface TaskLink {
   label: string;
@@ -572,8 +592,10 @@ export interface GoogleTaskTree {
 export function planFromGoogleTask(node: GoogleTaskTree): TaskPlanInput {
   return {
     title: node.title || "Google task",
-    // Reuse the `typed` source (no new ripple through dedupe/ignore); the googleTaskId is the link.
-    source: { kind: "typed", text: node.title || "Google task" },
+    // A manual entry made in Google Tasks — tagged "Google Tasks" (vs "VR" for app-typed). sourceId/
+    // sourceFrom return undefined for this kind (the googleTaskId is the link), so dedupe/ignore are
+    // unchanged — it behaves like `typed` everywhere except the source tag.
+    source: { kind: "google", taskId: node.id },
     googleTaskId: node.id,
     status: node.status === "completed" ? "completed" : "active",
     ...(node.notes ? { summary: node.notes } : {}),

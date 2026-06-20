@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from "react";
-import { dayToIso, describeRecurrence, ganttRowRef, needsAttention, needsPlanning, plansToGanttRows, type TaskPlan, type TaskRecurrence, type TaskStep } from "@visual-reader/core";
+import { dayToIso, describeRecurrence, ganttRowRef, needsAttention, needsPlanning, plansToGanttRows, sourceTag, type TaskPlan, type TaskRecurrence, type TaskStep } from "@visual-reader/core";
 import { GanttChart } from "./GanttChart.js";
 
 /**
@@ -89,6 +89,7 @@ function PlanCard({
   return (
     <div style={card}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <span style={sourceTagStyle(plan.source ? sourceTag(plan.source) : "VR")}>{plan.source ? sourceTag(plan.source) : "VR"}</span>
         <strong style={{ fontSize: 14 }}>{plan.title}</strong>
         {plan.deadlineIso ? <span style={{ fontSize: 11, color: "#ffcf8b" }}>due {plan.deadlineIso}</span> : null}
         {plan.recurrence ? (
@@ -582,6 +583,28 @@ const card: React.CSSProperties = {
   borderRadius: 8,
   padding: "10px 12px",
 };
+
+/** A small colour-coded chip for a task's source (Gmail / Calendar / VR / Google Tasks). */
+function sourceTagStyle(tag: "Gmail" | "Calendar" | "VR" | "Google Tasks"): React.CSSProperties {
+  const palette: Record<string, [string, string]> = {
+    Gmail: ["rgba(234,67,53,0.18)", "#ff9d92"],
+    Calendar: ["rgba(66,133,244,0.2)", "#9db8ff"],
+    VR: ["rgba(160,120,255,0.22)", "#cdbcff"],
+    "Google Tasks": ["rgba(52,168,83,0.18)", "#8fe3a8"],
+  };
+  const [background, color] = palette[tag] ?? palette.VR!;
+  return {
+    fontSize: 9,
+    fontWeight: 700,
+    padding: "1px 5px",
+    borderRadius: 4,
+    background,
+    color,
+    whiteSpace: "nowrap",
+    letterSpacing: 0.2,
+    flexShrink: 0,
+  };
+}
 const btn: React.CSSProperties = {
   background: "rgba(255,255,255,0.08)",
   color: "inherit",
