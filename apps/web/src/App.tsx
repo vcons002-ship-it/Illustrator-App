@@ -354,6 +354,7 @@ export function App() {
     paintForward,
     testRender,
     assessImage,
+    sendBuddyEmail,
     chat,
     chatTool,
     chatCancel,
@@ -2669,6 +2670,32 @@ export function App() {
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
+  // send_email (approval-gated): actually send the mail the buddy composed, then feed the
+  // outcome back so it confirms to the reader. Mirrors approveRunCommand.
+  const approveSendEmail = async (call: Extract<BuddyToolCall, { tool: "send_email" }>): Promise<void> => {
+    setBuddyPendingTool(undefined);
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+    setBuddyBusy(true);
+    setBuddyActivity(`Sending email to ${call.to.join(", ")}…`);
+    const r = await sendBuddyEmail({
+      to: call.to,
+      subject: call.subject,
+      body: call.body,
+      ...(call.cc ? { cc: call.cc } : {}),
+      ...(call.bcc ? { bcc: call.bcc } : {}),
+    });
+    setBuddyBusy(false);
+    setBuddyActivity("");
+    const result = { email: { sent: !r.error, to: call.to, subject: call.subject, ...(r.id ? { id: r.id } : {}), ...(r.error ? { error: r.error } : {}) } };
+    const feedback = formatBuddyToolResult(call, result);
+    const summary = r.error ? `⚠ Couldn't send the email: ${r.error}` : `📧 Sent "${call.subject}" to ${call.to.join(", ")}.`;
+    appendBuddy({ role: "tool", text: summary, turns: [...pre, { role: "user", content: feedback }] });
+    await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+  };
+
   // write_file (Autonomous workspace): save the file the model authored into the workspace, then
   // feed the result back so it can run_command it. Mirrors approveRunCommand; runs without a click.
   const runWriteFile = async (call: Extract<BuddyToolCall, { tool: "write_file" }>): Promise<void> => {
@@ -3324,6 +3351,10 @@ export function App() {
     }
     if (call?.tool === "screenshot") {
       void approveScreenshot(call);
+      return;
+    }
+    if (call?.tool === "send_email") {
+      void approveSendEmail(call);
       return;
     }
     if (!call || call.tool !== "generate_image") return;

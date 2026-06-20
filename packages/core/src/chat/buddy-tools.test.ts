@@ -696,9 +696,32 @@ describe("ALWAYS_GATED_TOOLS (the full-autonomy danger floor)", () => {
   it("always gates running a command/executable and placing a trade — never the medium-risk tools", () => {
     expect(ALWAYS_GATED_TOOLS.has("run_command")).toBe(true); // could run a downloaded .exe
     expect(ALWAYS_GATED_TOOLS.has("prep_order")).toBe(true); // places a financial trade
+    expect(ALWAYS_GATED_TOOLS.has("send_email")).toBe(true); // sends mail from the reader's account
     expect(ALWAYS_GATED_TOOLS.has("generate_image")).toBe(false);
     expect(ALWAYS_GATED_TOOLS.has("find_files")).toBe(false);
     expect(ALWAYS_GATED_TOOLS.has("read_attachment")).toBe(false);
+    expect(ALWAYS_GATED_TOOLS.has("draft_email")).toBe(false); // a draft just sits in Gmail
+  });
+});
+
+describe("parseBuddyToolCall: draft_email / send_email", () => {
+  it("parses recipients (array or string), keeps cc/bcc only when present", () => {
+    // A single recipient may arrive as a bare string.
+    expect(parseBuddyToolCall('{"tool":"draft_email","to":"a@b.com","subject":"Hi","body":"Hello"}')).toEqual({
+      tool: "draft_email",
+      to: ["a@b.com"],
+      subject: "Hi",
+      body: "Hello",
+    });
+    expect(
+      parseBuddyToolCall('{"tool":"send_email","to":["a@b.com","c@d.com"],"cc":["e@f.com"],"subject":"S","body":"B"}'),
+    ).toEqual({ tool: "send_email", to: ["a@b.com", "c@d.com"], subject: "S", body: "B", cc: ["e@f.com"] });
+  });
+
+  it("rejects an email with no recipient / subject / body", () => {
+    expect(parseBuddyToolCall('{"tool":"draft_email","to":[],"subject":"S","body":"B"}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"draft_email","to":["a@b.com"],"body":"B"}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"send_email","to":["a@b.com"],"subject":"S"}')).toBeUndefined();
   });
 });
 
