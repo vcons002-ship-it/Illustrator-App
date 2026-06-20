@@ -119,7 +119,14 @@ export interface ModelComponentFile {
   sizeGB?: number;
 }
 
-export type CatalogModelFamily = "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage";
+export type CatalogModelFamily =
+  | "sd15"
+  | "sdxl"
+  | "flux"
+  | "flux2"
+  | "zimage"
+  | "qwenimage"
+  | "hidream";
 
 export interface LocalModelCatalogEntry {
   id: string;
@@ -151,6 +158,21 @@ export interface LocalModelCatalogEntry {
     shift?: number;
   };
 }
+
+/**
+ * HiDream's four text encoders + the Flux VAE, shared by every HiDream catalog entry
+ * (the diffusion model differs by variant/precision, these don't). Hosted in the same
+ * Comfy-Org repack; the downloader skips files already on disk so they're fetched once.
+ */
+const HIDREAM_TE_BASE =
+  "https://huggingface.co/Comfy-Org/HiDream-I1_ComfyUI/resolve/main/split_files/text_encoders";
+const HIDREAM_SHARED_FILES: ModelComponentFile[] = [
+  { filename: "clip_l_hidream.safetensors", folder: "text_encoders", url: `${HIDREAM_TE_BASE}/clip_l_hidream.safetensors`, sizeGB: 0.25 },
+  { filename: "clip_g_hidream.safetensors", folder: "text_encoders", url: `${HIDREAM_TE_BASE}/clip_g_hidream.safetensors`, sizeGB: 1.4 },
+  { filename: "t5xxl_fp8_e4m3fn_scaled.safetensors", folder: "text_encoders", url: `${HIDREAM_TE_BASE}/t5xxl_fp8_e4m3fn_scaled.safetensors`, sizeGB: 4.9 },
+  { filename: "llama_3.1_8b_instruct_fp8_scaled.safetensors", folder: "text_encoders", url: `${HIDREAM_TE_BASE}/llama_3.1_8b_instruct_fp8_scaled.safetensors`, sizeGB: 8.1 },
+  { filename: "ae.safetensors", folder: "vae", url: "https://huggingface.co/Comfy-Org/HiDream-I1_ComfyUI/resolve/main/split_files/vae/ae.safetensors", sizeGB: 0.3 },
+];
 
 export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
   {
@@ -308,6 +330,53 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
         url: "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors",
         sizeGB: 0.25,
       },
+    ],
+  },
+  // --- HiDream-I1 (native ComfyUI). A 17B diffusion transformer that loads via a
+  // QuadrupleCLIPLoader (clip_l + clip_g + t5xxl + llama_3.1_8b), a UNETLoader, the Flux
+  // VAE (ae.safetensors), and a ModelSamplingSD3 shift node. Files + URLs + sampler
+  // settings from the official Comfy-Org repack (Comfy-Org/HiDream-I1_ComfyUI) and the
+  // ComfyUI HiDream workflow template. The four text encoders are shared between the Full
+  // and Dev entries; the downloader skips files already present, so installing one after
+  // the other reuses them. (HiDream has no `clipType` — QuadrupleCLIPLoader takes no type.)
+  {
+    id: "hidream-full",
+    label: "HiDream-I1 Full (fp16)",
+    sizeGB: 49,
+    note: "Top quality · 4 text encoders + Flux VAE · needs ~27 GB+ VRAM",
+    filename: "hidream_i1_full_fp16.safetensors",
+    url: "https://huggingface.co/Comfy-Org/HiDream-I1_ComfyUI/resolve/main/split_files/diffusion_models/hidream_i1_full_fp16.safetensors",
+    family: "hidream",
+    // Full is CFG-based (real negative): uni_pc / simple / cfg 5 / 50 steps / SD3 shift 3.0.
+    sampler: { cfg: 5, sampler: "uni_pc", scheduler: "simple", steps: 50, shift: 3.0 },
+    files: [
+      {
+        filename: "hidream_i1_full_fp16.safetensors",
+        folder: "diffusion_models",
+        url: "https://huggingface.co/Comfy-Org/HiDream-I1_ComfyUI/resolve/main/split_files/diffusion_models/hidream_i1_full_fp16.safetensors",
+        sizeGB: 34.2,
+      },
+      ...HIDREAM_SHARED_FILES,
+    ],
+  },
+  {
+    id: "hidream-dev",
+    label: "HiDream-I1 Dev (fp8)",
+    sizeGB: 32,
+    note: "Fast · near-Full quality at 8-bit · ~16 GB VRAM",
+    filename: "hidream_i1_dev_fp8.safetensors",
+    url: "https://huggingface.co/Comfy-Org/HiDream-I1_ComfyUI/resolve/main/split_files/diffusion_models/hidream_i1_dev_fp8.safetensors",
+    family: "hidream",
+    // Dev is guidance-distilled: cfg 1 (no negative), lcm / normal / 28 steps / SD3 shift 6.0.
+    sampler: { cfg: 1, sampler: "lcm", scheduler: "normal", steps: 28, shift: 6.0 },
+    files: [
+      {
+        filename: "hidream_i1_dev_fp8.safetensors",
+        folder: "diffusion_models",
+        url: "https://huggingface.co/Comfy-Org/HiDream-I1_ComfyUI/resolve/main/split_files/diffusion_models/hidream_i1_dev_fp8.safetensors",
+        sizeGB: 17.1,
+      },
+      ...HIDREAM_SHARED_FILES,
     ],
   },
 ];

@@ -231,6 +231,55 @@ export class ComfyUIBackend implements LocalEngineBackend {
   ): Promise<DiffusionComponents> {
     const vaes = await this.enumValues("VAELoader", "vae_name");
 
+    // HiDream: FOUR text encoders (clip_l + clip_g + t5xxl + llama_3.1_8b) bundled by a
+    // single QuadrupleCLIPLoader, plus the Flux VAE (ae.safetensors). Each slot is resolved
+    // catalog-first then by name pattern, tolerating same-family variant filenames — like
+    // the other split-file families, just across all four encoder slots at once.
+    if (family === "hidream") {
+      // QuadrupleCLIPLoader's slots draw from the text_encoders folder, same as CLIPLoader;
+      // union both enums so detection works whichever node ComfyUI advertises.
+      const clips = [
+        ...(await this.enumValues("QuadrupleCLIPLoader", "clip_name1")),
+        ...(await this.enumValues("CLIPLoader", "clip_name")),
+      ];
+      const entry = catalogEntryForModel(model);
+      const teWanted = (entry?.files ?? [])
+        .filter((f) => f.folder === "text_encoders")
+        .map((f) => f.filename);
+      const wantBy = (re: RegExp): string | undefined => teWanted.find((f) => re.test(f));
+      const clipL = pickComponentAsset(clips, wantBy(/clip[_-]?l/i), [/clip[_-]?l/i]);
+      const clipG = pickComponentAsset(clips, wantBy(/clip[_-]?g/i), [/clip[_-]?g/i]);
+      const t5 = pickComponentAsset(clips, wantBy(/t5/i), [/t5/i]);
+      const llama = pickComponentAsset(clips, wantBy(/llama/i), [/llama/i]);
+      const wantedVae = entry?.files?.find((f) => f.folder === "vae")?.filename;
+      const vae = pickComponentAsset(vaes, overrides?.vae ?? wantedVae, [], ["ae", "flux"]);
+      if (!clipL || !clipG || !t5 || !llama || !vae) {
+        const missing = [
+          ...(clipL ? [] : ["clip_l"]),
+          ...(clipG ? [] : ["clip_g"]),
+          ...(t5 ? [] : ["t5xxl"]),
+          ...(llama ? [] : ["llama_3.1_8b_instruct"]),
+          ...(vae ? [] : ["the Flux VAE (ae.safetensors)"]),
+        ].join(", ");
+        throw new Error(
+          "HiDream needs four text encoders (clip_l, clip_g, t5xxl, llama_3.1_8b_instruct) in " +
+            `models/text_encoders and the Flux VAE (ae.safetensors) in models/vae — missing: ${missing}. ` +
+            "Use the Download button in Settings → Local model to fetch all of HiDream's files, or pick " +
+            "an all-in-one SD/SDXL checkpoint. (If you just added the files, restart the engine.)",
+        );
+      }
+      return {
+        textEncoder: {
+          class_type: "QuadrupleCLIPLoader",
+          inputs: { clip_name1: clipL, clip_name2: clipG, clip_name3: t5, clip_name4: llama },
+        },
+        vaeName: vae,
+        // Low-VRAM: load the 17B UNET in fp8 (≈half the diffusion weights). The big T5 +
+        // Llama encoders are shrunk by the engine's --lowvram offloading (no dtype input here).
+        weightDtype: lowVram ? "fp8_e4m3fn" : "default",
+      };
+    }
+
     // Flux.1 UNET-only (not a split-file catalog family): DualCLIPLoader (t5xxl + clip_l).
     if (family !== "flux2" && family !== "zimage" && family !== "qwenimage") {
       const clips = await this.enumValues("DualCLIPLoader", "clip_name1");
@@ -803,13 +852,16 @@ export function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
       : addClassicIpAdapter(graph, p.ipAdapter, modelRef);
   }
   if (p.sampler.shift !== undefined) {
-    // Z-Image / Qwen-Image sigma shift — wrap whatever model ref feeds the sampler.
+    // Sigma shift — wrap whatever model ref currently feeds the sampler (UNET / LoRA /
+    // IP-Adapter chain). HiDream uses a ModelSamplingSD3 node; Z-Image / Qwen-Image use
+    // ModelSamplingAuraFlow. Node id "17" (not "15") so it never clobbers img2img's
+    // LoadImage / VAEEncode at "15" / "16" when a shift family also denoises from a photo.
     const ks = graph["3"] as { inputs: Record<string, unknown> };
-    graph["15"] = {
-      class_type: "ModelSamplingAuraFlow",
+    graph["17"] = {
+      class_type: p.family === "hidream" ? "ModelSamplingSD3" : "ModelSamplingAuraFlow",
       inputs: { shift: p.sampler.shift, model: ks.inputs.model },
     };
-    ks.inputs.model = ["15", 0];
+    ks.inputs.model = ["17", 0];
   }
   return graph;
 }

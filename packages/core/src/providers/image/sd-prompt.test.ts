@@ -18,6 +18,9 @@ describe("detectModelFamily", () => {
     expect(detectModelFamily("FLUX.2-dev-fp8.safetensors")).toBe("flux2");
     expect(detectModelFamily("z_image_turbo_bf16.safetensors")).toBe("zimage");
     expect(detectModelFamily("qwen_image_fp8_e4m3fn.safetensors")).toBe("qwenimage");
+    expect(detectModelFamily("hidream_i1_full_fp16.safetensors")).toBe("hidream");
+    expect(detectModelFamily("hidream_i1_dev_fp8.safetensors")).toBe("hidream");
+    expect(detectModelFamily("HiDream-O1-Image-BF16.safetensors")).toBe("hidream"); // tolerant of O1 naming
     expect(detectModelFamily("sd_xl_base_1.0.safetensors")).toBe("sdxl");
     expect(detectModelFamily("realvisxl_v4.safetensors")).toBe("sdxl"); // tricky: looks XL
     expect(detectModelFamily("v1-5-pruned-emaonly-fp16.safetensors")).toBe("sd15");
@@ -39,6 +42,10 @@ describe("samplerFor", () => {
     expect(samplerFor("zimage").guidance).toBeUndefined(); // no FluxGuidance node
     expect(samplerFor("qwenimage")).toMatchObject({ cfg: 4, sampler: "euler", steps: 20, shift: 3.1 });
   });
+  it("defaults HiDream to the CFG-based Full recipe with an SD3 shift (no FluxGuidance)", () => {
+    expect(samplerFor("hidream")).toMatchObject({ cfg: 5, sampler: "uni_pc", scheduler: "simple", steps: 50, shift: 3.0 });
+    expect(samplerFor("hidream").guidance).toBeUndefined();
+  });
 });
 
 describe("nameHandlingFor", () => {
@@ -49,6 +56,7 @@ describe("nameHandlingFor", () => {
     expect(nameHandlingFor("flux2")).toBe("reference");
     expect(nameHandlingFor("zimage")).toBe("reference");
     expect(nameHandlingFor("qwenimage")).toBe("reference");
+    expect(nameHandlingFor("hidream")).toBe("reference"); // has a Llama-3.1 encoder
   });
 });
 
@@ -61,6 +69,7 @@ describe("clampResolution", () => {
     expect(clampResolution("flux", 1280, 1280)).toEqual({ width: 1280, height: 1280 });
     expect(clampResolution("qwenimage", 1536, 1536)).toEqual({ width: 1536, height: 1536 });
     expect(clampResolution("zimage", 1536, 1536)).toEqual({ width: 1280, height: 1280 }); // turbo cap
+    expect(clampResolution("hidream", 1536, 1536)).toEqual({ width: 1536, height: 1536 }); // 17B DiT
     expect(clampResolution("sdxl", 1000, 1000)).toEqual({ width: 1000, height: 1000 }); // already fine
   });
 
@@ -81,6 +90,8 @@ describe("resolveModelFamily", () => {
     expect(resolveModelFamily("flux", "sd_xl_base_1.0.safetensors")).toBe("flux");
     // Catalog filename match.
     expect(resolveModelFamily(undefined, "sd_xl_base_1.0.safetensors")).toBe("sdxl");
+    // Catalog match for a HiDream entry's main filename.
+    expect(resolveModelFamily(undefined, "hidream_i1_dev_fp8.safetensors")).toBe("hidream");
     // Falls back to the heuristic for an unknown checkpoint.
     expect(resolveModelFamily(undefined, "mystery_flux_merge.safetensors")).toBe("flux");
     expect(resolveModelFamily(undefined, "whatever.safetensors")).toBe("unknown");
@@ -95,6 +106,8 @@ describe("formatting by family", () => {
     expect(negativeFor("flux")).toBe("");
     expect(negativeFor("zimage")).toBe("");
     expect(negativeFor("qwenimage")).toBe("");
+    expect(negativeFor("hidream")).toBe(""); // natural-language: no booru negative
+    expect(qualityPreamble("hidream")).toBe(""); // and no SD quality tags
 
     expect(qualityPreamble("sdxl")).toContain("masterpiece");
     expect(qualityPreamble("flux")).toBe("");

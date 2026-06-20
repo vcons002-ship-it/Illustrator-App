@@ -10,7 +10,15 @@ import { catalogModelFamily } from "../catalog.js";
  * a negative prompt (always safe) but no tags or weighting.
  */
 
-export type ModelFamily = "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage" | "unknown";
+export type ModelFamily =
+  | "sd15"
+  | "sdxl"
+  | "flux"
+  | "flux2"
+  | "zimage"
+  | "qwenimage"
+  | "hidream"
+  | "unknown";
 
 /** Flux.1 or Flux.2 — natural-language prompts, no negatives, no SD tags. */
 export function isFlux(family: ModelFamily): boolean {
@@ -18,11 +26,13 @@ export function isFlux(family: ModelFamily): boolean {
 }
 
 /**
- * Natural-language families (Flux, Z-Image, Qwen-Image): plain prose prompts, no
- * SD tags/weighting, no negative, and a fixed model-recommended step count.
+ * Natural-language families (Flux, Z-Image, Qwen-Image, HiDream): plain prose
+ * prompts, no SD tags/weighting, no negative, and a fixed model-recommended step
+ * count. HiDream reads prose well (it carries a Llama-3.1 encoder alongside T5 +
+ * dual CLIP), and like Qwen-Image runs at a real CFG without a booru-style negative.
  */
 export function isNaturalLanguage(family: ModelFamily): boolean {
-  return isFlux(family) || family === "zimage" || family === "qwenimage";
+  return isFlux(family) || family === "zimage" || family === "qwenimage" || family === "hidream";
 }
 
 /** Sampler settings for a family. Flux uses embedded guidance (cfg≈1) + the `simple`
@@ -39,7 +49,11 @@ export interface SamplerSettings {
    * Undefined for SD families, which use real CFG instead.
    */
   guidance?: number;
-  /** ModelSamplingAuraFlow shift (Z-Image / Qwen-Image); undefined = no node. */
+  /**
+   * Sigma shift for the few flow-matching families that need it: Z-Image / Qwen-Image
+   * via a ModelSamplingAuraFlow node, HiDream via ModelSamplingSD3 (the backend picks
+   * the node class by family). Undefined = no shift node.
+   */
   shift?: number;
 }
 
@@ -53,6 +67,11 @@ export function samplerFor(family: ModelFamily): SamplerSettings {
       return { cfg: 1, sampler: "res_multistep", scheduler: "simple", steps: 8, shift: 3 };
     case "qwenimage": // real CFG 4, AuraFlow shift 3.1
       return { cfg: 4, sampler: "euler", scheduler: "simple", steps: 20, shift: 3.1 };
+    case "hidream":
+      // Default to the Full recipe (CFG-based, SD3 shift 3.0) — the safe high-quality
+      // baseline for a HiDream file that isn't one of the catalog entries (those carry
+      // their own sampler, e.g. Dev = cfg 1 / lcm / shift 6).
+      return { cfg: 5, sampler: "uni_pc", scheduler: "simple", steps: 50, shift: 3.0 };
     default: // sd15 / sdxl / unknown
       return { cfg: 7, sampler: "euler", scheduler: "normal", steps: 28 };
   }
@@ -65,7 +84,7 @@ export function samplerFor(family: ModelFamily): SamplerSettings {
  *    name↔description glossary → **reference** block.
  */
 export function nameHandlingFor(family: ModelFamily): "inject" | "reference" {
-  return family === "flux2" || family === "zimage" || family === "qwenimage"
+  return family === "flux2" || family === "zimage" || family === "qwenimage" || family === "hidream"
     ? "reference"
     : "inject";
 }
@@ -79,6 +98,7 @@ export function familyMaxDimension(family: ModelFamily): number {
     case "flux":
     case "flux2":
     case "qwenimage":
+    case "hidream": // 17B DiT — coherent at large canvases like its Flux/Qwen peers
       return 1536;
     case "zimage":
       return 1280;
@@ -112,6 +132,7 @@ export function clampResolution(
  */
 export function detectModelFamily(name: string): ModelFamily {
   const n = (name || "").toLowerCase();
+  if (/hi[\s._-]?dream/.test(n)) return "hidream"; // hidream_i1_full_fp16, HiDream-O1, …
   if (/z[\s._-]?image/.test(n)) return "zimage"; // z_image_turbo, z-image, …
   if (/qwen[\s._-]?image/.test(n)) return "qwenimage"; // qwen_image, qwen-image, …
   if (/flux[\s._-]?2/.test(n)) return "flux2"; // flux2, flux.2, flux-2, flux_2 — before generic flux

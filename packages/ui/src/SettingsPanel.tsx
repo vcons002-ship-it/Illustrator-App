@@ -93,7 +93,7 @@ export interface ReaderSettings {
    * from the checkpoint name is wrong. "auto" (default) detects it. SD families get
    * quality tags + a negative prompt; Flux gets plain natural language.
    */
-  imageModelFamily?: "auto" | "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage";
+  imageModelFamily?: "auto" | "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage" | "hidream";
   /**
    * How many pages share one illustration: any positive number, or a whole
    * "chapter". A group never crosses a chapter boundary, so a number larger than
@@ -591,10 +591,11 @@ export function SettingsPanel({
                       | "flux"
                       | "flux2"
                       | "zimage"
-                      | "qwenimage",
+                      | "qwenimage"
+                      | "hidream",
                   })
                 }
-                title="How prompts are formatted and the model is loaded. Auto detects from the checkpoint name. SD1.5/SDXL get quality tags + a negative prompt; the newer families get plain natural language. Flux.2 / Z-Image / Qwen-Image load via their separate text encoder + VAE (ComfyUI only). Override if auto-detection is wrong."
+                title="How prompts are formatted and the model is loaded. Auto detects from the checkpoint name. SD1.5/SDXL get quality tags + a negative prompt; the newer families get plain natural language. Flux.2 / Z-Image / Qwen-Image / HiDream load via their separate text encoder(s) + VAE (ComfyUI only). Override if auto-detection is wrong."
               >
                 <option value="auto">Auto-detect</option>
                 <option value="sd15">Stable Diffusion 1.5</option>
@@ -603,6 +604,7 @@ export function SettingsPanel({
                 <option value="flux2">Flux.2</option>
                 <option value="zimage">Z-Image</option>
                 <option value="qwenimage">Qwen-Image</option>
+                <option value="hidream">HiDream</option>
               </select>
             </label>
           )}

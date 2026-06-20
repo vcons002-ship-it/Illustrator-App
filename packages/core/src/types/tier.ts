@@ -52,11 +52,12 @@ export interface TierConfig {
    * unset, the local backends auto-detect from the checkpoint. Cloud providers
    * ignore it (they always use natural language).
    */
-  imageModelFamily?: "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage";
+  imageModelFamily?: "sd15" | "sdxl" | "flux" | "flux2" | "zimage" | "qwenimage" | "hidream";
   /**
-   * Manual component overrides for split-file local models (Flux.2 / Z-Image / Qwen-Image)
-   * when auto-detection of the text encoder / VAE picks the wrong file. Exact filenames as
-   * ComfyUI lists them; unset = auto-resolve. Cloud providers ignore these.
+   * Manual component overrides for split-file local models (Flux.2 / Z-Image / Qwen-Image /
+   * HiDream) when auto-detection of the text encoder / VAE picks the wrong file. Exact
+   * filenames as ComfyUI lists them; unset = auto-resolve. Cloud providers ignore these.
+   * (HiDream's four text encoders auto-resolve; only the VAE override applies there.)
    */
   localTextEncoder?: string;
   localVae?: string;

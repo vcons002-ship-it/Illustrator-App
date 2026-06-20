@@ -110,9 +110,14 @@ export class Automatic1111Backend implements LocalEngineBackend {
     }
 
     const family = resolveModelFamily(input.modelFamily, checkpoint);
-    // Flux.2's separate Mistral encoder + VAE have no AUTOMATIC1111 equivalent here.
+    // Diffusion-only split-file models (separate text encoder(s) + VAE) have no
+    // AUTOMATIC1111 equivalent here — HiDream additionally needs a four-encoder
+    // QuadrupleCLIPLoader. Point the user at the ComfyUI engine instead.
     if (family === "flux2") {
       throw new Error("Flux.2 isn't supported on the AUTOMATIC1111 engine — use the ComfyUI engine for Flux.2.");
+    }
+    if (family === "hidream") {
+      throw new Error("HiDream isn't supported on the AUTOMATIC1111 engine — use the ComfyUI engine for HiDream.");
     }
     // Family-aware sampler: Flux uses embedded guidance (cfg≈1) + its own step count;
     // SD keeps the configured sampler/cfg and the quality-profile steps. Distilled

@@ -277,7 +277,7 @@ Open **Chat** while reading to discuss the book with an AI that actually knows i
 - **Text (story understanding):** Claude, Gemini, or OpenAI with your key — **or local** (on-device
   WebGPU, or Ollama/LM Studio/llama.cpp). **Ollama models download from Settings** with a progress bar. *(a key or local model)*
 - **Images:** a Flux-style API, Gemini, or OpenAI — **or local** on your GPU via ComfyUI/AUTOMATIC1111
-  (SD 1.5 / SDXL / Flux.1, plus **Z-Image Turbo**, **Flux.2 Klein**, **Qwen-Image** on ComfyUI). The
+  (SD 1.5 / SDXL / Flux.1, plus **Z-Image Turbo**, **Flux.2 Klein**, **Qwen-Image**, **HiDream-I1** on ComfyUI). The
   **desktop app can auto-manage** ComfyUI and fetch every file a model needs. *(a key or a GPU)*
 - **Vision (seeing images):** Claude/Gemini/OpenAI all see images; **locally** a vision model does too
   (Ollama llama3.2-vision/llava/qwen2-vl, or LM Studio). *(a vision-capable model)*
@@ -405,7 +405,7 @@ Open **Chat** while reading to discuss the book with an AI that actually knows i
   guide cloud renders (with an experimental one-shot sub-mode).
 - **Multi-view character references** — up to three photos per character condition each image together.
 - **Exact mid-chapter location changes per image** — each illustration records the one place its moment happens.
-- **One-click local model downloads** — curated image models (Z-Image Turbo, Flux.2 Klein, Qwen-Image)
+- **One-click local model downloads** — curated image models (Z-Image Turbo, Flux.2 Klein, Qwen-Image, HiDream-I1 Full/Dev)
   and Ollama text models download from Settings with a progress bar (split files included, resumable).
 - **Read-ahead prompts** — scene prompts written with each chapter's analysis and stored; images render
   from stored prompts (no AI call at render time).

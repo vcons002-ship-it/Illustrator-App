@@ -337,6 +337,19 @@ grounded-extraction test answers it empirically.
   to the real training tag `KidsRedmAF, Kids Book`.
 - **flux-schnell**: size corrected 12 → 17.2 GB (actual file).
 
+**HiDream-I1 (added 2026-06-20)** — native ComfyUI integration (NOT the drbaph/Saganaki22
+"HiDream-O1" custom-node packaging, which needs diffusers folders + a non-native scheduler
+and doesn't fit the file-based downloader or native-node graph builder). Files from the
+canonical `Comfy-Org/HiDream-I1_ComfyUI` repack: `hidream_i1_full_fp16` (34.2 GB) /
+`hidream_i1_dev_fp8` (17.1 GB) diffusion models + four shared text encoders (`clip_l_hidream`,
+`clip_g_hidream`, `t5xxl_fp8_e4m3fn_scaled`, `llama_3.1_8b_instruct_fp8_scaled`) + the Flux
+`ae.safetensors` VAE. Graph specifics handled in the ComfyUI backend: a **QuadrupleCLIPLoader**
+(four encoders, vs the single CLIPLoader other split-file families use) and a **ModelSamplingSD3**
+shift node (vs ModelSamplingAuraFlow for Z-Image/Qwen) — the backend picks the shift class by
+family, and the shift node moved to graph id "17" so it no longer collides with img2img's
+LoadImage/VAEEncode at "15"/"16". Sampler per variant (catalog `sampler`): Full = uni_pc/simple/
+cfg 5/50 steps/shift 3.0; Dev = lcm/normal/cfg 1/28 steps/shift 6.0.
+
 ---
 
 ## Credentials + environment setup the user is doing

@@ -1158,12 +1158,51 @@ describe("ComfyUI prompt formatting by family", () => {
     expect(wf["12"]!.inputs).toMatchObject({ clip_name: "qwen_3_4b.safetensors", type: "lumina2" });
     expect(wf["13"]!.inputs.vae_name).toBe("ae.safetensors");
     expect(wf["3"]!.inputs).toMatchObject({ cfg: 1, steps: 8, sampler_name: "res_multistep" });
-    // Sigma shift node wraps the model feeding the sampler.
-    expect(wf["15"]!.class_type).toBe("ModelSamplingAuraFlow");
-    expect(wf["15"]!.inputs.shift).toBe(3);
-    expect(wf["3"]!.inputs.model).toEqual(["15", 0]);
+    // Sigma shift node wraps the model feeding the sampler (node 17, off the img2img 15/16 lane).
+    expect(wf["17"]!.class_type).toBe("ModelSamplingAuraFlow");
+    expect(wf["17"]!.inputs.shift).toBe(3);
+    expect(wf["3"]!.inputs.model).toEqual(["17", 0]);
     expect(wf["6"]!.inputs.text).toBe("a knight"); // natural language, no SD tags
     expect(wf["7"]!.inputs.text).toBe("");
+  });
+
+  it("HiDream Dev (catalog) → QuadrupleCLIPLoader (4 encoders), Flux VAE, SD3 shift, distilled sampler", async () => {
+    const encoders = [
+      "clip_l_hidream.safetensors",
+      "clip_g_hidream.safetensors",
+      "t5xxl_fp8_e4m3fn_scaled.safetensors",
+      "llama_3.1_8b_instruct_fp8_scaled.safetensors",
+    ];
+    const t = new FakeTransport((req) => {
+      // HiDream resolves its encoders from the QuadrupleCLIPLoader enum (unioned with CLIPLoader).
+      if (req.url.endsWith("/object_info/QuadrupleCLIPLoader"))
+        return { json: { QuadrupleCLIPLoader: { input: { required: { clip_name1: [encoders] } } } } };
+      if (req.url.endsWith("/object_info/VAELoader"))
+        return { json: { VAELoader: { input: { required: { vae_name: [["ae.safetensors"]] } } } } };
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
+      if (req.url.includes("/history/"))
+        return { json: { p1: { outputs: { "9": { images: [{ filename: "f.png", subfolder: "", type: "output" }] } } } } };
+      return { bytes: png };
+    });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await backend.generate(imageInput, "hidream_i1_dev_fp8.safetensors");
+    const wf = workflowOf(t);
+    expect(wf["4"]!.class_type).toBe("UNETLoader"); // diffusion-only load
+    expect(wf["12"]!.class_type).toBe("QuadrupleCLIPLoader");
+    expect(wf["12"]!.inputs).toMatchObject({
+      clip_name1: "clip_l_hidream.safetensors",
+      clip_name2: "clip_g_hidream.safetensors",
+      clip_name3: "t5xxl_fp8_e4m3fn_scaled.safetensors",
+      clip_name4: "llama_3.1_8b_instruct_fp8_scaled.safetensors",
+    });
+    expect(wf["13"]!.inputs.vae_name).toBe("ae.safetensors"); // Flux VAE
+    // Dev recipe (catalog sampler): cfg 1, lcm/normal, 28 steps, SD3 shift 6.0.
+    expect(wf["3"]!.inputs).toMatchObject({ cfg: 1, steps: 28, sampler_name: "lcm", scheduler: "normal" });
+    expect(wf["17"]!.class_type).toBe("ModelSamplingSD3");
+    expect(wf["17"]!.inputs.shift).toBe(6.0);
+    expect(wf["3"]!.inputs.model).toEqual(["17", 0]);
+    expect(wf["14"]).toBeUndefined(); // real CFG, no FluxGuidance node
+    expect(wf["6"]!.inputs.text).toBe("a knight"); // natural language, no SD quality tags
   });
 
   it("a catalog model with components missing names the exact files + the Download button", async () => {
