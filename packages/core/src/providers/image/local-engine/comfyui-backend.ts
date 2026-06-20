@@ -268,6 +268,12 @@ export class ComfyUIBackend implements LocalEngineBackend {
             "an all-in-one SD/SDXL checkpoint. (If you just added the files, restart the engine.)",
         );
       }
+      // Diagnostic: the EXACT four files we hand QuadrupleCLIPLoader (clip_name1..4) + the VAE,
+      // so a "wrong pooled size" can be traced to a mis-picked/duplicate encoder at a glance.
+      console.info(
+        `[visual-reader] HiDream QuadrupleCLIPLoader → clip_l=${clipL} clip_g=${clipG} ` +
+          `t5xxl=${t5} llama=${llama} vae=${vae}`,
+      );
       return {
         textEncoder: {
           class_type: "QuadrupleCLIPLoader",
@@ -673,6 +679,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
     promptId: string,
     progress: { lastMs: number; everProgressed: boolean },
     signal?: AbortSignal,
+    family?: ModelFamily,
   ): Promise<HistoryImage> {
     // Two stop conditions: an absolute backstop (`maxPolls`) used when no progress
     // info is available, and — once the websocket has reported ANY progress — an
@@ -693,7 +700,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
         const first = images[0];
         if (first) return first;
         // No image: surface ComfyUI's REAL execution error (otherwise it's a mystery).
-        throw new Error(comfyExecutionError(entry.status) ?? "ComfyUI finished but produced no image");
+        throw new Error(comfyExecutionError(entry.status, family) ?? "ComfyUI finished but produced no image");
       }
       if (progress.everProgressed) {
         if (Date.now() - progress.lastMs > this.idleTimeoutMs) {
@@ -777,21 +784,11 @@ export function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
   // img2img: the sampler starts from the encoded photo's latent (node "16") and
   // denoises only partway (denoise < 1). txt2img starts from an empty latent ("5").
   const latentRef: [string, number] = p.initImage ? ["16", 0] : ["5", 0];
-  // HiDream is a four-encoder model: its conditioning MUST be built by the dedicated
-  // CLIPTextEncodeHiDream node (clip_l + clip_g + t5xxl + llama), not the generic
-  // CLIPTextEncode — otherwise the clip_l/clip_g POOLED embedding is never produced and
-  // the model's first projection (p_embedder(pooled)) crashes with "linear(): input must
-  // be Tensor, not NoneType". We send the same scene text to all four streams (what the
-  // generic node does internally for other families). The Llama/T5 streams take the full
-  // prose; clip_l/clip_g truncate to their 77-token window, as in the official workflow.
+  // HiDream's QuadrupleCLIPLoader already bundles all four encoders; the plain CLIPTextEncode
+  // reads the full pooled (clip_l 768 + clip_g 1280 = 2048) straight off that CLIP — exactly
+  // like the official template. (We tried the specialised CLIPTextEncodeHiDream node, but it
+  // emitted a 768-wide pooled — only clip_l — which the model's p_embedder rejects.)
   const isHiDream = p.family === "hidream";
-  const textEncode = (text: string): Record<string, unknown> =>
-    isHiDream
-      ? {
-          class_type: "CLIPTextEncodeHiDream",
-          inputs: { clip: clipRef, clip_l: text, clip_g: text, t5xxl: text, llama: text },
-        }
-      : { class_type: "CLIPTextEncode", inputs: { text, clip: clipRef } };
   const graph: Record<string, unknown> = {
     "3": {
       class_type: "KSampler",
@@ -808,8 +805,8 @@ export function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
         latent_image: latentRef,
       },
     },
-    "6": textEncode(p.prompt),
-    "7": textEncode(p.negative),
+    "6": { class_type: "CLIPTextEncode", inputs: { text: p.prompt, clip: clipRef } },
+    "7": { class_type: "CLIPTextEncode", inputs: { text: p.negative, clip: clipRef } },
     "8": { class_type: "VAEDecode", inputs: { samples: ["3", 0], vae: vaeRef } },
     "9": { class_type: "SaveImage", inputs: { filename_prefix: "visual-reader", images: ["8", 0] } },
   };
@@ -1004,13 +1001,28 @@ function delay(ms: number): Promise<void> {
  * so we say that instead of a linear-algebra dump. Returns undefined when the status
  * carries no error.
  */
-export function comfyExecutionError(status: HistoryResponse[string]["status"]): string | undefined {
+export function comfyExecutionError(
+  status: HistoryResponse[string]["status"],
+  family?: ModelFamily,
+): string | undefined {
   const errMsg = status?.messages?.find(([type]) => type === "execution_error")?.[1];
   const raw = typeof errMsg?.exception_message === "string" ? errMsg.exception_message : undefined;
   if (!raw) {
     return status?.status_str === "error" ? "ComfyUI reported an execution error." : undefined;
   }
   if (/shapes cannot be multiplied/i.test(raw)) {
+    // HiDream loads FOUR encoders via QuadrupleCLIPLoader. A shape mismatch here is almost
+    // always clip_g dropping out of the bundle: its 1280-wide pooled is missing, so the pooled
+    // is 768 (clip_l only) where the model's p_embedder expects 2048 — NOT a Mistral encoder.
+    if (family === "hidream") {
+      return (
+        "HiDream loaded clip_l but not clip_g, so its pooled text embedding is half the expected " +
+        "size (768 vs 2048). ComfyUI didn't recognise the clip_g file in the QuadrupleCLIPLoader — " +
+        "usually because the ComfyUI build is older than HiDream's long clip_l/clip_g (update ComfyUI), " +
+        "or the clip_g file selected for HiDream isn't an actual clip_g. Check the clip_g (Settings → " +
+        `Local model) and that ComfyUI is current. (ComfyUI: ${raw})`
+      );
+    }
     return (
       "The text encoder doesn't match this model. A split-file model needs its OWN encoder " +
       "(Flux.2-dev → Mistral-Small-3.1; Flux.2 Klein → Qwen-3-8B; Z-Image → Qwen-3-4B). Install " +
