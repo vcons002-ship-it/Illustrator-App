@@ -777,6 +777,21 @@ export function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
   // img2img: the sampler starts from the encoded photo's latent (node "16") and
   // denoises only partway (denoise < 1). txt2img starts from an empty latent ("5").
   const latentRef: [string, number] = p.initImage ? ["16", 0] : ["5", 0];
+  // HiDream is a four-encoder model: its conditioning MUST be built by the dedicated
+  // CLIPTextEncodeHiDream node (clip_l + clip_g + t5xxl + llama), not the generic
+  // CLIPTextEncode — otherwise the clip_l/clip_g POOLED embedding is never produced and
+  // the model's first projection (p_embedder(pooled)) crashes with "linear(): input must
+  // be Tensor, not NoneType". We send the same scene text to all four streams (what the
+  // generic node does internally for other families). The Llama/T5 streams take the full
+  // prose; clip_l/clip_g truncate to their 77-token window, as in the official workflow.
+  const isHiDream = p.family === "hidream";
+  const textEncode = (text: string): Record<string, unknown> =>
+    isHiDream
+      ? {
+          class_type: "CLIPTextEncodeHiDream",
+          inputs: { clip: clipRef, clip_l: text, clip_g: text, t5xxl: text, llama: text },
+        }
+      : { class_type: "CLIPTextEncode", inputs: { text, clip: clipRef } };
   const graph: Record<string, unknown> = {
     "3": {
       class_type: "KSampler",
@@ -793,8 +808,8 @@ export function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
         latent_image: latentRef,
       },
     },
-    "6": { class_type: "CLIPTextEncode", inputs: { text: p.prompt, clip: clipRef } },
-    "7": { class_type: "CLIPTextEncode", inputs: { text: p.negative, clip: clipRef } },
+    "6": textEncode(p.prompt),
+    "7": textEncode(p.negative),
     "8": { class_type: "VAEDecode", inputs: { samples: ["3", 0], vae: vaeRef } },
     "9": { class_type: "SaveImage", inputs: { filename_prefix: "visual-reader", images: ["8", 0] } },
   };
@@ -812,7 +827,12 @@ export function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
     graph["15"] = { class_type: "LoadImage", inputs: { image: p.initImage.filename } };
     graph["16"] = { class_type: "VAEEncode", inputs: { pixels: ["15", 0], vae: vaeRef } };
   } else {
-    graph["5"] = { class_type: "EmptyLatentImage", inputs: { width: p.width, height: p.height, batch_size: 1 } };
+    // HiDream uses the 16-channel SD3 latent (it shares the Flux VAE), matching the official
+    // workflow; other families' EmptyLatentImage is channel-fixed by the sampler at run time.
+    graph["5"] = {
+      class_type: isHiDream ? "EmptySD3LatentImage" : "EmptyLatentImage",
+      inputs: { width: p.width, height: p.height, batch_size: 1 },
+    };
   }
   if (p.sampler.guidance !== undefined) {
     // Flux embedded guidance — conditioning passes through FluxGuidance before the sampler.
