@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { buildScanPrompt, dedupeCandidates, parseCandidates } from "./task-scan.js";
+import { buildScanPrompt, buildFocusQuery, dedupeCandidates, parseCandidates } from "./task-scan.js";
+
+describe("buildFocusQuery", () => {
+  it("turns focus lines into a Gmail OR query (operators / emails / keywords)", () => {
+    expect(buildFocusQuery(undefined)).toBeUndefined();
+    expect(buildFocusQuery("   ")).toBeUndefined();
+    const q = buildFocusQuery("boss@acme.com\nsubject:invoice\nlandlord")!;
+    expect(q).toContain("(from:boss@acme.com)");
+    expect(q).toContain("(subject:invoice)");
+    expect(q).toContain("subject:(landlord) OR from:(landlord)");
+    expect(q.split(" OR ").length).toBeGreaterThanOrEqual(3);
+  });
+});
 import { normalizeTaskPlan, type IgnoreRule } from "./tasks.js";
 import type { CalendarEvent, EmailSummary } from "../providers/google.js";
 

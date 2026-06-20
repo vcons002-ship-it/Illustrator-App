@@ -220,6 +220,10 @@ export interface ReaderSettings {
    * periodically scan recent email + the calendar for tasks worth planning, and pre-plan them
    * into the 📋 Tasks panel (research only — no external writes). Set false to stop background scans. */
   autoTaskScan?: boolean;
+  /** FOCUS items for the email scan — senders/subjects/keywords (one per line) the scan always
+   * watches and favours, beyond the default recent/travel queries. Each line: an email address,
+   * a Gmail operator (from:/subject:/label:…), or a bare keyword (matched in subject or sender). */
+  scanFocus?: string;
   /** How many UNPLANNED tasks each idle background sweep plans (deep research, sequential). 0 =
    * never auto-plan in the background (surface only; plan via the per-task button). Default 2.
    * Sweeps never overlap and yield when you return, so this is a throughput knob, not a timeout. */
@@ -1134,6 +1138,34 @@ export function SettingsPanel({
                       how many unplanned tasks each idle sweep researches + plans (sequentially; it yields when you
                       return). Higher = the backlog clears faster but uses more model time.
                     </span>
+                  </label>
+                )}
+                {onConnectGoogle && (
+                  <label style={{ ...rowStyle, marginTop: 8 }}>
+                    <span>Focus senders &amp; subjects (one per line)</span>
+                    <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginBottom: 4 }}>
+                      People or topics the scan should always watch — even when an item looks borderline. One per line:
+                      an <b>email address</b> (e.g. <code>landlord@acme.com</code>), a <b>Gmail operator</b> (e.g.
+                      <code> from:irs.gov</code>, <code>subject:invoice</code>, <code>label:bills</code>), or a plain{" "}
+                      <b>keyword</b> (matched in the subject or sender). The scan searches these too and flags anything
+                      actionable from them.
+                    </span>
+                    <textarea
+                      value={value.scanFocus ?? ""}
+                      placeholder={"boss@company.com\nsubject:invoice\nlandlord\nfrom:school.edu"}
+                      onChange={(e) => set({ scanFocus: e.target.value })}
+                      rows={3}
+                      style={{
+                        background: "rgba(255,255,255,0.06)",
+                        color: "inherit",
+                        border: "1px solid rgba(255,255,255,0.15)",
+                        borderRadius: 6,
+                        padding: "6px 8px",
+                        fontSize: 12,
+                        fontFamily: "ui-monospace, Menlo, monospace",
+                        resize: "vertical",
+                      }}
+                    />
                   </label>
                 )}
                 <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 }}>

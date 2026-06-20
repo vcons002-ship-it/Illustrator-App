@@ -39,6 +39,8 @@ export const TUNING_FIELDS = [
   "autoLearnSkills",
   "remoteBus",
   "mcpServers",
+  // Read at scan time (the focus email query); changing it must not rebuild the engine.
+  "scanFocus",
   // Read per turn when fanning sub-agents out; changing them must not rebuild the engine.
   "agentConcurrency",
   "subAgentServerUrl",

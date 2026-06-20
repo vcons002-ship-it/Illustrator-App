@@ -544,10 +544,35 @@ export function googleNotesUserEdit(current: string | undefined, synced: string 
 /** Render a plan as readable notes for the PARENT Google Task, so the whole plan — summary, the
  * numbered steps (with who does each + due dates), and the deadline — is visible right in Google
  * Tasks, not just as a bare title with child rows. Bounded to Google's notes limit (~8 KB). PURE. */
+/** A Gmail deep link to one message (its API id), so a plan can point straight at the email a step
+ * is about. Opens it in All Mail (works whether it's in the inbox or archived). PURE. */
+export function gmailMessageLink(messageId: string): string {
+  return `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(messageId)}`;
+}
+
+const EMAIL_ACTION_RE = /\b(repl(?:y|ies|ied)|respond|response|e-?mail|sending|send|reach out|follow[ -]?up|get back|write back|rsvp|confirm with)\b/i;
+
+/** Attach a Gmail link to the SOURCE email on the step that involves emailing/replying — so the
+ * reader can jump straight to the message from the plan (and, once it's in the notes, from Google
+ * Tasks). Picks the first step whose title/detail mentions an email action, else the first
+ * user_action step, else step 0. Idempotent (won't add a duplicate). PURE. */
+export function attachSourceEmailLink(plan: TaskPlan, emailId: string | undefined): TaskPlan {
+  if (!emailId || plan.steps.length === 0) return plan;
+  const url = gmailMessageLink(emailId);
+  let idx = plan.steps.findIndex((s) => EMAIL_ACTION_RE.test(`${s.title} ${s.detail ?? ""}`));
+  if (idx < 0) idx = plan.steps.findIndex((s) => s.actor === "user_action");
+  if (idx < 0) idx = 0;
+  if (plan.steps[idx]!.links.some((l) => l.url === url)) return plan;
+  const steps = plan.steps.map((s, i) =>
+    i === idx ? { ...s, links: [...s.links, { label: "📧 Open the email", url }] } : s,
+  );
+  return { ...plan, steps };
+}
+
 export function formatPlanForGoogleNotes(plan: {
   summary?: string;
   deadlineIso?: string;
-  steps: readonly { title: string; detail?: string; actor: StepActor; status: StepStatus; dueIso?: string }[];
+  steps: readonly { title: string; detail?: string; actor: StepActor; status: StepStatus; dueIso?: string; links?: readonly TaskLink[] }[];
   clarifyingQuestions?: readonly string[];
 }): string {
   const lines: string[] = [];
@@ -568,6 +593,8 @@ export function formatPlanForGoogleNotes(plan: {
       const due = s.dueIso ? `, due ${s.dueIso}` : "";
       lines.push(`${i + 1}. ${mark} ${s.title} (${who}${due})`);
       if (s.detail) lines.push(`     ${s.detail.trim()}`);
+      // Links (official sites, and the 📧 email-to-reply link) so they're tappable right in Google Tasks.
+      for (const l of s.links ?? []) lines.push(`     ${l.label}: ${l.url}`);
     });
   }
   if (plan.deadlineIso) lines.push("", `Deadline: ${plan.deadlineIso}`);
