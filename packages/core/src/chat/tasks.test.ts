@@ -25,6 +25,7 @@ import {
   planFromGoogleTask,
   importableGoogleTasks,
   hasGoogleSkipMarker,
+  sourceTag,
   formatPlanForGoogleNotes,
   taskStubFromCandidate,
   tasksIndexBlock,
@@ -202,6 +203,17 @@ describe("normalizeTaskPlan", () => {
     expect(p.status).toBe("completed");
     expect(p.title).toBe("Google task");
     expect(p.steps).toHaveLength(0);
+  });
+
+  it("sourceTag labels each origin (Gmail / Calendar / VR / Google Tasks)", () => {
+    expect(sourceTag({ kind: "email", emailId: "m1" })).toBe("Gmail");
+    expect(sourceTag({ kind: "calendar", eventId: "e1" })).toBe("Calendar");
+    expect(sourceTag({ kind: "scan", emailId: "m1" })).toBe("Gmail");
+    expect(sourceTag({ kind: "scan", eventId: "e1" })).toBe("Calendar");
+    expect(sourceTag({ kind: "typed", text: "renew" })).toBe("VR");
+    expect(sourceTag({ kind: "google", taskId: "gt-1" })).toBe("Google Tasks");
+    // A Google-imported plan carries the "google" source → tagged "Google Tasks", not "VR".
+    expect(sourceTag(planFromGoogleTask({ id: "gt-1", title: "Buy milk", subtasks: [] }).source)).toBe("Google Tasks");
   });
 
   it("importableGoogleTasks: only returns trees not already linked to a local plan", () => {
