@@ -26,6 +26,8 @@ import {
   importableGoogleTasks,
   hasGoogleSkipMarker,
   sourceTag,
+  attachSourceEmailLink,
+  gmailMessageLink,
   formatPlanForGoogleNotes,
   taskStubFromCandidate,
   tasksIndexBlock,
@@ -118,6 +120,33 @@ describe("normalizeTaskPlan", () => {
     expect(googleNotesUserEdit(synced, undefined)).toBe("");
     // Missing notes → empty.
     expect(googleNotesUserEdit(undefined, synced)).toBe("");
+  });
+
+  it("attachSourceEmailLink drops a Gmail link on the step that needs the reply/send", () => {
+    const plan = normalizeTaskPlan({
+      title: "Lease question",
+      source: { kind: "email", emailId: "m9" },
+      steps: [
+        { title: "Read the lease terms", actor: "ai_prep" },
+        { title: "Reply to the landlord with your answer", actor: "user_action" },
+      ],
+    });
+    const linked = attachSourceEmailLink(plan, "m9");
+    expect(linked.steps[0]!.links).toHaveLength(0);
+    expect(linked.steps[1]!.links[0]).toEqual({ label: "📧 Open the email", url: gmailMessageLink("m9") });
+    // Idempotent + no-op without an id.
+    expect(attachSourceEmailLink(linked, "m9").steps[1]!.links).toHaveLength(1);
+    expect(attachSourceEmailLink(plan, undefined)).toBe(plan);
+  });
+
+  it("formatPlanForGoogleNotes includes step links (so the email link is tappable in Google Tasks)", () => {
+    const notes = formatPlanForGoogleNotes({
+      steps: [
+        { title: "Reply", actor: "user_action", status: "pending", links: [{ label: "📧 Open the email", url: gmailMessageLink("m9") }] },
+      ],
+    });
+    expect(notes).toContain("📧 Open the email:");
+    expect(notes).toContain(gmailMessageLink("m9"));
   });
 
   it("formatPlanForGoogleNotes surfaces clarifying questions as 'needs from you'", () => {

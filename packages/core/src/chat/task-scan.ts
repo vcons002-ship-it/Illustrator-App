@@ -4,6 +4,25 @@ import type { CalendarEvent, EmailSummary } from "../providers/google.js";
 import { isIgnored, sourceId, type IgnoreRule, type TaskCandidate, type TaskPlan } from "./tasks.js";
 
 /**
+ * Build a Gmail query OR-ing the reader's FOCUS items — senders/subjects/keywords they always want
+ * the scan to watch (one per line). Each line is used as-is when it's already a Gmail operator
+ * (`from:`, `subject:`, `label:`…); an email address → `from:<addr>`; anything else (a bare keyword)
+ * → match it in the subject OR the sender. Returns undefined when the list is empty. PURE.
+ */
+export function buildFocusQuery(focus: string | undefined): string | undefined {
+  const parts = (focus ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => {
+      if (l.includes(":")) return l; // already a Gmail operator (from:/subject:/label:/has:…)
+      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(l)) return `from:${l}`; // an email address → that sender
+      return `subject:(${l}) OR from:(${l})`; // a bare keyword → subject or sender
+    });
+  return parts.length ? parts.map((p) => `(${p})`).join(" OR ") : undefined;
+}
+
+/**
  * Inbox/calendar SCAN classifier (Phase 2) — the prompt + parse layer that turns
  * recent emails + upcoming events into ACTIONABLE task candidates the user can one-
  * click into a plan. Pure (string in / candidates out), so the "what counts as
@@ -17,14 +36,27 @@ export const MAX_SCAN_CANDIDATES = 8;
 /** Present recent emails + upcoming events to the classifier, asking for both one-off
  * to-dos AND upcoming events that need PLANNING/PREP ahead of time (with the source id
  * echoed so we can map the reply back). `todayIso` lets it pick sensible "arrange by" dates. */
-export function buildScanPrompt(emails: EmailSummary[], events: CalendarEvent[], todayIso?: string): ChatTurn[] {
+export function buildScanPrompt(
+  emails: EmailSummary[],
+  events: CalendarEvent[],
+  todayIso?: string,
+  focusEmailIds?: ReadonlySet<string>,
+): ChatTurn[] {
   const emailLines = emails
-    .map((e) => `[email:${e.id}] from ${e.from} — ${e.subject} — ${e.snippet.slice(0, 200)}`)
+    .map(
+      (e) =>
+        `${focusEmailIds?.has(e.id ?? "") ? "★ FOCUS " : ""}[email:${e.id}] from ${e.from} — ${e.subject} — ${e.snippet.slice(0, 200)}`,
+    )
     .join("\n");
   const eventLines = events
     .filter((e) => e.id)
     .map((e) => `[event:${e.id}] ${e.summary} — ${e.start}`)
     .join("\n");
+  const focusNote =
+    focusEmailIds && focusEmailIds.size > 0
+      ? "Lines marked ★ FOCUS are from senders/subjects the reader explicitly flagged to watch — be GENEROUS surfacing " +
+        "anything actionable from those (a reply needed, a thing to send, a decision), even if it'd otherwise be borderline.\n"
+      : "";
   const system =
     `${todayIso ? `Today is ${todayIso}. ` : ""}You triage a reader's recent email and upcoming calendar and ` +
     "surface anything that's a GENUINE TASK for THIS person — use your own judgment about what they need to act " +
@@ -34,6 +66,7 @@ export function buildScanPrompt(emails: EmailSummary[], events: CalendarEvent[],
     "already booked and flag the GAP (e.g. a trip with NO flight/lodging confirmation visible), naming the gap in " +
     "the title and setting 'suggestedDeadlineIso' to a sensible ARRANGE-BY date BEFORE the event (book flights/" +
     "lodging early), not the event date.\n" +
+    focusNote +
     "Skip obvious marketing, newsletters, promotions, social notifications, and pure receipts/FYI with no action. " +
     "But DON'T be over-conservative — if something plausibly needs an action, a decision, a reply, or planning, " +
     "surface it; a borderline item the reader can dismiss beats a missed obligation. For each, echo its exact id. " +

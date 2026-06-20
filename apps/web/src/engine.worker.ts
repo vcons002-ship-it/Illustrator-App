@@ -89,6 +89,7 @@ import {
   createTaskGroup,
   reconcileGoogleSubtasks,
   formatPlanForGoogleNotes,
+  attachSourceEmailLink,
   planFromGoogleTask,
   importableGoogleTasks,
   googleNotesUserEdit,
@@ -117,6 +118,7 @@ import {
   googleTaskExists,
   loadIgnored,
   buildScanPrompt,
+  buildFocusQuery,
   parseCandidates,
   dedupeCandidates,
   listAllEvents,
@@ -1531,7 +1533,7 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
     // planned version REPLACES the stub in place instead of adding a duplicate — and PRESERVES its
     // Google link + repeat rule (runTaskPlanning doesn't know about them).
     const existing = msg.planId ? (await loadTaskPlans(store)).find((p) => p.id === msg.planId) : undefined;
-    const finalPlan: TaskPlan = existing
+    const baseFinal: TaskPlan = existing
       ? {
           ...plan,
           id: existing.id,
@@ -1544,6 +1546,11 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
           ...(existing.userNotes ? { userNotes: existing.userNotes } : {}),
         }
       : plan;
+    // When the task came FROM an email, drop a Gmail link on the step that needs the reply/send, so
+    // the reader can jump straight to it from the plan (and from Google Tasks, via the notes).
+    const srcEmailId =
+      baseFinal.source.kind === "email" || baseFinal.source.kind === "scan" ? baseFinal.source.emailId : undefined;
+    const finalPlan = attachSourceEmailLink(baseFinal, srcEmailId);
     // SAVE + return the plan FIRST, so the steps show in the app immediately and can't be lost to a
     // slow/hung Google call. The Google mirror is then best-effort in the BACKGROUND (below).
     await upsertTaskPlan(store, finalPlan);
@@ -1601,18 +1608,24 @@ async function handleScanInbox(msg: Extract<MainToWorker, { type: "scanInbox" }>
     // next few days). Pull recent actionable mail PLUS travel/booking confirmations, so the
     // classifier can tell whether a trip's flight/hotel is already arranged.
     const horizon = new Date(now.getTime() + 45 * 86_400_000);
-    const [recent, travel, events] = await Promise.all([
+    // FOCUS items the reader flagged (specific senders/subjects to always watch): a separate search
+    // (no category exclusion, so a flagged sender surfaces even from Promotions), tagged for the
+    // classifier to favour. Empty when none configured.
+    const focusQuery = buildFocusQuery(settings?.scanFocus);
+    const [recent, travel, focus, events] = await Promise.all([
       gmailSearch(transport, token, "newer_than:2d -category:promotions -category:social", 15).catch(() => []),
       gmailSearch(transport, token, "newer_than:60d (flight OR hotel OR reservation OR itinerary OR booking OR confirmation)", 12).catch(() => []),
+      focusQuery ? gmailSearch(transport, token, `newer_than:30d (${focusQuery})`, 12).catch(() => []) : Promise.resolve([]),
       listEvents(transport, token, { max: 25, timeMin: now.toISOString(), timeMax: horizon.toISOString() }).catch(() => []),
     ]);
+    const focusIds = new Set(focus.map((e) => e.id).filter((id): id is string => !!id));
     const seen = new Set<string>();
-    const emails = [...recent, ...travel].filter((e) => e.id && !seen.has(e.id) && seen.add(e.id));
+    const emails = [...focus, ...recent, ...travel].filter((e) => e.id && !seen.has(e.id) && seen.add(e.id));
     if (emails.length === 0 && events.length === 0) {
       post({ type: "scanned", requestId: msg.requestId, ok: true, candidates: [] });
       return;
     }
-    const reply = await llm.chat(buildScanPrompt(emails, events, now.toISOString().slice(0, 10)), { maxTokens: 1024 });
+    const reply = await llm.chat(buildScanPrompt(emails, events, now.toISOString().slice(0, 10), focusIds), { maxTokens: 1024 });
     const candidates = dedupeCandidates(
       parseCandidates(reply, emails, events),
       await loadTaskPlans(store),
