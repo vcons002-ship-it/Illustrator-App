@@ -1215,11 +1215,10 @@ describe("ComfyUI prompt formatting by family", () => {
     expect(wf["17"]!.inputs.shift).toBe(6.0);
     expect(wf["3"]!.inputs.model).toEqual(["17", 0]);
     expect(wf["14"]).toBeUndefined(); // real CFG, no FluxGuidance node
-    // Conditioning is built by the dedicated four-stream node so the clip_l/clip_g POOLED
-    // is populated (the generic CLIPTextEncode left it None → p_embedder linear crash).
-    expect(wf["6"]!.class_type).toBe("CLIPTextEncodeHiDream");
-    expect(wf["6"]!.inputs).toMatchObject({ clip_l: "a knight", clip_g: "a knight", t5xxl: "a knight", llama: "a knight" });
-    expect(wf["6"]!.inputs.text).toBeUndefined(); // not the generic shape
+    // Plain CLIPTextEncode reads the full pooled (clip_l + clip_g = 2048) off the quad CLIP,
+    // exactly like the official template.
+    expect(wf["6"]!.class_type).toBe("CLIPTextEncode");
+    expect(wf["6"]!.inputs).toMatchObject({ text: "a knight", clip: ["12", 0] });
     expect(wf["5"]!.class_type).toBe("EmptySD3LatentImage"); // 16-channel latent
   });
 

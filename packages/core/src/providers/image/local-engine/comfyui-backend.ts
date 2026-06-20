@@ -784,21 +784,11 @@ export function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
   // img2img: the sampler starts from the encoded photo's latent (node "16") and
   // denoises only partway (denoise < 1). txt2img starts from an empty latent ("5").
   const latentRef: [string, number] = p.initImage ? ["16", 0] : ["5", 0];
-  // HiDream is a four-encoder model: its conditioning MUST be built by the dedicated
-  // CLIPTextEncodeHiDream node (clip_l + clip_g + t5xxl + llama), not the generic
-  // CLIPTextEncode — otherwise the clip_l/clip_g POOLED embedding is never produced and
-  // the model's first projection (p_embedder(pooled)) crashes with "linear(): input must
-  // be Tensor, not NoneType". We send the same scene text to all four streams (what the
-  // generic node does internally for other families). The Llama/T5 streams take the full
-  // prose; clip_l/clip_g truncate to their 77-token window, as in the official workflow.
+  // HiDream's QuadrupleCLIPLoader already bundles all four encoders; the plain CLIPTextEncode
+  // reads the full pooled (clip_l 768 + clip_g 1280 = 2048) straight off that CLIP — exactly
+  // like the official template. (We tried the specialised CLIPTextEncodeHiDream node, but it
+  // emitted a 768-wide pooled — only clip_l — which the model's p_embedder rejects.)
   const isHiDream = p.family === "hidream";
-  const textEncode = (text: string): Record<string, unknown> =>
-    isHiDream
-      ? {
-          class_type: "CLIPTextEncodeHiDream",
-          inputs: { clip: clipRef, clip_l: text, clip_g: text, t5xxl: text, llama: text },
-        }
-      : { class_type: "CLIPTextEncode", inputs: { text, clip: clipRef } };
   const graph: Record<string, unknown> = {
     "3": {
       class_type: "KSampler",
@@ -815,8 +805,8 @@ export function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
         latent_image: latentRef,
       },
     },
-    "6": textEncode(p.prompt),
-    "7": textEncode(p.negative),
+    "6": { class_type: "CLIPTextEncode", inputs: { text: p.prompt, clip: clipRef } },
+    "7": { class_type: "CLIPTextEncode", inputs: { text: p.negative, clip: clipRef } },
     "8": { class_type: "VAEDecode", inputs: { samples: ["3", 0], vae: vaeRef } },
     "9": { class_type: "SaveImage", inputs: { filename_prefix: "visual-reader", images: ["8", 0] } },
   };
