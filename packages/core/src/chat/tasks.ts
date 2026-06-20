@@ -703,6 +703,14 @@ export function resolveActiveTaskPlanId(plans: TaskPlan[], activeSessionId: stri
   return plans.find((p) => p.sessionId === activeSessionId)?.id;
 }
 
+/** A chat-session label for a task's dedicated chat: the plan title, trimmed and length-capped
+ * (titles can be a full sentence), falling back to "Task" when blank. Pure for unit testing. */
+export function sessionLabelForPlan(plan: { title?: string }): string {
+  const t = (plan.title ?? "").trim().replace(/\s+/g, " ");
+  if (!t) return "Task";
+  return t.length > 60 ? `${t.slice(0, 57).trimEnd()}…` : t;
+}
+
 // ------------------------------------------------------------------- ignore list
 
 function isIgnoreRule(v: unknown): v is IgnoreRule {
