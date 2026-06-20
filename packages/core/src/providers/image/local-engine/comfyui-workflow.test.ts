@@ -116,6 +116,12 @@ describe("buildWorkflow shift families", () => {
     // No FluxGuidance: HiDream uses real CFG, so positive conditioning is the plain encode.
     expect(g["14"]).toBeUndefined();
     expect(inputsOf(g, "3").positive).toEqual(["6", 0]);
+    // Conditioning uses the dedicated four-stream node (so clip_l/clip_g pooled is produced),
+    // and the 16-channel SD3 latent — matching the official HiDream workflow.
+    expect(classOf(g, "6")).toBe("CLIPTextEncodeHiDream");
+    expect(inputsOf(g, "6")).toMatchObject({ clip: ["12", 0], clip_l: "a fox", clip_g: "a fox", t5xxl: "a fox", llama: "a fox" });
+    expect(classOf(g, "7")).toBe("CLIPTextEncodeHiDream"); // negative too (used by the Full model at cfg 5)
+    expect(classOf(g, "5")).toBe("EmptySD3LatentImage");
   });
 
   it("Z-Image/Qwen still use ModelSamplingAuraFlow, now also at node 17", () => {

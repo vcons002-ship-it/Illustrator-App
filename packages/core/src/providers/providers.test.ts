@@ -1202,7 +1202,12 @@ describe("ComfyUI prompt formatting by family", () => {
     expect(wf["17"]!.inputs.shift).toBe(6.0);
     expect(wf["3"]!.inputs.model).toEqual(["17", 0]);
     expect(wf["14"]).toBeUndefined(); // real CFG, no FluxGuidance node
-    expect(wf["6"]!.inputs.text).toBe("a knight"); // natural language, no SD quality tags
+    // Conditioning is built by the dedicated four-stream node so the clip_l/clip_g POOLED
+    // is populated (the generic CLIPTextEncode left it None → p_embedder linear crash).
+    expect(wf["6"]!.class_type).toBe("CLIPTextEncodeHiDream");
+    expect(wf["6"]!.inputs).toMatchObject({ clip_l: "a knight", clip_g: "a knight", t5xxl: "a knight", llama: "a knight" });
+    expect(wf["6"]!.inputs.text).toBeUndefined(); // not the generic shape
+    expect(wf["5"]!.class_type).toBe("EmptySD3LatentImage"); // 16-channel latent
   });
 
   it("a catalog model with components missing names the exact files + the Download button", async () => {
