@@ -1510,7 +1510,9 @@ export function SettingsPanel({
                 )
               ) : (
                 <p style={{ fontSize: 11, opacity: 0.55, margin: "0 0 8px" }}>
-                  Text encoders are auto-detected for this model (t5xxl + clip_l) — no need to pick one.
+                  Text encoders are auto-detected for this model (
+                  {localFamily === "hidream" ? "clip_l + clip_g + t5xxl + llama" : "t5xxl + clip_l"}) — no need to
+                  pick one.
                 </p>
               )}
               {componentHint.vaeApplies &&
