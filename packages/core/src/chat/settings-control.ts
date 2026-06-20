@@ -133,6 +133,13 @@ export const CONTROLLABLE_SETTINGS: ControllableSetting[] = [
     kind: BOOL,
     describe: "low-VRAM mode for the local image engine (on/off)",
   },
+  {
+    key: "hires",
+    label: "high-resolution rendering",
+    aliases: ["high resolution", "high-res", "hires", "hi-res", "high res mode", "two-pass upscale", "high detail"],
+    kind: BOOL,
+    describe: "high-resolution two-pass rendering for the local image engine — renders native then upscales for more detail (on/off)",
+  },
 ];
 
 /** Normalize for matching: lower-case, collapse non-alphanumerics to single spaces. */

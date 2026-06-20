@@ -69,6 +69,10 @@ export interface TierConfig {
    * with --lowvram so the big text encoder offloads to CPU after encoding. Shrinks the
    * resident VRAM/RAM footprint of heavy split-file models (Flux.2/Z-Image/Qwen-Image). */
   lowVram?: boolean;
+  /** Hi-Res two-pass for the local engine: render at the family's native-safe size, then
+   * upscale the latent ~2× and refine for a larger, more detailed image without the subject
+   * duplication that comes from sampling above the trained resolution. Cloud providers ignore it. */
+  hires?: boolean;
   /**
    * "One API" native mode: the SAME cloud vendor + key serves both slots (e.g. both
    * Gemini), and the image slot uses the vendor's MULTIMODAL endpoint — which accepts

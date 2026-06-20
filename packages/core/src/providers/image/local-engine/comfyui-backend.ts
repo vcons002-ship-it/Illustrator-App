@@ -5,8 +5,10 @@ import type { ImageGenerationInput, ImageGenerationOutput } from "../image-provi
 import {
   type ModelFamily,
   type SamplerSettings,
+  HIRES_DENOISE,
   clampResolution,
   composeSdPositive,
+  hiresTarget,
   isNaturalLanguage,
   nameHandlingFor,
   resolveModelFamily,
@@ -466,6 +468,16 @@ export class ComfyUIBackend implements LocalEngineBackend {
     if (input.localSampler) sampler = { ...sampler, sampler: input.localSampler };
     if (input.localScheduler) sampler = { ...sampler, scheduler: input.localScheduler };
     const { width, height } = clampResolution(family, input.width ?? 1024, input.height ?? 1024);
+    // Hi-Res two-pass: keep the FIRST pass at the native-safe size (single coherent
+    // subject), then upscale the latent toward ~2× / the hires ceiling and refine. Skipped
+    // when the native size already meets the ceiling (hiresTarget → null = single pass).
+    const hires =
+      input.hires === true
+        ? (() => {
+            const target = hiresTarget(family, input.width ?? 1024, input.height ?? 1024);
+            return target ? { width: target.width, height: target.height, denoise: HIRES_DENOISE } : undefined;
+          })()
+        : undefined;
 
     // Expand bible terms per the target's text-encoder grade: CLIP/T5 (SD/Flux.1) inject
     // descriptors in place; LLM-grade (Flux.2/Mistral) keep names + a reference block. Then
@@ -565,6 +577,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
       ...(lora ? { lora } : {}),
       ...(ipAdapter ? { ipAdapter } : {}),
       ...(initImage ? { initImage } : {}),
+      ...(hires ? { hires } : {}),
     });
 
     // Best-effort live progress: ComfyUI broadcasts per-step `progress` messages
@@ -751,6 +764,9 @@ interface WorkflowParams {
   ipAdapter?: IpAdapterGraph;
   /** img2img: an already-uploaded base image (LoadImage name) + denoise strength. */
   initImage?: { filename: string; denoise: number };
+  /** Hi-Res two-pass: upscale the first pass's latent to this target size, then refine
+   * at `denoise`. The first pass renders at `width`/`height` (the native-safe size). */
+  hires?: { width: number; height: number; denoise: number };
 }
 
 /**
@@ -879,6 +895,42 @@ export function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
       inputs: { shift: p.sampler.shift, model: ks.inputs.model },
     };
     ks.inputs.model = ["17", 0];
+  }
+  if (p.hires) {
+    // Hi-Res two-pass. The first KSampler ("3") produced a latent at the native-safe size
+    // (its model/conditioning are now fully resolved — LoRA / IP-Adapter / shift all applied
+    // above). Upscale that latent to the target, then a SECOND KSampler ("19") refines it at
+    // low denoise so the upscaled image gains real detail without re-deciding the composition
+    // (which is what duplicates subjects when you sample large from scratch). VAEDecode then
+    // reads the refined latent. Node ids 18/19 sit clear of img2img (15/16), shift (17), and
+    // the IP-Adapter chain (20+).
+    const ks = graph["3"] as { inputs: Record<string, unknown> };
+    graph["18"] = {
+      class_type: "LatentUpscale",
+      inputs: {
+        samples: ["3", 0],
+        upscale_method: "nearest-exact",
+        width: p.hires.width,
+        height: p.hires.height,
+        crop: "disabled",
+      },
+    };
+    graph["19"] = {
+      class_type: "KSampler",
+      inputs: {
+        seed: p.seed,
+        steps: p.steps,
+        cfg: p.sampler.cfg,
+        sampler_name: p.sampler.sampler,
+        scheduler: p.sampler.scheduler,
+        denoise: p.hires.denoise,
+        model: ks.inputs.model,
+        positive: ks.inputs.positive,
+        negative: ks.inputs.negative,
+        latent_image: ["18", 0],
+      },
+    };
+    (graph["8"] as { inputs: Record<string, unknown> }).inputs.samples = ["19", 0];
   }
   return graph;
 }

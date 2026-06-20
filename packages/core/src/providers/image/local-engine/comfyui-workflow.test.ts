@@ -150,3 +150,64 @@ describe("buildWorkflow shift families", () => {
     expect(inputsOf(g, "3").model).toEqual(["17", 0]); // and still samples the shifted model
   });
 });
+
+describe("buildWorkflow Hi-Res two-pass", () => {
+  /** A HiDream render (UNET + sigma shift) with Hi-Res enabled — exercises the second
+   * pass picking up the shifted model + the SD3 conditioning. */
+  const hidreamHiRes = {
+    ...base,
+    family: "hidream" as const,
+    loadKind: "diffusion" as const,
+    sampler: { cfg: 5, sampler: "uni_pc", scheduler: "simple", steps: 50, shift: 3.0 } as SamplerSettings,
+    components: {
+      textEncoder: {
+        class_type: "QuadrupleCLIPLoader",
+        inputs: {
+          clip_name1: "clip_l_hidream.safetensors",
+          clip_name2: "clip_g_hidream.safetensors",
+          clip_name3: "t5xxl_fp8_e4m3fn_scaled.safetensors",
+          clip_name4: "llama_3.1_8b_instruct_fp8_scaled.safetensors",
+        },
+      },
+      vaeName: "ae.safetensors",
+      weightDtype: "default",
+    },
+    hires: { width: 2048, height: 2048, denoise: 0.5 },
+  };
+
+  it("upscales the first pass's latent and refines it in a second sampler", () => {
+    const g = buildWorkflow({ ...base, hires: { width: 2048, height: 2048, denoise: 0.5 } });
+    // First pass renders at the native size (the empty latent is unchanged).
+    expect(classOf(g, "5")).toBe("EmptyLatentImage");
+    expect(inputsOf(g, "5").width).toBe(1024);
+    // LatentUpscale (18) takes the first sampler's latent up to the target.
+    expect(classOf(g, "18")).toBe("LatentUpscale");
+    expect(inputsOf(g, "18").samples).toEqual(["3", 0]);
+    expect(inputsOf(g, "18").width).toBe(2048);
+    expect(inputsOf(g, "18").height).toBe(2048);
+    // Second KSampler (19) refines the upscaled latent at the hires denoise.
+    expect(classOf(g, "19")).toBe("KSampler");
+    expect(inputsOf(g, "19").latent_image).toEqual(["18", 0]);
+    expect(inputsOf(g, "19").denoise).toBe(0.5);
+    // VAEDecode now reads the refined second-pass latent, not the first.
+    expect(inputsOf(g, "8").samples).toEqual(["19", 0]);
+  });
+
+  it("the second pass reuses the FULLY-resolved model/conditioning (shift applied)", () => {
+    const g = buildWorkflow({ ...hidreamHiRes });
+    // The shift node wraps the UNET (17); BOTH samplers must read the shifted model.
+    expect(classOf(g, "17")).toBe("ModelSamplingSD3");
+    expect(inputsOf(g, "3").model).toEqual(["17", 0]);
+    expect(inputsOf(g, "19").model).toEqual(["17", 0]);
+    // And the second pass carries the same positive/negative conditioning.
+    expect(inputsOf(g, "19").positive).toEqual(inputsOf(g, "3").positive);
+    expect(inputsOf(g, "19").negative).toEqual(inputsOf(g, "3").negative);
+  });
+
+  it("no hires nodes when the flag is absent (single pass, decode reads sampler 3)", () => {
+    const g = buildWorkflow(base);
+    expect(g["18"]).toBeUndefined();
+    expect(g["19"]).toBeUndefined();
+    expect(inputsOf(g, "8").samples).toEqual(["3", 0]);
+  });
+});
