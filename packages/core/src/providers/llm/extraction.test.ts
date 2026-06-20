@@ -1030,4 +1030,14 @@ describe("extractionSystemFor", () => {
     // …and people are explicitly out.
     expect(TECHNICAL_EXTRACTION_SYSTEM).toMatch(/'characters', 'creatures', and 'spoilers' as EMPTY/);
   });
+
+  it("the storyboard guidance steers moment selection toward distinct, consequential beats", () => {
+    // Fiction: pick the consequential/distinct moment, avoid talking-heads + redundant images.
+    expect(EXTRACTION_SYSTEM).toMatch(/CHOOSING THE MOMENT/);
+    expect(EXTRACTION_SYSTEM).toMatch(/most CONSEQUENTIAL/);
+    expect(EXTRACTION_SYSTEM).toMatch(/clearly different/);
+    expect(EXTRACTION_SYSTEM).toMatch(/specific, depictable thing/);
+    // Technical: consecutive visuals must not re-illustrate the same idea.
+    expect(TECHNICAL_EXTRACTION_SYSTEM).toMatch(/DIFFERENT item for each/);
+  });
 });
