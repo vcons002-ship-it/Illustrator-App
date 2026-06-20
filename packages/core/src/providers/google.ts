@@ -660,3 +660,18 @@ export async function patchTask(
   if (!res.ok) throw new Error(await apiError(res));
   return parseTask(await res.json<RawTask>());
 }
+
+/** Whether a single Google Task still exists — used to CONFIRM a deletion (the task tree caps at
+ * 100, so "absent from the tree" alone could be truncation). Returns false ONLY on a definitive
+ * 404/410 (deleted); a present task → true; any other error THROWS so a network blip is never
+ * mistaken for a deletion. */
+export async function googleTaskExists(transport: Transport, token: string, id: string): Promise<boolean> {
+  const res = await transport.send({
+    url: `${TASKS}/${encodeURIComponent(id)}`,
+    method: "GET",
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (res.status === 404 || res.status === 410) return false;
+  if (!res.ok) throw new Error(await apiError(res));
+  return true;
+}

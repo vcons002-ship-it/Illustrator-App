@@ -24,6 +24,7 @@ import {
   reconcileGoogleSubtasks,
   planFromGoogleTask,
   importableGoogleTasks,
+  hasGoogleSkipMarker,
   formatPlanForGoogleNotes,
   taskStubFromCandidate,
   tasksIndexBlock,
@@ -214,6 +215,19 @@ describe("normalizeTaskPlan", () => {
       { id: "", title: "No id", subtasks: [] }, // malformed → skip
     ];
     expect(importableGoogleTasks(trees, existing).map((t) => t.id)).toEqual(["gt-2"]);
+  });
+
+  it("importableGoogleTasks skips tasks the reader marked [skip]/[ignore] in Google", () => {
+    const trees = [
+      { id: "gt-2", title: "Real task", subtasks: [] },
+      { id: "gt-3", title: "Groceries [skip]", subtasks: [] },
+      { id: "gt-4", title: "[ignore] personal note", subtasks: [] },
+    ];
+    expect(importableGoogleTasks(trees, []).map((t) => t.id)).toEqual(["gt-2"]);
+    expect(hasGoogleSkipMarker("Groceries [skip]")).toBe(true);
+    expect(hasGoogleSkipMarker("[IGNORE] x")).toBe(true);
+    expect(hasGoogleSkipMarker("normal title")).toBe(false);
+    expect(hasGoogleSkipMarker(undefined)).toBe(false);
   });
 
   it("formatPlanForGoogleNotes renders the whole plan for the parent task's notes", () => {

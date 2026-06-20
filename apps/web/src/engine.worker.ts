@@ -92,6 +92,7 @@ import {
   planFromGoogleTask,
   importableGoogleTasks,
   googleNotesUserEdit,
+  hasGoogleSkipMarker,
   runTaskPlanning,
   normalizeTaskPlan,
   upsertTaskPlan,
@@ -112,6 +113,7 @@ import {
   nextReadyStep,
   tasksIndexBlock,
   patchTask,
+  googleTaskExists,
   loadIgnored,
   buildScanPrompt,
   parseCandidates,
@@ -1642,28 +1644,64 @@ async function handleImportGoogleTasks(msg: Extract<MainToWorker, { type: "impor
     for (const tree of toImport) {
       await upsertTaskPlan(store, normalizeTaskPlan(planFromGoogleTask(tree)));
     }
-    // DETECT GOOGLE-TASKS EDITS → re-plan: for each LINKED plan, compare its parent's current notes
-    // to the baseline the app last wrote. New lines = the reader's added detail → fold into userNotes
-    // + flag needsReplan, so the sweep re-attacks the plan with it. First time (no baseline) just
-    // records one, so pre-existing notes aren't mistaken for an edit. Never writes to Google here.
+    // SYNC FROM GOOGLE for each LINKED plan: mirror the reader's actions in Google Tasks back into
+    // the app — [skip]/[ignore] in the title → archive ignored; marked complete → mark the plan
+    // complete; deleted → archive removed (CONFIRMED via a single GET, since the tree caps at 100 and
+    // "absent" could be truncation); otherwise detect a NOTES edit → re-plan. Never writes to Google.
     const treeById = new Map(trees.map((t) => [t.id, t]));
-    let edited = 0;
+    let edited = 0; // notes edits → re-plan
+    let mirrored = 0; // ignore / complete / delete mirrored from Google
+    let deleteConfirms = 0; // bound the confirm GETs per sweep
+    const now = Date.now();
     for (const plan of existingPlans) {
       if (!plan.googleTaskId || plan.status === "archived") continue;
       const tree = treeById.get(plan.googleTaskId);
-      if (!tree) continue;
-      if (plan.googleNotesSynced === undefined) {
-        await upsertTaskPlan(store, { ...plan, googleNotesSynced: tree.notes ?? "" });
-        continue;
+      if (tree) {
+        if (hasGoogleSkipMarker(tree.title)) {
+          // The reader marked it [skip]/[ignore] in Google → stop managing it (undo via Restore).
+          await upsertTaskPlan(store, { ...plan, status: "archived", archivedReason: "ignored", archivedAt: now });
+          mirrored++;
+          continue;
+        }
+        if (tree.status === "completed" && plan.status !== "completed") {
+          await upsertTaskPlan(store, { ...plan, status: "completed" });
+          mirrored++;
+          continue;
+        }
+        if (plan.googleNotesSynced === undefined) {
+          await upsertTaskPlan(store, { ...plan, googleNotesSynced: tree.notes ?? "" });
+          continue;
+        }
+        const added = googleNotesUserEdit(tree.notes, plan.googleNotesSynced);
+        if (!added) continue;
+        const userNotes = [plan.userNotes, added].filter(Boolean).join("\n").slice(0, 4000);
+        // Re-baseline to the current notes so the same edit isn't captured twice before the re-plan.
+        await upsertTaskPlan(store, { ...plan, userNotes, needsReplan: true, googleNotesSynced: tree.notes ?? "" });
+        edited++;
+      } else if (plan.googleNotesSynced !== undefined && deleteConfirms < 25) {
+        // Absent from the tree: could be a deletion OR just truncation (tree caps at 100). Only mirror
+        // a deletion once a single GET CONFIRMS it's gone (404) — a network error throws and is skipped.
+        deleteConfirms++;
+        let gone = false;
+        try {
+          gone = !(await googleTaskExists(transport, token, plan.googleTaskId));
+        } catch {
+          gone = false; // couldn't confirm → don't mirror
+        }
+        if (gone) {
+          await upsertTaskPlan(store, { ...plan, status: "archived", archivedReason: "removed", archivedAt: now });
+          mirrored++;
+        }
       }
-      const added = googleNotesUserEdit(tree.notes, plan.googleNotesSynced);
-      if (!added) continue;
-      const userNotes = [plan.userNotes, added].filter(Boolean).join("\n").slice(0, 4000);
-      // Re-baseline to the current notes so the same edit isn't captured twice before the re-plan.
-      await upsertTaskPlan(store, { ...plan, userNotes, needsReplan: true, googleNotesSynced: tree.notes ?? "" });
-      edited++;
     }
-    post({ type: "googleTasksImported", requestId: msg.requestId, ok: true, imported: toImport.length, ...(edited ? { edited } : {}) });
+    post({
+      type: "googleTasksImported",
+      requestId: msg.requestId,
+      ok: true,
+      imported: toImport.length,
+      ...(edited ? { edited } : {}),
+      ...(mirrored ? { mirrored } : {}),
+    });
   } catch (err) {
     post({ type: "googleTasksImported", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
   }

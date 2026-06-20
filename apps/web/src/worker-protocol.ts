@@ -329,7 +329,7 @@ export type WorkerToMain =
   | { type: "planProgress"; requestId: number; phase: "research" | "plan"; note?: string }
   | { type: "planned"; requestId: number; ok: boolean; plan?: TaskPlan; error?: string }
   | { type: "scanned"; requestId: number; ok: boolean; candidates?: TaskCandidate[]; error?: string }
-  | { type: "googleTasksImported"; requestId: number; ok: boolean; imported?: number; edited?: number; error?: string }
+  | { type: "googleTasksImported"; requestId: number; ok: boolean; imported?: number; edited?: number; mirrored?: number; error?: string }
   | { type: "googleTaskCreated"; requestId: number; ok: boolean; id?: string; error?: string }
   | { type: "eventCreated"; requestId: number; ok: boolean; id?: string; error?: string }
   | { type: "calendarLoaded"; requestId: number; ok: boolean; events?: CalendarEvent[]; error?: string }

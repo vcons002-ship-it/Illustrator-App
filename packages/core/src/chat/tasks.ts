@@ -589,12 +589,22 @@ export function planFromGoogleTask(node: GoogleTaskTree): TaskPlanInput {
 
 /** Pure: which Google Tasks aren't yet mirrored in the app's plans — matched by the stored
  * parent googleTaskId, so re-running an import never duplicates a task already in the list. */
+/** Google-side "don't manage this" marker: put [skip] (or [ignore]) anywhere in a Google Task's
+ * TITLE and the app won't import it — and mirrors it as ignored if it was already imported. */
+const GOOGLE_SKIP_RE = /\[(skip|ignore)\]/i;
+
+/** Whether a Google task title carries the skip/ignore marker. PURE. */
+export function hasGoogleSkipMarker(title: string | undefined): boolean {
+  return !!title && GOOGLE_SKIP_RE.test(title);
+}
+
 export function importableGoogleTasks(
   trees: readonly GoogleTaskTree[],
   existing: readonly TaskPlan[],
 ): GoogleTaskTree[] {
   const known = new Set(existing.map((p) => p.googleTaskId).filter((id): id is string => !!id));
-  return trees.filter((t) => !!t.id && !known.has(t.id));
+  // Skip tasks the reader marked [skip]/[ignore] in Google, and ones already linked to a plan.
+  return trees.filter((t) => !!t.id && !known.has(t.id) && !hasGoogleSkipMarker(t.title));
 }
 
 /** Build an UNPLANNED task stub from a scan candidate — it goes straight into the list/calendar
