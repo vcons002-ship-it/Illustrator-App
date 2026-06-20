@@ -135,7 +135,8 @@ apps/
   **AUTOMATIC1111** (`/sdapi/v1/*`) or **ComfyUI** (graph API) — from either the
   web app or the desktop app. Free, private, no keys. Family-aware rendering:
   SD 1.5 / SDXL / Flux.1, plus the split-file generation on ComfyUI — **Z-Image
-  Turbo** (recommended), **Flux.2 Klein**, **Qwen-Image**. The desktop app
+  Turbo** (recommended), **Flux.2 Klein**, **Qwen-Image**, **HiDream-I1** (Full/Dev).
+  The desktop app
   **auto-manages** the engine: it downloads/launches ComfyUI portable and fetches
   every file a catalog model needs (diffusion model + text encoder + VAE, with
   resume) from the Settings picker (implemented; pending on-device verification).
@@ -198,7 +199,8 @@ Claude, Gemini, and OpenAI all qualify.
 |---|---|---|
 | **Minimum** | ~4 GB | **SD 1.5**, **SDXL-Turbo** — run almost anywhere |
 | **Recommended** | 8–12 GB | **SDXL**, **Flux.1**, **Z-Image Turbo** (the recommended default — current-gen quality in 8 steps) |
-| **High-end** | 16–24 GB | **Flux.2 Klein 9B**, **Qwen-Image** (best fine detail + in-image text; ~30 GB download) |
+| **High-end** | 16–24 GB | **Flux.2 Klein 9B**, **Qwen-Image** (best fine detail + in-image text; ~30 GB download), **HiDream Dev** (strong prompt adherence) |
+| **Top-end** | 27 GB+ | **HiDream-I1 Full** (fp16) — 17B, maximum fidelity |
 
 > Mix and match freely — e.g. a cloud Claude key for text while images render locally on
 > SDXL, or a fully local Qwen 3 + Z-Image setup with no keys at all. The placeholder

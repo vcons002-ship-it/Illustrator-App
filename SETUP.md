@@ -124,7 +124,8 @@ art works on anything.
 | **Cloud** | Any laptop + a key | **Flux** (Black Forest Labs), **Gemini** native, **OpenAI** `gpt-image-1` |
 | **Local — minimum** | ~4 GB VRAM | **SD 1.5**, **SDXL-Turbo** (run almost anywhere) |
 | **Local — recommended** | 8–12 GB VRAM | **SDXL**, **Flux.1**, **Z-Image Turbo** (the recommended default — 8 steps) |
-| **Local — high-end** | 16–24 GB VRAM | **Flux.2 Klein 9B**, **Qwen-Image** (sharpest detail + in-image text) |
+| **Local — high-end** | 16–24 GB VRAM | **Flux.2 Klein 9B**, **Qwen-Image** (sharpest detail + in-image text), **HiDream Dev** (strong prompt adherence) |
+| **Local — top-end** | 27 GB+ VRAM | **HiDream Full** (fp16) — 17B, maximum fidelity |
 
 One **Gemini** or one **OpenAI** key covers both text and images. A common high-continuity
 combo is **Claude** (text) + **Flux** (images). Mix cloud and local freely — e.g. a cloud
@@ -533,12 +534,17 @@ Downloads **resume** if interrupted; retrying skips files that finished.
   slower than Z-Image (real CFG, 20 steps). Needs a strong GPU.
 - **Qwen-Image (fp8)** — best fine detail and in-image text; the biggest download
   (~30 GB) and VRAM-heaviest.
+- **HiDream-I1 Full (fp16) / Dev (fp8)** — a 17B model with unusually strong prompt
+  adherence (it reads prose through a Llama-3.1 encoder alongside T5 + dual CLIP).
+  **Full** is top quality (real CFG, 50 steps, ~27 GB+ VRAM); **Dev** is ~2× faster at
+  near-Full quality (8-bit, ~16 GB VRAM). Both pull **four** text encoders + the Flux VAE.
 - **SD 1.5 / SDXL / SDXL-Turbo / Flux.1** — the classic single-file checkpoints;
   smaller and fine on modest GPUs (SD 1.5 runs almost anywhere).
 
 > **Why a "small" model can fill a big card.** A split-file model's checkpoint size
-> is only part of what loads: Flux.2 / Z-Image / Qwen-Image each pair the diffusion
-> weights with a **large separate text encoder** (a Qwen-3-8B / T5-XXL, ~9 GB) plus a
+> is only part of what loads: Flux.2 / Z-Image / Qwen-Image / HiDream each pair the
+> diffusion weights with **large separate text encoder(s)** (a Qwen-3-8B / T5-XXL, ~9 GB;
+> HiDream stacks four — clip_l + clip_g + T5-XXL + Llama-3.1-8B) plus a
 > VAE, and ComfyUI keeps a copy in **system RAM** as well as VRAM — so the resident
 > footprint is easily ~20 GB, mirrored. If you're tight on memory, turn on
 > **Settings → Low-VRAM mode**: it loads the diffusion model in fp8 and (managed
@@ -555,8 +561,8 @@ Notes for **manually installed** files (everything above is automatic):
   text encoder + VAE aren't installed. For catalog models the error tells you the
   exact missing filenames (the Download button fetches them); for other files set
   **Settings → Images → Model family** and install the encoder/VAE it names.
-- The split-file families (**Flux.2 / Z-Image / Qwen-Image**) are **ComfyUI only**
-  (not AUTOMATIC1111).
+- The split-file families (**Flux.2 / Z-Image / Qwen-Image / HiDream**) are **ComfyUI
+  only** (not AUTOMATIC1111).
 
 ### Local text model (prompt quality)
 

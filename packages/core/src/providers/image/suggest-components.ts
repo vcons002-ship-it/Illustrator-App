@@ -18,6 +18,8 @@ import {
  *  - **Flux.2 / Z-Image / Qwen-Image** — split-file: a single CLIPLoader text encoder + a VAE.
  *  - **Flux.1 (UNET-only)** — uses TWO auto-detected encoders (t5xxl + clip_l), so the single
  *    encoder picker doesn't apply, but a VAE does.
+ *  - **HiDream** — uses FOUR auto-detected encoders (clip_l + clip_g + t5xxl + llama) via a
+ *    QuadrupleCLIPLoader, so the single-encoder picker doesn't apply, but a VAE does.
  */
 export interface ComponentSuggestion {
   family: ModelFamily;
@@ -50,6 +52,8 @@ function noteFor(family: ModelFamily, model: string): string {
       return "Qwen-Image → a Qwen-2.5-VL text encoder + the Qwen-Image VAE.";
     case "flux":
       return "Flux.1 (diffusion-only) → dual encoders (t5xxl + clip_l, auto-detected) + the Flux VAE (ae.safetensors).";
+    case "hidream":
+      return "HiDream → four auto-detected encoders (clip_l + clip_g + t5xxl + llama_3.1_8b) + the Flux VAE (ae.safetensors).";
     default:
       return "All-in-one checkpoint — no separate text encoder or VAE needed.";
   }
@@ -67,7 +71,10 @@ export function suggestComponents(
 ): ComponentSuggestion {
   const splitFile = SPLIT_FILE.has(family);
   const isFlux1Unet = family === "flux";
-  const usesComponents = splitFile || isFlux1Unet;
+  const isHiDream = family === "hidream";
+  // Flux.1 (dual) and HiDream (quad) auto-detect their encoders, so the single-encoder
+  // picker doesn't apply to them — but they still load a separate VAE.
+  const usesComponents = splitFile || isFlux1Unet || isHiDream;
   const note = noteFor(family, model);
 
   if (!usesComponents) {

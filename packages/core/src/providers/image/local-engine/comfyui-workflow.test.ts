@@ -80,3 +80,67 @@ describe("buildWorkflow img2img", () => {
     expect(inputsOf(g, "3").latent_image).toEqual(["16", 0]);
   });
 });
+
+describe("buildWorkflow shift families", () => {
+  /** A HiDream render: quad-encoder diffusion model + an SD3 sigma shift. */
+  const hidream = {
+    ...base,
+    family: "hidream" as const,
+    loadKind: "diffusion" as const,
+    sampler: { cfg: 5, sampler: "uni_pc", scheduler: "simple", steps: 50, shift: 3.0 } as SamplerSettings,
+    components: {
+      textEncoder: {
+        class_type: "QuadrupleCLIPLoader",
+        inputs: {
+          clip_name1: "clip_l_hidream.safetensors",
+          clip_name2: "clip_g_hidream.safetensors",
+          clip_name3: "t5xxl_fp8_e4m3fn_scaled.safetensors",
+          clip_name4: "llama_3.1_8b_instruct_fp8_scaled.safetensors",
+        },
+      },
+      vaeName: "ae.safetensors",
+      weightDtype: "default",
+    },
+  };
+
+  it("HiDream wraps the model in ModelSamplingSD3 (node 17) and loads the quad encoder", () => {
+    const g = buildWorkflow(hidream);
+    // Four-encoder loader passes through as the diffusion clip node (12).
+    expect(classOf(g, "12")).toBe("QuadrupleCLIPLoader");
+    expect(inputsOf(g, "12").clip_name4).toBe("llama_3.1_8b_instruct_fp8_scaled.safetensors");
+    // Shift uses the SD3 node, at id 17 (not 15), wrapping the UNET and feeding the sampler.
+    expect(classOf(g, "17")).toBe("ModelSamplingSD3");
+    expect(inputsOf(g, "17").shift).toBe(3.0);
+    expect(inputsOf(g, "17").model).toEqual(["4", 0]); // wraps the UNETLoader
+    expect(inputsOf(g, "3").model).toEqual(["17", 0]); // sampler reads the shifted model
+    // No FluxGuidance: HiDream uses real CFG, so positive conditioning is the plain encode.
+    expect(g["14"]).toBeUndefined();
+    expect(inputsOf(g, "3").positive).toEqual(["6", 0]);
+  });
+
+  it("Z-Image/Qwen still use ModelSamplingAuraFlow, now also at node 17", () => {
+    const g = buildWorkflow({
+      ...base,
+      family: "zimage",
+      loadKind: "diffusion",
+      sampler: { cfg: 1, sampler: "res_multistep", scheduler: "simple", steps: 8, shift: 3 },
+      components: {
+        textEncoder: { class_type: "CLIPLoader", inputs: { clip_name: "qwen_3_4b.safetensors", type: "lumina2" } },
+        vaeName: "ae.safetensors",
+        weightDtype: "default",
+      },
+    });
+    expect(classOf(g, "17")).toBe("ModelSamplingAuraFlow");
+    expect(inputsOf(g, "17").shift).toBe(3);
+  });
+
+  it("img2img + shift no longer collide (LoadImage at 15, shift node at 17)", () => {
+    const g = buildWorkflow({ ...hidream, initImage: { filename: "photo.png", denoise: 0.6 } });
+    expect(classOf(g, "15")).toBe("LoadImage"); // img2img kept its node
+    expect(classOf(g, "16")).toBe("VAEEncode");
+    expect(classOf(g, "17")).toBe("ModelSamplingSD3"); // shift kept its own node
+    expect(inputsOf(g, "16").pixels).toEqual(["15", 0]); // VAEEncode reads the real LoadImage
+    expect(inputsOf(g, "3").latent_image).toEqual(["16", 0]);
+    expect(inputsOf(g, "3").model).toEqual(["17", 0]); // and still samples the shifted model
+  });
+});

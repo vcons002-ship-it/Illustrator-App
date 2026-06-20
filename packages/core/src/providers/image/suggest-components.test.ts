@@ -40,6 +40,24 @@ describe("suggestComponents", () => {
     expect(s.recommendedVae).toBe("ae.safetensors");
   });
 
+  it("HiDream → encoder picker off (auto quad), VAE still applies", () => {
+    const s = suggestComponents("hidream_i1_dev_fp8.safetensors", "hidream", {
+      textEncoders: [
+        "clip_l_hidream.safetensors",
+        "clip_g_hidream.safetensors",
+        "t5xxl_fp8_e4m3fn_scaled.safetensors",
+        "llama_3.1_8b_instruct_fp8_scaled.safetensors",
+      ],
+      vaes: ["ae.safetensors"],
+    });
+    expect(s.usesComponents).toBe(true);
+    expect(s.encoderApplies).toBe(false); // four encoders auto-resolve — no single picker
+    expect(s.recommendedEncoder).toBeUndefined();
+    expect(s.vaeApplies).toBe(true);
+    expect(s.recommendedVae).toBe("ae.safetensors");
+    expect(s.note).toMatch(/four auto-detected encoders/i);
+  });
+
   it("Flux.1 UNET-only → encoder picker off (auto dual), VAE still applies", () => {
     const s = suggestComponents("flux1-dev.safetensors", "flux", {
       textEncoders: ["t5xxl_fp16.safetensors", "clip_l.safetensors"],
