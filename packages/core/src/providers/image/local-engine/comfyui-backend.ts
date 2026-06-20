@@ -268,6 +268,12 @@ export class ComfyUIBackend implements LocalEngineBackend {
             "an all-in-one SD/SDXL checkpoint. (If you just added the files, restart the engine.)",
         );
       }
+      // Diagnostic: the EXACT four files we hand QuadrupleCLIPLoader (clip_name1..4) + the VAE,
+      // so a "wrong pooled size" can be traced to a mis-picked/duplicate encoder at a glance.
+      console.info(
+        `[visual-reader] HiDream QuadrupleCLIPLoader → clip_l=${clipL} clip_g=${clipG} ` +
+          `t5xxl=${t5} llama=${llama} vae=${vae}`,
+      );
       return {
         textEncoder: {
           class_type: "QuadrupleCLIPLoader",
@@ -673,6 +679,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
     promptId: string,
     progress: { lastMs: number; everProgressed: boolean },
     signal?: AbortSignal,
+    family?: ModelFamily,
   ): Promise<HistoryImage> {
     // Two stop conditions: an absolute backstop (`maxPolls`) used when no progress
     // info is available, and — once the websocket has reported ANY progress — an
@@ -693,7 +700,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
         const first = images[0];
         if (first) return first;
         // No image: surface ComfyUI's REAL execution error (otherwise it's a mystery).
-        throw new Error(comfyExecutionError(entry.status) ?? "ComfyUI finished but produced no image");
+        throw new Error(comfyExecutionError(entry.status, family) ?? "ComfyUI finished but produced no image");
       }
       if (progress.everProgressed) {
         if (Date.now() - progress.lastMs > this.idleTimeoutMs) {
@@ -1004,13 +1011,28 @@ function delay(ms: number): Promise<void> {
  * so we say that instead of a linear-algebra dump. Returns undefined when the status
  * carries no error.
  */
-export function comfyExecutionError(status: HistoryResponse[string]["status"]): string | undefined {
+export function comfyExecutionError(
+  status: HistoryResponse[string]["status"],
+  family?: ModelFamily,
+): string | undefined {
   const errMsg = status?.messages?.find(([type]) => type === "execution_error")?.[1];
   const raw = typeof errMsg?.exception_message === "string" ? errMsg.exception_message : undefined;
   if (!raw) {
     return status?.status_str === "error" ? "ComfyUI reported an execution error." : undefined;
   }
   if (/shapes cannot be multiplied/i.test(raw)) {
+    // HiDream loads FOUR encoders via QuadrupleCLIPLoader. A shape mismatch here is almost
+    // always clip_g dropping out of the bundle: its 1280-wide pooled is missing, so the pooled
+    // is 768 (clip_l only) where the model's p_embedder expects 2048 — NOT a Mistral encoder.
+    if (family === "hidream") {
+      return (
+        "HiDream loaded clip_l but not clip_g, so its pooled text embedding is half the expected " +
+        "size (768 vs 2048). ComfyUI didn't recognise the clip_g file in the QuadrupleCLIPLoader — " +
+        "usually because the ComfyUI build is older than HiDream's long clip_l/clip_g (update ComfyUI), " +
+        "or the clip_g file selected for HiDream isn't an actual clip_g. Check the clip_g (Settings → " +
+        `Local model) and that ComfyUI is current. (ComfyUI: ${raw})`
+      );
+    }
     return (
       "The text encoder doesn't match this model. A split-file model needs its OWN encoder " +
       "(Flux.2-dev → Mistral-Small-3.1; Flux.2 Klein → Qwen-3-8B; Z-Image → Qwen-3-4B). Install " +
