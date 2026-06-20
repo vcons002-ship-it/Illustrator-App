@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildGoogleAuthUrl,
+  buildRawEmail,
+  createDraft,
+  sendEmail,
+  decodeBase64UrlBytes,
   createTask,
   toTaskDue,
   patchTask,
@@ -55,6 +59,9 @@ describe("buildGoogleAuthUrl", () => {
     // calendarList.list (the calendar grid + email/calendar sweep) needs a calendar-list read
     // scope — calendar.events alone 403s. Lock that in.
     expect(GOOGLE_SCOPES).toContain("https://www.googleapis.com/auth/calendar.readonly");
+    // Email write: drafting (compose) + sending.
+    expect(GOOGLE_SCOPES).toContain("https://www.googleapis.com/auth/gmail.compose");
+    expect(GOOGLE_SCOPES).toContain("https://www.googleapis.com/auth/gmail.send");
   });
 });
 
@@ -235,6 +242,54 @@ describe("calendar + tasks parsers", () => {
       due: "2026-04-15T00:00:00Z",
     });
     expect(parseTask({}).title).toBe("(untitled)");
+  });
+});
+
+describe("email: buildRawEmail / createDraft / sendEmail", () => {
+  const decode = (raw: string) => new TextDecoder().decode(decodeBase64UrlBytes(raw));
+
+  it("builds an RFC-822 message with the right headers + body", () => {
+    const raw = buildRawEmail({ to: ["a@b.com"], subject: "Hi there", body: "Line one\nLine two" });
+    const mime = decode(raw);
+    expect(mime).toContain("To: a@b.com");
+    expect(mime).toContain("Subject: Hi there");
+    expect(mime).toMatch(/Content-Type: text\/plain; charset="UTF-8"/);
+    // Body sits after the blank line.
+    expect(mime).toContain("\r\n\r\nLine one\nLine two");
+  });
+
+  it("joins multiple recipients and omits empty cc/bcc", () => {
+    const raw = buildRawEmail({ to: ["a@b.com", "c@d.com"], subject: "S", body: "B" });
+    const mime = decode(raw);
+    expect(mime).toContain("To: a@b.com, c@d.com");
+    expect(mime).not.toContain("Cc:");
+    expect(mime).not.toContain("Bcc:");
+  });
+
+  it("includes cc/bcc when present and RFC-2047 encodes a non-ASCII subject", () => {
+    const raw = buildRawEmail({ to: ["a@b.com"], cc: ["c@d.com"], bcc: ["e@f.com"], subject: "Café ☕", body: "B" });
+    const mime = decode(raw);
+    expect(mime).toContain("Cc: c@d.com");
+    expect(mime).toContain("Bcc: e@f.com");
+    expect(mime).toMatch(/Subject: =\?UTF-8\?B\?.+\?=/); // encoded-word, not raw unicode
+    expect(mime).not.toContain("Subject: Café");
+  });
+
+  it("createDraft POSTs { message: { raw } } to the drafts endpoint", async () => {
+    const t = new FakeTransport({ id: "draft-1", message: { id: "m1", threadId: "th1" } });
+    const r = await createDraft(t, "tok", { to: ["a@b.com"], subject: "S", body: "B" });
+    expect(r.id).toBe("draft-1");
+    expect(t.requests[0]!.method).toBe("POST");
+    expect(t.requests[0]!.url).toMatch(/\/drafts$/);
+    expect(t.requests[0]!.body).toMatchObject({ message: { raw: expect.any(String) } });
+  });
+
+  it("sendEmail POSTs { raw } to messages/send", async () => {
+    const t = new FakeTransport({ id: "sent-1", threadId: "th2" });
+    const r = await sendEmail(t, "tok", { to: ["a@b.com"], subject: "S", body: "B" });
+    expect(r.id).toBe("sent-1");
+    expect(t.requests[0]!.url).toMatch(/\/messages\/send$/);
+    expect(t.requests[0]!.body).toMatchObject({ raw: expect.any(String) });
   });
 });
 

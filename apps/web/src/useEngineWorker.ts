@@ -157,6 +157,10 @@ export interface EngineWorkerApi {
     image: { bytes: ArrayBuffer; mimeType: string },
     question?: string,
   ) => Promise<{ text?: string; error?: string }>;
+  /** Send a user-approved email from the connected Google account. */
+  sendBuddyEmail: (
+    call: { to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[] },
+  ) => Promise<{ id?: string; error?: string }>;
   /** Abort the in-flight chat round, if any. */
   chatCancel: () => void;
   /** Landing-page buddy: one user message (no book open; streams via `onEvent`). */
@@ -381,6 +385,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     Map<number, { resolve: (result: TestRenderResult) => void; onProgress?: (fraction: number) => void }>
   >(new Map());
   const assessRequests = useRef<Map<number, (r: { text?: string; error?: string }) => void>>(new Map());
+  const emailRequests = useRef<Map<number, (r: { id?: string; error?: string }) => void>>(new Map());
   // In-flight chat rounds: streaming events + the final resolve, keyed by requestId.
   const chatRequests = useRef<
     Map<
@@ -621,6 +626,12 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           const resolve = assessRequests.current.get(msg.requestId);
           assessRequests.current.delete(msg.requestId);
           resolve?.({ ...(msg.text ? { text: msg.text } : {}), ...(msg.error ? { error: msg.error } : {}) });
+          break;
+        }
+        case "buddyEmailSent": {
+          const resolve = emailRequests.current.get(msg.requestId);
+          emailRequests.current.delete(msg.requestId);
+          resolve?.({ ...(msg.id ? { id: msg.id } : {}), ...(msg.error ? { error: msg.error } : {}) });
           break;
         }
         case "testRendered": {
@@ -1284,6 +1295,21 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const sendBuddyEmail = useCallback(
+    (call: { to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[] }): Promise<{ id?: string; error?: string }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (emailRequests.current.delete(requestId)) resolve({ error: "Sending the email timed out." });
+        }, 60_000);
+        emailRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "buddySendEmail", requestId, call });
+      }),
+    [],
+  );
   const chatCancel = useCallback(() => {
     const id = activeChatRequestId.current;
     if (id !== undefined) send({ type: "chatCancel", requestId: id });
@@ -1678,6 +1704,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     paintForward,
     testRender,
     assessImage,
+    sendBuddyEmail,
     chat,
     chatTool,
     chatCancel,

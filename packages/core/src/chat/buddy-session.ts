@@ -92,6 +92,10 @@ export interface BuddyDeps {
   readEmail?: (id: string) => Promise<EmailFull>;
   /** Download + read an email attachment's text (auto-run; safe internal "gather" work). */
   readAttachment?: (messageId: string, attachmentId: string) => Promise<{ filename: string; mimeType: string; text?: string; bytesLen: number }>;
+  /** Draft an email (saved to Gmail Drafts; auto-run — a draft is reversible). */
+  draftEmail?: (d: { to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[] }) => Promise<{ id?: string }>;
+  /** Send an email directly (ALWAYS approval-gated by the host). */
+  sendEmail?: (d: { to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[] }) => Promise<{ id?: string }>;
   /** Search the reader's computer (planner; gated by the autonomous-file-search setting). */
   findFiles?: (query: string) => Promise<{ name: string; path: string }[]>;
   /** Read a local file's text (planner; gated by the auto-pull-files setting). */
@@ -154,7 +158,8 @@ type HostToolName =
   | "plan_task"
   | "prep_order"
   | "tv_chart"
-  | "delegate";
+  | "delegate"
+  | "send_email";
 const HOST_TOOLS = new Set<HostToolName>([
   "generate_image",
   "find_files",
@@ -165,6 +170,9 @@ const HOST_TOOLS = new Set<HostToolName>([
   "prep_order",
   "tv_chart",
   "delegate",
+  // send_email is outward-facing + irreversible — handed up so the host shows an approval card
+  // (draft_email stays auto-run below: a draft just sits in Gmail for the reader to review).
+  "send_email",
 ]);
 /** Type-guard so the non-host branch narrows to the tools `runBuddyTool` can execute. */
 function isHostTool(call: BuddyToolCall): call is Extract<BuddyToolCall, { tool: HostToolName }> {
@@ -297,7 +305,7 @@ export async function runBuddyTurn(opts: {
 /** Execute one auto-run buddy tool (everything but generate_image). Exported for
  * the slash-command path, which runs tools directly without an LLM round. */
 export async function runBuddyTool(
-  call: Exclude<BuddyToolCall, { tool: "generate_image" | "find_files" | "run_command" | "write_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" }>,
+  call: Exclude<BuddyToolCall, { tool: "generate_image" | "find_files" | "run_command" | "write_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" }>,
   deps: BuddyDeps,
 ): Promise<BuddyToolResultPayload> {
   try {
@@ -452,6 +460,22 @@ export async function runBuddyTool(
       case "read_email":
         if (!deps.readEmail) return { error: "Google isn't connected (connect it in Settings)." };
         return { emailFull: await deps.readEmail(call.id) };
+      case "draft_email": {
+        if (!deps.draftEmail) return { error: "Google isn't connected (connect it in Settings)." };
+        const d = {
+          to: call.to,
+          subject: call.subject,
+          body: call.body,
+          ...(call.cc ? { cc: call.cc } : {}),
+          ...(call.bcc ? { bcc: call.bcc } : {}),
+        };
+        try {
+          const r = await deps.draftEmail(d);
+          return { email: { sent: false, to: call.to, subject: call.subject, ...(r.id ? { id: r.id } : {}) } };
+        } catch (err) {
+          return { email: { sent: false, to: call.to, subject: call.subject, error: err instanceof Error ? err.message : String(err) } };
+        }
+      }
       case "read_attachment":
         if (!deps.readAttachment) return { error: "Google isn't connected (connect it in Settings)." };
         return { attachment: await deps.readAttachment(call.messageId, call.attachmentId) };

@@ -2,11 +2,11 @@ import type { Transport } from "./transport/transport.js";
 import type { VisualReaderStore } from "../storage/store.js";
 
 /**
- * Google integration — Gmail (read), Calendar (read + create), Tasks (read + create).
+ * Google integration — Gmail (read + draft/send), Calendar (read + create), Tasks (read + create).
  * OAuth 2.0 with PKCE against the user's OWN Google Cloud OAuth client (no app
  * backend); the desktop shell runs the consent + loopback redirect, this module does
  * the token exchange/refresh and the API calls through the Transport seam (so the
- * desktop CORS proxy carries them). Read + create only — no send-email or delete here,
+ * desktop CORS proxy carries them). Read + create + draft/send email, never delete,
  * matching the chosen permission scope.
  *
  * The PARSERS (Gmail message → email, API item → event/task) are pure and unit-tested;
@@ -27,6 +27,11 @@ import type { VisualReaderStore } from "../storage/store.js";
  */
 export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/gmail.readonly",
+  // gmail.compose creates DRAFTS (the safe default — the reader reviews + sends); gmail.send lets
+  // the buddy send directly when the reader explicitly asks. Both are added together so a single
+  // reconnect grants the whole email-write posture.
+  "https://www.googleapis.com/auth/gmail.compose",
+  "https://www.googleapis.com/auth/gmail.send",
   "https://www.googleapis.com/auth/calendar.events",
   "https://www.googleapis.com/auth/calendar.readonly",
   "https://www.googleapis.com/auth/tasks",
@@ -360,6 +365,63 @@ export async function gmailGetAttachment(
 export async function getGoogleEmail(transport: Transport, token: string): Promise<string> {
   const p = await apiGet<{ emailAddress?: string }>(transport, token, `${GMAIL}/profile`);
   return p.emailAddress ?? "";
+}
+
+/** An outgoing email's fields (shared by draft + send). */
+export interface EmailDraft {
+  to: string[];
+  subject: string;
+  body: string;
+  cc?: string[];
+  bcc?: string[];
+}
+
+/** Standard base64 (with padding) — for the RFC-2047 encoded-word inside a header, which
+ * uses normal base64, unlike the base64URL of the message envelope. */
+function base64Std(bytes: Uint8Array): string {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+
+/**
+ * Pure: an {@link EmailDraft} → the base64url-encoded RFC-822 message the Gmail API wants.
+ * Recipients are comma-joined; empty cc/bcc headers are omitted; a non-ASCII subject is
+ * RFC-2047 (UTF-8/base64) encoded; the body is sent as UTF-8 text/plain. Unit-tested.
+ */
+export function buildRawEmail(d: EmailDraft): string {
+  const enc = new TextEncoder();
+  // RFC-2047-encode the subject when it carries any non-ASCII char (a raw header must be 7-bit).
+  const nonAscii = [...d.subject].some((ch) => ch.charCodeAt(0) > 127);
+  const subject = nonAscii ? `=?UTF-8?B?${base64Std(enc.encode(d.subject))}?=` : d.subject;
+  const headers = [
+    `To: ${d.to.join(", ")}`,
+    ...(d.cc && d.cc.length ? [`Cc: ${d.cc.join(", ")}`] : []),
+    ...(d.bcc && d.bcc.length ? [`Bcc: ${d.bcc.join(", ")}`] : []),
+    `Subject: ${subject}`,
+    "MIME-Version: 1.0",
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: 8bit",
+  ];
+  return base64Url(enc.encode(`${headers.join("\r\n")}\r\n\r\n${d.body}`));
+}
+
+/** Create a Gmail DRAFT (the reader reviews + sends from Gmail). Needs the gmail.compose scope. */
+export async function createDraft(
+  transport: Transport,
+  token: string,
+  d: EmailDraft,
+): Promise<{ id: string; message?: { id?: string; threadId?: string } }> {
+  return apiPost(transport, token, `${GMAIL}/drafts`, { message: { raw: buildRawEmail(d) } });
+}
+
+/** SEND an email directly (only when the reader explicitly asks). Needs the gmail.send scope. */
+export async function sendEmail(
+  transport: Transport,
+  token: string,
+  d: EmailDraft,
+): Promise<{ id: string; threadId?: string }> {
+  return apiPost(transport, token, `${GMAIL}/messages/send`, { raw: buildRawEmail(d) });
 }
 
 // ------------------------------------------------------------------- Calendar

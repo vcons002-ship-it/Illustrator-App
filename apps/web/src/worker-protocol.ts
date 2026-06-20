@@ -109,6 +109,12 @@ export type MainToWorker =
   | { type: "assessImage"; requestId: number; image: { bytes: ArrayBuffer; mimeType: string }; question?: string }
   /** Run a user-APPROVED generate_image tool call (answered by `chatToolResult`). */
   | { type: "chatTool"; requestId: number; call: ToolCall }
+  /** Send a user-APPROVED send_email tool call (answered by `buddyEmailSent`). */
+  | {
+      type: "buddySendEmail";
+      requestId: number;
+      call: { to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[] };
+    }
   | { type: "chatCancel"; requestId: number }
   /** Compact a chat: summarize these model-facing turns (answered by `summarized`). */
   | { type: "summarize"; requestId: number; turns: ChatTurn[] }
@@ -230,6 +236,7 @@ export type WorkerToMain =
   | { type: "testProgress"; requestId: number; fraction: number }
   /** A vision model's text observation of a screenshot (or an error). */
   | { type: "imageAssessed"; requestId: number; text?: string; error?: string }
+  | { type: "buddyEmailSent"; requestId: number; id?: string; error?: string }
   | { type: "error"; message: string }
   /** Incremental assistant text (streaming providers only). */
   | { type: "chatToken"; requestId: number; text: string }

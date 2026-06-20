@@ -413,6 +413,43 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             </button>
           </div>
         )}
+        {props.pendingTool?.tool === "send_email" && (
+          <div style={{ ...approvalStyle, borderColor: "rgba(255,170,90,0.6)", background: "rgba(255,170,90,0.08)" }}>
+            <div style={{ fontSize: 12, marginBottom: 6 }}>
+              ✉ Send this email from your account?
+              <span style={{ display: "block", marginTop: 4 }}>
+                <b>To:</b> {props.pendingTool.to.join(", ")}
+                {props.pendingTool.cc && props.pendingTool.cc.length > 0 ? ` · Cc: ${props.pendingTool.cc.join(", ")}` : ""}
+              </span>
+              <span style={{ display: "block" }}>
+                <b>Subject:</b> {props.pendingTool.subject}
+              </span>
+              <div
+                style={{
+                  marginTop: 4,
+                  padding: "6px 8px",
+                  borderRadius: 6,
+                  background: "rgba(0,0,0,0.3)",
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                  maxHeight: 160,
+                  overflowY: "auto",
+                }}
+              >
+                {props.pendingTool.body}
+              </div>
+              <span style={{ display: "block", opacity: 0.7, marginTop: 4 }}>
+                Sends immediately from your connected Google account. To keep it as a draft instead, ask the assistant to draft it.
+              </span>
+            </div>
+            <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+              Send
+            </button>
+            <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+              Cancel
+            </button>
+          </div>
+        )}
         {props.pendingTool?.tool === "screenshot" && (
           <div style={{ ...approvalStyle, borderColor: "rgba(255,170,90,0.6)", background: "rgba(255,170,90,0.08)" }}>
             <div style={{ fontSize: 12, marginBottom: 6 }}>

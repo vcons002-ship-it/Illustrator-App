@@ -82,6 +82,8 @@ import {
   extractAttachmentText,
   listEvents,
   createEvent,
+  createDraft,
+  sendEmail,
   listTasks,
   listSubtasks,
   listTaskTree,
@@ -209,6 +211,28 @@ async function handleAssessImage(
     post({ type: "imageAssessed", requestId, text });
   } catch (err) {
     post({ type: "imageAssessed", requestId, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/** A user-APPROVED send_email tool call — actually send the mail from the connected Google
+ * account. Gated host-side (the approval card), so this only runs after the reader confirms. */
+async function handleSendEmail(
+  requestId: number,
+  call: { to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[] },
+): Promise<void> {
+  try {
+    const googleId = settings?.keys?.googleClientId;
+    const googleSecret = settings?.keys?.googleClientSecret;
+    const store = memoryStore();
+    if (!googleId || !googleSecret || !(await loadGoogleTokens(store))) {
+      throw new Error("Google isn't connected (connect it in Settings).");
+    }
+    const transport = new DirectTransport(corsFetch());
+    const token = await getFreshAccessToken(store, { clientId: googleId, clientSecret: googleSecret, transport });
+    const r = await sendEmail(transport, token, call);
+    post({ type: "buddyEmailSent", requestId, ...(r.id ? { id: r.id } : {}) });
+  } catch (err) {
+    post({ type: "buddyEmailSent", requestId, error: err instanceof Error ? err.message : String(err) });
   }
 }
 
@@ -771,6 +795,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "assessImage":
       void handleAssessImage(msg.requestId, msg.image, msg.question);
+      break;
+    case "buddySendEmail":
+      void handleSendEmail(msg.requestId, msg.call);
       break;
     case "chatCancel":
       chatAborts.get(msg.requestId)?.abort();
@@ -2080,6 +2107,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             gmailSearch: makeBuddyGmailSearch(transport, tok),
             readEmail: async (id: string) => gmailReadEmail(transport, await tok(), id),
             readAttachment: makeReadAttachment(transport, tok),
+            // Draft an email (auto-run — a draft just lands in Gmail Drafts for the reader to send).
+            draftEmail: async (d) => createDraft(transport, await tok(), d),
             listEvents: async (o: { max?: number; timeMin?: string; timeMax?: string }) =>
               listEvents(transport, await tok(), o),
             createEvent: async (ev) => createEvent(transport, await tok(), ev),
@@ -2411,7 +2440,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         slash.call.tool === "plan_task" ||
         slash.call.tool === "prep_order" ||
         slash.call.tool === "tv_chart" ||
-        slash.call.tool === "delegate"
+        slash.call.tool === "delegate" ||
+        slash.call.tool === "send_email"
       ) {
         post({ type: "buddyDone", requestId: msg.requestId, text: "", transcript: [], pendingTool: slash.call });
         return;
