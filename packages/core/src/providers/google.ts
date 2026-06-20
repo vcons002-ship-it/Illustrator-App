@@ -557,14 +557,22 @@ export async function listSubtasks(
 export async function listTaskTree(
   transport: Transport,
   token: string,
-  max = 100,
+  max = 500,
 ): Promise<{ id: string; title: string; notes?: string; due?: string; status?: string; subtasks: { id: string; title: string; status?: string }[] }[]> {
-  const data = await apiGet<{ items?: RawTask[] }>(
-    transport,
-    token,
-    `${TASKS}?showCompleted=true&showHidden=true&maxResults=${Math.min(100, Math.max(1, max))}`,
-  );
-  const items = data.items ?? [];
+  // PAGINATE: a single list page maxes at 100 items, and that page COUNTS SUB-TASKS (the API returns
+  // a flat list — sub-tasks carry a `parent`), so one page can drop parents. Follow nextPageToken up
+  // to `max` total / a bounded page count, then nest. Most accounts fit one page (no extra calls).
+  const items: RawTask[] = [];
+  let pageToken: string | undefined;
+  for (let page = 0; page < 20 && items.length < max; page++) {
+    const url =
+      `${TASKS}?showCompleted=true&showHidden=true&maxResults=100` +
+      (pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : "");
+    const data = await apiGet<{ items?: RawTask[]; nextPageToken?: string }>(transport, token, url);
+    items.push(...(data.items ?? []));
+    pageToken = data.nextPageToken;
+    if (!pageToken) break;
+  }
   return items
     .filter((t): t is RawTask & { id: string } => !!t.id && !t.parent)
     .map((t) => ({

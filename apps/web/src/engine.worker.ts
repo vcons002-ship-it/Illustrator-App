@@ -95,6 +95,7 @@ import {
   hasGoogleSkipMarker,
   runTaskPlanning,
   normalizeTaskPlan,
+  nextOccurrence,
   upsertTaskPlan,
   loadTaskPlans,
   normalizeScheduledTask,
@@ -1638,7 +1639,7 @@ async function handleImportGoogleTasks(msg: Extract<MainToWorker, { type: "impor
     }
     const transport = new DirectTransport(corsFetch());
     const token = await getFreshAccessToken(store, { clientId: googleId, clientSecret: googleSecret, transport });
-    const trees = await listTaskTree(transport, token, 100);
+    const trees = await listTaskTree(transport, token, 500); // paginates; counts sub-tasks per page
     const existingPlans = await loadTaskPlans(store);
     const toImport = importableGoogleTasks(trees, existingPlans);
     for (const tree of toImport) {
@@ -1653,6 +1654,7 @@ async function handleImportGoogleTasks(msg: Extract<MainToWorker, { type: "impor
     let mirrored = 0; // ignore / complete / delete mirrored from Google
     let deleteConfirms = 0; // bound the confirm GETs per sweep
     const now = Date.now();
+    const todayIso = new Date().toISOString().slice(0, 10);
     for (const plan of existingPlans) {
       if (!plan.googleTaskId || plan.status === "archived") continue;
       const tree = treeById.get(plan.googleTaskId);
@@ -1664,7 +1666,29 @@ async function handleImportGoogleTasks(msg: Extract<MainToWorker, { type: "impor
           continue;
         }
         if (tree.status === "completed" && plan.status !== "completed") {
-          await upsertTaskPlan(store, { ...plan, status: "completed" });
+          // Completed in Google. A RECURRING task rolls forward to the next occurrence (mirrors the
+          // in-app completion): reset steps, shift the dates, and create a fresh parent Google Task
+          // for the new cycle. A one-off just gets marked complete.
+          const next = plan.recurrence ? nextOccurrence(plan, todayIso) : undefined;
+          if (next) {
+            let newGoogleId: string | undefined;
+            try {
+              const parent = await createTask(transport, token, {
+                title: next.title,
+                ...(next.summary ? { notes: next.summary } : {}),
+                ...(next.deadlineIso ? { due: next.deadlineIso } : {}),
+              });
+              newGoogleId = parent.id;
+            } catch {
+              /* keep the rolled plan even if the Google write failed */
+            }
+            await upsertTaskPlan(
+              store,
+              normalizeTaskPlan({ ...next, id: plan.id, ...(newGoogleId ? { googleTaskId: newGoogleId } : {}) }),
+            );
+          } else {
+            await upsertTaskPlan(store, { ...plan, status: "completed" });
+          }
           mirrored++;
           continue;
         }
