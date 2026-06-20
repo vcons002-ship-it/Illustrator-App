@@ -163,8 +163,10 @@ export const EXTRACTION_SYSTEM =
   "framing) — plus 'location': the established location NAME where THAT scene's moment happens. " +
   "Track the setting beat by beat: each keyEvent gets ITS OWN location, so when the chapter moves " +
   "(tavern → road → castle) consecutive keyEvents change location accordingly. EXACTLY one place " +
-  "per keyEvent — if a stretch itself moves between places, use the place of the depicted moment " +
-  "(empty string only if genuinely unknowable). " +
+  "per keyEvent — if a stretch itself moves between places, use the place of the depicted moment. " +
+  "ALWAYS fill in 'location' (fall back to the chapter's primary setting if a beat's place is " +
+  "implicit) — a blank here makes the image guess the setting from stray words in the prose and " +
+  "get it wrong (e.g. drawing an indoor classroom scene as students outdoors). " +
   "Describe a scene with the characters acting in their setting — NOT a portrait. Refer to " +
   "characters/creatures by their EXACT bible name, to clothing by its outfit LABEL, and to a place " +
   "by its location NAME (the app expands each into its visual description), so do NOT describe their " +
@@ -692,10 +694,12 @@ export function extractionUserContent(input: EntityExtractionInput): string {
 function mapKeyEventsToUnits(
   events: RawExtraction["keyEvents"],
   unitRanges: [number, number][] | undefined,
+  chapterLocation = "",
 ): KeyEvent[] {
   if (!events || !unitRanges || unitRanges.length === 0) return [];
   const out: KeyEvent[] = [];
   const n = Math.min(events.length, unitRanges.length);
+  const fallback = chapterLocation.trim();
   for (let i = 0; i < n; i++) {
     const e = events[i]!;
     const imagePrompt: ScenePrompt = {};
@@ -704,7 +708,10 @@ function mapKeyEventsToUnits(
       if (v) imagePrompt[key] = v;
     }
     if (Object.keys(imagePrompt).length === 0) continue;
-    const location = (e.location ?? "").trim();
+    // Beat-level location is authoritative for the render's "Setting" line. When the model left
+    // it blank, inherit the chapter's location so the beat is never location-less (which is what
+    // forced the live prompt path to scan the passage text and sometimes pick a wrong place).
+    const location = (e.location ?? "").trim() || fallback;
     out.push({ pageRange: unitRanges[i]!, imagePrompt, ...(location ? { location } : {}) });
   }
   return out;
@@ -952,7 +959,7 @@ export function mergeExtraction(
 
   // Upsert this chapter's storyboard scene (idempotent re-run replaces it). Fold in the
   // per-scene image prompts: map raw.keyEvents[i] → the chapter's unitRanges[i].
-  const incoming = mapKeyEventsToUnits(raw.keyEvents, unitRanges);
+  const incoming = mapKeyEventsToUnits(raw.keyEvents, unitRanges, raw.location ?? "");
   if (raw.summary || raw.keyMoment || raw.location || incoming.length > 0) {
     const at = bible.storyboard.findIndex((s) => s.chapterIndex === chapterIndex);
     const prev = at >= 0 ? bible.storyboard[at] : undefined;
@@ -1084,7 +1091,12 @@ function settingLine(
 ): string {
   const haystack = sourceText.toLowerCase();
   const named = envs.find((e) => e.name && haystack.includes(e.name.toLowerCase()));
-  const place = (beatLocation ?? "").trim() || named?.name || scene?.location || "";
+  // Precedence: the beat's own location (most exact) → the chapter's EXTRACTED location (the model
+  // already decided where this chapter happens) → only as a last resort, an environment NAME that
+  // literally appears in the passage. The passage scan used to outrank the chapter location, which
+  // is the "inside a classroom" → "outside at desks" bug: a stray place-name in the prose would win
+  // over the real setting. It's now the fallback, used only when nothing authoritative is known.
+  const place = (beatLocation ?? "").trim() || (scene?.location ?? "").trim() || named?.name || "";
   if (!place) return "";
   const change = scene?.locationChange ? ` (note: the chapter moves — ${scene.locationChange})` : "";
   return `Setting for this image (use this ONE location, do not blend places): ${place}${change}`;

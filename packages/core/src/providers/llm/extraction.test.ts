@@ -525,6 +525,68 @@ describe("environments + location tracking", () => {
     expect(text).toContain("Setting for this image (use this ONE location, do not blend places): the Courtyard");
   });
 
+  it("the chapter's extracted location outranks a contradictory place named in the passage", () => {
+    // The "inside a classroom → outside at desks" bug: with no beat location, a stray place-name in
+    // the prose used to win. The chapter's extracted location must take precedence now.
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [],
+        environments: [
+          { name: "the classroom", description: ["desks", "chalkboard"] },
+          { name: "the courtyard", description: ["open air"] },
+        ],
+        spoilers: [],
+        summary: "A lesson indoors.",
+        keyMoment: "The lecture.",
+        location: "the classroom",
+        locationChange: "",
+        // No keyEvents → the render falls back to the live path's settingLine (no beat location).
+      },
+      0,
+    );
+    const req: VisualRequest = {
+      kind: "scene_illustration",
+      bookId: "b",
+      pageId: "u-0",
+      pageIndex: 0,
+      chapterIndex: 0,
+      // The prose mentions the courtyard in passing; the scene is still the classroom.
+      sourceText: "She remembered the courtyard as she sat at her desk and opened her book.",
+      characterIds: [],
+      environmentIds: ["env-the-classroom", "env-the-courtyard"],
+      creatureIds: [],
+      spoilerIds: [],
+    };
+    const text = promptUserContent(req, bible);
+    expect(text).toContain("Setting for this image (use this ONE location, do not blend places): the classroom");
+    expect(text).not.toContain("): the courtyard");
+  });
+
+  it("a blank beat location inherits the chapter location (so the beat is never location-less)", () => {
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [],
+        environments: [{ name: "the lab", description: ["benches"] }],
+        spoilers: [],
+        summary: "Experiments.",
+        keyMoment: "The reaction.",
+        location: "the lab",
+        locationChange: "",
+        keyEvents: [
+          // location deliberately omitted — it must inherit "the lab".
+          { subject: "Sam", action: "mixes reagents", environment: "benches", mood: "focused", composition: "close" },
+        ],
+      },
+      0,
+      [[0, 9]],
+    );
+    expect(bible.storyboard[0]!.keyEvents?.[0]!.location).toBe("the lab");
+  });
+
   it("feeds known locations back into the next chapter's extraction context", () => {
     let bible = createEmptyBible("b");
     bible = mergeExtraction(
