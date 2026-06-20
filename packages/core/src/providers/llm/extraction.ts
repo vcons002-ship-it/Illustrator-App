@@ -161,6 +161,13 @@ export const EXTRACTION_SYSTEM =
   "stretch as five natural-language fields: 'subject' (who/what is the focus), 'action' (what they " +
   "are doing), 'environment' (where/how it looks), 'mood' (tone), 'composition' (camera angle/" +
   "framing) — plus 'location': the established location NAME where THAT scene's moment happens. " +
+  "CHOOSING THE MOMENT (this is the storyboard): for each stretch pick its most CONSEQUENTIAL, " +
+  "visually distinct beat — a turning point, a decisive or dramatic action, a vivid reveal or first " +
+  "appearance — NOT a quiet transition, and NOT a repeat of a moment an adjacent image already " +
+  "shows (consecutive images should look clearly different). If the stretch is mostly dialogue or " +
+  "inner thought, depict the most CONCRETE physical action or the most evocable image in it (a " +
+  "character doing something, an object, the place) rather than people merely standing and talking. " +
+  "'action' must name one specific, depictable thing happening — not a summary or an abstraction. " +
   "Track the setting beat by beat: each keyEvent gets ITS OWN location, so when the chapter moves " +
   "(tavern → road → castle) consecutive keyEvents change location accordingly. EXACTLY one place " +
   "per keyEvent — if a stretch itself moves between places, use the place of the depicted moment. " +
@@ -216,7 +223,8 @@ export const TECHNICAL_EXTRACTION_SYSTEM =
   "relationship visually (relative sizes, before/after, side-by-side); (2) a mechanism " +
   "or process — show its stages flowing left-to-right or top-to-bottom; (3) a structure " +
   "— show a cutaway, cross-section, or exploded view; (4) an abstract concept — invent " +
-  "ONE concrete visual metaphor that makes it tangible. Fill the five fields: 'subject' " +
+  "ONE concrete visual metaphor that makes it tangible. Pick a DIFFERENT item for each " +
+  "stretch so consecutive images don't re-illustrate the same idea. Fill the five fields: 'subject' " +
   "(the concept/data/structure being shown), 'action' (what the visual demonstrates — " +
   "the change, flow, comparison, or relationship), 'environment' (the visual FORM: " +
   "cutaway diagram, step-by-step process view, scale comparison, annotated-style " +
@@ -1033,9 +1041,10 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
   return [
     request.allowMature ? MATURE_CONTENT_NOTE : "",
     request.bookTitle ? `Book: ${request.bookTitle}.` : "",
-    `Illustrate the single most important action in THIS passage (below). Each illustration ` +
-      `covers a DIFFERENT stretch of the chapter, so depict ONLY what happens in THIS passage — ` +
-      `not the chapter's overall climax, and not a previous illustration's moment.`,
+    `Illustrate the single most important action in THIS passage (below): its most consequential, ` +
+      `visually striking moment — a decisive action or vivid image, NOT people merely standing and ` +
+      `talking. Each illustration covers a DIFFERENT stretch of the chapter, so depict ONLY what ` +
+      `happens in THIS passage — not the chapter's overall climax, and not a previous illustration's moment.`,
     `Passage:\n${request.sourceText}`,
     settingLine(scene, envs, request.sourceText, beatLocation),
     chars.length
