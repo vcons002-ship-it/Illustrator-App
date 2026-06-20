@@ -69,7 +69,7 @@ describe("clampResolution", () => {
     expect(clampResolution("flux", 1280, 1280)).toEqual({ width: 1280, height: 1280 });
     expect(clampResolution("qwenimage", 1536, 1536)).toEqual({ width: 1536, height: 1536 });
     expect(clampResolution("zimage", 1536, 1536)).toEqual({ width: 1280, height: 1280 }); // turbo cap
-    expect(clampResolution("hidream", 1536, 1536)).toEqual({ width: 1536, height: 1536 }); // 17B DiT
+    expect(clampResolution("hidream", 1536, 1536)).toEqual({ width: 1216, height: 1216 }); // ~1 MP buckets
     expect(clampResolution("sdxl", 1000, 1000)).toEqual({ width: 1000, height: 1000 }); // already fine
   });
 

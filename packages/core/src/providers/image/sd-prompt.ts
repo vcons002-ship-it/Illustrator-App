@@ -92,16 +92,19 @@ export function nameHandlingFor(family: ModelFamily): "inject" | "reference" {
 /** Largest square dimension a family handles well (bounds time + artifacts). The
  * natural-language families (Flux, Flux.2, Qwen-Image) stay coherent at large canvases,
  * so High/Ultra can reach 1280/1536 there; SDXL duplicates/degrades above ~1024 and
- * SD1.5 above ~768; Z-Image (turbo) is happiest up to ~1280. */
+ * SD1.5 above ~768; Z-Image (turbo) is happiest up to ~1280. HiDream was trained on
+ * ~1 MP buckets (top side 1360) and duplicates subjects above that like SDXL does past
+ * 1024 — so it caps low, and the Hi-Res two-pass path is how it reaches larger canvases. */
 export function familyMaxDimension(family: ModelFamily): number {
   switch (family) {
     case "flux":
     case "flux2":
     case "qwenimage":
-    case "hidream": // 17B DiT — coherent at large canvases like its Flux/Qwen peers
       return 1536;
     case "zimage":
       return 1280;
+    case "hidream": // 17B DiT but trained at ~1 MP — past ~1216 it tiles the subject
+      return 1216;
     case "sd15":
       return 768;
     default: // sdxl + unknown — conservative
