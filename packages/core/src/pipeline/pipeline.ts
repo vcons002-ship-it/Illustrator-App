@@ -355,6 +355,7 @@ export class RenderPipeline {
         ...(isLocal && this.deps.tier.localSteps ? { stepsOverride: this.deps.tier.localSteps } : {}),
         ...(isLocal && this.deps.tier.localCfg !== undefined ? { cfgOverride: this.deps.tier.localCfg } : {}),
         ...(isLocal && this.deps.tier.lowVram ? { lowVram: true } : {}),
+        ...(isLocal && this.deps.tier.hires ? { hires: true } : {}),
         // Local backends expand bible terms themselves (family-aware); cloud got them above.
         ...(isLocal && terms.length ? { terms } : {}),
         ...(isLocal && worldStyle ? { worldStyle } : {}),

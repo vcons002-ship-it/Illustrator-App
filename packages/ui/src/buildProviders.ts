@@ -196,6 +196,7 @@ export function buildProviders(
         ? { localCfg: settings.localCfg }
         : {}),
       ...(settings.imageProvider === "local" && settings.lowVram ? { lowVram: true } : {}),
+      ...(settings.imageProvider === "local" && settings.hires ? { hires: true } : {}),
       // "One API" native mode: the image slot used the vendor's multimodal endpoint, so
       // mark the tier (and carry the experimental one-shot sub-mode, only when native).
       ...(native && !image.diag.mock ? { nativeIllustration: true } : {}),

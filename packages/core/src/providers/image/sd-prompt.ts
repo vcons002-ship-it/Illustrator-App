@@ -129,6 +129,36 @@ export function clampResolution(
   return { width: fit(width), height: fit(height) };
 }
 
+/** Hi-Res two-pass ceiling: the long side never exceeds this after upscaling, so the
+ * second pass stays bounded in VRAM/time regardless of family or requested size. */
+export const HIRES_MAX_DIMENSION = 2048;
+
+/** Second-pass denoise for the Hi-Res upscale. Low enough that the first pass's
+ * composition (locked at native res → a single subject) is preserved while the
+ * upscaled latent is repainted with real detail. */
+export const HIRES_DENOISE = 0.5;
+
+/**
+ * Target resolution for the Hi-Res two-pass path: render at the family's native-safe
+ * size (so the composition stays coherent — no duplicated subjects), then upscale the
+ * latent ~2× toward the {@link HIRES_MAX_DIMENSION} ceiling and refine. Aspect ratio is
+ * taken from the request. Returns null when the native size already meets/exceeds the
+ * ceiling (nothing to gain from a second pass — the caller renders single-pass).
+ */
+export function hiresTarget(
+  family: ModelFamily,
+  width: number,
+  height: number,
+): { width: number; height: number } | null {
+  const base = clampResolution(family, width, height);
+  const longest = Math.max(base.width, base.height);
+  const targetLongest = Math.min(HIRES_MAX_DIMENSION, longest * 2);
+  if (targetLongest <= longest) return null;
+  const scale = targetLongest / longest;
+  const fit = (n: number): number => Math.max(512, Math.round((n * scale) / 8) * 8);
+  return { width: fit(base.width), height: fit(base.height) };
+}
+
 /**
  * Best-effort family from a checkpoint/model name. Deliberately lenient (e.g. any
  * "xl" → sdxl) because users have a manual override when it guesses wrong.

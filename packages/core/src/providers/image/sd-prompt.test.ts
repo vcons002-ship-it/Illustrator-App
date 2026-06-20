@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
+  HIRES_MAX_DIMENSION,
   clampResolution,
   composeSdPositive,
   detectModelFamily,
+  hiresTarget,
   nameHandlingFor,
   negativeFor,
   qualityPreamble,
@@ -81,6 +83,35 @@ describe("clampResolution", () => {
     expect(width).toBeLessThan(height); // still portrait
     // Ratio preserved within rounding (~0.667).
     expect(Math.abs(width / height - 1248 / 1872)).toBeLessThan(0.02);
+  });
+});
+
+describe("hiresTarget", () => {
+  it("upscales the native-safe size ~2× toward the 2048 ceiling, per family", () => {
+    // HiDream/SDXL render small natively, so the second pass reaches the 2048 ceiling.
+    expect(hiresTarget("hidream", 2048, 2048)).toEqual({ width: 2048, height: 2048 }); // from 1216
+    expect(hiresTarget("sdxl", 1024, 1024)).toEqual({ width: 2048, height: 2048 }); // from 1024
+    // SD1.5 caps at 768 native → 2× = 1536 (under the ceiling).
+    expect(hiresTarget("sd15", 1024, 1024)).toEqual({ width: 1536, height: 1536 });
+    // The long side never exceeds the ceiling.
+    const t = hiresTarget("flux", 4096, 4096);
+    expect(Math.max(t!.width, t!.height)).toBe(HIRES_MAX_DIMENSION);
+  });
+
+  it("keeps the requested aspect ratio through the upscale", () => {
+    const t = hiresTarget("sdxl", 768, 1024); // 3:4 portrait → native 768×1024, upscale toward 2048
+    expect(t).not.toBeNull();
+    expect(t!.height).toBeGreaterThan(t!.width); // still portrait
+    expect(Math.max(t!.width, t!.height)).toBe(HIRES_MAX_DIMENSION); // long side at the ceiling
+    expect(Math.abs(t!.width / t!.height - 768 / 1024)).toBeLessThan(0.02);
+  });
+
+  it("always has headroom to upscale (clamp caps native ≤1536, below the 2048 ceiling)", () => {
+    // Every family's native size is below the ceiling, so a target always exists — never a
+    // single-pass no-op. (The null path guards a future family whose native ≥ ceiling.)
+    for (const f of ["sd15", "sdxl", "flux", "flux2", "qwenimage", "zimage", "hidream"] as const) {
+      expect(hiresTarget(f, 2048, 2048)).not.toBeNull();
+    }
   });
 });
 

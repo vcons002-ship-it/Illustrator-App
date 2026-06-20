@@ -138,6 +138,9 @@ export interface ReaderSettings {
   /** Low-VRAM mode (local ComfyUI): fp8 UNET loading + (managed engine) --lowvram so the
    * heavy text encoder offloads to CPU. Shrinks VRAM/RAM for Flux.2/Z-Image/Qwen-Image. */
   lowVram?: boolean;
+  /** Hi-Res two-pass (local ComfyUI): render at the family's native-safe size, then upscale
+   * the latent ~2× and refine for a larger, more detailed image without subject duplication. */
+  hires?: boolean;
   /** Advanced manual sampler / scheduler choice for local ComfyUI; "" = per-model default. */
   localSampler?: string;
   localScheduler?: string;
@@ -1453,6 +1456,26 @@ export function SettingsPanel({
                 encoding instead of squatting VRAM. Roughly halves the resident footprint of
                 heavy split-file models (Flux.2 / Z-Image / Qwen-Image) for a small speed/quality
                 cost. {isDesktop ? "Takes effect next time the engine starts." : "For your own ComfyUI, also launch it with --lowvram."}
+              </span>
+            </label>
+          )}
+
+          {value.imageProvider === "local" && (
+            <label style={{ ...rowStyle, alignItems: "flex-start" }}>
+              <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={value.hires ?? false}
+                  onChange={(e) => set({ hires: e.target.checked })}
+                />
+                <span>High resolution (two-pass)</span>
+              </span>
+              <span style={{ opacity: 0.6, fontSize: 11 }}>
+                Renders at the model's native size (a single coherent subject), then upscales the
+                latent ~2× toward 2048px and refines it in a second pass — a larger, more detailed
+                image without the duplicated subjects you get from generating large from scratch.
+                Works with every local model; roughly doubles render time. You can also just ask in
+                chat (&ldquo;make it high-res&rdquo;).
               </span>
             </label>
           )}
