@@ -47,6 +47,7 @@ import {
   getImageStyle,
   loadMemory,
   loadSkills,
+  seedStarterSkills,
   memoryPromptBlock,
   saveSkill,
   runSkillProposal,
@@ -2476,6 +2477,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const note = await renderDefaultsNote();
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
     const memory = memoryPromptBlock(await loadMemory(store));
+    await seedStarterSkills(store); // one-time: ship a few ready-made playbooks on a fresh install
     const skills = skillsIndexBlock(await loadSkills(store));
     // When this session is executing a task plan, load its context for the prompt.
     const activePlan = msg.taskPlanId ? (await loadTaskPlans(store)).find((p) => p.id === msg.taskPlanId) : undefined;

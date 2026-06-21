@@ -24,6 +24,7 @@ import {
   combFitsCard,
   RECOMMENDED_WORKER_COMBOS,
   suggestComponents,
+  MCP_PRESETS,
   type LocalTextServerId,
   type ProviderInfo,
 } from "@visual-reader/core";
@@ -840,6 +841,33 @@ export function SettingsPanel({
               access for HTTP, and to spawn a process for stdio — which runs with your permissions, so only add
               servers you trust).
             </span>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6, alignItems: "center" }}>
+              <span style={{ opacity: 0.55, fontSize: 11 }}>Add an example:</span>
+              {MCP_PRESETS.map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  title={`${p.hint}${p.desktopOnly ? " (desktop only)" : ""}\n${p.line}`}
+                  onClick={() => {
+                    const cur = value.mcpServers ?? "";
+                    // Don't duplicate a server that's already listed by name.
+                    const name = p.line.split(/\s+/)[0];
+                    if (name && new RegExp(`^\\s*${name}\\s`, "m").test(cur)) return;
+                    set({ mcpServers: cur ? `${cur.replace(/\s*$/, "")}\n${p.line}` : p.line });
+                  }}
+                  style={{
+                    fontSize: 11,
+                    padding: "2px 8px",
+                    borderRadius: 12,
+                    border: "1px solid rgba(255,255,255,0.2)",
+                    background: "rgba(255,255,255,0.05)",
+                    cursor: "pointer",
+                  }}
+                >
+                  + {p.label}
+                </button>
+              ))}
+            </div>
           </label>
           </Group>
 

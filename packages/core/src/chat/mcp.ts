@@ -45,6 +45,48 @@ export function parseMcpServers(text: string | undefined): McpServer[] {
   return out;
 }
 
+/** Ready-to-paste MCP server examples for the Settings field, so a reader can connect a
+ * common integration (or see the exact line shape) without hunting for syntax. `line` is
+ * literally what goes in the "MCP servers" box; stdio ones need the desktop app. Each `line`
+ * round-trips through {@link parseMcpServers}. */
+export interface McpPreset {
+  /** Short label for the UI. */
+  label: string;
+  /** Whether it needs the desktop app (stdio spawns a local process). */
+  desktopOnly: boolean;
+  /** The exact settings line to add. */
+  line: string;
+  /** One-liner: what it gives the buddy. */
+  hint: string;
+}
+
+export const MCP_PRESETS: readonly McpPreset[] = [
+  {
+    label: "GitHub",
+    desktopOnly: true,
+    line: "github npx -y @modelcontextprotocol/server-github",
+    hint: "Browse repos, issues, and PRs from chat (set GITHUB_TOKEN in the server's env).",
+  },
+  {
+    label: "Filesystem",
+    desktopOnly: true,
+    line: "files npx -y @modelcontextprotocol/server-filesystem /path/to/folder",
+    hint: "Give the buddy read/write access to one folder you choose.",
+  },
+  {
+    label: "Unreal Engine",
+    desktopOnly: true,
+    line: "unreal python C:\\path\\to\\unreal-mcp\\server.py",
+    hint: "Drive the Unreal Editor (spawn/edit actors, run Python) via a community Unreal MCP bridge — install its UE plugin + server, then point this at the server's launch command.",
+  },
+  {
+    label: "HTTP server",
+    desktopOnly: false,
+    line: "myserver https://mcp.example.com/mcp",
+    hint: "Any streamable-HTTP MCP server (works in the web app too — no desktop needed).",
+  },
+];
+
 let rpcId = 0;
 /** A JSON-RPC 2.0 request envelope. */
 export function buildJsonRpc(method: string, params?: unknown): Record<string, unknown> {

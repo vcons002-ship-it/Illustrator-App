@@ -9,6 +9,7 @@ import {
   parseToolCallText,
   parseToolsList,
   pickStdioResult,
+  MCP_PRESETS,
 } from "./mcp.js";
 
 describe("parseMcpServers", () => {
@@ -26,6 +27,16 @@ describe("parseMcpServers", () => {
       { name: "files", kind: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/me"] },
     ]);
     expect(parseMcpServers(undefined)).toEqual([]);
+  });
+
+  it("every MCP_PRESET line parses to exactly one server (incl. the Unreal stdio example)", () => {
+    for (const p of MCP_PRESETS) {
+      const parsed = parseMcpServers(p.line);
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0]!.kind).toBe(p.desktopOnly ? p.line.includes("://") ? "http" : "stdio" : "http");
+    }
+    const unreal = MCP_PRESETS.find((p) => p.label === "Unreal Engine")!;
+    expect(parseMcpServers(unreal.line)[0]).toMatchObject({ name: "unreal", kind: "stdio", command: "python" });
   });
 });
 

@@ -40,6 +40,76 @@ function isSkill(v: unknown): v is Skill {
   return s != null && typeof s.name === "string" && typeof s.body === "string";
 }
 
+/** Memo flag: starter skills have been seeded once (so we never re-add them, and never
+ * fight the reader if they delete one). */
+export const SKILLS_SEEDED_KEY = "skills-seeded";
+
+/** A handful of ready-made playbooks the assistant ships with, so a fresh install already
+ * knows a few recurring jobs (and shows the reader what a skill looks like). The reader can
+ * edit or forget any of them; they're only ever seeded ONCE. `at` is set at seed time. */
+export const STARTER_SKILLS: readonly Omit<Skill, "at">[] = [
+  {
+    name: "clone-and-setup-repo",
+    description: "Clone a GitHub repo and get it running (install deps, build, run tests).",
+    body:
+      "# Clone & set up a repo\n\n" +
+      "1. `gh repo clone <owner>/<repo>` (gh is already authenticated). Each run_command starts in the " +
+      "workspace root and `cd` does NOT persist — chain steps with `&&`.\n" +
+      "2. Detect the stack from the files: `package.json` → Node, `requirements.txt`/`pyproject.toml` → " +
+      "Python, `Cargo.toml` → Rust, `go.mod` → Go.\n" +
+      "3. Install: Node `npm install` (or `pnpm install`/`yarn` if a lockfile says so); Python `pip install " +
+      "-r requirements.txt` (prefer a venv); Rust `cargo build`; Go `go mod download`.\n" +
+      "4. Read the README for any setup/env steps; create a `.env` from `.env.example` if present (ask the " +
+      "reader for any secret values — never invent them).\n" +
+      "5. Build + test to confirm it works (`npm run build` / `npm test`, `pytest`, `cargo test`, `go test ./...`).\n" +
+      "6. Report what ran, what passed/failed, and how to start it (the dev/run command).",
+  },
+  {
+    name: "draft-status-email",
+    description: "Draft a clear status/update email from notes or a task's progress.",
+    body:
+      "# Draft a status email\n\n" +
+      "Use draft_email (it lands in Gmail Drafts for the reader to review) unless they say to send.\n" +
+      "1. Confirm the recipient(s) — pull the address from an email you read, or ask; never guess.\n" +
+      "2. Subject: specific and scannable (e.g. \"Project X — week of <date>: on track\").\n" +
+      "3. Body, short and skimmable: one-line summary first; then **Done**, **In progress**, **Blocked/needs " +
+      "you** as short bullet groups; a clear ask or next step at the end.\n" +
+      "4. Match the reader's voice — plain, warm, no filler. Keep it under ~200 words unless they want detail.\n" +
+      "5. Draft it, then tell the reader it's ready to review and send.",
+  },
+  {
+    name: "run-tests-and-summarize",
+    description: "Run a project's tests and report failures concisely with likely causes.",
+    body:
+      "# Run tests & summarize\n\n" +
+      "1. Find the test command (package.json scripts, Makefile, CI config, or the stack default: " +
+      "`npm test`, `pytest -q`, `cargo test`, `go test ./...`).\n" +
+      "2. Run it; capture stdout+stderr. If it fails to start, fix the obvious setup issue (missing deps) and retry once.\n" +
+      "3. Summarize: total passed/failed, then for each failure the test name, the assertion/error line, and the " +
+      "file:line — not the whole dump.\n" +
+      "4. For each failure give a one-line likely cause and the smallest next step. Don't claim a fix you didn't verify.",
+  },
+];
+
+/**
+ * Seed {@link STARTER_SKILLS} ONCE per install: only when they've never been seeded AND the
+ * reader has no skills of their own (so we never overwrite or duplicate). Idempotent — the
+ * memo flag short-circuits every later call. Safe to invoke before each skills load.
+ */
+export async function seedStarterSkills(store: VisualReaderStore): Promise<void> {
+  try {
+    if (await store.getMemo?.(SKILLS_SEEDED_KEY)) return;
+    const existing = await loadSkills(store);
+    if (existing.length === 0) {
+      const at = Date.now();
+      await persist(store, STARTER_SKILLS.map((s) => ({ ...s, at })));
+    }
+    await store.putMemo?.(SKILLS_SEEDED_KEY, "1");
+  } catch {
+    /* seeding is best-effort — a store hiccup must never block a chat turn */
+  }
+}
+
 /** When a skill was last touched (used, else written) — the eviction key. */
 function usedAt(s: Skill): number {
   return s.lastUsedAt ?? s.at;

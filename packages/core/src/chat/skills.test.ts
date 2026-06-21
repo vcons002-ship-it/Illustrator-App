@@ -10,10 +10,37 @@ import {
   normalizeSkill,
   readSkillBody,
   saveSkill,
+  seedStarterSkills,
   skillsIndexBlock,
   touchSkill,
+  STARTER_SKILLS,
+  SKILLS_SEEDED_KEY,
   type Skill,
 } from "./skills.js";
+
+describe("seedStarterSkills", () => {
+  it("seeds the starter skills once on a fresh store", async () => {
+    const store = new InMemoryStore();
+    await seedStarterSkills(store);
+    const skills = await loadSkills(store);
+    expect(skills.map((s) => s.name).sort()).toEqual(STARTER_SKILLS.map((s) => s.name).sort());
+    expect(await store.getMemo("skills-seeded")).toBe("1");
+  });
+
+  it("never re-seeds (flag set) and never overwrites the reader's own skills", async () => {
+    const store = new InMemoryStore();
+    // Reader already has a skill → seed must NOT add the starters, just mark seeded.
+    await saveSkill(store, { name: "mine", description: "d", body: "b" });
+    await seedStarterSkills(store);
+    const after = await loadSkills(store);
+    expect(after.map((s) => s.name)).toEqual(["mine"]);
+    // And once seeded, deleting all skills doesn't bring the starters back.
+    await store.putMemo(SKILLS_SEEDED_KEY, "1");
+    await forgetSkill(store, "mine");
+    await seedStarterSkills(store);
+    expect(await loadSkills(store)).toEqual([]);
+  });
+});
 
 describe("touchSkill (reuse tracking)", () => {
   it("bumps useCount + lastUsedAt on a match, keeps reuse stats when refined", async () => {
