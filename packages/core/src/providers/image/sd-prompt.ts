@@ -209,15 +209,25 @@ export function detectModelFamily(name: string): ModelFamily {
 }
 
 /**
- * Resolve the family to format for. Precedence: explicit override → managed
- * catalog family → filename heuristic → "unknown".
+ * Resolve the family to format for. Precedence: managed **catalog** family → explicit
+ * override → filename heuristic → "unknown".
+ *
+ * The catalog wins over the override on purpose. The override exists to correct the *lenient
+ * filename heuristic* on unknown/custom checkpoints — NOT to reclassify a known model. A
+ * model's family fixes its encoder STRUCTURE (HiDream = quad-CLIP, Flux.2 = single CLIP,
+ * SDXL = all-in-one), which is intrinsic to the file: you can't run a HiDream UNET as Flux.2.
+ * Letting a sticky override beat the catalog built a Flux.2-shaped single-encoder graph around
+ * a HiDream UNET → pooled 768 vs 2048 → "shapes cannot be multiplied". So an exact catalog
+ * match (curated, authoritative) is honoured first; the override still beats the heuristic.
  */
 export function resolveModelFamily(
   override: ModelFamily | undefined,
   checkpoint: string,
 ): ModelFamily {
+  const fromCatalog = catalogModelFamily(checkpoint);
+  if (fromCatalog) return fromCatalog;
   if (override && override !== "unknown") return override;
-  return catalogModelFamily(checkpoint) ?? detectModelFamily(checkpoint);
+  return detectModelFamily(checkpoint);
 }
 
 function isSd(family: ModelFamily): boolean {

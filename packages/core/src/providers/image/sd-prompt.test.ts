@@ -142,14 +142,18 @@ describe("hiresCeiling", () => {
 });
 
 describe("resolveModelFamily", () => {
-  it("honours the override, then the catalog, then the filename", () => {
-    // Override wins even when the filename says otherwise.
-    expect(resolveModelFamily("flux", "sd_xl_base_1.0.safetensors")).toBe("flux");
-    // Catalog filename match.
+  it("honours the catalog first, then the override, then the filename", () => {
+    // The catalog is authoritative for KNOWN models — a stale manual override can't reclassify a
+    // known model into an incompatible encoder structure (the footgun that wrapped a HiDream UNET
+    // in a Flux.2 single-encoder graph → "shapes cannot be multiplied").
+    expect(resolveModelFamily("flux2", "hidream_i1_dev_fp8.safetensors")).toBe("hidream");
+    expect(resolveModelFamily("flux", "sd_xl_base_1.0.safetensors")).toBe("sdxl"); // catalog beats override
+    // Catalog filename match with no override.
     expect(resolveModelFamily(undefined, "sd_xl_base_1.0.safetensors")).toBe("sdxl");
-    // Catalog match for a HiDream entry's main filename.
     expect(resolveModelFamily(undefined, "hidream_i1_dev_fp8.safetensors")).toBe("hidream");
-    // Falls back to the heuristic for an unknown checkpoint.
+    // The override DOES win over the lenient filename heuristic for unknown/custom checkpoints.
+    expect(resolveModelFamily("flux", "my_custom_xl_merge.safetensors")).toBe("flux"); // not catalog → override beats "xl"→sdxl guess
+    // Falls back to the heuristic for an unknown checkpoint with no override.
     expect(resolveModelFamily(undefined, "mystery_flux_merge.safetensors")).toBe("flux");
     expect(resolveModelFamily(undefined, "whatever.safetensors")).toBe("unknown");
   });
