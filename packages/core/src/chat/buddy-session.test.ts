@@ -71,6 +71,43 @@ describe("runBuddyTurn — spawn_agents parallel fan-out", () => {
   });
 });
 
+describe("runBuddyTurn — write-capable sub-agent (runHostTool)", () => {
+  it("executes a host tool out-of-band and feeds the result back instead of suspending", async () => {
+    // A coding agent runs a command, sees the output, then answers — no pendingTool suspension.
+    const llm = scriptedLlm([
+      '{"tool":"run_command","command":"pytest -q"}',
+      "Tests pass — 12 passed.",
+    ]);
+    const ran: string[] = [];
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "run the tests" }],
+      deps: baseDeps,
+      runHostTool: async (call) => {
+        if (call.tool === "run_command") ran.push(call.command);
+        return { command: { stdout: "12 passed", stderr: "", code: 0, timedOut: false } };
+      },
+    });
+    expect(ran).toEqual(["pytest -q"]);
+    expect(outcome.pendingTool).toBeUndefined(); // did NOT suspend
+    expect(outcome.text).toBe("Tests pass — 12 passed.");
+    // The command output was fed into the next round.
+    expect(llm.calls[1]!.map((t) => t.content).join("\n")).toContain("12 passed");
+  });
+
+  it("without runHostTool, a host tool still suspends as a pendingTool (main-buddy path)", async () => {
+    const llm = scriptedLlm(['{"tool":"run_command","command":"ls"}', "done"]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "list" }],
+      deps: baseDeps,
+    });
+    expect(outcome.pendingTool).toEqual({ tool: "run_command", command: "ls" });
+  });
+});
+
 describe("runBuddyTurn — never-empty answer + thinking", () => {
   it("re-prompts for a plain-text wrap-up when a tool round ends with no prose", async () => {
     const llm = scriptedLlm(['{"tool":"search_books","query":"x"}', "", "All set — nothing notable came back."]);
