@@ -782,14 +782,60 @@ export function parseBuddyToolCalls(text: string): BuddyToolCall[] {
   const cleaned = stripFences(stripThink(text));
   const out: BuddyToolCall[] = [];
   for (const chunk of extractJsonObjects(cleaned)) {
-    let obj: Record<string, unknown>;
-    try {
-      obj = JSON.parse(chunk) as Record<string, unknown>;
-    } catch {
-      continue;
-    }
+    const obj = parseJsonLoose(chunk);
+    if (!obj) continue;
     const call = parseToolObject(obj);
     if (call) out.push(call);
+  }
+  return out;
+}
+
+/**
+ * JSON.parse, but tolerating the TRAILING COMMAS weaker (local) models routinely emit
+ * (`{"tool":"search_web","query":"x",}` or `[1,2,]`) — strict JSON rejects them, which silently
+ * DROPPED an otherwise-valid tool call and left the buddy unable to "string together tools". The
+ * repair is string-aware (a comma inside a quoted value is never touched). Returns undefined when it
+ * still isn't a JSON object.
+ */
+function parseJsonLoose(chunk: string): Record<string, unknown> | undefined {
+  try {
+    return JSON.parse(chunk) as Record<string, unknown>;
+  } catch {
+    try {
+      const repaired = JSON.parse(stripTrailingCommas(chunk));
+      return repaired && typeof repaired === "object" ? (repaired as Record<string, unknown>) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+/** Drop commas that sit right before a closing `}`/`]` (ignoring whitespace), but NEVER inside a
+ * string literal — so `{"q":"a, ",}` loses only the structural trailing comma, not the one in "a, ". */
+function stripTrailingCommas(s: string): string {
+  let out = "";
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!;
+    if (inStr) {
+      out += c;
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      out += c;
+      continue;
+    }
+    if (c === ",") {
+      let j = i + 1;
+      while (j < s.length && /\s/.test(s[j]!)) j++;
+      if (j < s.length && (s[j] === "}" || s[j] === "]")) continue; // structural trailing comma → drop
+    }
+    out += c;
   }
   return out;
 }

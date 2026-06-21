@@ -170,11 +170,17 @@ export const CHAT_TOOLS_SYSTEM =
 export function parseToolCall(text: string): ToolCall | undefined {
   const cleaned = stripFences(stripThink(text));
   if (!cleaned.startsWith("{") || !cleaned.endsWith("}")) return undefined;
+  // Tolerate the trailing commas weaker local models emit (`{…,}`), which strict JSON rejects —
+  // a dropped tool call is why the model "couldn't string together tools". String-aware repair.
   let obj: Record<string, unknown>;
   try {
     obj = JSON.parse(cleaned) as Record<string, unknown>;
   } catch {
-    return undefined;
+    try {
+      obj = JSON.parse(stripTrailingCommas(cleaned)) as Record<string, unknown>;
+    } catch {
+      return undefined;
+    }
   }
   const tool = obj.tool;
   if (tool === "read_url") {
@@ -420,6 +426,36 @@ export function formatToolResult(call: ToolCall, result: ToolResultPayload): str
   return result.image?.ok
     ? "[tool generate_image: the image was generated and is shown to the reader]"
     : `[tool generate_image failed: ${result.image?.error ?? "unknown error"}]`;
+}
+
+/** Drop commas that sit right before a closing `}`/`]` (ignoring whitespace), never inside a string
+ * literal — so a trailing comma from a weak local model parses, but `"a, "` is untouched. */
+function stripTrailingCommas(s: string): string {
+  let out = "";
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!;
+    if (inStr) {
+      out += c;
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      out += c;
+      continue;
+    }
+    if (c === ",") {
+      let j = i + 1;
+      while (j < s.length && /\s/.test(s[j]!)) j++;
+      if (j < s.length && (s[j] === "}" || s[j] === "]")) continue;
+    }
+    out += c;
+  }
+  return out;
 }
 
 function strArg(v: unknown, max: number): string | undefined {
