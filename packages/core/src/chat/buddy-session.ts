@@ -34,9 +34,11 @@ import { jsonGatedTokenSink } from "./chat-session.js";
  * chat (chat-session.ts).
  */
 
-/** How many extra passes a single answer may be CONTINUED when the model is cut off at the token
- * budget. 8 passes × the per-reply cap (~8k tokens) ≈ 65k tokens of stitched output — enough for a
- * "massive" document while still bounded so a runaway model can't loop forever. */
+/** Extra auto-continue passes per turn. This is a SAFETY valve against a model that loops forever
+ * always-reporting "truncated", NOT a content cap — at ~30k tokens/pass on a big window that's
+ * hundreds of thousands of tokens, and if it's ever hit the answer ends with a plain "say continue"
+ * note (never a silent cut), so the reader can always get the rest. The Stop button also interrupts
+ * between passes. */
 const MAX_REPLY_CONTINUATIONS = 8;
 
 export interface BuddyDeps {
@@ -300,6 +302,11 @@ export async function runBuddyTurn(opts: {
         rawSoFar = await chatOnce();
         const more = stripToolCallJson(rawSoFar).trim();
         if (more) clean = clean ? `${clean}\n${more}` : more;
+      }
+      // If we stopped only because of the per-turn safety cap (still truncated), say so plainly so a
+      // genuinely huge document is never SILENTLY cut — the reader can just ask for the rest.
+      if (lastTruncated) {
+        clean += '\n\n_(This is running very long — I paused here. Say "continue" and I\'ll pick up exactly where I left off.)_';
       }
       transcript.push({ role: "assistant", content: clean });
       // Safety net: never hand the reader stray tool-call JSON or an empty string.

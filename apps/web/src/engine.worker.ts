@@ -1197,10 +1197,18 @@ const MAX_TRUSTED_CONTEXT_TOKENS = 1_048_576;
 /** Even with a giant window, bound the input we build — prefill on a local GPU
  * is slow, and the lazy book/bible tools fetch the rest on demand anyway. */
 const MAX_LOCAL_INPUT_CHARS = 480_000;
-/** Max tokens per single reply. A coherent, reasonably-fast chunk; the chat/buddy loop AUTO-
- * CONTINUES past it (stitching passes) so the TOTAL output is effectively unbounded for big tasks.
- * Raised from 4096 so a large window (the reader's 100k+) yields long answers without many hops. */
-const MAX_REPLY_TOKENS = 8192;
+/** Per-reply token budget for a LOCAL model = ~30% of the resolved window (so a 100k window writes
+ * ~30k in ONE pass — fewer continuation hops, each of which re-prefills the growing context, so big
+ * passes are also CHEAPER). Capped only by a sanity ceiling: a single local generation past ~32k
+ * tokens is impractically slow to decode and tends to drift, and the loop AUTO-CONTINUES past it
+ * with the Stop button able to interrupt between passes — so the cap bounds one *generation*, not
+ * the total output. */
+const LOCAL_REPLY_FRACTION = 0.3;
+const MAX_LOCAL_REPLY_TOKENS = 32_768;
+/** Per-reply budget for CLOUD models — kept moderate because cloud APIs REJECT a max_tokens above
+ * the model's own output ceiling (Claude/Gemini ≈ 8k). They rarely truncate at this; if they do, the
+ * loop continues just like local. */
+const CLOUD_REPLY_TOKENS = 8192;
 
 /**
  * Split the model's context window into book + history char budgets. Cloud models
@@ -1217,7 +1225,7 @@ function contextBudgets(llmId: string, ctxTokens?: number): ContextBudgets {
     return {
       book: 24_000,
       history: 60_000,
-      reply: MAX_REPLY_TOKENS,
+      reply: CLOUD_REPLY_TOKENS,
       ...(CLOUD_MAX_TOKENS[llmId] ? { maxTokens: CLOUD_MAX_TOKENS[llmId] } : {}),
     };
   }
@@ -1227,11 +1235,10 @@ function contextBudgets(llmId: string, ctxTokens?: number): ContextBudgets {
     return {
       book: Math.floor(inputChars * 0.7),
       history: Math.floor(inputChars * 0.3),
-      // ~30% of the window per reply, floored so tiny windows still answer and capped at
-      // MAX_REPLY_TOKENS so one pass stays fast + coherent. A BIG window (the reader raised theirs to
-      // 100k+) now gets a much larger single reply, and the chat/buddy loop AUTO-CONTINUES beyond
-      // even that — so a massive document is produced in stitched passes, not capped at one.
-      reply: Math.min(MAX_REPLY_TOKENS, Math.max(512, Math.floor(usable * 0.3))),
+      // ~30% of the window per reply (floored so tiny windows still answer; ceilinged at
+      // MAX_LOCAL_REPLY_TOKENS so ONE generation stays tractable). A 100k window → ~30k per pass, and
+      // the chat/buddy loop AUTO-CONTINUES beyond even that — total output is effectively unbounded.
+      reply: Math.min(MAX_LOCAL_REPLY_TOKENS, Math.max(512, Math.floor(usable * LOCAL_REPLY_FRACTION))),
       maxTokens: usable,
     };
   }
