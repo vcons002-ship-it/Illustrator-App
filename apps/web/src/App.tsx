@@ -868,6 +868,14 @@ export function App() {
     [activeBuddyId, persistSessions],
   );
   const [buddyPendingTool, setBuddyPendingTool] = useState<BuddyToolCall | undefined>();
+  // Phase-2 per-step approval QUEUE for coding agents: when Autonomous workspace is OFF, each agent's
+  // write/command waits here for the reader's click while siblings keep running. Display in state;
+  // the call+cwd+resolver live in a ref (functions don't belong in render state).
+  const [agentApprovals, setAgentApprovals] = useState<{ id: number; title: string; call: BuddyToolCall }[]>([]);
+  const agentApprovalCtx = useRef(
+    new Map<number, { call: BuddyToolCall; cwd: string; resolve: (r: BuddyToolResultPayload) => void }>(),
+  );
+  const nextAgentApprovalId = useRef(1);
   const [buddyUsage, setBuddyUsage] = useState<ContextUsage | undefined>();
   // The pending generate_image's transcript, folded in only on approval (same
   // injection guard as the book chat's pendingTranscript).
@@ -2735,6 +2743,30 @@ export function App() {
     return { error: `the "${call.tool}" tool isn't available to a coding agent — use run_command (e.g. ls/grep) or write_file in your worktree` };
   };
 
+  // Auto-run the agent's tool (Autonomous workspace) OR queue it for the reader's per-step approval
+  // (Phase 2). Queued tools resolve when the reader approves (run) or denies (the agent adapts);
+  // siblings keep running while one waits.
+  const runOrQueueAgentTool = (call: BuddyToolCall, cwd: string, title: string): Promise<BuddyToolResultPayload> => {
+    if (settings.autonomousWorkspace) return executeAgentTool(call, cwd);
+    return new Promise<BuddyToolResultPayload>((resolve) => {
+      const id = nextAgentApprovalId.current++;
+      agentApprovalCtx.current.set(id, { call, cwd, resolve });
+      setAgentApprovals((q) => [...q, { id, title, call }]);
+    });
+  };
+  const onApproveAgentTool = (id: number): void => {
+    const ctx = agentApprovalCtx.current.get(id);
+    agentApprovalCtx.current.delete(id);
+    setAgentApprovals((q) => q.filter((a) => a.id !== id));
+    if (ctx) void executeAgentTool(ctx.call, ctx.cwd).then(ctx.resolve);
+  };
+  const onDenyAgentTool = (id: number): void => {
+    const ctx = agentApprovalCtx.current.get(id);
+    agentApprovalCtx.current.delete(id);
+    setAgentApprovals((q) => q.filter((a) => a.id !== id));
+    ctx?.resolve({ error: "the reader declined this step — try a different approach or stop here" });
+  };
+
   // Approved spawn_coding_agents: create a git worktree per task, run the write-capable agents in
   // parallel, then the APP commits + diffs + merges each branch back (cleaning up) and reports.
   const approveSpawnCodingAgents = async (
@@ -2751,8 +2783,8 @@ export function App() {
       await dispatchBuddyTurn([...preHistory, ...pre], feedback);
     };
     if (!isDesktop) return bail("coding agents need the desktop app");
-    if (!(settings.allowCommands && settings.autonomousWorkspace))
-      return bail("turn on Autonomous workspace (Settings → assistant abilities) to let coding agents write + run");
+    if (!settings.allowCommands)
+      return bail("turn on 'run commands & see the screen' (Settings → assistant abilities) to use coding agents");
     if (!buddyWorkingDir)
       return bail("pick a working folder for this chat first (the folder icon) so the agents have a project to work in");
 
@@ -2783,7 +2815,7 @@ export function App() {
     const run = await runCodingAgents(
       runId,
       created.map((c) => ({ title: c.title, instructions: c.instructions, dir: c.path })),
-      executeAgentTool,
+      (call, cwd, agentIdx) => runOrQueueAgentTool(call, cwd, created[agentIdx]?.title ?? `agent ${agentIdx + 1}`),
     );
     const resultFor = (title: string): string =>
       run.results?.find((r) => r.title === title)?.result ?? "(no summary returned)";
@@ -4570,6 +4602,9 @@ export function App() {
             onApprovePendingTool={onApproveBuddyPendingTool}
             onApprovePendingToolAlways={onAllowBuddyAlways}
             onDismissPendingTool={onDismissBuddyPendingTool}
+            agentApprovals={agentApprovals}
+            onApproveAgentTool={onApproveAgentTool}
+            onDenyAgentTool={onDenyAgentTool}
             onCancel={buddyCancel}
             onClearHistory={onClearBuddy}
             onDeleteMessage={onDeleteBuddyMessage}

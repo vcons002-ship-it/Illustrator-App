@@ -167,7 +167,7 @@ export interface EngineWorkerApi {
   runCodingAgents: (
     runId: string,
     agents: { title: string; instructions: string; dir: string }[],
-    onAgentTool: (call: BuddyToolCall, cwd: string) => Promise<BuddyToolResultPayload>,
+    onAgentTool: (call: BuddyToolCall, cwd: string, agentIdx: number) => Promise<BuddyToolResultPayload>,
   ) => Promise<{ results?: { title: string; result: string }[]; error?: string }>;
   /** Abort the in-flight chat round, if any. */
   chatCancel: () => void;
@@ -400,7 +400,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     Map<number, (r: { results?: { title: string; result: string }[]; error?: string }) => void>
   >(new Map());
   const agentToolHandler = useRef<
-    ((call: BuddyToolCall, cwd: string) => Promise<BuddyToolResultPayload>) | undefined
+    ((call: BuddyToolCall, cwd: string, agentIdx: number) => Promise<BuddyToolResultPayload>) | undefined
   >(undefined);
   // In-flight chat rounds: streaming events + the final resolve, keyed by requestId.
   const chatRequests = useRef<
@@ -655,7 +655,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           // the active run's handler and post the result back, or report no handler.
           const handler = agentToolHandler.current;
           if (handler) {
-            void handler(msg.call, msg.cwd).then(
+            void handler(msg.call, msg.cwd, msg.agentIdx).then(
               (result) => send({ type: "agentToolResult", callId: msg.callId, result }),
               (e) => send({ type: "agentToolResult", callId: msg.callId, result: { error: e instanceof Error ? e.message : String(e) } }),
             );
@@ -1350,7 +1350,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     (
       runId: string,
       agents: { title: string; instructions: string; dir: string }[],
-      onAgentTool: (call: BuddyToolCall, cwd: string) => Promise<BuddyToolResultPayload>,
+      onAgentTool: (call: BuddyToolCall, cwd: string, agentIdx: number) => Promise<BuddyToolResultPayload>,
     ): Promise<{ results?: { title: string; result: string }[]; error?: string }> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
