@@ -1307,10 +1307,13 @@ describe("ComfyUI prompt formatting by family", () => {
     expect(wf["13"]!.inputs.vae_name).toBe("flux2-vae.safetensors");
   });
 
-  it("modelFamily override forces formatting regardless of the checkpoint name", async () => {
+  it("modelFamily override forces formatting for a non-catalog checkpoint (beats the filename heuristic)", async () => {
     const t = comfyRun();
     const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
-    await backend.generate({ ...imageInput, modelFamily: "sdxl" }, "flux1-schnell-fp8.safetensors");
+    // Not a catalog model, so the override applies over the lenient filename heuristic (which would
+    // otherwise read "flux"). A KNOWN catalog model would keep its curated family — the override
+    // can't reclassify it into an incompatible encoder structure (e.g. HiDream → Flux.2).
+    await backend.generate({ ...imageInput, modelFamily: "sdxl" }, "my_flux_merge.safetensors");
     const wf = workflowOf(t);
     expect(wf["7"]!.inputs.text).toContain("bad anatomy"); // override → treated as SDXL
   });
