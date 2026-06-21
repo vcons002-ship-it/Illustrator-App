@@ -193,6 +193,14 @@ export async function runBuddyTurn(opts: {
   /** Run `spawn_agents` subtasks as concurrent read-only sub-agents (host-provided so it owns the
    * concurrency cap + which model tier the sub-agents use). Absent ⇒ the tool reports unavailable. */
   runSubAgents?: (tasks: string[]) => Promise<{ task: string; result: string }[]>;
+  /**
+   * Execute a HOST tool (run_command / write_file / …) OUT-OF-BAND and feed its result back into
+   * this turn, instead of suspending and returning it as a `pendingTool`. This is what makes a
+   * WRITE-CAPABLE sub-agent possible: a coding agent runs in the worker, but its commands/writes
+   * execute on the main thread in the agent's worktree (the host provides this, optionally behind a
+   * per-step approval). Absent ⇒ host tools suspend the turn as before (the main buddy's path).
+   */
+  runHostTool?: (call: BuddyToolCall) => Promise<BuddyToolResultPayload>;
   signal?: AbortSignal;
 }): Promise<BuddyTurnOutcome> {
   const messages: ChatTurn[] = [{ role: "system", content: opts.system }, ...opts.history];
@@ -273,6 +281,16 @@ export async function runBuddyTurn(opts: {
         continue;
       }
       if (isHostTool(call)) {
+        // Write-capable sub-agent: execute the host tool out-of-band (host runs it in the agent's
+        // worktree, optionally after an approval) and continue, rather than suspending the turn.
+        if (opts.runHostTool) {
+          opts.onEvent?.({ kind: "tool", round, call });
+          const result = await opts.runHostTool(call);
+          toolResults.push({ call, result });
+          opts.onEvent?.({ kind: "toolResult", round, call, result });
+          feedbacks.push(formatBuddyToolResult(call, result));
+          continue;
+        }
         if (feedbacks.length === 0) {
           opts.onEvent?.({ kind: "tool", round, call });
           return { text: "", transcript, pendingTool: call, toolResults };
