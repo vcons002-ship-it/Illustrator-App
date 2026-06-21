@@ -123,6 +123,11 @@ export type BuddyTurnEvent =
   | { kind: "token"; text: string }
   /** A thinking model is reasoning (no visible answer yet); `text` is the live reasoning. */
   | { kind: "thinking"; text: string }
+  /** A transient "working" heartbeat so the turn never looks frozen while the model streams
+   * MUTED content (tool-call JSON is gated out of the visible stream) or thinks silently — the one
+   * signal a linked phone gets that the buddy is busy. Cleared by the first visible token / the
+   * settled answer. */
+  | { kind: "activity"; text: string }
   | { kind: "tool"; round: number; call: BuddyToolCall }
   | { kind: "toolResult"; round: number; call: BuddyToolCall; result: BuddyToolResultPayload };
 
@@ -213,6 +218,10 @@ export async function runBuddyTurn(opts: {
   let wrappedUp = false; // guard: only re-prompt for a plain-text wrap-up once
 
   for (let round = 0; ; round++) {
+    // Heartbeat: the reply may stream entirely MUTED (tool-call JSON is gated out of the visible
+    // token stream) or the model may think silently for a while — without this the turn looks frozen,
+    // which is exactly what a linked phone saw. A visible token / the final answer clears it.
+    opts.onEvent?.({ kind: "activity", text: round === 0 ? "Thinking…" : "Working on it…" });
     const reply = await opts.llm.chat(messages, {
       // Fresh gate per round (see chat-session.ts): tool JSON never streams visibly.
       ...(opts.onEvent
