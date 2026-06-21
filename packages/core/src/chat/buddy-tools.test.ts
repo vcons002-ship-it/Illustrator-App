@@ -3,6 +3,7 @@ import {
   ALWAYS_GATED_TOOLS,
   MAX_BUDDY_TOOL_ROUNDS,
   buildBuddySystemPrompt,
+  describeBuddyToolActivity,
   formatBuddyToolResult,
   isRetryableError,
   looksLikeToolJson,
@@ -762,6 +763,18 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
     expect(parseBuddyToolCalls('{"tool":"search_web","query":"apples, oranges, and pears"}')).toEqual([
       { tool: "search_web", query: "apples, oranges, and pears" },
     ]);
+  });
+
+  it("describeBuddyToolActivity names the specific action for the status line", () => {
+    expect(describeBuddyToolActivity({ tool: "search_web", query: "Virginia SOL Algebra 1" })).toMatch(
+      /Searching the web for .*Algebra 1/,
+    );
+    expect(describeBuddyToolActivity({ tool: "read_url", url: "https://doe.virginia.gov/standards" })).toBe(
+      "Reading doe.virginia.gov…",
+    );
+    expect(describeBuddyToolActivity({ tool: "calculate", expression: "2+2" })).toBe("Calculating…");
+    // An uncommon tool still gets a sane generic line (never blank).
+    expect(describeBuddyToolActivity({ tool: "set_visual_style", style: "watercolor" })).toBe("Working on it…");
   });
 
   it("looksLikeToolJson flags a tool-shaped reply so raw JSON isn't shown as prose", () => {

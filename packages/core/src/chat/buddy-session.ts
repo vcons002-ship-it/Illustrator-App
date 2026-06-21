@@ -3,6 +3,7 @@ import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-sear
 import type { BookSearchHit } from "../providers/book-search.js";
 import {
   MAX_BUDDY_TOOL_ROUNDS,
+  describeBuddyToolActivity,
   formatBuddyToolResult,
   isRetryableError,
   looksLikeToolJson,
@@ -346,6 +347,9 @@ export async function runBuddyTurn(opts: {
         break;
       }
       opts.onEvent?.({ kind: "tool", round, call });
+      // Name the specific action in the status line ("Searching the web for …") so the reader sees
+      // exactly what's happening while the (muted) tool runs — clarity the phone especially needs.
+      opts.onEvent?.({ kind: "activity", text: describeBuddyToolActivity(call) });
       let result = await runBuddyTool(call, opts.deps);
       // One automatic retry for a transient (network/timeout/rate-limit) failure before the
       // error is shown to the model — turns a flaky blip into a silent recovery.

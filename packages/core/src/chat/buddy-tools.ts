@@ -261,6 +261,72 @@ export function toolLimitNudge(round: number, max = MAX_BUDDY_TOOL_ROUNDS): stri
     : "";
 }
 
+/** A short, SPECIFIC "what the buddy is doing right now" line for the transient activity status, so
+ * the reader (and a linked phone) sees the actual step — "Searching the web for …" — not just a
+ * generic "Working…". PURE. */
+export function describeBuddyToolActivity(call: BuddyToolCall): string {
+  const clip = (s: string, n = 60): string => (s.length > n ? `${s.slice(0, n).trim()}…` : s);
+  const host = (u: string): string => {
+    try {
+      return new URL(u).host || u;
+    } catch {
+      return clip(u, 40);
+    }
+  };
+  switch (call.tool) {
+    case "search_web":
+      return `Searching the web for “${clip(call.query)}”…`;
+    case "search_books":
+      return `Searching books for “${clip(call.query)}”…`;
+    case "search_images":
+      return `Searching for images…`;
+    case "read_url":
+      return `Reading ${host(call.url)}…`;
+    case "open_web_text":
+      return `Opening ${host(call.url)}…`;
+    case "calculate":
+      return "Calculating…";
+    case "wolfram":
+      return "Asking Wolfram|Alpha…";
+    case "gmail_search":
+      return "Searching your email…";
+    case "read_email":
+      return "Reading an email…";
+    case "read_attachment":
+      return "Reading an attachment…";
+    case "draft_email":
+      return "Drafting an email…";
+    case "list_events":
+      return "Checking your calendar…";
+    case "create_event":
+      return `Adding “${clip(call.summary, 50)}” to your calendar…`;
+    case "list_tasks":
+    case "list_task_plans":
+      return "Checking your tasks…";
+    case "create_task":
+      return `Adding the task “${clip(call.title, 50)}”…`;
+    case "add_task_group":
+      return `Planning “${clip(call.title, 50)}”…`;
+    case "create_spreadsheet":
+      return `Building the “${clip(call.title, 50)}” spreadsheet…`;
+    case "stock_quote":
+    case "schwab_quote":
+      return `Looking up ${call.symbol}…`;
+    case "market_analysis":
+      return `Analyzing ${call.symbol}…`;
+    case "read_file":
+      return "Reading a file…";
+    case "find_files":
+      return `Searching your files for “${clip(call.query, 50)}”…`;
+    case "run_command":
+      return `Running: ${clip(call.command, 50)}`;
+    case "read_skill":
+      return "Checking my playbooks…";
+    default:
+      return "Working on it…";
+  }
+}
+
 /**
  * Whether a tool error reads as transient (network blip / timeout / rate limit) and is worth
  * exactly ONE automatic retry before the failure is surfaced to the model.
