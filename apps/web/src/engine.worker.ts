@@ -885,6 +885,7 @@ async function handleTestRender(
 ): Promise<void> {
   try {
     if (!settings) throw new Error("Settings not initialised yet.");
+    cancelChatWarm(); // don't let a pending LLM warm steal VRAM from this render
     const { image, tier } = buildProviders(settings);
     const out = await renderFromText(image, tier, text, {
       ...(initImage ? { initImage } : {}),
@@ -988,15 +989,39 @@ async function renderFromText(
  * would otherwise wait on a cold reload (felt like a hang). Fire-and-forget: a
  * 1-token request warms it while the reader looks at the rendered image. Cloud
  * chat models don't load locally, so they're skipped.
+ *
+ * DEBOUNCED + cancellable: during a BURST of rapid renders, warming the LLM after
+ * each one steals VRAM back from the NEXT image — forcing ComfyUI to offload weights
+ * to system RAM (the "…MB Staged" dynamic loading), which can slow a render 10×+
+ * (e.g. 10s → 100s). So we cancel any pending warm when a render starts, and only
+ * warm once the renders have settled — keeping the next chat turn fast without
+ * throttling an image burst (during which the LLM simply stays evicted and ComfyUI
+ * keeps the whole GPU).
  */
-function warmChatModel(): void {
-  try {
-    const { llm } = chatProviders();
-    if (!supportsChat(llm) || (llm.id !== "local-server" && llm.id !== "webllm")) return;
-    void llm.chat([{ role: "user", content: "ok" }], { maxTokens: 1 }).catch(() => {});
-  } catch {
-    /* no chat provider yet / not initialised — nothing to warm */
+const WARM_DEBOUNCE_MS = 12_000;
+let warmTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Cancel a pending chat-model warm — called when a render STARTS so warming never
+ * reloads the LLM mid-render (which would steal VRAM from the in-flight image). */
+function cancelChatWarm(): void {
+  if (warmTimer) {
+    clearTimeout(warmTimer);
+    warmTimer = undefined;
   }
+}
+
+function warmChatModel(): void {
+  cancelChatWarm();
+  warmTimer = setTimeout(() => {
+    warmTimer = undefined;
+    try {
+      const { llm } = chatProviders();
+      if (!supportsChat(llm) || (llm.id !== "local-server" && llm.id !== "webllm")) return;
+      void llm.chat([{ role: "user", content: "ok" }], { maxTokens: 1 }).catch(() => {});
+    } catch {
+      /* no chat provider yet / not initialised — nothing to warm */
+    }
+  }, WARM_DEBOUNCE_MS);
 }
 
 // --- Reading-companion chat -------------------------------------------------
@@ -2905,6 +2930,7 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
     // carries the SETTINGS style, so re-apply the resolved override on top of it.
     const baseTier = useBook ? bookProviders!.tier : built.tier;
     const tier = styleId ? { ...baseTier, style: styleId } : baseTier;
+    cancelChatWarm(); // don't let a pending LLM warm steal VRAM from this render
     const out = await renderFromText(image, tier, call.prompt, {
       ...(call.steps ? { stepsOverride: call.steps } : {}),
       ...(call.highRes ? { hires: true } : {}),
