@@ -1069,6 +1069,10 @@ describe("comfyExecutionError + flux2EncoderPatterns (encoder/model mismatch)", 
     const both = ["mistral3-fp8.safetensors", "qwen_3_8b.safetensors"];
     expect(tryNames("flux2-klein-9b.safetensors", both)).toBe("qwen_3_8b.safetensors");
     expect(tryNames("flux2-dev.safetensors", both)).toBe("mistral3-fp8.safetensors");
+    // Variant-specific: Klein must NOT match Z-Image's Qwen-3-4B (different hidden size → crash).
+    expect(tryNames("flux2-klein-9b.safetensors", ["qwen_3_4b.safetensors"])).toBeUndefined();
+    // With both 4B and 8B present, Klein still picks the 8B regardless of order.
+    expect(tryNames("flux2-klein-9b.safetensors", ["qwen_3_4b.safetensors", "qwen_3_8b.safetensors"])).toBe("qwen_3_8b.safetensors");
   });
 });
 
@@ -1289,10 +1293,12 @@ describe("ComfyUI prompt formatting by family", () => {
     );
   });
 
-  it("a non-catalog Klein file falls back to the Qwen-aware Flux.2 heuristic", async () => {
+  it("a non-catalog Klein file picks Qwen-3-8B, not Z-Image's 4B (variant-specific)", async () => {
+    // BOTH a Z-Image 4B and a Klein 8B are installed; Klein must pick the 8B (they have different
+    // hidden sizes → the 4B would crash). A loose /qwen.?3/ used to grab whichever was listed first.
     const t = new FakeTransport((req) => {
       if (req.url.endsWith("/object_info/CLIPLoader"))
-        return { json: { CLIPLoader: { input: { required: { clip_name: [["qwen_3_4b.safetensors"]] } } } } };
+        return { json: { CLIPLoader: { input: { required: { clip_name: [["qwen_3_4b.safetensors", "qwen_3_8b_fp8mixed.safetensors"]] } } } } };
       if (req.url.endsWith("/object_info/VAELoader"))
         return { json: { VAELoader: { input: { required: { vae_name: [["flux2-vae.safetensors"]] } } } } };
       if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
@@ -1301,10 +1307,24 @@ describe("ComfyUI prompt formatting by family", () => {
       return { bytes: png };
     });
     const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
-    await backend.generate(imageInput, "flux-2-klein-4b.safetensors");
+    await backend.generate(imageInput, "my-flux2-klein.safetensors");
     const wf = workflowOf(t);
-    expect(wf["12"]!.inputs).toMatchObject({ clip_name: "qwen_3_4b.safetensors", type: "flux2" });
+    expect(wf["12"]!.inputs).toMatchObject({ clip_name: "qwen_3_8b_fp8mixed.safetensors", type: "flux2" });
     expect(wf["13"]!.inputs.vae_name).toBe("flux2-vae.safetensors");
+  });
+
+  it("a Klein file with ONLY Z-Image's 4B installed errors instead of loading the wrong 4B", async () => {
+    // The reported bug: Klein (9B) was recommended/loaded Z-Image's Qwen-3-4B. Now it refuses and
+    // asks for the right encoder rather than silently building a mismatched graph.
+    const t = new FakeTransport((req) => {
+      if (req.url.endsWith("/object_info/CLIPLoader"))
+        return { json: { CLIPLoader: { input: { required: { clip_name: [["qwen_3_4b.safetensors"]] } } } } };
+      if (req.url.endsWith("/object_info/VAELoader"))
+        return { json: { VAELoader: { input: { required: { vae_name: [["flux2-vae.safetensors"]] } } } } };
+      return { bytes: png };
+    });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
+    await expect(backend.generate(imageInput, "my-flux2-klein.safetensors")).rejects.toThrow(/text encoder/i);
   });
 
   it("modelFamily override forces formatting for a non-catalog checkpoint (beats the filename heuristic)", async () => {
