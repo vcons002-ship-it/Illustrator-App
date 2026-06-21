@@ -1454,6 +1454,11 @@ export function App() {
             setBook(undefined);
             closeBook();
             break;
+          case "vrcmd:settings":
+            // The phone edited settings (it has no engine of its own); apply them here so the
+            // desktop renders with them. Our own change-effect re-mirrors them back to the phone.
+            setSettings(msg.settings);
+            break;
           default:
             break;
         }
@@ -1472,6 +1477,17 @@ export function App() {
   useEffect(() => {
     if (!isRemoteClient) sendAppSync({ type: "vrsync:book", ...(book ? { book } : {}), ...(bible ? { bible } : {}) });
   }, [isRemoteClient, sendAppSync, book, bible]);
+  // Settings edits: on the desktop, apply locally (it owns the engine). On a linked PHONE, also push
+  // the change to the desktop (vrcmd:settings) so the render the phone triggers uses it — the desktop
+  // applies it and re-mirrors it back. (The phone applies the desktop's pushes via setSettings
+  // directly, so this never loops.)
+  const onSettingsChange = useCallback(
+    (next: ReaderSettings) => {
+      setSettings(next);
+      if (isRemoteClient) sendAppSync({ type: "vrcmd:settings", settings: next });
+    },
+    [isRemoteClient, sendAppSync],
+  );
 
   // OCR: read the text out of a scanned image with the configured vision model, then open it
   // as a (technical) document via the paste modal. Reuses the screenshot tool's vision path —
@@ -4543,7 +4559,7 @@ export function App() {
           )}
           <SettingsPanel
             value={settings}
-            onChange={setSettings}
+            onChange={onSettingsChange}
             isDesktop={isDesktop}
             installedModels={installedModels}
             installedTextEncoders={installedTextEncoders}
