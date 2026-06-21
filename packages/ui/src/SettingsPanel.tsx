@@ -292,6 +292,10 @@ export interface SettingsPanelProps {
   onChange: (next: ReaderSettings) => void;
   /** True when running inside the desktop app (enables the local GPU engine). */
   isDesktop?: boolean;
+  /** True when this is a phone LINKED to a desktop: it has no engine of its own, but its edits and
+   * model picks are relayed to the desktop, so it gets the desktop's pickers (downloads stay
+   * desktop-side). The desktop's inventory is mirrored in via installedModels/etc. */
+  remote?: boolean;
   /** Models the running engine has downloaded. */
   installedModels?: InstalledModel[];
   /** Text-encoder files the local engine exposes (for the split-file dropdown). */
@@ -343,6 +347,7 @@ export function SettingsPanel({
   value,
   onChange,
   isDesktop = false,
+  remote = false,
   installedModels = [],
   installedTextEncoders = [],
   installedVaes = [],
@@ -1492,6 +1497,7 @@ export function SettingsPanel({
           {value.imageProvider === "local" && (
             <LocalEngine
               isDesktop={isDesktop}
+              remote={remote}
               installedModels={installedModels}
               backend={value.localBackend ?? "a1111"}
               serverUrl={value.localServerUrl ?? ""}
@@ -2016,6 +2022,7 @@ function StyleLoraRow({
  */
 function LocalEngine({
   isDesktop,
+  remote,
   installedModels,
   backend,
   serverUrl,
@@ -2031,6 +2038,7 @@ function LocalEngine({
   onConnect,
 }: {
   isDesktop: boolean;
+  remote: boolean;
   installedModels: InstalledModel[];
   backend: LocalBackendId;
   serverUrl: string;
@@ -2047,10 +2055,13 @@ function LocalEngine({
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {isDesktop && (
+      {(isDesktop || remote) && (
+        // A linked phone gets the app-managed model PICKER (its pick relays to the desktop), but
+        // not the DOWNLOAD controls — downloading runs on the desktop where the engine lives.
         <ManagedEngine
           installedModels={installedModels}
           selected={selected}
+          allowDownload={isDesktop}
           downloadProgress={downloadProgress}
           downloadStage={downloadStage}
           engineStatus={engineStatus}
@@ -2061,7 +2072,7 @@ function LocalEngine({
       )}
 
       <div style={rowStyle}>
-        <span>{isDesktop ? "Or use your own server" : "Your Stable Diffusion server"}</span>
+        <span>{isDesktop || remote ? "Or use your own server" : "Your Stable Diffusion server"}</span>
         <select value={backend} onChange={(e) => onSet({ localBackend: e.target.value as LocalBackendId })}>
           {(["a1111", "comfyui"] as LocalBackendId[]).map((id) => (
             <option key={id} value={id}>
@@ -2101,6 +2112,7 @@ function LocalEngine({
 function ManagedEngine({
   installedModels,
   selected,
+  allowDownload,
   downloadProgress,
   downloadStage,
   engineStatus,
@@ -2110,6 +2122,9 @@ function ManagedEngine({
 }: {
   installedModels: InstalledModel[];
   selected: string | undefined;
+  /** Whether to show the download controls (desktop only — a linked phone gets the picker only,
+   * since downloads run on the desktop's engine). */
+  allowDownload: boolean;
   downloadProgress: Record<string, number>;
   downloadStage: Record<string, string>;
   engineStatus: string;
@@ -2121,9 +2136,16 @@ function ManagedEngine({
   const installedNames = new Set(installedModels.map((m) => m.id));
   return (
     <div style={rowStyle}>
-      <span>Local model (app-managed)</span>
+      <span>Local model (app-managed){!allowDownload ? " — on the desktop" : ""}</span>
       {engineStatus && <span style={{ opacity: 0.7, fontSize: 12 }}>{engineStatus}</span>}
       <ModelSelect installedModels={installedModels} selected={selected} onSelect={onSelect} />
+      {!allowDownload && (
+        <span style={{ opacity: 0.55, fontSize: 11, marginTop: 2 }}>
+          Pick which installed model the desktop uses. Add new models on the desktop.
+        </span>
+      )}
+      {allowDownload && (
+      <>
       <span style={{ opacity: 0.7, fontSize: 12, marginTop: 4 }}>Download a model — we set up the engine:</span>
       <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 2 }}>
         {LOCAL_IMAGE_MODELS.map((m) => {
@@ -2170,6 +2192,8 @@ function ManagedEngine({
       <span style={{ opacity: 0.55, fontSize: 11 }}>
         You can also drop a checkpoint into the engine’s models/checkpoints folder.
       </span>
+      </>
+      )}
     </div>
   );
 }

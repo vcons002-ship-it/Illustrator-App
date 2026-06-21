@@ -11,7 +11,22 @@
  */
 
 import type { BookSource, BookSummary, VisualBible } from "@visual-reader/core";
-import type { ReaderSettings } from "@visual-reader/ui";
+import type { InstalledModel, ReaderSettings } from "@visual-reader/ui";
+
+/**
+ * The desktop engine's installed inventory, mirrored to the phone so its model/encoder/VAE/LoRA
+ * pickers have the SAME options the desktop has. The phone has no engine of its own to enumerate,
+ * so without this the pickers are empty and the phone is stuck with "whatever is set on desktop".
+ */
+export interface EngineInventory {
+  installedModels: InstalledModel[];
+  installedTextEncoders: string[];
+  installedVaes: string[];
+  installedLoras: string[];
+  loraFamilies: Record<string, string>;
+  textModels: InstalledModel[];
+  engineStatus: string;
+}
 
 /** A full snapshot of what the desktop is showing — sent when a phone first asks (`vrcmd:hello`). */
 export interface MirrorSnapshot {
@@ -19,6 +34,8 @@ export interface MirrorSnapshot {
   host?: string;
   library: BookSummary[];
   settings: ReaderSettings;
+  /** The desktop engine's installed models/components (so the phone's pickers aren't empty). */
+  inventory: EngineInventory;
   /** The currently-open book (undefined when the desktop is on the home screen). */
   book?: BookSource;
   /** The open book's analysis (illustrations/concept cards/charts are anchored from this). */
@@ -30,6 +47,7 @@ export type SyncToPhone =
   | ({ type: "vrsync:state" } & MirrorSnapshot)
   | { type: "vrsync:library"; library: BookSummary[] }
   | { type: "vrsync:settings"; settings: ReaderSettings }
+  | ({ type: "vrsync:inventory" } & EngineInventory)
   | { type: "vrsync:book"; book?: BookSource; bible?: VisualBible };
 
 /** Phone → desktop commands. */
