@@ -1359,6 +1359,156 @@ async fn run_command(
     .map_err(|e| e.to_string())?
 }
 
+// ----------------------------------------------------------- Git worktrees
+//
+// App-managed git worktrees for parallel WRITE-capable coding agents: each agent works in
+// its own worktree+branch so concurrent edits can't collide, and the app (not the model)
+// creates, diffs, merges, and tears them down. All commands shell out to `git` with FIXED
+// args (no shell), reusing the COMMAND_OUTPUT_CAP cap. A baked-in author/committer identity
+// is set via env so commits/merges work even on a machine with no global git config.
+
+#[derive(Serialize)]
+struct WorktreeInfo {
+    path: String,
+    branch: String,
+}
+
+/// Run `git` with fixed args in `dir`; returns the captured result (never spawns a shell).
+fn git(dir: &str, args: &[&str]) -> Result<CommandResult, String> {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_AUTHOR_NAME", "Visual Reader")
+        .env("GIT_AUTHOR_EMAIL", "agent@visual-reader.local")
+        .env("GIT_COMMITTER_NAME", "Visual Reader")
+        .env("GIT_COMMITTER_EMAIL", "agent@visual-reader.local")
+        .output()
+        .map_err(|e| format!("git isn't available: {e}"))?;
+    let cap = |b: &[u8]| String::from_utf8_lossy(b).chars().take(COMMAND_OUTPUT_CAP).collect::<String>();
+    Ok(CommandResult {
+        stdout: cap(&out.stdout),
+        stderr: cap(&out.stderr),
+        code: out.status.code().unwrap_or(-1),
+        timed_out: false,
+    })
+}
+
+/// The repo root for `dir`, or None when it isn't inside a git repo.
+#[tauri::command]
+async fn git_repo_root(dir: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if !std::path::Path::new(&dir).is_dir() {
+            return Ok(None);
+        }
+        let r = git(&dir, &["rev-parse", "--show-toplevel"])?;
+        Ok(if r.code == 0 { Some(r.stdout.trim().to_string()) } else { None })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Ensure `dir` is a git repo (init + an initial empty commit if not), returning its root —
+/// so a plain workspace folder can still host agent worktrees.
+#[tauri::command]
+async fn git_ensure_repo(dir: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let existing = git(&dir, &["rev-parse", "--show-toplevel"])?;
+        if existing.code == 0 {
+            return Ok(existing.stdout.trim().to_string());
+        }
+        git(&dir, &["init"])?;
+        git(&dir, &["add", "-A"])?;
+        // --allow-empty so a brand-new folder still gets a base commit for worktrees to branch from.
+        git(&dir, &["commit", "--allow-empty", "-m", "Visual Reader workspace"])?;
+        let root = git(&dir, &["rev-parse", "--show-toplevel"])?;
+        if root.code != 0 {
+            return Err(format!("couldn't initialize a git repo: {}", root.stderr));
+        }
+        Ok(root.stdout.trim().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Add a worktree + branch for one agent, OUTSIDE the repo (in a temp dir) so it never
+/// pollutes the working tree. Branch names are caller-controlled (e.g. "vr-agent-1").
+#[tauri::command]
+async fn git_worktree_create(repo_dir: String, branch: String) -> Result<WorktreeInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let base = std::env::temp_dir().join("vr-agents");
+        std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+        let path = base.join(&branch);
+        let path_str = path.to_string_lossy().to_string();
+        // Clean up a stale worktree at this path from a previous run (best-effort).
+        let _ = git(&repo_dir, &["worktree", "remove", "--force", &path_str]);
+        let _ = git(&repo_dir, &["branch", "-D", &branch]);
+        let r = git(&repo_dir, &["worktree", "add", &path_str, "-b", &branch])?;
+        if r.code != 0 {
+            return Err(format!("git worktree add failed: {}", r.stderr));
+        }
+        Ok(WorktreeInfo { path: path_str, branch })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Stage + commit everything in `dir` (an agent's worktree, or the base after a conflict
+/// resolution). `--allow-empty` so it never errors when there's nothing to commit.
+#[tauri::command]
+async fn git_commit_all(dir: String, message: String) -> Result<CommandResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git(&dir, &["add", "-A"])?;
+        git(&dir, &["commit", "--allow-empty", "-m", &message])
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// A worktree branch's diff against `base` (name-stat summary + full patch).
+#[tauri::command]
+async fn git_worktree_diff(path: String, base: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let range = format!("{base}...HEAD");
+        let stat = git(&path, &["diff", &range, "--stat"])?;
+        let full = git(&path, &["diff", &range])?;
+        Ok(format!("{}\n{}", stat.stdout.trim(), full.stdout))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Merge an agent branch into the current base (no-ff). Returns the raw git output; the
+/// caller parses "CONFLICT (…): Merge conflict in <file>" lines to detect conflicts.
+#[tauri::command]
+async fn git_merge_branch(repo_dir: String, branch: String) -> Result<CommandResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git(&repo_dir, &["merge", "--no-ff", "--no-edit", &branch])
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Abort an in-progress (conflicted) merge, returning the base to a clean state.
+#[tauri::command]
+async fn git_merge_abort(repo_dir: String) -> Result<CommandResult, String> {
+    tauri::async_runtime::spawn_blocking(move || git(&repo_dir, &["merge", "--abort"]))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Remove an agent worktree + delete its branch (best-effort cleanup after merge).
+#[tauri::command]
+async fn git_worktree_remove(repo_dir: String, path: String, branch: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = git(&repo_dir, &["worktree", "remove", "--force", &path]);
+        let _ = git(&repo_dir, &["branch", "-D", &branch]);
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[derive(Serialize)]
 struct Screenshot {
     #[serde(rename = "bytesBase64")]
@@ -1916,6 +2066,14 @@ fn main() {
             search_files,
             read_file,
             run_command,
+            git_repo_root,
+            git_ensure_repo,
+            git_worktree_create,
+            git_commit_all,
+            git_worktree_diff,
+            git_merge_branch,
+            git_merge_abort,
+            git_worktree_remove,
             capture_screen,
             pick_folder,
             oauth_loopback,
