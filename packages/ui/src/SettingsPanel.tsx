@@ -292,6 +292,53 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
  * picker and the app's auto-select paths (download/connect) so switching models never leaves the
  * previous model's encoder/VAE selected. Pure — returns the next settings.
  */
+/** In-app "Software update": one button that pulls + rebuilds + reloads, with a live status line. */
+function SoftwareUpdateRow({
+  onUpdate,
+}: {
+  onUpdate: (
+    onProgress: (msg: string) => void,
+  ) => Promise<{ status: "uptodate" | "updated" | "needs-restart" | "error"; message: string }>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [line, setLine] = useState("");
+  const [result, setResult] = useState<{ status: string; message: string } | null>(null);
+  const run = async (): Promise<void> => {
+    setBusy(true);
+    setResult(null);
+    setLine("Starting…");
+    try {
+      setResult(await onUpdate(setLine));
+    } catch (e) {
+      setResult({ status: "error", message: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+      setLine("");
+    }
+  };
+  const color =
+    result?.status === "error" ? "#e0716f" : result?.status === "needs-restart" ? "#e0b050" : "#7dd87f";
+  return (
+    <div style={{ ...rowStyle, borderBottom: "1px solid rgba(255,255,255,0.1)", paddingBottom: 10, marginBottom: 2 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <span>⬆ Software update</span>
+        <button style={buttonStyle} disabled={busy} onClick={() => void run()}>
+          {busy ? "Updating…" : "Check & install"}
+        </button>
+      </div>
+      {busy && line ? (
+        <span style={{ opacity: 0.75, fontSize: 12 }}>{line}</span>
+      ) : result ? (
+        <span style={{ fontSize: 12, color }}>{result.message}</span>
+      ) : (
+        <span style={{ opacity: 0.55, fontSize: 11 }}>
+          Pulls the latest version, rebuilds, and reloads. A core update will ask you to fully restart.
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function applyLocalModelComponents(s: ReaderSettings, model: string): ReaderSettings {
   const remembered = s.localComponentsByModel?.[model];
   return {
@@ -362,6 +409,11 @@ export interface SettingsPanelProps {
   pullProgress?: Record<string, { status: string; percent?: number }>;
   /** Ping the sub-agent "worker" endpoint and report whether it's reachable + which models it serves. */
   onTestSubAgentEndpoint?: (url: string) => Promise<{ ok: boolean; models?: string[]; error?: string }>;
+  /** In-app software update (desktop): pull + rebuild + reload. Reports progress; resolves with the
+   * outcome. Absent on the web / older builds (the section is hidden). */
+  onSoftwareUpdate?: (
+    onProgress: (msg: string) => void,
+  ) => Promise<{ status: "uptodate" | "updated" | "needs-restart" | "error"; message: string }>;
 }
 
 export function SettingsPanel({
@@ -392,6 +444,7 @@ export function SettingsPanel({
   googleEmail,
   onConnectGoogle,
   onDisconnectGoogle,
+  onSoftwareUpdate,
 }: SettingsPanelProps) {
   const [open, setOpen] = useState(false);
   // Settings filter: typing hides non-matching groups and force-opens matches.
@@ -462,6 +515,7 @@ export function SettingsPanel({
               aria-label="Filter settings"
             />
           </div>
+          {onSoftwareUpdate && <SoftwareUpdateRow onUpdate={onSoftwareUpdate} />}
           <Group
             q={query}
             title="📖 1 · Read & analyse — text model"

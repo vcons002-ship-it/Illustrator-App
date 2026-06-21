@@ -1409,6 +1409,39 @@ async fn git_repo_root(dir: String) -> Result<Option<String>, String> {
     .map_err(|e| e.to_string())?
 }
 
+/// The Visual Reader SOURCE repo root, located from the running executable (the .bat distribution
+/// runs the app from inside the clone — `cargo tauri dev` from target/debug, a built exe from the
+/// repo tree). Used by the in-app "Software update" button to git-pull + rebuild the web bundle in
+/// place. None when the app isn't inside a git checkout (e.g. a packaged binary moved elsewhere).
+#[tauri::command]
+async fn app_repo_root() -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(p) = exe.parent() {
+                dirs.push(p.to_path_buf());
+            }
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            dirs.push(cwd);
+        }
+        for dir in dirs {
+            let d = dir.to_string_lossy().to_string();
+            if let Ok(r) = git(&d, &["rev-parse", "--show-toplevel"]) {
+                if r.code == 0 {
+                    let root = r.stdout.trim().to_string();
+                    if !root.is_empty() {
+                        return Ok(Some(root));
+                    }
+                }
+            }
+        }
+        Ok(None)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Ensure `dir` is a git repo (init + an initial empty commit if not), returning its root —
 /// so a plain workspace folder can still host agent worktrees.
 #[tauri::command]
@@ -2127,6 +2160,7 @@ fn main() {
             read_file,
             run_command,
             git_repo_root,
+            app_repo_root,
             git_ensure_repo,
             git_worktree_create,
             git_commit_all,

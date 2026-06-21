@@ -217,6 +217,7 @@ import {
   onModelProgress,
   readLocalFile,
   runCommand,
+  appRepoRoot,
   writeWorkspaceFile,
   gitEnsureRepo,
   gitWorktreeCreate,
@@ -1547,6 +1548,55 @@ export function App() {
       if (isRemoteClient) sendAppSync({ type: "vrcmd:settings", settings: next });
     },
     [isRemoteClient, sendAppSync],
+  );
+
+  // In-app software update (desktop): git-pull the latest code, reinstall deps, rebuild the web
+  // bundle, then reload the window to apply it. The app serves apps/web/dist (or Vite in dev), so a
+  // JS/TS update — almost everything — applies on reload without rebuilding the Rust shell; a core
+  // (src-tauri) change is detected and the reader is told to fully relaunch to finish it.
+  const onSoftwareUpdate = useCallback(
+    async (
+      onProgress: (msg: string) => void,
+    ): Promise<{ status: "uptodate" | "updated" | "needs-restart" | "error"; message: string }> => {
+      if (!isDesktop) return { status: "error", message: "Updates need the desktop app." };
+      const token = settings.keys?.github || undefined;
+      const trim = (s: string): string => s.trim().slice(0, 300);
+      const root = await appRepoRoot();
+      if (!root) {
+        return { status: "error", message: "Couldn't find the Visual Reader project folder — update with update.bat instead." };
+      }
+      onProgress("Checking for updates…");
+      const pull = await runCommand("git pull --ff-only", token, root);
+      if (pull.timedOut || pull.code !== 0) {
+        return { status: "error", message: `Couldn't download the update: ${trim(pull.stderr || pull.stdout) || "git pull failed"}. Try update.bat.` };
+      }
+      if (/already up to date/i.test(pull.stdout)) {
+        return { status: "uptodate", message: "You're already on the latest version." };
+      }
+      // What did the pull change? A core/shell (src-tauri) change can't be applied by a reload.
+      const diff = await runCommand("git diff --name-only ORIG_HEAD HEAD", token, root);
+      const coreChanged = /apps\/desktop\/src-tauri\//.test(diff.stdout);
+      onProgress("Installing dependencies…");
+      const install = await runCommand("pnpm install", token, root);
+      if (install.timedOut || install.code !== 0) {
+        return { status: "error", message: `Dependency install failed: ${trim(install.stderr || install.stdout)}. Try update.bat.` };
+      }
+      onProgress("Rebuilding (this can take a minute)…");
+      const build = await runCommand("pnpm -r build", token, root);
+      if (build.timedOut || build.code !== 0) {
+        return { status: "error", message: `Rebuild failed: ${trim(build.stderr || build.stdout)}. Try update.bat.` };
+      }
+      if (coreChanged) {
+        return {
+          status: "needs-restart",
+          message: "Updated! This release also changes the core app — fully close and reopen Visual Reader (run desktop.bat) to finish.",
+        };
+      }
+      onProgress("Reloading…");
+      setTimeout(() => window.location.reload(), 1200);
+      return { status: "updated", message: "Updated — reloading the app…" };
+    },
+    [settings.keys],
   );
 
   // OCR: read the text out of a scanned image with the configured vision model, then open it
@@ -4727,6 +4777,7 @@ export function App() {
             onChange={onSettingsChange}
             isDesktop={isDesktop}
             remote={isRemoteClient}
+            {...(isDesktop ? { onSoftwareUpdate } : {})}
             installedModels={installedModels}
             installedTextEncoders={installedTextEncoders}
             installedVaes={installedVaes}
