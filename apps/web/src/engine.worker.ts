@@ -1183,7 +1183,9 @@ async function renderDefaultsNote(): Promise<string> {
   return (
     `CURRENT APP SETTINGS (applied to every render automatically): ${parts.join(", ")}.` +
     (installed.length ? ` INSTALLED LOCAL IMAGE MODELS: ${installed.join(", ")}.` : "") +
-    ' These defaults are used unless the reader explicitly asks for something different — only then pass "model"/"style" fields, naming a model close to an installed name above.'
+    ' These defaults are used unless the reader EXPLICITLY names a different model IN THEIR MESSAGE — only then pass "model".' +
+    ' When you do, copy the reader\'s OWN WORDS (e.g. "flux 2 klein") or an EXACT name from the installed list above — NEVER invent a filename, guess a different model, or change the ".safetensors" extension.' +
+    " If they didn't name a model, OMIT the model field so their selected model is used."
   );
 }
 
@@ -2872,15 +2874,26 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
     if (call.model && cs.imageProvider === "local") {
       const installed = await installedModelNames(cs);
       const resolved = resolveModelRequest(call.model, installed);
-      if (!resolved) {
+      if (resolved) {
+        cs = { ...cs, localModel: resolved };
+      } else if (!cs.localModel) {
+        // Nothing configured to fall back to — surface the miss so the reader can pick a model.
         throw new Error(
           `no installed image model matches "${call.model}"` +
             (installed.length
               ? ` — installed: ${installed.join(", ")}`
               : " — the local engine lists no models (is it running and connected in Settings?)"),
         );
+      } else {
+        // The named model didn't resolve — usually the CHAT model invented or mis-spelled a
+        // filename (e.g. a ".saftextensors" typo, or the wrong family entirely). Don't dead-end
+        // the render: fall back to the model the reader already selected in Settings, so "generate
+        // an apple" still works with their chosen model instead of failing.
+        console.info(
+          `[visual-reader] generate_image model "${call.model}" matched no installed model — ` +
+            `using the configured local model "${cs.localModel}" instead.`,
+        );
       }
-      cs = { ...cs, localModel: resolved };
     }
     const cfTool = corsFetch();
     const built = buildProviders(cs, cfTool ? { corsFetch: cfTool } : {});
