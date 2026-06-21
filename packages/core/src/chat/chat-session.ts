@@ -140,6 +140,8 @@ export async function runChatTurn(opts: {
   maxTokens?: number;
   onEvent?: (e: ChatTurnEvent) => void;
   signal?: AbortSignal;
+  /** Thinking level for local reasoning models (passed straight to the provider's chat). */
+  reasoningEffort?: "none" | "low" | "medium" | "high";
 }): Promise<ChatTurnOutcome> {
   const messages: ChatTurn[] = [{ role: "system", content: opts.system }, ...opts.history];
   const transcript: ChatTurn[] = [];
@@ -159,6 +161,7 @@ export async function runChatTurn(opts: {
       ...(opts.signal ? { signal: opts.signal } : {}),
       ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
       ...(opts.cachePrefix ? { cachePrefix: opts.cachePrefix } : {}),
+      ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
       onComplete: (m) => {
         lastTruncated = m.truncated;
       },

@@ -1119,6 +1119,24 @@ function warmChatModel(): void {
 
 // --- Reading-companion chat -------------------------------------------------
 
+/** The user's thinking-level setting → the provider's reasoning_effort (undefined = the model's
+ * own default; "off" turns the hidden reasoning pass off on models that support it). Harmless for
+ * cloud + non-thinking local models, which ignore the field. */
+function chatReasoningEffort(s: ReaderSettings | undefined): "none" | "low" | "medium" | "high" | undefined {
+  switch (s?.localThinkingEffort) {
+    case "off":
+      return "none";
+    case "low":
+      return "low";
+    case "medium":
+      return "medium";
+    case "high":
+      return "high";
+    default:
+      return undefined; // "auto" / unset
+  }
+}
+
 /**
  * Settings as the CHAT sees them: the chat's own provider choices (default: local
  * text + local image — free and private) override the book's. "default" follows
@@ -1479,6 +1497,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       cachePrefix: chatSystemCachePrefix(sections),
       history,
       maxTokens: budgets.reply,
+      ...(chatReasoningEffort(settings) ? { reasoningEffort: chatReasoningEffort(settings)! } : {}),
       tools: {
         searchWeb: (q) => imageSearch.searchWeb(q),
         searchImages: (q) => imageSearch.search(q),
@@ -2860,6 +2879,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       cachePrefix: setup,
       history,
       maxTokens: budgets.reply,
+      ...(chatReasoningEffort(settings) ? { reasoningEffort: chatReasoningEffort(settings)! } : {}),
       deps,
       // PARALLEL SUB-AGENTS: the model's `spawn_agents` tool fans independent read-only subtasks out
       // concurrently. Capped by `agentConcurrency` (default 2). TIER ROUTING: when a sub-agent
