@@ -1336,19 +1336,29 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     (call: ToolCall, opts?: { onProgress?: (fraction: number) => void }): Promise<ChatToolRender> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
-        // A dead/HMR worker can't answer — surface a timeout so the approval flow
-        // doesn't spin on "Generating the image…" forever (M5).
-        const timeout = setTimeout(() => {
-          if (chatToolRequests.current.delete(requestId)) {
-            resolve({ error: "The image render timed out — try again." });
-          }
-        }, 180_000);
+        // Only a genuinely dead/HMR worker times out — a SLOW render must not (a Hi-Res / low-VRAM
+        // render can take many minutes, and the worker keeps the job alive via queue-aware polling).
+        // Each progress tick RE-ARMS the deadline, so an actively-rendering job is never killed and
+        // its finished image is never dropped; the long backstop only fires on true silence.
+        let timeout: ReturnType<typeof setTimeout>;
+        const arm = (): void => {
+          clearTimeout(timeout);
+          timeout = setTimeout(() => {
+            if (chatToolRequests.current.delete(requestId)) {
+              resolve({ error: "The image render timed out — the engine stopped responding. Try again." });
+            }
+          }, 1_200_000); // 20 min of SILENCE (no progress, no result) ⇒ the worker/engine is dead
+        };
+        arm();
         chatToolRequests.current.set(requestId, {
           resolve: (r) => {
             clearTimeout(timeout);
             resolve(r);
           },
-          ...(opts?.onProgress ? { onProgress: opts.onProgress } : {}),
+          onProgress: (fraction) => {
+            arm(); // the engine is alive and working — push the deadline out
+            opts?.onProgress?.(fraction);
+          },
         });
         send({ type: "chatTool", requestId, call });
       }),

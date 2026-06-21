@@ -135,6 +135,11 @@ export function clampResolution(
  * second pass stays bounded in VRAM/time regardless of family or requested size. */
 export const HIRES_MAX_DIMENSION = 2048;
 
+/** A LOWER Hi-Res ceiling for Low-VRAM mode. Low-VRAM offloads model weights to system RAM; a full
+ * 2048 second pass on top of that can exhaust system RAM and thrash the page file (the whole PC
+ * stutters). 1536 keeps the upscale useful while much lighter on memory. */
+export const HIRES_MAX_DIMENSION_LOWVRAM = 1536;
+
 /** Second-pass denoise for the Hi-Res upscale. Low enough that the first pass's
  * composition (locked at native res → a single subject) is preserved while the
  * upscaled latent is repainted with real detail. */
@@ -151,10 +156,11 @@ export function hiresTarget(
   family: ModelFamily,
   width: number,
   height: number,
+  maxDimension: number = HIRES_MAX_DIMENSION,
 ): { width: number; height: number } | null {
   const base = clampResolution(family, width, height);
   const longest = Math.max(base.width, base.height);
-  const targetLongest = Math.min(HIRES_MAX_DIMENSION, longest * 2);
+  const targetLongest = Math.min(maxDimension, longest * 2);
   if (targetLongest <= longest) return null;
   const scale = targetLongest / longest;
   const fit = (n: number): number => Math.max(512, Math.round((n * scale) / 8) * 8);
