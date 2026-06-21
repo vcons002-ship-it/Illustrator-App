@@ -199,7 +199,7 @@ import type { LocalTextServerId } from "@visual-reader/core";
 import { loadSampleBook } from "./sample.js";
 import { useEngineWorker, type ImportResult, type TestRenderResult } from "./useEngineWorker.js";
 import { useActivityLog } from "./useActivityLog.js";
-import type { EngineInventory, PlannerMirror, SyncToPhone } from "./remote-sync.js";
+import type { EngineInventory, PlannerCommand, PlannerMirror, SyncToPhone } from "./remote-sync.js";
 import {
   downloadLora,
   downloadModel,
@@ -491,6 +491,12 @@ export function App() {
     if (isRemoteClient) return;
     void loadTaskPlans(libraryStore).then(setTaskPlans).catch(() => {});
   }, [libraryStore, isRemoteClient]);
+  // On a linked phone, Tasks/Calendar actions are RELAYED to the desktop (which owns the data and
+  // re-mirrors the result). Each handler below early-returns through this when isRemoteClient.
+  const sendPlanner = useCallback(
+    (command: PlannerCommand) => sendAppSync({ type: "vrcmd:planner", command }),
+    [sendAppSync],
+  );
   // SURFACE the actionable items a scan found as UNPLANNED stubs — they appear in the task list
   // (and their dates on the calendar) with NO LLM work. Planning happens later (the periodic
   // sweep below, or the per-task "Plan" button). Deduped so a re-scan never adds the same item twice.
@@ -1424,6 +1430,7 @@ export function App() {
     googleConnected: false,
   });
   const applyPlannerRef = useRef<(p: PlannerMirror) => void>(() => {});
+  const plannerCommandRef = useRef<(c: PlannerCommand) => void>(() => {});
   const buildSnapshot = useCallback(
     (): SyncToPhone => ({
       type: "vrsync:state",
@@ -1505,6 +1512,11 @@ export function App() {
             // The phone edited settings (it has no engine of its own); apply them here so the
             // desktop renders with them. Our own change-effect re-mirrors them back to the phone.
             setSettings(msg.settings);
+            break;
+          case "vrcmd:planner":
+            // The phone triggered a Tasks/Calendar action; run it here (we own the data) and the
+            // planner mirror re-pushes the result.
+            plannerCommandRef.current(msg.command);
             break;
           default:
             break;
@@ -3821,6 +3833,77 @@ export function App() {
     [libraryStore, buddySessions, persistSessions, resetBuddyView, refreshTaskPlans],
   );
 
+  // DESKTOP side: run a Tasks/Calendar action the phone relayed (vrcmd:planner). Each maps to the
+  // SAME handler the desktop UI uses, so the result persists + re-mirrors to the phone via
+  // vrsync:planner. Kept in a ref (plannerCommandRef) so the early-registered relay handler reaches it.
+  const runPlannerCommand = useCallback(
+    (c: PlannerCommand) => {
+      switch (c.action) {
+        case "createTask":
+          void onCreateTask(c.title, c.dueIso, c.recurrence, c.planNow);
+          break;
+        case "scanNow":
+          void scanNow();
+          break;
+        case "planPending":
+          void planAllPending();
+          break;
+        case "planTask":
+          void planOneTask(c.id);
+          break;
+        case "openTask":
+          void openTaskInChat(c.id);
+          break;
+        case "advanceStep":
+          void onAdvanceTaskStep(c.planId, c.stepId);
+          break;
+        case "toggleStep":
+          void onToggleStepDone(c.planId, c.stepId, c.done);
+          break;
+        case "ignoreTask":
+          void ignoreTask(c.id);
+          break;
+        case "addDetails":
+          void onAddTaskDetails(c.planId, c.text);
+          break;
+        case "deleteTask":
+          void removeTask(c.id);
+          break;
+        case "restoreTask":
+          void restoreTask(c.id);
+          break;
+        case "deleteForever":
+          void deleteTaskForever(c.id);
+          break;
+        case "calShift":
+          shiftCalendarMonth(c.delta);
+          break;
+        case "createEvent":
+          void onCreateCalendarEvent(c.ev);
+          break;
+      }
+    },
+    [
+      onCreateTask,
+      scanNow,
+      planAllPending,
+      planOneTask,
+      openTaskInChat,
+      onAdvanceTaskStep,
+      onToggleStepDone,
+      ignoreTask,
+      onAddTaskDetails,
+      removeTask,
+      restoreTask,
+      deleteTaskForever,
+      shiftCalendarMonth,
+      onCreateCalendarEvent,
+    ],
+  );
+  useEffect(() => {
+    plannerCommandRef.current = runPlannerCommand;
+  }, [runPlannerCommand]);
+
   // Stable per-index delete handlers (memoised bubbles take the SAME function).
   const onDeleteBuddyMessage = useCallback((index: number) => {
     setBuddyMessages((prev) => prev.filter((_, i) => i !== index));
@@ -5038,25 +5121,38 @@ export function App() {
       )}
 
       {showTasks && (
+        // On a linked phone, every action is RELAYED to the desktop (which owns the planner data and
+        // re-mirrors the result); on the desktop they run locally as before.
         <TasksPanel
           plans={taskPlans}
           planning={planningCount}
           creatingTask={creatingTask}
-          onCreateTask={(title, dueIso, recurrence, planNow) => void onCreateTask(title, dueIso, recurrence, planNow)}
-          {...(googleConnected ? { onScanNow: () => void scanNow(), scanning: scanningNow } : {})}
-          onPlanPending={() => void planAllPending()}
+          onCreateTask={
+            isRemoteClient
+              ? (title, dueIso, recurrence, planNow) =>
+                  sendPlanner({ action: "createTask", title, planNow: planNow ?? true, ...(dueIso ? { dueIso } : {}), ...(recurrence ? { recurrence } : {}) })
+              : (title, dueIso, recurrence, planNow) => void onCreateTask(title, dueIso, recurrence, planNow)
+          }
+          {...(googleConnected
+            ? { onScanNow: isRemoteClient ? () => sendPlanner({ action: "scanNow" }) : () => void scanNow(), scanning: scanningNow }
+            : {})}
+          onPlanPending={isRemoteClient ? () => sendPlanner({ action: "planPending" }) : () => void planAllPending()}
           planningPending={planningCount > 0}
           {...(scanMessage ? { scanMessage } : {})}
           {...(planMessage ? { planMessage } : {})}
-          onPlanTask={(id) => void planOneTask(id)}
-          onOpenTask={(id) => void openTaskInChat(id)}
-          onAdvanceStep={onAdvanceTaskStep}
-          onToggleStepDone={onToggleStepDone}
-          onIgnoreTask={ignoreTask}
-          onAddTaskDetails={(planId, text) => void onAddTaskDetails(planId, text)}
-          onDelete={(id) => void removeTask(id)}
-          onRestore={(id) => void restoreTask(id)}
-          onDeleteForever={(id) => void deleteTaskForever(id)}
+          onPlanTask={isRemoteClient ? (id) => sendPlanner({ action: "planTask", id }) : (id) => void planOneTask(id)}
+          onOpenTask={isRemoteClient ? (id) => sendPlanner({ action: "openTask", id }) : (id) => void openTaskInChat(id)}
+          onAdvanceStep={isRemoteClient ? (planId, stepId) => sendPlanner({ action: "advanceStep", planId, stepId }) : onAdvanceTaskStep}
+          onToggleStepDone={
+            isRemoteClient ? (planId, stepId, done) => sendPlanner({ action: "toggleStep", planId, stepId, done }) : onToggleStepDone
+          }
+          onIgnoreTask={isRemoteClient ? (id) => sendPlanner({ action: "ignoreTask", id }) : ignoreTask}
+          onAddTaskDetails={
+            isRemoteClient ? (planId, text) => sendPlanner({ action: "addDetails", planId, text }) : (planId, text) => void onAddTaskDetails(planId, text)
+          }
+          onDelete={isRemoteClient ? (id) => sendPlanner({ action: "deleteTask", id }) : (id) => void removeTask(id)}
+          onRestore={isRemoteClient ? (id) => sendPlanner({ action: "restoreTask", id }) : (id) => void restoreTask(id)}
+          onDeleteForever={isRemoteClient ? (id) => sendPlanner({ action: "deleteForever", id }) : (id) => void deleteTaskForever(id)}
           onClose={() => setShowTasks(false)}
         />
       )}
@@ -5068,14 +5164,24 @@ export function App() {
           month={calendarMonth}
           loading={calendarLoading}
           {...(calendarError ? { error: calendarError } : {})}
-          onPrev={() => shiftCalendarMonth(-1)}
-          onNext={() => shiftCalendarMonth(1)}
-          onToday={() => shiftCalendarMonth("today")}
+          onPrev={isRemoteClient ? () => sendPlanner({ action: "calShift", delta: -1 }) : () => shiftCalendarMonth(-1)}
+          onNext={isRemoteClient ? () => sendPlanner({ action: "calShift", delta: 1 }) : () => shiftCalendarMonth(1)}
+          onToday={isRemoteClient ? () => sendPlanner({ action: "calShift", delta: "today" }) : () => shiftCalendarMonth("today")}
           onOpenTask={(id) => {
             setShowCalendar(false);
-            void openTaskInChat(id);
+            if (isRemoteClient) sendPlanner({ action: "openTask", id });
+            else void openTaskInChat(id);
           }}
-          {...(googleConnected ? { onCreateEvent: onCreateCalendarEvent } : {})}
+          {...(googleConnected
+            ? {
+                onCreateEvent: isRemoteClient
+                  ? (ev: { summary: string; start: string; end: string; description?: string; location?: string }) => {
+                      sendPlanner({ action: "createEvent", ev });
+                      return Promise.resolve({ ok: true });
+                    }
+                  : onCreateCalendarEvent,
+              }
+            : {})}
           onClose={() => setShowCalendar(false)}
         />
       )}
