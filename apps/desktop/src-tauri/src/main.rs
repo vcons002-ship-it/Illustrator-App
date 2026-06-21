@@ -1500,6 +1500,47 @@ async fn git_merge_abort(repo_dir: String) -> Result<CommandResult, String> {
         .map_err(|e| e.to_string())?
 }
 
+#[derive(Serialize)]
+struct ConflictVersions {
+    base: String,
+    ours: String,
+    theirs: String,
+}
+
+/// The three merge stages of a conflicted file (:1: base, :2: ours, :3: theirs) — fed to the
+/// manager model to auto-resolve. A missing stage (add/delete conflict) yields an empty string.
+#[tauri::command]
+async fn git_conflict_versions(repo_dir: String, file: String) -> Result<ConflictVersions, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let stage = |n: u8| git(&repo_dir, &["show", &format!(":{n}:{file}")]).map(|r| r.stdout).unwrap_or_default();
+        Ok(ConflictVersions { base: stage(1), ours: stage(2), theirs: stage(3) })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Complete a conflicted merge AFTER the host wrote resolved files: stage everything, then REFUSE
+/// (non-zero code) if any path is still unmerged or any staged content still carries conflict
+/// markers (`git diff --cached --check`) — only then commit. So a bad auto-resolution can never be
+/// committed; the caller aborts the merge on a non-zero code.
+#[tauri::command]
+async fn git_complete_merge(repo_dir: String, message: String) -> Result<CommandResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        git(&repo_dir, &["add", "-A"])?;
+        let unmerged = git(&repo_dir, &["ls-files", "-u"])?;
+        if !unmerged.stdout.trim().is_empty() {
+            return Ok(CommandResult { stdout: String::new(), stderr: "files are still unmerged".into(), code: 2, timed_out: false });
+        }
+        let check = git(&repo_dir, &["diff", "--cached", "--check"])?;
+        if check.code != 0 {
+            return Ok(CommandResult { stdout: check.stdout, stderr: "conflict markers remain in the staged content".into(), code: 3, timed_out: false });
+        }
+        git(&repo_dir, &["commit", "--no-edit", "-m", &message])
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Remove an agent worktree + delete its branch (best-effort cleanup after merge).
 #[tauri::command]
 async fn git_worktree_remove(repo_dir: String, path: String, branch: String) -> Result<(), String> {
@@ -2076,6 +2117,8 @@ fn main() {
             git_worktree_diff,
             git_merge_branch,
             git_merge_abort,
+            git_conflict_versions,
+            git_complete_merge,
             git_worktree_remove,
             capture_screen,
             pick_folder,

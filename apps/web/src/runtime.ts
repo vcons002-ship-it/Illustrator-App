@@ -328,6 +328,23 @@ export function gitMergeAbort(repoDir: string): Promise<CommandResult> {
   return invoke<CommandResult>("git_merge_abort", { repoDir });
 }
 
+export interface ConflictVersions {
+  base: string;
+  ours: string;
+  theirs: string;
+}
+
+/** The three merge stages (base/ours/theirs) of a conflicted file, for auto-resolution. */
+export function gitConflictVersions(repoDir: string, file: string): Promise<ConflictVersions> {
+  return invoke<ConflictVersions>("git_conflict_versions", { repoDir, file });
+}
+
+/** Complete a conflicted merge after resolved files were written — REFUSES (non-zero code) if any
+ * path is still unmerged or any staged content carries conflict markers, then commits. */
+export function gitCompleteMerge(repoDir: string, message: string): Promise<CommandResult> {
+  return invoke<CommandResult>("git_complete_merge", { repoDir, message });
+}
+
 /** Remove an agent worktree + delete its branch (best-effort cleanup). */
 export function gitWorktreeRemove(repoDir: string, path: string, branch: string): Promise<void> {
   return invoke<void>("git_worktree_remove", { repoDir, path, branch });

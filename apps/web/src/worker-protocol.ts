@@ -127,6 +127,13 @@ export type MainToWorker =
       agents: { title: string; instructions: string; dir: string }[];
     }
   | { type: "codingAgentCancel"; requestId: number }
+  /** Auto-resolve git merge conflicts with the main model (answered by `conflictsResolved`). */
+  | {
+      type: "resolveConflicts";
+      requestId: number;
+      agentTitle: string;
+      files: { file: string; base: string; ours: string; theirs: string }[];
+    }
   /** The host's result for one agent's host-tool request (answers a worker `agentTool`). */
   | { type: "agentToolResult"; callId: number; result: BuddyToolResultPayload }
   /** Compact a chat: summarize these model-facing turns (answered by `summarized`). */
@@ -255,6 +262,8 @@ export type WorkerToMain =
   | { type: "agentTool"; callId: number; runId: string; agentIdx: number; call: BuddyToolCall; cwd: string }
   /** All coding agents finished: each agent's concise text result (host then merges + reports). */
   | { type: "codingAgentsDone"; requestId: number; results: { title: string; result: string }[]; error?: string }
+  /** Auto-resolved merge conflicts: the merged content per file (host validates + commits). */
+  | { type: "conflictsResolved"; requestId: number; files: { file: string; content: string }[]; error?: string }
   | { type: "error"; message: string }
   /** Incremental assistant text (streaming providers only). */
   | { type: "chatToken"; requestId: number; text: string }

@@ -216,6 +216,9 @@ export interface ReaderSettings {
   /** Windows shell for run_command: "cmd" (default) or "powershell". Ignored on macOS/Linux
    * (always sh). Lets PowerShell-centric workflows run pwsh cmdlets without the `powershell -Command` wrapper. */
   commandShell?: "cmd" | "powershell";
+  /** Parallel coding agents: let the manager model auto-resolve a merge conflict between agent
+   * branches (validated, then committed — or aborted if it can't). Default on. */
+  autoResolveConflicts?: boolean;
   /** Enable GitHub repo work using your OWN local `gh` login (gh auth login) instead
    * of a stored token — so the assistant's GitHub mode turns on without `keys.github`. */
   githubLocalAuth?: boolean;
@@ -1082,6 +1085,24 @@ export function SettingsPanel({
                     <span style={{ opacity: 0.55, fontSize: 11 }}>
                       Which shell runs approved commands on Windows. PowerShell lets the assistant use
                       cmdlets directly. Ignored on macOS/Linux (always <code>sh</code>).
+                    </span>
+                  </label>
+                )}
+                {(value.allowCommands ?? false) && (
+                  <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 6 }}>
+                    <input
+                      type="checkbox"
+                      checked={value.autoResolveConflicts ?? true}
+                      onChange={(e) => set({ autoResolveConflicts: e.target.checked })}
+                    />
+                    <span>
+                      Auto-resolve coding-agent merge conflicts
+                      <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                        When parallel <b>coding agents</b> edit overlapping code, let the main model
+                        merge the conflicting versions automatically. It only commits a resolution that
+                        leaves <b>no conflict markers</b>; if it's unsure it backs out and leaves that
+                        agent's branch for you. On by default.
+                      </span>
                     </span>
                   </label>
                 )}

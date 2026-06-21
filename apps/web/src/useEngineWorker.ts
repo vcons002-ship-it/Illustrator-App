@@ -169,6 +169,12 @@ export interface EngineWorkerApi {
     agents: { title: string; instructions: string; dir: string }[],
     onAgentTool: (call: BuddyToolCall, cwd: string, agentIdx: number) => Promise<BuddyToolResultPayload>,
   ) => Promise<{ results?: { title: string; result: string }[]; error?: string }>;
+  /** Auto-resolve git merge conflicts on the main model — returns the merged content per file
+   * (the caller validates + completes the merge). */
+  resolveConflicts: (
+    agentTitle: string,
+    files: { file: string; base: string; ours: string; theirs: string }[],
+  ) => Promise<{ files?: { file: string; content: string }[]; error?: string }>;
   /** Abort the in-flight chat round, if any. */
   chatCancel: () => void;
   /** Landing-page buddy: one user message (no book open; streams via `onEvent`). */
@@ -398,6 +404,9 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   // worktree (set for the duration of a run; only one run is active at a time — approval is serial).
   const codingAgentsRequests = useRef<
     Map<number, (r: { results?: { title: string; result: string }[]; error?: string }) => void>
+  >(new Map());
+  const conflictRequests = useRef<
+    Map<number, (r: { files?: { file: string; content: string }[]; error?: string }) => void>
   >(new Map());
   const agentToolHandler = useRef<
     ((call: BuddyToolCall, cwd: string, agentIdx: number) => Promise<BuddyToolResultPayload>) | undefined
@@ -668,6 +677,12 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           const resolve = codingAgentsRequests.current.get(msg.requestId);
           codingAgentsRequests.current.delete(msg.requestId);
           resolve?.(msg.error ? { error: msg.error } : { results: msg.results });
+          break;
+        }
+        case "conflictsResolved": {
+          const resolve = conflictRequests.current.get(msg.requestId);
+          conflictRequests.current.delete(msg.requestId);
+          resolve?.(msg.error ? { error: msg.error } : { files: msg.files });
           break;
         }
         case "testRendered": {
@@ -1363,6 +1378,24 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const resolveConflicts = useCallback(
+    (
+      agentTitle: string,
+      files: { file: string; base: string; ours: string; theirs: string }[],
+    ): Promise<{ files?: { file: string; content: string }[]; error?: string }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (conflictRequests.current.delete(requestId)) resolve({ error: "conflict resolution timed out" });
+        }, 5 * 60_000);
+        conflictRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "resolveConflicts", requestId, agentTitle, files });
+      }),
+    [],
+  );
   const chatCancel = useCallback(() => {
     const id = activeChatRequestId.current;
     if (id !== undefined) send({ type: "chatCancel", requestId: id });
@@ -1759,6 +1792,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     assessImage,
     sendBuddyEmail,
     runCodingAgents,
+    resolveConflicts,
     chat,
     chatTool,
     chatCancel,
