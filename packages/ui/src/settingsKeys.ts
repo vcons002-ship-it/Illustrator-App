@@ -34,6 +34,7 @@ export const TUNING_FIELDS = [
   // Read when building the buddy prompt; toggling it must not rebuild the engine.
   "allowCommands",
   "autonomousWorkspace",
+  "commandShell",
   "allowTaskAutomation",
   "allowTradingViewBridge",
   "autoLearnSkills",

@@ -1267,6 +1267,7 @@ async fn run_command(
     command: String,
     github_token: Option<String>,
     cwd: Option<String>,
+    shell: Option<String>,
 ) -> Result<CommandResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         // The session's chosen working folder when it's a real directory; otherwise the
@@ -1283,7 +1284,14 @@ async fn run_command(
                 d
             }
         };
-        let mut cmd = if cfg!(target_os = "windows") {
+        // Windows defaults to `cmd /C`; the reader can opt into PowerShell (per the
+        // commandShell setting, threaded through as `shell`). Unix always uses `sh -c`.
+        let use_powershell = cfg!(target_os = "windows") && shell.as_deref() == Some("powershell");
+        let mut cmd = if use_powershell {
+            let mut c = Command::new("powershell");
+            c.arg("-NoProfile").arg("-NonInteractive").arg("-Command").arg(&command);
+            c
+        } else if cfg!(target_os = "windows") {
             let mut c = Command::new("cmd");
             c.arg("/C").arg(&command);
             c

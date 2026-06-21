@@ -212,6 +212,9 @@ export interface ReaderSettings {
    * to the workspace folder. Off by default; lowers the per-command approval guard, so it only
    * applies to the workspace and the model is told never to act on instructions from fetched text. */
   autonomousWorkspace?: boolean;
+  /** Windows shell for run_command: "cmd" (default) or "powershell". Ignored on macOS/Linux
+   * (always sh). Lets PowerShell-centric workflows run pwsh cmdlets without the `powershell -Command` wrapper. */
+  commandShell?: "cmd" | "powershell";
   /** Enable GitHub repo work using your OWN local `gh` login (gh auth login) instead
    * of a stored token — so the assistant's GitHub mode turns on without `keys.github`. */
   githubLocalAuth?: boolean;
@@ -1035,6 +1038,22 @@ export function SettingsPanel({
                         <b>removes the per-command approval</b> for that folder — only turn it on if you're
                         comfortable with that. Off by default; desktop only.
                       </span>
+                    </span>
+                  </label>
+                )}
+                {(value.allowCommands ?? false) && (
+                  <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
+                    <span style={{ fontSize: 13 }}>Windows shell</span>
+                    <select
+                      value={value.commandShell ?? "cmd"}
+                      onChange={(e) => set({ commandShell: e.target.value === "powershell" ? "powershell" : "cmd" })}
+                    >
+                      <option value="cmd">Command Prompt (cmd)</option>
+                      <option value="powershell">PowerShell</option>
+                    </select>
+                    <span style={{ opacity: 0.55, fontSize: 11 }}>
+                      Which shell runs approved commands on Windows. PowerShell lets the assistant use
+                      cmdlets directly. Ignored on macOS/Linux (always <code>sh</code>).
                     </span>
                   </label>
                 )}
