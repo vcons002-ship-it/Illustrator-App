@@ -279,6 +279,58 @@ export function writeWorkspaceFile(relPath: string, content: string, cwd?: strin
   return invoke<string>("write_workspace_file", { relPath, contentBase64, ...(cwd ? { cwd } : {}) });
 }
 
+// ----------------------------------------------------------- Git worktrees
+//
+// App-managed worktrees for parallel write-capable coding agents — the host owns the whole
+// lifecycle (create → diff → merge → cleanup), so branches are never the reader's problem.
+// All desktop-only; reject on the web.
+
+export interface WorktreeInfo {
+  path: string;
+  branch: string;
+}
+
+/** The git repo root for a folder, or undefined when it isn't a repo (or on the web). */
+export async function gitRepoRoot(dir: string): Promise<string | undefined> {
+  if (!isDesktop) return undefined;
+  return (await invoke<string | null>("git_repo_root", { dir })) ?? undefined;
+}
+
+/** Ensure a folder is a git repo (init + base commit if needed); returns its root. */
+export function gitEnsureRepo(dir: string): Promise<string> {
+  return invoke<string>("git_ensure_repo", { dir });
+}
+
+/** Create a worktree + branch for one agent (outside the repo); returns its path. */
+export function gitWorktreeCreate(repoDir: string, branch: string): Promise<WorktreeInfo> {
+  return invoke<WorktreeInfo>("git_worktree_create", { repoDir, branch });
+}
+
+/** Stage + commit everything in a folder (agent worktree, or base after a resolve). */
+export function gitCommitAll(dir: string, message: string): Promise<CommandResult> {
+  return invoke<CommandResult>("git_commit_all", { dir, message });
+}
+
+/** A worktree branch's diff against base (stat + full patch). */
+export function gitWorktreeDiff(path: string, base: string): Promise<string> {
+  return invoke<string>("git_worktree_diff", { path, base });
+}
+
+/** Merge an agent branch into base (no-ff); returns raw git output to parse for conflicts. */
+export function gitMergeBranch(repoDir: string, branch: string): Promise<CommandResult> {
+  return invoke<CommandResult>("git_merge_branch", { repoDir, branch });
+}
+
+/** Abort an in-progress (conflicted) merge, restoring a clean base. */
+export function gitMergeAbort(repoDir: string): Promise<CommandResult> {
+  return invoke<CommandResult>("git_merge_abort", { repoDir });
+}
+
+/** Remove an agent worktree + delete its branch (best-effort cleanup). */
+export function gitWorktreeRemove(repoDir: string, path: string, branch: string): Promise<void> {
+  return invoke<void>("git_worktree_remove", { repoDir, path, branch });
+}
+
 /** Native "choose a folder" dialog (desktop). Resolves to the path, or undefined on
  * cancel / on the web. */
 export async function pickFolder(): Promise<string | undefined> {
