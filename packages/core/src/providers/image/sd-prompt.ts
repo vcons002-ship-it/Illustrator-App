@@ -140,17 +140,42 @@ export const HIRES_MAX_DIMENSION = 2048;
  * stutters). 1536 keeps the upscale useful while much lighter on memory. */
 export const HIRES_MAX_DIMENSION_LOWVRAM = 1536;
 
+/** Heavy diffusion-transformer families (~12–20B weights + large encoders: Flux.2, Qwen-Image,
+ * HiDream) cap their Hi-Res second pass a notch under 2048 even with VRAM headroom — 2048 on these
+ * is a steep memory jump for marginal extra detail. */
+export const HIRES_MAX_DIMENSION_HEAVY = 1792;
+
+/** Linear upscale factor for the Hi-Res second pass. ~1.5× (≈2.25× the pixels) is the range a
+ * low-denoise refine pass holds WITHOUT re-introducing the duplicate subjects that full-res
+ * generation causes — so weaker models (SD/SDXL/HiDream) aren't pushed past what they render
+ * coherently, while a memory ceiling still bounds the big models. */
+export const HIRES_UPSCALE_FACTOR = 1.5;
+
 /** Second-pass denoise for the Hi-Res upscale. Low enough that the first pass's
  * composition (locked at native res → a single subject) is preserved while the
  * upscaled latent is repainted with real detail. */
 export const HIRES_DENOISE = 0.5;
 
+/** The Hi-Res ceiling for a family + memory mode: Low-VRAM (weights in system RAM) keeps it light;
+ * the heavy DiT families stay a notch under 2048; everything else can reach 2048. */
+export function hiresCeiling(family: ModelFamily, lowVram?: boolean): number {
+  if (lowVram) return HIRES_MAX_DIMENSION_LOWVRAM;
+  switch (family) {
+    case "flux2":
+    case "qwenimage":
+    case "hidream":
+      return HIRES_MAX_DIMENSION_HEAVY;
+    default:
+      return HIRES_MAX_DIMENSION;
+  }
+}
+
 /**
  * Target resolution for the Hi-Res two-pass path: render at the family's native-safe
  * size (so the composition stays coherent — no duplicated subjects), then upscale the
- * latent ~2× toward the {@link HIRES_MAX_DIMENSION} ceiling and refine. Aspect ratio is
- * taken from the request. Returns null when the native size already meets/exceeds the
- * ceiling (nothing to gain from a second pass — the caller renders single-pass).
+ * latent ~1.5× (model-dependent, anchored to the family's native max), bounded by the
+ * memory ceiling. Aspect ratio is taken from the request. Returns null when the native
+ * size already meets the ceiling (nothing to gain — the caller renders single-pass).
  */
 export function hiresTarget(
   family: ModelFamily,
@@ -160,7 +185,7 @@ export function hiresTarget(
 ): { width: number; height: number } | null {
   const base = clampResolution(family, width, height);
   const longest = Math.max(base.width, base.height);
-  const targetLongest = Math.min(maxDimension, longest * 2);
+  const targetLongest = Math.min(maxDimension, Math.round(longest * HIRES_UPSCALE_FACTOR));
   if (targetLongest <= longest) return null;
   const scale = targetLongest / longest;
   const fit = (n: number): number => Math.max(512, Math.round((n * scale) / 8) * 8);
