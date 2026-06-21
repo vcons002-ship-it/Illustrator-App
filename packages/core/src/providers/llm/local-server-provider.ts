@@ -166,6 +166,7 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
     if (opts.onToken) {
       let full = "";
       let emitted = 0;
+      let truncated = false;
       await streamSse(this.fetchImpl, `${this.baseUrl}/chat/completions`, {
         headers: this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
         body: {
@@ -178,6 +179,10 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
         },
         ...(opts.signal ? { signal: opts.signal } : {}),
         onEvent: (e) => {
+          // The final SSE chunk carries finish_reason "length" when the server cut us off at
+          // max_tokens — surfaced so the loop can continue a long answer in another pass.
+          const fr = (e as { choices?: { finish_reason?: string }[] }).choices?.[0]?.finish_reason;
+          if (fr === "length") truncated = true;
           const delta = (e as { choices?: { delta?: { content?: string } }[] }).choices?.[0]?.delta
             ?.content;
           if (!delta) return;
@@ -199,8 +204,11 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
           `Local LLM server stream failed with ${err instanceof Error ? err.message : String(err)}`,
         );
       });
+      opts.onComplete?.({ truncated });
       return stripThink(full).trim();
     }
+    // Non-streaming path (no onToken) — used rarely; the chat/buddy loop always streams, so
+    // continuation (onComplete) rides the streaming branch above.
     const text = await this.complete(messages, {
       json: false,
       maxTokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,

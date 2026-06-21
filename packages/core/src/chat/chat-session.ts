@@ -10,6 +10,10 @@ import {
   type ToolResultPayload,
 } from "./chat-tools.js";
 
+/** Extra passes a single answer may be CONTINUED when the model is cut off at the budget (mirrors
+ * runBuddyTurn) — a long document is stitched across passes rather than capped at one reply. */
+const MAX_REPLY_CONTINUATIONS = 8;
+
 /**
  * One user-message round of the chat, including the tool loop — worker-agnostic
  * and fully testable with a scripted ChatCapable. Search tools execute inline
@@ -139,11 +143,11 @@ export async function runChatTurn(opts: {
   const messages: ChatTurn[] = [{ role: "system", content: opts.system }, ...opts.history];
   const transcript: ChatTurn[] = [];
   const toolResults: ChatTurnOutcome["toolResults"] = [];
+  let lastTruncated = false; // did the last reply get CUT OFF at the budget? (→ auto-continue)
 
-  for (let round = 0; ; round++) {
-    // Heartbeat so a muted/thinking round never looks frozen (see runBuddyTurn).
-    opts.onEvent?.({ kind: "activity", text: round === 0 ? "Thinking…" : "Working on it…" });
-    const reply = await opts.llm.chat(messages, {
+  const chatOnce = (): Promise<string> => {
+    lastTruncated = false;
+    return opts.llm.chat(messages, {
       // Fresh gate per round: a tool-JSON round streams nothing; the prose round streams live.
       ...(opts.onEvent
         ? {
@@ -154,11 +158,36 @@ export async function runChatTurn(opts: {
       ...(opts.signal ? { signal: opts.signal } : {}),
       ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
       ...(opts.cachePrefix ? { cachePrefix: opts.cachePrefix } : {}),
+      onComplete: (m) => {
+        lastTruncated = m.truncated;
+      },
     });
+  };
+
+  for (let round = 0; ; round++) {
+    // Heartbeat so a muted/thinking round never looks frozen (see runBuddyTurn).
+    opts.onEvent?.({ kind: "activity", text: round === 0 ? "Thinking…" : "Working on it…" });
+    const reply = await chatOnce();
     const call = round < MAX_TOOL_ROUNDS ? parseToolCall(reply) : undefined;
     if (!call) {
-      transcript.push({ role: "assistant", content: reply });
-      return { text: reply, transcript, toolResults };
+      // AUTO-CONTINUE a CUT-OFF answer and stitch the parts so a long document isn't capped at one
+      // reply (mirrors runBuddyTurn). Pure prose only — a final answer never carries a tool call.
+      let answer = reply;
+      let rawSoFar = reply;
+      for (let part = 0; lastTruncated && part < MAX_REPLY_CONTINUATIONS; part++) {
+        opts.onEvent?.({ kind: "activity", text: `Writing the answer… (part ${part + 2})` });
+        messages.push({ role: "assistant", content: rawSoFar });
+        messages.push({
+          role: "user",
+          content:
+            "[You hit the length limit mid-answer. Continue EXACTLY where you left off — no repetition, " +
+            "no preamble and no tool calls — until the answer is complete.]",
+        });
+        rawSoFar = await chatOnce();
+        if (rawSoFar.trim()) answer = answer ? `${answer}\n${rawSoFar.trim()}` : rawSoFar.trim();
+      }
+      transcript.push({ role: "assistant", content: answer });
+      return { text: answer, transcript, toolResults };
     }
     opts.onEvent?.({ kind: "tool", round, call });
     transcript.push({ role: "assistant", content: reply });
