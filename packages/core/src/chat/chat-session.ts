@@ -10,8 +10,9 @@ import {
   type ToolResultPayload,
 } from "./chat-tools.js";
 
-/** Extra passes a single answer may be CONTINUED when the model is cut off at the budget (mirrors
- * runBuddyTurn) — a long document is stitched across passes rather than capped at one reply. */
+/** Safety cap on auto-continue passes (mirrors runBuddyTurn) — bounds a runaway/looping model, NOT
+ * the content: at ~30k tokens/pass it's hundreds of thousands of tokens, and hitting it ends with a
+ * "say continue" note rather than a silent cut. */
 const MAX_REPLY_CONTINUATIONS = 8;
 
 /**
@@ -185,6 +186,9 @@ export async function runChatTurn(opts: {
         });
         rawSoFar = await chatOnce();
         if (rawSoFar.trim()) answer = answer ? `${answer}\n${rawSoFar.trim()}` : rawSoFar.trim();
+      }
+      if (lastTruncated) {
+        answer += '\n\n_(This is running very long — I paused here. Say "continue" and I\'ll pick up where I left off.)_';
       }
       transcript.push({ role: "assistant", content: answer });
       return { text: answer, transcript, toolResults };

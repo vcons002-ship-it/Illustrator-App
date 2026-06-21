@@ -213,6 +213,23 @@ describe("runBuddyTurn", () => {
     expect(outcome.text).toBe("All done in one go.");
   });
 
+  it("stops at the per-turn safety cap with a 'continue' note (never a silent cut)", async () => {
+    let n = 0;
+    const llm: ChatCapable = {
+      async chat(_messages, opts) {
+        n++;
+        opts?.onComplete?.({ truncated: true }); // a model that never finishes
+        return `chunk${n} `;
+      },
+    };
+    const outcome = await runBuddyTurn({ llm, system: "sys", history: [{ role: "user", content: "write forever" }], deps: baseDeps });
+    // 1 initial reply + MAX_REPLY_CONTINUATIONS (8) passes, then it stops — bounded, not infinite.
+    expect(n).toBe(9);
+    // The reader is told it paused and can continue — the answer is never silently truncated.
+    expect(outcome.text).toMatch(/continue/i);
+    expect(outcome.text).toContain("chunk1");
+  });
+
   it("runs a search → open → prose flow, emitting events and the right deps", async () => {
     const llm = scriptedLlm([
       '{"tool":"search_books","query":"frankenstein"}',
