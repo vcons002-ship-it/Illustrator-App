@@ -274,6 +274,21 @@ export function runCommand(
 }
 
 /**
+ * The Visual Reader SOURCE repo root (the clone the app runs from), or undefined on the web / when
+ * the app isn't inside a git checkout. Used by the in-app "Software update" button to git-pull +
+ * rebuild the web bundle in place. Best-effort: returns undefined rather than throwing on older
+ * builds without the command.
+ */
+export async function appRepoRoot(): Promise<string | undefined> {
+  if (!isDesktop) return undefined;
+  try {
+    return (await invoke<string | null>("app_repo_root")) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Write a file the assistant authored (a script, data, config) INTO the desktop workspace so it can
  * then be run via {@link runCommand}. `relPath` is workspace-relative; the Rust side sanitizes it so
  * it can never escape the workspace folder. `cwd` pins the session's chosen working folder (else the
