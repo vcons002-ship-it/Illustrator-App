@@ -1371,6 +1371,8 @@ async fn run_command(
 struct WorktreeInfo {
     path: String,
     branch: String,
+    /// The base commit the worktree branched from — the diff/merge reference.
+    base: String,
 }
 
 /// Run `git` with fixed args in `dir`; returns the captured result (never spawns a shell).
@@ -1443,11 +1445,12 @@ async fn git_worktree_create(repo_dir: String, branch: String) -> Result<Worktre
         // Clean up a stale worktree at this path from a previous run (best-effort).
         let _ = git(&repo_dir, &["worktree", "remove", "--force", &path_str]);
         let _ = git(&repo_dir, &["branch", "-D", &branch]);
+        let base = git(&repo_dir, &["rev-parse", "HEAD"])?;
         let r = git(&repo_dir, &["worktree", "add", &path_str, "-b", &branch])?;
         if r.code != 0 {
             return Err(format!("git worktree add failed: {}", r.stderr));
         }
-        Ok(WorktreeInfo { path: path_str, branch })
+        Ok(WorktreeInfo { path: path_str, branch, base: base.stdout.trim().to_string() })
     })
     .await
     .map_err(|e| e.to_string())?

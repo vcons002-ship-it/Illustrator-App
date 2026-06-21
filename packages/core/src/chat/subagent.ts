@@ -19,6 +19,28 @@ export function buildDelegatePrompt(task: string): string {
 }
 
 /**
+ * Turn an ordinary buddy turn into a WRITE-capable CODING sub-agent, scoped to its own git
+ * worktree at `dir`. Unlike {@link buildDelegatePrompt} it MAY write + run commands (in `dir`),
+ * but it must NOT fan out further or touch anything outside its worktree, so parallel agents stay
+ * independent and the app can merge each one's branch cleanly.
+ */
+export function buildCodingAgentPrompt(task: { title: string; instructions: string }, dir: string): string {
+  return (
+    "You are a focused CODING SUB-AGENT working IN PARALLEL with other agents. You have your OWN " +
+    `isolated git worktree at:\n  ${dir}\n` +
+    "Everything you do happens THERE — write_file and run_command are already scoped to this folder " +
+    "(use workspace-relative paths). Rules:\n" +
+    "- Do ONLY your assigned subtask; stay within your worktree; do NOT touch unrelated files.\n" +
+    "- Build it, then VERIFY with run_command (run the build/tests/script) and fix until it works.\n" +
+    "- Do NOT spawn more agents, change app settings, send email, or do git branch/merge work — the " +
+    "app handles committing and merging your worktree back.\n" +
+    "- When done, reply with a CONCISE summary of what you changed (files + what each does) so the " +
+    "manager can review and merge it.\n\n" +
+    `SUBTASK: ${task.title.trim()}\n${task.instructions.trim()}`
+  );
+}
+
+/**
  * Run `fn` over `items` with at most `limit` in flight at once — a tiny concurrency pool used to
  * fan independent sub-agents (or any latency-tolerant unit of work) out in parallel without
  * unbounded load. Preserves input ORDER in the result. A failing item resolves to whatever `fn`'s

@@ -57,6 +57,9 @@ import {
   updateTaskStep,
   resolveActiveTaskPlanId,
   sessionLabelForPlan,
+  agentBranchName,
+  parseGitConflicts,
+  countChangedFiles,
   loadScheduledTasks,
   upsertScheduledTask,
   deleteScheduledTask,
@@ -131,6 +134,7 @@ import {
   type ChapterDataset,
   type BuddyPersona,
   type BuddyToolCall,
+  type BuddyToolResultPayload,
   type ChatTurn,
   type ContextUsage,
   type EncryptedSecrets,
@@ -212,6 +216,13 @@ import {
   readLocalFile,
   runCommand,
   writeWorkspaceFile,
+  gitEnsureRepo,
+  gitWorktreeCreate,
+  gitCommitAll,
+  gitWorktreeDiff,
+  gitMergeBranch,
+  gitMergeAbort,
+  gitWorktreeRemove,
   pickFolder,
   googleOauthLoopback,
   tvBridgeEval,
@@ -355,6 +366,7 @@ export function App() {
     testRender,
     assessImage,
     sendBuddyEmail,
+    runCodingAgents,
     chat,
     chatTool,
     chatCancel,
@@ -2701,6 +2713,116 @@ export function App() {
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
+  // Execute ONE coding-agent host tool in the agent's worktree `cwd` (Phase 1: autonomous, no
+  // per-step click). run_command + write_file are the writers; anything else is declined so the
+  // agent adapts. Returns the structured result the worker feeds back into that agent's loop.
+  const executeAgentTool = async (
+    call: BuddyToolCall,
+    cwd: string,
+  ): Promise<BuddyToolResultPayload> => {
+    if (call.tool === "run_command") {
+      const r = await runCommand(call.command, settings.keys?.github || undefined, cwd, settings.commandShell);
+      return { command: r };
+    }
+    if (call.tool === "write_file") {
+      try {
+        const saved = await writeWorkspaceFile(call.path, call.content, cwd);
+        return { writeFile: { path: saved, ok: true } };
+      } catch (err) {
+        return { writeFile: { path: call.path, ok: false, error: err instanceof Error ? err.message : String(err) } };
+      }
+    }
+    return { error: `the "${call.tool}" tool isn't available to a coding agent — use run_command (e.g. ls/grep) or write_file in your worktree` };
+  };
+
+  // Approved spawn_coding_agents: create a git worktree per task, run the write-capable agents in
+  // parallel, then the APP commits + diffs + merges each branch back (cleaning up) and reports.
+  const approveSpawnCodingAgents = async (
+    call: Extract<BuddyToolCall, { tool: "spawn_coding_agents" }>,
+  ): Promise<void> => {
+    setBuddyPendingTool(undefined);
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+    const bail = async (note: string): Promise<void> => {
+      const feedback = `[spawn_coding_agents unavailable: ${note}]`;
+      appendBuddy({ role: "tool", text: `🔒 ${note}`, turns: [...pre, { role: "user", content: feedback }] });
+      await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+    };
+    if (!isDesktop) return bail("coding agents need the desktop app");
+    if (!(settings.allowCommands && settings.autonomousWorkspace))
+      return bail("turn on Autonomous workspace (Settings → assistant abilities) to let coding agents write + run");
+    if (!buddyWorkingDir)
+      return bail("pick a working folder for this chat first (the folder icon) so the agents have a project to work in");
+
+    setBuddyBusy(true);
+    setBuddyActivity("Setting up coding agents…");
+    const runId = Date.now().toString(36);
+    let root: string;
+    try {
+      root = await gitEnsureRepo(buddyWorkingDir);
+    } catch (err) {
+      setBuddyBusy(false);
+      return bail(`couldn't prepare a git repo: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    // One worktree+branch per task.
+    const created: { title: string; instructions: string; path: string; branch: string; base: string }[] = [];
+    try {
+      for (let i = 0; i < call.tasks.length; i++) {
+        const info = await gitWorktreeCreate(root, agentBranchName(i, runId));
+        created.push({ ...call.tasks[i]!, path: info.path, branch: info.branch, base: info.base });
+      }
+    } catch (err) {
+      for (const c of created) await gitWorktreeRemove(root, c.path, c.branch).catch(() => {});
+      setBuddyBusy(false);
+      return bail(`couldn't create agent worktrees: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    setBuddyActivity(`Running ${created.length} coding agents…`);
+    const run = await runCodingAgents(
+      runId,
+      created.map((c) => ({ title: c.title, instructions: c.instructions, dir: c.path })),
+      executeAgentTool,
+    );
+    const resultFor = (title: string): string =>
+      run.results?.find((r) => r.title === title)?.result ?? "(no summary returned)";
+
+    // App-managed merge: commit each worktree, diff it, merge its branch into the working tree.
+    setBuddyActivity("Merging agents' work…");
+    const outcomes: NonNullable<BuddyToolResultPayload["codingAgents"]> = [];
+    for (const c of created) {
+      let merge: "merged" | "resolved" | "conflict" | "failed" = "failed";
+      let changedFiles = 0;
+      try {
+        await gitCommitAll(c.path, `agent: ${c.title}`);
+        changedFiles = countChangedFiles(await gitWorktreeDiff(c.path, c.base));
+        const m = await gitMergeBranch(root, c.branch);
+        if (m.code === 0) merge = "merged";
+        else {
+          // Phase 1: don't auto-resolve — abort so the working tree stays clean, leave the branch.
+          merge = parseGitConflicts(`${m.stdout}\n${m.stderr}`).length ? "conflict" : "failed";
+          await gitMergeAbort(root).catch(() => {});
+        }
+      } catch {
+        merge = "failed";
+      }
+      if (merge === "merged") await gitWorktreeRemove(root, c.path, c.branch).catch(() => {});
+      outcomes.push({ title: c.title, result: resultFor(c.title), merge, ...(changedFiles ? { changedFiles } : {}) });
+    }
+
+    setBuddyBusy(false);
+    setBuddyActivity("");
+    const mergedCount = outcomes.filter((o) => o.merge === "merged" || o.merge === "resolved").length;
+    const feedback = formatBuddyToolResult(call, { codingAgents: outcomes });
+    appendBuddy({
+      role: "tool",
+      text: `🤖 Coding agents: ${mergedCount}/${outcomes.length} merged into your working tree.`,
+      turns: [...pre, { role: "user", content: feedback }],
+    });
+    await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+  };
+
   // write_file (Autonomous workspace): save the file the model authored into the workspace, then
   // feed the result back so it can run_command it. Mirrors approveRunCommand; runs without a click.
   const runWriteFile = async (call: Extract<BuddyToolCall, { tool: "write_file" }>): Promise<void> => {
@@ -3360,6 +3482,10 @@ export function App() {
     }
     if (call?.tool === "send_email") {
       void approveSendEmail(call);
+      return;
+    }
+    if (call?.tool === "spawn_coding_agents") {
+      void approveSpawnCodingAgents(call);
       return;
     }
     if (!call || call.tool !== "generate_image") return;

@@ -288,6 +288,8 @@ export function writeWorkspaceFile(relPath: string, content: string, cwd?: strin
 export interface WorktreeInfo {
   path: string;
   branch: string;
+  /** The base commit the worktree branched from — the diff/merge reference. */
+  base: string;
 }
 
 /** The git repo root for a folder, or undefined when it isn't a repo (or on the web). */
