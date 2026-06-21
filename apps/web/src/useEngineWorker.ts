@@ -431,6 +431,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     Map<number, { resolve: (r: ChatToolRender) => void; onProgress?: (fraction: number) => void }>
   >(new Map());
   const activeChatRequestId = useRef<number | undefined>(undefined);
+  // The in-flight standalone image render (a chatTool/buddy approved generate_image, or a
+  // playground testRender). It runs under its OWN requestId — NOT activeChatRequestId — so the Stop
+  // button must cancel THIS too, or a long render keeps going after Stop.
+  const activeRenderRequestId = useRef<number | undefined>(undefined);
   // In-flight buddy rounds (landing page), keyed by requestId like chatRequests.
   const buddyRequests = useRef<
     Map<
@@ -1273,8 +1277,12 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     ): Promise<TestRenderResult> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
+        activeRenderRequestId.current = requestId; // so Stop can interrupt this render
         testRequests.current.set(requestId, {
-          resolve,
+          resolve: (r) => {
+            if (activeRenderRequestId.current === requestId) activeRenderRequestId.current = undefined;
+            resolve(r);
+          },
           ...(opts?.onProgress ? { onProgress: opts.onProgress } : {}),
         });
         send({
@@ -1336,25 +1344,28 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     (call: ToolCall, opts?: { onProgress?: (fraction: number) => void }): Promise<ChatToolRender> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
+        activeRenderRequestId.current = requestId; // so Stop can interrupt this render
         // Only a genuinely dead/HMR worker times out — a SLOW render must not (a Hi-Res / low-VRAM
         // render can take many minutes, and the worker keeps the job alive via queue-aware polling).
         // Each progress tick RE-ARMS the deadline, so an actively-rendering job is never killed and
         // its finished image is never dropped; the long backstop only fires on true silence.
         let timeout: ReturnType<typeof setTimeout>;
+        const done = (r: ChatToolRender): void => {
+          clearTimeout(timeout);
+          if (activeRenderRequestId.current === requestId) activeRenderRequestId.current = undefined;
+          resolve(r);
+        };
         const arm = (): void => {
           clearTimeout(timeout);
           timeout = setTimeout(() => {
             if (chatToolRequests.current.delete(requestId)) {
-              resolve({ error: "The image render timed out — the engine stopped responding. Try again." });
+              done({ error: "The image render timed out — the engine stopped responding. Try again." });
             }
           }, 1_200_000); // 20 min of SILENCE (no progress, no result) ⇒ the worker/engine is dead
         };
         arm();
         chatToolRequests.current.set(requestId, {
-          resolve: (r) => {
-            clearTimeout(timeout);
-            resolve(r);
-          },
+          resolve: done,
           onProgress: (fraction) => {
             arm(); // the engine is alive and working — push the deadline out
             opts?.onProgress?.(fraction);
@@ -1432,6 +1443,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const chatCancel = useCallback(() => {
     const id = activeChatRequestId.current;
     if (id !== undefined) send({ type: "chatCancel", requestId: id });
+    // Also interrupt a standalone image render in flight (an approved generate_image runs under its
+    // OWN requestId, after the chat turn ended — so cancelling only the turn left it rendering).
+    const rid = activeRenderRequestId.current;
+    if (rid !== undefined) send({ type: "chatCancel", requestId: rid });
   }, []);
   const buddyChat = useCallback(
     (
@@ -1479,6 +1494,9 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const buddyCancel = useCallback(() => {
     const id = activeBuddyRequestId.current;
     if (id !== undefined) send({ type: "chatCancel", requestId: id });
+    // Also interrupt a standalone image render the buddy kicked off (runs under its own requestId).
+    const rid = activeRenderRequestId.current;
+    if (rid !== undefined) send({ type: "chatCancel", requestId: rid });
   }, []);
   const summarize = useCallback(
     (turns: ChatTurn[]): Promise<{ text?: string; error?: string }> =>

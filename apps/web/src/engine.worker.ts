@@ -944,6 +944,8 @@ async function handleTestRender(
   denoise?: number,
   size?: { width: number; height: number },
 ): Promise<void> {
+  const ac = new AbortController();
+  chatAborts.set(requestId, ac); // so a Stop (chatCancel for this requestId) interrupts the render
   try {
     if (!settings) throw new Error("Settings not initialised yet.");
     cancelChatWarm(); // don't let a pending LLM warm steal VRAM from this render
@@ -952,6 +954,7 @@ async function handleTestRender(
       ...(initImage ? { initImage } : {}),
       ...(denoise !== undefined ? { denoise } : {}),
       ...(size ? { width: size.width, height: size.height } : {}),
+      signal: ac.signal,
       onProgress: (fraction) => post({ type: "testProgress", requestId, fraction }),
     });
     post(
@@ -965,13 +968,15 @@ async function handleTestRender(
       [out.bytes],
     );
   } catch (err) {
+    const aborted = ac.signal.aborted || (err instanceof DOMException && err.name === "AbortError");
     post({
       type: "testRendered",
       requestId,
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: aborted ? "Image generation stopped." : err instanceof Error ? err.message : String(err),
     });
   } finally {
+    chatAborts.delete(requestId);
     warmChatModel(); // schedule the (debounced) LLM reload — and restore it if we freed its VRAM,
     // even when the render failed, so the bundled model is never left stopped.
   }
@@ -997,6 +1002,8 @@ async function renderFromText(
     hires?: boolean;
     /** Render progress sink (0..1) for engines that report it (ComfyUI). */
     onProgress?: (fraction: number) => void;
+    /** Cancellation: aborting it interrupts the in-flight ComfyUI render (the Stop button). */
+    signal?: AbortSignal;
   } = {},
 ): Promise<{ bytes: ArrayBuffer; mimeType: string; prompt: string }> {
   // Standalone render (playground / chat generate_image): free the bundled chat LLM's VRAM first so
@@ -1047,6 +1054,7 @@ async function renderFromText(
     ...(opts.initImage ? { initImage: opts.initImage } : {}),
     ...(opts.denoise !== undefined ? { denoise: opts.denoise } : {}),
     ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),
+    ...(opts.signal ? { signal: opts.signal } : {}),
   });
   return { bytes: out.bytes, mimeType: out.mimeType, prompt };
 }
@@ -2957,6 +2965,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
  * style catalog, and a step count rides the render directly.
  */
 async function handleChatTool(requestId: number, call: ToolCall): Promise<void> {
+  // Register an abort controller under THIS render's requestId so the Stop button (chatCancel)
+  // can interrupt the ComfyUI render — without this the image kept rendering after Stop.
+  const ac = new AbortController();
+  chatAborts.set(requestId, ac);
   try {
     if (call.tool !== "generate_image") throw new Error("Only generate_image needs approval.");
     if (!settings) throw new Error("Settings not initialised yet.");
@@ -3009,6 +3021,7 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
     const out = await renderFromText(image, tier, call.prompt, {
       ...(call.steps ? { stepsOverride: call.steps } : {}),
       ...(call.highRes ? { hires: true } : {}),
+      signal: ac.signal,
       onProgress: (fraction) => post({ type: "testProgress", requestId, fraction }),
     });
     post(
@@ -3021,13 +3034,16 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
       [out.bytes],
     );
   } catch (err) {
+    // A user Stop aborts the render — report it as a clean cancellation, not a scary error.
+    const aborted = ac.signal.aborted || (err instanceof DOMException && err.name === "AbortError");
     post({
       type: "chatToolResult",
       requestId,
       call,
-      error: err instanceof Error ? err.message : String(err),
+      error: aborted ? "Image generation stopped." : err instanceof Error ? err.message : String(err),
     });
   } finally {
+    chatAborts.delete(requestId);
     warmChatModel(); // (debounced) reload + restore the LLM if we freed it — even on failure.
   }
 }
