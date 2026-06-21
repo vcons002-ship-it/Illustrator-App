@@ -2442,9 +2442,14 @@ const panelStyle = {
   width: "min(340px, calc(100vw - 16px))",
   background: "#16181d",
   boxShadow: "0 12px 40px rgba(0,0,0,0.55)",
-  // Own scrollbar instead of overflowing the screen.
-  maxHeight: "calc(100vh - 16px)",
+  // Own scrollbar instead of overflowing the screen. `dvh` (dynamic viewport height) tracks the
+  // visible area on phones where the browser's address bar shows/hides — `vh` is taller than what's
+  // on screen there, which left the bottom of the panel unreachable. Touch momentum + overscroll
+  // containment make it scroll smoothly on a phone without dragging the page behind it.
+  maxHeight: "calc(100dvh - 16px)",
   overflowY: "auto",
+  WebkitOverflowScrolling: "touch",
+  overscrollBehavior: "contain",
 } as const;
 
 const rowStyle = {

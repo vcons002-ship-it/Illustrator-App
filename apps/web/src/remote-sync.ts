@@ -36,7 +36,8 @@ export type SyncToPhone =
 export type CmdToDesktop =
   | { type: "vrcmd:hello" } // "I just connected — send me a full snapshot."
   | { type: "vrcmd:open"; bookId: string } // open this library book on the desktop
-  | { type: "vrcmd:home" }; // leave the open book (back to the desktop's home screen)
+  | { type: "vrcmd:home" } // leave the open book (back to the desktop's home screen)
+  | { type: "vrcmd:settings"; settings: ReaderSettings }; // phone edited settings → apply on the desktop (it renders)
 
 export type AppSyncMessage = SyncToPhone | CmdToDesktop;
 
