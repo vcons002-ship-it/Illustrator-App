@@ -6,6 +6,8 @@ import {
   type ModelFamily,
   type SamplerSettings,
   HIRES_DENOISE,
+  HIRES_MAX_DIMENSION,
+  HIRES_MAX_DIMENSION_LOWVRAM,
   clampResolution,
   composeSdPositive,
   hiresTarget,
@@ -472,7 +474,10 @@ export class ComfyUIBackend implements LocalEngineBackend {
     const hires =
       input.hires === true
         ? (() => {
-            const target = hiresTarget(family, input.width ?? 1024, input.height ?? 1024);
+            // Under Low-VRAM (weights offloaded to system RAM), cap the second pass lower so a 2048
+            // upscale on top of RAM-resident weights can't exhaust system RAM and freeze the PC.
+            const ceiling = input.lowVram ? HIRES_MAX_DIMENSION_LOWVRAM : HIRES_MAX_DIMENSION;
+            const target = hiresTarget(family, input.width ?? 1024, input.height ?? 1024, ceiling);
             return target ? { width: target.width, height: target.height, denoise: HIRES_DENOISE } : undefined;
           })()
         : undefined;

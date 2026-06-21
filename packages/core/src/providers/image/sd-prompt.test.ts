@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   HIRES_MAX_DIMENSION,
+  HIRES_MAX_DIMENSION_LOWVRAM,
   clampResolution,
   composeSdPositive,
   detectModelFamily,
@@ -112,6 +113,12 @@ describe("hiresTarget", () => {
     for (const f of ["sd15", "sdxl", "flux", "flux2", "qwenimage", "zimage", "hidream"] as const) {
       expect(hiresTarget(f, 2048, 2048)).not.toBeNull();
     }
+  });
+
+  it("honours a lower ceiling (Low-VRAM caps the second pass at 1536, not 2048)", () => {
+    expect(hiresTarget("sdxl", 2048, 2048, HIRES_MAX_DIMENSION_LOWVRAM)).toEqual({ width: 1536, height: 1536 });
+    // Native already ≥ the low ceiling → no second pass (would only add memory pressure).
+    expect(hiresTarget("flux", 2048, 2048, HIRES_MAX_DIMENSION_LOWVRAM)).toBeNull(); // flux native 1536
   });
 });
 
