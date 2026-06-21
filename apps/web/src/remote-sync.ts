@@ -10,8 +10,24 @@
  * stream back over the same relay, so no model or data ever needs to live on the phone.
  */
 
-import type { BookSource, BookSummary, VisualBible } from "@visual-reader/core";
+import type { BookSource, BookSummary, CalendarEvent, TaskPlan, VisualBible } from "@visual-reader/core";
 import type { InstalledModel, ReaderSettings } from "@visual-reader/ui";
+
+/**
+ * Tasks + calendar state mirrored to the phone so its Tasks/Calendar panels show the desktop's
+ * LIVE content (they're Google/desktop-backed — the phone has no planner data of its own, so
+ * without this they render empty). `calendarMonth` rides as an ISO string (JSON can't carry a
+ * Date); the phone rebuilds a Date. Task-plan deadlines are re-derived on the phone from `tasks`.
+ */
+export interface PlannerMirror {
+  tasks: TaskPlan[];
+  calendarEvents: CalendarEvent[];
+  /** First day of the month the desktop's calendar is showing (ISO). */
+  calendarMonth: string;
+  calendarLoading: boolean;
+  calendarError?: string;
+  googleConnected: boolean;
+}
 
 /**
  * The desktop engine's installed inventory, mirrored to the phone so its model/encoder/VAE/LoRA
@@ -36,6 +52,8 @@ export interface MirrorSnapshot {
   settings: ReaderSettings;
   /** The desktop engine's installed models/components (so the phone's pickers aren't empty). */
   inventory: EngineInventory;
+  /** The desktop's tasks + calendar (so the phone's planner panels aren't empty). */
+  planner: PlannerMirror;
   /** The currently-open book (undefined when the desktop is on the home screen). */
   book?: BookSource;
   /** The open book's analysis (illustrations/concept cards/charts are anchored from this). */
@@ -48,6 +66,7 @@ export type SyncToPhone =
   | { type: "vrsync:library"; library: BookSummary[] }
   | { type: "vrsync:settings"; settings: ReaderSettings }
   | ({ type: "vrsync:inventory" } & EngineInventory)
+  | ({ type: "vrsync:planner" } & PlannerMirror)
   | { type: "vrsync:book"; book?: BookSource; bible?: VisualBible };
 
 /** Phone → desktop commands. */

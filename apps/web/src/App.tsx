@@ -199,7 +199,7 @@ import type { LocalTextServerId } from "@visual-reader/core";
 import { loadSampleBook } from "./sample.js";
 import { useEngineWorker, type ImportResult, type TestRenderResult } from "./useEngineWorker.js";
 import { useActivityLog } from "./useActivityLog.js";
-import type { EngineInventory, SyncToPhone } from "./remote-sync.js";
+import type { EngineInventory, PlannerMirror, SyncToPhone } from "./remote-sync.js";
 import {
   downloadLora,
   downloadModel,
@@ -487,8 +487,10 @@ export function App() {
   // panel so clicking "Plan" is never a silent no-op.
   const [planMessage, setPlanMessage] = useState<string | undefined>();
   const refreshTaskPlans = useCallback(() => {
+    // The phone shows the desktop's MIRRORED tasks; loading its own (empty) store would clobber them.
+    if (isRemoteClient) return;
     void loadTaskPlans(libraryStore).then(setTaskPlans).catch(() => {});
-  }, [libraryStore]);
+  }, [libraryStore, isRemoteClient]);
   // SURFACE the actionable items a scan found as UNPLANNED stubs — they appear in the task list
   // (and their dates on the calendar) with NO LLM work. Planning happens later (the periodic
   // sweep below, or the per-task "Plan" button). Deduped so a re-scan never adds the same item twice.
@@ -1411,6 +1413,17 @@ export function App() {
     }),
     [installedModels, installedTextEncoders, installedVaes, installedLoras, loraFamilyMap, textModels, engineStatus],
   );
+  // The planner (tasks + calendar) state is declared lower in the file, so the hello snapshot and
+  // the phone's apply-handler reach it through refs kept current by effects below (the same pattern
+  // as buildSnapshotRef / refreshCalendarRef).
+  const plannerMirrorRef = useRef<PlannerMirror>({
+    tasks: [],
+    calendarEvents: [],
+    calendarMonth: new Date().toISOString(),
+    calendarLoading: false,
+    googleConnected: false,
+  });
+  const applyPlannerRef = useRef<(p: PlannerMirror) => void>(() => {});
   const buildSnapshot = useCallback(
     (): SyncToPhone => ({
       type: "vrsync:state",
@@ -1418,6 +1431,7 @@ export function App() {
       library,
       settings,
       inventory: engineInventory,
+      planner: plannerMirrorRef.current,
       ...(book ? { book } : {}),
       ...(bible ? { bible } : {}),
     }),
@@ -1446,6 +1460,7 @@ export function App() {
             setLibrary(msg.library);
             setSettings(msg.settings);
             applyInventory(msg.inventory);
+            applyPlannerRef.current(msg.planner);
             setBook(msg.book);
             setBible(msg.bible);
             setRemoteHost(msg.host);
@@ -1458,6 +1473,9 @@ export function App() {
             break;
           case "vrsync:inventory":
             applyInventory(msg);
+            break;
+          case "vrsync:planner":
+            applyPlannerRef.current(msg);
             break;
           case "vrsync:book":
             setBook(msg.book);
@@ -1822,9 +1840,11 @@ export function App() {
   // by the engine hook so task surfacing/planning can mirror to Google Tasks; loaded below.)
 
   useEffect(() => {
+    // The phone has no Google tokens of its own — its connection status is mirrored from the desktop.
+    if (isRemoteClient) return;
     void libraryStore.getMemo?.("google-tokens").then((t) => setGoogleConnected(!!t)).catch(() => {});
     void libraryStore.getMemo?.("google-email").then((e) => setGoogleEmail(e || undefined)).catch(() => {});
-  }, [libraryStore]);
+  }, [libraryStore, isRemoteClient]);
   const onConnectGoogle = useCallback(async (): Promise<{ ok: boolean; email?: string; error?: string }> => {
     if (!isDesktop) return { ok: false, error: "Connecting Google needs the desktop app." };
     if (!settings.keys?.googleClientId || !settings.keys?.googleClientSecret) {
@@ -1912,7 +1932,8 @@ export function App() {
   const [calendarError, setCalendarError] = useState<string | undefined>();
   const loadCalendarFor = useCallback(
     async (month: Date, silent = false): Promise<{ ok: boolean; count: number; error?: string }> => {
-      if (!googleConnected) return { ok: false, count: 0 };
+      // The phone shows the desktop's MIRRORED calendar; it has no Google of its own to fetch.
+      if (isRemoteClient || !googleConnected) return { ok: false, count: 0 };
       // Cover the 6×7 grid: from the Sunday on/before the 1st to ~42 days later.
       const first = new Date(month.getFullYear(), month.getMonth(), 1);
       const start = new Date(first);
@@ -1934,7 +1955,7 @@ export function App() {
         if (!silent) setCalendarLoading(false);
       }
     },
-    [googleConnected, loadCalendar],
+    [googleConnected, loadCalendar, isRemoteClient],
   );
   // Keep the in-app calendar in sync without a visible reload — used after the agent creates an
   // event and after the idle scan scrapes the calendar, so the app's calendar reflects Google.
@@ -1961,6 +1982,37 @@ export function App() {
     },
     [createCalendarEvent, refreshCalendar],
   );
+  // Mirror the planner (tasks + calendar) to a linked phone. The desktop owns the data (Google +
+  // the task store); the phone renders this snapshot so its panels aren't empty. Re-pushed whenever
+  // any piece changes. The `calendarMonth` Date rides as ISO (JSON can't carry a Date).
+  const plannerMirror = useMemo<PlannerMirror>(
+    () => ({
+      tasks: taskPlans,
+      calendarEvents,
+      calendarMonth: calendarMonth.toISOString(),
+      calendarLoading,
+      ...(calendarError ? { calendarError } : {}),
+      googleConnected,
+    }),
+    [taskPlans, calendarEvents, calendarMonth, calendarLoading, calendarError, googleConnected],
+  );
+  useEffect(() => {
+    plannerMirrorRef.current = plannerMirror;
+    if (!isRemoteClient) sendAppSync({ type: "vrsync:planner", ...plannerMirror });
+  }, [isRemoteClient, sendAppSync, plannerMirror]);
+  // PHONE side: adopt the desktop's mirrored planner. (Kept in a ref so the early-registered relay
+  // handler can reach these later-declared setters.)
+  const applyPlanner = useCallback((p: PlannerMirror) => {
+    setTaskPlans(p.tasks);
+    setCalendarEvents(p.calendarEvents);
+    setCalendarMonth(new Date(p.calendarMonth));
+    setCalendarLoading(p.calendarLoading);
+    setCalendarError(p.calendarError);
+    setGoogleConnected(p.googleConnected);
+  }, []);
+  useEffect(() => {
+    applyPlannerRef.current = applyPlanner;
+  }, [applyPlanner]);
   // On-demand: scan email + calendar for tasks right now and SURFACE them (as unplanned stubs) +
   // refresh the in-app calendar. It does NOT plan — planning is left to the background sweep or the
   // per-task "Plan" button, so a manual scan is fast and never kicks off long LLM work.
