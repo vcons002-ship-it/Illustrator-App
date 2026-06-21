@@ -37,8 +37,8 @@ export interface ComfyUIBackendOptions {
   transport?: Transport;
   clientId?: string;
   pollIntervalMs?: number;
-  maxPolls?: number;
-  /** Fail only after this many ms of NO progress once the render has started. */
+  /** Sustained-outage backstop: fail only after ComfyUI is UNREACHABLE for this long (it likely
+   * crashed). A slow-but-working render is never failed — only the reader's cancel stops it. */
   idleTimeoutMs?: number;
 }
 
@@ -92,7 +92,6 @@ export class ComfyUIBackend implements LocalEngineBackend {
   private readonly transport: Transport;
   private readonly clientId: string;
   private readonly pollIntervalMs: number;
-  private readonly maxPolls: number;
   private readonly idleTimeoutMs: number;
   private lorasCache?: Promise<Set<string>>;
   private ipAdapterCache?: Promise<IpAdapterCaps | null>;
@@ -119,8 +118,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
     this.transport = opts.transport ?? new DirectTransport();
     this.clientId = opts.clientId ?? "visual-reader";
     this.pollIntervalMs = opts.pollIntervalMs ?? 1000;
-    this.maxPolls = opts.maxPolls ?? 600;
-    this.idleTimeoutMs = opts.idleTimeoutMs ?? 180000; // 3 min of no progress
+    this.idleTimeoutMs = opts.idleTimeoutMs ?? 180000; // 3 min of ComfyUI being UNREACHABLE
   }
 
   async listModels(): Promise<LocalModelDescriptor[]> {
@@ -586,12 +584,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
     // alive: as long as ComfyUI reports progress we never time out (a slow-but-
     // working render must not be killed). Completion + image come from /history
     // polling below (a no-op socket in tests / where WebSocket is unavailable).
-    const progress = { lastMs: Date.now(), everProgressed: false };
-    const relay = (fraction: number): void => {
-      progress.lastMs = Date.now();
-      progress.everProgressed = true;
-      input.onProgress?.(fraction);
-    };
+    const relay = (fraction: number): void => input.onProgress?.(fraction);
     // Cancellation (user paused images): abort the in-flight HTTP AND tell ComfyUI to
     // interrupt the running job so the GPU frees immediately, not after it finishes.
     const signal = input.signal;
@@ -615,7 +608,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
       const { prompt_id } = await submit.json<PromptResponse>();
       job.promptId = prompt_id;
 
-      const image = await this.pollForImage(prompt_id, progress, signal);
+      const image = await this.pollForImage(prompt_id, signal, family);
       const view = await this.transport.send({
         url:
           `${this.baseUrl}/view?filename=${encodeURIComponent(image.filename)}` +
@@ -690,42 +683,87 @@ export class ComfyUIBackend implements LocalEngineBackend {
 
   private async pollForImage(
     promptId: string,
-    progress: { lastMs: number; everProgressed: boolean },
     signal?: AbortSignal,
     family?: ModelFamily,
   ): Promise<HistoryImage> {
-    // Two stop conditions: an absolute backstop (`maxPolls`) used when no progress
-    // info is available, and — once the websocket has reported ANY progress — an
-    // idle window: keep polling indefinitely while ComfyUI is still working, only
-    // failing after `idleTimeoutMs` of silence. So a slow render is never killed.
-    for (let i = 0; ; i++) {
+    // A render is NEVER timed out for being slow — only the reader's cancel (the abort signal)
+    // stops a live job. We poll /history for the result, and treat the prompt as alive as long as
+    // ComfyUI still lists it in its QUEUE (running or pending). A render under heavy VRAM pressure
+    // can sit queued/sampling for many minutes; the old fixed timeout would give up while ComfyUI
+    // kept working, then never collect the finished image — exactly the bug this fixes. The only
+    // genuine failures: the reader cancels, ComfyUI is unreachable for a sustained window, or the
+    // prompt vanishes from BOTH history and the queue (ComfyUI dropped it).
+    let unreachableSinceMs = 0; // 0 = reachable; else the ms it first failed
+    let lostPolls = 0; // consecutive polls where the prompt is in neither history nor the queue
+    for (;;) {
       if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-      const res = await this.transport.send({
-        url: `${this.baseUrl}/history/${encodeURIComponent(promptId)}`,
-        method: "GET",
-        ...(signal ? { signal } : {}),
-      });
-      if (!res.ok) throw new Error(`ComfyUI history failed with status ${res.status}`);
-      const history = await res.json<HistoryResponse>();
+      let history: HistoryResponse;
+      try {
+        const res = await this.transport.send({
+          url: `${this.baseUrl}/history/${encodeURIComponent(promptId)}`,
+          method: "GET",
+          ...(signal ? { signal } : {}),
+        });
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        history = await res.json<HistoryResponse>();
+        unreachableSinceMs = 0;
+      } catch (err) {
+        if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        // Transient blip vs sustained outage: tolerate hiccups, fail only after idleTimeoutMs of
+        // ComfyUI being unreachable (it likely crashed) — not because a render is slow.
+        if (unreachableSinceMs === 0) unreachableSinceMs = Date.now();
+        if (Date.now() - unreachableSinceMs > this.idleTimeoutMs) {
+          throw new Error(`ComfyUI became unreachable during the render (${err instanceof Error ? err.message : String(err)})`);
+        }
+        await delay(this.pollIntervalMs);
+        continue;
+      }
       const entry = history[promptId];
       if (entry) {
         const images = Object.values(entry.outputs ?? {}).flatMap((o) => o.images ?? []);
         const first = images[0];
         if (first) return first;
-        // No image: surface ComfyUI's REAL execution error (otherwise it's a mystery).
+        // Finished but no image: surface ComfyUI's REAL execution error (otherwise it's a mystery).
         throw new Error(comfyExecutionError(entry.status, family) ?? "ComfyUI finished but produced no image");
       }
-      if (progress.everProgressed) {
-        if (Date.now() - progress.lastMs > this.idleTimeoutMs) {
-          throw new Error("ComfyUI generation stalled (no progress)");
+      // Not done yet — still queued/running in ComfyUI? Then keep waiting, however long it takes.
+      if (await this.isPromptQueued(promptId, signal)) {
+        lostPolls = 0;
+      } else {
+        // In neither history nor queue: usually the brief hand-off as it finishes (history catches
+        // up next poll); only fail if it stays missing past a short grace window.
+        lostPolls++;
+        if (lostPolls > LOST_GRACE_POLLS) {
+          throw new Error("ComfyUI dropped the render (it left the queue without producing an image)");
         }
-      } else if (i >= this.maxPolls) {
-        throw new Error("ComfyUI generation timed out");
       }
       await delay(this.pollIntervalMs);
     }
   }
+
+  /** Whether ComfyUI still lists `promptId` in its queue (running or pending). On any read error,
+   * assume alive — never fail a working render because the liveness check itself hiccuped. */
+  private async isPromptQueued(promptId: string, signal?: AbortSignal): Promise<boolean> {
+    try {
+      const res = await this.transport.send({
+        url: `${this.baseUrl}/queue`,
+        method: "GET",
+        ...(signal ? { signal } : {}),
+      });
+      if (!res.ok) return true;
+      const q = await res.json<{ queue_running?: unknown[][]; queue_pending?: unknown[][] }>();
+      const has = (list?: unknown[][]): boolean =>
+        (list ?? []).some((e) => Array.isArray(e) && e[1] === promptId);
+      return has(q.queue_running) || has(q.queue_pending);
+    } catch {
+      return true; // can't tell → don't kill a render that may still be running
+    }
+  }
 }
+
+/** Polls the prompt may be absent from BOTH history and the queue (the finishing hand-off) before
+ * we conclude ComfyUI genuinely dropped it. At the 1s poll interval, ~8s of grace. */
+const LOST_GRACE_POLLS = 8;
 
 /** IP-Adapter inputs for the graph builder (already-uploaded reference filenames). */
 interface IpAdapterGraph {
