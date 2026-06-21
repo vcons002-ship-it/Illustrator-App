@@ -49,8 +49,14 @@ export const TUNING_FIELDS = [
   "subAgentModel",
 ] as const satisfies readonly (keyof ReaderSettings)[];
 
-/** Settings the engine never needs at all (pure presentation). */
-export const UI_ONLY_FIELDS = ["panelsPerView"] as const satisfies readonly (keyof ReaderSettings)[];
+/** Settings the engine never needs at all (pure presentation / bookkeeping). */
+export const UI_ONLY_FIELDS = [
+  "panelsPerView",
+  // Per-model encoder/VAE memory: the engine reads the RESOLVED localTextEncoder/localVae (tuning
+  // fields); this map only drives what those default to on model select. Changing it must not
+  // rebuild the engine.
+  "localComponentsByModel",
+] as const satisfies readonly (keyof ReaderSettings)[];
 
 /** Dependency key over just the tuning fields. */
 export function tuningSettingsKey(s: ReaderSettings): string {

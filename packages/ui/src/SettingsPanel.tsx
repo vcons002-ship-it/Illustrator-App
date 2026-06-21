@@ -132,6 +132,11 @@ export interface ReaderSettings {
    * auto-detection picks the wrong one. Exact filename as the engine lists it; "" = auto. */
   localTextEncoder?: string;
   localVae?: string;
+  /** Per-model memory of the text-encoder + VAE combo last used WITH each image model (keyed by the
+   * model's filename). When a model is selected, its remembered combo is restored into
+   * localTextEncoder/localVae (or "" = auto if none) — so switching between e.g. Flux.2 Klein and
+   * Z-Image doesn't leave the wrong encoder/VAE selected from the previous model. */
+  localComponentsByModel?: Record<string, { textEncoder?: string; vae?: string }>;
   /** Advanced manual sampler overrides for local ComfyUI: step count and CFG/guidance
    * scale. Unset/undefined = the family/catalog default. */
   localSteps?: number | undefined;
@@ -281,6 +286,22 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   keys: {},
 };
 
+/**
+ * Select a local image model AND restore the text-encoder + VAE combo last used with it (from
+ * localComponentsByModel), or "" = auto when none is remembered. Shared by the Settings model
+ * picker and the app's auto-select paths (download/connect) so switching models never leaves the
+ * previous model's encoder/VAE selected. Pure — returns the next settings.
+ */
+export function applyLocalModelComponents(s: ReaderSettings, model: string): ReaderSettings {
+  const remembered = s.localComponentsByModel?.[model];
+  return {
+    ...s,
+    localModel: model,
+    localTextEncoder: remembered?.textEncoder ?? "",
+    localVae: remembered?.vae ?? "",
+  };
+}
+
 /** A downloaded local model reported by the running engine. */
 export interface InstalledModel {
   id: string;
@@ -379,6 +400,23 @@ export function SettingsPanel({
   const [subTest, setSubTest] = useState<{ state: "idle" | "testing" | "ok" | "err"; msg?: string }>({ state: "idle" });
   const set = (patch: Partial<ReaderSettings>) => onChange({ ...value, ...patch });
   const setKey = (id: string, key: string) => set({ keys: { ...value.keys, [id]: key } });
+
+  // Per-model text-encoder/VAE memory. `selectLocalModel` switches the model AND restores the combo
+  // last used with it (or "" = auto). `setComponent` updates the current pick AND remembers it for
+  // the active model, so returning to that model later restores the same encoder/VAE.
+  const selectLocalModel = (id: string): void => onChange(applyLocalModelComponents(value, id));
+  const setComponent = (patch: { textEncoder?: string; vae?: string }): void => {
+    const model = value.localModel;
+    const fieldPatch: Partial<ReaderSettings> = {
+      ...(patch.textEncoder !== undefined ? { localTextEncoder: patch.textEncoder } : {}),
+      ...(patch.vae !== undefined ? { localVae: patch.vae } : {}),
+    };
+    if (model) {
+      const prev = value.localComponentsByModel ?? {};
+      fieldPatch.localComponentsByModel = { ...prev, [model]: { ...(prev[model] ?? {}), ...patch } };
+    }
+    set(fieldPatch);
+  };
 
   const textInfo = getProvider("text", value.textProvider);
   const imageInfo = getProvider("image", value.imageProvider);
@@ -1507,7 +1545,7 @@ export function SettingsPanel({
               downloadStage={downloadStage}
               engineStatus={engineStatus}
               onSet={set}
-              onSelect={(id) => set({ localModel: id })}
+              onSelect={selectLocalModel}
               onDownload={onDownloadModel}
               onDownloadModelUrl={onDownloadModelUrl}
               onConnect={onConnectLocalServer}
@@ -1593,7 +1631,7 @@ export function SettingsPanel({
                     valueId={value.localTextEncoder ?? ""}
                     options={installedTextEncoders}
                     recommended={componentHint.recommendedEncoder}
-                    onPick={(id) => set({ localTextEncoder: id })}
+                    onPick={(id) => setComponent({ textEncoder: id })}
                   />
                 ) : (
                   <label style={rowStyle}>
@@ -1601,7 +1639,7 @@ export function SettingsPanel({
                     <input
                       value={value.localTextEncoder ?? ""}
                       placeholder={`auto${componentHint.recommendedEncoder ? ` — e.g. ${componentHint.recommendedEncoder}` : " — e.g. qwen_3_8b_fp8mixed.safetensors"}`}
-                      onChange={(e) => set({ localTextEncoder: e.target.value.trim() })}
+                      onChange={(e) => setComponent({ textEncoder: e.target.value.trim() })}
                     />
                   </label>
                 )
@@ -1619,7 +1657,7 @@ export function SettingsPanel({
                     valueId={value.localVae ?? ""}
                     options={installedVaes}
                     recommended={componentHint.recommendedVae}
-                    onPick={(id) => set({ localVae: id })}
+                    onPick={(id) => setComponent({ vae: id })}
                   />
                 ) : (
                   <label style={rowStyle}>
@@ -1627,7 +1665,7 @@ export function SettingsPanel({
                     <input
                       value={value.localVae ?? ""}
                       placeholder={`auto${componentHint.recommendedVae ? ` — e.g. ${componentHint.recommendedVae}` : " — e.g. ae.safetensors"}`}
-                      onChange={(e) => set({ localVae: e.target.value.trim() })}
+                      onChange={(e) => setComponent({ vae: e.target.value.trim() })}
                     />
                   </label>
                 ))}

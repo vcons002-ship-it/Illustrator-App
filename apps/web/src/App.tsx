@@ -176,6 +176,7 @@ import {
   OrderReviewModal,
   type CalendarDeadline,
   DEFAULT_SETTINGS,
+  applyLocalModelComponents,
   DocumentPolishPanel,
   FirstRunWizard,
   ImagePanel,
@@ -1067,7 +1068,7 @@ export function App() {
         setModelProgress((prev) => ({ ...prev, [id]: ((i + 1) / files.length) * 100 }));
       }
       setInstalledModels(await listLocalModels());
-      setSettings((s) => ({ ...s, localModel: model.filename }));
+      setSettings((s) => applyLocalModelComponents(s, model.filename));
     } catch (err) {
       setModelProgress((prev) => {
         const next = { ...prev };
@@ -1188,15 +1189,12 @@ export function App() {
         /* leave components empty */
       }
       setSettings((s) => {
+        const base = { ...s, localBackend: backend, localServerUrl: url, engineBaseUrl: url };
         const keep = s.localModel && models.some((m) => m.id === s.localModel);
-        const localModel = keep ? s.localModel : models[0]?.id;
-        return {
-          ...s,
-          localBackend: backend,
-          localServerUrl: url,
-          engineBaseUrl: url,
-          ...(localModel ? { localModel } : {}),
-        };
+        if (keep) return base;
+        // Switched to a different model → restore the encoder/VAE combo last used with it.
+        const localModel = models[0]?.id;
+        return localModel ? applyLocalModelComponents(base, localModel) : base;
       });
     } catch (err) {
       const name = backend === "a1111" ? "AUTOMATIC1111" : "ComfyUI";
