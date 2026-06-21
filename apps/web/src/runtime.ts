@@ -92,6 +92,12 @@ export function ensureLocalLlm(): Promise<LocalLlm> {
   return invoke<LocalLlm>("ensure_llm");
 }
 
+/** Stop the bundled text model to free its VRAM for a burst of local image renders on the same
+ * GPU. The next {@link ensureLocalLlm} relaunches it cold. No-op on the web / when nothing runs. */
+export function stopLocalLlm(): Promise<void> {
+  return invoke<void>("stop_llm");
+}
+
 /** Subscribe to bundled-LLM setup progress (download/launch). Undefined on the web. */
 export function onLlmProgress(handler: (p: EngineProgress) => void): Promise<UnlistenFn> | undefined {
   return tauri()?.event?.listen<EngineProgress>("llm://progress", (e) => handler(e.payload));
