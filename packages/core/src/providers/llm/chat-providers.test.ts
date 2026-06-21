@@ -187,6 +187,39 @@ describe("provider chat()", () => {
     expect(body.messages).toEqual(turns);
   });
 
+  it("streams with reasoning_effort, retrying WITHOUT it when a strict server rejects it", async () => {
+    const sseOk = (deltas: string[]): Response => {
+      const lines = [
+        ...deltas.map((d) => `data: ${JSON.stringify({ choices: [{ delta: { content: d } }] })}\n\n`),
+        "data: [DONE]\n\n",
+      ];
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(c) {
+            const enc = new TextEncoder();
+            for (const l of lines) c.enqueue(enc.encode(l));
+            c.close();
+          },
+        }),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    };
+    const bodies: Array<{ reasoning_effort?: string }> = [];
+    let call = 0;
+    const fetchImpl = (async (_url: unknown, init?: { body?: unknown }) => {
+      bodies.push(JSON.parse(String(init?.body)) as { reasoning_effort?: string });
+      return ++call === 1 ? new Response("unknown reasoning_effort", { status: 400 }) : sseOk(["hi ", "there"]);
+    }) as unknown as typeof fetch;
+    const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", fetchImpl });
+    let streamed = "";
+    const out = await p.chat(turns, { onToken: (t) => (streamed += t), reasoningEffort: "none" });
+    expect(out).toBe("hi there");
+    expect(streamed).toBe("hi there");
+    expect(bodies[0]!.reasoning_effort).toBe("none"); // first attempt carried the thinking level
+    expect(bodies[1]!.reasoning_effort).toBeUndefined(); // strict-server retry dropped it
+    expect(call).toBe(2);
+  });
+
   it("gemini maps assistant→model and system→systemInstruction", async () => {
     const t = new FakeTransport({
       candidates: [{ content: { parts: [{ text: "gm" }] } }],

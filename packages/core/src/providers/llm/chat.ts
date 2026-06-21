@@ -38,6 +38,13 @@ export interface ChatOptions {
    */
   onComplete?: (meta: { truncated: boolean }) => void;
   /**
+   * Reasoning effort for THINKING models served locally (OpenAI `reasoning_effort`): "none" turns
+   * the hidden reasoning pass off, "low"/"medium"/"high" scale it. Sent only when set; servers/models
+   * that don't support it ignore the field (and a strict server that rejects it is retried without).
+   * Cloud providers map their own reasoning controls separately, so this is a no-op there.
+   */
+  reasoningEffort?: "none" | "low" | "medium" | "high";
+  /**
    * The byte-stable LEADING portion of the system prompt (role + tool definitions +
    * guard) — must be a genuine prefix of the joined system text. Providers with an
    * explicit prompt cache (Claude) mark a cache breakpoint after it so multi-turn

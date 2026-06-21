@@ -180,6 +180,11 @@ export interface ReaderSettings {
    * Modelfile num_ctx when Ollama reports one, else a conservative 4096.
    */
   localContextTokens?: number;
+  /** Thinking level for local REASONING models (Qwen3, DeepSeek-R1, …) — sent as the OpenAI
+   * `reasoning_effort` on each chat: "off" turns the hidden reasoning pass off (faster), low/medium/
+   * high scale it. "auto"/unset leaves the model's default. Models/servers that don't support it
+   * ignore the field. */
+  localThinkingEffort?: "auto" | "off" | "low" | "medium" | "high";
   /** Which local engine API to talk to (browser "your own server" path). */
   localBackend?: LocalBackendId;
   /** Base URL of a local engine you run yourself (browser path; persisted). */
@@ -1096,6 +1101,27 @@ export function SettingsPanel({
                 <span style={{ opacity: 0.6, fontSize: 12 }}>
                   Downloaded models from your local setup (connect the server in section 1 to
                   list more).
+                </span>
+              </label>
+            )}
+            {(value.chatTextProvider ?? "local") === "local" && (
+              <label style={rowStyle}>
+                <span>Thinking (reasoning models)</span>
+                <select
+                  value={value.localThinkingEffort ?? "auto"}
+                  onChange={(e) =>
+                    set({ localThinkingEffort: e.target.value as "auto" | "off" | "low" | "medium" | "high" })
+                  }
+                  title="For local REASONING models (Qwen3, DeepSeek-R1, GPT-OSS…), sent as the OpenAI reasoning_effort on each chat. Off skips the hidden reasoning pass (fastest); Low/Medium/High scale how much it thinks before answering. Auto leaves the model's default. Models/servers that don't support thinking ignore this."
+                >
+                  <option value="auto">Auto (model default)</option>
+                  <option value="off">Off — answer directly (fastest)</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High — think hardest (slowest)</option>
+                </select>
+                <span style={{ opacity: 0.6, fontSize: 12 }}>
+                  Only affects local models that support reasoning (Qwen3, DeepSeek-R1…); others ignore it.
                 </span>
               </label>
             )}

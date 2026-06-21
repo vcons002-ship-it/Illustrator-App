@@ -31,6 +31,8 @@ export const TUNING_FIELDS = [
   "chatLocalModel",
   "chatImageProvider",
   "localContextTokens",
+  // Read per chat turn (passed as reasoning_effort); changing it must not rebuild the engine.
+  "localThinkingEffort",
   // Read when building the buddy prompt; toggling it must not rebuild the engine.
   "allowCommands",
   "autonomousWorkspace",

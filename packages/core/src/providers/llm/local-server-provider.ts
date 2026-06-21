@@ -164,48 +164,62 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
    * `<think>` block closes so reasoning never flashes in the panel. */
   async chat(messages: ChatTurn[], opts: ChatOptions = {}): Promise<string> {
     if (opts.onToken) {
-      let full = "";
-      let emitted = 0;
-      let truncated = false;
-      await streamSse(this.fetchImpl, `${this.baseUrl}/chat/completions`, {
-        headers: this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
-        body: {
-          model: this.model,
-          messages,
-          temperature: 0.7,
-          max_tokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
-          keep_alive: "30m",
-          stream: true,
-        },
-        ...(opts.signal ? { signal: opts.signal } : {}),
-        onEvent: (e) => {
-          // The final SSE chunk carries finish_reason "length" when the server cut us off at
-          // max_tokens — surfaced so the loop can continue a long answer in another pass.
-          const fr = (e as { choices?: { finish_reason?: string }[] }).choices?.[0]?.finish_reason;
-          if (fr === "length") truncated = true;
-          const delta = (e as { choices?: { delta?: { content?: string } }[] }).choices?.[0]?.delta
-            ?.content;
-          if (!delta) return;
-          full += delta;
-          // Visible text = the reply minus any (possibly still-open) think block.
-          const stripped = stripThink(full);
-          const visible = stripped.trimStart().startsWith("<think>") ? "" : stripped;
-          if (visible.length > emitted) {
-            opts.onToken!(visible.slice(emitted));
-            emitted = visible.length;
-          } else if (visible.length === 0) {
-            // Still inside the think block — stream the reasoning so the host can show
-            // the model's live thoughts (a silent gate reads as a hang).
-            opts.onThinking?.(reasoningSoFar(full));
-          }
-        },
-      }).catch((err) => {
-        throw new Error(
-          `Local LLM server stream failed with ${err instanceof Error ? err.message : String(err)}`,
-        );
-      });
-      opts.onComplete?.({ truncated });
-      return stripThink(full).trim();
+      let emittedAny = false;
+      // One streaming attempt at a given reasoning effort. Returns the full reply + whether the
+      // server cut us off at max_tokens (finish_reason "length", surfaced for auto-continuation).
+      const attempt = async (effort?: ChatOptions["reasoningEffort"]): Promise<{ full: string; truncated: boolean }> => {
+        let full = "";
+        let emitted = 0;
+        let truncated = false;
+        await streamSse(this.fetchImpl, `${this.baseUrl}/chat/completions`, {
+          headers: this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
+          body: {
+            model: this.model,
+            messages,
+            temperature: 0.7,
+            max_tokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
+            keep_alive: "30m",
+            stream: true,
+            // Thinking level for reasoning models (Qwen3, etc.). Unsupported servers ignore it.
+            ...(effort ? { reasoning_effort: effort } : {}),
+          },
+          ...(opts.signal ? { signal: opts.signal } : {}),
+          onEvent: (e) => {
+            const fr = (e as { choices?: { finish_reason?: string }[] }).choices?.[0]?.finish_reason;
+            if (fr === "length") truncated = true;
+            const delta = (e as { choices?: { delta?: { content?: string } }[] }).choices?.[0]?.delta
+              ?.content;
+            if (!delta) return;
+            full += delta;
+            const stripped = stripThink(full);
+            const visible = stripped.trimStart().startsWith("<think>") ? "" : stripped;
+            if (visible.length > emitted) {
+              opts.onToken!(visible.slice(emitted));
+              emitted = visible.length;
+              emittedAny = true;
+            } else if (visible.length === 0) {
+              // Still inside the think block — stream the reasoning so the host can show the
+              // model's live thoughts (a silent gate reads as a hang).
+              opts.onThinking?.(reasoningSoFar(full));
+            }
+          },
+        });
+        return { full, truncated };
+      };
+      let r: { full: string; truncated: boolean };
+      try {
+        r = await attempt(opts.reasoningEffort);
+      } catch (err) {
+        // A strict server may reject reasoning_effort (esp. the non-standard "none"). Never let a
+        // thinking-level preference break chat: if nothing streamed yet, retry once without it.
+        if (opts.reasoningEffort && !emittedAny) {
+          r = await attempt(undefined);
+        } else {
+          throw new Error(`Local LLM server stream failed with ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      opts.onComplete?.({ truncated: r.truncated });
+      return stripThink(r.full).trim();
     }
     // Non-streaming path (no onToken) — used rarely; the chat/buddy loop always streams, so
     // continuation (onComplete) rides the streaming branch above.
