@@ -2650,7 +2650,12 @@ export function App() {
       // Authenticate gh/git for this command via the env (token never enters the
       // command string or the chat) when a GitHub token is configured; run it in the
       // session's chosen working folder (or the default workspace when unset).
-      r = await runCommand(call.command, settings.keys?.github || undefined, buddyWorkingDir || undefined);
+      r = await runCommand(
+        call.command,
+        settings.keys?.github || undefined,
+        buddyWorkingDir || undefined,
+        settings.commandShell,
+      );
     } catch (err) {
       // Feed the failure back so the buddy explains it + offers a next step (don't dead-end).
       const message = err instanceof Error ? err.message : String(err);

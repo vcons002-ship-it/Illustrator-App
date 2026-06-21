@@ -252,11 +252,18 @@ export interface CommandResult {
  * passed out-of-band as an ENV var (GH_TOKEN/GITHUB_TOKEN) for the child — never in
  * the command string — so `gh`/`git` are authenticated without exposing it.
  */
-export function runCommand(command: string, githubToken?: string, cwd?: string): Promise<CommandResult> {
+export function runCommand(
+  command: string,
+  githubToken?: string,
+  cwd?: string,
+  shell?: "cmd" | "powershell",
+): Promise<CommandResult> {
   return invoke<CommandResult>("run_command", {
     command,
     ...(githubToken ? { githubToken } : {}),
     ...(cwd ? { cwd } : {}),
+    // Windows only: "powershell" runs the command via PowerShell instead of cmd /C.
+    ...(shell ? { shell } : {}),
   });
 }
 
