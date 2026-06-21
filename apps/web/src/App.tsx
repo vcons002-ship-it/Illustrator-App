@@ -199,7 +199,7 @@ import type { LocalTextServerId } from "@visual-reader/core";
 import { loadSampleBook } from "./sample.js";
 import { useEngineWorker, type ImportResult, type TestRenderResult } from "./useEngineWorker.js";
 import { useActivityLog } from "./useActivityLog.js";
-import type { SyncToPhone } from "./remote-sync.js";
+import type { EngineInventory, SyncToPhone } from "./remote-sync.js";
 import {
   downloadLora,
   downloadModel,
@@ -1398,17 +1398,42 @@ export function App() {
   // illustrate/analyse/chat the phone triggers run here and stream their results back — the phone
   // never needs its own image model or data. (`isRemoteClient` ⇒ this tab IS the phone.)
   const [remoteHost, setRemoteHost] = useState<string | undefined>();
+  // The desktop engine's inventory, bundled so the phone's model/component/LoRA pickers mirror it.
+  const engineInventory = useMemo(
+    (): EngineInventory => ({
+      installedModels,
+      installedTextEncoders,
+      installedVaes,
+      installedLoras,
+      loraFamilies: loraFamilyMap,
+      textModels,
+      engineStatus,
+    }),
+    [installedModels, installedTextEncoders, installedVaes, installedLoras, loraFamilyMap, textModels, engineStatus],
+  );
   const buildSnapshot = useCallback(
     (): SyncToPhone => ({
       type: "vrsync:state",
       host: "this desktop",
       library,
       settings,
+      inventory: engineInventory,
       ...(book ? { book } : {}),
       ...(bible ? { bible } : {}),
     }),
-    [library, settings, book, bible],
+    [library, settings, engineInventory, book, bible],
   );
+  // PHONE side: adopt the desktop's mirrored inventory so the local-model pickers show the SAME
+  // installed models/components the desktop has (the phone has no engine to enumerate).
+  const applyInventory = useCallback((inv: EngineInventory) => {
+    setInstalledModels(inv.installedModels);
+    setInstalledTextEncoders(inv.installedTextEncoders);
+    setInstalledVaes(inv.installedVaes);
+    setInstalledLoras(inv.installedLoras);
+    setLoraFamilyMap(inv.loraFamilies);
+    setTextModels(inv.textModels);
+    setEngineStatus(inv.engineStatus);
+  }, []);
   const buildSnapshotRef = useRef(buildSnapshot);
   buildSnapshotRef.current = buildSnapshot;
   // Register the relay handler once: the PHONE applies the desktop's state pushes; the DESKTOP
@@ -1420,6 +1445,7 @@ export function App() {
           case "vrsync:state":
             setLibrary(msg.library);
             setSettings(msg.settings);
+            applyInventory(msg.inventory);
             setBook(msg.book);
             setBible(msg.bible);
             setRemoteHost(msg.host);
@@ -1429,6 +1455,9 @@ export function App() {
             break;
           case "vrsync:settings":
             setSettings(msg.settings);
+            break;
+          case "vrsync:inventory":
+            applyInventory(msg);
             break;
           case "vrsync:book":
             setBook(msg.book);
@@ -1464,7 +1493,7 @@ export function App() {
         }
       }
     });
-  }, [isRemoteClient, setAppSyncHandler, sendAppSync, setBible, libraryStore, openBook, closeBook]);
+  }, [isRemoteClient, setAppSyncHandler, sendAppSync, setBible, libraryStore, openBook, closeBook, applyInventory]);
   // Desktop: push each slice of state to a linked phone as it changes — granularly, so a settings
   // tweak doesn't resend the whole book (no-op without a linked phone: `sendAppSync` only writes
   // when the host bridge is open).
@@ -1477,6 +1506,9 @@ export function App() {
   useEffect(() => {
     if (!isRemoteClient) sendAppSync({ type: "vrsync:book", ...(book ? { book } : {}), ...(bible ? { bible } : {}) });
   }, [isRemoteClient, sendAppSync, book, bible]);
+  useEffect(() => {
+    if (!isRemoteClient) sendAppSync({ type: "vrsync:inventory", ...engineInventory });
+  }, [isRemoteClient, sendAppSync, engineInventory]);
   // Settings edits: on the desktop, apply locally (it owns the engine). On a linked PHONE, also push
   // the change to the desktop (vrcmd:settings) so the render the phone triggers uses it — the desktop
   // applies it and re-mirrors it back. (The phone applies the desktop's pushes via setSettings
@@ -4561,6 +4593,7 @@ export function App() {
             value={settings}
             onChange={onSettingsChange}
             isDesktop={isDesktop}
+            remote={isRemoteClient}
             installedModels={installedModels}
             installedTextEncoders={installedTextEncoders}
             installedVaes={installedVaes}
