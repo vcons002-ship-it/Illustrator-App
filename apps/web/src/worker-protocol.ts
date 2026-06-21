@@ -193,6 +193,8 @@ export type MainToWorker =
   /** Reply to a worker `hostFile` (local-file search/read + PDF text extraction — main thread
    * owns the Tauri bridge + pdfjs). */
   | { type: "hostFileResult"; callId: number; ok: boolean; files?: { name: string; path: string }[]; text?: string; error?: string }
+  /** Ack for a worker `llmVram` (the stop/ensure ran on the main thread). */
+  | { type: "llmVramResult"; callId: number }
   /**
    * Landing-page buddy: one user message BEFORE any book is open. `library` is the
    * reader's book list (for open_library_book); `persona` picks the entertainment
@@ -230,6 +232,9 @@ export type WorkerToMain =
    * search the disk, read a file's text, or extract text from attachment PDF bytes. Answered by
    * `hostFileResult` with the same callId. */
   | { type: "hostFile"; callId: number; op: "search" | "read" | "pdftext"; query?: string; path?: string; bytesBase64?: string }
+  /** Free or relaunch the bundled chat LLM's VRAM (Tauri lives on the main thread) so a burst of
+   * local image renders gets the whole GPU. Answered by `llmVramResult` with the same callId. */
+  | { type: "llmVram"; callId: number; action: "stop" | "ensure" }
   | { type: "status"; message: string }
   | { type: "providers"; diagnostics: ProvidersDiagnostics }
   | { type: "generating"; value: boolean }

@@ -1984,6 +1984,21 @@ async fn ensure_llm(app: AppHandle, state: State<'_, LlmState>) -> Result<LlmInf
     Ok(LlmInfo { base_url, model: BUNDLED_LLM_MODEL.to_string() })
 }
 
+/// Stop the bundled text model to free its VRAM (e.g. for a burst of local image renders on the
+/// same GPU). Kills the managed child and clears the cached URL, so the next `ensure_llm`
+/// relaunches it cold. A no-op when nothing is running. Safe to call repeatedly.
+#[tauri::command]
+async fn stop_llm(state: State<'_, LlmState>) -> Result<(), String> {
+    let child = state.child.lock().unwrap().take();
+    if let Some(mut child) = child {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    *state.base_url.lock().unwrap() = None;
+    *state.model.lock().unwrap() = None;
+    Ok(())
+}
+
 fn ensure_llm_blocking(app: &AppHandle) -> Result<(String, Option<Child>), String> {
     let root = format!("http://127.0.0.1:{LLM_PORT}");
     let api = format!("{root}/v1");
@@ -2098,6 +2113,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             ensure_engine,
             ensure_llm,
+            stop_llm,
             list_models,
             download_model,
             list_loras,

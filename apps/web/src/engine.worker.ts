@@ -267,6 +267,8 @@ function readUrlText(signal: AbortSignal): (url: string) => Promise<{ title?: st
  * the turn finishes. Cloud chat models don't contend, so they never pause it.
  */
 async function withChatPriority<T>(llmId: string, fn: () => Promise<T>): Promise<T> {
+  // If we freed the bundled LLM for an image burst, relaunch it before this chat turn needs it.
+  await restoreChatLlm();
   const eng = engine;
   const yieldBible =
     (llmId === "local-server" || llmId === "webllm") &&
@@ -433,6 +435,72 @@ function runHostToolViaMain(
     });
     post({ type: "agentTool", callId, runId, agentIdx, call, cwd });
   });
+}
+
+// Free/relaunch the bundled chat LLM's VRAM via the main thread (Tauri lives there). Used to give
+// a burst of local image renders the whole GPU; the model is relaunched after the burst settles.
+const llmVramPending = new Map<number, () => void>();
+let nextLlmVramId = 1;
+/** True while we've stopped the bundled chat LLM to free VRAM for image renders — so any later
+ * LLM use (a chat turn, the warm) knows to relaunch it first. */
+let chatLlmFreed = false;
+/** Whether WE paused the bible when freeing the LLM (so we only unpause our own pause, never one
+ * the reader or withChatPriority set). */
+let biblePausedByLlmFree = false;
+function llmVramOp(action: "stop" | "ensure"): Promise<void> {
+  return new Promise((resolve) => {
+    const callId = nextLlmVramId++;
+    const to = setTimeout(() => {
+      if (llmVramPending.delete(callId)) resolve();
+    }, 30_000);
+    llmVramPending.set(callId, () => {
+      clearTimeout(to);
+      resolve();
+    });
+    post({ type: "llmVram", callId, action });
+  });
+}
+
+/** Whether it's SAFE + worth freeing the chat LLM's VRAM for a render: only the BUNDLED managed
+ * llama-server (which we can kill + relaunch) holds local VRAM; only when images render on the same
+ * local GPU; and NEVER while the engine is using the LLM to build the bible (so book extraction is
+ * never interrupted). */
+function canFreeChatLlm(): boolean {
+  if (!settings || settings.localTextBackend !== "bundled") return false;
+  if (bibleActive) return false; // the book's bible-build owns the LLM right now — leave it alone
+  const cs = chatSettingsOf(settings);
+  if (cs.imageProvider !== "local" && settings.imageProvider !== "local") return false;
+  try {
+    return chatProviders().llm.id === "local-server";
+  } catch {
+    return false;
+  }
+}
+
+/** Before a STANDALONE image render: free the bundled chat LLM's VRAM (once per burst) so ComfyUI
+ * gets the whole GPU. Pauses the bible build too, so it can't try to use the now-stopped LLM. */
+async function freeChatLlmForRender(): Promise<void> {
+  if (chatLlmFreed || !canFreeChatLlm()) return;
+  chatLlmFreed = true;
+  // Pause the bible only if it isn't already — so the build can't try to use the stopped LLM, and
+  // we only ever unpause a pause we own.
+  if (engine && !engine.isBiblePaused()) {
+    engine.setBiblePaused(true);
+    biblePausedByLlmFree = true;
+  }
+  await llmVramOp("stop");
+}
+
+/** Relaunch the bundled chat LLM after it was freed (before the next chat / the warm), and let the
+ * bible build resume if WE paused it. Idempotent + safe to call from several places. */
+async function restoreChatLlm(): Promise<void> {
+  if (!chatLlmFreed) return;
+  chatLlmFreed = false;
+  await llmVramOp("ensure");
+  if (biblePausedByLlmFree) {
+    biblePausedByLlmFree = false;
+    engine?.setBiblePaused(false);
+  }
 }
 
 /** Broadcast the current (independent) bible/image pause state + clear status lines. */
@@ -868,6 +936,12 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       resolve?.(msg);
       break;
     }
+    case "llmVramResult": {
+      const resolve = llmVramPending.get(msg.callId);
+      llmVramPending.delete(msg.callId);
+      resolve?.();
+      break;
+    }
   }
 };
 
@@ -903,7 +977,6 @@ async function handleTestRender(
       },
       [out.bytes],
     );
-    warmChatModel(); // reload the local LLM the render may have evicted
   } catch (err) {
     post({
       type: "testRendered",
@@ -911,6 +984,9 @@ async function handleTestRender(
       ok: false,
       error: err instanceof Error ? err.message : String(err),
     });
+  } finally {
+    warmChatModel(); // schedule the (debounced) LLM reload — and restore it if we freed its VRAM,
+    // even when the render failed, so the bundled model is never left stopped.
   }
 }
 
@@ -936,6 +1012,11 @@ async function renderFromText(
     onProgress?: (fraction: number) => void;
   } = {},
 ): Promise<{ bytes: ArrayBuffer; mimeType: string; prompt: string }> {
+  // Standalone render (playground / chat generate_image): free the bundled chat LLM's VRAM first so
+  // ComfyUI gets the whole GPU. Once per burst (gated to safe cases); relaunched after the burst by
+  // the debounced warm or the next chat. The book's bible-illustration path doesn't come through
+  // here, so it's never disturbed.
+  await freeChatLlmForRender();
   const stepsOverride = opts.stepsOverride;
   const style = getImageStyle(tier.style);
   // A photo transform's instruction IS the prompt — don't force the global art style
@@ -1014,13 +1095,17 @@ function warmChatModel(): void {
   cancelChatWarm();
   warmTimer = setTimeout(() => {
     warmTimer = undefined;
-    try {
-      const { llm } = chatProviders();
-      if (!supportsChat(llm) || (llm.id !== "local-server" && llm.id !== "webllm")) return;
-      void llm.chat([{ role: "user", content: "ok" }], { maxTokens: 1 }).catch(() => {});
-    } catch {
-      /* no chat provider yet / not initialised — nothing to warm */
-    }
+    void (async () => {
+      try {
+        // The render burst has settled — relaunch the bundled LLM if we freed it, then warm it.
+        await restoreChatLlm();
+        const { llm } = chatProviders();
+        if (!supportsChat(llm) || (llm.id !== "local-server" && llm.id !== "webllm")) return;
+        await llm.chat([{ role: "user", content: "ok" }], { maxTokens: 1 }).catch(() => {});
+      } catch {
+        /* no chat provider yet / not initialised — nothing to warm */
+      }
+    })();
   }, WARM_DEBOUNCE_MS);
 }
 
@@ -2945,7 +3030,6 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
       },
       [out.bytes],
     );
-    warmChatModel(); // reload the local LLM the render may have evicted
   } catch (err) {
     post({
       type: "chatToolResult",
@@ -2953,6 +3037,8 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
       call,
       error: err instanceof Error ? err.message : String(err),
     });
+  } finally {
+    warmChatModel(); // (debounced) reload + restore the LLM if we freed it — even on failure.
   }
 }
 

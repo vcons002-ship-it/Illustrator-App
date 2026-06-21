@@ -56,7 +56,15 @@ export interface ImportResult {
 }
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
 import type { AppSyncMessage } from "./remote-sync.js";
-import { desktopHttpFetch, mcpStdioExchange, isDesktop, searchLocalFiles, readLocalFile } from "./runtime.js";
+import {
+  desktopHttpFetch,
+  mcpStdioExchange,
+  isDesktop,
+  searchLocalFiles,
+  readLocalFile,
+  stopLocalLlm,
+  ensureLocalLlm,
+} from "./runtime.js";
 import { pdfToText } from "./import-file.js";
 
 /**
@@ -580,6 +588,21 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             } catch (err) {
               reply({ ok: false, error: err instanceof Error ? err.message : String(err) });
             }
+          })();
+          break;
+        }
+        case "llmVram": {
+          // Worker → main relay: free (stop) or relaunch (ensure) the bundled chat LLM. Tauri lives
+          // here. On the web / when nothing's running these are no-ops; we always ack so the worker
+          // proceeds. The worker has gated this to the safe (bundled, local-image, no-bible) case.
+          void (async () => {
+            try {
+              if (msg.action === "stop") await stopLocalLlm();
+              else await ensureLocalLlm();
+            } catch {
+              /* not desktop / nothing to do */
+            }
+            send({ type: "llmVramResult", callId: msg.callId });
           })();
           break;
         }
