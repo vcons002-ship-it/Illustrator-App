@@ -1209,16 +1209,20 @@ describe("ComfyUI prompt formatting by family", () => {
       clip_name4: "llama_3.1_8b_instruct_fp8_scaled.safetensors",
     });
     expect(wf["13"]!.inputs.vae_name).toBe("ae.safetensors"); // Flux VAE
-    // Dev recipe (catalog sampler): cfg 1, lcm/normal, 28 steps, SD3 shift 6.0.
-    expect(wf["3"]!.inputs).toMatchObject({ cfg: 1, steps: 28, sampler_name: "lcm", scheduler: "normal" });
+    // Dev recipe (catalog sampler), matching the working Comfy-Org template: cfg 2 (REAL CFG,
+    // not guidance-distilled), lcm/normal, 28 steps, SD3 shift 5.5.
+    expect(wf["3"]!.inputs).toMatchObject({ cfg: 2, steps: 28, sampler_name: "lcm", scheduler: "normal" });
     expect(wf["17"]!.class_type).toBe("ModelSamplingSD3");
-    expect(wf["17"]!.inputs.shift).toBe(6.0);
+    expect(wf["17"]!.inputs.shift).toBe(5.5);
     expect(wf["3"]!.inputs.model).toEqual(["17", 0]);
     expect(wf["14"]).toBeUndefined(); // real CFG, no FluxGuidance node
     // Plain CLIPTextEncode reads the full pooled (clip_l + clip_g = 2048) off the quad CLIP,
     // exactly like the official template.
     expect(wf["6"]!.class_type).toBe("CLIPTextEncode");
     expect(wf["6"]!.inputs).toMatchObject({ text: "a knight", clip: ["12", 0] });
+    // HiDream runs at real CFG, so the NEGATIVE must be non-empty (empty → None pooled crash).
+    expect(wf["7"]!.class_type).toBe("CLIPTextEncode");
+    expect(String((wf["7"]!.inputs as { text: string }).text)).toContain("bad anatomy");
     expect(wf["5"]!.class_type).toBe("EmptySD3LatentImage"); // 16-channel latent
   });
 

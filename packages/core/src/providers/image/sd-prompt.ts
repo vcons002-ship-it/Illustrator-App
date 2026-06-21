@@ -29,7 +29,9 @@ export function isFlux(family: ModelFamily): boolean {
  * Natural-language families (Flux, Z-Image, Qwen-Image, HiDream): plain prose
  * prompts, no SD tags/weighting, no negative, and a fixed model-recommended step
  * count. HiDream reads prose well (it carries a Llama-3.1 encoder alongside T5 +
- * dual CLIP), and like Qwen-Image runs at a real CFG without a booru-style negative.
+ * dual CLIP) so it's natural-language for the POSITIVE, but unlike the others it runs at
+ * real CFG and REQUIRES a non-empty negative (see resolveNegative) — so it's still listed
+ * here for prompt formatting, with the negative carved out as an exception.
  */
 export function isNaturalLanguage(family: ModelFamily): boolean {
   return isFlux(family) || family === "zimage" || family === "qwenimage" || family === "hidream";
@@ -198,9 +200,12 @@ export const DEFAULT_NEGATIVE =
   "blurry, watermark, signature, text, jpeg artifacts, cropped, out of frame, " +
   "portrait, headshot, close-up, simple background";
 
-/** Negative prompt for a family ("" for natural-language models — ignored/harmful). */
+/** Negative prompt for a family. Natural-language models that run at guidance/cfg≈1 take none
+ * (Flux / Z-Image / Qwen-Image — a negative is ignored or harmful). HiDream is the exception: it
+ * runs at REAL CFG and REQUIRES a non-empty negative — an empty one makes ComfyUI feed a None
+ * pooled to its embedder ("linear(): … must be Tensor, not NoneType"). */
 export function negativeFor(family: ModelFamily): string {
-  return isNaturalLanguage(family) ? "" : DEFAULT_NEGATIVE;
+  return isNaturalLanguage(family) && family !== "hidream" ? "" : DEFAULT_NEGATIVE;
 }
 
 /** Quality tag preamble for SD families; empty for flux/unknown. */
@@ -221,10 +226,12 @@ export function composeSdPositive(family: ModelFamily, basePrompt: string): stri
 }
 
 /**
- * The negative prompt to send for this generation: an explicit override wins for
- * SD families; natural-language models always get "" regardless of any override.
+ * The negative prompt to send for this generation: an explicit override wins for SD families
+ * (and HiDream); the cfg≈1 natural-language models (Flux / Z-Image / Qwen-Image) always get ""
+ * regardless of any override. HiDream is NOT in that set — it runs at real CFG and must get a
+ * non-empty negative (an empty negative → None pooled → a crash in ComfyUI's HiDream embedder).
  */
 export function resolveNegative(family: ModelFamily, override: string | undefined): string {
-  if (isNaturalLanguage(family)) return "";
+  if (isNaturalLanguage(family) && family !== "hidream") return "";
   return override && override.trim() ? override : DEFAULT_NEGATIVE;
 }

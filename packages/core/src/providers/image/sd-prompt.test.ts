@@ -137,7 +137,11 @@ describe("formatting by family", () => {
     expect(negativeFor("flux")).toBe("");
     expect(negativeFor("zimage")).toBe("");
     expect(negativeFor("qwenimage")).toBe("");
-    expect(negativeFor("hidream")).toBe(""); // natural-language: no booru negative
+    // HiDream is the natural-language exception: it runs at real CFG and REQUIRES a non-empty
+    // negative (empty → None pooled crash), but still gets no booru quality tags on the positive.
+    expect(negativeFor("hidream")).toContain("bad anatomy");
+    expect(resolveNegative("hidream", undefined)).toContain("bad anatomy");
+    expect(resolveNegative("hidream", "my own negative")).toBe("my own negative");
     expect(qualityPreamble("hidream")).toBe(""); // and no SD quality tags
 
     expect(qualityPreamble("sdxl")).toContain("masterpiece");
