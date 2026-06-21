@@ -18,6 +18,7 @@ import type {
   BookSummary,
   BuddyPersona,
   BuddyToolCall,
+  BuddyToolResultPayload,
   CharacterPatch,
   ChatTurn,
   ContextUsage,
@@ -161,6 +162,13 @@ export interface EngineWorkerApi {
   sendBuddyEmail: (
     call: { to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[] },
   ) => Promise<{ id?: string; error?: string }>;
+  /** Run write-capable coding agents in parallel (each in its worktree `dir`); `onAgentTool`
+   * executes one agent's host tool on the main thread in that dir. */
+  runCodingAgents: (
+    runId: string,
+    agents: { title: string; instructions: string; dir: string }[],
+    onAgentTool: (call: BuddyToolCall, cwd: string) => Promise<BuddyToolResultPayload>,
+  ) => Promise<{ results?: { title: string; result: string }[]; error?: string }>;
   /** Abort the in-flight chat round, if any. */
   chatCancel: () => void;
   /** Landing-page buddy: one user message (no book open; streams via `onEvent`). */
@@ -386,6 +394,14 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   >(new Map());
   const assessRequests = useRef<Map<number, (r: { text?: string; error?: string }) => void>>(new Map());
   const emailRequests = useRef<Map<number, (r: { id?: string; error?: string }) => void>>(new Map());
+  // In-flight coding-agent runs + the live handler that executes one agent's host tool in its
+  // worktree (set for the duration of a run; only one run is active at a time — approval is serial).
+  const codingAgentsRequests = useRef<
+    Map<number, (r: { results?: { title: string; result: string }[]; error?: string }) => void>
+  >(new Map());
+  const agentToolHandler = useRef<
+    ((call: BuddyToolCall, cwd: string) => Promise<BuddyToolResultPayload>) | undefined
+  >(undefined);
   // In-flight chat rounds: streaming events + the final resolve, keyed by requestId.
   const chatRequests = useRef<
     Map<
@@ -632,6 +648,26 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           const resolve = emailRequests.current.get(msg.requestId);
           emailRequests.current.delete(msg.requestId);
           resolve?.({ ...(msg.id ? { id: msg.id } : {}), ...(msg.error ? { error: msg.error } : {}) });
+          break;
+        }
+        case "agentTool": {
+          // A coding agent (in the worker) wants to run a host tool in its worktree — execute it via
+          // the active run's handler and post the result back, or report no handler.
+          const handler = agentToolHandler.current;
+          if (handler) {
+            void handler(msg.call, msg.cwd).then(
+              (result) => send({ type: "agentToolResult", callId: msg.callId, result }),
+              (e) => send({ type: "agentToolResult", callId: msg.callId, result: { error: e instanceof Error ? e.message : String(e) } }),
+            );
+          } else {
+            send({ type: "agentToolResult", callId: msg.callId, result: { error: "no coding-agent run is active" } });
+          }
+          break;
+        }
+        case "codingAgentsDone": {
+          const resolve = codingAgentsRequests.current.get(msg.requestId);
+          codingAgentsRequests.current.delete(msg.requestId);
+          resolve?.(msg.error ? { error: msg.error } : { results: msg.results });
           break;
         }
         case "testRendered": {
@@ -1310,6 +1346,23 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const runCodingAgents = useCallback(
+    (
+      runId: string,
+      agents: { title: string; instructions: string; dir: string }[],
+      onAgentTool: (call: BuddyToolCall, cwd: string) => Promise<BuddyToolResultPayload>,
+    ): Promise<{ results?: { title: string; result: string }[]; error?: string }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        agentToolHandler.current = onAgentTool;
+        codingAgentsRequests.current.set(requestId, (r) => {
+          agentToolHandler.current = undefined;
+          resolve(r);
+        });
+        send({ type: "runCodingAgents", requestId, runId, agents });
+      }),
+    [],
+  );
   const chatCancel = useCallback(() => {
     const id = activeChatRequestId.current;
     if (id !== undefined) send({ type: "chatCancel", requestId: id });
@@ -1705,6 +1758,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     testRender,
     assessImage,
     sendBuddyEmail,
+    runCodingAgents,
     chat,
     chatTool,
     chatCancel,

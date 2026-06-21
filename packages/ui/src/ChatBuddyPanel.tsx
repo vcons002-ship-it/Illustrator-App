@@ -450,6 +450,32 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             </button>
           </div>
         )}
+        {props.pendingTool?.tool === "spawn_coding_agents" && (
+          <div style={{ ...approvalStyle, borderColor: "rgba(255,170,90,0.6)", background: "rgba(255,170,90,0.08)" }}>
+            <div style={{ fontSize: 12, marginBottom: 6 }}>
+              🤖 Run {props.pendingTool.tasks.length} coding agents in parallel?
+              <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+                {props.pendingTool.tasks.map((t, i) => (
+                  <li key={i} style={{ marginBottom: 2 }}>
+                    <b>{t.title}</b>
+                    <span style={{ display: "block", opacity: 0.7 }}>{t.instructions.slice(0, 160)}</span>
+                  </li>
+                ))}
+              </ul>
+              <span style={{ display: "block", opacity: 0.7, marginTop: 4 }}>
+                Each works in its own isolated git worktree, then the app merges their changes into this
+                chat's working folder and cleans up the branches. They write + run commands on their own
+                (Autonomous workspace). Review the merged changes afterward.
+              </span>
+            </div>
+            <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+              Run agents
+            </button>
+            <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+              Cancel
+            </button>
+          </div>
+        )}
         {props.pendingTool?.tool === "screenshot" && (
           <div style={{ ...approvalStyle, borderColor: "rgba(255,170,90,0.6)", background: "rgba(255,170,90,0.08)" }}>
             <div style={{ fontSize: 12, marginBottom: 6 }}>

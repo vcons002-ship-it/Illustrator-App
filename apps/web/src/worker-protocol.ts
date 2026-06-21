@@ -5,6 +5,7 @@ import type {
   BookSummary,
   BuddyPersona,
   BuddyToolCall,
+  BuddyToolResultPayload,
   CalendarEvent,
   StockQuote,
   Indicators,
@@ -116,6 +117,18 @@ export type MainToWorker =
       call: { to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[] };
     }
   | { type: "chatCancel"; requestId: number }
+  /** Run write-capable CODING agents in parallel, each in its own worktree dir (answered by
+   * `codingAgentsDone`). During the run the worker emits `agentTool` requests for the host to
+   * execute each agent's commands/writes in its `dir`. */
+  | {
+      type: "runCodingAgents";
+      requestId: number;
+      runId: string;
+      agents: { title: string; instructions: string; dir: string }[];
+    }
+  | { type: "codingAgentCancel"; requestId: number }
+  /** The host's result for one agent's host-tool request (answers a worker `agentTool`). */
+  | { type: "agentToolResult"; callId: number; result: BuddyToolResultPayload }
   /** Compact a chat: summarize these model-facing turns (answered by `summarized`). */
   | { type: "summarize"; requestId: number; turns: ChatTurn[] }
   /** Finish Google OAuth: exchange the consent code (worker has the CORS proxy + store). */
@@ -237,6 +250,11 @@ export type WorkerToMain =
   /** A vision model's text observation of a screenshot (or an error). */
   | { type: "imageAssessed"; requestId: number; text?: string; error?: string }
   | { type: "buddyEmailSent"; requestId: number; id?: string; error?: string }
+  /** A coding agent (in the worker) asks the host to execute one host tool in its worktree `cwd`;
+   * the host answers with `agentToolResult`. */
+  | { type: "agentTool"; callId: number; runId: string; agentIdx: number; call: BuddyToolCall; cwd: string }
+  /** All coding agents finished: each agent's concise text result (host then merges + reports). */
+  | { type: "codingAgentsDone"; requestId: number; results: { title: string; result: string }[]; error?: string }
   | { type: "error"; message: string }
   /** Incremental assistant text (streaming providers only). */
   | { type: "chatToken"; requestId: number; text: string }

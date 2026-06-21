@@ -31,6 +31,15 @@ export function parseGitConflicts(gitOutput: string): string[] {
   return [...files];
 }
 
+/** Count the files a worktree diff touched — one per "diff --git a/… b/…" header (robust across
+ * git versions); falls back to git's "N files changed" summary when there are no headers. Pure. */
+export function countChangedFiles(diff: string): number {
+  const headers = (diff.match(/^diff --git /gm) ?? []).length;
+  if (headers > 0) return headers;
+  const summary = /(\d+) files? changed/.exec(diff);
+  return summary ? Number(summary[1]) : 0;
+}
+
 /** Whether a merge result indicates conflicts (non-zero exit AND/OR conflict lines). */
 export function mergeHadConflicts(result: { code: number; stdout: string; stderr: string }): boolean {
   if (result.code === 0) return false;

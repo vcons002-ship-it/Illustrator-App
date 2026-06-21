@@ -37,6 +37,7 @@ import {
   placeSchwabOrder,
   buildBuddySystemPrompt,
   buildDelegatePrompt,
+  buildCodingAgentPrompt,
   mapWithConcurrency,
   buildProducePrompt,
   buildUnderstandPrompt,
@@ -141,6 +142,8 @@ import {
   type BookSource,
   type BuddyDeps,
   type BuddyOpenedInfo,
+  type BuddyToolCall,
+  type BuddyToolResultPayload,
   type ChatToolDeps,
   type FigureSearch,
   type ImageProvider,
@@ -401,6 +404,33 @@ function hostFile(req: { op: "search" | "read" | "pdftext"; query?: string; path
       resolve(r);
     });
     post({ type: "hostFile", callId, ...req });
+  });
+}
+
+// Coding-agent host-tool execution (worker → main round-trip): a write-capable agent runs its LLM
+// loop here, but its run_command/write_file must execute on the main thread in the agent's worktree.
+// The host answers with `agentToolResult` (autonomously, or after a per-step approval in Phase 2).
+const agentToolPending = new Map<number, (r: BuddyToolResultPayload) => void>();
+let nextAgentToolId = 1;
+function runHostToolViaMain(
+  runId: string,
+  agentIdx: number,
+  call: BuddyToolCall,
+  cwd: string,
+): Promise<BuddyToolResultPayload> {
+  return new Promise((resolve) => {
+    const callId = nextAgentToolId++;
+    const timeout = setTimeout(
+      () => {
+        if (agentToolPending.delete(callId)) resolve({ error: "the agent's tool step timed out or was denied" });
+      },
+      5 * 60_000,
+    );
+    agentToolPending.set(callId, (r) => {
+      clearTimeout(timeout);
+      resolve(r);
+    });
+    post({ type: "agentTool", callId, runId, agentIdx, call, cwd });
   });
 }
 
@@ -743,6 +773,12 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "buddyChat":
       void handleBuddyChat(msg);
       break;
+    case "runCodingAgents":
+      void handleCodingAgents(msg);
+      break;
+    case "codingAgentCancel":
+      codingAgentAborts.get(msg.requestId)?.abort();
+      break;
     case "summarize":
       void handleSummarize(msg);
       break;
@@ -814,6 +850,12 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       const resolve = mcpStdioPending.get(msg.callId);
       mcpStdioPending.delete(msg.callId);
       resolve?.(msg);
+      break;
+    }
+    case "agentToolResult": {
+      const resolve = agentToolPending.get(msg.callId);
+      agentToolPending.delete(msg.callId);
+      resolve?.(msg.result);
       break;
     }
     case "hostFileResult": {
@@ -2081,6 +2123,95 @@ function currentDateTimeLabel(): string {
   return `${label} (UTC${sign}${hh}:${mm})`;
 }
 
+// In-flight coding-agent runs (so a cancel can abort the LLM loops).
+const codingAgentAborts = new Map<number, AbortController>();
+
+/** BuddyDeps a coding agent never legitimately uses (open books / change style / remove books) —
+ * throwing stubs satisfy the type; the prompt tells the agent to stick to writing code. */
+function codingAgentStubDeps(): Pick<
+  BuddyDeps,
+  "openLibraryBook" | "openWebText" | "openPastedText" | "removeLibraryBook" | "setVisualStyle"
+> {
+  const no = async (): Promise<never> => {
+    throw new Error("not available to a coding agent");
+  };
+  return {
+    openLibraryBook: no,
+    openWebText: no,
+    openPastedText: no,
+    removeLibraryBook: no,
+    setVisualStyle: async () => ({}),
+  };
+}
+
+/** Run write-capable CODING agents in parallel — each in its own worktree `dir`. Their LLM loops
+ * run here; their run_command/write_file execute on the main thread (via runHostToolViaMain) in the
+ * agent's worktree. The host (App) created the worktrees and merges them back after this returns. */
+async function handleCodingAgents(msg: Extract<MainToWorker, { type: "runCodingAgents" }>): Promise<void> {
+  const ac = new AbortController();
+  codingAgentAborts.set(msg.requestId, ac);
+  try {
+    const { llm, imageSearch } = chatProviders();
+    if (!supportsChat(llm)) {
+      post({ type: "codingAgentsDone", requestId: msg.requestId, results: [], error: "the chat model can't run agents" });
+      return;
+    }
+    const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
+    // Optional worker (e.g. vLLM) model for the agents, leaving the main model free — same routing
+    // as read-only sub-agents. A capable coding model is recommended here.
+    const sf = corsFetch();
+    const subUrl = settings?.subAgentServerUrl?.trim();
+    const subModel = settings?.subAgentModel?.trim();
+    const agentLlm =
+      sf && subUrl && subModel
+        ? new LocalServerLLMProvider({ baseUrl: subUrl, model: subModel, transport: new DirectTransport(sf), fetchImpl: sf })
+        : llm;
+    const deps: BuddyDeps = {
+      ...codingAgentStubDeps(),
+      ...fileResearchDeps(true), // readFile (find_files/run_command/write_file go via runHostTool)
+      searchWeb: (q) => imageSearch.searchWeb(q),
+      readUrl: readUrlText(ac.signal),
+    };
+    const total = msg.agents.length;
+    const concurrency = Math.max(1, Math.min(settings?.agentConcurrency ?? 2, total));
+    let done = 0;
+    const announce = () =>
+      post({
+        type: "buddyActivity",
+        requestId: msg.requestId,
+        text:
+          done < total
+            ? `Coding agents working (${concurrency} at a time)… ${done}/${total} done`
+            : `Coding agents finished (${total}/${total}) — merging…`,
+      });
+    announce();
+    const results = await mapWithConcurrency(msg.agents, concurrency, async (agent, idx) => {
+      try {
+        const out = await runBuddyTurn({
+          llm: agentLlm,
+          system: buildCodingAgentPrompt({ title: agent.title, instructions: agent.instructions }, agent.dir),
+          history: [{ role: "user", content: "Complete your subtask in your worktree, verify it, and report what you changed." }],
+          deps,
+          runHostTool: (call) => runHostToolViaMain(msg.runId, idx, call, agent.dir),
+          maxTokens: budgets.reply,
+          signal: ac.signal,
+        });
+        return { title: agent.title, result: out.text || "(no summary returned)" };
+      } catch (e) {
+        return { title: agent.title, result: `(agent failed: ${e instanceof Error ? e.message : String(e)})` };
+      } finally {
+        done++;
+        announce();
+      }
+    });
+    post({ type: "codingAgentsDone", requestId: msg.requestId, results });
+  } catch (e) {
+    post({ type: "codingAgentsDone", requestId: msg.requestId, results: [], error: e instanceof Error ? e.message : String(e) });
+  } finally {
+    codingAgentAborts.delete(msg.requestId);
+  }
+}
+
 async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>): Promise<void> {
   const ac = new AbortController();
   chatAborts.set(msg.requestId, ac);
@@ -2442,7 +2573,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         slash.call.tool === "prep_order" ||
         slash.call.tool === "tv_chart" ||
         slash.call.tool === "delegate" ||
-        slash.call.tool === "send_email"
+        slash.call.tool === "send_email" ||
+        slash.call.tool === "spawn_coding_agents"
       ) {
         post({ type: "buddyDone", requestId: msg.requestId, text: "", transcript: [], pendingTool: slash.call });
         return;
