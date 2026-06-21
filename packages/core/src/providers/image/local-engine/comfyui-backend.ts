@@ -6,10 +6,9 @@ import {
   type ModelFamily,
   type SamplerSettings,
   HIRES_DENOISE,
-  HIRES_MAX_DIMENSION,
-  HIRES_MAX_DIMENSION_LOWVRAM,
   clampResolution,
   composeSdPositive,
+  hiresCeiling,
   hiresTarget,
   isNaturalLanguage,
   nameHandlingFor,
@@ -469,14 +468,15 @@ export class ComfyUIBackend implements LocalEngineBackend {
     if (input.localScheduler) sampler = { ...sampler, scheduler: input.localScheduler };
     const { width, height } = clampResolution(family, input.width ?? 1024, input.height ?? 1024);
     // Hi-Res two-pass: keep the FIRST pass at the native-safe size (single coherent
-    // subject), then upscale the latent toward ~2× / the hires ceiling and refine. Skipped
-    // when the native size already meets the ceiling (hiresTarget → null = single pass).
+    // subject), then upscale the latent ~1.5× toward the family's hires ceiling and refine.
+    // Skipped when the native size already meets the ceiling (hiresTarget → null = single pass).
     const hires =
       input.hires === true
         ? (() => {
-            // Under Low-VRAM (weights offloaded to system RAM), cap the second pass lower so a 2048
-            // upscale on top of RAM-resident weights can't exhaust system RAM and freeze the PC.
-            const ceiling = input.lowVram ? HIRES_MAX_DIMENSION_LOWVRAM : HIRES_MAX_DIMENSION;
+            // The ceiling is model- and memory-dependent: Low-VRAM (weights offloaded to system
+            // RAM) caps low so a big upscale can't exhaust RAM and freeze the PC; the heavy DiT
+            // families stay a notch under 2048; everything else can reach 2048.
+            const ceiling = hiresCeiling(family, input.lowVram);
             const target = hiresTarget(family, input.width ?? 1024, input.height ?? 1024, ceiling);
             return target ? { width: target.width, height: target.height, denoise: HIRES_DENOISE } : undefined;
           })()
