@@ -43,11 +43,11 @@ function noteFor(family: ModelFamily, model: string): string {
   const m = model.toLowerCase();
   switch (family) {
     case "flux2":
-      if (/klein/.test(m)) return "Flux.2 Klein → a Qwen-3 text encoder + the Flux.2 VAE.";
+      if (/klein/.test(m)) return "Flux.2 Klein → the Qwen-3-8B text encoder (NOT Z-Image's 4B) + the Flux.2 VAE.";
       if (/dev|pro/.test(m)) return "Flux.2 dev/pro → a Mistral-Small text encoder + the Flux.2 VAE.";
-      return "Flux.2 → a Mistral-Small (dev/pro) or Qwen-3 (Klein) text encoder + the Flux.2 VAE.";
+      return "Flux.2 → a Mistral-Small (dev/pro) or Qwen-3-8B (Klein) text encoder + the Flux.2 VAE.";
     case "zimage":
-      return "Z-Image → a Qwen-3 text encoder + the Z-Image VAE (ae.safetensors).";
+      return "Z-Image → the Qwen-3-4B text encoder (NOT Flux.2 Klein's 8B) + the Z-Image VAE (ae.safetensors).";
     case "qwenimage":
       return "Qwen-Image → a Qwen-2.5-VL text encoder + the Qwen-Image VAE.";
     case "flux":

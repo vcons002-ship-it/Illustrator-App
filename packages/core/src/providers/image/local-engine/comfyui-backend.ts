@@ -1163,28 +1163,35 @@ export function comfyExecutionError(
 
 /** Per-family encoder/VAE matching for split-file models (Flux.2 / Z-Image / Qwen-Image).
  * `clip` matches the text-encoder name; `vae` are VAE name-substring hints; `type` is the
- * CLIPLoader type; `what` names it in errors. Flux.2-dev ships a Mistral-3 encoder, Klein
- * a Qwen-3 one — both accepted. */
+ * CLIPLoader type; `what` names it in errors.
+ *
+ * The encoder patterns are VARIANT-specific on purpose: Qwen-3 ships a 4B (Z-Image) and an 8B
+ * (Flux.2 Klein) that are NOT interchangeable (different hidden size → "shapes cannot be
+ * multiplied"), and Qwen-Image wants Qwen-2.5-VL, not Qwen-3 at all. A loose `/qwen/` here would
+ * recommend/load the wrong sibling when only it is installed (e.g. Z-Image's 4B getting picked for
+ * Klein). The exact catalog filename still matches first via pickComponentAsset; these are the
+ * fallback, so we keep them tight rather than cross-match families. */
 export const SPLIT_FILE_HEURISTICS: Record<
   string,
   { clip: RegExp; vae: string[]; type: string; what: string }
 > = {
-  flux2: { clip: /mistral|flux.?2|qwen.?3/i, vae: ["flux2", "flux.2", "flux", "encoder"], type: "flux2", what: "Flux.2" },
-  zimage: { clip: /qwen.?3|qwen/i, vae: ["ae.", "z_image", "z-image"], type: "lumina2", what: "Z-Image" },
-  qwenimage: { clip: /qwen.?2\.5|qwen.*vl|qwen/i, vae: ["qwen"], type: "qwen_image", what: "Qwen-Image" },
+  flux2: { clip: /mistral|qwen.?3.?8b/i, vae: ["flux2", "flux.2", "flux", "encoder"], type: "flux2", what: "Flux.2" },
+  zimage: { clip: /qwen.?3.?4b/i, vae: ["ae.", "z_image", "z-image"], type: "lumina2", what: "Z-Image" },
+  qwenimage: { clip: /qwen.?2[._-]?5|qwen.*vl/i, vae: ["qwen"], type: "qwen_image", what: "Qwen-Image" },
 };
 
-/** Flux.2 encoder-name patterns ordered by the diffusion model's name: Klein → Qwen-3
- * first, dev/pro → Mistral first; otherwise the combined pattern. Picks the right one when
- * both a Mistral and a Qwen encoder are installed (they're NOT interchangeable). */
+/** Flux.2 encoder-name patterns ordered by the diffusion model's name: Klein uses Qwen-3-**8B**,
+ * dev/pro use Mistral-Small. They are NOT interchangeable, and — critically — Qwen-3 also ships a
+ * **4B** (Z-Image's encoder) that a loose `/qwen.?3/` would wrongly grab for Klein when only the 4B
+ * is installed. So Klein matches the 8B SPECIFICALLY (never the 4B); dev/pro prefer Mistral. The
+ * exact catalog filename still matches first in pickComponentAsset — these are the fallback. */
 export function flux2EncoderPatterns(model: string): RegExp[] {
   const m = model.toLowerCase();
-  const qwen = /qwen.?3/i;
+  const qwen8b = /qwen.?3.?8b/i;
   const mistral = /mistral/i;
-  const both = SPLIT_FILE_HEURISTICS.flux2!.clip;
-  if (/klein/.test(m)) return [qwen, mistral, both];
-  if (/dev|pro/.test(m)) return [mistral, qwen, both];
-  return [both];
+  if (/klein/.test(m)) return [qwen8b, mistral];
+  // dev / pro / generic flux2 → Mistral; qwen8b is only a last-ditch fallback (never the 4B).
+  return [mistral, qwen8b];
 }
 
 /**
