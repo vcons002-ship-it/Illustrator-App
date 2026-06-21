@@ -60,6 +60,7 @@ import {
   agentBranchName,
   parseGitConflicts,
   countChangedFiles,
+  hasConflictMarkers,
   loadScheduledTasks,
   upsertScheduledTask,
   deleteScheduledTask,
@@ -222,6 +223,8 @@ import {
   gitWorktreeDiff,
   gitMergeBranch,
   gitMergeAbort,
+  gitConflictVersions,
+  gitCompleteMerge,
   gitWorktreeRemove,
   pickFolder,
   googleOauthLoopback,
@@ -367,6 +370,7 @@ export function App() {
     assessImage,
     sendBuddyEmail,
     runCodingAgents,
+    resolveConflicts,
     chat,
     chatTool,
     chatCancel,
@@ -2767,6 +2771,32 @@ export function App() {
     ctx?.resolve({ error: "the reader declined this step — try a different approach or stop here" });
   };
 
+  // Auto-resolve a conflicted merge with the manager (main) model. Reads the 3 merge sides per
+  // conflicted file, asks the model to merge them, writes the results back, and lets the Rust side
+  // COMPLETE the merge only if nothing is unmerged and no markers remain — otherwise returns false
+  // (the caller aborts). Bounded + binary-skipping; any doubt → false, never a bad commit.
+  const tryAutoResolveConflicts = async (root: string, files: string[], title: string): Promise<boolean> => {
+    try {
+      if (files.length === 0 || files.length > 20) return false;
+      const versions = await Promise.all(
+        files.map(async (file) => ({ file, ...(await gitConflictVersions(root, file)) })),
+      );
+      // Skip binary (null byte) or very large conflicts — the model can't reliably merge those.
+      if (versions.some((v) => (v.ours + v.theirs).includes(String.fromCharCode(0)) || v.ours.length + v.theirs.length > 200_000))
+        return false;
+      const res = await resolveConflicts(title, versions);
+      if (res.error || !res.files || res.files.length !== files.length) return false;
+      // Validate the model's output before touching disk; reject any leftover markers.
+      if (res.files.some((f) => hasConflictMarkers(f.content))) return false;
+      for (const f of res.files) await writeWorkspaceFile(f.file, f.content, root);
+      // Rust completes the merge only if no path is unmerged and no markers are staged (code 0).
+      const done = await gitCompleteMerge(root, `merge ${title} (auto-resolved ${files.length} conflict${files.length === 1 ? "" : "s"})`);
+      return done.code === 0;
+    } catch {
+      return false;
+    }
+  };
+
   // Approved spawn_coding_agents: create a git worktree per task, run the write-capable agents in
   // parallel, then the APP commits + diffs + merges each branch back (cleaning up) and reports.
   const approveSpawnCodingAgents = async (
@@ -2832,9 +2862,18 @@ export function App() {
         const m = await gitMergeBranch(root, c.branch);
         if (m.code === 0) merge = "merged";
         else {
-          // Phase 1: don't auto-resolve — abort so the working tree stays clean, leave the branch.
-          merge = parseGitConflicts(`${m.stdout}\n${m.stderr}`).length ? "conflict" : "failed";
-          await gitMergeAbort(root).catch(() => {});
+          const conflictFiles = parseGitConflicts(`${m.stdout}\n${m.stderr}`);
+          // Try the manager's auto-resolution (unless disabled); it either completes the merge or
+          // we abort so the working tree stays clean and the branch is left for the reader.
+          const resolved =
+            conflictFiles.length > 0 && settings.autoResolveConflicts !== false
+              ? await tryAutoResolveConflicts(root, conflictFiles, c.title)
+              : false;
+          if (resolved) merge = "resolved";
+          else {
+            merge = conflictFiles.length ? "conflict" : "failed";
+            await gitMergeAbort(root).catch(() => {});
+          }
         }
       } catch {
         merge = "failed";

@@ -38,6 +38,7 @@ import {
   buildBuddySystemPrompt,
   buildDelegatePrompt,
   buildCodingAgentPrompt,
+  buildConflictResolvePrompt,
   mapWithConcurrency,
   buildProducePrompt,
   buildUnderstandPrompt,
@@ -778,6 +779,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "codingAgentCancel":
       codingAgentAborts.get(msg.requestId)?.abort();
+      break;
+    case "resolveConflicts":
+      void handleResolveConflicts(msg);
       break;
     case "summarize":
       void handleSummarize(msg);
@@ -2209,6 +2213,42 @@ async function handleCodingAgents(msg: Extract<MainToWorker, { type: "runCodingA
     post({ type: "codingAgentsDone", requestId: msg.requestId, results: [], error: e instanceof Error ? e.message : String(e) });
   } finally {
     codingAgentAborts.delete(msg.requestId);
+  }
+}
+
+/** Defensive: strip a leading/trailing ``` fence if the model wrapped the file despite being told
+ * not to (keeps the inner content; leaves un-fenced text untouched). */
+function unfenceFile(text: string): string {
+  const m = /^\s*```[^\n]*\n([\s\S]*?)\n?```\s*$/.exec(text);
+  return m ? m[1]! : text;
+}
+
+/** Auto-resolve git merge conflicts with the MAIN model (high-stakes — not a small sub-agent). One
+ * bounded pass per file; the host validates (no markers, completes the merge) before committing. */
+async function handleResolveConflicts(msg: Extract<MainToWorker, { type: "resolveConflicts" }>): Promise<void> {
+  try {
+    const { llm } = chatProviders();
+    if (!supportsChat(llm)) {
+      post({ type: "conflictsResolved", requestId: msg.requestId, files: [], error: "the chat model can't resolve conflicts" });
+      return;
+    }
+    const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
+    const resolved = await mapWithConcurrency(msg.files, 1, async (f) => {
+      const reply = await llm.chat(
+        [
+          { role: "system", content: "You resolve git merge conflicts. Output ONLY the final merged file — no prose, no fences, no conflict markers." },
+          {
+            role: "user",
+            content: buildConflictResolvePrompt({ file: f.file, agentTitle: msg.agentTitle, base: f.base, ours: f.ours, theirs: f.theirs }),
+          },
+        ],
+        { maxTokens: budgets.reply },
+      );
+      return { file: f.file, content: unfenceFile(reply) };
+    });
+    post({ type: "conflictsResolved", requestId: msg.requestId, files: resolved });
+  } catch (e) {
+    post({ type: "conflictsResolved", requestId: msg.requestId, files: [], error: e instanceof Error ? e.message : String(e) });
   }
 }
 

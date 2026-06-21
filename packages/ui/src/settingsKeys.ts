@@ -35,6 +35,7 @@ export const TUNING_FIELDS = [
   "allowCommands",
   "autonomousWorkspace",
   "commandShell",
+  "autoResolveConflicts",
   "allowTaskAutomation",
   "allowTradingViewBridge",
   "autoLearnSkills",

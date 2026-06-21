@@ -45,3 +45,36 @@ export function mergeHadConflicts(result: { code: number; stdout: string; stderr
   if (result.code === 0) return false;
   return parseGitConflicts(`${result.stdout}\n${result.stderr}`).length > 0 || result.code !== 0;
 }
+
+/** Whether text still contains git conflict markers — the safety gate before trusting an
+ * auto-resolved file. Checks the unambiguous start-of-line markers (<<<<<<<, >>>>>>>, |||||||);
+ * `=======` is deliberately NOT checked (it appears in legit content). Pure. */
+export function hasConflictMarkers(text: string): boolean {
+  return /^(?:<{7}|>{7}|\|{7})(?:\s|$)/m.test(text);
+}
+
+/**
+ * Prompt for the manager's conflict-resolution pass on ONE file: it gets the three merge sides
+ * (base / ours / theirs) and must return ONLY the fully merged file — both intents preserved, no
+ * markers. Run on the STRONG main model (not a small sub-agent). Pure.
+ */
+export function buildConflictResolvePrompt(input: {
+  file: string;
+  agentTitle: string;
+  base: string;
+  ours: string;
+  theirs: string;
+}): string {
+  return [
+    `Resolve the git MERGE CONFLICT in "${input.file}".`,
+    `It conflicts merging the coding agent "${input.agentTitle}"'s changes (THEIRS) into the current ` +
+      `working tree (OURS). Produce the correct MERGED file that PRESERVES BOTH intents — keep OURS's ` +
+      `changes AND incorporate THEIRS's; drop neither side's work, and combine sensibly where they overlap.`,
+    `Output ONLY the complete final file contents. No explanation, no markdown fences, and ABSOLUTELY ` +
+      `NO conflict markers (<<<<<<<, =======, >>>>>>>).`,
+    "",
+    `--- BASE (common ancestor) ---\n${input.base}`,
+    `--- OURS (current working tree) ---\n${input.ours}`,
+    `--- THEIRS (${input.agentTitle}) ---\n${input.theirs}`,
+  ].join("\n");
+}

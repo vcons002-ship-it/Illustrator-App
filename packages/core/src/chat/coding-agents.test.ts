@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { agentBranchName, parseGitConflicts, mergeHadConflicts, countChangedFiles } from "./coding-agents.js";
+import {
+  agentBranchName,
+  parseGitConflicts,
+  mergeHadConflicts,
+  countChangedFiles,
+  hasConflictMarkers,
+  buildConflictResolvePrompt,
+} from "./coding-agents.js";
 import { buildCodingAgentPrompt } from "./subagent.js";
 import { parseBuddyToolCall } from "./buddy-tools.js";
 
@@ -71,6 +78,33 @@ describe("countChangedFiles", () => {
     expect(countChangedFiles(diff)).toBe(2);
     expect(countChangedFiles(" 3 files changed, 9 insertions(+)")).toBe(3);
     expect(countChangedFiles("")).toBe(0);
+  });
+});
+
+describe("hasConflictMarkers", () => {
+  it("detects leftover git markers, ignores legit content with ======= lines", () => {
+    expect(hasConflictMarkers("a\n<<<<<<< HEAD\nb\n=======\nc\n>>>>>>> branch\nd")).toBe(true);
+    expect(hasConflictMarkers("||||||| base\nx")).toBe(true); // diff3 base marker
+    expect(hasConflictMarkers("# Title\n=======\nclean markdown underline")).toBe(false);
+    expect(hasConflictMarkers("const x = 1;\n")).toBe(false);
+  });
+});
+
+describe("buildConflictResolvePrompt", () => {
+  it("includes all three sides + the file + a no-markers instruction", () => {
+    const p = buildConflictResolvePrompt({
+      file: "src/a.ts",
+      agentTitle: "API layer",
+      base: "BASE_CONTENT",
+      ours: "OURS_CONTENT",
+      theirs: "THEIRS_CONTENT",
+    });
+    expect(p).toContain("src/a.ts");
+    expect(p).toContain("API layer");
+    expect(p).toContain("BASE_CONTENT");
+    expect(p).toContain("OURS_CONTENT");
+    expect(p).toContain("THEIRS_CONTENT");
+    expect(p).toMatch(/NO conflict markers/i);
   });
 });
 
