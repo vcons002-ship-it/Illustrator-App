@@ -367,8 +367,10 @@ export const LOCAL_IMAGE_MODELS: LocalModelCatalogEntry[] = [
     filename: "hidream_i1_dev_fp8.safetensors",
     url: "https://huggingface.co/Comfy-Org/HiDream-I1_ComfyUI/resolve/main/split_files/diffusion_models/hidream_i1_dev_fp8.safetensors",
     family: "hidream",
-    // Dev is guidance-distilled: cfg 1 (no negative), lcm / normal / 28 steps / SD3 shift 6.0.
-    sampler: { cfg: 1, sampler: "lcm", scheduler: "normal", steps: 28, shift: 6.0 },
+    // Dev runs at a light REAL CFG with a negative (NOT pure guidance-distillation): cfg 2,
+    // lcm / normal / 28 steps / SD3 shift 5.5 — matching the Comfy-Org HiDream-dev template. An
+    // empty negative here crashes ("linear(): … not NoneType"); resolveNegative supplies one.
+    sampler: { cfg: 2, sampler: "lcm", scheduler: "normal", steps: 28, shift: 5.5 },
     files: [
       {
         filename: "hidream_i1_dev_fp8.safetensors",
