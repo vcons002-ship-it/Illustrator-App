@@ -164,6 +164,55 @@ describe("runBuddyTurn", () => {
     expect(outcome.transcript).toEqual([{ role: "assistant", content: outcome.text }]);
   });
 
+  it("auto-continues a CUT-OFF answer and stitches the parts into one", async () => {
+    // A scripted model that reports finish_reason "length" (truncated) for its first two replies,
+    // then finishes — exactly the long-document case. Each chunk is a worksheet section.
+    const chunks = ["## Algebra 1 — part A\n1) 2x+3=7", "2) x^2-9=0", "3) factor x^2+5x+6\nThat's the set!"];
+    let n = 0;
+    const llm: ChatCapable = {
+      async chat(_messages, opts) {
+        const i = n++;
+        const truncated = i < chunks.length - 1; // last chunk finishes cleanly
+        opts?.onComplete?.({ truncated });
+        return chunks[Math.min(i, chunks.length - 1)]!;
+      },
+    };
+    const events: BuddyTurnEvent[] = [];
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "make an algebra worksheet" }],
+      deps: baseDeps,
+      onEvent: (e) => events.push(e),
+    });
+    // All three parts are present, in order, stitched together.
+    expect(outcome.text).toContain("part A");
+    expect(outcome.text).toContain("x^2-9=0");
+    expect(outcome.text).toContain("That's the set!");
+    // The model was called once + twice more for the continuations (3 total).
+    expect(n).toBe(3);
+    // The reader saw "part 2"/"part 3" progress while it wrote.
+    expect(events.some((e) => e.kind === "activity" && /part 2/.test(e.text))).toBe(true);
+    // History keeps ONE assistant turn (the assembled answer), not the truncated fragments.
+    expect(outcome.transcript.filter((t) => t.role === "assistant")).toEqual([
+      { role: "assistant", content: outcome.text },
+    ]);
+  });
+
+  it("does NOT continue when the model finishes cleanly (no truncation)", async () => {
+    let n = 0;
+    const llm: ChatCapable = {
+      async chat(_messages, opts) {
+        n++;
+        opts?.onComplete?.({ truncated: false });
+        return "All done in one go.";
+      },
+    };
+    const outcome = await runBuddyTurn({ llm, system: "sys", history: [{ role: "user", content: "hi" }], deps: baseDeps });
+    expect(n).toBe(1);
+    expect(outcome.text).toBe("All done in one go.");
+  });
+
   it("runs a search → open → prose flow, emitting events and the right deps", async () => {
     const llm = scriptedLlm([
       '{"tool":"search_books","query":"frankenstein"}',

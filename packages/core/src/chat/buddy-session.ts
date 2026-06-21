@@ -33,6 +33,11 @@ import { jsonGatedTokenSink } from "./chat-session.js";
  * chat (chat-session.ts).
  */
 
+/** How many extra passes a single answer may be CONTINUED when the model is cut off at the token
+ * budget. 8 passes × the per-reply cap (~8k tokens) ≈ 65k tokens of stitched output — enough for a
+ * "massive" document while still bounded so a runaway model can't loop forever. */
+const MAX_REPLY_CONTINUATIONS = 8;
+
 export interface BuddyDeps {
   searchWeb?: (query: string) => Promise<WebSearchHit[]>;
   searchBooks?: (query: string) => Promise<BookSearchHit[]>;
@@ -216,14 +221,14 @@ export async function runBuddyTurn(opts: {
   const toolResults: BuddyTurnOutcome["toolResults"] = [];
   let lastThinking = ""; // the latest round's reasoning, persisted onto the settled message
   let wrappedUp = false; // guard: only re-prompt for a plain-text wrap-up once
+  let lastTruncated = false; // did the last reply get CUT OFF at the token budget? (→ auto-continue)
 
-  for (let round = 0; ; round++) {
-    // Heartbeat: the reply may stream entirely MUTED (tool-call JSON is gated out of the visible
-    // token stream) or the model may think silently for a while — without this the turn looks frozen,
-    // which is exactly what a linked phone saw. A visible token / the final answer clears it.
-    opts.onEvent?.({ kind: "activity", text: round === 0 ? "Thinking…" : "Working on it…" });
-    const reply = await opts.llm.chat(messages, {
-      // Fresh gate per round (see chat-session.ts): tool JSON never streams visibly.
+  // One model call against the current `messages` — a FRESH token gate each time (tool JSON never
+  // streams visibly), capturing whether the server cut us off at the budget so a long answer can be
+  // continued in another pass and stitched together.
+  const chatOnce = (): Promise<string> => {
+    lastTruncated = false;
+    return opts.llm.chat(messages, {
       ...(opts.onEvent
         ? {
             onToken: jsonGatedTokenSink((text) => opts.onEvent?.({ kind: "token", text })),
@@ -236,7 +241,18 @@ export async function runBuddyTurn(opts: {
       ...(opts.signal ? { signal: opts.signal } : {}),
       ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
       ...(opts.cachePrefix ? { cachePrefix: opts.cachePrefix } : {}),
+      onComplete: (m) => {
+        lastTruncated = m.truncated;
+      },
     });
+  };
+
+  for (let round = 0; ; round++) {
+    // Heartbeat: the reply may stream entirely MUTED (tool-call JSON is gated out of the visible
+    // token stream) or the model may think silently for a while — without this the turn looks frozen,
+    // which is exactly what a linked phone saw. A visible token / the final answer clears it.
+    opts.onEvent?.({ kind: "activity", text: round === 0 ? "Thinking…" : "Working on it…" });
+    const reply = await chatOnce();
     const calls = round < MAX_BUDDY_TOOL_ROUNDS ? parseBuddyToolCalls(reply) : [];
     const withThinking = (out: BuddyTurnOutcome): BuddyTurnOutcome =>
       lastThinking.trim() ? { ...out, thinking: lastThinking.trim() } : out;
@@ -254,11 +270,11 @@ export async function runBuddyTurn(opts: {
         messages.push({ role: "user", content: nudge });
         continue;
       }
-      transcript.push({ role: "assistant", content: reply });
-      const clean = stripToolCallJson(reply).trim();
+      let clean = stripToolCallJson(reply).trim();
       // The model ended on a tool/blank with NO prose. Ask once for a plain-text wrap-up so the
       // reader never gets an empty bubble; if it's still empty, fall back to a short line.
       if (!clean && !wrappedUp) {
+        transcript.push({ role: "assistant", content: reply });
         wrappedUp = true;
         const wrap =
           "[Now reply to the reader in plain text — briefly say what you did or found. No tool calls.]";
@@ -266,6 +282,25 @@ export async function runBuddyTurn(opts: {
         transcript.push({ role: "user", content: wrap });
         continue;
       }
+      // AUTO-CONTINUE: the server CUT THE ANSWER OFF at the token budget. Keep asking it to pick up
+      // where it left off and stitch the parts, so a big document (a full worksheet, a long file)
+      // isn't capped at one reply — the reader sees each part stream in with a "part N" status.
+      let rawSoFar = reply;
+      for (let part = 0; lastTruncated && part < MAX_REPLY_CONTINUATIONS; part++) {
+        opts.onEvent?.({ kind: "activity", text: `Writing the answer… (part ${part + 2})` });
+        messages.push({ role: "assistant", content: rawSoFar });
+        messages.push({
+          role: "user",
+          content:
+            "[You hit the length limit mid-answer. Continue EXACTLY where you left off — pick up at the " +
+            "next character, do NOT repeat anything already written, no preamble and no tool calls — " +
+            "until the answer is complete.]",
+        });
+        rawSoFar = await chatOnce();
+        const more = stripToolCallJson(rawSoFar).trim();
+        if (more) clean = clean ? `${clean}\n${more}` : more;
+      }
+      transcript.push({ role: "assistant", content: clean });
       // Safety net: never hand the reader stray tool-call JSON or an empty string.
       return withThinking({ text: nonEmptyAnswer(clean, toolResults.length > 0), transcript, toolResults });
     }

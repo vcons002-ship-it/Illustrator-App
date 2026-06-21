@@ -31,6 +31,13 @@ export interface ChatOptions {
   /** Response budget; defaults per provider (~1024). */
   maxTokens?: number;
   /**
+   * Called once when the reply finishes, reporting whether the model was CUT OFF at the token
+   * budget (`truncated: true` ⇒ finish_reason "length"). The chat/buddy loop uses this to AUTO-
+   * CONTINUE a long answer in further passes and stitch them together, so a big document isn't
+   * capped at one reply. Optional — providers that can't tell simply never call it (no continuation).
+   */
+  onComplete?: (meta: { truncated: boolean }) => void;
+  /**
    * The byte-stable LEADING portion of the system prompt (role + tool definitions +
    * guard) — must be a genuine prefix of the joined system text. Providers with an
    * explicit prompt cache (Claude) mark a cache breakpoint after it so multi-turn
