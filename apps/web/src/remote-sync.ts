@@ -10,8 +10,29 @@
  * stream back over the same relay, so no model or data ever needs to live on the phone.
  */
 
-import type { BookSource, BookSummary, CalendarEvent, TaskPlan, VisualBible } from "@visual-reader/core";
+import type { BookSource, BookSummary, CalendarEvent, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
 import type { InstalledModel, ReaderSettings } from "@visual-reader/ui";
+
+/**
+ * A Tasks/Calendar action the phone asks the desktop to perform. The desktop owns the planner data
+ * (Google + the task store), so the phone never mutates locally — it relays the intent, the desktop
+ * runs its existing handler, and the result flows back via the `vrsync:planner` mirror.
+ */
+export type PlannerCommand =
+  | { action: "createTask"; title: string; dueIso?: string; recurrence?: TaskRecurrence; planNow: boolean }
+  | { action: "scanNow" }
+  | { action: "planPending" }
+  | { action: "planTask"; id: string }
+  | { action: "openTask"; id: string }
+  | { action: "advanceStep"; planId: string; stepId: string }
+  | { action: "toggleStep"; planId: string; stepId: string; done: boolean }
+  | { action: "ignoreTask"; id: string }
+  | { action: "addDetails"; planId: string; text: string }
+  | { action: "deleteTask"; id: string }
+  | { action: "restoreTask"; id: string }
+  | { action: "deleteForever"; id: string }
+  | { action: "calShift"; delta: number | "today" }
+  | { action: "createEvent"; ev: { summary: string; start: string; end: string; description?: string; location?: string } };
 
 /**
  * Tasks + calendar state mirrored to the phone so its Tasks/Calendar panels show the desktop's
@@ -74,7 +95,8 @@ export type CmdToDesktop =
   | { type: "vrcmd:hello" } // "I just connected — send me a full snapshot."
   | { type: "vrcmd:open"; bookId: string } // open this library book on the desktop
   | { type: "vrcmd:home" } // leave the open book (back to the desktop's home screen)
-  | { type: "vrcmd:settings"; settings: ReaderSettings }; // phone edited settings → apply on the desktop (it renders)
+  | { type: "vrcmd:settings"; settings: ReaderSettings } // phone edited settings → apply on the desktop (it renders)
+  | { type: "vrcmd:planner"; command: PlannerCommand }; // phone Tasks/Calendar action → run on the desktop
 
 export type AppSyncMessage = SyncToPhone | CmdToDesktop;
 
