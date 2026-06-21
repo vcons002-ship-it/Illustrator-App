@@ -460,11 +460,16 @@ function llmVramOp(action: "stop" | "ensure"): Promise<void> {
 
 /** Whether it's SAFE + worth freeing the chat LLM for a render. Only the BUNDLED managed
  * llama-server (which we can kill + relaunch) holds local memory; only when images render on the
- * same local GPU; and ONLY when NO book is open — so the engine's bible-build can never need the
- * LLM while it's gone (it gets relaunched on the next chat, or when a book is opened). */
+ * same local GPU; and only when the Visual Bible isn't MID-BUILD (that's the one thing on the book
+ * path that needs the text LLM). A book can be open and fully analysed — then the llama-server is
+ * just squatting ~10GB of GPU+RAM during the render (the reported Qwen-Image thrash), so we free it
+ * and restore it right after (warmChatModel). chat/buddy turns relaunch it first via
+ * withChatPriority; opening/analysing a book restores it via handleOpen. */
 function canFreeChatLlm(): boolean {
   if (!settings || settings.localTextBackend !== "bundled") return false;
-  if (engine) return false; // a book is open — its bible-build may need the LLM; leave it resident
+  // Never free mid-bible-build (active chapter, or a run with chapters still pending) — the engine
+  // would lose the LLM it's extracting with.
+  if (bibleActive || (bibleRunTotal > 0 && bibleRunDone < bibleRunTotal)) return false;
   const cs = chatSettingsOf(settings);
   if (cs.imageProvider !== "local" && settings.imageProvider !== "local") return false;
   try {
@@ -1090,11 +1095,16 @@ function warmChatModel(): void {
   cancelChatWarm();
   warmTimer = setTimeout(() => {
     warmTimer = undefined;
-    // If we explicitly STOPPED the bundled LLM to free memory for an image session, leave it
-    // unloaded — don't reload a multi-GB model the reader isn't using. It's relaunched on demand
-    // when they actually chat (withChatPriority) or open a book (handleOpen). Otherwise, just warm
-    // the model a render may have evicted, so the next chat isn't cold.
-    if (chatLlmFreed) return;
+    // If we explicitly STOPPED the bundled LLM to free memory for an image session:
+    //  - A book is OPEN → the engine may need the LLM next (a chapter, concept cards, task plans),
+    //    and we only freed it because the bible was idle for THIS render — so restore it now (after
+    //    a render burst, debounced) to bound the freed window to the burst itself.
+    //  - PURE IMAGE (no book) → leave it unloaded; relaunched on demand at the next chat/open, so a
+    //    standalone image session never reloads a multi-GB model the reader isn't using.
+    if (chatLlmFreed) {
+      if (engine) void restoreChatLlm();
+      return;
+    }
     void (async () => {
       try {
         const { llm } = chatProviders();
