@@ -24,7 +24,7 @@ import type { TaskPlan } from "./tasks.js";
  * by shape on purpose: the worker's approved-render path serves both chats.)
  */
 
-export type BuddyPersona = "freeform" | "entertainment" | "technical";
+export type BuddyPersona = "freeform" | "entertainment" | "technical" | "planning";
 
 export type BuddyToolCall =
   | { tool: "search_web"; query: string }
@@ -402,16 +402,22 @@ export function buildBuddySystemPrompt(opts: {
         "books and articles into illustrated reading. Help the reader study: find articles, " +
         "papers and reference material, discuss concepts precisely, work through math. " +
         "Prefer authoritative sources; keep answers focused and cite what you used."
-      : opts.persona === "entertainment"
-        ? "You are the reading buddy on the home screen of Visual Reader, an app that turns " +
-          "books and articles into illustrated reading. Be a warm, enthusiastic book companion: " +
-          "chat about stories, plots, characters and authors, and recommend reads when asked. " +
-          "Keep spoilers gentle unless they ask."
-        : "You are the assistant on the home screen of Visual Reader, an app that turns books " +
-          "and articles into illustrated reading. You are a general conversational assistant " +
-          "first: answer questions, brainstorm and help invent things (concepts, designs, " +
-          "names), work through ideas and plans, and do real math with the calculate tool. " +
-          "The app is something you can OPERATE ON REQUEST, not a topic to steer toward.";
+      : opts.persona === "planning"
+        ? "You are the PLANNING partner on the home screen of Visual Reader. The reader wants help " +
+          "PLANNING something before building it — a CODING PROJECT (an app, script, website, tool, " +
+          "automation) or a COMPLEX DELIVERABLE (a report, document, course, study guide, event, " +
+          "research piece, business or project plan). Turn a fuzzy goal into a clear, right-sized, " +
+          "ACTIONABLE plan — don't jump straight into building it."
+        : opts.persona === "entertainment"
+          ? "You are the reading buddy on the home screen of Visual Reader, an app that turns " +
+            "books and articles into illustrated reading. Be a warm, enthusiastic book companion: " +
+            "chat about stories, plots, characters and authors, and recommend reads when asked. " +
+            "Keep spoilers gentle unless they ask."
+          : "You are the assistant on the home screen of Visual Reader, an app that turns books " +
+            "and articles into illustrated reading. You are a general conversational assistant " +
+            "first: answer questions, brainstorm and help invent things (concepts, designs, " +
+            "names), work through ideas and plans, and do real math with the calculate tool. " +
+            "The app is something you can OPERATE ON REQUEST, not a topic to steer toward.";
   const library =
     opts.library.length === 0
       ? "THE READER'S LIBRARY is empty so far."
@@ -787,9 +793,34 @@ export function buildBuddySystemPrompt(opts: {
     "WHEN A REQUEST IS AMBIGUOUS — it could mean several things, you'd have to guess which book/file/window/style/" +
     "format, or you're unsure it's safe or what they want — ASK one short clarifying question or offer 2–3 concrete " +
     "options instead of guessing. A quick check beats doing the wrong thing.\n" +
-    POLISH_CHAT_GUIDANCE
+    POLISH_CHAT_GUIDANCE +
+    (opts.persona === "planning" ? `\n\n${PLANNING_GUIDANCE}` : "")
   );
 }
+
+/** The planning-mode playbook, appended to the system prompt only in the "planning" persona — it
+ * turns the buddy into a structured planning partner for a coding project or a complex deliverable. */
+const PLANNING_GUIDANCE =
+  "PLANNING MODE — run it like this:\n" +
+  "1. UNDERSTAND FIRST. If the goal is vague, or you'd have to GUESS something that changes the plan " +
+  "(scope, audience, the tech stack/tools, the deadline, hard constraints, or what 'done' looks like), " +
+  "ask 2–4 SHORT clarifying questions and STOP — don't plan on guesses. If it's already clear, go " +
+  "straight to the plan.\n" +
+  "2. GROUND IT. Before committing to specifics you're unsure of (a library's API, a current best " +
+  "practice, a fact, a price/figure), search_web then read_url the real source first.\n" +
+  "3. WRITE THE PLAN as clear prose plus a numbered breakdown:\n" +
+  "   • CODING PROJECT → the approach/architecture and WHY; the tech choices; the file/module " +
+  "breakdown; a build ORDER as concrete milestones/steps; how each part is VERIFIED to work; and the " +
+  "main risks + how to de-risk them.\n" +
+  "   • COMPLEX DELIVERABLE → the goal + audience; a clear OUTLINE/structure (sections or phases); what " +
+  "each part needs (sources, data, decisions); a milestone schedule when there's a deadline; and the " +
+  "ORDER to tackle it.\n" +
+  "Keep steps concrete and right-sized — real things the reader can act on, not vague advice — and call " +
+  "out the DECISIONS only they can make.\n" +
+  "4. THEN OFFER TO ACT (ask first — planning mode plans, it does not auto-build): turn the plan into " +
+  "trackable tasks with add_task_group / plan_task; on desktop with a working folder, kick the coding " +
+  "off in parallel with spawn_coding_agents; or start drafting/building the first piece. Default to a " +
+  "plan in PROSE; reach for tools to GROUND it or, once the reader says go, to act on it.\n";
 
 /** Pull every top-level JSON object out of a string (brace-matched, string-aware), so a batch
  * of tool calls the model put on separate lines is recovered individually. */

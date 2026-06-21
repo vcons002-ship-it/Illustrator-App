@@ -253,6 +253,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
           <span style={personaGroupStyle}>
             {personaButton("freeform", "Freeform", "General assistant — chat about anything; runs the app when asked")}
+            {personaButton("planning", "📋 Planning", "Plan a coding project or a complex deliverable before building it — clarifies, structures, and breaks it into steps")}
             {personaButton("entertainment", "Entertainment", "Stories, novels, fun reads — a book-club voice")}
             {personaButton("technical", "Technical", "Articles, papers, study material — a research voice")}
           </span>
@@ -302,12 +303,14 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           <div style={{ opacity: 0.55, fontSize: 12, padding: 12, lineHeight: 1.5 }}>
             {props.persona === "technical"
               ? "Ask for a topic — I can find articles, open them in the reader, and illustrate the concepts while we talk. Try “find me an article on the citric acid cycle and open it”."
-              : props.persona === "entertainment"
-                ? "Tell me what you feel like reading — I can open books from your library, find classics on Project Gutenberg, and illustrate them while we chat. Try “open Frankenstein and illustrate it”."
-                : "Chat about anything — questions, ideas, math, inventions, writing. I can also run the app for you: “open a random classic and illustrate it in oil painting style”, “generate a picture of an apple”, “read this URL and summarize it”, “make a study quiz from my notes”." +
-                  (props.desktop
-                    ? " On the desktop app I can also find files on your computer, run and test code, and take a screenshot to see if it works (you approve each step)."
-                    : "")}
+              : props.persona === "planning"
+                ? "Tell me what you want to build or write and I'll help you PLAN it first — a coding project or a complex deliverable. I'll ask a couple of questions, then lay out the approach, the steps, and the milestones, and offer to turn it into tasks (or kick off the work). Try “help me plan a budgeting web app” or “plan a 10-page report on coral reefs”."
+                : props.persona === "entertainment"
+                  ? "Tell me what you feel like reading — I can open books from your library, find classics on Project Gutenberg, and illustrate them while we chat. Try “open Frankenstein and illustrate it”."
+                  : "Chat about anything — questions, ideas, math, inventions, writing. I can also run the app for you: “open a random classic and illustrate it in oil painting style”, “generate a picture of an apple”, “read this URL and summarize it”, “make a study quiz from my notes”." +
+                    (props.desktop
+                      ? " On the desktop app I can also find files on your computer, run and test code, and take a screenshot to see if it works (you approve each step)."
+                      : "")}
           </div>
         )}
         {props.messages.map((m, i) => (
@@ -635,7 +638,9 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               ? "Thinking…"
               : props.persona === "technical"
                 ? "What do you want to study? (Enter to send, / for commands)"
-                : "What do you feel like reading? (Enter to send, / for commands)"
+                : props.persona === "planning"
+                  ? "What do you want to plan? (Enter to send, / for commands)"
+                  : "What do you feel like reading? (Enter to send, / for commands)"
           }
           rows={2}
           style={textareaStyle}

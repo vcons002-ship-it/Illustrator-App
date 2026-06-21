@@ -265,6 +265,17 @@ describe("buildBuddySystemPrompt", () => {
     expect(prompt).toContain("NEVER steer the chat toward opening");
   });
 
+  it("planning persona adds the planning playbook (coding project + complex deliverable)", () => {
+    const p = buildBuddySystemPrompt({ persona: "planning", library: [] });
+    expect(p).toContain("PLANNING partner");
+    expect(p).toContain("CODING PROJECT");
+    expect(p).toContain("COMPLEX DELIVERABLE");
+    expect(p).toContain("PLANNING MODE"); // the appended playbook
+    expect(p).toMatch(/clarifying questions/i); // understand-first step
+    // The planning playbook is exclusive to the planning persona.
+    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain("PLANNING MODE");
+  });
+
   it("every persona carries the show-me-vs-generate image-tool rule", () => {
     for (const persona of ["freeform", "entertainment", "technical"] as const) {
       const prompt = buildBuddySystemPrompt({ persona, library: [] });
