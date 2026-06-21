@@ -2111,8 +2111,9 @@ export function App() {
   }, [loadPage]);
   // Remote link (LAN, desktop): start/stop the WebSocket relay so a phone on the same Wi-Fi
   // can drive the assistant. Clicking it IS the opt-in (nothing listens until you start it).
-  // `remoteLink` is the running server (kept while the panel is closed, so the URL + pairing
-  // token stay CONSTANT across re-opens); `showRemoteLink` only controls the modal's visibility.
+  // `remoteLink` is the running server (kept while the panel is closed, so the URL + pairing token
+  // stay CONSTANT across re-opens AND app restarts — persisted, see persistedRemoteToken);
+  // `showRemoteLink` only controls the modal's visibility.
   const [remoteLink, setRemoteLink] = useState<RemoteServerStatus | null>(null);
   const [showRemoteLink, setShowRemoteLink] = useState(false);
   const bridgeToRelay = useCallback(
@@ -2122,17 +2123,27 @@ export function App() {
     [startHostBridge],
   );
   // On desktop startup, adopt an already-running relay so a reload doesn't lose (or duplicate) it.
+  // If none is running but the user had the link enabled in a previous session, bring it back up
+  // with the SAME persisted token so a paired phone reconnects without re-pairing.
   useEffect(() => {
     if (!isDesktop) return;
-    void remoteServerStatus().then((s) => {
+    void remoteServerStatus().then(async (s) => {
       if (s.running) {
         setRemoteLink(s);
         if (s.token) bridgeToRelay(s, s.token);
+        return;
+      }
+      if (remoteWasEnabled()) {
+        const token = persistedRemoteToken();
+        const status = await startRemoteServer(token);
+        setRemoteLink(status);
+        if (status.running) bridgeToRelay(status, token);
       }
     });
   }, [bridgeToRelay]);
   // Open the panel WITHOUT restarting a live server: reuse the running one (same URL/token) and
-  // only mint a new token + start a server when nothing is listening yet.
+  // only start a server when nothing is listening yet — with the PERSISTED token, so the link is
+  // the same address the phone saved before (stable across sessions until "Change link").
   const openRemoteLink = useCallback(async () => {
     const existing = remoteLink?.running ? remoteLink : await remoteServerStatus();
     if (existing.running) {
@@ -2141,16 +2152,31 @@ export function App() {
       if (existing.token) bridgeToRelay(existing, existing.token);
       return;
     }
-    const token = generatePairingToken();
+    const token = persistedRemoteToken();
     const status = await startRemoteServer(token);
+    setRemoteEnabled(status.running);
     setRemoteLink(status);
     setShowRemoteLink(true);
     bridgeToRelay(status, token);
   }, [remoteLink, bridgeToRelay]);
-  // Explicit stop (the only thing that rotates the link): tear down the bridge + server.
+  // "Change link": the ONLY thing that rotates the pairing code. Mint a new token, persist it, and
+  // restart the server so previously-paired phones must re-open the new address.
+  const changeRemoteLink = useCallback(async () => {
+    stopHostBridge();
+    await stopRemoteServer();
+    const token = rotateRemoteToken();
+    const status = await startRemoteServer(token);
+    setRemoteEnabled(status.running);
+    setRemoteLink(status);
+    if (status.running) bridgeToRelay(status, token);
+  }, [stopHostBridge, bridgeToRelay]);
+  // Explicit stop: tear down the bridge + server and forget the opt-in (no auto-restart next
+  // session). The token stays persisted, so re-opening the link gives the SAME address — only
+  // "Change link" rotates it.
   const stopRemoteLink = useCallback(async () => {
     stopHostBridge();
     await stopRemoteServer();
+    setRemoteEnabled(false);
     setRemoteLink(null);
     setShowRemoteLink(false);
   }, [stopHostBridge]);
@@ -5095,8 +5121,9 @@ export function App() {
                 </code>
                 <p style={{ fontSize: 11, opacity: 0.55, marginTop: 8 }}>
                   Experimental — needs a desktop build with the phone-link command and on-device verification (see
-                  REMOTE-LINK.md). LAN-only; nothing leaves your network. Closing this keeps the server running and the
-                  address stable — re-opening shows the same link. Use Stop to end it (which rotates the pairing code).
+                  REMOTE-LINK.md). LAN-only; nothing leaves your network. This link stays the SAME across app restarts
+                  (the phone keeps working) until you press <b>Change link</b>, which rotates the pairing code. Stop ends
+                  the relay but keeps the same address for next time.
                 </p>
               </>
             ) : (
@@ -5104,9 +5131,14 @@ export function App() {
             )}
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
               {remoteLink.running ? (
-                <button style={styles.button} onClick={() => void stopRemoteLink()}>
-                  Stop
-                </button>
+                <>
+                  <button style={styles.button} onClick={() => void stopRemoteLink()}>
+                    Stop
+                  </button>
+                  <button style={styles.button} onClick={() => void changeRemoteLink()} title="Rotate the pairing code — previously linked phones must open the new address.">
+                    Change link
+                  </button>
+                </>
               ) : null}
               <button style={{ ...styles.button, marginLeft: "auto" }} onClick={() => setShowRemoteLink(false)}>
                 Close
@@ -5506,6 +5538,60 @@ function fileNameFromUrl(url: string): string {
     /* fall through */
   }
   return "model.safetensors";
+}
+
+/**
+ * The phone-link pairing token is PERSISTED (not minted per session) so the link a phone has
+ * saved keeps working across desktop restarts. The token only changes when the user presses
+ * "Change link" (rotateRemoteToken). The "enabled" flag remembers that the user opted in, so a
+ * relay that was running is brought back up on the next launch with the SAME token.
+ */
+const REMOTE_TOKEN_KEY = "vr-remote-token";
+const REMOTE_ENABLED_KEY = "vr-remote-enabled";
+
+/** The persisted pairing token, minting + storing one on first use (stable across restarts). */
+function persistedRemoteToken(): string {
+  try {
+    const existing = localStorage.getItem(REMOTE_TOKEN_KEY);
+    if (existing) return existing;
+  } catch {
+    /* ignore */
+  }
+  const token = generatePairingToken();
+  try {
+    localStorage.setItem(REMOTE_TOKEN_KEY, token);
+  } catch {
+    /* ignore */
+  }
+  return token;
+}
+
+/** Rotate the persisted pairing token (the "Change link" action) → a fresh, stored token. */
+function rotateRemoteToken(): string {
+  const token = generatePairingToken();
+  try {
+    localStorage.setItem(REMOTE_TOKEN_KEY, token);
+  } catch {
+    /* ignore */
+  }
+  return token;
+}
+
+/** Remember whether the user opted into the relay, so it auto-restarts on the next launch. */
+function setRemoteEnabled(on: boolean): void {
+  try {
+    if (on) localStorage.setItem(REMOTE_ENABLED_KEY, "1");
+    else localStorage.removeItem(REMOTE_ENABLED_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+function remoteWasEnabled(): boolean {
+  try {
+    return localStorage.getItem(REMOTE_ENABLED_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 function loadStoredSettings(): { settings: ReaderSettings; encrypted?: EncryptedSecrets } {
