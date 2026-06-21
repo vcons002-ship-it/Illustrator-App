@@ -82,6 +82,11 @@ export interface ChatBuddyPanelProps {
   /** Grant filesystem access for the session (find_files approval only). */
   onApprovePendingToolAlways?: () => void;
   onDismissPendingTool: () => void;
+  /** Per-step approval QUEUE for parallel coding agents (Phase 2): each entry is one agent's
+   * pending write/command, awaiting the reader's click while siblings keep running. */
+  agentApprovals?: { id: number; title: string; call: BuddyToolCall }[];
+  onApproveAgentTool?: (id: number) => void;
+  onDenyAgentTool?: (id: number) => void;
   onCancel: () => void;
   onClearHistory: () => void;
   /** Delete one message by index (must be referentially stable — see MessageBubble). */
@@ -338,6 +343,48 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         {props.activity ? (
           <div style={{ opacity: 0.6, fontSize: 12, padding: "2px 8px" }}>{props.activity}</div>
         ) : null}
+        {(props.agentApprovals ?? []).map((a) => {
+          const what =
+            a.call.tool === "run_command"
+              ? a.call.command
+              : a.call.tool === "write_file"
+                ? `write ${a.call.path}`
+                : a.call.tool;
+          return (
+            <div
+              key={a.id}
+              style={{ ...approvalStyle, borderColor: "rgba(120,170,255,0.6)", background: "rgba(120,170,255,0.08)" }}
+            >
+              <div style={{ fontSize: 12, marginBottom: 6 }}>
+                🤖 <b>{a.title}</b> wants to {a.call.tool === "run_command" ? "run a command" : "write a file"}:
+                <code
+                  style={{
+                    display: "block",
+                    marginTop: 4,
+                    padding: "6px 8px",
+                    borderRadius: 6,
+                    background: "rgba(0,0,0,0.3)",
+                    fontFamily: "ui-monospace, Menlo, monospace",
+                    fontSize: 12,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-all",
+                  }}
+                >
+                  {what.slice(0, 600)}
+                </code>
+                <span style={{ display: "block", opacity: 0.7, marginTop: 4 }}>
+                  Runs in this agent's isolated worktree. Other agents keep working while this waits.
+                </span>
+              </div>
+              <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={() => props.onApproveAgentTool?.(a.id)}>
+                Approve
+              </button>
+              <button style={smallButtonStyle} onClick={() => props.onDenyAgentTool?.(a.id)}>
+                Deny
+              </button>
+            </div>
+          );
+        })}
         {props.pendingTool?.tool === "generate_image" && (
           <div style={approvalStyle}>
             <div style={{ fontSize: 12, marginBottom: 6 }}>
