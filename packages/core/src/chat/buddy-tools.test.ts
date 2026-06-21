@@ -749,6 +749,21 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
     expect(parseBuddyToolCalls("just a normal sentence")).toEqual([]);
   });
 
+  it("tolerates the TRAILING COMMAS weaker local models emit (which strict JSON drops)", () => {
+    // A single trailing comma before } used to make JSON.parse throw → the tool call was silently
+    // dropped → the buddy "couldn't string together tools" / fell back to "I didn't catch that".
+    expect(parseBuddyToolCalls('{"tool":"search_web","query":"VA SOL Algebra 1 standards",}')).toEqual([
+      { tool: "search_web", query: "VA SOL Algebra 1 standards" },
+    ]);
+    // A batch where each object has a trailing comma still recovers all of them.
+    const batched = '{"tool":"list_tasks",}\n{"tool":"search_web","query":"x",}';
+    expect(parseBuddyToolCalls(batched).map((c) => c.tool)).toEqual(["list_tasks", "search_web"]);
+    // A comma INSIDE a quoted value is never touched (the repair is string-aware).
+    expect(parseBuddyToolCalls('{"tool":"search_web","query":"apples, oranges, and pears"}')).toEqual([
+      { tool: "search_web", query: "apples, oranges, and pears" },
+    ]);
+  });
+
   it("looksLikeToolJson flags a tool-shaped reply so raw JSON isn't shown as prose", () => {
     expect(looksLikeToolJson('{"tool":"create_task","title":"x"}')).toBe(true);
     expect(looksLikeToolJson("hello there, here is my answer")).toBe(false);
