@@ -436,14 +436,20 @@ describe("ComfyUIBackend", () => {
     expect(models.map((m) => m.id)).toEqual(["a.safetensors", "b.safetensors"]);
   });
 
-  it("runs the prompt → history → view flow", async () => {
+  it("runs the prompt → history → view flow (waiting while the prompt is queued)", async () => {
     const png = new TextEncoder().encode("COMFY").buffer;
-    const transport = new FakeTransport((_req, i) => {
-      if (i === 0) return { json: { prompt_id: "p1" } };
-      if (i === 1) return { json: {} }; // not ready yet
-      if (i === 2)
-        return { json: { p1: { outputs: { "9": { images: [{ filename: "f.png", subfolder: "", type: "output" }] } } } } };
-      return { bytes: png };
+    let historyCalls = 0;
+    const transport = new FakeTransport((req) => {
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p1" } };
+      if (req.url.includes("/history/")) {
+        historyCalls++;
+        // Empty for the first few polls (still rendering), then the finished image.
+        return historyCalls < 3
+          ? { json: {} }
+          : { json: { p1: { outputs: { "9": { images: [{ filename: "f.png", subfolder: "", type: "output" }] } } } } };
+      }
+      if (req.url.endsWith("/queue")) return { json: { queue_running: [[0, "p1"]] } }; // still alive
+      return { bytes: png }; // /view
     });
     const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188/", transport, pollIntervalMs: 0 });
     const out = await backend.generate(imageInput, "sdxl.safetensors");
@@ -451,8 +457,41 @@ describe("ComfyUIBackend", () => {
     expect(transport.requests[0]!.url).toBe("http://127.0.0.1:8188/prompt");
     const body = transport.requests[0]!.body as { prompt: Record<string, { class_type: string; inputs: Record<string, unknown> }> };
     expect(body.prompt["4"]!.inputs.ckpt_name).toBe("sdxl.safetensors");
-    expect(transport.requests[3]!.url).toContain("/view?filename=f.png");
+    // It polled /queue while history was empty (didn't give up), then fetched the finished image.
+    expect(transport.requests.some((r) => r.url.endsWith("/queue"))).toBe(true);
+    expect(transport.requests.at(-1)!.url).toContain("/view?filename=f.png");
     expect(new TextDecoder().decode(out.bytes)).toBe("COMFY");
+  });
+
+  it("never times out a slow render that stays in the queue (only the cancel stops it)", async () => {
+    const png = new TextEncoder().encode("SLOW").buffer;
+    let historyCalls = 0;
+    const transport = new FakeTransport((req) => {
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "p9" } };
+      if (req.url.includes("/history/")) {
+        historyCalls++;
+        // Empty for MANY polls — far beyond any old fixed timeout — then finally finishes.
+        return historyCalls < 50
+          ? { json: {} }
+          : { json: { p9: { outputs: { "9": { images: [{ filename: "slow.png", subfolder: "", type: "output" }] } } } } };
+      }
+      if (req.url.endsWith("/queue")) return { json: { queue_pending: [[0, "p9"]] } }; // queued the whole time
+      return { bytes: png };
+    });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport, pollIntervalMs: 0 });
+    const out = await backend.generate(imageInput, "sdxl.safetensors");
+    expect(new TextDecoder().decode(out.bytes)).toBe("SLOW"); // collected the image, never timed out
+  });
+
+  it("fails only if the prompt vanishes from BOTH history and the queue", async () => {
+    const transport = new FakeTransport((req) => {
+      if (req.url.endsWith("/prompt")) return { json: { prompt_id: "gone" } };
+      if (req.url.includes("/history/")) return { json: {} }; // never finishes
+      if (req.url.endsWith("/queue")) return { json: { queue_running: [], queue_pending: [] } }; // not queued
+      return { bytes: new ArrayBuffer(0) };
+    });
+    const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport, pollIntervalMs: 0 });
+    await expect(backend.generate(imageInput, "sdxl.safetensors")).rejects.toThrow(/dropped the render/i);
   });
 });
 
