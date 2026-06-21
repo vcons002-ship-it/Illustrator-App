@@ -1491,6 +1491,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       onEvent: (e) => {
         if (e.kind === "token") post({ type: "chatToken", requestId: msg.requestId, text: e.text });
         else if (e.kind === "thinking") thinking(e.text);
+        else if (e.kind === "activity") post({ type: "chatActivity", requestId: msg.requestId, text: e.text });
         else if (e.kind === "tool") post({ type: "chatTool", requestId: msg.requestId, round: e.round, call: e.call });
         else
           post({
@@ -2910,6 +2911,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       onEvent: (e) => {
         if (e.kind === "token") post({ type: "buddyToken", requestId: msg.requestId, text: e.text });
         else if (e.kind === "thinking") thinking(e.text);
+        else if (e.kind === "activity") post({ type: "buddyActivity", requestId: msg.requestId, text: e.text });
         else if (e.kind === "tool") post({ type: "buddyTool", requestId: msg.requestId, round: e.round, call: e.call });
         else
           post({

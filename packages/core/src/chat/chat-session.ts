@@ -42,6 +42,9 @@ export type ChatTurnEvent =
   | { kind: "token"; text: string }
   /** A thinking model is reasoning (no visible answer yet); `text` is the live reasoning. */
   | { kind: "thinking"; text: string }
+  /** A transient "working" heartbeat so a turn streaming MUTED content (tool-call JSON) or thinking
+   * silently never looks frozen. Cleared by the first visible token / the settled answer. */
+  | { kind: "activity"; text: string }
   | { kind: "tool"; round: number; call: ToolCall }
   | { kind: "toolResult"; round: number; call: ToolCall; result: ToolResultPayload };
 
@@ -138,6 +141,8 @@ export async function runChatTurn(opts: {
   const toolResults: ChatTurnOutcome["toolResults"] = [];
 
   for (let round = 0; ; round++) {
+    // Heartbeat so a muted/thinking round never looks frozen (see runBuddyTurn).
+    opts.onEvent?.({ kind: "activity", text: round === 0 ? "Thinking…" : "Working on it…" });
     const reply = await opts.llm.chat(messages, {
       // Fresh gate per round: a tool-JSON round streams nothing; the prose round streams live.
       ...(opts.onEvent
