@@ -269,6 +269,17 @@ export class ComfyUIBackend implements LocalEngineBackend {
             "an all-in-one SD/SDXL checkpoint. (If you just added the files, restart the engine.)",
         );
       }
+      // Distinctness guard: if clip_l and clip_g resolved to the SAME file, the loader gets two
+      // 768-wide pooled halves instead of clip_l(768)+clip_g(1280)=2048 → the exact shape crash.
+      // Catch it pre-flight with the same clip_g guidance rather than a cryptic runtime error.
+      if (clipL === clipG) {
+        throw new Error(
+          `HiDream resolved the same file (${clipG}) for both clip_l and clip_g, so its pooled text ` +
+            "embedding would be 768 instead of the required 2048. Install a genuine, distinct clip_g " +
+            "(1280-wide) in models/text_encoders — e.g. clip_g_hidream.safetensors — and pick it under " +
+            "Settings → Local model.",
+        );
+      }
       // Diagnostic: the EXACT four files we hand QuadrupleCLIPLoader (clip_name1..4) + the VAE,
       // so a "wrong pooled size" can be traced to a mis-picked/duplicate encoder at a glance.
       console.info(
@@ -613,7 +624,16 @@ export class ComfyUIBackend implements LocalEngineBackend {
       const { prompt_id } = await submit.json<PromptResponse>();
       job.promptId = prompt_id;
 
-      const image = await this.pollForImage(prompt_id, signal, family);
+      // For HiDream, carry the EXACT clip_l/clip_g files we resolved into the poller so a
+      // pooled-shape failure (768 vs 2048) names the culprit file instead of a mystery.
+      const hidreamClips =
+        family === "hidream" && components?.textEncoder.class_type === "QuadrupleCLIPLoader"
+          ? {
+              clipL: String(components.textEncoder.inputs.clip_name1 ?? ""),
+              clipG: String(components.textEncoder.inputs.clip_name2 ?? ""),
+            }
+          : undefined;
+      const image = await this.pollForImage(prompt_id, signal, family, hidreamClips);
       const view = await this.transport.send({
         url:
           `${this.baseUrl}/view?filename=${encodeURIComponent(image.filename)}` +
@@ -690,6 +710,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
     promptId: string,
     signal?: AbortSignal,
     family?: ModelFamily,
+    hidreamClips?: { clipL?: string; clipG?: string },
   ): Promise<HistoryImage> {
     // A render is NEVER timed out for being slow — only the reader's cancel (the abort signal)
     // stops a live job. We poll /history for the result, and treat the prompt as alive as long as
@@ -729,7 +750,9 @@ export class ComfyUIBackend implements LocalEngineBackend {
         const first = images[0];
         if (first) return first;
         // Finished but no image: surface ComfyUI's REAL execution error (otherwise it's a mystery).
-        throw new Error(comfyExecutionError(entry.status, family) ?? "ComfyUI finished but produced no image");
+        throw new Error(
+          comfyExecutionError(entry.status, family, hidreamClips) ?? "ComfyUI finished but produced no image",
+        );
       }
       // Not done yet — still queued/running in ComfyUI? Then keep waiting, however long it takes.
       if (await this.isPromptQueued(promptId, signal)) {
@@ -1099,6 +1122,7 @@ function delay(ms: number): Promise<void> {
 export function comfyExecutionError(
   status: HistoryResponse[string]["status"],
   family?: ModelFamily,
+  hidreamClips?: { clipL?: string; clipG?: string },
 ): string | undefined {
   const errMsg = status?.messages?.find(([type]) => type === "execution_error")?.[1];
   const raw = typeof errMsg?.exception_message === "string" ? errMsg.exception_message : undefined;
@@ -1110,12 +1134,21 @@ export function comfyExecutionError(
     // always clip_g dropping out of the bundle: its 1280-wide pooled is missing, so the pooled
     // is 768 (clip_l only) where the model's p_embedder expects 2048 — NOT a Mistral encoder.
     if (family === "hidream") {
+      // Name the EXACT files we handed the loader so the cause is obvious without digging
+      // through the console: if clip_g isn't a real clip_g file (or matches clip_l), that's it;
+      // if both look right, it's a ComfyUI build too old for HiDream's long clip_l/clip_g.
+      const resolved =
+        hidreamClips?.clipL || hidreamClips?.clipG
+          ? ` Resolved files: clip_l=${hidreamClips.clipL ?? "?"}, clip_g=${hidreamClips.clipG ?? "?"} —` +
+            " if clip_g isn't a genuine clip_g (1280-wide) file, that's the cause."
+          : "";
       return (
         "HiDream loaded clip_l but not clip_g, so its pooled text embedding is half the expected " +
         "size (768 vs 2048). ComfyUI didn't recognise the clip_g file in the QuadrupleCLIPLoader — " +
         "usually because the ComfyUI build is older than HiDream's long clip_l/clip_g (update ComfyUI), " +
-        "or the clip_g file selected for HiDream isn't an actual clip_g. Check the clip_g (Settings → " +
-        `Local model) and that ComfyUI is current. (ComfyUI: ${raw})`
+        "or the clip_g file selected for HiDream isn't an actual clip_g." +
+        resolved +
+        ` Check the clip_g (Settings → Local model) and that ComfyUI is current. (ComfyUI: ${raw})`
       );
     }
     return (

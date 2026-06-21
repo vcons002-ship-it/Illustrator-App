@@ -1035,6 +1035,22 @@ describe("comfyExecutionError + flux2EncoderPatterns (encoder/model mismatch)", 
     expect(msg).not.toMatch(/Mistral/); // the Flux.2 translation must NOT fire for HiDream
     expect(msg).toContain("2048x2560"); // raw kept
   });
+  it("names the resolved clip_l/clip_g files in a HiDream shape-mismatch when known", () => {
+    const status = {
+      status_str: "error",
+      messages: [
+        ["execution_error", { exception_message: "mat1 and mat2 shapes cannot be multiplied (2x768 and 2048x2560)" }],
+      ] as [string, Record<string, unknown>][],
+    };
+    // The self-diagnosing case: a mislabeled clip_g (here, clip_l reused) is named outright so the
+    // user can see WHICH file is wrong without opening the console.
+    const msg = comfyExecutionError(status, "hidream", { clipL: "clip_l_hidream.safetensors", clipG: "clip_l_hidream.safetensors" })!;
+    expect(msg).toContain("clip_l=clip_l_hidream.safetensors");
+    expect(msg).toContain("clip_g=clip_l_hidream.safetensors");
+    expect(msg).toMatch(/genuine clip_g/);
+    // Without the resolved names it still works (no "Resolved files:" tail).
+    expect(comfyExecutionError(status, "hidream")!).not.toMatch(/Resolved files/);
+  });
   it("passes a non-cryptic error through, and returns undefined for success", () => {
     expect(
       comfyExecutionError({ status_str: "error", messages: [["execution_error", { exception_message: "Out of memory" }]] }),
