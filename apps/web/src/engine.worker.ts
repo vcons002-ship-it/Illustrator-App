@@ -441,12 +441,9 @@ function runHostToolViaMain(
 // a burst of local image renders the whole GPU; the model is relaunched after the burst settles.
 const llmVramPending = new Map<number, () => void>();
 let nextLlmVramId = 1;
-/** True while we've stopped the bundled chat LLM to free VRAM for image renders — so any later
- * LLM use (a chat turn, the warm) knows to relaunch it first. */
+/** True while we've stopped the bundled chat LLM to free VRAM/RAM for image renders — so any later
+ * LLM use (a chat turn, opening a book) knows to relaunch it first. */
 let chatLlmFreed = false;
-/** Whether WE paused the bible when freeing the LLM (so we only unpause our own pause, never one
- * the reader or withChatPriority set). */
-let biblePausedByLlmFree = false;
 function llmVramOp(action: "stop" | "ensure"): Promise<void> {
   return new Promise((resolve) => {
     const callId = nextLlmVramId++;
@@ -461,13 +458,13 @@ function llmVramOp(action: "stop" | "ensure"): Promise<void> {
   });
 }
 
-/** Whether it's SAFE + worth freeing the chat LLM's VRAM for a render: only the BUNDLED managed
- * llama-server (which we can kill + relaunch) holds local VRAM; only when images render on the same
- * local GPU; and NEVER while the engine is using the LLM to build the bible (so book extraction is
- * never interrupted). */
+/** Whether it's SAFE + worth freeing the chat LLM for a render. Only the BUNDLED managed
+ * llama-server (which we can kill + relaunch) holds local memory; only when images render on the
+ * same local GPU; and ONLY when NO book is open — so the engine's bible-build can never need the
+ * LLM while it's gone (it gets relaunched on the next chat, or when a book is opened). */
 function canFreeChatLlm(): boolean {
   if (!settings || settings.localTextBackend !== "bundled") return false;
-  if (bibleActive) return false; // the book's bible-build owns the LLM right now — leave it alone
+  if (engine) return false; // a book is open — its bible-build may need the LLM; leave it resident
   const cs = chatSettingsOf(settings);
   if (cs.imageProvider !== "local" && settings.imageProvider !== "local") return false;
   try {
@@ -477,30 +474,20 @@ function canFreeChatLlm(): boolean {
   }
 }
 
-/** Before a STANDALONE image render: free the bundled chat LLM's VRAM (once per burst) so ComfyUI
- * gets the whole GPU. Pauses the bible build too, so it can't try to use the now-stopped LLM. */
+/** Before a STANDALONE image render (no book open): stop the bundled chat LLM so ComfyUI gets the
+ * whole GPU AND its model stops squatting system RAM. Once per burst; relaunched only on demand. */
 async function freeChatLlmForRender(): Promise<void> {
   if (chatLlmFreed || !canFreeChatLlm()) return;
   chatLlmFreed = true;
-  // Pause the bible only if it isn't already — so the build can't try to use the stopped LLM, and
-  // we only ever unpause a pause we own.
-  if (engine && !engine.isBiblePaused()) {
-    engine.setBiblePaused(true);
-    biblePausedByLlmFree = true;
-  }
   await llmVramOp("stop");
 }
 
-/** Relaunch the bundled chat LLM after it was freed (before the next chat / the warm), and let the
- * bible build resume if WE paused it. Idempotent + safe to call from several places. */
+/** Relaunch the bundled chat LLM after it was freed — called ON DEMAND (a chat turn, opening a
+ * book), NOT after every render, so a pure image session leaves it unloaded (no RAM/VRAM held). */
 async function restoreChatLlm(): Promise<void> {
   if (!chatLlmFreed) return;
   chatLlmFreed = false;
   await llmVramOp("ensure");
-  if (biblePausedByLlmFree) {
-    biblePausedByLlmFree = false;
-    engine?.setBiblePaused(false);
-  }
 }
 
 /** Broadcast the current (independent) bible/image pause state + clear status lines. */
@@ -1095,10 +1082,13 @@ function warmChatModel(): void {
   cancelChatWarm();
   warmTimer = setTimeout(() => {
     warmTimer = undefined;
+    // If we explicitly STOPPED the bundled LLM to free memory for an image session, leave it
+    // unloaded — don't reload a multi-GB model the reader isn't using. It's relaunched on demand
+    // when they actually chat (withChatPriority) or open a book (handleOpen). Otherwise, just warm
+    // the model a render may have evicted, so the next chat isn't cold.
+    if (chatLlmFreed) return;
     void (async () => {
       try {
-        // The render burst has settled — relaunch the bundled LLM if we freed it, then warm it.
-        await restoreChatLlm();
         const { llm } = chatProviders();
         if (!supportsChat(llm) || (llm.id !== "local-server" && llm.id !== "webllm")) return;
         await llm.chat([{ role: "user", content: "ok" }], { maxTokens: 1 }).catch(() => {});
@@ -3097,6 +3087,9 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     return;
   }
   opening = true;
+  // Opening a book means the engine's bible-build will need the LLM — relaunch it if a prior image
+  // session had freed it (otherwise extraction would hit a stopped server).
+  await restoreChatLlm();
   try {
     // A NEW engine is built per book — stop the previous one FIRST, or its bible loop
     // and renders keep running and its callbacks mingle the old book's characters and
