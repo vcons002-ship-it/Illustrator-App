@@ -1649,6 +1649,10 @@ export function App() {
             // The phone asked us to update: run the same pull+rebuild+reload, streaming status back.
             runUpdateForPhoneRef.current();
             break;
+          case "vrcmd:restart":
+            // The phone asked us to fully relaunch (Settings → Restart app on the phone).
+            void restartApp().catch(() => {});
+            break;
           case "vrcmd:hostTool":
             // The phone's buddy hit a desktop-runtime tool (files/command/screenshot); run it HERE
             // (we have the runtime + the working folder) and relay the result back.
@@ -1790,6 +1794,12 @@ export function App() {
       }),
     [sendAppSync],
   );
+
+  // PHONE side: ask the desktop to fully relaunch. Fire-and-forget — the desktop restarts (and the
+  // link reconnects via the persisted token); there's no result to await.
+  const onRestartAppRemote = useCallback(() => {
+    sendAppSync({ type: "vrcmd:restart" });
+  }, [sendAppSync]);
 
   // OCR: read the text out of a scanned image with the configured vision model, then open it
   // as a (technical) document via the paste modal. Reuses the screenshot tool's vision path —
@@ -5125,7 +5135,7 @@ export function App() {
               : isRemoteClient
                 ? { onSoftwareUpdate: onSoftwareUpdateRemote }
                 : {})}
-            {...(isDesktop ? { onRestartApp } : {})}
+            {...(isDesktop ? { onRestartApp } : isRemoteClient ? { onRestartApp: onRestartAppRemote } : {})}
             installedModels={installedModels}
             installedTextEncoders={installedTextEncoders}
             installedVaes={installedVaes}
