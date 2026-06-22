@@ -896,9 +896,14 @@ describe("write_file tool", () => {
     expect(parseBuddyToolCall('{"tool":"write_file","content":"x"}')).toBeUndefined();
   });
 
-  it("advertises write_file + the autonomy note only when Autonomous workspace is on", () => {
+  it("advertises write_file whenever commands are on (so it can save-then-run), but the autonomy note only when Autonomous workspace is on", () => {
+    const none = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    expect(none).not.toContain('"tool":"write_file"');
+    // Commands on (but not autonomous): write_file IS available — it saves into the workspace so the
+    // buddy can run its own file — but the no-click autonomy note is not shown.
     const cmds = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true });
-    expect(cmds).not.toContain('"tool":"write_file"');
+    expect(cmds).toContain('"tool":"write_file"');
+    expect(cmds).not.toMatch(/AUTONOMOUS WORKSPACE is ON/);
     const auto = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true, canAutonomousWorkspace: true });
     expect(auto).toContain('"tool":"write_file"');
     expect(auto).toMatch(/AUTONOMOUS WORKSPACE is ON/);
