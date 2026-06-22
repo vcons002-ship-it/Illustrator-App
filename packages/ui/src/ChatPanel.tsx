@@ -857,14 +857,17 @@ function CodeCard({
 }) {
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState<string | undefined>();
+  const [previewOpen, setPreviewOpen] = useState(false);
   const { filename, saveName, mime } = resolveCodeFile(lang, rawFilename);
   const ext = (filename.split(".").pop() ?? "").toLowerCase();
+  const previewable = ext === "html" || ext === "svg";
   const save = async () => {
     if (!onSaveFile) return;
     const r = await onSaveFile(saveName, code, mime);
     setSaved(typeof r === "string" ? r : "saved");
   };
-  const preview = () => {
+  // Open the rendered page in a new tab (a real click → not blocked).
+  const openInTab = () => {
     const url = URL.createObjectURL(new Blob([code], { type: mime }));
     window.open(url, "_blank", "noreferrer");
     setTimeout(() => URL.revokeObjectURL(url), 30_000);
@@ -879,9 +882,14 @@ function CodeCard({
               💾 Save
             </button>
           )}
-          {(ext === "html" || ext === "svg") && (
-            <button style={codeBtnStyle} onClick={preview}>
-              ▶ Preview
+          {previewable && (
+            <button style={codeBtnStyle} onClick={() => setPreviewOpen((o) => !o)} title="Render it right here in the chat">
+              {previewOpen ? "▾ Hide preview" : "▶ Preview"}
+            </button>
+          )}
+          {previewable && (
+            <button style={codeBtnStyle} onClick={openInTab} title="Open the rendered page in a new browser tab">
+              ↗ Tab
             </button>
           )}
           <button
@@ -896,9 +904,20 @@ function CodeCard({
           </button>
         </span>
       </div>
-      <pre style={codePreStyle}>
-        <code>{code}</code>
-      </pre>
+      {previewOpen && previewable ? (
+        // Sandboxed in-app render: scripts run (so a coded page/widget actually works) but it has no
+        // same-origin access — it can't touch the app, cookies, or storage.
+        <iframe
+          title={`Preview of ${filename}`}
+          srcDoc={code}
+          sandbox="allow-scripts allow-forms allow-popups allow-modals"
+          style={{ width: "100%", height: 320, border: "1px solid rgba(255,255,255,0.12)", borderRadius: 6, background: "#fff" }}
+        />
+      ) : (
+        <pre style={codePreStyle}>
+          <code>{code}</code>
+        </pre>
+      )}
       {saved && (
         <div style={{ fontSize: 11, opacity: 0.7, padding: "4px 8px" }}>
           {saved === "saved" ? "✓ Saved (check your downloads)" : `✓ Saved to ${saved}`}
