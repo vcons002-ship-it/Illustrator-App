@@ -1438,6 +1438,12 @@ export function App() {
   const phoneUpdatePending = useRef<{ resolve: (r: UpdateResult) => void; onProgress: (m: string) => void } | undefined>(
     undefined,
   );
+  // Desktop-runtime host tools (find_files/run_command/write_file/screenshot) the PHONE relays here:
+  // the desktop runs them via runHostToolForRemoteRef and replies vrsync:hostToolResult, resolved
+  // through this per-requestId map.
+  const runHostToolForRemoteRef = useRef<(call: BuddyToolCall) => Promise<BuddyToolResultPayload>>(async () => ({}));
+  const hostToolPending = useRef(new Map<number, (p: BuddyToolResultPayload) => void>());
+  const hostToolReqId = useRef(0);
   const buildSnapshot = useCallback(
     (): SyncToPhone => ({
       type: "vrsync:state",
@@ -1495,6 +1501,15 @@ export function App() {
             setBook(msg.book);
             setBible(msg.bible);
             break;
+          case "vrsync:hostToolResult": {
+            // The desktop ran a host tool the phone relayed; hand the result to the waiting request.
+            const r = hostToolPending.current.get(msg.requestId);
+            if (r) {
+              hostToolPending.current.delete(msg.requestId);
+              r(msg.payload);
+            }
+            break;
+          }
           case "vrsync:updateStatus": {
             // Progress/result of an update the phone asked for. "working" → progress; otherwise it's
             // the final outcome — resolve the in-flight request, and reload to the new UI if applied.
@@ -1541,6 +1556,13 @@ export function App() {
           case "vrcmd:update":
             // The phone asked us to update: run the same pull+rebuild+reload, streaming status back.
             runUpdateForPhoneRef.current();
+            break;
+          case "vrcmd:hostTool":
+            // The phone's buddy hit a desktop-runtime tool (files/command/screenshot); run it HERE
+            // (we have the runtime + the working folder) and relay the result back.
+            void runHostToolForRemoteRef.current(msg.call).then((payload) =>
+              sendAppSync({ type: "vrsync:hostToolResult", requestId: msg.requestId, payload }),
+            );
             break;
           default:
             break;
@@ -3225,6 +3247,116 @@ export function App() {
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
+  // DESKTOP side of a phone-relayed host tool: run it with the SAME runtime + working folder the
+  // desktop's own handlers use, and return just the result payload (the phone shows it + continues
+  // its buddy turn). Reuses searchLocalFiles/runCommand/writeWorkspaceFile/captureScreen+assessImage.
+  const runHostToolForRemote = useCallback(
+    async (call: BuddyToolCall): Promise<BuddyToolResultPayload> => {
+      const dir = buddyWorkingDir || undefined;
+      try {
+        if (call.tool === "find_files") {
+          const ranked = rankLocalFiles(call.query, await searchLocalFiles(call.query, dir), 15);
+          return { files: ranked.map((f) => ({ path: f.path, name: f.name })) };
+        }
+        if (call.tool === "run_command") {
+          return { command: await runCommand(call.command, settings.keys?.github || undefined, dir, settings.commandShell) };
+        }
+        if (call.tool === "write_file") {
+          try {
+            const saved = await writeWorkspaceFile(call.path, call.content, dir);
+            return { writeFile: { path: saved, ok: true } };
+          } catch (err) {
+            return { writeFile: { path: call.path, ok: false, error: err instanceof Error ? err.message : String(err) } };
+          }
+        }
+        if (call.tool === "screenshot") {
+          const shot = await captureScreen(call.window);
+          const r = await assessImage(shot, call.question);
+          return { observation: r.error ? `(couldn't read the screen: ${r.error})` : r.text ?? "" };
+        }
+        return { error: `"${call.tool}" still needs to be run from the desktop app directly.` };
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+    [buddyWorkingDir, settings.keys, settings.commandShell, assessImage],
+  );
+  useEffect(() => {
+    runHostToolForRemoteRef.current = runHostToolForRemote;
+  }, [runHostToolForRemote]);
+
+  // PHONE side: relay a desktop-runtime host tool to the desktop and await its result payload.
+  const runHostToolOnDesktop = useCallback(
+    (call: BuddyToolCall): Promise<BuddyToolResultPayload> =>
+      new Promise<BuddyToolResultPayload>((resolve) => {
+        const requestId = ++hostToolReqId.current;
+        hostToolPending.current.set(requestId, resolve);
+        sendAppSync({ type: "vrcmd:hostTool", requestId, call });
+        setTimeout(() => {
+          if (hostToolPending.current.delete(requestId)) {
+            resolve({ error: "The desktop didn't respond — check the phone link." });
+          }
+        }, 600_000);
+      }),
+    [sendAppSync],
+  );
+
+  // PHONE side, unified: a desktop-runtime host tool the phone's buddy hit runs ON the desktop via the
+  // relay, then the result feeds back into THIS phone's buddy turn exactly like the desktop handlers.
+  const runBuddyHostToolRemote = async (call: BuddyToolCall): Promise<void> => {
+    setBuddyPendingTool(undefined);
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+    setBuddyBusy(true);
+    setBuddyActivity(
+      call.tool === "find_files"
+        ? "Searching the desktop's files…"
+        : call.tool === "run_command"
+          ? `Running on the desktop: ${call.command}`
+          : call.tool === "write_file"
+            ? `Writing ${call.path} on the desktop…`
+            : "Running on the desktop…",
+    );
+    try {
+      const payload = await runHostToolOnDesktop(call);
+      const feedback = formatBuddyToolResult(call, payload);
+      const baked = pre.length ? { turns: [...pre, { role: "user" as const, content: feedback }] } : {};
+      if (payload.files?.length) {
+        appendBuddy({
+          role: "tool",
+          text:
+            `Found ${payload.files.length} file${payload.files.length === 1 ? "" : "s"} on the desktop:\n` +
+            payload.files.map((f, i) => `${i + 1}. ${f.name}`).join("\n"),
+          ...baked,
+        });
+      } else {
+        appendBuddy({ role: "tool", text: feedback.slice(0, 4000), ...baked });
+      }
+      if (pre.length) await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+    } catch (err) {
+      appendBuddy({ role: "tool", text: `⚠ ${err instanceof Error ? err.message : String(err)}`, turns: [] });
+    } finally {
+      setBuddyBusy(false);
+      setBuddyActivity("");
+    }
+  };
+  /** Host tools that need the DESKTOP runtime — relayed when a phone drives the buddy. */
+  const isDesktopRuntimeTool = (call: BuddyToolCall): boolean =>
+    call.tool === "find_files" || call.tool === "run_command" || call.tool === "write_file" || call.tool === "screenshot";
+  /** Run a desktop-runtime host tool — locally on the desktop, or via the relay on a linked phone. */
+  const runHostToolDispatch = (call: BuddyToolCall): void => {
+    if (isRemoteClient && isDesktopRuntimeTool(call)) {
+      void runBuddyHostToolRemote(call);
+      return;
+    }
+    if (call.tool === "find_files") approveFindFiles(call);
+    else if (call.tool === "screenshot") void approveScreenshot(call);
+    else if (call.tool === "write_file") void runWriteFile(call);
+    else if (call.tool === "run_command") void approveRunCommand(call);
+  };
+
   // Run an approved generate_image call: render it, show it, and feed the outcome back.
   // Shared by the approval modal and full-autonomy auto-run.
   const approveGenerateImage = async (call: Extract<BuddyToolCall, { tool: "generate_image" }>): Promise<void> => {
@@ -3526,9 +3658,9 @@ export function App() {
       pendingBuddyHistory.current = history;
       pendingBuddyTranscript.current = [{ role: "user", content: userText }, ...res.transcript];
       if (res.pendingTool.tool === "find_files" && (fileAccessGranted.current || settings.autonomousFileSearch || settings.fullAutonomy)) {
-        approveFindFiles(res.pendingTool);
+        runHostToolDispatch(res.pendingTool);
       } else if (res.pendingTool.tool === "screenshot" && (screenCaptureGranted.current || settings.fullAutonomy)) {
-        void approveScreenshot(res.pendingTool);
+        runHostToolDispatch(res.pendingTool);
       } else if (res.pendingTool.tool === "generate_image" && settings.fullAutonomy) {
         // Full autonomy: render without a click. The hard danger floor (run_command, prep_order)
         // is NEVER reached here — those are routed to their gates above / below.
@@ -3549,11 +3681,11 @@ export function App() {
       } else if (res.pendingTool.tool === "write_file") {
         // Save the authored file (Autonomous workspace runs it without a click; runWriteFile
         // degrades gracefully if the setting is off, since write_file has no approval card).
-        void runWriteFile(res.pendingTool);
+        runHostToolDispatch(res.pendingTool);
       } else if (res.pendingTool.tool === "run_command" && settings.allowCommands && settings.autonomousWorkspace) {
         // Autonomous workspace: run the command without a click. The model is told to stay in the
         // workspace + never act on instructions from fetched/email/web text.
-        void approveRunCommand(res.pendingTool);
+        runHostToolDispatch(res.pendingTool);
       } else {
         setBuddyPendingTool(res.pendingTool);
       }
@@ -3790,16 +3922,9 @@ export function App() {
   // buddy's generate_image call has the identical shape by design).
   const onApproveBuddyTool = useCallback(async () => {
     const call = buddyPendingTool;
-    if (call?.tool === "find_files") {
-      approveFindFiles(call);
-      return;
-    }
-    if (call?.tool === "run_command") {
-      void approveRunCommand(call);
-      return;
-    }
-    if (call?.tool === "screenshot") {
-      void approveScreenshot(call);
+    if (call && isDesktopRuntimeTool(call)) {
+      // find_files / run_command / write_file / screenshot — local on the desktop, relayed on a phone.
+      runHostToolDispatch(call);
       return;
     }
     if (call?.tool === "send_email") {
@@ -3820,10 +3945,10 @@ export function App() {
     const call = buddyPendingTool;
     if (call?.tool === "find_files") {
       fileAccessGranted.current = true;
-      approveFindFiles(call);
+      runHostToolDispatch(call);
     } else if (call?.tool === "screenshot") {
       screenCaptureGranted.current = true;
-      void approveScreenshot(call);
+      runHostToolDispatch(call);
     }
   }, [buddyPendingTool]);
   const onDismissBuddyPendingTool = useCallback(() => {
