@@ -507,10 +507,20 @@ export function buildBuddySystemPrompt(opts: {
       "constants, finance, nutrition, dates), equation solving, and step-by-step results. Use it when a " +
       "question needs an authoritative real-world value; use calculate for pure math you can express directly.\n"
     : "";
-  const workingFolderNote = opts.workingDir
-    ? `WORKING FOLDER: your run_command and find_files operate in \`${opts.workingDir}\` (the reader chose it for this ` +
-      "session). Paths you reference are relative to it. Remember each command starts here fresh — a `cd` into a " +
-      "subfolder does NOT carry to the next command, so chain with `&&` or re-`cd` each time.\n"
+  const runLocation = opts.workingDir
+    ? `\`${opts.workingDir}\` (the folder the reader chose for this session)`
+    : "your VisualReader workspace — a dedicated, app-owned folder (the default working directory)";
+  const workingFolderNote = opts.canRunCommands
+    ? `WHERE YOUR CODE RUNS — read this before writing any code: run_command, write_file, AND the chat's ▶ Run ` +
+      `button ALL operate in ${runLocation}. That folder is the CURRENT DIRECTORY: a relative path like \`data.csv\` ` +
+      "or `out/plot.png` resolves THERE, and write_file saves THERE — so a script you write and a data file you " +
+      "write_file land in the SAME place and find each other by plain relative names. Do NOT assume the code runs " +
+      "next to the reader's own files: a file from find_files is at an ABSOLUTE path ELSEWHERE on disk — read it by " +
+      "that absolute path, or copy it into the workspace first. Commands run NON-INTERACTIVELY — there is no stdin " +
+      "and no display, so `input()`, interactive prompts, and `plt.show()`/GUI windows will hang or do nothing: " +
+      "PRINT every result you want to see, and SAVE any chart/image to a file in the workspace. Each command starts " +
+      "in this folder FRESH — a `cd` into a subfolder does NOT carry to the next command, so chain with `&&` or " +
+      "re-`cd` each time. If you're unsure where you are, run `pwd` (or `cd` on Windows) first.\n"
     : "";
   const googleBlock = opts.canGoogle
     ? "GOOGLE (the reader connected Gmail, Calendar, and Tasks) — use these tools, and ANSWER " +
@@ -1520,7 +1530,7 @@ export interface BuddyToolResultPayload {
   /** Fetched page text from read_url (title + readable text). */
   page?: { title?: string; text: string };
   /** Output of an approved run_command (fed back so the model can react/fix). */
-  command?: { stdout: string; stderr: string; code: number; timedOut?: boolean };
+  command?: { stdout: string; stderr: string; code: number; timedOut?: boolean; cwd?: string };
   /** write_file outcome: the saved path (so the model can run_command it), or an error. */
   writeFile?: { path: string; ok: boolean; error?: string };
   /** A vision model's observation of an approved screenshot (fed back as text). */
@@ -1603,10 +1613,13 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     const out = c.stdout.slice(0, 8000);
     const err = c.stderr.slice(0, 4000);
     return (
-      `[run_command "${call.command}" — exit code ${c.code}${c.timedOut ? " (TIMED OUT)" : ""}]\n` +
+      `[run_command "${call.command}" — exit code ${c.code}${c.timedOut ? " (TIMED OUT)" : ""}` +
+      `${c.cwd ? `, ran in ${c.cwd}` : ""}]\n` +
       (out ? `stdout:\n${out}\n` : "stdout: (empty)\n") +
       (err ? `stderr:\n${err}` : "stderr: (empty)") +
-      "\nReact to this: if it failed, explain why and propose the fix (often a corrected file to save + a command to re-run); if it worked, say so and continue."
+      "\nReact to this: if it failed, explain why and propose the fix — if it's a 'file not found'/path error, " +
+      "remember commands run in the working folder above (write_file inputs there, or use the file's absolute " +
+      "path), then re-run; if it worked, say so and continue."
     );
   }
   if (call.tool === "screenshot") {

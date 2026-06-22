@@ -119,6 +119,8 @@ export interface RunCodeResult {
   stderr?: string;
   code?: number;
   error?: string;
+  /** The directory the code actually ran in, so the reader sees WHERE it executed. */
+  cwd?: string;
 }
 /** Run a code block on the host (the desktop; relayed from a linked phone) and return its output. */
 export type RunCodeFn = (lang: string, code: string, filename?: string) => Promise<RunCodeResult>;
@@ -963,7 +965,7 @@ function CodeCard({
           <code>
             {output.error
               ? `⚠ ${output.error}`
-              : `[exit ${output.code ?? "?"}]` +
+              : `[exit ${output.code ?? "?"}${output.cwd ? ` · in ${output.cwd}` : ""}]` +
                 (output.stdout ? `\n${output.stdout.slice(0, 6000)}` : "") +
                 (output.stderr ? `\n⚠ ${output.stderr.slice(0, 3000)}` : "") +
                 (!output.stdout && !output.stderr ? "\n(no output)" : "")}

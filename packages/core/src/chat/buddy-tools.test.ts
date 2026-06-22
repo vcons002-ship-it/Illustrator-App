@@ -317,12 +317,19 @@ describe("buildBuddySystemPrompt", () => {
     expect(on).toMatch(/never.*print|NEVER print/i); // the token-safety rule
   });
 
-  it("names the session's working folder only when one is set", () => {
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain("WORKING FOLDER");
-    const on = buildBuddySystemPrompt({ persona: "freeform", library: [], workingDir: "/home/u/projects/site" });
-    expect(on).toContain("WORKING FOLDER");
-    expect(on).toContain("/home/u/projects/site");
-    expect(on).toMatch(/cd.*does NOT carry|cd.*not carry/i); // the per-command caveat
+  it("explains WHERE code runs whenever commands are on, and names the chosen folder when set", () => {
+    // No command access → no execution-context note at all.
+    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain("WHERE YOUR CODE RUNS");
+    // Commands on, no folder chosen → still explains the default workspace (so the model knows where
+    // its code runs) and the non-interactive caveat.
+    const cmds = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true });
+    expect(cmds).toContain("WHERE YOUR CODE RUNS");
+    expect(cmds).toMatch(/workspace/i);
+    expect(cmds).toMatch(/NON-INTERACTIVE/i);
+    expect(cmds).toMatch(/cd.*does NOT carry|cd.*not carry/i); // the per-command caveat
+    // A chosen folder is named explicitly.
+    const folder = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true, workingDir: "/home/u/projects/site" });
+    expect(folder).toContain("/home/u/projects/site");
   });
 
   it("advertises run_command + screenshot only when explicitly enabled (opt-in)", () => {
