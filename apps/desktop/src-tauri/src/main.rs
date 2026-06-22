@@ -1125,6 +1125,9 @@ struct CommandResult {
     code: i32,
     #[serde(rename = "timedOut")]
     timed_out: bool,
+    /// The directory the command actually ran in (so the assistant + reader see WHERE it ran and
+    /// can correct a relative-path mistake).
+    cwd: String,
 }
 
 /// Hard ceilings so an approved command can't hang the UI or flood it with output.
@@ -1360,6 +1363,7 @@ async fn run_command(
             stderr: cap(err_handle.join().unwrap_or_default()),
             code: status.code().unwrap_or(-1),
             timed_out,
+            cwd: dir.to_string_lossy().to_string(),
         })
     })
     .await
@@ -1399,6 +1403,7 @@ fn git(dir: &str, args: &[&str]) -> Result<CommandResult, String> {
         stderr: cap(&out.stderr),
         code: out.status.code().unwrap_or(-1),
         timed_out: false,
+        cwd: dir.to_string(),
     })
 }
 
@@ -1569,11 +1574,11 @@ async fn git_complete_merge(repo_dir: String, message: String) -> Result<Command
         git(&repo_dir, &["add", "-A"])?;
         let unmerged = git(&repo_dir, &["ls-files", "-u"])?;
         if !unmerged.stdout.trim().is_empty() {
-            return Ok(CommandResult { stdout: String::new(), stderr: "files are still unmerged".into(), code: 2, timed_out: false });
+            return Ok(CommandResult { stdout: String::new(), stderr: "files are still unmerged".into(), code: 2, timed_out: false, cwd: repo_dir.clone() });
         }
         let check = git(&repo_dir, &["diff", "--cached", "--check"])?;
         if check.code != 0 {
-            return Ok(CommandResult { stdout: check.stdout, stderr: "conflict markers remain in the staged content".into(), code: 3, timed_out: false });
+            return Ok(CommandResult { stdout: check.stdout, stderr: "conflict markers remain in the staged content".into(), code: 3, timed_out: false, cwd: repo_dir.clone() });
         }
         git(&repo_dir, &["commit", "--no-edit", "-m", &message])
     })

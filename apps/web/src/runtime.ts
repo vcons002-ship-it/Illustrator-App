@@ -255,6 +255,8 @@ export interface CommandResult {
   stderr: string;
   code: number;
   timedOut: boolean;
+  /** The directory the command actually ran in (so the assistant/reader see WHERE it ran). */
+  cwd?: string;
 }
 
 /**

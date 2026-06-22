@@ -3078,7 +3078,7 @@ export function App() {
     }
     const feedback = formatBuddyToolResult(call, { command: r });
     const summary =
-      `$ ${call.command}\n[exit ${r.code}${r.timedOut ? " · timed out" : ""}]` +
+      `$ ${call.command}${r.cwd ? `   (in ${r.cwd})` : ""}\n[exit ${r.code}${r.timedOut ? " · timed out" : ""}]` +
       (r.stdout ? `\n${r.stdout.slice(0, 4000)}` : "") +
       (r.stderr ? `\n⚠ ${r.stderr.slice(0, 2000)}` : "");
     appendBuddy({ role: "tool", text: summary, turns: [...pre, { role: "user", content: feedback }] });
@@ -3430,7 +3430,7 @@ export function App() {
   // DESKTOP (relayed from a phone via execHostTool). Gated by the allow-commands setting at the
   // call site, and the click itself is the user's go-ahead (like Save).
   const onRunCode = useCallback(
-    async (lang: string, code: string, filename?: string): Promise<{ stdout?: string; stderr?: string; code?: number; error?: string }> => {
+    async (lang: string, code: string, filename?: string): Promise<{ stdout?: string; stderr?: string; code?: number; error?: string; cwd?: string }> => {
       const l = (lang || "").toLowerCase();
       const ext = l === "python" || l === "py" ? "py" : l === "js" || l === "javascript" || l === "node" ? "js" : l === "sh" || l === "bash" || l === "shell" ? "sh" : undefined;
       if (!ext) return { error: `Can't run "${lang}" code here — try Python, JavaScript, or a shell script.` };
@@ -3442,7 +3442,9 @@ export function App() {
       const path = w.writeFile?.path ?? safe;
       const r = await execHostTool({ tool: "run_command", command: `${interp} "${path}"` });
       if (r.error) return { error: r.error };
-      return r.command ? { stdout: r.command.stdout, stderr: r.command.stderr, code: r.command.code } : { error: "no output" };
+      return r.command
+        ? { stdout: r.command.stdout, stderr: r.command.stderr, code: r.command.code, ...(r.command.cwd ? { cwd: r.command.cwd } : {}) }
+        : { error: "no output" };
     },
     [execHostTool],
   );
