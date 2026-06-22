@@ -811,6 +811,21 @@ describe("read_file tool", () => {
   });
 });
 
+describe("open_image tool", () => {
+  it("parses open_image and formats a shown-inline note (or a couldn't-open note)", () => {
+    expect(parseBuddyToolCall('{"tool":"open_image","path":"/home/u/shot.png"}')).toEqual({ tool: "open_image", path: "/home/u/shot.png" });
+    expect(parseBuddyToolCall('{"tool":"open_image"}')).toBeUndefined();
+    const ok = formatBuddyToolResult(
+      { tool: "open_image", path: "/home/u/shot.png" },
+      { openedImage: { name: "shot.png", mimeType: "image/png", base64: "AAAA" } },
+    );
+    expect(ok).toMatch(/shown inline/i);
+    expect(ok).toContain("shot.png");
+    expect(ok).not.toContain("AAAA"); // the bytes never enter the model-facing turn
+    expect(formatBuddyToolResult({ tool: "open_image", path: "/x" }, {})).toMatch(/couldn't open/i);
+  });
+});
+
 describe("screenshot tool", () => {
   it("parses screenshot with question and/or a target window", () => {
     expect(parseBuddyToolCall('{"tool":"screenshot","question":"is the game showing?"}')).toEqual({

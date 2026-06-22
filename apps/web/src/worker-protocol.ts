@@ -192,7 +192,7 @@ export type MainToWorker =
   | { type: "mcpStdioResult"; callId: number; ok: boolean; lines?: string[]; error?: string }
   /** Reply to a worker `hostFile` (local-file search/read + PDF text extraction — main thread
    * owns the Tauri bridge + pdfjs). */
-  | { type: "hostFileResult"; callId: number; ok: boolean; files?: { name: string; path: string }[]; text?: string; error?: string }
+  | { type: "hostFileResult"; callId: number; ok: boolean; files?: { name: string; path: string }[]; text?: string; imageBase64?: string; mimeType?: string; name?: string; error?: string }
   /** Ack for a worker `llmVram` (the stop/ensure ran on the main thread). */
   | { type: "llmVramResult"; callId: number }
   /**
@@ -231,7 +231,7 @@ export type WorkerToMain =
   /** Local-file op the worker can't do itself (Tauri bridge + pdfjs live on the main thread):
    * search the disk, read a file's text, or extract text from attachment PDF bytes. Answered by
    * `hostFileResult` with the same callId. */
-  | { type: "hostFile"; callId: number; op: "search" | "read" | "pdftext"; query?: string; path?: string; bytesBase64?: string }
+  | { type: "hostFile"; callId: number; op: "search" | "read" | "pdftext" | "imageBytes"; query?: string; path?: string; bytesBase64?: string }
   /** Free or relaunch the bundled chat LLM's VRAM (Tauri lives on the main thread) so a burst of
    * local image renders gets the whole GPU. Answered by `llmVramResult` with the same callId. */
   | { type: "llmVram"; callId: number; action: "stop" | "ensure" }
@@ -325,6 +325,8 @@ export type WorkerToMain =
       calc?: { expression: string; result: string };
       wolfram?: { query: string; answer: string };
       memory?: { action: "remembered" | "forgot"; note: string; count: number };
+      /** open_image outcome — the picture's bytes (base64) so the main thread shows it inline in chat. */
+      openedImage?: { name: string; mimeType: string; base64: string; observation?: string };
       error?: string;
     }
   /** A buddy tool resolved a full BookSource — the main thread opens it (and

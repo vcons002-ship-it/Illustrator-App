@@ -114,6 +114,7 @@ import {
   parseDocImages,
   embedDocImages,
   bytesToBase64,
+  base64ToBytes,
   generatePkce,
   clearGoogleTokens,
   GOOGLE_SCOPES,
@@ -3614,7 +3615,15 @@ export function App() {
         if (e.kind === "toolResult" && (e.call.tool === "create_event" || e.call.tool === "list_events")) refreshCalendar();
         if (e.kind === "toolResult" && (e.call.tool === "add_task_group" || e.call.tool === "create_task" || e.call.tool === "add_task_steps" || e.call.tool === "mark_step_done" || e.call.tool === "update_task_step")) refreshTaskPlans();
         const typed = userBubbleText ?? "";
-        if (e.hits?.length) {
+        if (e.openedImage) {
+          // open_image: show the picture file inline in the chat (the bytes rode home base64-encoded).
+          const img = e.openedImage;
+          appendBuddy({
+            role: "tool",
+            text: `🖼 ${img.name}`,
+            image: { bytes: base64ToBytes(img.base64), mimeType: img.mimeType },
+          });
+        } else if (e.hits?.length) {
           appendBuddy({
             role: "tool",
             text: `Results for “${"query" in e.call ? e.call.query : ""}”:`,
@@ -3829,8 +3838,9 @@ export function App() {
   }, []);
 
   // Send with attachments: docs inline as labeled text blocks, images via the vision model
-  // (using the typed message as the question). The model gets the full content; the chat bubble
-  // shows just a "📎 filenames" line + the question, so a big doc doesn't flood the transcript.
+  // (using the typed message as the question). The model gets the full content; the chat shows
+  // each attached IMAGE inline (so the reader sees what they sent) plus the typed question, while
+  // a big doc stays a "📎 filename" chip so it doesn't flood the transcript.
   const onBuddySendWithAttachments = useCallback(
     async (text: string) => {
       markUserRequest();
@@ -3844,6 +3854,9 @@ export function App() {
       const parts: string[] = [];
       for (const att of ready) {
         if (att.kind === "image" && att.image) {
+          // Show the picture the reader attached, inline in the chat (display-only — the full
+          // content is folded into `combined` for this turn, so it carries no model turn of its own).
+          appendBuddy({ role: "user", text: `🖼 ${att.name}`, image: { bytes: att.image.bytes.slice(0), mimeType: att.image.mimeType }, turns: [] });
           const r = await assessImage({ bytes: att.image.bytes.slice(0), mimeType: att.image.mimeType }, userText);
           parts.push(
             r.text
@@ -3851,12 +3864,13 @@ export function App() {
               : `[Attached image "${att.name}" — couldn't read it: ${r.error ?? "no vision-capable model is set"}]`,
           );
         } else if (att.kind === "doc" && att.text) {
+          appendBuddy({ role: "user", text: `📎 ${att.name}`, turns: [] });
           parts.push(`[Attached file "${att.name}"]\n${att.text}`);
         }
       }
       const combined = parts.length ? `${parts.join("\n\n")}\n\n${userText}` : userText;
-      const bubble = `📎 ${ready.map((a) => a.name).join(", ")}\n${userText}`;
-      await dispatchBuddyTurn(chatTurnsOf(buddyMessages), combined, bubble);
+      // The attachment bubbles are already shown above; pass the typed question as its own bubble.
+      await dispatchBuddyTurn(chatTurnsOf(buddyMessages), combined, userText);
     },
     [buddyAttachments, assessImage, onBuddySendText, buddyMessages],
   );

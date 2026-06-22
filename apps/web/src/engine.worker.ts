@@ -393,10 +393,10 @@ function mcpStdioExchange(command: string, args: string[], input: string[]): Pro
 
 // Local-file ops via the main thread (worker → main round-trip): the worker can't reach the
 // Tauri bridge or pdfjs, so it asks the main thread to search/read a file or extract PDF text.
-type HostFileReply = { ok: boolean; files?: { name: string; path: string }[]; text?: string; error?: string };
+type HostFileReply = { ok: boolean; files?: { name: string; path: string }[]; text?: string; imageBase64?: string; mimeType?: string; name?: string; error?: string };
 const hostFilePending = new Map<number, (r: HostFileReply) => void>();
 let nextHostFileId = 1;
-function hostFile(req: { op: "search" | "read" | "pdftext"; query?: string; path?: string; bytesBase64?: string }): Promise<HostFileReply> {
+function hostFile(req: { op: "search" | "read" | "pdftext" | "imageBytes"; query?: string; path?: string; bytesBase64?: string }): Promise<HostFileReply> {
   return new Promise((resolve) => {
     const callId = nextHostFileId++;
     const timeout = setTimeout(() => {
@@ -1652,6 +1652,11 @@ function fileResearchDeps(force = false): Partial<BuddyDeps> {
             const r = await hostFile({ op: "read", path });
             if (!r.ok) throw new Error(r.error ?? "couldn't read that file");
             return r.text ?? "";
+          },
+          openImage: async (path: string) => {
+            const r = await hostFile({ op: "imageBytes", path });
+            if (!r.ok || !r.imageBase64) throw new Error(r.error ?? "couldn't open that image");
+            return { name: r.name ?? path.split(/[\\/]/).pop() ?? "image", mimeType: r.mimeType ?? "image/png", base64: r.imageBase64 };
           },
         }
       : {}),
@@ -2959,6 +2964,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             ...(e.result.calc ? { calc: e.result.calc } : {}),
             ...(e.result.wolfram ? { wolfram: e.result.wolfram } : {}),
             ...(e.result.memory ? { memory: e.result.memory } : {}),
+            ...(e.result.openedImage ? { openedImage: e.result.openedImage } : {}),
             ...(e.result.error ? { error: e.result.error } : {}),
           });
       },

@@ -67,6 +67,17 @@ import {
 } from "./runtime.js";
 import { pdfToText } from "./import-file.js";
 
+/** Best-effort image mime from a filename extension (for the buddy's open_image bubble). */
+function imageMimeFromName(name: string): string {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  return ext === "jpg" || ext === "jpeg" ? "image/jpeg"
+    : ext === "webp" ? "image/webp"
+    : ext === "gif" ? "image/gif"
+    : ext === "svg" ? "image/svg+xml"
+    : ext === "bmp" ? "image/bmp"
+    : "image/png";
+}
+
 /**
  * How long the chat may stay COMPLETELY silent (no token, reasoning, tool, or status
  * event) before we assume the worker is wedged (stale dev/HMR) and surface an error.
@@ -268,6 +279,8 @@ export type BuddyStreamEvent =
       calc?: { expression: string; result: string };
       wolfram?: { query: string; answer: string };
       memory?: { action: "remembered" | "forgot"; note: string; count: number };
+      /** open_image outcome — the picture's bytes (base64) so the app shows it inline in chat. */
+      openedImage?: { name: string; mimeType: string; base64: string; observation?: string };
       error?: string;
     }
   /** A buddy tool opened a book — the app should open it (and start visuals). */
@@ -574,7 +587,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           // Worker → main relay for local files: the Tauri bridge (search/read) + pdfjs (PDF text)
           // live here, not in the worker. The worker has already gated this on the reader's
           // settings, so we just run it. PDF-from-bytes works on web too (no Tauri needed).
-          const reply = (r: { ok: boolean; files?: { name: string; path: string }[]; text?: string; error?: string }) =>
+          const reply = (r: { ok: boolean; files?: { name: string; path: string }[]; text?: string; imageBase64?: string; mimeType?: string; name?: string; error?: string }) =>
             send({ type: "hostFileResult", callId: msg.callId, ...r });
           void (async () => {
             try {
@@ -586,6 +599,11 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
                 const bytes = new Uint8Array(await file.arrayBuffer());
                 const text = /\.pdf$/i.test(file.name) ? await pdfToText(bytes) : new TextDecoder().decode(bytes);
                 reply({ ok: true, text: text.slice(0, 200_000) });
+              } else if (msg.op === "imageBytes") {
+                // Read an image file's raw bytes (no text decode) so the buddy can show it inline in chat.
+                const file = await readLocalFile(msg.path ?? "");
+                const bytes = new Uint8Array(await file.arrayBuffer());
+                reply({ ok: true, imageBase64: bytesToBase64(bytes.buffer as ArrayBuffer), mimeType: imageMimeFromName(file.name), name: file.name });
               } else {
                 reply({ ok: true, text: (await pdfToText(new Uint8Array(base64ToBytes(msg.bytesBase64 ?? "")))).slice(0, 200_000) });
               }
@@ -815,6 +833,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             ...(msg.calc ? { calc: msg.calc } : {}),
             ...(msg.wolfram ? { wolfram: msg.wolfram } : {}),
             ...(msg.memory ? { memory: msg.memory } : {}),
+            ...(msg.openedImage ? { openedImage: msg.openedImage } : {}),
             ...(msg.error ? { error: msg.error } : {}),
           });
           break;
