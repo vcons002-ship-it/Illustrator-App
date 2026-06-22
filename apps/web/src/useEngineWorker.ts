@@ -67,6 +67,31 @@ import {
 } from "./runtime.js";
 import { pdfToText } from "./import-file.js";
 
+/**
+ * Resolve PHONE-CLIENT mode for this tab. A `#vrlink=<token>` in the URL means "drive a remote
+ * desktop over the relay." The token from the hash wins and is PERSISTED per-host in localStorage, so
+ * a link saved to the phone's home screen keeps working even if a Cloudflare Access login later drops
+ * the `#fragment` on a redirect (fragments aren't carried to the server). With no hash token, the
+ * saved one for this host is reused. `remoteModeFromHash` derives ws:// (LAN/http) vs wss:// (tunnel/
+ * https) from the page protocol. Undefined on a normal desktop/web load (no token anywhere).
+ */
+function initRemoteMode(): RemoteMode | undefined {
+  if (typeof window === "undefined") return undefined;
+  const { hash, host, protocol } = window.location;
+  let mode = remoteModeFromHash(hash, host, protocol);
+  const key = `vr-link-token:${host}`;
+  try {
+    if (mode) localStorage.setItem(key, mode.token);
+    else {
+      const saved = localStorage.getItem(key);
+      if (saved) mode = remoteModeFromHash(`#vrlink=${encodeURIComponent(saved)}`, host, protocol);
+    }
+  } catch {
+    /* storage blocked (private mode) — fall back to whatever the hash gave us */
+  }
+  return mode;
+}
+
 /** Best-effort image mime from a filename extension (for the buddy's open_image bubble). */
 function imageMimeFromName(name: string): string {
   const ext = name.split(".").pop()?.toLowerCase() ?? "";
@@ -499,9 +524,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   // PHONE-CLIENT MODE: when opened via a #vrlink=… link, this tab drives a remote desktop
   // engine over the relay instead of a local Web Worker. Detected once. (Undefined normally —
   // the default local-worker path below is unchanged.)
-  const remoteRef = useRef<RemoteMode | undefined>(
-    typeof window !== "undefined" ? remoteModeFromHash(window.location.hash, window.location.host, window.location.protocol) : undefined,
-  );
+  const remoteRef = useRef<RemoteMode | undefined>(initRemoteMode());
   const phoneWsRef = useRef<WebSocket | undefined>(undefined);
   // HOST-BRIDGE: on the desktop, when a phone is linked, mirror the engine worker to the relay.
   const hostBridgeRef = useRef<{ ws: WebSocket; token: string } | undefined>(undefined);
