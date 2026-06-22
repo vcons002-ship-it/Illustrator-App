@@ -6,6 +6,7 @@ import {
   IndexedDbStore,
   LocalServerLLMProvider,
   LOCAL_IMAGE_MODELS,
+  imageModelVramCostGb,
   LOCAL_TEXT_SERVER_DEFAULT_URL,
   ollamaModelMatches,
   computeBloomTarget,
@@ -1008,16 +1009,26 @@ export function App() {
     void (async () => {
       try {
         setEngineStatus("Setting up the local engine…");
-        const baseUrl = await ensureEngine(settings.lowVram);
+        // Detect VRAM once: it both caps Auto-quality AND decides --lowvram below
+        // (best-effort; undefined on non-NVIDIA GPUs leaves Auto uncapped).
+        const vram = await gpuVramMb();
+        if (cancelled) return;
+        // VRAM- and model-aware --lowvram: launch ComfyUI to offload the big text encoder to
+        // system RAM ONLY when the chosen image model won't comfortably fit the GPU. When VRAM
+        // is unknown, fall back to the manual Low-VRAM toggle. (fp8 weights stay tied to the
+        // toggle separately, in the workflow.)
+        const LOWVRAM_HEADROOM_GB = 4; // activations/latents/runtime overhead beyond the weights
+        const modelCostGb = imageModelVramCostGb(settings.localModel ?? "");
+        const needsLowVram =
+          vram === undefined
+            ? !!settings.lowVram
+            : modelCostGb > 0 && (modelCostGb + LOWVRAM_HEADROOM_GB) * 1024 > vram;
+        const baseUrl = await ensureEngine(needsLowVram);
         const models = await listLocalModels();
         const loras = await listLoras();
         // Detect each LoRA's base architecture (reads only the safetensors header) so the
         // UI can flag one that won't load on the active model.
         const families = await loraFamilies();
-        if (cancelled) return;
-        // Detect VRAM once so Auto-quality stays within what the card can render
-        // (best-effort; undefined on non-NVIDIA GPUs leaves Auto uncapped).
-        const vram = await gpuVramMb();
         if (cancelled) return;
         setEngineStatus("");
         setInstalledModels(models);
