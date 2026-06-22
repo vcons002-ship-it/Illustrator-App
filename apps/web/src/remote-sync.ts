@@ -10,7 +10,7 @@
  * stream back over the same relay, so no model or data ever needs to live on the phone.
  */
 
-import type { BookSource, BookSummary, BuddyToolCall, BuddyToolResultPayload, CalendarEvent, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
+import type { BookSource, BookSummary, BuddyPersona, BuddyToolCall, BuddyToolResultPayload, CalendarEvent, StoredChatMessage, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
 import type { InstalledModel, ReaderSettings } from "@visual-reader/ui";
 
 /**
@@ -65,6 +65,31 @@ export interface EngineInventory {
   engineStatus: string;
 }
 
+/** One landing-page chat session in the mirror (id + its working folder + a display label). Mirrors
+ * the desktop's BuddySession; the phone has no chat data of its own, so it renders these. */
+export interface ChatSessionInfo {
+  id: string;
+  workingDir: string;
+  label?: string;
+}
+
+/**
+ * The desktop's landing-page chat (the "buddy"), mirrored so the phone shows the SAME conversations —
+ * the session list, which one is active, and that session's full history — instead of an empty,
+ * separate chat of its own. The desktop owns the chat: the phone relays high-level intents
+ * (switch/new/delete/rename a session, send a message, set persona, clear) via `vrcmd:chat*`, the
+ * desktop runs them on its existing handlers (and its models), and the result flows back here.
+ * `busy` lets the phone show a "working…" state while a phone-triggered turn runs on the desktop.
+ */
+export interface ChatMirror {
+  sessions: ChatSessionInfo[];
+  activeId: string;
+  /** Full history of the ACTIVE session (the only one the phone displays at a time). */
+  messages: StoredChatMessage[];
+  persona: BuddyPersona;
+  busy: boolean;
+}
+
 /** A full snapshot of what the desktop is showing — sent when a phone first asks (`vrcmd:hello`). */
 export interface MirrorSnapshot {
   /** A friendly desktop name for the phone's "Linked to …" header. */
@@ -75,6 +100,8 @@ export interface MirrorSnapshot {
   inventory: EngineInventory;
   /** The desktop's tasks + calendar (so the phone's planner panels aren't empty). */
   planner: PlannerMirror;
+  /** The desktop's landing-page chat (sessions + active history) so the phone's chat isn't empty. */
+  chat: ChatMirror;
   /** The currently-open book (undefined when the desktop is on the home screen). */
   book?: BookSource;
   /** The open book's analysis (illustrations/concept cards/charts are anchored from this). */
@@ -88,6 +115,7 @@ export type SyncToPhone =
   | { type: "vrsync:settings"; settings: ReaderSettings }
   | ({ type: "vrsync:inventory" } & EngineInventory)
   | ({ type: "vrsync:planner" } & PlannerMirror)
+  | ({ type: "vrsync:chat" } & ChatMirror)
   | { type: "vrsync:book"; book?: BookSource; bible?: VisualBible }
   // Progress/result of an update the PHONE triggered (vrcmd:update). `reload` ⇒ the desktop applied a
   // JS update and the phone should reload to pick up the new UI (then it reconnects via its token).
@@ -103,6 +131,16 @@ export type CmdToDesktop =
   | { type: "vrcmd:home" } // leave the open book (back to the desktop's home screen)
   | { type: "vrcmd:settings"; settings: ReaderSettings } // phone edited settings → apply on the desktop (it renders)
   | { type: "vrcmd:planner"; command: PlannerCommand } // phone Tasks/Calendar action → run on the desktop
+  // Landing-page chat actions the phone relays — the desktop owns the chat (it has the models + the
+  // working folder), so the phone never runs a turn locally: it relays the intent, the desktop runs
+  // its existing buddy handler, and the result flows back via the `vrsync:chat` mirror.
+  | { type: "vrcmd:chatSend"; text: string } // phone typed a message → run the turn on the desktop
+  | { type: "vrcmd:chatSwitch"; id: string } // make this session active on the desktop
+  | { type: "vrcmd:chatNew" } // start a fresh chat session on the desktop
+  | { type: "vrcmd:chatDelete"; id: string } // delete a session on the desktop
+  | { type: "vrcmd:chatRename"; id: string; label: string } // rename a session (empty ⇒ reset label)
+  | { type: "vrcmd:chatPersona"; persona: BuddyPersona } // change the active session's persona
+  | { type: "vrcmd:chatClear" } // clear the active session's history on the desktop
   | { type: "vrcmd:update" } // phone asked the desktop to pull + rebuild + reload (software update)
   | { type: "vrcmd:restart" } // phone asked the desktop to fully relaunch (Settings → Restart app)
   | { type: "vrcmd:hostTool"; requestId: number; call: BuddyToolCall }; // run a desktop-runtime tool (files/command/screenshot) on the desktop

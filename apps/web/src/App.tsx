@@ -203,7 +203,7 @@ import type { LocalTextServerId } from "@visual-reader/core";
 import { loadSampleBook } from "./sample.js";
 import { useEngineWorker, type ImportResult, type TestRenderResult } from "./useEngineWorker.js";
 import { useActivityLog } from "./useActivityLog.js";
-import type { EngineInventory, PlannerCommand, PlannerMirror, SyncToPhone } from "./remote-sync.js";
+import type { ChatMirror, CmdToDesktop, EngineInventory, PlannerCommand, PlannerMirror, SyncToPhone } from "./remote-sync.js";
 import {
   downloadLora,
   downloadModel,
@@ -870,6 +870,10 @@ export function App() {
   const onRenameBuddySession = useCallback(
     (id: string, label: string) => {
       const trimmed = label.trim().slice(0, 60);
+      if (isRemoteClient) {
+        sendAppSync({ type: "vrcmd:chatRename", id, label: trimmed }); // rename on the desktop
+        return;
+      }
       setBuddySessions((prev) => {
         const next = prev.map((s) => {
           if (s.id !== id) return s;
@@ -881,7 +885,7 @@ export function App() {
         return next;
       });
     },
-    [persistSessions],
+    [isRemoteClient, sendAppSync, persistSessions],
   );
   // The active session's working folder ("" = the default VisualReader workspace).
   const setWorkingDir = useCallback(
@@ -1526,6 +1530,13 @@ export function App() {
   });
   const applyPlannerRef = useRef<(p: PlannerMirror) => void>(() => {});
   const plannerCommandRef = useRef<(c: PlannerCommand) => void>(() => {});
+  // The landing-page chat (buddy) lives lower in the file too, so the hello snapshot + the phone's
+  // apply-handler + the desktop's relayed-command runner reach it through refs (same pattern as the
+  // planner). `chatMirrorRef` holds the latest mirror for the snapshot; `applyChatRef` is the phone's
+  // adopt-the-desktop's-chat setter; `chatCommandRef` runs a phone-relayed chat command on the desktop.
+  const chatMirrorRef = useRef<ChatMirror>({ sessions: [], activeId: "", messages: [], persona: "freeform", busy: false });
+  const applyChatRef = useRef<(c: ChatMirror) => void>(() => {});
+  const chatCommandRef = useRef<(c: CmdToDesktop) => void>(() => {});
   // Phone-triggered software update: the DESKTOP runs it via this ref (assigned below, since
   // onSoftwareUpdate is declared later); the PHONE holds the in-flight request here so a relayed
   // vrsync:updateStatus can resolve it + reload.
@@ -1548,6 +1559,7 @@ export function App() {
       settings,
       inventory: engineInventory,
       planner: plannerMirrorRef.current,
+      chat: chatMirrorRef.current,
       ...(book ? { book } : {}),
       ...(bible ? { bible } : {}),
     }),
@@ -1577,6 +1589,7 @@ export function App() {
             setSettings(msg.settings);
             applyInventory(msg.inventory);
             applyPlannerRef.current(msg.planner);
+            applyChatRef.current(msg.chat);
             setBook(msg.book);
             setBible(msg.bible);
             setRemoteHost(msg.host);
@@ -1592,6 +1605,9 @@ export function App() {
             break;
           case "vrsync:planner":
             applyPlannerRef.current(msg);
+            break;
+          case "vrsync:chat":
+            applyChatRef.current(msg);
             break;
           case "vrsync:book":
             setBook(msg.book);
@@ -1648,6 +1664,17 @@ export function App() {
             // The phone triggered a Tasks/Calendar action; run it here (we own the data) and the
             // planner mirror re-pushes the result.
             plannerCommandRef.current(msg.command);
+            break;
+          case "vrcmd:chatSend":
+          case "vrcmd:chatSwitch":
+          case "vrcmd:chatNew":
+          case "vrcmd:chatDelete":
+          case "vrcmd:chatRename":
+          case "vrcmd:chatPersona":
+          case "vrcmd:chatClear":
+            // The phone drove the landing-page chat; run it HERE on our buddy handlers (we own the
+            // models + the working folder), and the chat mirror re-pushes the result to the phone.
+            chatCommandRef.current(msg);
             break;
           case "vrcmd:update":
             // The phone asked us to update: run the same pull+rebuild+reload, streaming status back.
@@ -2279,6 +2306,37 @@ export function App() {
   useEffect(() => {
     applyPlannerRef.current = applyPlanner;
   }, [applyPlanner]);
+  // Mirror the landing-page chat (buddy) to a linked phone. The desktop owns the chat (its models +
+  // working folder); the phone renders the active session's history so its chat isn't a separate,
+  // empty one. Re-pushed whenever the sessions, active id, that session's messages, persona, or the
+  // busy flag change — so a phone-triggered turn shows "working…" and then the result, all here.
+  const chatMirror = useMemo<ChatMirror>(
+    () => ({
+      sessions: buddySessions.map((s) => ({ id: s.id, workingDir: s.workingDir, ...(s.label ? { label: s.label } : {}) })),
+      activeId: activeBuddyId,
+      messages: buddyMessages,
+      persona: buddyPersona,
+      busy: buddyBusy,
+    }),
+    [buddySessions, activeBuddyId, buddyMessages, buddyPersona, buddyBusy],
+  );
+  useEffect(() => {
+    chatMirrorRef.current = chatMirror;
+    if (!isRemoteClient) sendAppSync({ type: "vrsync:chat", ...chatMirror });
+  }, [isRemoteClient, sendAppSync, chatMirror]);
+  // PHONE side: adopt the desktop's mirrored chat (kept in a ref so the early-registered relay handler
+  // reaches these later-declared setters). The phone never persists/loads chat locally (those effects
+  // are gated on isRemoteClient), so this mirror is its only source of chat state.
+  const applyChat = useCallback((c: ChatMirror) => {
+    setBuddySessions(c.sessions.map((s) => ({ id: s.id, workingDir: s.workingDir, ...(s.label ? { label: s.label } : {}) })));
+    setActiveBuddyId(c.activeId);
+    setBuddyMessages(c.messages);
+    setBuddyPersona(c.persona);
+    setBuddyBusy(c.busy);
+  }, []);
+  useEffect(() => {
+    applyChatRef.current = applyChat;
+  }, [applyChat]);
   // On-demand: scan email + calendar for tasks right now and SURFACE them (as unplanned stubs) +
   // refresh the in-app calendar. It does NOT plan — planning is left to the background sweep or the
   // per-task "Plan" button, so a manual scan is fast and never kicks off long LLM work.
@@ -2923,6 +2981,9 @@ export function App() {
   // never collide with a book id (epub hashes / "text-…").
   const buddyReady = useRef(false);
   useEffect(() => {
+    // On a linked PHONE the chat is mirrored from the desktop (vrsync:chat), not loaded locally —
+    // loading the phone's own (empty/stale) sessions here would clobber the mirror.
+    if (isRemoteClient) return;
     let cancelled = false;
     void (async () => {
       const rawSessions = await libraryStore.getMemo?.("buddy-sessions").catch(() => undefined);
@@ -2954,16 +3015,17 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [libraryStore]);
+  }, [libraryStore, isRemoteClient]);
   // Persist the ACTIVE session's history (debounced). Deletion is explicit (clear /
   // delete session), so an empty conversation just stores nothing — never wiping a
-  // session before its history has loaded.
+  // session before its history has loaded. On a linked PHONE the chat is the desktop's
+  // (mirrored), so the phone never persists it to its own store.
   useEffect(() => {
-    if (!buddyReady.current || buddyMessages.length === 0) return;
+    if (isRemoteClient || !buddyReady.current || buddyMessages.length === 0) return;
     const id = activeBuddyId;
     const t = setTimeout(() => void libraryStore.putChatHistory?.(id, buddyMessages), 500);
     return () => clearTimeout(t);
-  }, [buddyMessages, activeBuddyId, libraryStore]);
+  }, [buddyMessages, activeBuddyId, libraryStore, isRemoteClient]);
 
   const appendBuddy = (msg: Omit<StoredChatMessage, "at">) =>
     setBuddyMessages((prev) => [...prev, { ...msg, at: Date.now() }]);
@@ -3978,6 +4040,15 @@ export function App() {
   // a big doc stays a "📎 filename" chip so it doesn't flood the transcript.
   const onBuddySendWithAttachments = useCallback(
     async (text: string) => {
+      // On a linked PHONE the turn runs on the DESKTOP (it has the models + the working folder):
+      // relay the message and let the result flow back via the chat mirror. (Attachments aren't
+      // carried over the link yet — a phone send is text-only; the chip is cleared so it isn't lost
+      // silently.) The desktop runs the full onBuddySend path, including /find and "open #N".
+      if (isRemoteClient) {
+        setBuddyAttachments([]);
+        if (text.trim()) sendAppSync({ type: "vrcmd:chatSend", text });
+        return;
+      }
       markUserRequest();
       const ready = buddyAttachments.filter((x) => x.status === "ready");
       if (ready.length === 0) {
@@ -4007,7 +4078,16 @@ export function App() {
       // The attachment bubbles are already shown above; pass the typed question as its own bubble.
       await dispatchBuddyTurn(chatTurnsOf(buddyMessages), combined, userText);
     },
-    [buddyAttachments, assessImage, onBuddySendText, buddyMessages],
+    [isRemoteClient, sendAppSync, buddyAttachments, assessImage, onBuddySendText, buddyMessages],
+  );
+  // Persona is part of the chat the desktop owns: on a linked phone, relay the change so the desktop
+  // applies it (and the mirror reflects it); on the desktop, set it locally.
+  const onBuddyPersonaChange = useCallback(
+    (persona: BuddyPersona) => {
+      if (isRemoteClient) sendAppSync({ type: "vrcmd:chatPersona", persona });
+      else setBuddyPersona(persona);
+    },
+    [isRemoteClient, sendAppSync],
   );
 
   // Scheduled-task runner: while the app is open, every ~minute fire the FIRST due task
@@ -4016,6 +4096,7 @@ export function App() {
   const buddyBusyRef = useRef(buddyBusy);
   buddyBusyRef.current = buddyBusy;
   useEffect(() => {
+    if (isRemoteClient) return; // the desktop runs scheduled tasks (it owns the chat + the data)
     const id = setInterval(() => {
       if (buddyBusyRef.current) return;
       void (async () => {
@@ -4031,7 +4112,7 @@ export function App() {
       })();
     }, 60_000);
     return () => clearInterval(id);
-  }, [libraryStore, onBuddySendText, refreshScheduled]);
+  }, [libraryStore, onBuddySendText, refreshScheduled, isRemoteClient]);
 
   // Remote bus (phone↔Google↔desktop): when enabled + Google's connected, poll the user's
   // Google Tasks for "VR:" commands they added from their phone, run each through the buddy,
@@ -4041,7 +4122,7 @@ export function App() {
   const busProcessed = useRef<Set<string>>(new Set());
   const busPollingRef = useRef(false);
   useEffect(() => {
-    if (!googleConnected || !settings.remoteBus) return;
+    if (isRemoteClient || !googleConnected || !settings.remoteBus) return; // desktop owns the bus
     const id = setInterval(() => {
       if (busPollingRef.current || buddyBusyRef.current) return;
       busPollingRef.current = true;
@@ -4059,7 +4140,7 @@ export function App() {
         });
     }, 45_000);
     return () => clearInterval(id);
-  }, [googleConnected, settings.remoteBus, remoteBusList, remoteBusReply, buddyMessages]);
+  }, [isRemoteClient, googleConnected, settings.remoteBus, remoteBusList, remoteBusReply, buddyMessages]);
 
   // Price-alert runner: every ~minute, pull fresh indicators for each watched symbol,
   // evaluate the alerts, fire a notification on a trigger, and persist the new state
@@ -4135,6 +4216,10 @@ export function App() {
     pendingBuddyHistory.current = [];
   }, []);
   const onClearBuddy = useCallback(() => {
+    if (isRemoteClient) {
+      sendAppSync({ type: "vrcmd:chatClear" }); // the desktop owns the chat — clear it there
+      return;
+    }
     buddyTurnSeq.current++;
     buddyCancel();
     setBuddyBusy(false);
@@ -4143,7 +4228,7 @@ export function App() {
     setBuddyMessages([]);
     setBuddyPendingTool(undefined);
     void libraryStore.deleteChatHistory?.(activeBuddyId);
-  }, [libraryStore, buddyCancel, activeBuddyId]);
+  }, [isRemoteClient, sendAppSync, libraryStore, buddyCancel, activeBuddyId]);
 
   // Reset the live conversation view when moving between sessions.
   const resetBuddyView = useCallback(() => {
@@ -4165,6 +4250,10 @@ export function App() {
   const onSwitchBuddySession = useCallback(
     (id: string) => {
       if (id === activeBuddyId) return;
+      if (isRemoteClient) {
+        sendAppSync({ type: "vrcmd:chatSwitch", id }); // switch on the desktop; mirror reflects it
+        return;
+      }
       resetBuddyView();
       void libraryStore.putMemo?.("buddy-active-session", id).catch(() => {});
       void libraryStore.getChatHistory?.(id).then((hist) => {
@@ -4172,9 +4261,13 @@ export function App() {
         setBuddyMessages(hist ?? []);
       });
     },
-    [activeBuddyId, libraryStore, resetBuddyView],
+    [isRemoteClient, sendAppSync, activeBuddyId, libraryStore, resetBuddyView],
   );
   const onNewBuddySession = useCallback(() => {
+    if (isRemoteClient) {
+      sendAppSync({ type: "vrcmd:chatNew" }); // create on the desktop; the mirror brings it back
+      return;
+    }
     const id = `${BUDDY_CHAT_ID}-${Date.now().toString(36)}`;
     resetBuddyView();
     setBuddySessions((prev) => {
@@ -4185,9 +4278,13 @@ export function App() {
     setActiveBuddyId(id);
     setBuddyMessages([]);
     void libraryStore.putMemo?.("buddy-active-session", id).catch(() => {});
-  }, [libraryStore, persistSessions, resetBuddyView]);
+  }, [isRemoteClient, sendAppSync, libraryStore, persistSessions, resetBuddyView]);
   const onDeleteBuddySession = useCallback(
     (id: string) => {
+      if (isRemoteClient) {
+        sendAppSync({ type: "vrcmd:chatDelete", id }); // delete on the desktop; mirror reflects it
+        return;
+      }
       setBuddySessions((prev) => {
         if (prev.length <= 1) return prev; // keep at least one session
         const next = prev.filter((s) => s.id !== id);
@@ -4205,7 +4302,7 @@ export function App() {
         return next;
       });
     },
-    [activeBuddyId, libraryStore, persistSessions, resetBuddyView],
+    [isRemoteClient, sendAppSync, activeBuddyId, libraryStore, persistSessions, resetBuddyView],
   );
   // Open a task in its own preloaded chat session (reuses multi-session): switch to the
   // plan's session (creating one the first time), seed it with the current step + links.
@@ -4322,6 +4419,44 @@ export function App() {
   useEffect(() => {
     plannerCommandRef.current = runPlannerCommand;
   }, [runPlannerCommand]);
+
+  // DESKTOP side: run a landing-page chat action the phone relayed (vrcmd:chat*). Each maps to the
+  // SAME handler the desktop UI uses — and since we're the desktop (isRemoteClient is false), those
+  // handlers take their LOCAL branch (run the turn / mutate sessions), then the chat mirror re-pushes
+  // the result to the phone. Kept in a ref (chatCommandRef) so the early-registered relay reaches it.
+  const runChatCommand = useCallback(
+    (c: CmdToDesktop) => {
+      switch (c.type) {
+        case "vrcmd:chatSend":
+          void onBuddySendWithAttachments(c.text);
+          break;
+        case "vrcmd:chatSwitch":
+          onSwitchBuddySession(c.id);
+          break;
+        case "vrcmd:chatNew":
+          onNewBuddySession();
+          break;
+        case "vrcmd:chatDelete":
+          onDeleteBuddySession(c.id);
+          break;
+        case "vrcmd:chatRename":
+          onRenameBuddySession(c.id, c.label);
+          break;
+        case "vrcmd:chatPersona":
+          setBuddyPersona(c.persona);
+          break;
+        case "vrcmd:chatClear":
+          onClearBuddy();
+          break;
+        default:
+          break;
+      }
+    },
+    [onBuddySendWithAttachments, onSwitchBuddySession, onNewBuddySession, onDeleteBuddySession, onRenameBuddySession, onClearBuddy],
+  );
+  useEffect(() => {
+    chatCommandRef.current = runChatCommand;
+  }, [runChatCommand]);
 
   // Stable per-index delete handlers (memoised bubbles take the SAME function).
   const onDeleteBuddyMessage = useCallback((index: number) => {
@@ -5253,7 +5388,7 @@ export function App() {
             {...(buddySteps.length ? { steps: buddySteps } : {})}
             {...(buddyPendingTool ? { pendingTool: buddyPendingTool } : {})}
             persona={buddyPersona}
-            onPersonaChange={setBuddyPersona}
+            onPersonaChange={onBuddyPersonaChange}
             sessions={buddySessions.map((s, i) => ({
               id: s.id,
               label: s.label || (s.workingDir ? lastPathSegment(s.workingDir) : `Chat ${i + 1}`),
