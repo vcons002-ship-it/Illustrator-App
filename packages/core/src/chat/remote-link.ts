@@ -39,6 +39,18 @@ export function buildLinkUrl(p: LinkParams): string {
   return `http://${p.host}:${p.port}/#vrlink=${encodeURIComponent(p.token)}`;
 }
 
+/**
+ * Build the INTERNET link for a tunnelled host (e.g. a Cloudflare named tunnel `vr.example.app`):
+ * always `https://<host>/#vrlink=<token>`. Accepts a host with or without a scheme/trailing slash
+ * and normalizes it; returns undefined for a blank host. The phone loads this over HTTPS (so the
+ * relay socket becomes `wss://` via `remoteModeFromHash`), gated by Cloudflare Access in front.
+ */
+export function buildRemoteLinkUrl(host: string, token: string): string | undefined {
+  const clean = host.trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+  if (!clean || !token) return undefined;
+  return `https://${clean}/#vrlink=${encodeURIComponent(token)}`;
+}
+
 /** Pull the pairing token out of a link URL or hash (the phone reads this on load). */
 export function parseLinkToken(urlOrHash: string): string | undefined {
   const m = /[#&?]vrlink=([^&]+)/.exec(urlOrHash);
@@ -78,11 +90,15 @@ export interface RemoteMode {
  * Detect "phone client" mode from the page URL: a `#vrlink=<token>` hash means this tab should
  * drive a remote desktop engine over the relay instead of a local Web Worker. `host` is the
  * page's host (e.g. "192.168.1.20:8787"); the relay listens on the same host as the served app.
+ * `protocol` is the page's `location.protocol` — over a `https://` tunnel (e.g. Cloudflare) the
+ * socket MUST be `wss://` (browsers block `ws://` from an https page); a plain `http://` LAN page
+ * uses `ws://`. Defaults to http→ws when the protocol isn't given.
  */
-export function remoteModeFromHash(hash: string, host: string): RemoteMode | undefined {
+export function remoteModeFromHash(hash: string, host: string, protocol?: string): RemoteMode | undefined {
   const token = parseLinkToken(hash);
   if (!token || !host) return undefined;
-  return { wsUrl: `ws://${host}/`, token };
+  const scheme = protocol === "https:" ? "wss" : "ws";
+  return { wsUrl: `${scheme}://${host}/`, token };
 }
 
 /**
