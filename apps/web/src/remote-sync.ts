@@ -10,7 +10,7 @@
  * stream back over the same relay, so no model or data ever needs to live on the phone.
  */
 
-import type { BookSource, BookSummary, BuddyPersona, BuddyToolCall, BuddyToolResultPayload, CalendarEvent, StoredChatMessage, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
+import type { BookSource, BookSummary, BuddyPersona, BuddyToolCall, BuddyToolResultPayload, CalendarEvent, ContextUsage, StoredChatMessage, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
 import type { InstalledModel, ReaderSettings } from "@visual-reader/ui";
 
 /**
@@ -90,6 +90,39 @@ export interface ChatMirror {
   busy: boolean;
 }
 
+/**
+ * The LIVE state of an in-flight buddy turn, mirrored so the phone shows the SAME real-time view the
+ * desktop does: the streaming answer as it's typed, the model's reasoning/activity line, the running
+ * tool log, a pending tool waiting for approval, the parallel coding-agent approval queue, and the
+ * context-usage donut. Pushed separately from `ChatMirror` (and throttled) because it updates many
+ * times per second while a turn runs, whereas the conversation history changes only per message.
+ */
+export interface ChatLive {
+  /** The assistant's answer streamed so far (cumulative). */
+  streaming: string;
+  /** A thinking model's live reasoning (shown dimmed). */
+  thinking: string;
+  /** A short status line while the model works invisibly. */
+  activity: string;
+  /** The tools taken this turn, newest last (the visible "process" log). */
+  steps: string[];
+  /** A tool the model proposed that's waiting for the reader's approval (the approval modal). */
+  pendingTool?: BuddyToolCall;
+  /** Per-step approval queue for parallel coding agents (when Autonomous workspace is OFF). */
+  agentApprovals: { id: number; title: string; call: BuddyToolCall }[];
+  /** Where this turn's context budget is going (the usage donut). */
+  usage?: ContextUsage;
+}
+
+/** One attachment the phone carries to the desktop on a relayed send (already extracted on the
+ * phone: an image's bytes for the desktop's vision model, or a document's pulled text). */
+export interface ChatSendAttachment {
+  name: string;
+  kind: "image" | "doc";
+  image?: { bytes: ArrayBuffer; mimeType: string };
+  text?: string;
+}
+
 /** A full snapshot of what the desktop is showing — sent when a phone first asks (`vrcmd:hello`). */
 export interface MirrorSnapshot {
   /** A friendly desktop name for the phone's "Linked to …" header. */
@@ -102,6 +135,8 @@ export interface MirrorSnapshot {
   planner: PlannerMirror;
   /** The desktop's landing-page chat (sessions + active history) so the phone's chat isn't empty. */
   chat: ChatMirror;
+  /** The live state of any in-flight turn (so a phone joining mid-turn sees streaming/approvals). */
+  live: ChatLive;
   /** The currently-open book (undefined when the desktop is on the home screen). */
   book?: BookSource;
   /** The open book's analysis (illustrations/concept cards/charts are anchored from this). */
@@ -116,6 +151,7 @@ export type SyncToPhone =
   | ({ type: "vrsync:inventory" } & EngineInventory)
   | ({ type: "vrsync:planner" } & PlannerMirror)
   | ({ type: "vrsync:chat" } & ChatMirror)
+  | ({ type: "vrsync:chatLive" } & ChatLive)
   | { type: "vrsync:book"; book?: BookSource; bible?: VisualBible }
   // Progress/result of an update the PHONE triggered (vrcmd:update). `reload` ⇒ the desktop applied a
   // JS update and the phone should reload to pick up the new UI (then it reconnects via its token).
@@ -134,13 +170,18 @@ export type CmdToDesktop =
   // Landing-page chat actions the phone relays — the desktop owns the chat (it has the models + the
   // working folder), so the phone never runs a turn locally: it relays the intent, the desktop runs
   // its existing buddy handler, and the result flows back via the `vrsync:chat` mirror.
-  | { type: "vrcmd:chatSend"; text: string } // phone typed a message → run the turn on the desktop
+  | { type: "vrcmd:chatSend"; text: string; attachments?: ChatSendAttachment[] } // phone typed a message (+ files) → run the turn on the desktop
   | { type: "vrcmd:chatSwitch"; id: string } // make this session active on the desktop
   | { type: "vrcmd:chatNew" } // start a fresh chat session on the desktop
   | { type: "vrcmd:chatDelete"; id: string } // delete a session on the desktop
   | { type: "vrcmd:chatRename"; id: string; label: string } // rename a session (empty ⇒ reset label)
   | { type: "vrcmd:chatPersona"; persona: BuddyPersona } // change the active session's persona
   | { type: "vrcmd:chatClear" } // clear the active session's history on the desktop
+  | { type: "vrcmd:chatCancel" } // stop the in-flight turn on the desktop
+  | { type: "vrcmd:chatApproveTool"; always: boolean } // approve the pending tool (always ⇒ grant for the session)
+  | { type: "vrcmd:chatDismissTool" } // dismiss the pending tool without running it
+  | { type: "vrcmd:chatAgentApprove"; id: number } // approve one queued coding-agent step
+  | { type: "vrcmd:chatAgentDeny"; id: number } // deny one queued coding-agent step
   | { type: "vrcmd:update" } // phone asked the desktop to pull + rebuild + reload (software update)
   | { type: "vrcmd:restart" } // phone asked the desktop to fully relaunch (Settings → Restart app)
   | { type: "vrcmd:hostTool"; requestId: number; call: BuddyToolCall }; // run a desktop-runtime tool (files/command/screenshot) on the desktop

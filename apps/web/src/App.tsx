@@ -203,7 +203,7 @@ import type { LocalTextServerId } from "@visual-reader/core";
 import { loadSampleBook } from "./sample.js";
 import { useEngineWorker, type ImportResult, type TestRenderResult } from "./useEngineWorker.js";
 import { useActivityLog } from "./useActivityLog.js";
-import type { ChatMirror, CmdToDesktop, EngineInventory, PlannerCommand, PlannerMirror, SyncToPhone } from "./remote-sync.js";
+import type { ChatLive, ChatMirror, ChatSendAttachment, CmdToDesktop, EngineInventory, PlannerCommand, PlannerMirror, SyncToPhone } from "./remote-sync.js";
 import {
   downloadLora,
   downloadModel,
@@ -1537,6 +1537,13 @@ export function App() {
   const chatMirrorRef = useRef<ChatMirror>({ sessions: [], activeId: "", messages: [], persona: "freeform", busy: false });
   const applyChatRef = useRef<(c: ChatMirror) => void>(() => {});
   const chatCommandRef = useRef<(c: CmdToDesktop) => void>(() => {});
+  // The live in-flight-turn state (streaming/thinking/activity/steps/pending approvals/usage) — held
+  // in a ref so the connect snapshot carries it and the throttled push effect can land a trailing
+  // send; `applyChatLiveRef` is the phone's adopt-the-live-state setter.
+  const chatLiveRef = useRef<ChatLive>({ streaming: "", thinking: "", activity: "", steps: [], agentApprovals: [] });
+  const applyChatLiveRef = useRef<(l: ChatLive) => void>(() => {});
+  const chatLiveSentAt = useRef(0);
+  const chatLiveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Phone-triggered software update: the DESKTOP runs it via this ref (assigned below, since
   // onSoftwareUpdate is declared later); the PHONE holds the in-flight request here so a relayed
   // vrsync:updateStatus can resolve it + reload.
@@ -1560,6 +1567,7 @@ export function App() {
       inventory: engineInventory,
       planner: plannerMirrorRef.current,
       chat: chatMirrorRef.current,
+      live: chatLiveRef.current,
       ...(book ? { book } : {}),
       ...(bible ? { bible } : {}),
     }),
@@ -1590,6 +1598,7 @@ export function App() {
             applyInventory(msg.inventory);
             applyPlannerRef.current(msg.planner);
             applyChatRef.current(msg.chat);
+            applyChatLiveRef.current(msg.live);
             setBook(msg.book);
             setBible(msg.bible);
             setRemoteHost(msg.host);
@@ -1608,6 +1617,9 @@ export function App() {
             break;
           case "vrsync:chat":
             applyChatRef.current(msg);
+            break;
+          case "vrsync:chatLive":
+            applyChatLiveRef.current(msg);
             break;
           case "vrsync:book":
             setBook(msg.book);
@@ -1672,6 +1684,11 @@ export function App() {
           case "vrcmd:chatRename":
           case "vrcmd:chatPersona":
           case "vrcmd:chatClear":
+          case "vrcmd:chatCancel":
+          case "vrcmd:chatApproveTool":
+          case "vrcmd:chatDismissTool":
+          case "vrcmd:chatAgentApprove":
+          case "vrcmd:chatAgentDeny":
             // The phone drove the landing-page chat; run it HERE on our buddy handlers (we own the
             // models + the working folder), and the chat mirror re-pushes the result to the phone.
             chatCommandRef.current(msg);
@@ -2337,6 +2354,53 @@ export function App() {
   useEffect(() => {
     applyChatRef.current = applyChat;
   }, [applyChat]);
+  // Mirror the LIVE turn state to a linked phone (streaming answer, reasoning, activity, the tool
+  // log, a pending tool / coding-agent approvals, and the usage donut) so the phone shows the same
+  // real-time view. The streaming text updates per token, so throttle to ~8 pushes/sec but always
+  // land a TRAILING send (the cleanup clears a superseded timer) so the final text/approval isn't
+  // lost. Pushing the cumulative streaming string keeps the phone correct even if a push is dropped.
+  const chatLive = useMemo<ChatLive>(
+    () => ({
+      streaming: buddyStreaming,
+      thinking: buddyThinking,
+      activity: buddyActivity,
+      steps: buddySteps,
+      ...(buddyPendingTool ? { pendingTool: buddyPendingTool } : {}),
+      agentApprovals,
+      ...(buddyUsage ? { usage: buddyUsage } : {}),
+    }),
+    [buddyStreaming, buddyThinking, buddyActivity, buddySteps, buddyPendingTool, agentApprovals, buddyUsage],
+  );
+  chatLiveRef.current = chatLive;
+  useEffect(() => {
+    if (isRemoteClient) return;
+    // Throttle to ~8/sec: push immediately if a full interval has passed, else schedule ONE trailing
+    // send (which reads the latest ref). While a send is already scheduled, newer changes just update
+    // the ref — so steady streaming pushes periodically (not suppressed) and the final state always lands.
+    if (chatLiveTimer.current) return;
+    const fire = () => {
+      chatLiveTimer.current = undefined;
+      chatLiveSentAt.current = Date.now();
+      sendAppSync({ type: "vrsync:chatLive", ...chatLiveRef.current });
+    };
+    const since = Date.now() - chatLiveSentAt.current;
+    if (since >= 120) fire();
+    else chatLiveTimer.current = setTimeout(fire, 120 - since);
+  }, [isRemoteClient, sendAppSync, chatLive]);
+  // PHONE side: adopt the desktop's live turn state (via a ref, like applyChat). These setters drive
+  // the same streaming view / approval modal the desktop shows; the approve/dismiss buttons relay back.
+  const applyChatLive = useCallback((l: ChatLive) => {
+    setBuddyStreaming(l.streaming);
+    setBuddyThinking(l.thinking);
+    setBuddyActivity(l.activity);
+    setBuddySteps(l.steps);
+    setBuddyPendingTool(l.pendingTool);
+    setAgentApprovals(l.agentApprovals);
+    setBuddyUsage(l.usage);
+  }, []);
+  useEffect(() => {
+    applyChatLiveRef.current = applyChatLive;
+  }, [applyChatLive]);
   // On-demand: scan email + calendar for tasks right now and SURFACE them (as unplanned stubs) +
   // refresh the in-app calendar. It does NOT plan — planning is left to the background sweep or the
   // per-task "Plan" button, so a manual scan is fast and never kicks off long LLM work.
@@ -3212,13 +3276,23 @@ export function App() {
       setAgentApprovals((q) => [...q, { id, title, call }]);
     });
   };
+  // The coding-agent run + its approval resolvers live on the DESKTOP; on a linked phone, relay the
+  // reader's click by id and let the desktop resolve the waiting step.
   const onApproveAgentTool = (id: number): void => {
+    if (isRemoteClient) {
+      sendAppSync({ type: "vrcmd:chatAgentApprove", id });
+      return;
+    }
     const ctx = agentApprovalCtx.current.get(id);
     agentApprovalCtx.current.delete(id);
     setAgentApprovals((q) => q.filter((a) => a.id !== id));
     if (ctx) void executeAgentTool(ctx.call, ctx.cwd).then(ctx.resolve);
   };
   const onDenyAgentTool = (id: number): void => {
+    if (isRemoteClient) {
+      sendAppSync({ type: "vrcmd:chatAgentDeny", id });
+      return;
+    }
     const ctx = agentApprovalCtx.current.get(id);
     agentApprovalCtx.current.delete(id);
     setAgentApprovals((q) => q.filter((a) => a.id !== id));
@@ -4034,31 +4108,21 @@ export function App() {
     setBuddyAttachments((a) => a.filter((x) => x.id !== id));
   }, []);
 
-  // Send with attachments: docs inline as labeled text blocks, images via the vision model
-  // (using the typed message as the question). The model gets the full content; the chat shows
-  // each attached IMAGE inline (so the reader sees what they sent) plus the typed question, while
-  // a big doc stays a "📎 filename" chip so it doesn't flood the transcript.
-  const onBuddySendWithAttachments = useCallback(
-    async (text: string) => {
-      // On a linked PHONE the turn runs on the DESKTOP (it has the models + the working folder):
-      // relay the message and let the result flow back via the chat mirror. (Attachments aren't
-      // carried over the link yet — a phone send is text-only; the chip is cleared so it isn't lost
-      // silently.) The desktop runs the full onBuddySend path, including /find and "open #N".
-      if (isRemoteClient) {
-        setBuddyAttachments([]);
-        if (text.trim()) sendAppSync({ type: "vrcmd:chatSend", text });
-        return;
-      }
+  // Run a turn with PREPARED attachments (docs inline as labeled text blocks, images via the vision
+  // model using the typed message as the question). The model gets the full content; the chat shows
+  // each attached IMAGE inline (so the reader sees what they sent) plus the typed question, while a
+  // big doc stays a "📎 filename" chip so it doesn't flood the transcript. Shared by the desktop UI
+  // and a phone-relayed send (vrcmd:chatSend) — the attachments are already extracted either way.
+  const runBuddyTurnWithAttachments = useCallback(
+    async (text: string, atts: ChatSendAttachment[]) => {
       markUserRequest();
-      const ready = buddyAttachments.filter((x) => x.status === "ready");
-      if (ready.length === 0) {
+      if (atts.length === 0) {
         onBuddySendText(text);
         return;
       }
-      setBuddyAttachments([]);
       const userText = text.trim() || "Please look at the attached file(s) and help me with them.";
       const parts: string[] = [];
-      for (const att of ready) {
+      for (const att of atts) {
         if (att.kind === "image" && att.image) {
           // Show the picture the reader attached, inline in the chat (display-only — the full
           // content is folded into `combined` for this turn, so it carries no model turn of its own).
@@ -4078,7 +4142,27 @@ export function App() {
       // The attachment bubbles are already shown above; pass the typed question as its own bubble.
       await dispatchBuddyTurn(chatTurnsOf(buddyMessages), combined, userText);
     },
-    [isRemoteClient, sendAppSync, buddyAttachments, assessImage, onBuddySendText, buddyMessages],
+    [assessImage, onBuddySendText, buddyMessages],
+  );
+  // Panel "send": gather the ready attachments. On a linked PHONE the turn runs on the DESKTOP (it
+  // has the models + the working folder) — relay the message AND its (already-extracted) attachments,
+  // and the result/stream flow back via the chat mirror. On the desktop, run the turn locally.
+  const onBuddySendWithAttachments = useCallback(
+    async (text: string) => {
+      const ready = buddyAttachments.filter((x) => x.status === "ready");
+      const atts: ChatSendAttachment[] = ready.map((a) =>
+        a.kind === "image" && a.image
+          ? { name: a.name, kind: "image", image: { bytes: a.image.bytes.slice(0), mimeType: a.image.mimeType } }
+          : { name: a.name, kind: "doc", ...(a.text ? { text: a.text } : {}) },
+      );
+      if (atts.length) setBuddyAttachments([]); // consumed the ready chips (a still-reading one stays)
+      if (isRemoteClient) {
+        if (text.trim() || atts.length) sendAppSync({ type: "vrcmd:chatSend", text, ...(atts.length ? { attachments: atts } : {}) });
+        return;
+      }
+      await runBuddyTurnWithAttachments(text, atts);
+    },
+    [isRemoteClient, sendAppSync, buddyAttachments, runBuddyTurnWithAttachments],
   );
   // Persona is part of the chat the desktop owns: on a linked phone, relay the change so the desktop
   // applies it (and the mirror reflects it); on the desktop, set it locally.
@@ -4197,10 +4281,19 @@ export function App() {
     if (!call || call.tool !== "generate_image") return;
     await approveGenerateImage(call);
   }, [buddyPendingTool, chatTool]);
-  const onApproveBuddyPendingTool = useCallback(() => void onApproveBuddyTool(), [onApproveBuddyTool]);
+  // On a linked PHONE the turn (and its pending tool) lives on the DESKTOP — relay the approval intent;
+  // the desktop runs the real handler against its own pending tool. Same for "allow always" + dismiss.
+  const onApproveBuddyPendingTool = useCallback(() => {
+    if (isRemoteClient) sendAppSync({ type: "vrcmd:chatApproveTool", always: false });
+    else void onApproveBuddyTool();
+  }, [isRemoteClient, sendAppSync, onApproveBuddyTool]);
   // "Allow this session": grant the pending capability (file search OR screen
   // capture) so later same-kind calls run without re-prompting, then run this one.
   const onAllowBuddyAlways = useCallback(() => {
+    if (isRemoteClient) {
+      sendAppSync({ type: "vrcmd:chatApproveTool", always: true });
+      return;
+    }
     const call = buddyPendingTool;
     if (call?.tool === "find_files") {
       fileAccessGranted.current = true;
@@ -4209,12 +4302,16 @@ export function App() {
       screenCaptureGranted.current = true;
       runHostToolDispatch(call);
     }
-  }, [buddyPendingTool]);
+  }, [isRemoteClient, sendAppSync, buddyPendingTool]);
   const onDismissBuddyPendingTool = useCallback(() => {
+    if (isRemoteClient) {
+      sendAppSync({ type: "vrcmd:chatDismissTool" });
+      return;
+    }
     setBuddyPendingTool(undefined);
     pendingBuddyTranscript.current = [];
     pendingBuddyHistory.current = [];
-  }, []);
+  }, [isRemoteClient, sendAppSync]);
   const onClearBuddy = useCallback(() => {
     if (isRemoteClient) {
       sendAppSync({ type: "vrcmd:chatClear" }); // the desktop owns the chat — clear it there
@@ -4229,6 +4326,12 @@ export function App() {
     setBuddyPendingTool(undefined);
     void libraryStore.deleteChatHistory?.(activeBuddyId);
   }, [isRemoteClient, sendAppSync, libraryStore, buddyCancel, activeBuddyId]);
+  // Stop: the turn runs on the DESKTOP (under its worker request id the phone doesn't have), so a
+  // linked phone relays the stop; the desktop aborts its in-flight buddy round.
+  const onBuddyCancel = useCallback(() => {
+    if (isRemoteClient) sendAppSync({ type: "vrcmd:chatCancel" });
+    else buddyCancel();
+  }, [isRemoteClient, sendAppSync, buddyCancel]);
 
   // Reset the live conversation view when moving between sessions.
   const resetBuddyView = useCallback(() => {
@@ -4428,7 +4531,7 @@ export function App() {
     (c: CmdToDesktop) => {
       switch (c.type) {
         case "vrcmd:chatSend":
-          void onBuddySendWithAttachments(c.text);
+          void runBuddyTurnWithAttachments(c.text, c.attachments ?? []);
           break;
         case "vrcmd:chatSwitch":
           onSwitchBuddySession(c.id);
@@ -4448,11 +4551,27 @@ export function App() {
         case "vrcmd:chatClear":
           onClearBuddy();
           break;
+        case "vrcmd:chatCancel":
+          buddyCancel();
+          break;
+        case "vrcmd:chatApproveTool":
+          if (c.always) onAllowBuddyAlways();
+          else onApproveBuddyPendingTool();
+          break;
+        case "vrcmd:chatDismissTool":
+          onDismissBuddyPendingTool();
+          break;
+        case "vrcmd:chatAgentApprove":
+          onApproveAgentTool(c.id);
+          break;
+        case "vrcmd:chatAgentDeny":
+          onDenyAgentTool(c.id);
+          break;
         default:
           break;
       }
     },
-    [onBuddySendWithAttachments, onSwitchBuddySession, onNewBuddySession, onDeleteBuddySession, onRenameBuddySession, onClearBuddy],
+    [runBuddyTurnWithAttachments, onSwitchBuddySession, onNewBuddySession, onDeleteBuddySession, onRenameBuddySession, onClearBuddy, buddyCancel, onAllowBuddyAlways, onApproveBuddyPendingTool, onDismissBuddyPendingTool],
   );
   useEffect(() => {
     chatCommandRef.current = runChatCommand;
@@ -5414,7 +5533,7 @@ export function App() {
             agentApprovals={agentApprovals}
             onApproveAgentTool={onApproveAgentTool}
             onDenyAgentTool={onDenyAgentTool}
-            onCancel={buddyCancel}
+            onCancel={onBuddyCancel}
             onClearHistory={onClearBuddy}
             onDeleteMessage={onDeleteBuddyMessage}
             onCompact={onCompactBuddyClick}
