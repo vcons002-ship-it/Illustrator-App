@@ -300,10 +300,13 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
 /** In-app "Software update": one button that pulls + rebuilds + reloads, with a live status line. */
 function SoftwareUpdateRow({
   onUpdate,
+  onRestart,
 }: {
   onUpdate: (
     onProgress: (msg: string) => void,
   ) => Promise<{ status: "uptodate" | "updated" | "needs-restart" | "error"; message: string }>;
+  /** Relaunch the app — surfaced as a "Restart now" button once an update needs a restart. */
+  onRestart?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [line, setLine] = useState("");
@@ -334,7 +337,14 @@ function SoftwareUpdateRow({
       {busy && line ? (
         <span style={{ opacity: 0.75, fontSize: 12 }}>{line}</span>
       ) : result ? (
-        <span style={{ fontSize: 12, color }}>{result.message}</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12, color }}>{result.message}</span>
+          {onRestart && (result.status === "needs-restart" || result.status === "updated") && (
+            <button style={buttonStyle} onClick={() => onRestart()} title="Relaunch Visual Reader to finish the update">
+              ↻ Restart now
+            </button>
+          )}
+        </span>
       ) : (
         <span style={{ opacity: 0.55, fontSize: 11 }}>
           Pulls the latest version, rebuilds, and reloads. A core update will ask you to fully restart.
@@ -523,7 +533,9 @@ export function SettingsPanel({
               aria-label="Filter settings"
             />
           </div>
-          {onSoftwareUpdate && <SoftwareUpdateRow onUpdate={onSoftwareUpdate} />}
+          {onSoftwareUpdate && (
+            <SoftwareUpdateRow onUpdate={onSoftwareUpdate} {...(onRestartApp ? { onRestart: onRestartApp } : {})} />
+          )}
           {onRestartApp && (
             <div
               style={{
