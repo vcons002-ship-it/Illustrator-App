@@ -86,10 +86,25 @@ export function remoteModeFromHash(hash: string, host: string): RemoteMode | und
 }
 
 /**
- * Worker-protocol messages that must stay LOCAL to whichever side owns the engine — the
- * desktop host handles its own CORS-exempt fetches; they're never relayed to the phone.
+ * Worker-protocol messages that must stay LOCAL to whichever side OWNS the engine worker (the
+ * desktop). These are the worker's HOST CALLS into the runtime — CORS-exempt fetches, local file
+ * search/read, stdio MCP servers, the chat-LLM VRAM toggle, and the coding-agent tool channel — plus
+ * their results. They must be handled on the desktop (which has Tauri); relaying them to a linked
+ * phone would make the phone ALSO try to run them (it has no runtime) and post an error result that
+ * RACES the desktop's real one. So they never cross the relay.
  */
-export const LOCAL_ONLY_MESSAGE_TYPES: ReadonlySet<string> = new Set(["corsFetch", "corsFetchResult"]);
+export const LOCAL_ONLY_MESSAGE_TYPES: ReadonlySet<string> = new Set([
+  "corsFetch",
+  "corsFetchResult",
+  "hostFile",
+  "hostFileResult",
+  "mcpStdio",
+  "mcpStdioResult",
+  "llmVram",
+  "llmVramResult",
+  "agentToolRequest",
+  "agentToolResult",
+]);
 
 /** True when a worker-protocol message should NOT cross the relay (handled on the engine side). */
 export function isLocalOnlyMessage(msg: unknown): boolean {
