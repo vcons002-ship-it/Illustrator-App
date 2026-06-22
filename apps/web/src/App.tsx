@@ -1430,6 +1430,14 @@ export function App() {
   });
   const applyPlannerRef = useRef<(p: PlannerMirror) => void>(() => {});
   const plannerCommandRef = useRef<(c: PlannerCommand) => void>(() => {});
+  // Phone-triggered software update: the DESKTOP runs it via this ref (assigned below, since
+  // onSoftwareUpdate is declared later); the PHONE holds the in-flight request here so a relayed
+  // vrsync:updateStatus can resolve it + reload.
+  const runUpdateForPhoneRef = useRef<() => void>(() => {});
+  type UpdateResult = { status: "uptodate" | "updated" | "needs-restart" | "error"; message: string };
+  const phoneUpdatePending = useRef<{ resolve: (r: UpdateResult) => void; onProgress: (m: string) => void } | undefined>(
+    undefined,
+  );
   const buildSnapshot = useCallback(
     (): SyncToPhone => ({
       type: "vrsync:state",
@@ -1487,6 +1495,19 @@ export function App() {
             setBook(msg.book);
             setBible(msg.bible);
             break;
+          case "vrsync:updateStatus": {
+            // Progress/result of an update the phone asked for. "working" → progress; otherwise it's
+            // the final outcome — resolve the in-flight request, and reload to the new UI if applied.
+            const p = phoneUpdatePending.current;
+            if (msg.status === "working") {
+              p?.onProgress(msg.message);
+            } else {
+              phoneUpdatePending.current = undefined;
+              p?.resolve({ status: msg.status, message: msg.message });
+              if (msg.reload) setTimeout(() => window.location.reload(), 2500);
+            }
+            break;
+          }
           default:
             break; // commands are desktop-bound
         }
@@ -1516,6 +1537,10 @@ export function App() {
             // The phone triggered a Tasks/Calendar action; run it here (we own the data) and the
             // planner mirror re-pushes the result.
             plannerCommandRef.current(msg.command);
+            break;
+          case "vrcmd:update":
+            // The phone asked us to update: run the same pull+rebuild+reload, streaming status back.
+            runUpdateForPhoneRef.current();
             break;
           default:
             break;
@@ -1597,6 +1622,46 @@ export function App() {
       return { status: "updated", message: "Updated — reloading the app…" };
     },
     [settings.keys],
+  );
+
+  // DESKTOP side of a phone-triggered update: run the same update, streaming progress to the phone
+  // (vrsync:updateStatus) and signalling it to reload when a JS update was applied. Kept in a ref so
+  // the early-registered relay handler can reach it.
+  const runUpdateForPhone = useCallback(() => {
+    void (async () => {
+      const result = await onSoftwareUpdate((m) =>
+        sendAppSync({ type: "vrsync:updateStatus", status: "working", message: m }),
+      );
+      sendAppSync({
+        type: "vrsync:updateStatus",
+        status: result.status,
+        message: result.message,
+        ...(result.status === "updated" ? { reload: true } : {}),
+      });
+    })();
+  }, [onSoftwareUpdate, sendAppSync]);
+  useEffect(() => {
+    runUpdateForPhoneRef.current = runUpdateForPhone;
+  }, [runUpdateForPhone]);
+
+  // PHONE side: ask the desktop to update and await the relayed result. The desktop reloads itself
+  // and tells us to reload too (we re-fetch the new UI from its rebuilt bundle, then reconnect via
+  // the persisted token in our URL). A long backstop covers an older desktop build that can't update.
+  const onSoftwareUpdateRemote = useCallback(
+    (onProgress: (msg: string) => void): Promise<UpdateResult> =>
+      new Promise<UpdateResult>((resolve) => {
+        const entry = { resolve, onProgress };
+        phoneUpdatePending.current = entry;
+        onProgress("Asking the desktop to update…");
+        sendAppSync({ type: "vrcmd:update" });
+        setTimeout(() => {
+          if (phoneUpdatePending.current === entry) {
+            phoneUpdatePending.current = undefined;
+            resolve({ status: "error", message: "The desktop didn't respond — update it from the desktop app, or check the link." });
+          }
+        }, 600_000); // 10 min: a full rebuild can be slow
+      }),
+    [sendAppSync],
   );
 
   // OCR: read the text out of a scanned image with the configured vision model, then open it
@@ -4777,7 +4842,11 @@ export function App() {
             onChange={onSettingsChange}
             isDesktop={isDesktop}
             remote={isRemoteClient}
-            {...(isDesktop ? { onSoftwareUpdate } : {})}
+            {...(isDesktop
+              ? { onSoftwareUpdate }
+              : isRemoteClient
+                ? { onSoftwareUpdate: onSoftwareUpdateRemote }
+                : {})}
             installedModels={installedModels}
             installedTextEncoders={installedTextEncoders}
             installedVaes={installedVaes}
