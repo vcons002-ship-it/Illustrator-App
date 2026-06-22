@@ -108,6 +108,10 @@ export interface BuddyDeps {
   findFiles?: (query: string) => Promise<{ name: string; path: string }[]>;
   /** Read a local file's text (planner; gated by the auto-pull-files setting). */
   readFile?: (path: string) => Promise<string>;
+  /** Open an image file INTO the chat (the host shows its bytes inline). Returns the picture's name,
+   * mime + base64 bytes (the host renders them; never folded into the model turn) and an optional
+   * vision observation. */
+  openImage?: (path: string) => Promise<{ name: string; mimeType: string; base64: string; observation?: string }>;
   listEvents?: (opts: { max?: number; timeMin?: string; timeMax?: string }) => Promise<CalendarEvent[]>;
   createEvent?: (ev: { summary: string; start: string; end: string; description?: string; location?: string }) => Promise<CalendarEvent>;
   listTasks?: (max?: number) => Promise<TaskItem[]>;
@@ -561,6 +565,9 @@ export async function runBuddyTool(
       case "read_file":
         if (!deps.readFile) return { error: "reading local files isn't enabled (turn on file pulling in Settings, on desktop)." };
         return { fileText: await deps.readFile(call.path) };
+      case "open_image":
+        if (!deps.openImage) return { error: "opening images isn't enabled (turn on file pulling in Settings, on desktop)." };
+        return { openedImage: await deps.openImage(call.path) };
       case "list_events":
         if (!deps.listEvents) return { error: "Google isn't connected (connect it in Settings)." };
         return {
