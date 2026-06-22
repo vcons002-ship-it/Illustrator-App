@@ -58,6 +58,9 @@ export const UI_ONLY_FIELDS = [
   // fields); this map only drives what those default to on model select. Changing it must not
   // rebuild the engine.
   "localComponentsByModel",
+  // Per-backend server-URL memory: the engine reads the RESOLVED localServerUrl; this map only drives
+  // what the URL field restores when the ComfyUI/A1111 dropdown is flipped. No engine rebuild.
+  "localServerUrlByBackend",
 ] as const satisfies readonly (keyof ReaderSettings)[];
 
 /** Dependency key over just the tuning fields. */

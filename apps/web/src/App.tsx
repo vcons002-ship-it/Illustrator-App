@@ -195,6 +195,7 @@ import {
   type DisplayResult,
   type InstalledModel,
   type LocalBackendId,
+  type LocalEngineSource,
   type ProvidersDiagnostics,
   type ReaderSettings,
 } from "@visual-reader/ui";
@@ -302,6 +303,10 @@ function imageSearchMiss(query: string, error: string | undefined, hasSearchKey:
 export function App() {
   const stored = useMemo(loadStoredSettings, []);
   const [settings, setSettings] = useState<ReaderSettings>(stored.settings);
+  // Always-current settings, so engine resolution can read the latest URL/source/backend without
+  // re-creating its callbacks on every keystroke (which would refire the resolve effect).
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   const [book, setBook] = useState<BookSource | undefined>();
   const [localError, setLocalError] = useState<string>("");
   const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
@@ -1003,62 +1008,135 @@ export function App() {
     };
   }, [settings.textProvider, settings.localTextBackend, settings.localServerTextUrl]);
 
-  // Desktop: when the local image path is selected, make sure the GPU engine is
-  // installed + running (downloads on first use) and learn its base URL + models.
-  useEffect(() => {
-    if (!isDesktop || settings.imageProvider !== "local" || settings.engineBaseUrl) return;
-    let cancelled = false;
-    void (async () => {
+  // Start (or reuse) the app-managed ComfyUI and load its inventory; point the ACTIVE engine at it
+  // (always ComfyUI). Returns `true` on success, or a reason string (`"unavailable"` off the desktop)
+  // so the resolver can fall back. Desktop only — `ensureEngine` rejects elsewhere.
+  const startManagedEngine = useCallback(async (): Promise<true | string> => {
+    if (!isDesktop) return "unavailable";
+    try {
+      setEngineStatus("Setting up the local engine…");
+      // Detect VRAM once: it both caps Auto-quality AND decides --lowvram (best-effort; undefined on
+      // non-NVIDIA GPUs leaves Auto uncapped).
+      const vram = await gpuVramMb();
+      // VRAM- and model-aware --lowvram: offload the big text encoder to system RAM ONLY when the
+      // chosen image model won't comfortably fit the GPU. When VRAM is unknown, fall back to the
+      // manual Low-VRAM toggle. (fp8 weights stay tied to the toggle separately, in the workflow.)
+      const LOWVRAM_HEADROOM_GB = 4; // activations/latents/runtime overhead beyond the weights
+      const s = settingsRef.current;
+      const modelCostGb = imageModelVramCostGb(s.localModel ?? "");
+      const needsLowVram =
+        vram === undefined ? !!s.lowVram : modelCostGb > 0 && (modelCostGb + LOWVRAM_HEADROOM_GB) * 1024 > vram;
+      const baseUrl = await ensureEngine(needsLowVram);
+      const models = await listLocalModels();
+      const loras = await listLoras();
+      // Detect each LoRA's base architecture (reads only the safetensors header) so the UI can flag
+      // one that won't load on the active model.
+      const families = await loraFamilies();
+      setEngineStatus("");
+      setInstalledModels(models);
+      setInstalledLoras(loras);
+      setLoraFamilyMap(families);
+      // The managed engine is ComfyUI — read its text-encoder + VAE files over the HTTP API (same as
+      // the "connect" path) so the split-file dropdowns are populated on desktop too.
       try {
-        setEngineStatus("Setting up the local engine…");
-        // Detect VRAM once: it both caps Auto-quality AND decides --lowvram below
-        // (best-effort; undefined on non-NVIDIA GPUs leaves Auto uncapped).
-        const vram = await gpuVramMb();
-        if (cancelled) return;
-        // VRAM- and model-aware --lowvram: launch ComfyUI to offload the big text encoder to
-        // system RAM ONLY when the chosen image model won't comfortably fit the GPU. When VRAM
-        // is unknown, fall back to the manual Low-VRAM toggle. (fp8 weights stay tied to the
-        // toggle separately, in the workflow.)
-        const LOWVRAM_HEADROOM_GB = 4; // activations/latents/runtime overhead beyond the weights
-        const modelCostGb = imageModelVramCostGb(settings.localModel ?? "");
-        const needsLowVram =
-          vram === undefined
-            ? !!settings.lowVram
-            : modelCostGb > 0 && (modelCostGb + LOWVRAM_HEADROOM_GB) * 1024 > vram;
-        const baseUrl = await ensureEngine(needsLowVram);
-        const models = await listLocalModels();
-        const loras = await listLoras();
-        // Detect each LoRA's base architecture (reads only the safetensors header) so the
-        // UI can flag one that won't load on the active model.
-        const families = await loraFamilies();
-        if (cancelled) return;
-        setEngineStatus("");
-        setInstalledModels(models);
-        setInstalledLoras(loras);
-        setLoraFamilyMap(families);
-        // The managed engine is ComfyUI — read its text-encoder + VAE files over the HTTP API
-        // (same as the web "connect" path) so the split-file dropdowns are populated on desktop too.
-        try {
-          const comps = await new ComfyUIBackend({ baseUrl }).listComponents();
-          if (!cancelled) {
-            setInstalledTextEncoders(comps.textEncoders);
-            setInstalledVaes(comps.vaes);
-          }
-        } catch {
-          /* leave components empty — the fields fall back to manual entry */
-        }
-        setSettings((s) => ({ ...s, engineBaseUrl: baseUrl, ...(vram ? { gpuVramMb: vram } : {}) }));
-      } catch (err) {
-        if (!cancelled) {
-          setEngineStatus("");
-          setLocalError(`Local engine setup failed: ${err instanceof Error ? err.message : String(err)}`);
-        }
+        const comps = await new ComfyUIBackend({ baseUrl }).listComponents();
+        setInstalledTextEncoders(comps.textEncoders);
+        setInstalledVaes(comps.vaes);
+      } catch {
+        /* leave components empty — the fields fall back to manual entry */
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [settings.imageProvider, settings.engineBaseUrl]);
+      setSettings((cur) => ({ ...cur, engineBaseUrl: baseUrl, engineBackend: "comfyui", ...(vram ? { gpuVramMb: vram } : {}) }));
+      return true;
+    } catch (err) {
+      setEngineStatus("");
+      return err instanceof Error ? err.message : String(err);
+    }
+  }, []);
+
+  // Probe a self-hosted SD server (ComfyUI/A1111): list its models + components and, on success,
+  // point the ACTIVE engine at it (engineBaseUrl + engineBackend) and pick a sensible model. Throws
+  // if the server can't be reached (so the resolver / connect handler can fall back).
+  const probeServer = useCallback(async (backend: LocalBackendId, url: string): Promise<void> => {
+    if (!url) throw new Error("no server URL set");
+    const engine = backend === "a1111" ? new Automatic1111Backend({ baseUrl: url }) : new ComfyUIBackend({ baseUrl: url });
+    const models = await engine.listModels(); // throws when the server is unreachable
+    setInstalledModels(models);
+    try {
+      const comps = await engine.listComponents();
+      setInstalledTextEncoders(comps.textEncoders);
+      setInstalledVaes(comps.vaes);
+    } catch {
+      /* leave components empty (A1111 has none; a ComfyUI miss falls back to manual entry) */
+    }
+    setSettings((s) => {
+      const base: ReaderSettings = { ...s, engineBaseUrl: url, engineBackend: backend };
+      // Keep the current model if the server still has it; otherwise pick its first + restore that
+      // model's remembered encoder/VAE combo.
+      if (s.localModel && models.some((m) => m.id === s.localModel)) return base;
+      const localModel = models[0]?.id;
+      return localModel ? applyLocalModelComponents(base, localModel) : base;
+    });
+  }, []);
+
+  // Resolve which local engine actually renders, honouring the user's "Generate on" choice and
+  // falling back to the OTHER engine when the chosen one can't be reached (so a wrong server URL no
+  // longer dead-ends — it drops to the app-managed ComfyUI, and vice-versa).
+  const resolveLocalEngine = useCallback(async (): Promise<void> => {
+    const s = settingsRef.current;
+    if (s.imageProvider !== "local") return;
+    const source: LocalEngineSource = s.localSource ?? (isDesktop ? "managed" : "server");
+    const backend = s.localBackend ?? "comfyui";
+    const url = (s.localServerUrl ?? "").trim();
+    const backendName = backend === "a1111" ? "AUTOMATIC1111" : "ComfyUI";
+    setLocalError("");
+    if (source === "server") {
+      if (!url) {
+        // Nothing configured yet: on desktop start the managed engine; on web just wait for Connect
+        // (no error noise before the user has entered anything).
+        await startManagedEngine();
+        return;
+      }
+      try {
+        await probeServer(backend, url);
+        return;
+      } catch (err) {
+        const why = err instanceof Error ? err.message : String(err);
+        // Fallback: drop to the app-managed engine when the server can't be reached.
+        if ((await startManagedEngine()) === true) {
+          setLocalError(`Couldn't reach your ${backendName} server${url ? ` at ${url}` : ""} — using the app-managed engine instead.`);
+          return;
+        }
+        setLocalError(`Couldn't reach your ${backendName} server${url ? ` at ${url}` : ""}: ${why}. Check the URL + that it's running with CORS for ${location.origin}.`);
+      }
+    } else {
+      const managed = await startManagedEngine();
+      if (managed === true) return;
+      // No managed engine here (or it failed) — fall back to the user's server.
+      try {
+        await probeServer(backend, url);
+        setLocalError(
+          managed === "unavailable"
+            ? "The app-managed engine needs the Windows desktop app — using your server instead."
+            : `The app-managed engine couldn't start (${managed}) — using your server instead.`,
+        );
+      } catch {
+        setLocalError(
+          managed === "unavailable"
+            ? "The app-managed engine needs the Windows desktop app. Add your own ComfyUI/AUTOMATIC1111 server URL below."
+            : `Local engine setup failed: ${managed}`,
+        );
+      }
+    }
+  }, [probeServer, startManagedEngine]);
+
+  // Re-resolve the active engine when the local path is chosen and whenever the "Generate on" source
+  // changes. NOT on URL keystrokes or a backend-dropdown flip — those are committed explicitly via
+  // Connect (so flipping to an unconfigured backend never silently auto-starts a different engine).
+  // `resolveLocalEngine` is stable, so this only fires on the listed inputs.
+  useEffect(() => {
+    if (settings.imageProvider !== "local") return;
+    void resolveLocalEngine();
+  }, [settings.imageProvider, settings.localSource, resolveLocalEngine]);
 
   // Download a catalog model: every component file of a split-file model (diffusion
   // model + text encoder + VAE, each into its ComfyUI subfolder), or the single
@@ -1184,43 +1262,43 @@ export function App() {
     }
   }, []);
 
-  // Browser path: connect to a self-hosted engine (AUTOMATIC1111 / ComfyUI),
-  // read its installed checkpoints, and remember the server for next time.
-  const onConnectLocalServer = useCallback(async (backend: LocalBackendId, url: string) => {
-    setLocalError("");
-    setConnectingLocal(true);
-    try {
-      const engine =
-        backend === "a1111" ? new Automatic1111Backend({ baseUrl: url }) : new ComfyUIBackend({ baseUrl: url });
-      const models = await engine.listModels();
-      setInstalledModels(models);
-      // Also list the separate text-encoder + VAE files (for the split-file dropdowns).
-      // Best-effort: a failure just leaves the dropdowns as manual entry.
-      try {
-        const comps = await engine.listComponents();
-        setInstalledTextEncoders(comps.textEncoders);
-        setInstalledVaes(comps.vaes);
-      } catch {
-        /* leave components empty */
-      }
-      setSettings((s) => {
-        const base = { ...s, localBackend: backend, localServerUrl: url, engineBaseUrl: url };
-        const keep = s.localModel && models.some((m) => m.id === s.localModel);
-        if (keep) return base;
-        // Switched to a different model → restore the encoder/VAE combo last used with it.
-        const localModel = models[0]?.id;
-        return localModel ? applyLocalModelComponents(base, localModel) : base;
-      });
-    } catch (err) {
+  // Connect to a self-hosted engine (AUTOMATIC1111 / ComfyUI): probe it, switch to the "server"
+  // source, and remember the URL UNDER its backend so flipping the dropdown later restores it. On
+  // failure, fall back to the app-managed engine (desktop) instead of dead-ending.
+  const onConnectLocalServer = useCallback(
+    async (backend: LocalBackendId, url: string) => {
+      setLocalError("");
+      setConnectingLocal(true);
       const name = backend === "a1111" ? "AUTOMATIC1111" : "ComfyUI";
-      setLocalError(
-        `Couldn't reach ${name} at ${url}: ${err instanceof Error ? err.message : String(err)}. ` +
-          `Make sure it's running with its API and CORS enabled for ${location.origin}.`,
-      );
-    } finally {
-      setConnectingLocal(false);
-    }
-  }, []);
+      // Persist the choice + per-backend URL memory whether or not the probe succeeds, so the field
+      // keeps what the user typed and the dropdown restores it next time.
+      const remember = (s: ReaderSettings): ReaderSettings => ({
+        ...s,
+        localSource: "server",
+        localBackend: backend,
+        localServerUrl: url,
+        localServerUrlByBackend: { ...(s.localServerUrlByBackend ?? {}), [backend]: url },
+      });
+      try {
+        await probeServer(backend, url); // sets engineBaseUrl/engineBackend/models on success
+        setSettings(remember);
+      } catch (err) {
+        const why = err instanceof Error ? err.message : String(err);
+        setSettings(remember);
+        // Fallback so a bad URL doesn't leave the user with no engine.
+        if ((await startManagedEngine()) === true) {
+          setLocalError(`Couldn't reach ${name} at ${url} — using the app-managed engine instead. (${why})`);
+        } else {
+          setLocalError(
+            `Couldn't reach ${name} at ${url}: ${why}. Make sure it's running with its API and CORS enabled for ${location.origin}.`,
+          );
+        }
+      } finally {
+        setConnectingLocal(false);
+      }
+    },
+    [probeServer, startManagedEngine],
+  );
 
   // Connect to a local LLM server (Ollama / LM Studio / llama.cpp), load its model
   // list, and remember it for next time. A direct fetch is fine in the web app
@@ -6160,10 +6238,11 @@ function migrate(raw: Record<string, unknown>): ReaderSettings {
 
 async function saveSettings(s: ReaderSettings): Promise<void> {
   try {
-    // Drop the transient engine URL + detected VRAM and the plaintext keys; persist
+    // Drop the transient engine URL + active backend + detected VRAM and the plaintext keys; persist
     // the keys only as an encrypted blob (never in plaintext).
-    const { keys, engineBaseUrl: _url, gpuVramMb: _vram, ...rest } = s;
+    const { keys, engineBaseUrl: _url, engineBackend: _backend, gpuVramMb: _vram, ...rest } = s;
     void _url;
+    void _backend;
     void _vram;
     const persist: Record<string, unknown> = { ...rest };
     delete persist.keysEnc;

@@ -37,6 +37,39 @@ describe("buildProviders bundled text model (desktop)", () => {
   });
 });
 
+describe("buildProviders local image backend", () => {
+  it("talks to the user's server with the chosen backend when no active override is set", () => {
+    const a1111 = buildProviders(
+      settings({ imageProvider: "local", localBackend: "a1111", localServerUrl: "http://127.0.0.1:7860", localModel: "sd_xl_base" }),
+    );
+    expect(a1111.diagnostics.image.mock).toBe(false);
+    expect(a1111.diagnostics.image.label).toMatch(/AUTOMATIC1111/);
+  });
+
+  it("the resolved engineBackend wins over localBackend (fallback to managed ComfyUI speaks ComfyUI)", () => {
+    // The user picked A1111, but engine resolution fell back to the managed ComfyUI and stamped
+    // engineBaseUrl + engineBackend; the provider must talk ComfyUI, not A1111.
+    const fellBack = buildProviders(
+      settings({
+        imageProvider: "local",
+        localBackend: "a1111",
+        localServerUrl: "http://127.0.0.1:7860",
+        engineBaseUrl: "http://127.0.0.1:8188",
+        engineBackend: "comfyui",
+        localModel: "sd_xl_base",
+      }),
+    );
+    expect(fellBack.diagnostics.image.label).toMatch(/ComfyUI/);
+    expect(fellBack.diagnostics.image.label).not.toMatch(/AUTOMATIC1111/);
+  });
+
+  it("falls back to mock with a clear reason when nothing is connected", () => {
+    const none = buildProviders(settings({ imageProvider: "local", localModel: "sd_xl_base" }));
+    expect(none.diagnostics.image.mock).toBe(true);
+    expect(none.diagnostics.image.reason).toMatch(/isn't connected/i);
+  });
+});
+
 describe("buildProviders search credentials", () => {
   it("activates Google search with the dedicated key + engine id", () => {
     const built = buildProviders(settings({ keys: { search: "k" }, searchEngineId: "cx" }));

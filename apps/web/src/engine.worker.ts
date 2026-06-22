@@ -477,7 +477,8 @@ function canFreeChatLlm(): boolean {
   // app's managed ComfyUI, which releases it under memory pressure), so freeing the chat model for it
   // only strands the LLM — it can't reload into the now-contended GPU and the chat goes unresponsive.
   // Only free for engines whose VRAM the app actually coordinates (bundled server / managed ComfyUI).
-  if (settings.localBackend === "a1111") return false;
+  // Use the RESOLVED active backend: a fallback from A1111 to the managed ComfyUI does release VRAM.
+  if ((settings.engineBackend ?? settings.localBackend) === "a1111") return false;
   try {
     return chatProviders().llm.id === "local-server";
   } catch {
@@ -3125,7 +3126,7 @@ async function installedModelNames(s: ReaderSettings): Promise<string[]> {
   if (!baseUrl) return [];
   try {
     const backend =
-      s.localBackend === "a1111"
+      (s.engineBackend ?? s.localBackend) === "a1111"
         ? new Automatic1111Backend({ baseUrl })
         : new ComfyUIBackend({ baseUrl });
     // Bounded: this runs per chat turn (for the settings note) — a wedged local

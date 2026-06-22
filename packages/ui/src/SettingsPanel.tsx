@@ -41,13 +41,17 @@ export type ImageProviderId = "flux" | "gemini" | "openai" | "local";
 /** Which local engine HTTP API to speak when the image provider is "local". */
 export type LocalBackendId = "comfyui" | "a1111";
 
+/** Which local engine actually renders: the app-managed ComfyUI the desktop launches itself, or a
+ * Stable Diffusion server (ComfyUI/A1111) the user runs and points the app at. */
+export type LocalEngineSource = "managed" | "server";
+
 /** Default localhost URL for each local engine, used as the field placeholder. */
 export const LOCAL_ENGINE_DEFAULT_URL: Record<LocalBackendId, string> = {
   comfyui: "http://127.0.0.1:8188",
   a1111: "http://127.0.0.1:7860",
 };
 
-const LOCAL_BACKEND_LABEL: Record<LocalBackendId, string> = {
+export const LOCAL_BACKEND_LABEL: Record<LocalBackendId, string> = {
   a1111: "AUTOMATIC1111",
   comfyui: "ComfyUI",
 };
@@ -185,10 +189,22 @@ export interface ReaderSettings {
    * high scale it. "auto"/unset leaves the model's default. Models/servers that don't support it
    * ignore the field. */
   localThinkingEffort?: "auto" | "off" | "low" | "medium" | "high";
-  /** Which local engine API to talk to (browser "your own server" path). */
+  /** Which local engine API to talk to (the "your own server" path). */
   localBackend?: LocalBackendId;
-  /** Base URL of a local engine you run yourself (browser path; persisted). */
+  /** Base URL of a local engine you run yourself (persisted). Mirrors the last-used URL for the
+   * currently-selected `localBackend`; the full per-backend memory lives in `localServerUrlByBackend`. */
   localServerUrl?: string;
+  /** Last-used server URL for EACH backend, so switching the ComfyUI/A1111 dropdown restores the URL
+   * you last entered for it (you don't retype it). Keyed by backend id. */
+  localServerUrlByBackend?: Partial<Record<LocalBackendId, string>>;
+  /** Which local engine renders: the app-managed ComfyUI ("managed") or your own server ("server").
+   * Defaults to "managed" on the desktop, "server" elsewhere. The unselected one is used as an
+   * automatic fallback when the selected one can't be reached. */
+  localSource?: LocalEngineSource;
+  /** Transient: the API the CURRENTLY-ACTIVE engine speaks (set by engine resolution alongside
+   * engineBaseUrl; "comfyui" for the managed engine). Not persisted. The provider reads this so a
+   * fallback to the managed ComfyUI talks ComfyUI even when localBackend is "a1111". */
+  engineBackend?: LocalBackendId;
   /**
    * "One API" native mode (opt-in): when the same vendor (Gemini/OpenAI) drives both
    * text and images, render through that vendor's MULTIMODAL endpoint so character
@@ -281,7 +297,8 @@ export interface ReaderSettings {
   remoteBus?: boolean;
   /** Optional MCP servers the buddy can call — one per line: `name https://host/mcp`. */
   mcpServers?: string;
-  /** Transient: base URL of the app-managed local engine (desktop; not persisted). */
+  /** Transient: base URL of the ACTIVE local engine (the app-managed one, or the user's server, or
+   * the fallback that won — set by engine resolution; not persisted). */
   engineBaseUrl?: string;
 }
 
@@ -1659,6 +1676,8 @@ export function SettingsPanel({
               installedModels={installedModels}
               backend={value.localBackend ?? "a1111"}
               serverUrl={value.localServerUrl ?? ""}
+              serverUrlByBackend={value.localServerUrlByBackend ?? {}}
+              source={value.localSource ?? (isDesktop || remote ? "managed" : "server")}
               selected={value.localModel}
               connecting={connectingLocal}
               downloadProgress={downloadProgress}
@@ -2173,7 +2192,8 @@ function StyleLoraRow({
 }
 
 /**
- * Local-engine settings. Two ways to generate on your own hardware:
+ * Local-engine settings. Two ways to generate on your own hardware, chosen with the "Generate on"
+ * selector (the unselected one is an automatic fallback when the selected one can't be reached):
  *  - Desktop: the app-managed engine, with a curated one-click model download.
  *  - Anywhere (incl. the browser): connect to a Stable Diffusion server you run
  *    yourself — AUTOMATIC1111 or ComfyUI — and pick from its installed models.
@@ -2184,6 +2204,8 @@ function LocalEngine({
   installedModels,
   backend,
   serverUrl,
+  serverUrlByBackend,
+  source,
   selected,
   connecting,
   downloadProgress,
@@ -2200,6 +2222,9 @@ function LocalEngine({
   installedModels: InstalledModel[];
   backend: LocalBackendId;
   serverUrl: string;
+  /** Last-used URL per backend, so flipping the ComfyUI/A1111 dropdown restores the saved URL. */
+  serverUrlByBackend: Partial<Record<LocalBackendId, string>>;
+  source: LocalEngineSource;
   selected: string | undefined;
   connecting: boolean;
   downloadProgress: Record<string, number>;
@@ -2211,9 +2236,31 @@ function LocalEngine({
   onDownloadModelUrl: ((url: string) => void) | undefined;
   onConnect: ((backend: LocalBackendId, url: string) => void) | undefined;
 }) {
+  const hasManaged = isDesktop || remote;
+  // Remember the URL under its backend so switching the dropdown swaps back to it (and the active
+  // localServerUrl follows the selected backend, so you never retype it).
+  const rememberUrl = (b: LocalBackendId, url: string): Partial<ReaderSettings> => ({
+    localServerUrl: url,
+    localServerUrlByBackend: { ...serverUrlByBackend, [b]: url },
+  });
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {(isDesktop || remote) && (
+      {hasManaged && (
+        <div style={rowStyle}>
+          <span>Generate on</span>
+          <select value={source} onChange={(e) => onSet({ localSource: e.target.value as LocalEngineSource })}>
+            <option value="managed">App-managed engine (ComfyUI)</option>
+            <option value="server">My own server</option>
+          </select>
+          <span style={{ opacity: 0.6, fontSize: 12 }}>
+            {source === "managed"
+              ? "Uses the engine the app runs for you. If it can't start, your server below is used as a fallback."
+              : "Uses your server below. If it can't be reached, the app-managed engine is used as a fallback."}
+          </span>
+        </div>
+      )}
+
+      {hasManaged && (
         // A linked phone gets the app-managed model PICKER (its pick relays to the desktop), but
         // not the DOWNLOAD controls — downloading runs on the desktop where the engine lives.
         <ManagedEngine
@@ -2230,8 +2277,16 @@ function LocalEngine({
       )}
 
       <div style={rowStyle}>
-        <span>{isDesktop || remote ? "Or use your own server" : "Your Stable Diffusion server"}</span>
-        <select value={backend} onChange={(e) => onSet({ localBackend: e.target.value as LocalBackendId })}>
+        <span>{hasManaged ? "Or use your own server" : "Your Stable Diffusion server"}</span>
+        <select
+          value={backend}
+          onChange={(e) => {
+            const b = e.target.value as LocalBackendId;
+            // Flip the dropdown → restore the URL last entered for that backend (or blank to show its
+            // placeholder), so the user never re-types a server they've used before.
+            onSet({ localBackend: b, localServerUrl: serverUrlByBackend[b] ?? "" });
+          }}
+        >
           {(["a1111", "comfyui"] as LocalBackendId[]).map((id) => (
             <option key={id} value={id}>
               {LOCAL_BACKEND_LABEL[id]}
@@ -2243,7 +2298,7 @@ function LocalEngine({
             style={{ flex: 1 }}
             value={serverUrl}
             placeholder={LOCAL_ENGINE_DEFAULT_URL[backend]}
-            onChange={(e) => onSet({ localServerUrl: e.target.value })}
+            onChange={(e) => onSet(rememberUrl(backend, e.target.value))}
           />
           <button
             style={buttonStyle}
