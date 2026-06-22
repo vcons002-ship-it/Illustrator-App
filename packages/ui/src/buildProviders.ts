@@ -386,7 +386,10 @@ function buildImage(
         },
       };
     }
-    const isA1111 = settings.localBackend === "a1111";
+    // The ACTIVE engine's protocol: `engineBackend` (set by engine resolution — "comfyui" for the
+    // managed engine and for any fallback to it) wins over the user's `localBackend` choice, so a
+    // fallback to the managed ComfyUI talks ComfyUI even when the server pick was A1111.
+    const isA1111 = (settings.engineBackend ?? settings.localBackend) === "a1111";
     const backend: LocalEngineBackend = isA1111
       ? new Automatic1111Backend({ baseUrl, ...(transport ? { transport } : {}) })
       : new ComfyUIBackend({ baseUrl, ...(transport ? { transport } : {}) });
