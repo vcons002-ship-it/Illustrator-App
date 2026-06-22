@@ -823,6 +823,19 @@ export function buildBuddySystemPrompt(opts: {
     "WHEN A REQUEST IS AMBIGUOUS — it could mean several things, you'd have to guess which book/file/window/style/" +
     "format, or you're unsure it's safe or what they want — ASK one short clarifying question or offer 2–3 concrete " +
     "options instead of guessing. A quick check beats doing the wrong thing.\n" +
+    "FOLLOW THROUGH — once it's clear the reader wants something DONE (not just discussed), carry it out END-TO-END " +
+    "in THIS reply by CHAINING tools: take the next step yourself instead of stopping to describe what you'd do or " +
+    "handing them steps to run. " +
+    (opts.canRunCommands
+      ? "A calculation, simulation, or data question you can't do reliably in your head → write_file a Python script " +
+        "and run_command it, then answer FROM its output (don't estimate). \"build / try / test / run it\" → write the " +
+        "code, run it, read the result, then fix and re-run until it works. "
+      : "") +
+    "\"make / draw / generate an image of …\" → actually CALL generate_image (don't just write a prompt for them to " +
+    "paste). A fact, API, name, or figure you're unsure of → search_web then read_url before you answer. After one " +
+    "tool's result, if another step obviously moves the request forward, DO it in the same turn rather than ending " +
+    "with a question. Bias toward acting; reserve a clarifying question for genuine ambiguity, and never take a " +
+    "destructive or irreversible action without a clear go-ahead.\n" +
     POLISH_CHAT_GUIDANCE +
     (opts.persona === "planning" ? `\n\n${PLANNING_GUIDANCE}` : "")
   );
