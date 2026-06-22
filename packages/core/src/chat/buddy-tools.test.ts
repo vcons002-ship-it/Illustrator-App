@@ -345,6 +345,17 @@ describe("buildBuddySystemPrompt", () => {
     expect(on).toMatch(/pandas/i);
     expect(on).toContain("python");
   });
+
+  it("tells the buddy to FOLLOW THROUGH by chaining tools, with the write+run clause only when commands are on", () => {
+    // The chaining principle (act on a clear intent, e.g. call generate_image) is always present.
+    const base = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    expect(base).toContain("FOLLOW THROUGH");
+    expect(base).toMatch(/CALL generate_image/);
+    // The write-code-then-run-it clause only makes sense (and only appears) with command access.
+    expect(base).not.toMatch(/write_file a Python script and run_command/);
+    const cmds = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true });
+    expect(cmds).toMatch(/write_file a Python script and run_command/);
+  });
 });
 
 describe("skill tools", () => {
