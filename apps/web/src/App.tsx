@@ -696,10 +696,13 @@ export function App() {
     },
     [libraryStore, refreshTaskPlans],
   );
-  const openTasks = useCallback(async () => {
-    await loadTaskPlans(libraryStore).then(setTaskPlans).catch(() => {});
+  const openTasks = useCallback(() => {
+    // Reload from the store on the desktop; on a linked phone this is a no-op (refreshTaskPlans is
+    // gated) so it keeps the desktop-mirrored task list instead of clobbering it with the phone's
+    // own empty store.
+    refreshTaskPlans();
     setShowTasks(true);
-  }, [libraryStore]);
+  }, [refreshTaskPlans]);
   // App-managed recurrence: when every step of a REPEATING task is done, roll it forward in place
   // to the next occurrence (steps reset to pending, deadline + step dues shifted by the rule) and
   // create a fresh Google Task for the new cycle — so a repeating to-do comes back once, on cadence,
