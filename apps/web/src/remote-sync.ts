@@ -10,7 +10,7 @@
  * stream back over the same relay, so no model or data ever needs to live on the phone.
  */
 
-import type { BookSource, BookSummary, CalendarEvent, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
+import type { BookSource, BookSummary, BuddyToolCall, BuddyToolResultPayload, CalendarEvent, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
 import type { InstalledModel, ReaderSettings } from "@visual-reader/ui";
 
 /**
@@ -91,7 +91,10 @@ export type SyncToPhone =
   | { type: "vrsync:book"; book?: BookSource; bible?: VisualBible }
   // Progress/result of an update the PHONE triggered (vrcmd:update). `reload` ⇒ the desktop applied a
   // JS update and the phone should reload to pick up the new UI (then it reconnects via its token).
-  | { type: "vrsync:updateStatus"; status: "working" | "uptodate" | "updated" | "needs-restart" | "error"; message: string; reload?: boolean };
+  | { type: "vrsync:updateStatus"; status: "working" | "uptodate" | "updated" | "needs-restart" | "error"; message: string; reload?: boolean }
+  // Result of a desktop-runtime host tool the phone relayed (vrcmd:hostTool) — file search/read,
+  // run_command, write_file, screenshot — run on the desktop, fed back to the phone's buddy turn.
+  | { type: "vrsync:hostToolResult"; requestId: number; payload: BuddyToolResultPayload };
 
 /** Phone → desktop commands. */
 export type CmdToDesktop =
@@ -100,7 +103,8 @@ export type CmdToDesktop =
   | { type: "vrcmd:home" } // leave the open book (back to the desktop's home screen)
   | { type: "vrcmd:settings"; settings: ReaderSettings } // phone edited settings → apply on the desktop (it renders)
   | { type: "vrcmd:planner"; command: PlannerCommand } // phone Tasks/Calendar action → run on the desktop
-  | { type: "vrcmd:update" }; // phone asked the desktop to pull + rebuild + reload (software update)
+  | { type: "vrcmd:update" } // phone asked the desktop to pull + rebuild + reload (software update)
+  | { type: "vrcmd:hostTool"; requestId: number; call: BuddyToolCall }; // run a desktop-runtime tool (files/command/screenshot) on the desktop
 
 export type AppSyncMessage = SyncToPhone | CmdToDesktop;
 
