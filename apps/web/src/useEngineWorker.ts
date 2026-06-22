@@ -993,29 +993,52 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }
     };
 
-    // PHONE-CLIENT MODE: no local worker — drive the desktop engine over the relay.
+    // PHONE-CLIENT MODE: no local worker — drive the desktop engine over the relay. The socket
+    // AUTO-RECONNECTS (with backoff) so a desktop restart, an in-app update's reload, or a brief Wi-Fi
+    // blip doesn't strand the phone — when the desktop's relay comes back on the SAME persisted link,
+    // the phone re-attaches and re-syncs, no manual reload needed.
     const remote = remoteRef.current;
     if (remote) {
-      const ws = new WebSocket(remote.wsUrl);
-      ws.onopen = () => {
-        setStatus("Linked to a desktop");
-        // Ask the desktop for a full snapshot of what it's showing (library/book/bible/settings).
-        ws.send(encodeFrame(remote.token, { type: "vrcmd:hello" }));
+      let stopped = false; // set on unmount — stop reconnecting then
+      let attempt = 0;
+      let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+      const connect = (): void => {
+        const ws = new WebSocket(remote.wsUrl);
+        ws.onopen = () => {
+          attempt = 0;
+          setStatus("Linked to a desktop");
+          // Re-ask for a full snapshot every (re)connect, so the phone re-syncs after a gap.
+          ws.send(encodeFrame(remote.token, { type: "vrcmd:hello" }));
+        };
+        ws.onclose = () => {
+          if (phoneWsRef.current === ws) phoneWsRef.current = undefined;
+          if (stopped) return;
+          const delay = Math.min(1000 * 2 ** attempt, 10_000); // 1s, 2s, 4s, 8s, 10s, 10s…
+          attempt++;
+          setStatus("Reconnecting to the desktop…");
+          reconnectTimer = setTimeout(connect, delay);
+        };
+        ws.onerror = () => {
+          /* an onclose follows and schedules the retry */
+        };
+        ws.onmessage = (e) => {
+          if (typeof e.data !== "string") return;
+          const payload = decodeFrame(e.data, remote.token);
+          if (!payload) return;
+          const msg = deserializeFromRemote(payload, base64ToBytes);
+          // App-sync state pushes (library/book/bible/settings) go to App; everything else is an
+          // engine message streamed from the desktop's worker.
+          if (isAppSyncMessage(msg)) appSyncRef.current?.(msg as AppSyncMessage);
+          else if (!isLocalOnlyMessage(msg)) handleMsg(msg as WorkerToMain);
+        };
+        phoneWsRef.current = ws;
       };
-      ws.onclose = () => setStatus("Disconnected from the desktop");
-      ws.onerror = () => setStatus("Error: couldn't reach the desktop on this network");
-      ws.onmessage = (e) => {
-        if (typeof e.data !== "string") return;
-        const payload = decodeFrame(e.data, remote.token);
-        if (!payload) return;
-        const msg = deserializeFromRemote(payload, base64ToBytes);
-        // App-sync state pushes (library/book/bible/settings) go to App; everything else is an
-        // engine message streamed from the desktop's worker.
-        if (isAppSyncMessage(msg)) appSyncRef.current?.(msg as AppSyncMessage);
-        else if (!isLocalOnlyMessage(msg)) handleMsg(msg as WorkerToMain);
+      connect();
+      return () => {
+        stopped = true;
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        phoneWsRef.current?.close();
       };
-      phoneWsRef.current = ws;
-      return () => ws.close();
     }
 
     let worker: Worker;
