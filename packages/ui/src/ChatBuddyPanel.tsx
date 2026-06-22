@@ -8,6 +8,7 @@ import {
   completeSlash,
   type BuildDocumentFn,
   type ChatMessageVM,
+  type RunCodeFn,
 } from "./ChatPanel.js";
 import {
   buddySlashCommands,
@@ -101,6 +102,8 @@ export interface ChatBuddyPanelProps {
   onOpenLocalFile?: (path: string) => void;
   /** Save a file the assistant wrote in a code block. */
   onSaveFile?: (filename: string, content: string, mime: string) => Promise<string | true>;
+  /** Run a code block (Python/JS/shell) on the host and show its output. */
+  onRunCode?: RunCodeFn;
   /** Zip + save a multi-file (≥2 code blocks) answer as one project. */
   onSaveProject?: (files: ProjectFile[]) => Promise<string | true>;
   /** Generate + embed a designed document's images. */
@@ -321,6 +324,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             {...(props.onDeleteMessage ? { onDelete: props.onDeleteMessage } : {})}
             {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
             {...(props.onSaveFile ? { onSaveFile: props.onSaveFile } : {})}
+            {...(props.onRunCode ? { onRunCode: props.onRunCode } : {})}
             {...(props.onSaveProject ? { onSaveProject: props.onSaveProject } : {})}
             {...(props.onBuildDocument ? { onBuildDocument: props.onBuildDocument } : {})}
             onAction={props.onSend}
