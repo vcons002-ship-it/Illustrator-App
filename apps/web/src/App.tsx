@@ -209,6 +209,7 @@ import {
   ensureEngine,
   ensureLocalLlm,
   gpuVramMb,
+  restartApp,
   isDesktop,
   listLocalModels,
   listLoras,
@@ -378,6 +379,7 @@ export function App() {
     chat,
     chatTool,
     chatCancel,
+    warmLlm,
     buddyChat,
     buddyCancel,
     summarize,
@@ -5026,6 +5028,7 @@ export function App() {
               : isRemoteClient
                 ? { onSoftwareUpdate: onSoftwareUpdateRemote }
                 : {})}
+            {...(isDesktop ? { onRestartApp: restartApp } : {})}
             installedModels={installedModels}
             installedTextEncoders={installedTextEncoders}
             installedVaes={installedVaes}
@@ -5156,6 +5159,9 @@ export function App() {
             onDeleteMessage={onDeleteBuddyMessage}
             onCompact={onCompactBuddyClick}
             desktop={isDesktop}
+            {...(isDesktop && (settings.localTextBackend === "bundled" || settings.localTextBackend === "server")
+              ? { onLoadModel: warmLlm }
+              : {})}
             {...(isDesktop && settings.allowCommands
               ? { workingDir: buddyWorkingDir, onSetWorkingDir: setWorkingDir, onPickFolder: pickFolder }
               : {})}

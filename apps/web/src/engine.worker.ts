@@ -917,6 +917,10 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       chatAborts.get(msg.requestId)?.abort();
       chatAborts.delete(msg.requestId);
       break;
+    case "warmLlm":
+      cancelChatWarm(); // supersede any pending debounced warm — load it right now
+      void doWarmChatModel();
+      break;
     case "corsFetchResult": {
       const resolve = corsFetchPending.get(msg.fetchId);
       corsFetchPending.delete(msg.fetchId);
@@ -1108,26 +1112,24 @@ function warmChatModel(): void {
   cancelChatWarm();
   warmTimer = setTimeout(() => {
     warmTimer = undefined;
-    // If we explicitly STOPPED the bundled LLM to free memory for an image session:
-    //  - A book is OPEN → the engine may need the LLM next (a chapter, concept cards, task plans),
-    //    and we only freed it because the bible was idle for THIS render — so restore it now (after
-    //    a render burst, debounced) to bound the freed window to the burst itself.
-    //  - PURE IMAGE (no book) → leave it unloaded; relaunched on demand at the next chat/open, so a
-    //    standalone image session never reloads a multi-GB model the reader isn't using.
-    if (chatLlmFreed) {
-      if (engine) void restoreChatLlm();
-      return;
-    }
-    void (async () => {
-      try {
-        const { llm } = chatProviders();
-        if (!supportsChat(llm) || (llm.id !== "local-server" && llm.id !== "webllm")) return;
-        await llm.chat([{ role: "user", content: "ok" }], { maxTokens: 1 }).catch(() => {});
-      } catch {
-        /* no chat provider yet / not initialised — nothing to warm */
-      }
-    })();
+    void doWarmChatModel();
   }, WARM_DEBOUNCE_MS);
+}
+
+/** Bring the local chat model back into memory (used by the debounced post-render warm AND the
+ * manual "load model" command). If we freed it for the render burst, clear that first — bundled
+ * relaunches its process, an Ollama ("server") model just clears the flag — then a 1-token request
+ * loads it (cold) for both backends. After a render burst this restores it even in a pure image
+ * session, so the reader's next chat is ready instead of waiting on a cold load. */
+async function doWarmChatModel(): Promise<void> {
+  if (chatLlmFreed) await restoreChatLlm();
+  try {
+    const { llm } = chatProviders();
+    if (!supportsChat(llm) || (llm.id !== "local-server" && llm.id !== "webllm")) return;
+    await llm.chat([{ role: "user", content: "ok" }], { maxTokens: 1 }).catch(() => {});
+  } catch {
+    /* no chat provider yet / not initialised — nothing to warm */
+  }
 }
 
 // --- Reading-companion chat -------------------------------------------------

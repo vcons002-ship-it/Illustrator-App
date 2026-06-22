@@ -196,6 +196,8 @@ export interface EngineWorkerApi {
   ) => Promise<{ files?: { file: string; content: string }[]; error?: string }>;
   /** Abort the in-flight chat round, if any. */
   chatCancel: () => void;
+  /** Force-load the local chat model now (image renders evict it to free the GPU). */
+  warmLlm: () => void;
   /** Landing-page buddy: one user message (no book open; streams via `onEvent`). */
   buddyChat: (
     history: ChatTurn[],
@@ -1490,6 +1492,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     const rid = activeRenderRequestId.current;
     if (rid !== undefined) send({ type: "chatCancel", requestId: rid });
   }, []);
+  const warmLlm = useCallback(() => send({ type: "warmLlm" }), []);
   const buddyChat = useCallback(
     (
       history: ChatTurn[],
@@ -1889,6 +1892,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     chat,
     chatTool,
     chatCancel,
+    warmLlm,
     buddyChat,
     buddyCancel,
     summarize,

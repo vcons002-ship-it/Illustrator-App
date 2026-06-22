@@ -90,6 +90,9 @@ export interface ChatBuddyPanelProps {
   onDenyAgentTool?: (id: number) => void;
   onCancel: () => void;
   onClearHistory: () => void;
+  /** Force-load the local chat model into memory now (image renders evict it to free the GPU).
+   * When omitted (cloud/web text models), the button is hidden. */
+  onLoadModel?: () => void;
   /** Delete one message by index (must be referentially stable — see MessageBubble). */
   onDeleteMessage?: (index: number) => void;
   /** Compact the conversation into a summary (frees the model's context window). */
@@ -119,6 +122,7 @@ export interface ChatBuddyPanelProps {
 export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanelProps) {
   const [draft, setDraft] = useState("");
   const [showHelp, setShowHelp] = useState(false);
+  const [loadingModel, setLoadingModel] = useState(false);
   const commands = useMemo(() => buddySlashCommands(props.desktop ?? false), [props.desktop]);
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -260,6 +264,20 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             {personaButton("entertainment", "Entertainment", "Stories, novels, fun reads — a book-club voice")}
             {personaButton("technical", "Technical", "Articles, papers, study material — a research voice")}
           </span>
+          {props.onLoadModel && (
+            <button
+              style={smallButtonStyle}
+              onClick={() => {
+                props.onLoadModel!();
+                setLoadingModel(true);
+                window.setTimeout(() => setLoadingModel(false), 4000);
+              }}
+              disabled={loadingModel}
+              title="Load the local chat model into memory now — image generation evicts it to free the GPU, so this brings it back without waiting for your next message"
+            >
+              {loadingModel ? "Loading…" : "⟳ Model"}
+            </button>
+          )}
           {props.onCompact && props.messages.length > 4 && (
             <button
               style={smallButtonStyle}

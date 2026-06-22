@@ -419,6 +419,8 @@ export interface SettingsPanelProps {
   onSoftwareUpdate?: (
     onProgress: (msg: string) => void,
   ) => Promise<{ status: "uptodate" | "updated" | "needs-restart" | "error"; message: string }>;
+  /** Fully relaunch the desktop app (Settings → Restart app). Absent on the web (button hidden). */
+  onRestartApp?: () => void;
 }
 
 export function SettingsPanel({
@@ -450,6 +452,7 @@ export function SettingsPanel({
   onConnectGoogle,
   onDisconnectGoogle,
   onSoftwareUpdate,
+  onRestartApp,
 }: SettingsPanelProps) {
   const [open, setOpen] = useState(false);
   // Settings filter: typing hides non-matching groups and force-opens matches.
@@ -521,6 +524,31 @@ export function SettingsPanel({
             />
           </div>
           {onSoftwareUpdate && <SoftwareUpdateRow onUpdate={onSoftwareUpdate} />}
+          {onRestartApp && (
+            <div
+              style={{
+                ...rowStyle,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+                borderBottom: "1px solid rgba(255,255,255,0.1)",
+                paddingBottom: 10,
+                marginBottom: 2,
+              }}
+            >
+              <span>↻ Restart app</span>
+              <button
+                style={buttonStyle}
+                title="Fully relaunch the app — recovers a stuck engine or finishes a core update"
+                onClick={() => {
+                  if (window.confirm("Restart Visual Reader now?")) onRestartApp();
+                }}
+              >
+                Restart
+              </button>
+            </div>
+          )}
           <Group
             q={query}
             title="📖 1 · Read & analyse — text model"

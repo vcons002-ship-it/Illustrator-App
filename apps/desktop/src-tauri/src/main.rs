@@ -202,6 +202,13 @@ fn nvidia_vram_mb() -> Option<u64> {
     text.lines().next()?.trim().parse::<u64>().ok()
 }
 
+/// Fully relaunch the app (Settings → Restart app). The bundled engine/LLM children are killed on
+/// exit (see `RunEvent::ExitRequested`), so nothing is left holding the GPU. Never returns.
+#[tauri::command]
+fn restart_app(app: AppHandle) {
+    app.restart();
+}
+
 /// One installed LoRA's name + the leading JSON header of its safetensors file (training
 /// metadata + tensor names), so the UI can detect which base model it was trained for.
 #[derive(Serialize)]
@@ -2147,6 +2154,7 @@ fn main() {
             ensure_engine,
             ensure_llm,
             stop_llm,
+            restart_app,
             list_models,
             download_model,
             list_loras,
