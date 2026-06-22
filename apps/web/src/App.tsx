@@ -1660,6 +1660,19 @@ export function App() {
     [settings.keys],
   );
 
+  // Settings → Restart app (and the "Restart now" button after a core update). restartApp() never
+  // resolves on success (the process relaunches); it REJECTS only when the running build exposes
+  // no `restart_app` command yet (an older shell that hasn't been rebuilt) — then guide the reader.
+  const onRestartApp = useCallback(async () => {
+    try {
+      await restartApp();
+    } catch {
+      window.alert(
+        "Couldn't restart automatically — this build doesn't have the restart command yet. " +
+          "Fully close and reopen Visual Reader (run desktop.bat) to finish updating.",
+      );
+    }
+  }, []);
   // DESKTOP side of a phone-triggered update: run the same update, streaming progress to the phone
   // (vrsync:updateStatus) and signalling it to reload when a JS update was applied. Kept in a ref so
   // the early-registered relay handler can reach it.
@@ -5028,7 +5041,7 @@ export function App() {
               : isRemoteClient
                 ? { onSoftwareUpdate: onSoftwareUpdateRemote }
                 : {})}
-            {...(isDesktop ? { onRestartApp: restartApp } : {})}
+            {...(isDesktop ? { onRestartApp } : {})}
             installedModels={installedModels}
             installedTextEncoders={installedTextEncoders}
             installedVaes={installedVaes}
