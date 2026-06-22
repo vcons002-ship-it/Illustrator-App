@@ -3272,8 +3272,10 @@ export function App() {
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
-  // write_file (Autonomous workspace): save the file the model authored into the workspace, then
-  // feed the result back so it can run_command it. Mirrors approveRunCommand; runs without a click.
+  // write_file: save the file the model authored straight into the workspace (the sandboxed folder
+  // run_command executes in — NOT the exports folder), then feed the result back so it can run_command
+  // it. Saving needs no approval click (it just writes into the sandbox); the dangerous step,
+  // run_command, stays gated unless Autonomous workspace is on. Mirrors approveRunCommand.
   const runWriteFile = async (call: Extract<BuddyToolCall, { tool: "write_file" }>): Promise<void> => {
     setBuddyPendingTool(undefined);
     const pre = pendingBuddyTranscript.current;
@@ -3284,12 +3286,12 @@ export function App() {
       appendBuddy({ role: "tool", text: "🔒 Writing files needs the desktop app.", turns: [] });
       return;
     }
-    if (!(settings.allowCommands && settings.autonomousWorkspace)) {
-      // write_file is only advertised with Autonomous workspace on; if it slips through otherwise,
-      // degrade by handing the content to the reader to save rather than dead-ending.
+    if (!settings.allowCommands) {
+      // write_file is advertised with command access on; if it slips through otherwise, degrade by
+      // handing the content to the reader to save rather than dead-ending.
       appendBuddy({
         role: "tool",
-        text: `🔒 Turn on Autonomous workspace (Settings → assistant abilities) to let me save files directly. Meanwhile, here's “${call.path}” to save yourself:`,
+        text: `🔒 Turn on "Let the assistant run commands" (Settings → assistant abilities) to let me save + run files in the workspace. Meanwhile, here's “${call.path}” to save yourself:`,
       });
       appendBuddy({ role: "assistant", text: "```\n" + call.content.slice(0, 8000) + "\n```" });
       return;
@@ -3821,8 +3823,9 @@ export function App() {
         // Hand the subtask to an isolated read-only sub-agent, then feed its result back.
         void runDelegate(res.pendingTool.task);
       } else if (res.pendingTool.tool === "write_file") {
-        // Save the authored file (Autonomous workspace runs it without a click; runWriteFile
-        // degrades gracefully if the setting is off, since write_file has no approval card).
+        // Save the authored file into the workspace with no approval click — writing into the
+        // sandboxed folder is harmless (the dangerous step, run_command, stays gated). runWriteFile
+        // degrades gracefully (hands the content over) when command access is off.
         runHostToolDispatch(res.pendingTool);
       } else if (res.pendingTool.tool === "run_command" && settings.allowCommands && settings.autonomousWorkspace) {
         // Autonomous workspace: run the command without a click. The model is told to stay in the
