@@ -396,6 +396,16 @@ export function catalogModelFamily(name: string): CatalogModelFamily | undefined
   return catalogEntryForModel(name)?.family;
 }
 
+/**
+ * Rough resident VRAM cost (GB) of a local image model — its total file size (diffusion
+ * model + text encoder + VAE), which for the fp8 catalog files ≈ what sits in memory.
+ * Returns 0 when the model isn't in the catalog, so callers don't force memory offload
+ * for an unknown model. Used to decide whether ComfyUI needs `--lowvram` on a given card.
+ */
+export function imageModelVramCostGb(name: string): number {
+  return catalogEntryForModel(name)?.sizeGB ?? 0;
+}
+
 /** Squashed lowercase alphanumerics ("Flux 2 Klein.safetensors" → "flux2klein"). */
 function normalizeModelName(s: string): string {
   return s
