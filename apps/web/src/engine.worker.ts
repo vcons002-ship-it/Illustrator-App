@@ -458,15 +458,16 @@ function llmVramOp(action: "stop" | "ensure"): Promise<void> {
   });
 }
 
-/** Whether it's SAFE + worth freeing the chat LLM for a render. Only the BUNDLED managed
- * llama-server (which we can kill + relaunch) holds local memory; only when images render on the
- * same local GPU; and only when the Visual Bible isn't MID-BUILD (that's the one thing on the book
- * path that needs the text LLM). A book can be open and fully analysed — then the llama-server is
- * just squatting ~10GB of GPU+RAM during the render (the reported Qwen-Image thrash), so we free it
- * and restore it right after (warmChatModel). chat/buddy turns relaunch it first via
- * withChatPriority; opening/analysing a book restores it via handleOpen. */
+/** Whether it's SAFE + worth freeing the chat LLM for a render. Covers the local-server backends
+ * that hold their own memory: the BUNDLED llama-server (which we kill + relaunch) and a local
+ * "server" model like Ollama (which we tell to evict via keep_alive:0, then it reloads lazily).
+ * Only when images render on the same local GPU, and only when the Visual Bible isn't MID-BUILD
+ * (the one book-path step that needs the text LLM). A book can be open and fully analysed — then
+ * the model is just squatting ~10–20GB of GPU/RAM during the render (the reported Qwen-Image
+ * thrash), so we free it and restore it after (warmChatModel). chat/buddy turns restore it first
+ * via withChatPriority; opening/analysing a book restores it via handleOpen. */
 function canFreeChatLlm(): boolean {
-  if (!settings || settings.localTextBackend !== "bundled") return false;
+  if (!settings || (settings.localTextBackend !== "bundled" && settings.localTextBackend !== "server")) return false;
   // Never free mid-bible-build (active chapter, or a run with chapters still pending) — the engine
   // would lose the LLM it's extracting with.
   if (bibleActive || (bibleRunTotal > 0 && bibleRunDone < bibleRunTotal)) return false;
@@ -484,7 +485,17 @@ function canFreeChatLlm(): boolean {
 async function freeChatLlmForRender(): Promise<void> {
   if (chatLlmFreed || !canFreeChatLlm()) return;
   chatLlmFreed = true;
-  await llmVramOp("stop");
+  if (settings?.localTextBackend === "bundled") {
+    await llmVramOp("stop"); // we own the bundled process — kill it to free its RAM/VRAM
+  } else {
+    // "server" backend (Ollama): we don't own the process, but Ollama evicts the model on a
+    // keep_alive:0 request (no-op for non-Ollama servers like LM Studio). It reloads lazily.
+    try {
+      await chatProviders().llm.unload?.();
+    } catch {
+      /* best-effort — leave it loaded if the unload call fails */
+    }
+  }
 }
 
 /** Relaunch the bundled chat LLM after it was freed — called ON DEMAND (a chat turn, opening a
@@ -492,7 +503,9 @@ async function freeChatLlmForRender(): Promise<void> {
 async function restoreChatLlm(): Promise<void> {
   if (!chatLlmFreed) return;
   chatLlmFreed = false;
-  await llmVramOp("ensure");
+  // Only the bundled server needs an explicit relaunch. An Ollama ("server") model reloads
+  // lazily on the next chat request (which is what triggered this restore), so nothing to start.
+  if (settings?.localTextBackend === "bundled") await llmVramOp("ensure");
 }
 
 /** Broadcast the current (independent) bible/image pause state + clear status lines. */
