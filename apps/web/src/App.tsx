@@ -3301,6 +3301,35 @@ export function App() {
     [sendAppSync],
   );
 
+  // Run a host tool wherever the runtime is: directly on the desktop, or relayed to it from a phone.
+  const execHostTool = useCallback(
+    (call: BuddyToolCall): Promise<BuddyToolResultPayload> =>
+      isRemoteClient ? runHostToolOnDesktop(call) : runHostToolForRemote(call),
+    [isRemoteClient, runHostToolOnDesktop, runHostToolForRemote],
+  );
+
+  // Run a code block (Python/JS/shell) the assistant wrote and return its output — used by the chat
+  // "▶ Run" button. Writes the code to a file then runs it with the matching interpreter, on the
+  // DESKTOP (relayed from a phone via execHostTool). Gated by the allow-commands setting at the
+  // call site, and the click itself is the user's go-ahead (like Save).
+  const onRunCode = useCallback(
+    async (lang: string, code: string, filename?: string): Promise<{ stdout?: string; stderr?: string; code?: number; error?: string }> => {
+      const l = (lang || "").toLowerCase();
+      const ext = l === "python" || l === "py" ? "py" : l === "js" || l === "javascript" || l === "node" ? "js" : l === "sh" || l === "bash" || l === "shell" ? "sh" : undefined;
+      if (!ext) return { error: `Can't run "${lang}" code here — try Python, JavaScript, or a shell script.` };
+      const interp = ext === "py" ? "python" : ext === "js" ? "node" : "sh";
+      const safe = filename && /^[\w./-]{1,80}$/.test(filename) && filename.toLowerCase().endsWith(`.${ext}`) ? filename : `vr_run.${ext}`;
+      const w = await execHostTool({ tool: "write_file", path: safe, content: code });
+      if (w.error) return { error: w.error };
+      if (w.writeFile && !w.writeFile.ok) return { error: w.writeFile.error ?? "couldn't write the file" };
+      const path = w.writeFile?.path ?? safe;
+      const r = await execHostTool({ tool: "run_command", command: `${interp} "${path}"` });
+      if (r.error) return { error: r.error };
+      return r.command ? { stdout: r.command.stdout, stderr: r.command.stderr, code: r.command.code } : { error: "no output" };
+    },
+    [execHostTool],
+  );
+
   // PHONE side, unified: a desktop-runtime host tool the phone's buddy hit runs ON the desktop via the
   // relay, then the result feeds back into THIS phone's buddy turn exactly like the desktop handlers.
   const runBuddyHostToolRemote = async (call: BuddyToolCall): Promise<void> => {
@@ -5107,6 +5136,8 @@ export function App() {
               : {})}
             onOpenLocalFile={onOpenLocalFile}
             onSaveFile={onSaveChatFile}
+          {...((isDesktop || isRemoteClient) && settings.allowCommands ? { onRunCode } : {})}
+            {...((isDesktop || isRemoteClient) && settings.allowCommands ? { onRunCode } : {})}
             onSaveProject={onSaveProject}
             onBuildDocument={onBuildDocument}
             {...(buddyUsage ? { contextUsage: buddyUsage } : {})}
@@ -5256,6 +5287,7 @@ export function App() {
           onDeleteMessage={onDeleteChatMessage}
           onCompact={onCompactChatClick}
           onSaveFile={onSaveChatFile}
+          {...((isDesktop || isRemoteClient) && settings.allowCommands ? { onRunCode } : {})}
           onSaveProject={onSaveProject}
           onBuildDocument={onBuildDocument}
           onDownloadData={onDownloadData}
@@ -5323,6 +5355,7 @@ export function App() {
             return { cancel: () => polishCancel(requestId), result };
           }}
           onSaveFile={onSaveChatFile}
+          {...((isDesktop || isRemoteClient) && settings.allowCommands ? { onRunCode } : {})}
           onClose={() => {
             setShowPolish(false);
             setPolishInitial(undefined);

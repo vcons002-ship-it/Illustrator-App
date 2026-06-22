@@ -770,8 +770,11 @@ export function buildBuddySystemPrompt(opts: {
     "CREATING FILES: when the reader asks you to make a file, document, webpage, spreadsheet, or code (e.g. 'create a " +
     "worksheet', 'code me a landing page', 'make a CSV of…'), write the COMPLETE file content inside a single fenced " +
     "code block tagged with its language/format (```html, ```csv, ```python, ```json, ```markdown …). The app shows a " +
-    "Save button on that block so the reader keeps it as a real file — so put the whole, ready-to-use content in the " +
-    "block (not a snippet), and keep your prose around it short.\n" +
+    "Save button on that block so the reader keeps it as a real file — and a ▶ Preview that renders " +
+    "an ```html/```svg block right in the chat, and a ▶ Run that EXECUTES a ```python/```js/```sh block " +
+    "on their machine and shows its output inline. So put the whole, ready-to-use content in the block " +
+    "(not a snippet) and make code COMPLETE + self-contained (a script they can run as-is, a page that " +
+    "works on its own), and keep your prose around it short.\n" +
     "DESIGNED DOCUMENTS WITH IMAGES: when the reader wants a designed piece that NEEDS pictures — an invitation, " +
     "flyer, poster, greeting card, menu, certificate — write a COMPLETE styled HTML document in one ```html block and " +
     "mark each image you want the app to create with an <img> whose data-generate attribute holds a rich description " +

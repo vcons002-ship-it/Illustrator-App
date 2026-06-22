@@ -113,6 +113,16 @@ export type BuildDocumentFn = (
   onProgress?: (done: number, total: number) => void,
 ) => Promise<{ html: string; generated: number; failed: number }>;
 
+/** Result of running a code block (Python/JS/shell) — its captured output, or an error. */
+export interface RunCodeResult {
+  stdout?: string;
+  stderr?: string;
+  code?: number;
+  error?: string;
+}
+/** Run a code block on the host (the desktop; relayed from a linked phone) and return its output. */
+export type RunCodeFn = (lang: string, code: string, filename?: string) => Promise<RunCodeResult>;
+
 const LANG_EXT: Record<string, string> = {
   html: "html", htm: "html", xml: "xml", svg: "svg", css: "css",
   javascript: "js", js: "js", jsx: "jsx", typescript: "ts", ts: "ts", tsx: "tsx",
@@ -203,6 +213,8 @@ export interface ChatPanelProps {
   onCompact?: () => void;
   /** Save a file the assistant wrote in a code block. */
   onSaveFile?: (filename: string, content: string, mime: string) => Promise<string | true>;
+  /** Run a code block (Python/JS/shell) on the host and show its output. */
+  onRunCode?: RunCodeFn;
   /** Zip + save a multi-file (≥2 code blocks) answer as one project. */
   onSaveProject?: (files: ProjectFile[]) => Promise<string | true>;
   /** Generate + embed a designed document's images. */
@@ -293,6 +305,7 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
           )}
           {props.messages.map((m, i) => (
             <MessageBubble
+              {...(props.onRunCode ? { onRunCode: props.onRunCode } : {})}
               key={i}
               message={m}
               index={i}
@@ -522,6 +535,7 @@ export const MessageBubble = memo(function MessageBubble({
   onOpenLocalFile,
   onAction,
   onSaveFile,
+  onRunCode,
   onSaveProject,
   onBuildDocument,
   onDownloadData,
@@ -535,6 +549,8 @@ export const MessageBubble = memo(function MessageBubble({
   onAction?: (send: string) => void;
   /** Save a code block the assistant wrote as a file. Stable callback (memo). */
   onSaveFile?: (filename: string, content: string, mime: string) => Promise<string | true>;
+  /** Run a code block (Python/JS/shell) on the host. Stable (memo). */
+  onRunCode?: RunCodeFn;
   /** Zip + save the message's code blocks as one project (≥2 files). Stable (memo). */
   onSaveProject?: (files: ProjectFile[]) => Promise<string | true>;
   /** Generate + embed a designed document's images. Stable (memo). */
@@ -584,6 +600,7 @@ export const MessageBubble = memo(function MessageBubble({
                   code={b.code}
                   {...(b.filename ? { filename: b.filename } : {})}
                   {...(onSaveFile ? { onSaveFile } : {})}
+                  {...(onRunCode ? { onRunCode } : {})}
                 />
               )
             ) : b.text.trim() ? (
@@ -849,22 +866,40 @@ function CodeCard({
   code,
   filename: rawFilename,
   onSaveFile,
+  onRunCode,
 }: {
   lang: string;
   code: string;
   filename?: string;
   onSaveFile?: (filename: string, content: string, mime: string) => Promise<string | true>;
+  onRunCode?: RunCodeFn;
 }) {
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState<string | undefined>();
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [output, setOutput] = useState<RunCodeResult | undefined>();
   const { filename, saveName, mime } = resolveCodeFile(lang, rawFilename);
   const ext = (filename.split(".").pop() ?? "").toLowerCase();
   const previewable = ext === "html" || ext === "svg";
+  const l = (lang || "").toLowerCase();
+  const runnable = !!onRunCode && (["py", "js", "sh"].includes(ext) || ["python", "js", "javascript", "node", "sh", "bash", "shell"].includes(l));
   const save = async () => {
     if (!onSaveFile) return;
     const r = await onSaveFile(saveName, code, mime);
     setSaved(typeof r === "string" ? r : "saved");
+  };
+  const run = async () => {
+    if (!onRunCode) return;
+    setRunning(true);
+    setOutput(undefined);
+    try {
+      setOutput(await onRunCode(lang, code, rawFilename));
+    } catch (e) {
+      setOutput({ error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setRunning(false);
+    }
   };
   // Open the rendered page in a new tab (a real click → not blocked).
   const openInTab = () => {
@@ -880,6 +915,11 @@ function CodeCard({
           {onSaveFile && (
             <button style={codeBtnStyle} onClick={() => void save()}>
               💾 Save
+            </button>
+          )}
+          {runnable && (
+            <button style={codeBtnStyle} onClick={() => void run()} disabled={running} title="Run this code on the desktop and show its output here">
+              {running ? "Running…" : "▶ Run"}
             </button>
           )}
           {previewable && (
@@ -916,6 +956,18 @@ function CodeCard({
       ) : (
         <pre style={codePreStyle}>
           <code>{code}</code>
+        </pre>
+      )}
+      {output && (
+        <pre style={{ ...codePreStyle, borderTop: "1px solid rgba(255,255,255,0.12)", opacity: 0.95 }}>
+          <code>
+            {output.error
+              ? `⚠ ${output.error}`
+              : `[exit ${output.code ?? "?"}]` +
+                (output.stdout ? `\n${output.stdout.slice(0, 6000)}` : "") +
+                (output.stderr ? `\n⚠ ${output.stderr.slice(0, 3000)}` : "") +
+                (!output.stdout && !output.stderr ? "\n(no output)" : "")}
+          </code>
         </pre>
       )}
       {saved && (
