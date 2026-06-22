@@ -98,6 +98,12 @@ export function stopLocalLlm(): Promise<void> {
   return invoke<void>("stop_llm");
 }
 
+/** Fully relaunch the desktop app (kills the bundled engine/LLM children on the way out). The call
+ * never resolves — the process restarts. No-op on the web. */
+export function restartApp(): Promise<void> {
+  return invoke<void>("restart_app");
+}
+
 /** Subscribe to bundled-LLM setup progress (download/launch). Undefined on the web. */
 export function onLlmProgress(handler: (p: EngineProgress) => void): Promise<UnlistenFn> | undefined {
   return tauri()?.event?.listen<EngineProgress>("llm://progress", (e) => handler(e.payload));

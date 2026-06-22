@@ -117,6 +117,8 @@ export type MainToWorker =
       call: { to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[] };
     }
   | { type: "chatCancel"; requestId: number }
+  /** Force-load the local chat model now (it gets evicted to free the GPU during image renders). */
+  | { type: "warmLlm" }
   /** Run write-capable CODING agents in parallel, each in its own worktree dir (answered by
    * `codingAgentsDone`). During the run the worker emits `agentTool` requests for the host to
    * execute each agent's commands/writes in its `dir`. */
