@@ -104,6 +104,7 @@ export type CmdToDesktop =
   | { type: "vrcmd:settings"; settings: ReaderSettings } // phone edited settings → apply on the desktop (it renders)
   | { type: "vrcmd:planner"; command: PlannerCommand } // phone Tasks/Calendar action → run on the desktop
   | { type: "vrcmd:update" } // phone asked the desktop to pull + rebuild + reload (software update)
+  | { type: "vrcmd:restart" } // phone asked the desktop to fully relaunch (Settings → Restart app)
   | { type: "vrcmd:hostTool"; requestId: number; call: BuddyToolCall }; // run a desktop-runtime tool (files/command/screenshot) on the desktop
 
 export type AppSyncMessage = SyncToPhone | CmdToDesktop;
