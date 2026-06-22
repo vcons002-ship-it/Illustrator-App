@@ -1370,7 +1370,82 @@ async fn run_command(
     .map_err(|e| e.to_string())?
 }
 
-// ----------------------------------------------------------- Git worktrees
+/// Wrap an interpreter token in quotes when it contains a space (an absolute path), so it can be
+/// safely prepended to a shell command; bare names / launcher forms (`py -3`) pass through.
+fn quote_interp(s: &str) -> String {
+    if s.contains(' ') && !s.contains("-3") {
+        format!("\"{s}\"")
+    } else {
+        s.to_string()
+    }
+}
+
+/// Resolve a WORKING interpreter for the chat's ▶ Run button: probe the common names for `kind`
+/// (python: `python3` → `python` → `py -3`, then the bundled ComfyUI python as a last resort; node;
+/// sh) with a quick `--version`, and return a shell-ready token to prepend. None when nothing works —
+/// the UI then shows a clear "install X" message instead of a cryptic "file not found". No shell is
+/// spawned; each candidate is probed directly.
+#[tauri::command]
+async fn which_interpreter(app: AppHandle, kind: String) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        fn probe(prog: &str, args: &[&str]) -> bool {
+            Command::new(prog)
+                .args(args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .stdin(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        }
+        let found = match kind.as_str() {
+            "python" => {
+                // System pythons first (a predictable env, so a `pip install` the assistant runs and
+                // the script that imports it share the same interpreter).
+                if probe("python3", &["--version"]) {
+                    Some("python3".to_string())
+                } else if probe("python", &["--version"]) {
+                    Some("python".to_string())
+                } else if probe("py", &["-3", "--version"]) {
+                    Some("py -3".to_string())
+                } else {
+                    // Last resort: the bundled ComfyUI embedded python (present once the managed
+                    // engine is installed), so a stdlib script still runs with zero setup.
+                    let exe = engine_root(&app)
+                        .join("ComfyUI_windows_portable")
+                        .join("python_embeded")
+                        .join(if cfg!(windows) { "python.exe" } else { "python" });
+                    let p = exe.to_string_lossy().to_string();
+                    if exe.is_file() && probe(&p, &["--version"]) {
+                        Some(quote_interp(&p))
+                    } else {
+                        None
+                    }
+                }
+            }
+            "node" => {
+                if probe("node", &["--version"]) {
+                    Some("node".to_string())
+                } else {
+                    None
+                }
+            }
+            "sh" => {
+                if !cfg!(windows) && probe("sh", &["-c", "exit 0"]) {
+                    Some("sh".to_string())
+                } else if probe("bash", &["-c", "exit 0"]) {
+                    Some("bash".to_string())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        Ok(found)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
 //
 // App-managed git worktrees for parallel WRITE-capable coding agents: each agent works in
 // its own worktree+branch so concurrent edits can't collide, and the app (not the model)
@@ -2172,6 +2247,7 @@ fn main() {
             search_files,
             read_file,
             run_command,
+            which_interpreter,
             git_repo_root,
             app_repo_root,
             git_ensure_repo,

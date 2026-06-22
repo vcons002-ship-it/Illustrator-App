@@ -221,6 +221,7 @@ import {
   onModelProgress,
   readLocalFile,
   runCommand,
+  whichInterpreter,
   appRepoRoot,
   writeWorkspaceFile,
   gitEnsureRepo,
@@ -3437,7 +3438,19 @@ export function App() {
       const l = (lang || "").toLowerCase();
       const ext = l === "python" || l === "py" ? "py" : l === "js" || l === "javascript" || l === "node" ? "js" : l === "sh" || l === "bash" || l === "shell" ? "sh" : undefined;
       if (!ext) return { error: `Can't run "${lang}" code here — try Python, JavaScript, or a shell script.` };
-      const interp = ext === "py" ? "python" : ext === "js" ? "node" : "sh";
+      const kind = ext === "py" ? "python" : ext === "js" ? "node" : "sh";
+      // Resolve a WORKING interpreter (python3/python/py/…), not a hardcoded `python` that may not
+      // exist. On the desktop a miss is a clear "install X" message; on a phone we relay to the
+      // desktop with the plain name (its resolution happens there next time we wire it through).
+      let interp: string = kind;
+      if (isDesktop) {
+        const resolved = await whichInterpreter(kind);
+        if (!resolved) {
+          const label = kind === "python" ? "Python" : kind === "node" ? "Node.js" : "a shell (sh/bash)";
+          return { error: `No ${label} interpreter found on this computer. Install ${label} and restart the app (make sure it's on your PATH) — or ask me to run it as a command.` };
+        }
+        interp = resolved;
+      }
       const safe = filename && /^[\w./-]{1,80}$/.test(filename) && filename.toLowerCase().endsWith(`.${ext}`) ? filename : `vr_run.${ext}`;
       const w = await execHostTool({ tool: "write_file", path: safe, content: code });
       if (w.error) return { error: w.error };
