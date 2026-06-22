@@ -631,6 +631,19 @@ fn mcp_stdio_blocking(req: McpStdioRequest) -> Result<Vec<String>, String> {
     }
 }
 
+/// Constant-time byte comparison for the pairing token — equal length AND equal contents, with no
+/// early-out, so authorization timing doesn't leak how many leading bytes matched.
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 /// The relay loop: accept connections, classify each (peek the request bytes) as either a
 /// WebSocket upgrade (authorize by the pairing token, then relay frames between peers) or a
 /// plain HTTP GET (serve the bundled web app so the phone can LOAD it from this same port —
@@ -685,9 +698,11 @@ async fn run_remote_server(
                         let Some(Ok(msg)) = incoming else { break };
                         if let tokio_tungstenite::tungstenite::Message::Text(txt) = msg {
                             if !authorized {
+                                // Constant-time compare so a network timing side-channel can't probe the
+                                // pairing token byte-by-byte (it now also gates an internet-exposed tunnel).
                                 let ok = serde_json::from_str::<serde_json::Value>(&txt)
                                     .ok()
-                                    .and_then(|v| v.get("token").and_then(|t| t.as_str()).map(|s| s == token))
+                                    .and_then(|v| v.get("token").and_then(|t| t.as_str()).map(|s| ct_eq(s.as_bytes(), token.as_bytes())))
                                     .unwrap_or(false);
                                 if !ok { break; }
                                 authorized = true;

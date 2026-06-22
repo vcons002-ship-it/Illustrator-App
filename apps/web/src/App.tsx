@@ -110,6 +110,7 @@ import {
   type StockQuote,
   type PageText,
   generatePairingToken,
+  buildRemoteLinkUrl,
   buildDelegatePrompt,
   MAX_SKILL_NAME_CHARS,
   MAX_SKILL_DESC_CHARS,
@@ -6051,11 +6052,44 @@ export function App() {
                   {remoteLink.url}
                 </code>
                 <p style={{ fontSize: 11, opacity: 0.55, marginTop: 8 }}>
-                  Experimental — needs a desktop build with the phone-link command and on-device verification (see
-                  REMOTE-LINK.md). LAN-only; nothing leaves your network. This link stays the SAME across app restarts
-                  (the phone keeps working) until you press <b>Change link</b>, which rotates the pairing code. Stop ends
-                  the relay but keeps the same address for next time.
+                  LAN-only; nothing leaves your network. This link stays the SAME across app restarts (the phone keeps
+                  working) until you press <b>Change link</b>, which rotates the pairing code. Stop ends the relay but
+                  keeps the same address for next time.
                 </p>
+
+                {/* Internet link via a tunnel (e.g. Cloudflare) — works off Wi-Fi when configured. */}
+                <div style={{ marginTop: 14, borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: 12 }}>
+                  <p style={{ fontSize: 13, opacity: 0.8, margin: 0 }}>
+                    <b>From anywhere (internet)</b> — your tunnel hostname (e.g. a Cloudflare named tunnel):
+                  </p>
+                  <input
+                    style={{ width: "100%", boxSizing: "border-box", marginTop: 6, background: "rgba(255,255,255,0.06)", color: "inherit", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 6, padding: 8, fontSize: 13 }}
+                    value={settings.remoteLinkHost ?? ""}
+                    placeholder="vr.nic024i.app"
+                    onChange={(e) => setSettings((s) => ({ ...s, remoteLinkHost: e.target.value }))}
+                  />
+                  {(() => {
+                    const remoteUrl = remoteLink.token ? buildRemoteLinkUrl(settings.remoteLinkHost ?? "", remoteLink.token) : undefined;
+                    return remoteUrl ? (
+                      <>
+                        <code style={{ display: "block", background: "#0d1017", padding: "8px 10px", borderRadius: 6, fontSize: 12, wordBreak: "break-all", marginTop: 8 }}>
+                          {remoteUrl}
+                        </code>
+                        <p style={{ fontSize: 11, opacity: 0.55, marginTop: 8 }}>
+                          Works off Wi-Fi when a tunnel forwards <code>{settings.remoteLinkHost}</code> → this desktop's
+                          relay (port {remoteLink.port ?? 8787}). <b>Put Cloudflare Access in front of the hostname</b> so
+                          only you can reach it — the pairing code is a second factor, not the only lock. Same pairing
+                          code as the Wi-Fi link; <b>Change link</b> rotates both.
+                        </p>
+                      </>
+                    ) : (
+                      <p style={{ fontSize: 11, opacity: 0.5, marginTop: 6 }}>
+                        Set up a tunnel (Cloudflare) pointing <code>your-host → http://localhost:{remoteLink.port ?? 8787}</code>,
+                        then enter its hostname above to get an internet link.
+                      </p>
+                    );
+                  })()}
+                </div>
               </>
             ) : (
               <p style={{ fontSize: 13, color: "#ff8c8c", marginTop: 8 }}>⚠ {remoteLink.error ?? "Couldn't start the phone link."}</p>

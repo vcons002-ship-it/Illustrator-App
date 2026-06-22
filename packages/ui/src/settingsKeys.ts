@@ -61,6 +61,9 @@ export const UI_ONLY_FIELDS = [
   // Per-backend server-URL memory: the engine reads the RESOLVED localServerUrl; this map only drives
   // what the URL field restores when the ComfyUI/A1111 dropdown is flipped. No engine rebuild.
   "localServerUrlByBackend",
+  // Phone-link tunnel hostname: only used to BUILD the internet link in the Link-a-phone panel; the
+  // engine never reads it, so editing it must not rebuild.
+  "remoteLinkHost",
 ] as const satisfies readonly (keyof ReaderSettings)[];
 
 /** Dependency key over just the tuning fields. */

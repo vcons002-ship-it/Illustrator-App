@@ -500,7 +500,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   // engine over the relay instead of a local Web Worker. Detected once. (Undefined normally —
   // the default local-worker path below is unchanged.)
   const remoteRef = useRef<RemoteMode | undefined>(
-    typeof window !== "undefined" ? remoteModeFromHash(window.location.hash, window.location.host) : undefined,
+    typeof window !== "undefined" ? remoteModeFromHash(window.location.hash, window.location.host, window.location.protocol) : undefined,
   );
   const phoneWsRef = useRef<WebSocket | undefined>(undefined);
   // HOST-BRIDGE: on the desktop, when a phone is linked, mirror the engine worker to the relay.

@@ -295,6 +295,11 @@ export interface ReaderSettings {
   /** OFF by default: drive the desktop assistant from your phone via Google Tasks — add a to-do
    * starting "VR:" and the app (while open) runs it and writes the answer back. Needs Google. */
   remoteBus?: boolean;
+  /** Internet hostname for the phone link via a tunnel (e.g. a Cloudflare named tunnel
+   * `vr.example.app`). When set, the Link-a-phone panel also shows an `https://<host>/#vrlink=…`
+   * address that works from anywhere (off Wi-Fi), gated by Cloudflare Access in front of the tunnel.
+   * Empty = LAN-only. */
+  remoteLinkHost?: string;
   /** Optional MCP servers the buddy can call — one per line: `name https://host/mcp`. */
   mcpServers?: string;
   /** Transient: base URL of the ACTIVE local engine (the app-managed one, or the user's server, or
