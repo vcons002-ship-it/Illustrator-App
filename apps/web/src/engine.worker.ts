@@ -473,6 +473,11 @@ function canFreeChatLlm(): boolean {
   if (bibleActive || (bibleRunTotal > 0 && bibleRunDone < bibleRunTotal)) return false;
   const cs = chatSettingsOf(settings);
   if (cs.imageProvider !== "local" && settings.imageProvider !== "local") return false;
+  // An external AUTOMATIC1111 server keeps its checkpoint resident in VRAM after a render (unlike the
+  // app's managed ComfyUI, which releases it under memory pressure), so freeing the chat model for it
+  // only strands the LLM — it can't reload into the now-contended GPU and the chat goes unresponsive.
+  // Only free for engines whose VRAM the app actually coordinates (bundled server / managed ComfyUI).
+  if (settings.localBackend === "a1111") return false;
   try {
     return chatProviders().llm.id === "local-server";
   } catch {
