@@ -7,6 +7,7 @@ import {
   memoryPromptBlock,
   rememberNote,
   forgetNote,
+  saveMemory,
 } from "./reader-memory.js";
 
 describe("reader memory", () => {
@@ -66,5 +67,27 @@ describe("reader memory", () => {
     const block = memoryPromptBlock([{ text: "prefers watercolor", at: 1 }]);
     expect(block).toContain("READER MEMORY");
     expect(block).toContain("- prefers watercolor");
+  });
+
+  it("saveMemory replaces the whole list, trimming, de-duping, dropping blanks, and bounding", async () => {
+    const store = new InMemoryStore();
+    await rememberNote(store, "old note"); // gets replaced wholesale by saveMemory
+    const saved = await saveMemory(store, [
+      { text: "  keep me  ", at: 10 },
+      { text: "", at: 11 }, // blank → dropped
+      { text: "Keep Me", at: 12 }, // case-insensitive dup of the first → dropped
+      { text: "x".repeat(MAX_NOTE_CHARS + 50), at: 13 }, // over-long → trimmed
+    ]);
+    expect(saved.map((n) => n.text)).toEqual(["keep me", "x".repeat(MAX_NOTE_CHARS)]);
+    // Persisted: a fresh load matches what saveMemory returned (and "old note" is gone).
+    expect((await loadMemory(store)).map((n) => n.text)).toEqual(["keep me", "x".repeat(MAX_NOTE_CHARS)]);
+  });
+
+  it("saveMemory bounds an over-long list to the cap (keeps the most recent)", async () => {
+    const store = new InMemoryStore();
+    const many = Array.from({ length: MAX_MEMORY_NOTES + 5 }, (_, i) => ({ text: `note ${i}`, at: i }));
+    const saved = await saveMemory(store, many);
+    expect(saved).toHaveLength(MAX_MEMORY_NOTES);
+    expect(saved[saved.length - 1]!.text).toBe(`note ${MAX_MEMORY_NOTES + 4}`);
   });
 });
