@@ -297,6 +297,20 @@ export async function appRepoRoot(): Promise<string | undefined> {
 }
 
 /**
+ * Resolve a working interpreter for the chat's ▶ Run button (`python`/`node`/`sh`) — returns a
+ * shell-ready token to prepend (e.g. `python3`, `py -3`, or a quoted absolute path), or undefined
+ * when none is installed (the caller then shows a clear "install X" message) or off the desktop.
+ */
+export async function whichInterpreter(kind: "python" | "node" | "sh"): Promise<string | undefined> {
+  if (!isDesktop) return undefined;
+  try {
+    return (await invoke<string | null>("which_interpreter", { kind })) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Write a file the assistant authored (a script, data, config) INTO the desktop workspace so it can
  * then be run via {@link runCommand}. `relPath` is workspace-relative; the Rust side sanitizes it so
  * it can never escape the workspace folder. `cwd` pins the session's chosen working folder (else the
