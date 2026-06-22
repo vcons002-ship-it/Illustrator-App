@@ -40,6 +40,27 @@ async function save(store: VisualReaderStore, notes: MemoryNote[]): Promise<void
   await store.putMemo?.(READER_MEMORY_KEY, JSON.stringify(notes.slice(-MAX_MEMORY_NOTES)));
 }
 
+/**
+ * Replace the WHOLE memory list — for the editable Memory panel (the reader manages the array
+ * directly). Trims each note to the char cap, drops blanks, de-dupes case-insensitively (keeping the
+ * first occurrence + its order), and bounds to the cap. Returns the cleaned, persisted list.
+ */
+export async function saveMemory(store: VisualReaderStore, notes: readonly MemoryNote[]): Promise<MemoryNote[]> {
+  const seen = new Set<string>();
+  const cleaned: MemoryNote[] = [];
+  for (const n of notes) {
+    const text = (n?.text ?? "").trim().slice(0, MAX_NOTE_CHARS);
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cleaned.push({ text, at: typeof n?.at === "number" ? n.at : Date.now() });
+  }
+  const bounded = cleaned.slice(-MAX_MEMORY_NOTES);
+  await save(store, bounded);
+  return bounded;
+}
+
 /** Add a note (deduped case-insensitively; oldest evicted past the cap). */
 export async function rememberNote(store: VisualReaderStore, text: string): Promise<MemoryNote[]> {
   const note = text.trim().slice(0, MAX_NOTE_CHARS);

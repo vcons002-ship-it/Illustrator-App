@@ -49,6 +49,10 @@ import {
   loadSkills,
   saveSkill,
   forgetSkill,
+  loadMemory,
+  saveMemory,
+  MAX_NOTE_CHARS,
+  MAX_MEMORY_NOTES,
   loadTaskPlans,
   deleteTaskPlan,
   archiveTaskPlan,
@@ -132,6 +136,7 @@ import {
   type JsonValue,
   type ProjectFile,
   type Skill,
+  type MemoryNote,
   type BookSource,
   type BookSummary,
   type ChapterDataset,
@@ -167,6 +172,7 @@ import {
   DataTablePreview,
   JsonTreeView,
   SkillsPanel,
+  MemoriesPanel,
   TasksPanel,
   ScheduledTasksPanel,
   CalendarPanel,
@@ -474,6 +480,17 @@ export function App() {
   const openSkills = useCallback(async () => {
     await loadSkills(libraryStore).then(setSkills).catch(() => {});
     setShowSkills(true);
+  }, [libraryStore]);
+  // Reader memory — the durable "remember" notes, in the same shared store the worker reads, so
+  // panel edits apply on the assistant's next turn (and the buddy's own remember/forget show here).
+  const [showMemories, setShowMemories] = useState(false);
+  const [memories, setMemories] = useState<MemoryNote[]>([]);
+  const refreshMemories = useCallback(() => {
+    void loadMemory(libraryStore).then(setMemories).catch(() => {});
+  }, [libraryStore]);
+  const openMemories = useCallback(async () => {
+    await loadMemory(libraryStore).then(setMemories).catch(() => {});
+    setShowMemories(true);
   }, [libraryStore]);
   // A skill the buddy distilled from a recurring task, awaiting the reader's Keep/Dismiss.
   const [pendingSkill, setPendingSkill] = useState<{ name: string; description: string; body: string } | null>(null);
@@ -2900,6 +2917,7 @@ export function App() {
                 role: "tool",
                 text: `🧠 ${e.memory.action === "remembered" ? "Remembered" : "Forgot"}: “${e.memory.note}”`,
               });
+              refreshMemories(); // shared memory — keep the Memory panel in sync with in-book chat edits
             } else if (e.passages?.length) {
               // Slash-command /book results (model-driven searches consume these
               // silently as feedback; a direct command shows them to the reader).
@@ -3937,6 +3955,7 @@ export function App() {
             role: "tool",
             text: `🧠 ${e.memory.action === "remembered" ? "Remembered" : "Forgot"}: “${e.memory.note}”`,
           });
+          refreshMemories(); // keep the Memory panel + list current with the buddy's own edits
         } else if (e.removed) {
           appendBuddy({ role: "tool", text: `🗑 Removed “${e.removed}” from the library.` });
         } else if (e.call.tool === "search_images") {
@@ -5086,6 +5105,13 @@ export function App() {
           </button>
           <button
             style={styles.button}
+            onClick={() => void openMemories()}
+            title="What the assistant remembers about you — durable notes it keeps across every chat (view, add, edit, or delete)"
+          >
+            💭 Memory
+          </button>
+          <button
+            style={styles.button}
             onClick={() => void openTasks()}
             title="Your planned multi-step tasks — research, steps, deadlines, prepped docs. Ask the assistant to “plan …” anything."
           >
@@ -5803,6 +5829,18 @@ export function App() {
             refreshSkills();
           }}
           onClose={() => setShowSkills(false)}
+        />
+      )}
+
+      {showMemories && (
+        <MemoriesPanel
+          notes={memories}
+          limits={{ note: MAX_NOTE_CHARS, max: MAX_MEMORY_NOTES }}
+          onSave={async (notes) => {
+            const saved = await saveMemory(libraryStore, notes);
+            setMemories(saved);
+          }}
+          onClose={() => setShowMemories(false)}
         />
       )}
 
