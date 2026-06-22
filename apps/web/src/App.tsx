@@ -4128,6 +4128,9 @@ export function App() {
     setBuddyActivity("");
     setBuddySteps([]);
     setBuddyPendingTool(undefined);
+    // The context-usage badge is per-conversation — clear it on a session switch so it doesn't show
+    // the previous window's % (it repopulates from the new session's next turn).
+    setBuddyUsage(undefined);
     pendingBuddyTranscript.current = [];
     pendingBuddyHistory.current = [];
   }, [buddyCancel]);
