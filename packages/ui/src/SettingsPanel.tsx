@@ -14,6 +14,7 @@ import {
   LOCAL_IMAGE_MODELS,
   imageModelVramCostGb,
   serverModelVramCostGb,
+  recommendImageModePairings,
   OLLAMA_TEXT_MODELS,
   getImageStyle,
   getProvider,
@@ -1947,6 +1948,65 @@ export function SettingsPanel({
                 cost. {isDesktop ? "Takes effect next time the engine starts." : "For your own ComfyUI, also launch it with --lowvram."}
               </span>
             </label>
+            {(() => {
+              // IMAGE-GEN PAIRING: rank the installed chat models that can stay RESIDENT alongside the
+              // chosen image model, so prompt-editing chat never starves it of VRAM (no evict/reload
+              // thrash). Recommend-only — the reader clicks "Use" to apply (sets it as the local chat
+              // model + a num_ctx that fits). Nothing fits ⇒ show the math + Low-VRAM / no-LLM options.
+              if (!value.gpuVramMb || !value.localModel) return null;
+              const rec = recommendImageModePairings({
+                imageModel: value.localModel,
+                gpuVramMb: value.gpuVramMb,
+                installed: textModels.map((m) => m.id),
+              });
+              if (!rec) return null;
+              const useModel = (model: string, numCtx: number) =>
+                set({
+                  textProvider: "local",
+                  localTextBackend: "server",
+                  localServerTextModel: model,
+                  localContextByModel: { ...(value.localContextByModel ?? {}), [model]: numCtx },
+                });
+              return (
+                <div style={{ ...rowStyle, fontSize: 11, flexDirection: "column", alignItems: "stretch", gap: 4 }}>
+                  <span>🎨 Image-gen pairing — a chat model that stays loaded WITH the image model</span>
+                  <span style={{ opacity: 0.7 }}>
+                    Image <b>{rec.imageGb} GB</b> on your <b>{rec.gpuGb} GB</b> GPU ⇒ ~<b>{Math.max(0, rec.freeGb)} GB</b> free for chat.
+                  </span>
+                  {rec.noneFit ? (
+                    <span style={{ opacity: 0.85 }}>
+                      ⚠ No installed chat model fits alongside this image model.{" "}
+                      <button style={{ ...buttonStyle, padding: "1px 6px" }} onClick={() => set({ lowVram: true })}>
+                        Turn on Low-VRAM mode
+                      </button>{" "}
+                      (frees the chat model for each render), or skip the LLM entirely and use the freeform image
+                      box — your prompt goes straight to the model, nothing else in VRAM.
+                    </span>
+                  ) : (
+                    <>
+                      {rec.fits.slice(0, 4).map((f) => (
+                        <div key={f.model} style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                          <span>
+                            {f.model} · ~{f.vramGb} GB · loads at {Math.round(f.suggestedNumCtx / 1024)}k
+                          </span>
+                          {value.textProvider === "local" && value.localServerTextModel === f.model ? (
+                            <span style={{ color: "#7dd87f" }}>✓ In use</span>
+                          ) : (
+                            <button style={{ ...buttonStyle, padding: "1px 6px" }} onClick={() => useModel(f.model, f.suggestedNumCtx)}>
+                              Use
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                      <span style={{ opacity: 0.55 }}>
+                        Best (largest that fits) first — “Use” makes it your chat model at a window that fits, so it
+                        and the image model both stay on the GPU.
+                      </span>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
             </>
           )}
 

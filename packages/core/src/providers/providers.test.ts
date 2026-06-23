@@ -30,6 +30,7 @@ import {
   catalogEntryForModel,
   catalogModelFamily,
   ollamaModelMatches,
+  recommendImageModePairings,
   serverModelVramCostGb,
   styleLoraDownload,
 } from "./catalog.js";
@@ -102,6 +103,44 @@ describe("catalog", () => {
     // No parseable size → 0 so the caller keeps its existing "free it" behaviour.
     expect(serverModelVramCostGb("gemma2:latest")).toBe(0);
     expect(serverModelVramCostGb("")).toBe(0);
+  });
+
+  it("recommendImageModePairings ranks installed chat models that fit alongside an image model", () => {
+    const r = recommendImageModePairings({
+      imageModel: "flux-schnell", // ~17 GB
+      gpuVramMb: 32768, // 32 GB
+      installed: ["gemma4:31b", "qwen3:8b", "llama3.2:3b"],
+    })!;
+    expect(r).toBeDefined();
+    expect(r.imageGb).toBeGreaterThan(0);
+    // A 31B (~21 GB) can't coexist with a ~17 GB image model on 32 GB; the small ones can.
+    expect(r.fits.map((f) => f.model)).not.toContain("gemma4:31b");
+    expect(r.fits.map((f) => f.model)).toContain("qwen3:8b");
+    // Ranked biggest-first (best prose that still fits).
+    for (let i = 1; i < r.fits.length; i++) {
+      expect(r.fits[i - 1]!.vramGb).toBeGreaterThanOrEqual(r.fits[i]!.vramGb);
+    }
+    // Suggested window is modest + bounded (prompt-editing doesn't need a huge one).
+    for (const f of r.fits) {
+      expect(f.suggestedNumCtx).toBeGreaterThanOrEqual(8192);
+      expect(f.suggestedNumCtx).toBeLessThanOrEqual(16384);
+    }
+    expect(r.noneFit).toBe(false);
+  });
+
+  it("recommendImageModePairings flags noneFit when the image model leaves no room", () => {
+    const r = recommendImageModePairings({
+      imageModel: "qwen-image", // ~30 GB → ~0 left on 32 GB
+      gpuVramMb: 32768,
+      installed: ["qwen3:8b", "llama3.2:3b"],
+    })!;
+    expect(r.noneFit).toBe(true);
+    expect(r.fits).toHaveLength(0);
+  });
+
+  it("recommendImageModePairings returns undefined when GPU or image size is unknown", () => {
+    expect(recommendImageModePairings({ imageModel: "flux-schnell", gpuVramMb: 0, installed: [] })).toBeUndefined();
+    expect(recommendImageModePairings({ imageModel: "not-a-model", gpuVramMb: 32768, installed: [] })).toBeUndefined();
   });
 });
 

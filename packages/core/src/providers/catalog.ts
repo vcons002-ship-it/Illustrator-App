@@ -449,6 +449,65 @@ export function serverModelVramCostGb(name: string): number {
   return Math.ceil(params * bytesPerParam + 1.5);
 }
 
+/** One installed chat model that can run ALONGSIDE the chosen image model. */
+export interface ImagePairingOption {
+  /** Installed chat model id (e.g. an Ollama tag). */
+  model: string;
+  /** Estimated resident VRAM of its weights (+ a small KV baseline), GB. */
+  vramGb: number;
+  /** A context window whose KV cache still fits the leftover VRAM (kept modest — prompt-editing
+   * chat doesn't need a huge window, and a smaller one leaves the image model more headroom). */
+  suggestedNumCtx: number;
+}
+
+/** The VRAM-fit picture for an "image generation mode" pairing. */
+export interface ImageModePairing {
+  /** The image model's resident VRAM, GB (0 if unknown). */
+  imageGb: number;
+  /** Detected GPU VRAM, GB. */
+  gpuGb: number;
+  /** VRAM left for a chat model after the image model + headroom, GB. */
+  freeGb: number;
+  /** Installed chat models that fit, BEST (largest that still fits) first. */
+  fits: ImagePairingOption[];
+  /** True when nothing installed fits — the caller offers Low-VRAM / a no-LLM direct prompt. */
+  noneFit: boolean;
+}
+
+/**
+ * Rank the user's installed chat models by which can stay RESIDENT alongside a chosen local image
+ * model so prompt-editing chat never starves the image model of VRAM (and never needs the
+ * evict/reload thrash). Largest-that-fits first (best prose quality), each with a context window
+ * sized to the leftover VRAM. Returns undefined when we can't size it (unknown image model / no GPU
+ * reading). Pure — uses the existing `imageModelVramCostGb` / `serverModelVramCostGb` estimates.
+ */
+export function recommendImageModePairings(opts: {
+  imageModel: string;
+  gpuVramMb: number;
+  installed: string[];
+  headroomGb?: number;
+}): ImageModePairing | undefined {
+  const gpuGb = opts.gpuVramMb > 0 ? Math.round((opts.gpuVramMb / 1024) * 10) / 10 : 0;
+  const imageGb = imageModelVramCostGb(opts.imageModel);
+  if (!gpuGb || !imageGb) return undefined;
+  const headroom = opts.headroomGb ?? 2;
+  const freeGb = Math.round((gpuGb - imageGb - headroom) * 10) / 10;
+  const fits = opts.installed
+    .map((model) => ({ model, weights: serverModelVramCostGb(model) }))
+    .filter((c) => c.weights > 0 && c.weights <= freeGb)
+    .sort((a, b) => b.weights - a.weights) // biggest (best) first
+    .map((c) => {
+      // KV grows with the window and model size; spend the leftover beyond the weights on context,
+      // but cap modestly — editing prompts doesn't need a big window, and a smaller one is safer.
+      const kvBudgetGb = Math.max(0, freeGb - c.weights);
+      const kvPer8k = Math.max(1, Math.round((c.weights / 20) * 2));
+      const extraTokens = Math.floor((kvBudgetGb / kvPer8k) * 8192);
+      const window = Math.min(16384, 8192 + Math.max(0, extraTokens));
+      return { model: c.model, vramGb: c.weights, suggestedNumCtx: Math.max(8192, Math.floor(window / 2048) * 2048) };
+    });
+  return { imageGb: Math.round(imageGb), gpuGb, freeGb, fits, noneFit: fits.length === 0 };
+}
+
 /** Squashed lowercase alphanumerics ("Flux 2 Klein.safetensors" → "flux2klein"). */
 function normalizeModelName(s: string): string {
   return s
