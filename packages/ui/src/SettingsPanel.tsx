@@ -186,6 +186,14 @@ export interface ReaderSettings {
    * Modelfile num_ctx when Ollama reports one, else a conservative 4096.
    */
   localContextTokens?: number;
+  /**
+   * Per-OLLAMA-model context window to LOAD with (keyed by model id). Unlike `localContextTokens`
+   * (which only sizes OUR prompt), this is SENT to Ollama via its native `/api/chat` as
+   * `options.num_ctx`, so the model loads at this window and its KV cache fits the GPU — the in-app
+   * lever for the "256k default spills a dense model to the CPU" problem. Ollama-only; mirrors the
+   * `localComponentsByModel` per-model map.
+   */
+  localContextByModel?: Record<string, number>;
   /** Thinking level for local REASONING models (Qwen3, DeepSeek-R1, …) — sent as the OpenAI
    * `reasoning_effort` on each chat: "off" turns the hidden reasoning pass off (faster), low/medium/
    * high scale it. "auto"/unset leaves the model's default. Models/servers that don't support it
@@ -735,6 +743,56 @@ export function SettingsPanel({
                   pullProgress={pullProgress}
                 />
               )}
+              {(() => {
+                // PER-MODEL num_ctx — the in-app lever. Ollama-only (its native /api/chat honours
+                // options.num_ctx; the OpenAI /v1 path can't). When set, the app loads THIS model at
+                // THIS window, so its KV cache (and VRAM) shrink to fit the GPU — the fix for slow
+                // CPU-offloaded generation. Stored per model id (mirrors localComponentsByModel).
+                const backend = value.localTextBackend ?? (isDesktop || remote ? "bundled" : "webgpu");
+                const server = value.localTextServer ?? "ollama";
+                const model = value.localServerTextModel;
+                if (backend !== "server" || server !== "ollama" || !model) return null;
+                const cur = value.localContextByModel?.[model];
+                const setForModel = (n: number | undefined) => {
+                  const map = { ...(value.localContextByModel ?? {}) };
+                  if (n && n > 0) {
+                    map[model] = n;
+                    set({ localContextByModel: map });
+                  } else {
+                    delete map[model];
+                    if (Object.keys(map).length) {
+                      set({ localContextByModel: map });
+                    } else {
+                      const { localContextByModel: _drop, ...rest } = value;
+                      onChange(rest);
+                    }
+                  }
+                };
+                return (
+                  <label style={rowStyle}>
+                    <span>
+                      Load <b>{model}</b> at (num_ctx) — <b>sets VRAM</b>
+                    </span>
+                    <input
+                      type="number"
+                      min={1024}
+                      step={1024}
+                      placeholder="Ollama default"
+                      value={cur ?? ""}
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        setForModel(Number.isFinite(n) ? n : undefined);
+                      }}
+                    />
+                    <span style={{ opacity: 0.55, fontSize: 11 }}>
+                      The app tells Ollama (native <code>/api/chat</code>) to LOAD this model at this window,
+                      so its KV cache — and its VRAM — shrink to fit the GPU. <b>This</b> is the lever that
+                      fixes slow CPU-offloaded generation: a ~19 GB model fits roughly a 48–64k window on a
+                      32 GB card. Per-model; leave blank to use Ollama's own default (often very large).
+                    </span>
+                  </label>
+                );
+              })()}
               <label style={rowStyle}>
                 <span>Context window (tokens) — how much we SEND</span>
                 <input

@@ -1319,6 +1319,10 @@ function contextBudgets(llmId: string, ctxTokens?: number): ContextBudgets {
 let localCtxCache: { key: string; ctx: number | undefined; at: number } | undefined;
 async function localContextTokens(llmId: string): Promise<number | undefined> {
   if (!settings || CLOUD_LLM_IDS.has(llmId)) return undefined;
+  // Per-model num_ctx wins: it's the window we actually told Ollama to LOAD, so budget to it exactly.
+  const activeModel = chatSettingsOf(settings).localServerTextModel ?? settings.localServerTextModel;
+  const perModel = activeModel ? settings.localContextByModel?.[activeModel] : undefined;
+  if (perModel && perModel > 0) return Math.min(perModel, MAX_TRUSTED_CONTEXT_TOKENS);
   const override = settings.localContextTokens;
   if (override && override > 0) return Math.min(override, MAX_TRUSTED_CONTEXT_TOKENS);
   if (llmId !== "local-server") return undefined; // only Ollama can be queried

@@ -260,12 +260,20 @@ function buildLLM(
         };
       }
       const serverModel = settings.localServerTextModel ?? (bundled ? BUNDLED_LLM.model : undefined);
+      // Per-model num_ctx is OLLAMA-only (its native /api/chat) — never for the bundled llama-server
+      // or LM Studio / llama.cpp, which have no such endpoint. When set, the provider loads the model
+      // at this window so its KV cache fits the GPU.
+      const numCtx =
+        !bundled && (settings.localTextServer ?? "ollama") === "ollama" && serverModel
+          ? settings.localContextByModel?.[serverModel]
+          : undefined;
       try {
         return {
           provider: createLLMProvider("local-server", {
             baseUrl,
             ...(serverModel ? { model: serverModel } : {}),
             ...(transport ? { transport } : {}),
+            ...(numCtx ? { numCtx } : {}),
           }),
           diag: {
             id: "local-server",

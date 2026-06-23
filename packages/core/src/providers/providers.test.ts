@@ -998,6 +998,56 @@ describe("LocalServerLLMProvider", () => {
     expect(t.requests[0]!.url).toBe("http://localhost:11434/api/pull");
     expect(t.requests[0]!.body).toEqual({ model: "qwen3:8b", stream: false });
   });
+
+  it("with numCtx set, streams chat via Ollama NATIVE /api/chat and sends options.num_ctx", async () => {
+    // num_ctx can't be set on the OpenAI /v1 endpoint, so a per-model window routes to the native
+    // /api/chat (NDJSON). This is the lever that loads a big model at a small window so it fits VRAM.
+    const ndjson = [
+      JSON.stringify({ message: { content: "Hel" }, done: false }),
+      JSON.stringify({ message: { content: "lo" }, done: false }),
+      JSON.stringify({ done: true, done_reason: "stop" }),
+    ].join("\n");
+    let url = "";
+    let body: { stream?: boolean; options?: { num_ctx?: number } } = {};
+    const fakeFetch = (async (u: RequestInfo | URL, init?: RequestInit) => {
+      url = String(u);
+      body = JSON.parse(String(init?.body));
+      return new Response(ndjson, { status: 200 });
+    }) as typeof fetch;
+    const provider = new LocalServerLLMProvider({
+      baseUrl: "http://localhost:11434/v1",
+      model: "gemma4:31b",
+      numCtx: 16384,
+      fetchImpl: fakeFetch,
+    });
+    const tokens: string[] = [];
+    const text = await provider.chat([{ role: "user", content: "hi" }], { onToken: (t) => tokens.push(t) });
+    expect(url).toBe("http://localhost:11434/api/chat"); // native root (/v1 stripped)
+    expect(body.stream).toBe(true);
+    expect(body.options?.num_ctx).toBe(16384);
+    expect(tokens.join("")).toBe("Hello");
+    expect(text).toBe("Hello");
+  });
+
+  it("with numCtx set, extraction uses native /api/chat (stream:false, format json, options.num_ctx)", async () => {
+    const transport = new FakeTransport(() => ({
+      json: { message: { content: '{"characters":[{"name":"Cal","aliases":[],"persistentTraits":[],"clothing":[]}],"environments":[],"spoilers":[]}' } },
+    }));
+    const provider = new LocalServerLLMProvider({
+      baseUrl: "http://localhost:11434/v1",
+      model: "gemma4:31b",
+      numCtx: 16384,
+      transport,
+    });
+    const bible = await provider.extractEntities({ bookId: "b", chapterIndex: 0, chapterText: "Cal walked in.", existing: emptyBible() });
+    const req = transport.requests[0]!;
+    expect(req.url).toBe("http://localhost:11434/api/chat");
+    const b = req.body as { stream?: boolean; format?: string; options?: { num_ctx?: number } };
+    expect(b.stream).toBe(false);
+    expect(b.format).toBe("json");
+    expect(b.options?.num_ctx).toBe(16384);
+    expect(bible.characters[0]?.name).toBe("Cal");
+  });
 });
 
 describe("assetStem / pickComponentAsset (split-file variant matching)", () => {
