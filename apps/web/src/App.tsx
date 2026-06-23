@@ -148,6 +148,7 @@ import {
   type ChatTurn,
   type ContextUsage,
   type EncryptedSecrets,
+  type StoreBackup,
   type StoredChatMessage,
   type ToolCall,
   type ToolResultPayload,
@@ -2207,6 +2208,45 @@ export function App() {
     },
     [promptExportName],
   );
+  // Backup / Restore: dev (`cargo tauri dev`) and the packaged build use DIFFERENT storage origins,
+  // so data doesn't carry over. Export bundles the reader's library, chats, tasks, memories + skills
+  // (and the non-secret settings) into one JSON; restore merges it back. API keys aren't included —
+  // they're device-encrypted per origin, so re-enter them after a restore.
+  const onExportData = useCallback(async (): Promise<void> => {
+    const data = await libraryStore.exportData();
+    let storedSettings: string | undefined;
+    try {
+      storedSettings = localStorage.getItem("vr-settings") ?? undefined;
+    } catch {
+      /* storage blocked */
+    }
+    const stamp = new Date().toISOString().slice(0, 10);
+    await saveExportFile(
+      `visual-reader-backup-${stamp}.json`,
+      JSON.stringify({ ...data, settings: storedSettings }),
+      "application/json",
+    );
+  }, [libraryStore]);
+  const onImportData = useCallback(
+    async (file: File): Promise<{ ok: boolean; error?: string }> => {
+      try {
+        const parsed = JSON.parse(await file.text()) as StoreBackup & { settings?: string };
+        await libraryStore.importData(parsed);
+        if (typeof parsed.settings === "string") {
+          try {
+            localStorage.setItem("vr-settings", parsed.settings);
+          } catch {
+            /* storage blocked */
+          }
+        }
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    },
+    [libraryStore],
+  );
+
   // Download a grounded analysis-result table (a pivot/aggregate the chat computed)
   // as a real Excel workbook or CSV — built in the host from the typed DataTable.
   const onDownloadData = useCallback(
@@ -5500,6 +5540,7 @@ export function App() {
                 ? { onSoftwareUpdate: onSoftwareUpdateRemote }
                 : {})}
             {...(isDesktop ? { onRestartApp } : isRemoteClient ? { onRestartApp: onRestartAppRemote } : {})}
+            {...(!isRemoteClient ? { onExportData, onImportData } : {})}
             installedModels={installedModels}
             installedTextEncoders={installedTextEncoders}
             installedVaes={installedVaes}

@@ -1,6 +1,7 @@
 import type { VisualBible } from "../types/bible.js";
 import type { BookSource } from "../types/book.js";
-import { MAX_CHAT_HISTORY, type BookSummary, type StoredChatMessage, type VisualReaderStore } from "./store.js";
+import { base64ToBytes, bytesToBase64 } from "../providers/image/base64.js";
+import { MAX_CHAT_HISTORY, type BookSummary, type StoreBackup, type StoredChatMessage, type VisualReaderStore } from "./store.js";
 
 /**
  * IndexedDB-backed store for the web app: caches the Visual Bible and rendered
@@ -17,8 +18,56 @@ const BOOK_STORE = "books";
 const CHAT_STORE = "chats";
 const MEMO_STORE = "memos";
 
+/** Stores included in a backup: the reader's DATA. The IMAGE_STORE (rendered illustrations) is
+ * skipped — it's large and re-derivable, so a backup stays small and portable. */
+const BACKUP_STORES = [BIBLE_STORE, BOOK_STORE, CHAT_STORE, MEMO_STORE] as const;
+
 interface BookRecord extends BookSource {
   addedAt: number;
+}
+
+/** Read every [key, value] pair from a store, base64-tagging any ArrayBuffer so it's JSON-safe. */
+function dumpStore(db: IDBDatabase, name: string): Promise<{ key: string; value: unknown }[]> {
+  return new Promise((resolve, reject) => {
+    const out: { key: string; value: unknown }[] = [];
+    const req = db.transaction(name, "readonly").objectStore(name).openCursor();
+    req.onsuccess = () => {
+      const cur = req.result;
+      if (!cur) {
+        resolve(out);
+        return;
+      }
+      out.push({ key: String(cur.key), value: encodeBuffers(cur.value) });
+      cur.continue();
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/** Recursively replace ArrayBuffers with `{ __ab: <base64> }` so a value round-trips through JSON. */
+function encodeBuffers(value: unknown): unknown {
+  if (value instanceof ArrayBuffer) return { __ab: bytesToBase64(value) };
+  if (ArrayBuffer.isView(value)) return { __ab: bytesToBase64((value as ArrayBufferView).buffer as ArrayBuffer) };
+  if (Array.isArray(value)) return value.map(encodeBuffers);
+  if (value && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) out[k] = encodeBuffers(v);
+    return out;
+  }
+  return value;
+}
+
+/** Reverse {@link encodeBuffers}: `{ __ab }` tags become ArrayBuffers again. */
+function decodeBuffers(value: unknown): unknown {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const tag = (value as { __ab?: unknown }).__ab;
+    if (typeof tag === "string") return base64ToBytes(tag);
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) out[k] = decodeBuffers(v);
+    return out;
+  }
+  if (Array.isArray(value)) return value.map(decodeBuffers);
+  return value;
 }
 
 export class IndexedDbStore implements VisualReaderStore {
@@ -129,6 +178,33 @@ export class IndexedDbStore implements VisualReaderStore {
 
   async deleteMemo(key: string): Promise<void> {
     return this.delete(MEMO_STORE, key);
+  }
+
+  /** Dump the reader's DATA stores (not the re-renderable images) to a JSON-safe backup. */
+  async exportData(): Promise<StoreBackup> {
+    const db = await this.dbPromise;
+    const stores: Record<string, { key: string; value: unknown }[]> = {};
+    for (const name of BACKUP_STORES) {
+      stores[name] = await dumpStore(db, name);
+    }
+    return { app: "visual-reader", version: DB_VERSION, at: Date.now(), stores };
+  }
+
+  /** Restore a backup, MERGING each [key, value] into its store (overwriting same-key records). */
+  async importData(backup: StoreBackup): Promise<void> {
+    if (!backup || backup.app !== "visual-reader" || !backup.stores) throw new Error("Not a Visual Reader backup file.");
+    const db = await this.dbPromise;
+    for (const name of BACKUP_STORES) {
+      const rows = backup.stores[name];
+      if (!Array.isArray(rows) || rows.length === 0) continue;
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(name, "readwrite");
+        const os = tx.objectStore(name);
+        for (const { key, value } of rows) os.put(decodeBuffers(value), key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
   }
 
   private async get<T>(store: string, key: string): Promise<T | undefined> {

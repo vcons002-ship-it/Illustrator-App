@@ -319,6 +319,74 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
  * picker and the app's auto-select paths (download/connect) so switching models never leaves the
  * previous model's encoder/VAE selected. Pure — returns the next settings.
  */
+/** Backup / Restore: export the reader's data (library, chats, tasks, memories, skills + settings)
+ * to a file, and import it back — for moving everything between environments (dev ↔ packaged use
+ * separate storage) or just keeping a backup. Restore reloads so the app picks up the data. */
+function BackupRow({
+  onExport,
+  onImport,
+}: {
+  onExport: () => Promise<void>;
+  onImport: (file: File) => Promise<{ ok: boolean; error?: string }>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+  const doExport = async (): Promise<void> => {
+    setBusy(true);
+    setMsg("");
+    try {
+      await onExport();
+      setMsg("Backup saved.");
+    } catch (e) {
+      setMsg(`Export failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const doImport = async (file: File): Promise<void> => {
+    setBusy(true);
+    setMsg("Restoring…");
+    const r = await onImport(file);
+    if (r.ok) {
+      setMsg("Restored — reloading…");
+      setTimeout(() => location.reload(), 800);
+    } else {
+      setMsg(`Restore failed: ${r.error ?? "unknown error"}`);
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ ...rowStyle, marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+      <span>💾 Backup &amp; restore</span>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <button style={buttonStyle} disabled={busy} onClick={() => void doExport()}>
+          Export backup
+        </button>
+        <button style={buttonStyle} disabled={busy} onClick={() => fileRef.current?.click()}>
+          Restore from file…
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".json,application/json"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void doImport(f);
+            e.target.value = "";
+          }}
+        />
+        {msg && <span style={{ fontSize: 12, opacity: 0.75 }}>{msg}</span>}
+      </div>
+      <span style={{ opacity: 0.55, fontSize: 11 }}>
+        Moves your library, chats, tasks, memories &amp; skills (and settings) between installs — e.g. from the
+        dev build to the packaged app. API keys aren&apos;t included (re-enter them after restoring).
+      </span>
+    </div>
+  );
+}
+
 /** In-app "Software update": one button that pulls + rebuilds + reloads, with a live status line. */
 function SoftwareUpdateRow({
   onUpdate,
@@ -453,6 +521,10 @@ export interface SettingsPanelProps {
   ) => Promise<{ status: "uptodate" | "updated" | "needs-restart" | "error"; message: string }>;
   /** Fully relaunch the desktop app (Settings → Restart app). Absent on the web (button hidden). */
   onRestartApp?: () => void;
+  /** Export all reader data (library, chats, tasks, memories, skills + settings) to a backup file. */
+  onExportData?: () => Promise<void>;
+  /** Restore a backup file produced by onExportData (merges it in); resolves with ok/error. */
+  onImportData?: (file: File) => Promise<{ ok: boolean; error?: string }>;
 }
 
 export function SettingsPanel({
@@ -485,6 +557,8 @@ export function SettingsPanel({
   onDisconnectGoogle,
   onSoftwareUpdate,
   onRestartApp,
+  onExportData,
+  onImportData,
 }: SettingsPanelProps) {
   const [open, setOpen] = useState(false);
   // Settings filter: typing hides non-matching groups and force-opens matches.
@@ -558,6 +632,7 @@ export function SettingsPanel({
           {onSoftwareUpdate && (
             <SoftwareUpdateRow onUpdate={onSoftwareUpdate} {...(onRestartApp ? { onRestart: onRestartApp } : {})} />
           )}
+          {onExportData && onImportData && <BackupRow onExport={onExportData} onImport={onImportData} />}
           {onRestartApp && (
             <div
               style={{
