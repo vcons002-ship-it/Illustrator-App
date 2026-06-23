@@ -1768,6 +1768,11 @@ export function App() {
             // The phone asked us to fully relaunch (Settings → Restart app on the phone).
             void restartApp().catch(() => {});
             break;
+          case "vrcmd:openLocalFile":
+            // The phone tapped a desktop file (a /find result) to open into the reader; read + import
+            // it HERE (we have the filesystem), and the opened book mirrors back to the phone.
+            void openLocalFileRef.current(msg.path);
+            break;
           case "vrcmd:hostTool":
             // The phone's buddy hit a desktop-runtime tool (files/command/screenshot); run it HERE
             // (we have the runtime + the working folder) and relay the result back.
@@ -3166,10 +3171,15 @@ export function App() {
   // note renders as a system line (like a delegated-subtask note), not as the assistant talking.
   buddyNoteRef.current = (text: string) => appendBuddy({ role: "tool", text });
 
-  // Open a local file the desktop `/find` surfaced: read its bytes via the Rust
-  // bridge, then run it through the SAME importer as an upload.
+  // Open a local file the desktop `/find` surfaced: read its bytes via the Rust bridge, then run it
+  // through the SAME importer as an upload. On a linked PHONE there's no local filesystem — relay the
+  // path to the desktop, which reads + imports + opens it; the opened book mirrors back (vrsync:book).
   const onOpenLocalFile = useCallback(
     async (path: string) => {
+      if (isRemoteClient) {
+        sendAppSync({ type: "vrcmd:openLocalFile", path });
+        return;
+      }
       try {
         const file = await readLocalFile(path);
         await onUpload(file);
@@ -3177,8 +3187,12 @@ export function App() {
         setLocalError(`Couldn't open that file: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [onUpload],
+    [onUpload, isRemoteClient, sendAppSync],
   );
+  // Desktop reads the latest opener so the early-registered relay handler can invoke it for a
+  // phone-relayed vrcmd:openLocalFile without a stale closure.
+  const openLocalFileRef = useRef(onOpenLocalFile);
+  openLocalFileRef.current = onOpenLocalFile;
 
   // Run a local-file search and present the matches as clickable chips. `modelTurns`
   // (the conversational find_files path) bakes a model-facing feedback turn into the
