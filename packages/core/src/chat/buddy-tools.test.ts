@@ -246,6 +246,14 @@ describe("formatBuddyToolResult", () => {
 });
 
 describe("buildBuddySystemPrompt", () => {
+  it("tells the buddy that created docs (spreadsheets/code/text) are auto-saved to the library", () => {
+    // Guards against the buddy hallucinating "I can't save a created document to your library".
+    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    expect(prompt).toMatch(/SAVED TO THE LIBRARY AUTOMATICALLY/);
+    expect(prompt).toMatch(/NEVER tell the reader you can't save a created/i);
+    expect(prompt).toMatch(/Excel \(\.xlsx\)/);
+  });
+
   it("lists the library with ids and switches persona text", () => {
     const prompt = buildBuddySystemPrompt({
       persona: "entertainment",

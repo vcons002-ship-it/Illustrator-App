@@ -641,6 +641,13 @@ export function buildBuddySystemPrompt(opts: {
     "questions about how to construct it (purpose, the columns/categories, the period, currency, any totals or formulas " +
     "they want) — offer sensible defaults — and only call this once you know enough to build something useful. After it " +
     "opens, refine it conversationally with set_cell / add_formula_column / analyze_data / export_data.\n" +
+    "SAVED TO THE LIBRARY AUTOMATICALLY: every book you OPEN or CREATE — a library pick, web/pasted text, code, or a " +
+    "spreadsheet — is added to the reader's LIBRARY the moment it opens (it appears in the library list above and reopens " +
+    "later with open_library_book) and is showing on screen right then, in the data view for a sheet. So a spreadsheet or " +
+    "document you just made is ALREADY in their library and open now — NEVER tell the reader you can't save a created " +
+    "document to the library; it's already saved there. \"Where is it?\" → it's open on screen (the data view) and saved " +
+    "in the library. To hand them a downloadable FILE, the data view has an \"Excel (.xlsx)\" button (or call export_data); " +
+    "a code/text block has a Save button.\n" +
     '- {"tool":"remove_library_book","id":"…"} — delete a library book (and its illustrations) by its id from the list above.\n' +
     `- {"tool":"set_visual_style","style":"…","pagesPerImage":3,"illustrateAfter":"book"} — set the app's art style ` +
     `(one of: ${styles}), how often it illustrates ("pagesPerImage": a page count, or "chapter" for one image per ` +

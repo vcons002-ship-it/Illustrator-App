@@ -5728,7 +5728,7 @@ export function App() {
       )}
 
       {book && (
-        <main style={wideImageColumn ? styles.readerWide : styles.reader}>
+        <main style={book.data || (book.dataSheets && book.dataSheets.length) ? styles.readerData : wideImageColumn ? styles.readerWide : styles.reader}>
           <ReaderColumn
             book={book}
             pageToUnit={units?.pageToUnit}
@@ -6394,7 +6394,7 @@ const ReaderColumn = memo(function ReaderColumn({
   const activeTable = sheets ? (sheets[Math.min(activeSheet, sheets.length - 1)]?.table ?? book.data) : book.data;
   const dataChart = useMemo(() => (activeTable ? autoChartDataset(activeTable) : undefined), [activeTable]);
   return (
-    <article style={styles.column}>
+    <article style={activeTable ? { ...styles.column, maxWidth: "100%" } : styles.column}>
       {layoutHtml && <style>{ARTICLE_HTML_STYLE}</style>}
       {/* An uploaded spreadsheet/CSV/tabular-JSON: show the REAL grid as an aligned
           table up top (the flattened "a | b | c" pipe-text below is what the
@@ -7687,6 +7687,14 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 40,
     padding: "32px 20px 50vh",
     maxWidth: 1700,
+    margin: "0 auto",
+  },
+  // Data/spreadsheet books: a single FULL-WIDTH column (no reserved illustration pane), so the grid
+  // gets the horizontal room a sheet needs instead of squishing into the ~640px reading column.
+  readerData: {
+    display: "block",
+    padding: "32px 20px 50vh",
+    maxWidth: 1200,
     margin: "0 auto",
   },
   column: { maxWidth: 640 },
