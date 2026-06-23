@@ -1190,6 +1190,29 @@ export function App() {
     void resolveLocalEngine();
   }, [settings.imageProvider, settings.localSource, resolveLocalEngine]);
 
+  // Desktop: list the app-managed engine's installed image models on startup with a CHEAP folder scan
+  // (no need to boot ComfyUI), so the picker + the phone-link inventory are populated immediately —
+  // even before the engine resolves, and even when the image provider is currently CLOUD (so the
+  // phone can still see + switch to a local model). Skipped for a user's OWN server (its models live
+  // on the server and are listed by probeServer instead, not in the managed folder).
+  useEffect(() => {
+    if (!isDesktop || settings.localSource === "server") return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [models, loras] = await Promise.all([listLocalModels(), listLoras()]);
+        if (cancelled) return;
+        if (models.length) setInstalledModels(models);
+        if (loras.length) setInstalledLoras(loras);
+      } catch {
+        /* managed engine not installed yet — nothing to list */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.localSource]);
+
   // Download a catalog model: every component file of a split-file model (diffusion
   // model + text encoder + VAE, each into its ComfyUI subfolder), or the single
   // checkpoint. Sequential, with one combined progress bar; already-present files
