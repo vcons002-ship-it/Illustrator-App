@@ -184,7 +184,7 @@ export type CmdToDesktop =
   | { type: "vrcmd:chatAgentDeny"; id: number } // deny one queued coding-agent step
   | { type: "vrcmd:update" } // phone asked the desktop to pull + rebuild + reload (software update)
   | { type: "vrcmd:restart" } // phone asked the desktop to fully relaunch (Settings → Restart app)
-  | { type: "vrcmd:openLocalFile"; path: string } // open a file FROM the desktop's disk into the reader (the desktop reads + imports it; the open book mirrors back)
+  | { type: "vrcmd:openLocalFile"; path: string } // open a PC file (PDF/EPUB/doc) FROM the desktop's disk as a book; the desktop reads + imports it, the open book mirrors back
   | { type: "vrcmd:hostTool"; requestId: number; call: BuddyToolCall; cwd?: string }; // run a desktop-runtime tool (files/command/screenshot) on the desktop, in the phone's chosen working folder
 
 export type AppSyncMessage = SyncToPhone | CmdToDesktop;
