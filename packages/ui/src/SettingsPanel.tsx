@@ -1204,7 +1204,7 @@ export function SettingsPanel({
                 ))}
               </select>
             </label>
-            {isDesktop && (
+            {(isDesktop || remote) && (
               <>
                 <div
                   style={{
@@ -1215,7 +1215,8 @@ export function SettingsPanel({
                     opacity: 0.85,
                   }}
                 >
-                  🛠 <b>Assistant abilities (desktop)</b>
+                  🛠 <b>Assistant abilities</b>
+                  {remote && !isDesktop ? <span style={{ opacity: 0.6 }}> — these run on your desktop</span> : " (desktop)"}
                 </div>
                 <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 6 }}>
                   <input
