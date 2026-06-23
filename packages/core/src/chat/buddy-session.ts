@@ -41,6 +41,11 @@ import { jsonGatedTokenSink } from "./chat-session.js";
  * between passes. */
 const MAX_REPLY_CONTINUATIONS = 8;
 
+/** How often to tick a transient "still working" activity heartbeat while waiting for the model's
+ * first token. Kept well under the linked phone's silence watchdog (120s) so a slow large model's
+ * long time-to-first-token never trips it. */
+const HEARTBEAT_MS = 10_000;
+
 export interface BuddyDeps {
   searchWeb?: (query: string) => Promise<WebSearchHit[]>;
   searchBooks?: (query: string) => Promise<BookSearchHit[]>;
@@ -237,11 +242,33 @@ export async function runBuddyTurn(opts: {
   // continued in another pass and stitched together.
   const chatOnce = (): Promise<string> => {
     lastTruncated = false;
-    return opts.llm.chat(messages, {
+    // First-token heartbeat: a big local model (e.g. a 27B over the phone tunnel) can take a long
+    // time to load/process the prompt before the FIRST token arrives. The linked phone's silence
+    // watchdog only resets on a stream event, so a long time-to-first-token used to trip it ("the
+    // chat went quiet"). Tick a transient activity event with elapsed seconds every few seconds
+    // until the first token (or thinking) shows up — this only feeds the watchdog, never caps the
+    // reply. Cleared the instant any real content streams or the call settles.
+    let sawContent = false;
+    const startedAt = Date.now();
+    const heartbeat = opts.onEvent
+      ? setInterval(() => {
+          if (sawContent) return;
+          const secs = Math.round((Date.now() - startedAt) / 1000);
+          opts.onEvent?.({ kind: "activity", text: `Still working… (${secs}s — large models can be slow to start)` });
+        }, HEARTBEAT_MS)
+      : undefined;
+    const noteContent = () => {
+      sawContent = true;
+    };
+    const settled = opts.llm.chat(messages, {
       ...(opts.onEvent
         ? {
-            onToken: jsonGatedTokenSink((text) => opts.onEvent?.({ kind: "token", text })),
+            onToken: jsonGatedTokenSink((text) => {
+              noteContent();
+              opts.onEvent?.({ kind: "token", text });
+            }),
             onThinking: (text: string) => {
+              noteContent();
               lastThinking = text;
               opts.onEvent?.({ kind: "thinking", text });
             },
@@ -255,6 +282,11 @@ export async function runBuddyTurn(opts: {
         lastTruncated = m.truncated;
       },
     });
+    if (heartbeat !== undefined) {
+      const stop = () => clearInterval(heartbeat);
+      settled.then(stop, stop);
+    }
+    return settled;
   };
 
   for (let round = 0; ; round++) {

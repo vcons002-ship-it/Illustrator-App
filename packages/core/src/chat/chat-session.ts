@@ -14,6 +14,8 @@ import {
  * the content: at ~30k tokens/pass it's hundreds of thousands of tokens, and hitting it ends with a
  * "say continue" note rather than a silent cut. */
 const MAX_REPLY_CONTINUATIONS = 8;
+/** First-token heartbeat cadence — kept well under the phone silence watchdog (120s). */
+const HEARTBEAT_MS = 10_000;
 
 /**
  * One user-message round of the chat, including the tool loop — worker-agnostic
@@ -150,12 +152,34 @@ export async function runChatTurn(opts: {
 
   const chatOnce = (): Promise<string> => {
     lastTruncated = false;
-    return opts.llm.chat(messages, {
+    // First-token heartbeat (see runBuddyTurn): a big local model can take a long time before the
+    // FIRST token, and the linked phone's silence watchdog only resets on a stream event — so tick a
+    // transient activity event with elapsed seconds until content shows up. Feeds the watchdog only;
+    // never caps the reply.
+    let sawContent = false;
+    const startedAt = Date.now();
+    const heartbeat = opts.onEvent
+      ? setInterval(() => {
+          if (sawContent) return;
+          const secs = Math.round((Date.now() - startedAt) / 1000);
+          opts.onEvent?.({ kind: "activity", text: `Still working… (${secs}s — large models can be slow to start)` });
+        }, HEARTBEAT_MS)
+      : undefined;
+    const noteContent = () => {
+      sawContent = true;
+    };
+    const settled = opts.llm.chat(messages, {
       // Fresh gate per round: a tool-JSON round streams nothing; the prose round streams live.
       ...(opts.onEvent
         ? {
-            onToken: jsonGatedTokenSink((text) => opts.onEvent?.({ kind: "token", text })),
-            onThinking: (text: string) => opts.onEvent?.({ kind: "thinking", text }),
+            onToken: jsonGatedTokenSink((text) => {
+              noteContent();
+              opts.onEvent?.({ kind: "token", text });
+            }),
+            onThinking: (text: string) => {
+              noteContent();
+              opts.onEvent?.({ kind: "thinking", text });
+            },
           }
         : {}),
       ...(opts.signal ? { signal: opts.signal } : {}),
@@ -166,6 +190,11 @@ export async function runChatTurn(opts: {
         lastTruncated = m.truncated;
       },
     });
+    if (heartbeat !== undefined) {
+      const stop = () => clearInterval(heartbeat);
+      settled.then(stop, stop);
+    }
+    return settled;
   };
 
   for (let round = 0; ; round++) {

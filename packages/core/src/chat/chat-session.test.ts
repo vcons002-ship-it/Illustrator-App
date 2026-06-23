@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runChatTurn } from "./chat-session.js";
 import { MAX_TOOL_ROUNDS } from "./chat-tools.js";
 import type { ChatCapable, ChatOptions, ChatTurn } from "../providers/llm/chat.js";
@@ -19,6 +19,48 @@ class FakeChat implements ChatCapable {
 const SEARCH = '{"tool":"search_web","query":"Krebs cycle"}';
 
 describe("runChatTurn", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("ticks a working heartbeat while the model is slow to produce its first token", async () => {
+    // A big local model can take a long time before the FIRST token. The phone's silence watchdog
+    // only resets on a stream event, so the turn must emit periodic activity heartbeats during that
+    // wait — without them a slow time-to-first-token would trip the "chat went quiet" timeout.
+    vi.useFakeTimers();
+    let release: (() => void) | undefined;
+    const llm: ChatCapable = {
+      async chat(_messages, opts) {
+        await new Promise<void>((r) => {
+          release = r;
+        });
+        opts?.onToken?.("done");
+        return "done";
+      },
+    };
+    const events: string[] = [];
+    const turn = runChatTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "hi" }],
+      tools: {},
+      onEvent: (e) => {
+        if (e.kind === "activity") events.push(e.text);
+      },
+    });
+    // Advance past several heartbeat intervals while the model is still "loading".
+    await vi.advanceTimersByTimeAsync(35_000);
+    expect(events.some((t) => /Still working/.test(t))).toBe(true);
+    const beatsWhileWaiting = events.filter((t) => /Still working/.test(t)).length;
+    expect(beatsWhileWaiting).toBeGreaterThanOrEqual(2);
+    // First token arrives → heartbeat stops; no more "still working" beats after completion.
+    release?.();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(events.filter((t) => /Still working/.test(t)).length).toBe(beatsWhileWaiting);
+    const out = await turn;
+    expect(out.text).toBe("done");
+  });
+
   it("answers plain prose without touching tools", async () => {
     const llm = new FakeChat(["It's a great chapter."]);
     const out = await runChatTurn({

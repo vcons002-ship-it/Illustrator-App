@@ -1776,28 +1776,37 @@ export function SettingsPanel({
           {value.imageProvider === "local" && (
             <>
             {(() => {
-              // VRAM clarity: show what the chosen setup needs vs the detected GPU, so the reader can
-              // see whether the image model + the built-in chat model fit at once (if they do, the chat
-              // model stays loaded across renders; if not, it's freed for each render).
+              // Models + VRAM clarity: name BOTH loaded models (image + chat) and show whether they
+              // fit the GPU at once. Always shown for the local image path — even for a model whose
+              // size isn't in our table (then we say "size unknown" rather than hiding the whole line).
               const gpuGb = value.gpuVramMb ? Math.round((value.gpuVramMb / 1024) * 10) / 10 : undefined;
               const imgGb = imageModelVramCostGb(value.localModel ?? "");
-              if (!imgGb) return null;
+              const imgName = value.localModel || "(none selected)";
               const CHAT_GB = 4; // built-in Llama 3.2 3B, approx
-              const usingBundled = (value.textProvider === "local" && value.localTextBackend === "bundled");
+              const textLocal = value.textProvider === "local";
+              const usingBundled = textLocal && (value.localTextBackend ?? (isDesktop || remote ? "bundled" : "webgpu")) === "bundled";
+              const chatName = !textLocal
+                ? `cloud (${value.textProvider})`
+                : usingBundled
+                  ? "Built-in Llama 3.2 3B"
+                  : value.localTextBackend === "webgpu"
+                    ? `on-device ${value.localTextModel ?? ""}`.trim()
+                    : value.localServerTextModel || "local server";
               const both = imgGb + (usingBundled ? CHAT_GB : 0);
-              const fits = gpuGb !== undefined ? both + 2 <= gpuGb : undefined;
+              const fits = gpuGb !== undefined && imgGb > 0 ? both + 2 <= gpuGb : undefined;
               return (
-                <div style={{ ...rowStyle, fontSize: 11, opacity: 0.7 }}>
-                  <span>VRAM</span>
+                <div style={{ ...rowStyle, fontSize: 11, opacity: 0.8 }}>
+                  <span>🧠 Models &amp; VRAM{remote ? " (on desktop)" : ""}</span>
                   <span>
-                    This image model needs ~<b>{imgGb} GB</b>
-                    {usingBundled ? <> (+ ~{CHAT_GB} GB if the built-in chat model stays loaded = ~<b>{both} GB</b>)</> : null}.
+                    🖼 Image: <b>{imgName}</b>
+                    {imgGb ? <> (~{imgGb} GB)</> : <> (size not in our table)</>} · 💬 Chat: <b>{chatName}</b>
+                    {usingBundled ? " (~4 GB)" : ""}.
                     {gpuGb !== undefined ? (
                       <>
-                        {" "}Your GPU: <b>{gpuGb} GB</b>.{" "}
-                        {fits
-                          ? "Both fit — the chat model stays loaded across renders (no reload)."
-                          : "Tight — the chat model is freed for each render (turn on Low-VRAM mode below to also shrink the image model)."}
+                        {" "}GPU: <b>{gpuGb} GB</b>.
+                        {fits === true && " Both fit — the chat model stays loaded across renders (no reload)."}
+                        {fits === false &&
+                          " Tight — the chat model is freed for each render (turn on Low-VRAM mode below to also shrink the image model)."}
                       </>
                     ) : (
                       " GPU VRAM wasn't detected (non-NVIDIA?) — the chat model is freed for each render to be safe."
