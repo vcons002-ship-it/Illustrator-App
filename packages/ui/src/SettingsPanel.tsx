@@ -12,6 +12,7 @@ import {
   DEFAULT_LOCAL_TEXT_SERVER,
   TEXT_PROVIDERS,
   LOCAL_IMAGE_MODELS,
+  imageModelVramCostGb,
   OLLAMA_TEXT_MODELS,
   getImageStyle,
   getProvider,
@@ -1773,6 +1774,38 @@ export function SettingsPanel({
           )}
 
           {value.imageProvider === "local" && (
+            <>
+            {(() => {
+              // VRAM clarity: show what the chosen setup needs vs the detected GPU, so the reader can
+              // see whether the image model + the built-in chat model fit at once (if they do, the chat
+              // model stays loaded across renders; if not, it's freed for each render).
+              const gpuGb = value.gpuVramMb ? Math.round((value.gpuVramMb / 1024) * 10) / 10 : undefined;
+              const imgGb = imageModelVramCostGb(value.localModel ?? "");
+              if (!imgGb) return null;
+              const CHAT_GB = 4; // built-in Llama 3.2 3B, approx
+              const usingBundled = (value.textProvider === "local" && value.localTextBackend === "bundled");
+              const both = imgGb + (usingBundled ? CHAT_GB : 0);
+              const fits = gpuGb !== undefined ? both + 2 <= gpuGb : undefined;
+              return (
+                <div style={{ ...rowStyle, fontSize: 11, opacity: 0.7 }}>
+                  <span>VRAM</span>
+                  <span>
+                    This image model needs ~<b>{imgGb} GB</b>
+                    {usingBundled ? <> (+ ~{CHAT_GB} GB if the built-in chat model stays loaded = ~<b>{both} GB</b>)</> : null}.
+                    {gpuGb !== undefined ? (
+                      <>
+                        {" "}Your GPU: <b>{gpuGb} GB</b>.{" "}
+                        {fits
+                          ? "Both fit — the chat model stays loaded across renders (no reload)."
+                          : "Tight — the chat model is freed for each render (turn on Low-VRAM mode below to also shrink the image model)."}
+                      </>
+                    ) : (
+                      " GPU VRAM wasn't detected (non-NVIDIA?) — the chat model is freed for each render to be safe."
+                    )}
+                  </span>
+                </div>
+              );
+            })()}
             <label style={{ ...rowStyle, alignItems: "flex-start" }}>
               <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 <input
@@ -1790,6 +1823,7 @@ export function SettingsPanel({
                 cost. {isDesktop ? "Takes effect next time the engine starts." : "For your own ComfyUI, also launch it with --lowvram."}
               </span>
             </label>
+            </>
           )}
 
           {value.imageProvider === "local" && (
