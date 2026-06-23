@@ -763,31 +763,56 @@ export function SettingsPanel({
                 </span>
               </label>
               {(() => {
-                // VRAM FIT for a local-server chat model: a DENSE model whose weights + context
-                // (KV) cache don't ALL fit the GPU gets split onto the CPU by Ollama, and a dense
-                // model runs every weight per token — so token streaming crawls. Estimate the model
-                // from its name + a context-scaled KV allowance and warn when it won't fit. (An MoE
-                // model activates few params/token, so it stays fast even when offloaded.)
+                // VRAM FIT for a local-server chat model. A DENSE model whose WEIGHTS + context (KV)
+                // cache don't ALL fit the GPU gets split onto the CPU by Ollama, and a dense model
+                // runs every weight per token — so token streaming crawls. The weights usually fit on
+                // a modern card; the KV cache is the variable that blows the budget, and it scales
+                // with the context window Ollama LOADS — which new models often default to a very
+                // large value (e.g. 128k+). We can't read that window from here, so: when the reader
+                // has told us the window (localContextTokens) we give a confident verdict; otherwise
+                // we DON'T claim it fits — we flag the large-default-context trap, which is the usual
+                // cause of slow dense generation. (An MoE model activates few params/token, so it
+                // stays fast even when offloaded.)
                 const backend = value.localTextBackend ?? (isDesktop || remote ? "bundled" : "webgpu");
                 if (backend !== "server") return null;
                 const model = value.localServerTextModel ?? "";
                 const chatGb = serverModelVramCostGb(model);
                 const gpuGb = value.gpuVramMb ? Math.round((value.gpuVramMb / 1024) * 10) / 10 : undefined;
                 if (!chatGb || gpuGb === undefined) return null; // unknown size or non-NVIDIA → no guess
-                const ctx = value.localContextTokens && value.localContextTokens > 0 ? value.localContextTokens : 8192;
-                const kvGb = Math.max(1, Math.round((ctx / 8192) * 1.5)); // rough KV-cache allowance
-                const needed = chatGb + kvGb;
-                const tight = needed + 1 > gpuGb; // over, or within ~1 GB → KV will tip it over
+                // KV cache grows with BOTH the window and the model size; ~2 GB per 8k tokens for a
+                // ~30B model, scaled by the model's size. Rough, clearly approximate.
+                const kvPer8k = Math.max(1, Math.round((chatGb / 20) * 2));
+                const kvGb = (tokens: number) => Math.max(1, Math.round((tokens / 8192) * kvPer8k));
+                const known = !!(value.localContextTokens && value.localContextTokens > 0);
                 return (
                   <div style={{ ...rowStyle, fontSize: 11, opacity: 0.85 }}>
                     <span>🧮 Fits your GPU?</span>
-                    <span>
-                      <b>{model}</b> ≈ {chatGb} GB weights + ~{kvGb} GB for a {Math.round(ctx / 1024)}k context ≈{" "}
-                      <b>{needed} GB</b> vs your <b>{gpuGb} GB</b> GPU.
-                      {tight
-                        ? " ⚠ Likely larger than your GPU — Ollama runs part of it on the CPU, and a DENSE model streams tokens slowly when split. Use a smaller / more-quantized build (q4 over q8), lower the context window above, or an MoE model (e.g. Qwen3-30B-A3B) which stays fast even when offloaded."
-                        : " ✓ Should fit on the GPU."}
-                    </span>
+                    {known ? (
+                      (() => {
+                        const ctx = value.localContextTokens!;
+                        const kv = kvGb(ctx);
+                        const needed = chatGb + kv;
+                        const tight = needed + 1 > gpuGb;
+                        return (
+                          <span>
+                            <b>{model}</b> ≈ {chatGb} GB weights + ~{kv} GB for your {Math.round(ctx / 1024)}k context ≈{" "}
+                            <b>{needed} GB</b> vs your <b>{gpuGb} GB</b> GPU.
+                            {tight
+                              ? " ⚠ Over budget — Ollama runs part of it on the CPU, and a DENSE model streams tokens slowly when split. Lower the context window above (and OLLAMA_CONTEXT_LENGTH / a Modelfile num_ctx so Ollama actually loads it smaller), or use an MoE model (e.g. Qwen3-30B-A3B) which stays fast even when offloaded."
+                              : " ✓ Should fit on the GPU."}
+                          </span>
+                        );
+                      })()
+                    ) : (
+                      <span>
+                        <b>{model}</b> ≈ {chatGb} GB of weights — those fit your <b>{gpuGb} GB</b> GPU. But its
+                        context (KV) cache is added on top and scales with the window Ollama LOADS: ~{kvGb(8192)} GB at 8k,
+                        ~{kvGb(40960)} GB at 40k, ~{kvGb(131072)} GB at 128k. New models often DEFAULT to a huge window,
+                        which spills a dense model onto the CPU and makes token streaming slow. If it's slow, cap it: set the
+                        context window above, and set <code>OLLAMA_CONTEXT_LENGTH</code> (or a Modelfile <code>num_ctx</code>)
+                        so weights + cache stay under {gpuGb} GB. Check with <code>ollama ps</code> — it should read 100% GPU.
+                      </span>
+                    )}
                   </div>
                 );
               })()}
