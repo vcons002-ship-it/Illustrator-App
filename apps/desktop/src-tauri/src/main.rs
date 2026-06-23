@@ -792,8 +792,19 @@ async fn serve_http_asset(mut stream: tokio::net::TcpStream, app: &AppHandle) {
             ),
         },
     };
+    // Cache policy so a desktop rebuild reliably reaches the phone: NEVER cache the HTML shell (it
+    // must re-fetch each load to pick up new asset hashes), but let the content-hashed /assets/*
+    // files cache long (a new build = new hashes = new URLs, so this is safe and keeps loads fast
+    // over the tunnel).
+    let cache = if mime.starts_with("text/html") {
+        "no-cache, must-revalidate"
+    } else if key.starts_with("assets/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
     let header = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nCache-Control: {cache}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
         body.len()
     );
     let _ = stream.write_all(header.as_bytes()).await;
