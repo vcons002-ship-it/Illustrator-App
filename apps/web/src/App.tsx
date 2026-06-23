@@ -1612,6 +1612,9 @@ export function App() {
   const applyChatLiveRef = useRef<(l: ChatLive) => void>(() => {});
   const chatLiveSentAt = useRef(0);
   const chatLiveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // DESKTOP: open a PC file (that the phone tapped in a /find result) as a book — assigned below,
+  // since the importer/openBook are declared later; the early-registered relay handler reaches it here.
+  const openLocalFileRef = useRef<(path: string) => void>(() => {});
   // Phone-triggered software update: the DESKTOP runs it via this ref (assigned below, since
   // onSoftwareUpdate is declared later); the PHONE holds the in-flight request here so a relayed
   // vrsync:updateStatus can resolve it + reload.
@@ -3211,9 +3214,10 @@ export function App() {
   // note renders as a system line (like a delegated-subtask note), not as the assistant talking.
   buddyNoteRef.current = (text: string) => appendBuddy({ role: "tool", text });
 
-  // Open a local file the desktop `/find` surfaced: read its bytes via the Rust bridge, then run it
-  // through the SAME importer as an upload. On a linked PHONE there's no local filesystem — relay the
-  // path to the desktop, which reads + imports + opens it; the opened book mirrors back (vrsync:book).
+  // Open a local file the desktop `/find` surfaced: read its bytes via the Rust
+  // bridge, then run it through the SAME importer as an upload. On a linked PHONE there's no
+  // filesystem of its own — relay the path so the DESKTOP reads + imports + opens it (the opened
+  // book then mirrors back via vrsync:book, so it appears in the phone's reader + library).
   const onOpenLocalFile = useCallback(
     async (path: string) => {
       if (isRemoteClient) {
@@ -3227,12 +3231,41 @@ export function App() {
         setLocalError(`Couldn't open that file: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [onUpload, isRemoteClient, sendAppSync],
+    [isRemoteClient, sendAppSync, onUpload],
   );
-  // Desktop reads the latest opener so the early-registered relay handler can invoke it for a
-  // phone-relayed vrcmd:openLocalFile without a stale closure.
-  const openLocalFileRef = useRef(onOpenLocalFile);
-  openLocalFileRef.current = onOpenLocalFile;
+  // DESKTOP side: open a PC file a PHONE tapped (vrcmd:openLocalFile). Unlike the desktop's own click
+  // (which routes a doc through the paste-confirm modal — the phone can't see that), this creates the
+  // book DIRECTLY from the import (sensible defaults: the file's name as title, the detected mode),
+  // then openBook mirrors it to the phone. A buddy note carries the outcome so the phone sees feedback.
+  const openLocalFileDirect = useCallback(
+    async (path: string) => {
+      try {
+        const file = await readLocalFile(path);
+        const imported = await importBookFile(file);
+        if (imported.kind === "book") {
+          openBook(imported.book);
+        } else if (imported.kind === "image") {
+          // An image isn't a book; the desktop's photo (img2img) panel can't be driven from the phone.
+          buddyNoteRef.current(`🖼 “${file.name}” is an image — open it in the desktop's photo tools.`);
+        } else {
+          const created = bookFromText(imported.title, imported.text, imported.mode, "Imported file");
+          openBook({
+            ...created,
+            ...(imported.data ? { data: imported.data } : {}),
+            ...(imported.dataSheets ? { dataSheets: imported.dataSheets } : {}),
+            ...(imported.tree !== undefined ? { tree: imported.tree } : {}),
+          });
+          buddyNoteRef.current(`📖 Opened “${imported.title}” in the reader.`);
+        }
+      } catch (err) {
+        buddyNoteRef.current(`⚠ Couldn't open that file: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [openBook],
+  );
+  useEffect(() => {
+    openLocalFileRef.current = openLocalFileDirect;
+  }, [openLocalFileDirect]);
 
   // Run a local-file search and present the matches as clickable chips. `modelTurns`
   // (the conversational find_files path) bakes a model-facing feedback turn into the
