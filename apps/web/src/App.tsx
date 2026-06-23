@@ -1557,13 +1557,19 @@ export function App() {
 
   const onRemoveBook = useCallback(
     (id: string) => {
+      if (isRemoteClient) {
+        // The desktop OWNS the library; a phone-local delete is just re-clobbered by the next
+        // vrsync:library push. Relay it so the desktop deletes + re-pushes the trimmed library.
+        sendAppSync({ type: "vrcmd:libraryDelete", bookId: id });
+        return;
+      }
       void libraryStore
         .removeBook(id)
         .then(() => libraryStore.listBooks())
         .then(setLibrary)
         .catch(() => {});
     },
-    [libraryStore],
+    [libraryStore, isRemoteClient, sendAppSync],
   );
 
   // PHONE MIRROR: a linked phone shows exactly what THIS desktop shows — its library, the open
@@ -1734,6 +1740,15 @@ export function App() {
               })
               .catch(() => {});
             break;
+          case "vrcmd:libraryDelete":
+            // The phone deleted a library book; delete it HERE (we own the library) — our library
+            // change-effect then re-pushes vrsync:library WITHOUT the book, so it stays gone.
+            void libraryStore
+              .removeBook(msg.bookId)
+              .then(() => libraryStore.listBooks())
+              .then(setLibrary)
+              .catch(() => {});
+            break;
           case "vrcmd:home":
             setBook(undefined);
             closeBook();
@@ -1752,6 +1767,7 @@ export function App() {
           case "vrcmd:chatSwitch":
           case "vrcmd:chatNew":
           case "vrcmd:chatDelete":
+          case "vrcmd:chatDeleteMessage":
           case "vrcmd:chatRename":
           case "vrcmd:chatPersona":
           case "vrcmd:chatClear":
@@ -4700,6 +4716,11 @@ export function App() {
         case "vrcmd:chatDelete":
           onDeleteBuddySession(c.id);
           break;
+        case "vrcmd:chatDeleteMessage":
+          // Delete the message HERE (we own the chat store); the persistence effect writes it and the
+          // chat mirror re-pushes — so a phone-side delete sticks instead of being clobbered back in.
+          setBuddyMessages((prev) => prev.filter((_, i) => i !== c.index));
+          break;
         case "vrcmd:chatRename":
           onRenameBuddySession(c.id, c.label);
           break;
@@ -4736,9 +4757,18 @@ export function App() {
   }, [runChatCommand]);
 
   // Stable per-index delete handlers (memoised bubbles take the SAME function).
-  const onDeleteBuddyMessage = useCallback((index: number) => {
-    setBuddyMessages((prev) => prev.filter((_, i) => i !== index));
-  }, []);
+  const onDeleteBuddyMessage = useCallback(
+    (index: number) => {
+      if (isRemoteClient) {
+        // The desktop owns the chat store; relay the delete so it sticks (a phone-local delete is
+        // re-clobbered by the next vrsync:chat mirror push).
+        sendAppSync({ type: "vrcmd:chatDeleteMessage", index });
+        return;
+      }
+      setBuddyMessages((prev) => prev.filter((_, i) => i !== index));
+    },
+    [isRemoteClient, sendAppSync],
+  );
   const onDeleteChatMessage = useCallback((index: number) => {
     setChatMessages((prev) => prev.filter((_, i) => i !== index));
   }, []);

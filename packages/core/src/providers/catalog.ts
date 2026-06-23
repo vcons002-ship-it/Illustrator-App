@@ -406,6 +406,49 @@ export function imageModelVramCostGb(name: string): number {
   return catalogEntryForModel(name)?.sizeGB ?? 0;
 }
 
+/**
+ * Rough resident VRAM cost (GB) of a LOCAL SERVER chat model (Ollama / LM Studio), estimated from
+ * its name — Ollama tags embed the parameter count and usually the quantization (e.g. "gemma2:27b",
+ * "qwen3:32b-q4_K_M", "llama3.1:70b-instruct-q8_0", "mixtral:8x7b"). There's no portable API to read
+ * the loaded size, so this lets the engine decide whether a big chat model AND the image model both
+ * fit at once — and so SKIP evicting the chat model for a render (which on a large model costs a
+ * multi-minute cold reload on the next message).
+ *
+ * Conservative (rounds UP, generous KV allowance) so we only keep both resident when there's clearly
+ * headroom — an under-estimate could OOM. Returns 0 when no parameter count is parseable, so callers
+ * fall back to their existing "free it" behaviour (no regression for unknown names).
+ */
+export function serverModelVramCostGb(name: string): number {
+  const lower = name.toLowerCase();
+  // Parameter count in billions: an MoE "8x7b" (all experts are resident) takes precedence over the
+  // plain "27b" / "3.8b" form so we don't read just the "7b" out of "8x7b".
+  const moe = lower.match(/(\d+)\s*x\s*(\d+(?:\.\d+)?)\s*b/);
+  let params: number | undefined;
+  if (moe) {
+    params = Number(moe[1]) * Number(moe[2]);
+  } else {
+    const m = lower.match(/(\d+(?:\.\d+)?)\s*b(?![a-z0-9])/); // "27b", "3.8b" — not "bf16"/"base"
+    if (m) params = Number(m[1]);
+  }
+  if (!params || !Number.isFinite(params) || params <= 0) return 0;
+  // Bytes per weight by quantization; Ollama defaults to a ~q4 mix when the tag omits one.
+  const bytesPerParam = /f(p)?16|bf16/.test(lower)
+    ? 2.0
+    : /q8|int8|8bit/.test(lower)
+      ? 1.1
+      : /q6/.test(lower)
+        ? 0.85
+        : /q5/.test(lower)
+          ? 0.72
+          : /q3/.test(lower)
+            ? 0.5
+            : /q2/.test(lower)
+              ? 0.42
+              : 0.6; // q4 — the common default
+  // Weights + a fixed allowance for the KV cache / runtime activations.
+  return Math.ceil(params * bytesPerParam + 1.5);
+}
+
 /** Squashed lowercase alphanumerics ("Flux 2 Klein.safetensors" → "flux2klein"). */
 function normalizeModelName(s: string): string {
   return s
