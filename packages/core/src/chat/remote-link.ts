@@ -41,14 +41,17 @@ export function buildLinkUrl(p: LinkParams): string {
 
 /**
  * Build the INTERNET link for a tunnelled host (e.g. a Cloudflare named tunnel `vr.example.app`):
- * always `https://<host>/#vrlink=<token>`. Accepts a host with or without a scheme/trailing slash
- * and normalizes it; returns undefined for a blank host. The phone loads this over HTTPS (so the
- * relay socket becomes `wss://` via `remoteModeFromHash`), gated by Cloudflare Access in front.
+ * `https://<host>/?vrlink=<token>`. Accepts a host with or without a scheme/trailing slash and
+ * normalizes it; returns undefined for a blank host. The token rides in the QUERY (not the `#hash`)
+ * because a Cloudflare Access login redirect preserves the query but routinely DROPS a fragment —
+ * so the query is the reliable way to first-capture the token behind Access. The client stores it
+ * and scrubs it from the address bar on load (see the host app), and a `wss://` socket is used over
+ * HTTPS. After first capture, the plain `https://<host>/` link works (the token is remembered).
  */
 export function buildRemoteLinkUrl(host: string, token: string): string | undefined {
   const clean = host.trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
   if (!clean || !token) return undefined;
-  return `https://${clean}/#vrlink=${encodeURIComponent(token)}`;
+  return `https://${clean}/?vrlink=${encodeURIComponent(token)}`;
 }
 
 /** Pull the pairing token out of a link URL or hash (the phone reads this on load). */
