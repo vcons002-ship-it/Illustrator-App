@@ -613,7 +613,7 @@ export function SettingsPanel({
                   set({ localTextBackend: e.target.value as "webgpu" | "server" | "bundled" })
                 }
               >
-                {isDesktop && (
+                {(isDesktop || remote) && (
                   <option value="bundled">Built-in model (shipped with the app, no setup)</option>
                 )}
                 <option value="webgpu">On-device (WebGPU, no install)</option>

@@ -1,6 +1,7 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Automatic1111Backend,
+  BUNDLED_LLM,
   ComfyUIBackend,
   DEFAULT_LOCAL_TEXT_SERVER,
   IndexedDbStore,
@@ -1021,6 +1022,10 @@ export function App() {
         const { baseUrl, model } = await ensureLocalLlm();
         if (cancelled) return;
         setEngineStatus("");
+        // List the running model so the picker isn't empty — and so a LINKED PHONE sees it via the
+        // inventory mirror (the phone has no local server to query). The bundled server reports this
+        // one model id; without this, textModels stayed [] and the phone showed "connect locally".
+        setTextModels([{ id: model, label: BUNDLED_LLM.label }]);
         setSettings((s) => ({ ...s, localServerTextUrl: baseUrl, localServerTextModel: model }));
       } catch (err) {
         if (!cancelled) {
@@ -1033,6 +1038,27 @@ export function App() {
       cancelled = true;
     };
   }, [settings.textProvider, settings.localTextBackend, settings.localServerTextUrl]);
+
+  // Desktop: when the text provider is a LOCAL SERVER (Ollama / LM Studio / llama.cpp) with a saved
+  // URL, list its models on load so the picker is populated without a manual reconnect — and so a
+  // linked phone (which can't reach the desktop's localhost server) sees the list via the inventory
+  // mirror. Best-effort; a wedged/offline server just leaves the list as-is.
+  useEffect(() => {
+    if (!isDesktop || settings.textProvider !== "local" || settings.localTextBackend !== "server") return;
+    const url =
+      settings.localServerTextUrl?.trim() ||
+      LOCAL_TEXT_SERVER_DEFAULT_URL[settings.localTextServer ?? DEFAULT_LOCAL_TEXT_SERVER];
+    if (!url) return;
+    let cancelled = false;
+    void LocalServerLLMProvider.listModels(url)
+      .then((models) => {
+        if (!cancelled && models.length) setTextModels(models);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.textProvider, settings.localTextBackend, settings.localServerTextUrl, settings.localTextServer]);
 
   // Start (or reuse) the app-managed ComfyUI and load its inventory; point the ACTIVE engine at it
   // (always ComfyUI). Returns `true` on success, or a reason string (`"unavailable"` off the desktop)
