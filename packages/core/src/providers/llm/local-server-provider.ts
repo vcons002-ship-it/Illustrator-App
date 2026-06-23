@@ -48,6 +48,14 @@ export interface LocalServerProviderOptions {
   transport?: Transport;
   /** Raw fetch for STREAMING chat (Transport buffers); defaults to global fetch. */
   fetchImpl?: typeof fetch;
+  /**
+   * Context window (tokens) to LOAD an OLLAMA model with. When set, chat/complete go
+   * through Ollama's NATIVE `/api/chat` (which honours `options.num_ctx`) instead of the
+   * OpenAI `/v1` endpoint (which can't set it) — so the KV cache is sized to this window
+   * and a big model stays on the GPU instead of spilling to the CPU. Ollama-only (the
+   * native endpoint); leave undefined for LM Studio / llama.cpp / the default path.
+   */
+  numCtx?: number;
 }
 
 interface ChatResponse {
@@ -56,6 +64,13 @@ interface ChatResponse {
 
 interface ModelsResponse {
   data?: { id: string }[];
+}
+
+/** One NDJSON line from Ollama's native `/api/chat`. */
+interface OllamaChatLine {
+  message?: { role?: string; content?: string; thinking?: string };
+  done?: boolean;
+  done_reason?: string;
 }
 
 /** Subset of Ollama `/api/show` we use: `model_info` carries the ARCHITECTURAL
@@ -88,6 +103,7 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
   private readonly baseUrl: string;
   private readonly model: string;
   private readonly apiKey: string | undefined;
+  private readonly numCtx: number | undefined;
 
   private readonly fetchImpl: typeof fetch;
 
@@ -96,6 +112,7 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
     this.baseUrl = opts.baseUrl.replace(/\/$/, "");
     this.model = opts.model;
     this.apiKey = opts.apiKey;
+    this.numCtx = opts.numCtx && opts.numCtx > 0 ? opts.numCtx : undefined;
     this.fetchImpl = opts.fetchImpl ?? ((input, init) => fetch(input, init));
   }
 
@@ -163,6 +180,9 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
    * preambles are stripped in both paths — streamed tokens are gated until the
    * `<think>` block closes so reasoning never flashes in the panel. */
   async chat(messages: ChatTurn[], opts: ChatOptions = {}): Promise<string> {
+    // num_ctx set ⇒ talk to Ollama natively so the model LOADS at this window (the OpenAI
+    // `/v1` endpoint can't set num_ctx). Streams NDJSON instead of SSE.
+    if (this.numCtx !== undefined) return this.chatViaOllama(messages, opts);
     if (opts.onToken) {
       let emittedAny = false;
       // One streaming attempt at a given reasoning effort. Returns the full reply + whether the
@@ -278,6 +298,9 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
     messages: { role: "system" | "user" | "assistant"; content: string }[],
     opts: { json: boolean; signal?: AbortSignal; maxTokens?: number; noThink?: boolean },
   ): Promise<string> {
+    // num_ctx set ⇒ Ollama native, so extraction/prompt calls LOAD at the same window as chat
+    // (no reload thrash between opening a book and chatting).
+    if (this.numCtx !== undefined) return this.completeViaOllama(messages, opts);
     const json = opts.json;
     const send = (noThink: boolean) =>
       this.transport.send({
@@ -346,6 +369,110 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
       );
     }
     return choice?.message?.content ?? "";
+  }
+
+  /** Ollama native `options` block, including the num_ctx that LOADS the model at our window. */
+  private ollamaOptions(maxTokens: number | undefined, temperature: number): Record<string, unknown> {
+    return {
+      num_ctx: this.numCtx,
+      temperature,
+      ...(maxTokens ? { num_predict: maxTokens } : {}),
+    };
+  }
+
+  /** Map our reasoning-effort hint to Ollama's native `think` flag (thinking models only). */
+  private ollamaThink(effort: ChatOptions["reasoningEffort"]): boolean | undefined {
+    if (effort === "none") return false;
+    if (effort) return true;
+    return undefined; // unset → the model's default
+  }
+
+  /**
+   * Chat over Ollama's NATIVE `/api/chat` (used when `numCtx` is set). The native endpoint —
+   * unlike the OpenAI `/v1` one — honours `options.num_ctx`, so the model loads at our window
+   * and a big model's KV cache stays on the GPU. Streams NDJSON (one JSON object per line);
+   * thinking-model preambles are stripped just like the SSE path.
+   */
+  private async chatViaOllama(messages: ChatTurn[], opts: ChatOptions): Promise<string> {
+    if (!opts.onToken) {
+      // No streaming sink — reuse the buffered native path and return the text.
+      return this.completeViaOllama(messages as { role: "system" | "user" | "assistant"; content: string }[], {
+        json: false,
+        ...(opts.signal ? { signal: opts.signal } : {}),
+        ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
+        noThink: opts.reasoningEffort === "none",
+      });
+    }
+    let full = "";
+    let emitted = 0;
+    let truncated = false;
+    const think = this.ollamaThink(opts.reasoningEffort);
+    await streamOllamaLines(
+      this.fetchImpl,
+      `${ollamaRoot(this.baseUrl)}/api/chat`,
+      {
+        model: this.model,
+        messages,
+        stream: true,
+        keep_alive: "30m",
+        options: this.ollamaOptions(opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS, 0.7),
+        ...(think !== undefined ? { think } : {}),
+      },
+      this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
+      (line) => {
+        const l = line as OllamaChatLine;
+        if (l.done_reason === "length") truncated = true;
+        // Separated reasoning (think:true) streams in `message.thinking`; older builds inline a
+        // `<think>` block in `content`, handled by the stripThink gate below.
+        if (l.message?.thinking) opts.onThinking?.(l.message.thinking);
+        const delta = l.message?.content;
+        if (!delta) return;
+        full += delta;
+        const stripped = stripThink(full);
+        const visible = stripped.trimStart().startsWith("<think>") ? "" : stripped;
+        if (visible.length > emitted) {
+          opts.onToken!(visible.slice(emitted));
+          emitted = visible.length;
+        } else if (visible.length === 0) {
+          opts.onThinking?.(reasoningSoFar(full));
+        }
+      },
+      opts.signal,
+    );
+    opts.onComplete?.({ truncated });
+    return stripThink(full).trim();
+  }
+
+  /** Buffered native `/api/chat` (stream:false) — the num_ctx-aware twin of `complete()`. */
+  private async completeViaOllama(
+    messages: { role: "system" | "user" | "assistant"; content: string }[],
+    opts: { json: boolean; signal?: AbortSignal; maxTokens?: number; noThink?: boolean },
+  ): Promise<string> {
+    const res = await this.transport.send({
+      url: `${ollamaRoot(this.baseUrl)}/api/chat`,
+      method: "POST",
+      headers: this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      body: {
+        model: this.model,
+        messages,
+        stream: false,
+        keep_alive: "30m",
+        options: this.ollamaOptions(opts.maxTokens ?? (opts.json ? 12288 : 512), opts.json ? 0 : 0.7),
+        ...(opts.noThink ? { think: false } : {}),
+        ...(opts.json ? { format: "json" } : {}),
+      },
+    });
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).trim();
+      const reason = parseServerError(detail);
+      throw new Error(`Ollama /api/chat failed with status ${res.status}${reason ? `: ${reason}` : ""}`);
+    }
+    const data = await res.json<OllamaChatLine>();
+    if (opts.json && data.done_reason === "length") {
+      throw new Error("Local LLM extraction was truncated at the response limit — the chapter will be retried.");
+    }
+    return data.message?.content ?? "";
   }
 
   /**
@@ -495,6 +622,56 @@ export interface OllamaPullProgress {
 /** Ollama's API root from a configured base URL (strips the OpenAI-compat `/v1`). */
 function ollamaRoot(baseUrl: string): string {
   return baseUrl.replace(/\/$/, "").replace(/\/v1$/, "");
+}
+
+/**
+ * POST `body` to an Ollama native endpoint and parse its NDJSON stream (one JSON object per
+ * line), invoking `onLine` per object — the streaming twin of `streamSse` for `/api/chat`.
+ * Mirrors the buffered line-split in `pullModel`; degrades to a single buffered parse on a host
+ * without body streaming (the extension's proxy). Throws the server's body text on a bad status.
+ */
+async function streamOllamaLines(
+  fetchImpl: typeof fetch,
+  url: string,
+  body: unknown,
+  headers: Record<string, string>,
+  onLine: (obj: unknown) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetchImpl(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
+  });
+  if (!res.ok) {
+    const detail = (await res.text().catch(() => "")).trim().slice(0, 300);
+    throw new Error(`Ollama /api/chat failed with status ${res.status}${detail ? `: ${detail}` : ""}`);
+  }
+  const emit = (line: string): void => {
+    if (!line.trim()) return;
+    try {
+      onLine(JSON.parse(line));
+    } catch {
+      /* tolerate partial/malformed frames */
+    }
+  };
+  if (!res.body) {
+    (await res.text()).split("\n").forEach(emit);
+    return;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    lines.forEach(emit);
+  }
+  emit(buffer);
 }
 
 /** Pull a human reason out of a server error body: `{"error":{"message":…}}`,

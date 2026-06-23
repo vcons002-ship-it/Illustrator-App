@@ -39,6 +39,9 @@ export interface LLMProviderOptions {
   baseUrl?: string;
   /** Model id for the local LLM server. */
   model?: string;
+  /** Ollama only: context window to LOAD the model with (sent as `options.num_ctx` via the native
+   * `/api/chat`). Sizes the KV cache so a big model fits the GPU; undefined = the default `/v1` path. */
+  numCtx?: number;
   /** Gemini only: ground technical analysis in Google Search (same Gemini key). */
   ground?: boolean;
   /** Relax adjustable provider safety filters for adult source material (Gemini). */
@@ -97,6 +100,7 @@ export function createLLMProvider(id: string, opts: LLMProviderOptions = {}): LL
         ...(opts.key ? { apiKey: opts.key } : {}),
         ...(transport ? { transport } : {}),
         ...(opts.fetch ? { fetchImpl: opts.fetch } : {}),
+        ...(opts.numCtx ? { numCtx: opts.numCtx } : {}),
       });
     }
     case "mock":
