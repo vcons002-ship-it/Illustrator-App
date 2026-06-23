@@ -86,6 +86,23 @@ export interface VisualReaderStore {
   getMemo?(key: string): Promise<string | undefined>;
   putMemo?(key: string, text: string): Promise<void>;
   deleteMemo?(key: string): Promise<void>;
+
+  /** Dump every persisted data store (library, bibles, chats, memories/tasks/skills) to a
+   * JSON-safe object for a backup; rendered images are skipped (re-derivable). Optional. */
+  exportData?(): Promise<StoreBackup>;
+  /** Restore a backup produced by {@link exportData}, MERGING it into this store. Optional. */
+  importData?(backup: StoreBackup): Promise<void>;
+}
+
+/** A portable backup of the persisted data stores (ArrayBuffers are base64-tagged so it's JSON-safe).
+ * Moves a reader's library/chats/tasks/memories/skills between environments (e.g. dev → packaged). */
+export interface StoreBackup {
+  app: "visual-reader";
+  /** The IndexedDB schema version it was taken at. */
+  version: number;
+  at: number;
+  /** Per object-store: the [key, value] pairs (values may hold `{ __ab }` base64 ArrayBuffer tags). */
+  stores: Record<string, { key: string; value: unknown }[]>;
 }
 
 /** In-memory store — used by tests and as a fallback when no persistence exists. */
