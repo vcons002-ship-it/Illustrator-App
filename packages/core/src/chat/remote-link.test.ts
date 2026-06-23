@@ -56,11 +56,14 @@ describe("thin-client helpers", () => {
     expect(remoteModeFromHash("#vrlink=tok", "192.168.1.20:8787", "http:")).toEqual({ wsUrl: "ws://192.168.1.20:8787/", token: "tok" });
   });
 
-  it("buildRemoteLinkUrl makes an https tunnel link, normalizing the host", () => {
-    expect(buildRemoteLinkUrl("vr.nic024i.app", "Tok 1")).toBe("https://vr.nic024i.app/#vrlink=Tok%201");
-    expect(buildRemoteLinkUrl("https://vr.nic024i.app/", "t")).toBe("https://vr.nic024i.app/#vrlink=t"); // scheme + trailing slash stripped
+  it("buildRemoteLinkUrl makes an https tunnel link with the token in the QUERY (survives Access), normalizing the host", () => {
+    // Query, not #hash — a Cloudflare Access login preserves the query but drops a fragment.
+    expect(buildRemoteLinkUrl("vr.nic024i.app", "Tok 1")).toBe("https://vr.nic024i.app/?vrlink=Tok%201");
+    expect(buildRemoteLinkUrl("https://vr.nic024i.app/", "t")).toBe("https://vr.nic024i.app/?vrlink=t"); // scheme + trailing slash stripped
     expect(buildRemoteLinkUrl("  ", "t")).toBeUndefined();
     expect(buildRemoteLinkUrl("host", "")).toBeUndefined();
+    // parseLinkToken accepts the query form too (the client reads it on load).
+    expect(parseLinkToken("?vrlink=abc")).toBe("abc");
   });
 
   it("flags local-only (CORS) messages so they never cross the relay", () => {

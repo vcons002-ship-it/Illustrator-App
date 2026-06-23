@@ -7,7 +7,7 @@ import {
   encodeFrame,
   isAppSyncMessage,
   isLocalOnlyMessage,
-  remoteModeFromHash,
+  parseLinkToken,
   serializeForRemote,
   type RemoteMode,
 } from "@visual-reader/core";
@@ -68,28 +68,39 @@ import {
 import { pdfToText } from "./import-file.js";
 
 /**
- * Resolve PHONE-CLIENT mode for this tab. A `#vrlink=<token>` in the URL means "drive a remote
- * desktop over the relay." The token from the hash wins and is PERSISTED per-host in localStorage, so
- * a link saved to the phone's home screen keeps working even if a Cloudflare Access login later drops
- * the `#fragment` on a redirect (fragments aren't carried to the server). With no hash token, the
- * saved one for this host is reused. `remoteModeFromHash` derives ws:// (LAN/http) vs wss:// (tunnel/
- * https) from the page protocol. Undefined on a normal desktop/web load (no token anywhere).
+ * Resolve PHONE-CLIENT mode for this tab. A `vrlink=<token>` in the URL means "drive a remote desktop
+ * over the relay." The token can arrive in the QUERY (`?vrlink=`, the internet/tunnel link) or the
+ * HASH (`#vrlink=`, the LAN link); the query is used over a tunnel because a Cloudflare Access login
+ * redirect drops a `#fragment` but preserves the query. The token is PERSISTED per-host in
+ * localStorage, so a saved BARE link (`https://host/`, no token) keeps working afterward; with no
+ * token in the URL, the saved one for this host is reused. A query token is scrubbed from the address
+ * bar so it isn't left in history / re-shared. ws:// (LAN/http) vs wss:// (tunnel/https) is derived
+ * from the page protocol. Undefined on a normal desktop/web load (no token anywhere).
  */
 function initRemoteMode(): RemoteMode | undefined {
   if (typeof window === "undefined") return undefined;
-  const { hash, host, protocol } = window.location;
-  let mode = remoteModeFromHash(hash, host, protocol);
+  const { hash, search, host, protocol, pathname } = window.location;
   const key = `vr-link-token:${host}`;
+  // Hash first (LAN), then query (tunnel/Access). One of them, or the remembered one for this host.
+  let token = parseLinkToken(hash) ?? parseLinkToken(search) ?? undefined;
+  const fromQuery = !parseLinkToken(hash) && !!parseLinkToken(search);
   try {
-    if (mode) localStorage.setItem(key, mode.token);
-    else {
-      const saved = localStorage.getItem(key);
-      if (saved) mode = remoteModeFromHash(`#vrlink=${encodeURIComponent(saved)}`, host, protocol);
-    }
+    if (token) localStorage.setItem(key, token);
+    else token = localStorage.getItem(key) ?? undefined;
   } catch {
-    /* storage blocked (private mode) — fall back to whatever the hash gave us */
+    /* storage blocked (private mode) — fall back to whatever the URL gave us */
   }
-  return mode;
+  if (!token || !host) return undefined;
+  // Drop the ?vrlink= token from the visible URL once captured (keep the path + any hash).
+  if (fromQuery) {
+    try {
+      window.history.replaceState(null, "", (pathname || "/") + (hash || ""));
+    } catch {
+      /* history not available — harmless */
+    }
+  }
+  const scheme = protocol === "https:" ? "wss" : "ws";
+  return { wsUrl: `${scheme}://${host}/`, token };
 }
 
 /** Best-effort image mime from a filename extension (for the buddy's open_image bubble). */
