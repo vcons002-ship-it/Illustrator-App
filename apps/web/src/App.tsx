@@ -1622,7 +1622,7 @@ export function App() {
   // Desktop-runtime host tools (find_files/run_command/write_file/screenshot) the PHONE relays here:
   // the desktop runs them via runHostToolForRemoteRef and replies vrsync:hostToolResult, resolved
   // through this per-requestId map.
-  const runHostToolForRemoteRef = useRef<(call: BuddyToolCall) => Promise<BuddyToolResultPayload>>(async () => ({}));
+  const runHostToolForRemoteRef = useRef<(call: BuddyToolCall, cwd?: string) => Promise<BuddyToolResultPayload>>(async () => ({}));
   const hostToolPending = useRef(new Map<number, (p: BuddyToolResultPayload) => void>());
   const hostToolReqId = useRef(0);
   const buildSnapshot = useCallback(
@@ -1771,7 +1771,7 @@ export function App() {
           case "vrcmd:hostTool":
             // The phone's buddy hit a desktop-runtime tool (files/command/screenshot); run it HERE
             // (we have the runtime + the working folder) and relay the result back.
-            void runHostToolForRemoteRef.current(msg.call).then((payload) =>
+            void runHostToolForRemoteRef.current(msg.call, msg.cwd).then((payload) =>
               sendAppSync({ type: "vrsync:hostToolResult", requestId: msg.requestId, payload }),
             );
             break;
@@ -3576,8 +3576,10 @@ export function App() {
   // desktop's own handlers use, and return just the result payload (the phone shows it + continues
   // its buddy turn). Reuses searchLocalFiles/runCommand/writeWorkspaceFile/captureScreen+assessImage.
   const runHostToolForRemote = useCallback(
-    async (call: BuddyToolCall): Promise<BuddyToolResultPayload> => {
-      const dir = buddyWorkingDir || undefined;
+    async (call: BuddyToolCall, cwdOverride?: string): Promise<BuddyToolResultPayload> => {
+      // A linked phone relays its OWN chosen working folder (cwdOverride) so commands/files run where
+      // the phone pointed them; the desktop's own session folder is the fallback.
+      const dir = cwdOverride || buddyWorkingDir || undefined;
       try {
         if (call.tool === "find_files") {
           const ranked = rankLocalFiles(call.query, await searchLocalFiles(call.query, dir), 15);
@@ -3616,14 +3618,14 @@ export function App() {
       new Promise<BuddyToolResultPayload>((resolve) => {
         const requestId = ++hostToolReqId.current;
         hostToolPending.current.set(requestId, resolve);
-        sendAppSync({ type: "vrcmd:hostTool", requestId, call });
+        sendAppSync({ type: "vrcmd:hostTool", requestId, call, ...(buddyWorkingDir ? { cwd: buddyWorkingDir } : {}) });
         setTimeout(() => {
           if (hostToolPending.current.delete(requestId)) {
             resolve({ error: "The desktop didn't respond — check the phone link." });
           }
         }, 600_000);
       }),
-    [sendAppSync],
+    [sendAppSync, buddyWorkingDir],
   );
 
   // Run a host tool wherever the runtime is: directly on the desktop, or relayed to it from a phone.
@@ -5617,8 +5619,14 @@ export function App() {
             {...(isDesktop && (settings.localTextBackend === "bundled" || settings.localTextBackend === "server")
               ? { onLoadModel: warmLlm }
               : {})}
-            {...(isDesktop && settings.allowCommands
-              ? { workingDir: buddyWorkingDir, onSetWorkingDir: setWorkingDir, onPickFolder: pickFolder }
+            {...((isDesktop || isRemoteClient) && settings.allowCommands
+              ? {
+                  workingDir: buddyWorkingDir,
+                  onSetWorkingDir: setWorkingDir,
+                  // The native folder-picker dialog is desktop-only; the phone types the path (it's
+                  // relayed with each command/file tool so they run in that folder on the desktop).
+                  ...(isDesktop ? { onPickFolder: pickFolder } : {}),
+                }
               : {})}
             onOpenLocalFile={onOpenLocalFile}
             onSaveFile={onSaveChatFile}
