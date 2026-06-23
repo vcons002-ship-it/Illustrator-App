@@ -30,6 +30,7 @@ import {
   catalogEntryForModel,
   catalogModelFamily,
   ollamaModelMatches,
+  serverModelVramCostGb,
   styleLoraDownload,
 } from "./catalog.js";
 import type { LocalEngineBackend } from "./image/local-engine/backend.js";
@@ -84,6 +85,23 @@ describe("catalog", () => {
     expect(IMAGE_PROVIDERS.find((p) => p.id === "claude")).toBeUndefined();
     expect(TEXT_PROVIDERS.find((p) => p.id === "claude")).toBeDefined();
     expect(IMAGE_PROVIDERS.find((p) => p.id === "local")?.local).toBe(true);
+  });
+
+  it("estimates a server chat model's VRAM from its Ollama-style name", () => {
+    // Parameter count + quantization parsed from the tag; rounds up. Used to decide whether a big
+    // chat model + the image model both fit, so the engine can skip evicting it for a render.
+    expect(serverModelVramCostGb("gemma2:27b")).toBe(18); // 27 * 0.6 (q4 default) + 1.5 → ceil
+    expect(serverModelVramCostGb("qwen3:32b-q8_0")).toBe(37); // 32 * 1.1 + 1.5
+    expect(serverModelVramCostGb("llama3.1:70b")).toBe(44); // 70 * 0.6 + 1.5
+    expect(serverModelVramCostGb("mistral:7b-instruct-q4_K_M")).toBe(6); // 7 * 0.6 + 1.5
+    expect(serverModelVramCostGb("phi3:3.8b")).toBe(4); // 3.8 * 0.6 + 1.5 → ceil
+    // MoE: ALL experts are resident, so "8x7b" ≈ 56B, not 7B.
+    expect(serverModelVramCostGb("mixtral:8x7b")).toBe(36); // 56 * 0.6 + 1.5 → ceil
+    // fp16 is heavier per weight than the q4 default.
+    expect(serverModelVramCostGb("gemma2:27b-fp16")).toBeGreaterThan(serverModelVramCostGb("gemma2:27b"));
+    // No parseable size → 0 so the caller keeps its existing "free it" behaviour.
+    expect(serverModelVramCostGb("gemma2:latest")).toBe(0);
+    expect(serverModelVramCostGb("")).toBe(0);
   });
 });
 

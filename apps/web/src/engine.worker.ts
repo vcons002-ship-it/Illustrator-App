@@ -18,6 +18,7 @@ import {
   LocalServerLLMProvider,
   analyzeData,
   imageModelVramCostGb,
+  serverModelVramCostGb,
   createDataTable,
   recalcTable,
   tableToText,
@@ -480,16 +481,21 @@ function canFreeChatLlm(): boolean {
   // Only free for engines whose VRAM the app actually coordinates (bundled server / managed ComfyUI).
   // Use the RESOLVED active backend: a fallback from A1111 to the managed ComfyUI does release VRAM.
   if ((settings.engineBackend ?? settings.localBackend) === "a1111") return false;
-  // VRAM HEADROOM: only free when memory is actually tight. If the GPU can hold the chat LLM AND the
-  // image model at once, keep BOTH resident — freeing+relaunching the bundled llama-server is the
-  // unreliable part, so skipping it avoids the reload thrash. Free when low-VRAM is forced, when they
-  // can't both fit, or when VRAM is unknown (the safe default). Only the BUNDLED LLM's size is known
-  // (Ollama "server" sizes vary → keep freeing it via its lazy keep_alive eviction).
-  if (!settings.lowVram && settings.localTextBackend === "bundled" && settings.gpuVramMb && settings.gpuVramMb > 0) {
+  // VRAM HEADROOM: only free when memory is actually tight. If the GPU can hold the chat model AND
+  // the image model at once, keep BOTH resident — evicting the chat model and reloading it is the
+  // expensive part (a big Ollama model is a multi-minute cold reload on the next message), so skip it
+  // when there's clearly room. Free when low-VRAM is forced, when they can't both fit, or when a size
+  // is unknown (the safe default). The bundled LLM's size is fixed; a "server" model's is estimated
+  // from its name (params + quant) — 0/unknown falls through to freeing, so nothing regresses.
+  if (!settings.lowVram && settings.gpuVramMb && settings.gpuVramMb > 0) {
     const imageGb = imageModelVramCostGb(settings.localModel ?? "");
+    const chatGb =
+      settings.localTextBackend === "bundled"
+        ? BUNDLED_LLM_VRAM_GB
+        : serverModelVramCostGb(cs.localServerTextModel ?? settings.localServerTextModel ?? "");
     const HEADROOM_GB = 2; // activations/latents/runtime overhead beyond the weights
-    if (imageGb > 0 && (imageGb + BUNDLED_LLM_VRAM_GB + HEADROOM_GB) * 1024 <= settings.gpuVramMb) {
-      return false; // both fit — leave the chat model loaded
+    if (imageGb > 0 && chatGb > 0 && (imageGb + chatGb + HEADROOM_GB) * 1024 <= settings.gpuVramMb) {
+      return false; // both fit — leave the chat model loaded (no evict/cold-reload thrash)
     }
   }
   try {

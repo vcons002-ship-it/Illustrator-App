@@ -164,6 +164,7 @@ export type SyncToPhone =
 export type CmdToDesktop =
   | { type: "vrcmd:hello" } // "I just connected — send me a full snapshot."
   | { type: "vrcmd:open"; bookId: string } // open this library book on the desktop
+  | { type: "vrcmd:libraryDelete"; bookId: string } // phone deleted a library book → delete it on the desktop (it owns the library; a local-only delete is re-clobbered by vrsync:library)
   | { type: "vrcmd:home" } // leave the open book (back to the desktop's home screen)
   | { type: "vrcmd:settings"; settings: ReaderSettings } // phone edited settings → apply on the desktop (it renders)
   | { type: "vrcmd:planner"; command: PlannerCommand } // phone Tasks/Calendar action → run on the desktop
@@ -174,6 +175,7 @@ export type CmdToDesktop =
   | { type: "vrcmd:chatSwitch"; id: string } // make this session active on the desktop
   | { type: "vrcmd:chatNew" } // start a fresh chat session on the desktop
   | { type: "vrcmd:chatDelete"; id: string } // delete a session on the desktop
+  | { type: "vrcmd:chatDeleteMessage"; index: number } // delete one message from the active session on the desktop (it persists + re-mirrors)
   | { type: "vrcmd:chatRename"; id: string; label: string } // rename a session (empty ⇒ reset label)
   | { type: "vrcmd:chatPersona"; persona: BuddyPersona } // change the active session's persona
   | { type: "vrcmd:chatClear" } // clear the active session's history on the desktop
