@@ -664,8 +664,10 @@ async fn run_remote_server(
             _ = stop.notified() => return Ok(()),
             accepted = listener.accept() => accepted.map_err(|e| e.to_string())?,
         };
-        // Peek (non-consuming) to tell a WebSocket upgrade from a plain HTTP request.
-        let mut head = [0u8; 1024];
+        // Peek (non-consuming) to tell a WebSocket upgrade from a plain HTTP request. Use a large
+        // buffer: through Cloudflare (Access) the request carries big headers + the CF_Authorization
+        // JWT cookie, which can push the `Upgrade: websocket` header well past the first KB.
+        let mut head = [0u8; 8192];
         let n = match stream.peek(&mut head).await {
             Ok(n) => n,
             Err(_) => continue,
@@ -729,13 +731,30 @@ async fn run_remote_server(
 /// (never sent here) — so serving a file leaks nothing; the WS handshake still gates control.
 async fn serve_http_asset(mut stream: tokio::net::TcpStream, app: &AppHandle) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    // Read the request head (enough for the request line + headers).
-    let mut buf = vec![0u8; 2048];
-    let n = match stream.read(&mut buf).await {
-        Ok(0) | Err(_) => return,
-        Ok(n) => n,
-    };
-    let req = String::from_utf8_lossy(&buf[..n]);
+    // Read the FULL request head (request line + ALL headers), not a fixed slice. Through Cloudflare
+    // the request carries large headers — X-Forwarded-*, and especially the CF_Authorization JWT
+    // cookie that Access adds — that exceed a single small read. If we reply + close with request
+    // bytes still unread in the socket, Windows sends a TCP RST and the edge reports 502 (Bad
+    // Gateway). So drain to the end of the headers (\r\n\r\n) first, then respond and close cleanly.
+    let mut buf: Vec<u8> = Vec::with_capacity(4096);
+    let mut chunk = [0u8; 4096];
+    loop {
+        match stream.read(&mut chunk).await {
+            Ok(0) => break, // peer closed
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                // End of the request head, or a sane cap so a malformed request can't grow forever.
+                if buf.windows(4).any(|w| w == b"\r\n\r\n") || buf.len() > 65536 {
+                    break;
+                }
+            }
+            Err(_) => return,
+        }
+    }
+    if buf.is_empty() {
+        return;
+    }
+    let req = String::from_utf8_lossy(&buf);
     let raw_path = req
         .lines()
         .next()
@@ -780,6 +799,9 @@ async fn serve_http_asset(mut stream: tokio::net::TcpStream, app: &AppHandle) {
     let _ = stream.write_all(header.as_bytes()).await;
     let _ = stream.write_all(&body).await;
     let _ = stream.flush().await;
+    // Graceful FIN (half-close the write side) so the peer reads the whole response before the
+    // socket drops — avoids a truncating RST under Cloudflare.
+    let _ = stream.shutdown().await;
 }
 
 /// In a `tauri dev` build the web UI is served by the Vite dev server (`devUrl`) rather than
