@@ -454,6 +454,11 @@ export function App() {
   const [googleEmail, setGoogleEmail] = useState<string | undefined>();
   const [showCharacters, setShowCharacters] = useState(false);
   const [showData, setShowData] = useState(false);
+  // Whether the reader's inline spreadsheet preview is expanded. Lifted out of ReaderColumn (and the
+  // raw `<details open>`) so it SURVIVES re-renders/remounts — on a linked phone the frequent vrsync
+  // pushes + socket reconnects re-mounted ReaderColumn, which reset an uncontrolled `<details open>`
+  // back to open, so a collapse the reader made kept springing back. Defaults open (show the data).
+  const [dataPreviewOpen, setDataPreviewOpen] = useState(true);
   const [showImport, setShowImport] = useState(false);
   const [showPasteText, setShowPasteText] = useState(false);
   const [showTestImage, setShowTestImage] = useState(false);
@@ -5766,6 +5771,8 @@ export function App() {
             pagesPerImage={pagesPerImage}
             registerParagraph={registerParagraph}
             dataEdit={dataEdit}
+            dataOpen={dataPreviewOpen}
+            onDataToggle={setDataPreviewOpen}
             onAddAnalysisSheet={addAnalysisSheet}
             saveNamed={saveNamed}
             {...(technicalSupport ? { technical: technicalSupport } : {})}
@@ -6389,6 +6396,8 @@ const ReaderColumn = memo(function ReaderColumn({
   pagesPerImage,
   registerParagraph,
   dataEdit,
+  dataOpen,
+  onDataToggle,
   onAddAnalysisSheet,
   saveNamed,
   technical,
@@ -6399,6 +6408,10 @@ const ReaderColumn = memo(function ReaderColumn({
   unitIndex: number;
   pagesPerImage: number | "chapter";
   registerParagraph: (id: string) => (el: HTMLElement | null) => void;
+  /** Whether the inline spreadsheet preview is expanded (controlled by App so it survives the
+   * remounts a linked phone's sync pushes cause — an uncontrolled `<details open>` kept reopening). */
+  dataOpen: boolean;
+  onDataToggle: (open: boolean) => void;
   /** Edit the data grid (sheetIndex is null for a single-table import). */
   dataEdit?: {
     onEditCell: (s: number | null, r: number, c: number, raw: string) => void;
@@ -6431,7 +6444,7 @@ const ReaderColumn = memo(function ReaderColumn({
           illustration/extraction pipeline reads, but it's no way to look at a sheet).
           A single label+value table also gets an auto-chart. */}
       {activeTable ? (
-        <details open style={styles.dataPreview}>
+        <details open={dataOpen} onToggle={(e) => onDataToggle(e.currentTarget.open)} style={styles.dataPreview}>
           <summary style={styles.dataPreviewSummary}>
             <strong>🗂 {book.title || "Data"}</strong>
             <span style={{ opacity: 0.6 }}>
