@@ -736,7 +736,7 @@ export function SettingsPanel({
                 />
               )}
               <label style={rowStyle}>
-                <span>Context window (tokens) — optional</span>
+                <span>Context window (tokens) — how much we SEND</span>
                 <input
                   type="number"
                   min={1024}
@@ -755,11 +755,13 @@ export function SettingsPanel({
                   }}
                 />
                 <span style={{ opacity: 0.55, fontSize: 11 }}>
-                  What your server actually loads. Auto reads the model's Modelfile num_ctx
-                  from Ollama (many new models ship one — qwen3 = 40960), else assumes
-                  Ollama's ~4k default. Set this if you raised OLLAMA_CONTEXT_LENGTH (not
-                  visible to apps) or use LM Studio/WebLLM. Bigger window = the chat sends
-                  more book/history per turn — large values prefill slowly on local GPUs.
+                  Only sizes how much book/history WE put in each prompt — it does <b>not</b> change
+                  your server's VRAM. The KV cache is pre-allocated by your server for its FULL loaded
+                  window (Ollama = <code>OLLAMA_CONTEXT_LENGTH</code> or a Modelfile <code>num_ctx</code>),
+                  regardless of how short the chat is — so a 256k window reserves a 256k cache even for
+                  "hi". To cut VRAM / fix CPU-offload slowness, LOWER that on the server (16k–32k);
+                  set this field to match so we don't over-stuff the prompt. Auto reads Ollama's
+                  Modelfile num_ctx, else assumes ~4k.
                 </span>
               </label>
               {(() => {
