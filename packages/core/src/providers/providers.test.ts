@@ -1073,6 +1073,10 @@ describe("comfyExecutionError + flux2EncoderPatterns (encoder/model mismatch)", 
     expect(tryNames("flux2-klein-9b.safetensors", ["qwen_3_4b.safetensors"])).toBeUndefined();
     // With both 4B and 8B present, Klein still picks the 8B regardless of order.
     expect(tryNames("flux2-klein-9b.safetensors", ["qwen_3_4b.safetensors", "qwen_3_8b.safetensors"])).toBe("qwen_3_8b.safetensors");
+    // A 4B Flux.2 variant → the Qwen-3 4B encoder (NOT the 8B / Mistral).
+    expect(tryNames("flux2-4b-fp8.safetensors", ["qwen_3_4b.safetensors", "qwen_3_8b.safetensors", "mistral3.safetensors"])).toBe("qwen_3_4b.safetensors");
+    // …but "94b"/"14b" in a name is NOT a 4B model (no false 4B match).
+    expect(tryNames("flux2-94b.safetensors", both)).toBe("mistral3-fp8.safetensors");
   });
 });
 

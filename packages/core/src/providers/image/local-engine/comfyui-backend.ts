@@ -1180,16 +1180,20 @@ export const SPLIT_FILE_HEURISTICS: Record<
   qwenimage: { clip: /qwen.?2[._-]?5|qwen.*vl/i, vae: ["qwen"], type: "qwen_image", what: "Qwen-Image" },
 };
 
-/** Flux.2 encoder-name patterns ordered by the diffusion model's name: Klein uses Qwen-3-**8B**,
- * dev/pro use Mistral-Small. They are NOT interchangeable, and — critically — Qwen-3 also ships a
- * **4B** (Z-Image's encoder) that a loose `/qwen.?3/` would wrongly grab for Klein when only the 4B
- * is installed. So Klein matches the 8B SPECIFICALLY (never the 4B); dev/pro prefer Mistral. The
+/** Flux.2 encoder-name patterns ordered by the diffusion model's name: a **4B** Flux.2 pairs with the
+ * Qwen-3 **4B** encoder; Klein (9B) uses Qwen-3 **8B**; dev/pro use Mistral-Small. They are NOT
+ * interchangeable. The size is read from the MODEL name — only a model that itself says "4b" gets the
+ * 4B encoder, so a loose `/qwen.?3/` can't wrongly grab Z-Image's 4B encoder for a bigger Flux.2. The
  * exact catalog filename still matches first in pickComponentAsset — these are the fallback. */
 export function flux2EncoderPatterns(model: string): RegExp[] {
   const m = model.toLowerCase();
   const qwen8b = /qwen.?3.?8b/i;
+  const qwen4b = /qwen.?3.?4b/i;
   const mistral = /mistral/i;
+  // Klein ALWAYS pairs with Qwen-3 8B — even a Klein distill whose name carries a "4b" size tag.
   if (/klein/.test(m)) return [qwen8b, mistral];
+  // A non-Klein 4B Flux.2 variant → the Qwen-3 4B encoder. Guard against 14b/24b/94b (a STANDALONE "4b").
+  if (/(?:^|[^0-9])4b(?:[^0-9]|$)/.test(m)) return [qwen4b, mistral, qwen8b];
   // dev / pro / generic flux2 → Mistral; qwen8b is only a last-ditch fallback (never the 4B).
   return [mistral, qwen8b];
 }

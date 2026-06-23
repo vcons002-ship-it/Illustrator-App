@@ -17,6 +17,7 @@ import {
   CHAT_CONTEXT_BUDGET_CHARS,
   LocalServerLLMProvider,
   analyzeData,
+  imageModelVramCostGb,
   createDataTable,
   recalcTable,
   tableToText,
@@ -479,12 +480,28 @@ function canFreeChatLlm(): boolean {
   // Only free for engines whose VRAM the app actually coordinates (bundled server / managed ComfyUI).
   // Use the RESOLVED active backend: a fallback from A1111 to the managed ComfyUI does release VRAM.
   if ((settings.engineBackend ?? settings.localBackend) === "a1111") return false;
+  // VRAM HEADROOM: only free when memory is actually tight. If the GPU can hold the chat LLM AND the
+  // image model at once, keep BOTH resident — freeing+relaunching the bundled llama-server is the
+  // unreliable part, so skipping it avoids the reload thrash. Free when low-VRAM is forced, when they
+  // can't both fit, or when VRAM is unknown (the safe default). Only the BUNDLED LLM's size is known
+  // (Ollama "server" sizes vary → keep freeing it via its lazy keep_alive eviction).
+  if (!settings.lowVram && settings.localTextBackend === "bundled" && settings.gpuVramMb && settings.gpuVramMb > 0) {
+    const imageGb = imageModelVramCostGb(settings.localModel ?? "");
+    const HEADROOM_GB = 2; // activations/latents/runtime overhead beyond the weights
+    if (imageGb > 0 && (imageGb + BUNDLED_LLM_VRAM_GB + HEADROOM_GB) * 1024 <= settings.gpuVramMb) {
+      return false; // both fit — leave the chat model loaded
+    }
+  }
   try {
     return chatProviders().llm.id === "local-server";
   } catch {
     return false;
   }
 }
+
+/** Approx VRAM the bundled chat model (Llama 3.2 3B, launched fp16-ish with -c 8192) holds resident,
+ * used only to decide whether it + the image model both fit so we can SKIP freeing it. */
+const BUNDLED_LLM_VRAM_GB = 4;
 
 /** Before a STANDALONE image render (no book open): stop the bundled chat LLM so ComfyUI gets the
  * whole GPU AND its model stops squatting system RAM. Once per burst; relaunched only on demand. */
