@@ -188,6 +188,14 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
   it("delegate vs spawn_agents: parallel-vs-single rule is present", () => {
     expect(prompt).toContain("faster than delegating");
   });
+  it("run-it: code the reader wants RUN goes to write_file + run_command, not a fenced block + promise", () => {
+    expect(prompt).toContain("write_file the script into the workspace and run_command it in the SAME turn");
+    // Anti-empty-promise: don't say you'll run it and then end without the tool call.
+    expect(prompt).toContain("end your reply without the write_file / run_command call");
+  });
+  it("checklist: 'write code and run it' is given as a set_plan example so multi-step asks get planned", () => {
+    expect(prompt).toContain('"write code and run it"');
+  });
 });
 
 // ───────────────────────────────────────────────────────────────────────────
