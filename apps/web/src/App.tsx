@@ -268,6 +268,36 @@ interface BuddySession {
   label?: string;
 }
 
+/** How many bytes of inline (generated-image) data the chat MIRROR may carry across the active
+ * session's history. The snapshot/`vrsync:chat` frame rides one WebSocket message; a tunnel
+ * (Cloudflare) silently drops an oversized frame, which left a linked phone connected-but-blank as
+ * generated images piled up. ~3 MB keeps the most-recent images and the full text. */
+const CHAT_MIRROR_IMAGE_BUDGET = 3_000_000;
+
+/** Bound the chat history mirrored to a phone so its frame stays tunnel-safe: keep EVERY message's
+ * text/structure intact, but carry inline image BYTES only for the most recent messages within the
+ * budget (older generated images become a text-only bubble on the phone — they're untouched on the
+ * desktop). Walks newest→oldest so recent images survive. */
+function boundChatMessagesForMirror(messages: StoredChatMessage[]): StoredChatMessage[] {
+  let budget = CHAT_MIRROR_IMAGE_BUDGET;
+  let stripped = false;
+  const out = messages.slice();
+  for (let i = out.length - 1; i >= 0; i--) {
+    const m = out[i]!;
+    const img = m.image;
+    if (img && "bytes" in img) {
+      if (img.bytes.byteLength <= budget) {
+        budget -= img.bytes.byteLength;
+      } else {
+        const { image: _drop, ...rest } = m; // keep the bubble (text), drop the heavy bytes
+        out[i] = rest;
+        stripped = true;
+      }
+    }
+  }
+  return stripped ? out : messages; // unchanged reference when nothing was trimmed (stable memo)
+}
+
 /** Last path segment, for a session's display label (so a folder-bound session reads
  * as its folder name). */
 function lastPathSegment(p: string): string {
@@ -2525,7 +2555,7 @@ export function App() {
     () => ({
       sessions: buddySessions.map((s) => ({ id: s.id, workingDir: s.workingDir, ...(s.label ? { label: s.label } : {}) })),
       activeId: activeBuddyId,
-      messages: buddyMessages,
+      messages: boundChatMessagesForMirror(buddyMessages),
       persona: buddyPersona,
       busy: buddyBusy,
     }),
@@ -2800,9 +2830,14 @@ export function App() {
   const [showRemoteLink, setShowRemoteLink] = useState(false);
   const bridgeToRelay = useCallback(
     (status: RemoteServerStatus, token: string) => {
-      if (status.running && status.port) startHostBridge(`ws://127.0.0.1:${status.port}/`, token);
+      if (status.running && status.port) {
+        // On every (re)connect, push a fresh snapshot so a phone already on the relay re-populates
+        // even when only the desktop's bridge dropped (the phone won't re-`hello` while its own
+        // socket stayed up). `buildSnapshotRef` reads live state without re-binding this callback.
+        startHostBridge(`ws://127.0.0.1:${status.port}/`, token, () => sendAppSync(buildSnapshotRef.current()));
+      }
     },
-    [startHostBridge],
+    [startHostBridge, sendAppSync],
   );
   // On desktop startup, adopt an already-running relay so a reload doesn't lose (or duplicate) it.
   // If none is running but the user had the link enabled in a previous session, bring it back up
