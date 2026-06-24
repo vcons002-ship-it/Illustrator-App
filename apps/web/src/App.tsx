@@ -144,6 +144,7 @@ import {
   type BookSummary,
   type ChapterDataset,
   type BuddyPersona,
+  type BuddyPlan,
   type BuddyToolCall,
   type BuddyToolResultPayload,
   type ChatTurn,
@@ -941,6 +942,26 @@ export function App() {
   const [buddyActivity, setBuddyActivity] = useState("");
   // A running log of the steps (tools) the buddy takes this turn, so its process is visible.
   const [buddySteps, setBuddySteps] = useState<string[]>([]);
+  // The chat's lightweight working checklist (set_plan/complete_step) — a single evolving object per
+  // session, shown live and re-injected into the prompt each turn so a paused/failed run resumes from
+  // the first unfinished step. NOT a TaskPlan. Persisted per session under `buddy-plan:<id>`.
+  const [buddyPlan, setBuddyPlan] = useState<BuddyPlan | undefined>(undefined);
+  const buddyPlanRef = useRef<BuddyPlan | undefined>(undefined);
+  buddyPlanRef.current = buddyPlan;
+  const planMemoKey = (id: string) => `buddy-plan:${id}`;
+  const loadBuddyPlan = useCallback(
+    async (id: string): Promise<BuddyPlan | undefined> => {
+      const raw = await libraryStore.getMemo?.(planMemoKey(id)).catch(() => undefined);
+      if (!raw) return undefined;
+      try {
+        const p = JSON.parse(raw) as BuddyPlan;
+        return p && Array.isArray(p.steps) && p.steps.length > 0 ? p : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    [libraryStore],
+  );
   const [buddyPersona, setBuddyPersona] = useState<BuddyPersona>("freeform");
   // Multiple landing-page chat SESSIONS — each with its own history (keyed by id) and
   // (desktop) working folder, while skills/memory stay global. Persisted so they
@@ -2662,8 +2683,9 @@ export function App() {
       ...(buddyPendingTool ? { pendingTool: buddyPendingTool } : {}),
       agentApprovals,
       ...(buddyUsage ? { usage: buddyUsage } : {}),
+      ...(buddyPlan ? { plan: buddyPlan } : {}),
     }),
-    [buddyStreaming, buddyThinking, buddyActivity, buddySteps, buddyPendingTool, agentApprovals, buddyUsage],
+    [buddyStreaming, buddyThinking, buddyActivity, buddySteps, buddyPendingTool, agentApprovals, buddyUsage, buddyPlan],
   );
   chatLiveRef.current = chatLive;
   useEffect(() => {
@@ -2691,6 +2713,7 @@ export function App() {
     setBuddyPendingTool(l.pendingTool);
     setAgentApprovals(l.agentApprovals);
     setBuddyUsage(l.usage);
+    setBuddyPlan(l.plan); // PHONE: mirror the desktop's live working checklist
   }, []);
   useEffect(() => {
     applyChatLiveRef.current = applyChatLive;
@@ -3377,9 +3400,12 @@ export function App() {
       const active = sessions.some((s) => s.id === savedActive) ? savedActive : sessions[0]!.id;
       const hist = await libraryStore.getChatHistory?.(active).catch(() => undefined);
       if (cancelled) return;
+      const savedPlan = await loadBuddyPlan(active);
+      if (cancelled) return;
       setBuddySessions(sessions);
       setActiveBuddyId(active);
       if (hist) setBuddyMessages(hist);
+      setBuddyPlan(savedPlan);
       buddyReady.current = true;
     })();
     return () => {
@@ -4251,7 +4277,13 @@ export function App() {
       } else if (e.kind === "thinking") setBuddyThinking(e.text);
       else if (e.kind === "activity") setBuddyActivity(e.text);
       else if (e.kind === "usage") setBuddyUsage(e.usage);
-      else if (e.kind === "tool") {
+      else if (e.kind === "plan") {
+        setBuddyPlan(e.plan);
+        // Persist the working checklist per session (desktop owns the store; never on a phone or in
+        // incognito). activeBuddyIdRef is the live session this turn runs for.
+        if (!isRemoteClient && !settings.incognitoRemote)
+          void libraryStore.putMemo?.(planMemoKey(activeBuddyIdRef.current), JSON.stringify(e.plan)).catch(() => {});
+      } else if (e.kind === "tool") {
         // Keep any prose the model said before this tool call (a briefing) as its own message.
         const said = stripToolCallJson(buddyStreamingRef.current).trim();
         if (said) {
@@ -4442,7 +4474,7 @@ export function App() {
           appendBuddy({ role: "tool", text: "🔍 No results." });
         }
       }
-    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext());
+    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current);
     if (buddyTurnSeq.current !== seq) return;
     setBuddyBusy(false);
     setBuddyStreaming("");
@@ -4818,8 +4850,10 @@ export function App() {
     setBuddyStreaming("");
     setBuddyActivity("");
     setBuddyMessages([]);
+    setBuddyPlan(undefined);
     setBuddyPendingTool(undefined);
     void libraryStore.deleteChatHistory?.(activeBuddyId);
+    void libraryStore.deleteMemo?.(planMemoKey(activeBuddyId)).catch(() => {});
   }, [isRemoteClient, sendAppSync, libraryStore, buddyCancel, activeBuddyId]);
   // Stop: the turn runs on the DESKTOP (under its worker request id the phone doesn't have), so a
   // linked phone relays the stop; the desktop aborts its in-flight buddy round.
@@ -4838,6 +4872,7 @@ export function App() {
     setBuddyThinking("");
     setBuddyActivity("");
     setBuddySteps([]);
+    setBuddyPlan(undefined); // the new session's plan loads in (or stays empty); don't flash the old one
     setBuddyPendingTool(undefined);
     // The context-usage badge is per-conversation — clear it on a session switch so it doesn't show
     // the previous window's % (it repopulates from the new session's next turn).
@@ -4858,8 +4893,9 @@ export function App() {
         setActiveBuddyId(id);
         setBuddyMessages(hist ?? []);
       });
+      void loadBuddyPlan(id).then(setBuddyPlan);
     },
-    [isRemoteClient, sendAppSync, activeBuddyId, libraryStore, resetBuddyView],
+    [isRemoteClient, sendAppSync, activeBuddyId, libraryStore, resetBuddyView, loadBuddyPlan],
   );
   const onNewBuddySession = useCallback(() => {
     if (isRemoteClient) {
@@ -4888,6 +4924,7 @@ export function App() {
         const next = prev.filter((s) => s.id !== id);
         persistSessions(next);
         void libraryStore.deleteChatHistory?.(id).catch(() => {});
+        void libraryStore.deleteMemo?.(planMemoKey(id)).catch(() => {});
         if (id === activeBuddyId) {
           const fallback = next[0]!.id;
           resetBuddyView();
@@ -4896,11 +4933,12 @@ export function App() {
             setActiveBuddyId(fallback);
             setBuddyMessages(hist ?? []);
           });
+          void loadBuddyPlan(fallback).then(setBuddyPlan);
         }
         return next;
       });
     },
-    [isRemoteClient, sendAppSync, activeBuddyId, libraryStore, persistSessions, resetBuddyView],
+    [isRemoteClient, sendAppSync, activeBuddyId, libraryStore, persistSessions, resetBuddyView, loadBuddyPlan],
   );
   // Open a task in its own preloaded chat session (reuses multi-session): switch to the
   // plan's session (creating one the first time), seed it with the current step + links.
@@ -6094,6 +6132,7 @@ export function App() {
             busy={buddyBusy}
             {...(buddyActivity ? { activity: buddyActivity } : {})}
             {...(buddySteps.length ? { steps: buddySteps } : {})}
+            {...(buddyPlan ? { plan: buddyPlan } : {})}
             {...(buddyPendingTool ? { pendingTool: buddyPendingTool } : {})}
             persona={buddyPersona}
             onPersonaChange={onBuddyPersonaChange}

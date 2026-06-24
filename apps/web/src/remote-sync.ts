@@ -10,7 +10,7 @@
  * stream back over the same relay, so no model or data ever needs to live on the phone.
  */
 
-import type { BookSource, BookSummary, BuddyPersona, BuddyToolCall, BuddyToolResultPayload, CalendarEvent, ContextUsage, MemoryNote, Skill, StoredChatMessage, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
+import type { BookSource, BookSummary, BuddyPersona, BuddyPlan, BuddyToolCall, BuddyToolResultPayload, CalendarEvent, ContextUsage, MemoryNote, Skill, StoredChatMessage, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
 import type { InstalledModel, ReaderSettings } from "@visual-reader/ui";
 
 /**
@@ -116,6 +116,9 @@ export interface ChatLive {
   agentApprovals: { id: number; title: string; call: BuddyToolCall }[];
   /** Where this turn's context budget is going (the usage donut). */
   usage?: ContextUsage;
+  /** The chat's lightweight working checklist (set_plan/complete_step), so the phone shows the same
+   * live plan + progress as the desktop. */
+  plan?: BuddyPlan;
 }
 
 /** One attachment the phone carries to the desktop on a relayed send (already extracted on the

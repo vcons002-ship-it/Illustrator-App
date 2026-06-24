@@ -12,6 +12,7 @@ import {
   stripToolCallJson,
   toolLimitNudge,
   type BuddyOpenedInfo,
+  type BuddyPlan,
   type BuddyToolCall,
   type BuddyToolResultPayload,
 } from "./buddy-tools.js";
@@ -111,6 +112,10 @@ export interface BuddyDeps {
   /** Long-term reader memory (see reader-memory.ts); returns the kept count. */
   remember?: (note: string) => Promise<number>;
   forget?: (match: string) => Promise<number>;
+  /** Lightweight chat-scoped working checklist. setPlan creates/replaces it; completeStep ticks the
+   * first unfinished step. Both return the updated plan (host owns the canonical object + persistence). */
+  setPlan?: (goal: string | undefined, steps: string[]) => BuddyPlan;
+  completeStep?: (note?: string) => BuddyPlan | undefined;
   /** Skills (durable playbooks — see skills.ts). readSkill returns the body ("" if
    * none); saveSkill/forgetSkill return the kept count. */
   readSkill?: (name: string) => Promise<string>;
@@ -601,6 +606,14 @@ export async function runBuddyTool(
       case "forget":
         if (!deps.forget) return { error: "memory isn't available right now" };
         return { memory: { action: "forgot", note: call.match, count: await deps.forget(call.match) } };
+      case "set_plan":
+        if (!deps.setPlan) return { error: "the working checklist isn't available here" };
+        return { plan: deps.setPlan(call.goal, call.steps) };
+      case "complete_step": {
+        if (!deps.completeStep) return { error: "no checklist is set — call set_plan first" };
+        const updated = deps.completeStep(call.note);
+        return updated ? { plan: updated } : { error: "there's no unfinished checklist step — call set_plan first" };
+      }
       case "update_setting": {
         // Validate purely (coerce + bound to the controllable table), then hand the
         // concrete patch to the host, which owns ReaderSettings and persistence.

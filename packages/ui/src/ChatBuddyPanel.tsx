@@ -14,6 +14,7 @@ import {
   buddySlashCommands,
   speakableText,
   type BuddyPersona,
+  type BuddyPlan,
   type BuddyToolCall,
   type ContextUsage,
   type ProjectFile,
@@ -60,6 +61,9 @@ export interface ChatBuddyPanelProps {
   /** A running log of the steps the buddy has taken this turn (tools it called), so its
    * process is visible instead of a single flickering status line. */
   steps?: string[];
+  /** The chat's lightweight working checklist (set_plan/complete_step) — a pinned, evolving plan the
+   * buddy ticks off as it executes a multi-step ask. */
+  plan?: BuddyPlan;
   /** An un-executed generate_image awaiting the reader's approval. */
   pendingTool?: BuddyToolCall;
   persona: BuddyPersona;
@@ -351,6 +355,26 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         {props.thinking ? <ThinkingBlock text={props.thinking} /> : null}
         {props.streamingText ? (
           <MessageBubble message={{ role: "assistant", text: props.streamingText }} />
+        ) : null}
+        {props.plan && props.plan.steps.length > 0 ? (
+          <div style={planBoxStyle}>
+            {props.plan.goal ? (
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>📋 {props.plan.goal}</div>
+            ) : (
+              <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.7, marginBottom: 4 }}>📋 Plan</div>
+            )}
+            {props.plan.steps.map((s, i) => {
+              const done = s.status === "done";
+              const current = !done && props.plan!.steps.slice(0, i).every((p) => p.status === "done");
+              return (
+                <div key={i} style={{ fontSize: 12, padding: "1px 0", opacity: done ? 0.55 : current ? 1 : 0.7 }}>
+                  <span style={{ opacity: 0.7 }}>{done ? "✓ " : current ? "▸ " : "○ "}</span>
+                  {s.text}
+                  {done && s.note ? <span style={{ opacity: 0.6 }}> — {s.note}</span> : null}
+                </div>
+              );
+            })}
+          </div>
         ) : null}
         {props.steps && props.steps.length > 0 ? (
           <div style={stepsBoxStyle}>
@@ -766,6 +790,16 @@ const stepsBoxStyle = {
   borderRadius: 8,
   background: "rgba(122,162,255,0.06)",
   border: "1px solid rgba(122,162,255,0.18)",
+} as const;
+
+// The pinned working-checklist box — slightly stronger than the transient steps trace so it reads as
+// the persistent plan.
+const planBoxStyle = {
+  margin: "2px 8px",
+  padding: "6px 10px",
+  borderRadius: 8,
+  background: "rgba(122,162,255,0.1)",
+  border: "1px solid rgba(122,162,255,0.3)",
 } as const;
 
 const sessionSelectStyle = {

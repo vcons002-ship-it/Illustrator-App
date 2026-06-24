@@ -17,6 +17,7 @@ import type {
   BookSource,
   BookSummary,
   BuddyPersona,
+  BuddyPlan,
   BuddyToolCall,
   BuddyToolResultPayload,
   CharacterPatch,
@@ -244,6 +245,7 @@ export interface EngineWorkerApi {
     workingDir?: string,
     taskPlanId?: string,
     currentCodeFile?: { name: string; title: string; language?: string },
+    plan?: BuddyPlan,
   ) => Promise<BuddyDoneResult>;
   /** Abort the in-flight buddy round, if any. */
   buddyCancel: () => void;
@@ -330,6 +332,8 @@ export type BuddyStreamEvent =
   | { kind: "storyBeat"; book: BookSource; firstNewUnit: number; illustrate: boolean }
   /** Story config changed (cadence/role-play) — persist the book's storyConfig, no scroll. */
   | { kind: "storyConfig"; book: BookSource }
+  /** The buddy updated its working checklist (set_plan/complete_step) — the app renders + persists it. */
+  | { kind: "plan"; plan: BuddyPlan }
   /** Where the request's context budget is going (for the usage donut). */
   | { kind: "usage"; usage: ContextUsage }
   /** remove_library_book deleted a book — the app should refresh its library. */
@@ -929,6 +933,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
         }
         case "storyConfig": {
           buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "storyConfig", book: msg.book });
+          break;
+        }
+        case "buddyPlan": {
+          buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "plan", plan: msg.plan });
           break;
         }
         case "buddyLibraryChanged": {
@@ -1589,6 +1597,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       workingDir?: string,
       taskPlanId?: string,
       currentCodeFile?: { name: string; title: string; language?: string },
+      plan?: BuddyPlan,
     ): Promise<BuddyDoneResult> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
@@ -1619,7 +1628,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             resolve(r);
           },
         });
-        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}) });
+        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}), ...(plan ? { plan } : {}) });
       }),
     [],
   );
