@@ -412,6 +412,13 @@ describe("skill tools", () => {
     expect(p).toContain('"tool":"save_skill"');
     expect(p).toContain("GROUNDED IN TRUTH");
   });
+
+  it("tells the model to ACT (emit the search JSON) instead of promising a search it never runs", () => {
+    const p = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    expect(p).toMatch(/ACT, DON'T NARRATE/);
+    expect(p).toMatch(/MUST BE the search_web JSON/);
+    expect(p).toMatch(/NEVER state specific facts you have not verified/i);
+  });
 });
 
 describe("update_setting tool", () => {

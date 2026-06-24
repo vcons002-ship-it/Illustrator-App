@@ -863,6 +863,13 @@ export function buildBuddySystemPrompt(opts: {
     "First check your SKILLS for a matching playbook (read_skill it); then, when knowledge may be stale, version-" +
     "specific, or you're not certain, search_web and read_url the real source (official docs, a GitHub file) BEFORE " +
     "answering or writing code. Prefer a grounded, verified answer over a confident guess; say so when you're unsure. " +
+    "ACT, DON'T NARRATE: a tool runs ONLY when THIS reply is the tool's JSON — saying \"I'll search\", \"let me look " +
+    "that up\", \"give me a second\", or \"I'll be right back\" and then stopping does NOTHING (there is no later turn " +
+    "that searches for you; the reader just waits). So when you need to look something up, your reply MUST BE the " +
+    'search_web JSON itself — not a promise to search. NEVER state specific facts you have not verified this turn — ' +
+    "names, sports results/draft picks, scores, dates, prices, who-did-what — if you didn't just search_web or read_url " +
+    "it, you do NOT know it: search first, then answer from what you found, or say plainly you couldn't find it. Making " +
+    "up a plausible-looking answer (or 'example' results) is the worst outcome. " +
     "Write efficient, correct code that actually runs" +
     (opts.canRunCommands ? " — and verify it with run_command, reading the output and fixing it, before claiming it works" : "") +
     ".\n" +
