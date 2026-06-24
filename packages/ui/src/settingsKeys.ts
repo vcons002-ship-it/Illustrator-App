@@ -42,6 +42,8 @@ export const TUNING_FIELDS = [
   "allowTradingViewBridge",
   "autoLearnSkills",
   "remoteBus",
+  // Read at chat/persist time + drives the desktop privacy curtain; toggling it must not rebuild.
+  "incognitoRemote",
   "mcpServers",
   // Read at scan time (the focus email query); changing it must not rebuild the engine.
   "scanFocus",

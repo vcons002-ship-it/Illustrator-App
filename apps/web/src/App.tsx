@@ -3315,11 +3315,13 @@ export function App() {
   // session before its history has loaded. On a linked PHONE the chat is the desktop's
   // (mirrored), so the phone never persists it to its own store.
   useEffect(() => {
-    if (isRemoteClient || !buddyReady.current || buddyMessages.length === 0) return;
+    // Incognito (remote privacy): the desktop runs the turn but never writes the conversation, so a
+    // remote session leaves nothing on disk.
+    if (isRemoteClient || settings.incognitoRemote || !buddyReady.current || buddyMessages.length === 0) return;
     const id = activeBuddyId;
     const t = setTimeout(() => void libraryStore.putChatHistory?.(id, buddyMessages), 500);
     return () => clearTimeout(t);
-  }, [buddyMessages, activeBuddyId, libraryStore, isRemoteClient]);
+  }, [buddyMessages, activeBuddyId, libraryStore, isRemoteClient, settings.incognitoRemote]);
 
   const appendBuddy = (msg: Omit<StoredChatMessage, "at">) =>
     setBuddyMessages((prev) => [...prev, { ...msg, at: Date.now() }]);
@@ -5303,6 +5305,41 @@ export function App() {
   return (
     <div style={styles.shell}>
       <style>{KEYFRAMES}</style>
+      {/* PRIVACY CURTAIN: while a phone drives this desktop in incognito, the engine runs here but the
+          desktop's own screen is hidden so a bystander can't see the remote session. Never on the phone
+          itself (isRemoteClient) — it shows normally. Exit from here or from the phone. */}
+      {!isRemoteClient && settings.incognitoRemote && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 99999,
+            background: "rgba(8,10,18,0.985)",
+            backdropFilter: "blur(14px)",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 14,
+            textAlign: "center",
+            padding: 24,
+          }}
+        >
+          <div style={{ fontSize: 52 }}>🔒</div>
+          <div style={{ fontSize: 18, fontWeight: 600 }}>Incognito — remote session hidden</div>
+          <div style={{ opacity: 0.7, maxWidth: 440, fontSize: 13, lineHeight: 1.5 }}>
+            Your phone is driving this desktop privately. What&apos;s being done remotely runs here but
+            isn&apos;t shown on this screen, and nothing from the session is saved. Turn it off on your
+            phone, or here.
+          </div>
+          <button
+            style={{ ...styles.button, padding: "8px 16px" }}
+            onClick={() => onSettingsChange({ ...settings, incognitoRemote: false })}
+          >
+            Exit incognito
+          </button>
+        </div>
+      )}
       <header style={styles.header}>
         <div style={styles.headerRow}>
         <strong>Visual Reader</strong>

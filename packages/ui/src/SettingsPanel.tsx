@@ -306,6 +306,11 @@ export interface ReaderSettings {
   /** OFF by default: drive the desktop assistant from your phone via Google Tasks — add a to-do
    * starting "VR:" and the app (while open) runs it and writes the answer back. Needs Google. */
   remoteBus?: boolean;
+  /** Privacy / incognito for the phone link. The engine still runs on the desktop, but the remote
+   * session is NOT persisted (no chat history or memory saved) and the desktop's own screen is
+   * curtained so a bystander at the desktop can't see what's being done remotely. Toggle from either
+   * side; OFF by default. */
+  incognitoRemote?: boolean;
   /** Internet hostname for the phone link via a tunnel (e.g. a Cloudflare named tunnel
    * `vr.example.app`). When set, the Link-a-phone panel also shows an `https://<host>/#vrlink=…`
    * address that works from anywhere (off Wi-Fi), gated by Cloudflare Access in front of the tunnel.
@@ -1194,6 +1199,22 @@ export function SettingsPanel({
                 writes the answer back into the task, and marks it done — so you read the result on
                 your phone. No server, no cloud — it uses your own Google account. Needs Google
                 connected; off by default.
+              </span>
+            </span>
+          </label>
+          <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+            <input
+              type="checkbox"
+              checked={value.incognitoRemote ?? false}
+              onChange={(e) => set({ incognitoRemote: e.target.checked })}
+            />
+            <span>
+              🔒 Privacy / incognito (phone link)
+              <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                For driving the desktop privately from your phone. The engine still runs on the desktop,
+                but the remote session is <b>not saved</b> (no chat history or memories) and the desktop's
+                own screen is <b>curtained</b> so a bystander there can't see what you're doing. Toggle it
+                from either side; off by default.
               </span>
             </span>
           </label>
