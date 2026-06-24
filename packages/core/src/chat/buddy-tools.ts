@@ -874,7 +874,7 @@ const PLANNING_GUIDANCE =
 
 /** Pull every top-level JSON object out of a string (brace-matched, string-aware), so a batch
  * of tool calls the model put on separate lines is recovered individually. */
-function extractJsonObjects(s: string): string[] {
+export function extractJsonObjects(s: string): string[] {
   const out: string[] = [];
   let depth = 0;
   let start = -1;
