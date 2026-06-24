@@ -359,6 +359,9 @@ export function App() {
   // shown under the editor. `codeSaveTimer` debounces persisting edits back to the library + workspace.
   const [codeDraft, setCodeDraft] = useState<string>("");
   const [codeEditMode, setCodeEditMode] = useState(true);
+  // Show the code book's analysis (glossary of symbols, module map, current illustration) in a side
+  // pane alongside the editor, so it's available without leaving the editor for the read view.
+  const [codeAnalysisOpen, setCodeAnalysisOpen] = useState(false);
   const [codeRunning, setCodeRunning] = useState(false);
   const [codeRunOutput, setCodeRunOutput] = useState<
     { stdout?: string; stderr?: string; code?: number; error?: string; cwd?: string } | undefined
@@ -3842,6 +3845,14 @@ export function App() {
         if (call.tool === "write_file") {
           try {
             const saved = await writeWorkspaceFile(call.path, call.content, dir);
+            // If this (possibly phone-relayed) write targets the file open in the code window, keep the
+            // open code book's source authoritative HERE — the book change-effect then re-mirrors the
+            // latest to the phone's editor (vrsync:book), so its window refreshes.
+            const open = bookRef.current;
+            if (open?.contentMode === "code" && call.path === codeFileName(open)) {
+              setCodeDraft((prev) => (prev === call.content ? prev : call.content));
+              setBook((prev) => (prev && prev.id === open.id && prev.code !== call.content ? { ...prev, code: call.content } : prev));
+            }
             return { writeFile: { path: saved, ok: true } };
           } catch (err) {
             return { writeFile: { path: call.path, ok: false, error: err instanceof Error ? err.message : String(err) } };
@@ -3946,6 +3957,16 @@ export function App() {
     setCodeRunOutput(undefined);
     setCodeRunning(false);
   }, [book?.id, book?.contentMode]);
+
+  // PHONE: when the desktop mirrors a new version of the OPEN code book — a buddy edit, or a
+  // desktop-side edit to the same file — refresh the editor to match. The desktop owns the source and
+  // our own edits round-trip through it, so an incoming value equal to what we already show is a no-op
+  // (no cursor jump); only a genuinely different (newer) source replaces the draft.
+  useEffect(() => {
+    if (!isRemoteClient || book?.contentMode !== "code") return;
+    const src = codeSourceOf(book);
+    setCodeDraft((prev) => (prev === src ? prev : src));
+  }, [isRemoteClient, book?.code, book?.contentMode, codeSourceOf, book]);
 
   // Edit in the code window: keep the live draft, then debounce-persist to the library AND write the
   // file into the workspace so a run (and, later, the assistant) sees the latest source.
@@ -6063,35 +6084,95 @@ export function App() {
               💻 {book.title || "Code"}
               {book.language ? ` · ${book.language}` : ""}
             </span>
-            {(isDesktop || isRemoteClient) && settings.allowCommands && (
-              <button
-                type="button"
-                style={codeRunning ? { ...styles.button, opacity: 0.6 } : styles.button}
-                onClick={() => void runCodeBook()}
-                disabled={codeRunning}
-                title="Write the current code into the workspace and run it (Python / JavaScript / shell)"
-              >
-                {codeRunning ? "Running…" : "▶ Run"}
-              </button>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              {bible && (
+                <button
+                  type="button"
+                  style={
+                    codeAnalysisOpen
+                      ? { ...styles.button, borderColor: "rgba(122,162,255,0.6)", color: "#bcd0ff" }
+                      : styles.button
+                  }
+                  onClick={() => setCodeAnalysisOpen((v) => !v)}
+                  title="Show the code analysis — glossary of symbols, module map, and the current illustration — beside the editor"
+                >
+                  📊 Analysis
+                </button>
+              )}
+              {(isDesktop || isRemoteClient) && settings.allowCommands && (
+                <button
+                  type="button"
+                  style={codeRunning ? { ...styles.button, opacity: 0.6 } : styles.button}
+                  onClick={() => void runCodeBook()}
+                  disabled={codeRunning}
+                  title="Write the current code into the workspace and run it (Python / JavaScript / shell)"
+                >
+                  {codeRunning ? "Running…" : "▶ Run"}
+                </button>
+              )}
+            </div>
+          </div>
+          <div style={styles.codeBody}>
+            <div style={styles.codeMain}>
+              <textarea
+                value={codeDraft}
+                onChange={(e) => onCodeDraftChange(e.target.value)}
+                spellCheck={false}
+                wrap="off"
+                style={styles.codeEditor}
+                aria-label={`Edit ${book.title || "code"}`}
+              />
+              {codeRunOutput && (
+                <pre style={styles.codeOutput}>
+                  {codeRunOutput.error
+                    ? `⚠ ${codeRunOutput.error}`
+                    : `[exit ${codeRunOutput.code ?? "?"}]${codeRunOutput.cwd ? `  (in ${codeRunOutput.cwd})` : ""}` +
+                      (codeRunOutput.stdout ? `\n${codeRunOutput.stdout}` : "") +
+                      (codeRunOutput.stderr ? `\n⚠ ${codeRunOutput.stderr}` : "")}
+                </pre>
+              )}
+            </div>
+            {codeAnalysisOpen && bible && (
+              <aside style={styles.codeAnalysis}>
+                <div style={styles.codeAnalysisHead}>📊 Code analysis</div>
+                {(generating || results.get(unitIndex)) && (
+                  <div style={{ marginBottom: 12 }}>
+                    <ImagePanel
+                      result={results.get(unitIndex)}
+                      bloom={bloom}
+                      pageKey={unitIndex}
+                      awaitingStart={!generating}
+                    />
+                  </div>
+                )}
+                {bible.glossary.length > 0 && (
+                  <div style={styles.codeAnalysisGroup}>
+                    <div style={styles.codeAnalysisLabel}>Symbols ({bible.glossary.length})</div>
+                    {bible.glossary.slice(0, 80).map((g) => (
+                      <div key={g.term} style={styles.codeAnalysisItem}>
+                        <strong>{g.term}</strong>
+                        {g.definition ? ` — ${g.definition}` : ""}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {bible.environments.length > 0 && (
+                  <div style={styles.codeAnalysisGroup}>
+                    <div style={styles.codeAnalysisLabel}>Modules ({bible.environments.length})</div>
+                    {bible.environments.slice(0, 60).map((e) => (
+                      <div key={e.id} style={styles.codeAnalysisItem}>
+                        <strong>{e.name}</strong>
+                        {e.description?.[0] ? ` — ${e.description[0]}` : ""}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={styles.codeAnalysisHint}>
+                  Switch to “📖 Read view” (header) for the full inline diagrams &amp; illustrations.
+                </div>
+              </aside>
             )}
           </div>
-          <textarea
-            value={codeDraft}
-            onChange={(e) => onCodeDraftChange(e.target.value)}
-            spellCheck={false}
-            wrap="off"
-            style={styles.codeEditor}
-            aria-label={`Edit ${book.title || "code"}`}
-          />
-          {codeRunOutput && (
-            <pre style={styles.codeOutput}>
-              {codeRunOutput.error
-                ? `⚠ ${codeRunOutput.error}`
-                : `[exit ${codeRunOutput.code ?? "?"}]${codeRunOutput.cwd ? `  (in ${codeRunOutput.cwd})` : ""}` +
-                  (codeRunOutput.stdout ? `\n${codeRunOutput.stdout}` : "") +
-                  (codeRunOutput.stderr ? `\n⚠ ${codeRunOutput.stderr}` : "")}
-            </pre>
-          )}
         </section>
       ) : book ? (
         <main style={book.data || (book.dataSheets && book.dataSheets.length) ? styles.readerData : wideImageColumn ? styles.readerWide : styles.reader}>
@@ -8194,6 +8275,30 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "10px 12px",
     whiteSpace: "pre-wrap" as const,
   },
+  // The editor + its run output (left) sit next to the optional analysis pane (right).
+  codeBody: { display: "flex", flex: 1, gap: 12, minHeight: 0 },
+  codeMain: { display: "flex", flexDirection: "column" as const, flex: 1, gap: 8, minWidth: 0 },
+  codeAnalysis: {
+    width: 340,
+    flexShrink: 0,
+    overflow: "auto" as const,
+    background: "rgba(122,162,255,0.05)",
+    border: "1px solid rgba(122,162,255,0.22)",
+    borderRadius: 8,
+    padding: "12px 14px",
+    fontFamily: "system-ui, sans-serif",
+  },
+  codeAnalysisHead: { fontSize: 13, fontWeight: 700, marginBottom: 10, opacity: 0.85 },
+  codeAnalysisGroup: { marginBottom: 14 },
+  codeAnalysisLabel: {
+    fontSize: 11,
+    textTransform: "uppercase" as const,
+    letterSpacing: 0.6,
+    opacity: 0.6,
+    marginBottom: 6,
+  },
+  codeAnalysisItem: { fontSize: 12.5, lineHeight: 1.5, marginBottom: 6, color: "rgba(255,255,255,0.85)" },
+  codeAnalysisHint: { fontSize: 11.5, opacity: 0.6, lineHeight: 1.5, marginTop: 4 },
   aside: {},
   // The aside is sticky; when its content (image + data charts on technical
   // books) exceeds the viewport it must scroll INTERNALLY — a sticky element's
