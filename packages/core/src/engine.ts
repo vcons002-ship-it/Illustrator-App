@@ -26,6 +26,7 @@ import {
   type ImportStats,
 } from "./visual-bible/bible-export.js";
 import { consolidateCharacters } from "./providers/llm/extraction.js";
+import type { StoryPresent } from "./visual-bible/story-scene.js";
 
 /**
  * Top-level engine — the single object a front-end constructs. It owns the
@@ -75,6 +76,15 @@ export interface EngineOptions {
    * every prompt has full-book context. Default "chapter".
    */
   illustrateAfter?: "book" | "chapter";
+  /**
+   * Story "as you go" hook: fired right AFTER a chapter is extracted + merged into the
+   * bible, BEFORE its unit is released to render. The host computes the active-scene
+   * present cast + location for that beat (carry-forward across terse beats — see
+   * `visual-bible/story-scene.ts`) and returns it as a render override; the engine pins
+   * it on the pipeline so the beat's image uses the TRACKED scene, not just names found
+   * in the terse beat text. Absent for the book illustrator (cast comes from page text).
+   */
+  onChapterExtracted?: (chapterIndex: number, bible: VisualBible) => StoryPresent | undefined;
 }
 
 /** A user correction to a single character (any subset of editable fields). */
@@ -495,6 +505,11 @@ export class Engine {
         // Extraction never owns reference images, so re-apply the CURRENT bible's uploads
         // onto the result (matched by id/name/alias, surviving any consolidate/rename).
         this.bible = carryReferenceImages(this.bible!, next);
+        // Story mode: the active-scene tracker (host) resolves THIS beat's present cast +
+        // location from the just-grown bible and pins it on the pipeline BEFORE refresh
+        // releases the unit — so a terse beat still illustrates the tracked scene.
+        const present = this.opts.onChapterExtracted?.(chapterIndex, this.bible);
+        if (present) this.pipeline?.setStoryPresent(chapterIndex, present);
       } else {
         this.bible = markChapterProcessed(this.bible!, chapterIndex);
         this.opts.onBibleNote?.(`Chapter ${chapterIndex + 1} analysis failed — continuing.`);
@@ -1013,6 +1028,50 @@ export class Engine {
       }
       this.buffer.refresh();
     }
+  }
+
+  /**
+   * Story "as you go": grow the OPEN book by one already-segmented beat WITHOUT a
+   * re-open. `renderBook` must share this book's id and be a positional SUPERSET — every
+   * prior chapter/page id byte-identical, the new beat's unit(s) appended at the END
+   * (see `appendStoryChapter` + `toRenderUnits`, which assign ids positionally). The
+   * stable book id keeps the `${book.id}:${pageId}` image cache and `processedChapters`
+   * valid, so NO prior span is re-extracted or re-rendered — only the new chapter is
+   * pending. Re-indexes the lookup tables, re-points the pipeline + extends the buffer
+   * (preserving every rendered slot), then re-arms the bible loop (when generating) so it
+   * extracts only the new chapter, folds its prompt, fires `onChapterExtracted`, and
+   * releases its unit. The new beat's image is prioritised ahead of the in-order schedule.
+   *
+   * Re-opening instead (`openBook`) would `dispose` + rebuild the engine and rescan every
+   * cached image — churning the reader on every beat — which is exactly what this avoids.
+   */
+  async appendChapter(renderBook: BookSource): Promise<{ firstNewUnit: number; chapterIndex: number }> {
+    if (!this.book || !this.pipeline || !this.buffer) {
+      throw new Error("appendChapter requires an open book");
+    }
+    if (renderBook.id !== this.book.id) {
+      throw new Error(`appendChapter: book id "${renderBook.id}" must match the open book "${this.book.id}"`);
+    }
+    if (renderBook.pages.length <= this.book.pages.length) {
+      throw new Error("appendChapter: the grown book must add at least one unit at the end");
+    }
+    // The new beat is the last chapter; its first render unit is the first newly-added page.
+    const firstNewUnit = this.book.pages.length;
+    const chapterIndex = renderBook.chapters[renderBook.chapters.length - 1]?.index ?? 0;
+    this.book = renderBook;
+    this.indexBook(renderBook); // rebuild positional tables (prior entries identical + the new unit)
+    this.pipeline.setBook(renderBook);
+    this.buffer.extend(renderBook.pages.length); // preserves existing slot state
+    // The new chapter isn't in processedChapters → automatically pending. Re-arm the bible
+    // loop exactly like rebuildPrompts/regenerateStoryboard: it cancels any in-flight prior
+    // run (run-token), then extracts ONLY the new chapter (prior ones are processed/skipped).
+    if (this.generationStarted && !this.biblePaused) {
+      this.biblePromise = this.buildBibleInBackground();
+    }
+    // Jump the new beat's image ahead of the strict in-order schedule — it's what the
+    // reader is waiting on. Harmless before generation starts (it renders once it does).
+    this.buffer.prioritize(firstNewUnit);
+    return { firstNewUnit, chapterIndex };
   }
 }
 

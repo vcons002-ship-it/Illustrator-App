@@ -65,6 +65,13 @@ export interface BookSource {
   pages: Page[];
   /** What kind of writing this is, chosen at import (default "fiction"). See `ContentMode`. */
   contentMode?: ContentMode;
+  /**
+   * Marks a book co-written live with the chat buddy ("story as you go") rather than
+   * imported. A story grows one beat at a time (`Engine.appendChapter`), reads as
+   * continuous prose, and keeps the buddy chat mounted BESIDE the reader so the next
+   * beat can be written. Absent for ordinary imported/created books.
+   */
+  kind?: "story";
   /** For a `code` book: the source language (e.g. "ts", "python"), for the reader's code view. */
   language?: string;
   /** Structured grid for a spreadsheet/CSV import — powers the chat's `analyze_data`

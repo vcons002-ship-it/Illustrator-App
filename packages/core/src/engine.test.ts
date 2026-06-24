@@ -1017,6 +1017,49 @@ describe("Engine", () => {
     expect(bible.bookId).toBe("book-2");
   });
 
+  it("appendChapter enforces its contract (open book, matching id, must grow)", async () => {
+    const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider() });
+    // No open book yet.
+    await expect(engine.appendChapter(sampleBook())).rejects.toThrow(/open book/i);
+    await engine.openBook(sampleBook());
+    // A different book id would orphan the bible + image cache — rejected.
+    await expect(engine.appendChapter({ ...sampleBook(), id: "other-id" })).rejects.toThrow(/match/i);
+    // Same book (no new unit) — nothing to append.
+    await expect(engine.appendChapter(sampleBook())).rejects.toThrow(/at least one/i);
+  });
+
+  it("appendChapter grows the open book and renders ONLY the new unit (prior images kept)", async () => {
+    const image = new MockImageProvider();
+    const genSpy = vi.spyOn(image, "generate");
+    const engine = new Engine({ llm: new MockLLMProvider(), image });
+    await engine.openBook(sampleBook()); // book-1, 2 units
+    engine.startGeneration();
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+    await vi.waitFor(() => expect(engine.resultFor(1)?.status).toBe("ready"));
+    const keptImage = engine.resultFor(0)?.image;
+    const callsBefore = genSpy.mock.calls.length;
+
+    // Append a third unit (same id, one more page) — a new chapter "ch-2"/page index 2.
+    const grown: BookSource = {
+      ...sampleBook(),
+      chapters: [...sampleBook().chapters, { id: "c2", index: 1, title: "Two" }],
+      pages: [
+        ...sampleBook().pages,
+        { id: "pg-2", index: 2, chapterId: "c2", pageRange: [2, 2], paragraphs: [{ id: "pg-2-0", index: 0, text: "Aria returned to the bridge." }] },
+      ],
+    };
+    const { firstNewUnit, chapterIndex } = await engine.appendChapter(grown);
+    expect(firstNewUnit).toBe(2);
+    expect(chapterIndex).toBe(1);
+
+    await vi.waitFor(() => expect(engine.resultFor(2)?.status).toBe("ready"));
+    // Exactly one new render; the earlier unit's image object is the SAME (not re-rendered).
+    expect(genSpy.mock.calls.length).toBe(callsBefore + 1);
+    expect(engine.resultFor(0)?.image).toBe(keptImage);
+    // The new chapter was folded into the bible (processed) without touching chapter 0.
+    expect(engine.getBible()!.processedChapters).toContain(1);
+  });
+
   it("retries a failed chapter once, then continues with a note", async () => {
     const llm = new MockLLMProvider();
     let calls = 0;

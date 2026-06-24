@@ -59,11 +59,36 @@ const MAX_FRAME_REFS = 4;
 export class RenderPipeline {
   constructor(private deps: PipelineDeps) {}
 
+  /**
+   * Story "as you go": per-chapter present-cast/location overrides from the active-scene
+   * tracker (`visual-bible/story-scene.ts`). A terse chat beat ("she nods") names no one,
+   * so a text scan would drop the cast — the tracker carries it forward and pins it here,
+   * keyed by the beat's chapter index (one beat = one chapter = one render unit). Empty
+   * for the book illustrator, which resolves the cast purely from page text.
+   */
+  private readonly storyPresent = new Map<
+    number,
+    { characterIds: string[]; environmentIds: string[]; creatureIds: string[] }
+  >();
+
   buildRequest(page: Page): VisualRequest {
-    const { characterIds, environmentIds, creatureIds, spoilerIds } = resolvePageEntities(
-      this.deps.getBible(),
-      page,
-    );
+    const scanned = resolvePageEntities(this.deps.getBible(), page);
+    const chapterIndex = this.deps.book.chapters.find((c) => c.id === page.chapterId)?.index ?? 0;
+    // Active-scene override (story mode): UNION the tracked cast with names found in the
+    // beat text (never drop someone the text named), and PREFER the tracked location when
+    // it resolved (a beat may mention another place in passing — the tracker is the
+    // authoritative "current setting"). Creatures stay text-scanned (the override has none).
+    const tracked = this.storyPresent.get(chapterIndex);
+    // The active-scene tracker is AUTHORITATIVE for a story's cast: it already folds in the
+    // beat's mentioned/entering characters AND removes those who exited, so a text scan would
+    // only RE-ADD a character the narrative just sent off (named in "Borin slipped away").
+    // Use the tracked set directly; creatures aren't tracked, so they stay text-scanned.
+    const characterIds = tracked ? tracked.characterIds : scanned.characterIds;
+    const environmentIds =
+      tracked && tracked.environmentIds.length > 0 ? tracked.environmentIds : scanned.environmentIds;
+    const creatureIds = tracked
+      ? unique([...scanned.creatureIds, ...tracked.creatureIds])
+      : scanned.creatureIds;
     const chapterContext = this.chapterContextFor(page);
     return {
       // Technical books (papers/textbooks, chosen at import) illustrate the passage's
@@ -73,7 +98,7 @@ export class RenderPipeline {
       ...(this.deps.book.title ? { bookTitle: this.deps.book.title } : {}),
       pageId: page.id,
       pageIndex: page.index,
-      chapterIndex: this.deps.book.chapters.find((c) => c.id === page.chapterId)?.index ?? 0,
+      chapterIndex,
       // Always carry a range so a stored prompt can be matched by overlap (a raw single
       // page is [index, index]); keeps buildRequest, hasKeyEvent, and renderPage aligned.
       pageRange: page.pageRange ?? [page.index, page.index],
@@ -82,9 +107,31 @@ export class RenderPipeline {
       characterIds,
       environmentIds,
       creatureIds,
-      spoilerIds,
+      spoilerIds: scanned.spoilerIds,
       ...(this.deps.tier.allowMature ? { allowMature: true } : {}),
     };
+  }
+
+  /**
+   * Re-point the pipeline at the grown book after a story append (`Engine.appendChapter`).
+   * Prior chapter/page ids are byte-identical (positional ids + a stable book id), so the
+   * chapter-context and reference-byte caches stay valid; the new chapter's context fills
+   * in lazily. In-flight renders keep their own `deps` closure, so swapping here is safe.
+   */
+  setBook(book: BookSource): void {
+    this.deps = { ...this.deps, book };
+  }
+
+  /**
+   * Pin the tracked present cast + location for a story beat's chapter (active-scene
+   * tracking). Used by both the live append (the new beat's first render) and on-demand
+   * re-illustration of a past range (the chapter keeps its scene). See `buildRequest`.
+   */
+  setStoryPresent(
+    chapterIndex: number,
+    present: { characterIds: string[]; environmentIds: string[]; creatureIds: string[] },
+  ): void {
+    this.storyPresent.set(chapterIndex, present);
   }
 
   /**
@@ -310,17 +357,26 @@ export class RenderPipeline {
       if (sharedEventOffset !== undefined && sharedEventOffset > 0) {
         anchors = anchors.map((a) => ({ ...a, seed: a.seed + sharedEventOffset }));
       }
+      // Story "as you go": NAME the tracked present cast + location in the prompt when a
+      // terse beat ("she nods") didn't, so their descriptors inject and the right people +
+      // place are depicted — the active-scene carry-forward made real in the image, not
+      // just the request object. Scoped to story books (kind === "story"); a no-op when
+      // the prompt already names them, so the book illustrator's prompts are untouched.
+      const sceneBase =
+        this.deps.book.kind === "story"
+          ? nameActiveScene(basePrompt, present, presentCreatures, bible.environments.filter((e) => request.environmentIds.includes(e.id)))
+          : basePrompt;
       // Bible terms mentioned in the prompt (names → descriptors). Local backends expand them
       // family-aware; for cloud we pre-expand here (cloud providers don't know the bible).
-      const terms = findBibleTermsInText(basePrompt, bible);
+      const terms = findBibleTermsInText(sceneBase, bible);
       const isLocal = this.deps.tier.tier === "local";
       // The bible's world style only rides along for the "auto" art style — an explicitly
       // chosen style WINS, instead of the prompt carrying two competing "Style:" directives.
       const worldStyle = this.deps.tier.style && this.deps.tier.style !== "auto" ? undefined : bible.worldStyle;
       const prompt = isLocal
-        ? basePrompt
+        ? sceneBase
         : expandPrompt(
-            basePrompt,
+            sceneBase,
             terms,
             cloudNameHandling(this.deps.image.id),
             worldStyle,
@@ -463,6 +519,39 @@ export class RenderPipeline {
 function retrievedCaption(query: string, found: RetrievedImage): string {
   const source = found.contextLink ? `\n\nSource: ${found.title ? `${found.title} — ` : ""}${found.contextLink}` : "";
   return `Retrieved figure for “${query}”${source}`;
+}
+
+/** Order-preserving de-duplication (small id lists; a Set keeps first-seen order). */
+function unique(ids: string[]): string[] {
+  return [...new Set(ids)];
+}
+
+/**
+ * Story "as you go": ensure the tracked present cast + location are NAMED in the prompt
+ * (active-scene carry-forward). A terse chat beat often names no one, so the scene's
+ * keyEvent prompt wouldn't mention the people/place that the tracker knows are present —
+ * naming them here (only those not already in the prompt) makes bible-term injection
+ * expand their descriptors AND tells the image model who/where to depict. Pure; returns
+ * the prompt unchanged when everyone is already named (so a fully-specified beat is a
+ * no-op). Used ONLY for story books — the book illustrator's prompts are not augmented.
+ */
+function nameActiveScene(
+  prompt: string,
+  characters: { name: string }[],
+  creatures: { name: string }[],
+  environments: { name: string }[],
+): string {
+  const lc = prompt.toLowerCase();
+  const has = (n: string): boolean => n.length > 0 && lc.includes(n.toLowerCase());
+  const people = [...characters, ...creatures].map((c) => c.name).filter((n) => !has(n));
+  const places = environments.map((e) => e.name).filter((n) => !has(n));
+  const clause = [
+    people.length ? `featuring ${people.join(", ")}` : "",
+    places.length ? `at ${places.join(", ")}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return clause ? `${prompt.replace(/[\s.]+$/, "")}. Scene continuity: ${clause}.` : prompt;
 }
 
 /** Skip note when no verified figure exists — names the concept so the UI can say so. */
