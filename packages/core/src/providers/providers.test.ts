@@ -1042,6 +1042,8 @@ describe("LocalServerLLMProvider", () => {
     // num_ctx can't be set on the OpenAI /v1 endpoint, so a per-model window routes to the native
     // /api/chat (NDJSON). This is the lever that loads a big model at a small window so it fits VRAM.
     const ndjson = [
+      JSON.stringify({ message: { thinking: "Let me " }, done: false }),
+      JSON.stringify({ message: { thinking: "think." }, done: false }),
       JSON.stringify({ message: { content: "Hel" }, done: false }),
       JSON.stringify({ message: { content: "lo" }, done: false }),
       JSON.stringify({ done: true, done_reason: "stop" }),
@@ -1060,12 +1062,18 @@ describe("LocalServerLLMProvider", () => {
       fetchImpl: fakeFetch,
     });
     const tokens: string[] = [];
-    const text = await provider.chat([{ role: "user", content: "hi" }], { onToken: (t) => tokens.push(t) });
+    const thinks: string[] = [];
+    const text = await provider.chat([{ role: "user", content: "hi" }], {
+      onToken: (t) => tokens.push(t),
+      onThinking: (t) => thinks.push(t),
+    });
     expect(url).toBe("http://localhost:11434/api/chat"); // native root (/v1 stripped)
     expect(body.stream).toBe(true);
     expect(body.options?.num_ctx).toBe(16384);
     expect(tokens.join("")).toBe("Hello");
     expect(text).toBe("Hello");
+    // Reasoning is ACCUMULATED (onThinking is replace-semantics) — not just the last delta.
+    expect(thinks.at(-1)).toBe("Let me think.");
   });
 
   it("with numCtx set, extraction uses native /api/chat (stream:false, format json, options.num_ctx)", async () => {
