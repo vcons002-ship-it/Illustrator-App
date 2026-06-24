@@ -275,6 +275,24 @@ interface BuddySession {
  * generated images piled up. ~3 MB keeps the most-recent images and the full text. */
 const CHAT_MIRROR_IMAGE_BUDGET = 3_000_000;
 
+/** Is this code book renderable markup (HTML/SVG), so we can show the rendered PAGE — not just the
+ * source — in an in-app iframe? Detects by language, title extension, or a sniff of the source. PURE. */
+function markupPreviewKind(book: { language?: string; title?: string } | undefined, draft: string): "html" | "svg" | undefined {
+  if (!book) return undefined;
+  const lang = (book.language ?? "").toLowerCase();
+  const title = (book.title ?? "").toLowerCase();
+  const head = draft.slice(0, 400);
+  if (lang === "svg" || title.endsWith(".svg") || /^\s*<svg[\s>]/i.test(head)) return "svg";
+  if (
+    ["html", "htm", "xhtml", "xml", "markup"].includes(lang) ||
+    title.endsWith(".html") ||
+    title.endsWith(".htm") ||
+    /<!doctype html|<html[\s>]/i.test(head)
+  )
+    return "html";
+  return undefined;
+}
+
 /** Bound the chat history mirrored to a phone so its frame stays tunnel-safe: keep EVERY message's
  * text/structure intact, but carry inline image BYTES only for the most recent messages within the
  * budget (older generated images become a text-only bubble on the phone — they're untouched on the
@@ -366,6 +384,9 @@ export function App() {
   // Show the code book's analysis (glossary of symbols, module map, current illustration) in a side
   // pane alongside the editor, so it's available without leaving the editor for the read view.
   const [codeAnalysisOpen, setCodeAnalysisOpen] = useState(false);
+  // Render an HTML/SVG code book IN-APP (a sandboxed iframe) instead of showing its source — "open the
+  // page, not just the text". Works on the phone too (plain iframe srcDoc).
+  const [codePreviewOpen, setCodePreviewOpen] = useState(false);
   const [codeRunning, setCodeRunning] = useState(false);
   const [codeRunOutput, setCodeRunOutput] = useState<
     { stdout?: string; stderr?: string; code?: number; error?: string; cwd?: string } | undefined
@@ -4035,6 +4056,7 @@ export function App() {
     else setCodeDraft("");
     setCodeRunOutput(undefined);
     setCodeRunning(false);
+    setCodePreviewOpen(false); // start a freshly-opened code book on the source, not the render
   }, [book?.id, book?.contentMode]);
 
   // PHONE: when the desktop mirrors a new version of the OPEN code book — a buddy edit, or a
@@ -6235,6 +6257,20 @@ export function App() {
               {book.language ? ` · ${book.language}` : ""}
             </span>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              {markupPreviewKind(book, codeDraft) && (
+                <button
+                  type="button"
+                  style={
+                    codePreviewOpen
+                      ? { ...styles.button, borderColor: "rgba(122,162,255,0.6)", color: "#bcd0ff" }
+                      : styles.button
+                  }
+                  onClick={() => setCodePreviewOpen((v) => !v)}
+                  title="Render this HTML/SVG page in-app — toggle back to edit the source"
+                >
+                  {codePreviewOpen ? "✏️ Edit" : "👁 Preview"}
+                </button>
+              )}
               {bible && (
                 <button
                   type="button"
@@ -6264,14 +6300,25 @@ export function App() {
           </div>
           <div style={styles.codeBody}>
             <div style={styles.codeMain}>
-              <textarea
-                value={codeDraft}
-                onChange={(e) => onCodeDraftChange(e.target.value)}
-                spellCheck={false}
-                wrap="off"
-                style={styles.codeEditor}
-                aria-label={`Edit ${book.title || "code"}`}
-              />
+              {codePreviewOpen && markupPreviewKind(book, codeDraft) ? (
+                // Sandboxed in-app render: scripts run so a coded page actually works, but it has no
+                // same-origin access (can't touch the app, cookies, or storage). Renders on the phone too.
+                <iframe
+                  title={`Preview of ${book.title || "page"}`}
+                  srcDoc={codeDraft}
+                  sandbox="allow-scripts allow-forms allow-popups allow-modals"
+                  style={styles.codePreview}
+                />
+              ) : (
+                <textarea
+                  value={codeDraft}
+                  onChange={(e) => onCodeDraftChange(e.target.value)}
+                  spellCheck={false}
+                  wrap="off"
+                  style={styles.codeEditor}
+                  aria-label={`Edit ${book.title || "code"}`}
+                />
+              )}
               {codeRunOutput && (
                 <pre style={styles.codeOutput}>
                   {codeRunOutput.error
@@ -8498,6 +8545,15 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "pre" as const,
     overflow: "auto" as const,
     tabSize: 2,
+    boxSizing: "border-box" as const,
+  },
+  // In-app rendered HTML/SVG page (the 👁 Preview), filling the editor area.
+  codePreview: {
+    flex: 1,
+    width: "100%",
+    border: "1px solid rgba(255,255,255,0.12)",
+    borderRadius: 8,
+    background: "#fff",
     boxSizing: "border-box" as const,
   },
   codeOutput: {

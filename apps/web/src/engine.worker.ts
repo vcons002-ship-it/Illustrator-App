@@ -2901,8 +2901,20 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           : bookFromText(title, page.text, call.mode, "Chat buddy");
         return opened(book, call.visuals);
       },
-      openPastedText: async (call) =>
-        opened(bookFromText(call.title, call.text, call.mode, "Pasted in chat"), call.visuals),
+      openPastedText: async (call) => {
+        // Safety net: HTML/SVG/markup (pasted, or written by the model and mis-routed here instead of
+        // open_code) opens as a CODE book so the SOURCE is kept in book.code — renderable in-app + re-
+        // savable — instead of being reduced to extracted text ("saves the output, not the code").
+        const head = call.text.slice(0, 400);
+        const svg = /^\s*<svg[\s>]/i.test(head);
+        const html = /<!doctype html|<html[\s>]/i.test(head) || /<\/(html|body|head)>/i.test(call.text);
+        return opened(
+          svg || html
+            ? bookFromCode(call.title, call.text, svg ? "svg" : "html", "Pasted in chat")
+            : bookFromText(call.title, call.text, call.mode, "Pasted in chat"),
+          call.visuals,
+        );
+      },
       openCode: async (call) =>
         opened(bookFromCode(call.title, call.code, call.language, "Code in chat"), call.visuals),
       createSpreadsheet: async (call) => {
