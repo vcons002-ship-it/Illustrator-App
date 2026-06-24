@@ -63,6 +63,28 @@ describe("buildProviders local image backend", () => {
     expect(fellBack.diagnostics.image.label).not.toMatch(/AUTOMATIC1111/);
   });
 
+  it("routes the self-hosted local engine through corsFetch (CORS-exempt) so the packaged app can generate", async () => {
+    // The bug: the local A1111/ComfyUI backend used the browser fetch, which the packaged app's
+    // Tauri-scheme origin is CORS-blocked from — generation "failed to fetch" (worked in dev only).
+    const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    const seen: string[] = [];
+    const corsFetch = (async (input: RequestInfo | URL) => {
+      const url = String((input as Request).url ?? input);
+      seen.push(url);
+      if (url.includes("/sdapi/v1/sd-models")) {
+        return new Response(JSON.stringify([{ title: "sd_xl_base.safetensors [abc]", model_name: "sd_xl_base" }]), { status: 200 });
+      }
+      return new Response(JSON.stringify({ images: [PNG] }), { status: 200 });
+    }) as typeof fetch;
+    const built = buildProviders(
+      settings({ imageProvider: "local", localBackend: "a1111", localServerUrl: "http://127.0.0.1:7860", localModel: "sd_xl_base" }),
+      { corsFetch },
+    );
+    const out = await built.image.generate({ prompt: "a cat", anchors: [] });
+    expect(out.bytes.byteLength).toBeGreaterThan(0);
+    expect(seen.some((u) => u.includes("/sdapi/v1/txt2img"))).toBe(true); // hit the engine via corsFetch
+  });
+
   it("falls back to mock with a clear reason when nothing is connected", () => {
     const none = buildProviders(settings({ imageProvider: "local", localModel: "sd_xl_base" }));
     expect(none.diagnostics.image.mock).toBe(true);

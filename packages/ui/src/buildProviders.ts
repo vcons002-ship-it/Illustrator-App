@@ -109,10 +109,16 @@ export function buildProviders(
 } {
   const transport: Transport | undefined = opts.fetch ? new DirectTransport(opts.fetch) : undefined;
   const llm = buildLLM(settings, transport, opts.fetch, opts.onLocalStatus, opts.onLocalActivity);
+  // A self-hosted local image engine (ComfyUI/AUTOMATIC1111) is NOT a CORS-open provider API — it's a
+  // localhost/LAN server the browser's CORS blocks (esp. in the packaged app, whose Tauri-scheme origin
+  // isn't in the server's allowlist). So route IT through the CORS-exempt `corsFetch` too (the desktop
+  // shell's native fetch), unlike cloud APIs which keep the platform fetch + its streaming.
+  const engineFetch = opts.fetch ?? opts.corsFetch;
+  const engineTransport: Transport | undefined = engineFetch ? new DirectTransport(engineFetch) : undefined;
   // "One API" native mode needs to know it BEFORE building the image slot (it picks the
   // multimodal provider variant). It depends only on settings (same vendor + key + opt-in).
   const native = isNativeIllustration(settings);
-  const image = buildImage(settings, transport, native);
+  const image = buildImage(settings, transport, native, engineTransport);
   // Scientific sources: real-figure retrieval needs a Google API key AND the Programmable
   // Search Engine id. The dedicated Custom Search key wins; absent it, the Gemini key is
   // tried — the same Google Cloud key serves Custom Search when that API is enabled on its
@@ -366,6 +372,8 @@ function buildImage(
   settings: ReaderSettings,
   transport: Transport | undefined,
   native: boolean,
+  /** CORS-exempt transport for the self-hosted local engine (ComfyUI/A1111) — see buildProviders. */
+  engineTransport: Transport | undefined,
 ): BuiltImage {
   const id = settings.imageProvider;
   if (id === "local") {
@@ -399,8 +407,8 @@ function buildImage(
     // fallback to the managed ComfyUI talks ComfyUI even when the server pick was A1111.
     const isA1111 = (settings.engineBackend ?? settings.localBackend) === "a1111";
     const backend: LocalEngineBackend = isA1111
-      ? new Automatic1111Backend({ baseUrl, ...(transport ? { transport } : {}) })
-      : new ComfyUIBackend({ baseUrl, ...(transport ? { transport } : {}) });
+      ? new Automatic1111Backend({ baseUrl, ...(engineTransport ? { transport: engineTransport } : {}) })
+      : new ComfyUIBackend({ baseUrl, ...(engineTransport ? { transport: engineTransport } : {}) });
     return {
       provider: createImageProvider("local", { engine: { backend, model: settings.localModel } }),
       diag: {
