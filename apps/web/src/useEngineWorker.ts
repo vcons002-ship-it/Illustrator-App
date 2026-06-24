@@ -273,8 +273,9 @@ export interface EngineWorkerApi {
   /** Remote bus: list pending "VR:" Google-Task commands; write an answer back + complete one. */
   remoteBusList: () => Promise<{ ok: boolean; commands?: BusCommand[] }>;
   remoteBusReply: (id: string, answer: string) => Promise<{ ok: boolean; error?: string }>;
-  /** LAN phone link: bridge this desktop's engine worker to the relay (start/stop with the link). */
-  startHostBridge: (wsUrl: string, token: string) => void;
+  /** LAN phone link: bridge this desktop's engine worker to the relay (start/stop with the link).
+   * `onOpen` fires on every (re)connect — used to re-push a snapshot so a waiting phone re-populates. */
+  startHostBridge: (wsUrl: string, token: string, onOpen?: () => void) => void;
   stopHostBridge: () => void;
   /** True when THIS tab is a phone client driving a remote desktop (opened via a #vrlink). */
   isRemoteClient: boolean;
@@ -539,6 +540,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const phoneWsRef = useRef<WebSocket | undefined>(undefined);
   // HOST-BRIDGE: on the desktop, when a phone is linked, mirror the engine worker to the relay.
   const hostBridgeRef = useRef<{ ws: WebSocket; token: string } | undefined>(undefined);
+  // Auto-reconnect state for the host bridge (a generation counter invalidates a superseded/stopped
+  // reconnect loop; the pending timer lets a dropped bridge come back like the phone client does).
+  const hostBridgeGen = useRef(0);
+  const hostBridgeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // APP-STATE MIRROR: a handler (set by App) for incoming library/book/bible/settings frames, so
   // the phone renders the desktop's content and the desktop answers the phone's commands.
   const appSyncRef = useRef<((msg: AppSyncMessage) => void) | undefined>(undefined);
@@ -570,25 +575,53 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     }
     workerRef.current?.postMessage(msg, transfer);
   };
-  const startHostBridge = useCallback((wsUrl: string, token: string) => {
+  const startHostBridge = useCallback((wsUrl: string, token: string, onOpen?: () => void) => {
+    // Reconnect like the phone client does: the relay is local (127.0.0.1) but it can restart, and a
+    // dead bridge used to leave a reconnecting phone talking to a relay with no desktop behind it —
+    // it connects but never gets a snapshot (blank). A generation counter retires the old loop.
+    const gen = ++hostBridgeGen.current;
+    if (hostBridgeTimer.current) {
+      clearTimeout(hostBridgeTimer.current);
+      hostBridgeTimer.current = undefined;
+    }
     hostBridgeRef.current?.ws.close();
-    const ws = new WebSocket(wsUrl);
-    ws.onmessage = (e) => {
-      // A frame from the linked phone: either an app-sync COMMAND (open a book / ask for a
-      // snapshot) handled by App, or an engine request to run on the desktop's real worker.
-      if (typeof e.data !== "string") return;
-      const payload = decodeFrame(e.data, token);
-      if (!payload) return;
-      const msg = deserializeFromRemote(payload, base64ToBytes);
-      if (isAppSyncMessage(msg)) appSyncRef.current?.(msg as AppSyncMessage);
-      else if (!isLocalOnlyMessage(msg)) workerRef.current?.postMessage(msg);
+    let attempt = 0;
+    const connect = (): void => {
+      if (hostBridgeGen.current !== gen) return; // superseded by a newer start, or stopped
+      const ws = new WebSocket(wsUrl);
+      ws.onopen = () => {
+        attempt = 0;
+        // (Re)push the desktop's full state so a phone already waiting on the relay re-populates
+        // even though it won't re-send `vrcmd:hello` while its own socket stayed up.
+        onOpen?.();
+      };
+      ws.onmessage = (e) => {
+        // A frame from the linked phone: either an app-sync COMMAND (open a book / ask for a
+        // snapshot) handled by App, or an engine request to run on the desktop's real worker.
+        if (typeof e.data !== "string") return;
+        const payload = decodeFrame(e.data, token);
+        if (!payload) return;
+        const msg = deserializeFromRemote(payload, base64ToBytes);
+        if (isAppSyncMessage(msg)) appSyncRef.current?.(msg as AppSyncMessage);
+        else if (!isLocalOnlyMessage(msg)) workerRef.current?.postMessage(msg);
+      };
+      ws.onclose = () => {
+        if (hostBridgeRef.current?.ws === ws) hostBridgeRef.current = undefined;
+        if (hostBridgeGen.current !== gen) return; // stopped/superseded — don't retry
+        const delay = Math.min(1000 * 2 ** attempt, 10_000); // 1s, 2s, 4s, 8s, 10s…
+        attempt++;
+        hostBridgeTimer.current = setTimeout(connect, delay);
+      };
+      hostBridgeRef.current = { ws, token };
     };
-    ws.onclose = () => {
-      if (hostBridgeRef.current?.ws === ws) hostBridgeRef.current = undefined;
-    };
-    hostBridgeRef.current = { ws, token };
+    connect();
   }, []);
   const stopHostBridge = useCallback(() => {
+    hostBridgeGen.current++; // invalidate any in-flight reconnect loop
+    if (hostBridgeTimer.current) {
+      clearTimeout(hostBridgeTimer.current);
+      hostBridgeTimer.current = undefined;
+    }
     hostBridgeRef.current?.ws.close();
     hostBridgeRef.current = undefined;
   }, []);

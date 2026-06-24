@@ -903,18 +903,62 @@ function extractJsonObjects(s: string): string[] {
   return out;
 }
 
+/** Strip the wrapper CONTROL tokens that common local-model tool formats emit AROUND their JSON —
+ * Hermes/Qwen/ChatML `<tool_call>…</tool_call>` (+ `<tool_response>`) and gpt-oss "harmony"
+ * `<|channel|>…<|message|>…<|call|>` — so they never leak into the chat as garbage. The JSON payload
+ * is left in place (extractJsonObjects still finds it). Only known tokens are removed, never content. */
+export function stripControlTokens(s: string): string {
+  return s
+    .replace(/<\/?tool_call>/gi, "")
+    .replace(/<\/?tool_response>/gi, "")
+    .replace(/<\|(?:im_start|im_end|channel|message|start|end|call|return|constrain|tool_call|tool_response)\|>/gi, "");
+}
+
+/** A JSON chunk is a tool call in EITHER the app's `{"tool":X, …flatArgs}` shape OR the
+ * `{"name":X,"arguments":{…}}` shape that Hermes/Qwen/ChatML-tools models emit. */
+function isToolJsonChunk(chunk: string): boolean {
+  return /"tool"\s*:/.test(chunk) || (/"(?:name|function)"\s*:/.test(chunk) && /"(?:arguments|parameters|args|input)"\s*:/.test(chunk));
+}
+
+/** Accept the `{"name":X,"arguments":{…}}` tool shape that Hermes/Qwen/ChatML-tools models emit (inside
+ * `<tool_call>…`), not just the app's `{"tool":X, …flatArgs}`. Without this, those very common local
+ * models' tool calls are silently ignored — the model "calls" write_file but nothing is written, so a
+ * follow-up run_command finds no file. `arguments` may be an object, a double-encoded JSON string, or
+ * siblings of `name`. */
+export function normalizeToolShape(obj: Record<string, unknown>): Record<string, unknown> {
+  if (typeof obj.tool === "string") return obj;
+  const name = obj.name ?? obj.function ?? obj.tool_name;
+  if (typeof name !== "string") return obj;
+  const rawArgs = obj.arguments ?? obj.parameters ?? obj.args ?? obj.input;
+  let args: Record<string, unknown> = {};
+  if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
+    args = rawArgs as Record<string, unknown>;
+  } else if (typeof rawArgs === "string") {
+    try {
+      const parsed = JSON.parse(rawArgs);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) args = parsed as Record<string, unknown>;
+    } catch {
+      /* not double-encoded JSON — leave args empty */
+    }
+  } else {
+    const { name: _n, function: _f, tool_name: _t, ...rest } = obj; // args as siblings of `name`
+    args = rest;
+  }
+  return { tool: name, ...args };
+}
+
 /** Whether a reply was MEANT to be tool JSON (so a parse miss isn't shown to the reader as prose). */
 export function looksLikeToolJson(text: string): boolean {
-  const cleaned = stripFences(stripThink(text)).trim();
-  return cleaned.startsWith("{") && /"tool"\s*:/.test(cleaned);
+  const cleaned = stripControlTokens(stripFences(stripThink(text))).trim();
+  return cleaned.startsWith("{") && isToolJsonChunk(cleaned);
 }
 
 /** Remove tool-call JSON objects (those with a `"tool"` field) from a reply, leaving the prose —
  * so when a model mixes a briefing WITH a tool call, the raw JSON never reaches the reader. */
 export function stripToolCallJson(text: string): string {
-  let out = stripThink(text);
+  let out = stripControlTokens(stripThink(text));
   for (const chunk of extractJsonObjects(out)) {
-    if (/"tool"\s*:/.test(chunk)) out = out.replace(chunk, "");
+    if (isToolJsonChunk(chunk)) out = out.replace(chunk, "");
   }
   return out.replace(/```(?:json)?\s*```/gi, "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
@@ -926,7 +970,7 @@ export function stripToolCallJson(text: string): string {
  * so the call runs instead of the raw JSON leaking into the chat. The prose is shown separately.
  */
 export function parseBuddyToolCalls(text: string): BuddyToolCall[] {
-  const cleaned = stripFences(stripThink(text));
+  const cleaned = stripControlTokens(stripFences(stripThink(text)));
   const out: BuddyToolCall[] = [];
   for (const chunk of extractJsonObjects(cleaned)) {
     const obj = parseJsonLoose(chunk);
@@ -992,7 +1036,8 @@ export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
   return parseBuddyToolCalls(text)[0];
 }
 
-function parseToolObject(obj: Record<string, unknown>): BuddyToolCall | undefined {
+function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefined {
+  const obj = normalizeToolShape(input);
   const tool = obj.tool;
   if (tool === "search_web" || tool === "search_books" || tool === "search_images") {
     const query = strArg(obj.query, MAX_QUERY_CHARS);

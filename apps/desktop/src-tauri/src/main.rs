@@ -289,6 +289,44 @@ struct HttpFetchResult {
 /// on the webview's native fetch). 32 MB covers any page or figure generously.
 const HTTP_FETCH_MAX_BYTES: usize = 32 * 1024 * 1024;
 
+/// True when a URL targets the local machine / LAN — a self-hosted engine (ComfyUI / AUTOMATIC1111),
+/// a dev server, etc. Such requests must NOT go through a system/env proxy: the webview's `fetch`
+/// bypasses the proxy for localhost, but `reqwest` honors it by default, so a user behind a proxy
+/// (corporate, Cloudflare WARP, …) hits the proxy when reaching their own 127.0.0.1 and gets the
+/// opaque "error sending request for url". We bypass the proxy for these so a local engine is always
+/// reachable; internet requests (web/figure search) keep proxy support.
+fn is_local_target(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    let Some(raw) = parsed.host_str() else {
+        return false;
+    };
+    let host = raw.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local") {
+        return true;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+        Ok(std::net::IpAddr::V6(v6)) => v6.is_loopback(),
+        Err(_) => false,
+    }
+}
+
+/// Flatten an error + its source chain into one message, so a wrapped transport failure surfaces its
+/// real cause (e.g. "error sending request for url (…) — error trying to connect — Connection
+/// refused") instead of just the opaque top line.
+fn err_with_sources(e: &dyn std::error::Error) -> String {
+    let mut s = e.to_string();
+    let mut src = e.source();
+    while let Some(inner) = src {
+        s.push_str(" — ");
+        s.push_str(&inner.to_string());
+        src = inner.source();
+    }
+    s
+}
+
 /// CORS-free fetch for the renderer — the desktop twin of the extension's
 /// background-worker proxy (`apps/extension/src/background.ts`). The webview is
 /// a browser and enforces CORS like any other; this native command is what lets
@@ -313,11 +351,14 @@ fn http_fetch_blocking(req: HttpFetchRequest) -> Result<HttpFetchResult, String>
     // default-features=false sends no default UA. The browser/extension paths get
     // the webview's UA for free; this proxy must set one or desktop figure search
     // 403s. A request that carries its own User-Agent header still overrides this.
-    let client = reqwest::blocking::Client::builder()
+    let mut client_builder = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
-        .user_agent("VisualReader/1.0 (https://github.com/vcons002-ship-it/illustrator-app)")
-        .build()
-        .map_err(|e| e.to_string())?;
+        .user_agent("VisualReader/1.0 (https://github.com/vcons002-ship-it/illustrator-app)");
+    // A self-hosted engine on this machine/LAN must bypass any system/env proxy (see is_local_target).
+    if is_local_target(&req.url) {
+        client_builder = client_builder.no_proxy();
+    }
+    let client = client_builder.build().map_err(|e| e.to_string())?;
     let method =
         reqwest::Method::from_bytes(req.method.as_bytes()).map_err(|e| e.to_string())?;
     let mut builder = client.request(method, &req.url);
@@ -327,7 +368,7 @@ fn http_fetch_blocking(req: HttpFetchRequest) -> Result<HttpFetchResult, String>
     if let Some(b64) = &req.body_base64 {
         builder = builder.body(engine.decode(b64).map_err(|e| e.to_string())?);
     }
-    let mut resp = builder.send().map_err(|e| e.to_string())?;
+    let mut resp = builder.send().map_err(|e| err_with_sources(&e))?;
     let status = resp.status();
     let mut headers = std::collections::HashMap::new();
     for (name, value) in resp.headers() {
