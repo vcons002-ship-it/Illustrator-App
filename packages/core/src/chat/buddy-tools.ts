@@ -520,8 +520,15 @@ export function buildBuddySystemPrompt(opts: {
       "and no display, so `input()`, interactive prompts, and `plt.show()`/GUI windows will hang or do nothing: " +
       "PRINT every result you want to see, and SAVE any chart/image to a file in the workspace. Each command starts " +
       "in this folder FRESH — a `cd` into a subfolder does NOT carry to the next command, so chain with `&&` or " +
-      "re-`cd` each time. If you're unsure where you are, run `pwd` (or `cd` on Windows) first.\n"
-    : "";
+      "re-`cd` each time. If you're unsure where you are, run `pwd` (or `cd` on Windows) first. " +
+      "NEVER say a file was saved or a command/script RAN until write_file / run_command actually " +
+      "RETURNS a result — do not narrate success in advance or claim an output you didn't receive.\n"
+    : "YOU CANNOT SAVE FILES OR RUN CODE in this chat — you have no file-writing or command-running " +
+      "tool in your toolkit here (the reader hasn't turned the ability on). If the reader asks you to " +
+      "SAVE a file, RUN python/code, or EXECUTE a command, do NOT pretend you did it and do NOT claim " +
+      "an output: say plainly that you can't yet, and tell them to enable Settings → Authorizations → " +
+      "\"Let the assistant run commands\" (desktop), then optionally Autonomous workspace for hands-free " +
+      "runs. You can still WRITE the code in the chat for them to copy.\n";
   const googleBlock = opts.canGoogle
     ? "GOOGLE (the reader connected Gmail, Calendar, and Tasks) — use these tools, and ANSWER " +
       "QUESTIONS ABOUT THEIR SCHEDULE, MAIL, AND TO-DOS by reading with them:\n" +
