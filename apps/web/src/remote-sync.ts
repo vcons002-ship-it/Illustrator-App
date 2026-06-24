@@ -10,7 +10,7 @@
  * stream back over the same relay, so no model or data ever needs to live on the phone.
  */
 
-import type { BookSource, BookSummary, BuddyPersona, BuddyToolCall, BuddyToolResultPayload, CalendarEvent, ContextUsage, StoredChatMessage, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
+import type { BookSource, BookSummary, BuddyPersona, BuddyToolCall, BuddyToolResultPayload, CalendarEvent, ContextUsage, MemoryNote, StoredChatMessage, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
 import type { InstalledModel, ReaderSettings } from "@visual-reader/ui";
 
 /**
@@ -135,6 +135,8 @@ export interface MirrorSnapshot {
   planner: PlannerMirror;
   /** The desktop's landing-page chat (sessions + active history) so the phone's chat isn't empty. */
   chat: ChatMirror;
+  /** The assistant's remembered notes (so the phone's Memory panel isn't empty). */
+  memories: MemoryNote[];
   /** The live state of any in-flight turn (so a phone joining mid-turn sees streaming/approvals). */
   live: ChatLive;
   /** The currently-open book (undefined when the desktop is on the home screen). */
@@ -152,6 +154,7 @@ export type SyncToPhone =
   | ({ type: "vrsync:planner" } & PlannerMirror)
   | ({ type: "vrsync:chat" } & ChatMirror)
   | ({ type: "vrsync:chatLive" } & ChatLive)
+  | { type: "vrsync:memories"; memories: MemoryNote[] } // the assistant's remembered notes → phone Memory panel
   | { type: "vrsync:book"; book?: BookSource; bible?: VisualBible }
   // Progress/result of an update the PHONE triggered (vrcmd:update). `reload` ⇒ the desktop applied a
   // JS update and the phone should reload to pick up the new UI (then it reconnects via its token).
@@ -176,6 +179,7 @@ export type CmdToDesktop =
   | { type: "vrcmd:chatNew" } // start a fresh chat session on the desktop
   | { type: "vrcmd:chatDelete"; id: string } // delete a session on the desktop
   | { type: "vrcmd:chatDeleteMessage"; index: number } // delete one message from the active session on the desktop (it persists + re-mirrors)
+  | { type: "vrcmd:memory"; notes: MemoryNote[] } // phone edited the Memory panel → save the whole list on the desktop (it owns the store + re-mirrors)
   | { type: "vrcmd:chatRename"; id: string; label: string } // rename a session (empty ⇒ reset label)
   | { type: "vrcmd:chatPersona"; persona: BuddyPersona } // change the active session's persona
   | { type: "vrcmd:chatClear" } // clear the active session's history on the desktop

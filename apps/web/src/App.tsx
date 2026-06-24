@@ -494,12 +494,15 @@ export function App() {
   const [showMemories, setShowMemories] = useState(false);
   const [memories, setMemories] = useState<MemoryNote[]>([]);
   const refreshMemories = useCallback(() => {
+    // The phone shows the desktop's MIRRORED memories (vrsync:memories); loading its own empty
+    // store would clobber them — same guard as Tasks.
+    if (isRemoteClient) return;
     void loadMemory(libraryStore).then(setMemories).catch(() => {});
-  }, [libraryStore]);
+  }, [libraryStore, isRemoteClient]);
   const openMemories = useCallback(async () => {
-    await loadMemory(libraryStore).then(setMemories).catch(() => {});
+    if (!isRemoteClient) await loadMemory(libraryStore).then(setMemories).catch(() => {});
     setShowMemories(true);
-  }, [libraryStore]);
+  }, [libraryStore, isRemoteClient]);
   // A skill the buddy distilled from a recurring task, awaiting the reader's Keep/Dismiss.
   const [pendingSkill, setPendingSkill] = useState<{ name: string; description: string; body: string } | null>(null);
   const keepPendingSkill = useCallback(async () => {
@@ -1650,10 +1653,11 @@ export function App() {
       planner: plannerMirrorRef.current,
       chat: chatMirrorRef.current,
       live: chatLiveRef.current,
+      memories,
       ...(book ? { book } : {}),
       ...(bible ? { bible } : {}),
     }),
-    [library, settings, engineInventory, book, bible],
+    [library, settings, engineInventory, book, bible, memories],
   );
   // PHONE side: adopt the desktop's mirrored inventory so the local-model pickers show the SAME
   // installed models/components the desktop has (the phone has no engine to enumerate).
@@ -1681,6 +1685,7 @@ export function App() {
             applyPlannerRef.current(msg.planner);
             applyChatRef.current(msg.chat);
             applyChatLiveRef.current(msg.live);
+            setMemories(msg.memories);
             setBook(msg.book);
             setBible(msg.bible);
             setRemoteHost(msg.host);
@@ -1696,6 +1701,9 @@ export function App() {
             break;
           case "vrsync:planner":
             applyPlannerRef.current(msg);
+            break;
+          case "vrsync:memories":
+            setMemories(msg.memories);
             break;
           case "vrsync:chat":
             applyChatRef.current(msg);
@@ -1768,6 +1776,11 @@ export function App() {
             // planner mirror re-pushes the result.
             plannerCommandRef.current(msg.command);
             break;
+          case "vrcmd:memory":
+            // The phone edited the Memory panel; save the whole list HERE (we own the store) — our
+            // memories-mirror effect then re-pushes vrsync:memories with the saved result.
+            void saveMemory(libraryStore, msg.notes).then(setMemories).catch(() => {});
+            break;
           case "vrcmd:chatSend":
           case "vrcmd:chatSwitch":
           case "vrcmd:chatNew":
@@ -1826,6 +1839,10 @@ export function App() {
   useEffect(() => {
     if (!isRemoteClient) sendAppSync({ type: "vrsync:inventory", ...engineInventory });
   }, [isRemoteClient, sendAppSync, engineInventory]);
+  useEffect(() => {
+    // Mirror the assistant's remembered notes to a linked phone so its Memory panel isn't empty.
+    if (!isRemoteClient) sendAppSync({ type: "vrsync:memories", memories });
+  }, [isRemoteClient, sendAppSync, memories]);
   // Settings edits: on the desktop, apply locally (it owns the engine). On a linked PHONE, also push
   // the change to the desktop (vrcmd:settings) so the render the phone triggers uses it — the desktop
   // applies it and re-mirrors it back. (The phone applies the desktop's pushes via setSettings
@@ -6020,6 +6037,13 @@ export function App() {
           notes={memories}
           limits={{ note: MAX_NOTE_CHARS, max: MAX_MEMORY_NOTES }}
           onSave={async (notes) => {
+            if (isRemoteClient) {
+              // The desktop owns the store; relay the edited list and show it optimistically — the
+              // desktop saves it and re-mirrors vrsync:memories.
+              setMemories(notes);
+              sendAppSync({ type: "vrcmd:memory", notes });
+              return;
+            }
             const saved = await saveMemory(libraryStore, notes);
             setMemories(saved);
           }}
