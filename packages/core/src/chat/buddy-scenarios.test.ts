@@ -382,4 +382,37 @@ describe("scenario: chains run in order and each result feeds the next round", (
     expect(outcome.toolResults.map((r) => r.call.tool)).toEqual(["create_task", "create_task", "search_web"]);
     expect(llm.calls).toHaveLength(2); // all three ran in ONE round, then the model answered
   });
+
+  it("no real limit: a chain of 8 sequential tool rounds all run (well past the old cap of 5)", async () => {
+    const replies = Array.from({ length: 8 }, (_, i) => `{"tool":"search_web","query":"step ${i}"}`);
+    replies.push("Worked through all eight lookups — here's the synthesis.");
+    const llm = scriptedLlm(replies);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "research this thoroughly, take as many steps as you need" }],
+      deps: baseDeps({ searchWeb: async () => [] }),
+    });
+    expect(outcome.toolResults).toHaveLength(8); // not truncated at 5
+    expect(outcome.text).toContain("synthesis");
+    expect(llm.calls).toHaveLength(9); // 8 tool rounds + the final answer
+  });
+
+  it("reply-as-you-go: a progress-chunk directive reaches the model partway through a long run", async () => {
+    const replies = Array.from({ length: 8 }, (_, i) => `{"tool":"search_web","query":"q${i}"}`);
+    replies.push("Done.");
+    const llm = scriptedLlm(replies);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "long research job" }],
+      deps: baseDeps({ searchWeb: async () => [] }),
+    });
+    // Somewhere in the back-and-forth the loop fed the model a "narrate progress so it's recoverable"
+    // directive (every TOOL_PROGRESS_EVERY rounds) — so a long run surfaces resumable chunks.
+    const sawProgressDirective = llm.calls
+      .flat()
+      .some((m) => m.role === "user" && /follow along/i.test(typeof m.content === "string" ? m.content : ""));
+    expect(sawProgressDirective).toBe(true);
+  });
 });

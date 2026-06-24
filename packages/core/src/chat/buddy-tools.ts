@@ -235,8 +235,16 @@ export const ALWAYS_GATED_TOOLS: ReadonlySet<BuddyToolCall["tool"]> = new Set([
   "spawn_coding_agents",
 ]);
 
-/** Generous: a "style + random pick + open + prose" flow is three tools deep. */
-export const MAX_BUDDY_TOOL_ROUNDS = 5;
+/** A HIGH runaway backstop, NOT a task limit: a real job is unbounded because each host-tool step
+ * (run_command / write_file / generate_image …) ends the turn and re-dispatches a FRESH turn (the
+ * round counter resets), so build/agentic loops run as long as the task needs. This only caps a
+ * single unbroken run of AUTO-RUN tools (searches/reads/etc.) in one turn — set generously so it
+ * never cuts a genuine task short, while still stopping a model that loops forever. On hitting it the
+ * buddy posts a resumable progress summary (say "continue" to pick up), never a silent drop. */
+export const MAX_BUDDY_TOOL_ROUNDS = 50;
+
+/** How often, mid-run, to remind the model to surface a progress chunk (see `progressNudge`). */
+export const TOOL_PROGRESS_EVERY = 6;
 
 /**
  * A model-facing directive for when a HOST-run tool (run_command, screenshot, plan_task…)
@@ -259,8 +267,26 @@ export function toolFailureDirective(tool: string, message: string): string {
  */
 export function toolLimitNudge(round: number, max = MAX_BUDDY_TOOL_ROUNDS): string {
   return round >= max - 1
-    ? "\n\n[You've reached your tool-call limit for this turn — do NOT call another tool. Give the " +
-        "reader your best answer now with what you have, and note briefly what's still open, if anything.]"
+    ? "\n\n[You've reached this turn's tool-call limit (a safety backstop, not the end of the task). " +
+        "Do NOT call another tool now. Give the reader a clear PROGRESS SUMMARY — what you've COMPLETED " +
+        "and exactly what's LEFT — and tell them to say \"continue\" and you'll pick up the rest. Never " +
+        "silently drop the remaining work.]"
+    : "";
+}
+
+/**
+ * Mid-run, every `every` rounds, remind the model to surface a PROGRESS CHUNK so a long task is
+ * visible and recoverable: a short plain-text line of what's done + what's next, written in the SAME
+ * message as the next tool call (prose first, then the tool JSON) so the update shows WITHOUT ending
+ * the turn. This is the "reply as you go" safety valve — if something fails midway, the completed
+ * work is already shown + saved and the task can be picked back up. Returns "" off the interval.
+ */
+export function progressNudge(round: number, every = TOOL_PROGRESS_EVERY): string {
+  return round > 0 && round % every === 0
+    ? "\n\n[You've run several steps without updating the reader. Before your NEXT tool call, write ONE " +
+        "short plain-text line of progress (what you just finished, what's next) IN THE SAME message " +
+        "(prose first, then the tool JSON) so they can follow along and pick the task back up if " +
+        "anything fails — then continue.]"
     : "";
 }
 
@@ -866,6 +892,16 @@ export function buildBuddySystemPrompt(opts: {
     "tool's result, if another step obviously moves the request forward, DO it in the same turn rather than ending " +
     "with a question. Bias toward acting; reserve a clarifying question for genuine ambiguity, and never take a " +
     "destructive or irreversible action without a clear go-ahead.\n" +
+    "LONG / MULTI-STEP TASKS — there is NO fixed limit on how many tools you may call or how long a job " +
+    "takes, so never refuse or shrink a task because it's big, and don't stop early to hand the rest " +
+    "back: keep chaining steps until it's actually DONE. To stay safe over a long run, REPLY AS YOU GO " +
+    "in chunks: before each significant step, write ONE short plain-text line of what you just finished " +
+    "and what's next, then issue the next tool call IN THE SAME message (the prose first, then the tool " +
+    "JSON — that surfaces the update WITHOUT ending your turn). At natural milestones give a brief " +
+    "\"done X / next Y\" summary. This isn't busywork: each chunk is shown and saved, so if a step FAILS " +
+    "midway the completed work is already there and you (or the reader) can pick the task back up from " +
+    "that point instead of losing it — far better than going silent for twenty steps and failing with " +
+    "nothing to show. When the whole task is finished, give the complete result.\n" +
     POLISH_CHAT_GUIDANCE +
     (opts.persona === "planning" ? `\n\n${PLANNING_GUIDANCE}` : "")
   );
