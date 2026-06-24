@@ -384,6 +384,10 @@ export function buildBuddySystemPrompt(opts: {
   canGithub?: boolean;
   /** The session's chosen working folder (desktop): commands + file search run here. */
   workingDir?: string;
+  /** A code file is open in the reader's editable code window — its workspace filename (+ title and
+   * language). The model should edit/run THAT file in place (write_file to the same path, run_command
+   * it) instead of re-opening a fresh code book; its edits appear live in the reader's window. */
+  currentCodeFile?: { name: string; title: string; language?: string };
   /** The reader's current local date/time + UTC offset (e.g. "Sunday, June 15,
    * 2026, 4:58 PM (UTC-04:00)") — anchors "today"/"this week"/"by when" answers
    * and the ISO ranges/due dates the model builds. */
@@ -529,6 +533,17 @@ export function buildBuddySystemPrompt(opts: {
       "an output: say plainly that you can't yet, and tell them to enable Settings → Authorizations → " +
       "\"Let the assistant run commands\" (desktop), then optionally Autonomous workspace for hands-free " +
       "runs. You can still WRITE the code in the chat for them to copy.\n";
+  const codeFileNote =
+    opts.canRunCommands && opts.currentCodeFile
+      ? `OPEN CODE FILE — the reader is viewing \`${opts.currentCodeFile.name}\`` +
+        (opts.currentCodeFile.language ? ` (${opts.currentCodeFile.language})` : "") +
+        ` in their editable code window, and that exact file already lives in ${runLocation}. To CHANGE it, ` +
+        `write the FULL updated file with write_file to \`${opts.currentCodeFile.name}\` (that same workspace ` +
+        `path) — your edits then appear LIVE in their window. To run or test it, run_command it by that ` +
+        `filename. If you need its current contents first, read them with a \`cat\`/\`type\` command (or ` +
+        `read_file). Do NOT use open_code to "re-open" this file — it is already open; just edit ` +
+        `\`${opts.currentCodeFile.name}\` in place.\n`
+      : "";
   const googleBlock = opts.canGoogle
     ? "GOOGLE (the reader connected Gmail, Calendar, and Tasks) — use these tools, and ANSWER " +
       "QUESTIONS ABOUT THEIR SCHEDULE, MAIL, AND TO-DOS by reading with them:\n" +
@@ -690,6 +705,7 @@ export function buildBuddySystemPrompt(opts: {
     fileTool +
     commandTool +
     workingFolderNote +
+    codeFileNote +
     wolframTool +
     '- {"tool":"stock_quote","symbol":"AAPL"} — fetch the latest KEYLESS stock quote (price/open/high/low/volume) to ' +
     "ground market analysis in real numbers when the reader asks about a stock/ticker. Pair it with search_web for news " +

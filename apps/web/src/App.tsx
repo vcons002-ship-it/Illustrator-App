@@ -3765,6 +3765,13 @@ export function App() {
       const saved = await writeWorkspaceFile(call.path, call.content, buddyWorkingDir || undefined);
       payload = { path: saved, ok: true };
       appendBuddy({ role: "tool", text: `📝 Saved ${saved}`, turns: [] });
+      // If the assistant just edited the file open in the code window, show its change live there.
+      const openCode = bookRef.current;
+      if (openCode?.contentMode === "code" && call.path === codeFileName(openCode)) {
+        setCodeDraft(call.content);
+        setBook((prev) => (prev && prev.id === openCode.id ? { ...prev, code: call.content } : prev));
+        void libraryStore.putBook({ ...openCode, code: call.content }).catch(() => {});
+      }
     } catch (err) {
       payload = { path: call.path, ok: false, error: err instanceof Error ? err.message : String(err) };
       appendBuddy({ role: "tool", text: `⚠ Couldn't write ${call.path}: ${payload.error}`, turns: [] });
@@ -3977,6 +3984,15 @@ export function App() {
       setCodeRunning(false);
     }
   }, [onRunCode, codeDraft, codeFileName]);
+
+  // The code file currently open in the editable code window (workspace name + title + language), so a
+  // buddy turn can edit/run THAT file in place instead of re-opening a fresh code book. Undefined unless
+  // a code book is open.
+  const openCodeContext = useCallback((): { name: string; title: string; language?: string } | undefined => {
+    const b = bookRef.current;
+    if (b?.contentMode !== "code") return undefined;
+    return { name: codeFileName(b), title: b.title || "code", ...(b.language ? { language: b.language } : {}) };
+  }, [codeFileName]);
 
   // PHONE side, unified: a desktop-runtime host tool the phone's buddy hit runs ON the desktop via the
   // relay, then the result feeds back into THIS phone's buddy turn exactly like the desktop handlers.
@@ -4341,7 +4357,7 @@ export function App() {
           appendBuddy({ role: "tool", text: "🔍 No results." });
         }
       }
-    }, buddyWorkingDir || undefined, activeTaskPlanId());
+    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext());
     if (buddyTurnSeq.current !== seq) return;
     setBuddyBusy(false);
     setBuddyStreaming("");

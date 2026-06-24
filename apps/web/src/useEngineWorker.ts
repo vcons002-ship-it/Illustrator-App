@@ -243,6 +243,7 @@ export interface EngineWorkerApi {
     onEvent: (e: BuddyStreamEvent) => void,
     workingDir?: string,
     taskPlanId?: string,
+    currentCodeFile?: { name: string; title: string; language?: string },
   ) => Promise<BuddyDoneResult>;
   /** Abort the in-flight buddy round, if any. */
   buddyCancel: () => void;
@@ -1569,6 +1570,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       onEvent: (e: BuddyStreamEvent) => void,
       workingDir?: string,
       taskPlanId?: string,
+      currentCodeFile?: { name: string; title: string; language?: string },
     ): Promise<BuddyDoneResult> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
@@ -1599,7 +1601,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             resolve(r);
           },
         });
-        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}) });
+        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}) });
       }),
     [],
   );
