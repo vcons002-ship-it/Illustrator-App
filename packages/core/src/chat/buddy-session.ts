@@ -8,6 +8,7 @@ import {
   isRetryableError,
   looksLikeToolJson,
   parseBuddyToolCalls,
+  progressNudge,
   stripToolCallJson,
   toolLimitNudge,
   type BuddyOpenedInfo,
@@ -411,6 +412,7 @@ export async function runBuddyTurn(opts: {
     const feedback =
       feedbacks.join("\n\n") +
       (deferred ? "\n\n[Re-issue the remaining host tool (image/command/plan/etc.) now if you still need it.]" : "") +
+      progressNudge(round) +
       toolLimitNudge(round);
     transcript.push({ role: "user", content: feedback });
     messages.push({ role: "user", content: feedback });

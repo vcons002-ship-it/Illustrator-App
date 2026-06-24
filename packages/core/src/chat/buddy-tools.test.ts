@@ -9,6 +9,7 @@ import {
   looksLikeToolJson,
   parseBuddyToolCall,
   parseBuddyToolCalls,
+  progressNudge,
   stripToolCallJson,
   toolFailureDirective,
   toolLimitNudge,
@@ -996,11 +997,31 @@ describe("failure feedback helpers", () => {
     expect(d).toMatch(/do not silently retry/i);
   });
 
-  it("toolLimitNudge fires only on the final round", () => {
+  it("toolLimitNudge fires only at the backstop, and is RESUMABLE (not a dead stop)", () => {
     expect(toolLimitNudge(0)).toBe("");
     expect(toolLimitNudge(MAX_BUDDY_TOOL_ROUNDS - 2)).toBe("");
     expect(toolLimitNudge(MAX_BUDDY_TOOL_ROUNDS - 1)).toMatch(/tool-call limit/i);
     expect(toolLimitNudge(MAX_BUDDY_TOOL_ROUNDS)).toMatch(/tool-call limit/i);
+    // It must invite continuation + a progress summary, never just "stop".
+    expect(toolLimitNudge(MAX_BUDDY_TOOL_ROUNDS - 1)).toMatch(/continue/i);
+    expect(toolLimitNudge(MAX_BUDDY_TOOL_ROUNDS - 1)).toMatch(/progress/i);
+  });
+
+  it("the round cap is a generous backstop, not a real task limit", () => {
+    // Real agentic work re-arms the budget per host-tool step; this only caps an unbroken auto-run
+    // streak. It must be high enough never to cut a genuine task short.
+    expect(MAX_BUDDY_TOOL_ROUNDS).toBeGreaterThanOrEqual(24);
+  });
+
+  it("progressNudge surfaces a progress chunk on the interval, asking for prose-before-tool", () => {
+    expect(progressNudge(0, 6)).toBe(""); // never on round 0
+    expect(progressNudge(1, 6)).toBe(""); // off-interval
+    expect(progressNudge(6, 6)).toMatch(/progress/i);
+    expect(progressNudge(12, 6)).toMatch(/progress/i);
+    // It must tell the model to narrate IN THE SAME message as the next tool (prose first), so the
+    // update shows without ending the turn.
+    expect(progressNudge(6, 6)).toMatch(/same message/i);
+    expect(progressNudge(6, 6)).toMatch(/pick the task back up|fails/i);
   });
 
   it("isRetryableError catches transient blips but not logic errors", () => {
