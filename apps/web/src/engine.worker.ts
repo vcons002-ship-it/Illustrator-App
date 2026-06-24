@@ -2896,6 +2896,11 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           : {}),
         // The chosen working folder only matters when commands/file-search can run.
         ...(corsProxyAvailable && settings?.allowCommands && msg.workingDir ? { workingDir: msg.workingDir } : {}),
+        // A code file is open in the reader's editable code window — point the model at its workspace
+        // file so it edits/runs THAT file in place (only meaningful when it can write/run).
+        ...(corsProxyAvailable && settings?.allowCommands && msg.currentCodeFile
+          ? { currentCodeFile: msg.currentCodeFile }
+          : {}),
         // Gmail/Calendar/Tasks tools when Google is connected.
         ...(googleConnected ? { canGoogle: true } : {}),
         // Auto-approval: create reminders without per-item confirm when opted in.
