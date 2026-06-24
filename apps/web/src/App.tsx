@@ -518,12 +518,15 @@ export function App() {
   // Skills live in the same shared store the worker reads (libraryStore → IndexedDB),
   // so panel edits show up on the assistant's next turn with no extra plumbing.
   const refreshSkills = useCallback(() => {
+    // The phone shows the desktop's MIRRORED skills (vrsync:skills); loading its own empty store
+    // would clobber them — same guard as Memory/Tasks.
+    if (isRemoteClient) return;
     void loadSkills(libraryStore).then(setSkills).catch(() => {});
-  }, [libraryStore]);
+  }, [libraryStore, isRemoteClient]);
   const openSkills = useCallback(async () => {
-    await loadSkills(libraryStore).then(setSkills).catch(() => {});
+    if (!isRemoteClient) await loadSkills(libraryStore).then(setSkills).catch(() => {});
     setShowSkills(true);
-  }, [libraryStore]);
+  }, [libraryStore, isRemoteClient]);
   // Reader memory — the durable "remember" notes, in the same shared store the worker reads, so
   // panel edits apply on the assistant's next turn (and the buddy's own remember/forget show here).
   const [showMemories, setShowMemories] = useState(false);
@@ -1590,6 +1593,19 @@ export function App() {
     void libraryStore.listBooks().then(setLibrary).catch(() => {});
   }, [libraryStore]);
 
+  // Desktop: eagerly load the assistant's accumulated panels (memories, tasks, skills) at startup.
+  // They otherwise load LAZILY (only when their panel is opened on the desktop), so a phone that
+  // connects — or opens those panels itself — would mirror an EMPTY desktop state. The phone's own
+  // loaders are gated (they'd clobber the mirror), so the desktop must populate the source of truth
+  // up front; the snapshot + per-slice push effects then carry them to a linked phone. (Calendar is
+  // Google-gated and loads on connect via refreshCalendar.)
+  useEffect(() => {
+    if (isRemoteClient) return;
+    refreshMemories();
+    refreshTaskPlans();
+    refreshSkills();
+  }, [isRemoteClient, refreshMemories, refreshTaskPlans, refreshSkills]);
+
   const onPickBook = useCallback(
     async (id: string) => {
       if (!id || id === book?.id) return;
@@ -1724,10 +1740,11 @@ export function App() {
       chat: chatMirrorRef.current,
       live: chatLiveRef.current,
       memories,
+      skills,
       ...(book ? { book } : {}),
       ...(bible ? { bible } : {}),
     }),
-    [library, settings, engineInventory, book, bible, memories],
+    [library, settings, engineInventory, book, bible, memories, skills],
   );
   // PHONE side: adopt the desktop's mirrored inventory so the local-model pickers show the SAME
   // installed models/components the desktop has (the phone has no engine to enumerate).
@@ -1757,6 +1774,7 @@ export function App() {
             applyChatRef.current(msg.chat);
             applyChatLiveRef.current(msg.live);
             setMemories(msg.memories);
+            setSkills(msg.skills);
             setBook(msg.book);
             setBible(msg.bible);
             setRemoteHost(msg.host);
@@ -1775,6 +1793,9 @@ export function App() {
             break;
           case "vrsync:memories":
             setMemories(msg.memories);
+            break;
+          case "vrsync:skills":
+            setSkills(msg.skills);
             break;
           case "vrsync:chat":
             applyChatRef.current(msg);
@@ -1852,6 +1873,16 @@ export function App() {
             // memories-mirror effect then re-pushes vrsync:memories with the saved result.
             void saveMemory(libraryStore, msg.notes).then(setMemories).catch(() => {});
             break;
+          case "vrcmd:skillSave":
+            // The phone saved a skill; save it HERE (we own the store) and reload → the skills-mirror
+            // effect re-pushes vrsync:skills with the result.
+            void saveSkill(libraryStore, { name: msg.name, description: msg.description, body: msg.body })
+              .then(() => refreshSkills())
+              .catch(() => {});
+            break;
+          case "vrcmd:skillDelete":
+            void forgetSkill(libraryStore, msg.name).then(() => refreshSkills()).catch(() => {});
+            break;
           case "vrcmd:chatSend":
           case "vrcmd:chatSwitch":
           case "vrcmd:chatNew":
@@ -1914,6 +1945,10 @@ export function App() {
     // Mirror the assistant's remembered notes to a linked phone so its Memory panel isn't empty.
     if (!isRemoteClient) sendAppSync({ type: "vrsync:memories", memories });
   }, [isRemoteClient, sendAppSync, memories]);
+  useEffect(() => {
+    // Mirror the assistant's saved skills to a linked phone so its Skills panel isn't empty.
+    if (!isRemoteClient) sendAppSync({ type: "vrsync:skills", skills });
+  }, [isRemoteClient, sendAppSync, skills]);
   // Settings edits: on the desktop, apply locally (it owns the engine). On a linked PHONE, also push
   // the change to the desktop (vrcmd:settings) so the render the phone triggers uses it — the desktop
   // applies it and re-mirrors it back. (The phone applies the desktop's pushes via setSettings
@@ -6171,10 +6206,27 @@ export function App() {
           skills={skills}
           limits={{ name: MAX_SKILL_NAME_CHARS, description: MAX_SKILL_DESC_CHARS, body: MAX_SKILL_BODY_CHARS }}
           onSave={async (name, description, body) => {
+            if (isRemoteClient) {
+              // The desktop owns the store; relay the save + show it optimistically — the desktop
+              // saves it and re-mirrors vrsync:skills.
+              setSkills((prev) => {
+                const at = prev.findIndex((s) => s.name.toLowerCase() === name.toLowerCase());
+                return at >= 0
+                  ? prev.map((s, i) => (i === at ? { ...s, description, body, at: Date.now() } : s))
+                  : [...prev, { name, description, body, at: Date.now() }];
+              });
+              sendAppSync({ type: "vrcmd:skillSave", name, description, body });
+              return;
+            }
             await saveSkill(libraryStore, { name, description, body });
             refreshSkills();
           }}
           onDelete={async (name) => {
+            if (isRemoteClient) {
+              setSkills((prev) => prev.filter((s) => s.name.toLowerCase() !== name.toLowerCase()));
+              sendAppSync({ type: "vrcmd:skillDelete", name });
+              return;
+            }
             await forgetSkill(libraryStore, name);
             refreshSkills();
           }}
