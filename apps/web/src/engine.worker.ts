@@ -143,6 +143,9 @@ import {
   advanceStoryScene,
   presentFromScene,
   emptyStoryScene,
+  createEmptyBible,
+  emptyAppearance,
+  deterministicSeed,
   ComfyUIBackend,
   Automatic1111Backend,
   type BookSource,
@@ -210,6 +213,12 @@ interface StorySessionState {
 }
 let story: StorySessionState | undefined;
 let storyCounter = 0;
+
+/** Character-id slug — MUST match `mergeExtraction`'s (`char-<slug>`) so a pre-seeded cast
+ * entry and the same name later extracted from prose resolve to ONE bible entry. */
+function storySlug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
 
 /** Bible character names whose name/alias appears in a beat's text (the active-scene "mentioned"
  * signal — the same name match the render's text scan uses, so the tracker never misses one). */
@@ -2867,6 +2876,28 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           cadence: { mode: "per-response", n: 3 },
           beatsSinceImage: 0,
         };
+        // Pre-seed the named cast (start_story `characters` + the role-played pair) into the
+        // bible BEFORE the open, so the active-scene tracker resolves + keeps them present
+        // from beat one even if the opening prose doesn't name them — closing the "setting-
+        // only opening" gap. Each is a minimal entry (name + identity seed, empty look);
+        // extraction UPSERTS by name on the first beat that describes them, enriching this
+        // same entry (no duplicate). Written to the shared store so openBook restores it.
+        const seedNames = [...new Set([...(call.characters ?? []), ...played].map((n) => n.trim()).filter(Boolean))];
+        if (seedNames.length) {
+          await store.putBible({
+            ...createEmptyBible(id),
+            characters: seedNames.map((name) => ({
+              id: `char-${storySlug(name)}`,
+              name,
+              aliases: [],
+              appearance: emptyAppearance(),
+              persistentTraits: [],
+              clothing: [],
+              anchor: { seed: deterministicSeed(name) },
+              firstSeenChapter: 0,
+            })),
+          });
+        }
         const book = storyBook(id, story.title, story.author, story.beats);
         return opened(book, true); // visuals on → beat one illustrates
       },

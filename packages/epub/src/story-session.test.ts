@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   advanceStoryScene,
+  createEmptyBible,
   DEFAULT_TIER_CONFIG,
   deterministicSeed,
   emptyAppearance,
   emptyStoryScene,
   Engine,
+  InMemoryStore,
   MockImageProvider,
   presentFromScene,
   toRenderUnits,
@@ -387,5 +389,71 @@ describe("story as you go — Tier-1 methodology", () => {
     expect(terse.prompt).toContain(A);
     expect(terse.prompt).toContain(B);
     expect(terse.prompt).toContain(HIGH);
+  });
+
+  it("a PRE-SEEDED role-play cast is illustrated from beat 1 even when the opening prose names no one", async () => {
+    // The edge case: a setting-only opening ("The tavern roared") names neither played
+    // character. start_story pre-seeds the cast into the bible (name + identity seed); this
+    // mirrors that — the cast is present + rendered from beat one via the role-play seed,
+    // not from a text scan. (Without the pre-seed, the names wouldn't resolve and the frame
+    // would have no cast — exactly the gap this closes.)
+    const store = new InMemoryStore();
+    const bookId = "story-preseed";
+    await store.putBible({
+      ...createEmptyBible(bookId),
+      characters: [A, B].map((name) => ({
+        id: `char-${name.toLowerCase()}`,
+        name,
+        aliases: [],
+        appearance: emptyAppearance(),
+        persistentTraits: [],
+        clothing: [],
+        anchor: { seed: deterministicSeed(name) },
+        firstSeenChapter: 0,
+      })),
+    });
+
+    const beats: Beat[] = [
+      // Names NO character — only the setting. Presence must come from the pre-seed + role-play.
+      { text: "Scene 0. The tavern roared with firelight and noise.", mentioned: [], enters: [], exits: [], location: HIGH, present: [A, B], expectLocation: HIGH },
+    ];
+    const image = new MockImageProvider();
+    const realGen = image.generate.bind(image);
+    const captured = new Map<number, ImageGenerationInput>();
+    vi.spyOn(image, "generate").mockImplementation(async (input) => {
+      const m = /\[beat (\d+)\]/.exec(input.prompt);
+      if (m) captured.set(Number(m[1]), input);
+      return realGen(input);
+    });
+    const roleplay: StoryRoleplay = { playedCharacterNames: [A, B] };
+    let scene: StoryScene = emptyStoryScene();
+    const engine = new Engine({
+      llm: new ScriptedLLM(beats),
+      image,
+      store,
+      tier: { ...DEFAULT_TIER_CONFIG, tier: "local" },
+      illustrateAfter: "chapter",
+      onChapterExtracted: (chapterIndex, bible) => {
+        const beat = beats[chapterIndex]!;
+        scene = advanceStoryScene(
+          scene,
+          bible,
+          { mentionedNames: beat.mentioned, ...(beat.location ? { location: beat.location } : {}) },
+          roleplay,
+        );
+        return presentFromScene(scene);
+      },
+    });
+    const book = storyBook(bookId, "Tavern Tale", undefined, [beats[0]!.text]);
+    await engine.openBook(toRenderUnits(book, "chapter").book);
+    engine.startGeneration();
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+
+    const first = captured.get(0)!;
+    expect(new Set((first.anchors ?? []).map((a) => a.seed))).toEqual(
+      new Set([deterministicSeed(A), deterministicSeed(B)]),
+    );
+    expect(first.prompt).toContain(A);
+    expect(first.prompt).toContain(B);
   });
 });
