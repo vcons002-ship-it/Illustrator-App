@@ -21,6 +21,23 @@ describe("parseToolCall", () => {
     });
   });
 
+  it("fires a tool that follows a prose preamble (trailing JSON), incl. {r} in a formula", () => {
+    // The exact failure: the model explained itself, THEN emitted the call — strict whole-text parsing
+    // dropped it, so nothing was added and the model hallucinated a result table.
+    const reply =
+      'The best way is a formula column counting "r". I\'ll name it "R Count".\n\n' +
+      '{"tool":"add_formula_column","name":"R Count","formula":"=LEN(A{r})-LEN(SUBSTITUTE(A{r}, \\"r\\", \\"\\"))"}';
+    expect(parseToolCall(reply)).toEqual({
+      tool: "add_formula_column",
+      name: "R Count",
+      formula: '=LEN(A{r})-LEN(SUBSTITUTE(A{r}, "r", ""))',
+    });
+  });
+
+  it("does NOT fire a tool merely mentioned mid-text (not trailing)", () => {
+    expect(parseToolCall('Sure: {"tool":"set_cell","ref":"C2","formula":"A2*B2"} — but first, a note.')).toBeUndefined();
+  });
+
   it("parses a fenced call and strips a thinking preamble", () => {
     expect(parseToolCall('```json\n{"tool":"search_images","query":"mitochondrion"}\n```')).toEqual({
       tool: "search_images",

@@ -1000,7 +1000,10 @@ async function handleTestRender(
   try {
     if (!settings) throw new Error("Settings not initialised yet.");
     cancelChatWarm(); // don't let a pending LLM warm steal VRAM from this render
-    const { image, tier } = buildProviders(settings);
+    // Pass corsFetch so a self-hosted local engine (A1111/ComfyUI) is reached through the desktop
+    // bridge (CORS-exempt) — a browser fetch from the packaged app's origin is CORS-blocked.
+    const cfRender = corsFetch();
+    const { image, tier } = buildProviders(settings, cfRender ? { corsFetch: cfRender } : {});
     const out = await renderFromText(image, tier, text, {
       ...(initImage ? { initImage } : {}),
       ...(denoise !== undefined ? { denoise } : {}),
