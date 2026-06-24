@@ -2578,8 +2578,21 @@ export function App() {
   // are gated on isRemoteClient), so this mirror is its only source of chat state.
   const applyChat = useCallback((c: ChatMirror) => {
     setBuddySessions(c.sessions.map((s) => ({ id: s.id, workingDir: s.workingDir, ...(s.label ? { label: s.label } : {}) })));
+    // Never let an OLDER desktop snapshot erase chat the phone is already showing. A stale vrsync:chat
+    // can race a phone-typed message: the desktop re-pushes its pre-send history before it has run the
+    // new turn, which used to clobber the phone's in-flight message ("lost the new chat on mobile").
+    // If we're on the SAME session and the incoming history is a strict PREFIX of what we show (fewer
+    // messages, all matching by role+timestamp), it's stale — keep ours and wait for the real (longer)
+    // update that includes the message. A different activeId is a genuine switch/new chat — adopt fully.
+    const sameSession = activeBuddyIdRef.current === c.activeId;
     setActiveBuddyId(c.activeId);
-    setBuddyMessages(c.messages);
+    setBuddyMessages((prev) =>
+      sameSession &&
+      c.messages.length < prev.length &&
+      c.messages.every((m, i) => prev[i] && prev[i].role === m.role && prev[i].at === m.at)
+        ? prev
+        : c.messages,
+    );
     setBuddyPersona(c.persona);
     setBuddyBusy(c.busy);
   }, []);
@@ -5328,38 +5341,44 @@ export function App() {
     <div style={styles.shell}>
       <style>{KEYFRAMES}</style>
       {/* PRIVACY CURTAIN: while a phone drives this desktop in incognito, the engine runs here but the
-          desktop's own screen is hidden so a bystander can't see the remote session. Never on the phone
-          itself (isRemoteClient) — it shows normally. Exit from here or from the phone. */}
+          desktop's own screen stays hidden so a bystander can't see the remote session. Kept DISCREET on
+          purpose — it looks like the app sitting idle (no lock, no "incognito" banner advertising that
+          something is hidden), with only a tiny corner dot the owner recognises (and can click to exit).
+          Never on the phone itself (isRemoteClient) — it shows normally. Also exit from the phone. */}
       {!isRemoteClient && settings.incognitoRemote && (
         <div
           style={{
             position: "fixed",
             inset: 0,
             zIndex: 99999,
-            background: "rgba(8,10,18,0.985)",
-            backdropFilter: "blur(14px)",
+            background: "#11131a",
             display: "flex",
-            flexDirection: "column",
             alignItems: "center",
             justifyContent: "center",
-            gap: 14,
-            textAlign: "center",
-            padding: 24,
           }}
         >
-          <div style={{ fontSize: 52 }}>🔒</div>
-          <div style={{ fontSize: 18, fontWeight: 600 }}>Incognito — remote session hidden</div>
-          <div style={{ opacity: 0.7, maxWidth: 440, fontSize: 13, lineHeight: 1.5 }}>
-            Your phone is driving this desktop privately. What&apos;s being done remotely runs here but
-            isn&apos;t shown on this screen, and nothing from the session is saved. Turn it off on your
-            phone, or here.
+          {/* Innocuous idle look — a faint wordmark like a resting screen, nothing that reveals a session. */}
+          <div style={{ opacity: 0.05, fontSize: 40, fontWeight: 700, letterSpacing: 1, userSelect: "none" }}>
+            Visual Reader
           </div>
           <button
-            style={{ ...styles.button, padding: "8px 16px" }}
+            type="button"
+            title="Incognito remote session active — click to exit"
+            aria-label="Exit incognito"
             onClick={() => onSettingsChange({ ...settings, incognitoRemote: false })}
-          >
-            Exit incognito
-          </button>
+            style={{
+              position: "fixed",
+              bottom: 10,
+              right: 12,
+              width: 8,
+              height: 8,
+              padding: 0,
+              borderRadius: "50%",
+              border: "none",
+              background: "rgba(120,160,255,0.45)",
+              cursor: "pointer",
+            }}
+          />
         </div>
       )}
       <header style={styles.header}>
