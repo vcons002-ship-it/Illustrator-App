@@ -355,6 +355,9 @@ export function App() {
   // the live value — e.g. to dedupe a buddy re-open of the book that's already showing.
   const bookRef = useRef(book);
   bookRef.current = book;
+  // PHONE: the id of a book the reader CLOSED here, so a passive desktop re-mirror of it (a bible/image
+  // update, a story beat, a re-render) doesn't yank them back into it. Cleared when they open something.
+  const phoneExitedBookId = useRef<string | undefined>(undefined);
   // Code books open as a full-screen, editable code workspace (run / test / edit in place). `codeDraft`
   // is the live editor text; `codeEditMode` toggles to the illustrated reading view; the run output is
   // shown under the editor. `codeSaveTimer` debounces persisting edits back to the library + workspace.
@@ -1640,9 +1643,11 @@ export function App() {
     chatCancel(); // stop any in-flight chat turn before its book is torn down
     setShowChat(false);
     setShowCharacters(false);
+    // On a linked phone, remember which book we closed so the desktop's passive re-mirrors don't reopen it.
+    if (isRemoteClient) phoneExitedBookId.current = bookRef.current?.id;
     setBook(undefined);
     closeBook();
-  }, [closeBook, chatCancel]);
+  }, [closeBook, chatCancel, isRemoteClient]);
 
   // Load the library on mount (recent books to switch between).
   useEffect(() => {
@@ -1654,6 +1659,7 @@ export function App() {
       if (!id || id === book?.id) return;
       // On a linked phone, opening happens on the DESKTOP (which then pushes the book back).
       if (isRemoteClient) {
+        phoneExitedBookId.current = undefined; // an explicit re-open clears the "closed it" guard
         sendAppSync({ type: "vrcmd:open", bookId: id });
         return;
       }
@@ -1847,6 +1853,14 @@ export function App() {
             applyChatLiveRef.current(msg);
             break;
           case "vrsync:book":
+            // Don't re-yank the reader into a book they CLOSED on the phone: the desktop keeps it open
+            // and re-mirrors it on every bible/image update, story beat, or re-render. Ignore those
+            // passive re-pushes of the SAME closed book (a DIFFERENT id is a genuine new open → adopt).
+            if (msg.book && msg.book.id === phoneExitedBookId.current && !bookRef.current) {
+              setBible(msg.bible); // keep the bible fresh so a re-open is current
+              break;
+            }
+            if (msg.book?.id !== phoneExitedBookId.current) phoneExitedBookId.current = undefined;
             setBook(msg.book);
             setBible(msg.bible);
             break;
@@ -1942,6 +1956,12 @@ export function App() {
             // The phone drove the landing-page chat; run it HERE on our buddy handlers (we own the
             // models + the working folder), and the chat mirror re-pushes the result to the phone.
             chatCommandRef.current(msg);
+            break;
+          case "vrcmd:chatPlanClear":
+            // The phone dismissed the working checklist — clear it HERE (we own it) so the ChatLive
+            // mirror stops re-pushing it.
+            setBuddyPlan(undefined);
+            void libraryStore.deleteMemo?.(planMemoKey(activeBuddyIdRef.current)).catch(() => {});
             break;
           case "vrcmd:update":
             // The phone asked us to update: run the same pull+rebuild+reload, streaming status back.
@@ -4844,6 +4864,16 @@ export function App() {
     pendingBuddyTranscript.current = [];
     pendingBuddyHistory.current = [];
   }, [isRemoteClient, sendAppSync]);
+  // Dismiss the working checklist. On a phone the desktop owns it (and re-mirrors via ChatLive), so
+  // relay the clear there; clear locally too for an instant response.
+  const onDismissPlan = useCallback(() => {
+    setBuddyPlan(undefined);
+    if (isRemoteClient) {
+      sendAppSync({ type: "vrcmd:chatPlanClear" });
+      return;
+    }
+    void libraryStore.deleteMemo?.(planMemoKey(activeBuddyIdRef.current)).catch(() => {});
+  }, [isRemoteClient, sendAppSync, libraryStore]);
   const onClearBuddy = useCallback(() => {
     if (isRemoteClient) {
       sendAppSync({ type: "vrcmd:chatClear" }); // the desktop owns the chat — clear it there
@@ -6137,7 +6167,7 @@ export function App() {
             busy={buddyBusy}
             {...(buddyActivity ? { activity: buddyActivity } : {})}
             {...(buddySteps.length ? { steps: buddySteps } : {})}
-            {...(buddyPlan ? { plan: buddyPlan } : {})}
+            {...(buddyPlan ? { plan: buddyPlan, onDismissPlan } : {})}
             {...(buddyPendingTool ? { pendingTool: buddyPendingTool } : {})}
             persona={buddyPersona}
             onPersonaChange={onBuddyPersonaChange}
