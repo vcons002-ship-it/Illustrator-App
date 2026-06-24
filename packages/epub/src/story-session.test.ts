@@ -399,16 +399,22 @@ describe("story as you go — Tier-1 methodology", () => {
     // would have no cast — exactly the gap this closes.)
     const store = new InMemoryStore();
     const bookId = "story-preseed";
+    // A carries a seeded DESCRIPTION (e.g. the reader's remembered look in a "me and you"
+    // story) → it must drive A's render descriptor from beat one, not an arbitrary face.
+    const ARIA_LOOK = "weathered, copper-haired, green travelling cloak";
     await store.putBible({
       ...createEmptyBible(bookId),
-      characters: [A, B].map((name) => ({
-        id: `char-${name.toLowerCase()}`,
-        name,
+      characters: [
+        { name: A, traits: [ARIA_LOOK] },
+        { name: B, traits: [] },
+      ].map((c) => ({
+        id: `char-${c.name.toLowerCase()}`,
+        name: c.name,
         aliases: [],
         appearance: emptyAppearance(),
-        persistentTraits: [],
+        persistentTraits: c.traits,
         clothing: [],
-        anchor: { seed: deterministicSeed(name) },
+        anchor: { seed: deterministicSeed(c.name) },
         firstSeenChapter: 0,
       })),
     });
@@ -455,5 +461,8 @@ describe("story as you go — Tier-1 methodology", () => {
     );
     expect(first.prompt).toContain(A);
     expect(first.prompt).toContain(B);
+    // The seeded description rides into A's render descriptor (so the look isn't arbitrary).
+    const ariaTerm = (first.terms ?? []).find((t) => t.names.includes(A));
+    expect(ariaTerm?.descriptor).toContain("copper-haired");
   });
 });

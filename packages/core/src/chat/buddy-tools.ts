@@ -128,7 +128,13 @@ export type BuddyToolCall =
       title: string;
       opening: string;
       style?: string;
-      characters?: string[];
+      /** Named cast to pre-register so they're tracked + visually consistent from beat one.
+       * Each entry's optional `description` seeds that character's LOOK (e.g. the reader's
+       * remembered appearance for a "me and you" story) so the first image isn't arbitrary. */
+      characters?: { name: string; description?: string }[];
+      /** Role-play: the played characters. `you` = the character the READER plays, `me` =
+       * the one YOU (the assistant) play. "me and you" / "us" means the reader and the
+       * assistant ARE the two characters. */
       roleplay?: { you?: string; me?: string };
     }
   /** Advance the OPEN story by one beat: append this prose as the next span and (per the
@@ -676,13 +682,18 @@ export function buildBuddySystemPrompt(opts: {
     "they want) — offer sensible defaults — and only call this once you know enough to build something useful. After it " +
     "opens, refine it conversationally with set_cell / add_formula_column / analyze_data / export_data.\n" +
     '- {"tool":"start_story","title":"The Lantern Road","opening":"<the first beat — a vivid full scene>","style":"storybook ' +
-    'illustration","characters":["Mira","Toll"],"roleplay":{"you":"Mira","me":"Toll"}} — START an illustrated STORY you ' +
-    "co-write with the reader, AS YOU GO. It opens in the reader and the first scene illustrates immediately; every beat " +
-    "after (continue_story) adds prose AND a new image, while the Visual Bible accumulates the characters/places so they " +
-    'stay visually consistent. "style" sets the art look; "characters" seeds known cast; "roleplay" (optional) assigns ' +
-    'the played characters — "you" is the character the READER plays, "me" is the one YOU play (both are assumed present ' +
-    "each beat unless one leaves). Use this when the reader wants to make up / write / role-play a story together (NOT for " +
-    "opening existing text — that's open_pasted_text).\n" +
+    'illustration","characters":["Mira",{"name":"Toll","description":"tall, salt-and-pepper beard, worn leather coat"}],' +
+    '"roleplay":{"you":"Mira","me":"Toll"}} — START an illustrated STORY you co-write with the reader, AS YOU GO. It opens ' +
+    "in the reader and the first scene illustrates immediately; every beat after (continue_story) adds prose AND a new " +
+    'image, while the Visual Bible accumulates the characters/places so they stay visually consistent. "style" sets the ' +
+    'art look. "characters" pre-registers the cast so they\'re consistent from the FIRST image — each entry is a name, or ' +
+    '{"name":"…","description":"…"} to FIX their look (without a description the first image\'s appearance is arbitrary). ' +
+    '"roleplay" assigns the played characters — "you" is the character the READER plays, "me" the one YOU play (both ' +
+    'assumed present each beat unless one leaves). If the reader says "me and you" / "us" (with no character names), then ' +
+    "THEY are one character and YOU (the assistant) are the other: name them (use the reader's name if you know it, else " +
+    'a fitting name) and DESCRIBE the reader\'s character from what you REMEMBER about them (pass it in "characters" so the ' +
+    "art matches), and portray yourself as your own character. Use start_story when the reader wants to make up / write / " +
+    "role-play a story together (NOT for opening existing text — that's open_pasted_text).\n" +
     '- {"tool":"continue_story","text":"<the next beat — a vivid full scene>"} — advance the OPEN story by one beat. Write ' +
     "a rich, FULL-SCENE paragraph (who is there, where, what happens, the mood) using the bible's established names so the " +
     "image stays consistent; it illustrates automatically (per the cadence). In role-play, write ONLY your character's part " +
@@ -696,8 +707,10 @@ export function buildBuddySystemPrompt(opts: {
     "FULL-SCENE prose (who is present, where, what happens, the mood), reusing the bible's established character/place " +
     "names so the art stays consistent; it illustrates automatically. Keep beats moving and end on a hook that invites " +
     "the reader's next move. In ROLE-PLAY (you were given a character at start_story), write ONLY your character's part " +
-    "each beat — never the reader's. Do NOT call open_pasted_text for a story you're co-writing — that's for existing " +
-    "text; use start_story / continue_story. After a tool runs, reply with ONE short line (don't repeat the prose).\n" +
+    'each beat — never the reader\'s. If it\'s a "me and you" story, the reader\'s character IS the reader (portray them ' +
+    "from what you remember about them, consistently) and your character is YOU. Do NOT call open_pasted_text for a story " +
+    "you're co-writing — that's for existing text; use start_story / continue_story. After a tool runs, reply with ONE " +
+    "short line (don't repeat the prose).\n" +
     "SAVED TO THE LIBRARY AUTOMATICALLY: every book you OPEN or CREATE — a library pick, web/pasted text, code, or a " +
     "spreadsheet — is added to the reader's LIBRARY the moment it opens (it appears in the library list above and reopens " +
     "later with open_library_book) and is showing on screen right then, in the data view for a sheet. So a spreadsheet or " +
@@ -1561,10 +1574,19 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
   if (tool === "start_story") {
     const opening = strArg(obj.opening, MAX_PASTE_CHARS);
     if (!opening) return undefined;
+    // Each cast entry is a bare name OR {name, description?} (description seeds the look).
     const characters = Array.isArray(obj.characters)
       ? obj.characters
-          .map((c) => strArg(c, MAX_NAME_CHARS))
-          .filter((c): c is string => !!c)
+          .map((c): { name: string; description?: string } | undefined => {
+            if (typeof c === "string") {
+              const name = strArg(c, MAX_NAME_CHARS);
+              return name ? { name } : undefined;
+            }
+            const name = strArg((c as { name?: unknown })?.name, MAX_NAME_CHARS);
+            const description = strArg((c as { description?: unknown })?.description, 400);
+            return name ? { name, ...(description ? { description } : {}) } : undefined;
+          })
+          .filter((c): c is { name: string; description?: string } => !!c)
           .slice(0, 24)
       : undefined;
     const rp = obj.roleplay as { you?: unknown; me?: unknown } | undefined;

@@ -5948,6 +5948,38 @@ export function App() {
                   )}
                 </div>
               )}
+              {/* Story "lock the look": pin THIS beat's image as a character's IP-Adapter
+                  reference, so every later beat matches the face you actually liked — the
+                  fix for "consistent but arbitrary". A deliberate one-click capture (the app
+                  doesn't auto-capture); future renders pick it up, so regenerate a past beat
+                  to re-illustrate it with the locked look. */}
+              {book.kind === "story" && !isTechnical && bible && bible.characters.length > 0 && results.get(unitIndex)?.image && (
+                <div style={styles.lockLook}>
+                  <span style={styles.lockLookLabel}>📌 Lock this look as:</span>
+                  <div style={styles.lockLookRow}>
+                    {bible.characters.map((c) => (
+                      <button
+                        key={c.id}
+                        style={styles.lockLookButton}
+                        title={`Use this image as ${c.name}'s reference — future beats will match it (regenerate a beat to re-illustrate with it)`}
+                        onClick={() => {
+                          void (async () => {
+                            const img = results.get(unitIndex)?.image;
+                            if (!img) return;
+                            // The display image is raw bytes OR a host-converted Blob; get bytes
+                            // either way, COPYING so the capture never disturbs the shown image.
+                            const bytes = "bytes" in img ? img.bytes.slice(0) : await img.blob.arrayBuffer();
+                            addCharacterReference(c.id, { bytes, mimeType: img.mimeType });
+                            noteAction(`✓ Locked this image as ${c.name}'s look — future beats will match it. Regenerate a beat to re-illustrate it with the new reference.`);
+                          })();
+                        }}
+                      >
+                        {c.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div style={styles.caption}>
                 {pagesPerImage === "chapter"
                   ? `Chapter ${unitIndex + 1} of ${totalUnits}`
@@ -7877,6 +7909,19 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 8,
     padding: "6px 12px",
     fontSize: 13,
+    cursor: "pointer",
+  },
+  // "Lock this look" control under a story beat's image: pin it as a character's reference.
+  lockLook: { marginTop: 6, display: "flex", flexDirection: "column", gap: 4 },
+  lockLookLabel: { fontSize: 11, opacity: 0.6 },
+  lockLookRow: { display: "flex", flexWrap: "wrap", gap: 6 },
+  lockLookButton: {
+    background: "#23262d",
+    color: "#e6e6e6",
+    border: "1px solid rgba(255,255,255,0.18)",
+    borderRadius: 999,
+    padding: "3px 10px",
+    fontSize: 12,
     cursor: "pointer",
   },
   reader: {

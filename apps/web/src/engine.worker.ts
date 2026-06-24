@@ -2879,21 +2879,30 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // Pre-seed the named cast (start_story `characters` + the role-played pair) into the
         // bible BEFORE the open, so the active-scene tracker resolves + keeps them present
         // from beat one even if the opening prose doesn't name them — closing the "setting-
-        // only opening" gap. Each is a minimal entry (name + identity seed, empty look);
-        // extraction UPSERTS by name on the first beat that describes them, enriching this
-        // same entry (no duplicate). Written to the shared store so openBook restores it.
-        const seedNames = [...new Set([...(call.characters ?? []), ...played].map((n) => n.trim()).filter(Boolean))];
-        if (seedNames.length) {
+        // only opening" gap. A cast entry's `description` seeds its LOOK (persistentTraits) so
+        // the first image isn't arbitrary (e.g. the reader's remembered appearance in a "me and
+        // you" story). Extraction UPSERTS by name on the first beat that describes them,
+        // enriching this same entry (no duplicate). Written to the shared store so openBook
+        // restores it. The played pair is added (name-only) when not already in `characters`.
+        const seedCast: { name: string; description?: string }[] = [...(call.characters ?? []), ...played.map((name) => ({ name }))];
+        const seen = new Set<string>();
+        const cast = seedCast.filter((c) => {
+          const k = c.name.trim().toLowerCase();
+          if (!k || seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
+        if (cast.length) {
           await store.putBible({
             ...createEmptyBible(id),
-            characters: seedNames.map((name) => ({
-              id: `char-${storySlug(name)}`,
-              name,
+            characters: cast.map((c) => ({
+              id: `char-${storySlug(c.name)}`,
+              name: c.name.trim(),
               aliases: [],
               appearance: emptyAppearance(),
-              persistentTraits: [],
+              persistentTraits: c.description ? [c.description] : [],
               clothing: [],
-              anchor: { seed: deterministicSeed(name) },
+              anchor: { seed: deterministicSeed(c.name) },
               firstSeenChapter: 0,
             })),
           });

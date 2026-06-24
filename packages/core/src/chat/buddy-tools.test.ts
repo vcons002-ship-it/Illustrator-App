@@ -527,7 +527,7 @@ describe("create_spreadsheet tool", () => {
 });
 
 describe("story as you go tools", () => {
-  it("parses start_story (opening required; style/characters/roleplay optional)", () => {
+  it("parses start_story (opening required; cast accepts names or {name,description})", () => {
     expect(
       parseBuddyToolCall(
         JSON.stringify({
@@ -535,7 +535,7 @@ describe("story as you go tools", () => {
           title: "The Lantern Road",
           opening: "Mira lit the last lantern as Toll watched from the bridge.",
           style: "storybook illustration",
-          characters: ["Mira", "Toll", ""],
+          characters: ["Mira", { name: "Toll", description: "tall, salt-and-pepper beard" }, "", { name: "" }],
           roleplay: { you: "Mira", me: "Toll" },
         }),
       ),
@@ -544,11 +544,17 @@ describe("story as you go tools", () => {
       title: "The Lantern Road",
       opening: "Mira lit the last lantern as Toll watched from the bridge.",
       style: "storybook illustration",
-      characters: ["Mira", "Toll"],
+      characters: [{ name: "Mira" }, { name: "Toll", description: "tall, salt-and-pepper beard" }],
       roleplay: { you: "Mira", me: "Toll" },
     });
     // No opening → not a valid start.
     expect(parseBuddyToolCall('{"tool":"start_story","title":"x"}')).toBeUndefined();
+  });
+
+  it("documents 'me and you' role-play in the system prompt", () => {
+    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    expect(prompt).toMatch(/me and you/i);
+    expect(prompt).toMatch(/remember/i); // portray the reader's character from memory
   });
 
   it("parses continue_story / render_scene / set_story_cadence", () => {
