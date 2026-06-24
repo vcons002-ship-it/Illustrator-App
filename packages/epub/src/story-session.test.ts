@@ -465,4 +465,67 @@ describe("story as you go — Tier-1 methodology", () => {
     const ariaTerm = (first.terms ?? []).find((t) => t.names.includes(A));
     expect(ariaTerm?.descriptor).toContain("copper-haired");
   });
+
+  it("after a reopen, render_scene of a TERSE past beat uses that beat's persisted tracked cast", async () => {
+    // Beat 0 establishes Aria + Borin; beat 1 is terse (names no one) → tracked cast carries.
+    const beats: Beat[] = [
+      { text: "Scene 0. Aria and Borin meet at Highspire.", mentioned: [A, B], enters: [], exits: [], location: HIGH, present: [A, B], expectLocation: HIGH },
+      { text: "Scene 1. A long, wordless silence.", mentioned: [], enters: [], exits: [], present: [A, B], expectLocation: HIGH },
+    ];
+    const store = new InMemoryStore();
+    const bookId = "story-reopen";
+
+    // --- Live session: build the bible + images on `store`, capturing each beat's scene. ---
+    let scene: StoryScene = emptyStoryScene();
+    const liveScenes: StoryScene[] = [];
+    const engine1 = new Engine({
+      llm: new ScriptedLLM(beats),
+      image: new MockImageProvider(),
+      store,
+      tier: { ...DEFAULT_TIER_CONFIG, tier: "local" },
+      illustrateAfter: "chapter",
+      onChapterExtracted: (k, bible) => {
+        const b = beats[k]!;
+        scene = advanceStoryScene(scene, bible, { mentionedNames: b.mentioned, ...(b.location ? { location: b.location } : {}) });
+        liveScenes[k] = scene;
+        return presentFromScene(scene);
+      },
+    });
+    let book = storyBook(bookId, "Reopen", undefined, [beats[0]!.text]);
+    await engine1.openBook(toRenderUnits(book, "chapter").book);
+    engine1.startGeneration();
+    await vi.waitFor(() => expect(engine1.resultFor(0)?.status).toBe("ready"));
+    book = appendStoryChapter(book, [beats[0]!.text], beats[1]!.text);
+    await engine1.appendChapter(toRenderUnits(book, "chapter").book);
+    await vi.waitFor(() => expect(engine1.resultFor(1)?.status).toBe("ready"));
+    expect(new Set(liveScenes[1]!.presentCharacterIds)).toEqual(new Set(["char-aria", "char-borin"]));
+
+    // --- Reopen: a FRESH engine on the SAME store (bible + images cached, no re-extraction). ---
+    const image2 = new MockImageProvider();
+    const real2 = image2.generate.bind(image2);
+    const captured = new Map<number, ImageGenerationInput>();
+    vi.spyOn(image2, "generate").mockImplementation(async (input) => {
+      const m = /\[beat (\d+)\]/.exec(input.prompt);
+      if (m) captured.set(Number(m[1]), input);
+      return real2(input);
+    });
+    const engine2 = new Engine({
+      llm: new ScriptedLLM(beats),
+      image: image2,
+      store,
+      tier: { ...DEFAULT_TIER_CONFIG, tier: "local" },
+      illustrateAfter: "chapter",
+    });
+    await engine2.openBook(toRenderUnits(book, "chapter").book);
+    // Restore the per-beat overrides — exactly what the worker does from storyConfig.scenes.
+    liveScenes.forEach((sc, k) => engine2.setStoryPresent(k, presentFromScene(sc)));
+
+    // Re-illustrate the TERSE beat 1 on demand. Its text names no one, so WITHOUT the restored
+    // snapshot a re-scan would find nobody — the restore is what keeps Aria + Borin in frame.
+    await engine2.renderScene(1, 1);
+    await vi.waitFor(() => expect(captured.has(1)).toBe(true));
+    expect(new Set((captured.get(1)!.anchors ?? []).map((a) => a.seed))).toEqual(
+      new Set([deterministicSeed(A), deterministicSeed(B)]),
+    );
+  });
 });

@@ -207,6 +207,9 @@ interface StorySessionState {
   author?: string;
   beats: string[];
   scene: StoryScene;
+  /** Per-beat active-scene SNAPSHOTS (index = beat); persisted so a reopen resumes the exact
+   * scene and render_scene of a past beat uses that beat's cast/location. */
+  scenes: StoryScene[];
   roleplay?: StoryRoleplay;
   cadence: { mode: "per-response" | "every-n" | "manual"; n: number };
   beatsSinceImage: number;
@@ -244,6 +247,14 @@ function storyPresentFor(chapterIndex: number, bible: VisualBible): StoryPresent
     { mentionedNames: bibleNamesInText(text, bible), ...(scene?.location ? { location: scene.location } : {}) },
     story.roleplay,
   );
+  story.scenes[chapterIndex] = story.scene; // snapshot this beat's tracked scene (persisted below)
+  // Persist the just-tracked snapshot immediately + durably: extraction is async (it finishes
+  // after the chat turn, so a buddy-request reply can't be relied on), so the worker writes the
+  // book itself. A reopen's getBook then has the latest beat's scene too (not lagging by one).
+  if (currentBook?.kind === "story" && currentBook.id === story.bookId) {
+    currentBook = { ...currentBook, storyConfig: storyConfigOf(story) };
+    void buddyStore?.putBook(currentBook).catch(() => {});
+  }
   return presentFromScene(story.scene);
 }
 
@@ -258,37 +269,52 @@ function beatsFromBook(book: BookSource): string[] {
   return book.chapters.map((c) => (byChapter.get(c.id) ?? []).join("\n\n"));
 }
 
-/** The book-persisted view of the live session (role-play + cadence), so a reopen resumes them. */
+/** The book-persisted view of the live session (role-play, cadence, per-beat scene snapshots),
+ * so a reopen resumes the exact scene + contract. */
 function storyConfigOf(s: StorySessionState): NonNullable<BookSource["storyConfig"]> {
-  return { ...(s.roleplay ? { roleplay: s.roleplay } : {}), cadence: s.cadence };
+  return {
+    ...(s.roleplay ? { roleplay: s.roleplay } : {}),
+    cadence: s.cadence,
+    scenes: s.scenes.map((sc) => ({ presentCharacterIds: [...sc.presentCharacterIds], ...(sc.locationId ? { locationId: sc.locationId } : {}) })),
+  };
 }
 
-/** Rebuild the story session from a reopened story book (fresh worker / library reopen). The
- * active-scene `scene` is replayed from the beats against the restored bible — using the
- * PERSISTED role-play (so a played cast is seeded) — and role-play + cadence are restored from
- * the book's `storyConfig`, so a resumed story keeps its contract, not the defaults. */
+/** Rebuild the story session from a reopened story book (fresh worker / library reopen).
+ * Per-beat scene SNAPSHOTS are restored from the book's persisted `storyConfig.scenes` where
+ * present (authoritative); any un-persisted tail (at most the latest beat) is replayed from the
+ * last known snapshot against the restored bible — so the resumed scene is exact and complete.
+ * Role-play + cadence are restored from `storyConfig`, so the contract survives, not defaults. */
 function rebuildStoryFromBook(book: BookSource, bible: VisualBible | undefined): StorySessionState {
   const beats = beatsFromBook(book);
   const roleplay = book.storyConfig?.roleplay;
   const cadence = book.storyConfig?.cadence ?? { mode: "per-response" as const, n: 3 };
-  let scene = emptyStoryScene();
-  if (bible) {
-    beats.forEach((text, k) => {
+  const persisted = book.storyConfig?.scenes ?? [];
+  const scenes: StoryScene[] = [];
+  let running: StoryScene = emptyStoryScene();
+  beats.forEach((text, k) => {
+    const snap = persisted[k];
+    if (snap) {
+      running = { presentCharacterIds: [...snap.presentCharacterIds], ...(snap.locationId ? { locationId: snap.locationId } : {}) };
+    } else if (bible) {
+      // Replay the un-persisted tail from the last snapshot (deterministic — same inputs the
+      // live tracker used: this beat's mentioned cast + its scene location + the role-play seed).
       const s = bible.storyboard.find((x) => x.chapterIndex === k);
-      scene = advanceStoryScene(
-        scene,
+      running = advanceStoryScene(
+        running,
         bible,
         { mentionedNames: bibleNamesInText(text, bible), ...(s?.location ? { location: s.location } : {}) },
         roleplay,
       );
-    });
-  }
+    }
+    scenes[k] = running;
+  });
   return {
     bookId: book.id,
     title: book.title,
     ...(book.author ? { author: book.author } : {}),
     beats,
-    scene,
+    scene: scenes[scenes.length - 1] ?? emptyStoryScene(),
+    scenes,
     ...(roleplay ? { roleplay } : {}),
     cadence: { mode: cadence.mode, n: cadence.n ?? 3 },
     beatsSinceImage: 0,
@@ -2883,6 +2909,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           author: "Story with the chat buddy",
           beats: [call.opening],
           scene: emptyStoryScene(),
+          scenes: [],
           ...(played.length ? { roleplay: { playedCharacterNames: played } } : {}),
           cadence: { mode: "per-response", n: 3 },
           beatsSinceImage: 0,
@@ -3556,9 +3583,14 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     // Loads the book + restores cached bible/images, but does NOT generate. The
     // user triggers generation via the "start" message ("Begin generating book").
     await engine.openBook(renderBook);
-    // On a reopen, replay the active scene from the beats against the now-restored cached
-    // bible so a post-reopen append carries the correct cast forward. (No-op for live starts.)
-    if (reopenedStory && engine.getBible()) story = rebuildStoryFromBook(book, engine.getBible());
+    // On a reopen, restore the per-beat scene snapshots (persisted, replay-filled) and PUSH
+    // each into the engine — nothing re-extracts on a cached reopen, so this is what makes
+    // render_scene of a PAST beat use that beat's exact tracked cast/location, and a
+    // post-reopen append carry the correct scene forward. (No-op for live starts.)
+    if (reopenedStory && engine.getBible()) {
+      story = rebuildStoryFromBook(book, engine.getBible());
+      story.scenes.forEach((sc, k) => engine!.setStoryPresent(k, presentFromScene(sc)));
+    }
     // Open is complete — now a deferred start can actually run (and `beginGeneration`
     // below sees `opening === false`). Replaying covers a `start` that arrived during
     // the open (e.g. the buddy's "open and illustrate it") as well as a settings re-open.

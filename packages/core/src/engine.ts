@@ -1031,6 +1031,17 @@ export class Engine {
   }
 
   /**
+   * Story "as you go": pin a beat's tracked present cast + location on the pipeline so its
+   * render uses that exact scene. Normally the bible hook (`onChapterExtracted`) sets this
+   * live during extraction; this public form lets the host RESTORE the per-beat snapshots on
+   * a reopen (when nothing re-extracts), so re-illustrating a past beat (`render_scene`) and
+   * continuing both resume the precise scene. No-op before a book is open.
+   */
+  setStoryPresent(chapterIndex: number, present: StoryPresent): void {
+    this.pipeline?.setStoryPresent(chapterIndex, present);
+  }
+
+  /**
    * Story "as you go": grow the OPEN book by one already-segmented beat WITHOUT a
    * re-open. `renderBook` must share this book's id and be a positional SUPERSET — every
    * prior chapter/page id byte-identical, the new beat's unit(s) appended at the END

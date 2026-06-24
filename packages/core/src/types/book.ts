@@ -82,6 +82,13 @@ export interface BookSource {
     roleplay?: { playedCharacterNames: string[] };
     /** How often a beat auto-illustrates. */
     cadence?: { mode: "per-response" | "every-n" | "manual"; n: number };
+    /**
+     * Per-beat active-scene SNAPSHOTS (index = beat/chapter): the exact tracked present cast
+     * + location at each beat, so a reopen resumes the precise scene AND re-illustrating a
+     * past beat (render_scene) uses that beat's cast/setting — not a re-derivation. (Inlined
+     * to avoid importing the StoryScene type into the book model.)
+     */
+    scenes?: { presentCharacterIds: string[]; locationId?: string }[];
   };
   /** For a `code` book: the source language (e.g. "ts", "python"), for the reader's code view. */
   language?: string;
