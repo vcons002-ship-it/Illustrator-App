@@ -4177,6 +4177,11 @@ export function App() {
             }
           }, 60);
         }
+      } else if (e.kind === "storyConfig") {
+        // Role-play / cadence changed (no new beat) — persist the book's storyConfig so it
+        // survives a reopen. setBook keeps the open reader's copy current; no scroll.
+        setBook(e.book);
+        void libraryStore.putBook(e.book).catch(() => {});
       } else {
         setBuddyActivity("");
         // The agent just read/wrote the calendar or tasks — reflect it in the app's views.

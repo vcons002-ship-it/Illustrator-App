@@ -258,19 +258,29 @@ function beatsFromBook(book: BookSource): string[] {
   return book.chapters.map((c) => (byChapter.get(c.id) ?? []).join("\n\n"));
 }
 
+/** The book-persisted view of the live session (role-play + cadence), so a reopen resumes them. */
+function storyConfigOf(s: StorySessionState): NonNullable<BookSource["storyConfig"]> {
+  return { ...(s.roleplay ? { roleplay: s.roleplay } : {}), cadence: s.cadence };
+}
+
 /** Rebuild the story session from a reopened story book (fresh worker / library reopen). The
- * active-scene `scene` is replayed from the beats against the restored bible so a post-reopen
- * append still carries the right cast forward. Role-play/cadence aren't persisted (default). */
+ * active-scene `scene` is replayed from the beats against the restored bible — using the
+ * PERSISTED role-play (so a played cast is seeded) — and role-play + cadence are restored from
+ * the book's `storyConfig`, so a resumed story keeps its contract, not the defaults. */
 function rebuildStoryFromBook(book: BookSource, bible: VisualBible | undefined): StorySessionState {
   const beats = beatsFromBook(book);
+  const roleplay = book.storyConfig?.roleplay;
+  const cadence = book.storyConfig?.cadence ?? { mode: "per-response" as const, n: 3 };
   let scene = emptyStoryScene();
   if (bible) {
     beats.forEach((text, k) => {
       const s = bible.storyboard.find((x) => x.chapterIndex === k);
-      scene = advanceStoryScene(scene, bible, {
-        mentionedNames: bibleNamesInText(text, bible),
-        ...(s?.location ? { location: s.location } : {}),
-      });
+      scene = advanceStoryScene(
+        scene,
+        bible,
+        { mentionedNames: bibleNamesInText(text, bible), ...(s?.location ? { location: s.location } : {}) },
+        roleplay,
+      );
     });
   }
   return {
@@ -279,7 +289,8 @@ function rebuildStoryFromBook(book: BookSource, bible: VisualBible | undefined):
     ...(book.author ? { author: book.author } : {}),
     beats,
     scene,
-    cadence: { mode: "per-response", n: 3 },
+    ...(roleplay ? { roleplay } : {}),
+    cadence: { mode: cadence.mode, n: cadence.n ?? 3 },
     beatsSinceImage: 0,
   };
 }
@@ -2907,7 +2918,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             })),
           });
         }
-        const book = storyBook(id, story.title, story.author, story.beats);
+        // Persist role-play + cadence ON the book (storyConfig) so a reopen resumes them.
+        const book = { ...storyBook(id, story.title, story.author, story.beats), storyConfig: storyConfigOf(story) };
         return opened(book, true); // visuals on → beat one illustrates
       },
       // Append the next beat to the OPEN story. Stays IN the worker (no re-open): grows the
@@ -2927,7 +2939,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           illustrate = story.beatsSinceImage >= story.cadence.n;
         }
         if (illustrate) story.beatsSinceImage = 0;
-        const book = storyBook(story.bookId, story.title, story.author, story.beats);
+        const book = { ...storyBook(story.bookId, story.title, story.author, story.beats), storyConfig: storyConfigOf(story) };
         const renderBook = toRenderUnits(book, "chapter").book;
         const { firstNewUnit } = await engine.appendChapter(renderBook, { illustrate });
         currentBook = book; // keep the chat's book context current
@@ -2957,6 +2969,12 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         if (!story) throw new Error("no story is open");
         story.cadence = { mode: call.mode, n: call.n ?? story.cadence.n };
         if (call.mode === "per-response") story.beatsSinceImage = 0;
+        // Persist the new cadence immediately (no new beat) so it survives a reopen: patch the
+        // open book's storyConfig and hand it to the host to setBook + putBook.
+        if (currentBook?.kind === "story" && currentBook.id === story.bookId) {
+          currentBook = { ...currentBook, storyConfig: storyConfigOf(story) };
+          post({ type: "storyConfig", requestId: msg.requestId, book: currentBook });
+        }
         return { mode: story.cadence.mode, ...(story.cadence.mode === "every-n" ? { n: story.cadence.n } : {}) };
       },
       removeLibraryBook: async (call) => {

@@ -965,17 +965,33 @@ export function mergeExtraction(
     });
   }
 
+  // Cross-chapter location carry-forward (the best practice the as-you-go story tracker
+  // proved): when THIS chapter names no location, the scene almost always continues in the
+  // place already established — inherit the most recent prior chapter's location so a unit is
+  // never left location-less (which let the render drift to a different setting). A real move
+  // sets a fresh `location`, which always wins. Within-chapter fallback (the chapter location
+  // folded into each beat) was already handled by mapKeyEventsToUnits; this extends the same
+  // idea ACROSS chapters, unifying book + story scene tracking.
+  const carriedLocation =
+    (raw.location ?? "").trim() ||
+    (() => {
+      for (let i = chapterIndex - 1; i >= 0; i--) {
+        const loc = bible.storyboard.find((s) => s.chapterIndex === i)?.location?.trim();
+        if (loc) return loc;
+      }
+      return "";
+    })();
   // Upsert this chapter's storyboard scene (idempotent re-run replaces it). Fold in the
   // per-scene image prompts: map raw.keyEvents[i] → the chapter's unitRanges[i].
-  const incoming = mapKeyEventsToUnits(raw.keyEvents, unitRanges, raw.location ?? "");
-  if (raw.summary || raw.keyMoment || raw.location || incoming.length > 0) {
+  const incoming = mapKeyEventsToUnits(raw.keyEvents, unitRanges, carriedLocation);
+  if (raw.summary || raw.keyMoment || carriedLocation || incoming.length > 0) {
     const at = bible.storyboard.findIndex((s) => s.chapterIndex === chapterIndex);
     const prev = at >= 0 ? bible.storyboard[at] : undefined;
     const scene: ChapterScene = {
       chapterIndex,
       summary: raw.summary ?? "",
       keyMoment: raw.keyMoment ?? "",
-      location: raw.location ?? "",
+      location: carriedLocation,
       locationChange: raw.locationChange ?? "",
       // Fresh keyEvents win; if none came back this run, keep any prior ones.
       ...(incoming.length > 0

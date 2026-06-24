@@ -72,6 +72,17 @@ export interface BookSource {
    * beat can be written. Absent for ordinary imported/created books.
    */
   kind?: "story";
+  /**
+   * Story "as you go" session settings, persisted WITH the book so a reopen resumes the
+   * role-play contract + image cadence (the cast/looks themselves rebuild from the Visual
+   * Bible). Absent for non-story books.
+   */
+  storyConfig?: {
+    /** The played characters (e.g. a "me and you" pair) — assumed present each beat. */
+    roleplay?: { playedCharacterNames: string[] };
+    /** How often a beat auto-illustrates. */
+    cadence?: { mode: "per-response" | "every-n" | "manual"; n: number };
+  };
   /** For a `code` book: the source language (e.g. "ts", "python"), for the reader's code view. */
   language?: string;
   /** Structured grid for a spreadsheet/CSV import — powers the chat's `analyze_data`
