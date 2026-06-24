@@ -338,12 +338,13 @@ export async function runBuddyTurn(opts: {
       // dumped to the reader as prose (that's the raw-JSON-in-chat bug). Nudge the model to
       // re-issue it properly; otherwise it's a normal plain-text answer.
       if (round < effectiveMax && looksLikeToolJson(reply)) {
-        transcript.push({ role: "assistant", content: reply });
+        // Keep the malformed attempt + the re-issue nudge in the MODEL's context ONLY — pushing
+        // them to `transcript` persists them as chat history, which leaked the internal directive
+        // into the conversation as a "user" message.
         messages.push({ role: "assistant", content: reply });
         const nudge =
           "[That looked like a tool call but wasn't something I could run. Re-issue each tool call " +
           "as its own JSON object (one per line, no prose around them), or just answer in plain text.]";
-        transcript.push({ role: "user", content: nudge });
         messages.push({ role: "user", content: nudge });
         continue;
       }
@@ -351,12 +352,14 @@ export async function runBuddyTurn(opts: {
       // The model ended on a tool/blank with NO prose. Ask once for a plain-text wrap-up so the
       // reader never gets an empty bubble; if it's still empty, fall back to a short line.
       if (!clean && !wrappedUp) {
-        transcript.push({ role: "assistant", content: reply });
         wrappedUp = true;
+        // Context-ONLY (never the persisted transcript): the empty/tool reply + this wrap directive
+        // are internal control flow — persisting them leaked "[Now reply to the reader in plain
+        // text…]" into the chat as a user message.
+        messages.push({ role: "assistant", content: reply });
         const wrap =
           "[Now reply to the reader in plain text — briefly say what you did or found. No tool calls.]";
         messages.push({ role: "user", content: wrap });
-        transcript.push({ role: "user", content: wrap });
         continue;
       }
       // AUTO-CONTINUE: the server CUT THE ANSWER OFF at the token budget. Keep asking it to pick up
