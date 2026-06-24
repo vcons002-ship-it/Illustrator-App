@@ -614,7 +614,7 @@ export function buildBuddySystemPrompt(opts: {
     '- {"tool":"search_images","query":"…"} — find a REAL existing figure/diagram/photo; it is shown to the reader inline.\n' +
     '- {"tool":"generate_image","prompt":"…"} — generate a NEW image with the app\'s image model (the reader approves it first). ' +
     'Optional: "model" (an installed image model they name), "steps" (sampler steps), "style" (an art style name), ' +
-    '"highRes" (true when they ask for a high-resolution / more-detailed / larger image — renders native then upscales in a second pass; local engine only).\n' +
+    '"highRes" (ONLY when the reader EXPLICITLY asks for a high-resolution / higher-res / upscaled / larger / sharper image — it renders native then upscales in a slow second pass, local engine only. Do NOT set it just because the SUBJECT is detailed or the description is long — a detailed prompt is not a request for high resolution. Default: omit it).\n' +
     "PICKING THE IMAGE TOOL (same rule in every persona): \"show me / find / pull up / look up / what does X " +
     'look like" = the reader wants a REAL image → search_images. "generate / draw / make / create / paint / ' +
     'imagine" = the reader wants NEW art → generate_image. If genuinely ambiguous, prefer search_images for ' +
