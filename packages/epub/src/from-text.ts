@@ -80,7 +80,7 @@ export function bookFromCode(title: string, code: string, language?: string, aut
     { id, title: title.trim() || "Code", ...(author ? { author } : {}) },
     splitCodeSections(title.trim() || "Code", body),
   );
-  return { ...book, contentMode: "code", ...(language ? { language } : {}) };
+  return { ...book, contentMode: "code", code: body, ...(language ? { language } : {}) };
 }
 
 /**

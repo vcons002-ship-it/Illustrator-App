@@ -286,6 +286,23 @@ describe("jsonGatedTokenSink", () => {
     expect(out.join("").trim()).toBe("Here is your briefing.");
     expect(out.join("")).not.toContain("{");
   });
+
+  it("mutes an INLINE tool call the model runs straight onto a sentence (no newline)", async () => {
+    const { jsonGatedTokenSink } = await import("./chat-session.js");
+    const out: string[] = [];
+    const sink = jsonGatedTokenSink((t) => out.push(t));
+    for (const ch of 'Sure, drawing it now: {"tool":"generate_image","prompt":"a cat"}') sink(ch);
+    expect(out.join("").trim()).toBe("Sure, drawing it now:");
+    expect(out.join("")).not.toContain("{");
+  });
+
+  it("still streams prose that merely contains balanced braces", async () => {
+    const { jsonGatedTokenSink } = await import("./chat-session.js");
+    const out: string[] = [];
+    const sink = jsonGatedTokenSink((t) => out.push(t));
+    for (const ch of "Use the {placeholder} token in your template.") sink(ch);
+    expect(out.join("")).toBe("Use the {placeholder} token in your template.");
+  });
 });
 
 describe("trimChatHistory", () => {

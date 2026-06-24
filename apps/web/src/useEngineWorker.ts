@@ -243,6 +243,7 @@ export interface EngineWorkerApi {
     onEvent: (e: BuddyStreamEvent) => void,
     workingDir?: string,
     taskPlanId?: string,
+    currentCodeFile?: { name: string; title: string; language?: string },
   ) => Promise<BuddyDoneResult>;
   /** Abort the in-flight buddy round, if any. */
   buddyCancel: () => void;
@@ -358,6 +359,8 @@ export interface BuddyDoneResult {
   pendingTool?: BuddyToolCall;
   /** The turn's reasoning, persisted onto the settled message as a collapsible. */
   thinking?: string;
+  /** The turn paused at a cloud "keep going?" budget checkpoint — offer a Continue affordance. */
+  paused?: boolean;
   error?: string;
 }
 
@@ -964,6 +967,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             transcript: msg.transcript,
             ...(msg.pendingTool ? { pendingTool: msg.pendingTool } : {}),
             ...(msg.thinking ? { thinking: msg.thinking } : {}),
+            ...(msg.paused ? { paused: true } : {}),
           });
           break;
         }
@@ -1584,6 +1588,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       onEvent: (e: BuddyStreamEvent) => void,
       workingDir?: string,
       taskPlanId?: string,
+      currentCodeFile?: { name: string; title: string; language?: string },
     ): Promise<BuddyDoneResult> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
@@ -1614,7 +1619,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             resolve(r);
           },
         });
-        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}) });
+        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}) });
       }),
     [],
   );

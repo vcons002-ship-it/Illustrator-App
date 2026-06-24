@@ -78,17 +78,26 @@ export function jsonGatedTokenSink(emit: (text: string) => void): (delta: string
       }
       mode = "live";
     }
-    // Live prose. If a tool call (or fence) starts on its OWN line — the model appended one after a
-    // briefing — emit the prose up to it and mute the rest so the raw JSON never shows.
-    const boundary = /\n[ \t]*(\{|```)/.exec(buffer);
-    if (boundary) {
-      if (boundary.index > 0) emit(buffer.slice(0, boundary.index));
+    // Live prose. Mute as soon as a tool call BEGINS — either a `{` / code fence at the start of a
+    // line (a call appended after a briefing) OR an inline `{"tool"|"name"|"function":…}` object the
+    // model ran straight onto the end of a sentence with no newline. Emit the prose up to it, then
+    // mute the rest so the raw JSON never streams into the bubble.
+    const lineStart = /\n[ \t]*(?:\{|```)/.exec(buffer);
+    const inlineTool = /\{\s*"(?:tool|name|function)"\s*:/.exec(buffer);
+    const boundaryIdx = Math.min(
+      lineStart ? lineStart.index : Number.POSITIVE_INFINITY,
+      inlineTool ? inlineTool.index : Number.POSITIVE_INFINITY,
+    );
+    if (boundaryIdx !== Number.POSITIVE_INFINITY) {
+      if (boundaryIdx > 0) emit(buffer.slice(0, boundaryIdx));
       buffer = "";
       mode = "mute";
       return;
     }
-    // Otherwise stream eagerly, but HOLD a trailing "\n   " (it could be the start of "\n{…}").
-    const tail = /\n[ \t]*$/.exec(buffer);
+    // Otherwise stream eagerly, but HOLD a trailing partial that could be the START of a tool call:
+    // a "\n   " (start of "\n{…}") OR a dangling unclosed "{…" (the model has begun an inline object
+    // whose first key hasn't arrived yet) — so we don't emit a "{" that's about to become tool JSON.
+    const tail = /\n[ \t]*$|\{[^{}]*$/.exec(buffer);
     if (tail) {
       if (tail.index > 0) emit(buffer.slice(0, tail.index));
       buffer = buffer.slice(tail.index);

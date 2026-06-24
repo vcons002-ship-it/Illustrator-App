@@ -350,6 +350,23 @@ export function App() {
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const [book, setBook] = useState<BookSource | undefined>();
+  // Current book in a ref so callbacks/event handlers (which capture a render-time `book`) can read
+  // the live value — e.g. to dedupe a buddy re-open of the book that's already showing.
+  const bookRef = useRef(book);
+  bookRef.current = book;
+  // Code books open as a full-screen, editable code workspace (run / test / edit in place). `codeDraft`
+  // is the live editor text; `codeEditMode` toggles to the illustrated reading view; the run output is
+  // shown under the editor. `codeSaveTimer` debounces persisting edits back to the library + workspace.
+  const [codeDraft, setCodeDraft] = useState<string>("");
+  const [codeEditMode, setCodeEditMode] = useState(true);
+  // Show the code book's analysis (glossary of symbols, module map, current illustration) in a side
+  // pane alongside the editor, so it's available without leaving the editor for the read view.
+  const [codeAnalysisOpen, setCodeAnalysisOpen] = useState(false);
+  const [codeRunning, setCodeRunning] = useState(false);
+  const [codeRunOutput, setCodeRunOutput] = useState<
+    { stdout?: string; stderr?: string; code?: number; error?: string; cwd?: string } | undefined
+  >();
+  const codeSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [localError, setLocalError] = useState<string>("");
   const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
   // Split-file component files (text encoders / VAEs) the local engine has, for the
@@ -569,6 +586,16 @@ export function App() {
     if (isRemoteClient) return;
     void loadTaskPlans(libraryStore).then(setTaskPlans).catch(() => {});
   }, [libraryStore, isRemoteClient]);
+  // Load the desktop's saved memories + task plans + skills ONCE on startup, so they're populated
+  // BEFORE any panel is opened — and therefore already present in the snapshot/mirror a linked phone
+  // receives on connect. Without this they sat [] until the desktop user happened to open each panel
+  // (or the buddy edited them), so a freshly-loaded desktop mirrored EMPTY tasks/memories/skills to
+  // the phone. All three refreshers no-op on the phone (it owns no store and gets them via the mirror).
+  useEffect(() => {
+    refreshMemories();
+    refreshTaskPlans();
+    refreshSkills();
+  }, [refreshMemories, refreshTaskPlans, refreshSkills]);
   // On a linked phone, Tasks/Calendar actions are RELAYED to the desktop (which owns the data and
   // re-mirrors the result). Each handler below early-returns through this when isRemoteClient.
   const sendPlanner = useCallback(
@@ -900,6 +927,9 @@ export function App() {
   // The pending generate_image's transcript (assistant JSON turn), folded into the
   // history only when the user approves — a dismissed call never reaches the model.
   const pendingTranscript = useRef<ChatTurn[]>([]);
+  // Same synchronous double-render guard as the buddy (see buddyRenderingRef): a fast double-click /
+  // relayed approve can't fire the in-book render twice.
+  const chatRenderingRef = useRef(false);
   // Landing-page buddy (persisted under its own key; finds + opens books via tools).
   const [buddyMessages, setBuddyMessages] = useState<StoredChatMessage[]>([]);
   const [buddyBusy, setBuddyBusy] = useState(false);
@@ -977,6 +1007,11 @@ export function App() {
   // The pending generate_image's transcript, folded in only on approval (same
   // injection guard as the book chat's pendingTranscript).
   const pendingBuddyTranscript = useRef<ChatTurn[]>([]);
+  // Synchronous guard against a DOUBLE render: fullAutonomy fire-and-forgets approveGenerateImage
+  // while setBuddyPendingTool(undefined) is still an async React update, so a second approval (a
+  // manual click, or the phone's vrcmd:chatApproveTool relay) can grab the same pending tool and
+  // render again. A ref flips synchronously, so the duplicate is dropped before it can re-enter.
+  const buddyRenderingRef = useRef(false);
   // The model-facing history of the turn that produced a pendingTool — so an
   // approved run_command can auto-react with the exact context up to its call.
   const pendingBuddyHistory = useRef<ChatTurn[]>([]);
@@ -1592,19 +1627,6 @@ export function App() {
   useEffect(() => {
     void libraryStore.listBooks().then(setLibrary).catch(() => {});
   }, [libraryStore]);
-
-  // Desktop: eagerly load the assistant's accumulated panels (memories, tasks, skills) at startup.
-  // They otherwise load LAZILY (only when their panel is opened on the desktop), so a phone that
-  // connects — or opens those panels itself — would mirror an EMPTY desktop state. The phone's own
-  // loaders are gated (they'd clobber the mirror), so the desktop must populate the source of truth
-  // up front; the snapshot + per-slice push effects then carry them to a linked phone. (Calendar is
-  // Google-gated and loads on connect via refreshCalendar.)
-  useEffect(() => {
-    if (isRemoteClient) return;
-    refreshMemories();
-    refreshTaskPlans();
-    refreshSkills();
-  }, [isRemoteClient, refreshMemories, refreshTaskPlans, refreshSkills]);
 
   const onPickBook = useCallback(
     async (id: string) => {
@@ -2605,8 +2627,21 @@ export function App() {
   // are gated on isRemoteClient), so this mirror is its only source of chat state.
   const applyChat = useCallback((c: ChatMirror) => {
     setBuddySessions(c.sessions.map((s) => ({ id: s.id, workingDir: s.workingDir, ...(s.label ? { label: s.label } : {}) })));
+    // Never let an OLDER desktop snapshot erase chat the phone is already showing. A stale vrsync:chat
+    // can race a phone-typed message: the desktop re-pushes its pre-send history before it has run the
+    // new turn, which used to clobber the phone's in-flight message ("lost the new chat on mobile").
+    // If we're on the SAME session and the incoming history is a strict PREFIX of what we show (fewer
+    // messages, all matching by role+timestamp), it's stale — keep ours and wait for the real (longer)
+    // update that includes the message. A different activeId is a genuine switch/new chat — adopt fully.
+    const sameSession = activeBuddyIdRef.current === c.activeId;
     setActiveBuddyId(c.activeId);
-    setBuddyMessages(c.messages);
+    setBuddyMessages((prev) =>
+      sameSession &&
+      c.messages.length < prev.length &&
+      c.messages.every((m, i) => prev[i] && prev[i].role === m.role && prev[i].at === m.at)
+        ? prev
+        : c.messages,
+    );
     setBuddyPersona(c.persona);
     setBuddyBusy(c.busy);
   }, []);
@@ -3248,24 +3283,30 @@ export function App() {
   const onApproveChatTool = useCallback(async () => {
     const call = chatPendingTool;
     if (!call || call.tool !== "generate_image") return;
+    if (chatRenderingRef.current) return; // a render is already in flight — drop the duplicate approval
+    chatRenderingRef.current = true;
     setChatPendingTool(undefined);
     setChatBusy(true);
     setChatActivity("Generating the image…");
-    const out = await chatTool(call, {
-      onProgress: (f) => setChatActivity(`Generating the image… ${Math.round(f * 100)}%`),
-    });
-    setChatBusy(false);
-    setChatActivity("");
-    const feedback = formatToolResult(call, {
-      image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
-    });
-    appendChat({
-      role: "tool",
-      text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
-      ...(out.image ? { image: out.image } : {}),
-      turns: [...pendingTranscript.current, { role: "user", content: feedback }],
-    });
-    pendingTranscript.current = [];
+    try {
+      const out = await chatTool(call, {
+        onProgress: (f) => setChatActivity(`Generating the image… ${Math.round(f * 100)}%`),
+      });
+      setChatBusy(false);
+      setChatActivity("");
+      const feedback = formatToolResult(call, {
+        image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
+      });
+      appendChat({
+        role: "tool",
+        text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
+        ...(out.image ? { image: out.image } : {}),
+        turns: [...pendingTranscript.current, { role: "user", content: feedback }],
+      });
+      pendingTranscript.current = [];
+    } finally {
+      chatRenderingRef.current = false;
+    }
   }, [chatPendingTool, chatTool]);
 
   const onClearChat = useCallback(() => {
@@ -3350,11 +3391,13 @@ export function App() {
   // session before its history has loaded. On a linked PHONE the chat is the desktop's
   // (mirrored), so the phone never persists it to its own store.
   useEffect(() => {
-    if (isRemoteClient || !buddyReady.current || buddyMessages.length === 0) return;
+    // Incognito (remote privacy): the desktop runs the turn but never writes the conversation, so a
+    // remote session leaves nothing on disk.
+    if (isRemoteClient || settings.incognitoRemote || !buddyReady.current || buddyMessages.length === 0) return;
     const id = activeBuddyId;
     const t = setTimeout(() => void libraryStore.putChatHistory?.(id, buddyMessages), 500);
     return () => clearTimeout(t);
-  }, [buddyMessages, activeBuddyId, libraryStore, isRemoteClient]);
+  }, [buddyMessages, activeBuddyId, libraryStore, isRemoteClient, settings.incognitoRemote]);
 
   const appendBuddy = (msg: Omit<StoredChatMessage, "at">) =>
     setBuddyMessages((prev) => [...prev, { ...msg, at: Date.now() }]);
@@ -3757,6 +3800,13 @@ export function App() {
       const saved = await writeWorkspaceFile(call.path, call.content, buddyWorkingDir || undefined);
       payload = { path: saved, ok: true };
       appendBuddy({ role: "tool", text: `📝 Saved ${saved}`, turns: [] });
+      // If the assistant just edited the file open in the code window, show its change live there.
+      const openCode = bookRef.current;
+      if (openCode?.contentMode === "code" && call.path === codeFileName(openCode)) {
+        setCodeDraft(call.content);
+        setBook((prev) => (prev && prev.id === openCode.id ? { ...prev, code: call.content } : prev));
+        void libraryStore.putBook({ ...openCode, code: call.content }).catch(() => {});
+      }
     } catch (err) {
       payload = { path: call.path, ok: false, error: err instanceof Error ? err.message : String(err) };
       appendBuddy({ role: "tool", text: `⚠ Couldn't write ${call.path}: ${payload.error}`, turns: [] });
@@ -3827,6 +3877,14 @@ export function App() {
         if (call.tool === "write_file") {
           try {
             const saved = await writeWorkspaceFile(call.path, call.content, dir);
+            // If this (possibly phone-relayed) write targets the file open in the code window, keep the
+            // open code book's source authoritative HERE — the book change-effect then re-mirrors the
+            // latest to the phone's editor (vrsync:book), so its window refreshes.
+            const open = bookRef.current;
+            if (open?.contentMode === "code" && call.path === codeFileName(open)) {
+              setCodeDraft((prev) => (prev === call.content ? prev : call.content));
+              setBook((prev) => (prev && prev.id === open.id && prev.code !== call.content ? { ...prev, code: call.content } : prev));
+            }
             return { writeFile: { path: saved, ok: true } };
           } catch (err) {
             return { writeFile: { path: call.path, ok: false, error: err instanceof Error ? err.message : String(err) } };
@@ -3897,8 +3955,10 @@ export function App() {
       const w = await execHostTool({ tool: "write_file", path: safe, content: code });
       if (w.error) return { error: w.error };
       if (w.writeFile && !w.writeFile.ok) return { error: w.writeFile.error ?? "couldn't write the file" };
-      const path = w.writeFile?.path ?? safe;
-      const r = await execHostTool({ tool: "run_command", command: `${interp} "${path}"` });
+      // Run by RELATIVE name (run_command's cwd is the same workspace write_file saved into), and
+      // unquoted — `safe` is regex-restricted to word chars/dots/slashes (no spaces). This avoids
+      // quoting an ABSOLUTE path, which on Windows cmd used to mangle into a doubled, broken path.
+      const r = await execHostTool({ tool: "run_command", command: `${interp} ${safe}` });
       if (r.error) return { error: r.error };
       return r.command
         ? { stdout: r.command.stdout, stderr: r.command.stderr, code: r.command.code, ...(r.command.cwd ? { cwd: r.command.cwd } : {}) }
@@ -3906,6 +3966,86 @@ export function App() {
     },
     [execHostTool],
   );
+
+  // The exact source of a code book — the byte-accurate `code` field, falling back to re-joining the
+  // segmented pages for legacy books saved before that field existed.
+  const codeSourceOf = useCallback(
+    (b: BookSource): string =>
+      b.code ?? b.pages.flatMap((p) => p.paragraphs.map((para) => para.text)).join("\n\n"),
+    [],
+  );
+  // A safe, run_command-findable filename for the open code book (its title, sanitised, at the
+  // working-folder root so `python <name>` finds it). Falls back to a generic name.
+  const codeFileName = useCallback((b: BookSource): string => {
+    const safe = (b.title || "code").trim().replace(/[^\w.-]+/g, "_").slice(0, 80);
+    return safe.replace(/^_+|_+$/g, "") || "code.txt";
+  }, []);
+
+  // Load the editor when a (different) code book opens; clear it otherwise. Gated on the book id so
+  // persisting an edit back into `book` (same id) doesn't yank the draft out from under the typist.
+  useEffect(() => {
+    if (book?.contentMode === "code") setCodeDraft(codeSourceOf(book));
+    else setCodeDraft("");
+    setCodeRunOutput(undefined);
+    setCodeRunning(false);
+  }, [book?.id, book?.contentMode]);
+
+  // PHONE: when the desktop mirrors a new version of the OPEN code book — a buddy edit, or a
+  // desktop-side edit to the same file — refresh the editor to match. The desktop owns the source and
+  // our own edits round-trip through it, so an incoming value equal to what we already show is a no-op
+  // (no cursor jump); only a genuinely different (newer) source replaces the draft.
+  useEffect(() => {
+    if (!isRemoteClient || book?.contentMode !== "code") return;
+    const src = codeSourceOf(book);
+    setCodeDraft((prev) => (prev === src ? prev : src));
+  }, [isRemoteClient, book?.code, book?.contentMode, codeSourceOf, book]);
+
+  // Edit in the code window: keep the live draft, then debounce-persist to the library AND write the
+  // file into the workspace so a run (and, later, the assistant) sees the latest source.
+  const onCodeDraftChange = useCallback(
+    (text: string) => {
+      setCodeDraft(text);
+      const b = bookRef.current;
+      if (!b || b.contentMode !== "code") return;
+      const id = b.id;
+      if (codeSaveTimer.current) clearTimeout(codeSaveTimer.current);
+      codeSaveTimer.current = setTimeout(() => {
+        setBook((prev) => (prev && prev.id === id ? { ...prev, code: text } : prev));
+        void libraryStore.putBook({ ...b, code: text }).catch(() => {});
+        if ((isDesktop || isRemoteClient) && settings.allowCommands) {
+          void execHostTool({ tool: "write_file", path: codeFileName(b), content: text }).catch(() => {});
+        }
+      }, 700);
+    },
+    [libraryStore, isDesktop, isRemoteClient, settings.allowCommands, execHostTool, codeFileName],
+  );
+
+  // ▶ Run the code book: write the current draft to the workspace and run it with the matching
+  // interpreter (on the desktop, relayed from a phone), then show the output under the editor.
+  const runCodeBook = useCallback(async () => {
+    const b = bookRef.current;
+    if (!b || b.contentMode !== "code") return;
+    setCodeRunning(true);
+    setCodeRunOutput(undefined);
+    try {
+      const lang = b.language || codeFileName(b).split(".").pop() || "";
+      const out = await onRunCode(lang, codeDraft, codeFileName(b));
+      setCodeRunOutput(out);
+    } catch (err) {
+      setCodeRunOutput({ error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setCodeRunning(false);
+    }
+  }, [onRunCode, codeDraft, codeFileName]);
+
+  // The code file currently open in the editable code window (workspace name + title + language), so a
+  // buddy turn can edit/run THAT file in place instead of re-opening a fresh code book. Undefined unless
+  // a code book is open.
+  const openCodeContext = useCallback((): { name: string; title: string; language?: string } | undefined => {
+    const b = bookRef.current;
+    if (b?.contentMode !== "code") return undefined;
+    return { name: codeFileName(b), title: b.title || "code", ...(b.language ? { language: b.language } : {}) };
+  }, [codeFileName]);
 
   // PHONE side, unified: a desktop-runtime host tool the phone's buddy hit runs ON the desktop via the
   // relay, then the result feeds back into THIS phone's buddy turn exactly like the desktop handlers.
@@ -3966,24 +4106,30 @@ export function App() {
   // Run an approved generate_image call: render it, show it, and feed the outcome back.
   // Shared by the approval modal and full-autonomy auto-run.
   const approveGenerateImage = async (call: Extract<BuddyToolCall, { tool: "generate_image" }>): Promise<void> => {
+    if (buddyRenderingRef.current) return; // a render is already in flight — drop the duplicate approval
+    buddyRenderingRef.current = true;
     setBuddyPendingTool(undefined);
     setBuddyBusy(true);
     setBuddyActivity("Generating the image…");
-    const out = await chatTool(call, {
-      onProgress: (f) => setBuddyActivity(`Generating the image… ${Math.round(f * 100)}%`),
-    });
-    setBuddyBusy(false);
-    setBuddyActivity("");
-    const feedback = formatToolResult(call, {
-      image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
-    });
-    appendBuddy({
-      role: "tool",
-      text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
-      ...(out.image ? { image: out.image } : {}),
-      turns: [...pendingBuddyTranscript.current, { role: "user", content: feedback }],
-    });
-    pendingBuddyTranscript.current = [];
+    try {
+      const out = await chatTool(call, {
+        onProgress: (f) => setBuddyActivity(`Generating the image… ${Math.round(f * 100)}%`),
+      });
+      setBuddyBusy(false);
+      setBuddyActivity("");
+      const feedback = formatToolResult(call, {
+        image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
+      });
+      appendBuddy({
+        role: "tool",
+        text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
+        ...(out.image ? { image: out.image } : {}),
+        turns: [...pendingBuddyTranscript.current, { role: "user", content: feedback }],
+      });
+      pendingBuddyTranscript.current = [];
+    } finally {
+      buddyRenderingRef.current = false;
+    }
   };
 
 
@@ -4178,13 +4324,20 @@ export function App() {
         // Offer the distilled skill — the reader is the value judge (never saved silently).
         setPendingSkill(e.skill);
       } else if (e.kind === "opened") {
-        openedBook = true;
-        buddyHandoff.current = [...buddyMessages, { role: "user" as const, text: userBubbleText ?? userText, at: Date.now() }]
-          .slice(-12)
-          .map(({ turns: _turns, ...m }) => m);
-        openBook(e.book);
-        if (e.visuals) startGeneration();
-        setShowChat(true);
+        // Don't yank a book open AGAIN if it's already the one showing — the buddy can re-emit
+        // open_code for a code file the reader is already editing, and re-opening would discard their
+        // unsaved draft and restart generation ("code book keeps force opening"). Just surface the chat.
+        if (bookRef.current?.id === e.book.id) {
+          setShowChat(true);
+        } else {
+          openedBook = true;
+          buddyHandoff.current = [...buddyMessages, { role: "user" as const, text: userBubbleText ?? userText, at: Date.now() }]
+            .slice(-12)
+            .map(({ turns: _turns, ...m }) => m);
+          openBook(e.book);
+          if (e.visuals) startGeneration();
+          setShowChat(true);
+        }
       } else if (e.kind === "storyBeat") {
         // A continue_story beat grew the OPEN story IN the worker (the engine appended a
         // span). Grow the reader WITHOUT re-opening — a re-open would dispose + rebuild the
@@ -4289,7 +4442,7 @@ export function App() {
           appendBuddy({ role: "tool", text: "🔍 No results." });
         }
       }
-    }, buddyWorkingDir || undefined, activeTaskPlanId());
+    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext());
     if (buddyTurnSeq.current !== seq) return;
     setBuddyBusy(false);
     setBuddyStreaming("");
@@ -4345,6 +4498,9 @@ export function App() {
         text: res.text,
         turns: [{ role: "user", content: userText }, ...res.transcript],
         ...(res.thinking ? { thinking: res.thinking } : {}),
+        // Cloud "keep going?" checkpoint: the task paused with work remaining (so a long run doesn't
+        // burn API calls unattended). Offer a one-tap Continue that re-arms the budget and resumes.
+        ...(res.paused ? { actions: [{ label: "▶ Continue", send: "continue" }] } : {}),
       });
       if (openedBook) appendChat({ role: "assistant", text: res.text });
     }
@@ -5370,6 +5526,47 @@ export function App() {
   return (
     <div style={styles.shell}>
       <style>{KEYFRAMES}</style>
+      {/* PRIVACY CURTAIN: while a phone drives this desktop in incognito, the engine runs here but the
+          desktop's own screen stays hidden so a bystander can't see the remote session. Kept DISCREET on
+          purpose — it looks like the app sitting idle (no lock, no "incognito" banner advertising that
+          something is hidden), with only a tiny corner dot the owner recognises (and can click to exit).
+          Never on the phone itself (isRemoteClient) — it shows normally. Also exit from the phone. */}
+      {!isRemoteClient && settings.incognitoRemote && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 99999,
+            background: "#11131a",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          {/* Innocuous idle look — a faint wordmark like a resting screen, nothing that reveals a session. */}
+          <div style={{ opacity: 0.05, fontSize: 40, fontWeight: 700, letterSpacing: 1, userSelect: "none" }}>
+            Visual Reader
+          </div>
+          <button
+            type="button"
+            title="Incognito remote session active — click to exit"
+            aria-label="Exit incognito"
+            onClick={() => onSettingsChange({ ...settings, incognitoRemote: false })}
+            style={{
+              position: "fixed",
+              bottom: 10,
+              right: 12,
+              width: 8,
+              height: 8,
+              padding: 0,
+              borderRadius: "50%",
+              border: "none",
+              background: "rgba(120,160,255,0.45)",
+              cursor: "pointer",
+            }}
+          />
+        </div>
+      )}
       <header style={styles.header}>
         <div style={styles.headerRow}>
         <strong>Visual Reader</strong>
@@ -5381,6 +5578,27 @@ export function App() {
               title="Close this book and return to the home screen (the book stays in your library)"
             >
               ← Exit book
+            </button>
+          )}
+          {book && (
+            <span
+              style={styles.modeBadge}
+              title="What kind of document this is, chosen at import — it sets the reading view and tools"
+            >
+              {book.contentMode === "code"
+                ? "💻 Code file"
+                : book.contentMode === "technical"
+                  ? "📘 Technical"
+                  : "📖 Story"}
+            </span>
+          )}
+          {book?.contentMode === "code" && (
+            <button
+              style={styles.button}
+              onClick={() => setCodeEditMode((v) => !v)}
+              title="Switch between the full-screen code editor (run / test / edit) and the illustrated reading view"
+            >
+              {codeEditMode ? "📖 Read view" : "✏️ Edit code"}
             </button>
           )}
           {bookHasHtml && (
@@ -5932,7 +6150,107 @@ export function App() {
         </section>
       )}
 
-      {book && (
+      {book && book.contentMode === "code" && codeEditMode ? (
+        // Code books open as a full-screen, editable code workspace: edit the source in place, then
+        // ▶ Run it (writes the draft to the workspace and runs it on the desktop / relayed from a
+        // phone). The illustrated reading view is still one click away ("📖 Read view" in the header).
+        <section style={styles.codeWorkspace}>
+          <div style={styles.codeToolbar}>
+            <span style={styles.codeToolbarTitle}>
+              💻 {book.title || "Code"}
+              {book.language ? ` · ${book.language}` : ""}
+            </span>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              {bible && (
+                <button
+                  type="button"
+                  style={
+                    codeAnalysisOpen
+                      ? { ...styles.button, borderColor: "rgba(122,162,255,0.6)", color: "#bcd0ff" }
+                      : styles.button
+                  }
+                  onClick={() => setCodeAnalysisOpen((v) => !v)}
+                  title="Show the code analysis — glossary of symbols, module map, and the current illustration — beside the editor"
+                >
+                  📊 Analysis
+                </button>
+              )}
+              {(isDesktop || isRemoteClient) && settings.allowCommands && (
+                <button
+                  type="button"
+                  style={codeRunning ? { ...styles.button, opacity: 0.6 } : styles.button}
+                  onClick={() => void runCodeBook()}
+                  disabled={codeRunning}
+                  title="Write the current code into the workspace and run it (Python / JavaScript / shell)"
+                >
+                  {codeRunning ? "Running…" : "▶ Run"}
+                </button>
+              )}
+            </div>
+          </div>
+          <div style={styles.codeBody}>
+            <div style={styles.codeMain}>
+              <textarea
+                value={codeDraft}
+                onChange={(e) => onCodeDraftChange(e.target.value)}
+                spellCheck={false}
+                wrap="off"
+                style={styles.codeEditor}
+                aria-label={`Edit ${book.title || "code"}`}
+              />
+              {codeRunOutput && (
+                <pre style={styles.codeOutput}>
+                  {codeRunOutput.error
+                    ? `⚠ ${codeRunOutput.error}`
+                    : `[exit ${codeRunOutput.code ?? "?"}]${codeRunOutput.cwd ? `  (in ${codeRunOutput.cwd})` : ""}` +
+                      (codeRunOutput.stdout ? `\n${codeRunOutput.stdout}` : "") +
+                      (codeRunOutput.stderr ? `\n⚠ ${codeRunOutput.stderr}` : "")}
+                </pre>
+              )}
+            </div>
+            {codeAnalysisOpen && bible && (
+              <aside style={styles.codeAnalysis}>
+                <div style={styles.codeAnalysisHead}>📊 Code analysis</div>
+                {(generating || results.get(unitIndex)) && (
+                  <div style={{ marginBottom: 12 }}>
+                    <ImagePanel
+                      result={results.get(unitIndex)}
+                      bloom={bloom}
+                      pageKey={unitIndex}
+                      awaitingStart={!generating}
+                    />
+                  </div>
+                )}
+                {bible.glossary.length > 0 && (
+                  <div style={styles.codeAnalysisGroup}>
+                    <div style={styles.codeAnalysisLabel}>Symbols ({bible.glossary.length})</div>
+                    {bible.glossary.slice(0, 80).map((g) => (
+                      <div key={g.term} style={styles.codeAnalysisItem}>
+                        <strong>{g.term}</strong>
+                        {g.definition ? ` — ${g.definition}` : ""}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {bible.environments.length > 0 && (
+                  <div style={styles.codeAnalysisGroup}>
+                    <div style={styles.codeAnalysisLabel}>Modules ({bible.environments.length})</div>
+                    {bible.environments.slice(0, 60).map((e) => (
+                      <div key={e.id} style={styles.codeAnalysisItem}>
+                        <strong>{e.name}</strong>
+                        {e.description?.[0] ? ` — ${e.description[0]}` : ""}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={styles.codeAnalysisHint}>
+                  Switch to “📖 Read view” (header) for the full inline diagrams &amp; illustrations.
+                </div>
+              </aside>
+            )}
+          </div>
+        </section>
+      ) : book ? (
         <main style={book.data || (book.dataSheets && book.dataSheets.length) ? styles.readerData : wideImageColumn ? styles.readerWide : styles.reader}>
           <ReaderColumn
             book={book}
@@ -6037,7 +6355,7 @@ export function App() {
             </div>
           </aside>
         </main>
-      )}
+      ) : null}
 
       {showCharacters && (
         <CharacterBible
@@ -8059,6 +8377,93 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "pre" as const,
     tabSize: 2,
   },
+  // A small pill in the header that names the kind of document you're in (Story / Technical / Code).
+  modeBadge: {
+    fontSize: 12,
+    padding: "3px 10px",
+    borderRadius: 999,
+    border: "1px solid rgba(255,255,255,0.18)",
+    color: "rgba(255,255,255,0.82)",
+    whiteSpace: "nowrap" as const,
+    fontFamily: "system-ui, sans-serif",
+  },
+  // Full-screen code workspace (code books): a toolbar, an editable monospace area that fills the
+  // screen, and the run output below it.
+  codeWorkspace: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 8,
+    height: "calc(100vh - 72px)",
+    maxWidth: 1600,
+    width: "100%",
+    margin: "0 auto",
+    padding: "12px 16px 16px",
+    boxSizing: "border-box" as const,
+  },
+  codeToolbar: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 },
+  codeToolbarTitle: {
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    fontSize: 14,
+    opacity: 0.85,
+    overflow: "hidden" as const,
+    textOverflow: "ellipsis" as const,
+    whiteSpace: "nowrap" as const,
+  },
+  codeEditor: {
+    flex: 1,
+    width: "100%",
+    resize: "none" as const,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    fontSize: 14,
+    lineHeight: 1.6,
+    color: "#e7e7ee",
+    background: "rgba(0,0,0,0.32)",
+    border: "1px solid rgba(255,255,255,0.12)",
+    borderRadius: 8,
+    padding: "12px 14px",
+    whiteSpace: "pre" as const,
+    overflow: "auto" as const,
+    tabSize: 2,
+    boxSizing: "border-box" as const,
+  },
+  codeOutput: {
+    margin: 0,
+    maxHeight: "30vh",
+    overflow: "auto" as const,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    fontSize: 12.5,
+    lineHeight: 1.55,
+    color: "#d7dbe6",
+    background: "rgba(0,0,0,0.4)",
+    border: "1px solid rgba(255,255,255,0.1)",
+    borderRadius: 8,
+    padding: "10px 12px",
+    whiteSpace: "pre-wrap" as const,
+  },
+  // The editor + its run output (left) sit next to the optional analysis pane (right).
+  codeBody: { display: "flex", flex: 1, gap: 12, minHeight: 0 },
+  codeMain: { display: "flex", flexDirection: "column" as const, flex: 1, gap: 8, minWidth: 0 },
+  codeAnalysis: {
+    width: 340,
+    flexShrink: 0,
+    overflow: "auto" as const,
+    background: "rgba(122,162,255,0.05)",
+    border: "1px solid rgba(122,162,255,0.22)",
+    borderRadius: 8,
+    padding: "12px 14px",
+    fontFamily: "system-ui, sans-serif",
+  },
+  codeAnalysisHead: { fontSize: 13, fontWeight: 700, marginBottom: 10, opacity: 0.85 },
+  codeAnalysisGroup: { marginBottom: 14 },
+  codeAnalysisLabel: {
+    fontSize: 11,
+    textTransform: "uppercase" as const,
+    letterSpacing: 0.6,
+    opacity: 0.6,
+    marginBottom: 6,
+  },
+  codeAnalysisItem: { fontSize: 12.5, lineHeight: 1.5, marginBottom: 6, color: "rgba(255,255,255,0.85)" },
+  codeAnalysisHint: { fontSize: 11.5, opacity: 0.6, lineHeight: 1.5, marginTop: 4 },
   aside: {},
   // The aside is sticky; when its content (image + data charts on technical
   // books) exceeds the viewport it must scroll INTERNALLY — a sticky element's

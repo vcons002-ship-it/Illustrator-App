@@ -1186,9 +1186,6 @@ async function renderFromText(
     /** Output dimensions (the photo path passes the source photo's aspect). */
     width?: number;
     height?: number;
-    /** Hi-Res two-pass override (a per-request "make it high-res" from chat); falls back
-     * to the tier's persisted setting when unset. Local engine only. */
-    hires?: boolean;
     /** Render progress sink (0..1) for engines that report it (ComfyUI). */
     onProgress?: (fraction: number) => void;
     /** Cancellation: aborting it interrupts the in-flight ComfyUI render (the Stop button). */
@@ -1223,8 +1220,10 @@ async function renderFromText(
         ? { name: tier.styleLoraOverride, strength: 0.8 }
         : style.local?.lora;
   const steps = stepsOverride ?? (isLocal ? tier.localSteps : undefined);
-  // Hi-Res: a per-request override (chat "make it high-res") wins, else the tier setting.
-  const hires = opts.hires ?? (isLocal ? tier.hires : undefined);
+  // Hi-Res two-pass is controlled SOLELY by the persisted "High resolution" setting (tier.hires).
+  // The chat/model can NOT enable it per-request — too many prompts ("draw a detailed …") were
+  // misread as high-res requests and triggered the slow, ghosting second pass unasked.
+  const hires = isLocal ? tier.hires : undefined;
   const out = await image.generate({
     prompt,
     anchors: [],
@@ -1368,6 +1367,10 @@ function chatProviders(): { llm: LLMProvider; image: ImageProvider; tier: TierCo
  * 90% of what they could read. Local/on-device models keep the small budgets.
  */
 const CLOUD_LLM_IDS = new Set(["claude", "gemini", "openai"]);
+/** Cloud models bill per call, so a long auto-run tool streak PAUSES for a "keep going?" check this
+ * often (the reader gets a Continue button) instead of running to the big local backstop. Local/free
+ * models (local-server / webllm) don't pass this, so they run uninterrupted. */
+const CLOUD_TOOL_PAUSE_ROUNDS = 10;
 /** Approximate context windows (tokens) for the donut's "X / Y" readout — cloud
  * models don't report it; these are the families' standard sizes. */
 const CLOUD_MAX_TOKENS: Record<string, number> = { claude: 200_000, gemini: 1_000_000, openai: 128_000 };
@@ -2749,11 +2752,19 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         };
       })()),
       randomBooks: () => books.random(),
-      remember: async (n) => (await rememberNote(store, n)).length,
-      forget: async (m) => (await forgetNote(store, m)).length,
+      // Incognito (remote privacy): keep READING memory/skills (so the assistant stays useful) but
+      // never WRITE — a remote session leaves no remembered notes or learned skills behind.
+      remember: async (n) =>
+        settings?.incognitoRemote ? (await loadMemory(store)).length : (await rememberNote(store, n)).length,
+      forget: async (m) =>
+        settings?.incognitoRemote ? (await loadMemory(store)).length : (await forgetNote(store, m)).length,
       readSkill: async (name) => (await touchSkill(store, name))?.body ?? "",
-      saveSkill: async (name, description, body) => (await saveSkill(store, { name, description, body })).length,
-      forgetSkill: async (m) => (await forgetSkill(store, m)).length,
+      saveSkill: async (name, description, body) =>
+        settings?.incognitoRemote
+          ? (await loadSkills(store)).length
+          : (await saveSkill(store, { name, description, body })).length,
+      forgetSkill: async (m) =>
+        settings?.incognitoRemote ? (await loadSkills(store)).length : (await forgetSkill(store, m)).length,
       // Task-plan execution: advance/update steps + read plans over the shared store,
       // writing a completed step back to Google Tasks (best-effort) when connected.
       markStepDone: async (planId, stepId) => {
@@ -3143,6 +3154,11 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           : {}),
         // The chosen working folder only matters when commands/file-search can run.
         ...(corsProxyAvailable && settings?.allowCommands && msg.workingDir ? { workingDir: msg.workingDir } : {}),
+        // A code file is open in the reader's editable code window — point the model at its workspace
+        // file so it edits/runs THAT file in place (only meaningful when it can write/run).
+        ...(corsProxyAvailable && settings?.allowCommands && msg.currentCodeFile
+          ? { currentCodeFile: msg.currentCodeFile }
+          : {}),
         // Gmail/Calendar/Tasks tools when Google is connected.
         ...(googleConnected ? { canGoogle: true } : {}),
         // Auto-approval: create reminders without per-item confirm when opted in.
@@ -3190,6 +3206,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       history,
       maxTokens: budgets.reply,
       ...(chatReasoningEffort(settings) ? { reasoningEffort: chatReasoningEffort(settings)! } : {}),
+      // Cloud (paid) models pause for a "keep going?" check every so often so a long task doesn't burn
+      // many API calls unattended; local/free models run to the backstop (no pauseEvery).
+      ...(CLOUD_LLM_IDS.has(llm.id) ? { pauseEvery: CLOUD_TOOL_PAUSE_ROUNDS } : {}),
       deps,
       // PARALLEL SUB-AGENTS: the model's `spawn_agents` tool fans independent read-only subtasks out
       // concurrently. Capped by `agentConcurrency` (default 2). TIER ROUTING: when a sub-agent
@@ -3302,6 +3321,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       transcript: outcome.transcript,
       ...(outcome.pendingTool ? { pendingTool: outcome.pendingTool } : {}),
       ...(outcome.thinking ? { thinking: outcome.thinking } : {}),
+      ...(outcome.paused ? { paused: true } : {}),
     });
   } catch (err) {
     post({
@@ -3376,7 +3396,6 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
     cancelChatWarm(); // don't let a pending LLM warm steal VRAM from this render
     const out = await renderFromText(image, tier, call.prompt, {
       ...(call.steps ? { stepsOverride: call.steps } : {}),
-      ...(call.highRes ? { hires: true } : {}),
       signal: ac.signal,
       onProgress: (fraction) => post({ type: "testProgress", requestId, fraction }),
     });

@@ -92,6 +92,10 @@ export interface BookSource {
   };
   /** For a `code` book: the source language (e.g. "ts", "python"), for the reader's code view. */
   language?: string;
+  /** For a `code` book: the EXACT source text. This is what the full-screen code editor edits and
+   * what `run_command` runs (kept byte-accurate, unlike the segmented `pages` reading view, which is
+   * derived from it). Absent on legacy code books — reconstruct from `pages` when missing. */
+  code?: string;
   /** Structured grid for a spreadsheet/CSV import — powers the chat's `analyze_data`
    * tool (group-by / pivots / aggregates over real cells). Absent for prose. For a
    * multi-sheet workbook this is the FIRST sheet (`dataSheets` holds them all). */

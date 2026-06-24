@@ -14,7 +14,10 @@ import type { VisualReaderStore } from "../storage/store.js";
 
 export const READER_MEMORY_KEY = "reader-memory";
 export const MAX_MEMORY_NOTES = 40;
-export const MAX_NOTE_CHARS = 200;
+/** Per-note character cap. Generous so a memory can hold a real paragraph (a preference with its
+ * reasoning, a multi-part instruction) without being cut off — the earlier 200 truncated mid-note.
+ * 40 notes × this is still a bounded, flat prompt cost. */
+export const MAX_NOTE_CHARS = 1000;
 
 export interface MemoryNote {
   text: string;

@@ -217,6 +217,9 @@ export type MainToWorker =
       /** When this session is executing a task plan: its id, so the prompt loads the
        * plan context + enables the step tools. */
       taskPlanId?: string;
+      /** A code file is open in the reader's editable code window — its workspace filename (+ title
+       * and language), so the prompt tells the model to edit/run THAT file in place. */
+      currentCodeFile?: { name: string; title: string; language?: string };
     };
 
 export type WorkerToMain =
@@ -372,6 +375,9 @@ export type WorkerToMain =
       pendingTool?: BuddyToolCall;
       /** The turn's reasoning, persisted onto the settled message. */
       thinking?: string;
+      /** The turn paused at a cloud "keep going?" budget checkpoint (work remains) — the host offers
+       * a Continue affordance instead of treating it as a finished answer. */
+      paused?: boolean;
     }
   | { type: "buddyError"; requestId: number; message: string }
   /** Reply to `summarize`: the compact brief, or why it failed. */
