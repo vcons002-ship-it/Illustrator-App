@@ -136,8 +136,9 @@ export const CHAT_TOOLS_SYSTEM =
   '- {"tool":"generate_image","prompt":"…"} — generate a NEW illustration with the app\'s image model. ' +
   'Optional fields when the reader asks for specific render settings: "model" (an installed image ' +
   'model they name, e.g. "flux 2"), "steps" (sampler steps), "style" (an art style name), "highRes" ' +
-  '(true when they ask for a high-resolution / more-detailed / larger image — native render then a ' +
-  "second upscale pass). Copy such requests into the call; otherwise omit the fields and the app's current settings apply.\n" +
+  '(ONLY when the reader EXPLICITLY asks for a high-resolution / upscaled / larger / sharper image — ' +
+  'native render then a slow second upscale pass. A detailed subject or a long prompt is NOT a request ' +
+  "for high resolution — do not set it then). Copy such requests into the call; otherwise omit the fields and the app's current settings apply.\n" +
   'PICKING THE IMAGE TOOL: "show me / find / pull up / what does X look like" = a REAL image → ' +
   'search_images. "generate / draw / make / create / paint / imagine" = NEW art → generate_image. ' +
   "Ambiguous → search_images for real-world subjects, generate_image only for fictional scenes.\n" +
