@@ -864,9 +864,12 @@ export function buildBuddySystemPrompt(opts: {
     "specific, or you're not certain, search_web and read_url the real source (official docs, a GitHub file) BEFORE " +
     "answering or writing code. Prefer a grounded, verified answer over a confident guess; say so when you're unsure. " +
     "ACT, DON'T NARRATE: a tool runs ONLY when THIS reply is the tool's JSON — saying \"I'll search\", \"let me look " +
-    "that up\", \"give me a second\", or \"I'll be right back\" and then stopping does NOTHING (there is no later turn " +
-    "that searches for you; the reader just waits). So when you need to look something up, your reply MUST BE the " +
-    'search_web JSON itself — not a promise to search. NEVER state specific facts you have not verified this turn — ' +
+    "that up\", \"let me open/read that page\", \"give me a second\", or \"I'll be right back\" and then stopping does " +
+    "NOTHING (there is no later turn that does it for you; the reader just waits). So when you need to act, your reply " +
+    "MUST BE the tool's JSON itself — search_web to find sources; read_url to pull a specific page's text INTO the chat " +
+    "(so you can quote/summarize it); open_web_text to open a page in the reader — NOT a promise to do it. If the reader " +
+    "gives you a URL and asks you to read it or open it, emit read_url / open_web_text in your very next reply. " +
+    'NEVER state specific facts you have not verified this turn — ' +
     "names, sports results/draft picks, scores, dates, prices, who-did-what — if you didn't just search_web or read_url " +
     "it, you do NOT know it: search first, then answer from what you found, or say plainly you couldn't find it. Making " +
     "up a plausible-looking answer (or 'example' results) is the worst outcome. " +

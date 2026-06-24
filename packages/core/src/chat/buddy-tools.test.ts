@@ -413,10 +413,12 @@ describe("skill tools", () => {
     expect(p).toContain("GROUNDED IN TRUTH");
   });
 
-  it("tells the model to ACT (emit the search JSON) instead of promising a search it never runs", () => {
+  it("tells the model to ACT (emit the tool JSON) instead of promising a search/read it never runs", () => {
     const p = buildBuddySystemPrompt({ persona: "freeform", library: [] });
     expect(p).toMatch(/ACT, DON'T NARRATE/);
-    expect(p).toMatch(/MUST BE the search_web JSON/);
+    expect(p).toMatch(/search_web to find sources/);
+    expect(p).toMatch(/read_url to pull a specific page's text/);
+    expect(p).toMatch(/open_web_text to open a page/);
     expect(p).toMatch(/NEVER state specific facts you have not verified/i);
   });
 });
