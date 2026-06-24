@@ -1051,9 +1051,6 @@ async function renderFromText(
     /** Output dimensions (the photo path passes the source photo's aspect). */
     width?: number;
     height?: number;
-    /** Hi-Res two-pass override (a per-request "make it high-res" from chat); falls back
-     * to the tier's persisted setting when unset. Local engine only. */
-    hires?: boolean;
     /** Render progress sink (0..1) for engines that report it (ComfyUI). */
     onProgress?: (fraction: number) => void;
     /** Cancellation: aborting it interrupts the in-flight ComfyUI render (the Stop button). */
@@ -1088,8 +1085,10 @@ async function renderFromText(
         ? { name: tier.styleLoraOverride, strength: 0.8 }
         : style.local?.lora;
   const steps = stepsOverride ?? (isLocal ? tier.localSteps : undefined);
-  // Hi-Res: a per-request override (chat "make it high-res") wins, else the tier setting.
-  const hires = opts.hires ?? (isLocal ? tier.hires : undefined);
+  // Hi-Res two-pass is controlled SOLELY by the persisted "High resolution" setting (tier.hires).
+  // The chat/model can NOT enable it per-request — too many prompts ("draw a detailed …") were
+  // misread as high-res requests and triggered the slow, ghosting second pass unasked.
+  const hires = isLocal ? tier.hires : undefined;
   const out = await image.generate({
     prompt,
     anchors: [],
@@ -3130,7 +3129,6 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
     cancelChatWarm(); // don't let a pending LLM warm steal VRAM from this render
     const out = await renderFromText(image, tier, call.prompt, {
       ...(call.steps ? { stepsOverride: call.steps } : {}),
-      ...(call.highRes ? { hires: true } : {}),
       signal: ac.signal,
       onProgress: (fraction) => post({ type: "testProgress", requestId, fraction }),
     });

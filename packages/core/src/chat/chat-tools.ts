@@ -23,9 +23,6 @@ export type ToolCall =
       model?: string;
       steps?: number;
       style?: string;
-      /** Render in the Hi-Res two-pass path (native then upscale) when the reader asks for a
-       * high-resolution / more-detailed / larger image. Local engine only. */
-      highRes?: boolean;
     }
   | { tool: "search_web"; query: string }
   | { tool: "search_images"; query: string }
@@ -135,10 +132,9 @@ export const CHAT_TOOLS_SYSTEM =
   '- {"tool":"search_images","query":"…"} — find a REAL existing figure/diagram/photo.\n' +
   '- {"tool":"generate_image","prompt":"…"} — generate a NEW illustration with the app\'s image model. ' +
   'Optional fields when the reader asks for specific render settings: "model" (an installed image ' +
-  'model they name, e.g. "flux 2"), "steps" (sampler steps), "style" (an art style name), "highRes" ' +
-  '(ONLY when the reader EXPLICITLY asks for a high-resolution / upscaled / larger / sharper image — ' +
-  'native render then a slow second upscale pass. A detailed subject or a long prompt is NOT a request ' +
-  "for high resolution — do not set it then). Copy such requests into the call; otherwise omit the fields and the app's current settings apply.\n" +
+  'model they name, e.g. "flux 2"), "steps" (sampler steps), "style" (an art style name). Copy such ' +
+  "requests into the call; otherwise omit the fields and the app's current settings apply. (Resolution / " +
+  "Hi-Res is the reader's own Settings toggle — you can't set it.)\n" +
   'PICKING THE IMAGE TOOL: "show me / find / pull up / what does X look like" = a REAL image → ' +
   'search_images. "generate / draw / make / create / paint / imagine" = NEW art → generate_image. ' +
   "Ambiguous → search_images for real-world subjects, generate_image only for fictional scenes.\n" +
@@ -283,7 +279,6 @@ export function parseToolCall(text: string): ToolCall | undefined {
       ...(model ? { model } : {}),
       ...(style ? { style } : {}),
       ...(steps !== undefined ? { steps } : {}),
-      ...(obj.highRes === true ? { highRes: true } : {}),
     };
   }
   return undefined;
