@@ -63,6 +63,10 @@ export interface EngineInventory {
   loraFamilies: Record<string, string>;
   textModels: InstalledModel[];
   engineStatus: string;
+  /** The selected Ollama chat model's context window from /api/show: `loaded` = the Modelfile
+   * num_ctx Ollama actually loads with; `max` = the architecture's ceiling. Lets the UI show the
+   * real default + max instead of a blank "uses Ollama default" field. Desktop-fetched, mirrored. */
+  textModelContext?: { loaded?: number; max?: number };
 }
 
 /** One landing-page chat session in the mirror (id + its working folder + a display label). Mirrors

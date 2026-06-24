@@ -339,6 +339,9 @@ export function App() {
   >([]);
   const [connectingLocal, setConnectingLocal] = useState(false);
   const [textModels, setTextModels] = useState<InstalledModel[]>([]);
+  // The selected Ollama chat model's loaded num_ctx + arch max (from /api/show), so Settings can show
+  // the real default/ceiling instead of a blank field. Desktop-fetched; mirrored to the phone.
+  const [textModelContext, setTextModelContext] = useState<{ loaded?: number; max?: number } | undefined>();
   const [connectingLocalText, setConnectingLocalText] = useState(false);
   const [modelProgress, setModelProgress] = useState<Record<string, number>>({});
   // Which component file of a split-file model is downloading ("file 2/3: …").
@@ -1588,6 +1591,30 @@ export function App() {
   // never needs its own image model or data. (`isRemoteClient` ⇒ this tab IS the phone.)
   const [remoteHost, setRemoteHost] = useState<string | undefined>();
   // The desktop engine's inventory, bundled so the phone's model/component/LoRA pickers mirror it.
+  // Read the selected Ollama model's real context window (Modelfile num_ctx + arch max) so Settings
+  // can show "default 40960 · max 262144" instead of a blank field. Desktop-only (the phone can't
+  // reach the desktop's Ollama directly); it receives this through the mirrored inventory.
+  useEffect(() => {
+    if (isRemoteClient) return;
+    const server = settings.localTextServer ?? "ollama";
+    const url = settings.localServerTextUrl;
+    const model = settings.localServerTextModel;
+    if (settings.localTextBackend !== "server" || server !== "ollama" || !url || !model) {
+      setTextModelContext(undefined);
+      return;
+    }
+    let cancelled = false;
+    void LocalServerLLMProvider.contextLength(url, model)
+      .then((info) => {
+        if (!cancelled) setTextModelContext(info ?? undefined);
+      })
+      .catch(() => {
+        if (!cancelled) setTextModelContext(undefined);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isRemoteClient, settings.localTextServer, settings.localServerTextUrl, settings.localServerTextModel, settings.localTextBackend]);
   const engineInventory = useMemo(
     (): EngineInventory => ({
       installedModels,
@@ -1597,8 +1624,9 @@ export function App() {
       loraFamilies: loraFamilyMap,
       textModels,
       engineStatus,
+      ...(textModelContext ? { textModelContext } : {}),
     }),
-    [installedModels, installedTextEncoders, installedVaes, installedLoras, loraFamilyMap, textModels, engineStatus],
+    [installedModels, installedTextEncoders, installedVaes, installedLoras, loraFamilyMap, textModels, engineStatus, textModelContext],
   );
   // The planner (tasks + calendar) state is declared lower in the file, so the hello snapshot and
   // the phone's apply-handler reach it through refs kept current by effects below (the same pattern
@@ -1669,6 +1697,7 @@ export function App() {
     setLoraFamilyMap(inv.loraFamilies);
     setTextModels(inv.textModels);
     setEngineStatus(inv.engineStatus);
+    setTextModelContext(inv.textModelContext);
   }, []);
   const buildSnapshotRef = useRef(buildSnapshot);
   buildSnapshotRef.current = buildSnapshot;
@@ -5640,6 +5669,7 @@ export function App() {
             onConnectLocalServer={onConnectLocalServer}
             connectingLocal={connectingLocal}
             textModels={textModels}
+            {...(textModelContext ? { textModelContext } : {})}
             onConnectLocalTextServer={onConnectLocalTextServer}
             connectingLocalText={connectingLocalText}
             onPullTextModel={onPullTextModel}
