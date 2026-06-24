@@ -33,10 +33,9 @@ interface SpeechRecognitionLike {
 
 /**
  * The landing-page chat buddy. Pure presentation, like ChatPanel — but rendered
- * INLINE as the landing experience itself (full-window, no overlay). Three
- * personas switch the buddy's voice (and the App's prompt): freeform (default —
- * a general assistant that runs the app on request), entertainment (stories,
- * recommendations) and technical (articles, papers, research).
+ * INLINE as the landing experience itself (full-window, no overlay). ONE general
+ * assistant voice, with a single optional Planning toggle (📋 Plan) that switches
+ * the App's prompt into structured-planning mode; off, it's the everyday assistant.
  */
 
 /** A file attached to the next chat message: a document read as text, or an image the
@@ -202,16 +201,17 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     e.target.value = ""; // allow re-attaching the same file
   };
 
-  const personaButton = (p: BuddyPersona, label: string, title: string) => (
+  // One chat, one voice. The only mode is an optional Planning toggle: on → structure a fuzzy goal
+  // into an actionable plan before building; off → the general assistant just chats and acts.
+  const planActive = props.persona === "planning";
+  const planToggle = (
     <button
-      style={{
-        ...personaButtonStyle,
-        ...(props.persona === p ? personaActiveStyle : {}),
-      }}
-      onClick={() => props.onPersonaChange(p)}
-      title={title}
+      style={{ ...personaButtonStyle, ...(planActive ? personaActiveStyle : {}) }}
+      onClick={() => props.onPersonaChange(planActive ? "assistant" : "planning")}
+      title="Plan mode — turn a fuzzy goal (a coding project or a complex deliverable) into a clear, actionable plan before building it. Toggle off to just chat and act."
+      aria-pressed={planActive}
     >
-      {label}
+      📋 Plan
     </button>
   );
 
@@ -264,12 +264,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           <strong style={{ fontSize: 14 }}>Chat</strong>
         )}
         <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
-          <span style={personaGroupStyle}>
-            {personaButton("freeform", "Freeform", "General assistant — chat about anything; runs the app when asked")}
-            {personaButton("planning", "📋 Planning", "Plan a coding project or a complex deliverable before building it — clarifies, structures, and breaks it into steps")}
-            {personaButton("entertainment", "Entertainment", "Stories, novels, fun reads — a book-club voice")}
-            {personaButton("technical", "Technical", "Articles, papers, study material — a research voice")}
-          </span>
+          <span style={personaGroupStyle}>{planToggle}</span>
           {props.onLoadModel && (
             <button
               style={smallButtonStyle}
@@ -328,16 +323,12 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
       <div ref={scrollRef} style={scrollStyle}>
         {props.messages.length === 0 && !props.streamingText && (
           <div style={{ opacity: 0.55, fontSize: 12, padding: 12, lineHeight: 1.5 }}>
-            {props.persona === "technical"
-              ? "Ask for a topic — I can find articles, open them in the reader, and illustrate the concepts while we talk. Try “find me an article on the citric acid cycle and open it”."
-              : props.persona === "planning"
-                ? "Tell me what you want to build or write and I'll help you PLAN it first — a coding project or a complex deliverable. I'll ask a couple of questions, then lay out the approach, the steps, and the milestones, and offer to turn it into tasks (or kick off the work). Try “help me plan a budgeting web app” or “plan a 10-page report on coral reefs”."
-                : props.persona === "entertainment"
-                  ? "Tell me what you feel like reading — I can open books from your library, find classics on Project Gutenberg, and illustrate them while we chat. Try “open Frankenstein and illustrate it”."
-                  : "Chat about anything — questions, ideas, math, inventions, writing. I can also run the app for you: “open a random classic and illustrate it in oil painting style”, “generate a picture of an apple”, “read this URL and summarize it”, “make a study quiz from my notes”." +
-                    (props.desktop
-                      ? " On the desktop app I can also find files on your computer, run and test code, and take a screenshot to see if it works (you approve each step)."
-                      : "")}
+            {props.persona === "planning"
+              ? "Tell me what you want to build or write and I'll help you PLAN it first — a coding project or a complex deliverable. I'll ask a couple of questions, then lay out the approach, the steps, and the milestones, and offer to turn it into tasks (or kick off the work). Try “help me plan a budgeting web app” or “plan a 10-page report on coral reefs”."
+              : "Ask me anything, or put me to work — research, images, documents, spreadsheets and data, tasks, markets, and reading. Try “generate a picture of an apple”, “research the best photonics stocks and make a comparison sheet”, “read this URL and summarize it”, “make a study quiz from my notes”, or “open a classic and illustrate it in oil-painting style”." +
+                (props.desktop
+                  ? " On desktop I can also find and open files on your computer, run and test code, and take a screenshot to see if it works (you approve each step)."
+                  : "")}
           </div>
         )}
         {props.messages.map((m, i) => (
@@ -694,11 +685,9 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           placeholder={
             props.busy
               ? "Thinking…"
-              : props.persona === "technical"
-                ? "What do you want to study? (Enter to send, / for commands)"
-                : props.persona === "planning"
-                  ? "What do you want to plan? (Enter to send, / for commands)"
-                  : "What do you feel like reading? (Enter to send, / for commands)"
+              : props.persona === "planning"
+                ? "What do you want to plan? (Enter to send, / for commands)"
+                : "Ask anything, or tell me what to do… (Enter to send, / for commands)"
           }
           rows={2}
           style={textareaStyle}

@@ -144,6 +144,7 @@ import {
   type BookSummary,
   type ChapterDataset,
   type BuddyPersona,
+  normalizeBuddyPersona,
   type BuddyPlan,
   type BuddyToolCall,
   type BuddyToolResultPayload,
@@ -986,7 +987,7 @@ export function App() {
     },
     [libraryStore],
   );
-  const [buddyPersona, setBuddyPersona] = useState<BuddyPersona>("freeform");
+  const [buddyPersona, setBuddyPersona] = useState<BuddyPersona>("assistant");
   // Multiple landing-page chat SESSIONS — each with its own history (keyed by id) and
   // (desktop) working folder, while skills/memory stay global. Persisted so they
   // survive reloads.
@@ -1772,7 +1773,7 @@ export function App() {
   // apply-handler + the desktop's relayed-command runner reach it through refs (same pattern as the
   // planner). `chatMirrorRef` holds the latest mirror for the snapshot; `applyChatRef` is the phone's
   // adopt-the-desktop's-chat setter; `chatCommandRef` runs a phone-relayed chat command on the desktop.
-  const chatMirrorRef = useRef<ChatMirror>({ sessions: [], activeId: "", messages: [], persona: "freeform", busy: false });
+  const chatMirrorRef = useRef<ChatMirror>({ sessions: [], activeId: "", messages: [], persona: "assistant", busy: false });
   const applyChatRef = useRef<(c: ChatMirror) => void>(() => {});
   const chatCommandRef = useRef<(c: CmdToDesktop) => void>(() => {});
   // The live in-flight-turn state (streaming/thinking/activity/steps/pending approvals/usage) — held
@@ -2704,7 +2705,7 @@ export function App() {
         ? prev
         : c.messages,
     );
-    setBuddyPersona(c.persona);
+    setBuddyPersona(normalizeBuddyPersona(c.persona));
     setBuddyBusy(c.busy);
   }, []);
   useEffect(() => {
@@ -5141,7 +5142,7 @@ export function App() {
           onRenameBuddySession(c.id, c.label);
           break;
         case "vrcmd:chatPersona":
-          setBuddyPersona(c.persona);
+          setBuddyPersona(normalizeBuddyPersona(c.persona));
           break;
         case "vrcmd:chatClear":
           onClearBuddy();

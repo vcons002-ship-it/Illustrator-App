@@ -7,6 +7,7 @@ import {
   formatBuddyToolResult,
   isRetryableError,
   looksLikeToolJson,
+  normalizeBuddyPersona,
   parseBuddyToolCall,
   parseBuddyToolCalls,
   progressNudge,
@@ -249,44 +250,45 @@ describe("formatBuddyToolResult", () => {
 describe("buildBuddySystemPrompt", () => {
   it("tells the buddy that created docs (spreadsheets/code/text) are auto-saved to the library", () => {
     // Guards against the buddy hallucinating "I can't save a created document to your library".
-    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(prompt).toMatch(/SAVED TO THE LIBRARY AUTOMATICALLY/);
     expect(prompt).toMatch(/NEVER tell the reader you can't save a created/i);
     expect(prompt).toMatch(/Excel \(\.xlsx\)/);
   });
 
-  it("lists the library with ids and switches persona text", () => {
+  it("lists the library with ids", () => {
     const prompt = buildBuddySystemPrompt({
-      persona: "entertainment",
+      persona: "assistant",
       library: [{ id: "text-1", title: "Dune", author: "Frank Herbert", addedAt: 1 }],
     });
     expect(prompt).toContain('"Dune" by Frank Herbert — id: text-1');
-    expect(prompt).toContain("reading buddy");
-    const tech = buildBuddySystemPrompt({ persona: "technical", library: [] });
-    expect(tech).toContain("research buddy");
-    expect(tech).toContain("LIBRARY is empty");
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toContain("LIBRARY is empty");
   });
 
-  it("freeform leads as a general assistant and never steers toward books", () => {
-    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+  it("the assistant leads as a general one-stop assistant and never steers toward books", () => {
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(prompt).toContain("general conversational assistant");
-    expect(prompt).toContain("OPERATE ON REQUEST");
+    expect(prompt).toContain("ONE-STOP AI workspace");
+    expect(prompt).toContain("ON REQUEST");
+    // The single voice must not carry the old reading/research-buddy framing.
+    expect(prompt).not.toContain("reading buddy");
+    expect(prompt).not.toContain("research buddy");
     expect(prompt).toContain("NEVER steer the chat toward opening");
   });
 
-  it("planning persona adds the planning playbook (coding project + complex deliverable)", () => {
+  it("planning mode adds the planning playbook (coding project + complex deliverable)", () => {
     const p = buildBuddySystemPrompt({ persona: "planning", library: [] });
     expect(p).toContain("PLANNING partner");
     expect(p).toContain("CODING PROJECT");
     expect(p).toContain("COMPLEX DELIVERABLE");
     expect(p).toContain("PLANNING MODE"); // the appended playbook
     expect(p).toMatch(/clarifying questions/i); // understand-first step
-    // The planning playbook is exclusive to the planning persona.
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain("PLANNING MODE");
+    // The planning playbook is exclusive to planning mode.
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).not.toContain("PLANNING MODE");
   });
 
-  it("every persona carries the show-me-vs-generate image-tool rule", () => {
-    for (const persona of ["freeform", "entertainment", "technical"] as const) {
+  it("carries the show-me-vs-generate image-tool rule in both modes", () => {
+    for (const persona of ["assistant", "planning"] as const) {
       const prompt = buildBuddySystemPrompt({ persona, library: [] });
       expect(prompt).toContain("PICKING THE IMAGE TOOL");
       expect(prompt).toContain("search_images");
@@ -295,15 +297,22 @@ describe("buildBuddySystemPrompt", () => {
     }
   });
 
+  it("normalizeBuddyPersona maps legacy voices forward to the single assistant", () => {
+    for (const legacy of ["freeform", "entertainment", "technical", "", undefined, null, "bogus"]) {
+      expect(normalizeBuddyPersona(legacy)).toBe("assistant");
+    }
+    expect(normalizeBuddyPersona("planning")).toBe("planning");
+  });
+
   it("advertises find_files only when filesystem access is available (desktop)", () => {
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain("find_files");
-    const desktop = buildBuddySystemPrompt({ persona: "freeform", library: [], canSearchFiles: true });
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).not.toContain("find_files");
+    const desktop = buildBuddySystemPrompt({ persona: "assistant", library: [], canSearchFiles: true });
     expect(desktop).toContain('"tool":"find_files"');
     expect(desktop).toContain("OWN COMPUTER");
   });
 
   it("routes a compose-the-steps request (research + files + drafting) to plan_task", () => {
-    const g = buildBuddySystemPrompt({ persona: "freeform", library: [], canGoogle: true });
+    const g = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true });
     expect(g).toContain('"tool":"plan_task"');
     // It should tell the model to hand a multi-source job (e.g. job posting + resume on disk) to
     // plan_task in ONE call instead of doing it inline and giving up.
@@ -312,10 +321,10 @@ describe("buildBuddySystemPrompt", () => {
   });
 
   it("advertises GitHub repo work only when a token is configured (canGithub)", () => {
-    const off = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    const off = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(off).not.toContain("GITHUB:");
     expect(off).not.toContain("gh repo clone");
-    const on = buildBuddySystemPrompt({ persona: "freeform", library: [], canGithub: true });
+    const on = buildBuddySystemPrompt({ persona: "assistant", library: [], canGithub: true });
     expect(on).toContain("GITHUB:");
     expect(on).toContain("gh pr create");
     expect(on).toContain("gh auth setup-git");
@@ -328,24 +337,24 @@ describe("buildBuddySystemPrompt", () => {
 
   it("explains WHERE code runs whenever commands are on, and names the chosen folder when set", () => {
     // No command access → no execution-context note at all.
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain("WHERE YOUR CODE RUNS");
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).not.toContain("WHERE YOUR CODE RUNS");
     // Commands on, no folder chosen → still explains the default workspace (so the model knows where
     // its code runs) and the non-interactive caveat.
-    const cmds = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true });
+    const cmds = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true });
     expect(cmds).toContain("WHERE YOUR CODE RUNS");
     expect(cmds).toMatch(/workspace/i);
     expect(cmds).toMatch(/NON-INTERACTIVE/i);
     expect(cmds).toMatch(/cd.*does NOT carry|cd.*not carry/i); // the per-command caveat
     // A chosen folder is named explicitly.
-    const folder = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true, workingDir: "/home/u/projects/site" });
+    const folder = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true, workingDir: "/home/u/projects/site" });
     expect(folder).toContain("/home/u/projects/site");
   });
 
   it("advertises run_command + screenshot only when explicitly enabled (opt-in)", () => {
-    const off = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    const off = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(off).not.toContain("run_command");
     expect(off).not.toContain("screenshot");
-    const on = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true });
+    const on = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true });
     expect(on).toContain('"tool":"run_command"');
     expect(on).toContain('"tool":"screenshot"');
     expect(on).toContain("APPROVE");
@@ -357,12 +366,12 @@ describe("buildBuddySystemPrompt", () => {
 
   it("tells the buddy to FOLLOW THROUGH by chaining tools, with the write+run clause only when commands are on", () => {
     // The chaining principle (act on a clear intent, e.g. call generate_image) is always present.
-    const base = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    const base = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(base).toContain("FOLLOW THROUGH");
     expect(base).toMatch(/CALL generate_image/);
     // The write-code-then-run-it clause only makes sense (and only appears) with command access.
     expect(base).not.toMatch(/write_file a Python script and run_command/);
-    const cmds = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true });
+    const cmds = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true });
     expect(cmds).toMatch(/write_file a Python script and run_command/);
   });
 });
@@ -408,14 +417,14 @@ describe("skill tools", () => {
   });
 
   it("always advertises the skill tools and the grounded-in-truth rule", () => {
-    const p = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(p).toContain('"tool":"read_skill"');
     expect(p).toContain('"tool":"save_skill"');
     expect(p).toContain("GROUNDED IN TRUTH");
   });
 
   it("tells the model to ACT (emit the tool JSON) instead of promising a search/read it never runs", () => {
-    const p = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(p).toMatch(/ACT, DON'T NARRATE/);
     expect(p).toMatch(/search_web to find sources/);
     expect(p).toMatch(/read_url to pull a specific page's text/);
@@ -442,7 +451,7 @@ describe("update_setting tool", () => {
       value: 4,
     });
     expect(parseBuddyToolCall('{"tool":"update_setting","field":"  ","value":true}')).toBeUndefined();
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"update_setting"');
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toContain('"tool":"update_setting"');
   });
 
   it("confirms an applied change (flagging sensitive ones) and reports a bad one", () => {
@@ -466,7 +475,7 @@ describe("stock_quote tool", () => {
   it("parses + advertises stock_quote, and feeds the quote back for analysis", () => {
     expect(parseBuddyToolCall('{"tool":"stock_quote","symbol":"AAPL"}')).toEqual({ tool: "stock_quote", symbol: "AAPL" });
     expect(parseBuddyToolCall('{"tool":"stock_quote","symbol":"  "}')).toBeUndefined();
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"stock_quote"');
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toContain('"tool":"stock_quote"');
     const out = formatBuddyToolResult({ tool: "stock_quote", symbol: "AAPL" }, { quote: { symbol: "AAPL", close: 204, open: 200 } });
     expect(out).toContain("AAPL: 204");
     expect(out).toMatch(/financial advice/i);
@@ -480,7 +489,7 @@ describe("stock_quote tool", () => {
       interval: "5m",
       range: "1d",
     });
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"market_analysis"');
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toContain('"tool":"market_analysis"');
     const out = formatBuddyToolResult(
       { tool: "market_analysis", symbol: "AAPL" },
       { indicators: { symbol: "AAPL", bars: 78, last: 204, vwap: 202, rsi14: 61 } },
@@ -498,7 +507,7 @@ describe("stock_quote tool", () => {
       length: 9,
     });
     expect(parseBuddyToolCall('{"tool":"trading_script","platform":"pine","kind":"bogus"}')).toBeUndefined();
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"trading_script"');
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toContain('"tool":"trading_script"');
     const out = formatBuddyToolResult(
       { tool: "trading_script", platform: "thinkscript", kind: "vwap_cross" },
       { tradingScript: { lang: "ts", script: "# VWAP\nAlert(...)", where: "thinkorswim → Studies" } },
@@ -532,7 +541,7 @@ describe("create_spreadsheet tool", () => {
   it("requires at least one valid column, and is advertised", () => {
     expect(parseBuddyToolCall('{"tool":"create_spreadsheet","title":"x","columns":[]}')).toBeUndefined();
     expect(parseBuddyToolCall('{"tool":"create_spreadsheet","title":"x"}')).toBeUndefined();
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"create_spreadsheet"');
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toContain('"tool":"create_spreadsheet"');
   });
 });
 
@@ -562,7 +571,7 @@ describe("story as you go tools", () => {
   });
 
   it("documents 'me and you' role-play in the system prompt", () => {
-    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(prompt).toMatch(/me and you/i);
     expect(prompt).toMatch(/remember/i); // portray the reader's character from memory
   });
@@ -615,7 +624,7 @@ describe("story as you go tools", () => {
   });
 
   it("advertises the story tools in the system prompt", () => {
-    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(prompt).toContain('"tool":"start_story"');
     expect(prompt).toContain('"tool":"continue_story"');
     expect(prompt).toMatch(/STORY MODE/);
@@ -629,7 +638,7 @@ describe("setup_help tool", () => {
       topic: "image generation",
     });
     expect(parseBuddyToolCall('{"tool":"setup_help","topic":"  "}')).toBeUndefined();
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"setup_help"');
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toContain('"tool":"setup_help"');
   });
 
   it("feeds a matched guide back as a walkthrough, and falls back to a topic list", () => {
@@ -742,9 +751,9 @@ describe("google tools", () => {
   });
 
   it("injects the current date/time and advertises schedule/mail lookups when connected", () => {
-    const dated = buildBuddySystemPrompt({ persona: "freeform", library: [], now: "Sunday, June 15, 2026, 4:58 PM (UTC-04:00)" });
+    const dated = buildBuddySystemPrompt({ persona: "assistant", library: [], now: "Sunday, June 15, 2026, 4:58 PM (UTC-04:00)" });
     expect(dated).toContain("CURRENT DATE & TIME: Sunday, June 15, 2026");
-    const g = buildBuddySystemPrompt({ persona: "freeform", library: [], canGoogle: true });
+    const g = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true });
     expect(g).toContain("this week");
     expect(g).toMatch(/when did I last pay/i);
     expect(g).toContain("timeMin");
@@ -756,7 +765,7 @@ describe("google tools", () => {
       request: "plan my car registration renewal",
     });
     expect(parseBuddyToolCall('{"tool":"plan_task","request":"  "}')).toBeUndefined();
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"plan_task"');
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toContain('"tool":"plan_task"');
   });
 
   it("parses the task-execution tools and shows them only with an active task", () => {
@@ -775,8 +784,8 @@ describe("google tools", () => {
     expect(parseBuddyToolCall('{"tool":"list_task_plans"}')).toEqual({ tool: "list_task_plans" });
     expect(parseBuddyToolCall('{"tool":"mark_step_done","planId":"t1"}')).toBeUndefined(); // no stepId
     // The step tools + the plan context appear only when a task is active.
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain('"tool":"mark_step_done"');
-    const active = buildBuddySystemPrompt({ persona: "freeform", library: [], activeTask: "ACTIVE TASK: Renew (plan id: t1)" });
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).not.toContain('"tool":"mark_step_done"');
+    const active = buildBuddySystemPrompt({ persona: "assistant", library: [], activeTask: "ACTIVE TASK: Renew (plan id: t1)" });
     expect(active).toContain("ACTIVE TASK: Renew");
     expect(active).toContain('"tool":"mark_step_done"');
     // With a task active, "plan/redo this" re-plans THAT task in place (no fork), and an
@@ -786,7 +795,7 @@ describe("google tools", () => {
   });
 
   it("tells the model that plan_task refines the ACTIVE task in place (no duplicate fork)", () => {
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toMatch(/re-plans THAT task in place/i);
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toMatch(/re-plans THAT task in place/i);
   });
 
   it("feeds an email back as the reader's DATA, and confirms a created event/task", () => {
@@ -808,8 +817,8 @@ describe("google tools", () => {
   });
 
   it("advertises the Google tools only when connected (canGoogle), with the confirm-before-create rule", () => {
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain('"tool":"gmail_search"');
-    const on = buildBuddySystemPrompt({ persona: "freeform", library: [], canGoogle: true });
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).not.toContain('"tool":"gmail_search"');
+    const on = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true });
     expect(on).toContain('"tool":"gmail_search"');
     expect(on).toContain('"tool":"create_event"');
     expect(on).toContain('"tool":"create_task"');
@@ -818,18 +827,18 @@ describe("google tools", () => {
   });
 
   it("when Google is NOT connected, tells the model so it can't fabricate a connection or data", () => {
-    const off = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    const off = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(off).toMatch(/GOOGLE IS NOT CONNECTED/);
     expect(off).toMatch(/NEVER invent emails, events, or to-dos/i);
     expect(off).toMatch(/setup_help/); // offers the real reconnect path
     // The disconnected guard must NOT smuggle the read tools back in.
     expect(off).not.toContain('"tool":"gmail_search"');
     // ...and the connected build must NOT carry the "not connected" warning.
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [], canGoogle: true })).not.toMatch(/GOOGLE IS NOT CONNECTED/);
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true })).not.toMatch(/GOOGLE IS NOT CONNECTED/);
   });
 
   it("swaps the confirm rule for auto-approval when canAutomateTasks is on", () => {
-    const auto = buildBuddySystemPrompt({ persona: "freeform", library: [], canGoogle: true, canAutomateTasks: true });
+    const auto = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true, canAutomateTasks: true });
     expect(auto).toContain("Task automation is ON");
     expect(auto).toContain("without asking each time");
     expect(auto).toMatch(/NEVER submit forms, pay, or send/);
@@ -1050,14 +1059,14 @@ describe("write_file tool", () => {
   });
 
   it("advertises write_file whenever commands are on (so it can save-then-run), but the autonomy note only when Autonomous workspace is on", () => {
-    const none = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    const none = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(none).not.toContain('"tool":"write_file"');
     // Commands on (but not autonomous): write_file IS available — it saves into the workspace so the
     // buddy can run its own file — but the no-click autonomy note is not shown.
-    const cmds = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true });
+    const cmds = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true });
     expect(cmds).toContain('"tool":"write_file"');
     expect(cmds).not.toMatch(/AUTONOMOUS WORKSPACE is ON/);
-    const auto = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true, canAutonomousWorkspace: true });
+    const auto = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true, canAutonomousWorkspace: true });
     expect(auto).toContain('"tool":"write_file"');
     expect(auto).toMatch(/AUTONOMOUS WORKSPACE is ON/);
   });

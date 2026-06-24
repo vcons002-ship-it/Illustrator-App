@@ -24,7 +24,17 @@ import type { TaskPlan } from "./tasks.js";
  * by shape on purpose: the worker's approved-render path serves both chats.)
  */
 
-export type BuddyPersona = "freeform" | "entertainment" | "technical" | "planning";
+/** The home chat has ONE general-assistant voice, with an optional Planning mode toggled in the UI.
+ * (Earlier builds split it into freeform/entertainment/technical voices; those collapsed into the
+ * single "assistant" identity — `normalizeBuddyPersona` maps any legacy value forward.) */
+export type BuddyPersona = "assistant" | "planning";
+
+/** Coerce any incoming persona value (including legacy freeform/entertainment/technical, or a value
+ * arriving over remote-sync from another build) to a current one. Anything but "planning" is the
+ * general assistant. */
+export function normalizeBuddyPersona(p: unknown): BuddyPersona {
+  return p === "planning" ? "planning" : "assistant";
+}
 
 /** A lightweight, CHAT-SCOPED working checklist the buddy keeps for the current conversation — how it
  * plans to attack a multi-step ask, ticked off as it executes. Deliberately NOT a TaskPlan (no dates,
@@ -500,27 +510,20 @@ export function buildBuddySystemPrompt(opts: {
   activeTask?: string;
 }): string {
   const persona =
-    opts.persona === "technical"
-      ? "You are the research buddy on the home screen of Visual Reader, an app that turns " +
-        "books and articles into illustrated reading. Help the reader study: find articles, " +
-        "papers and reference material, discuss concepts precisely, work through math. " +
-        "Prefer authoritative sources; keep answers focused and cite what you used."
-      : opts.persona === "planning"
-        ? "You are the PLANNING partner on the home screen of Visual Reader. The reader wants help " +
-          "PLANNING something before building it — a CODING PROJECT (an app, script, website, tool, " +
-          "automation) or a COMPLEX DELIVERABLE (a report, document, course, study guide, event, " +
-          "research piece, business or project plan). Turn a fuzzy goal into a clear, right-sized, " +
-          "ACTIONABLE plan — don't jump straight into building it."
-        : opts.persona === "entertainment"
-          ? "You are the reading buddy on the home screen of Visual Reader, an app that turns " +
-            "books and articles into illustrated reading. Be a warm, enthusiastic book companion: " +
-            "chat about stories, plots, characters and authors, and recommend reads when asked. " +
-            "Keep spoilers gentle unless they ask."
-          : "You are the assistant on the home screen of Visual Reader, an app that turns books " +
-            "and articles into illustrated reading. You are a general conversational assistant " +
-            "first: answer questions, brainstorm and help invent things (concepts, designs, " +
-            "names), work through ideas and plans, and do real math with the calculate tool. " +
-            "The app is something you can OPERATE ON REQUEST, not a topic to steer toward.";
+    opts.persona === "planning"
+      ? "You are the PLANNING partner on the home screen of Visual Reader. The reader wants help " +
+        "PLANNING something before building it — a CODING PROJECT (an app, script, website, tool, " +
+        "automation) or a COMPLEX DELIVERABLE (a report, document, course, study guide, event, " +
+        "research piece, business or project plan). Turn a fuzzy goal into a clear, right-sized, " +
+        "ACTIONABLE plan — don't jump straight into building it."
+      : "You are the assistant on the home screen of Visual Reader — a ONE-STOP AI workspace for " +
+        "getting real work done. You are a general conversational assistant first: answer questions, " +
+        "brainstorm and help invent things (concepts, designs, names), work through ideas, and do real " +
+        "math with the calculate tool. You ALSO operate the app's full toolkit ON REQUEST — managing " +
+        "files and the reader's PC, generating and finding images, researching the web, working with " +
+        "documents, spreadsheets and data (and any file they bring), planning and tracking tasks, " +
+        "following markets and finances, and reading/illustrating books. None of these is a topic to " +
+        "steer toward — reach for whichever the reader's request actually needs, and otherwise just talk.";
   const library =
     opts.library.length === 0
       ? "THE READER'S LIBRARY is empty so far."
@@ -731,7 +734,7 @@ export function buildBuddySystemPrompt(opts: {
         `${renderPlanLines(opts.activePlan)}\n\n`
       : "";
   return (
-    `${persona} Whatever the persona, you are a full conversational assistant: answer ` +
+    `${persona} Either way, you are a full conversational assistant: answer ` +
     "general questions directly in prose (use search_web to ground facts when it genuinely helps)." +
     `${mature}\n\n` +
     `${nowBlock}` +

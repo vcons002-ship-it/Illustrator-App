@@ -152,7 +152,7 @@ describe("scenario: a realistic ask maps to the right tool call", () => {
 // ───────────────────────────────────────────────────────────────────────────
 describe("scenario: the system prompt instructs the natural-language → tool mapping", () => {
   const prompt = buildBuddySystemPrompt({
-    persona: "freeform",
+    persona: "assistant",
     library: [{ id: "text-1", title: "Dune", author: "Frank Herbert", addedAt: 1 }],
     canSearchFiles: true,
     canRunCommands: true,
@@ -517,7 +517,7 @@ describe("scenario: the buddy plans a multi-step ask and ticks it off", () => {
         { text: "C", status: "pending" },
       ],
     };
-    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [], activePlan: plan });
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], activePlan: plan });
     expect(prompt).toContain("CURRENT CHECKLIST");
     expect(prompt).toContain("✓ A");
     expect(prompt).toContain("▸ B (current)"); // the resume anchor
@@ -544,7 +544,7 @@ describe("scenario: a large file is built in append chunks", () => {
   });
 
   it("the prompt tells the model to chunk a too-big file with append:true instead of stitching in chat", () => {
-    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true });
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true });
     expect(prompt).toContain('"append":true');
     expect(prompt).toContain("appended on DISK");
     expect(prompt).toContain("paste a giant file into the chat");

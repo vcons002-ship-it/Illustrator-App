@@ -115,8 +115,9 @@ keeps the real, typed grid (not flattened text).
 
 ### 🤝 The chat assistant (home screen)
 
-The landing page **is** a full-window chat assistant, in three voices — **Freeform** (general),
-**Entertainment** (book-club), **Technical** (research). *(text model)*
+The landing page **is** a single full-window chat assistant — one general voice for everything
+(questions, research, images, files, tasks, markets, reading), with an optional **📋 Plan** toggle
+that switches it into structured-planning mode for a coding project or a complex deliverable. *(text model)*
 
 - **Talk about anything** — questions, brainstorming, working through ideas; it does **real math**
   with a built-in calculator (never guessed arithmetic).
