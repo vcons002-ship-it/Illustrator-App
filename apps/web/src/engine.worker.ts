@@ -2611,11 +2611,19 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         };
       })()),
       randomBooks: () => books.random(),
-      remember: async (n) => (await rememberNote(store, n)).length,
-      forget: async (m) => (await forgetNote(store, m)).length,
+      // Incognito (remote privacy): keep READING memory/skills (so the assistant stays useful) but
+      // never WRITE — a remote session leaves no remembered notes or learned skills behind.
+      remember: async (n) =>
+        settings?.incognitoRemote ? (await loadMemory(store)).length : (await rememberNote(store, n)).length,
+      forget: async (m) =>
+        settings?.incognitoRemote ? (await loadMemory(store)).length : (await forgetNote(store, m)).length,
       readSkill: async (name) => (await touchSkill(store, name))?.body ?? "",
-      saveSkill: async (name, description, body) => (await saveSkill(store, { name, description, body })).length,
-      forgetSkill: async (m) => (await forgetSkill(store, m)).length,
+      saveSkill: async (name, description, body) =>
+        settings?.incognitoRemote
+          ? (await loadSkills(store)).length
+          : (await saveSkill(store, { name, description, body })).length,
+      forgetSkill: async (m) =>
+        settings?.incognitoRemote ? (await loadSkills(store)).length : (await forgetSkill(store, m)).length,
       // Task-plan execution: advance/update steps + read plans over the shared store,
       // writing a completed step back to Google Tasks (best-effort) when connected.
       markStepDone: async (planId, stepId) => {
