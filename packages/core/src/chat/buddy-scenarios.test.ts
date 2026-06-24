@@ -14,6 +14,7 @@ import {
   buildBuddySystemPrompt,
   parseBuddyToolCall,
   parseBuddyToolCalls,
+  type BuddyPlan,
   type BuddyToolResultPayload,
 } from "./buddy-tools.js";
 
@@ -440,5 +441,78 @@ describe("scenario: chains run in order and each result feeds the next round", (
     });
     expect(outcome.paused).toBeFalsy();
     expect(outcome.text).toContain("done");
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// 4. EXECUTION PLAN — a lightweight working checklist set + advanced + resumed
+// ───────────────────────────────────────────────────────────────────────────
+/** A worker-style mutable plan (mirrors engine.worker.ts setPlan/completeStep). */
+function planDeps() {
+  let plan: BuddyPlan | undefined;
+  return {
+    get plan() {
+      return plan;
+    },
+    setPlan: (goal: string | undefined, steps: string[]): BuddyPlan => {
+      plan = { ...(goal ? { goal } : {}), steps: steps.map((t) => ({ text: t, status: "pending" as const })) };
+      return plan;
+    },
+    completeStep: (note?: string): BuddyPlan | undefined => {
+      if (!plan) return undefined;
+      const i = plan.steps.findIndex((s) => s.status === "pending");
+      if (i >= 0) plan.steps[i] = { ...plan.steps[i]!, status: "done", ...(note ? { note } : {}) };
+      return plan;
+    },
+  };
+}
+
+describe("scenario: the buddy plans a multi-step ask and ticks it off", () => {
+  it("parses set_plan / complete_step (the working-checklist tools)", () => {
+    expect(parseBuddyToolCall('{"tool":"set_plan","goal":"G","steps":["a","b","c"]}')).toEqual({
+      tool: "set_plan",
+      goal: "G",
+      steps: ["a", "b", "c"],
+    });
+    expect(parseBuddyToolCall('{"tool":"set_plan","steps":["only"]}')).toEqual({ tool: "set_plan", steps: ["only"] });
+    expect(parseBuddyToolCall('{"tool":"set_plan","steps":[]}')).toBeUndefined(); // empty checklist rejected
+    expect(parseBuddyToolCall('{"tool":"complete_step"}')).toEqual({ tool: "complete_step" }); // no args needed
+    expect(parseBuddyToolCall('{"tool":"complete_step","note":"did A"}')).toEqual({ tool: "complete_step", note: "did A" });
+  });
+
+  it("set_plan lays out the checklist, complete_step ticks the first unfinished step", async () => {
+    const pd = planDeps();
+    const llm = scriptedLlm([
+      '{"tool":"set_plan","goal":"Ship it","steps":["A","B","C"]}',
+      '{"tool":"complete_step","note":"did A"}',
+      "Step A is done — on to B.",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "do A, then B, then C" }],
+      deps: baseDeps({ setPlan: pd.setPlan, completeStep: pd.completeStep }),
+    });
+    expect(outcome.toolResults.map((r) => r.call.tool)).toEqual(["set_plan", "complete_step"]);
+    expect(pd.plan?.steps.map((s) => s.status)).toEqual(["done", "pending", "pending"]);
+    expect(pd.plan?.steps[0]?.note).toBe("did A");
+    // The model is fed the updated checklist back so it knows the current step mid-turn.
+    expect(outcome.toolResults[1]?.result.plan?.steps[0]?.status).toBe("done");
+  });
+
+  it("the checklist re-injects into the prompt so a paused/failed run resumes from the first ▸ step", () => {
+    const plan: BuddyPlan = {
+      goal: "Ship it",
+      steps: [
+        { text: "A", status: "done" },
+        { text: "B", status: "pending" },
+        { text: "C", status: "pending" },
+      ],
+    };
+    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [], activePlan: plan });
+    expect(prompt).toContain("CURRENT CHECKLIST");
+    expect(prompt).toContain("✓ A");
+    expect(prompt).toContain("▸ B (current)"); // the resume anchor
+    expect(prompt).toContain("· C");
   });
 });

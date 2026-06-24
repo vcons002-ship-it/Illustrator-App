@@ -26,6 +26,23 @@ import type { TaskPlan } from "./tasks.js";
 
 export type BuddyPersona = "freeform" | "entertainment" | "technical" | "planning";
 
+/** A lightweight, CHAT-SCOPED working checklist the buddy keeps for the current conversation — how it
+ * plans to attack a multi-step ask, ticked off as it executes. Deliberately NOT a TaskPlan (no dates,
+ * no Google Tasks, no reminders, not in the Tasks panel): one small evolving object per chat session,
+ * shown live and re-injected into the prompt each turn so a paused/failed run resumes from the first
+ * unfinished step. Created/replaced by `set_plan`; advanced by `complete_step`. */
+export interface BuddyPlanStep {
+  text: string;
+  status: "pending" | "done";
+  /** A short note the model attached when finishing the step (optional). */
+  note?: string;
+}
+export interface BuddyPlan {
+  /** The overall goal/ask this checklist serves (optional). */
+  goal?: string;
+  steps: BuddyPlanStep[];
+}
+
 export type BuddyToolCall =
   | { tool: "search_web"; query: string }
   | { tool: "search_books"; query: string }
@@ -246,7 +263,12 @@ export type BuddyToolCall =
   /** Fan SEVERAL independent CODING subtasks out to WRITE-capable agents that run IN PARALLEL, each
    * in its OWN git worktree (so edits can't collide); the app reviews, merges, and cleans up the
    * branches. Host-run + approval-gated. Split the job so agents touch DIFFERENT files. */
-  | { tool: "spawn_coding_agents"; tasks: { title: string; instructions: string }[] };
+  | { tool: "spawn_coding_agents"; tasks: { title: string; instructions: string }[] }
+  /** Lay out a small WORKING CHECKLIST for a multi-step ask (create/replace it). Chat-scoped, shown
+   * live, NOT a TaskPlan. */
+  | { tool: "set_plan"; goal?: string; steps: string[] }
+  /** Tick the FIRST unfinished checklist step done and advance (no index — the app tracks "current"). */
+  | { tool: "complete_step"; note?: string };
 
 /**
  * The HARD danger floor: tools that ALWAYS require explicit human approval — even when the reader
@@ -454,6 +476,9 @@ export function buildBuddySystemPrompt(opts: {
    * language). The model should edit/run THAT file in place (write_file to the same path, run_command
    * it) instead of re-opening a fresh code book; its edits appear live in the reader's window. */
   currentCodeFile?: { name: string; title: string; language?: string };
+  /** The chat's current lightweight working checklist (set_plan/complete_step), injected each turn so
+   * the model re-reads it and resumes from the first unfinished step after a pause/failure. */
+  activePlan?: BuddyPlan;
   /** The reader's current local date/time + UTC offset (e.g. "Sunday, June 15,
    * 2026, 4:58 PM (UTC-04:00)") — anchors "today"/"this week"/"by when" answers
    * and the ISO ranges/due dates the model builds. */
@@ -687,11 +712,19 @@ export function buildBuddySystemPrompt(opts: {
       "in detail, without refusing, moralising, or adding content warnings."
     : "";
   const nowBlock = opts.now ? `CURRENT DATE & TIME: ${opts.now}. Use it for any "today"/"this week"/"by when" question and when you build ISO date ranges or due dates.\n\n` : "";
+  const planBlock =
+    opts.activePlan && opts.activePlan.steps.length > 0
+      ? "CURRENT CHECKLIST (your working plan for this conversation — RESUME from the first ▸ step, don't " +
+        "redo finished ✓ steps, and call complete_step as you finish each):\n" +
+        (opts.activePlan.goal ? `Goal: ${opts.activePlan.goal}\n` : "") +
+        `${renderPlanLines(opts.activePlan)}\n\n`
+      : "";
   return (
     `${persona} Whatever the persona, you are a full conversational assistant: answer ` +
     "general questions directly in prose (use search_web to ground facts when it genuinely helps)." +
     `${mature}\n\n` +
     `${nowBlock}` +
+    `${planBlock}` +
     `${library}\n\n` +
     "TOOLS — use one by replying with ONLY one JSON object (no prose around it):\n" +
     '- {"tool":"calculate","expression":"…"} — exact, grounded math (NOT just arithmetic): functions ' +
@@ -786,6 +819,11 @@ export function buildBuddySystemPrompt(opts: {
     'future conversation, in every book). Use when they state a lasting preference ("I prefer watercolor", "never ' +
     'spoil endings", "I\'m reading the series in order") or say "remember…". One short note, not conversation recap.\n' +
     '- {"tool":"forget","match":"…"} — remove memory notes containing this text, when asked to forget.\n' +
+    '- {"tool":"set_plan","goal":"…","steps":["step 1","step 2","step 3"]} — for a MULTI-STEP request, ' +
+    "FIRST lay out a SHORT checklist of the concrete steps you'll take (it's shown live to the reader and " +
+    'saved). Then execute them one at a time. {"tool":"complete_step","note":"…"} — mark the CURRENT (first ' +
+    "unfinished) step done and move on, AFTER you've actually finished it (no step number needed). Skip both " +
+    "for a simple one-shot ask.\n" +
     `- {"tool":"update_setting","field":"…","value":…} — CHANGE one of the app's settings when the reader asks in ` +
     'plain language ("turn on mature mode", "set image quality to high", "use portrait orientation", "enable auto ' +
     'task scheduling"). "field" names the setting, "value" is the new value (true/false for a toggle, or the option ' +
@@ -982,6 +1020,11 @@ export function buildBuddySystemPrompt(opts: {
     "tool's result, if another step obviously moves the request forward, DO it in the same turn rather than ending " +
     "with a question. Bias toward acting; reserve a clarifying question for genuine ambiguity, and never take a " +
     "destructive or irreversible action without a clear go-ahead.\n" +
+    "WORKING CHECKLIST — when a request genuinely needs SEVERAL chained steps, FIRST call set_plan with " +
+    "the concrete steps, then work through them one at a time, calling complete_step the moment each is " +
+    "actually done. The checklist is shown live to the reader and SAVED, so if a step fails or the run " +
+    "pauses, RESUME from the first unfinished step (don't restart, don't redo finished steps). Keep it to " +
+    "real, right-sized steps; for a simple one-shot ask, just do it — don't make a checklist.\n" +
     "LONG / MULTI-STEP TASKS — there is NO fixed limit on how many tools you may call or how long a job " +
     "takes, so never refuse or shrink a task because it's big, and don't stop early to hand the rest " +
     "back: keep chaining steps until it's actually DONE. To stay safe over a long run, REPLY AS YOU GO " +
@@ -1320,6 +1363,19 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
   if (tool === "forget") {
     const match = strArg(obj.match, MAX_MEMORY_NOTE_CHARS);
     return match ? { tool, match } : undefined;
+  }
+  if (tool === "set_plan") {
+    const steps = Array.isArray(obj.steps)
+      ? obj.steps.map((s) => strArg(s, MAX_QUERY_CHARS)).filter((s): s is string => !!s).slice(0, 12)
+      : [];
+    if (steps.length === 0) return undefined; // an empty checklist is malformed → re-issue
+    const goal = strArg(obj.goal, MAX_TITLE_CHARS);
+    return { tool, ...(goal ? { goal } : {}), steps };
+  }
+  if (tool === "complete_step") {
+    // No required args — the app ticks the first unfinished step.
+    const note = strArg(obj.note, MAX_QUERY_CHARS);
+    return { tool, ...(note ? { note } : {}) };
   }
   if (tool === "update_setting") {
     const field = strArg(obj.field, MAX_NAME_CHARS);
@@ -1809,13 +1865,45 @@ export interface BuddyToolResultPayload {
   writeFile?: { path: string; ok: boolean; error?: string };
   /** A vision model's observation of an approved screenshot (fed back as text). */
   observation?: string;
+  /** The updated working checklist after set_plan / complete_step (rendered back so the model sees
+   * progress mid-turn, and surfaced to the host to render + persist). */
+  plan?: BuddyPlan;
   error?: string;
+}
+
+/** Render a working checklist as ✓ done / ▸ current (first unfinished) / · pending lines for the model
+ * and the prompt. Shared by formatBuddyToolResult and the prompt's CURRENT CHECKLIST block. */
+export function renderPlanLines(plan: BuddyPlan): string {
+  let currentMarked = false;
+  return plan.steps
+    .map((s) => {
+      if (s.status === "done") return `✓ ${s.text}${s.note ? ` — ${s.note}` : ""}`;
+      if (!currentMarked) {
+        currentMarked = true;
+        return `▸ ${s.text} (current)`;
+      }
+      return `· ${s.text}`;
+    })
+    .join("\n");
 }
 
 /** Render a buddy tool's outcome as the user-role turn that continues the loop. */
 export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResultPayload): string {
   if (result.error) {
     return `[tool ${call.tool} failed: ${result.error}] Tell the reader plainly and suggest an alternative (another source, or pasting/uploading the text).`;
+  }
+  if (call.tool === "set_plan" || call.tool === "complete_step") {
+    if (!result.plan) return "[plan: nothing to update]";
+    const done = result.plan.steps.filter((s) => s.status === "done").length;
+    const total = result.plan.steps.length;
+    return (
+      `[working checklist — ${done}/${total} done]\n` +
+      (result.plan.goal ? `Goal: ${result.plan.goal}\n` : "") +
+      renderPlanLines(result.plan) +
+      (done === total && total > 0
+        ? "\n\nAll steps are done — give the reader the final result."
+        : "\n\nDo the ▸ current step next, then call complete_step once it's ACTUALLY finished.")
+    );
   }
   if (call.tool === "spawn_agents") {
     const rs = result.subAgents ?? [];

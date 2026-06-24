@@ -2612,6 +2612,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       post({ type: "buddyOpened", requestId: msg.requestId, book, visuals });
       return { title: book.title, chapters: book.chapters.length, pages: book.pages.length, visuals };
     };
+    // The chat's lightweight working checklist. Starts as whatever the host injected; set_plan/
+    // complete_step mutate THIS copy mid-turn (so the loop's feedback shows progress) and post each
+    // update to the host, which renders + persists it as the canonical per-session plan.
+    let plan = msg.plan;
     // Google (Gmail/Calendar/Tasks): wired only when a client is configured AND tokens
     // are stored. Every call gets a fresh access token (auto-refreshed) over the CORS
     // proxy; the same transport carries the refresh and the API call.
@@ -2758,6 +2762,19 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         settings?.incognitoRemote ? (await loadMemory(store)).length : (await rememberNote(store, n)).length,
       forget: async (m) =>
         settings?.incognitoRemote ? (await loadMemory(store)).length : (await forgetNote(store, m)).length,
+      // Lightweight chat-scoped checklist — mutate the in-turn `plan` and mirror each change to the host.
+      setPlan: (goal, steps) => {
+        plan = { ...(goal ? { goal } : {}), steps: steps.map((t) => ({ text: t, status: "pending" as const })) };
+        post({ type: "buddyPlan", requestId: msg.requestId, plan });
+        return plan;
+      },
+      completeStep: (note) => {
+        if (!plan) return undefined;
+        const i = plan.steps.findIndex((s) => s.status === "pending");
+        if (i >= 0) plan.steps[i] = { ...plan.steps[i]!, status: "done", ...(note ? { note } : {}) };
+        post({ type: "buddyPlan", requestId: msg.requestId, plan });
+        return plan;
+      },
       readSkill: async (name) => (await touchSkill(store, name))?.body ?? "",
       saveSkill: async (name, description, body) =>
         settings?.incognitoRemote
@@ -3159,6 +3176,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         ...(corsProxyAvailable && settings?.allowCommands && msg.currentCodeFile
           ? { currentCodeFile: msg.currentCodeFile }
           : {}),
+        // The chat's working checklist — injected so the model re-reads it and resumes from the first
+        // unfinished step (set_plan/complete_step are always available; the live state shows only here).
+        ...(msg.plan ? { activePlan: msg.plan } : {}),
         // Gmail/Calendar/Tasks tools when Google is connected.
         ...(googleConnected ? { canGoogle: true } : {}),
         // Auto-approval: create reminders without per-item confirm when opted in.

@@ -4,6 +4,7 @@ import type {
   BookSource,
   BookSummary,
   BuddyPersona,
+  BuddyPlan,
   BuddyToolCall,
   BuddyToolResultPayload,
   CalendarEvent,
@@ -220,6 +221,9 @@ export type MainToWorker =
       /** A code file is open in the reader's editable code window — its workspace filename (+ title
        * and language), so the prompt tells the model to edit/run THAT file in place. */
       currentCodeFile?: { name: string; title: string; language?: string };
+      /** The chat's current lightweight working checklist (set_plan/complete_step), injected into the
+       * prompt so the model resumes from the first unfinished step. */
+      plan?: BuddyPlan;
     };
 
 export type WorkerToMain =
@@ -345,6 +349,9 @@ export type WorkerToMain =
   /** Story config changed (e.g. set_story_cadence) WITHOUT a new beat — the host persists the
    * grown book's `storyConfig` so role-play + cadence survive a reopen. No scroll. */
   | { type: "storyConfig"; requestId: number; book: BookSource }
+  /** The buddy updated its lightweight working checklist (set_plan/complete_step) mid-turn — the host
+   * renders + persists it as the canonical per-session plan. */
+  | { type: "buddyPlan"; requestId: number; plan: BuddyPlan }
   /** remove_library_book deleted a book — the main thread refreshes its library list. */
   | { type: "buddyLibraryChanged"; requestId: number }
   /** A scheduled task was created/cancelled by the chat — the host refreshes its list. */
