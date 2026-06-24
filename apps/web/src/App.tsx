@@ -350,6 +350,20 @@ export function App() {
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const [book, setBook] = useState<BookSource | undefined>();
+  // Current book in a ref so callbacks/event handlers (which capture a render-time `book`) can read
+  // the live value — e.g. to dedupe a buddy re-open of the book that's already showing.
+  const bookRef = useRef(book);
+  bookRef.current = book;
+  // Code books open as a full-screen, editable code workspace (run / test / edit in place). `codeDraft`
+  // is the live editor text; `codeEditMode` toggles to the illustrated reading view; the run output is
+  // shown under the editor. `codeSaveTimer` debounces persisting edits back to the library + workspace.
+  const [codeDraft, setCodeDraft] = useState<string>("");
+  const [codeEditMode, setCodeEditMode] = useState(true);
+  const [codeRunning, setCodeRunning] = useState(false);
+  const [codeRunOutput, setCodeRunOutput] = useState<
+    { stdout?: string; stderr?: string; code?: number; error?: string; cwd?: string } | undefined
+  >();
+  const codeSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [localError, setLocalError] = useState<string>("");
   const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
   // Split-file component files (text encoders / VAEs) the local engine has, for the
@@ -3903,6 +3917,67 @@ export function App() {
     [execHostTool],
   );
 
+  // The exact source of a code book — the byte-accurate `code` field, falling back to re-joining the
+  // segmented pages for legacy books saved before that field existed.
+  const codeSourceOf = useCallback(
+    (b: BookSource): string =>
+      b.code ?? b.pages.flatMap((p) => p.paragraphs.map((para) => para.text)).join("\n\n"),
+    [],
+  );
+  // A safe, run_command-findable filename for the open code book (its title, sanitised, at the
+  // working-folder root so `python <name>` finds it). Falls back to a generic name.
+  const codeFileName = useCallback((b: BookSource): string => {
+    const safe = (b.title || "code").trim().replace(/[^\w.-]+/g, "_").slice(0, 80);
+    return safe.replace(/^_+|_+$/g, "") || "code.txt";
+  }, []);
+
+  // Load the editor when a (different) code book opens; clear it otherwise. Gated on the book id so
+  // persisting an edit back into `book` (same id) doesn't yank the draft out from under the typist.
+  useEffect(() => {
+    if (book?.contentMode === "code") setCodeDraft(codeSourceOf(book));
+    else setCodeDraft("");
+    setCodeRunOutput(undefined);
+    setCodeRunning(false);
+  }, [book?.id, book?.contentMode]);
+
+  // Edit in the code window: keep the live draft, then debounce-persist to the library AND write the
+  // file into the workspace so a run (and, later, the assistant) sees the latest source.
+  const onCodeDraftChange = useCallback(
+    (text: string) => {
+      setCodeDraft(text);
+      const b = bookRef.current;
+      if (!b || b.contentMode !== "code") return;
+      const id = b.id;
+      if (codeSaveTimer.current) clearTimeout(codeSaveTimer.current);
+      codeSaveTimer.current = setTimeout(() => {
+        setBook((prev) => (prev && prev.id === id ? { ...prev, code: text } : prev));
+        void libraryStore.putBook({ ...b, code: text }).catch(() => {});
+        if ((isDesktop || isRemoteClient) && settings.allowCommands) {
+          void execHostTool({ tool: "write_file", path: codeFileName(b), content: text }).catch(() => {});
+        }
+      }, 700);
+    },
+    [libraryStore, isDesktop, isRemoteClient, settings.allowCommands, execHostTool, codeFileName],
+  );
+
+  // ▶ Run the code book: write the current draft to the workspace and run it with the matching
+  // interpreter (on the desktop, relayed from a phone), then show the output under the editor.
+  const runCodeBook = useCallback(async () => {
+    const b = bookRef.current;
+    if (!b || b.contentMode !== "code") return;
+    setCodeRunning(true);
+    setCodeRunOutput(undefined);
+    try {
+      const lang = b.language || codeFileName(b).split(".").pop() || "";
+      const out = await onRunCode(lang, codeDraft, codeFileName(b));
+      setCodeRunOutput(out);
+    } catch (err) {
+      setCodeRunOutput({ error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setCodeRunning(false);
+    }
+  }, [onRunCode, codeDraft, codeFileName]);
+
   // PHONE side, unified: a desktop-runtime host tool the phone's buddy hit runs ON the desktop via the
   // relay, then the result feeds back into THIS phone's buddy turn exactly like the desktop handlers.
   const runBuddyHostToolRemote = async (call: BuddyToolCall): Promise<void> => {
@@ -4180,13 +4255,20 @@ export function App() {
         // Offer the distilled skill — the reader is the value judge (never saved silently).
         setPendingSkill(e.skill);
       } else if (e.kind === "opened") {
-        openedBook = true;
-        buddyHandoff.current = [...buddyMessages, { role: "user" as const, text: userBubbleText ?? userText, at: Date.now() }]
-          .slice(-12)
-          .map(({ turns: _turns, ...m }) => m);
-        openBook(e.book);
-        if (e.visuals) startGeneration();
-        setShowChat(true);
+        // Don't yank a book open AGAIN if it's already the one showing — the buddy can re-emit
+        // open_code for a code file the reader is already editing, and re-opening would discard their
+        // unsaved draft and restart generation ("code book keeps force opening"). Just surface the chat.
+        if (bookRef.current?.id === e.book.id) {
+          setShowChat(true);
+        } else {
+          openedBook = true;
+          buddyHandoff.current = [...buddyMessages, { role: "user" as const, text: userBubbleText ?? userText, at: Date.now() }]
+            .slice(-12)
+            .map(({ turns: _turns, ...m }) => m);
+          openBook(e.book);
+          if (e.visuals) startGeneration();
+          setShowChat(true);
+        }
       } else {
         setBuddyActivity("");
         // The agent just read/wrote the calendar or tasks — reflect it in the app's views.
@@ -5394,6 +5476,27 @@ export function App() {
               ← Exit book
             </button>
           )}
+          {book && (
+            <span
+              style={styles.modeBadge}
+              title="What kind of document this is, chosen at import — it sets the reading view and tools"
+            >
+              {book.contentMode === "code"
+                ? "💻 Code file"
+                : book.contentMode === "technical"
+                  ? "📘 Technical"
+                  : "📖 Story"}
+            </span>
+          )}
+          {book?.contentMode === "code" && (
+            <button
+              style={styles.button}
+              onClick={() => setCodeEditMode((v) => !v)}
+              title="Switch between the full-screen code editor (run / test / edit) and the illustrated reading view"
+            >
+              {codeEditMode ? "📖 Read view" : "✏️ Edit code"}
+            </button>
+          )}
           {bookHasHtml && (
             <button
               style={articleLayout ? { ...styles.button, borderColor: "rgba(90,209,155,0.6)", color: "#9be8c0" } : styles.button}
@@ -5934,7 +6037,47 @@ export function App() {
         </section>
       )}
 
-      {book && (
+      {book && book.contentMode === "code" && codeEditMode ? (
+        // Code books open as a full-screen, editable code workspace: edit the source in place, then
+        // ▶ Run it (writes the draft to the workspace and runs it on the desktop / relayed from a
+        // phone). The illustrated reading view is still one click away ("📖 Read view" in the header).
+        <section style={styles.codeWorkspace}>
+          <div style={styles.codeToolbar}>
+            <span style={styles.codeToolbarTitle}>
+              💻 {book.title || "Code"}
+              {book.language ? ` · ${book.language}` : ""}
+            </span>
+            {(isDesktop || isRemoteClient) && settings.allowCommands && (
+              <button
+                type="button"
+                style={codeRunning ? { ...styles.button, opacity: 0.6 } : styles.button}
+                onClick={() => void runCodeBook()}
+                disabled={codeRunning}
+                title="Write the current code into the workspace and run it (Python / JavaScript / shell)"
+              >
+                {codeRunning ? "Running…" : "▶ Run"}
+              </button>
+            )}
+          </div>
+          <textarea
+            value={codeDraft}
+            onChange={(e) => onCodeDraftChange(e.target.value)}
+            spellCheck={false}
+            wrap="off"
+            style={styles.codeEditor}
+            aria-label={`Edit ${book.title || "code"}`}
+          />
+          {codeRunOutput && (
+            <pre style={styles.codeOutput}>
+              {codeRunOutput.error
+                ? `⚠ ${codeRunOutput.error}`
+                : `[exit ${codeRunOutput.code ?? "?"}]${codeRunOutput.cwd ? `  (in ${codeRunOutput.cwd})` : ""}` +
+                  (codeRunOutput.stdout ? `\n${codeRunOutput.stdout}` : "") +
+                  (codeRunOutput.stderr ? `\n⚠ ${codeRunOutput.stderr}` : "")}
+            </pre>
+          )}
+        </section>
+      ) : book ? (
         <main style={book.data || (book.dataSheets && book.dataSheets.length) ? styles.readerData : wideImageColumn ? styles.readerWide : styles.reader}>
           <ReaderColumn
             book={book}
@@ -6007,7 +6150,7 @@ export function App() {
             </div>
           </aside>
         </main>
-      )}
+      ) : null}
 
       {showCharacters && (
         <CharacterBible
@@ -7971,6 +8114,69 @@ const styles: Record<string, React.CSSProperties> = {
     overflowX: "auto" as const,
     whiteSpace: "pre" as const,
     tabSize: 2,
+  },
+  // A small pill in the header that names the kind of document you're in (Story / Technical / Code).
+  modeBadge: {
+    fontSize: 12,
+    padding: "3px 10px",
+    borderRadius: 999,
+    border: "1px solid rgba(255,255,255,0.18)",
+    color: "rgba(255,255,255,0.82)",
+    whiteSpace: "nowrap" as const,
+    fontFamily: "system-ui, sans-serif",
+  },
+  // Full-screen code workspace (code books): a toolbar, an editable monospace area that fills the
+  // screen, and the run output below it.
+  codeWorkspace: {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 8,
+    height: "calc(100vh - 72px)",
+    maxWidth: 1600,
+    width: "100%",
+    margin: "0 auto",
+    padding: "12px 16px 16px",
+    boxSizing: "border-box" as const,
+  },
+  codeToolbar: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 },
+  codeToolbarTitle: {
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    fontSize: 14,
+    opacity: 0.85,
+    overflow: "hidden" as const,
+    textOverflow: "ellipsis" as const,
+    whiteSpace: "nowrap" as const,
+  },
+  codeEditor: {
+    flex: 1,
+    width: "100%",
+    resize: "none" as const,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    fontSize: 14,
+    lineHeight: 1.6,
+    color: "#e7e7ee",
+    background: "rgba(0,0,0,0.32)",
+    border: "1px solid rgba(255,255,255,0.12)",
+    borderRadius: 8,
+    padding: "12px 14px",
+    whiteSpace: "pre" as const,
+    overflow: "auto" as const,
+    tabSize: 2,
+    boxSizing: "border-box" as const,
+  },
+  codeOutput: {
+    margin: 0,
+    maxHeight: "30vh",
+    overflow: "auto" as const,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    fontSize: 12.5,
+    lineHeight: 1.55,
+    color: "#d7dbe6",
+    background: "rgba(0,0,0,0.4)",
+    border: "1px solid rgba(255,255,255,0.1)",
+    borderRadius: 8,
+    padding: "10px 12px",
+    whiteSpace: "pre-wrap" as const,
   },
   aside: {},
   // The aside is sticky; when its content (image + data charts on technical
