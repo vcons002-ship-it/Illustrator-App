@@ -10,6 +10,17 @@ describe("parseToolCall", () => {
     });
   });
 
+  it("accepts the {name, arguments} shape + <tool_call> tags local models emit", () => {
+    expect(parseToolCall('{"name":"search_web","arguments":{"query":"Krebs cycle"}}')).toEqual({
+      tool: "search_web",
+      query: "Krebs cycle",
+    });
+    expect(parseToolCall('<tool_call>{"name":"search_images","arguments":{"query":"mitochondrion"}}</tool_call>')).toEqual({
+      tool: "search_images",
+      query: "mitochondrion",
+    });
+  });
+
   it("parses a fenced call and strips a thinking preamble", () => {
     expect(parseToolCall('```json\n{"tool":"search_images","query":"mitochondrion"}\n```')).toEqual({
       tool: "search_images",

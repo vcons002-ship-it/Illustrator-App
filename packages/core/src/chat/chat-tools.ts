@@ -1,4 +1,5 @@
 import { stripThink } from "../providers/llm/extraction.js";
+import { normalizeToolShape, stripControlTokens } from "./buddy-tools.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
 import type { BookPassage } from "./book-passage-search.js";
 import type { AnalyzeChart, AnalyzeSpec, Aggregation, DataFilter, FilterOp } from "../data/analyze.js";
@@ -168,20 +169,24 @@ export const CHAT_TOOLS_SYSTEM =
  * executes. Arguments are trimmed and length-capped as an injection guard.
  */
 export function parseToolCall(text: string): ToolCall | undefined {
-  const cleaned = stripFences(stripThink(text));
+  // Strip the wrapper tokens that local models emit around tool JSON (Hermes/Qwen/ChatML
+  // `<tool_call>…`, gpt-oss harmony `<|channel|>…`) before the strict object check below.
+  const cleaned = stripControlTokens(stripFences(stripThink(text)));
   if (!cleaned.startsWith("{") || !cleaned.endsWith("}")) return undefined;
   // Tolerate the trailing commas weaker local models emit (`{…,}`), which strict JSON rejects —
   // a dropped tool call is why the model "couldn't string together tools". String-aware repair.
-  let obj: Record<string, unknown>;
+  let parsed: Record<string, unknown>;
   try {
-    obj = JSON.parse(cleaned) as Record<string, unknown>;
+    parsed = JSON.parse(cleaned) as Record<string, unknown>;
   } catch {
     try {
-      obj = JSON.parse(stripTrailingCommas(cleaned)) as Record<string, unknown>;
+      parsed = JSON.parse(stripTrailingCommas(cleaned)) as Record<string, unknown>;
     } catch {
       return undefined;
     }
   }
+  // Accept the {"name":X,"arguments":{…}} shape too, not just the app's {"tool":X, …flatArgs}.
+  const obj = normalizeToolShape(parsed);
   const tool = obj.tool;
   if (tool === "read_url") {
     const url = strArg(obj.url, MAX_URL_CHARS);

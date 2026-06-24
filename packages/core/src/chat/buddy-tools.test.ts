@@ -802,6 +802,26 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
     ]);
   });
 
+  it("accepts the {name, arguments} tool shape that Hermes/Qwen/ChatML models emit", () => {
+    // The exact failure from the transcript: the model "called" write_file but nothing was written,
+    // because the app only parsed {"tool":X,…} — not {"name":X,"arguments":{…}} — so the call vanished.
+    expect(parseBuddyToolCalls('{"name":"write_file","arguments":{"path":"count_rs.py","content":"print(1)"}}')).toEqual([
+      { tool: "write_file", path: "count_rs.py", content: "print(1)" },
+    ]);
+    // Wrapped in <tool_call>…</tool_call> control tags, with code containing braces (string-aware).
+    const tagged = '<tool_call>\n{"name":"run_command","arguments":{"command":"python count_rs.py"}}\n</tool_call>';
+    expect(parseBuddyToolCalls(tagged)).toEqual([{ tool: "run_command", command: "python count_rs.py" }]);
+    // Double-encoded arguments (a JSON STRING) — also common from local models.
+    expect(parseBuddyToolCalls('{"name":"search_web","arguments":"{\\"query\\":\\"strawberry\\"}"}')).toEqual([
+      { tool: "search_web", query: "strawberry" },
+    ]);
+  });
+
+  it("strips tool-call control tokens from the displayed prose", () => {
+    expect(stripToolCallJson('All set.<tool_call>{"name":"list_tasks","arguments":{}}</tool_call>')).toBe("All set.");
+    expect(looksLikeToolJson('<tool_call>{"name":"write_file","arguments":{"path":"a","content":"b"}}</tool_call>')).toBe(true);
+  });
+
   it("describeBuddyToolActivity names the specific action for the status line", () => {
     expect(describeBuddyToolActivity({ tool: "search_web", query: "Virginia SOL Algebra 1" })).toMatch(
       /Searching the web for .*Algebra 1/,
