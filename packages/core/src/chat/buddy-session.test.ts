@@ -119,6 +119,21 @@ describe("runBuddyTurn — never-empty answer + thinking", () => {
     });
     expect(outcome.text).toBe("All set — nothing notable came back."); // not an empty bubble
     expect(outcome.toolResults).toHaveLength(1);
+    // The internal "reply in plain text" wrap directive must NOT leak into the persisted transcript
+    // (it showed up in the chat as a "user" message — a real reported bug). The tool RESULT is a
+    // legitimate user-role turn (the round-trip context); only the internal directive is forbidden.
+    expect(outcome.transcript.some((t) => /reply to the reader in plain text/i.test(t.content))).toBe(false);
+  });
+
+  it("never persists a re-issue nudge into the transcript when a reply looks like tool JSON but doesn't parse", async () => {
+    // First reply LOOKS like a tool call but isn't a known tool → the loop nudges (context only),
+    // then the model answers in prose. The nudge must stay out of the stored transcript.
+    const llm = scriptedLlm(['{"tool":"definitely_not_a_real_tool","x":1}', "Here's the plain answer."]);
+    const outcome = await runBuddyTurn({ llm, system: "sys", history: [{ role: "user", content: "go" }], deps: baseDeps });
+    expect(outcome.text).toBe("Here's the plain answer.");
+    expect(outcome.transcript.some((t) => /Re-issue each tool call/i.test(t.content))).toBe(false);
+    // No internal directive leaked as a user turn (no tool ran here, so there are no legit user turns).
+    expect(outcome.transcript.some((t) => t.role === "user")).toBe(false);
   });
 
   it("falls back to a non-empty line when even the wrap-up is blank", async () => {

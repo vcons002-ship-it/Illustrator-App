@@ -535,7 +535,11 @@ export function buildBuddySystemPrompt(opts: {
       "(books, PDFs, Word docs, spreadsheets, text). Use when they ask to find/open/analyze something " +
       'from "my files", "my computer", "my documents", "my downloads", or name a file. The app asks the ' +
       "reader to approve filesystem access before it runs; results come back as a file list you can then " +
-      "offer to open. Do NOT use it for public/web material — that's search_books / search_web.\n" +
+      "offer to open. Do NOT use it for public/web material — that's search_books / search_web. IMPORTANT: " +
+      "find_files matches FILE NAMES, not what's inside them — so to find WHERE some text/logic lives in a " +
+      'file ("search the workspace/code for casino logic"), DON\'T pass the phrase to find_files (it finds ' +
+      "nothing and looks broken). Instead read_file the relevant file(s) and look through the text yourself; " +
+      "if you don't know which file, find_files by likely NAME (or the open file) first, then read it.\n" +
       '- {"tool":"read_file","path":"…"} — read ONE local file\'s text (a path from find_files) to pull its ' +
       "contents in as DATA — e.g. a form, a statement, a prior document — when you need what's inside it.\n" +
       '- {"tool":"open_image","path":"…"} — show an IMAGE FILE (png/jpg/webp/gif/svg, a screenshot, a photo, a ' +
