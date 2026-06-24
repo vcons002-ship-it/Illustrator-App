@@ -678,9 +678,18 @@ export function SettingsPanel({
               </button>
             </div>
           )}
+          {/* Five top-level SECTIONS. Each group below carries a CSS `order` (11/21/31/41/51) that
+              places it under the matching header — so the panel reads as five categories without
+              physically reordering the JSX. Headers hide during a search (groups then show flat). */}
+          <SectionHeader q={query} title="🧠 LLM" order={10} />
+          <SectionHeader q={query} title="🎨 Image generation" order={20} />
+          <SectionHeader q={query} title="🔐 Authorizations" order={30} />
+          <SectionHeader q={query} title="🔗 Links & APIs" order={40} />
+          <SectionHeader q={query} title="⚙️ Other app settings" order={50} />
           <Group
             q={query}
-            title="📖 1 · Read & analyse — text model"
+            order={11}
+            title="📖 Read & analyse — text model"
             hint="Reads the book, learns characters/places, writes the illustration prompts. Changes apply via ↻ Redo → Story analysis (or → Prompts)."
             keywords="text provider llm claude gemini openai api key local ollama lm studio llama webgpu on-device server model download pull context window tokens built-in bundled"
             defaultOpen
@@ -902,6 +911,7 @@ export function SettingsPanel({
 
           <Group
             q={query}
+            order={21}
             title="⏱ Illustration cadence"
             keywords="illustrate after chapter book when timing cadence generate"
           >
@@ -922,7 +932,8 @@ export function SettingsPanel({
 
           <Group
             q={query}
-            title="🎨 2 · Paint — image provider"
+            order={21}
+            title="🎨 Paint — image provider"
             hint="New paintings always use these settings. Apply them to already-painted pictures with ↻ Redo → All images (or → This image)."
             keywords="image provider flux gemini openai dall-e api key local gpu comfyui automatic1111"
             defaultOpen
@@ -945,6 +956,7 @@ export function SettingsPanel({
 
           <Group
             q={query}
+            order={21}
             title="🖌 Look & layout"
             keywords="art style anime manga watercolor oil painting comic photorealistic pages per image quality draft ultra aspect ratio portrait landscape panels per view grid comic page local model checkpoint"
           >
@@ -1103,7 +1115,8 @@ export function SettingsPanel({
 
           <Group
             q={query}
-            title="🔞 Content"
+            order={51}
+            title="🔞 Mature content"
             keywords="mature adult explicit nsfw content filter safety moderation uncensored"
           >
           <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
@@ -1122,7 +1135,15 @@ export function SettingsPanel({
               </span>
             </span>
           </label>
-          <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+          </Group>
+
+          <Group
+            q={query}
+            order={31}
+            title="🤝 Assistant autonomy"
+            keywords="autonomy autonomous learn skills pull files search full medium-risk approve permission"
+          >
+          <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
             <input
               type="checkbox"
               checked={value.autoLearnSkills ?? false}
@@ -1185,7 +1206,15 @@ export function SettingsPanel({
               </span>
             </span>
           </label>
-          <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+          </Group>
+
+          <Group
+            q={query}
+            order={41}
+            title="📱 Phone command bus"
+            keywords="remote bus google tasks phone run commands VR"
+          >
+          <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
             <input
               type="checkbox"
               checked={value.remoteBus ?? false}
@@ -1202,7 +1231,15 @@ export function SettingsPanel({
               </span>
             </span>
           </label>
-          <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+          </Group>
+
+          <Group
+            q={query}
+            order={51}
+            title="🔒 Privacy / incognito (phone link)"
+            keywords="privacy incognito phone link hidden curtain not saved"
+          >
+          <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
             <input
               type="checkbox"
               checked={value.incognitoRemote ?? false}
@@ -1218,6 +1255,14 @@ export function SettingsPanel({
               </span>
             </span>
           </label>
+          </Group>
+
+          <Group
+            q={query}
+            order={41}
+            title="🧩 MCP servers"
+            keywords="mcp model context protocol servers tools http stdio integrations"
+          >
           <label style={{ ...rowStyle, marginTop: 8 }}>
             <span>MCP servers (optional)</span>
             <textarea
@@ -1267,6 +1312,7 @@ export function SettingsPanel({
 
           <Group
             q={query}
+            order={41}
             title="🔬 Scientific sources (technical books)"
             keywords="google custom search programmable engine cx key grounding figures wikimedia wikipedia citations sources real diagrams"
           >
@@ -1338,8 +1384,9 @@ export function SettingsPanel({
 
           <Group
             q={query}
-            title="💬 Chat (buddy & reading companion)"
-            keywords="chat buddy companion local model ollama webllm chat provider chat image override private vision describe image screenshot run commands shell agentic assistant workspace test code find files allow wolfram alpha math knowledge appid github git gh token clone commit push pull request pr issue repository repo google gmail email calendar tasks schedule to-do todo oauth connect"
+            order={11}
+            title="💬 Chat — model & reasoning"
+            keywords="chat buddy companion local model ollama webllm chat provider private vision describe image screenshot thinking reasoning effort qwen deepseek"
           >
             <p style={{ opacity: 0.6, fontSize: 11, margin: "4px 0 8px" }}>
               The chat panel can run on a different model than the book analysis. Defaults to
@@ -1414,6 +1461,14 @@ export function SettingsPanel({
                 </span>
               </label>
             )}
+          </Group>
+
+          <Group
+            q={query}
+            order={21}
+            title="🖼 Chat image generation"
+            keywords="chat image generation local provider draw"
+          >
             <label style={rowStyle}>
               <span>Chat image generation</span>
               <select
@@ -1431,7 +1486,15 @@ export function SettingsPanel({
                 ))}
               </select>
             </label>
-            {(isDesktop || remote) && (
+          </Group>
+
+          {(isDesktop || remote) && (
+            <Group
+              q={query}
+              order={31}
+              title="🛠 Assistant — commands & screen"
+              keywords="run commands shell screen capture workspace autonomous test code execute conflicts"
+            >
               <>
                 <div
                   style={{
@@ -1519,6 +1582,18 @@ export function SettingsPanel({
                     </span>
                   </label>
                 )}
+              </>
+            </Group>
+          )}
+
+          {(isDesktop || remote) && (
+            <Group
+              q={query}
+              order={41}
+              title="📈 Integrations & API keys"
+              keywords="github git gh token google gmail calendar tasks oauth schwab markets options tradingview chart scan inbox focus"
+            >
+              <>
                 <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
                   <input
                     type="checkbox"
@@ -1654,6 +1729,18 @@ export function SettingsPanel({
                     />
                   </label>
                 )}
+              </>
+            </Group>
+          )}
+
+          {(isDesktop || remote) && (
+            <Group
+              q={query}
+              order={11}
+              title="🧠 Parallel sub-agents (advanced)"
+              keywords="parallel sub-agents concurrency worker model vllm endpoint qwen fast"
+            >
+              <>
                 <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 }}>
                   <span>Parallel sub-agents</span>
                   <select
@@ -1794,6 +1881,18 @@ export function SettingsPanel({
                     </div>
                   </div>
                 </label>
+              </>
+            </Group>
+          )}
+
+          {(isDesktop || remote) && (
+            <Group
+              q={query}
+              order={31}
+              title="✅ Task automation (permission)"
+              keywords="task automation reminders google calendar tasks without asking"
+            >
+              <>
                 {onConnectGoogle && (
                   <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
                     <input
@@ -1811,6 +1910,18 @@ export function SettingsPanel({
                     </span>
                   </label>
                 )}
+              </>
+            </Group>
+          )}
+
+          {(isDesktop || remote) && (
+            <Group
+              q={query}
+              order={41}
+              title="📈 Schwab (markets · options · positions)"
+              keywords="schwab markets options positions thinkorswim quotes greeks app key secret"
+            >
+              <>
                 <div style={{ marginTop: 12, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
                   <div style={{ fontWeight: 600, fontSize: 12, marginBottom: 4 }}>📈 Schwab (markets · options · positions)</div>
                   <p style={{ opacity: 0.55, fontSize: 11, margin: "0 0 6px" }}>
@@ -1837,12 +1948,13 @@ export function SettingsPanel({
                   </label>
                 </div>
               </>
-            )}
-          </Group>
+            </Group>
+          )}
 
           <Group
             q={query}
-            title="⚙️ Local engine & advanced"
+            order={21}
+            title="⚙️ Image — local engine & advanced"
             keywords="comfyui automatic1111 a1111 connect url lora style pack download sampler steps cfg scheduler vae text encoder native one api multimodal reference photos model files low vram lowvram fp8 memory offload gpu"
           >
           {sameVendorNative(value) && <NativeModeRow value={value} set={set} />}
@@ -2907,6 +3019,7 @@ function Group({
   hint,
   keywords,
   defaultOpen,
+  order,
   children,
 }: {
   q: string;
@@ -2914,6 +3027,9 @@ function Group({
   hint?: string;
   keywords?: string;
   defaultOpen?: boolean;
+  /** CSS flex `order` so a group renders under its top-level Section regardless of DOM position —
+   * lets the panel be reorganized into sections without physically moving 1500 lines of JSX. */
+  order?: number;
   children: ReactNode;
 }) {
   const [userOpen, setUserOpen] = useState(defaultOpen ?? false);
@@ -2928,7 +3044,7 @@ function Group({
       onToggle={(e) => {
         if (!query) setUserOpen((e.target as HTMLDetailsElement).open);
       }}
-      style={groupStyle}
+      style={order !== undefined ? { ...groupStyle, order } : groupStyle}
     >
       <summary style={groupSummaryStyle}>
         <span style={{ fontWeight: 600 }}>{title}</span>
@@ -2936,6 +3052,29 @@ function Group({
       </summary>
       <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingTop: 8 }}>{children}</div>
     </details>
+  );
+}
+
+/** A top-level settings SECTION header. Positioned by CSS `order` so it sits just above its group
+ * cluster; hidden during a search (the matching groups show flat, no empty section chrome). */
+function SectionHeader({ q, title, order }: { q: string; title: string; order: number }) {
+  if (q.trim()) return null;
+  return (
+    <div
+      style={{
+        order,
+        fontSize: 11,
+        fontWeight: 700,
+        letterSpacing: 0.6,
+        textTransform: "uppercase",
+        opacity: 0.5,
+        margin: "8px 2px 0",
+        paddingBottom: 2,
+        borderBottom: "1px solid rgba(255,255,255,0.12)",
+      }}
+    >
+      {title}
+    </div>
   );
 }
 
