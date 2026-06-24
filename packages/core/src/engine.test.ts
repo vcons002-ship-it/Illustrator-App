@@ -1060,6 +1060,39 @@ describe("Engine", () => {
     expect(engine.getBible()!.processedChapters).toContain(1);
   });
 
+  it("appendChapter with illustrate:false defers the image; renderScene draws it on demand", async () => {
+    const image = new MockImageProvider();
+    const genSpy = vi.spyOn(image, "generate");
+    const engine = new Engine({ llm: new MockLLMProvider(), image });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+    await vi.waitFor(() => expect(engine.resultFor(1)?.status).toBe("ready"));
+
+    const grown: BookSource = {
+      ...sampleBook(),
+      chapters: [...sampleBook().chapters, { id: "c2", index: 1, title: "Two" }],
+      pages: [
+        ...sampleBook().pages,
+        { id: "pg-2", index: 2, chapterId: "c2", pageRange: [2, 2], paragraphs: [{ id: "pg-2-0", index: 0, text: "Aria rested by the bridge." }] },
+      ],
+    };
+    const callsBefore = genSpy.mock.calls.length;
+    await engine.appendChapter(grown, { illustrate: false });
+    // The bible still extracts the new beat, but its image is DEFERRED (manual/every-N cadence):
+    // the unit is seeded "skipped", so no render fires.
+    await engine.whenBibleReady();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(genSpy.mock.calls.length).toBe(callsBefore); // nothing rendered automatically
+    expect(engine.resultFor(2)?.status).toBe("skipped");
+    expect(engine.getBible()!.processedChapters).toContain(1); // …but the bible grew
+
+    // render_scene draws the deferred beat on demand.
+    await engine.renderScene(2, 2);
+    await vi.waitFor(() => expect(engine.resultFor(2)?.status).toBe("ready"));
+    expect(genSpy.mock.calls.length).toBe(callsBefore + 1);
+  });
+
   it("retries a failed chapter once, then continues with a note", async () => {
     const llm = new MockLLMProvider();
     let calls = 0;

@@ -117,6 +117,32 @@ export type BuddyToolCall =
       columns: { name: string; type?: "number" | "string" }[];
       rows?: (string | number | null)[][];
     }
+  /** Start co-writing an illustrated STORY with the reader: create the story book from the
+   * opening beat, open it in the reader, and generate the first image. Each later beat
+   * (continue_story) adds prose + an image while the Visual Bible accumulates the cast/
+   * places. `style` sets the art look; `characters` seeds the known cast; `roleplay`
+   * assigns the played characters (`you` = the reader plays, `me` = you play) so both stay
+   * present by default. */
+  | {
+      tool: "start_story";
+      title: string;
+      opening: string;
+      style?: string;
+      characters?: string[];
+      roleplay?: { you?: string; me?: string };
+    }
+  /** Advance the OPEN story by one beat: append this prose as the next span and (per the
+   * current cadence) illustrate the scene since the last image. Write a vivid, FULL-SCENE
+   * beat; keep continuity with the bible's established names. In role-play, write only
+   * YOUR character's part and end on a beat that invites the reader's next move. */
+  | { tool: "continue_story"; text: string }
+  /** Illustrate a chosen part of the open story ON DEMAND (manual cadence, or "draw the
+   * last bit"): render an image for beats `from`..`to` (1-based beat numbers; default =
+   * the most recent beat). */
+  | { tool: "render_scene"; from?: number; to?: number }
+  /** Change how OFTEN the open story auto-illustrates: every buddy response (default),
+   * every N beats, or only on request (manual). */
+  | { tool: "set_story_cadence"; mode: "per-response" | "every-n" | "manual"; n?: number }
   /** Remove a book (and its bible/images/chat) from the library by id. */
   | { tool: "remove_library_book"; id: string }
   /** Change the app's art style and/or illustration cadence (settings). */
@@ -312,6 +338,14 @@ export function describeBuddyToolActivity(call: BuddyToolCall): string {
       return `Planning “${clip(call.title, 50)}”…`;
     case "create_spreadsheet":
       return `Building the “${clip(call.title, 50)}” spreadsheet…`;
+    case "start_story":
+      return `Starting the story “${clip(call.title, 50)}”…`;
+    case "continue_story":
+      return "Writing the next beat + illustrating it…";
+    case "render_scene":
+      return "Illustrating the scene…";
+    case "set_story_cadence":
+      return "Updating the story's image cadence…";
     case "stock_quote":
     case "schwab_quote":
       return `Looking up ${call.symbol}…`;
@@ -641,6 +675,29 @@ export function buildBuddySystemPrompt(opts: {
     "questions about how to construct it (purpose, the columns/categories, the period, currency, any totals or formulas " +
     "they want) — offer sensible defaults — and only call this once you know enough to build something useful. After it " +
     "opens, refine it conversationally with set_cell / add_formula_column / analyze_data / export_data.\n" +
+    '- {"tool":"start_story","title":"The Lantern Road","opening":"<the first beat — a vivid full scene>","style":"storybook ' +
+    'illustration","characters":["Mira","Toll"],"roleplay":{"you":"Mira","me":"Toll"}} — START an illustrated STORY you ' +
+    "co-write with the reader, AS YOU GO. It opens in the reader and the first scene illustrates immediately; every beat " +
+    "after (continue_story) adds prose AND a new image, while the Visual Bible accumulates the characters/places so they " +
+    'stay visually consistent. "style" sets the art look; "characters" seeds known cast; "roleplay" (optional) assigns ' +
+    'the played characters — "you" is the character the READER plays, "me" is the one YOU play (both are assumed present ' +
+    "each beat unless one leaves). Use this when the reader wants to make up / write / role-play a story together (NOT for " +
+    "opening existing text — that's open_pasted_text).\n" +
+    '- {"tool":"continue_story","text":"<the next beat — a vivid full scene>"} — advance the OPEN story by one beat. Write ' +
+    "a rich, FULL-SCENE paragraph (who is there, where, what happens, the mood) using the bible's established names so the " +
+    "image stays consistent; it illustrates automatically (per the cadence). In role-play, write ONLY your character's part " +
+    "and end on a beat that invites the reader's next move. This is the main loop once a story is open.\n" +
+    '- {"tool":"render_scene","from":3,"to":3} — illustrate a chosen part of the open story ON DEMAND ("draw the last bit", ' +
+    'or under manual cadence). "from"/"to" are 1-based beat numbers; omit them to illustrate the most recent beat.\n' +
+    '- {"tool":"set_story_cadence","mode":"per-response"} — how OFTEN the open story auto-illustrates: "per-response" ' +
+    '(default, an image every beat), "every-n" with "n" (an image every N beats), or "manual" (only on render_scene).\n' +
+    "STORY MODE (writing a story together, as you go): once a story is open, the LOOP is — the reader sends what " +
+    "happens next (or their character's line); you reply by calling continue_story with the NEXT BEAT as vivid, " +
+    "FULL-SCENE prose (who is present, where, what happens, the mood), reusing the bible's established character/place " +
+    "names so the art stays consistent; it illustrates automatically. Keep beats moving and end on a hook that invites " +
+    "the reader's next move. In ROLE-PLAY (you were given a character at start_story), write ONLY your character's part " +
+    "each beat — never the reader's. Do NOT call open_pasted_text for a story you're co-writing — that's for existing " +
+    "text; use start_story / continue_story. After a tool runs, reply with ONE short line (don't repeat the prose).\n" +
     "SAVED TO THE LIBRARY AUTOMATICALLY: every book you OPEN or CREATE — a library pick, web/pasted text, code, or a " +
     "spreadsheet — is added to the reader's LIBRARY the moment it opens (it appears in the library list above and reopens " +
     "later with open_library_book) and is showing on screen right then, in the data view for a sheet. So a spreadsheet or " +
@@ -1501,6 +1558,44 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       : undefined;
     return { tool, title: strArg(obj.title, MAX_TITLE_CHARS) ?? "Spreadsheet", columns, ...(rows ? { rows } : {}) };
   }
+  if (tool === "start_story") {
+    const opening = strArg(obj.opening, MAX_PASTE_CHARS);
+    if (!opening) return undefined;
+    const characters = Array.isArray(obj.characters)
+      ? obj.characters
+          .map((c) => strArg(c, MAX_NAME_CHARS))
+          .filter((c): c is string => !!c)
+          .slice(0, 24)
+      : undefined;
+    const rp = obj.roleplay as { you?: unknown; me?: unknown } | undefined;
+    const you = rp ? strArg(rp.you, MAX_NAME_CHARS) : undefined;
+    const me = rp ? strArg(rp.me, MAX_NAME_CHARS) : undefined;
+    const roleplay = you || me ? { ...(you ? { you } : {}), ...(me ? { me } : {}) } : undefined;
+    return {
+      tool,
+      title: strArg(obj.title, MAX_TITLE_CHARS) ?? "Our Story",
+      opening,
+      ...(strArg(obj.style, MAX_NAME_CHARS) ? { style: strArg(obj.style, MAX_NAME_CHARS)! } : {}),
+      ...(characters && characters.length ? { characters } : {}),
+      ...(roleplay ? { roleplay } : {}),
+    };
+  }
+  if (tool === "continue_story") {
+    const text = strArg(obj.text, MAX_PASTE_CHARS);
+    return text ? { tool, text } : undefined;
+  }
+  if (tool === "render_scene") {
+    const num = (v: unknown): number | undefined =>
+      typeof v === "number" && Number.isFinite(v) ? Math.max(1, Math.round(v)) : undefined;
+    const from = num(obj.from);
+    const to = num(obj.to);
+    return { tool, ...(from !== undefined ? { from } : {}), ...(to !== undefined ? { to } : {}) };
+  }
+  if (tool === "set_story_cadence") {
+    const mode = obj.mode === "every-n" ? "every-n" : obj.mode === "manual" ? "manual" : "per-response";
+    const n = typeof obj.n === "number" && Number.isFinite(obj.n) ? Math.max(1, Math.round(obj.n)) : undefined;
+    return { tool, mode, ...(n !== undefined ? { n } : {}) };
+  }
   return undefined;
 }
 
@@ -1517,6 +1612,20 @@ export interface BuddyToolResultPayload {
   books?: BookSearchHit[];
   imageHits?: ImageSearchHit[];
   opened?: BuddyOpenedInfo;
+  /** Story "as you go" outcomes: a started/continued story (the opened book info doubles as
+   * the start outcome), an on-demand render (render_scene), or a cadence change. */
+  story?: {
+    /** beats so far in the open story (1 = just started). */
+    beats?: number;
+    /** render_scene: how many beat-images were (re)rendered + the range. */
+    rendered?: number;
+    from?: number;
+    to?: number;
+    /** set_story_cadence: the applied cadence. */
+    cadence?: { mode: "per-response" | "every-n" | "manual"; n?: number };
+    /** whether this beat auto-illustrated (per the cadence). */
+    illustrated?: boolean;
+  };
   /** Title of a removed library book (remove_library_book). */
   removed?: string;
   /** A calculate tool's outcome (expression echoed for the inline chip). */
@@ -2050,6 +2159,42 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
       "set_cell / add_formula_column / analyze_data / export_data on it.] Confirm it warmly and suggest the next step " +
       "(e.g. add a totals row or a computed column)."
     );
+  }
+  if (call.tool === "start_story") {
+    const o = result.opened;
+    if (!o) return `[start_story failed: ${result.error ?? "couldn't start the story"}] Tell the reader.`;
+    return (
+      `[started the story "${o.title}" and opened it in the reader; the first scene is illustrating now. The Visual ` +
+      "Bible will accumulate the characters + places as you go, and every beat you write with continue_story gets its " +
+      "own image.] In ONE or two warm sentences, set the scene and invite the reader's next move (what happens next, " +
+      "or — in role-play — their character's line)."
+    );
+  }
+  if (call.tool === "continue_story") {
+    const o = result.opened;
+    if (!o) return `[continue_story failed: ${result.error ?? "no story is open"}] If no story is open, offer start_story.`;
+    const illustrated = result.story?.illustrated !== false;
+    return (
+      `[added the next beat${result.story?.beats ? ` (beat ${result.story.beats})` : ""}; ` +
+      (illustrated ? "an illustration of the new scene is generating" : "no image this beat (manual/every-N cadence — use render_scene to illustrate)") +
+      ".] Do NOT repeat the prose you just wrote. Reply with ONE short line that carries the story forward and invites " +
+      "the reader's next move (their action, or — in role-play — their character's response)."
+    );
+  }
+  if (call.tool === "render_scene") {
+    const s = result.story;
+    if (!s || !s.rendered) return `[render_scene: nothing to illustrate${result.error ? ` — ${result.error}` : ""}]`;
+    return (
+      `[illustrating ${s.rendered} beat${s.rendered === 1 ? "" : "s"}${s.from ? ` (${s.from}${s.to && s.to !== s.from ? `–${s.to}` : ""})` : ""} now.] Confirm briefly.`
+    );
+  }
+  if (call.tool === "set_story_cadence") {
+    const c = result.story?.cadence;
+    const desc =
+      c?.mode === "manual" ? "only when you ask (manual)"
+      : c?.mode === "every-n" ? `every ${c.n ?? 3} beats`
+      : "every response";
+    return `[story image cadence set to: ${desc}.] Confirm in one short sentence.`;
   }
   // open_library_book / open_web_text / open_pasted_text
   const o = result.opened;

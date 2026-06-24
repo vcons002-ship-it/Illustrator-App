@@ -4150,6 +4150,33 @@ export function App() {
         openBook(e.book);
         if (e.visuals) startGeneration();
         setShowChat(true);
+      } else if (e.kind === "storyBeat") {
+        // A continue_story beat grew the OPEN story IN the worker (the engine appended a
+        // span). Grow the reader WITHOUT re-opening — a re-open would dispose + rebuild the
+        // engine and undo the append. The new beat's image arrives via the normal `update`
+        // events the engine already posts. Persist the grown book and scroll to the new beat.
+        setBook(e.book);
+        void libraryStore
+          .putBook(e.book)
+          .then(() => libraryStore.listBooks())
+          .then(setLibrary)
+          .catch(() => {});
+        const chapter = e.book.chapters[e.book.chapters.length - 1];
+        const paraId = chapter
+          ? e.book.pages.find((p) => p.chapterId === chapter.id)?.paragraphs[0]?.id
+          : undefined;
+        if (paraId) {
+          // Let React paint the new paragraphs, then bring the new beat into view.
+          setTimeout(() => {
+            try {
+              document
+                .querySelector(`[data-paragraph-id="${CSS.escape(paraId)}"]`)
+                ?.scrollIntoView({ behavior: "smooth", block: "start" });
+            } catch {
+              /* CSS.escape unavailable / node gone — non-fatal */
+            }
+          }, 60);
+        }
       } else {
         setBuddyActivity("");
         // The agent just read/wrote the calendar or tasks — reflect it in the app's views.
@@ -5791,8 +5818,17 @@ export function App() {
         </div>
       )}
 
-      {!book && (
-        <section style={styles.buddySection}>
+      {(!book || (showChat && book.kind === "story")) && (
+        <section style={!book ? styles.buddySection : styles.storyChatOverlay}>
+          {book?.kind === "story" && (
+            <button
+              style={styles.storyChatClose}
+              onClick={() => setShowChat(false)}
+              title="Hide the chat and view the illustrated story"
+            >
+              ✕ View story
+            </button>
+          )}
           <ChatBuddyPanel
             messages={buddyPanelMessages}
             {...(buddyStreaming ? { streamingText: buddyStreaming } : {})}
@@ -5979,7 +6015,7 @@ export function App() {
         />
       )}
 
-      {showChat && book && (
+      {showChat && book && book.kind !== "story" && (
         <ChatPanel
           title={book.title}
           messages={chatPanelMessages}
@@ -7816,6 +7852,33 @@ const styles: Record<string, React.CSSProperties> = {
   },
   empty: { padding: "10px 24px 8px", maxWidth: 760, fontSize: 13, opacity: 0.8, lineHeight: 1.5 },
   buddySection: { padding: "0 24px 20px", display: "flex", justifyContent: "center" },
+  // A story keeps its buddy/story chat mounted OVER the open reader (toggled by the chat
+  // button): the chat drives the next beat; "✕ View story" hides it to see the growing
+  // illustrated story behind. Reuses ChatBuddyPanel — the full buddy toolset incl. the
+  // story tools — so the same surface that started the story continues it.
+  storyChatOverlay: {
+    position: "fixed",
+    inset: 0,
+    zIndex: 60,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    padding: 12,
+    background: "rgba(0,0,0,0.55)",
+    backdropFilter: "blur(2px)",
+  },
+  storyChatClose: {
+    alignSelf: "flex-end",
+    background: "#23262d",
+    color: "#e6e6e6",
+    border: "1px solid rgba(255,255,255,0.18)",
+    borderRadius: 8,
+    padding: "6px 12px",
+    fontSize: 13,
+    cursor: "pointer",
+  },
   reader: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) minmax(320px, 520px)",

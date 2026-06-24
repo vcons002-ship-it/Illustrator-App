@@ -80,7 +80,7 @@ describe("buildProviders local image backend", () => {
       settings({ imageProvider: "local", localBackend: "a1111", localServerUrl: "http://127.0.0.1:7860", localModel: "sd_xl_base" }),
       { corsFetch },
     );
-    const out = await built.image.generate({ prompt: "a cat", anchors: [] });
+    const out = await built.image.generate({ prompt: "a cat", anchors: [], quality: "standard" });
     expect(out.bytes.byteLength).toBeGreaterThan(0);
     expect(seen.some((u) => u.includes("/sdapi/v1/txt2img"))).toBe(true); // hit the engine via corsFetch
   });

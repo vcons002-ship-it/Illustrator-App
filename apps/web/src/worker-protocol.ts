@@ -334,6 +334,11 @@ export type WorkerToMain =
   /** A buddy tool resolved a full BookSource — the main thread opens it (and
    * starts generation when `visuals` was requested). Arrives mid-turn. */
   | { type: "buddyOpened"; requestId: number; book: BookSource; visuals: boolean }
+  /** Story "as you go": a `continue_story` beat grew the OPEN story IN the worker (the engine
+   * appended a span without re-opening). The host applies the grown book (setBook + putBook,
+   * NOT a re-open, which would dispose the engine + undo the append) and scrolls to the new
+   * beat. `firstNewUnit` is the new beat's render-unit index; `illustrate` whether it auto-rendered. */
+  | { type: "storyBeat"; requestId: number; book: BookSource; firstNewUnit: number; illustrate: boolean }
   /** remove_library_book deleted a book — the main thread refreshes its library list. */
   | { type: "buddyLibraryChanged"; requestId: number }
   /** A scheduled task was created/cancelled by the chat — the host refreshes its list. */

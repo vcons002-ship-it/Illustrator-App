@@ -1045,7 +1045,10 @@ export class Engine {
    * Re-opening instead (`openBook`) would `dispose` + rebuild the engine and rescan every
    * cached image — churning the reader on every beat — which is exactly what this avoids.
    */
-  async appendChapter(renderBook: BookSource): Promise<{ firstNewUnit: number; chapterIndex: number }> {
+  async appendChapter(
+    renderBook: BookSource,
+    opts: { illustrate?: boolean } = {},
+  ): Promise<{ firstNewUnit: number; chapterIndex: number }> {
     if (!this.book || !this.pipeline || !this.buffer) {
       throw new Error("appendChapter requires an open book");
     }
@@ -1062,6 +1065,13 @@ export class Engine {
     this.indexBook(renderBook); // rebuild positional tables (prior entries identical + the new unit)
     this.pipeline.setBook(renderBook);
     this.buffer.extend(renderBook.pages.length); // preserves existing slot state
+    // Cadence control: when the image is DEFERRED (everyN / manual cadence), seed the new
+    // unit so the buffer won't auto-render it — the BIBLE still extracts this beat below, so
+    // continuity keeps building; `render_scene` / regenerate releases the image on demand.
+    if (opts.illustrate === false) {
+      const page = renderBook.pages[firstNewUnit]!;
+      this.buffer.seed(firstNewUnit, { requestId: `page-${firstNewUnit}`, pageId: page.id, status: "skipped" });
+    }
     // The new chapter isn't in processedChapters → automatically pending. Re-arm the bible
     // loop exactly like rebuildPrompts/regenerateStoryboard: it cancels any in-flight prior
     // run (run-token), then extracts ONLY the new chapter (prior ones are processed/skipped).
@@ -1070,8 +1080,24 @@ export class Engine {
     }
     // Jump the new beat's image ahead of the strict in-order schedule — it's what the
     // reader is waiting on. Harmless before generation starts (it renders once it does).
-    this.buffer.prioritize(firstNewUnit);
+    if (opts.illustrate !== false) this.buffer.prioritize(firstNewUnit);
     return { firstNewUnit, chapterIndex };
+  }
+
+  /**
+   * On-demand (re)illustration of a story span: render the units in [fromUnit, toUnit]
+   * (inclusive) right now — for "illustrate the last bit" / a manual-cadence catch-up, or
+   * re-rolling a beat. Reuses the single-unit regenerate path so each unit re-renders from
+   * its stored prompt with the tracked active scene. A deferred (skipped-seeded) unit is
+   * released; a rendered one is re-rolled. Clamped to the story's units.
+   */
+  async renderScene(fromUnit: number, toUnit: number): Promise<void> {
+    if (!this.book) return;
+    const lo = Math.max(0, Math.min(fromUnit, toUnit));
+    const hi = Math.min(this.book.pages.length - 1, Math.max(fromUnit, toUnit));
+    for (let i = lo; i <= hi; i++) {
+      if (this.isStoryPage(i)) await this.regenerateCurrentImage(i);
+    }
   }
 }
 

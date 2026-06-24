@@ -526,6 +526,86 @@ describe("create_spreadsheet tool", () => {
   });
 });
 
+describe("story as you go tools", () => {
+  it("parses start_story (opening required; style/characters/roleplay optional)", () => {
+    expect(
+      parseBuddyToolCall(
+        JSON.stringify({
+          tool: "start_story",
+          title: "The Lantern Road",
+          opening: "Mira lit the last lantern as Toll watched from the bridge.",
+          style: "storybook illustration",
+          characters: ["Mira", "Toll", ""],
+          roleplay: { you: "Mira", me: "Toll" },
+        }),
+      ),
+    ).toEqual({
+      tool: "start_story",
+      title: "The Lantern Road",
+      opening: "Mira lit the last lantern as Toll watched from the bridge.",
+      style: "storybook illustration",
+      characters: ["Mira", "Toll"],
+      roleplay: { you: "Mira", me: "Toll" },
+    });
+    // No opening → not a valid start.
+    expect(parseBuddyToolCall('{"tool":"start_story","title":"x"}')).toBeUndefined();
+  });
+
+  it("parses continue_story / render_scene / set_story_cadence", () => {
+    expect(parseBuddyToolCall('{"tool":"continue_story","text":"They pressed on."}')).toEqual({
+      tool: "continue_story",
+      text: "They pressed on.",
+    });
+    expect(parseBuddyToolCall('{"tool":"continue_story","text":"  "}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"render_scene","from":3,"to":5}')).toEqual({ tool: "render_scene", from: 3, to: 5 });
+    expect(parseBuddyToolCall('{"tool":"render_scene"}')).toEqual({ tool: "render_scene" }); // defaults to latest
+    expect(parseBuddyToolCall('{"tool":"set_story_cadence","mode":"every-n","n":4}')).toEqual({
+      tool: "set_story_cadence",
+      mode: "every-n",
+      n: 4,
+    });
+    expect(parseBuddyToolCall('{"tool":"set_story_cadence","mode":"bogus"}')).toEqual({
+      tool: "set_story_cadence",
+      mode: "per-response",
+    });
+  });
+
+  it("formats the story outcomes for the model", () => {
+    const started = formatBuddyToolResult(
+      { tool: "start_story", title: "Tale", opening: "x" },
+      { opened: { title: "Tale", chapters: 1, pages: 1, visuals: true }, story: { beats: 1, illustrated: true } },
+    );
+    expect(started).toMatch(/started the story "Tale"/);
+
+    const beat = formatBuddyToolResult(
+      { tool: "continue_story", text: "next" },
+      { opened: { title: "Tale", chapters: 2, pages: 2, visuals: true }, story: { beats: 2, illustrated: true } },
+    );
+    expect(beat).toMatch(/beat 2/);
+    expect(beat).toMatch(/illustration of the new scene is generating/);
+
+    const manualBeat = formatBuddyToolResult(
+      { tool: "continue_story", text: "next" },
+      { opened: { title: "Tale", chapters: 3, pages: 3, visuals: false }, story: { beats: 3, illustrated: false } },
+    );
+    expect(manualBeat).toMatch(/no image this beat/);
+
+    expect(
+      formatBuddyToolResult({ tool: "render_scene", from: 2, to: 3 }, { story: { rendered: 2, from: 2, to: 3 } }),
+    ).toMatch(/illustrating 2 beats \(2–3\)/);
+    expect(
+      formatBuddyToolResult({ tool: "set_story_cadence", mode: "manual" }, { story: { cadence: { mode: "manual" } } }),
+    ).toMatch(/only when you ask/);
+  });
+
+  it("advertises the story tools in the system prompt", () => {
+    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    expect(prompt).toContain('"tool":"start_story"');
+    expect(prompt).toContain('"tool":"continue_story"');
+    expect(prompt).toMatch(/STORY MODE/);
+  });
+});
+
 describe("setup_help tool", () => {
   it("parses setup_help and always advertises it", () => {
     expect(parseBuddyToolCall('{"tool":"setup_help","topic":"image generation"}')).toEqual({
