@@ -404,9 +404,10 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
       });
     }
     let full = "";
+    let thinking = "";
     let emitted = 0;
     let truncated = false;
-    const think = this.ollamaThink(opts.reasoningEffort);
+    const wantsThink = this.ollamaThink(opts.reasoningEffort);
     await streamOllamaLines(
       this.fetchImpl,
       `${ollamaRoot(this.baseUrl)}/api/chat`,
@@ -416,15 +417,19 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
         stream: true,
         keep_alive: "30m",
         options: this.ollamaOptions(opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS, 0.7),
-        ...(think !== undefined ? { think } : {}),
+        ...(wantsThink !== undefined ? { think: wantsThink } : {}),
       },
       this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
       (line) => {
         const l = line as OllamaChatLine;
         if (l.done_reason === "length") truncated = true;
-        // Separated reasoning (think:true) streams in `message.thinking`; older builds inline a
-        // `<think>` block in `content`, handled by the stripThink gate below.
-        if (l.message?.thinking) opts.onThinking?.(l.message.thinking);
+        // Separated reasoning (think:true) streams in `message.thinking` as DELTAS — accumulate and
+        // emit the FULL reasoning so far (onThinking is replace-semantics, like the SSE path's
+        // reasoningSoFar). Older builds inline a `<think>` block in `content`, handled below.
+        if (l.message?.thinking) {
+          thinking += l.message.thinking;
+          opts.onThinking?.(thinking);
+        }
         const delta = l.message?.content;
         if (!delta) return;
         full += delta;
