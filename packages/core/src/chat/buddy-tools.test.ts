@@ -807,6 +807,17 @@ describe("google tools", () => {
     expect(on).toContain("cannot send email or delete");
   });
 
+  it("when Google is NOT connected, tells the model so it can't fabricate a connection or data", () => {
+    const off = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    expect(off).toMatch(/GOOGLE IS NOT CONNECTED/);
+    expect(off).toMatch(/NEVER invent emails, events, or to-dos/i);
+    expect(off).toMatch(/setup_help/); // offers the real reconnect path
+    // The disconnected guard must NOT smuggle the read tools back in.
+    expect(off).not.toContain('"tool":"gmail_search"');
+    // ...and the connected build must NOT carry the "not connected" warning.
+    expect(buildBuddySystemPrompt({ persona: "freeform", library: [], canGoogle: true })).not.toMatch(/GOOGLE IS NOT CONNECTED/);
+  });
+
   it("swaps the confirm rule for auto-approval when canAutomateTasks is on", () => {
     const auto = buildBuddySystemPrompt({ persona: "freeform", library: [], canGoogle: true, canAutomateTasks: true });
     expect(auto).toContain("Task automation is ON");

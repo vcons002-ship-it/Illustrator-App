@@ -611,7 +611,14 @@ export function buildBuddySystemPrompt(opts: {
         : "Before you CREATE an event or task, confirm the details (title, date/time) with the reader in plain words — " +
           "don't write to their calendar/list on a vague request; ask if anything's ambiguous. You only read and create " +
           "— you cannot send email or delete anything.\n")
-    : "";
+    : // NOT connected: be explicit so the model never fabricates a connection or data. Silence
+      // here let it invent emails/events/tasks; this forbids that and points to reconnecting.
+      "GOOGLE IS NOT CONNECTED: Gmail, Calendar, and Google Tasks are NOT linked, so you have NO way to read the " +
+      "reader's email, calendar, or Google to-dos (there are no gmail_search / list_events / list_tasks tools right " +
+      "now). NEVER say or imply you checked them, and NEVER invent emails, events, or to-dos. If the reader asks about " +
+      'their mail, schedule, or Google tasks, tell them plainly that Google isn\'t connected and offer to connect it — ' +
+      'call setup_help with topic "google" to walk them through it (or point them to Settings). The reader\'s in-app ' +
+      "task PLANS (list_task_plans / get_task_plan) are a SEPARATE feature and still work — use those for to-dos.\n";
   const githubBlock = opts.canGithub
     ? "GITHUB: GitHub is connected — the gh CLI is authenticated (via a token in your environment or the reader's own " +
       "gh login) and git can push — do real repository work through run_command in the workspace. Clone with " +
