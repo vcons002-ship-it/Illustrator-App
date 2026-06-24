@@ -583,6 +583,15 @@ export function App() {
     if (isRemoteClient) return;
     void loadTaskPlans(libraryStore).then(setTaskPlans).catch(() => {});
   }, [libraryStore, isRemoteClient]);
+  // Load the desktop's saved memories + task plans ONCE on startup, so they're populated BEFORE any
+  // panel is opened — and therefore already present in the snapshot/mirror a linked phone receives on
+  // connect. Without this they sat [] until the desktop user happened to open each panel (or the buddy
+  // edited them), so a freshly-loaded desktop mirrored EMPTY tasks + memories to the phone. Both
+  // refreshers no-op on the phone (it owns no store and gets both via the desktop's mirror).
+  useEffect(() => {
+    refreshMemories();
+    refreshTaskPlans();
+  }, [refreshMemories, refreshTaskPlans]);
   // On a linked phone, Tasks/Calendar actions are RELAYED to the desktop (which owns the data and
   // re-mirrors the result). Each handler below early-returns through this when isRemoteClient.
   const sendPlanner = useCallback(
