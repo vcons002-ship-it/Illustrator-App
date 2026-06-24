@@ -2076,6 +2076,8 @@ function boundedMax(v: unknown): number | undefined {
 
 function stripFences(s: string): string {
   const t = s.trim();
-  const m = /^```(?:json)?\s*([\s\S]*?)```$/i.exec(t);
+  // Accept ANY fence language tag — models wrap tool JSON in ```json but also ```tool_code (Gemma),
+  // ```python, ```bash, etc. Only the OPENING tag is a bare word; without this those calls leak.
+  const m = /^```[a-zA-Z0-9_-]*\s*([\s\S]*?)```$/.exec(t);
   return (m ? m[1]! : t).trim();
 }
