@@ -415,4 +415,30 @@ describe("scenario: chains run in order and each result feeds the next round", (
       .some((m) => m.role === "user" && /follow along/i.test(typeof m.content === "string" ? m.content : ""));
     expect(sawProgressDirective).toBe(true);
   });
+
+  it("cloud pause: a paid model stops at the pauseEvery budget with paused=true (a keep-going check)", async () => {
+    const llm = scriptedLlm(['{"tool":"search_web","query":"endless"}']); // never stops on its own
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "do a huge research job" }],
+      deps: baseDeps({ searchWeb: async () => [] }),
+      pauseEvery: 3, // simulate a cloud model's per-turn budget
+    });
+    expect(outcome.paused).toBe(true);
+    expect(outcome.toolResults).toHaveLength(3); // stopped at the budget, NOT the 50 backstop
+    expect(outcome.text.trim()).not.toBe(""); // a resumable summary, never empty
+  });
+
+  it("local: a natural finish is never flagged paused (no pauseEvery → runs uninterrupted)", async () => {
+    const llm = scriptedLlm(['{"tool":"search_web","query":"q"}', "All done."]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "quick lookup" }],
+      deps: baseDeps({ searchWeb: async () => [] }),
+    });
+    expect(outcome.paused).toBeFalsy();
+    expect(outcome.text).toContain("done");
+  });
 });

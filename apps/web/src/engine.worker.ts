@@ -1232,6 +1232,10 @@ function chatProviders(): { llm: LLMProvider; image: ImageProvider; tier: TierCo
  * 90% of what they could read. Local/on-device models keep the small budgets.
  */
 const CLOUD_LLM_IDS = new Set(["claude", "gemini", "openai"]);
+/** Cloud models bill per call, so a long auto-run tool streak PAUSES for a "keep going?" check this
+ * often (the reader gets a Continue button) instead of running to the big local backstop. Local/free
+ * models (local-server / webllm) don't pass this, so they run uninterrupted. */
+const CLOUD_TOOL_PAUSE_ROUNDS = 10;
 /** Approximate context windows (tokens) for the donut's "X / Y" readout — cloud
  * models don't report it; these are the families' standard sizes. */
 const CLOUD_MAX_TOKENS: Record<string, number> = { claude: 200_000, gemini: 1_000_000, openai: 128_000 };
@@ -2948,6 +2952,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       history,
       maxTokens: budgets.reply,
       ...(chatReasoningEffort(settings) ? { reasoningEffort: chatReasoningEffort(settings)! } : {}),
+      // Cloud (paid) models pause for a "keep going?" check every so often so a long task doesn't burn
+      // many API calls unattended; local/free models run to the backstop (no pauseEvery).
+      ...(CLOUD_LLM_IDS.has(llm.id) ? { pauseEvery: CLOUD_TOOL_PAUSE_ROUNDS } : {}),
       deps,
       // PARALLEL SUB-AGENTS: the model's `spawn_agents` tool fans independent read-only subtasks out
       // concurrently. Capped by `agentConcurrency` (default 2). TIER ROUTING: when a sub-agent
@@ -3060,6 +3067,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       transcript: outcome.transcript,
       ...(outcome.pendingTool ? { pendingTool: outcome.pendingTool } : {}),
       ...(outcome.thinking ? { thinking: outcome.thinking } : {}),
+      ...(outcome.paused ? { paused: true } : {}),
     });
   } catch (err) {
     post({

@@ -367,6 +367,9 @@ export type WorkerToMain =
       pendingTool?: BuddyToolCall;
       /** The turn's reasoning, persisted onto the settled message. */
       thinking?: string;
+      /** The turn paused at a cloud "keep going?" budget checkpoint (work remains) — the host offers
+       * a Continue affordance instead of treating it as a finished answer. */
+      paused?: boolean;
     }
   | { type: "buddyError"; requestId: number; message: string }
   /** Reply to `summarize`: the compact brief, or why it failed. */

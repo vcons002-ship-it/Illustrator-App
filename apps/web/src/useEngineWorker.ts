@@ -354,6 +354,8 @@ export interface BuddyDoneResult {
   pendingTool?: BuddyToolCall;
   /** The turn's reasoning, persisted onto the settled message as a collapsible. */
   thinking?: string;
+  /** The turn paused at a cloud "keep going?" budget checkpoint — offer a Continue affordance. */
+  paused?: boolean;
   error?: string;
 }
 
@@ -950,6 +952,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             transcript: msg.transcript,
             ...(msg.pendingTool ? { pendingTool: msg.pendingTool } : {}),
             ...(msg.thinking ? { thinking: msg.thinking } : {}),
+            ...(msg.paused ? { paused: true } : {}),
           });
           break;
         }
