@@ -83,6 +83,47 @@ export function bookFromCode(title: string, code: string, language?: string, aut
   return { ...book, contentMode: "code", code: body, ...(language ? { language } : {}) };
 }
 
+/**
+ * Build a "story as you go" `BookSource` under a STABLE, caller-supplied id — NOT a
+ * content hash. This is the linchpin of the as-you-go append: `segmentBook` assigns ids
+ * positionally (`ch-N`/`pg-N`), so re-segmenting the accumulated beats with the SAME id
+ * leaves every PRIOR id byte-identical and only appends the new beat's units at the end.
+ * That keeps the `${book.id}:${pageId}` image cache + `bible.processedChapters` valid, so
+ * earlier spans are never re-extracted or re-rendered. A content-hash id (which changes
+ * on every beat) would orphan the bible + images — exactly what must not happen.
+ *
+ * Each beat is one internal chapter (the engine's incremental extraction unit); the story
+ * reads as continuous prose (no visible chapter structure), so the chapters carry the
+ * story title rather than per-beat headings. `beats` is every beat so far, in order.
+ */
+export function storyBook(
+  id: string,
+  title: string,
+  author: string | undefined,
+  beats: string[],
+): BookSource {
+  const clean = (s: string): string => s.replace(/\r\n?/g, "\n").trim();
+  const name = title.trim() || "Story";
+  const chapters: RawChapter[] = beats
+    .map((text) => ({ title: name, text: clean(text) }))
+    .filter((c) => c.text.length > 0);
+  const book = segmentBook(
+    { id, title: name, ...(author ? { author } : {}) },
+    chapters.length > 0 ? chapters : [{ title: name, text: "" }],
+  );
+  return { ...book, contentMode: "fiction", kind: "story" };
+}
+
+/**
+ * Append one beat to a story, returning the GROWN book (the stable id is preserved). A
+ * thin wrapper over `storyBook` that re-segments the accumulated beats + the new one — so
+ * the host can keep a `string[]` of beats and call this per turn (O(text), but the only
+ * heavy work, extraction + render, stays O(one beat) via `Engine.appendChapter`).
+ */
+export function appendStoryChapter(book: BookSource, priorBeats: string[], newBeat: string): BookSource {
+  return storyBook(book.id, book.title, book.author, [...priorBeats, newBeat]);
+}
+
 /** A top-level (column-0) definition that starts a new code section. */
 const CODE_SECTION =
   /^(?:export\s+)?(?:default\s+)?(?:public\s+|private\s+|protected\s+|abstract\s+)?(?:async\s+)?(?:function|class|interface|type|enum|struct|impl|trait|def|fn|module|namespace|component|service)\b/;

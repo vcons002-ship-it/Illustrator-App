@@ -610,6 +610,22 @@ describe("environments + location tracking", () => {
     // already stored; re-sending it every chapter is what made long books crawl).
     expect(text).not.toContain("black basalt");
   });
+
+  it("carries the location ACROSS chapters when a later chapter names none (no setting drift)", () => {
+    let bible = createEmptyBible("b");
+    // Ch0 establishes the Spire.
+    bible = mergeExtraction(bible, { characters: [], environments: [], spoilers: [], summary: "Arrival.", location: "the Spire" }, 0, [[0, 0]]);
+    // Ch1 names NO location (the scene continues) → inherit the Spire, not location-less.
+    bible = mergeExtraction(bible, { characters: [], environments: [], spoilers: [], summary: "A quiet talk.", location: "", keyEvents: [{ subject: "Ana", action: "speaks", environment: "", mood: "", composition: "" }] }, 1, [[1, 1]]);
+    expect(bible.storyboard[1]!.location).toBe("the Spire");
+    expect(bible.storyboard[1]!.keyEvents![0]!.location).toBe("the Spire"); // folded into the beat too
+    // Ch2 genuinely MOVES → the fresh location wins over the carried one.
+    bible = mergeExtraction(bible, { characters: [], environments: [], spoilers: [], summary: "Outside.", location: "the Docks" }, 2, [[2, 2]]);
+    expect(bible.storyboard[2]!.location).toBe("the Docks");
+    // Ch3 names none again → carries the most recent (the Docks), not the older Spire.
+    bible = mergeExtraction(bible, { characters: [], environments: [], spoilers: [], summary: "Still there.", location: "" }, 3, [[3, 3]]);
+    expect(bible.storyboard[3]!.location).toBe("the Docks");
+  });
 });
 
 describe("character de-duplication", () => {

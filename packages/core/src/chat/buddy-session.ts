@@ -83,6 +83,21 @@ export interface BuddyDeps {
   openCode?: (call: Extract<BuddyToolCall, { tool: "open_code" }>) => Promise<BuddyOpenedInfo>;
   /** Generate a new spreadsheet from a column/row spec and open it (host-side). */
   createSpreadsheet?: (call: Extract<BuddyToolCall, { tool: "create_spreadsheet" }>) => Promise<BuddyOpenedInfo>;
+  /** Story "as you go": start a new co-written illustrated story, open it, render beat one. */
+  startStory?: (call: Extract<BuddyToolCall, { tool: "start_story" }>) => Promise<BuddyOpenedInfo>;
+  /** Append the next beat to the OPEN story (prose + an image per the cadence). Returns the
+   * grown story info + whether this beat auto-illustrated. */
+  continueStory?: (
+    call: Extract<BuddyToolCall, { tool: "continue_story" }>,
+  ) => Promise<BuddyOpenedInfo & { beats: number; illustrated: boolean }>;
+  /** Illustrate beats [from..to] of the open story on demand; returns how many rendered. */
+  renderScene?: (
+    call: Extract<BuddyToolCall, { tool: "render_scene" }>,
+  ) => Promise<{ rendered: number; from: number; to: number }>;
+  /** Change the open story's auto-illustration cadence; returns what was applied. */
+  setStoryCadence?: (
+    call: Extract<BuddyToolCall, { tool: "set_story_cadence" }>,
+  ) => Promise<{ mode: "per-response" | "every-n" | "manual"; n?: number }>;
   /** Remove a library book by id; returns its title (undefined when absent). */
   removeLibraryBook: (
     call: Extract<BuddyToolCall, { tool: "remove_library_book" }>,
@@ -558,6 +573,24 @@ export async function runBuddyTool(
       case "create_spreadsheet":
         if (!deps.createSpreadsheet) return { error: "creating spreadsheets isn't available right now" };
         return { opened: await deps.createSpreadsheet(call) };
+      case "start_story":
+        if (!deps.startStory) return { error: "story mode isn't available right now" };
+        return { opened: await deps.startStory(call), story: { beats: 1, illustrated: true } };
+      case "continue_story": {
+        if (!deps.continueStory) return { error: "no story is open — start one with start_story" };
+        const { beats, illustrated, ...opened } = await deps.continueStory(call);
+        return { opened, story: { beats, illustrated } };
+      }
+      case "render_scene": {
+        if (!deps.renderScene) return { error: "no story is open to illustrate" };
+        const r = await deps.renderScene(call);
+        return { story: { rendered: r.rendered, from: r.from, to: r.to } };
+      }
+      case "set_story_cadence": {
+        if (!deps.setStoryCadence) return { error: "no story is open" };
+        const cadence = await deps.setStoryCadence(call);
+        return { story: { cadence } };
+      }
       case "remove_library_book":
         return await deps.removeLibraryBook(call);
       case "set_visual_style":

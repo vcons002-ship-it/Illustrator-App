@@ -413,6 +413,15 @@ describe("skill tools", () => {
     expect(p).toContain('"tool":"save_skill"');
     expect(p).toContain("GROUNDED IN TRUTH");
   });
+
+  it("tells the model to ACT (emit the tool JSON) instead of promising a search/read it never runs", () => {
+    const p = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    expect(p).toMatch(/ACT, DON'T NARRATE/);
+    expect(p).toMatch(/search_web to find sources/);
+    expect(p).toMatch(/read_url to pull a specific page's text/);
+    expect(p).toMatch(/open_web_text to open a page/);
+    expect(p).toMatch(/NEVER state specific facts you have not verified/i);
+  });
 });
 
 describe("update_setting tool", () => {
@@ -524,6 +533,92 @@ describe("create_spreadsheet tool", () => {
     expect(parseBuddyToolCall('{"tool":"create_spreadsheet","title":"x","columns":[]}')).toBeUndefined();
     expect(parseBuddyToolCall('{"tool":"create_spreadsheet","title":"x"}')).toBeUndefined();
     expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"create_spreadsheet"');
+  });
+});
+
+describe("story as you go tools", () => {
+  it("parses start_story (opening required; cast accepts names or {name,description})", () => {
+    expect(
+      parseBuddyToolCall(
+        JSON.stringify({
+          tool: "start_story",
+          title: "The Lantern Road",
+          opening: "Mira lit the last lantern as Toll watched from the bridge.",
+          style: "storybook illustration",
+          characters: ["Mira", { name: "Toll", description: "tall, salt-and-pepper beard" }, "", { name: "" }],
+          roleplay: { you: "Mira", me: "Toll" },
+        }),
+      ),
+    ).toEqual({
+      tool: "start_story",
+      title: "The Lantern Road",
+      opening: "Mira lit the last lantern as Toll watched from the bridge.",
+      style: "storybook illustration",
+      characters: [{ name: "Mira" }, { name: "Toll", description: "tall, salt-and-pepper beard" }],
+      roleplay: { you: "Mira", me: "Toll" },
+    });
+    // No opening → not a valid start.
+    expect(parseBuddyToolCall('{"tool":"start_story","title":"x"}')).toBeUndefined();
+  });
+
+  it("documents 'me and you' role-play in the system prompt", () => {
+    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    expect(prompt).toMatch(/me and you/i);
+    expect(prompt).toMatch(/remember/i); // portray the reader's character from memory
+  });
+
+  it("parses continue_story / render_scene / set_story_cadence", () => {
+    expect(parseBuddyToolCall('{"tool":"continue_story","text":"They pressed on."}')).toEqual({
+      tool: "continue_story",
+      text: "They pressed on.",
+    });
+    expect(parseBuddyToolCall('{"tool":"continue_story","text":"  "}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"render_scene","from":3,"to":5}')).toEqual({ tool: "render_scene", from: 3, to: 5 });
+    expect(parseBuddyToolCall('{"tool":"render_scene"}')).toEqual({ tool: "render_scene" }); // defaults to latest
+    expect(parseBuddyToolCall('{"tool":"set_story_cadence","mode":"every-n","n":4}')).toEqual({
+      tool: "set_story_cadence",
+      mode: "every-n",
+      n: 4,
+    });
+    expect(parseBuddyToolCall('{"tool":"set_story_cadence","mode":"bogus"}')).toEqual({
+      tool: "set_story_cadence",
+      mode: "per-response",
+    });
+  });
+
+  it("formats the story outcomes for the model", () => {
+    const started = formatBuddyToolResult(
+      { tool: "start_story", title: "Tale", opening: "x" },
+      { opened: { title: "Tale", chapters: 1, pages: 1, visuals: true }, story: { beats: 1, illustrated: true } },
+    );
+    expect(started).toMatch(/started the story "Tale"/);
+
+    const beat = formatBuddyToolResult(
+      { tool: "continue_story", text: "next" },
+      { opened: { title: "Tale", chapters: 2, pages: 2, visuals: true }, story: { beats: 2, illustrated: true } },
+    );
+    expect(beat).toMatch(/beat 2/);
+    expect(beat).toMatch(/illustration of the new scene is generating/);
+
+    const manualBeat = formatBuddyToolResult(
+      { tool: "continue_story", text: "next" },
+      { opened: { title: "Tale", chapters: 3, pages: 3, visuals: false }, story: { beats: 3, illustrated: false } },
+    );
+    expect(manualBeat).toMatch(/no image this beat/);
+
+    expect(
+      formatBuddyToolResult({ tool: "render_scene", from: 2, to: 3 }, { story: { rendered: 2, from: 2, to: 3 } }),
+    ).toMatch(/illustrating 2 beats \(2–3\)/);
+    expect(
+      formatBuddyToolResult({ tool: "set_story_cadence", mode: "manual" }, { story: { cadence: { mode: "manual" } } }),
+    ).toMatch(/only when you ask/);
+  });
+
+  it("advertises the story tools in the system prompt", () => {
+    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    expect(prompt).toContain('"tool":"start_story"');
+    expect(prompt).toContain('"tool":"continue_story"');
+    expect(prompt).toMatch(/STORY MODE/);
   });
 });
 
@@ -720,6 +815,17 @@ describe("google tools", () => {
     expect(on).toContain('"tool":"create_task"');
     expect(on).toMatch(/confirm the details/i);
     expect(on).toContain("cannot send email or delete");
+  });
+
+  it("when Google is NOT connected, tells the model so it can't fabricate a connection or data", () => {
+    const off = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    expect(off).toMatch(/GOOGLE IS NOT CONNECTED/);
+    expect(off).toMatch(/NEVER invent emails, events, or to-dos/i);
+    expect(off).toMatch(/setup_help/); // offers the real reconnect path
+    // The disconnected guard must NOT smuggle the read tools back in.
+    expect(off).not.toContain('"tool":"gmail_search"');
+    // ...and the connected build must NOT carry the "not connected" warning.
+    expect(buildBuddySystemPrompt({ persona: "freeform", library: [], canGoogle: true })).not.toMatch(/GOOGLE IS NOT CONNECTED/);
   });
 
   it("swaps the confirm rule for auto-approval when canAutomateTasks is on", () => {

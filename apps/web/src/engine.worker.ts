@@ -140,9 +140,18 @@ import {
   supportsChat,
   supportsVision,
   toRenderUnits,
+  advanceStoryScene,
+  presentFromScene,
+  emptyStoryScene,
+  createEmptyBible,
+  emptyAppearance,
+  deterministicSeed,
   ComfyUIBackend,
   Automatic1111Backend,
   type BookSource,
+  type StoryScene,
+  type StoryRoleplay,
+  type StoryPresent,
   type BuddyDeps,
   type BuddyOpenedInfo,
   type BuddyToolCall,
@@ -156,7 +165,7 @@ import {
   type ToolCall,
   type VisualBible,
 } from "@visual-reader/core";
-import { bookFromText, bookFromHtml, bookFromCode } from "@visual-reader/epub";
+import { bookFromText, bookFromHtml, bookFromCode, storyBook } from "@visual-reader/epub";
 // Import buildProviders via the React-free subpath: pulling it from the package
 // index would drag the React UI components into the worker, which can crash the
 // worker on load (no `window`/DOM) under dev's cross-origin isolation.
@@ -185,6 +194,132 @@ let bookProviders:
   | undefined;
 /** In-flight chat rounds, aborted by `chatCancel`. */
 const chatAborts = new Map<number, AbortController>();
+
+/**
+ * Story "as you go" session — the OPEN story (one at a time). `beats` is every beat's prose
+ * (the source of `storyBook`); `scene` is the live active-scene accumulator the bible hook
+ * advances; `cadence` gates auto-illustration. Rebuilt from the book on a reopen so a
+ * resumed story keeps accumulating with correct carry-forward.
+ */
+interface StorySessionState {
+  bookId: string;
+  title: string;
+  author?: string;
+  beats: string[];
+  scene: StoryScene;
+  /** Per-beat active-scene SNAPSHOTS (index = beat); persisted so a reopen resumes the exact
+   * scene and render_scene of a past beat uses that beat's cast/location. */
+  scenes: StoryScene[];
+  roleplay?: StoryRoleplay;
+  cadence: { mode: "per-response" | "every-n" | "manual"; n: number };
+  beatsSinceImage: number;
+}
+let story: StorySessionState | undefined;
+let storyCounter = 0;
+
+/** Character-id slug — MUST match `mergeExtraction`'s (`char-<slug>`) so a pre-seeded cast
+ * entry and the same name later extracted from prose resolve to ONE bible entry. */
+function storySlug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+/** Bible character names whose name/alias appears in a beat's text (the active-scene "mentioned"
+ * signal — the same name match the render's text scan uses, so the tracker never misses one). */
+function bibleNamesInText(text: string, bible: VisualBible): string[] {
+  const hay = text.toLowerCase();
+  return bible.characters
+    .filter((c) => [c.name, ...c.aliases].some((n) => n.length > 0 && hay.includes(n.toLowerCase())))
+    .map((c) => c.name);
+}
+
+/**
+ * The engine's per-beat active-scene hook: advance the tracked scene from this beat's
+ * extraction (named cast + location) and return the render present-set override. Only fires
+ * for the open story; a no-op for ordinary books.
+ */
+function storyPresentFor(chapterIndex: number, bible: VisualBible): StoryPresent | undefined {
+  if (!story || currentBook?.kind !== "story" || story.bookId !== currentBook.id) return undefined;
+  const text = story.beats[chapterIndex] ?? "";
+  const scene = bible.storyboard.find((s) => s.chapterIndex === chapterIndex);
+  story.scene = advanceStoryScene(
+    story.scene,
+    bible,
+    { mentionedNames: bibleNamesInText(text, bible), ...(scene?.location ? { location: scene.location } : {}) },
+    story.roleplay,
+  );
+  story.scenes[chapterIndex] = story.scene; // snapshot this beat's tracked scene (persisted below)
+  // Persist the just-tracked snapshot immediately + durably: extraction is async (it finishes
+  // after the chat turn, so a buddy-request reply can't be relied on), so the worker writes the
+  // book itself. A reopen's getBook then has the latest beat's scene too (not lagging by one).
+  if (currentBook?.kind === "story" && currentBook.id === story.bookId) {
+    currentBook = { ...currentBook, storyConfig: storyConfigOf(story) };
+    void buddyStore?.putBook(currentBook).catch(() => {});
+  }
+  return presentFromScene(story.scene);
+}
+
+/** Each story chapter's prose (one beat per chapter), in order — to rebuild `beats` on reopen. */
+function beatsFromBook(book: BookSource): string[] {
+  const byChapter = new Map<string, string[]>();
+  for (const page of book.pages) {
+    const list = byChapter.get(page.chapterId) ?? [];
+    list.push(...page.paragraphs.map((p) => p.text));
+    byChapter.set(page.chapterId, list);
+  }
+  return book.chapters.map((c) => (byChapter.get(c.id) ?? []).join("\n\n"));
+}
+
+/** The book-persisted view of the live session (role-play, cadence, per-beat scene snapshots),
+ * so a reopen resumes the exact scene + contract. */
+function storyConfigOf(s: StorySessionState): NonNullable<BookSource["storyConfig"]> {
+  return {
+    ...(s.roleplay ? { roleplay: s.roleplay } : {}),
+    cadence: s.cadence,
+    scenes: s.scenes.map((sc) => ({ presentCharacterIds: [...sc.presentCharacterIds], ...(sc.locationId ? { locationId: sc.locationId } : {}) })),
+  };
+}
+
+/** Rebuild the story session from a reopened story book (fresh worker / library reopen).
+ * Per-beat scene SNAPSHOTS are restored from the book's persisted `storyConfig.scenes` where
+ * present (authoritative); any un-persisted tail (at most the latest beat) is replayed from the
+ * last known snapshot against the restored bible — so the resumed scene is exact and complete.
+ * Role-play + cadence are restored from `storyConfig`, so the contract survives, not defaults. */
+function rebuildStoryFromBook(book: BookSource, bible: VisualBible | undefined): StorySessionState {
+  const beats = beatsFromBook(book);
+  const roleplay = book.storyConfig?.roleplay;
+  const cadence = book.storyConfig?.cadence ?? { mode: "per-response" as const, n: 3 };
+  const persisted = book.storyConfig?.scenes ?? [];
+  const scenes: StoryScene[] = [];
+  let running: StoryScene = emptyStoryScene();
+  beats.forEach((text, k) => {
+    const snap = persisted[k];
+    if (snap) {
+      running = { presentCharacterIds: [...snap.presentCharacterIds], ...(snap.locationId ? { locationId: snap.locationId } : {}) };
+    } else if (bible) {
+      // Replay the un-persisted tail from the last snapshot (deterministic — same inputs the
+      // live tracker used: this beat's mentioned cast + its scene location + the role-play seed).
+      const s = bible.storyboard.find((x) => x.chapterIndex === k);
+      running = advanceStoryScene(
+        running,
+        bible,
+        { mentionedNames: bibleNamesInText(text, bible), ...(s?.location ? { location: s.location } : {}) },
+        roleplay,
+      );
+    }
+    scenes[k] = running;
+  });
+  return {
+    bookId: book.id,
+    title: book.title,
+    ...(book.author ? { author: book.author } : {}),
+    beats,
+    scene: scenes[scenes.length - 1] ?? emptyStoryScene(),
+    scenes,
+    ...(roleplay ? { roleplay } : {}),
+    cadence: { mode: cadence.mode, n: cadence.n ?? 3 },
+    beatsSinceImage: 0,
+  };
+}
 
 /** Store for long-term reader memory (shares the buddy's lazy IndexedDB handle). */
 function memoryStore(): IndexedDbStore {
@@ -2761,6 +2896,125 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         const book = bookFromText(call.title || "Spreadsheet", text, "technical", "Generated in chat");
         return opened({ ...book, data: table }, false);
       },
+      // Story "as you go": create the story book from the opening beat and open it (the
+      // normal `opened` path → the host opens it, the worker rebuilds the engine with the
+      // active-scene hook, beat one extracts + illustrates). worldStyle/style is applied
+      // to the worker's settings so the open renders in the chosen look.
+      startStory: async (call) => {
+        const id = `story-${storyCounter++}-${(call.title || "story").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24)}`;
+        const played = [call.roleplay?.you, call.roleplay?.me].filter((n): n is string => !!n);
+        // Apply the requested art style to the worker's settings immediately, so the open's
+        // providers render in it (mirrors set_visual_style's worker-settings update).
+        if (call.style && settings) {
+          const styleId = resolveStyleRequest(call.style);
+          if (styleId) settings = { ...settings, imageStyle: styleId };
+          post({
+            type: "buddySettings",
+            requestId: msg.requestId,
+            ...(styleId ? { style: { id: styleId, label: getImageStyle(styleId).label } } : {}),
+          });
+        }
+        story = {
+          bookId: id,
+          title: call.title || "Our Story",
+          author: "Story with the chat buddy",
+          beats: [call.opening],
+          scene: emptyStoryScene(),
+          scenes: [],
+          ...(played.length ? { roleplay: { playedCharacterNames: played } } : {}),
+          cadence: { mode: "per-response", n: 3 },
+          beatsSinceImage: 0,
+        };
+        // Pre-seed the named cast (start_story `characters` + the role-played pair) into the
+        // bible BEFORE the open, so the active-scene tracker resolves + keeps them present
+        // from beat one even if the opening prose doesn't name them — closing the "setting-
+        // only opening" gap. A cast entry's `description` seeds its LOOK (persistentTraits) so
+        // the first image isn't arbitrary (e.g. the reader's remembered appearance in a "me and
+        // you" story). Extraction UPSERTS by name on the first beat that describes them,
+        // enriching this same entry (no duplicate). Written to the shared store so openBook
+        // restores it. The played pair is added (name-only) when not already in `characters`.
+        const seedCast: { name: string; description?: string }[] = [...(call.characters ?? []), ...played.map((name) => ({ name }))];
+        const seen = new Set<string>();
+        const cast = seedCast.filter((c) => {
+          const k = c.name.trim().toLowerCase();
+          if (!k || seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
+        if (cast.length) {
+          await store.putBible({
+            ...createEmptyBible(id),
+            characters: cast.map((c) => ({
+              id: `char-${storySlug(c.name)}`,
+              name: c.name.trim(),
+              aliases: [],
+              appearance: emptyAppearance(),
+              persistentTraits: c.description ? [c.description] : [],
+              clothing: [],
+              anchor: { seed: deterministicSeed(c.name) },
+              firstSeenChapter: 0,
+            })),
+          });
+        }
+        // Persist role-play + cadence ON the book (storyConfig) so a reopen resumes them.
+        const book = { ...storyBook(id, story.title, story.author, story.beats), storyConfig: storyConfigOf(story) };
+        return opened(book, true); // visuals on → beat one illustrates
+      },
+      // Append the next beat to the OPEN story. Stays IN the worker (no re-open): grows the
+      // book, calls engine.appendChapter (extracts only the new span, fires the active-scene
+      // hook, renders per the cadence), and posts a `storyBeat` so the host grows the reader
+      // WITHOUT re-opening (which would dispose + rebuild the engine, undoing the append).
+      continueStory: async (call) => {
+        if (!story || !engine || currentBook?.kind !== "story") {
+          throw new Error("no story is open — start one with start_story first");
+        }
+        story.beats.push(call.text);
+        // Cadence: decide whether THIS beat auto-illustrates.
+        let illustrate = true;
+        if (story.cadence.mode === "manual") illustrate = false;
+        else if (story.cadence.mode === "every-n") {
+          story.beatsSinceImage += 1;
+          illustrate = story.beatsSinceImage >= story.cadence.n;
+        }
+        if (illustrate) story.beatsSinceImage = 0;
+        const book = { ...storyBook(story.bookId, story.title, story.author, story.beats), storyConfig: storyConfigOf(story) };
+        const renderBook = toRenderUnits(book, "chapter").book;
+        const { firstNewUnit } = await engine.appendChapter(renderBook, { illustrate });
+        currentBook = book; // keep the chat's book context current
+        post({ type: "storyBeat", requestId: msg.requestId, book, firstNewUnit, illustrate });
+        return {
+          title: book.title,
+          chapters: book.chapters.length,
+          pages: book.pages.length,
+          visuals: illustrate,
+          beats: story.beats.length,
+          illustrated: illustrate,
+        };
+      },
+      // Illustrate beats [from..to] of the open story on demand (1-based beat numbers →
+      // 0-based units; default = the most recent beat).
+      renderScene: async (call) => {
+        if (!story || !engine) throw new Error("no story is open to illustrate");
+        const last = story.beats.length;
+        const from = call.from ?? last;
+        const to = call.to ?? from;
+        const lo = Math.max(1, Math.min(from, to)) - 1;
+        const hi = Math.min(last, Math.max(from, to)) - 1;
+        await engine.renderScene(lo, hi);
+        return { rendered: hi - lo + 1, from: lo + 1, to: hi + 1 };
+      },
+      setStoryCadence: async (call) => {
+        if (!story) throw new Error("no story is open");
+        story.cadence = { mode: call.mode, n: call.n ?? story.cadence.n };
+        if (call.mode === "per-response") story.beatsSinceImage = 0;
+        // Persist the new cadence immediately (no new beat) so it survives a reopen: patch the
+        // open book's storyConfig and hand it to the host to setBook + putBook.
+        if (currentBook?.kind === "story" && currentBook.id === story.bookId) {
+          currentBook = { ...currentBook, storyConfig: storyConfigOf(story) };
+          post({ type: "storyConfig", requestId: msg.requestId, book: currentBook });
+        }
+        return { mode: story.cadence.mode, ...(story.cadence.mode === "every-n" ? { n: story.cadence.n } : {}) };
+      },
       removeLibraryBook: async (call) => {
         const book = await store.getBook(call.id);
         if (!book) return {};
@@ -3201,6 +3455,7 @@ function handleClose(): void {
   currentBook = undefined;
   currentBible = undefined;
   bookProviders = undefined;
+  story = undefined; // a reopen rebuilds it from the book
   pendingStart = false;
   opening = false;
   bibleActive = false;
@@ -3325,15 +3580,36 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
         renderBibleStatus();
       },
       onBibleNote: (message) => post({ type: "status", message }),
-      illustrateAfter: settings.illustrateAfter ?? "book",
+      // Story "as you go": illustrate as each beat (chapter) is read — the first image
+      // appears right after beat one, not after the whole "book". Ordinary books keep the
+      // user's setting (default whole-book for the best art).
+      illustrateAfter: book.kind === "story" ? "chapter" : (settings.illustrateAfter ?? "book"),
+      // Story active-scene hook (no-op for ordinary books): pin the tracked present cast +
+      // location per beat so terse beats still illustrate the right scene.
+      onChapterExtracted: storyPresentFor,
     });
-    // Re-segment into render units (one image per page, or per chapter) so the
-    // engine renders at the chosen granularity. The UI maps the reader's position
-    // to the same units via toRenderUnits, so the two never drift.
-    const renderBook = toRenderUnits(book, settings.pagesPerImage ?? 3).book;
+    // A story renders ONE image per beat (chapter), independent of the global pages-per-image
+    // cadence; ordinary books use the chosen granularity. The UI maps the reader's position to
+    // the same units via toRenderUnits, so the two never drift.
+    const grouping = book.kind === "story" ? ("chapter" as const) : (settings.pagesPerImage ?? 3);
+    const renderBook = toRenderUnits(book, grouping).book;
+    // A reopen (fresh worker / library reopen) has no matching live `story` — reconstruct it
+    // from the book so continue_story keeps the right cast/place. A live start_story already
+    // set `story` (matching id, with role-play/cadence + an empty scene the hook advances), so
+    // leave it untouched.
+    const reopenedStory = book.kind === "story" && (!story || story.bookId !== book.id);
+    if (reopenedStory) story = rebuildStoryFromBook(book, undefined);
     // Loads the book + restores cached bible/images, but does NOT generate. The
     // user triggers generation via the "start" message ("Begin generating book").
     await engine.openBook(renderBook);
+    // On a reopen, restore the per-beat scene snapshots (persisted, replay-filled) and PUSH
+    // each into the engine — nothing re-extracts on a cached reopen, so this is what makes
+    // render_scene of a PAST beat use that beat's exact tracked cast/location, and a
+    // post-reopen append carry the correct scene forward. (No-op for live starts.)
+    if (reopenedStory && engine.getBible()) {
+      story = rebuildStoryFromBook(book, engine.getBible());
+      story.scenes.forEach((sc, k) => engine!.setStoryPresent(k, presentFromScene(sc)));
+    }
     // Open is complete — now a deferred start can actually run (and `beginGeneration`
     // below sees `opening === false`). Replaying covers a `start` that arrived during
     // the open (e.g. the buddy's "open and illustrate it") as well as a settings re-open.

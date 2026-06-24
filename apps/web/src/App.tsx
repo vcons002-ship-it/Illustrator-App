@@ -535,12 +535,15 @@ export function App() {
   // Skills live in the same shared store the worker reads (libraryStore → IndexedDB),
   // so panel edits show up on the assistant's next turn with no extra plumbing.
   const refreshSkills = useCallback(() => {
+    // The phone shows the desktop's MIRRORED skills (vrsync:skills); loading its own empty store
+    // would clobber them — same guard as Memory/Tasks.
+    if (isRemoteClient) return;
     void loadSkills(libraryStore).then(setSkills).catch(() => {});
-  }, [libraryStore]);
+  }, [libraryStore, isRemoteClient]);
   const openSkills = useCallback(async () => {
-    await loadSkills(libraryStore).then(setSkills).catch(() => {});
+    if (!isRemoteClient) await loadSkills(libraryStore).then(setSkills).catch(() => {});
     setShowSkills(true);
-  }, [libraryStore]);
+  }, [libraryStore, isRemoteClient]);
   // Reader memory — the durable "remember" notes, in the same shared store the worker reads, so
   // panel edits apply on the assistant's next turn (and the buddy's own remember/forget show here).
   const [showMemories, setShowMemories] = useState(false);
@@ -583,15 +586,16 @@ export function App() {
     if (isRemoteClient) return;
     void loadTaskPlans(libraryStore).then(setTaskPlans).catch(() => {});
   }, [libraryStore, isRemoteClient]);
-  // Load the desktop's saved memories + task plans ONCE on startup, so they're populated BEFORE any
-  // panel is opened — and therefore already present in the snapshot/mirror a linked phone receives on
-  // connect. Without this they sat [] until the desktop user happened to open each panel (or the buddy
-  // edited them), so a freshly-loaded desktop mirrored EMPTY tasks + memories to the phone. Both
-  // refreshers no-op on the phone (it owns no store and gets both via the desktop's mirror).
+  // Load the desktop's saved memories + task plans + skills ONCE on startup, so they're populated
+  // BEFORE any panel is opened — and therefore already present in the snapshot/mirror a linked phone
+  // receives on connect. Without this they sat [] until the desktop user happened to open each panel
+  // (or the buddy edited them), so a freshly-loaded desktop mirrored EMPTY tasks/memories/skills to
+  // the phone. All three refreshers no-op on the phone (it owns no store and gets them via the mirror).
   useEffect(() => {
     refreshMemories();
     refreshTaskPlans();
-  }, [refreshMemories, refreshTaskPlans]);
+    refreshSkills();
+  }, [refreshMemories, refreshTaskPlans, refreshSkills]);
   // On a linked phone, Tasks/Calendar actions are RELAYED to the desktop (which owns the data and
   // re-mirrors the result). Each handler below early-returns through this when isRemoteClient.
   const sendPlanner = useCallback(
@@ -1758,10 +1762,11 @@ export function App() {
       chat: chatMirrorRef.current,
       live: chatLiveRef.current,
       memories,
+      skills,
       ...(book ? { book } : {}),
       ...(bible ? { bible } : {}),
     }),
-    [library, settings, engineInventory, book, bible, memories],
+    [library, settings, engineInventory, book, bible, memories, skills],
   );
   // PHONE side: adopt the desktop's mirrored inventory so the local-model pickers show the SAME
   // installed models/components the desktop has (the phone has no engine to enumerate).
@@ -1791,6 +1796,7 @@ export function App() {
             applyChatRef.current(msg.chat);
             applyChatLiveRef.current(msg.live);
             setMemories(msg.memories);
+            setSkills(msg.skills);
             setBook(msg.book);
             setBible(msg.bible);
             setRemoteHost(msg.host);
@@ -1809,6 +1815,9 @@ export function App() {
             break;
           case "vrsync:memories":
             setMemories(msg.memories);
+            break;
+          case "vrsync:skills":
+            setSkills(msg.skills);
             break;
           case "vrsync:chat":
             applyChatRef.current(msg);
@@ -1886,6 +1895,16 @@ export function App() {
             // memories-mirror effect then re-pushes vrsync:memories with the saved result.
             void saveMemory(libraryStore, msg.notes).then(setMemories).catch(() => {});
             break;
+          case "vrcmd:skillSave":
+            // The phone saved a skill; save it HERE (we own the store) and reload → the skills-mirror
+            // effect re-pushes vrsync:skills with the result.
+            void saveSkill(libraryStore, { name: msg.name, description: msg.description, body: msg.body })
+              .then(() => refreshSkills())
+              .catch(() => {});
+            break;
+          case "vrcmd:skillDelete":
+            void forgetSkill(libraryStore, msg.name).then(() => refreshSkills()).catch(() => {});
+            break;
           case "vrcmd:chatSend":
           case "vrcmd:chatSwitch":
           case "vrcmd:chatNew":
@@ -1948,6 +1967,10 @@ export function App() {
     // Mirror the assistant's remembered notes to a linked phone so its Memory panel isn't empty.
     if (!isRemoteClient) sendAppSync({ type: "vrsync:memories", memories });
   }, [isRemoteClient, sendAppSync, memories]);
+  useEffect(() => {
+    // Mirror the assistant's saved skills to a linked phone so its Skills panel isn't empty.
+    if (!isRemoteClient) sendAppSync({ type: "vrsync:skills", skills });
+  }, [isRemoteClient, sendAppSync, skills]);
   // Settings edits: on the desktop, apply locally (it owns the engine). On a linked PHONE, also push
   // the change to the desktop (vrcmd:settings) so the render the phone triggers uses it — the desktop
   // applies it and re-mirrors it back. (The phone applies the desktop's pushes via setSettings
@@ -4315,6 +4338,38 @@ export function App() {
           if (e.visuals) startGeneration();
           setShowChat(true);
         }
+      } else if (e.kind === "storyBeat") {
+        // A continue_story beat grew the OPEN story IN the worker (the engine appended a
+        // span). Grow the reader WITHOUT re-opening — a re-open would dispose + rebuild the
+        // engine and undo the append. The new beat's image arrives via the normal `update`
+        // events the engine already posts. Persist the grown book and scroll to the new beat.
+        setBook(e.book);
+        void libraryStore
+          .putBook(e.book)
+          .then(() => libraryStore.listBooks())
+          .then(setLibrary)
+          .catch(() => {});
+        const chapter = e.book.chapters[e.book.chapters.length - 1];
+        const paraId = chapter
+          ? e.book.pages.find((p) => p.chapterId === chapter.id)?.paragraphs[0]?.id
+          : undefined;
+        if (paraId) {
+          // Let React paint the new paragraphs, then bring the new beat into view.
+          setTimeout(() => {
+            try {
+              document
+                .querySelector(`[data-paragraph-id="${CSS.escape(paraId)}"]`)
+                ?.scrollIntoView({ behavior: "smooth", block: "start" });
+            } catch {
+              /* CSS.escape unavailable / node gone — non-fatal */
+            }
+          }, 60);
+        }
+      } else if (e.kind === "storyConfig") {
+        // Role-play / cadence changed (no new beat) — persist the book's storyConfig so it
+        // survives a reopen. setBook keeps the open reader's copy current; no scroll.
+        setBook(e.book);
+        void libraryStore.putBook(e.book).catch(() => {});
       } else {
         setBuddyActivity("");
         // The agent just read/wrote the calendar or tasks — reflect it in the app's views.
@@ -6021,8 +6076,17 @@ export function App() {
         </div>
       )}
 
-      {!book && (
-        <section style={styles.buddySection}>
+      {(!book || (showChat && book.kind === "story")) && (
+        <section style={!book ? styles.buddySection : styles.storyChatOverlay}>
+          {book?.kind === "story" && (
+            <button
+              style={styles.storyChatClose}
+              onClick={() => setShowChat(false)}
+              title="Hide the chat and view the illustrated story"
+            >
+              ✕ View story
+            </button>
+          )}
           <ChatBuddyPanel
             messages={buddyPanelMessages}
             {...(buddyStreaming ? { streamingText: buddyStreaming } : {})}
@@ -6242,6 +6306,38 @@ export function App() {
                   )}
                 </div>
               )}
+              {/* Story "lock the look": pin THIS beat's image as a character's IP-Adapter
+                  reference, so every later beat matches the face you actually liked — the
+                  fix for "consistent but arbitrary". A deliberate one-click capture (the app
+                  doesn't auto-capture); future renders pick it up, so regenerate a past beat
+                  to re-illustrate it with the locked look. */}
+              {book.kind === "story" && !isTechnical && bible && bible.characters.length > 0 && results.get(unitIndex)?.image && (
+                <div style={styles.lockLook}>
+                  <span style={styles.lockLookLabel}>📌 Lock this look as:</span>
+                  <div style={styles.lockLookRow}>
+                    {bible.characters.map((c) => (
+                      <button
+                        key={c.id}
+                        style={styles.lockLookButton}
+                        title={`Use this image as ${c.name}'s reference — future beats will match it (regenerate a beat to re-illustrate with it)`}
+                        onClick={() => {
+                          void (async () => {
+                            const img = results.get(unitIndex)?.image;
+                            if (!img) return;
+                            // The display image is raw bytes OR a host-converted Blob; get bytes
+                            // either way, COPYING so the capture never disturbs the shown image.
+                            const bytes = "bytes" in img ? img.bytes.slice(0) : await img.blob.arrayBuffer();
+                            addCharacterReference(c.id, { bytes, mimeType: img.mimeType });
+                            noteAction(`✓ Locked this image as ${c.name}'s look — future beats will match it. Regenerate a beat to re-illustrate it with the new reference.`);
+                          })();
+                        }}
+                      >
+                        {c.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div style={styles.caption}>
                 {pagesPerImage === "chapter"
                   ? `Chapter ${unitIndex + 1} of ${totalUnits}`
@@ -6309,7 +6405,7 @@ export function App() {
         />
       )}
 
-      {showChat && book && (
+      {showChat && book && book.kind !== "story" && (
         <ChatPanel
           title={book.title}
           messages={chatPanelMessages}
@@ -6428,10 +6524,27 @@ export function App() {
           skills={skills}
           limits={{ name: MAX_SKILL_NAME_CHARS, description: MAX_SKILL_DESC_CHARS, body: MAX_SKILL_BODY_CHARS }}
           onSave={async (name, description, body) => {
+            if (isRemoteClient) {
+              // The desktop owns the store; relay the save + show it optimistically — the desktop
+              // saves it and re-mirrors vrsync:skills.
+              setSkills((prev) => {
+                const at = prev.findIndex((s) => s.name.toLowerCase() === name.toLowerCase());
+                return at >= 0
+                  ? prev.map((s, i) => (i === at ? { ...s, description, body, at: Date.now() } : s))
+                  : [...prev, { name, description, body, at: Date.now() }];
+              });
+              sendAppSync({ type: "vrcmd:skillSave", name, description, body });
+              return;
+            }
             await saveSkill(libraryStore, { name, description, body });
             refreshSkills();
           }}
           onDelete={async (name) => {
+            if (isRemoteClient) {
+              setSkills((prev) => prev.filter((s) => s.name.toLowerCase() !== name.toLowerCase()));
+              sendAppSync({ type: "vrcmd:skillDelete", name });
+              return;
+            }
             await forgetSkill(libraryStore, name);
             refreshSkills();
           }}
@@ -8146,6 +8259,46 @@ const styles: Record<string, React.CSSProperties> = {
   },
   empty: { padding: "10px 24px 8px", maxWidth: 760, fontSize: 13, opacity: 0.8, lineHeight: 1.5 },
   buddySection: { padding: "0 24px 20px", display: "flex", justifyContent: "center" },
+  // A story keeps its buddy/story chat mounted OVER the open reader (toggled by the chat
+  // button): the chat drives the next beat; "✕ View story" hides it to see the growing
+  // illustrated story behind. Reuses ChatBuddyPanel — the full buddy toolset incl. the
+  // story tools — so the same surface that started the story continues it.
+  storyChatOverlay: {
+    position: "fixed",
+    inset: 0,
+    zIndex: 60,
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    padding: 12,
+    background: "rgba(0,0,0,0.55)",
+    backdropFilter: "blur(2px)",
+  },
+  storyChatClose: {
+    alignSelf: "flex-end",
+    background: "#23262d",
+    color: "#e6e6e6",
+    border: "1px solid rgba(255,255,255,0.18)",
+    borderRadius: 8,
+    padding: "6px 12px",
+    fontSize: 13,
+    cursor: "pointer",
+  },
+  // "Lock this look" control under a story beat's image: pin it as a character's reference.
+  lockLook: { marginTop: 6, display: "flex", flexDirection: "column", gap: 4 },
+  lockLookLabel: { fontSize: 11, opacity: 0.6 },
+  lockLookRow: { display: "flex", flexWrap: "wrap", gap: 6 },
+  lockLookButton: {
+    background: "#23262d",
+    color: "#e6e6e6",
+    border: "1px solid rgba(255,255,255,0.18)",
+    borderRadius: 999,
+    padding: "3px 10px",
+    fontSize: 12,
+    cursor: "pointer",
+  },
   reader: {
     display: "grid",
     gridTemplateColumns: "minmax(0, 1fr) minmax(320px, 520px)",

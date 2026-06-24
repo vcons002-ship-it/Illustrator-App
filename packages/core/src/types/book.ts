@@ -65,6 +65,31 @@ export interface BookSource {
   pages: Page[];
   /** What kind of writing this is, chosen at import (default "fiction"). See `ContentMode`. */
   contentMode?: ContentMode;
+  /**
+   * Marks a book co-written live with the chat buddy ("story as you go") rather than
+   * imported. A story grows one beat at a time (`Engine.appendChapter`), reads as
+   * continuous prose, and keeps the buddy chat mounted BESIDE the reader so the next
+   * beat can be written. Absent for ordinary imported/created books.
+   */
+  kind?: "story";
+  /**
+   * Story "as you go" session settings, persisted WITH the book so a reopen resumes the
+   * role-play contract + image cadence (the cast/looks themselves rebuild from the Visual
+   * Bible). Absent for non-story books.
+   */
+  storyConfig?: {
+    /** The played characters (e.g. a "me and you" pair) — assumed present each beat. */
+    roleplay?: { playedCharacterNames: string[] };
+    /** How often a beat auto-illustrates. */
+    cadence?: { mode: "per-response" | "every-n" | "manual"; n: number };
+    /**
+     * Per-beat active-scene SNAPSHOTS (index = beat/chapter): the exact tracked present cast
+     * + location at each beat, so a reopen resumes the precise scene AND re-illustrating a
+     * past beat (render_scene) uses that beat's cast/setting — not a re-derivation. (Inlined
+     * to avoid importing the StoryScene type into the book model.)
+     */
+    scenes?: { presentCharacterIds: string[]; locationId?: string }[];
+  };
   /** For a `code` book: the source language (e.g. "ts", "python"), for the reader's code view. */
   language?: string;
   /** For a `code` book: the EXACT source text. This is what the full-screen code editor edits and

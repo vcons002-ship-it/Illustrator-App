@@ -325,6 +325,11 @@ export type BuddyStreamEvent =
     }
   /** A buddy tool opened a book — the app should open it (and start visuals). */
   | { kind: "opened"; book: BookSource; visuals: boolean }
+  /** Story "as you go": a beat grew the open story IN the worker — the app applies the grown
+   * book (setBook + putBook, NOT a re-open) and scrolls to the new beat. */
+  | { kind: "storyBeat"; book: BookSource; firstNewUnit: number; illustrate: boolean }
+  /** Story config changed (cadence/role-play) — persist the book's storyConfig, no scroll. */
+  | { kind: "storyConfig"; book: BookSource }
   /** Where the request's context budget is going (for the usage donut). */
   | { kind: "usage"; usage: ContextUsage }
   /** remove_library_book deleted a book — the app should refresh its library. */
@@ -914,6 +919,16 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           buddyRequests.current
             .get(msg.requestId)
             ?.onEvent({ kind: "opened", book: msg.book, visuals: msg.visuals });
+          break;
+        }
+        case "storyBeat": {
+          buddyRequests.current
+            .get(msg.requestId)
+            ?.onEvent({ kind: "storyBeat", book: msg.book, firstNewUnit: msg.firstNewUnit, illustrate: msg.illustrate });
+          break;
+        }
+        case "storyConfig": {
+          buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "storyConfig", book: msg.book });
           break;
         }
         case "buddyLibraryChanged": {

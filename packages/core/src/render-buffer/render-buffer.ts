@@ -52,7 +52,7 @@ export interface RenderBufferOptions {
 }
 
 export class RenderBuffer {
-  private readonly totalPages: number;
+  private totalPages: number;
   private readonly render: (
     pageIndex: number,
     onProgress: (fraction: number) => void,
@@ -95,6 +95,21 @@ export class RenderBuffer {
    * held start without waiting for the reader to move.
    */
   refresh(): void {
+    this.pump();
+  }
+
+  /**
+   * Grow the page count after the book gained units at the END (a story "as you go"
+   * append). Existing slot state (results, in-flight renders, the priority queue) is
+   * keyed by index and left untouched — so already-rendered pages keep their images and
+   * in-flight renders keep going. New higher indices simply become renderable. The skip
+   * pass is re-armed so any new non-story pages get their one-time `skipped` result.
+   * A no-op when `totalPages` isn't actually larger (never shrinks).
+   */
+  extend(totalPages: number): void {
+    if (totalPages <= this.totalPages) return;
+    this.totalPages = totalPages;
+    this.skipsApplied = false; // re-mark: new pages may be front/back matter
     this.pump();
   }
 
