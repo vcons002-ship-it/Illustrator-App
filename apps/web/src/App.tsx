@@ -897,6 +897,9 @@ export function App() {
   // The pending generate_image's transcript (assistant JSON turn), folded into the
   // history only when the user approves — a dismissed call never reaches the model.
   const pendingTranscript = useRef<ChatTurn[]>([]);
+  // Same synchronous double-render guard as the buddy (see buddyRenderingRef): a fast double-click /
+  // relayed approve can't fire the in-book render twice.
+  const chatRenderingRef = useRef(false);
   // Landing-page buddy (persisted under its own key; finds + opens books via tools).
   const [buddyMessages, setBuddyMessages] = useState<StoredChatMessage[]>([]);
   const [buddyBusy, setBuddyBusy] = useState(false);
@@ -974,6 +977,11 @@ export function App() {
   // The pending generate_image's transcript, folded in only on approval (same
   // injection guard as the book chat's pendingTranscript).
   const pendingBuddyTranscript = useRef<ChatTurn[]>([]);
+  // Synchronous guard against a DOUBLE render: fullAutonomy fire-and-forgets approveGenerateImage
+  // while setBuddyPendingTool(undefined) is still an async React update, so a second approval (a
+  // manual click, or the phone's vrcmd:chatApproveTool relay) can grab the same pending tool and
+  // render again. A ref flips synchronously, so the duplicate is dropped before it can re-enter.
+  const buddyRenderingRef = useRef(false);
   // The model-facing history of the turn that produced a pendingTool — so an
   // approved run_command can auto-react with the exact context up to its call.
   const pendingBuddyHistory = useRef<ChatTurn[]>([]);
@@ -3213,24 +3221,30 @@ export function App() {
   const onApproveChatTool = useCallback(async () => {
     const call = chatPendingTool;
     if (!call || call.tool !== "generate_image") return;
+    if (chatRenderingRef.current) return; // a render is already in flight — drop the duplicate approval
+    chatRenderingRef.current = true;
     setChatPendingTool(undefined);
     setChatBusy(true);
     setChatActivity("Generating the image…");
-    const out = await chatTool(call, {
-      onProgress: (f) => setChatActivity(`Generating the image… ${Math.round(f * 100)}%`),
-    });
-    setChatBusy(false);
-    setChatActivity("");
-    const feedback = formatToolResult(call, {
-      image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
-    });
-    appendChat({
-      role: "tool",
-      text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
-      ...(out.image ? { image: out.image } : {}),
-      turns: [...pendingTranscript.current, { role: "user", content: feedback }],
-    });
-    pendingTranscript.current = [];
+    try {
+      const out = await chatTool(call, {
+        onProgress: (f) => setChatActivity(`Generating the image… ${Math.round(f * 100)}%`),
+      });
+      setChatBusy(false);
+      setChatActivity("");
+      const feedback = formatToolResult(call, {
+        image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
+      });
+      appendChat({
+        role: "tool",
+        text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
+        ...(out.image ? { image: out.image } : {}),
+        turns: [...pendingTranscript.current, { role: "user", content: feedback }],
+      });
+      pendingTranscript.current = [];
+    } finally {
+      chatRenderingRef.current = false;
+    }
   }, [chatPendingTool, chatTool]);
 
   const onClearChat = useCallback(() => {
@@ -3933,24 +3947,30 @@ export function App() {
   // Run an approved generate_image call: render it, show it, and feed the outcome back.
   // Shared by the approval modal and full-autonomy auto-run.
   const approveGenerateImage = async (call: Extract<BuddyToolCall, { tool: "generate_image" }>): Promise<void> => {
+    if (buddyRenderingRef.current) return; // a render is already in flight — drop the duplicate approval
+    buddyRenderingRef.current = true;
     setBuddyPendingTool(undefined);
     setBuddyBusy(true);
     setBuddyActivity("Generating the image…");
-    const out = await chatTool(call, {
-      onProgress: (f) => setBuddyActivity(`Generating the image… ${Math.round(f * 100)}%`),
-    });
-    setBuddyBusy(false);
-    setBuddyActivity("");
-    const feedback = formatToolResult(call, {
-      image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
-    });
-    appendBuddy({
-      role: "tool",
-      text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
-      ...(out.image ? { image: out.image } : {}),
-      turns: [...pendingBuddyTranscript.current, { role: "user", content: feedback }],
-    });
-    pendingBuddyTranscript.current = [];
+    try {
+      const out = await chatTool(call, {
+        onProgress: (f) => setBuddyActivity(`Generating the image… ${Math.round(f * 100)}%`),
+      });
+      setBuddyBusy(false);
+      setBuddyActivity("");
+      const feedback = formatToolResult(call, {
+        image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
+      });
+      appendBuddy({
+        role: "tool",
+        text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
+        ...(out.image ? { image: out.image } : {}),
+        turns: [...pendingBuddyTranscript.current, { role: "user", content: feedback }],
+      });
+      pendingBuddyTranscript.current = [];
+    } finally {
+      buddyRenderingRef.current = false;
+    }
   };
 
 
