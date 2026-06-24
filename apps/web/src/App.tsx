@@ -3878,8 +3878,10 @@ export function App() {
       const w = await execHostTool({ tool: "write_file", path: safe, content: code });
       if (w.error) return { error: w.error };
       if (w.writeFile && !w.writeFile.ok) return { error: w.writeFile.error ?? "couldn't write the file" };
-      const path = w.writeFile?.path ?? safe;
-      const r = await execHostTool({ tool: "run_command", command: `${interp} "${path}"` });
+      // Run by RELATIVE name (run_command's cwd is the same workspace write_file saved into), and
+      // unquoted — `safe` is regex-restricted to word chars/dots/slashes (no spaces). This avoids
+      // quoting an ABSOLUTE path, which on Windows cmd used to mangle into a doubled, broken path.
+      const r = await execHostTool({ tool: "run_command", command: `${interp} ${safe}` });
       if (r.error) return { error: r.error };
       return r.command
         ? { stdout: r.command.stdout, stderr: r.command.stderr, code: r.command.code, ...(r.command.cwd ? { cwd: r.command.cwd } : {}) }

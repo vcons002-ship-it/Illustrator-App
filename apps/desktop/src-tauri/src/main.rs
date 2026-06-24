@@ -1354,6 +1354,22 @@ async fn pick_folder() -> Option<String> {
         .map(|h| h.path().to_string_lossy().into_owned())
 }
 
+/// Append a shell command to `cmd` VERBATIM on Windows, so `cmd /C` / PowerShell get the command
+/// exactly as written and do their OWN quote parsing. Rust's normal arg escaping wraps the command
+/// and turns an inner `"path"` into `\"path\"` — which cmd.exe does NOT understand, so the quotes
+/// reach the program literally (python then opened `"C:\…\f.py"` as a RELATIVE path, doubling the
+/// workspace dir → Errno 22). `raw_arg` skips that escaping. No-op shim off Windows (this code path
+/// is Windows-only at runtime, but must still compile elsewhere).
+#[cfg(target_os = "windows")]
+fn append_raw_command(c: &mut Command, command: &str) {
+    use std::os::windows::process::CommandExt;
+    c.raw_arg(command);
+}
+#[cfg(not(target_os = "windows"))]
+fn append_raw_command(c: &mut Command, command: &str) {
+    c.arg(command);
+}
+
 /// Run ONE shell command (the chat's run_command tool, after the reader approved it)
 /// in the app's workspace folder, capturing stdout/stderr/exit. The renderer only
 /// reaches this after an explicit per-command approval click — there is no silent
@@ -1387,14 +1403,22 @@ async fn run_command(
         // commandShell setting, threaded through as `shell`). Unix always uses `sh -c`.
         let use_powershell = cfg!(target_os = "windows") && shell.as_deref() == Some("powershell");
         let mut cmd = if use_powershell {
+            // raw_arg: pass the command VERBATIM so PowerShell parses its own quotes (see
+            // append_raw_command) instead of getting Rust-escaped `\"` it mishandles.
             let mut c = Command::new("powershell");
-            c.arg("-NoProfile").arg("-NonInteractive").arg("-Command").arg(&command);
+            c.arg("-NoProfile").arg("-NonInteractive").arg("-Command");
+            append_raw_command(&mut c, &command);
             c
         } else if cfg!(target_os = "windows") {
+            // raw_arg: `cmd /C` must see the command verbatim, or a quoted "C:\…\f.py" arrives at the
+            // program with literal quotes (Errno 22). See append_raw_command.
             let mut c = Command::new("cmd");
-            c.arg("/C").arg(&command);
+            c.arg("/C");
+            append_raw_command(&mut c, &command);
             c
         } else {
+            // Unix: args are a vector (no command-line string), so `sh -c <command>` needs no special
+            // handling — sh parses the one command string itself.
             let mut c = Command::new("sh");
             c.arg("-c").arg(&command);
             c
