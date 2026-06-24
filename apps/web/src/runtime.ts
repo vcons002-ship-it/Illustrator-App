@@ -358,9 +358,9 @@ export async function whichInterpreter(kind: "python" | "node" | "sh"): Promise<
  * default workspace). Returns the absolute path written. Rejects on the web (no filesystem). Only
  * reached when Autonomous workspace is on (no per-write click) — see the write_file tool.
  */
-export function writeWorkspaceFile(relPath: string, content: string, cwd?: string): Promise<string> {
+export function writeWorkspaceFile(relPath: string, content: string, cwd?: string, append?: boolean): Promise<string> {
   const contentBase64 = bytesToBase64(new TextEncoder().encode(content));
-  return invoke<string>("write_workspace_file", { relPath, contentBase64, ...(cwd ? { cwd } : {}) });
+  return invoke<string>("write_workspace_file", { relPath, contentBase64, ...(cwd ? { cwd } : {}), ...(append ? { append: true } : {}) });
 }
 
 // ----------------------------------------------------------- Git worktrees

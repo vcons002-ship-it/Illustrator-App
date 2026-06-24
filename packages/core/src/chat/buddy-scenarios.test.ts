@@ -524,3 +524,29 @@ describe("scenario: the buddy plans a multi-step ask and ticks it off", () => {
     expect(prompt).toContain("· C");
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// 5. BIG FILES — written in append chunks on disk, not truncated / re-merged in chat
+// ───────────────────────────────────────────────────────────────────────────
+describe("scenario: a large file is built in append chunks", () => {
+  it("parses write_file's append flag (and omits it when absent)", () => {
+    expect(parseBuddyToolCall('{"tool":"write_file","path":"big.py","content":"part1","append":true}')).toEqual({
+      tool: "write_file",
+      path: "big.py",
+      content: "part1",
+      append: true,
+    });
+    expect(parseBuddyToolCall('{"tool":"write_file","path":"big.py","content":"part1"}')).toEqual({
+      tool: "write_file",
+      path: "big.py",
+      content: "part1",
+    });
+  });
+
+  it("the prompt tells the model to chunk a too-big file with append:true instead of stitching in chat", () => {
+    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true });
+    expect(prompt).toContain('"append":true');
+    expect(prompt).toContain("appended on DISK");
+    expect(prompt).toContain("paste a giant file into the chat");
+  });
+});

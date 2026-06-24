@@ -961,6 +961,7 @@ async fn write_workspace_file(
     rel_path: String,
     content_base64: String,
     cwd: Option<String>,
+    append: Option<bool>,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use base64::Engine as _;
@@ -997,7 +998,19 @@ async fn write_workspace_file(
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
-        std::fs::write(&dest, &bytes).map_err(|e| e.to_string())?;
+        // Append mode lets the model build a file too large for one reply in chunks (the first
+        // write_file overwrites, each subsequent append:true grows the SAME file on disk).
+        if append.unwrap_or(false) {
+            use std::io::Write as _;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&dest)
+                .map_err(|e| e.to_string())?;
+            f.write_all(&bytes).map_err(|e| e.to_string())?;
+        } else {
+            std::fs::write(&dest, &bytes).map_err(|e| e.to_string())?;
+        }
         Ok(dest.to_string_lossy().to_string())
     })
     .await

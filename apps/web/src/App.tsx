@@ -3629,7 +3629,7 @@ export function App() {
     }
     if (call.tool === "write_file") {
       try {
-        const saved = await writeWorkspaceFile(call.path, call.content, cwd);
+        const saved = await writeWorkspaceFile(call.path, call.content, cwd, call.append);
         return { writeFile: { path: saved, ok: true } };
       } catch (err) {
         return { writeFile: { path: call.path, ok: false, error: err instanceof Error ? err.message : String(err) } };
@@ -3823,12 +3823,13 @@ export function App() {
     setBuddyActivity(`Writing ${call.path}…`);
     let payload: { path: string; ok: boolean; error?: string };
     try {
-      const saved = await writeWorkspaceFile(call.path, call.content, buddyWorkingDir || undefined);
+      const saved = await writeWorkspaceFile(call.path, call.content, buddyWorkingDir || undefined, call.append);
       payload = { path: saved, ok: true };
-      appendBuddy({ role: "tool", text: `📝 Saved ${saved}`, turns: [] });
-      // If the assistant just edited the file open in the code window, show its change live there.
+      appendBuddy({ role: "tool", text: `📝 ${call.append ? "Appended to" : "Saved"} ${saved}`, turns: [] });
+      // If the assistant just edited the file open in the code window, show its change live there. (Skip
+      // append chunks — call.content is a fragment, not the whole file.)
       const openCode = bookRef.current;
-      if (openCode?.contentMode === "code" && call.path === codeFileName(openCode)) {
+      if (!call.append && openCode?.contentMode === "code" && call.path === codeFileName(openCode)) {
         setCodeDraft(call.content);
         setBook((prev) => (prev && prev.id === openCode.id ? { ...prev, code: call.content } : prev));
         void libraryStore.putBook({ ...openCode, code: call.content }).catch(() => {});
@@ -3902,12 +3903,12 @@ export function App() {
         }
         if (call.tool === "write_file") {
           try {
-            const saved = await writeWorkspaceFile(call.path, call.content, dir);
+            const saved = await writeWorkspaceFile(call.path, call.content, dir, call.append);
             // If this (possibly phone-relayed) write targets the file open in the code window, keep the
             // open code book's source authoritative HERE — the book change-effect then re-mirrors the
-            // latest to the phone's editor (vrsync:book), so its window refreshes.
+            // latest to the phone's editor (vrsync:book), so its window refreshes. (Skip append chunks.)
             const open = bookRef.current;
-            if (open?.contentMode === "code" && call.path === codeFileName(open)) {
+            if (!call.append && open?.contentMode === "code" && call.path === codeFileName(open)) {
               setCodeDraft((prev) => (prev === call.content ? prev : call.content));
               setBook((prev) => (prev && prev.id === open.id && prev.code !== call.content ? { ...prev, code: call.content } : prev));
             }
