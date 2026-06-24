@@ -515,6 +515,9 @@ export interface SettingsPanelProps {
   connectingLocal?: boolean;
   /** Models reported by the local LLM text server (separate from image models). */
   textModels?: InstalledModel[];
+  /** The selected Ollama model's real context window (Modelfile num_ctx + arch max) so the per-model
+   * field shows the actual default/ceiling instead of a blank "uses Ollama default". */
+  textModelContext?: { loaded?: number; max?: number };
   /** Connect to a local LLM server and load its model list. */
   onConnectLocalTextServer?: (server: LocalTextServerId, url: string) => void;
   /** True while a local-text-server connection attempt is in flight. */
@@ -557,6 +560,7 @@ export function SettingsPanel({
   onConnectLocalServer,
   connectingLocal = false,
   textModels = [],
+  textModelContext,
   onConnectLocalTextServer,
   connectingLocalText = false,
   onPullTextModel,
@@ -778,7 +782,7 @@ export function SettingsPanel({
                       type="number"
                       min={1024}
                       step={1024}
-                      placeholder="Ollama default"
+                      placeholder={textModelContext?.loaded ? `default ${textModelContext.loaded}` : "Ollama default"}
                       value={cur ?? ""}
                       onChange={(e) => {
                         const n = Number(e.target.value);
@@ -789,7 +793,17 @@ export function SettingsPanel({
                       The app tells Ollama (native <code>/api/chat</code>) to LOAD this model at this window,
                       so its KV cache — and its VRAM — shrink to fit the GPU. <b>This</b> is the lever that
                       fixes slow CPU-offloaded generation: a ~19 GB model fits roughly a 48–64k window on a
-                      32 GB card. Per-model; leave blank to use Ollama's own default (often very large).
+                      32 GB card.{" "}
+                      {textModelContext?.loaded || textModelContext?.max ? (
+                        <>
+                          This model currently loads at{" "}
+                          <b>{textModelContext.loaded ? textModelContext.loaded.toLocaleString() : "Ollama's default"}</b>
+                          {textModelContext.max ? <> · architecture max <b>{textModelContext.max.toLocaleString()}</b></> : null}.
+                          Blank = leave it at that.
+                        </>
+                      ) : (
+                        <>Per-model; leave blank to use Ollama's own default (often very large).</>
+                      )}
                     </span>
                   </label>
                 );
