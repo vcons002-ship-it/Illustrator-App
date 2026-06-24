@@ -4434,6 +4434,9 @@ export function App() {
         text: res.text,
         turns: [{ role: "user", content: userText }, ...res.transcript],
         ...(res.thinking ? { thinking: res.thinking } : {}),
+        // Cloud "keep going?" checkpoint: the task paused with work remaining (so a long run doesn't
+        // burn API calls unattended). Offer a one-tap Continue that re-arms the budget and resumes.
+        ...(res.paused ? { actions: [{ label: "▶ Continue", send: "continue" }] } : {}),
       });
       if (openedBook) appendChat({ role: "assistant", text: res.text });
     }

@@ -157,6 +157,10 @@ export interface BuddyTurnOutcome {
   /** An un-executed generate_image awaiting the reader's approval. */
   pendingTool?: BuddyToolCall;
   toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[];
+  /** The turn stopped at a per-turn tool-round budget with the model still wanting to call tools (a
+   * "keep going?" checkpoint — used for cloud models) rather than finishing. The host can offer a
+   * Continue affordance; saying/clicking continue resumes from the persisted progress. */
+  paused?: boolean;
   /** The turn's reasoning (a thinking model's scratchpad), kept so the UI can show it as a
    * collapsible on the settled message instead of losing it when the turn ends. */
   thinking?: string;
@@ -230,6 +234,14 @@ export async function runBuddyTurn(opts: {
   signal?: AbortSignal;
   /** Thinking level for local reasoning models (passed straight to the provider's chat). */
   reasoningEffort?: "none" | "low" | "medium" | "high";
+  /**
+   * Pause the auto-run tool loop after this many rounds for a "keep going?" checkpoint, instead of
+   * running to the (much larger) `MAX_BUDDY_TOOL_ROUNDS` backstop. Set it for PAID/cloud models so a
+   * long task doesn't silently burn many API calls before checking in; leave it unset for local/free
+   * models, which run to the backstop. The turn returns `paused: true` with a resumable progress
+   * summary; the reader continues (a Continue button / "continue") and the next turn re-arms the budget.
+   */
+  pauseEvery?: number;
 }): Promise<BuddyTurnOutcome> {
   const messages: ChatTurn[] = [{ role: "system", content: opts.system }, ...opts.history];
   const transcript: ChatTurn[] = [];
@@ -237,6 +249,10 @@ export async function runBuddyTurn(opts: {
   let lastThinking = ""; // the latest round's reasoning, persisted onto the settled message
   let wrappedUp = false; // guard: only re-prompt for a plain-text wrap-up once
   let lastTruncated = false; // did the last reply get CUT OFF at the token budget? (→ auto-continue)
+  // Per-turn tool-round budget: a small "keep going?" interval for cloud models, else the big backstop.
+  const effectiveMax =
+    opts.pauseEvery && opts.pauseEvery > 0 ? Math.min(opts.pauseEvery, MAX_BUDDY_TOOL_ROUNDS) : MAX_BUDDY_TOOL_ROUNDS;
+  let pausedForBudget = false; // hit the budget with tools still pending → a resumable checkpoint, not a finish
 
   // One model call against the current `messages` — a FRESH token gate each time (tool JSON never
   // streams visibly), capturing whether the server cut us off at the budget so a long answer can be
@@ -296,14 +312,17 @@ export async function runBuddyTurn(opts: {
     // which is exactly what a linked phone saw. A visible token / the final answer clears it.
     opts.onEvent?.({ kind: "activity", text: round === 0 ? "Thinking…" : "Working on it…" });
     const reply = await chatOnce();
-    const calls = round < MAX_BUDDY_TOOL_ROUNDS ? parseBuddyToolCalls(reply) : [];
+    const calls = round < effectiveMax ? parseBuddyToolCalls(reply) : [];
     const withThinking = (out: BuddyTurnOutcome): BuddyTurnOutcome =>
       lastThinking.trim() ? { ...out, thinking: lastThinking.trim() } : out;
     if (calls.length === 0) {
+      // Hit the per-turn budget with the model STILL trying to call a tool → this is a "keep going?"
+      // checkpoint (cloud pause / backstop), not a natural finish. Flag it so the host offers Continue.
+      if (round >= effectiveMax && looksLikeToolJson(reply)) pausedForBudget = true;
       // A reply that LOOKED like tool JSON but didn't parse into any known call must NOT be
       // dumped to the reader as prose (that's the raw-JSON-in-chat bug). Nudge the model to
       // re-issue it properly; otherwise it's a normal plain-text answer.
-      if (round < MAX_BUDDY_TOOL_ROUNDS && looksLikeToolJson(reply)) {
+      if (round < effectiveMax && looksLikeToolJson(reply)) {
         transcript.push({ role: "assistant", content: reply });
         messages.push({ role: "assistant", content: reply });
         const nudge =
@@ -350,7 +369,12 @@ export async function runBuddyTurn(opts: {
       }
       transcript.push({ role: "assistant", content: clean });
       // Safety net: never hand the reader stray tool-call JSON or an empty string.
-      return withThinking({ text: nonEmptyAnswer(clean, toolResults.length > 0), transcript, toolResults });
+      return withThinking({
+        text: nonEmptyAnswer(clean, toolResults.length > 0),
+        transcript,
+        toolResults,
+        ...(pausedForBudget ? { paused: true } : {}),
+      });
     }
     transcript.push({ role: "assistant", content: reply });
     messages.push({ role: "assistant", content: reply });
@@ -413,7 +437,7 @@ export async function runBuddyTurn(opts: {
       feedbacks.join("\n\n") +
       (deferred ? "\n\n[Re-issue the remaining host tool (image/command/plan/etc.) now if you still need it.]" : "") +
       progressNudge(round) +
-      toolLimitNudge(round);
+      toolLimitNudge(round, effectiveMax);
     transcript.push({ role: "user", content: feedback });
     messages.push({ role: "user", content: feedback });
   }
