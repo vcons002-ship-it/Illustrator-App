@@ -3,6 +3,7 @@ import {
   Automatic1111Backend,
   BUNDLED_LLM,
   ComfyUIBackend,
+  DirectTransport,
   DEFAULT_LOCAL_TEXT_SERVER,
   IndexedDbStore,
   LocalServerLLMProvider,
@@ -215,6 +216,7 @@ import { useActivityLog } from "./useActivityLog.js";
 import type { ChatLive, ChatMirror, ChatSendAttachment, CmdToDesktop, EngineInventory, PlannerCommand, PlannerMirror, SyncToPhone } from "./remote-sync.js";
 import {
   downloadLora,
+  desktopFetch,
   downloadModel,
   ensureEngine,
   ensureLocalLlm,
@@ -1103,7 +1105,9 @@ export function App() {
       // The managed engine is ComfyUI — read its text-encoder + VAE files over the HTTP API (same as
       // the "connect" path) so the split-file dropdowns are populated on desktop too.
       try {
-        const comps = await new ComfyUIBackend({ baseUrl }).listComponents();
+        // Through the Rust bridge (CORS-exempt) — the managed engine is desktop-only, and a browser
+        // fetch from the packaged app's Tauri-scheme origin would be CORS-blocked (empty dropdowns).
+        const comps = await new ComfyUIBackend({ baseUrl, transport: new DirectTransport(desktopFetch) }).listComponents();
         setInstalledTextEncoders(comps.textEncoders);
         setInstalledVaes(comps.vaes);
       } catch {
@@ -1122,7 +1126,15 @@ export function App() {
   // if the server can't be reached (so the resolver / connect handler can fall back).
   const probeServer = useCallback(async (backend: LocalBackendId, url: string): Promise<void> => {
     if (!url) throw new Error("no server URL set");
-    const engine = backend === "a1111" ? new Automatic1111Backend({ baseUrl: url }) : new ComfyUIBackend({ baseUrl: url });
+    // On desktop, reach the server through the Rust HTTP bridge (CORS-exempt) — the same path
+    // generation uses. A plain browser fetch is CORS-bound, and in the PACKAGED app the WebView
+    // origin is the Tauri custom scheme (not localhost:5173), which a self-hosted A1111/ComfyUI
+    // `--cors-allow-origins` set for the dev origin won't match — so the link "stops working" in prod.
+    const transport = isDesktop ? new DirectTransport(desktopFetch) : undefined;
+    const engine =
+      backend === "a1111"
+        ? new Automatic1111Backend({ baseUrl: url, ...(transport ? { transport } : {}) })
+        : new ComfyUIBackend({ baseUrl: url, ...(transport ? { transport } : {}) });
     const models = await engine.listModels(); // throws when the server is unreachable
     setInstalledModels(models);
     try {

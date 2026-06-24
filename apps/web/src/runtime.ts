@@ -185,6 +185,47 @@ export async function desktopHttpFetch(request: DesktopFetchRequest): Promise<De
   }
 }
 
+/** Statuses a Response may not carry a body for (so `new Response(body, …)` doesn't throw). */
+const NO_BODY_STATUS = new Set([101, 103, 204, 205, 304]);
+
+/**
+ * A `fetch`-shaped function backed by the Rust HTTP bridge (CORS-exempt), for MAIN-THREAD callers
+ * that must reach a localhost server the WebView origin can't. The browser applies CORS to a plain
+ * `fetch`, and in the PACKAGED desktop app the WebView origin is the Tauri custom scheme
+ * (`http://tauri.localhost`), NOT the `http://localhost:5173` dev origin — so a self-hosted
+ * AUTOMATIC1111 / ComfyUI server whose `--cors-allow-origins` was set for the dev origin blocks the
+ * request. Routing through the Rust shell (same path the engine worker uses) makes CORS irrelevant.
+ */
+export async function desktopFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const req = new Request(input as RequestInfo, init);
+  const headers: Record<string, string> = {};
+  req.headers.forEach((value, key) => {
+    headers[key] = value;
+  });
+  let bodyBase64: string | undefined;
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    const body = await req.clone().arrayBuffer();
+    if (body.byteLength > 0) bodyBase64 = bytesToBase64(new Uint8Array(body));
+  }
+  const reply = await desktopHttpFetch({ url: req.url, method: req.method, headers, ...(bodyBase64 ? { bodyBase64 } : {}) });
+  if (reply.error || reply.status === 0) {
+    throw new TypeError(reply.error ?? "The desktop fetch bridge failed.");
+  }
+  const bytes = reply.bodyBase64 ? base64ToBytes(reply.bodyBase64) : new ArrayBuffer(0);
+  // The native fetch already decoded the body to identity bytes; drop the hop-by-hop/length headers
+  // so `Response` doesn't claim a now-wrong content-length or an encoding the bytes no longer carry.
+  const replyHeaders = { ...reply.headers };
+  for (const k of Object.keys(replyHeaders)) {
+    const lk = k.toLowerCase();
+    if (lk === "content-encoding" || lk === "content-length" || lk === "transfer-encoding") delete replyHeaders[k];
+  }
+  return new Response(NO_BODY_STATUS.has(reply.status) ? null : bytes, {
+    status: reply.status,
+    statusText: reply.statusText,
+    headers: replyHeaders,
+  });
+}
+
 /** Download a curated checkpoint; emits `model://progress` events while it runs. */
 export function downloadModel(model: DownloadableModel): Promise<void> {
   return invoke<void>("download_model", { model });
