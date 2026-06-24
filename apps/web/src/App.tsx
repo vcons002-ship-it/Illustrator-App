@@ -4324,9 +4324,12 @@ export function App() {
         // Offer the distilled skill — the reader is the value judge (never saved silently).
         setPendingSkill(e.skill);
       } else if (e.kind === "opened") {
-        // Don't yank a book open AGAIN if it's already the one showing — the buddy can re-emit
-        // open_code for a code file the reader is already editing, and re-opening would discard their
-        // unsaved draft and restart generation ("code book keeps force opening"). Just surface the chat.
+        // Don't yank a book open AGAIN if it's already the one showing — for ANY book type, the
+        // buddy can re-emit an open for what's already open (a code file being edited, a web page
+        // it just opened, a pasted doc, a spreadsheet, a story), and re-opening discards unsaved
+        // state + restarts generation ("keeps force opening"). Guard by id, and update bookRef
+        // SYNCHRONOUSLY when we open so a re-emit LATER IN THE SAME TURN is caught too (bookRef
+        // otherwise only refreshes on the next render, so a tool-loop re-emit slipped through).
         if (bookRef.current?.id === e.book.id) {
           setShowChat(true);
         } else {
@@ -4334,6 +4337,7 @@ export function App() {
           buddyHandoff.current = [...buddyMessages, { role: "user" as const, text: userBubbleText ?? userText, at: Date.now() }]
             .slice(-12)
             .map(({ turns: _turns, ...m }) => m);
+          bookRef.current = e.book; // dedupe a same-turn re-emit before the render refreshes the ref
           openBook(e.book);
           if (e.visuals) startGeneration();
           setShowChat(true);

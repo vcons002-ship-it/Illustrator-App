@@ -717,7 +717,10 @@ export function buildBuddySystemPrompt(opts: {
     '- {"tool":"open_library_book","id":"…","visuals":false} — open a book from the library list above.\n' +
     '- {"tool":"open_web_text","url":"…","title":"…","mode":"fiction","visuals":false} — fetch a text/article/news ' +
     'URL (or a search hit\'s URL) and open it in the reader. "mode" picks the illustration pipeline: "fiction" for ' +
-    'stories/novels, "technical" for articles, papers, news and non-fiction.\n' +
+    'stories/novels, "technical" for articles, papers, news and non-fiction. Use this ONLY when the reader wants to ' +
+    "READ or illustrate the page IN THE READER — it takes over the screen. To merely ANSWER a question about a page, " +
+    "summarize it, or pull a fact from it, use read_url (pulls the text into the chat) — do NOT open it as a book. And " +
+    "NEVER re-open a page (or any book) that's already open: if it's already showing, just talk about it.\n" +
     '- {"tool":"open_pasted_text","text":"…","title":"…","mode":"fiction","visuals":false} — open PROSE the reader ' +
     'PASTED or wrote into the chat (a poem, lyrics, an excerpt, an article) so they can READ/illustrate it. Put the ' +
     'passage ITSELF in "text" — never a how-to, a list of steps, or an explanation ABOUT something, and never code/HTML ' +
