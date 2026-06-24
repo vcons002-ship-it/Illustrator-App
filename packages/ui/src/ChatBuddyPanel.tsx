@@ -64,6 +64,8 @@ export interface ChatBuddyPanelProps {
   /** The chat's lightweight working checklist (set_plan/complete_step) — a pinned, evolving plan the
    * buddy ticks off as it executes a multi-step ask. */
   plan?: BuddyPlan;
+  /** Dismiss the working checklist (the ✕ on it) — clears it for good. */
+  onDismissPlan?: () => void;
   /** An un-executed generate_image awaiting the reader's approval. */
   pendingTool?: BuddyToolCall;
   persona: BuddyPersona;
@@ -358,11 +360,21 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         ) : null}
         {props.plan && props.plan.steps.length > 0 ? (
           <div style={planBoxStyle}>
-            {props.plan.goal ? (
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>📋 {props.plan.goal}</div>
-            ) : (
-              <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.7, marginBottom: 4 }}>📋 Plan</div>
-            )}
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+              <div style={{ fontSize: props.plan.goal ? 12 : 11, fontWeight: 600, opacity: props.plan.goal ? 1 : 0.7, marginBottom: 4 }}>
+                📋 {props.plan.goal || "Plan"}
+              </div>
+              {props.onDismissPlan ? (
+                <button
+                  type="button"
+                  onClick={() => props.onDismissPlan?.()}
+                  title="Dismiss this checklist"
+                  style={{ background: "none", border: "none", color: "inherit", opacity: 0.5, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}
+                >
+                  ✕
+                </button>
+              ) : null}
+            </div>
             {props.plan.steps.map((s, i) => {
               const done = s.status === "done";
               const current = !done && props.plan!.steps.slice(0, i).every((p) => p.status === "done");

@@ -195,6 +195,7 @@ export type CmdToDesktop =
   | { type: "vrcmd:chatRename"; id: string; label: string } // rename a session (empty ⇒ reset label)
   | { type: "vrcmd:chatPersona"; persona: BuddyPersona } // change the active session's persona
   | { type: "vrcmd:chatClear" } // clear the active session's history on the desktop
+  | { type: "vrcmd:chatPlanClear" } // dismiss the working checklist (the desktop owns + re-mirrors it)
   | { type: "vrcmd:chatCancel" } // stop the in-flight turn on the desktop
   | { type: "vrcmd:chatApproveTool"; always: boolean } // approve the pending tool (always ⇒ grant for the session)
   | { type: "vrcmd:chatDismissTool" } // dismiss the pending tool without running it
