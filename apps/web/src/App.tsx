@@ -1132,6 +1132,9 @@ export function App() {
   // Top toolbar's big button row collapses behind a "Tools" caret — default collapsed on phones
   // to reclaim vertical space; the title + Exit book + mode badge stay visible regardless.
   const [toolbarOpen, setToolbarOpen] = useState(() => !narrow);
+  // The bottom chat dock keeps its input bar always visible; its message history expands/collapses.
+  // Default expanded on desktop, collapsed on phones (the reader gets the room).
+  const [chatHistoryOpen, setChatHistoryOpen] = useState(() => !narrow);
 
   // Decrypt stored keys after mount, then enable persistence. Persisting is gated
   // on hydration so the initial empty-keys render can't clobber the saved keys.
@@ -5794,8 +5797,122 @@ export function App() {
           ? "paint"
           : "done";
 
+  // The buddy chat is rendered in two places that share the same wiring: as the home-screen hero
+  // (no book) and as the always-present bottom dock beneath an open book. Extracted so the ~60
+  // props live once. `fill` makes it stretch to the dock's height; history collapse is dock-only.
+  const renderBuddyChat = (
+    fill: boolean,
+    historyCollapsed?: boolean,
+    onToggleHistory?: () => void,
+  ) => (
+    <ChatBuddyPanel
+      {...(fill ? { fill: true } : {})}
+      {...(historyCollapsed !== undefined ? { historyCollapsed } : {})}
+      {...(onToggleHistory ? { onToggleHistory } : {})}
+      messages={buddyPanelMessages}
+      {...(buddyStreaming ? { streamingText: buddyStreaming } : {})}
+      {...(buddyThinking ? { thinking: buddyThinking } : {})}
+      busy={buddyBusy}
+      {...(buddyActivity ? { activity: buddyActivity } : {})}
+      {...(buddySteps.length ? { steps: buddySteps } : {})}
+      {...(buddyPlan ? { plan: buddyPlan, onDismissPlan } : {})}
+      {...(buddyPendingTool ? { pendingTool: buddyPendingTool } : {})}
+      persona={buddyPersona}
+      onPersonaChange={onBuddyPersonaChange}
+      sessions={buddySessions.map((s, i) => ({
+        id: s.id,
+        label: s.label || (s.workingDir ? lastPathSegment(s.workingDir) : `Chat ${i + 1}`),
+      }))}
+      activeSessionId={activeBuddyId}
+      onSwitchSession={onSwitchBuddySession}
+      onNewSession={onNewBuddySession}
+      onRenameSession={onRenameBuddySession}
+      onDeleteSession={onDeleteBuddySession}
+      onSend={onBuddySendWithAttachments}
+      onStartStory={() => void startStoryAsYouGo()}
+      onAttachFile={onAttachBuddyFile}
+      attachments={buddyAttachments.map((a) => ({
+        id: a.id,
+        name: a.name,
+        kind: a.kind,
+        status: a.status,
+        ...(a.error ? { error: a.error } : {}),
+      }))}
+      onRemoveAttachment={onRemoveBuddyAttachment}
+      onApprovePendingTool={onApproveBuddyPendingTool}
+      onApprovePendingToolAlways={onAllowBuddyAlways}
+      onDismissPendingTool={onDismissBuddyPendingTool}
+      agentApprovals={agentApprovals}
+      onApproveAgentTool={onApproveAgentTool}
+      onDenyAgentTool={onDenyAgentTool}
+      onCancel={onBuddyCancel}
+      onClearHistory={onClearBuddy}
+      onDeleteMessage={onDeleteBuddyMessage}
+      onCompact={onCompactBuddyClick}
+      desktop={isDesktop}
+      {...(isDesktop && (settings.localTextBackend === "bundled" || settings.localTextBackend === "server")
+        ? { onLoadModel: warmLlm }
+        : {})}
+      {...((isDesktop || isRemoteClient) && settings.allowCommands
+        ? {
+            workingDir: buddyWorkingDir,
+            onSetWorkingDir: setWorkingDir,
+            // The native folder-picker dialog is desktop-only; the phone types the path (it's
+            // relayed with each command/file tool so they run in that folder on the desktop).
+            ...(isDesktop ? { onPickFolder: pickFolder } : {}),
+          }
+        : {})}
+      onOpenLocalFile={onOpenLocalFile}
+      onSaveFile={onSaveChatFile}
+      fileActions={buddyFileActions}
+      {...((isDesktop || isRemoteClient) && settings.allowCommands ? { onRunCode } : {})}
+      onSaveProject={onSaveProject}
+      onBuildDocument={onBuildDocument}
+      {...(buddyUsage ? { contextUsage: buddyUsage } : {})}
+    />
+  );
+
+  // The story dock's control row (workflow + cadence + manual illustrate) — shown above the chat
+  // when an open book is a "story as you go".
+  const storyControlsRow = book?.kind === "story" && (
+    <div style={styles.storyControls}>
+      <select
+        style={styles.storyControlSelect}
+        value={book.storyConfig?.mode ?? "direct"}
+        onChange={(e) => storySetMode(e.target.value as "direct" | "roleplay")}
+        title="Workflow — Roleplay (you steer, the assistant plays the scene) or Direct (you direct, it narrates)"
+      >
+        <option value="roleplay">🎭 Roleplay</option>
+        <option value="direct">✍️ Direct</option>
+      </select>
+      <select
+        style={styles.storyControlSelect}
+        value={(() => {
+          const c = book.storyConfig?.cadence;
+          return !c || c.mode === "per-response" ? "per-response" : c.mode === "manual" ? "manual" : "every-n";
+        })()}
+        onChange={(e) => {
+          const v = e.target.value as "per-response" | "every-n" | "manual";
+          storySetCadence(v, v === "every-n" ? 3 : undefined);
+        }}
+        title="How often a beat auto-illustrates"
+      >
+        <option value="per-response">🖼 Every beat</option>
+        <option value="every-n">Every 3 beats</option>
+        <option value="manual">Manual only</option>
+      </select>
+      <button
+        style={styles.button}
+        onClick={() => storyRenderLatest()}
+        title="Illustrate (or redraw) the most recent beat now"
+      >
+        ↻ Illustrate
+      </button>
+    </div>
+  );
+
   return (
-    <div style={book?.kind === "story" ? { ...styles.shell, paddingRight: STORY_DOCK_W } : styles.shell}>
+    <div style={styles.shell}>
       <style>{KEYFRAMES}</style>
       {/* PRIVACY CURTAIN: while a phone drives this desktop in incognito, the engine runs here but the
           desktop's own screen stays hidden so a bystander can't see the remote session. Kept DISCREET on
@@ -6334,6 +6451,9 @@ export function App() {
         )}
       </header>
 
+      {/* Everything between the (fixed-height) header and the bottom chat dock scrolls here. */}
+      <div style={styles.contentScroll}>
+
       {!settings.configured && !isRemoteClient && (
         <FirstRunWizard current={settings} onComplete={setSettings} isDesktop={isDesktop} />
       )}
@@ -6380,108 +6500,11 @@ export function App() {
         </div>
       )}
 
-      {(!book || book.kind === "story") && (
-        <section style={!book ? styles.buddySection : styles.storyChatDock}>
-          {book?.kind === "story" && (
-            <div style={styles.storyControls}>
-              <select
-                style={styles.storyControlSelect}
-                value={book.storyConfig?.mode ?? "direct"}
-                onChange={(e) => storySetMode(e.target.value as "direct" | "roleplay")}
-                title="Workflow — Roleplay (you steer, the assistant plays the scene) or Direct (you direct, it narrates)"
-              >
-                <option value="roleplay">🎭 Roleplay</option>
-                <option value="direct">✍️ Direct</option>
-              </select>
-              <select
-                style={styles.storyControlSelect}
-                value={(() => {
-                  const c = book.storyConfig?.cadence;
-                  return !c || c.mode === "per-response" ? "per-response" : c.mode === "manual" ? "manual" : "every-n";
-                })()}
-                onChange={(e) => {
-                  const v = e.target.value as "per-response" | "every-n" | "manual";
-                  storySetCadence(v, v === "every-n" ? 3 : undefined);
-                }}
-                title="How often a beat auto-illustrates"
-              >
-                <option value="per-response">🖼 Every beat</option>
-                <option value="every-n">Every 3 beats</option>
-                <option value="manual">Manual only</option>
-              </select>
-              <button
-                style={styles.button}
-                onClick={() => storyRenderLatest()}
-                title="Illustrate (or redraw) the most recent beat now"
-              >
-                ↻ Illustrate
-              </button>
-            </div>
-          )}
-          <ChatBuddyPanel
-            {...(book?.kind === "story" ? { fill: true } : {})}
-            messages={buddyPanelMessages}
-            {...(buddyStreaming ? { streamingText: buddyStreaming } : {})}
-            {...(buddyThinking ? { thinking: buddyThinking } : {})}
-            busy={buddyBusy}
-            {...(buddyActivity ? { activity: buddyActivity } : {})}
-            {...(buddySteps.length ? { steps: buddySteps } : {})}
-            {...(buddyPlan ? { plan: buddyPlan, onDismissPlan } : {})}
-            {...(buddyPendingTool ? { pendingTool: buddyPendingTool } : {})}
-            persona={buddyPersona}
-            onPersonaChange={onBuddyPersonaChange}
-            sessions={buddySessions.map((s, i) => ({
-              id: s.id,
-              label: s.label || (s.workingDir ? lastPathSegment(s.workingDir) : `Chat ${i + 1}`),
-            }))}
-            activeSessionId={activeBuddyId}
-            onSwitchSession={onSwitchBuddySession}
-            onNewSession={onNewBuddySession}
-            onRenameSession={onRenameBuddySession}
-            onDeleteSession={onDeleteBuddySession}
-            onSend={onBuddySendWithAttachments}
-            onStartStory={() => void startStoryAsYouGo()}
-            onAttachFile={onAttachBuddyFile}
-            attachments={buddyAttachments.map((a) => ({
-              id: a.id,
-              name: a.name,
-              kind: a.kind,
-              status: a.status,
-              ...(a.error ? { error: a.error } : {}),
-            }))}
-            onRemoveAttachment={onRemoveBuddyAttachment}
-            onApprovePendingTool={onApproveBuddyPendingTool}
-            onApprovePendingToolAlways={onAllowBuddyAlways}
-            onDismissPendingTool={onDismissBuddyPendingTool}
-            agentApprovals={agentApprovals}
-            onApproveAgentTool={onApproveAgentTool}
-            onDenyAgentTool={onDenyAgentTool}
-            onCancel={onBuddyCancel}
-            onClearHistory={onClearBuddy}
-            onDeleteMessage={onDeleteBuddyMessage}
-            onCompact={onCompactBuddyClick}
-            desktop={isDesktop}
-            {...(isDesktop && (settings.localTextBackend === "bundled" || settings.localTextBackend === "server")
-              ? { onLoadModel: warmLlm }
-              : {})}
-            {...((isDesktop || isRemoteClient) && settings.allowCommands
-              ? {
-                  workingDir: buddyWorkingDir,
-                  onSetWorkingDir: setWorkingDir,
-                  // The native folder-picker dialog is desktop-only; the phone types the path (it's
-                  // relayed with each command/file tool so they run in that folder on the desktop).
-                  ...(isDesktop ? { onPickFolder: pickFolder } : {}),
-                }
-              : {})}
-            onOpenLocalFile={onOpenLocalFile}
-            onSaveFile={onSaveChatFile}
-            fileActions={buddyFileActions}
-            {...((isDesktop || isRemoteClient) && settings.allowCommands ? { onRunCode } : {})}
-            onSaveProject={onSaveProject}
-            onBuildDocument={onBuildDocument}
-            {...(buddyUsage ? { contextUsage: buddyUsage } : {})}
-          />
-        </section>
+      {/* Home screen (no book open): the assistant chat is the hero, centered. With a book open the
+          chat instead docks at the bottom of the page (below the reader) — see the dock after this
+          scroll region. */}
+      {!book && (
+        <section style={styles.buddySection}>{renderBuddyChat(false)}</section>
       )}
 
       {book && book.contentMode === "code" && codeEditMode ? (
@@ -6610,7 +6633,7 @@ export function App() {
           </div>
         </section>
       ) : book ? (
-        <main style={book.data || (book.dataSheets && book.dataSheets.length) ? styles.readerData : wideImageColumn ? styles.readerWide : styles.reader}>
+        <main style={book.data || (book.dataSheets && book.dataSheets.length) ? styles.readerData : narrow ? styles.readerNarrow : wideImageColumn ? styles.readerWide : styles.reader}>
           <ReaderColumn
             book={book}
             pageToUnit={units?.pageToUnit}
@@ -6715,6 +6738,18 @@ export function App() {
           </aside>
         </main>
       ) : null}
+
+      </div>{/* end contentScroll */}
+
+      {/* With a book open the assistant chat docks at the BOTTOM of the page, full width, beneath the
+          reader. Its input bar is always visible; the message history expands/collapses (caret in the
+          panel header). A "story as you go" book also gets its workflow/cadence controls here. */}
+      {book && (
+        <section style={chatHistoryOpen ? { ...styles.chatDock, height: "min(62vh, 560px)" } : styles.chatDock}>
+          {storyControlsRow}
+          {renderBuddyChat(true, !chatHistoryOpen, () => setChatHistoryOpen((v) => !v))}
+        </section>
+      )}
 
       {showCharacters && (
         <CharacterBible
@@ -8483,20 +8518,23 @@ const KEYFRAMES =
   `details > summary { list-style: none; }\n` +
   `details > summary::-webkit-details-marker { display: none; }`;
 
-/** Width of the always-on story chat sidebar; the shell reserves this much on the right when a story
- * is open so the reader/header never sit underneath it. */
-const STORY_DOCK_W = "min(460px, 42vw)";
 
 const styles: Record<string, React.CSSProperties> = {
+  // Full-height flex column: fixed header on top, a scrolling content region in the middle, and a
+  // fixed-height chat dock pinned at the bottom (when a book is open).
   shell: {
-    minHeight: "100vh",
+    height: "100vh",
+    display: "flex",
+    flexDirection: "column",
     background: "#11131a",
     color: "#e7e7ee",
     fontFamily: "Georgia, 'Iowan Old Style', serif",
   },
+  // The middle region between header and bottom dock — this is what scrolls. `minHeight: 0` is
+  // required so the flex child can shrink below its content height and actually scroll.
+  contentScroll: { flex: "1 1 auto", overflowY: "auto", minHeight: 0 },
   header: {
-    position: "sticky",
-    top: 0,
+    flex: "0 0 auto",
     zIndex: 10,
     display: "flex",
     flexDirection: "column",
@@ -8653,24 +8691,18 @@ const styles: Record<string, React.CSSProperties> = {
   },
   empty: { padding: "10px 24px 8px", maxWidth: 760, fontSize: 13, opacity: 0.8, lineHeight: 1.5 },
   buddySection: { padding: "0 24px 20px", display: "flex", justifyContent: "center" },
-  // A story docks its chat as an ALWAYS-VISIBLE right sidebar beside the growing illustrated story,
-  // so you co-write and watch it build at once — no toggle, nothing covering the reader. The shell
-  // gets a matching right padding so the reader/header never sit under the dock. Reuses ChatBuddyPanel
-  // (the same surface that started the story continues it).
-  storyChatDock: {
-    position: "fixed",
-    top: 0,
-    right: 0,
-    bottom: 0,
-    width: STORY_DOCK_W,
-    zIndex: 60,
+  // With a book open the chat docks at the bottom of the page (full width), beneath the reader. It's
+  // a fixed-height flex child of the shell; its inner panel scrolls. The story workflow/cadence
+  // controls sit above it when the book is a "story as you go".
+  chatDock: {
+    flex: "0 0 auto",
     display: "flex",
     flexDirection: "column",
-    gap: 8,
+    gap: 6,
     padding: 10,
     boxSizing: "border-box",
     background: "#0e0f13",
-    borderLeft: "1px solid rgba(255,255,255,0.12)",
+    borderTop: "1px solid rgba(255,255,255,0.12)",
   },
   // The story dock's control row: workflow + cadence dropdowns and an Illustrate button (no model round).
   storyControls: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" },
@@ -8720,6 +8752,14 @@ const styles: Record<string, React.CSSProperties> = {
     display: "block",
     padding: "32px 20px 50vh",
     maxWidth: 1200,
+    margin: "0 auto",
+  },
+  // Narrow / phone viewport: a single column. Because the grid becomes `display:block`, the image
+  // `<aside>` (the second child) flows BELOW the text it illustrates instead of beside it.
+  readerNarrow: {
+    display: "block",
+    padding: "24px 16px 40vh",
+    maxWidth: 680,
     margin: "0 auto",
   },
   column: { maxWidth: 640 },
