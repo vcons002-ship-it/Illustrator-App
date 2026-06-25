@@ -160,6 +160,10 @@ export interface EngineWorkerApi {
   pauseImages: () => void;
   resumeImages: () => void;
   regenerateStoryboard: () => void;
+  /** Story header controls (no model round). */
+  storySetCadence: (mode: "per-response" | "every-n" | "manual", n?: number) => void;
+  storyRenderLatest: () => void;
+  storySetMode: (mode: "direct" | "roleplay") => void;
   regenerateAllImages: () => void;
   regenerateImage: (unitIndex: number) => void;
   /** Fill gaps (missing prompts + failed/un-rendered units); finished images are kept. */
@@ -1291,6 +1295,16 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     generationRequested.current = true;
     send({ type: "regenerateStoryboard" });
   }, []);
+  // Story header controls (no model round): cadence, illustrate-latest, and mid-story workflow switch.
+  const storySetCadence = useCallback((mode: "per-response" | "every-n" | "manual", n?: number) => {
+    send({ type: "storySetCadence", mode, ...(n !== undefined ? { n } : {}) });
+  }, []);
+  const storyRenderLatest = useCallback(() => {
+    send({ type: "storyRenderLatest" });
+  }, []);
+  const storySetMode = useCallback((mode: "direct" | "roleplay") => {
+    send({ type: "storySetMode", mode });
+  }, []);
   const rebuildPrompts = useCallback(() => {
     generationRequested.current = true;
     send({ type: "rebuildPrompts" });
@@ -1965,6 +1979,9 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     pauseImages,
     resumeImages,
     regenerateStoryboard,
+    storySetCadence,
+    storyRenderLatest,
+    storySetMode,
     regenerateAllImages,
     regenerateImage,
     completeBook,

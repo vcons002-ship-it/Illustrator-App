@@ -64,6 +64,11 @@ export type MainToWorker =
   | { type: "pauseImages" }
   | { type: "resumeImages" }
   | { type: "regenerateStoryboard" }
+  /** Story header controls (no model round): set the auto-illustrate cadence, illustrate the latest
+   * beat on demand, or switch the writing workflow mid-story. */
+  | { type: "storySetCadence"; mode: "per-response" | "every-n" | "manual"; n?: number }
+  | { type: "storyRenderLatest" }
+  | { type: "storySetMode"; mode: "direct" | "roleplay" }
   | { type: "rebuildPrompts" }
   | { type: "regenerateAllImages" }
   | { type: "regenerateImage"; unitIndex: number }

@@ -477,6 +477,9 @@ export function App() {
     pauseImages,
     resumeImages,
     regenerateStoryboard,
+    storySetCadence,
+    storyRenderLatest,
+    storySetMode,
     regenerateAllImages,
     regenerateImage,
     completeBook,
@@ -6361,6 +6364,42 @@ export function App() {
 
       {(!book || book.kind === "story") && (
         <section style={!book ? styles.buddySection : styles.storyChatDock}>
+          {book?.kind === "story" && (
+            <div style={styles.storyControls}>
+              <select
+                style={styles.storyControlSelect}
+                value={book.storyConfig?.mode ?? "direct"}
+                onChange={(e) => storySetMode(e.target.value as "direct" | "roleplay")}
+                title="Workflow — Roleplay (you steer, the assistant plays the scene) or Direct (you direct, it narrates)"
+              >
+                <option value="roleplay">🎭 Roleplay</option>
+                <option value="direct">✍️ Direct</option>
+              </select>
+              <select
+                style={styles.storyControlSelect}
+                value={(() => {
+                  const c = book.storyConfig?.cadence;
+                  return !c || c.mode === "per-response" ? "per-response" : c.mode === "manual" ? "manual" : "every-n";
+                })()}
+                onChange={(e) => {
+                  const v = e.target.value as "per-response" | "every-n" | "manual";
+                  storySetCadence(v, v === "every-n" ? 3 : undefined);
+                }}
+                title="How often a beat auto-illustrates"
+              >
+                <option value="per-response">🖼 Every beat</option>
+                <option value="every-n">Every 3 beats</option>
+                <option value="manual">Manual only</option>
+              </select>
+              <button
+                style={styles.button}
+                onClick={() => storyRenderLatest()}
+                title="Illustrate (or redraw) the most recent beat now"
+              >
+                ↻ Illustrate
+              </button>
+            </div>
+          )}
           <ChatBuddyPanel
             {...(book?.kind === "story" ? { fill: true } : {})}
             messages={buddyPanelMessages}
@@ -8609,10 +8648,23 @@ const styles: Record<string, React.CSSProperties> = {
     zIndex: 60,
     display: "flex",
     flexDirection: "column",
+    gap: 8,
     padding: 10,
     boxSizing: "border-box",
     background: "#0e0f13",
     borderLeft: "1px solid rgba(255,255,255,0.12)",
+  },
+  // The story dock's control row: workflow + cadence dropdowns and an Illustrate button (no model round).
+  storyControls: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" },
+  storyControlSelect: {
+    background: "rgba(255,255,255,0.08)",
+    color: "inherit",
+    border: "1px solid rgba(255,255,255,0.2)",
+    borderRadius: 6,
+    padding: "5px 8px",
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: "pointer",
   },
   // "Lock this look" control under a story beat's image: pin it as a character's reference.
   lockLook: { marginTop: 6, display: "flex", flexDirection: "column", gap: 4 },

@@ -299,6 +299,16 @@ function storyConfigOf(s: StorySessionState): NonNullable<BookSource["storyConfi
   };
 }
 
+/** Persist the live story session onto the open book's storyConfig and hand it to the host (setBook +
+ * putBook), with NO new beat — used by the header controls (cadence / mode) that the reader changes
+ * directly. `requestId: 0` marks a host-initiated (non-turn) update. */
+function persistStoryConfig(): void {
+  if (story && currentBook?.kind === "story" && currentBook.id === story.bookId) {
+    currentBook = { ...currentBook, storyConfig: storyConfigOf(story) };
+    post({ type: "storyConfig", requestId: 0, book: currentBook });
+  }
+}
+
 /** The live STORY STATE block fed to the WRITING model each beat (present cast + location from the
  * tracker, the last few beats verbatim, and the rolling synopsis) — so a long story keeps continuity
  * even after chat history is trimmed. "" when there's nothing to say. */
@@ -987,6 +997,25 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "regenerateStoryboard":
       void engine?.regenerateStoryboard();
       postPaused();
+      break;
+    case "storySetCadence":
+      if (story) {
+        story.cadence = { mode: msg.mode, n: msg.n ?? story.cadence.n };
+        if (msg.mode === "per-response") story.beatsSinceImage = 0;
+        persistStoryConfig();
+      }
+      break;
+    case "storySetMode":
+      if (story) {
+        story.mode = msg.mode;
+        persistStoryConfig();
+      }
+      break;
+    case "storyRenderLatest":
+      if (story && engine && story.beats.length > 0) {
+        const last = story.beats.length - 1;
+        void engine.renderScene(last, last);
+      }
       break;
     case "rebuildPrompts":
       void engine?.rebuildPrompts();
