@@ -249,9 +249,11 @@ export type BuddyToolCall =
   /** Capture the reader's SCREEN (or one window by title) and look at it with a
    * vision model (desktop). The reader approves; the model gets a text observation. */
   | { tool: "screenshot"; question?: string; window?: string }
-  /** Long-term reader memory (shared with the book chat — see reader-memory.ts). */
-  | { tool: "remember"; note: string }
-  | { tool: "forget"; match: string }
+  /** Long-term reader memory (shared with the book chat — see reader-memory.ts), or one of
+   * the two identity souls (see souls.ts): about:"self" = your own identity, about:"user" =
+   * the reader's own character. Omitted/`"reader"` → reader memory. */
+  | { tool: "remember"; note: string; about?: "reader" | "self" | "user" }
+  | { tool: "forget"; match: string; about?: "reader" | "self" | "user" }
   /** Change one of the app's settings by name on the reader's request (then confirm). */
   | { tool: "update_setting"; field: string; value: string | number | boolean }
   /** Walk the reader through SETTING UP a feature — returns the built-in step-by-step
@@ -930,10 +932,13 @@ export function buildBuddySystemPrompt(opts: {
     'chapter), and the cadence ("illustrateAfter": "chapter" to illustrate as each chapter finishes, or "book" to ' +
     'wait for the whole book and get the best art). Use BEFORE an open with visuals when the reader asks for a look ' +
     '("…in oil painting style") or pace.\n' +
-    '- {"tool":"remember","note":"…"} — save a DURABLE reader preference/fact to long-term memory (applies in every ' +
-    'future conversation, in every book). Use when they state a lasting preference ("I prefer watercolor", "never ' +
-    'spoil endings", "I\'m reading the series in order") or say "remember…". One short note, not conversation recap.\n' +
-    '- {"tool":"forget","match":"…"} — remove memory notes containing this text, when asked to forget.\n' +
+    '- {"tool":"remember","note":"…","about":"reader"} — save a DURABLE note. about:"reader" (default) = a reader ' +
+    'preference/fact ("I prefer watercolor", "never spoil endings"); about:"self" = a fact about YOUR OWN identity ' +
+    '(your persona, look, or voice); about:"user" = a fact about the READER\'S OWN character (their look/personality, ' +
+    'used when they play themselves in a story). Use when they state a lasting preference or identity detail, or say ' +
+    '"remember…". One short note, not conversation recap.\n' +
+    '- {"tool":"forget","match":"…","about":"reader"} — remove notes containing this text from that store (default ' +
+    '"reader"; use "self"/"user" to edit a soul), when asked to forget.\n' +
     '- {"tool":"set_plan","goal":"…","steps":["step 1","step 2","step 3"]} — for a MULTI-STEP request, ' +
     "FIRST lay out a SHORT checklist of the concrete steps you'll take (it's shown live to the reader and " +
     'saved). Then execute them one at a time. {"tool":"complete_step","note":"…"} — mark the CURRENT (first ' +
@@ -1527,11 +1532,13 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
   }
   if (tool === "remember") {
     const note = strArg(obj.note, MAX_MEMORY_NOTE_CHARS);
-    return note ? { tool, note } : undefined;
+    const about = obj.about === "self" ? "self" : obj.about === "user" ? "user" : undefined;
+    return note ? { tool, note, ...(about ? { about } : {}) } : undefined;
   }
   if (tool === "forget") {
     const match = strArg(obj.match, MAX_MEMORY_NOTE_CHARS);
-    return match ? { tool, match } : undefined;
+    const about = obj.about === "self" ? "self" : obj.about === "user" ? "user" : undefined;
+    return match ? { tool, match, ...(about ? { about } : {}) } : undefined;
   }
   if (tool === "set_plan") {
     const steps = Array.isArray(obj.steps)
@@ -2018,8 +2025,8 @@ export interface BuddyToolResultPayload {
   applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
   /** Whether an approved image generation succeeded. */
   image?: { ok: boolean; error?: string };
-  /** A remember/forget outcome (note echoed for the inline chip). */
-  memory?: { action: "remembered" | "forgot"; note: string; count: number };
+  /** A remember/forget outcome (note echoed for the inline chip). `about` names which store. */
+  memory?: { action: "remembered" | "forgot"; note: string; about?: "reader" | "self" | "user"; count: number };
   /** A read_skill / save_skill / forget_skill outcome. */
   skill?: { action: "read" | "missing" | "saved" | "forgot"; name: string; body?: string; count?: number };
   /** A setup_help lookup: the matched guide, or the topic list when none matched. */
@@ -2303,9 +2310,10 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     );
   }
   if (call.tool === "remember" || call.tool === "forget") {
-    return result.memory
-      ? `[memory ${result.memory.action}: "${result.memory.note}" — ${result.memory.count} note${result.memory.count === 1 ? "" : "s"} kept] Confirm briefly.`
-      : `[${call.tool} did nothing]`;
+    if (!result.memory) return `[${call.tool} did nothing]`;
+    const store =
+      result.memory.about === "self" ? "your-identity" : result.memory.about === "user" ? "reader-identity" : "memory";
+    return `[${store} ${result.memory.action}: "${result.memory.note}" — ${result.memory.count} note${result.memory.count === 1 ? "" : "s"} kept] Confirm briefly.`;
   }
   if (call.tool === "read_skill") {
     if (result.skill?.action === "read" && result.skill.body) {

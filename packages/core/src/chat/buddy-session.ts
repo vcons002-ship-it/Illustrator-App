@@ -110,8 +110,8 @@ export interface BuddyDeps {
   /** Apply a validated settings change (host owns ReaderSettings + persistence). */
   applySetting?: (change: { key: string; value: boolean | number | string; label: string; valueLabel: string }) => Promise<void>;
   /** Long-term reader memory (see reader-memory.ts); returns the kept count. */
-  remember?: (note: string) => Promise<number>;
-  forget?: (match: string) => Promise<number>;
+  remember?: (note: string, about?: "reader" | "self" | "user") => Promise<number>;
+  forget?: (match: string, about?: "reader" | "self" | "user") => Promise<number>;
   /** Lightweight chat-scoped working checklist. setPlan creates/replaces it; completeStep ticks the
    * first unfinished step. Both return the updated plan (host owns the canonical object + persistence). */
   setPlan?: (goal: string | undefined, steps: string[]) => BuddyPlan;
@@ -613,10 +613,14 @@ export async function runBuddyTool(
         return { applied: await deps.setVisualStyle(call) };
       case "remember":
         if (!deps.remember) return { error: "memory isn't available right now" };
-        return { memory: { action: "remembered", note: call.note, count: await deps.remember(call.note) } };
+        return {
+          memory: { action: "remembered", note: call.note, about: call.about ?? "reader", count: await deps.remember(call.note, call.about) },
+        };
       case "forget":
         if (!deps.forget) return { error: "memory isn't available right now" };
-        return { memory: { action: "forgot", note: call.match, count: await deps.forget(call.match) } };
+        return {
+          memory: { action: "forgot", note: call.match, about: call.about ?? "reader", count: await deps.forget(call.match, call.about) },
+        };
       case "set_plan":
         if (!deps.setPlan) return { error: "the working checklist isn't available here" };
         return { plan: deps.setPlan(call.goal, call.steps) };

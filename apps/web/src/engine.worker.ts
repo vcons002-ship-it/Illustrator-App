@@ -51,6 +51,12 @@ import {
   getImageStyle,
   loadMemory,
   loadSkills,
+  loadSoul,
+  loadSoulName,
+  rememberSoul,
+  forgetSoul,
+  selfSoulPromptBlock,
+  userSoulPromptBlock,
   seedStarterSkills,
   memoryPromptBlock,
   saveSkill,
@@ -1643,6 +1649,8 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
     });
     const sec = (key: string) => sections.find((s) => s.key === key)?.text ?? "";
     const memory = memoryPromptBlock(await loadMemory(memoryStore()));
+    const selfSoul = selfSoulPromptBlock(await loadSoul(memoryStore(), "self"), await loadSoulName(memoryStore(), "self"));
+    const userSoul = userSoulPromptBlock(await loadSoul(memoryStore(), "user"), await loadSoulName(memoryStore(), "user"));
     const skills = skillsIndexBlock(await loadSkills(memoryStore()));
     const system =
       sections
@@ -1650,6 +1658,8 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
         .filter(Boolean)
         .join("\n\n") +
       (memory ? `\n\n${memory}` : "") +
+      (selfSoul ? `\n\n${selfSoul}` : "") +
+      (userSoul ? `\n\n${userSoul}` : "") +
       (skills ? `\n\n${skills}` : "") +
       (note ? `\n\n${note}` : "");
     const history = trimChatHistory(
@@ -2756,12 +2766,19 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         };
       })()),
       randomBooks: () => books.random(),
-      // Incognito (remote privacy): keep READING memory/skills (so the assistant stays useful) but
-      // never WRITE — a remote session leaves no remembered notes or learned skills behind.
-      remember: async (n) =>
-        settings?.incognitoRemote ? (await loadMemory(store)).length : (await rememberNote(store, n)).length,
-      forget: async (m) =>
-        settings?.incognitoRemote ? (await loadMemory(store)).length : (await forgetNote(store, m)).length,
+      // Incognito (remote privacy): keep READING memory/skills/souls (so the assistant stays useful)
+      // but never WRITE — a remote session leaves no remembered notes or learned identity behind.
+      // `about` routes to one of the two identity souls (self/user); default → reader memory.
+      remember: async (n, about) => {
+        const soul = about === "self" || about === "user" ? about : undefined;
+        if (settings?.incognitoRemote) return (soul ? await loadSoul(store, soul) : await loadMemory(store)).length;
+        return (soul ? await rememberSoul(store, soul, n) : await rememberNote(store, n)).length;
+      },
+      forget: async (m, about) => {
+        const soul = about === "self" || about === "user" ? about : undefined;
+        if (settings?.incognitoRemote) return (soul ? await loadSoul(store, soul) : await loadMemory(store)).length;
+        return (soul ? await forgetSoul(store, soul, m) : await forgetNote(store, m)).length;
+      },
       // Lightweight chat-scoped checklist — mutate the in-turn `plan` and mirror each change to the host.
       setPlan: (goal, steps) => {
         plan = { ...(goal ? { goal } : {}), steps: steps.map((t) => ({ text: t, status: "pending" as const })) };
@@ -3152,6 +3169,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const note = await renderDefaultsNote();
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
     const memory = memoryPromptBlock(await loadMemory(store));
+    const selfSoul = selfSoulPromptBlock(await loadSoul(store, "self"), await loadSoulName(store, "self"));
+    const userSoul = userSoulPromptBlock(await loadSoul(store, "user"), await loadSoulName(store, "user"));
     await seedStarterSkills(store); // one-time: ship a few ready-made playbooks on a fresh install
     const skills = skillsIndexBlock(await loadSkills(store));
     // When this session is executing a task plan, load its context for the prompt.
@@ -3227,6 +3246,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           : {}),
       }) +
       (memory ? `\n\n${memory}` : "") +
+      (selfSoul ? `\n\n${selfSoul}` : "") +
+      (userSoul ? `\n\n${userSoul}` : "") +
       (skills ? `\n\n${skills}` : "") +
       (note ? `\n\n${note}` : "");
     const history = trimChatHistory(

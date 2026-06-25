@@ -55,6 +55,13 @@ import {
   saveMemory,
   MAX_NOTE_CHARS,
   MAX_MEMORY_NOTES,
+  loadSoul,
+  saveSoul,
+  loadSoulName,
+  saveSoulName,
+  MAX_SOUL_NOTES,
+  MAX_SOUL_NOTE_CHARS,
+  MAX_SOUL_NAME_CHARS,
   loadTaskPlans,
   deleteTaskPlan,
   archiveTaskPlan,
@@ -140,6 +147,8 @@ import {
   type ProjectFile,
   type Skill,
   type MemoryNote,
+  type SoulNote,
+  type SoulKind,
   type BookSource,
   type BookSummary,
   type ChapterDataset,
@@ -179,6 +188,7 @@ import {
   JsonTreeView,
   SkillsPanel,
   MemoriesPanel,
+  SoulPanel,
   TasksPanel,
   ScheduledTasksPanel,
   CalendarPanel,
@@ -599,6 +609,26 @@ export function App() {
     if (!isRemoteClient) await loadMemory(libraryStore).then(setMemories).catch(() => {});
     setShowMemories(true);
   }, [libraryStore, isRemoteClient]);
+
+  // The two identity "souls" — the assistant's own identity (self) and what it knows about the
+  // reader's own character (user). Same shared store the worker reads, edited via the Soul panels.
+  const [showSoul, setShowSoul] = useState<SoulKind | undefined>(undefined);
+  const [selfSoulNotes, setSelfSoulNotes] = useState<SoulNote[]>([]);
+  const [selfSoulName, setSelfSoulName] = useState("");
+  const [userSoulNotes, setUserSoulNotes] = useState<SoulNote[]>([]);
+  const [userSoulName, setUserSoulName] = useState("");
+  const setSoulNotes = (kind: SoulKind, n: SoulNote[]) => (kind === "self" ? setSelfSoulNotes(n) : setUserSoulNotes(n));
+  const setSoulName = (kind: SoulKind, n: string) => (kind === "self" ? setSelfSoulName(n) : setUserSoulName(n));
+  const openSoul = useCallback(
+    async (kind: SoulKind) => {
+      await Promise.all([
+        loadSoul(libraryStore, kind).then((n) => setSoulNotes(kind, n)),
+        loadSoulName(libraryStore, kind).then((n) => setSoulName(kind, n)),
+      ]).catch(() => {});
+      setShowSoul(kind);
+    },
+    [libraryStore],
+  );
   // A skill the buddy distilled from a recurring task, awaiting the reader's Keep/Dismiss.
   const [pendingSkill, setPendingSkill] = useState<{ name: string; description: string; body: string } | null>(null);
   const keepPendingSkill = useCallback(async () => {
@@ -5879,6 +5909,20 @@ export function App() {
           </button>
           <button
             style={styles.button}
+            onClick={() => void openSoul("self")}
+            title="The assistant's own identity — its persona, look, and voice. Used when it plays itself in a story."
+          >
+            🪞 Soul
+          </button>
+          <button
+            style={styles.button}
+            onClick={() => void openSoul("user")}
+            title="Who you are — your own character's look & personality, so the assistant can portray you when you play yourself."
+          >
+            👤 You
+          </button>
+          <button
+            style={styles.button}
             onClick={() => void openTasks()}
             title="Your planned multi-step tasks — research, steps, deadlines, prepped docs. Ask the assistant to “plan …” anything."
           >
@@ -6811,6 +6855,26 @@ export function App() {
             setMemories(saved);
           }}
           onClose={() => setShowMemories(false)}
+        />
+      )}
+
+      {showSoul && (
+        <SoulPanel
+          variant={showSoul}
+          name={showSoul === "self" ? selfSoulName : userSoulName}
+          notes={showSoul === "self" ? selfSoulNotes : userSoulNotes}
+          limits={{ note: MAX_SOUL_NOTE_CHARS, max: MAX_SOUL_NOTES, name: MAX_SOUL_NAME_CHARS }}
+          onSaveNotes={async (notes) => {
+            const kind = showSoul;
+            const saved = await saveSoul(libraryStore, kind, notes);
+            setSoulNotes(kind, saved);
+          }}
+          onSaveName={async (name) => {
+            const kind = showSoul;
+            await saveSoulName(libraryStore, kind, name);
+            setSoulName(kind, name.trim().slice(0, MAX_SOUL_NAME_CHARS));
+          }}
+          onClose={() => setShowSoul(undefined)}
         />
       )}
 
