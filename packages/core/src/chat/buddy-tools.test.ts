@@ -317,6 +317,16 @@ describe("buildBuddySystemPrompt", () => {
     expect(prompt).toContain("NEVER steer the chat toward opening");
   });
 
+  it("story mode demands prose-only beats and never an empty/meta reply", () => {
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [], storyActive: true });
+    expect(p).toContain("STORY MODE");
+    expect(p).toMatch(/ONLY the next beat/i);
+    expect(p).toMatch(/Do NOT call any tool/i);
+    // The never-empty clause closes the empty/tool-only reply gap at the source.
+    expect(p).toMatch(/ALWAYS write a beat/i);
+    expect(p).toMatch(/never reply with an empty message/i);
+  });
+
   it("planning mode adds the planning playbook (coding project + complex deliverable)", () => {
     const p = buildBuddySystemPrompt({ persona: "planning", library: [] });
     expect(p).toContain("PLANNING partner");

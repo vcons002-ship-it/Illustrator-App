@@ -854,7 +854,8 @@ export function buildBuddySystemPrompt(opts: {
       "ESTABLISHED names (from the Visual Bible / story state) so the illustration stays on the right subjects. " +
       "Do NOT call any tool, do NOT speak to the reader out of character, and do NOT add commentary before or after — " +
       "your ENTIRE reply becomes the next illustrated beat. Keep it moving and end on a hook that invites the next " +
-      "steer.\n" +
+      "steer. ALWAYS write a beat: even if the steer is thin or you're unsure where to go, advance the scene a little " +
+      "in prose — never reply with an empty message, a question to the reader, or a meta-comment.\n" +
       roleplayLine
     : "CO-WRITING AN ILLUSTRATED STORY: to start one (as-you-go scenes that auto-illustrate, with a Visual " +
       'Bible keeping the cast consistent), tell the reader to click "✍️ Story as you go" under Open Book — that is ' +

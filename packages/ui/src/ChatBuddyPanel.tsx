@@ -131,6 +131,11 @@ export interface ChatBuddyPanelProps {
   /** Fill the parent container (width + height 100%) instead of the centered full-window card —
    * used when the panel is docked beside the story reader. */
   fill?: boolean;
+  /** Bottom-dock mode: when true, the message history is hidden (only the header + input bar show),
+   * so the dock collapses to a thin composer beneath the reader. The caret in the header toggles it
+   * via `onToggleHistory`. Undefined → no caret (history always visible, e.g. the home-screen hero). */
+  historyCollapsed?: boolean;
+  onToggleHistory?: () => void;
 }
 
 export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanelProps) {
@@ -311,6 +316,16 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               Clear
             </button>
           )}
+          {props.onToggleHistory && (
+            <button
+              style={smallButtonStyle}
+              onClick={props.onToggleHistory}
+              title={props.historyCollapsed ? "Show chat history" : "Hide chat history (keep the input bar)"}
+              aria-expanded={!props.historyCollapsed}
+            >
+              {props.historyCollapsed ? "▴ History" : "▾ History"}
+            </button>
+          )}
         </span>
       </div>
 
@@ -329,7 +344,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         />
       )}
 
-      <div ref={scrollRef} style={scrollStyle}>
+      <div ref={scrollRef} style={props.historyCollapsed ? { ...scrollStyle, display: "none" } : scrollStyle}>
         {props.messages.length === 0 && !props.streamingText && (
           <div style={{ opacity: 0.55, fontSize: 12, padding: 12, lineHeight: 1.5 }}>
             {props.persona === "planning"
