@@ -675,8 +675,10 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         <button
           style={smallButtonStyle}
           onClick={() => {
-            // Story "as you go" is an Open Book OPTION, not a chat tool: collect the opening scene and
-            // start it via the deterministic /story command (creates a Library story book to keep building).
+            // Story "as you go" is started by a click, not a chat tool: collect the opening scene and
+            // start it via the deterministic /story command (creates a Library story book to keep
+            // building). Mirrored by the header's ✍️ Story button (App.tsx) so it's reachable next to
+            // "Open book…", which only opens an existing file.
             const opening = window.prompt(
               "✍️ Story as you go — describe the opening scene. We'll co-write it together and illustrate each beat:",
             );

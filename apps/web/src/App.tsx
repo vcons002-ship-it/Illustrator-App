@@ -4744,6 +4744,20 @@ export function App() {
   );
   const onBuddySendText = useCallback((text: string) => void onBuddySend(text), [onBuddySend]);
 
+  // "Story as you go": start a brand-new illustrated story the user co-writes — the same
+  // deterministic /story path the chat composer's ✍️ Story button uses, but reachable from the
+  // header next to "Open book…" (which only opens an EXISTING file). Surfacing the chat makes the
+  // workflow visible even when a book is already open.
+  const startStoryAsYouGo = useCallback(() => {
+    const opening = window.prompt(
+      "✍️ Story as you go — describe the opening scene. We'll co-write it together and illustrate each beat:",
+    );
+    if (opening && opening.trim()) {
+      setShowChat(true);
+      onBuddySendText(`/story ${opening.trim()}`);
+    }
+  }, [onBuddySendText]);
+
   // Attach a file to the next buddy message. Documents (PDF/Word/Excel/CSV/text/EPUB) are
   // extracted to text via the same importer the "Open a document" path uses; images are held
   // for the vision model to describe at send time. All in the main thread — no new worker wiring.
@@ -5825,6 +5839,13 @@ export function App() {
               onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])}
             />
           </label>
+          <button
+            style={styles.button}
+            onClick={startStoryAsYouGo}
+            title="Write a brand-new illustrated story you co-write as you go — no file needed. Saved to your library to keep building."
+          >
+            ✍️ Story
+          </button>
           <button
             style={styles.button}
             onClick={() => setShowPasteText(true)}

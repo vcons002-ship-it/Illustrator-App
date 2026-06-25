@@ -152,8 +152,9 @@ export function parseBuddySlashCommand(
       return call ? { call } : usage(info);
     }
     case "story": {
-      // Story "as you go" is started by a click (Open Book → Story as you go) which sends this
-      // deterministic command — never by the model. The first sentence/words become the title.
+      // Story "as you go" is started by a click (the ✍️ Story button in the header or the chat
+      // composer) which sends this deterministic command — never by the model. The first
+      // sentence/words become the title.
       if (!s.args) return usage(info);
       const title = s.args.split(/[.!?\n]/)[0]!.trim().split(/\s+/).slice(0, 6).join(" ") || "Our Story";
       const call = viaParser(parseBuddyToolCall, { tool: "start_story", title, opening: s.args });
