@@ -8,6 +8,11 @@ This is the v1 implementation: fiction/EPUB **scene illustrations**, with a
 shared engine consumed by three surfaces — a web app, a Chrome extension (which
 illustrates any article you read), and a desktop app.
 
+The home screen is now a **single general-purpose chat assistant** — a one-stop
+workspace for research, image generation, files & data, tasks, markets, PC actions,
+and reading/illustration — with an optional **📋 Plan** mode for structured project
+planning. Reading and illustration are one capability among many, not the only door in.
+
 > New here? **[FEATURES.md](./FEATURES.md)** is a plain-language tour of what the
 > app does, how it works, and what's on the roadmap.
 

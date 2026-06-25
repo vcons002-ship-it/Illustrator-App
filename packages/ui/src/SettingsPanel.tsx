@@ -285,6 +285,14 @@ export interface ReaderSettings {
    * sub-agent work behind a batching server. Falls back to the main model when unset/unreachable. */
   subAgentServerUrl?: string;
   subAgentModel?: string;
+  /** OFF by default: advertise the parallel sub-agent fan-out tools (delegate / spawn_agents) in
+   * chat. Off keeps a one-on-one chat lean (these are orchestration primitives most chats don't
+   * need); a configured sub-agent backend (subAgentServerUrl/subAgentModel) auto-enables them too. */
+  allowSubAgents?: boolean;
+  /** OFF by default: advertise the keyless markets tools (stock_quote, market_analysis, price alerts,
+   * trading_script) in chat. Off so a non-trading chat isn't carrying the finance suite; connecting
+   * Schwab or the TradingView bridge auto-enables them regardless. */
+  allowMarkets?: boolean;
   /** Desktop only, OFF by default: let the assistant drive your TradingView Desktop chart
    * (set symbol, add studies, read state, inject Pine) via its DevTools bridge. Chart-only
    * — it never trades. Requires TradingView Desktop launched with remote debugging. */
@@ -1597,6 +1605,21 @@ export function SettingsPanel({
                 <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
                   <input
                     type="checkbox"
+                    checked={value.allowMarkets ?? false}
+                    onChange={(e) => set({ allowMarkets: e.target.checked })}
+                  />
+                  <span>
+                    Offer markets tools in chat (quotes, technicals, alerts)
+                    <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                      Advertises the keyless <b>stock quote / technical-analysis / price-alert</b> tools to the
+                      assistant. Off by default so a non-trading chat stays lean; connecting Schwab or the TradingView
+                      bridge below turns it on automatically.
+                    </span>
+                  </span>
+                </label>
+                <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+                  <input
+                    type="checkbox"
                     checked={value.allowTradingViewBridge ?? false}
                     onChange={(e) => set({ allowTradingViewBridge: e.target.checked })}
                   />
@@ -1738,9 +1761,23 @@ export function SettingsPanel({
               q={query}
               order={11}
               title="🧠 Parallel sub-agents (advanced)"
-              keywords="parallel sub-agents concurrency worker model vllm endpoint qwen fast"
+              keywords="parallel sub-agents concurrency worker model vllm endpoint qwen fast delegate spawn"
             >
               <>
+                <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={value.allowSubAgents ?? false}
+                    onChange={(e) => set({ allowSubAgents: e.target.checked })}
+                  />
+                  <span>
+                    Offer sub-agent fan-out in chat (<code>delegate</code> / <code>spawn_agents</code>)
+                    <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                      Lets the assistant hand off or parallelise read-only research across several sub-agents. Off by
+                      default to keep ordinary chats lean; configuring a worker endpoint below turns it on automatically.
+                    </span>
+                  </span>
+                </label>
                 <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 }}>
                   <span>Parallel sub-agents</span>
                   <select

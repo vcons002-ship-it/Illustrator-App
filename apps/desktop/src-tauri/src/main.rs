@@ -950,6 +950,20 @@ async fn save_file(app: AppHandle, filename: String, body_base64: String) -> Res
     .map_err(|e| e.to_string())?
 }
 
+/// Open an existing file or folder in the OS default handler (the "Open on PC" file-card action).
+/// Reuses the same platform launchers as `open_browser` so a path opens in the user's default app
+/// (or the file manager for a directory). The path must already exist — refuses otherwise so a
+/// stray string can't be handed to the shell.
+#[tauri::command]
+async fn open_path(path: String) -> Result<(), String> {
+    let p = std::path::PathBuf::from(&path);
+    if !p.exists() {
+        return Err(format!("No such file: {path}"));
+    }
+    open_browser(&path); // file paths open in the default app; directories in the file manager
+    Ok(())
+}
+
 /// Write a file the assistant authored INTO the workspace (or the session's chosen folder) so it can
 /// then be run via `run_command` — the autonomous write→run→fix loop. `rel_path` is workspace-relative
 /// and sanitized component-by-component (`..`, `.`, absolute parts and illegal chars are dropped) so it
@@ -2369,6 +2383,7 @@ fn main() {
             gpu_info,
             http_fetch,
             save_file,
+            open_path,
             write_workspace_file,
             search_files,
             read_file,

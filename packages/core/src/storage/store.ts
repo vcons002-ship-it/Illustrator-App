@@ -3,6 +3,19 @@ import type { BookSource } from "../types/book.js";
 import type { DataTable } from "../data/data-table.js";
 import type { AnalyzeChart } from "../data/analyze.js";
 
+/** A library book's type tag — what kind of thing it is, used to filter the library and to pick the
+ * reader format it opens in. Derived from the book's kind/contentMode/data via {@link libraryTypeOf}. */
+export type LibraryType = "fiction" | "technical" | "code" | "data" | "story";
+
+/** Derive a book's library type tag from its stored shape. */
+export function libraryTypeOf(book: { kind?: "story"; contentMode?: "fiction" | "technical" | "code"; data?: unknown }): LibraryType {
+  if (book.kind === "story") return "story";
+  if (book.data) return "data";
+  if (book.contentMode === "code") return "code";
+  if (book.contentMode === "technical") return "technical";
+  return "fiction";
+}
+
 /** Lightweight library entry for the "switch between books" picker. */
 export interface BookSummary {
   id: string;
@@ -10,6 +23,20 @@ export interface BookSummary {
   author?: string;
   /** When the book was last opened (ms epoch), for recency ordering. */
   addedAt: number;
+  /** The book's type tag (see {@link LibraryType}) — drives the library filter + reader format. */
+  type?: LibraryType;
+}
+
+/** A file surfaced in a chat message — created by the assistant (a code block, spreadsheet,
+ * export, generated image) or found on the PC (a `/find` hit). Persisted so its action card
+ * survives reload. Structurally mirrors the UI's `FileRef` (bytes stored as ArrayBuffer). */
+export interface ChatFileRef {
+  name: string;
+  mime: string;
+  kind: "code" | "doc" | "data" | "image" | "text" | "found" | "export";
+  content?: string;
+  bytes?: ArrayBuffer;
+  path?: string;
 }
 
 /** One persisted reading-companion chat message (per book). Image bytes are kept
@@ -30,6 +57,9 @@ export interface StoredChatMessage {
   analysis?: { table: DataTable; summary?: string; chart?: AnalyzeChart };
   /** Clickable local-file results (the desktop `/find` command); each opens on click. */
   files?: { path: string; name: string }[];
+  /** Files surfaced by the turn (created OR found), shown as a universal file card with
+   * Download / Open in app / Open in library / Open on PC actions. Mirrors the UI's `FileRef`. */
+  attachments?: ChatFileRef[];
   /** Quick-reply action buttons (e.g. what to do with a pasted link). */
   actions?: { label: string; send: string }[];
   /** The model's reasoning for this turn (a thinking model's scratchpad), shown as a collapsible
@@ -152,6 +182,7 @@ export class InMemoryStore implements VisualReaderStore {
         title: book.title,
         ...(book.author ? { author: book.author } : {}),
         addedAt,
+        type: libraryTypeOf(book),
       }));
   }
   async removeBook(id: string): Promise<void> {

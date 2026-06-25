@@ -85,6 +85,14 @@ describe("parseBuddySlashCommand", () => {
     });
   });
 
+  it("/story starts a co-written story (the Open Book → Story as you go click path)", () => {
+    const r = parseBuddySlashCommand("/story A lighthouse keeper finds a sealed bottle at dawn.", library);
+    expect(r).toEqual({
+      call: { tool: "start_story", title: "A lighthouse keeper finds a sealed", opening: "A lighthouse keeper finds a sealed bottle at dawn." },
+    });
+    expect(parseBuddySlashCommand("/story", library)).toMatchObject({ error: expect.stringContaining("Usage: /story") });
+  });
+
   it("opens URLs with an optional trailing mode flag", () => {
     expect(parseBuddySlashCommand("/open https://example.org/paper", library)).toEqual({
       call: { tool: "open_web_text", url: "https://example.org/paper", mode: "fiction", visuals: false },

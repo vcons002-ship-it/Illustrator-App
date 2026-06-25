@@ -273,6 +273,16 @@ export async function saveExportFile(
 }
 
 /**
+ * Open an existing file or folder in the OS default app (the "Open on PC" file-card
+ * action; desktop only). The path must already exist on disk — typically the path
+ * `saveExportFile` returned after writing to ~/VisualReader/exports. No-op on web.
+ */
+export async function openPathOnPC(path: string): Promise<void> {
+  if (!isDesktop) return;
+  await invoke("open_path", { path });
+}
+
+/**
  * Search the user's local files for importable books (desktop only). Returns
  * coarse filename matches the caller ranks with `rankLocalFiles`. Empty on the
  * web (no filesystem). `root` scopes the walk to a folder (default: home dir).

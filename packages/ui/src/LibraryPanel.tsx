@@ -1,4 +1,14 @@
-import type { BookSummary } from "@visual-reader/core";
+import { useState } from "react";
+import type { BookSummary, LibraryType } from "@visual-reader/core";
+
+/** Human labels + emoji for each library type tag (the filter chips + per-book badge). */
+const TYPE_LABELS: Record<LibraryType, string> = {
+  fiction: "📖 Fiction",
+  technical: "🔬 Technical",
+  code: "💻 Code",
+  data: "📊 Data",
+  story: "✍️ Story",
+};
 
 /**
  * The library: books you've opened, most-recent first. Open one, remove it, or —
@@ -18,6 +28,10 @@ export interface LibraryPanelProps {
 }
 
 export function LibraryPanel({ books, currentId, onOpen, onRemove, onCarryOver, onClose }: LibraryPanelProps) {
+  const [filter, setFilter] = useState<LibraryType | "all">("all");
+  // The type tags actually present, in a stable order, so the chip row only offers real options.
+  const presentTypes = (Object.keys(TYPE_LABELS) as LibraryType[]).filter((t) => books.some((b) => (b.type ?? "fiction") === t));
+  const shown = filter === "all" ? books : books.filter((b) => (b.type ?? "fiction") === filter);
   return (
     <div style={overlayStyle} onClick={onClose}>
       <div style={panelStyle} onClick={(e) => e.stopPropagation()}>
@@ -30,11 +44,23 @@ export function LibraryPanel({ books, currentId, onOpen, onRemove, onCarryOver, 
             Close
           </button>
         </div>
+        {presentTypes.length > 1 && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+            <button style={filter === "all" ? chipActive : chipStyle} onClick={() => setFilter("all")}>
+              All
+            </button>
+            {presentTypes.map((t) => (
+              <button key={t} style={filter === t ? chipActive : chipStyle} onClick={() => setFilter(t)}>
+                {TYPE_LABELS[t]}
+              </button>
+            ))}
+          </div>
+        )}
         {books.length === 0 ? (
           <p style={{ opacity: 0.7 }}>No books yet — open an EPUB and it'll appear here.</p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {books.map((b) => {
+            {shown.map((b) => {
               const current = b.id === currentId;
               return (
                 <div key={b.id} style={current ? { ...rowStyle, ...rowCurrent } : rowStyle}>
@@ -44,7 +70,8 @@ export function LibraryPanel({ books, currentId, onOpen, onRemove, onCarryOver, 
                       {current && <span style={{ opacity: 0.6, fontWeight: 400 }}> · open now</span>}
                     </div>
                     <div style={{ opacity: 0.6, fontSize: 12 }}>
-                      {b.author ? `${b.author} · ` : ""}
+                      <span style={badgeStyle}>{TYPE_LABELS[b.type ?? "fiction"]}</span>
+                      {b.author ? ` ${b.author} · ` : " "}
                       opened {relativeTime(b.addedAt)}
                     </div>
                   </div>
@@ -129,4 +156,25 @@ const buttonStyle = {
   padding: "4px 10px",
   cursor: "pointer",
   fontSize: 13,
+} as const;
+
+const chipStyle = {
+  background: "rgba(255,255,255,0.06)",
+  border: "1px solid rgba(255,255,255,0.2)",
+  color: "inherit",
+  borderRadius: 999,
+  padding: "3px 10px",
+  cursor: "pointer",
+  fontSize: 12,
+} as const;
+
+const chipActive = { ...chipStyle, background: "rgba(96,170,255,0.25)", borderColor: "rgba(120,180,255,0.7)" } as const;
+
+const badgeStyle = {
+  display: "inline-block",
+  marginRight: 6,
+  padding: "1px 6px",
+  borderRadius: 4,
+  background: "rgba(255,255,255,0.08)",
+  fontSize: 11,
 } as const;

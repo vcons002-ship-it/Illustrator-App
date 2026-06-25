@@ -113,6 +113,20 @@ export const CONTROLLABLE_SETTINGS: ControllableSetting[] = [
     describe: "automatic task scheduling — let the task assistant schedule/prep without a click each (on/off)",
   },
   {
+    key: "allowMarkets",
+    label: "markets tools",
+    aliases: ["markets", "markets tools", "stock tools", "trading tools", "market tools", "stocks", "finance tools", "quotes"],
+    kind: BOOL,
+    describe: "markets tools — advertise the keyless stock-quote / technical-analysis / price-alert tools in chat (on/off)",
+  },
+  {
+    key: "allowSubAgents",
+    label: "sub-agent fan-out",
+    aliases: ["sub-agents", "subagents", "sub agent", "fan-out", "fan out", "parallel agents", "delegate", "spawn agents"],
+    kind: BOOL,
+    describe: "sub-agent fan-out — advertise the delegate / spawn_agents tools in chat (on/off)",
+  },
+  {
     key: "nativeIllustration",
     label: "native cloud illustration",
     aliases: ["native illustration", "native mode", "native cloud", "one-api"],

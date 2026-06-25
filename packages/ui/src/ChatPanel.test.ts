@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  fileActionKeys,
   fileForLang,
   linkifyText,
   parseFenceInfo,
@@ -116,6 +117,34 @@ describe("projectFilesFromBlocks", () => {
 
   it("falls back to a generic name for an unnamed block", () => {
     expect(projectFilesFromBlocks(parseMessageBlocks("```js\nx\n```"))).toEqual([{ name: "file.js", content: "x" }]);
+  });
+});
+
+describe("fileActionKeys (universal file card)", () => {
+  const all = { download: true, openInApp: true, openInLibrary: true, openOnPC: true };
+
+  it("offers every action for a created code file on desktop, in stable order", () => {
+    expect(fileActionKeys("code", all, true)).toEqual(["dl", "app", "lib", "pc"]);
+  });
+
+  it("hides Open-on-PC when not on desktop", () => {
+    expect(fileActionKeys("code", all, false)).toEqual(["dl", "app", "lib"]);
+  });
+
+  it("does not offer Open-in-library for a bare image (but still download / open / on-PC)", () => {
+    expect(fileActionKeys("image", all, true)).toEqual(["dl", "app", "pc"]);
+  });
+
+  it("an export only downloads or opens on PC (not in app / library)", () => {
+    expect(fileActionKeys("export", all, true)).toEqual(["dl", "pc"]);
+  });
+
+  it("a found PC file with only open-in-app + open-on-PC wired", () => {
+    expect(fileActionKeys("found", { openInApp: true, openOnPC: true }, true)).toEqual(["app", "pc"]);
+  });
+
+  it("renders nothing when no callbacks are wired", () => {
+    expect(fileActionKeys("text", {}, true)).toEqual([]);
   });
 });
 
