@@ -186,6 +186,14 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
   it("find_files vs search_*: local-vs-web domain rule is present", () => {
     expect(prompt).toContain("search_books / search_web");
   });
+  it("verb default: bare 'search' → the web (search_web), bare 'find' → their PC (find_files)", () => {
+    expect(prompt).toContain("THE VERB DECIDES");
+    expect(prompt).toContain('a bare "search …" means the WEB → search_web');
+    expect(prompt).toContain('a bare "find …" means THEIR PC → find_files');
+    // The explicit override flips it either way.
+    expect(prompt).toContain('"search my files/computer/downloads/drive" → find_files');
+    expect(prompt).toContain('"find an article/page/website/source online" → search_web');
+  });
   it("delegate vs spawn_agents: parallel-vs-single rule is present", () => {
     expect(prompt).toContain("faster than delegating");
   });

@@ -563,8 +563,9 @@ export function buildBuddySystemPrompt(opts: {
   const styles = IMAGE_STYLES.map((s) => s.label).join(", ");
   const fileTool = opts.canSearchFiles
     ? '- {"tool":"find_files","query":"…"} — search the reader\'s OWN COMPUTER for a document to open ' +
-      "(books, PDFs, Word docs, spreadsheets, text). Use when they ask to find/open/analyze something " +
-      'from "my files", "my computer", "my documents", "my downloads", or name a file. The app asks the ' +
+      "(books, PDFs, Word docs, spreadsheets, text). A bare \"find …\" defaults HERE (their PC). Use when " +
+      'they ask to find/open/analyze something from "my files", "my computer", "my documents", ' +
+      '"my downloads", or name a file. The app asks the ' +
       "reader to approve filesystem access before it runs; results come back as a file list you can then " +
       "offer to open. Do NOT use it for public/web material — that's search_books / search_web. IMPORTANT: " +
       "find_files matches FILE NAMES, not what's inside them — so to find WHERE some text/logic lives in a " +
@@ -771,6 +772,12 @@ export function buildBuddySystemPrompt(opts: {
     "• A fact you're unsure of → search_web, then read_url the best hit." +
     (opts.canWolfram ? " An authoritative real-world VALUE/quantity → wolfram." : "") +
     "\n" +
+    "• THE VERB DECIDES \"where\": a bare \"search …\" means the WEB → search_web" +
+    (opts.canSearchFiles
+      ? "; a bare \"find …\" means THEIR PC → find_files. Only cross over when the ask is explicit: " +
+        "\"search my files/computer/downloads/drive\" → find_files; " +
+        "\"find an article/page/website/source online\" → search_web.\n"
+      : ". (No filesystem access this session, so \"find …\" still means the web.)\n") +
     "• \"show me / what does X look like\" → search_images (a REAL image). \"draw / generate / imagine\" → " +
     "generate_image (NEW art).\n" +
     "• \"read / summarize / pull a fact from this page\" → read_url (text into the chat). \"open / illustrate this " +
@@ -780,7 +787,7 @@ export function buildBuddySystemPrompt(opts: {
     "(The reader can also just CLICK any surfaced book/result/file to open it — prefer that over re-opening something " +
     "already shown.)\n" +
     (opts.canSearchFiles
-      ? "• A file on THEIR computer: find it by NAME → find_files; read its CONTENTS → read_file; SEE a picture → open_image.\n"
+      ? "• A file on THEIR computer (the default home of \"find\"): find it by NAME → find_files; read its CONTENTS → read_file; SEE a picture → open_image.\n"
       : "") +
     "• Make a file: a spreadsheet → create_spreadsheet; anything else (a script, document, webpage, CSV) → write it " +
     "in a fenced ```code``` block (the reader gets Download / Open buttons on it)." +
@@ -828,7 +835,11 @@ export function buildBuddySystemPrompt(opts: {
     "computation instead of working it out in your head — it never guesses.\n" +
     '- {"tool":"search_books","query":"…"} — search Project Gutenberg (full public-domain books; each hit has a text URL).\n' +
     '- {"tool":"random_books"} — surprise picks from Gutenberg\'s most-loved classics (for "open something random / surprise me").\n' +
-    '- {"tool":"search_web","query":"…"} — search for articles/topics/facts (returns titles, snippets and URLs).\n' +
+    '- {"tool":"search_web","query":"…"} — search the WEB for articles/topics/facts (returns titles, snippets and URLs). ' +
+    'A bare "search …" defaults HERE (the web)' +
+    (opts.canSearchFiles
+      ? ', NOT the reader\'s computer — use find_files only if they say "my files/computer/downloads".\n'
+      : ".\n") +
     '- {"tool":"read_url","url":"https://…"} — fetch and READ a specific page\'s text into the chat (an API doc, a ' +
     "reference, an example) so you can learn from it before answering or writing code. A GitHub repo URL reads its " +
     "README + top-level file list; a github.com/.../blob/... URL reads that file. Pair with search_web (search → " +
