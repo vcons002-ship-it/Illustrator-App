@@ -168,7 +168,7 @@ import {
   type ExportImage,
   type ExportImages,
 } from "@visual-reader/epub";
-import { IMPORT_ACCEPT, importBookFile } from "./import-file.js";
+import { IMPORT_ACCEPT, importBookFile, type FileHandler } from "./import-file.js";
 import {
   CharacterBible,
   ChatBuddyPanel,
@@ -2193,9 +2193,9 @@ export function App() {
     [assessImage],
   );
   const onUpload = useCallback(
-    async (file: File) => {
+    async (file: File, handler: FileHandler = "auto") => {
       try {
-        const imported = await importBookFile(file);
+        const imported = await importBookFile(file, handler);
         if (imported.kind === "book") {
           openBook(imported.book);
         } else if (imported.kind === "image") {
@@ -3615,6 +3615,11 @@ export function App() {
       },
       openInLibrary: (ref) => void addRefToLibrary(ref),
       ...(isDesktop ? { openOnPC: (ref: FileRef) => void revealRefOnPC(ref) } : {}),
+      // "Open as…" — re-route the SAME file through a chosen reader (overrides the extension default).
+      openAs: (ref, as) => {
+        if (ref.path) void readLocalFile(ref.path).then((f) => onUpload(f, as));
+        else void onUpload(fileFromRef(ref), as);
+      },
     }),
     [saveNamed, onOpenLocalFile, onUpload, fileFromRef, addRefToLibrary, revealRefOnPC],
   );

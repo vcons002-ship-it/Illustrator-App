@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { InMemoryStore } from "./store.js";
+import { InMemoryStore, libraryTypeOf } from "./store.js";
 import { createEmptyBible } from "../visual-bible/bible.js";
 import type { BookSource } from "../types/book.js";
 
@@ -8,6 +8,29 @@ function book(id: string, title: string, author?: string): BookSource {
 }
 
 const EMPTY_BIBLE = createEmptyBible("a");
+
+describe("libraryTypeOf (library tag derivation)", () => {
+  it("derives a type tag from the book's kind / contentMode / data", () => {
+    expect(libraryTypeOf({ kind: "story" })).toBe("story");
+    expect(libraryTypeOf({ data: {} })).toBe("data");
+    expect(libraryTypeOf({ contentMode: "code" })).toBe("code");
+    expect(libraryTypeOf({ contentMode: "technical" })).toBe("technical");
+    expect(libraryTypeOf({ contentMode: "fiction" })).toBe("fiction");
+    expect(libraryTypeOf({})).toBe("fiction"); // default
+    // A story or a data table wins over its contentMode.
+    expect(libraryTypeOf({ kind: "story", contentMode: "technical" })).toBe("story");
+    expect(libraryTypeOf({ data: {}, contentMode: "fiction" })).toBe("data");
+  });
+});
+
+describe("listBooks tags each summary with its type", () => {
+  it("includes the derived type tag", async () => {
+    const store = new InMemoryStore();
+    await store.putBook({ id: "d", title: "Budget", chapters: [], pages: [], contentMode: "technical", data: { columns: [], rows: [] } as never });
+    const list = await store.listBooks();
+    expect(list[0]!.type).toBe("data");
+  });
+});
 
 describe("InMemoryStore library", () => {
   it("stores, lists most-recent-first, gets, and removes books", async () => {

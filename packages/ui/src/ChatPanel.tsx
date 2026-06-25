@@ -71,7 +71,18 @@ export interface FileActions {
   openInLibrary?: (file: FileRef) => void;
   /** Desktop: open it in the OS default app (saving a copy first when it's in-chat content). */
   openOnPC?: (file: FileRef) => void;
+  /** Re-open the SAME file through a different reader ("Open as…"): the plain-text reader, the data
+   * grid, the book/article reader, or the photo tools. Lets the reader override the extension's route. */
+  openAs?: (file: FileRef, as: "reader" | "data" | "text" | "image") => void;
 }
+
+/** The "Open as…" choices a file can be re-routed through, with labels for the menu. */
+const OPEN_AS_CHOICES: { as: "reader" | "data" | "text" | "image"; label: string }[] = [
+  { as: "reader", label: "Open as book / article" },
+  { as: "data", label: "Open as spreadsheet / data" },
+  { as: "text", label: "Open as plain text" },
+  { as: "image", label: "Open as image" },
+];
 
 export type MessageBlock =
   | { type: "text"; text: string }
@@ -862,11 +873,7 @@ export function FileActionBar({
       <button style={fileChipStyle} title={primary.title} disabled={busy === primary.key} onClick={() => void fire(primary)}>
         {busy === primary.key ? "…" : primary.label}
       </button>
-      {rest.length === 1 ? (
-        <button style={fileChipStyle} title={rest[0]!.title} disabled={busy === rest[0]!.key} onClick={() => void fire(rest[0]!)}>
-          {busy === rest[0]!.key ? "…" : rest[0]!.label}
-        </button>
-      ) : rest.length > 1 ? (
+      {rest.length >= 1 || actions.openAs ? (
         <details style={{ position: "relative" }}>
           <summary style={{ ...fileChipStyle, listStyle: "none", cursor: "pointer" }}>⋯ More</summary>
           <div style={fileMenuStyle}>
@@ -875,6 +882,16 @@ export function FileActionBar({
                 {it.label}
               </button>
             ))}
+            {actions.openAs ? (
+              <>
+                <div style={{ opacity: 0.5, fontSize: 10, padding: "4px 8px 2px" }}>Open as…</div>
+                {OPEN_AS_CHOICES.map((c) => (
+                  <button key={c.as} style={fileMenuItemStyle} onClick={() => actions.openAs!(file, c.as)}>
+                    {c.label}
+                  </button>
+                ))}
+              </>
+            ) : null}
           </div>
         </details>
       ) : null}

@@ -1,7 +1,7 @@
 import type { VisualBible } from "../types/bible.js";
 import type { BookSource } from "../types/book.js";
 import { base64ToBytes, bytesToBase64 } from "../providers/image/base64.js";
-import { MAX_CHAT_HISTORY, type BookSummary, type StoreBackup, type StoredChatMessage, type VisualReaderStore } from "./store.js";
+import { MAX_CHAT_HISTORY, libraryTypeOf, type BookSummary, type StoreBackup, type StoredChatMessage, type VisualReaderStore } from "./store.js";
 
 /**
  * IndexedDB-backed store for the web app: caches the Visual Bible and rendered
@@ -137,7 +137,7 @@ export class IndexedDbStore implements VisualReaderStore {
     const records = await this.getAll<BookRecord>(BOOK_STORE);
     return records
       .sort((a, b) => b.addedAt - a.addedAt)
-      .map((b) => ({ id: b.id, title: b.title, ...(b.author ? { author: b.author } : {}), addedAt: b.addedAt }));
+      .map((b) => ({ id: b.id, title: b.title, ...(b.author ? { author: b.author } : {}), addedAt: b.addedAt, type: libraryTypeOf(b) }));
   }
 
   async removeBook(id: string): Promise<void> {

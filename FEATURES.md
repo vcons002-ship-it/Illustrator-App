@@ -39,9 +39,14 @@ Each feature notes **what it needs** in *(italics)*. A quick key:
 
 ### 📖 Reading & illustrating books
 
-- **Open almost any document** — EPUB, plain text, Markdown, HTML, PDF, **Word (.docx)**,
-  **Excel (.xlsx)**, **CSV/TSV**, **RTF**, **JSON**, or **paste text** to read any article or
-  excerpt. Data files open in technical mode automatically. *(no setup — placeholder art needs nothing)*
+- **Open any file** — EPUB, plain text, Markdown, HTML, PDF, **Word (.docx)**, **Excel (.xlsx)**,
+  **CSV/TSV**, **RTF**, **JSON**, images, or **paste text**. Files open by **extension** (data files in
+  the grid, documents in the reader, images in the photo tools); an **unknown type opens in a plain-text
+  reader** rather than failing. An **"Open as…"** control re-routes the same file through a different
+  reader (e.g. open a `.dat` as text, then reinterpret it as a spreadsheet). *(no setup — placeholder art needs nothing)*
+- **Filterable library** — every opened book/file is tagged by type (Fiction · Technical · Code · Data ·
+  Story) and the Library can be filtered by tag; switching a book's type re-tags it and reopens it in that
+  format. *(no setup)*
 - **One illustration per page-group** — you choose how many pages share an image (any number,
   or one per chapter): fewer pages = more frequent, quicker art; more pages = rarer, richer art. *(image model)*
 - **Reveal as you read** — each picture gently un-blurs ("blooms") as you move through its pages,

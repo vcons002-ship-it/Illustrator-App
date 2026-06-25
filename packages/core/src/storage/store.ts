@@ -3,6 +3,19 @@ import type { BookSource } from "../types/book.js";
 import type { DataTable } from "../data/data-table.js";
 import type { AnalyzeChart } from "../data/analyze.js";
 
+/** A library book's type tag — what kind of thing it is, used to filter the library and to pick the
+ * reader format it opens in. Derived from the book's kind/contentMode/data via {@link libraryTypeOf}. */
+export type LibraryType = "fiction" | "technical" | "code" | "data" | "story";
+
+/** Derive a book's library type tag from its stored shape. */
+export function libraryTypeOf(book: { kind?: "story"; contentMode?: "fiction" | "technical" | "code"; data?: unknown }): LibraryType {
+  if (book.kind === "story") return "story";
+  if (book.data) return "data";
+  if (book.contentMode === "code") return "code";
+  if (book.contentMode === "technical") return "technical";
+  return "fiction";
+}
+
 /** Lightweight library entry for the "switch between books" picker. */
 export interface BookSummary {
   id: string;
@@ -10,6 +23,8 @@ export interface BookSummary {
   author?: string;
   /** When the book was last opened (ms epoch), for recency ordering. */
   addedAt: number;
+  /** The book's type tag (see {@link LibraryType}) — drives the library filter + reader format. */
+  type?: LibraryType;
 }
 
 /** A file surfaced in a chat message — created by the assistant (a code block, spreadsheet,
@@ -167,6 +182,7 @@ export class InMemoryStore implements VisualReaderStore {
         title: book.title,
         ...(book.author ? { author: book.author } : {}),
         addedAt,
+        type: libraryTypeOf(book),
       }));
   }
   async removeBook(id: string): Promise<void> {
