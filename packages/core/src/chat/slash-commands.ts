@@ -152,12 +152,32 @@ export function parseBuddySlashCommand(
       return call ? { call } : usage(info);
     }
     case "story": {
-      // Story "as you go" is started by a click (the ✍️ Story button in the header or the chat
-      // composer) which sends this deterministic command — never by the model. The first
-      // sentence/words become the title.
+      // Story "as you go" is started by a click (the ✍️ Story button), never by the model. The
+      // Story-setup modal sends a JSON payload (opening + workflow/cast/characters/roleplay); a
+      // plain-text "/story <opening>" is still the quick path. The first words become the title.
       if (!s.args) return usage(info);
-      const title = s.args.split(/[.!?\n]/)[0]!.trim().split(/\s+/).slice(0, 6).join(" ") || "Our Story";
-      const call = viaParser(parseBuddyToolCall, { tool: "start_story", title, opening: s.args });
+      const titleFrom = (text: string) => text.split(/[.!?\n]/)[0]!.trim().split(/\s+/).slice(0, 6).join(" ") || "Our Story";
+      if (s.args.startsWith("{")) {
+        let payload: Record<string, unknown>;
+        try {
+          payload = JSON.parse(s.args) as Record<string, unknown>;
+        } catch {
+          return usage(info);
+        }
+        const opening = typeof payload.opening === "string" ? payload.opening : "";
+        if (!opening.trim()) return usage(info);
+        const title = typeof payload.title === "string" && payload.title.trim() ? payload.title : titleFrom(opening);
+        const call = viaParser(parseBuddyToolCall, {
+          tool: "start_story",
+          title,
+          opening,
+          ...(typeof payload.style === "string" ? { style: payload.style } : {}),
+          ...(Array.isArray(payload.characters) ? { characters: payload.characters } : {}),
+          ...(payload.roleplay && typeof payload.roleplay === "object" ? { roleplay: payload.roleplay } : {}),
+        });
+        return call ? { call } : usage(info);
+      }
+      const call = viaParser(parseBuddyToolCall, { tool: "start_story", title: titleFrom(s.args), opening: s.args });
       return call ? { call } : usage(info);
     }
     case "remove": {

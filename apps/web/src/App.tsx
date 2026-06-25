@@ -189,6 +189,8 @@ import {
   SkillsPanel,
   MemoriesPanel,
   SoulPanel,
+  StorySetupModal,
+  type StoryStartPayload,
   TasksPanel,
   ScheduledTasksPanel,
   CalendarPanel,
@@ -4778,15 +4780,37 @@ export function App() {
   // deterministic /story path the chat composer's ✍️ Story button uses, but reachable from the
   // header next to "Open book…" (which only opens an EXISTING file). Surfacing the chat makes the
   // workflow visible even when a book is already open.
-  const startStoryAsYouGo = useCallback(() => {
-    const opening = window.prompt(
-      "✍️ Story as you go — describe the opening scene. We'll co-write it together and illustrate each beat:",
-    );
-    if (opening && opening.trim()) {
+  // "Story as you go": open the setup modal (workflow + cast + characters), seeded from the souls so
+  // a "You & me" story already knows the played names + looks. Replaces the old window.prompt.
+  const [showStorySetup, setShowStorySetup] = useState(false);
+  const [storySetupSeed, setStorySetupSeed] = useState<{ self: { name: string; note?: string }; user: { name: string; note?: string } }>({
+    self: { name: "" },
+    user: { name: "" },
+  });
+  const startStoryAsYouGo = useCallback(async () => {
+    const [selfName, selfNotes, userName, userNotes] = await Promise.all([
+      loadSoulName(libraryStore, "self"),
+      loadSoul(libraryStore, "self"),
+      loadSoulName(libraryStore, "user"),
+      loadSoul(libraryStore, "user"),
+    ]).catch(() => ["", [], "", []] as [string, SoulNote[], string, SoulNote[]]);
+    setStorySetupSeed({
+      self: { name: selfName, ...(selfNotes[0]?.text ? { note: selfNotes.map((n) => n.text).join("; ").slice(0, 200) } : {}) },
+      user: { name: userName, ...(userNotes[0]?.text ? { note: userNotes.map((n) => n.text).join("; ").slice(0, 200) } : {}) },
+    });
+    setShowStorySetup(true);
+  }, [libraryStore]);
+  // Dispatch the setup as a deterministic /story call (carrying the cast/roleplay as JSON) through the
+  // normal buddy turn, with a friendly chat bubble instead of the raw payload.
+  const startStoryFromSetup = useCallback(
+    (payload: StoryStartPayload) => {
+      setShowStorySetup(false);
       setShowChat(true);
-      onBuddySendText(`/story ${opening.trim()}`);
-    }
-  }, [onBuddySendText]);
+      const bubble = `✍️ Starting a story — ${payload.opening.slice(0, 80)}${payload.opening.length > 80 ? "…" : ""}`;
+      void dispatchBuddyTurn(chatTurnsOf(buddyMessages), `/story ${JSON.stringify(payload)}`, bubble);
+    },
+    [buddyMessages],
+  );
 
   // Attach a file to the next buddy message. Documents (PDF/Word/Excel/CSV/text/EPUB) are
   // extracted to text via the same importer the "Open a document" path uses; images are held
@@ -5871,7 +5895,7 @@ export function App() {
           </label>
           <button
             style={styles.button}
-            onClick={startStoryAsYouGo}
+            onClick={() => void startStoryAsYouGo()}
             title="Write a brand-new illustrated story you co-write as you go — no file needed. Saved to your library to keep building."
           >
             ✍️ Story
@@ -6367,6 +6391,7 @@ export function App() {
             onRenameSession={onRenameBuddySession}
             onDeleteSession={onDeleteBuddySession}
             onSend={onBuddySendWithAttachments}
+            onStartStory={() => void startStoryAsYouGo()}
             onAttachFile={onAttachBuddyFile}
             attachments={buddyAttachments.map((a) => ({
               id: a.id,
@@ -6875,6 +6900,15 @@ export function App() {
             setSoulName(kind, name.trim().slice(0, MAX_SOUL_NAME_CHARS));
           }}
           onClose={() => setShowSoul(undefined)}
+        />
+      )}
+
+      {showStorySetup && (
+        <StorySetupModal
+          self={storySetupSeed.self}
+          user={storySetupSeed.user}
+          onStart={startStoryFromSetup}
+          onClose={() => setShowStorySetup(false)}
         />
       )}
 

@@ -79,6 +79,9 @@ export interface ChatBuddyPanelProps {
   onRenameSession?: (id: string, label: string) => void;
   onDeleteSession?: (id: string) => void;
   onSend: (text: string) => void;
+  /** Open the host's "Story as you go" setup modal (workflow + cast + characters). When omitted, the
+   * ✍️ Story button falls back to a one-line opening prompt. */
+  onStartStory?: () => void;
   /** Attach a file (document or image) to the next message — read into the chat as context. */
   onAttachFile?: (file: File) => void;
   /** Pending attachments, shown as removable chips above the composer. */
@@ -675,10 +678,12 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         <button
           style={smallButtonStyle}
           onClick={() => {
-            // Story "as you go" is started by a click, not a chat tool: collect the opening scene and
-            // start it via the deterministic /story command (creates a Library story book to keep
-            // building). Mirrored by the header's ✍️ Story button (App.tsx) so it's reachable next to
-            // "Open book…", which only opens an existing file.
+            // Story "as you go" is started by a click, not a chat tool. The host opens a setup modal
+            // (workflow + cast + characters); when unavailable we fall back to a one-line opening.
+            if (props.onStartStory) {
+              props.onStartStory();
+              return;
+            }
             const opening = window.prompt(
               "✍️ Story as you go — describe the opening scene. We'll co-write it together and illustrate each beat:",
             );
