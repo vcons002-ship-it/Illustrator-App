@@ -1059,8 +1059,11 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
     request.bookTitle ? `Book: ${request.bookTitle}.` : "",
     `Illustrate the single most important action in THIS passage (below): its most consequential, ` +
       `visually striking moment — a decisive action or vivid image, NOT people merely standing and ` +
-      `talking. Each illustration covers a DIFFERENT stretch of the chapter, so depict ONLY what ` +
-      `happens in THIS passage — not the chapter's overall climax, and not a previous illustration's moment.`,
+      `talking. Quoted speech describes what characters SAY, not what to draw — never depict the literal ` +
+      `content of dialogue (a line like "look at the dragon" is NOT a dragon in the scene); draw only the ` +
+      `physical action and the characters actually present. Each illustration covers a DIFFERENT stretch ` +
+      `of the chapter, so depict ONLY what happens in THIS passage — not the chapter's overall climax, ` +
+      `and not a previous illustration's moment.`,
     `Passage:\n${request.sourceText}`,
     settingLine(scene, envs, request.sourceText, beatLocation),
     chars.length
