@@ -4,3 +4,5 @@ export * from "./key-events.js";
 export * from "./spoiler.js";
 export * from "./reveal.js";
 export * from "./story-scene.js";
+export * from "./story-image-text.js";
+export * from "./story-digest.js";

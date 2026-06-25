@@ -51,6 +51,16 @@ import {
   getImageStyle,
   loadMemory,
   loadSkills,
+  loadSoul,
+  loadSoulName,
+  rememberSoul,
+  forgetSoul,
+  selfSoulPromptBlock,
+  userSoulPromptBlock,
+  storyStatePromptBlock,
+  synopsisRequest,
+  SYNOPSIS_REFRESH_EVERY,
+  MAX_SYNOPSIS_CHARS,
   seedStarterSkills,
   memoryPromptBlock,
   saveSkill,
@@ -211,6 +221,13 @@ interface StorySessionState {
    * scene and render_scene of a past beat uses that beat's cast/location. */
   scenes: StoryScene[];
   roleplay?: StoryRoleplay;
+  /** The story workflow: "roleplay" (reader steers a character, the assistant voices everyone) or
+   * "direct" (reader directs, the assistant narrates). Drives the writing prompt. */
+  mode: "direct" | "roleplay";
+  /** Roleplay only: the played character NAMES for narration labels (me = reader, you = assistant). */
+  play?: { me?: string; you?: string };
+  /** Rolling "story so far" synopsis, refreshed every N beats and fed back to the writer. */
+  synopsis?: string;
   cadence: { mode: "per-response" | "every-n" | "manual"; n: number };
   beatsSinceImage: number;
 }
@@ -274,9 +291,44 @@ function beatsFromBook(book: BookSource): string[] {
 function storyConfigOf(s: StorySessionState): NonNullable<BookSource["storyConfig"]> {
   return {
     ...(s.roleplay ? { roleplay: s.roleplay } : {}),
+    mode: s.mode,
+    ...(s.play ? { play: s.play } : {}),
+    ...(s.synopsis ? { synopsis: s.synopsis } : {}),
     cadence: s.cadence,
     scenes: s.scenes.map((sc) => ({ presentCharacterIds: [...sc.presentCharacterIds], ...(sc.locationId ? { locationId: sc.locationId } : {}) })),
   };
+}
+
+/** Persist the live story session onto the open book's storyConfig and hand it to the host (setBook +
+ * putBook), with NO new beat — used by the header controls (cadence / mode) that the reader changes
+ * directly. `requestId: 0` marks a host-initiated (non-turn) update. */
+function persistStoryConfig(): void {
+  if (story && currentBook?.kind === "story" && currentBook.id === story.bookId) {
+    currentBook = { ...currentBook, storyConfig: storyConfigOf(story) };
+    post({ type: "storyConfig", requestId: 0, book: currentBook });
+  }
+}
+
+/** The live STORY STATE block fed to the WRITING model each beat (present cast + location from the
+ * tracker, the last few beats verbatim, and the rolling synopsis) — so a long story keeps continuity
+ * even after chat history is trimmed. "" when there's nothing to say. */
+function buildStoryStateBlock(s: StorySessionState): string {
+  const bible = currentBible;
+  const presentCast = (s.scene.presentCharacterIds ?? []).map((id) => {
+    const c = bible?.characters.find((ch) => ch.id === id);
+    const name = c?.name ?? id;
+    const note = c?.persistentTraits?.slice(0, 2).join(", ");
+    return note ? { name, note } : { name };
+  });
+  const location = s.scene.locationId ? bible?.environments.find((e) => e.id === s.scene.locationId)?.name : undefined;
+  return storyStatePromptBlock({
+    mode: s.mode,
+    ...(s.play ? { play: s.play } : {}),
+    presentCast,
+    ...(location ? { location } : {}),
+    recentBeats: s.beats.slice(-3),
+    ...(s.synopsis ? { synopsis: s.synopsis } : {}),
+  });
 }
 
 /** Rebuild the story session from a reopened story book (fresh worker / library reopen).
@@ -316,6 +368,11 @@ function rebuildStoryFromBook(book: BookSource, bible: VisualBible | undefined):
     scene: scenes[scenes.length - 1] ?? emptyStoryScene(),
     scenes,
     ...(roleplay ? { roleplay } : {}),
+    // Workflow + played names persist on storyConfig (Phase C); fall back to deriving the mode from
+    // whether a played cast exists, so stories created before that still resume in a sensible mode.
+    mode: book.storyConfig?.mode ?? (roleplay ? "roleplay" : "direct"),
+    ...(book.storyConfig?.play ? { play: book.storyConfig.play } : {}),
+    ...(book.storyConfig?.synopsis ? { synopsis: book.storyConfig.synopsis } : {}),
     cadence: { mode: cadence.mode, n: cadence.n ?? 3 },
     beatsSinceImage: 0,
   };
@@ -940,6 +997,25 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "regenerateStoryboard":
       void engine?.regenerateStoryboard();
       postPaused();
+      break;
+    case "storySetCadence":
+      if (story) {
+        story.cadence = { mode: msg.mode, n: msg.n ?? story.cadence.n };
+        if (msg.mode === "per-response") story.beatsSinceImage = 0;
+        persistStoryConfig();
+      }
+      break;
+    case "storySetMode":
+      if (story) {
+        story.mode = msg.mode;
+        persistStoryConfig();
+      }
+      break;
+    case "storyRenderLatest":
+      if (story && engine && story.beats.length > 0) {
+        const last = story.beats.length - 1;
+        void engine.renderScene(last, last);
+      }
       break;
     case "rebuildPrompts":
       void engine?.rebuildPrompts();
@@ -1643,6 +1719,8 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
     });
     const sec = (key: string) => sections.find((s) => s.key === key)?.text ?? "";
     const memory = memoryPromptBlock(await loadMemory(memoryStore()));
+    const selfSoul = selfSoulPromptBlock(await loadSoul(memoryStore(), "self"), await loadSoulName(memoryStore(), "self"));
+    const userSoul = userSoulPromptBlock(await loadSoul(memoryStore(), "user"), await loadSoulName(memoryStore(), "user"));
     const skills = skillsIndexBlock(await loadSkills(memoryStore()));
     const system =
       sections
@@ -1650,6 +1728,8 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
         .filter(Boolean)
         .join("\n\n") +
       (memory ? `\n\n${memory}` : "") +
+      (selfSoul ? `\n\n${selfSoul}` : "") +
+      (userSoul ? `\n\n${userSoul}` : "") +
       (skills ? `\n\n${skills}` : "") +
       (note ? `\n\n${note}` : "");
     const history = trimChatHistory(
@@ -2756,12 +2836,19 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         };
       })()),
       randomBooks: () => books.random(),
-      // Incognito (remote privacy): keep READING memory/skills (so the assistant stays useful) but
-      // never WRITE — a remote session leaves no remembered notes or learned skills behind.
-      remember: async (n) =>
-        settings?.incognitoRemote ? (await loadMemory(store)).length : (await rememberNote(store, n)).length,
-      forget: async (m) =>
-        settings?.incognitoRemote ? (await loadMemory(store)).length : (await forgetNote(store, m)).length,
+      // Incognito (remote privacy): keep READING memory/skills/souls (so the assistant stays useful)
+      // but never WRITE — a remote session leaves no remembered notes or learned identity behind.
+      // `about` routes to one of the two identity souls (self/user); default → reader memory.
+      remember: async (n, about) => {
+        const soul = about === "self" || about === "user" ? about : undefined;
+        if (settings?.incognitoRemote) return (soul ? await loadSoul(store, soul) : await loadMemory(store)).length;
+        return (soul ? await rememberSoul(store, soul, n) : await rememberNote(store, n)).length;
+      },
+      forget: async (m, about) => {
+        const soul = about === "self" || about === "user" ? about : undefined;
+        if (settings?.incognitoRemote) return (soul ? await loadSoul(store, soul) : await loadMemory(store)).length;
+        return (soul ? await forgetSoul(store, soul, m) : await forgetNote(store, m)).length;
+      },
       // Lightweight chat-scoped checklist — mutate the in-turn `plan` and mirror each change to the host.
       setPlan: (goal, steps) => {
         plan = { ...(goal ? { goal } : {}), steps: steps.map((t) => ({ text: t, status: "pending" as const })) };
@@ -2932,6 +3019,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       startStory: async (call) => {
         const id = `story-${storyCounter++}-${(call.title || "story").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24)}`;
         const played = [call.roleplay?.you, call.roleplay?.me].filter((n): n is string => !!n);
+        const isRoleplay = !!call.roleplay && played.length > 0;
         // Apply the requested art style to the worker's settings immediately, so the open's
         // providers render in it (mirrors set_visual_style's worker-settings update).
         if (call.style && settings) {
@@ -2951,6 +3039,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           scene: emptyStoryScene(),
           scenes: [],
           ...(played.length ? { roleplay: { playedCharacterNames: played } } : {}),
+          mode: isRoleplay ? "roleplay" : "direct",
+          ...(isRoleplay ? { play: { ...(call.roleplay?.me ? { me: call.roleplay.me } : {}), ...(call.roleplay?.you ? { you: call.roleplay.you } : {}) } } : {}),
           cadence: { mode: "per-response", n: 3 },
           beatsSinceImage: 0,
         };
@@ -3011,6 +3101,32 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         const { firstNewUnit } = await engine.appendChapter(renderBook, { illustrate });
         currentBook = book; // keep the chat's book context current
         post({ type: "storyBeat", requestId: msg.requestId, book, firstNewUnit, illustrate });
+        // Rolling synopsis: every N beats, refresh the "story so far" in the BACKGROUND (don't block
+        // the beat) so the writer keeps long-range continuity after chat history is trimmed. Persist
+        // via a storyConfig update when it lands.
+        if (story.beats.length % SYNOPSIS_REFRESH_EVERY === 0 && supportsChat(llm)) {
+          const chatLlm = llm;
+          const forBook = story.bookId;
+          const beatsSnapshot = [...story.beats];
+          const prev = story.synopsis;
+          void (async () => {
+            try {
+              const { system, user } = synopsisRequest(beatsSnapshot, prev);
+              const text = (
+                await chatLlm.chat([{ role: "system", content: system }, { role: "user", content: user }], { maxTokens: 320 })
+              ).trim();
+              if (text && story && story.bookId === forBook) {
+                story.synopsis = text.slice(0, MAX_SYNOPSIS_CHARS);
+                if (currentBook?.kind === "story" && currentBook.id === story.bookId) {
+                  currentBook = { ...currentBook, storyConfig: storyConfigOf(story) };
+                  post({ type: "storyConfig", requestId: msg.requestId, book: currentBook });
+                }
+              }
+            } catch {
+              // Best-effort — a failed synopsis just means the writer leans on the recent beats this round.
+            }
+          })();
+        }
         return {
           title: book.title,
           chapters: book.chapters.length,
@@ -3152,6 +3268,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const note = await renderDefaultsNote();
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
     const memory = memoryPromptBlock(await loadMemory(store));
+    const selfSoul = selfSoulPromptBlock(await loadSoul(store, "self"), await loadSoulName(store, "self"));
+    const userSoul = userSoulPromptBlock(await loadSoul(store, "user"), await loadSoulName(store, "user"));
     await seedStarterSkills(store); // one-time: ship a few ready-made playbooks on a fresh install
     const skills = skillsIndexBlock(await loadSkills(store));
     // When this session is executing a task plan, load its context for the prompt.
@@ -3198,9 +3316,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // The chat's working checklist — injected so the model re-reads it and resumes from the first
         // unfinished step (set_plan/complete_step are always available; the live state shows only here).
         ...(msg.plan ? { activePlan: msg.plan } : {}),
-        // A co-written story is open → advertise the continue/render/cadence tools (stories are STARTED
-        // by a click, never a tool, so start_story is never advertised).
-        ...(story ? { storyActive: true } : {}),
+        // A co-written story is open → switch the prompt into story-writing mode (the reply IS the
+        // next beat; no tools). storyMode/storyPlay tailor direct vs roleplay narration.
+        ...(story ? { storyActive: true, storyMode: story.mode, ...(story.play ? { storyPlay: story.play } : {}) } : {}),
         // Gmail/Calendar/Tasks tools when Google is connected.
         ...(googleConnected ? { canGoogle: true } : {}),
         // Auto-approval: create reminders without per-item confirm when opted in.
@@ -3227,6 +3345,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           : {}),
       }) +
       (memory ? `\n\n${memory}` : "") +
+      (selfSoul ? `\n\n${selfSoul}` : "") +
+      (userSoul ? `\n\n${userSoul}` : "") +
       (skills ? `\n\n${skills}` : "") +
       (note ? `\n\n${note}` : "");
     const history = trimChatHistory(
@@ -3248,12 +3368,17 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const thinking = thinkingNotifier((text) =>
       post({ type: "buddyThinking", requestId: msg.requestId, text }),
     );
+    // Story "as you go": inject the live STORY STATE AFTER the stable cache prefix (it changes each
+    // beat, so it must not be part of the cached prefix), re-grounding the writer in the present cast,
+    // location, recent beats, and synopsis even when chat history has been trimmed.
+    const storyStateBlock = story ? buildStoryStateBlock(story) : "";
     const outcome = await withChatPriority(llm.id, () => runBuddyTurn({
       llm,
-      system: setup,
+      system: storyStateBlock ? `${setup}\n\n${storyStateBlock}` : setup,
       // The buddy prompt (persona + tool defs + library) is stable across a
-      // conversation — nothing changes turn-to-turn but the history — so the whole
-      // system is the cache prefix (an explicit library edit just rewrites it once).
+      // conversation — nothing changes turn-to-turn but the history — so it's the
+      // cache prefix (an explicit library edit just rewrites it once); volatile story
+      // state rides AFTER it so the prefix stays cacheable.
       cachePrefix: setup,
       history,
       maxTokens: budgets.reply,
@@ -3364,6 +3489,20 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         }
       } catch {
         // Reflection is best-effort — skip silently on any failure.
+      }
+    }
+    // Story "as you go": with a story open and the story tools removed, the model's plain prose reply
+    // IS the next beat. Route it into the same append+illustrate path the continue_story tool used, so
+    // the reader grows beside the chat. Skip if a story tool already ran this turn (the opening
+    // start_story, or a safety-net continue_story) so the beat isn't appended twice.
+    const storyToolRan = outcome.toolResults.some(
+      (t) => t.call.tool === "start_story" || t.call.tool === "continue_story",
+    );
+    if (story && currentBook?.kind === "story" && !storyToolRan && outcome.text.trim() && deps.continueStory) {
+      try {
+        await deps.continueStory({ tool: "continue_story", text: outcome.text.trim() });
+      } catch {
+        // Best-effort: if the beat can't append, the prose still shows in the chat below.
       }
     }
     post({

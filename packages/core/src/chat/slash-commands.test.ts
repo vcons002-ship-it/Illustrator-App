@@ -93,6 +93,25 @@ describe("parseBuddySlashCommand", () => {
     expect(parseBuddySlashCommand("/story", library)).toMatchObject({ error: expect.stringContaining("Usage: /story") });
   });
 
+  it("/story accepts the setup modal's JSON payload (cast + roleplay)", () => {
+    const payload = JSON.stringify({
+      opening: "Rain hammers the alley as Vex ducks under an awning.",
+      characters: [{ name: "Vex", description: "wiry, soaked trench coat" }, { name: "Mara" }],
+      roleplay: { me: "Vex", you: "Mara" },
+    });
+    const r = parseBuddySlashCommand(`/story ${payload}`, library);
+    expect(r).toMatchObject({
+      call: {
+        tool: "start_story",
+        opening: "Rain hammers the alley as Vex ducks under an awning.",
+        characters: [{ name: "Vex", description: "wiry, soaked trench coat" }, { name: "Mara" }],
+        roleplay: { me: "Vex", you: "Mara" },
+      },
+    });
+    // Malformed JSON falls back to the usage hint rather than throwing.
+    expect(parseBuddySlashCommand("/story {bad json", library)).toMatchObject({ error: expect.stringContaining("Usage: /story") });
+  });
+
   it("opens URLs with an optional trailing mode flag", () => {
     expect(parseBuddySlashCommand("/open https://example.org/paper", library)).toEqual({
       call: { tool: "open_web_text", url: "https://example.org/paper", mode: "fiction", visuals: false },

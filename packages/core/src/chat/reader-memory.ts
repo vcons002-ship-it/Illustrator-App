@@ -1,4 +1,5 @@
 import type { VisualReaderStore } from "../storage/store.js";
+import { type NoteEntry, type NoteStoreSpec, loadNotes, saveNotes, rememberIn, forgetIn } from "./note-store.js";
 
 /**
  * Long-term reader memory — the chat's `MEMORY.md`. A small, bounded list of
@@ -7,88 +8,38 @@ import type { VisualReaderStore } from "../storage/store.js";
  * maintain through `remember`/`forget` tool calls. Persisted as one JSON memo
  * in the store, so it survives sessions and applies across books.
  *
- * Deliberately bounded and note-shaped (not a free-form document): a cap keeps
- * the prompt cost flat, dedup keeps repeated "remember"s from accumulating, and
- * short notes keep a model from using memory as scratch space.
+ * The note machinery (dedupe, trim, eviction) lives in `note-store.ts`, shared with
+ * the identity "souls"; this module is the reader-memory store + its prompt block.
  */
 
 export const READER_MEMORY_KEY = "reader-memory";
 export const MAX_MEMORY_NOTES = 40;
 /** Per-note character cap. Generous so a memory can hold a real paragraph (a preference with its
- * reasoning, a multi-part instruction) without being cut off — the earlier 200 truncated mid-note.
- * 40 notes × this is still a bounded, flat prompt cost. */
+ * reasoning, a multi-part instruction) without being cut off. 40 notes × this is still bounded. */
 export const MAX_NOTE_CHARS = 1000;
 
-export interface MemoryNote {
-  text: string;
-  /** ms epoch when remembered (recency drives eviction at the cap). */
-  at: number;
+const SPEC: NoteStoreSpec = { key: READER_MEMORY_KEY, maxNotes: MAX_MEMORY_NOTES, maxChars: MAX_NOTE_CHARS };
+
+/** A single durable memory note. */
+export type MemoryNote = NoteEntry;
+
+export function loadMemory(store: VisualReaderStore): Promise<MemoryNote[]> {
+  return loadNotes(store, SPEC);
 }
 
-export async function loadMemory(store: VisualReaderStore): Promise<MemoryNote[]> {
-  try {
-    const raw = await store.getMemo?.(READER_MEMORY_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((n): n is MemoryNote => typeof (n as MemoryNote)?.text === "string")
-      .slice(0, MAX_MEMORY_NOTES);
-  } catch {
-    return [];
-  }
-}
-
-async function save(store: VisualReaderStore, notes: MemoryNote[]): Promise<void> {
-  await store.putMemo?.(READER_MEMORY_KEY, JSON.stringify(notes.slice(-MAX_MEMORY_NOTES)));
-}
-
-/**
- * Replace the WHOLE memory list — for the editable Memory panel (the reader manages the array
- * directly). Trims each note to the char cap, drops blanks, de-dupes case-insensitively (keeping the
- * first occurrence + its order), and bounds to the cap. Returns the cleaned, persisted list.
- */
-export async function saveMemory(store: VisualReaderStore, notes: readonly MemoryNote[]): Promise<MemoryNote[]> {
-  const seen = new Set<string>();
-  const cleaned: MemoryNote[] = [];
-  for (const n of notes) {
-    const text = (n?.text ?? "").trim().slice(0, MAX_NOTE_CHARS);
-    if (!text) continue;
-    const key = text.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    cleaned.push({ text, at: typeof n?.at === "number" ? n.at : Date.now() });
-  }
-  const bounded = cleaned.slice(-MAX_MEMORY_NOTES);
-  await save(store, bounded);
-  return bounded;
+/** Replace the WHOLE memory list — for the editable Memory panel. */
+export function saveMemory(store: VisualReaderStore, notes: readonly MemoryNote[]): Promise<MemoryNote[]> {
+  return saveNotes(store, SPEC, notes);
 }
 
 /** Add a note (deduped case-insensitively; oldest evicted past the cap). */
-export async function rememberNote(store: VisualReaderStore, text: string): Promise<MemoryNote[]> {
-  const note = text.trim().slice(0, MAX_NOTE_CHARS);
-  if (!note) throw new Error("nothing to remember");
-  const notes = await loadMemory(store);
-  const key = note.toLowerCase();
-  const kept = notes.filter((n) => n.text.toLowerCase() !== key);
-  kept.push({ text: note, at: Date.now() });
-  const bounded = kept.slice(-MAX_MEMORY_NOTES);
-  await save(store, bounded);
-  return bounded;
+export function rememberNote(store: VisualReaderStore, text: string): Promise<MemoryNote[]> {
+  return rememberIn(store, SPEC, text);
 }
 
-/** Remove every note containing `match` (case-insensitive); returns what's left.
- * Throws when nothing matched so the model learns the wording was off. */
-export async function forgetNote(store: VisualReaderStore, match: string): Promise<MemoryNote[]> {
-  const needle = match.trim().toLowerCase();
-  if (!needle) throw new Error("nothing to forget");
-  const notes = await loadMemory(store);
-  const kept = notes.filter((n) => !n.text.toLowerCase().includes(needle));
-  if (kept.length === notes.length) {
-    throw new Error(`no memory note contains "${match.trim()}"`);
-  }
-  await save(store, kept);
-  return kept;
+/** Remove every note containing `match` (case-insensitive); throws when nothing matched. */
+export function forgetNote(store: VisualReaderStore, match: string): Promise<MemoryNote[]> {
+  return forgetIn(store, SPEC, match, "memory note");
 }
 
 /** The system-prompt block both chats inject ("" when memory is empty). */

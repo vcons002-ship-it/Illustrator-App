@@ -201,6 +201,10 @@ export interface KeyEvent {
    * (older cached Bibles), in which case rendering falls back to chapter level.
    */
   location?: string;
+  /** Characters present in this scene + the outfit LABEL each wears here, recorded at extraction so
+   * the render injects the right clothes deterministically (no re-deriving the outfit from wording).
+   * Absent on older cached Bibles — rendering then falls back to scanning the prompt text. */
+  cast?: { name: string; outfit?: string }[];
   /** Optional stable render seed for reproducibility. */
   seed?: number;
 }

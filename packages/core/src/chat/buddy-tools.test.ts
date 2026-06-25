@@ -672,11 +672,26 @@ describe("story as you go tools", () => {
     expect(parseBuddyToolCall('{"tool":"start_story","title":"x"}')).toBeUndefined();
   });
 
-  it("documents the role-play loop once a story is open (not before)", () => {
-    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).not.toMatch(/ROLE-PLAY/);
-    const active = buildBuddySystemPrompt({ persona: "assistant", library: [], storyActive: true });
-    expect(active).toMatch(/ROLE-PLAY/i);
-    expect(active).toMatch(/continue_story/);
+  it("switches into story-writing mode once a story is open (prose, not tools)", () => {
+    const idle = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(idle).not.toMatch(/STORY MODE/);
+    const active = buildBuddySystemPrompt({ persona: "assistant", library: [], storyActive: true, storyMode: "direct" });
+    expect(active).toMatch(/STORY MODE/);
+    // The story tools are no longer advertised — the reply itself becomes the next beat.
+    expect(active).not.toContain('"tool":"continue_story"');
+    expect(active).not.toContain('"tool":"render_scene"');
+    expect(active).not.toContain('"tool":"set_story_cadence"');
+    // Roleplay narration names the played characters.
+    const rp = buildBuddySystemPrompt({
+      persona: "assistant",
+      library: [],
+      storyActive: true,
+      storyMode: "roleplay",
+      storyPlay: { me: "Toll", you: "Mira" },
+    });
+    expect(rp).toMatch(/ROLEPLAY/i);
+    expect(rp).toContain("Toll");
+    expect(rp).toContain("Mira");
   });
 
   it("parses continue_story / render_scene / set_story_cadence", () => {
@@ -726,16 +741,17 @@ describe("story as you go tools", () => {
     ).toMatch(/only when you ask/);
   });
 
-  it("never advertises start_story (stories are started by a click, not a tool)", () => {
+  it("never advertises any story tool — the reply is the beat", () => {
     const idle = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(idle).not.toContain('"tool":"start_story"');
     expect(idle).not.toContain('"tool":"continue_story"'); // nothing to continue when no story is open
     // It points the reader at the Open Book → Story as you go click instead.
     expect(idle).toContain("Story as you go");
-    const active = buildBuddySystemPrompt({ persona: "assistant", library: [], storyActive: true });
-    expect(active).not.toContain('"tool":"start_story"'); // still never a tool
-    expect(active).toContain('"tool":"continue_story"'); // continuation tools appear once a story is open
-    expect(active).toContain('"tool":"set_story_cadence"');
+    const active = buildBuddySystemPrompt({ persona: "assistant", library: [], storyActive: true, storyMode: "direct" });
+    expect(active).not.toContain('"tool":"start_story"'); // started by a click
+    expect(active).not.toContain('"tool":"continue_story"'); // continuation is a plain prose reply now
+    expect(active).not.toContain('"tool":"render_scene"');
+    expect(active).not.toContain('"tool":"set_story_cadence"');
     expect(active).toMatch(/STORY MODE/);
   });
 });

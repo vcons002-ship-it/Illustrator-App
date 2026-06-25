@@ -109,14 +109,17 @@ describe("every high-value capability still works end to end", () => {
     expect(markets).toContain('"tool":"market_analysis"');
   });
 
-  it("story 'as you go' is started by the click path (/story), not a model tool", () => {
+  it("story 'as you go' is started by the click path (/story), and continued by plain prose (no model tools)", () => {
     const r = parseBuddySlashCommand("/story A keeper finds a bottle at dawn.", []);
     expect(r).toMatchObject({ call: { tool: "start_story" } });
-    // ...and start_story is never advertised to the model, while continuation appears once open.
+    // No story tool is advertised: start is a click, and continuation is a plain prose reply the
+    // worker turns into the next beat. Capability is preserved without the model juggling tools.
     const idle = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(idle).not.toContain('"tool":"start_story"');
-    const open = buildBuddySystemPrompt({ persona: "assistant", library: [], storyActive: true });
-    expect(open).toContain('"tool":"continue_story"');
+    const open = buildBuddySystemPrompt({ persona: "assistant", library: [], storyActive: true, storyMode: "direct" });
+    expect(open).not.toContain('"tool":"continue_story"');
+    expect(open).not.toContain('"tool":"set_story_cadence"');
+    expect(open).toMatch(/STORY MODE/);
   });
 });
 

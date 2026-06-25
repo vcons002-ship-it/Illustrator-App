@@ -86,6 +86,47 @@ function mentions(haystack: string, term: string): boolean {
   return new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRegExp(t)}([^\\p{L}\\p{N}]|$)`, "iu").test(haystack);
 }
 
+const STOP = new Set(["with", "and", "the", "her", "his", "their", "a", "an", "of", "in", "on"]);
+
+/** Does the prompt paraphrase an outfit — i.e. contain a distinctive 2-word content phrase from its
+ * label/description ("crimson gown" matching label "red gown", description "crimson silk gown")? The
+ * runtime fallback for older Bibles where the exact label wasn't written into the prompt. */
+function outfitDescribedIn(prompt: string, o: Outfit): boolean {
+  const words = `${o.label} ${o.description}`.toLowerCase().match(/\p{L}{3,}/gu) ?? [];
+  const content = words.filter((w) => !STOP.has(w));
+  for (let i = 0; i < content.length - 1; i++) {
+    if (mentions(prompt, `${content[i]} ${content[i + 1]}`)) return true;
+  }
+  return false;
+}
+
+/**
+ * Deterministically dress the present cast: append the EXACT stored outfit label for each character
+ * the storyboard tagged for this scene (KeyEvent.cast), so every downstream path (CLIP inject, the
+ * reference block, local family-aware expansion) surfaces the right clothes — without depending on
+ * the render LLM re-naming the outfit. A no-op when the prompt already names the character + label.
+ */
+export function appendSceneWardrobe(
+  prompt: string,
+  cast: readonly { name: string; outfit?: string }[] | undefined,
+  bible: VisualBible,
+): string {
+  if (!cast || cast.length === 0) return prompt;
+  const clauses: string[] = [];
+  for (const entry of cast) {
+    const label = (entry.outfit ?? "").trim();
+    const name = (entry.name ?? "").trim();
+    if (!label || !name) continue;
+    const c = bible.characters.find((ch) => [ch.name, ...ch.aliases].some((n) => n.toLowerCase() === name.toLowerCase()));
+    if (!c) continue;
+    const outfit = (c.outfits ?? []).find((o) => o.label.toLowerCase() === label.toLowerCase());
+    if (!outfit) continue;
+    if (mentions(prompt, c.name) && mentions(prompt, outfit.label)) continue; // already there
+    clauses.push(`${c.name} in ${outfit.label}`);
+  }
+  return clauses.length ? `${prompt} (Wardrobe: ${clauses.join("; ")}.)` : prompt;
+}
+
 /**
  * Scan a finished prompt for the bible terms it mentions. Characters, creatures, and
  * locations are matched by name/alias. Outfit labels are matched **only when their
@@ -100,10 +141,18 @@ export function findBibleTermsInText(prompt: string, bible: VisualBible): SceneT
     if (!forms.some((f) => mentions(prompt, f))) continue;
     terms.push({ names: forms, descriptor: describeCharacterIdentity(c), kind: "character" });
     // Outfit labels only for a character that IS named here.
+    let matched = false;
     for (const o of c.outfits ?? []) {
       if (o.label && mentions(prompt, o.label)) {
         terms.push({ names: [o.label], descriptor: describeOutfit(o), kind: "outfit" });
+        matched = true;
       }
+    }
+    // Fallback (older Bibles without a per-scene cast tag): the LLM paraphrased or omitted the label.
+    // A single known outfit is unambiguous; otherwise match one by a distinctive description phrase.
+    if (!matched && (c.outfits?.length ?? 0) > 0) {
+      const guess = c.outfits!.length === 1 ? c.outfits![0]! : c.outfits!.find((o) => outfitDescribedIn(prompt, o));
+      if (guess) terms.push({ names: [guess.label], descriptor: describeOutfit(guess), kind: "outfit" });
     }
   }
 

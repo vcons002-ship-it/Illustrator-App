@@ -79,6 +79,9 @@ export interface ChatBuddyPanelProps {
   onRenameSession?: (id: string, label: string) => void;
   onDeleteSession?: (id: string) => void;
   onSend: (text: string) => void;
+  /** Open the host's "Story as you go" setup modal (workflow + cast + characters). When omitted, the
+   * ✍️ Story button falls back to a one-line opening prompt. */
+  onStartStory?: () => void;
   /** Attach a file (document or image) to the next message — read into the chat as context. */
   onAttachFile?: (file: File) => void;
   /** Pending attachments, shown as removable chips above the composer. */
@@ -125,6 +128,9 @@ export interface ChatBuddyPanelProps {
   onSetWorkingDir?: (dir: string) => void;
   /** Native folder picker (desktop); resolves to a path or undefined on cancel. */
   onPickFolder?: () => Promise<string | undefined>;
+  /** Fill the parent container (width + height 100%) instead of the centered full-window card —
+   * used when the panel is docked beside the story reader. */
+  fill?: boolean;
 }
 
 export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanelProps) {
@@ -219,7 +225,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   );
 
   return (
-    <div style={panelStyle}>
+    <div style={props.fill ? { ...panelStyle, width: "100%", height: "100%" } : panelStyle}>
       <div style={headerStyle}>
         {props.sessions && props.onSwitchSession ? (
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -675,8 +681,12 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         <button
           style={smallButtonStyle}
           onClick={() => {
-            // Story "as you go" is an Open Book OPTION, not a chat tool: collect the opening scene and
-            // start it via the deterministic /story command (creates a Library story book to keep building).
+            // Story "as you go" is started by a click, not a chat tool. The host opens a setup modal
+            // (workflow + cast + characters); when unavailable we fall back to a one-line opening.
+            if (props.onStartStory) {
+              props.onStartStory();
+              return;
+            }
             const opening = window.prompt(
               "✍️ Story as you go — describe the opening scene. We'll co-write it together and illustrate each beat:",
             );

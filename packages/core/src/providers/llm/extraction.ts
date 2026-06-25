@@ -16,6 +16,7 @@ import type { EntityExtractionInput } from "./llm-provider.js";
 import type { VisualRequest } from "../../types/content.js";
 import { deterministicSeed } from "./mock-llm-provider.js";
 import { resolveKeyEvent } from "../../visual-bible/key-events.js";
+import { recentArcLine } from "../../visual-bible/story-digest.js";
 import { sanitizeWorldStyle } from "../image/bible-injection.js";
 
 /**
@@ -67,6 +68,9 @@ export interface RawExtraction {
     composition: string;
     /** Beat-level setting: the ONE location name where this scene happens. */
     location?: string;
+    /** Characters present in this scene + the outfit LABEL each wears here (deterministic outfit
+     * injection — so the render never has to re-derive the active outfit from wording). */
+    cast?: { name: string; outfit?: string }[];
   }[];
   /** One concise genre/art-direction line for the whole book, applied to every prompt. */
   worldStyle?: string;
@@ -174,6 +178,11 @@ export const EXTRACTION_SYSTEM =
   "ALWAYS fill in 'location' (fall back to the chapter's primary setting if a beat's place is " +
   "implicit) — a blank here makes the image guess the setting from stray words in the prose and " +
   "get it wrong (e.g. drawing an indoor classroom scene as students outdoors). " +
+  "For each keyEvent also set 'cast': the characters PRESENT in that scene (by their EXACT bible " +
+  "name), and for each, 'outfit': the LABEL of the outfit they wear in THIS scene (one of that " +
+  "character's outfit labels — use the exact label; empty string if it's unremarkable/unknown). This " +
+  "is how the app keeps each character in the right clothes per scene, so name the outfit even when " +
+  "the prose only implies it from context (a ball → the gown, a battle → the armor). " +
   "Describe a scene with the characters acting in their setting — NOT a portrait. Refer to " +
   "characters/creatures by their EXACT bible name, to clothing by its outfit LABEL, and to a place " +
   "by its location NAME (the app expands each into its visual description), so do NOT describe their " +
@@ -480,8 +489,20 @@ export const EXTRACTION_JSON_SCHEMA = {
           mood: { type: "string" },
           composition: { type: "string" },
           location: { type: "string" },
+          cast: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                name: { type: "string" },
+                outfit: { type: "string" },
+              },
+              required: ["name", "outfit"],
+            },
+          },
         },
-        required: ["subject", "action", "environment", "mood", "composition", "location"],
+        required: ["subject", "action", "environment", "mood", "composition", "location", "cast"],
       },
     },
     worldStyle: { type: "string" },
@@ -720,7 +741,13 @@ function mapKeyEventsToUnits(
     // it blank, inherit the chapter's location so the beat is never location-less (which is what
     // forced the live prompt path to scan the passage text and sometimes pick a wrong place).
     const location = (e.location ?? "").trim() || fallback;
-    out.push({ pageRange: unitRanges[i]!, imagePrompt, ...(location ? { location } : {}) });
+    // Present cast + per-character outfit label (deterministic outfit injection). Keep only entries
+    // with a name; drop blank outfit labels so an empty string never masks the text-scan fallback.
+    const cast = (e.cast ?? [])
+      .map((c) => ({ name: (c.name ?? "").trim(), outfit: (c.outfit ?? "").trim() }))
+      .filter((c) => c.name)
+      .map((c) => (c.outfit ? { name: c.name, outfit: c.outfit } : { name: c.name }));
+    out.push({ pageRange: unitRanges[i]!, imagePrompt, ...(location ? { location } : {}), ...(cast.length ? { cast } : {}) });
   }
   return out;
 }
@@ -1059,8 +1086,11 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
     request.bookTitle ? `Book: ${request.bookTitle}.` : "",
     `Illustrate the single most important action in THIS passage (below): its most consequential, ` +
       `visually striking moment — a decisive action or vivid image, NOT people merely standing and ` +
-      `talking. Each illustration covers a DIFFERENT stretch of the chapter, so depict ONLY what ` +
-      `happens in THIS passage — not the chapter's overall climax, and not a previous illustration's moment.`,
+      `talking. Quoted speech describes what characters SAY, not what to draw — never depict the literal ` +
+      `content of dialogue (a line like "look at the dragon" is NOT a dragon in the scene); draw only the ` +
+      `physical action and the characters actually present. Each illustration covers a DIFFERENT stretch ` +
+      `of the chapter, so depict ONLY what happens in THIS passage — not the chapter's overall climax, ` +
+      `and not a previous illustration's moment.`,
     `Passage:\n${request.sourceText}`,
     settingLine(scene, envs, request.sourceText, beatLocation),
     chars.length
@@ -1088,6 +1118,10 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
     scene?.summary
       ? `This chapter (continuity only — illustrate the passage, not this): ${scene.summary}`
       : "",
+    (() => {
+      const arc = recentArcLine(bible, { upToChapter: request.chapterIndex, maxChars: 800 });
+      return arc ? `Story so far (prior chapters, continuity only — do NOT illustrate): ${arc}` : "";
+    })(),
   ]
     .filter(Boolean)
     .join("\n\n");

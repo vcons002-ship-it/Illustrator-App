@@ -55,6 +55,13 @@ import {
   saveMemory,
   MAX_NOTE_CHARS,
   MAX_MEMORY_NOTES,
+  loadSoul,
+  saveSoul,
+  loadSoulName,
+  saveSoulName,
+  MAX_SOUL_NOTES,
+  MAX_SOUL_NOTE_CHARS,
+  MAX_SOUL_NAME_CHARS,
   loadTaskPlans,
   deleteTaskPlan,
   archiveTaskPlan,
@@ -140,6 +147,8 @@ import {
   type ProjectFile,
   type Skill,
   type MemoryNote,
+  type SoulNote,
+  type SoulKind,
   type BookSource,
   type BookSummary,
   type ChapterDataset,
@@ -179,6 +188,9 @@ import {
   JsonTreeView,
   SkillsPanel,
   MemoriesPanel,
+  SoulPanel,
+  StorySetupModal,
+  type StoryStartPayload,
   TasksPanel,
   ScheduledTasksPanel,
   CalendarPanel,
@@ -465,6 +477,9 @@ export function App() {
     pauseImages,
     resumeImages,
     regenerateStoryboard,
+    storySetCadence,
+    storyRenderLatest,
+    storySetMode,
     regenerateAllImages,
     regenerateImage,
     completeBook,
@@ -599,6 +614,26 @@ export function App() {
     if (!isRemoteClient) await loadMemory(libraryStore).then(setMemories).catch(() => {});
     setShowMemories(true);
   }, [libraryStore, isRemoteClient]);
+
+  // The two identity "souls" — the assistant's own identity (self) and what it knows about the
+  // reader's own character (user). Same shared store the worker reads, edited via the Soul panels.
+  const [showSoul, setShowSoul] = useState<SoulKind | undefined>(undefined);
+  const [selfSoulNotes, setSelfSoulNotes] = useState<SoulNote[]>([]);
+  const [selfSoulName, setSelfSoulName] = useState("");
+  const [userSoulNotes, setUserSoulNotes] = useState<SoulNote[]>([]);
+  const [userSoulName, setUserSoulName] = useState("");
+  const setSoulNotes = (kind: SoulKind, n: SoulNote[]) => (kind === "self" ? setSelfSoulNotes(n) : setUserSoulNotes(n));
+  const setSoulName = (kind: SoulKind, n: string) => (kind === "self" ? setSelfSoulName(n) : setUserSoulName(n));
+  const openSoul = useCallback(
+    async (kind: SoulKind) => {
+      await Promise.all([
+        loadSoul(libraryStore, kind).then((n) => setSoulNotes(kind, n)),
+        loadSoulName(libraryStore, kind).then((n) => setSoulName(kind, n)),
+      ]).catch(() => {});
+      setShowSoul(kind);
+    },
+    [libraryStore],
+  );
   // A skill the buddy distilled from a recurring task, awaiting the reader's Keep/Dismiss.
   const [pendingSkill, setPendingSkill] = useState<{ name: string; description: string; body: string } | null>(null);
   const keepPendingSkill = useCallback(async () => {
@@ -4744,6 +4779,42 @@ export function App() {
   );
   const onBuddySendText = useCallback((text: string) => void onBuddySend(text), [onBuddySend]);
 
+  // "Story as you go": start a brand-new illustrated story the user co-writes — the same
+  // deterministic /story path the chat composer's ✍️ Story button uses, but reachable from the
+  // header next to "Open book…" (which only opens an EXISTING file). Surfacing the chat makes the
+  // workflow visible even when a book is already open.
+  // "Story as you go": open the setup modal (workflow + cast + characters), seeded from the souls so
+  // a "You & me" story already knows the played names + looks. Replaces the old window.prompt.
+  const [showStorySetup, setShowStorySetup] = useState(false);
+  const [storySetupSeed, setStorySetupSeed] = useState<{ self: { name: string; note?: string }; user: { name: string; note?: string } }>({
+    self: { name: "" },
+    user: { name: "" },
+  });
+  const startStoryAsYouGo = useCallback(async () => {
+    const [selfName, selfNotes, userName, userNotes] = await Promise.all([
+      loadSoulName(libraryStore, "self"),
+      loadSoul(libraryStore, "self"),
+      loadSoulName(libraryStore, "user"),
+      loadSoul(libraryStore, "user"),
+    ]).catch(() => ["", [], "", []] as [string, SoulNote[], string, SoulNote[]]);
+    setStorySetupSeed({
+      self: { name: selfName, ...(selfNotes[0]?.text ? { note: selfNotes.map((n) => n.text).join("; ").slice(0, 200) } : {}) },
+      user: { name: userName, ...(userNotes[0]?.text ? { note: userNotes.map((n) => n.text).join("; ").slice(0, 200) } : {}) },
+    });
+    setShowStorySetup(true);
+  }, [libraryStore]);
+  // Dispatch the setup as a deterministic /story call (carrying the cast/roleplay as JSON) through the
+  // normal buddy turn, with a friendly chat bubble instead of the raw payload.
+  const startStoryFromSetup = useCallback(
+    (payload: StoryStartPayload) => {
+      setShowStorySetup(false);
+      setShowChat(true);
+      const bubble = `✍️ Starting a story — ${payload.opening.slice(0, 80)}${payload.opening.length > 80 ? "…" : ""}`;
+      void dispatchBuddyTurn(chatTurnsOf(buddyMessages), `/story ${JSON.stringify(payload)}`, bubble);
+    },
+    [buddyMessages],
+  );
+
   // Attach a file to the next buddy message. Documents (PDF/Word/Excel/CSV/text/EPUB) are
   // extracted to text via the same importer the "Open a document" path uses; images are held
   // for the vision model to describe at send time. All in the main thread — no new worker wiring.
@@ -5718,7 +5789,7 @@ export function App() {
           : "done";
 
   return (
-    <div style={styles.shell}>
+    <div style={book?.kind === "story" ? { ...styles.shell, paddingRight: STORY_DOCK_W } : styles.shell}>
       <style>{KEYFRAMES}</style>
       {/* PRIVACY CURTAIN: while a phone drives this desktop in incognito, the engine runs here but the
           desktop's own screen stays hidden so a bystander can't see the remote session. Kept DISCREET on
@@ -5827,6 +5898,13 @@ export function App() {
           </label>
           <button
             style={styles.button}
+            onClick={() => void startStoryAsYouGo()}
+            title="Write a brand-new illustrated story you co-write as you go — no file needed. Saved to your library to keep building."
+          >
+            ✍️ Story
+          </button>
+          <button
+            style={styles.button}
             onClick={() => setShowPasteText(true)}
             title="Paste any text (an article, a chapter, a paper) and read/illustrate it like a book"
           >
@@ -5855,6 +5933,20 @@ export function App() {
             title="What the assistant remembers about you — durable notes it keeps across every chat (view, add, edit, or delete)"
           >
             💭 Memory
+          </button>
+          <button
+            style={styles.button}
+            onClick={() => void openSoul("self")}
+            title="The assistant's own identity — its persona, look, and voice. Used when it plays itself in a story."
+          >
+            🪞 Soul
+          </button>
+          <button
+            style={styles.button}
+            onClick={() => void openSoul("user")}
+            title="Who you are — your own character's look & personality, so the assistant can portray you when you play yourself."
+          >
+            👤 You
           </button>
           <button
             style={styles.button}
@@ -5930,7 +6022,7 @@ export function App() {
           >
             🖼 Photo
           </button>
-          {book && (
+          {book && book.kind !== "story" && (
             <button
               style={styles.button}
               onClick={() => setShowChat(true)}
@@ -6270,18 +6362,46 @@ export function App() {
         </div>
       )}
 
-      {(!book || (showChat && book.kind === "story")) && (
-        <section style={!book ? styles.buddySection : styles.storyChatOverlay}>
+      {(!book || book.kind === "story") && (
+        <section style={!book ? styles.buddySection : styles.storyChatDock}>
           {book?.kind === "story" && (
-            <button
-              style={styles.storyChatClose}
-              onClick={() => setShowChat(false)}
-              title="Hide the chat and view the illustrated story"
-            >
-              ✕ View story
-            </button>
+            <div style={styles.storyControls}>
+              <select
+                style={styles.storyControlSelect}
+                value={book.storyConfig?.mode ?? "direct"}
+                onChange={(e) => storySetMode(e.target.value as "direct" | "roleplay")}
+                title="Workflow — Roleplay (you steer, the assistant plays the scene) or Direct (you direct, it narrates)"
+              >
+                <option value="roleplay">🎭 Roleplay</option>
+                <option value="direct">✍️ Direct</option>
+              </select>
+              <select
+                style={styles.storyControlSelect}
+                value={(() => {
+                  const c = book.storyConfig?.cadence;
+                  return !c || c.mode === "per-response" ? "per-response" : c.mode === "manual" ? "manual" : "every-n";
+                })()}
+                onChange={(e) => {
+                  const v = e.target.value as "per-response" | "every-n" | "manual";
+                  storySetCadence(v, v === "every-n" ? 3 : undefined);
+                }}
+                title="How often a beat auto-illustrates"
+              >
+                <option value="per-response">🖼 Every beat</option>
+                <option value="every-n">Every 3 beats</option>
+                <option value="manual">Manual only</option>
+              </select>
+              <button
+                style={styles.button}
+                onClick={() => storyRenderLatest()}
+                title="Illustrate (or redraw) the most recent beat now"
+              >
+                ↻ Illustrate
+              </button>
+            </div>
           )}
           <ChatBuddyPanel
+            {...(book?.kind === "story" ? { fill: true } : {})}
             messages={buddyPanelMessages}
             {...(buddyStreaming ? { streamingText: buddyStreaming } : {})}
             {...(buddyThinking ? { thinking: buddyThinking } : {})}
@@ -6302,6 +6422,7 @@ export function App() {
             onRenameSession={onRenameBuddySession}
             onDeleteSession={onDeleteBuddySession}
             onSend={onBuddySendWithAttachments}
+            onStartStory={() => void startStoryAsYouGo()}
             onAttachFile={onAttachBuddyFile}
             attachments={buddyAttachments.map((a) => ({
               id: a.id,
@@ -6790,6 +6911,35 @@ export function App() {
             setMemories(saved);
           }}
           onClose={() => setShowMemories(false)}
+        />
+      )}
+
+      {showSoul && (
+        <SoulPanel
+          variant={showSoul}
+          name={showSoul === "self" ? selfSoulName : userSoulName}
+          notes={showSoul === "self" ? selfSoulNotes : userSoulNotes}
+          limits={{ note: MAX_SOUL_NOTE_CHARS, max: MAX_SOUL_NOTES, name: MAX_SOUL_NAME_CHARS }}
+          onSaveNotes={async (notes) => {
+            const kind = showSoul;
+            const saved = await saveSoul(libraryStore, kind, notes);
+            setSoulNotes(kind, saved);
+          }}
+          onSaveName={async (name) => {
+            const kind = showSoul;
+            await saveSoulName(libraryStore, kind, name);
+            setSoulName(kind, name.trim().slice(0, MAX_SOUL_NAME_CHARS));
+          }}
+          onClose={() => setShowSoul(undefined)}
+        />
+      )}
+
+      {showStorySetup && (
+        <StorySetupModal
+          self={storySetupSeed.self}
+          user={storySetupSeed.user}
+          onStart={startStoryFromSetup}
+          onClose={() => setShowStorySetup(false)}
         />
       )}
 
@@ -8315,6 +8465,10 @@ const KEYFRAMES =
   `details > summary { list-style: none; }\n` +
   `details > summary::-webkit-details-marker { display: none; }`;
 
+/** Width of the always-on story chat sidebar; the shell reserves this much on the right when a story
+ * is open so the reader/header never sit underneath it. */
+const STORY_DOCK_W = "min(460px, 42vw)";
+
 const styles: Record<string, React.CSSProperties> = {
   shell: {
     minHeight: "100vh",
@@ -8481,31 +8635,35 @@ const styles: Record<string, React.CSSProperties> = {
   },
   empty: { padding: "10px 24px 8px", maxWidth: 760, fontSize: 13, opacity: 0.8, lineHeight: 1.5 },
   buddySection: { padding: "0 24px 20px", display: "flex", justifyContent: "center" },
-  // A story keeps its buddy/story chat mounted OVER the open reader (toggled by the chat
-  // button): the chat drives the next beat; "✕ View story" hides it to see the growing
-  // illustrated story behind. Reuses ChatBuddyPanel — the full buddy toolset incl. the
-  // story tools — so the same surface that started the story continues it.
-  storyChatOverlay: {
+  // A story docks its chat as an ALWAYS-VISIBLE right sidebar beside the growing illustrated story,
+  // so you co-write and watch it build at once — no toggle, nothing covering the reader. The shell
+  // gets a matching right padding so the reader/header never sit under the dock. Reuses ChatBuddyPanel
+  // (the same surface that started the story continues it).
+  storyChatDock: {
     position: "fixed",
-    inset: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    width: STORY_DOCK_W,
     zIndex: 60,
     display: "flex",
     flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
     gap: 8,
-    padding: 12,
-    background: "rgba(0,0,0,0.55)",
-    backdropFilter: "blur(2px)",
+    padding: 10,
+    boxSizing: "border-box",
+    background: "#0e0f13",
+    borderLeft: "1px solid rgba(255,255,255,0.12)",
   },
-  storyChatClose: {
-    alignSelf: "flex-end",
-    background: "#23262d",
-    color: "#e6e6e6",
-    border: "1px solid rgba(255,255,255,0.18)",
-    borderRadius: 8,
-    padding: "6px 12px",
-    fontSize: 13,
+  // The story dock's control row: workflow + cadence dropdowns and an Illustrate button (no model round).
+  storyControls: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" },
+  storyControlSelect: {
+    background: "rgba(255,255,255,0.08)",
+    color: "inherit",
+    border: "1px solid rgba(255,255,255,0.2)",
+    borderRadius: 6,
+    padding: "5px 8px",
+    fontSize: 12,
+    fontWeight: 600,
     cursor: "pointer",
   },
   // "Lock this look" control under a story beat's image: pin it as a character's reference.

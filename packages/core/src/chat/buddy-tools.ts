@@ -249,9 +249,11 @@ export type BuddyToolCall =
   /** Capture the reader's SCREEN (or one window by title) and look at it with a
    * vision model (desktop). The reader approves; the model gets a text observation. */
   | { tool: "screenshot"; question?: string; window?: string }
-  /** Long-term reader memory (shared with the book chat — see reader-memory.ts). */
-  | { tool: "remember"; note: string }
-  | { tool: "forget"; match: string }
+  /** Long-term reader memory (shared with the book chat — see reader-memory.ts), or one of
+   * the two identity souls (see souls.ts): about:"self" = your own identity, about:"user" =
+   * the reader's own character. Omitted/`"reader"` → reader memory. */
+  | { tool: "remember"; note: string; about?: "reader" | "self" | "user" }
+  | { tool: "forget"; match: string; about?: "reader" | "self" | "user" }
   /** Change one of the app's settings by name on the reader's request (then confirm). */
   | { tool: "update_setting"; field: string; value: string | number | boolean }
   /** Walk the reader through SETTING UP a feature — returns the built-in step-by-step
@@ -562,10 +564,16 @@ export function buildBuddySystemPrompt(opts: {
   canMarkets?: boolean;
   /** The active task plan's context (this chat opened a task) — enables the step tools. */
   activeTask?: string;
-  /** A co-written story is currently OPEN — advertise the continue/render/cadence tools so the reader
-   * keeps building it in chat. Stories are STARTED by a click (Open Book → Story as you go), never by a
-   * tool, so start_story is never advertised regardless of this flag. */
+  /** A co-written story is currently OPEN. The model writes the next beat as a PLAIN PROSE reply
+   * (no tool — the app turns the reply into the beat and illustrates it); this flag switches the
+   * prompt into that story-writing mode. Stories are STARTED by a click, never by a tool. */
   storyActive?: boolean;
+  /** Which story workflow is open: "direct" (the reader directs, you narrate) or "roleplay"
+   * (the reader steers their character; you voice everyone). Only meaningful with storyActive. */
+  storyMode?: "direct" | "roleplay";
+  /** Roleplay only: the played character names so the narration uses them by name. `me` = the
+   * character the READER plays; `you` = the character the assistant plays. */
+  storyPlay?: { me?: string; you?: string };
 }): string {
   const persona =
     opts.persona === "planning"
@@ -826,23 +834,28 @@ export function buildBuddySystemPrompt(opts: {
     (opts.canGoogle ? "• Email: compose → draft_email (the default); only send_email when they explicitly say \"send\".\n" : "") +
     "• A multi-step job → set_plan first, then work the steps (complete_step as you finish each). Every tool's result " +
     "comes back to you, so CHAIN tools: search → read → write → run, reacting to each result.\n\n";
-  // Story "as you go" is STARTED by a click (Open Book → ✍️ Story as you go), not a tool — so start_story
-  // is never advertised. Once a story IS open, the continuation tools appear so the reader keeps building it
-  // in chat (the "reopen to add beats" loop). Empty when no story is open.
+  // Story "as you go": once a story is OPEN, the model just writes the next beat as a normal prose
+  // reply — NO tool. The app turns that reply into the beat and illustrates it (cadence + redraw are
+  // the reader's UI controls). This keeps the model out of tool-juggling. Empty when no story is open.
+  const play = opts.storyPlay ?? {};
+  const roleplayLine =
+    opts.storyMode === "roleplay"
+      ? `This is ROLEPLAY: the reader plays ${play.me || "their character"}, and you voice ${
+          play.you || "your character"
+        } and everyone else. The reader's message is ${play.me || "their character"}'s action/line — narrate what ` +
+        "happens next for the WHOLE scene (their character included), in flowing prose, referring to everyone by " +
+        "their established names. Never decide the reader's intentions for them; respond to what they did.\n"
+      : "This is DIRECT WRITING: the reader's message tells you what should happen (or asks for more); you write " +
+        "the next stretch of narrative.\n";
   const storyBlock = opts.storyActive
-    ? '- {"tool":"continue_story","text":"<the next beat — a vivid full scene>"} — advance the OPEN story by one beat. ' +
-      "Write a rich, FULL-SCENE paragraph (who is there, where, what happens, the mood) using the bible's established " +
-      "names so the image stays consistent; it illustrates automatically (per the cadence). In role-play, write ONLY " +
-      "your character's part and end on a beat that invites the reader's next move. This is the main loop once a story is open.\n" +
-      '- {"tool":"render_scene","from":3,"to":3} — illustrate a chosen part of the open story ON DEMAND ("draw the last ' +
-      'bit", or under manual cadence). "from"/"to" are 1-based beat numbers; omit them to illustrate the most recent beat.\n' +
-      '- {"tool":"set_story_cadence","mode":"per-response"} — how OFTEN the open story auto-illustrates: "per-response" ' +
-      '(default, an image every beat), "every-n" with "n" (an image every N beats), or "manual" (only on render_scene).\n' +
-      "STORY MODE (a story is open): the reader sends what happens next (or their character's line); you reply by calling " +
-      "continue_story with the NEXT BEAT as vivid, FULL-SCENE prose, reusing the bible's established character/place names " +
-      "so the art stays consistent; it illustrates automatically. Keep beats moving and end on a hook that invites the " +
-      "reader's next move. In ROLE-PLAY, write ONLY your character's part each beat — never the reader's. Do NOT call " +
-      "open_content for a story you're co-writing; just continue_story. After a tool runs, reply with ONE short line.\n"
+    ? "STORY MODE (a story is open). The reader's message is their STEER. Reply with ONLY the next beat of the " +
+      "story — vivid, full-scene narrative PROSE that continues from the STORY STATE and recent beats, narrates the " +
+      "whole scene and every character present, and weaves in the reader's input. Refer to characters by their " +
+      "ESTABLISHED names (from the Visual Bible / story state) so the illustration stays on the right subjects. " +
+      "Do NOT call any tool, do NOT speak to the reader out of character, and do NOT add commentary before or after — " +
+      "your ENTIRE reply becomes the next illustrated beat. Keep it moving and end on a hook that invites the next " +
+      "steer.\n" +
+      roleplayLine
     : "CO-WRITING AN ILLUSTRATED STORY: to start one (as-you-go scenes that auto-illustrate, with a Visual " +
       'Bible keeping the cast consistent), tell the reader to click "✍️ Story as you go" under Open Book — that is ' +
       "how a story is STARTED (there is no start-story tool; it's a click). You can still write ordinary story PROSE " +
@@ -930,10 +943,13 @@ export function buildBuddySystemPrompt(opts: {
     'chapter), and the cadence ("illustrateAfter": "chapter" to illustrate as each chapter finishes, or "book" to ' +
     'wait for the whole book and get the best art). Use BEFORE an open with visuals when the reader asks for a look ' +
     '("…in oil painting style") or pace.\n' +
-    '- {"tool":"remember","note":"…"} — save a DURABLE reader preference/fact to long-term memory (applies in every ' +
-    'future conversation, in every book). Use when they state a lasting preference ("I prefer watercolor", "never ' +
-    'spoil endings", "I\'m reading the series in order") or say "remember…". One short note, not conversation recap.\n' +
-    '- {"tool":"forget","match":"…"} — remove memory notes containing this text, when asked to forget.\n' +
+    '- {"tool":"remember","note":"…","about":"reader"} — save a DURABLE note. about:"reader" (default) = a reader ' +
+    'preference/fact ("I prefer watercolor", "never spoil endings"); about:"self" = a fact about YOUR OWN identity ' +
+    '(your persona, look, or voice); about:"user" = a fact about the READER\'S OWN character (their look/personality, ' +
+    'used when they play themselves in a story). Use when they state a lasting preference or identity detail, or say ' +
+    '"remember…". One short note, not conversation recap.\n' +
+    '- {"tool":"forget","match":"…","about":"reader"} — remove notes containing this text from that store (default ' +
+    '"reader"; use "self"/"user" to edit a soul), when asked to forget.\n' +
     '- {"tool":"set_plan","goal":"…","steps":["step 1","step 2","step 3"]} — for a MULTI-STEP request, ' +
     "FIRST lay out a SHORT checklist of the concrete steps you'll take (it's shown live to the reader and " +
     'saved). Then execute them one at a time. {"tool":"complete_step","note":"…"} — mark the CURRENT (first ' +
@@ -1527,11 +1543,13 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
   }
   if (tool === "remember") {
     const note = strArg(obj.note, MAX_MEMORY_NOTE_CHARS);
-    return note ? { tool, note } : undefined;
+    const about = obj.about === "self" ? "self" : obj.about === "user" ? "user" : undefined;
+    return note ? { tool, note, ...(about ? { about } : {}) } : undefined;
   }
   if (tool === "forget") {
     const match = strArg(obj.match, MAX_MEMORY_NOTE_CHARS);
-    return match ? { tool, match } : undefined;
+    const about = obj.about === "self" ? "self" : obj.about === "user" ? "user" : undefined;
+    return match ? { tool, match, ...(about ? { about } : {}) } : undefined;
   }
   if (tool === "set_plan") {
     const steps = Array.isArray(obj.steps)
@@ -2018,8 +2036,8 @@ export interface BuddyToolResultPayload {
   applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
   /** Whether an approved image generation succeeded. */
   image?: { ok: boolean; error?: string };
-  /** A remember/forget outcome (note echoed for the inline chip). */
-  memory?: { action: "remembered" | "forgot"; note: string; count: number };
+  /** A remember/forget outcome (note echoed for the inline chip). `about` names which store. */
+  memory?: { action: "remembered" | "forgot"; note: string; about?: "reader" | "self" | "user"; count: number };
   /** A read_skill / save_skill / forget_skill outcome. */
   skill?: { action: "read" | "missing" | "saved" | "forgot"; name: string; body?: string; count?: number };
   /** A setup_help lookup: the matched guide, or the topic list when none matched. */
@@ -2303,9 +2321,10 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     );
   }
   if (call.tool === "remember" || call.tool === "forget") {
-    return result.memory
-      ? `[memory ${result.memory.action}: "${result.memory.note}" — ${result.memory.count} note${result.memory.count === 1 ? "" : "s"} kept] Confirm briefly.`
-      : `[${call.tool} did nothing]`;
+    if (!result.memory) return `[${call.tool} did nothing]`;
+    const store =
+      result.memory.about === "self" ? "your-identity" : result.memory.about === "user" ? "reader-identity" : "memory";
+    return `[${store} ${result.memory.action}: "${result.memory.note}" — ${result.memory.count} note${result.memory.count === 1 ? "" : "s"} kept] Confirm briefly.`;
   }
   if (call.tool === "read_skill") {
     if (result.skill?.action === "read" && result.skill.body) {

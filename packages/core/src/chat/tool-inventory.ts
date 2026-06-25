@@ -53,9 +53,12 @@ export const TOOL_INVENTORY: ToolEntry[] = [
 
   // Story "as you go" — start moves to a click; continuing an OPEN story stays a tool.
   { tool: "start_story", capability: "co-write an illustrated story", disposition: { movedToClick: "Open Book → Story as you go (/story)" } },
-  { tool: "continue_story", capability: "co-write an illustrated story", disposition: "kept" },
-  { tool: "render_scene", capability: "co-write an illustrated story", disposition: "kept" },
-  { tool: "set_story_cadence", capability: "co-write an illustrated story", disposition: "kept" },
+  // The three continuation tools left the model surface — they confused the model. Continuing is now a
+  // plain prose reply the worker turns into the next beat; cadence + redraw are Story-header controls.
+  // The executors are kept and retriggered from the worker/UI, so no capability is lost.
+  { tool: "continue_story", capability: "co-write an illustrated story", disposition: { movedToClick: "Story mode — the prose reply IS the next beat" } },
+  { tool: "render_scene", capability: "co-write an illustrated story", disposition: { movedToClick: "Story header → Illustrate / redraw control" } },
+  { tool: "set_story_cadence", capability: "co-write an illustrated story", disposition: { movedToClick: "Story header → cadence control" } },
 
   // Image generation & settings
   { tool: "generate_image", capability: "generate an image", disposition: "kept" },

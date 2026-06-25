@@ -475,6 +475,7 @@ describe("runBuddyTurn", () => {
     expect(outcome.toolResults[0]!.result.memory).toEqual({
       action: "remembered",
       note: "prefers watercolor",
+      about: "reader",
       count: 1,
     });
     // Without the dep, the tool fails soft (the model is told and recovers).
