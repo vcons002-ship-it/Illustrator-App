@@ -14,7 +14,7 @@ import type { VisualReaderStore } from "../storage/store.js";
 import { resolvePageEntities } from "../visual-bible/bible.js";
 import { anchorSetting, composeScenePrompt, resolveKeyEvent } from "../visual-bible/key-events.js";
 import { actionTextForImage } from "../visual-bible/story-image-text.js";
-import { expandPrompt, findBibleTermsInText } from "../providers/image/bible-injection.js";
+import { appendSceneWardrobe, expandPrompt, findBibleTermsInText } from "../providers/image/bible-injection.js";
 import { getImageStyle } from "../providers/catalog.js";
 import { buildFigureQuery, type RetrievedImage } from "../providers/image/image-search.js";
 import { profileDimensions, qualityProfile } from "../quality.js";
@@ -367,10 +367,14 @@ export class RenderPipeline {
       // place are depicted — the active-scene carry-forward made real in the image, not
       // just the request object. Scoped to story books (kind === "story"); a no-op when
       // the prompt already names them, so the book illustrator's prompts are untouched.
-      const sceneBase =
+      const named =
         this.deps.book.kind === "story"
           ? nameActiveScene(basePrompt, present, presentCreatures, bible.environments.filter((e) => request.environmentIds.includes(e.id)))
           : basePrompt;
+      // Deterministic wardrobe: append each present character's storyboard-tagged outfit LABEL
+      // (KeyEvent.cast) so the right clothes inject regardless of how the render LLM worded the
+      // scene — the fix for outfits dropping when the model paraphrases/omits the label.
+      const sceneBase = appendSceneWardrobe(named, keyEvent?.cast, bible);
       // Bible terms mentioned in the prompt (names → descriptors). Local backends expand them
       // family-aware; for cloud we pre-expand here (cloud providers don't know the bible).
       const terms = findBibleTermsInText(sceneBase, bible);

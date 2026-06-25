@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  appendSceneWardrobe,
   buildReferenceBlock,
   describeCharacterIdentity,
   displayCaption,
@@ -43,6 +44,69 @@ function creature(over: Partial<Creature> & { name: string }): Creature {
 function bibleWith(partial: Partial<VisualBible>): VisualBible {
   return { ...createEmptyBible("b"), ...partial };
 }
+
+describe("appendSceneWardrobe (deterministic per-scene outfit)", () => {
+  const violet = character({
+    name: "Violet",
+    aliases: ["Sorrengail"],
+    outfits: [
+      { label: "flight leathers", description: "fitted black hide with buckled straps", context: "" },
+      { label: "ball gown", description: "emerald silk with silver embroidery", context: "" },
+    ],
+  });
+  const bible = bibleWith({ characters: [violet] });
+
+  it("appends the tagged outfit label so it injects regardless of the LLM's wording", () => {
+    const out = appendSceneWardrobe("A woman descends the grand staircase.", [{ name: "Violet", outfit: "ball gown" }], bible);
+    expect(out).toContain("Wardrobe: Violet in ball gown");
+    // …and now findBibleTermsInText picks up both the character and the outfit.
+    const terms = findBibleTermsInText(out, bible);
+    expect(terms.some((t) => t.kind === "outfit" && t.descriptor.includes("emerald silk"))).toBe(true);
+  });
+
+  it("resolves the character by alias and is a no-op when already named with the label", () => {
+    expect(appendSceneWardrobe("x", [{ name: "Sorrengail", outfit: "flight leathers" }], bible)).toContain(
+      "Violet in flight leathers",
+    );
+    expect(appendSceneWardrobe("Violet buckles her flight leathers", [{ name: "Violet", outfit: "flight leathers" }], bible)).toBe(
+      "Violet buckles her flight leathers",
+    );
+  });
+
+  it("ignores unknown characters, unknown labels, and blank outfits", () => {
+    expect(appendSceneWardrobe("x", [{ name: "Nobody", outfit: "cloak" }], bible)).toBe("x");
+    expect(appendSceneWardrobe("x", [{ name: "Violet", outfit: "spacesuit" }], bible)).toBe("x");
+    expect(appendSceneWardrobe("x", [{ name: "Violet" }], bible)).toBe("x");
+  });
+});
+
+describe("findBibleTermsInText outfit fallback (older Bibles)", () => {
+  it("injects a character's single known outfit when the label wasn't written", () => {
+    const c = character({ name: "Mara", outfits: [{ label: "red gown", description: "crimson silk gown", context: "" }] });
+    const terms = findBibleTermsInText("Mara enters the hall.", bibleWith({ characters: [c] }));
+    expect(terms.some((t) => t.kind === "outfit" && t.descriptor.includes("crimson silk"))).toBe(true);
+  });
+
+  it("matches a paraphrased outfit by a distinctive description phrase", () => {
+    const c = character({
+      name: "Mara",
+      outfits: [
+        { label: "red gown", description: "crimson silk gown", context: "" },
+        { label: "travel cloak", description: "grey wool hooded cloak", context: "" },
+      ],
+    });
+    const terms = findBibleTermsInText("Mara sweeps in wearing a crimson silk gown.", bibleWith({ characters: [c] }));
+    const outfits = terms.filter((t) => t.kind === "outfit");
+    expect(outfits).toHaveLength(1);
+    expect(outfits[0]!.descriptor).toContain("crimson silk");
+  });
+
+  it("does not inject an outfit when the character isn't named", () => {
+    const c = character({ name: "Mara", outfits: [{ label: "red gown", description: "crimson silk gown", context: "" }] });
+    const terms = findBibleTermsInText("A woman in a gown enters.", bibleWith({ characters: [c] }));
+    expect(terms.some((t) => t.kind === "outfit")).toBe(false);
+  });
+});
 
 describe("injectBibleTerms", () => {
   const violet: SceneTerm = {
