@@ -672,6 +672,20 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             </button>
           </>
         )}
+        <button
+          style={smallButtonStyle}
+          onClick={() => {
+            // Story "as you go" is an Open Book OPTION, not a chat tool: collect the opening scene and
+            // start it via the deterministic /story command (creates a Library story book to keep building).
+            const opening = window.prompt(
+              "✍️ Story as you go — describe the opening scene. We'll co-write it together and illustrate each beat:",
+            );
+            if (opening && opening.trim()) props.onSend(`/story ${opening.trim()}`);
+          }}
+          title="Start an illustrated story you co-write as you go (saved to your library to keep building)"
+        >
+          ✍️ Story
+        </button>
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}

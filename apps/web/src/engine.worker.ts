@@ -3191,6 +3191,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // The chat's working checklist — injected so the model re-reads it and resumes from the first
         // unfinished step (set_plan/complete_step are always available; the live state shows only here).
         ...(msg.plan ? { activePlan: msg.plan } : {}),
+        // A co-written story is open → advertise the continue/render/cadence tools (stories are STARTED
+        // by a click, never a tool, so start_story is never advertised).
+        ...(story ? { storyActive: true } : {}),
         // Gmail/Calendar/Tasks tools when Google is connected.
         ...(googleConnected ? { canGoogle: true } : {}),
         // Auto-approval: create reminders without per-item confirm when opted in.

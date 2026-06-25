@@ -532,6 +532,10 @@ export function buildBuddySystemPrompt(opts: {
   canAutomateTasks?: boolean;
   /** The active task plan's context (this chat opened a task) — enables the step tools. */
   activeTask?: string;
+  /** A co-written story is currently OPEN — advertise the continue/render/cadence tools so the reader
+   * keeps building it in chat. Stories are STARTED by a click (Open Book → Story as you go), never by a
+   * tool, so start_story is never advertised regardless of this flag. */
+  storyActive?: boolean;
 }): string {
   const persona =
     opts.persona === "planning"
@@ -787,6 +791,27 @@ export function buildBuddySystemPrompt(opts: {
     (opts.canGoogle ? "• Email: compose → draft_email (the default); only send_email when they explicitly say \"send\".\n" : "") +
     "• A multi-step job → set_plan first, then work the steps (complete_step as you finish each). Every tool's result " +
     "comes back to you, so CHAIN tools: search → read → write → run, reacting to each result.\n\n";
+  // Story "as you go" is STARTED by a click (Open Book → ✍️ Story as you go), not a tool — so start_story
+  // is never advertised. Once a story IS open, the continuation tools appear so the reader keeps building it
+  // in chat (the "reopen to add beats" loop). Empty when no story is open.
+  const storyBlock = opts.storyActive
+    ? '- {"tool":"continue_story","text":"<the next beat — a vivid full scene>"} — advance the OPEN story by one beat. ' +
+      "Write a rich, FULL-SCENE paragraph (who is there, where, what happens, the mood) using the bible's established " +
+      "names so the image stays consistent; it illustrates automatically (per the cadence). In role-play, write ONLY " +
+      "your character's part and end on a beat that invites the reader's next move. This is the main loop once a story is open.\n" +
+      '- {"tool":"render_scene","from":3,"to":3} — illustrate a chosen part of the open story ON DEMAND ("draw the last ' +
+      'bit", or under manual cadence). "from"/"to" are 1-based beat numbers; omit them to illustrate the most recent beat.\n' +
+      '- {"tool":"set_story_cadence","mode":"per-response"} — how OFTEN the open story auto-illustrates: "per-response" ' +
+      '(default, an image every beat), "every-n" with "n" (an image every N beats), or "manual" (only on render_scene).\n' +
+      "STORY MODE (a story is open): the reader sends what happens next (or their character's line); you reply by calling " +
+      "continue_story with the NEXT BEAT as vivid, FULL-SCENE prose, reusing the bible's established character/place names " +
+      "so the art stays consistent; it illustrates automatically. Keep beats moving and end on a hook that invites the " +
+      "reader's next move. In ROLE-PLAY, write ONLY your character's part each beat — never the reader's. Do NOT call " +
+      "open_content for a story you're co-writing; just continue_story. After a tool runs, reply with ONE short line.\n"
+    : "CO-WRITING AN ILLUSTRATED STORY: to start one (as-you-go scenes that auto-illustrate, with a Visual " +
+      'Bible keeping the cast consistent), tell the reader to click "✍️ Story as you go" under Open Book — that is ' +
+      "how a story is STARTED (there is no start-story tool; it's a click). You can still write ordinary story PROSE " +
+      "right here if they only want text.\n";
   return (
     `${persona} Either way, you are a full conversational assistant: answer ` +
     "general questions directly in prose (use search_web to ground facts when it genuinely helps)." +
@@ -841,36 +866,7 @@ export function buildBuddySystemPrompt(opts: {
     "questions about how to construct it (purpose, the columns/categories, the period, currency, any totals or formulas " +
     "they want) — offer sensible defaults — and only call this once you know enough to build something useful. After it " +
     "opens, refine it conversationally with set_cell / add_formula_column / analyze_data / export_data.\n" +
-    '- {"tool":"start_story","title":"The Lantern Road","opening":"<the first beat — a vivid full scene>","style":"storybook ' +
-    'illustration","characters":["Mira",{"name":"Toll","description":"tall, salt-and-pepper beard, worn leather coat"}],' +
-    '"roleplay":{"you":"Mira","me":"Toll"}} — START an illustrated STORY you co-write with the reader, AS YOU GO. It opens ' +
-    "in the reader and the first scene illustrates immediately; every beat after (continue_story) adds prose AND a new " +
-    'image, while the Visual Bible accumulates the characters/places so they stay visually consistent. "style" sets the ' +
-    'art look. "characters" pre-registers the cast so they\'re consistent from the FIRST image — each entry is a name, or ' +
-    '{"name":"…","description":"…"} to FIX their look (without a description the first image\'s appearance is arbitrary). ' +
-    '"roleplay" assigns the played characters — "you" is the character the READER plays, "me" the one YOU play (both ' +
-    'assumed present each beat unless one leaves). If the reader says "me and you" / "us" (with no character names), then ' +
-    "THEY are one character and YOU (the assistant) are the other: name them (use the reader's name if you know it, else " +
-    'a fitting name) and DESCRIBE the reader\'s character from what you REMEMBER about them (pass it in "characters" so the ' +
-    "art matches), and portray yourself as your own character. Use start_story when the reader wants to make up / write / " +
-    "role-play a story together (NOT for opening existing text — that's open_pasted_text).\n" +
-    '- {"tool":"continue_story","text":"<the next beat — a vivid full scene>"} — advance the OPEN story by one beat. Write ' +
-    "a rich, FULL-SCENE paragraph (who is there, where, what happens, the mood) using the bible's established names so the " +
-    "image stays consistent; it illustrates automatically (per the cadence). In role-play, write ONLY your character's part " +
-    "and end on a beat that invites the reader's next move. This is the main loop once a story is open.\n" +
-    '- {"tool":"render_scene","from":3,"to":3} — illustrate a chosen part of the open story ON DEMAND ("draw the last bit", ' +
-    'or under manual cadence). "from"/"to" are 1-based beat numbers; omit them to illustrate the most recent beat.\n' +
-    '- {"tool":"set_story_cadence","mode":"per-response"} — how OFTEN the open story auto-illustrates: "per-response" ' +
-    '(default, an image every beat), "every-n" with "n" (an image every N beats), or "manual" (only on render_scene).\n' +
-    "STORY MODE (writing a story together, as you go): once a story is open, the LOOP is — the reader sends what " +
-    "happens next (or their character's line); you reply by calling continue_story with the NEXT BEAT as vivid, " +
-    "FULL-SCENE prose (who is present, where, what happens, the mood), reusing the bible's established character/place " +
-    "names so the art stays consistent; it illustrates automatically. Keep beats moving and end on a hook that invites " +
-    "the reader's next move. In ROLE-PLAY (you were given a character at start_story), write ONLY your character's part " +
-    'each beat — never the reader\'s. If it\'s a "me and you" story, the reader\'s character IS the reader (portray them ' +
-    "from what you remember about them, consistently) and your character is YOU. Do NOT call open_pasted_text for a story " +
-    "you're co-writing — that's for existing text; use start_story / continue_story. After a tool runs, reply with ONE " +
-    "short line (don't repeat the prose).\n" +
+    storyBlock +
     "SAVED TO THE LIBRARY AUTOMATICALLY: every book you OPEN or CREATE — a library pick, web/pasted text, code, or a " +
     "spreadsheet — is added to the reader's LIBRARY the moment it opens (it appears in the library list above and reopens " +
     "later with open_library_book) and is showing on screen right then, in the data view for a sheet. So a spreadsheet or " +

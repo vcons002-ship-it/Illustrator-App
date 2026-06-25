@@ -38,6 +38,7 @@ export const BUDDY_SLASH_COMMANDS: SlashCommandInfo[] = [
   { name: "books", args: "<query>", description: "Search Project Gutenberg" },
   { name: "random", args: "", description: "Surprise picks from the classics shelf" },
   { name: "open", args: "<title | url> [technical]", description: "Open a library book or fetch a URL into the reader" },
+  { name: "story", args: "<opening scene>", description: "Start an illustrated story you co-write as you go" },
   { name: "remove", args: "<title>", description: "Remove a book from the library" },
   { name: "images", args: "<query>", description: "Find a real figure/diagram/photo" },
   { name: "draw", args: "<prompt>", description: "Generate a new image (one-click confirm)" },
@@ -148,6 +149,14 @@ export function parseBuddySlashCommand(
     }
     case "forget": {
       const call = viaParser(parseBuddyToolCall, { tool: "forget", match: s.args });
+      return call ? { call } : usage(info);
+    }
+    case "story": {
+      // Story "as you go" is started by a click (Open Book → Story as you go) which sends this
+      // deterministic command — never by the model. The first sentence/words become the title.
+      if (!s.args) return usage(info);
+      const title = s.args.split(/[.!?\n]/)[0]!.trim().split(/\s+/).slice(0, 6).join(" ") || "Our Story";
+      const call = viaParser(parseBuddyToolCall, { tool: "start_story", title, opening: s.args });
       return call ? { call } : usage(info);
     }
     case "remove": {

@@ -632,10 +632,11 @@ describe("story as you go tools", () => {
     expect(parseBuddyToolCall('{"tool":"start_story","title":"x"}')).toBeUndefined();
   });
 
-  it("documents 'me and you' role-play in the system prompt", () => {
-    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [] });
-    expect(prompt).toMatch(/me and you/i);
-    expect(prompt).toMatch(/remember/i); // portray the reader's character from memory
+  it("documents the role-play loop once a story is open (not before)", () => {
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).not.toMatch(/ROLE-PLAY/);
+    const active = buildBuddySystemPrompt({ persona: "assistant", library: [], storyActive: true });
+    expect(active).toMatch(/ROLE-PLAY/i);
+    expect(active).toMatch(/continue_story/);
   });
 
   it("parses continue_story / render_scene / set_story_cadence", () => {
@@ -685,11 +686,17 @@ describe("story as you go tools", () => {
     ).toMatch(/only when you ask/);
   });
 
-  it("advertises the story tools in the system prompt", () => {
-    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [] });
-    expect(prompt).toContain('"tool":"start_story"');
-    expect(prompt).toContain('"tool":"continue_story"');
-    expect(prompt).toMatch(/STORY MODE/);
+  it("never advertises start_story (stories are started by a click, not a tool)", () => {
+    const idle = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(idle).not.toContain('"tool":"start_story"');
+    expect(idle).not.toContain('"tool":"continue_story"'); // nothing to continue when no story is open
+    // It points the reader at the Open Book → Story as you go click instead.
+    expect(idle).toContain("Story as you go");
+    const active = buildBuddySystemPrompt({ persona: "assistant", library: [], storyActive: true });
+    expect(active).not.toContain('"tool":"start_story"'); // still never a tool
+    expect(active).toContain('"tool":"continue_story"'); // continuation tools appear once a story is open
+    expect(active).toContain('"tool":"set_story_cadence"');
+    expect(active).toMatch(/STORY MODE/);
   });
 });
 
