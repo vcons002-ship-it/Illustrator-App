@@ -733,6 +733,35 @@ export function buildBuddySystemPrompt(opts: {
         (opts.activePlan.goal ? `Goal: ${opts.activePlan.goal}\n` : "") +
         `${renderPlanLines(opts.activePlan)}\n\n`
       : "";
+  // A compact intent→tool decision table read BEFORE the full catalog, so the model resolves the
+  // look-alike choices (search vs generate, read vs open, find vs read, draft vs send, run vs save)
+  // up front. Lines for tools that aren't available this session are omitted so nothing dangles.
+  const routingGuide =
+    "HOW TO PICK A TOOL — match the reader's actual intent, and DON'T reach for a tool when a direct " +
+    "answer (or one clarifying question) is better:\n" +
+    "• Chatting / reasoning / writing prose → NO tool. Any real math → calculate (never do it in your head).\n" +
+    "• A fact you're unsure of → search_web, then read_url the best hit." +
+    (opts.canWolfram ? " An authoritative real-world VALUE/quantity → wolfram." : "") +
+    "\n" +
+    "• \"show me / what does X look like\" → search_images (a REAL image). \"draw / generate / imagine\" → " +
+    "generate_image (NEW art).\n" +
+    "• \"read / summarize / pull a fact from this page\" → read_url (text into the chat). \"open / illustrate this " +
+    "page IN the reader\" → open_web_text.\n" +
+    "• Open something to READ: a library book → open_library_book; a web article → open_web_text; text the reader " +
+    "pasted → open_pasted_text; source code → open_code. (The reader can also just CLICK any surfaced book/result/" +
+    "file to open it — prefer that over re-opening something already shown.)\n" +
+    (opts.canSearchFiles
+      ? "• A file on THEIR computer: find it by NAME → find_files; read its CONTENTS → read_file; SEE a picture → open_image.\n"
+      : "") +
+    "• Make a file: a spreadsheet → create_spreadsheet; anything else (a script, document, webpage, CSV) → write it " +
+    "in a fenced ```code``` block (the reader gets Download / Open buttons on it)." +
+    (opts.canRunCommands
+      ? " To actually RUN code, write_file it then run_command — a fenced block alone is NOT executed."
+      : "") +
+    "\n" +
+    (opts.canGoogle ? "• Email: compose → draft_email (the default); only send_email when they explicitly say \"send\".\n" : "") +
+    "• A multi-step job → set_plan first, then work the steps (complete_step as you finish each). Every tool's result " +
+    "comes back to you, so CHAIN tools: search → read → write → run, reacting to each result.\n\n";
   return (
     `${persona} Either way, you are a full conversational assistant: answer ` +
     "general questions directly in prose (use search_web to ground facts when it genuinely helps)." +
@@ -740,6 +769,7 @@ export function buildBuddySystemPrompt(opts: {
     `${nowBlock}` +
     `${planBlock}` +
     `${library}\n\n` +
+    routingGuide +
     "TOOLS — use one by replying with ONLY one JSON object (no prose around it):\n" +
     '- {"tool":"calculate","expression":"…"} — exact, grounded math (NOT just arithmetic): functions ' +
     "(sqrt/sin/log/gcd/…), ^, !, pi; UNIT conversions (\"5 km to miles\", \"60 mph in m/s\"); MATRICES + " +

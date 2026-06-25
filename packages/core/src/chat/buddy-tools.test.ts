@@ -287,6 +287,27 @@ describe("buildBuddySystemPrompt", () => {
     expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).not.toContain("PLANNING MODE");
   });
 
+  it("opens with a tool-routing guide that resolves the look-alike choices", () => {
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(p).toContain("HOW TO PICK A TOOL");
+    // The routing guide precedes the full tool catalog so it's read first.
+    expect(p.indexOf("HOW TO PICK A TOOL")).toBeLessThan(p.indexOf("TOOLS — use one"));
+    // Confusable pairs are disambiguated.
+    expect(p).toMatch(/read_url.*open_web_text/s);
+    expect(p).toMatch(/search_images.*generate_image/s);
+  });
+
+  it("routing guide only mentions desktop/run/google tools when those are available", () => {
+    const base = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(base).not.toContain("find_files"); // no filesystem → no find_files routing line
+    const files = buildBuddySystemPrompt({ persona: "assistant", library: [], canSearchFiles: true });
+    expect(files).toContain("find it by NAME → find_files");
+    const cmds = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true });
+    expect(cmds).toContain("write_file it then run_command");
+    const g = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true });
+    expect(g).toContain("draft_email");
+  });
+
   it("carries the show-me-vs-generate image-tool rule in both modes", () => {
     for (const persona of ["assistant", "planning"] as const) {
       const prompt = buildBuddySystemPrompt({ persona, library: [] });
