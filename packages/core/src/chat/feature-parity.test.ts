@@ -34,6 +34,34 @@ describe("tool inventory is complete and consistent", () => {
     ]);
     expect(keptTools()).toContain("open_content");
   });
+
+  it("the four reader/ingest tools all route through read", () => {
+    expect(consolidatedTools().filter((c) => c.via === "read").map((c) => c.tool).sort()).toEqual([
+      "read_attachment",
+      "read_email",
+      "read_file",
+      "read_url",
+    ]);
+    expect(keptTools()).toContain("read");
+  });
+
+  it("read normalizes every source to its internal reader shape", () => {
+    expect(parseBuddyToolCall('{"tool":"read","source":"url","ref":"https://example.com"}')).toMatchObject({
+      tool: "read_url",
+      url: "https://example.com",
+    });
+    expect(parseBuddyToolCall('{"tool":"read","source":"file","ref":"/tmp/a.txt"}')).toMatchObject({
+      tool: "read_file",
+      path: "/tmp/a.txt",
+    });
+    expect(parseBuddyToolCall('{"tool":"read","source":"email","ref":"msg-1"}')).toMatchObject({
+      tool: "read_email",
+      id: "msg-1",
+    });
+    expect(
+      parseBuddyToolCall('{"tool":"read","source":"attachment","ref":"msg-1","attachmentId":"att-1"}'),
+    ).toMatchObject({ tool: "read_attachment", messageId: "msg-1", attachmentId: "att-1" });
+  });
 });
 
 describe("every high-value capability still works end to end", () => {

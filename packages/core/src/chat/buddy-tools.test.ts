@@ -334,7 +334,7 @@ describe("buildBuddySystemPrompt", () => {
     // The routing guide precedes the full tool catalog so it's read first.
     expect(p.indexOf("HOW TO PICK A TOOL")).toBeLessThan(p.indexOf("TOOLS — use one"));
     // Confusable pairs are disambiguated.
-    expect(p).toMatch(/read_url.*open_web_text/s);
+    expect(p).toMatch(/read \(source:"url"\).*open_web_text/s);
     expect(p).toMatch(/search_images.*generate_image/s);
   });
 
@@ -529,7 +529,7 @@ describe("skill tools", () => {
     const p = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(p).toMatch(/ACT, DON'T NARRATE/);
     expect(p).toMatch(/search_web to find sources/);
-    expect(p).toMatch(/read_url to pull a specific page's text/);
+    expect(p).toMatch(/read \(source:"url"\) to pull a specific page's text/);
     expect(p).toMatch(/open_web_text to open a page/);
     expect(p).toMatch(/NEVER state specific facts you have not verified/i);
   });
@@ -1074,13 +1074,13 @@ describe("read_file tool", () => {
     expect(formatBuddyToolResult({ tool: "read_file", path: "/home/u/form.txt" }, { fileText: "Policy #123" })).toContain("Policy #123");
     expect(formatBuddyToolResult({ tool: "read_file", path: "/x" }, {})).toMatch(/couldn't read/i);
   });
-  it("find_files now surfaces paths so read_file can target a result", () => {
+  it("find_files now surfaces paths so read can target a result", () => {
     const out = formatBuddyToolResult(
       { tool: "find_files", query: "passport" },
       { files: [{ name: "passport.pdf", path: "/home/u/docs/passport.pdf" }] },
     );
     expect(out).toContain("/home/u/docs/passport.pdf");
-    expect(out).toMatch(/read_file/);
+    expect(out).toMatch(/read with source:"file"/);
   });
 });
 

@@ -573,6 +573,10 @@ export async function runBuddyTool(
         // open_content is normalized into the open_library_book / open_web_text / open_pasted_text /
         // open_code shapes by parseBuddyToolCall, so it should never reach the executor directly.
         return { error: "couldn't open that — try again" };
+      case "read":
+        // read is normalized into the read_url / read_file / read_email / read_attachment shapes by
+        // parseBuddyToolCall, so it should never reach the executor directly.
+        return { error: "couldn't read that — try again" };
       case "open_library_book":
         return { opened: await deps.openLibraryBook(call) };
       case "open_web_text":

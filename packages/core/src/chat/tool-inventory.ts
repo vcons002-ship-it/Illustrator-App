@@ -6,8 +6,9 @@
  * existed is listed with its disposition —
  *   • "kept"            — still a tool the model can call directly.
  *   • { mergedInto }    — no longer advertised on its own; the model now reaches it through ONE
- *                         consolidated tool (the open_* reader tools → open_content). The shape stays
- *                         in the protocol, so the capability is unchanged.
+ *                         consolidated tool (the open_* reader tools → open_content; the read_url /
+ *                         read_file / read_email / read_attachment ingest tools → read). The shape
+ *                         stays in the protocol, so the capability is unchanged.
  *   • { movedToClick }  — taken off the model surface and surfaced as a UI click instead (start_story →
  *                         the Open Book "Story as you go" button / the /story command).
  *
@@ -29,7 +30,11 @@ export const TOOL_INVENTORY: ToolEntry[] = [
   { tool: "search_books", capability: "book discovery", disposition: "kept" },
   { tool: "random_books", capability: "book discovery", disposition: "kept" },
   { tool: "search_images", capability: "find real figures", disposition: "kept" },
-  { tool: "read_url", capability: "read a page/repo", disposition: "kept" },
+  // The four reader/ingest tools collapsed into ONE read tool with a `source` discriminator
+  // (url | file | email | attachment) — same move as open_content. The shapes stay in the
+  // protocol, so every capability is unchanged; only the model-facing surface shrank.
+  { tool: "read", capability: "read a page/repo", disposition: "kept" },
+  { tool: "read_url", capability: "read a page/repo", disposition: { mergedInto: "read" } },
   { tool: "wolfram", capability: "real-world data", disposition: "kept" },
   { tool: "calculate", capability: "exact math", disposition: "kept" },
 
@@ -87,8 +92,8 @@ export const TOOL_INVENTORY: ToolEntry[] = [
 
   // Google
   { tool: "gmail_search", capability: "Gmail", disposition: "kept" },
-  { tool: "read_email", capability: "Gmail", disposition: "kept" },
-  { tool: "read_attachment", capability: "Gmail attachments", disposition: "kept" },
+  { tool: "read_email", capability: "Gmail", disposition: { mergedInto: "read" } },
+  { tool: "read_attachment", capability: "Gmail attachments", disposition: { mergedInto: "read" } },
   { tool: "draft_email", capability: "Gmail", disposition: "kept" },
   { tool: "send_email", capability: "Gmail", disposition: "kept" },
   { tool: "list_events", capability: "Calendar", disposition: "kept" },
@@ -99,7 +104,7 @@ export const TOOL_INVENTORY: ToolEntry[] = [
 
   // Desktop PC tools
   { tool: "find_files", capability: "find files on the PC", disposition: "kept" },
-  { tool: "read_file", capability: "read any local file", disposition: "kept" },
+  { tool: "read_file", capability: "read any local file", disposition: { mergedInto: "read" } },
   { tool: "write_file", capability: "write to the workspace", disposition: "kept" },
   { tool: "run_command", capability: "run & test code", disposition: "kept" },
   { tool: "screenshot", capability: "see the screen", disposition: "kept" },
