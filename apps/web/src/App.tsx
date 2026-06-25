@@ -8555,7 +8555,6 @@ const KEYFRAMES =
   `details > summary { list-style: none; }\n` +
   `details > summary::-webkit-details-marker { display: none; }`;
 
-
 const styles: Record<string, React.CSSProperties> = {
   // Full-height flex column: fixed header on top, a scrolling content region in the middle, and a
   // fixed-height chat dock pinned at the bottom (when a book is open).
