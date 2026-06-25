@@ -173,8 +173,9 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
   it("calculate vs wolfram: 'use calculate for pure math' is present", () => {
     expect(prompt).toContain("use calculate for pure math");
   });
-  it("open_code vs open_pasted_text: 'NOT open_pasted_text' for code is present", () => {
-    expect(prompt).toContain("NOT open_pasted_text");
+  it("open_content: code uses source \"code\", pasted prose excludes generated code", () => {
+    expect(prompt).toContain('"code" → {"source":"code"');
+    expect(prompt).toContain("never code/HTML you generated");
   });
   it("write_file vs the chat Save button: 'Save button' caveat is present", () => {
     expect(prompt).toContain("Save button");
@@ -203,9 +204,10 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
 // ───────────────────────────────────────────────────────────────────────────
 describe("scenario: chains run in order and each result feeds the next round", () => {
   it("research → open: search_books, then open the hit, then answer", async () => {
+    // The model now emits the single open_content tool; the parser normalizes it to open_web_text.
     const llm = scriptedLlm([
       '{"tool":"search_books","query":"thermodynamics"}',
-      '{"tool":"open_web_text","url":"https://g.test/thermo.txt","title":"Thermodynamics","mode":"technical","visuals":true}',
+      '{"tool":"open_content","source":"web","url":"https://g.test/thermo.txt","title":"Thermodynamics","mode":"technical","visuals":true}',
       "Opened it in technical mode so the diagrams come through — want to start with the first law?",
     ]);
     const openedUrls: string[] = [];

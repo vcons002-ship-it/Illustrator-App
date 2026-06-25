@@ -65,6 +65,47 @@ describe("parseBuddyToolCall", () => {
     ).toBeUndefined();
   });
 
+  it("normalizes the single open_content tool into the internal open_* shapes by source", () => {
+    expect(parseBuddyToolCall('{"tool":"open_content","source":"library","id":"text-1"}')).toEqual({
+      tool: "open_library_book",
+      id: "text-1",
+      visuals: false,
+    });
+    expect(
+      parseBuddyToolCall('{"tool":"open_content","source":"web","url":"https://x.test/a","title":"A"}'),
+    ).toMatchObject({ tool: "open_web_text", url: "https://x.test/a", title: "A" });
+    expect(
+      parseBuddyToolCall('{"tool":"open_content","source":"pasted","text":"Once upon a time"}'),
+    ).toMatchObject({ tool: "open_pasted_text", text: "Once upon a time", mode: "fiction" });
+    expect(
+      parseBuddyToolCall('{"tool":"open_content","source":"code","text":"const x=1","language":"ts"}'),
+    ).toMatchObject({ tool: "open_code", code: "const x=1", language: "ts" });
+    // Invalid / incomplete open_content is rejected (no source, bad url).
+    expect(parseBuddyToolCall('{"tool":"open_content","source":"web"}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"open_content"}')).toBeUndefined();
+  });
+
+  it("auto-detects fiction vs technical for open_content when mode is omitted", () => {
+    expect(parseBuddyToolCall('{"tool":"open_content","source":"web","url":"https://x.test/a-short-story"}')).toMatchObject({
+      mode: "fiction",
+    });
+    expect(
+      parseBuddyToolCall('{"tool":"open_content","source":"web","url":"https://arxiv.org/abs/1234"}'),
+    ).toMatchObject({ mode: "technical" });
+    // An explicit mode always wins over the heuristic.
+    expect(
+      parseBuddyToolCall('{"tool":"open_content","source":"web","url":"https://arxiv.org/abs/1","mode":"fiction"}'),
+    ).toMatchObject({ mode: "fiction" });
+  });
+
+  it("the prompt advertises ONE open_content tool, not the four separate open_* tools", () => {
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(p).toContain('"tool":"open_content"');
+    expect(p).not.toContain('{"tool":"open_web_text"');
+    expect(p).not.toContain('{"tool":"open_library_book"');
+    expect(p).not.toContain('{"tool":"open_pasted_text"');
+  });
+
   it("parses the assistant-side tools (images, random picks, style, render)", () => {
     expect(parseBuddyToolCall('{"tool":"search_images","query":"thermodynamic cycle diagram"}')).toEqual({
       tool: "search_images",

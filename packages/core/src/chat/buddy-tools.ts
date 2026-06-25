@@ -121,6 +121,30 @@ export type BuddyToolCall =
       slow?: number;
       maType?: "sma" | "ema";
     }
+  /** The SINGLE model-facing tool for opening something to read/illustrate in the reader. The reader
+   * usually just CLICKS a surfaced book/result/file to open it; this is the hands-free path ("open
+   * Frankenstein and illustrate it"). `source` says where the content comes from; the fiction-vs-
+   * technical pipeline is auto-detected unless `mode` is given. `parseBuddyToolCall` normalizes this
+   * into the internal open_library_book / open_web_text / open_pasted_text / open_code shapes below,
+   * so the executor + host stay unchanged. */
+  | {
+      tool: "open_content";
+      source: "library" | "web" | "pasted" | "code";
+      /** library → the book id (from THE READER'S LIBRARY); web → the page URL. */
+      id?: string;
+      url?: string;
+      /** pasted → the prose itself; code → the source code itself. */
+      text?: string;
+      /** code → an optional language hint (e.g. "ts", "py"). */
+      language?: string;
+      /** Display title for the opened book (falls back to the page's / a default title). */
+      title?: string;
+      /** Story vs. concept/diagram pipeline; auto-detected from the content when omitted. */
+      mode?: "fiction" | "technical";
+      visuals?: boolean;
+    }
+  // The four shapes below are INTERNAL: produced by normalizing open_content (no longer advertised to
+  // the model on their own), but kept as the typed contract the host deps + executor consume.
   | { tool: "open_library_book"; id: string; visuals: boolean }
   | {
       tool: "open_web_text";
@@ -746,10 +770,11 @@ export function buildBuddySystemPrompt(opts: {
     "• \"show me / what does X look like\" → search_images (a REAL image). \"draw / generate / imagine\" → " +
     "generate_image (NEW art).\n" +
     "• \"read / summarize / pull a fact from this page\" → read_url (text into the chat). \"open / illustrate this " +
-    "page IN the reader\" → open_web_text.\n" +
-    "• Open something to READ: a library book → open_library_book; a web article → open_web_text; text the reader " +
-    "pasted → open_pasted_text; source code → open_code. (The reader can also just CLICK any surfaced book/result/" +
-    "file to open it — prefer that over re-opening something already shown.)\n" +
+    "page IN the reader\" → open_content (source:\"web\").\n" +
+    "• Open something to READ/illustrate → open_content with source: \"library\" (a saved book), \"web\" (an article " +
+    "URL), \"pasted\" (prose the reader pasted), or \"code\" (source code). Fiction-vs-technical is auto-detected. " +
+    "(The reader can also just CLICK any surfaced book/result/file to open it — prefer that over re-opening something " +
+    "already shown.)\n" +
     (opts.canSearchFiles
       ? "• A file on THEIR computer: find it by NAME → find_files; read its CONTENTS → read_file; SEE a picture → open_image.\n"
       : "") +
@@ -791,23 +816,23 @@ export function buildBuddySystemPrompt(opts: {
     'look like" = the reader wants a REAL image → search_images. "generate / draw / make / create / paint / ' +
     'imagine" = the reader wants NEW art → generate_image. If genuinely ambiguous, prefer search_images for ' +
     "real-world subjects and generate_image only for fictional/invented scenes — or ask.\n" +
-    '- {"tool":"open_library_book","id":"…","visuals":false} — open a book from the library list above.\n' +
-    '- {"tool":"open_web_text","url":"…","title":"…","mode":"fiction","visuals":false} — fetch a text/article/news ' +
-    'URL (or a search hit\'s URL) and open it in the reader. "mode" picks the illustration pipeline: "fiction" for ' +
-    'stories/novels, "technical" for articles, papers, news and non-fiction. Use this ONLY when the reader wants to ' +
-    "READ or illustrate the page IN THE READER — it takes over the screen. To merely ANSWER a question about a page, " +
-    "summarize it, or pull a fact from it, use read_url (pulls the text into the chat) — do NOT open it as a book. And " +
-    "NEVER re-open a page (or any book) that's already open: if it's already showing, just talk about it.\n" +
-    '- {"tool":"open_pasted_text","text":"…","title":"…","mode":"fiction","visuals":false} — open PROSE the reader ' +
-    'PASTED or wrote into the chat (a poem, lyrics, an excerpt, an article) so they can READ/illustrate it. Put the ' +
-    'passage ITSELF in "text" — never a how-to, a list of steps, or an explanation ABOUT something, and never code/HTML ' +
-    "you generated (that belongs in a fenced ```code``` block they can SAVE, not a book). For anything book-length, ask " +
-    "them to use the upload button instead.\n" +
-    '- {"tool":"open_code","code":"…","title":"auth.ts","language":"ts","visuals":true} — open SOURCE CODE ' +
-    "the reader shared (or that YOU wrote and they want to study) as a 'code book': it gets its own analysis " +
-    "(a glossary of functions, module map, control-/data-flow diagrams) and a syntax-highlighted reader view. " +
-    'Put the ACTUAL code in "code" (never a description of it). Use this — NOT open_pasted_text — for anything ' +
-    "that is code/markup/config.\n" +
+    '- {"tool":"open_content","source":"library|web|pasted|code", …} — the ONE way to OPEN something to ' +
+    "READ/illustrate IN THE READER (it takes over the screen). Pick `source`:\n" +
+    '    • "library" → {"source":"library","id":"…"} open a book from THE READER\'S LIBRARY above (use its id; never invent one).\n' +
+    '    • "web" → {"source":"web","url":"…","title":"…"} fetch an article/news/text URL (or a search hit\'s URL) and open it.\n' +
+    '    • "pasted" → {"source":"pasted","text":"…","title":"…"} open PROSE the reader pasted/wrote (a poem, lyrics, an excerpt). ' +
+    'Put the passage ITSELF in "text" — never a how-to/explanation, and never code/HTML you generated (that goes in a fenced ```code``` block).\n' +
+    '    • "code" → {"source":"code","text":"…","title":"auth.ts","language":"ts"} open SOURCE CODE as a "code book" ' +
+    "(its own glossary + module map + syntax-highlighted view). Put the ACTUAL code in \"text\".\n" +
+    "  The fiction-vs-technical pipeline is auto-detected — only add \"mode\":\"fiction\"|\"technical\" to OVERRIDE it. " +
+    "Use open_content ONLY to actually READ/illustrate something: to merely ANSWER about a page, summarize it, or pull a " +
+    "fact, use read_url instead. NEVER re-open something already showing — just talk about it. (The reader can also " +
+    "CLICK any surfaced book/result to open it, so prefer that when they've already got one in front of them.)\n" +
+    '- {"tool":"create_spreadsheet","title":"Monthly Budget","columns":[{"name":"Category"},{"name":"Budget","type":"number"},' +
+    '{"name":"Spent","type":"number"},{"name":"Remaining","type":"number"}],"rows":[["Rent",1500,1200,"=B2-C2"]]} — ' +
+    "GENERATE a new spreadsheet from scratch and open it in the data view (a budget, tracker, planner, schedule, " +
+    'invoice…). Give "columns" (name + optional "number"/"string" type) and optional seed "rows"; a cell starting with ' +
+    '"=" is an Excel formula (use {r}-free explicit refs here, e.g. "=B2-C2"). FIRST ask the reader the important ' +
     '- {"tool":"create_spreadsheet","title":"Monthly Budget","columns":[{"name":"Category"},{"name":"Budget","type":"number"},' +
     '{"name":"Spent","type":"number"},{"name":"Remaining","type":"number"}],"rows":[["Rent",1500,1200,"=B2-C2"]]} — ' +
     "GENERATE a new spreadsheet from scratch and open it in the data view (a budget, tracker, planner, schedule, " +
@@ -1272,6 +1297,21 @@ function stripTrailingCommas(s: string): string {
   return out;
 }
 
+/** Best-effort fiction-vs-technical guess for open_content when `mode` is omitted, from the
+ * title/url/text: technical for paper/doc/news/data/reference-shaped content, fiction otherwise
+ * (the safe default for prose/stories). The reader can flip a book's mode after it opens. */
+export function inferContentMode(sample: string): "fiction" | "technical" {
+  const s = sample.toLowerCase();
+  if (
+    /\b(paper|study|journal|arxiv|doi|abstract|figure|dataset|data|report|manual|spec|documentation|docs|reference|api|tutorial|guide|wikipedia|wiki|news|analysis|theorem|equation|algorithm|finance|market)\b/.test(
+      s,
+    )
+  )
+    return "technical";
+  if (/https?:\/\/[^\s]*(\.gov|\.edu|wikipedia\.org|arxiv\.org|github\.com|docs\.)/.test(s)) return "technical";
+  return "fiction";
+}
+
 /** The first tool call in a reply (back-compat — the planner runs one tool at a time). */
 export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
   return parseBuddyToolCalls(text)[0];
@@ -1690,6 +1730,46 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       ...(style ? { style } : {}),
       ...(steps !== undefined ? { steps } : {}),
     };
+  }
+  if (tool === "open_content") {
+    // The single model-facing open tool: normalize to the internal open_* shapes by `source`, and
+    // auto-detect fiction/technical when `mode` is omitted (the reader can flip it after it opens).
+    const title = strArg(obj.title, MAX_TITLE_CHARS);
+    const visuals = obj.visuals === true;
+    const explicitMode = obj.mode === "technical" ? "technical" : obj.mode === "fiction" ? "fiction" : undefined;
+    if (obj.source === "library") {
+      const id = strArg(obj.id, MAX_ID_CHARS);
+      return id ? { tool: "open_library_book", id, visuals } : undefined;
+    }
+    if (obj.source === "web") {
+      const url = strArg(obj.url, MAX_URL_CHARS);
+      if (!url || !/^https?:\/\//i.test(url)) return undefined;
+      return {
+        tool: "open_web_text",
+        url,
+        ...(title ? { title } : {}),
+        mode: explicitMode ?? inferContentMode(`${title ?? ""} ${url}`),
+        visuals,
+      };
+    }
+    if (obj.source === "pasted") {
+      const text = strArg(obj.text, MAX_PASTE_CHARS);
+      if (!text) return undefined;
+      return {
+        tool: "open_pasted_text",
+        text,
+        title: title ?? "Pasted text",
+        mode: explicitMode ?? inferContentMode(`${title ?? ""} ${text}`),
+        visuals,
+      };
+    }
+    if (obj.source === "code") {
+      const code = strArg(obj.text, MAX_PASTE_CHARS);
+      if (!code) return undefined;
+      const language = strArg(obj.language, MAX_NAME_CHARS);
+      return { tool: "open_code", code, title: title ?? "Code", ...(language ? { language } : {}), visuals };
+    }
+    return undefined;
   }
   if (tool === "open_library_book") {
     const id = strArg(obj.id, MAX_ID_CHARS);
