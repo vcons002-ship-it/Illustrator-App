@@ -5786,7 +5786,7 @@ export function App() {
           : "done";
 
   return (
-    <div style={styles.shell}>
+    <div style={book?.kind === "story" ? { ...styles.shell, paddingRight: STORY_DOCK_W } : styles.shell}>
       <style>{KEYFRAMES}</style>
       {/* PRIVACY CURTAIN: while a phone drives this desktop in incognito, the engine runs here but the
           desktop's own screen stays hidden so a bystander can't see the remote session. Kept DISCREET on
@@ -6019,7 +6019,7 @@ export function App() {
           >
             🖼 Photo
           </button>
-          {book && (
+          {book && book.kind !== "story" && (
             <button
               style={styles.button}
               onClick={() => setShowChat(true)}
@@ -6359,18 +6359,10 @@ export function App() {
         </div>
       )}
 
-      {(!book || (showChat && book.kind === "story")) && (
-        <section style={!book ? styles.buddySection : styles.storyChatOverlay}>
-          {book?.kind === "story" && (
-            <button
-              style={styles.storyChatClose}
-              onClick={() => setShowChat(false)}
-              title="Hide the chat and view the illustrated story"
-            >
-              ✕ View story
-            </button>
-          )}
+      {(!book || book.kind === "story") && (
+        <section style={!book ? styles.buddySection : styles.storyChatDock}>
           <ChatBuddyPanel
+            {...(book?.kind === "story" ? { fill: true } : {})}
             messages={buddyPanelMessages}
             {...(buddyStreaming ? { streamingText: buddyStreaming } : {})}
             {...(buddyThinking ? { thinking: buddyThinking } : {})}
@@ -8434,6 +8426,10 @@ const KEYFRAMES =
   `details > summary { list-style: none; }\n` +
   `details > summary::-webkit-details-marker { display: none; }`;
 
+/** Width of the always-on story chat sidebar; the shell reserves this much on the right when a story
+ * is open so the reader/header never sit underneath it. */
+const STORY_DOCK_W = "min(460px, 42vw)";
+
 const styles: Record<string, React.CSSProperties> = {
   shell: {
     minHeight: "100vh",
@@ -8600,32 +8596,23 @@ const styles: Record<string, React.CSSProperties> = {
   },
   empty: { padding: "10px 24px 8px", maxWidth: 760, fontSize: 13, opacity: 0.8, lineHeight: 1.5 },
   buddySection: { padding: "0 24px 20px", display: "flex", justifyContent: "center" },
-  // A story keeps its buddy/story chat mounted OVER the open reader (toggled by the chat
-  // button): the chat drives the next beat; "✕ View story" hides it to see the growing
-  // illustrated story behind. Reuses ChatBuddyPanel — the full buddy toolset incl. the
-  // story tools — so the same surface that started the story continues it.
-  storyChatOverlay: {
+  // A story docks its chat as an ALWAYS-VISIBLE right sidebar beside the growing illustrated story,
+  // so you co-write and watch it build at once — no toggle, nothing covering the reader. The shell
+  // gets a matching right padding so the reader/header never sit under the dock. Reuses ChatBuddyPanel
+  // (the same surface that started the story continues it).
+  storyChatDock: {
     position: "fixed",
-    inset: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+    width: STORY_DOCK_W,
     zIndex: 60,
     display: "flex",
     flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    padding: 12,
-    background: "rgba(0,0,0,0.55)",
-    backdropFilter: "blur(2px)",
-  },
-  storyChatClose: {
-    alignSelf: "flex-end",
-    background: "#23262d",
-    color: "#e6e6e6",
-    border: "1px solid rgba(255,255,255,0.18)",
-    borderRadius: 8,
-    padding: "6px 12px",
-    fontSize: 13,
-    cursor: "pointer",
+    padding: 10,
+    boxSizing: "border-box",
+    background: "#0e0f13",
+    borderLeft: "1px solid rgba(255,255,255,0.12)",
   },
   // "Lock this look" control under a story beat's image: pin it as a character's reference.
   lockLook: { marginTop: 6, display: "flex", flexDirection: "column", gap: 4 },

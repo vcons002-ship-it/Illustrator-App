@@ -128,6 +128,9 @@ export interface ChatBuddyPanelProps {
   onSetWorkingDir?: (dir: string) => void;
   /** Native folder picker (desktop); resolves to a path or undefined on cancel. */
   onPickFolder?: () => Promise<string | undefined>;
+  /** Fill the parent container (width + height 100%) instead of the centered full-window card —
+   * used when the panel is docked beside the story reader. */
+  fill?: boolean;
 }
 
 export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanelProps) {
@@ -222,7 +225,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   );
 
   return (
-    <div style={panelStyle}>
+    <div style={props.fill ? { ...panelStyle, width: "100%", height: "100%" } : panelStyle}>
       <div style={headerStyle}>
         {props.sessions && props.onSwitchSession ? (
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
