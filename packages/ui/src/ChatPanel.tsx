@@ -36,10 +36,41 @@ export interface ChatMessageVM {
   gallery?: { thumb: string; full: string; title?: string }[];
   /** Clickable local-file results (desktop `/find`); each opens the book on click. */
   files?: { path: string; name: string }[];
+  /** Files surfaced by the turn (created OR found) shown as a universal file card with
+   * Download / Open in app / Open in library / Open on PC actions. */
+  attachments?: FileRef[];
   /** Quick-reply action buttons (e.g. what to do with a pasted link). */
   actions?: { label: string; send: string }[];
   /** The model's reasoning for this turn, shown as a collapsed "Reasoning" disclosure. */
   thinking?: string;
+}
+
+/** A file surfaced in chat — something the assistant created (a code block, a spreadsheet, an
+ * export, a generated image) or something found (a `/find` hit on the PC). The universal file
+ * card offers the same actions for all of them; which apply is derived from `kind` + platform. */
+export interface FileRef {
+  name: string;
+  mime: string;
+  kind: "code" | "doc" | "data" | "image" | "text" | "found" | "export";
+  /** In-chat text/code content the assistant authored. */
+  content?: string;
+  /** Raw bytes (a generated image, an exported document). */
+  bytes?: ArrayBuffer;
+  /** A path to a file already on the user's computer (a desktop `/find` result). */
+  path?: string;
+}
+
+/** The four universal file-card actions, wired once by the app and reused for every surfaced file.
+ * Each is optional; the card only renders the ones provided (and the ones that fit the file/platform). */
+export interface FileActions {
+  /** Save a copy — a browser download on the web, the exports folder on desktop (returns the path). */
+  download?: (file: FileRef) => Promise<string | true>;
+  /** Open the file's content/path in the reader (import → open). */
+  openInApp?: (file: FileRef) => void;
+  /** Add it to the library and open it. */
+  openInLibrary?: (file: FileRef) => void;
+  /** Desktop: open it in the OS default app (saving a copy first when it's in-chat content). */
+  openOnPC?: (file: FileRef) => void;
 }
 
 export type MessageBlock =
@@ -223,6 +254,10 @@ export interface ChatPanelProps {
   onBuildDocument?: BuildDocumentFn;
   /** Download a grounded analysis-result table as a real .xlsx / .csv (host builds it). */
   onDownloadData?: (table: DataTable, name: string, format: "xlsx" | "csv") => void;
+  /** Universal file-card actions (Download / Open in app / Open in library / Open on PC). */
+  fileActions?: FileActions;
+  /** Desktop build — enables the Open-on-PC file action. */
+  desktop?: boolean;
   /** Latest context-usage breakdown (for the usage donut). */
   contextUsage?: ContextUsage;
 }
@@ -316,6 +351,8 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
               {...(props.onSaveProject ? { onSaveProject: props.onSaveProject } : {})}
               {...(props.onBuildDocument ? { onBuildDocument: props.onBuildDocument } : {})}
               {...(props.onDownloadData ? { onDownloadData: props.onDownloadData } : {})}
+              {...(props.fileActions ? { fileActions: props.fileActions } : {})}
+              {...(props.desktop ? { desktop: props.desktop } : {})}
             />
           ))}
           {props.thinking ? <ThinkingBlock text={props.thinking} /> : null}
@@ -541,6 +578,8 @@ export const MessageBubble = memo(function MessageBubble({
   onSaveProject,
   onBuildDocument,
   onDownloadData,
+  fileActions,
+  desktop,
 }: {
   message: ChatMessageVM;
   index?: number;
@@ -559,6 +598,10 @@ export const MessageBubble = memo(function MessageBubble({
   onBuildDocument?: BuildDocumentFn;
   /** Download a grounded analysis-result table as .xlsx / .csv. Stable (memo). */
   onDownloadData?: (table: DataTable, name: string, format: "xlsx" | "csv") => void;
+  /** Universal file-card actions (Download / Open in app / Open in library / Open on PC). Stable (memo). */
+  fileActions?: FileActions;
+  /** Desktop build — enables the Open-on-PC action. */
+  desktop?: boolean;
 }) {
   const isUser = message.role === "user";
   const url = useMessageImageUrl(message.image);
@@ -603,6 +646,8 @@ export const MessageBubble = memo(function MessageBubble({
                   {...(b.filename ? { filename: b.filename } : {})}
                   {...(onSaveFile ? { onSaveFile } : {})}
                   {...(onRunCode ? { onRunCode } : {})}
+                  {...(fileActions ? { fileActions } : {})}
+                  {...(desktop ? { desktop } : {})}
                 />
               )
             ) : b.text.trim() ? (
@@ -654,18 +699,39 @@ export const MessageBubble = memo(function MessageBubble({
           ))}
         </ol>
       ) : null}
+      {message.attachments?.length ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 2 }}>
+          {message.attachments.map((f, i) =>
+            fileActions ? (
+              <FileActionBar key={i} file={f} actions={fileActions} label {...(desktop ? { desktop } : {})} />
+            ) : null,
+          )}
+        </div>
+      ) : null}
       {message.files?.length ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
-          {message.files.map((f, i) => (
-            <button
-              key={i}
-              style={fileChipStyle}
-              title={`Open ${f.path}`}
-              onClick={() => onOpenLocalFile?.(f.path)}
-            >
-              📄 {f.name}
-            </button>
-          ))}
+          {message.files.map((f, i) =>
+            // A found PC file: the universal card (Open in app / Download / Open on PC) when wired,
+            // else the plain open-on-click chip the desktop /find has always shown.
+            fileActions ? (
+              <FileActionBar
+                key={i}
+                file={{ name: f.name, path: f.path, mime: "", kind: "found" }}
+                actions={fileActions}
+                label
+                {...(desktop ? { desktop } : {})}
+              />
+            ) : (
+              <button
+                key={i}
+                style={fileChipStyle}
+                title={`Open ${f.path}`}
+                onClick={() => onOpenLocalFile?.(f.path)}
+              >
+                📄 {f.name}
+              </button>
+            ),
+          )}
         </div>
       ) : null}
       {message.actions?.length ? (
@@ -692,6 +758,129 @@ const fileChipStyle = {
   fontSize: 12,
   cursor: "pointer",
 } as const;
+
+const fileMenuStyle = {
+  position: "absolute",
+  zIndex: 5,
+  marginTop: 4,
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+  background: "#1b1d26",
+  border: "1px solid rgba(255,255,255,0.18)",
+  borderRadius: 6,
+  padding: 4,
+  minWidth: 150,
+  boxShadow: "0 6px 18px rgba(0,0,0,0.4)",
+} as const;
+
+const fileMenuItemStyle = {
+  textAlign: "left",
+  background: "transparent",
+  color: "inherit",
+  border: "none",
+  borderRadius: 4,
+  padding: "5px 8px",
+  fontSize: 12,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+} as const;
+
+type FileActionKey = "dl" | "app" | "lib" | "pc";
+type FileActionItem = { key: FileActionKey; label: string; title: string; run: () => void | Promise<unknown> };
+
+/** Which file-card actions apply to a file — pure so it's unit-testable. `has` flags which
+ * callbacks the app wired. Rules: Download always (when wired); Open-in-app for everything but a
+ * pure export; Open-in-library only for book-like files (not a bare image or export); Open-on-PC
+ * desktop-only. Order is stable (download, app, library, pc) so the first stays the inline button. */
+export function fileActionKeys(
+  kind: FileRef["kind"],
+  has: { download?: boolean; openInApp?: boolean; openInLibrary?: boolean; openOnPC?: boolean },
+  desktop?: boolean,
+): FileActionKey[] {
+  const keys: FileActionKey[] = [];
+  if (has.download) keys.push("dl");
+  if (has.openInApp && kind !== "export") keys.push("app");
+  if (has.openInLibrary && kind !== "image" && kind !== "export") keys.push("lib");
+  if (desktop && has.openOnPC) keys.push("pc");
+  return keys;
+}
+
+const FILE_ACTION_LABEL: Record<FileActionKey, { label: string; title: string }> = {
+  dl: { label: "💾 Download", title: "Save a copy of this file" },
+  app: { label: "📖 Open in app", title: "Open it in the reader" },
+  lib: { label: "📚 Open in library", title: "Add it to your library and open it" },
+  pc: { label: "🖥 Open on PC", title: "Open it in your computer's default app" },
+};
+
+/**
+ * The universal file card's action bar — shown under ANY file the assistant created or found:
+ * Download, Open in app, Open in library, Open on PC. Only the actions provided AND applicable to
+ * the file/platform render; the first stays inline and the rest collapse into a ▾ More dropdown so
+ * the row stays compact. One component, reused for code blocks, found files, and surfaced artifacts.
+ */
+export function FileActionBar({
+  file,
+  actions,
+  desktop,
+  label,
+}: {
+  file: FileRef;
+  actions: FileActions;
+  desktop?: boolean;
+  /** Show the file name as a leading chip (used by the attachments list; off inside a CodeCard). */
+  label?: boolean;
+}) {
+  const [busy, setBusy] = useState<string | undefined>();
+  const runFor: Record<FileActionKey, () => void | Promise<unknown>> = {
+    dl: () => actions.download!(file),
+    app: () => actions.openInApp!(file),
+    lib: () => actions.openInLibrary!(file),
+    pc: () => actions.openOnPC!(file),
+  };
+  const items: FileActionItem[] = fileActionKeys(
+    file.kind,
+    { download: !!actions.download, openInApp: !!actions.openInApp, openInLibrary: !!actions.openInLibrary, openOnPC: !!actions.openOnPC },
+    desktop,
+  ).map((key) => ({ key, ...FILE_ACTION_LABEL[key], run: runFor[key] }));
+  if (items.length === 0) return null;
+  const fire = async (it: FileActionItem) => {
+    setBusy(it.key);
+    try {
+      await it.run();
+    } catch {
+      /* the app surfaces its own error note */
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const primary = items[0]!;
+  const rest = items.slice(1);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+      {label ? <span style={{ opacity: 0.7, fontSize: 11, marginRight: 2 }}>📎 {file.name}</span> : null}
+      <button style={fileChipStyle} title={primary.title} disabled={busy === primary.key} onClick={() => void fire(primary)}>
+        {busy === primary.key ? "…" : primary.label}
+      </button>
+      {rest.length === 1 ? (
+        <button style={fileChipStyle} title={rest[0]!.title} disabled={busy === rest[0]!.key} onClick={() => void fire(rest[0]!)}>
+          {busy === rest[0]!.key ? "…" : rest[0]!.label}
+        </button>
+      ) : rest.length > 1 ? (
+        <details style={{ position: "relative" }}>
+          <summary style={{ ...fileChipStyle, listStyle: "none", cursor: "pointer" }}>⋯ More</summary>
+          <div style={fileMenuStyle}>
+            {rest.map((it) => (
+              <button key={it.key} style={fileMenuItemStyle} title={it.title} disabled={busy === it.key} onClick={() => void fire(it)}>
+                {it.label}
+              </button>
+            ))}
+          </div>
+        </details>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * A row of retrieved-image thumbnails (a multi-hit `search_images`). Every result
@@ -869,12 +1058,17 @@ function CodeCard({
   filename: rawFilename,
   onSaveFile,
   onRunCode,
+  fileActions,
+  desktop,
 }: {
   lang: string;
   code: string;
   filename?: string;
   onSaveFile?: (filename: string, content: string, mime: string) => Promise<string | true>;
   onRunCode?: RunCodeFn;
+  /** Universal file-card actions (open in app / library / on PC) for the file this block creates. */
+  fileActions?: FileActions;
+  desktop?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState<string | undefined>();
@@ -946,6 +1140,18 @@ function CodeCard({
           </button>
         </span>
       </div>
+      {fileActions ? (
+        // The created file's universal actions (Save above is the Download; these add the rest).
+        <FileActionBar
+          file={{ name: filename, mime, kind: runnable || /^(ts|tsx|js|jsx|py|rb|go|rs|java|c|cpp|sh|css|json)$/.test(ext) ? "code" : "text", content: code }}
+          actions={{
+            ...(fileActions.openInApp ? { openInApp: fileActions.openInApp } : {}),
+            ...(fileActions.openInLibrary ? { openInLibrary: fileActions.openInLibrary } : {}),
+            ...(fileActions.openOnPC ? { openOnPC: fileActions.openOnPC } : {}),
+          }}
+          {...(desktop ? { desktop } : {})}
+        />
+      ) : null}
       {previewOpen && previewable ? (
         // Sandboxed in-app render: scripts run (so a coded page/widget actually works) but it has no
         // same-origin access — it can't touch the app, cookies, or storage.

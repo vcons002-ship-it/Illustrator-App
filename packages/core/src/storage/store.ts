@@ -12,6 +12,18 @@ export interface BookSummary {
   addedAt: number;
 }
 
+/** A file surfaced in a chat message — created by the assistant (a code block, spreadsheet,
+ * export, generated image) or found on the PC (a `/find` hit). Persisted so its action card
+ * survives reload. Structurally mirrors the UI's `FileRef` (bytes stored as ArrayBuffer). */
+export interface ChatFileRef {
+  name: string;
+  mime: string;
+  kind: "code" | "doc" | "data" | "image" | "text" | "found" | "export";
+  content?: string;
+  bytes?: ArrayBuffer;
+  path?: string;
+}
+
 /** One persisted reading-companion chat message (per book). Image bytes are kept
  * so a generated/retrieved picture survives reload; `links` keep search sources. */
 export interface StoredChatMessage {
@@ -30,6 +42,9 @@ export interface StoredChatMessage {
   analysis?: { table: DataTable; summary?: string; chart?: AnalyzeChart };
   /** Clickable local-file results (the desktop `/find` command); each opens on click. */
   files?: { path: string; name: string }[];
+  /** Files surfaced by the turn (created OR found), shown as a universal file card with
+   * Download / Open in app / Open in library / Open on PC actions. Mirrors the UI's `FileRef`. */
+  attachments?: ChatFileRef[];
   /** Quick-reply action buttons (e.g. what to do with a pasted link). */
   actions?: { label: string; send: string }[];
   /** The model's reasoning for this turn (a thinking model's scratchpad), shown as a collapsible

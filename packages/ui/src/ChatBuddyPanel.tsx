@@ -8,6 +8,7 @@ import {
   completeSlash,
   type BuildDocumentFn,
   type ChatMessageVM,
+  type FileActions,
   type RunCodeFn,
 } from "./ChatPanel.js";
 import {
@@ -116,6 +117,8 @@ export interface ChatBuddyPanelProps {
   onSaveProject?: (files: ProjectFile[]) => Promise<string | true>;
   /** Generate + embed a designed document's images. */
   onBuildDocument?: BuildDocumentFn;
+  /** Universal file-card actions (Download / Open in app / Open in library / Open on PC). Stable (memo). */
+  fileActions?: FileActions;
   /** The session's working folder ("" = default workspace). Present → show the picker. */
   workingDir?: string;
   /** Set the working folder run_command/find_files operate in ("" resets to default). */
@@ -342,6 +345,8 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             {...(props.onRunCode ? { onRunCode: props.onRunCode } : {})}
             {...(props.onSaveProject ? { onSaveProject: props.onSaveProject } : {})}
             {...(props.onBuildDocument ? { onBuildDocument: props.onBuildDocument } : {})}
+            {...(props.fileActions ? { fileActions: props.fileActions } : {})}
+            {...(props.desktop ? { desktop: props.desktop } : {})}
             onAction={props.onSend}
           />
         ))}
