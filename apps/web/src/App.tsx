@@ -1052,6 +1052,11 @@ export function App() {
   taskPlansRef.current = taskPlans;
   const activeBuddyIdRef = useRef(activeBuddyId);
   activeBuddyIdRef.current = activeBuddyId;
+  // Starting a "story as you go" spins up a fresh dedicated session; this remembers the session we
+  // came from so exiting the story book returns there. The switch fn is held in a ref because
+  // onExitBook is defined far above onSwitchBuddySession (avoids a TDZ in the dep array).
+  const storyReturnSessionRef = useRef<string | undefined>(undefined);
+  const switchBuddyRef = useRef<((id: string) => void) | undefined>(undefined);
   /** The plan whose execution chat is the active session (the task being "worked"), if any. */
   const activeTaskPlanId = () => resolveActiveTaskPlanId(taskPlansRef.current, activeBuddyIdRef.current);
   const persistSessions = useCallback(
@@ -1726,6 +1731,11 @@ export function App() {
     setShowCharacters(false);
     // On a linked phone, remember which book we closed so the desktop's passive re-mirrors don't reopen it.
     if (isRemoteClient) phoneExitedBookId.current = bookRef.current?.id;
+    // Exiting a "story as you go" returns to the chat session we started it from (its history intact);
+    // the dedicated story session is kept in the list so the book can be resumed later.
+    const ret = storyReturnSessionRef.current;
+    storyReturnSessionRef.current = undefined;
+    if (ret && bookRef.current?.kind === "story") switchBuddyRef.current?.(ret);
     setBook(undefined);
     closeBook();
   }, [closeBook, chatCancel, isRemoteClient]);
@@ -4819,9 +4829,35 @@ export function App() {
       setShowStorySetup(false);
       setShowChat(true);
       const bubble = `✍️ Starting a story — ${payload.opening.slice(0, 80)}${payload.opening.length > 80 ? "…" : ""}`;
-      void dispatchBuddyTurn(chatTurnsOf(buddyMessages), `/story ${JSON.stringify(payload)}`, bubble);
+      const command = `/story ${JSON.stringify(payload)}`;
+      // Remember where we came from so exiting the story returns us there (history intact).
+      storyReturnSessionRef.current = activeBuddyIdRef.current;
+      // On a linked phone the session lives on the desktop — keep the in-place dispatch (the desktop
+      // owns session creation) rather than spinning up a local one the mirror won't know about.
+      if (isRemoteClient) {
+        void dispatchBuddyTurn(chatTurnsOf(buddyMessages), command, bubble);
+        return;
+      }
+      // Open the story in a FRESH, dedicated book-only chat. A clean (empty) writer context is what
+      // makes the model reliably reply with beat prose — which the worker then lands in the book —
+      // instead of conversational filler inherited from whatever chat we were just in.
+      const sid = `${BUDDY_CHAT_ID}-${Date.now().toString(36)}`;
+      const label = `Story · ${payload.title || payload.opening.slice(0, 24)}`.slice(0, 60);
+      resetBuddyView();
+      setBuddySessions((prev) => {
+        const next = [...prev, { id: sid, workingDir: "", label }];
+        persistSessions(next);
+        return next;
+      });
+      setActiveBuddyId(sid);
+      activeBuddyIdRef.current = sid; // synchronous: the dispatch below must run against the new session
+      setBuddyMessages([]);
+      void libraryStore.putMemo?.("buddy-active-session", sid).catch(() => {});
+      void dispatchBuddyTurn([], command, bubble); // empty history → clean story context
     },
-    [buddyMessages],
+    // resetBuddyView is intentionally omitted — it's defined later in this component; referencing it
+    // in the dep array would evaluate before initialization (TDZ). It's stable, so this is safe.
+    [buddyMessages, isRemoteClient, libraryStore, persistSessions],
   );
 
   // Attach a file to the next buddy message. Documents (PDF/Word/Excel/CSV/text/EPUB) are
@@ -5132,6 +5168,7 @@ export function App() {
     },
     [isRemoteClient, sendAppSync, activeBuddyId, libraryStore, resetBuddyView, loadBuddyPlan],
   );
+  switchBuddyRef.current = onSwitchBuddySession; // so onExitBook (defined earlier) can restore a session
   const onNewBuddySession = useCallback(() => {
     if (isRemoteClient) {
       sendAppSync({ type: "vrcmd:chatNew" }); // create on the desktop; the mirror brings it back
