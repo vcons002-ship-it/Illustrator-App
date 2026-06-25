@@ -84,6 +84,9 @@ export interface BookSource {
     mode?: "direct" | "roleplay";
     /** Roleplay only: the played character NAMES (me = reader, you = assistant) for narration labels. */
     play?: { me?: string; you?: string };
+    /** Rolling "story so far" synopsis (plot/relationships/threads), refreshed every N beats and fed
+     * back to the writer so continuity survives chat-history trimming on long stories. */
+    synopsis?: string;
     /** How often a beat auto-illustrates. */
     cadence?: { mode: "per-response" | "every-n" | "manual"; n: number };
     /**
