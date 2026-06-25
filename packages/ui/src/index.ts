@@ -1,4 +1,5 @@
 export * from "./useScrollDepth.js";
+export * from "./useMediaQuery.js";
 export * from "./BloomTransition.js";
 export * from "./SpoilerGate.js";
 export * from "./ImagePanel.js";

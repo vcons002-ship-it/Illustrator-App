@@ -210,6 +210,7 @@ import {
   LibraryPanel,
   SettingsPanel,
   useScrollDepth,
+  useNarrow,
   ConceptCard,
   ConceptText,
   HtmlParagraph,
@@ -1126,6 +1127,11 @@ export function App() {
   // so a buddy-initiated open continues the conversation inside the reader.
   const buddyHandoff = useRef<StoredChatMessage[] | undefined>(undefined);
   const { registerParagraph, activeParagraphId, activeParagraphProgress } = useScrollDepth();
+  // Phone-sized viewport → single-column reader, auto-collapsed toolbar + chat history.
+  const narrow = useNarrow(760);
+  // Top toolbar's big button row collapses behind a "Tools" caret — default collapsed on phones
+  // to reclaim vertical space; the title + Exit book + mode badge stay visible regardless.
+  const [toolbarOpen, setToolbarOpen] = useState(() => !narrow);
 
   // Decrypt stored keys after mount, then enable persistence. Persisting is gated
   // on hydration so the initial empty-keys render can't clobber the saved keys.
@@ -5857,6 +5863,16 @@ export function App() {
                   : "📖 Story"}
             </span>
           )}
+          <button
+            style={toolbarOpen ? { ...styles.button, borderColor: "rgba(120,160,255,0.6)", color: "#acc4ff" } : styles.button}
+            onClick={() => setToolbarOpen((v) => !v)}
+            title="Show or hide the toolbar — collapse it to reclaim screen space, especially on a phone"
+            aria-expanded={toolbarOpen}
+          >
+            {toolbarOpen ? "▾ Tools" : "▸ Tools"}
+          </button>
+          {toolbarOpen && (
+          <>
           {book?.contentMode === "code" && (
             <button
               style={styles.button}
@@ -6298,6 +6314,8 @@ export function App() {
             onConnectGoogle={onConnectGoogle}
             onDisconnectGoogle={onDisconnectGoogle}
           />
+          </>
+          )}
         </div>
         </div>
         {book && (
