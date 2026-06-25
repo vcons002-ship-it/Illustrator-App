@@ -564,10 +564,16 @@ export function buildBuddySystemPrompt(opts: {
   canMarkets?: boolean;
   /** The active task plan's context (this chat opened a task) — enables the step tools. */
   activeTask?: string;
-  /** A co-written story is currently OPEN — advertise the continue/render/cadence tools so the reader
-   * keeps building it in chat. Stories are STARTED by a click (Open Book → Story as you go), never by a
-   * tool, so start_story is never advertised regardless of this flag. */
+  /** A co-written story is currently OPEN. The model writes the next beat as a PLAIN PROSE reply
+   * (no tool — the app turns the reply into the beat and illustrates it); this flag switches the
+   * prompt into that story-writing mode. Stories are STARTED by a click, never by a tool. */
   storyActive?: boolean;
+  /** Which story workflow is open: "direct" (the reader directs, you narrate) or "roleplay"
+   * (the reader steers their character; you voice everyone). Only meaningful with storyActive. */
+  storyMode?: "direct" | "roleplay";
+  /** Roleplay only: the played character names so the narration uses them by name. `me` = the
+   * character the READER plays; `you` = the character the assistant plays. */
+  storyPlay?: { me?: string; you?: string };
 }): string {
   const persona =
     opts.persona === "planning"
@@ -828,23 +834,28 @@ export function buildBuddySystemPrompt(opts: {
     (opts.canGoogle ? "• Email: compose → draft_email (the default); only send_email when they explicitly say \"send\".\n" : "") +
     "• A multi-step job → set_plan first, then work the steps (complete_step as you finish each). Every tool's result " +
     "comes back to you, so CHAIN tools: search → read → write → run, reacting to each result.\n\n";
-  // Story "as you go" is STARTED by a click (Open Book → ✍️ Story as you go), not a tool — so start_story
-  // is never advertised. Once a story IS open, the continuation tools appear so the reader keeps building it
-  // in chat (the "reopen to add beats" loop). Empty when no story is open.
+  // Story "as you go": once a story is OPEN, the model just writes the next beat as a normal prose
+  // reply — NO tool. The app turns that reply into the beat and illustrates it (cadence + redraw are
+  // the reader's UI controls). This keeps the model out of tool-juggling. Empty when no story is open.
+  const play = opts.storyPlay ?? {};
+  const roleplayLine =
+    opts.storyMode === "roleplay"
+      ? `This is ROLEPLAY: the reader plays ${play.me || "their character"}, and you voice ${
+          play.you || "your character"
+        } and everyone else. The reader's message is ${play.me || "their character"}'s action/line — narrate what ` +
+        "happens next for the WHOLE scene (their character included), in flowing prose, referring to everyone by " +
+        "their established names. Never decide the reader's intentions for them; respond to what they did.\n"
+      : "This is DIRECT WRITING: the reader's message tells you what should happen (or asks for more); you write " +
+        "the next stretch of narrative.\n";
   const storyBlock = opts.storyActive
-    ? '- {"tool":"continue_story","text":"<the next beat — a vivid full scene>"} — advance the OPEN story by one beat. ' +
-      "Write a rich, FULL-SCENE paragraph (who is there, where, what happens, the mood) using the bible's established " +
-      "names so the image stays consistent; it illustrates automatically (per the cadence). In role-play, write ONLY " +
-      "your character's part and end on a beat that invites the reader's next move. This is the main loop once a story is open.\n" +
-      '- {"tool":"render_scene","from":3,"to":3} — illustrate a chosen part of the open story ON DEMAND ("draw the last ' +
-      'bit", or under manual cadence). "from"/"to" are 1-based beat numbers; omit them to illustrate the most recent beat.\n' +
-      '- {"tool":"set_story_cadence","mode":"per-response"} — how OFTEN the open story auto-illustrates: "per-response" ' +
-      '(default, an image every beat), "every-n" with "n" (an image every N beats), or "manual" (only on render_scene).\n' +
-      "STORY MODE (a story is open): the reader sends what happens next (or their character's line); you reply by calling " +
-      "continue_story with the NEXT BEAT as vivid, FULL-SCENE prose, reusing the bible's established character/place names " +
-      "so the art stays consistent; it illustrates automatically. Keep beats moving and end on a hook that invites the " +
-      "reader's next move. In ROLE-PLAY, write ONLY your character's part each beat — never the reader's. Do NOT call " +
-      "open_content for a story you're co-writing; just continue_story. After a tool runs, reply with ONE short line.\n"
+    ? "STORY MODE (a story is open). The reader's message is their STEER. Reply with ONLY the next beat of the " +
+      "story — vivid, full-scene narrative PROSE that continues from the STORY STATE and recent beats, narrates the " +
+      "whole scene and every character present, and weaves in the reader's input. Refer to characters by their " +
+      "ESTABLISHED names (from the Visual Bible / story state) so the illustration stays on the right subjects. " +
+      "Do NOT call any tool, do NOT speak to the reader out of character, and do NOT add commentary before or after — " +
+      "your ENTIRE reply becomes the next illustrated beat. Keep it moving and end on a hook that invites the next " +
+      "steer.\n" +
+      roleplayLine
     : "CO-WRITING AN ILLUSTRATED STORY: to start one (as-you-go scenes that auto-illustrate, with a Visual " +
       'Bible keeping the cast consistent), tell the reader to click "✍️ Story as you go" under Open Book — that is ' +
       "how a story is STARTED (there is no start-story tool; it's a click). You can still write ordinary story PROSE " +

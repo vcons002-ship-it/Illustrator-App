@@ -217,6 +217,11 @@ interface StorySessionState {
    * scene and render_scene of a past beat uses that beat's cast/location. */
   scenes: StoryScene[];
   roleplay?: StoryRoleplay;
+  /** The story workflow: "roleplay" (reader steers a character, the assistant voices everyone) or
+   * "direct" (reader directs, the assistant narrates). Drives the writing prompt. */
+  mode: "direct" | "roleplay";
+  /** Roleplay only: the played character NAMES for narration labels (me = reader, you = assistant). */
+  play?: { me?: string; you?: string };
   cadence: { mode: "per-response" | "every-n" | "manual"; n: number };
   beatsSinceImage: number;
 }
@@ -280,6 +285,8 @@ function beatsFromBook(book: BookSource): string[] {
 function storyConfigOf(s: StorySessionState): NonNullable<BookSource["storyConfig"]> {
   return {
     ...(s.roleplay ? { roleplay: s.roleplay } : {}),
+    mode: s.mode,
+    ...(s.play ? { play: s.play } : {}),
     cadence: s.cadence,
     scenes: s.scenes.map((sc) => ({ presentCharacterIds: [...sc.presentCharacterIds], ...(sc.locationId ? { locationId: sc.locationId } : {}) })),
   };
@@ -322,6 +329,10 @@ function rebuildStoryFromBook(book: BookSource, bible: VisualBible | undefined):
     scene: scenes[scenes.length - 1] ?? emptyStoryScene(),
     scenes,
     ...(roleplay ? { roleplay } : {}),
+    // Workflow + played names persist on storyConfig (Phase C); fall back to deriving the mode from
+    // whether a played cast exists, so stories created before that still resume in a sensible mode.
+    mode: book.storyConfig?.mode ?? (roleplay ? "roleplay" : "direct"),
+    ...(book.storyConfig?.play ? { play: book.storyConfig.play } : {}),
     cadence: { mode: cadence.mode, n: cadence.n ?? 3 },
     beatsSinceImage: 0,
   };
@@ -2949,6 +2960,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       startStory: async (call) => {
         const id = `story-${storyCounter++}-${(call.title || "story").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24)}`;
         const played = [call.roleplay?.you, call.roleplay?.me].filter((n): n is string => !!n);
+        const isRoleplay = !!call.roleplay && played.length > 0;
         // Apply the requested art style to the worker's settings immediately, so the open's
         // providers render in it (mirrors set_visual_style's worker-settings update).
         if (call.style && settings) {
@@ -2968,6 +2980,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           scene: emptyStoryScene(),
           scenes: [],
           ...(played.length ? { roleplay: { playedCharacterNames: played } } : {}),
+          mode: isRoleplay ? "roleplay" : "direct",
+          ...(isRoleplay ? { play: { ...(call.roleplay?.me ? { me: call.roleplay.me } : {}), ...(call.roleplay?.you ? { you: call.roleplay.you } : {}) } } : {}),
           cadence: { mode: "per-response", n: 3 },
           beatsSinceImage: 0,
         };
@@ -3217,9 +3231,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // The chat's working checklist — injected so the model re-reads it and resumes from the first
         // unfinished step (set_plan/complete_step are always available; the live state shows only here).
         ...(msg.plan ? { activePlan: msg.plan } : {}),
-        // A co-written story is open → advertise the continue/render/cadence tools (stories are STARTED
-        // by a click, never a tool, so start_story is never advertised).
-        ...(story ? { storyActive: true } : {}),
+        // A co-written story is open → switch the prompt into story-writing mode (the reply IS the
+        // next beat; no tools). storyMode/storyPlay tailor direct vs roleplay narration.
+        ...(story ? { storyActive: true, storyMode: story.mode, ...(story.play ? { storyPlay: story.play } : {}) } : {}),
         // Gmail/Calendar/Tasks tools when Google is connected.
         ...(googleConnected ? { canGoogle: true } : {}),
         // Auto-approval: create reminders without per-item confirm when opted in.
@@ -3385,6 +3399,20 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         }
       } catch {
         // Reflection is best-effort — skip silently on any failure.
+      }
+    }
+    // Story "as you go": with a story open and the story tools removed, the model's plain prose reply
+    // IS the next beat. Route it into the same append+illustrate path the continue_story tool used, so
+    // the reader grows beside the chat. Skip if a story tool already ran this turn (the opening
+    // start_story, or a safety-net continue_story) so the beat isn't appended twice.
+    const storyToolRan = outcome.toolResults.some(
+      (t) => t.call.tool === "start_story" || t.call.tool === "continue_story",
+    );
+    if (story && currentBook?.kind === "story" && !storyToolRan && outcome.text.trim() && deps.continueStory) {
+      try {
+        await deps.continueStory({ tool: "continue_story", text: outcome.text.trim() });
+      } catch {
+        // Best-effort: if the beat can't append, the prose still shows in the chat below.
       }
     }
     post({

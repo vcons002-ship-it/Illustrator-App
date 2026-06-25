@@ -80,6 +80,10 @@ export interface BookSource {
   storyConfig?: {
     /** The played characters (e.g. a "me and you" pair) — assumed present each beat. */
     roleplay?: { playedCharacterNames: string[] };
+    /** The story workflow: "roleplay" (reader steers a character) or "direct" (reader directs). */
+    mode?: "direct" | "roleplay";
+    /** Roleplay only: the played character NAMES (me = reader, you = assistant) for narration labels. */
+    play?: { me?: string; you?: string };
     /** How often a beat auto-illustrates. */
     cadence?: { mode: "per-response" | "every-n" | "manual"; n: number };
     /**
