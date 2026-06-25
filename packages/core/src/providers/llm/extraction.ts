@@ -16,6 +16,7 @@ import type { EntityExtractionInput } from "./llm-provider.js";
 import type { VisualRequest } from "../../types/content.js";
 import { deterministicSeed } from "./mock-llm-provider.js";
 import { resolveKeyEvent } from "../../visual-bible/key-events.js";
+import { recentArcLine } from "../../visual-bible/story-digest.js";
 import { sanitizeWorldStyle } from "../image/bible-injection.js";
 
 /**
@@ -1117,6 +1118,10 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
     scene?.summary
       ? `This chapter (continuity only — illustrate the passage, not this): ${scene.summary}`
       : "",
+    (() => {
+      const arc = recentArcLine(bible, { upToChapter: request.chapterIndex, maxChars: 800 });
+      return arc ? `Story so far (prior chapters, continuity only — do NOT illustrate): ${arc}` : "";
+    })(),
   ]
     .filter(Boolean)
     .join("\n\n");

@@ -5,6 +5,7 @@ import {
   describeLocation,
   describeOutfit,
 } from "../providers/image/bible-injection.js";
+import { storyDigest } from "../visual-bible/story-digest.js";
 import { CHAT_TOOLS_SYSTEM, dataToolsBlock } from "./chat-tools.js";
 import { POLISH_CHAT_GUIDANCE } from "./document-polish.js";
 import { isNonFiction, type ContentMode } from "../types/book.js";
@@ -223,9 +224,10 @@ function bibleSlice(input: ChatContextInput, fullView: boolean): string {
   const lines: string[] = [];
   if (bible.worldStyle?.trim()) lines.push(`Art direction: ${bible.worldStyle.trim()}`);
 
-  // The reader's current chapter summary only — recent, small, usually relevant.
-  const here = (bible.storyboard ?? []).find((s) => s.chapterIndex === cur);
-  if (here?.summary?.trim()) lines.push(`This chapter so far: ${here.summary.trim()}`);
+  // "Story so far" — a bounded chapter-by-chapter digest (spoiler-gated to the reader's position),
+  // so the buddy can discuss the whole plot/timeline, not just the current chapter.
+  const digest = storyDigest(bible, fullView ? {} : { upToChapter: cur });
+  if (digest) lines.push(digest);
 
   const names = (list: readonly { name: string; aliases?: string[] }[]): string =>
     list.map((e) => e.name + (e.aliases?.length ? ` (${e.aliases.join(", ")})` : "")).join(", ");
