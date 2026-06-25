@@ -3156,6 +3156,13 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const skills = skillsIndexBlock(await loadSkills(store));
     // When this session is executing a task plan, load its context for the prompt.
     const activePlan = msg.taskPlanId ? (await loadTaskPlans(store)).find((p) => p.id === msg.taskPlanId) : undefined;
+    // Connected when the reader linked their own Schwab app (creds + a live token). Reused below to
+    // auto-enable the keyless markets tools as well.
+    const schwabConnected = !!(
+      settings?.keys?.schwabClientId &&
+      settings?.keys?.schwabClientSecret &&
+      (await loadSchwabTokens(store))
+    );
     const setup =
       buildBuddySystemPrompt({
         persona: msg.persona,
@@ -3198,10 +3205,20 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         ...(googleConnected ? { canGoogle: true } : {}),
         // Auto-approval: create reminders without per-item confirm when opted in.
         ...(googleConnected && settings?.allowTaskAutomation ? { canAutomateTasks: true } : {}),
-        // Schwab tools when the user connected their own Schwab app.
-        ...(settings?.keys?.schwabClientId && settings?.keys?.schwabClientSecret && (await loadSchwabTokens(store))
-          ? { canSchwab: true }
+        // Task-orchestrator surface (plan_task + scheduled tasks): opted in, OR a task is already
+        // active, OR we're in planning mode (its natural home). Otherwise a plain chat skips it.
+        ...(settings?.allowTaskAutomation || activePlan || msg.persona === "planning" ? { canTaskTools: true } : {}),
+        // Sub-agent fan-out (delegate + spawn_agents): opt-in, or a sub-agent backend is configured.
+        ...(settings?.allowSubAgents || settings?.subAgentServerUrl || settings?.subAgentModel
+          ? { canSubAgents: true }
           : {}),
+        // Keyless markets suite: opt-in, or auto-on when a broker / TV bridge is connected (which also
+        // keeps the Schwab block's "prefer these over the keyless feeds" reference from dangling).
+        ...(settings?.allowMarkets || schwabConnected || (corsProxyAvailable && settings?.allowTradingViewBridge)
+          ? { canMarkets: true }
+          : {}),
+        // Schwab tools when the user connected their own Schwab app.
+        ...(schwabConnected ? { canSchwab: true } : {}),
         // TradingView Desktop bridge when enabled (desktop + opt-in).
         ...(corsProxyAvailable && settings?.allowTradingViewBridge ? { canTvBridge: true } : {}),
         // MCP servers the reader configured (advertise their tools), when a proxy can reach them.

@@ -530,6 +530,17 @@ export function buildBuddySystemPrompt(opts: {
   mcpServers?: string[];
   /** Task automation opted in: create reminders directly without per-item confirm. */
   canAutomateTasks?: boolean;
+  /** Task-orchestrator opt-in (allowTaskAutomation): advertise plan_task + the scheduled-task tools.
+   * Off by default so a plain chat isn't carrying the heavy orchestrator surface; the lightweight
+   * in-chat set_plan/complete_step checklist is always available regardless. */
+  canTaskTools?: boolean;
+  /** Sub-agent fan-out opted in (or a sub-agent backend configured): advertise delegate + spawn_agents.
+   * Off by default — orchestration primitives that a one-on-one chat rarely needs. */
+  canSubAgents?: boolean;
+  /** Markets opted in (or a broker / TV bridge connected): advertise the keyless markets suite
+   * (stock_quote, market_analysis, the price-alert tools, trading_script). Off by default so a
+   * non-trading chat doesn't carry six finance tool descriptions. */
+  canMarkets?: boolean;
   /** The active task plan's context (this chat opened a task) — enables the step tools. */
   activeTask?: string;
   /** A co-written story is currently OPEN — advertise the continue/render/cadence tools so the reader
@@ -710,11 +721,14 @@ export function buildBuddySystemPrompt(opts: {
       '- {"tool":"add_task_group","title":"Iowa trip","due":"…","subtasks":[{"title":"Book outbound flight",' +
       '"due":"…"},{"title":"Book return flight"}]} — when the reader wants SEVERAL related to-dos added, use ' +
       "THIS (one PARENT task with nested SUB-TASKS) instead of many separate create_task calls — it nests them " +
-      "in Google Tasks AND shows as one task with its steps in the app. (For a task that needs RESEARCH/planning, " +
-      "use plan_task instead.)\n" +
+      "in Google Tasks AND shows as one task with its steps in the app." +
+      (opts.canTaskTools ? " (For a task that needs RESEARCH/planning, use plan_task instead.)" : "") +
+      "\n" +
       "ANSWERING SCHEDULE/MAIL QUESTIONS: \"what do I have going on this week?\" / \"what does my day look " +
       'like?" → list_events for that window, then summarize it plainly. "when do I need to do X by?" → check ' +
-      "list_tasks and the task plans (list_task_plans / get_task_plan) for a deadline, and list_events / " +
+      "list_tasks" +
+      (opts.canTaskTools ? " and the task plans (list_task_plans / get_task_plan)" : "") +
+      " for a deadline, and list_events / " +
       'gmail_search if it might be there. "when did I last pay/receive X and how much?" → gmail_search for the ' +
       'receipt (e.g. "water bill receipt", "from:utility", add newer_than: to bound it), then read_email the ' +
       "best hit to read off the date and amount. Report exactly what you find (with the date), and say so " +
@@ -927,9 +941,11 @@ export function buildBuddySystemPrompt(opts: {
     workingFolderNote +
     codeFileNote +
     wolframTool +
-    '- {"tool":"stock_quote","symbol":"AAPL"} — fetch the latest KEYLESS stock quote (price/open/high/low/volume) to ' +
-    "ground market analysis in real numbers when the reader asks about a stock/ticker. Pair it with search_web for news " +
-    "and fundamentals, then give a balanced read (bull + bear) and any ideas — and always note it isn't financial advice.\n" +
+    (opts.canMarkets
+      ? '- {"tool":"stock_quote","symbol":"AAPL"} — fetch the latest KEYLESS stock quote (price/open/high/low/volume) to ' +
+        "ground market analysis in real numbers when the reader asks about a stock/ticker. Pair it with search_web for news " +
+        "and fundamentals, then give a balanced read (bull + bear) and any ideas — and always note it isn't financial advice.\n"
+      : "") +
     (opts.canTvBridge
       ? '- {"tool":"tv_chart","action":"add_study","study":"Volume Weighted Average Price"} — DRIVE the reader\'s ' +
         'TradingView Desktop chart directly (the bridge is on). actions: "set_symbol" (symbol), "set_interval" ' +
@@ -968,50 +984,58 @@ export function buildBuddySystemPrompt(opts: {
         'one of your proposed trades or otherwise asks to buy/sell/place an order ("prep the AAPL one", "place that trade"); ' +
         "confirm the details first. Always note it isn't financial advice.\n"
       : "") +
-    '- {"tool":"market_analysis","symbol":"AAPL","interval":"5m","range":"1d"} — keyless TECHNICAL indicators (VWAP, ' +
-    "SMA20/50, EMA12/26, RSI14, recent move). Use for intraday/technical questions — VWAP watch levels, trend vs the " +
-    'moving averages, momentum, entry points. "interval"/"range" default to intraday ("5m"/"1d"); use "1d"/"6mo" for swing.\n' +
-    '- {"tool":"delegate","task":"…"} — hand a focused, self-contained SUBTASK to a read-only ' +
-    "sub-agent that runs its own research loop and returns a concise result (e.g. \"research the top 3 EU " +
-    "photonics firms by revenue\"). Use it to parallelise/offload a chunky lookup so your main answer stays " +
-    "clean; the sub-agent can't change anything. Don't delegate trivial things you can answer directly.\n" +
-    '- {"tool":"spawn_agents","tasks":["research firm A\'s funding","research firm B\'s funding","research firm C\'s funding"]} ' +
-    "— when a job splits into 2+ INDEPENDENT read-only subtasks, run them as PARALLEL sub-agents and get all results at " +
-    "once (faster than delegating one at a time). Use it for fan-out research/lookups (compare N options, gather facts on " +
-    "several items, plan several tasks); keep each subtask self-contained. The app caps how many run at once.\n" +
-    "- THEME/SCREEN requests (e.g. \"the 3 best photonics stocks to buy on earnings growth + P/E\") work even with no broker " +
-    "connected: use search_web/read_url to find the candidate tickers and the fundamentals asked for (P/E, earnings growth, " +
-    "margins…), stock_quote/market_analysis for price + technicals, then rank the top N against the reader's criteria with a " +
-    "one-line rationale each. Always state your sources briefly and that it isn't financial advice.\n" +
-    '- {"tool":"trading_script","platform":"pine","kind":"vwap_cross"} — generate a ready-to-paste TradingView Pine ' +
-    'Script (platform "pine") or thinkorswim thinkScript (platform "thinkscript") ALERT/study. kinds: "vwap_cross", ' +
-    '"rsi" (level/length), "ma_cross" (fast/slow/maType "sma"|"ema"), "price_level" (level). Use when the reader wants ' +
-    "the watch/alert/indicator set up INSIDE TradingView or thinkorswim itself. Present the returned script in a fenced " +
-    "code block and tell them where to paste it.\n" +
-    '- {"tool":"set_price_alert","symbol":"AAPL","type":"cross_vwap"} — set a WATCH/alert that fires a notification while ' +
-    'the app is open. "type": "above"/"below" (needs "value" = price), "cross_vwap" (price crosses VWAP, no value), ' +
-    '"pct_move" ("value" = percent, ± either way), "rsi_above"/"rsi_below" ("value" = 0–100). Use when the reader says ' +
-    '"alert/tell/ping me when…", "watch …", "let me know if …". {"tool":"list_alerts"} to show them; ' +
-    '{"tool":"cancel_alert","id":"…"} to remove one.\n' +
+    (opts.canMarkets
+      ? '- {"tool":"market_analysis","symbol":"AAPL","interval":"5m","range":"1d"} — keyless TECHNICAL indicators (VWAP, ' +
+        "SMA20/50, EMA12/26, RSI14, recent move). Use for intraday/technical questions — VWAP watch levels, trend vs the " +
+        'moving averages, momentum, entry points. "interval"/"range" default to intraday ("5m"/"1d"); use "1d"/"6mo" for swing.\n'
+      : "") +
+    (opts.canSubAgents
+      ? '- {"tool":"delegate","task":"…"} — hand a focused, self-contained SUBTASK to a read-only ' +
+        "sub-agent that runs its own research loop and returns a concise result (e.g. \"research the top 3 EU " +
+        "photonics firms by revenue\"). Use it to parallelise/offload a chunky lookup so your main answer stays " +
+        "clean; the sub-agent can't change anything. Don't delegate trivial things you can answer directly.\n" +
+        '- {"tool":"spawn_agents","tasks":["research firm A\'s funding","research firm B\'s funding","research firm C\'s funding"]} ' +
+        "— when a job splits into 2+ INDEPENDENT read-only subtasks, run them as PARALLEL sub-agents and get all results at " +
+        "once (faster than delegating one at a time). Use it for fan-out research/lookups (compare N options, gather facts on " +
+        "several items, plan several tasks); keep each subtask self-contained. The app caps how many run at once.\n"
+      : "") +
+    (opts.canMarkets
+      ? "- THEME/SCREEN requests (e.g. \"the 3 best photonics stocks to buy on earnings growth + P/E\") work even with no broker " +
+        "connected: use search_web/read_url to find the candidate tickers and the fundamentals asked for (P/E, earnings growth, " +
+        "margins…), stock_quote/market_analysis for price + technicals, then rank the top N against the reader's criteria with a " +
+        "one-line rationale each. Always state your sources briefly and that it isn't financial advice.\n" +
+        '- {"tool":"trading_script","platform":"pine","kind":"vwap_cross"} — generate a ready-to-paste TradingView Pine ' +
+        'Script (platform "pine") or thinkorswim thinkScript (platform "thinkscript") ALERT/study. kinds: "vwap_cross", ' +
+        '"rsi" (level/length), "ma_cross" (fast/slow/maType "sma"|"ema"), "price_level" (level). Use when the reader wants ' +
+        "the watch/alert/indicator set up INSIDE TradingView or thinkorswim itself. Present the returned script in a fenced " +
+        "code block and tell them where to paste it.\n" +
+        '- {"tool":"set_price_alert","symbol":"AAPL","type":"cross_vwap"} — set a WATCH/alert that fires a notification while ' +
+        'the app is open. "type": "above"/"below" (needs "value" = price), "cross_vwap" (price crosses VWAP, no value), ' +
+        '"pct_move" ("value" = percent, ± either way), "rsi_above"/"rsi_below" ("value" = 0–100). Use when the reader says ' +
+        '"alert/tell/ping me when…", "watch …", "let me know if …". {"tool":"list_alerts"} to show them; ' +
+        '{"tool":"cancel_alert","id":"…"} to remove one.\n'
+      : "") +
     googleBlock +
     githubBlock +
-    '- {"tool":"plan_task","request":"…"} — when the reader asks you to PLAN, organize, or "help me figure out what I ' +
-    'need to do" for a real-world MULTI-STEP task (e.g. "plan my car registration renewal", "help me get ready for the ' +
-    'trip", "help me apply for this job", or "plan this" after you read an email/event). Use this WHENEVER fulfilling ' +
-    "the ask would take several chained steps across sources — e.g. look up a job posting on the web, FIND and READ the " +
-    "reader's resume on their computer, and draft tailored edits. DON'T try to do that yourself one tool at a time and " +
-    "give up if one step fails — hand the WHOLE thing to plan_task in ONE call: it can research the web, read the " +
-    "reader's email/attachments, AND search + read files on their computer, then build a dated step-by-step plan with " +
-    'prepped documents. Put everything you know in "request" (the goal, any URL, the file they mentioned, constraints). ' +
-    "Reserve inline answers for genuine one-offs you can settle in a sentence. If a task is already active (see ACTIVE " +
-    "TASK below), calling this re-plans THAT task in place — use it to refine, redo, or fold in the reader's answers, " +
-    "not to start a new one.\n" +
-    '- {"tool":"schedule_task","title":"Morning email recap","prompt":"Summarise my unread email from the last day",' +
-    '"rule":"daily","time":"08:00"} — schedule a RECURRING action the assistant runs automatically while the app is open ' +
-    '(daily/weekly/monthly/once). Use when the reader says "every morning/day/week/Friday…", "remind me to…", "each ' +
-    'month…". "prompt" is exactly what you should DO when it fires (a self-contained instruction). For weekly add ' +
-    '"weekday" (0=Sun…6=Sat); for monthly add "dayOfMonth" (1–31); "time" is 24h "HH:MM". ' +
-    '{"tool":"list_scheduled"} to show them; {"tool":"cancel_scheduled","id":"…"} to remove one.\n' +
+    (opts.canTaskTools
+      ? '- {"tool":"plan_task","request":"…"} — when the reader asks you to PLAN, organize, or "help me figure out what I ' +
+        'need to do" for a real-world MULTI-STEP task (e.g. "plan my car registration renewal", "help me get ready for the ' +
+        'trip", "help me apply for this job", or "plan this" after you read an email/event). Use this WHENEVER fulfilling ' +
+        "the ask would take several chained steps across sources — e.g. look up a job posting on the web, FIND and READ the " +
+        "reader's resume on their computer, and draft tailored edits. DON'T try to do that yourself one tool at a time and " +
+        "give up if one step fails — hand the WHOLE thing to plan_task in ONE call: it can research the web, read the " +
+        "reader's email/attachments, AND search + read files on their computer, then build a dated step-by-step plan with " +
+        'prepped documents. Put everything you know in "request" (the goal, any URL, the file they mentioned, constraints). ' +
+        "Reserve inline answers for genuine one-offs you can settle in a sentence. If a task is already active (see ACTIVE " +
+        "TASK below), calling this re-plans THAT task in place — use it to refine, redo, or fold in the reader's answers, " +
+        "not to start a new one.\n" +
+        '- {"tool":"schedule_task","title":"Morning email recap","prompt":"Summarise my unread email from the last day",' +
+        '"rule":"daily","time":"08:00"} — schedule a RECURRING action the assistant runs automatically while the app is open ' +
+        '(daily/weekly/monthly/once). Use when the reader says "every morning/day/week/Friday…", "remind me to…", "each ' +
+        'month…". "prompt" is exactly what you should DO when it fires (a self-contained instruction). For weekly add ' +
+        '"weekday" (0=Sun…6=Sat); for monthly add "dayOfMonth" (1–31); "time" is 24h "HH:MM". ' +
+        '{"tool":"list_scheduled"} to show them; {"tool":"cancel_scheduled","id":"…"} to remove one.\n'
+      : "") +
     (opts.activeTask
       ? `${opts.activeTask}\nThis chat is working the task above. Help the reader finish the CURRENT step — do the ` +
         'prep parts yourself, walk them through the parts only they can do. {"tool":"mark_step_done","planId":"…",' +

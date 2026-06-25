@@ -63,6 +63,24 @@ describe("every high-value capability still works end to end", () => {
     });
   }
 
+  it("the context-trimmed tool groups are GATED, not dropped — each reappears under its flag", () => {
+    // The simplification gates these behind capability flags to save context in a plain chat; they
+    // must still be advertised (capability intact) when the flag is on.
+    const plain = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    for (const t of ['"tool":"plan_task"', '"tool":"schedule_task"', '"tool":"spawn_agents"', '"tool":"delegate"', '"tool":"stock_quote"', '"tool":"market_analysis"']) {
+      expect(plain).not.toContain(t);
+    }
+    const task = buildBuddySystemPrompt({ persona: "assistant", library: [], canTaskTools: true });
+    expect(task).toContain('"tool":"plan_task"');
+    expect(task).toContain('"tool":"schedule_task"');
+    const agents = buildBuddySystemPrompt({ persona: "assistant", library: [], canSubAgents: true });
+    expect(agents).toContain('"tool":"spawn_agents"');
+    expect(agents).toContain('"tool":"delegate"');
+    const markets = buildBuddySystemPrompt({ persona: "assistant", library: [], canMarkets: true });
+    expect(markets).toContain('"tool":"stock_quote"');
+    expect(markets).toContain('"tool":"market_analysis"');
+  });
+
   it("story 'as you go' is started by the click path (/story), not a model tool", () => {
     const r = parseBuddySlashCommand("/story A keeper finds a bottle at dawn.", []);
     expect(r).toMatchObject({ call: { tool: "start_story" } });

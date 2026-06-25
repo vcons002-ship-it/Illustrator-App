@@ -374,12 +374,52 @@ describe("buildBuddySystemPrompt", () => {
   });
 
   it("routes a compose-the-steps request (research + files + drafting) to plan_task", () => {
-    const g = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true });
+    const g = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true, canTaskTools: true });
     expect(g).toContain('"tool":"plan_task"');
     // It should tell the model to hand a multi-source job (e.g. job posting + resume on disk) to
     // plan_task in ONE call instead of doing it inline and giving up.
     expect(g).toMatch(/resume/i);
     expect(g).toMatch(/in ONE call|the WHOLE thing/);
+  });
+
+  it("gates the task-orchestrator tools (plan_task + scheduling) behind canTaskTools", () => {
+    const off = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true });
+    expect(off).not.toContain('"tool":"plan_task"');
+    expect(off).not.toContain('"tool":"schedule_task"');
+    const on = buildBuddySystemPrompt({ persona: "assistant", library: [], canTaskTools: true });
+    expect(on).toContain('"tool":"plan_task"');
+    expect(on).toContain('"tool":"schedule_task"');
+    expect(on).toContain('"tool":"cancel_scheduled"');
+  });
+
+  it("gates the sub-agent fan-out tools (delegate + spawn_agents) behind canSubAgents", () => {
+    const off = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(off).not.toContain('"tool":"delegate"');
+    expect(off).not.toContain('"tool":"spawn_agents"');
+    const on = buildBuddySystemPrompt({ persona: "assistant", library: [], canSubAgents: true });
+    expect(on).toContain('"tool":"delegate"');
+    expect(on).toContain('"tool":"spawn_agents"');
+  });
+
+  it("gates the keyless markets suite behind canMarkets", () => {
+    const off = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(off).not.toContain('"tool":"stock_quote"');
+    expect(off).not.toContain('"tool":"market_analysis"');
+    expect(off).not.toContain('"tool":"trading_script"');
+    expect(off).not.toContain('"tool":"set_price_alert"');
+    const on = buildBuddySystemPrompt({ persona: "assistant", library: [], canMarkets: true });
+    expect(on).toContain('"tool":"stock_quote"');
+    expect(on).toContain('"tool":"market_analysis"');
+    expect(on).toContain('"tool":"trading_script"');
+    expect(on).toContain('"tool":"set_price_alert"');
+  });
+
+  it("planning persona is NOT required for task tools, but does not itself leak markets/sub-agents", () => {
+    // canTaskTools is driven at the call site (planning mode / active task / opt-in); the prompt itself
+    // just honors the flag. Markets + sub-agents stay independent.
+    const planning = buildBuddySystemPrompt({ persona: "planning", library: [] });
+    expect(planning).not.toContain('"tool":"stock_quote"');
+    expect(planning).not.toContain('"tool":"spawn_agents"');
   });
 
   it("advertises GitHub repo work only when a token is configured (canGithub)", () => {
@@ -537,7 +577,7 @@ describe("stock_quote tool", () => {
   it("parses + advertises stock_quote, and feeds the quote back for analysis", () => {
     expect(parseBuddyToolCall('{"tool":"stock_quote","symbol":"AAPL"}')).toEqual({ tool: "stock_quote", symbol: "AAPL" });
     expect(parseBuddyToolCall('{"tool":"stock_quote","symbol":"  "}')).toBeUndefined();
-    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toContain('"tool":"stock_quote"');
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [], canMarkets: true })).toContain('"tool":"stock_quote"');
     const out = formatBuddyToolResult({ tool: "stock_quote", symbol: "AAPL" }, { quote: { symbol: "AAPL", close: 204, open: 200 } });
     expect(out).toContain("AAPL: 204");
     expect(out).toMatch(/financial advice/i);
@@ -551,7 +591,7 @@ describe("stock_quote tool", () => {
       interval: "5m",
       range: "1d",
     });
-    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toContain('"tool":"market_analysis"');
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [], canMarkets: true })).toContain('"tool":"market_analysis"');
     const out = formatBuddyToolResult(
       { tool: "market_analysis", symbol: "AAPL" },
       { indicators: { symbol: "AAPL", bars: 78, last: 204, vwap: 202, rsi14: 61 } },
@@ -569,7 +609,7 @@ describe("stock_quote tool", () => {
       length: 9,
     });
     expect(parseBuddyToolCall('{"tool":"trading_script","platform":"pine","kind":"bogus"}')).toBeUndefined();
-    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toContain('"tool":"trading_script"');
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [], canMarkets: true })).toContain('"tool":"trading_script"');
     const out = formatBuddyToolResult(
       { tool: "trading_script", platform: "thinkscript", kind: "vwap_cross" },
       { tradingScript: { lang: "ts", script: "# VWAP\nAlert(...)", where: "thinkorswim → Studies" } },
@@ -828,13 +868,13 @@ describe("google tools", () => {
     expect(g).toContain("timeMin");
   });
 
-  it("parses plan_task (natural-language planning) and advertises it always", () => {
+  it("parses plan_task (natural-language planning) and advertises it when task tools are on", () => {
     expect(parseBuddyToolCall('{"tool":"plan_task","request":"plan my car registration renewal"}')).toEqual({
       tool: "plan_task",
       request: "plan my car registration renewal",
     });
     expect(parseBuddyToolCall('{"tool":"plan_task","request":"  "}')).toBeUndefined();
-    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toContain('"tool":"plan_task"');
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [], canTaskTools: true })).toContain('"tool":"plan_task"');
   });
 
   it("parses the task-execution tools and shows them only with an active task", () => {
@@ -864,7 +904,9 @@ describe("google tools", () => {
   });
 
   it("tells the model that plan_task refines the ACTIVE task in place (no duplicate fork)", () => {
-    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toMatch(/re-plans THAT task in place/i);
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [], canTaskTools: true })).toMatch(
+      /re-plans THAT task in place/i,
+    );
   });
 
   it("feeds an email back as the reader's DATA, and confirms a created event/task", () => {

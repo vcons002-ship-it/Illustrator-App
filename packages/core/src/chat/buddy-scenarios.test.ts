@@ -163,6 +163,9 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     canTvBridge: true,
     mcpServers: ["notes"],
     canAutomateTasks: true,
+    canTaskTools: true,
+    canSubAgents: true,
+    canMarkets: true,
   });
 
   it("search_images vs generate_image: real-vs-new image rule is present", () => {
