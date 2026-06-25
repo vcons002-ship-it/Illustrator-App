@@ -37,6 +37,38 @@ describe("nonEmptyAnswer", () => {
   });
 });
 
+describe("runBuddyTurn — story-mode empty-reply repair", () => {
+  it("re-prompts for the next BEAT (not a meta wrap-up) and returns the recovered prose", async () => {
+    const llm = scriptedLlm(["", "She steps into the rain, and the door clicks shut behind her."]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "go on" }],
+      deps: baseDeps,
+      storyMode: true,
+    });
+    // The recovered reply IS the beat (so the worker's shouldAppendBeat will append it).
+    expect(outcome.text).toBe("She steps into the rain, and the door clicks shut behind her.");
+    // The second call's wrap directive asked for the next beat, NOT "say what you did".
+    const wrap = llm.calls[1]!.map((t) => t.content).join("\n");
+    expect(wrap).toMatch(/next beat/i);
+    expect(wrap).not.toMatch(/say what you did/i);
+  });
+
+  it("falls back to the generic wrap-up when not in story mode", async () => {
+    const llm = scriptedLlm(["", "I searched and found three results."]);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "go on" }],
+      deps: baseDeps,
+    });
+    const wrap = llm.calls[1]!.map((t) => t.content).join("\n");
+    expect(wrap).toMatch(/plain text/i);
+    expect(wrap).not.toMatch(/next beat/i);
+  });
+});
+
 describe("runBuddyTurn — spawn_agents parallel fan-out", () => {
   it("runs the subtasks via runSubAgents and feeds all results back to synthesize", async () => {
     const llm = scriptedLlm([

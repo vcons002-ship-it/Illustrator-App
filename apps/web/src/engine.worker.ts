@@ -38,6 +38,7 @@ import {
   schwabAccountNumbers,
   placeSchwabOrder,
   buildBuddySystemPrompt,
+  shouldAppendBeat,
   buildDelegatePrompt,
   buildCodingAgentPrompt,
   buildConflictResolvePrompt,
@@ -3386,6 +3387,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       // Cloud (paid) models pause for a "keep going?" check every so often so a long task doesn't burn
       // many API calls unattended; local/free models run to the backstop (no pauseEvery).
       ...(CLOUD_LLM_IDS.has(llm.id) ? { pauseEvery: CLOUD_TOOL_PAUSE_ROUNDS } : {}),
+      // A story is open → STORY MODE: if the model ends a turn empty/tool-only, the wrap-up asks for
+      // the next BEAT (prose), so the recovered reply is still appendable to the book.
+      ...(story && currentBook?.kind === "story" ? { storyMode: true } : {}),
       deps,
       // PARALLEL SUB-AGENTS: the model's `spawn_agents` tool fans independent read-only subtasks out
       // concurrently. Capped by `agentConcurrency` (default 2). TIER ROUTING: when a sub-agent
@@ -3493,12 +3497,12 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     }
     // Story "as you go": with a story open and the story tools removed, the model's plain prose reply
     // IS the next beat. Route it into the same append+illustrate path the continue_story tool used, so
-    // the reader grows beside the chat. Skip if a story tool already ran this turn (the opening
-    // start_story, or a safety-net continue_story) so the beat isn't appended twice.
-    const storyToolRan = outcome.toolResults.some(
-      (t) => t.call.tool === "start_story" || t.call.tool === "continue_story",
-    );
-    if (story && currentBook?.kind === "story" && !storyToolRan && outcome.text.trim() && deps.continueStory) {
+    // the reader grows beside the chat. (shouldAppendBeat encodes the guards — story open, story book,
+    // non-empty prose, and no story tool already ran this turn so the beat isn't appended twice.)
+    if (
+      deps.continueStory &&
+      shouldAppendBeat(outcome, { storyOpen: !!story, isStoryBook: currentBook?.kind === "story" })
+    ) {
       try {
         await deps.continueStory({ tool: "continue_story", text: outcome.text.trim() });
       } catch {

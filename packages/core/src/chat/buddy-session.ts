@@ -262,6 +262,10 @@ export async function runBuddyTurn(opts: {
    * summary; the reader continues (a Continue button / "continue") and the next turn re-arms the budget.
    */
   pauseEvery?: number;
+  /** This turn is a "story as you go" beat (the system prompt is in STORY MODE). It makes the
+   * empty/tool-only wrap-up ask for the next BEAT (prose) instead of a "what I did" meta line, so a
+   * recovered reply is still a usable beat the host can append to the book. */
+  storyMode?: boolean;
 }): Promise<BuddyTurnOutcome> {
   const messages: ChatTurn[] = [{ role: "system", content: opts.system }, ...opts.history];
   const transcript: ChatTurn[] = [];
@@ -362,8 +366,10 @@ export async function runBuddyTurn(opts: {
         // are internal control flow — persisting them leaked "[Now reply to the reader in plain
         // text…]" into the chat as a user message.
         messages.push({ role: "assistant", content: reply });
-        const wrap =
-          "[Now reply to the reader in plain text — briefly say what you did or found. No tool calls.]";
+        const wrap = opts.storyMode
+          ? "[Now write the next beat of the story as plain prose — continue the scene a little, refer to " +
+            "characters by their established names, no commentary and no tool calls.]"
+          : "[Now reply to the reader in plain text — briefly say what you did or found. No tool calls.]";
         messages.push({ role: "user", content: wrap });
         continue;
       }
