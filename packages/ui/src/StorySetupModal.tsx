@@ -158,7 +158,7 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, onSta
             {workflow === "roleplay" && namedChars.length > 0 && (
               <div style={{ ...row, marginTop: 8 }}>
                 <label style={{ ...field, flex: 1 }}>
-                  <span style={label}>You play (me)</span>
+                  <span style={label}>You play</span>
                   <select style={select} value={meIdx} onChange={(e) => setMeIdx(Number(e.target.value))}>
                     {namedChars.map((c, i) => (
                       <option key={i} value={i}>
@@ -168,7 +168,7 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, onSta
                   </select>
                 </label>
                 <label style={{ ...field, flex: 1 }}>
-                  <span style={label}>Assistant plays (you)</span>
+                  <span style={label}>Assistant plays</span>
                   <select style={select} value={youIdx} onChange={(e) => setYouIdx(Number(e.target.value))}>
                     {namedChars.map((c, i) => (
                       <option key={i} value={i}>
