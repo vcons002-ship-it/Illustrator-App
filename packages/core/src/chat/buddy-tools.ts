@@ -53,6 +53,41 @@ export interface BuddyPlan {
   steps: BuddyPlanStep[];
 }
 
+/**
+ * System prompt for the AUTO-PLAN decomposition pre-pass: a cheap one-shot call the HOST runs before
+ * a turn so a small model that won't reliably emit `set_plan` still gets a checklist. The model only
+ * has to list steps as plain lines (far easier than emitting tool JSON mid-conversation), and the host
+ * seeds the working checklist from them. PURE.
+ */
+export function decompositionSystemPrompt(): string {
+  return (
+    "You are the planning step for an assistant. Read the user's request and break it into the concrete " +
+    "actions the assistant must take, IN ORDER, to fully satisfy it. Output ONLY the steps, ONE PER LINE — " +
+    "each a short imperative action or ask the assistant will carry out (e.g. \"Generate image 1 of the " +
+    "sunset\", \"Generate image 2 of the sunset\", \"Search the web for X and report\", \"Say the number 1\"). " +
+    "No numbering, no bullets, no preamble, no commentary. Expand explicit counts and lists into one step " +
+    "each (\"5 images of a cat\" → five steps). If the request is a SINGLE step — one answer or one action — " +
+    "reply with exactly: NONE"
+  );
+}
+
+/**
+ * Parse the decomposition pre-pass reply into checklist steps. Strips bullets/numbering and preamble,
+ * treats a "NONE" reply (or a single step) as "no checklist needed" (returns []), and caps the list.
+ * Only returns steps when there are genuinely 2+ — a one-step "plan" isn't worth seeding. PURE.
+ */
+export function parseDecomposedSteps(raw: string): string[] {
+  const lines = (raw ?? "")
+    .split(/\r?\n/)
+    .map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim()) // drop bullets / "1." / "1)"
+    .filter(Boolean)
+    .filter((l) => !/^(here (are|is)\b|steps?:|plan:|sure[,!.]?$|okay[,!.]?$|let me\b)/i.test(l)); // drop preamble
+  // Any explicit NONE token means "single step, no checklist".
+  if (lines.some((l) => /^none[.!]?$/i.test(l))) return [];
+  const steps = lines.slice(0, 12);
+  return steps.length >= 2 ? steps : [];
+}
+
 export type BuddyToolCall =
   | { tool: "search_web"; query: string }
   | { tool: "search_books"; query: string }

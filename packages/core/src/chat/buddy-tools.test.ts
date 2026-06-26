@@ -3,8 +3,10 @@ import {
   ALWAYS_GATED_TOOLS,
   MAX_BUDDY_TOOL_ROUNDS,
   buildBuddySystemPrompt,
+  decompositionSystemPrompt,
   describeBuddyToolActivity,
   formatBuddyToolResult,
+  parseDecomposedSteps,
   isRetryableError,
   looksLikeToolJson,
   normalizeBuddyPersona,
@@ -1369,6 +1371,45 @@ describe("working-checklist queue auto-advance", () => {
     const fb = planQueueResumeFeedback("[tool generate_image: …]", fivePlan(5));
     expect(fb).toContain("5/5 done");
     expect(fb).toMatch(/All steps are done/i);
+  });
+});
+
+describe("auto-plan decomposition pre-pass", () => {
+  it("turns a multi-line decomposition into steps, stripping bullets/numbering", () => {
+    expect(parseDecomposedSteps("1. Generate image 1 of the sunset\n2. Generate image 2 of the sunset\n3. Generate image 3 of the sunset")).toEqual([
+      "Generate image 1 of the sunset",
+      "Generate image 2 of the sunset",
+      "Generate image 3 of the sunset",
+    ]);
+    expect(parseDecomposedSteps("- Search the web for X\n- Write the summary")).toEqual([
+      "Search the web for X",
+      "Write the summary",
+    ]);
+  });
+
+  it("treats NONE (single-step) as no checklist", () => {
+    expect(parseDecomposedSteps("NONE")).toEqual([]);
+    expect(parseDecomposedSteps("none.")).toEqual([]);
+    expect(parseDecomposedSteps("Generate one image of a cat")).toEqual([]); // a lone step isn't worth a plan
+  });
+
+  it("drops a preamble line but keeps the real steps", () => {
+    expect(parseDecomposedSteps("Here are the steps:\nSay the number 1\nSay the number 2")).toEqual([
+      "Say the number 1",
+      "Say the number 2",
+    ]);
+  });
+
+  it("caps the list at 12 steps", () => {
+    const many = Array.from({ length: 20 }, (_, i) => `Generate image ${i + 1}`).join("\n");
+    expect(parseDecomposedSteps(many)).toHaveLength(12);
+  });
+
+  it("the decomposition system prompt asks for one step per line and NONE for single-step", () => {
+    const p = decompositionSystemPrompt();
+    expect(p).toMatch(/ONE PER LINE/i);
+    expect(p).toMatch(/NONE/);
+    expect(p).toMatch(/no numbering|no bullets/i);
   });
 });
 

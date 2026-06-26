@@ -38,6 +38,8 @@ import {
   schwabAccountNumbers,
   placeSchwabOrder,
   buildBuddySystemPrompt,
+  decompositionSystemPrompt,
+  parseDecomposedSteps,
   shouldAppendBeat,
   buildDelegatePrompt,
   buildCodingAgentPrompt,
@@ -1102,6 +1104,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "summarize":
       void handleSummarize(msg);
+      break;
+    case "decomposeTask":
+      void handleDecompose(msg);
       break;
     case "googleConnect":
       void handleGoogleConnect(msg);
@@ -2475,6 +2480,34 @@ async function handleSummarize(msg: Extract<MainToWorker, { type: "summarize" }>
   } catch (err) {
     post({
       type: "summarized",
+      requestId: msg.requestId,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/** Auto-plan pre-pass: one cheap call that decomposes a request into checklist steps, so a small
+ * model that won't reliably emit `set_plan` still gets a working checklist the host can seed. */
+async function handleDecompose(msg: Extract<MainToWorker, { type: "decomposeTask" }>): Promise<void> {
+  try {
+    const { llm } = chatProviders();
+    // No chat provider → just proceed with no plan (the turn still runs normally).
+    if (!supportsChat(llm)) {
+      post({ type: "decomposed", requestId: msg.requestId, ok: true, steps: [] });
+      return;
+    }
+    const raw = await llm.chat(
+      [
+        { role: "system", content: decompositionSystemPrompt() },
+        { role: "user", content: msg.text.slice(0, 4000) },
+      ],
+      { maxTokens: 256 },
+    );
+    post({ type: "decomposed", requestId: msg.requestId, ok: true, steps: parseDecomposedSteps(raw) });
+  } catch (err) {
+    post({
+      type: "decomposed",
       requestId: msg.requestId,
       ok: false,
       error: err instanceof Error ? err.message : String(err),

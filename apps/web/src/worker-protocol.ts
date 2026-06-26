@@ -146,6 +146,8 @@ export type MainToWorker =
   | { type: "agentToolResult"; callId: number; result: BuddyToolResultPayload }
   /** Compact a chat: summarize these model-facing turns (answered by `summarized`). */
   | { type: "summarize"; requestId: number; turns: ChatTurn[] }
+  /** Auto-plan pre-pass: decompose a request into checklist steps (answered by `decomposed`). */
+  | { type: "decomposeTask"; requestId: number; text: string }
   /** Finish Google OAuth: exchange the consent code (worker has the CORS proxy + store). */
   | { type: "googleConnect"; requestId: number; code: string; redirectUri: string; codeVerifier: string }
   /** Plan a task: research it, produce a structured TaskPlan, and persist it (worker has
@@ -394,6 +396,8 @@ export type WorkerToMain =
   | { type: "buddyError"; requestId: number; message: string }
   /** Reply to `summarize`: the compact brief, or why it failed. */
   | { type: "summarized"; requestId: number; ok: boolean; text?: string; error?: string }
+  /** Reply to `decomposeTask`: the checklist steps (empty = single-step / no plan needed). */
+  | { type: "decomposed"; requestId: number; ok: boolean; steps?: string[]; error?: string }
   | { type: "googleConnected"; requestId: number; ok: boolean; email?: string; error?: string }
   | { type: "planProgress"; requestId: number; phase: "research" | "plan"; note?: string }
   | { type: "planned"; requestId: number; ok: boolean; plan?: TaskPlan; error?: string }
