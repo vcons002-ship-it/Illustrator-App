@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StoredChatMessage } from "../storage/store.js";
-import { boundChatHistoryForMirror } from "./mirror-bound.js";
+import { boundChatHistoryForMirror, chunkArrayBuffer, concatArrayBuffers, FILE_CHUNK_BYTES } from "./mirror-bound.js";
 
 const buf = (n: number) => new ArrayBuffer(n);
 const msg = (over: Partial<StoredChatMessage>): StoredChatMessage => ({ role: "assistant", text: "x", at: 0, ...over });
@@ -64,5 +64,46 @@ describe("boundChatHistoryForMirror", () => {
     // newest "doc" (2MB) fits; the 4MB image is dropped.
     expect(out[1]!.attachments?.[0]!.bytes).toBeDefined();
     expect(out[0]!.image).toBeUndefined();
+  });
+});
+
+describe("chunkArrayBuffer / concatArrayBuffers (on-demand chunked file sync)", () => {
+  const filled = (n: number, val: number) => {
+    const u = new Uint8Array(n);
+    u.fill(val);
+    return u.buffer;
+  };
+
+  it("returns a single chunk when the buffer already fits", () => {
+    const b = filled(500, 7);
+    const chunks = chunkArrayBuffer(b, 1000);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toBe(b);
+  });
+
+  it("splits a big buffer into <= size pieces and reassembles to the exact original", () => {
+    const u = new Uint8Array(2_500);
+    for (let i = 0; i < u.length; i++) u[i] = i % 256;
+    const chunks = chunkArrayBuffer(u.buffer, 1000);
+    expect(chunks.map((c) => c.byteLength)).toEqual([1000, 1000, 500]);
+    expect([...new Uint8Array(concatArrayBuffers(chunks))]).toEqual([...u]); // 2500 elems — cheap
+  });
+
+  it("a real-ish 3.2 MB image round-trips byte-for-byte through chunk → concat", () => {
+    const u = new Uint8Array(3_200_000);
+    for (let i = 0; i < u.length; i += 7) u[i] = (i * 31) % 256;
+    const chunks = chunkArrayBuffer(u.buffer);
+    expect(chunks.length).toBe(Math.ceil(u.length / FILE_CHUNK_BYTES));
+    // O(n) compare — a multi-million-element toEqual is pathologically slow in vitest.
+    const back = new Uint8Array(concatArrayBuffers(chunks));
+    let firstMismatch = -1;
+    for (let i = 0; i < u.length; i++) {
+      if (back[i] !== u[i]) {
+        firstMismatch = i;
+        break;
+      }
+    }
+    expect(firstMismatch).toBe(-1);
+    expect(back.byteLength).toBe(u.byteLength);
   });
 });

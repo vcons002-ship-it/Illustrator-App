@@ -65,3 +65,34 @@ function stripBytes<T extends { bytes?: ArrayBuffer }>(ref: T): T {
   const { bytes: _drop, ...rest } = ref;
   return rest as T;
 }
+
+/**
+ * Bytes per chunk when a file is fetched over the phone↔desktop tunnel ON DEMAND. The mirror snapshot
+ * must fit ONE frame (hence CHAT_MIRROR_IMAGE_BUDGET strips big images), but an on-demand fetch can be
+ * SPLIT across many frames — so any-size file syncs in pieces instead of being dropped for exceeding a
+ * single frame. ~1 MB of raw bytes (~1.4 MB once base64-serialised) sits well under the tunnel's frame
+ * limit (the 3 MB mirror budget is already known-safe), with margin for the message envelope.
+ */
+export const FILE_CHUNK_BYTES = 1_000_000;
+
+/** Split an ArrayBuffer into <= FILE_CHUNK_BYTES pieces (one piece when it already fits). PURE. */
+export function chunkArrayBuffer(buf: ArrayBuffer, size = FILE_CHUNK_BYTES): ArrayBuffer[] {
+  if (buf.byteLength <= size) return [buf];
+  const out: ArrayBuffer[] = [];
+  for (let off = 0; off < buf.byteLength; off += size) {
+    out.push(buf.slice(off, Math.min(off + size, buf.byteLength)));
+  }
+  return out;
+}
+
+/** Reassemble chunks (in order) back into one ArrayBuffer. PURE. */
+export function concatArrayBuffers(parts: ArrayBuffer[]): ArrayBuffer {
+  const total = parts.reduce((n, p) => n + p.byteLength, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) {
+    out.set(new Uint8Array(p), off);
+    off += p.byteLength;
+  }
+  return out.buffer;
+}
