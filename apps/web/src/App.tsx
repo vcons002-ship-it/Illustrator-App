@@ -37,7 +37,6 @@ import {
   conceptIntroductions,
   subjectFromCaption,
   rankLocalFiles,
-  formatFileSize,
   chartDatasetFromTable,
   buildAnalysisTable,
   recalcTable,
@@ -73,6 +72,7 @@ import {
   removeIgnore,
   upsertTaskPlan,
   updateTaskStep,
+  setTaskPlanComplete,
   resolveActiveTaskPlanId,
   sessionLabelForPlan,
   agentBranchName,
@@ -937,6 +937,16 @@ export function App() {
       await updateTaskStep(libraryStore, planId, stepId, { status: done ? "done" : "ready" });
       refreshTaskPlans();
       if (done) await maybeRollRecurring(planId);
+    },
+    [libraryStore, refreshTaskPlans, maybeRollRecurring],
+  );
+  // Mark a WHOLE task complete (or reopen it) — the per-card "✓ Complete task" button. Works for a
+  // plain to-do with no steps as well as a multi-step plan; completing a repeating task rolls it on.
+  const onCompleteTask = useCallback(
+    async (planId: string, complete: boolean) => {
+      await setTaskPlanComplete(libraryStore, planId, complete);
+      refreshTaskPlans();
+      if (complete) await maybeRollRecurring(planId);
     },
     [libraryStore, refreshTaskPlans, maybeRollRecurring],
   );
@@ -3808,7 +3818,13 @@ export function App() {
     () => ({
       download: async (ref0) => {
         const ref = await withFetchedBytes(ref0);
-        const data = ref.bytes ? new Uint8Array(ref.bytes) : (ref.content ?? "");
+        // A found PC file carries only a path — read its bytes off disk so "Save a copy" works for it
+        // too (in-chat content/bytes save directly).
+        const data: Uint8Array | string = ref.path
+          ? new Uint8Array(await (await readLocalFile(ref.path)).arrayBuffer())
+          : ref.bytes
+            ? new Uint8Array(ref.bytes)
+            : (ref.content ?? "");
         const saved = await saveNamed(ref.name, data, ref.mime || "application/octet-stream", "Save this file");
         return saved ?? true; // cancel is "handled"
       },
@@ -3848,12 +3864,17 @@ export function App() {
         appendBuddy({ role: "tool", text: `No importable files matched “${query}”.`, ...baked });
       } else {
         lastRefs.current = ranked.map((f) => ({ kind: "file", label: f.name, path: f.path }));
+        // Surface each hit as the universal file CARD (not a bare chip): the reader picks an action —
+        // Open in app, Open in library, Open on PC, Download — instead of a single click jumping
+        // straight into the book reader.
         appendBuddy({
           role: "tool",
-          text: `Found ${ranked.length} file${ranked.length === 1 ? "" : "s"} — click one, or say “open #N”:`,
-          files: ranked.map((f, i) => ({
+          text: `Found ${ranked.length} file${ranked.length === 1 ? "" : "s"} — open one with its buttons:`,
+          attachments: ranked.map((f) => ({
+            name: f.name,
+            mime: "",
+            kind: "found" as const,
             path: f.path,
-            name: `${i + 1}. ${f.name}${formatFileSize(f.size) ? ` · ${formatFileSize(f.size)}` : ""}`,
           })),
           ...baked,
         });
@@ -5546,6 +5567,9 @@ export function App() {
         case "toggleStep":
           void onToggleStepDone(c.planId, c.stepId, c.done);
           break;
+        case "completeTask":
+          void onCompleteTask(c.planId, c.complete);
+          break;
         case "ignoreTask":
           void ignoreTask(c.id);
           break;
@@ -5577,6 +5601,7 @@ export function App() {
       openTaskInChat,
       onAdvanceTaskStep,
       onToggleStepDone,
+      onCompleteTask,
       ignoreTask,
       onAddTaskDetails,
       removeTask,
@@ -7326,6 +7351,9 @@ export function App() {
           onAdvanceStep={isRemoteClient ? (planId, stepId) => sendPlanner({ action: "advanceStep", planId, stepId }) : onAdvanceTaskStep}
           onToggleStepDone={
             isRemoteClient ? (planId, stepId, done) => sendPlanner({ action: "toggleStep", planId, stepId, done }) : onToggleStepDone
+          }
+          onCompleteTask={
+            isRemoteClient ? (planId, complete) => sendPlanner({ action: "completeTask", planId, complete }) : onCompleteTask
           }
           onIgnoreTask={isRemoteClient ? (id) => sendPlanner({ action: "ignoreTask", id }) : ignoreTask}
           onAddTaskDetails={

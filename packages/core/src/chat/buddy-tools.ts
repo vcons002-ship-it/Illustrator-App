@@ -2579,7 +2579,9 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     return (
       `[find_files found ${files.length} file${files.length === 1 ? "" : "s"} on the reader's computer for "${call.query}"]\n` +
       `${lines.join("\n")}\n` +
-      "Offer to open the best match, or call read with source:\"file\" and ref=its path to pull its contents in. Don't invent file names."
+      "These are already shown to the reader as file cards with their own open buttons — DON'T auto-open one. " +
+      "Just say which looks like the best match and let them open it from the card, or ask which they want. " +
+      "Only call read with source:\"file\" and ref=its path if they ask you to read/work with its contents. Don't invent file names."
     );
   }
   if (call.tool === "read_file") {

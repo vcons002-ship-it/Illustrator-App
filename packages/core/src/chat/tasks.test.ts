@@ -34,6 +34,7 @@ import {
   resolveActiveTaskPlanId,
   sessionLabelForPlan,
   updateTaskStep,
+  setTaskPlanComplete,
   upsertTaskPlan,
   type TaskPlan,
   type TaskPlanInput,
@@ -413,6 +414,28 @@ describe("task plan store", () => {
     const after = await updateTaskStep(store, p.id, p.steps[0]!.id, { status: "done", googleTaskId: "g1" });
     expect(after[0]!.steps[0]!.status).toBe("done");
     expect(after[0]!.steps[0]!.googleTaskId).toBe("g1");
+  });
+
+  it("setTaskPlanComplete ticks every step + completes, and reopen resets a fully-done plan", async () => {
+    const store = new InMemoryStore();
+    const p = plan(); // multi-step, none done
+    await upsertTaskPlan(store, p);
+    const done = await setTaskPlanComplete(store, p.id, true);
+    expect(done[0]!.status).toBe("completed");
+    expect(done[0]!.steps.every((s) => s.status === "done")).toBe(true);
+    // Reopen a fully-done plan → active again, first step ready, the rest pending.
+    const reopened = await setTaskPlanComplete(store, p.id, false);
+    expect(reopened[0]!.status).toBe("active");
+    expect(reopened[0]!.steps[0]!.status).toBe("ready");
+    expect(reopened[0]!.steps.slice(1).every((s) => s.status === "pending")).toBe(true);
+  });
+
+  it("setTaskPlanComplete completes a no-step to-do", async () => {
+    const store = new InMemoryStore();
+    const p = plan({ steps: [] });
+    await upsertTaskPlan(store, p);
+    const done = await setTaskPlanComplete(store, p.id, true);
+    expect(done[0]!.status).toBe("completed");
   });
 });
 

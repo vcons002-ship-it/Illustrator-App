@@ -391,6 +391,30 @@ export async function restoreTaskPlan(store: VisualReaderStore, id: string): Pro
   return next;
 }
 
+/** Mark a WHOLE plan complete (or reopen it) — the "✓ Complete task" / "↺ Reopen" button. Completing
+ * ticks every step done and flips the plan to "completed" (works for a no-step to-do too); reopening
+ * sets it back to "active" and, when the plan was fully done, resets its steps (first → ready, rest →
+ * pending) so it's workable again. Returns the saved plans. */
+export async function setTaskPlanComplete(store: VisualReaderStore, id: string, complete: boolean): Promise<TaskPlan[]> {
+  const plans = await loadTaskPlans(store);
+  const next = plans.map((p) => {
+    if (p.id !== id) return p;
+    if (complete) {
+      return {
+        ...p,
+        status: "completed" as const,
+        steps: p.steps.map((s) => ({ ...s, status: "done" as StepStatus })),
+        updatedAt: Date.now(),
+      };
+    }
+    const wasAllDone = p.steps.length > 0 && p.steps.every((s) => s.status === "done");
+    const steps = wasAllDone ? p.steps.map((s, i) => ({ ...s, status: (i === 0 ? "ready" : "pending") as StepStatus })) : p.steps;
+    return { ...p, status: "active" as const, steps, updatedAt: Date.now() };
+  });
+  await persistPlans(store, next);
+  return next;
+}
+
 /** Patch one step (status/notes/google ids); bumps updatedAt. Returns the saved plans. */
 export async function updateTaskStep(
   store: VisualReaderStore,
