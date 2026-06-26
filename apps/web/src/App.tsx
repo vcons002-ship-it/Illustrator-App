@@ -365,6 +365,11 @@ function imageSearchMiss(query: string, error: string | undefined, hasSearchKey:
   );
 }
 
+/** How many checklist steps are done — used to tell whether a turn advanced the working plan. */
+function countDonePlanSteps(plan: BuddyPlan | undefined): number {
+  return plan ? plan.steps.filter((s) => s.status === "done").length : 0;
+}
+
 export function App() {
   const stored = useMemo(loadStoredSettings, []);
   const [settings, setSettings] = useState<ReaderSettings>(stored.settings);
@@ -1097,6 +1102,11 @@ export function App() {
   // The model-facing history of the turn that produced a pendingTool — so an
   // approved run_command can auto-react with the exact context up to its call.
   const pendingBuddyHistory = useRef<ChatTurn[]>([]);
+  // Working-checklist auto-advance budget: while a plan has unfinished steps, the host hands the
+  // model another turn so it works straight down the list without the reader typing "continue".
+  // Reset on each fresh user turn; `count` caps a runaway chain, `noProgress` stops a stalled one
+  // (a step that's actually a question to the reader ticks nothing → halts after one tolerated turn).
+  const buddyQueueAdvanceRef = useRef({ count: 0, noProgress: 0 });
   // Session grant for buddy-initiated filesystem search: once the reader picks
   // "Allow this session", later find_files calls run without re-confirming (a
   // direct /find never needed confirming — the reader typed it). Reset on reload.
@@ -4509,7 +4519,12 @@ export function App() {
     userBubbleText?: string,
   ): Promise<string | undefined> => {
     const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
-    if (userBubbleText !== undefined) appendBuddy({ role: "user", text: userBubbleText });
+    if (userBubbleText !== undefined) {
+      appendBuddy({ role: "user", text: userBubbleText });
+      buddyQueueAdvanceRef.current = { count: 0, noProgress: 0 }; // fresh user turn → reset the chain budget
+    }
+    // Done-steps before this turn, to tell whether the turn made progress on the checklist.
+    const doneAtStart = countDonePlanSteps(buddyPlanRef.current);
     setBuddyBusy(true);
     setBuddyStreaming("");
     buddyStreamingRef.current = "";
@@ -4576,12 +4591,9 @@ export function App() {
           : c.tool === "open_web_text" ? "Fetching the text and opening it…"
           : c.tool === "set_plan" ? "Planning the steps…"
           : c.tool === "complete_step" ? "Checking off a step…"
-          : c.tool === "say" ? "Sending a message…"
           : "Working…";
         setBuddyActivity(label);
-        // The `say` message renders as its own chat bubble (above), so a redundant trace row would
-        // just echo it — skip the trace for `say`, keep it for every other (otherwise invisible) tool.
-        if (c.tool !== "say") setBuddySteps((prev) => [...prev, label.replace(/…$/, "")]); // visible trace of each step
+        setBuddySteps((prev) => [...prev, label.replace(/…$/, "")]); // keep a visible trace of each step
       } else if (e.kind === "settings") {
         // set_visual_style fields + a generic update_setting patch both land here; App
         // owns ReaderSettings, so committing via setSettings runs the normal tune-vs-
@@ -4670,13 +4682,7 @@ export function App() {
         if (e.kind === "toolResult" && (e.call.tool === "create_event" || e.call.tool === "list_events")) refreshCalendar();
         if (e.kind === "toolResult" && (e.call.tool === "add_task_group" || e.call.tool === "create_task" || e.call.tool === "add_task_steps" || e.call.tool === "mark_step_done" || e.call.tool === "update_task_step")) refreshTaskPlans();
         const typed = userBubbleText ?? "";
-        if (e.said) {
-          // A `say` tool delivered one message mid-turn (a true queue step, e.g. "count to 10, one per
-          // message"). Render it as its own assistant bubble NOW. `turns: []` keeps it display-only —
-          // the settled message at turn end carries the canonical history (the say call is already in
-          // its transcript), so reconstructing the next turn's context never double-counts it.
-          appendBuddy({ role: "assistant", text: e.said, turns: [] });
-        } else if (e.openedImage) {
+        if (e.openedImage) {
           // open_image: show the picture file inline in the chat (the bytes rode home base64-encoded).
           const img = e.openedImage;
           appendBuddy({
@@ -4803,6 +4809,33 @@ export function App() {
         ...(res.paused ? { actions: [{ label: "▶ Continue", send: "continue" }] } : {}),
       });
       if (openedBook) appendChat({ role: "assistant", text: res.text });
+
+      // Lean chaining: the working checklist is re-injected into the prompt every turn, so the model
+      // can read what's ✓ done and what's ▸ next on its own. When a plain-text turn settles with steps
+      // still unfinished, just hand it another turn instead of waiting for the reader to type
+      // "continue" — it reads its checklist, does the next step, and complete_steps it. (Tool/host-tool
+      // turns auto-react on their own paths above; this only fires on a plain-text settle.)
+      const plan = buddyPlanRef.current;
+      if (!res.paused && planHasPendingStep(plan)) {
+        const adv = buddyQueueAdvanceRef.current;
+        adv.count += 1;
+        adv.noProgress = countDonePlanSteps(plan) > doneAtStart ? 0 : adv.noProgress + 1;
+        const cap = Math.max(20, plan!.steps.length * 2 + 5);
+        // Stop if the chain has run long (cap) or stalled: a step that's really a question to the
+        // reader ticks nothing, so after one tolerated no-progress turn we halt and let them answer.
+        if (adv.count <= cap && adv.noProgress <= 1) {
+          await dispatchBuddyTurn(
+            [...history, { role: "user", content: userText }, ...res.transcript],
+            "[Your checklist still has unfinished steps. Read it above, do the ▸ current step, then complete_step, " +
+              "and keep going on your own — don't wait for me. But if the current step is waiting on my answer to " +
+              "something you already asked, just stop and wait — don't repeat the question.]",
+          );
+          return res.text || undefined;
+        }
+        if (adv.count > cap) {
+          appendBuddy({ role: "tool", text: "Paused — say “continue” to keep working the checklist.", turns: [] });
+        }
+      }
     }
     return res.text || undefined;
   };

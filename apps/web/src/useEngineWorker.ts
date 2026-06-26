@@ -352,8 +352,6 @@ export type BuddyStreamEvent =
       hits?: WebSearchHit[];
       books?: BookSearchHit[];
       imageHits?: ImageSearchHit[];
-      /** A `say` tool's delivered message — rendered as its own assistant chat bubble mid-turn. */
-      said?: string;
       applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
       removed?: string;
       calc?: { expression: string; result: string };
@@ -947,7 +945,6 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             ...(msg.hits ? { hits: msg.hits } : {}),
             ...(msg.books ? { books: msg.books } : {}),
             ...(msg.imageHits ? { imageHits: msg.imageHits } : {}),
-            ...(msg.said ? { said: msg.said } : {}),
             ...(msg.applied ? { applied: msg.applied } : {}),
             ...(msg.removed ? { removed: msg.removed } : {}),
             ...(msg.calc ? { calc: msg.calc } : {}),

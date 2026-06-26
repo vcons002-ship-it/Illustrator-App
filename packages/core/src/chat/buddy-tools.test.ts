@@ -1372,46 +1372,15 @@ describe("working-checklist queue auto-advance", () => {
   });
 });
 
-describe("say tool (message-per-step queue primitive)", () => {
-  it("parses the native shape", () => {
-    expect(parseBuddyToolCall('{"tool":"say","text":"1"}')).toEqual({ tool: "say", text: "1" });
-  });
-
-  it("accepts the common arg synonyms a model might reach for", () => {
-    expect(parseBuddyToolCall('{"tool":"say","message":"hello"}')).toEqual({ tool: "say", text: "hello" });
-    expect(parseBuddyToolCall('{"tool":"say","content":"world"}')).toEqual({ tool: "say", text: "world" });
-  });
-
-  it("rejects an empty / whitespace message (nothing to deliver)", () => {
-    expect(parseBuddyToolCall('{"tool":"say","text":""}')).toBeUndefined();
-    expect(parseBuddyToolCall('{"tool":"say","text":"   "}')).toBeUndefined();
-    expect(parseBuddyToolCall('{"tool":"say"}')).toBeUndefined();
-  });
-
-  it("recovers a say BATCHED with a complete_step in one reply (a true queue round)", () => {
-    const calls = parseBuddyToolCalls('{"tool":"say","text":"3"}\n{"tool":"complete_step","note":"sent 3"}');
-    expect(calls).toEqual([
-      { tool: "say", text: "3" },
-      { tool: "complete_step", note: "sent 3" },
-    ]);
-  });
-
-  it("formats a delivered-message feedback that steers the model to tick + continue", () => {
-    const fb = formatBuddyToolResult({ tool: "say", text: "1" }, { said: "1" });
-    expect(fb).toMatch(/delivered to the reader/i);
-    expect(fb).toContain("complete_step");
-    expect(fb).toMatch(/next step/i);
-    expect(fb).toMatch(/don't repeat/i);
-  });
-
-  it("names the message in the status line", () => {
-    expect(describeBuddyToolActivity({ tool: "say", text: "1" })).toBe("Sending a message: “1”…");
-  });
-
-  it("is catalogued as a non-turn-ending message primitive", () => {
+describe("MULTI-STEP guidance — drive off the checklist, app auto-advances", () => {
+  it("tells the model the app hands it another turn and to phrase steps as actions", () => {
     const sys = buildBuddySystemPrompt({ persona: "assistant", library: [] });
-    expect(sys).toContain('{"tool":"say","text":"…"}');
-    expect(sys).toMatch(/does NOT end/i);
-    expect(sys).toMatch(/count to 10/i);
+    // The model is told the app re-invites it, so it must not wait for "continue".
+    expect(sys).toMatch(/AUTOMATICALLY GIVES YOU\s+ANOTHER TURN|hands you another turn/);
+    expect(sys).toMatch(/never stop to wait for the reader to say 'continue'/i);
+    // Steps are concrete actions/asks, and the checklist is the source of truth for completion.
+    expect(sys).toMatch(/Say the number 1/);
+    expect(sys).toMatch(/source of truth/i);
+    expect(sys).toMatch(/never tick a step you\s+haven't actually done/i);
   });
 });
