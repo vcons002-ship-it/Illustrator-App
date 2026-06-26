@@ -4409,17 +4409,23 @@ export function App() {
     // image), so without them it reads earlier "image rendered" lines and ticks the new steps off as
     // already done. At render time the image is for the ▸ current (first unfinished) step.
     let taggedImageFeedback = imageFeedback;
+    let tagCaption = ""; // a VISIBLE label on the render so the reader sees which checklist/step it's from
     if (!out.error && plan && plan.steps.length > 0) {
       const idx = plan.steps.findIndex((s) => s.status !== "done");
       const stepNo = idx >= 0 ? idx + 1 : plan.steps.length;
       const where = plan.goal ? `the checklist “${plan.goal}”` : "the checklist";
       taggedImageFeedback = `${imageFeedback} — this is step ${stepNo} of ${plan.steps.length} of ${where}.`;
+      const goalLabel = plan.goal ? ` · ${plan.goal.length > 50 ? `${plan.goal.slice(0, 50).trim()}…` : plan.goal}` : "";
+      tagCaption = `🖼 Step ${stepNo} of ${plan.steps.length}${goalLabel}`;
+    } else if (!out.error && call.prompt) {
+      // One-shot image (no checklist): still label it with what it depicts.
+      tagCaption = `🖼 ${call.prompt.length > 60 ? `${call.prompt.slice(0, 60).trim()}…` : call.prompt}`;
     }
     const continueQueue = !out.error && planHasPendingStep(plan);
     const feedback = continueQueue ? planQueueResumeFeedback(taggedImageFeedback, plan!) : taggedImageFeedback;
     appendBuddy({
       role: "tool",
-      text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
+      text: out.error ? `⚠ Image generation failed: ${out.error}` : tagCaption,
       ...(out.image ? { image: out.image, attachments: [imageAttachment(call.prompt, out.image)] } : {}),
       turns: [...pre, { role: "user", content: feedback }],
     });
