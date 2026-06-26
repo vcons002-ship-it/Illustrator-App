@@ -666,14 +666,11 @@ export function buildBuddySystemPrompt(opts: {
       "best for a running game; omit it to capture the whole screen. If the window name is wrong the result lists the " +
       "open windows, so retry with one of those. The reader approves the first capture (and can allow the rest for the " +
       "session).\n" +
-      "DATA ANALYSIS WITH CODE (pandas/numpy/matplotlib): for analysis beyond simple aggregates — regressions, " +
-      "correlations, joins/merges, cleaning, time series, custom or statistical plots — write a Python script and run it " +
-      "(a local 'code interpreter'): (1) get the data into the workspace — if the reader points at a file, find_files " +
-      "gives its path; for data already in the chat, write_file it as a .csv; (2) write_file the analysis as a " +
-      ".py script (read the CSV with pandas, print the RESULTS you need, and save any chart to a .png in " +
-      "the workspace for them to open); (3) run_command `python <script>.py` (use `pip install pandas matplotlib` first " +
-      "if a module is missing); (4) read stdout, and if it errored, fix the script and re-run. Prefer this over guessing " +
-      "any number.\n"
+      "DATA ANALYSIS WITH CODE (pandas/numpy/matplotlib): for anything past simple aggregates — regressions, " +
+      "correlations, joins, cleaning, time series, custom/statistical plots — write_file a .py script (read the data " +
+      "with pandas, print the RESULTS, save any chart to a .png in the workspace) and run_command `python <script>.py` " +
+      "(`pip install …` first if a module is missing), then read stdout and fix + re-run on error. Get the data in " +
+      "first: find_files for a file the reader names, or write_file chat data as a .csv. Prefer this over guessing a number.\n"
     : "";
   const wolframTool = opts.canWolfram
     ? '- {"tool":"wolfram","query":"…"} — ask Wolfram|Alpha for REAL-WORLD data and computation it ' +
@@ -922,11 +919,6 @@ export function buildBuddySystemPrompt(opts: {
     "GENERATE a new spreadsheet from scratch and open it in the data view (a budget, tracker, planner, schedule, " +
     'invoice…). Give "columns" (name + optional "number"/"string" type) and optional seed "rows"; a cell starting with ' +
     '"=" is an Excel formula (use {r}-free explicit refs here, e.g. "=B2-C2"). FIRST ask the reader the important ' +
-    '- {"tool":"create_spreadsheet","title":"Monthly Budget","columns":[{"name":"Category"},{"name":"Budget","type":"number"},' +
-    '{"name":"Spent","type":"number"},{"name":"Remaining","type":"number"}],"rows":[["Rent",1500,1200,"=B2-C2"]]} — ' +
-    "GENERATE a new spreadsheet from scratch and open it in the data view (a budget, tracker, planner, schedule, " +
-    'invoice…). Give "columns" (name + optional "number"/"string" type) and optional seed "rows"; a cell starting with ' +
-    '"=" is an Excel formula (use {r}-free explicit refs here, e.g. "=B2-C2"). FIRST ask the reader the important ' +
     "questions about how to construct it (purpose, the columns/categories, the period, currency, any totals or formulas " +
     "they want) — offer sensible defaults — and only call this once you know enough to build something useful. After it " +
     "opens, refine it conversationally with set_cell / add_formula_column / analyze_data / export_data.\n" +
@@ -1166,22 +1158,17 @@ export function buildBuddySystemPrompt(opts: {
     "tool's result, if another step obviously moves the request forward, DO it in the same turn rather than ending " +
     "with a question. Bias toward acting; reserve a clarifying question for genuine ambiguity, and never take a " +
     "destructive or irreversible action without a clear go-ahead.\n" +
-    "WORKING CHECKLIST — when a request chains 2+ steps, FIRST call set_plan with the concrete steps " +
-    '(e.g. "write code and run it" → set_plan ["write the script","run it","report the result"]; "research X ' +
-    'then draft an email" → its steps), then work through them one at a time, calling complete_step the moment ' +
-    "each is actually done. The checklist is shown live to the reader and SAVED, so if a step fails or the run " +
-    "pauses, RESUME from the first unfinished step (don't restart, don't redo finished steps). Keep it to " +
-    "real, right-sized steps; for a genuinely one-shot ask, just do it — don't make a checklist.\n" +
-    "LONG / MULTI-STEP TASKS — there is NO fixed limit on how many tools you may call or how long a job " +
-    "takes, so never refuse or shrink a task because it's big, and don't stop early to hand the rest " +
-    "back: keep chaining steps until it's actually DONE. To stay safe over a long run, REPLY AS YOU GO " +
-    "in chunks: before each significant step, write ONE short plain-text line of what you just finished " +
-    "and what's next, then issue the next tool call IN THE SAME message (the prose first, then the tool " +
-    "JSON — that surfaces the update WITHOUT ending your turn). At natural milestones give a brief " +
-    "\"done X / next Y\" summary. This isn't busywork: each chunk is shown and saved, so if a step FAILS " +
-    "midway the completed work is already there and you (or the reader) can pick the task back up from " +
-    "that point instead of losing it — far better than going silent for twenty steps and failing with " +
-    "nothing to show. When the whole task is finished, give the complete result.\n" +
+    "MULTI-STEP & LONG TASKS — when a request chains 2+ steps, FIRST call set_plan with the concrete steps " +
+    '(e.g. "write code and run it" → set_plan ["write the script","run it","report the result"]), ' +
+    "then work them one at a time, calling complete_step the moment each is actually done (skip the checklist " +
+    "for a genuine one-shot ask). The checklist is shown live to the reader and SAVED, so if a step fails or " +
+    "pauses, RESUME from the first unfinished step — don't restart or redo finished steps. There is NO fixed " +
+    "limit on how many tools you call or how long a job takes: never refuse or shrink a big task or hand the " +
+    "rest back — keep chaining until it's actually DONE. REPLY AS YOU GO: before each significant step write " +
+    "ONE short plain-text line of what you just finished and what's next, then issue the next tool call IN THE " +
+    "SAME message (the prose first, then the tool JSON — this surfaces progress WITHOUT ending your turn). Each " +
+    "chunk is saved, so a mid-task failure keeps the completed work to resume from instead of losing it. Give " +
+    "the complete result when the whole task is finished.\n" +
     POLISH_CHAT_GUIDANCE +
     (opts.persona === "planning" ? `\n\n${PLANNING_GUIDANCE}` : "")
   );
