@@ -308,6 +308,18 @@ function imageAttachment(prompt: string, image: { bytes: ArrayBuffer; mimeType: 
   return { id, name: `${stem}.${ext}`, mime: image.mimeType, kind: "image", bytes: image.bytes.slice(0) };
 }
 
+const DATA_FILE_EXTS = new Set(["csv", "tsv", "json", "xlsx", "xls", "ods", "numbers", "xml", "yaml", "yml"]);
+const CODE_FILE_EXTS = new Set([
+  "js", "ts", "tsx", "jsx", "mjs", "cjs", "py", "rs", "go", "java", "kt", "c", "cc", "cpp", "h", "hpp",
+  "cs", "rb", "php", "swift", "sh", "bash", "css", "scss", "html", "htm", "sql", "toml", "ipynb",
+]);
+/** The display kind for a file the assistant just authored (write_file / a saved doc), from its
+ * extension — picks which universal file-card actions show (data grid, code, or document reader). */
+function createdFileKind(name: string): FileRef["kind"] {
+  const ext = (name.toLowerCase().split(".").pop() ?? "");
+  return DATA_FILE_EXTS.has(ext) ? "data" : CODE_FILE_EXTS.has(ext) ? "code" : "doc";
+}
+
 /** Is this code book renderable markup (HTML/SVG), so we can show the rendered PAGE — not just the
  * source — in an in-app iframe? Detects by language, title extension, or a sniff of the source. PURE. */
 function markupPreviewKind(book: { language?: string; title?: string } | undefined, draft: string): "html" | "svg" | undefined {
@@ -4188,7 +4200,15 @@ export function App() {
     try {
       const saved = await writeWorkspaceFile(call.path, call.content, buddyWorkingDir || undefined, call.append);
       payload = { path: saved, ok: true };
-      appendBuddy({ role: "tool", text: `📝 ${call.append ? "Appended to" : "Saved"} ${saved}`, turns: [] });
+      // ALWAYS surface the authored file as a universal file card (Open in app / library / on PC /
+      // Download), not just a "saved" line — the card reads from the on-disk path so it's correct even
+      // for an append (whole file, not the fragment).
+      appendBuddy({
+        role: "tool",
+        text: `📝 ${call.append ? "Appended to" : "Saved"} ${saved}`,
+        attachments: [{ name: saved.split(/[\\/]/).pop() || saved, mime: "", kind: createdFileKind(saved), path: saved }],
+        turns: [],
+      });
       // If the assistant just edited the file open in the code window, show its change live there. (Skip
       // append chunks — call.content is a fragment, not the whole file.)
       const openCode = bookRef.current;
