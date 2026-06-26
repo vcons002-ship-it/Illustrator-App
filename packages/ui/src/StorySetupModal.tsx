@@ -84,11 +84,11 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, onSta
         </div>
 
         <label style={field}>
-          <span style={label}>Opening scene</span>
+          <span style={label}>Your story idea</span>
           <textarea
             style={textarea}
             value={opening}
-            placeholder="Describe how it begins — the setting, who's there, the mood. We co-write from here and illustrate each beat."
+            placeholder="A sentence or two about the premise — the setting, who's there, the mood. The assistant writes the title and opening scene from this, then you co-write and illustrate each beat."
             onChange={(e) => setOpening(e.target.value)}
             autoFocus
           />
@@ -158,7 +158,7 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, onSta
             {workflow === "roleplay" && namedChars.length > 0 && (
               <div style={{ ...row, marginTop: 8 }}>
                 <label style={{ ...field, flex: 1 }}>
-                  <span style={label}>You play (me)</span>
+                  <span style={label}>You play</span>
                   <select style={select} value={meIdx} onChange={(e) => setMeIdx(Number(e.target.value))}>
                     {namedChars.map((c, i) => (
                       <option key={i} value={i}>
@@ -168,7 +168,7 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, onSta
                   </select>
                 </label>
                 <label style={{ ...field, flex: 1 }}>
-                  <span style={label}>Assistant plays (you)</span>
+                  <span style={label}>Assistant plays</span>
                   <select style={select} value={youIdx} onChange={(e) => setYouIdx(Number(e.target.value))}>
                     {namedChars.map((c, i) => (
                       <option key={i} value={i}>

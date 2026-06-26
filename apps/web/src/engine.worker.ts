@@ -60,6 +60,8 @@ import {
   userSoulPromptBlock,
   storyStatePromptBlock,
   synopsisRequest,
+  storyOpeningRequest,
+  parseStoryOpening,
   SYNOPSIS_REFRESH_EVERY,
   MAX_SYNOPSIS_CHARS,
   seedStarterSkills,
@@ -3018,7 +3020,6 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       // active-scene hook, beat one extracts + illustrates). worldStyle/style is applied
       // to the worker's settings so the open renders in the chosen look.
       startStory: async (call) => {
-        const id = `story-${storyCounter++}-${(call.title || "story").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24)}`;
         const played = [call.roleplay?.you, call.roleplay?.me].filter((n): n is string => !!n);
         const isRoleplay = !!call.roleplay && played.length > 0;
         // Apply the requested art style to the worker's settings immediately, so the open's
@@ -3032,27 +3033,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             ...(styleId ? { style: { id: styleId, label: getImageStyle(styleId).label } } : {}),
           });
         }
-        story = {
-          bookId: id,
-          title: call.title || "Our Story",
-          author: "Story with the chat buddy",
-          beats: [call.opening],
-          scene: emptyStoryScene(),
-          scenes: [],
-          ...(played.length ? { roleplay: { playedCharacterNames: played } } : {}),
-          mode: isRoleplay ? "roleplay" : "direct",
-          ...(isRoleplay ? { play: { ...(call.roleplay?.me ? { me: call.roleplay.me } : {}), ...(call.roleplay?.you ? { you: call.roleplay.you } : {}) } } : {}),
-          cadence: { mode: "per-response", n: 3 },
-          beatsSinceImage: 0,
-        };
-        // Pre-seed the named cast (start_story `characters` + the role-played pair) into the
-        // bible BEFORE the open, so the active-scene tracker resolves + keeps them present
-        // from beat one even if the opening prose doesn't name them — closing the "setting-
-        // only opening" gap. A cast entry's `description` seeds its LOOK (persistentTraits) so
-        // the first image isn't arbitrary (e.g. the reader's remembered appearance in a "me and
-        // you" story). Extraction UPSERTS by name on the first beat that describes them,
-        // enriching this same entry (no duplicate). Written to the shared store so openBook
-        // restores it. The played pair is added (name-only) when not already in `characters`.
+        // Dedup the named cast (start_story `characters` + the role-played pair) — used both to seed
+        // the bible and to ground the AI-written opening below.
         const seedCast: { name: string; description?: string }[] = [...(call.characters ?? []), ...played.map((name) => ({ name }))];
         const seen = new Set<string>();
         const cast = seedCast.filter((c) => {
@@ -3061,6 +3043,47 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           seen.add(k);
           return true;
         });
+        // The reader's setup text is a PREMISE, not the opening prose: let the AI write the actual
+        // opening beat and propose a title from it (grounded in the cast/roleplay). Best-effort —
+        // if chat is unavailable or the reply doesn't parse, fall back to the typed text + title.
+        let title = call.title?.trim() || "Our Story";
+        let opening = call.opening;
+        if (supportsChat(llm) && call.opening.trim()) {
+          try {
+            post({ type: "buddyActivity", requestId: msg.requestId, text: "Writing the opening scene…" });
+            const { system, user } = storyOpeningRequest(call.opening, {
+              characters: cast,
+              mode: isRoleplay ? "roleplay" : "direct",
+              ...(isRoleplay && call.roleplay ? { play: call.roleplay } : {}),
+            });
+            const reply = (await llm.chat([{ role: "system", content: system }, { role: "user", content: user }], { maxTokens: 600 })).trim();
+            const parsed = parseStoryOpening(reply);
+            if (parsed.opening) opening = parsed.opening;
+            if (!call.title?.trim() && parsed.title) title = parsed.title;
+          } catch {
+            // Generation is best-effort — keep the typed premise as the opening beat.
+          }
+        }
+        const id = `story-${storyCounter++}-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24)}`;
+        story = {
+          bookId: id,
+          title,
+          author: "Story with the chat buddy",
+          beats: [opening],
+          scene: emptyStoryScene(),
+          scenes: [],
+          ...(played.length ? { roleplay: { playedCharacterNames: played } } : {}),
+          mode: isRoleplay ? "roleplay" : "direct",
+          ...(isRoleplay ? { play: { ...(call.roleplay?.me ? { me: call.roleplay.me } : {}), ...(call.roleplay?.you ? { you: call.roleplay.you } : {}) } } : {}),
+          cadence: { mode: "per-response", n: 3 },
+          beatsSinceImage: 0,
+        };
+        // Pre-seed the named cast into the bible BEFORE the open, so the active-scene tracker resolves
+        // + keeps them present from beat one even if the opening prose doesn't name them — closing the
+        // "setting-only opening" gap. A cast entry's `description` seeds its LOOK (persistentTraits) so
+        // the first image isn't arbitrary. Extraction UPSERTS by name on the first beat that describes
+        // them, enriching this same entry (no duplicate). Written to the shared store so openBook
+        // restores it. The played pair is added (name-only) when not already in `characters`.
         if (cast.length) {
           await store.putBible({
             ...createEmptyBible(id),

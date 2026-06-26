@@ -4740,6 +4740,23 @@ export function App() {
 
   const onBuddySend = useCallback(
     async (text: string) => {
+      // `/story {json}` — starting a story as you go. Show a friendly bubble (not the raw JSON) and
+      // run it against an EMPTY history so the writer's context is clean (the same guarantee the
+      // desktop's Story button gives locally). This is the path a PHONE-relayed story start lands on
+      // (vrcmd:chatSend "/story …"), so mobile gets the clean-context behaviour too.
+      const story = text.trim();
+      if (story.startsWith("/story ")) {
+        let bubble = "✍️ Starting a story…";
+        try {
+          const payload = JSON.parse(story.slice("/story ".length)) as { opening?: string };
+          const op = typeof payload.opening === "string" ? payload.opening : "";
+          if (op) bubble = `✍️ Starting a story — ${op.slice(0, 80)}${op.length > 80 ? "…" : ""}`;
+        } catch {
+          /* malformed payload — the generic bubble is fine; the worker reports the parse error */
+        }
+        await dispatchBuddyTurn([], story, bubble);
+        return;
+      }
       // `/find` is a MAIN-THREAD command (desktop only) — filesystem access never
       // routes through the LLM worker, so no web page / book text can trigger it.
       const find = /^\/find\s+(.+)$/i.exec(text.trim());
@@ -4832,10 +4849,13 @@ export function App() {
       const command = `/story ${JSON.stringify(payload)}`;
       // Remember where we came from so exiting the story returns us there (history intact).
       storyReturnSessionRef.current = activeBuddyIdRef.current;
-      // On a linked phone the session lives on the desktop — keep the in-place dispatch (the desktop
-      // owns session creation) rather than spinning up a local one the mirror won't know about.
+      // On a linked phone the session + engine live on the DESKTOP. Relay the story start the same way
+      // a normal message relays (the desktop owns session creation and runs the turn, then mirrors the
+      // opened book + each beat back): make a fresh session, then send the /story command into it. This
+      // gives mobile the same clean dedicated chat as desktop, and the book/beats sync back via vrsync.
       if (isRemoteClient) {
-        void dispatchBuddyTurn(chatTurnsOf(buddyMessages), command, bubble);
+        sendAppSync({ type: "vrcmd:chatNew" });
+        sendAppSync({ type: "vrcmd:chatSend", text: command });
         return;
       }
       // Open the story in a FRESH, dedicated book-only chat. A clean (empty) writer context is what
