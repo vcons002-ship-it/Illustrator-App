@@ -4777,6 +4777,12 @@ export function App() {
       return;
     }
     if (res.pendingTool) {
+      // Persist any plain-text the model wrote BEFORE this tool — its "✓ finished X, ▸ now Y" per-step
+      // narration — so that progress note stays documented in the chat instead of vanishing when the
+      // tool (e.g. a render) suspends the turn. turns:[] keeps it display-only (it's already in the
+      // transcript captured below, so the model's history never double-counts it).
+      const narration = buddyStreamingRef.current.trim();
+      if (narration) appendBuddy({ role: "assistant", text: narration, turns: [] });
       // Record the exact context up to this tool call so an approved run_command can
       // auto-react. `userText` is in `history` for a continuation; not for a typed turn.
       pendingBuddyHistory.current = history;

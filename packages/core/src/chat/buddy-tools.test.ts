@@ -1354,7 +1354,10 @@ describe("working-checklist queue auto-advance", () => {
     expect(fb).toMatch(/actually run its tool/i);
     expect(fb).toMatch(/do NOT just mark it done/i);
     // It must tell the model to keep going on its own rather than wait for the reader.
-    expect(fb).toMatch(/don't stop to wait for the reader/i);
+    expect(fb).toMatch(/don't wait for the reader/i);
+    // ...and to narrate + tick exactly one step per reply (the anti-skip directive).
+    expect(fb).toMatch(/one short plain-text line/i);
+    expect(fb).toMatch(/never two in a row/i);
   });
 
   it("last step: tick it, then wrap up — no 'next step' instruction", () => {
