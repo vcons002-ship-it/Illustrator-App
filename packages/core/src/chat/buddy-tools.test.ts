@@ -10,6 +10,8 @@ import {
   normalizeBuddyPersona,
   parseBuddyToolCall,
   parseBuddyToolCalls,
+  planHasPendingStep,
+  planQueueResumeFeedback,
   progressNudge,
   stripToolCallJson,
   toolFailureDirective,
@@ -1321,5 +1323,51 @@ describe("failure feedback helpers", () => {
     expect(isRetryableError("connection refused")).toBe(true);
     expect(isRetryableError("Schwab isn't connected")).toBe(false);
     expect(isRetryableError("invalid symbol")).toBe(false);
+  });
+});
+
+describe("working-checklist queue auto-advance", () => {
+  const fivePlan = (doneCount: number) => ({
+    goal: "5 images of the scene",
+    steps: Array.from({ length: 5 }, (_, i) => ({
+      text: `Generate image ${i + 1}`,
+      status: (i < doneCount ? "done" : "pending") as "done" | "pending",
+    })),
+  });
+
+  it("planHasPendingStep — true while any step is unfinished, false when all done / no plan", () => {
+    expect(planHasPendingStep(fivePlan(0))).toBe(true);
+    expect(planHasPendingStep(fivePlan(4))).toBe(true);
+    expect(planHasPendingStep(fivePlan(5))).toBe(false);
+    expect(planHasPendingStep(undefined)).toBe(false);
+    expect(planHasPendingStep({ steps: [] })).toBe(false);
+  });
+
+  it("mid-queue resume: tick the current step, then DO the next one (not just mark it)", () => {
+    // Steps 1–2 done; the image for step 3 (▸ current) just rendered.
+    const fb = planQueueResumeFeedback("[tool generate_image: the image was generated and is shown to the reader]", fivePlan(2));
+    expect(fb).toContain("the image was generated"); // the raw tool result is carried through
+    expect(fb).toContain("2/5 done");
+    expect(fb).toContain("complete_step");
+    expect(fb).toContain("Generate image 3"); // the just-finished current step is named
+    expect(fb).toContain("Generate image 4"); // the next step to actually do
+    expect(fb).toMatch(/actually run its tool/i);
+    expect(fb).toMatch(/do NOT just mark it done/i);
+    // It must tell the model to keep going on its own rather than wait for the reader.
+    expect(fb).toMatch(/don't stop to wait for the reader/i);
+  });
+
+  it("last step: tick it, then wrap up — no 'next step' instruction", () => {
+    const fb = planQueueResumeFeedback("[tool generate_image: the image was generated and is shown to the reader]", fivePlan(4));
+    expect(fb).toContain("4/5 done");
+    expect(fb).toMatch(/LAST step/);
+    expect(fb).toContain("Generate image 5");
+    expect(fb).toMatch(/wrap-up/i);
+  });
+
+  it("all steps done: just give the final result", () => {
+    const fb = planQueueResumeFeedback("[tool generate_image: …]", fivePlan(5));
+    expect(fb).toContain("5/5 done");
+    expect(fb).toMatch(/All steps are done/i);
   });
 });

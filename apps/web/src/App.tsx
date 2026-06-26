@@ -28,6 +28,8 @@ import {
   toRenderUnits,
   formatToolResult,
   formatBuddyToolResult,
+  planHasPendingStep,
+  planQueueResumeFeedback,
   stripToolCallJson,
   toolFailureDirective,
   anchorByParagraph,
@@ -4364,26 +4366,44 @@ export function App() {
     if (buddyRenderingRef.current) return; // a render is already in flight — drop the duplicate approval
     buddyRenderingRef.current = true;
     setBuddyPendingTool(undefined);
+    // Capture the model-facing context up to this image call so a multi-step PLAN can AUTO-REACT after
+    // the render (mirrors approveRunCommand) instead of halting for the reader to type "continue".
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
     setBuddyBusy(true);
     setBuddyActivity("Generating the image…");
+    let out: Awaited<ReturnType<typeof chatTool>>;
     try {
-      const out = await chatTool(call, {
+      out = await chatTool(call, {
         onProgress: (f) => setBuddyActivity(`Generating the image… ${Math.round(f * 100)}%`),
       });
-      setBuddyBusy(false);
-      setBuddyActivity("");
-      const feedback = formatToolResult(call, {
-        image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
-      });
-      appendBuddy({
-        role: "tool",
-        text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
-        ...(out.image ? { image: out.image, attachments: [imageAttachment(call.prompt, out.image)] } : {}),
-        turns: [...pendingBuddyTranscript.current, { role: "user", content: feedback }],
-      });
-      pendingBuddyTranscript.current = [];
     } finally {
+      // Release the duplicate-render guard the moment the RENDER finishes — BEFORE any follow-up turn,
+      // so a full-autonomy queue's next auto-approved image isn't dropped as a "duplicate".
       buddyRenderingRef.current = false;
+    }
+    setBuddyActivity("");
+    const imageFeedback = formatToolResult(call, {
+      image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
+    });
+    // A working checklist with steps left → advance the QUEUE: feed the render result back and let the
+    // model tick the current step + start the next one, so the plan runs to completion on its own (each
+    // next image still gets its own approval/gate). A one-shot image (no plan) just shows + stops, as before.
+    const plan = buddyPlanRef.current;
+    const continueQueue = !out.error && planHasPendingStep(plan);
+    const feedback = continueQueue ? planQueueResumeFeedback(imageFeedback, plan!) : imageFeedback;
+    appendBuddy({
+      role: "tool",
+      text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
+      ...(out.image ? { image: out.image, attachments: [imageAttachment(call.prompt, out.image)] } : {}),
+      turns: [...pre, { role: "user", content: feedback }],
+    });
+    if (continueQueue) {
+      await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+    } else {
+      setBuddyBusy(false);
     }
   };
 
@@ -4507,6 +4527,10 @@ export function App() {
       else if (e.kind === "activity") setBuddyActivity(e.text);
       else if (e.kind === "usage") setBuddyUsage(e.usage);
       else if (e.kind === "plan") {
+        // Update the ref SYNCHRONOUSLY (not just via setBuddyPlan's render) so a full-autonomy queue's
+        // FIRST auto-approved image — which can fire before React commits — already sees the fresh
+        // checklist and keeps the queue advancing instead of halting after step 1.
+        buddyPlanRef.current = e.plan;
         setBuddyPlan(e.plan);
         // Persist the working checklist per session (desktop owns the store; never on a phone or in
         // incognito). activeBuddyIdRef is the live session this turn runs for.
