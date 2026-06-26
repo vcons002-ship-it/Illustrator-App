@@ -13,7 +13,29 @@ import {
   saveSoulName,
   selfSoulPromptBlock,
   userSoulPromptBlock,
+  selfPortraitPrompt,
 } from "./souls.js";
+
+describe("selfPortraitPrompt", () => {
+  const look = [{ text: "silver hair", at: 1 }, { text: "long charcoal coat", at: 2 }];
+  it("folds the assistant's look in when it's a self-portrait (by self-reference)", () => {
+    const out = selfPortraitPrompt("a watercolor of yourself by the sea", "Sage", look);
+    expect(out).toContain("a watercolor of yourself by the sea");
+    expect(out).toMatch(/depict Sage with this appearance: silver hair, long charcoal coat/);
+  });
+  it("triggers on the assistant's name", () => {
+    expect(selfPortraitPrompt("Sage standing in the rain", "Sage", look)).toMatch(/appearance: silver hair/);
+  });
+  it("triggers on 'draw you' style phrasing", () => {
+    expect(selfPortraitPrompt("draw you as a knight", "Sage", look)).toMatch(/depict Sage/);
+  });
+  it("leaves an unrelated subject untouched", () => {
+    expect(selfPortraitPrompt("a red apple on a table", "Sage", look)).toBe("a red apple on a table");
+  });
+  it("is a no-op when there's no look to add", () => {
+    expect(selfPortraitPrompt("a selfie of you", "Sage", [])).toBe("a selfie of you");
+  });
+});
 
 describe("identity souls", () => {
   it("keeps self and user souls in separate stores, distinct from reader memory", async () => {

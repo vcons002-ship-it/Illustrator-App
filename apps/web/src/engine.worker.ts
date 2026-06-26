@@ -58,6 +58,7 @@ import {
   forgetSoul,
   selfSoulPromptBlock,
   userSoulPromptBlock,
+  selfPortraitPrompt,
   storyStatePromptBlock,
   synopsisRequest,
   storyOpeningRequest,
@@ -1709,6 +1710,10 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
     }
     const note = await renderDefaultsNote();
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
+    // The assistant's identity ("soul") — emitted as the FIRST section of the book chat too (and kept
+    // in the cached prefix), so the companion stays in character here, not just in the home chat.
+    const selfSoul = selfSoulPromptBlock(await loadSoul(memoryStore(), "self"), await loadSoulName(memoryStore(), "self"));
+    const userSoul = userSoulPromptBlock(await loadSoul(memoryStore(), "user"), await loadSoulName(memoryStore(), "user"));
     const sections = chatContextSections({
       bookTitle: book.title,
       contentMode: book.contentMode ?? "fiction",
@@ -1719,11 +1724,11 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       ...(settings?.allowMature ? { allowMature: true } : {}),
       ...(book.data ? { dataTable: book.data } : {}),
       budgetChars: budgets.book,
+      ...(selfSoul ? { selfSoul } : {}),
+      ...(userSoul ? { userSoul } : {}),
     });
     const sec = (key: string) => sections.find((s) => s.key === key)?.text ?? "";
     const memory = memoryPromptBlock(await loadMemory(memoryStore()));
-    const selfSoul = selfSoulPromptBlock(await loadSoul(memoryStore(), "self"), await loadSoulName(memoryStore(), "self"));
-    const userSoul = userSoulPromptBlock(await loadSoul(memoryStore(), "user"), await loadSoulName(memoryStore(), "user"));
     const skills = skillsIndexBlock(await loadSkills(memoryStore()));
     const system =
       sections
@@ -1731,8 +1736,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
         .filter(Boolean)
         .join("\n\n") +
       (memory ? `\n\n${memory}` : "") +
-      (selfSoul ? `\n\n${selfSoul}` : "") +
-      (userSoul ? `\n\n${userSoul}` : "") +
+      // selfSoul/userSoul are now the FIRST section (above), not appended here.
       (skills ? `\n\n${skills}` : "") +
       (note ? `\n\n${note}` : "");
     const history = trimChatHistory(
@@ -3618,7 +3622,14 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
     const baseTier = useBook ? bookProviders!.tier : built.tier;
     const tier = styleId ? { ...baseTier, style: styleId } : baseTier;
     cancelChatWarm(); // don't let a pending LLM warm steal VRAM from this render
-    const out = await renderFromText(image, tier, call.prompt, {
+    // If the assistant is drawing ITSELF, fold its identity "soul" appearance into the prompt so the
+    // render reliably uses its real look (no-op for any other subject).
+    const prompt = selfPortraitPrompt(
+      call.prompt,
+      await loadSoulName(memoryStore(), "self"),
+      await loadSoul(memoryStore(), "self"),
+    );
+    const out = await renderFromText(image, tier, prompt, {
       ...(call.steps ? { stepsOverride: call.steps } : {}),
       signal: ac.signal,
       onProgress: (fraction) => post({ type: "testProgress", requestId, fraction }),
