@@ -317,6 +317,27 @@ describe("buildBuddySystemPrompt", () => {
     expect(prompt).toContain("NEVER steer the chat toward opening");
   });
 
+  it("weaves the soul name into the FIRST line and puts the identity block before the tools", () => {
+    const p = buildBuddySystemPrompt({
+      persona: "assistant",
+      library: [],
+      selfName: "Sage",
+      selfSoul: "WHO YOU ARE (your own durable identity …):\n- Name: Sage\n- silver hair",
+      userSoul: "WHO THE READER IS …:\n- Name: Alex",
+    });
+    expect(p.startsWith("Your name is Sage — answer to it.")).toBe(true);
+    // The identity blocks come BEFORE the routing guide + tool catalog (so they're not buried).
+    expect(p.indexOf("WHO YOU ARE")).toBeGreaterThan(-1);
+    expect(p.indexOf("WHO YOU ARE")).toBeLessThan(p.indexOf("HOW TO PICK A TOOL"));
+    expect(p.indexOf("WHO THE READER IS")).toBeLessThan(p.indexOf("HOW TO PICK A TOOL"));
+  });
+
+  it("omits the name prefix when no soul name is set", () => {
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(p).not.toContain("Your name is");
+    expect(p).toContain("You are the assistant on the home screen of Visual Reader");
+  });
+
   it("story mode demands prose-only beats and never an empty/meta reply", () => {
     const p = buildBuddySystemPrompt({ persona: "assistant", library: [], storyActive: true });
     expect(p).toContain("STORY MODE");
