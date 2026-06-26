@@ -6127,7 +6127,7 @@ export function App() {
           <button
             style={styles.button}
             onClick={() => void openSoul("self")}
-            title="The assistant's own identity — its persona, look, and voice. Used when it plays itself in a story."
+            title="The assistant's own identity — its persona, voice, and look. It speaks and behaves as this character in every chat (and plays itself in a story)."
           >
             🪞 Soul
           </button>
