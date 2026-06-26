@@ -3533,6 +3533,7 @@ export function App() {
       setActiveBuddyId(active);
       if (hist) setBuddyMessages(hist);
       setBuddyPlan(savedPlan);
+      buddyPlanRef.current = savedPlan; // match the ref to the restored session's plan from the first tick
       buddyReady.current = true;
     })();
     return () => {
@@ -4402,11 +4403,28 @@ export function App() {
     // model tick the current step + start the next one, so the plan runs to completion on its own (each
     // next image still gets its own approval/gate). A one-shot image (no plan) just shows + stops, as before.
     const plan = buddyPlanRef.current;
+    // Tag a render with WHICH checklist + step it belongs to, so a SECOND batch of images later in the
+    // same chat can be told apart from this one — the model only ever sees these text tags (never the
+    // image), so without them it reads earlier "image rendered" lines and ticks the new steps off as
+    // already done. At render time the image is for the ▸ current (first unfinished) step.
+    let taggedImageFeedback = imageFeedback;
+    let tagCaption = ""; // a VISIBLE label on the render so the reader sees which checklist/step it's from
+    if (!out.error && plan && plan.steps.length > 0) {
+      const idx = plan.steps.findIndex((s) => s.status !== "done");
+      const stepNo = idx >= 0 ? idx + 1 : plan.steps.length;
+      const where = plan.goal ? `the checklist “${plan.goal}”` : "the checklist";
+      taggedImageFeedback = `${imageFeedback} — this is step ${stepNo} of ${plan.steps.length} of ${where}.`;
+      const goalLabel = plan.goal ? ` · ${plan.goal.length > 50 ? `${plan.goal.slice(0, 50).trim()}…` : plan.goal}` : "";
+      tagCaption = `🖼 Step ${stepNo} of ${plan.steps.length}${goalLabel}`;
+    } else if (!out.error && call.prompt) {
+      // One-shot image (no checklist): still label it with what it depicts.
+      tagCaption = `🖼 ${call.prompt.length > 60 ? `${call.prompt.slice(0, 60).trim()}…` : call.prompt}`;
+    }
     const continueQueue = !out.error && planHasPendingStep(plan);
-    const feedback = continueQueue ? planQueueResumeFeedback(imageFeedback, plan!) : imageFeedback;
+    const feedback = continueQueue ? planQueueResumeFeedback(taggedImageFeedback, plan!) : taggedImageFeedback;
     appendBuddy({
       role: "tool",
-      text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
+      text: out.error ? `⚠ Image generation failed: ${out.error}` : tagCaption,
       ...(out.image ? { image: out.image, attachments: [imageAttachment(call.prompt, out.image)] } : {}),
       turns: [...pre, { role: "user", content: feedback }],
     });
@@ -5244,6 +5262,7 @@ export function App() {
     setBuddyActivity("");
     setBuddyMessages([]);
     setBuddyPlan(undefined);
+    buddyPlanRef.current = undefined; // synchronous — don't let a stale checklist survive the clear
     setBuddyPendingTool(undefined);
     void libraryStore.deleteChatHistory?.(activeBuddyId);
     void libraryStore.deleteMemo?.(planMemoKey(activeBuddyId)).catch(() => {});
@@ -5265,7 +5284,14 @@ export function App() {
     setBuddyThinking("");
     setBuddyActivity("");
     setBuddySteps([]);
+    // ISOLATE the conversation immediately: the switch/new/delete callers load the target session's
+    // history + plan ASYNCHRONOUSLY, so without clearing here the PREVIOUS window's messages + checklist
+    // stay live during the load gap — the model then sees the old chat (e.g. "those 5 images are already
+    // generated") and reports the new task as already done. Clear the ref synchronously too (the
+    // render-time sync at the top of the component otherwise lags a tick behind this state update).
+    setBuddyMessages([]);
     setBuddyPlan(undefined); // the new session's plan loads in (or stays empty); don't flash the old one
+    buddyPlanRef.current = undefined;
     setBuddyPendingTool(undefined);
     // The context-usage badge is per-conversation — clear it on a session switch so it doesn't show
     // the previous window's % (it repopulates from the new session's next turn).
@@ -5286,7 +5312,10 @@ export function App() {
         setActiveBuddyId(id);
         setBuddyMessages(hist ?? []);
       });
-      void loadBuddyPlan(id).then(setBuddyPlan);
+      void loadBuddyPlan(id).then((p) => {
+        buddyPlanRef.current = p; // keep the ref in step with the loaded session's plan, not a render behind
+        setBuddyPlan(p);
+      });
     },
     [isRemoteClient, sendAppSync, activeBuddyId, libraryStore, resetBuddyView, loadBuddyPlan],
   );
@@ -5327,7 +5356,10 @@ export function App() {
             setActiveBuddyId(fallback);
             setBuddyMessages(hist ?? []);
           });
-          void loadBuddyPlan(fallback).then(setBuddyPlan);
+          void loadBuddyPlan(fallback).then((p) => {
+            buddyPlanRef.current = p;
+            setBuddyPlan(p);
+          });
         }
         return next;
       });

@@ -140,6 +140,86 @@ describe("runBuddyTurn — write-capable sub-agent (runHostTool)", () => {
   });
 });
 
+describe("runBuddyTurn — multi-step checklists run EVERY step (no skipping)", () => {
+  // A stateful working checklist, exactly like the host's set_plan/complete_step, so a full plan can
+  // be driven through the loop and we can assert every step's tool actually fired.
+  type Plan = { goal?: string; steps: { text: string; status: "pending" | "done"; note?: string }[] } | undefined;
+  function planHarness() {
+    let plan: Plan;
+    const deps = {
+      ...baseDeps,
+      setPlan: (goal: string | undefined, steps: string[]) => {
+        plan = { ...(goal ? { goal } : {}), steps: steps.map((t) => ({ text: t, status: "pending" as const })) };
+        return plan;
+      },
+      completeStep: (note?: string) => {
+        if (!plan) return undefined;
+        const i = plan.steps.findIndex((s) => s.status !== "done");
+        if (i < 0) return undefined;
+        plan.steps[i] = { ...plan.steps[i]!, status: "done", ...(note ? { note } : {}) };
+        return plan;
+      },
+    };
+    return { deps, get plan() { return plan; } };
+  }
+
+  it("a 3-image checklist renders EVERY image and ticks EVERY step — none skipped", async () => {
+    const h = planHarness();
+    const llm = scriptedLlm([
+      '{"tool":"set_plan","goal":"3 sunset images","steps":["Generate image 1 of the sunset","Generate image 2 of the sunset","Generate image 3 of the sunset"]}',
+      '{"tool":"generate_image","prompt":"sunset one"}\n{"tool":"complete_step","note":"image 1 done"}',
+      '{"tool":"generate_image","prompt":"sunset two"}\n{"tool":"complete_step","note":"image 2 done"}',
+      '{"tool":"generate_image","prompt":"sunset three"}\n{"tool":"complete_step","note":"image 3 done"}',
+      "All three sunsets are done!",
+    ]);
+    const rendered: string[] = [];
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "generate 3 images of a sunset, one at a time" }],
+      deps: h.deps,
+      // Execute the host render in-band (what the app does between turns) so the whole queue runs here.
+      runHostTool: async (call) => {
+        if (call.tool === "generate_image") rendered.push(call.prompt);
+        return { image: { ok: true } };
+      },
+    });
+    // Every image was actually rendered, in order — not skipped, not deduped, not "already done".
+    expect(rendered).toEqual(["sunset one", "sunset two", "sunset three"]);
+    expect(outcome.toolResults.filter((r) => r.call.tool === "generate_image")).toHaveLength(3);
+    expect(outcome.toolResults.filter((r) => r.call.tool === "complete_step")).toHaveLength(3);
+    expect(h.plan!.steps.every((s) => s.status === "done")).toBe(true); // all 3 ticked
+    expect(outcome.pendingTool).toBeUndefined();
+    expect(outcome.text).toBe("All three sunsets are done!");
+  });
+
+  it("a research → compute chain runs each step's tool in order and ticks each step", async () => {
+    const h = planHarness();
+    const llm = scriptedLlm([
+      '{"tool":"set_plan","goal":"research","steps":["Search the web for X","Compute the total"]}',
+      '{"tool":"search_web","query":"X facts"}\n{"tool":"complete_step","note":"searched"}',
+      '{"tool":"calculate","expression":"21 * 2"}\n{"tool":"complete_step","note":"computed"}',
+      "Found it — the total is 42.",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "research X then compute the total" }],
+      deps: { ...h.deps, searchWeb: async () => [{ title: "T", link: "http://x.test", snippet: "S" }] },
+    });
+    // The tools ran in the planned order, once each, with a tick after each.
+    expect(outcome.toolResults.map((r) => r.call.tool)).toEqual([
+      "set_plan",
+      "search_web",
+      "complete_step",
+      "calculate",
+      "complete_step",
+    ]);
+    expect(h.plan!.steps.every((s) => s.status === "done")).toBe(true);
+    expect(outcome.text).toBe("Found it — the total is 42.");
+  });
+});
+
 describe("runBuddyTurn — never-empty answer + thinking", () => {
   it("re-prompts for a plain-text wrap-up when a tool round ends with no prose", async () => {
     const llm = scriptedLlm(['{"tool":"search_books","query":"x"}', "", "All set — nothing notable came back."]);

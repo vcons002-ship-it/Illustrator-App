@@ -205,8 +205,9 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     // Anti-empty-promise: don't say you'll run it and then end without the tool call.
     expect(prompt).toContain("end your reply without the write_file / run_command call");
   });
-  it("checklist: a multi-step example is given as a set_plan example so multi-step asks get planned", () => {
-    expect(prompt).toContain('"research X and write it up"');
+  it("checklist: multi-image asks are planned one step per image (the worst skip case)", () => {
+    expect(prompt).toContain("Generate image 1 of the sunset");
+    expect(prompt).toMatch(/VERY FIRST action is ALWAYS set_plan/i);
   });
 });
 
