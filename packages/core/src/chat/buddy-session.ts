@@ -277,6 +277,10 @@ export async function runBuddyTurn(opts: {
   const effectiveMax =
     opts.pauseEvery && opts.pauseEvery > 0 ? Math.min(opts.pauseEvery, MAX_BUDDY_TOOL_ROUNDS) : MAX_BUDDY_TOOL_ROUNDS;
   let pausedForBudget = false; // hit the budget with tools still pending → a resumable checkpoint, not a finish
+  // Anti-skip guard (turn-scoped): true right after a complete_step, cleared by any real work (a tool /
+  // render). A second complete_step while it's still true is the model "jumping ahead" — ticking a step
+  // it never did (e.g. checking off image 2's step without generating image 2) — and is refused.
+  let lastWasCompleteStep = false;
 
   // One model call against the current `messages` — a FRESH token gate each time (tool JSON never
   // streams visibly), capturing whether the server cut us off at the budget so a long answer can be
@@ -426,6 +430,7 @@ export async function runBuddyTurn(opts: {
         toolResults.push({ call, result });
         opts.onEvent?.({ kind: "toolResult", round, call, result });
         feedbacks.push(formatBuddyToolResult(call, result));
+        lastWasCompleteStep = false; // real work happened
         continue;
       }
       if (isHostTool(call)) {
@@ -437,6 +442,7 @@ export async function runBuddyTurn(opts: {
           toolResults.push({ call, result });
           opts.onEvent?.({ kind: "toolResult", round, call, result });
           feedbacks.push(formatBuddyToolResult(call, result));
+          lastWasCompleteStep = false; // a render/command is real work — the next check-off is earned
           continue;
         }
         if (feedbacks.length === 0) {
@@ -445,6 +451,22 @@ export async function runBuddyTurn(opts: {
         }
         deferred = true;
         break;
+      }
+      // Anti-skip: a complete_step right after another check-off, with no real work in between, is the
+      // model jumping ahead — ticking a step it never did. Refuse it (the step stays unfinished) and tell
+      // it to do that step's action first. The FIRST check-off of a turn is always fine (the work was the
+      // render that ended the previous turn); only back-to-back ticks are blocked.
+      if (call.tool === "complete_step" && lastWasCompleteStep) {
+        opts.onEvent?.({ kind: "tool", round, call });
+        const result: BuddyToolResultPayload = { error: "checked off too fast — do this step's work first" };
+        toolResults.push({ call, result });
+        opts.onEvent?.({ kind: "toolResult", round, call, result });
+        feedbacks.push(
+          "[complete_step IGNORED — you just checked off a step with no work in between. Do the ▸ current " +
+            "step's action FIRST (e.g. actually call generate_image and let its image render), THEN check it " +
+            "off. Exactly one step's work per check-off — never tick two steps in a row.]",
+        );
+        continue; // leave lastWasCompleteStep true — a 3rd tick in a row is refused too
       }
       opts.onEvent?.({ kind: "tool", round, call });
       // Name the specific action in the status line ("Searching the web for …") so the reader sees
@@ -459,6 +481,8 @@ export async function runBuddyTurn(opts: {
       toolResults.push({ call, result });
       opts.onEvent?.({ kind: "toolResult", round, call, result });
       feedbacks.push(formatBuddyToolResult(call, result));
+      // Track for the anti-skip guard: only a successful check-off arms it; any other tool is "work".
+      lastWasCompleteStep = call.tool === "complete_step" && !result.error;
     }
     // On the final tool round, append a wrap-up nudge so the model answers now instead of
     // spending its last round on a tool whose result it can't follow up on.

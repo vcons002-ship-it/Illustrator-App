@@ -193,6 +193,29 @@ describe("runBuddyTurn — multi-step checklists run EVERY step (no skipping)", 
     expect(outcome.text).toBe("All three sunsets are done!");
   });
 
+  it("refuses a back-to-back complete_step (no work between) so a step can't be skipped", async () => {
+    const h = planHarness();
+    const llm = scriptedLlm([
+      '{"tool":"set_plan","goal":"3 images","steps":["Generate image 1","Generate image 2","Generate image 3"]}',
+      // Renders image 1, then tries to tick TWO steps at once — the exact "jumped ahead" bug.
+      '{"tool":"generate_image","prompt":"img1"}\n{"tool":"complete_step"}\n{"tool":"complete_step"}',
+      "ok",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "3 images" }],
+      deps: h.deps,
+      runHostTool: async () => ({ image: { ok: true } }),
+    });
+    // Only ONE step got ticked — the second check-off (no render between) was refused, so image 2's
+    // step stays unfinished instead of being silently skipped.
+    expect(h.plan!.steps.filter((s) => s.status === "done")).toHaveLength(1);
+    expect(outcome.toolResults.filter((r) => r.call.tool === "complete_step" && r.result.error)).toHaveLength(1);
+    const fedBack = llm.calls.flatMap((c) => c.map((t) => t.content)).join("\n");
+    expect(fedBack).toMatch(/complete_step IGNORED — you just checked off a step with no work in between/);
+  });
+
   it("a research → compute chain runs each step's tool in order and ticks each step", async () => {
     const h = planHarness();
     const llm = scriptedLlm([

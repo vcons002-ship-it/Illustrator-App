@@ -1186,6 +1186,10 @@ export function buildBuddySystemPrompt(opts: {
     "text as the LAST thing in the turn), then complete_step — but ONLY once that step is genuinely finished. " +
     "The app re-runs you automatically while any step is unfinished, so keep going step by step on your own — " +
     "NEVER wait for the reader to say 'continue', and never tick several steps at once to 'catch up'. " +
+    "NARRATE EVERY STEP: at the start of each step write ONE short plain-text line saying what you just " +
+    "finished and what you're doing next (e.g. \"✓ Image 1 done — now generating image 2 of 3.\"), THEN take " +
+    "that single step's action. Do EXACTLY ONE step's work before each complete_step — one check-off per " +
+    "reply, never two in a row (the app refuses a second check-off that has no work between). " +
     "CRITICAL FOR IMAGES: an image step is done ONLY after you have ACTUALLY CALLED generate_image for it AND " +
     "its render has come back THIS turn — then tick it. NEVER decide a ▸ or · step is already done because " +
     "pictures already appear earlier in the chat: those are from earlier steps or an EARLIER request and DO " +
@@ -2146,10 +2150,11 @@ export function planQueueResumeFeedback(toolFeedback: string, plan: BuddyPlan): 
     );
   } else {
     lines.push(
-      `That finishes the ▸ current step ("${current.text}"). Call complete_step to tick it, then ` +
-        `immediately DO the next step ("${next.text}") — actually run its tool (e.g. generate_image), do ` +
-        "NOT just mark it done. Keep working straight through the rest of the checklist on your own; the " +
-        "app feeds each result back automatically, so don't stop to wait for the reader between steps.",
+      `That finishes the ▸ current step ("${current.text}"). In ONE short plain-text line tell the reader ` +
+        `what you just finished and what's next, THEN complete_step to tick it, THEN do the next step ` +
+        `("${next.text}") — actually run its tool (e.g. generate_image), do NOT just mark it done. One ` +
+        "check-off per reply (never two in a row). Keep working through the rest of the checklist on your " +
+        "own; the app feeds each result back automatically, so don't wait for the reader between steps.",
     );
   }
   return lines.join("\n");
