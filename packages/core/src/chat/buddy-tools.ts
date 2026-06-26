@@ -323,7 +323,13 @@ export type BuddyToolCall =
    * live, NOT a TaskPlan. */
   | { tool: "set_plan"; goal?: string; steps: string[] }
   /** Tick the FIRST unfinished checklist step done and advance (no index — the app tracks "current"). */
-  | { tool: "complete_step"; note?: string };
+  | { tool: "complete_step"; note?: string }
+  /** Send the reader ONE discrete chat message right now and KEEP working — auto-run, does NOT end the
+   * turn. The missing primitive for a task whose every step PRODUCES a message ("count to 10, one number
+   * per message"; deliver several items one at a time): say the message, complete_step, say the next.
+   * Without it the model can only emit one message per turn (the final reply) and ends up ticking every
+   * step done without actually producing the output. */
+  | { tool: "say"; text: string };
 
 /**
  * The HARD danger floor: tools that ALWAYS require explicit human approval — even when the reader
@@ -470,6 +476,12 @@ export function describeBuddyToolActivity(call: BuddyToolCall): string {
       return `Running: ${clip(call.command, 50)}`;
     case "read_skill":
       return "Checking my playbooks…";
+    case "set_plan":
+      return "Planning the steps…";
+    case "complete_step":
+      return "Checking off a step…";
+    case "say":
+      return `Sending a message: “${clip(call.text, 50)}”…`;
     default:
       return "Working on it…";
   }
@@ -490,6 +502,8 @@ const MAX_QUERY_CHARS = 200;
 const MAX_URL_CHARS = 600;
 const MAX_TITLE_CHARS = 120;
 const MAX_ID_CHARS = 120;
+/** One `say` message — generous (a step's deliverable can be a short paragraph) but not a whole doc. */
+const MAX_SAY_CHARS = 4000;
 /** Image-generation prompts: natural-language models (Flux.2, Gemini, GPT-image) reward long,
  * detailed prompts, so give them real room — a 600-char cap visibly truncated both the render
  * prompt AND the "Generate this image?" preview. */
@@ -961,6 +975,10 @@ export function buildBuddySystemPrompt(opts: {
     'saved). Then execute them one at a time. {"tool":"complete_step","note":"…"} — mark the CURRENT (first ' +
     "unfinished) step done and move on, AFTER you've actually finished it (no step number needed). Skip both " +
     "for a simple one-shot ask.\n" +
+    '- {"tool":"say","text":"…"} — send the reader ONE message right now and KEEP working (it does NOT end ' +
+    'your turn). This is how you deliver a task that means several SEPARATE messages — "count to 10, one number ' +
+    'per message", or handing back items one at a time: say the message, then complete_step, then say the next, ' +
+    "and so on. For a normal single reply, just answer in plain text — don't use say.\n" +
     `- {"tool":"update_setting","field":"…","value":…} — CHANGE one of the app's settings when the reader asks in ` +
     'plain language ("turn on mature mode", "set image quality to high", "use portrait orientation", "enable auto ' +
     'task scheduling"). "field" names the setting, "value" is the new value (true/false for a toggle, or the option ' +
@@ -1186,6 +1204,13 @@ export function buildBuddySystemPrompt(opts: {
     "SAME message (the prose first, then the tool JSON — this surfaces progress WITHOUT ending your turn). Each " +
     "chunk is saved, so a mid-task failure keeps the completed work to resume from instead of losing it. Give " +
     "the complete result when the whole task is finished.\n" +
+    "MESSAGE-PER-STEP — when a step's action is to SEND THE READER A MESSAGE (counting items out one per " +
+    'message, handing back results piece by piece), DO it with {"tool":"say","text":"…"} — that delivers the ' +
+    "message and keeps your turn going — then complete_step and move to the next, all in one unbroken run. " +
+    "Marking a step done is NEVER the same as doing it: never call complete_step for a 'tell the reader X' step " +
+    "unless you actually said X this round (via say). So \"count to 10, one per message\" is: set_plan the ten " +
+    "steps, then say \"1\" → complete_step → say \"2\" → complete_step → … → say \"10\" → complete_step, then a " +
+    "short closing line — never ten complete_steps in a row with no messages.\n" +
     POLISH_CHAT_GUIDANCE +
     (opts.persona === "planning" ? `\n\n${PLANNING_GUIDANCE}` : "")
   );
@@ -1574,6 +1599,11 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     // No required args — the app ticks the first unfinished step.
     const note = strArg(obj.note, MAX_QUERY_CHARS);
     return { tool, ...(note ? { note } : {}) };
+  }
+  if (tool === "say") {
+    // The message to deliver — accept the common arg synonyms a model might reach for.
+    const text = strArg(obj.text ?? obj.message ?? obj.content, MAX_SAY_CHARS);
+    return text ? { tool, text } : undefined;
   }
   if (tool === "update_setting") {
     const field = strArg(obj.field, MAX_NAME_CHARS);
@@ -2005,6 +2035,8 @@ export interface BuddyToolResultPayload {
   hits?: WebSearchHit[];
   books?: BookSearchHit[];
   imageHits?: ImageSearchHit[];
+  /** A `say` tool's delivered message — the host renders it as its own chat bubble mid-turn. */
+  said?: string;
   opened?: BuddyOpenedInfo;
   /** Story "as you go" outcomes: a started/continued story (the opened book info doubles as
    * the start outcome), an on-demand render (render_scene), or a cadence change. */
@@ -2168,6 +2200,12 @@ export function renderPlanLines(plan: BuddyPlan): string {
 export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResultPayload): string {
   if (result.error) {
     return `[tool ${call.tool} failed: ${result.error}] Tell the reader plainly and suggest an alternative (another source, or pasting/uploading the text).`;
+  }
+  if (call.tool === "say") {
+    return (
+      "[message delivered to the reader] If this was one step of your checklist, tick it now (complete_step) " +
+      "and do the NEXT step — keep going on your own until the whole job is done. Don't repeat what you just said."
+    );
   }
   if (call.tool === "set_plan" || call.tool === "complete_step") {
     if (!result.plan) return "[plan: nothing to update]";

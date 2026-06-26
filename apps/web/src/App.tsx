@@ -4574,9 +4574,14 @@ export function App() {
           : c.tool === "schedule_task" ? "Scheduling a task…"
           : c.tool === "mark_step_done" || c.tool === "update_task_step" ? "Updating the plan…"
           : c.tool === "open_web_text" ? "Fetching the text and opening it…"
+          : c.tool === "set_plan" ? "Planning the steps…"
+          : c.tool === "complete_step" ? "Checking off a step…"
+          : c.tool === "say" ? "Sending a message…"
           : "Working…";
         setBuddyActivity(label);
-        setBuddySteps((prev) => [...prev, label.replace(/…$/, "")]); // keep a visible trace of each step
+        // The `say` message renders as its own chat bubble (above), so a redundant trace row would
+        // just echo it — skip the trace for `say`, keep it for every other (otherwise invisible) tool.
+        if (c.tool !== "say") setBuddySteps((prev) => [...prev, label.replace(/…$/, "")]); // visible trace of each step
       } else if (e.kind === "settings") {
         // set_visual_style fields + a generic update_setting patch both land here; App
         // owns ReaderSettings, so committing via setSettings runs the normal tune-vs-
@@ -4665,7 +4670,13 @@ export function App() {
         if (e.kind === "toolResult" && (e.call.tool === "create_event" || e.call.tool === "list_events")) refreshCalendar();
         if (e.kind === "toolResult" && (e.call.tool === "add_task_group" || e.call.tool === "create_task" || e.call.tool === "add_task_steps" || e.call.tool === "mark_step_done" || e.call.tool === "update_task_step")) refreshTaskPlans();
         const typed = userBubbleText ?? "";
-        if (e.openedImage) {
+        if (e.said) {
+          // A `say` tool delivered one message mid-turn (a true queue step, e.g. "count to 10, one per
+          // message"). Render it as its own assistant bubble NOW. `turns: []` keeps it display-only —
+          // the settled message at turn end carries the canonical history (the say call is already in
+          // its transcript), so reconstructing the next turn's context never double-counts it.
+          appendBuddy({ role: "assistant", text: e.said, turns: [] });
+        } else if (e.openedImage) {
           // open_image: show the picture file inline in the chat (the bytes rode home base64-encoded).
           const img = e.openedImage;
           appendBuddy({

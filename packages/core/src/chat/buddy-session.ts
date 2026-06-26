@@ -635,6 +635,10 @@ export async function runBuddyTool(
         const updated = deps.completeStep(call.note);
         return updated ? { plan: updated } : { error: "there's no unfinished checklist step — call set_plan first" };
       }
+      case "say":
+        // No dep: just hand the message back so the host renders it as a chat bubble; the loop keeps
+        // going so a message-per-step task runs as one uninterrupted in-worker queue.
+        return { said: call.text };
       case "update_setting": {
         // Validate purely (coerce + bound to the controllable table), then hand the
         // concrete patch to the host, which owns ReaderSettings and persistence.

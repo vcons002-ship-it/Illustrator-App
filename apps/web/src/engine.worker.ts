@@ -3497,6 +3497,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             ...(e.result.hits ? { hits: e.result.hits } : {}),
             ...(e.result.books ? { books: e.result.books } : {}),
             ...(e.result.imageHits ? { imageHits: e.result.imageHits } : {}),
+            ...(e.result.said ? { said: e.result.said } : {}),
             ...(e.result.applied ? { applied: e.result.applied } : {}),
             ...(e.result.removed ? { removed: e.result.removed } : {}),
             ...(e.result.calc ? { calc: e.result.calc } : {}),

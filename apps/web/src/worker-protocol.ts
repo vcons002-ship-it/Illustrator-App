@@ -334,6 +334,8 @@ export type WorkerToMain =
       hits?: WebSearchHit[];
       books?: BookSearchHit[];
       imageHits?: ImageSearchHit[];
+      /** A `say` tool's delivered message — the host renders it as its own chat bubble mid-turn. */
+      said?: string;
       applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
       removed?: string;
       calc?: { expression: string; result: string };
