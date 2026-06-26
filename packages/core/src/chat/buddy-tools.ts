@@ -1211,29 +1211,23 @@ export function buildBuddySystemPrompt(opts: {
     "tool's result, if another step obviously moves the request forward, DO it in the same turn rather than ending " +
     "with a question. Bias toward acting; reserve a clarifying question for genuine ambiguity, and never take a " +
     "destructive or irreversible action without a clear go-ahead.\n" +
-    "MULTI-STEP & LONG TASKS — when a request chains 2+ steps, FIRST call set_plan. Write each step as a " +
-    "clear, self-contained ACTION or ASK that reads like the reader said it — e.g. \"count to 10, one per " +
-    "message\" → set_plan [\"Say the number 1\",\"Say the number 2\", … ,\"Say the number 10\"]; \"research X " +
-    "and write it up\" → [\"Search the web for X and read the top sources\",\"Write the summary\",\"List 3 " +
-    "follow-ups\"] — not vague labels like \"step 1\". Then WORK THE LIST OFF YOUR CHECKLIST: the current " +
-    "checklist is shown to you at the top of EVERY turn (✓ done, ▸ current, · pending) — it is your working " +
-    "memory, so at the start of each turn just READ it and your recent messages to see what you've already " +
-    "done and what's next; nobody needs to tell you. Do the ▸ current step now: if it only needs a reply, " +
-    "answer in plain text (make that reply the LAST thing in the turn — don't bury it next to a tool call, or " +
-    "the reader won't see it); if it needs a tool, call the tool. The MOMENT a step is genuinely done, call " +
-    "complete_step to check it off — honestly: the checklist is the source of truth, so never tick a step you " +
-    "haven't actually done, and never tick several at once to 'catch up'. THE APP AUTOMATICALLY GIVES YOU " +
-    "ANOTHER TURN whenever the checklist still has unfinished steps — so keep going step by step on your own, " +
-    "and NEVER stop to wait for the reader to say 'continue'. A step whose action is a tool/image is only DONE " +
-    "once that tool's result has come back (don't mark 'generate image 4' done until image 4 has rendered). " +
-    "Each render is tagged in your context with its prompt, checklist, and step number — before ticking an " +
-    "image step, check that THIS checklist actually rendered THAT step's image; images from an EARLIER " +
-    "request (or a different step) don't count, so never tick a step off just because the chat already has " +
-    "some pictures in it. " +
-    "There is NO fixed limit on how long a job takes — never refuse or shrink a big task. Stop only when EVERY " +
-    "step is ✓ (give a short wrap-up of the whole job) or you're genuinely blocked and need the reader (tell " +
-    "them what you need, and do NOT tick the step). If a step fails, RESUME from the first unfinished step — " +
-    "don't restart or redo finished steps.\n" +
+    "MULTI-STEP TASKS — if a request needs 2+ steps, your VERY FIRST action is ALWAYS set_plan: lay out your " +
+    "OWN checklist before doing any of the work. This INCLUDES making several images — ONE step per image " +
+    "(\"5 images of a sunset\" → set_plan [\"Generate image 1 of the sunset\",\"Generate image 2 of the " +
+    "sunset\",\"Generate image 3 of the sunset\",\"Generate image 4 of the sunset\",\"Generate image 5 of the " +
+    "sunset\"]). Write each step as one concrete action that reads like the reader said it, not a vague label. " +
+    "The checklist is shown to you at the top of EVERY turn (✓ done, ▸ current, · pending) and is the ONLY " +
+    "record of progress that counts. Work it top-down: do the ▸ current step (call its tool, or reply in plain " +
+    "text as the LAST thing in the turn), then complete_step — but ONLY once that step is genuinely finished. " +
+    "The app re-runs you automatically while any step is unfinished, so keep going step by step on your own — " +
+    "NEVER wait for the reader to say 'continue', and never tick several steps at once to 'catch up'. " +
+    "CRITICAL FOR IMAGES: an image step is done ONLY after you have ACTUALLY CALLED generate_image for it AND " +
+    "its render has come back THIS turn — then tick it. NEVER decide a ▸ or · step is already done because " +
+    "pictures already appear earlier in the chat: those are from earlier steps or an EARLIER request and DO " +
+    "NOT count. So for every step that isn't ✓, actually call generate_image again — do not skip it, do not " +
+    "just mark it done. There is NO limit on how long a job takes — never refuse or shrink it. Stop only when " +
+    "EVERY step is ✓ (give a short wrap-up) or you're genuinely blocked and need the reader (say what you " +
+    "need; don't tick the step). If a step fails, resume from the first unfinished step — don't redo ✓ ones.\n" +
     POLISH_CHAT_GUIDANCE +
     (opts.persona === "planning" ? `\n\n${PLANNING_GUIDANCE}` : "")
   );

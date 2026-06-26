@@ -1413,15 +1413,23 @@ describe("auto-plan decomposition pre-pass", () => {
   });
 });
 
-describe("MULTI-STEP guidance — drive off the checklist, app auto-advances", () => {
-  it("tells the model the app hands it another turn and to phrase steps as actions", () => {
+describe("MULTI-STEP guidance — always plan, checklist is the only truth, never skip images", () => {
+  it("makes set_plan the mandatory first action (incl. one step per image) and the app re-runs it", () => {
     const sys = buildBuddySystemPrompt({ persona: "assistant", library: [] });
-    // The model is told the app re-invites it, so it must not wait for "continue".
-    expect(sys).toMatch(/AUTOMATICALLY GIVES YOU\s+ANOTHER TURN|hands you another turn/);
-    expect(sys).toMatch(/never stop to wait for the reader to say 'continue'/i);
-    // Steps are concrete actions/asks, and the checklist is the source of truth for completion.
-    expect(sys).toMatch(/Say the number 1/);
-    expect(sys).toMatch(/source of truth/i);
-    expect(sys).toMatch(/never tick a step you\s+haven't actually done/i);
+    // Planning is mandatory and first, and multiple images become one step each.
+    expect(sys).toMatch(/VERY FIRST action is ALWAYS set_plan/i);
+    expect(sys).toMatch(/ONE step per image/i);
+    expect(sys).toContain("Generate image 1 of the sunset");
+    // The app re-invites it, so it must not wait for "continue".
+    expect(sys).toMatch(/re-runs you automatically/i);
+    expect(sys).toMatch(/never wait for the reader to say 'continue'/i);
+  });
+
+  it("forbids skipping image steps — only ✓ counts, pictures already in chat do NOT", () => {
+    const sys = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(sys).toMatch(/the ONLY\s+record of progress that counts/i);
+    expect(sys).toMatch(/NEVER decide a ▸ or · step is already done because\s+pictures already appear/i);
+    expect(sys).toMatch(/DO\s+NOT count/);
+    expect(sys).toMatch(/actually call generate_image again — do not skip it/i);
   });
 });
