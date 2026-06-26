@@ -157,6 +157,7 @@ import {
   type BuddyPlan,
   type BuddyToolCall,
   type BuddyToolResultPayload,
+  boundChatHistoryForMirror,
   type ChatTurn,
   type ContextUsage,
   type EncryptedSecrets,
@@ -298,12 +299,6 @@ function imageAttachment(prompt: string, image: { bytes: ArrayBuffer; mimeType: 
   return { name: `${stem}.${ext}`, mime: image.mimeType, kind: "image", bytes: image.bytes.slice(0) };
 }
 
-/** How many bytes of inline (generated-image) data the chat MIRROR may carry across the active
- * session's history. The snapshot/`vrsync:chat` frame rides one WebSocket message; a tunnel
- * (Cloudflare) silently drops an oversized frame, which left a linked phone connected-but-blank as
- * generated images piled up. ~3 MB keeps the most-recent images and the full text. */
-const CHAT_MIRROR_IMAGE_BUDGET = 3_000_000;
-
 /** Is this code book renderable markup (HTML/SVG), so we can show the rendered PAGE — not just the
  * source — in an in-app iframe? Detects by language, title extension, or a sniff of the source. PURE. */
 function markupPreviewKind(book: { language?: string; title?: string } | undefined, draft: string): "html" | "svg" | undefined {
@@ -320,30 +315,6 @@ function markupPreviewKind(book: { language?: string; title?: string } | undefin
   )
     return "html";
   return undefined;
-}
-
-/** Bound the chat history mirrored to a phone so its frame stays tunnel-safe: keep EVERY message's
- * text/structure intact, but carry inline image BYTES only for the most recent messages within the
- * budget (older generated images become a text-only bubble on the phone — they're untouched on the
- * desktop). Walks newest→oldest so recent images survive. */
-function boundChatMessagesForMirror(messages: StoredChatMessage[]): StoredChatMessage[] {
-  let budget = CHAT_MIRROR_IMAGE_BUDGET;
-  let stripped = false;
-  const out = messages.slice();
-  for (let i = out.length - 1; i >= 0; i--) {
-    const m = out[i]!;
-    const img = m.image;
-    if (img && "bytes" in img) {
-      if (img.bytes.byteLength <= budget) {
-        budget -= img.bytes.byteLength;
-      } else {
-        const { image: _drop, ...rest } = m; // keep the bubble (text), drop the heavy bytes
-        out[i] = rest;
-        stripped = true;
-      }
-    }
-  }
-  return stripped ? out : messages; // unchanged reference when nothing was trimmed (stable memo)
 }
 
 /** Last path segment, for a session's display label (so a folder-bound session reads
@@ -2744,7 +2715,7 @@ export function App() {
     () => ({
       sessions: buddySessions.map((s) => ({ id: s.id, workingDir: s.workingDir, ...(s.label ? { label: s.label } : {}) })),
       activeId: activeBuddyId,
-      messages: boundChatMessagesForMirror(buddyMessages),
+      messages: boundChatHistoryForMirror(buddyMessages),
       persona: buddyPersona,
       busy: buddyBusy,
     }),
