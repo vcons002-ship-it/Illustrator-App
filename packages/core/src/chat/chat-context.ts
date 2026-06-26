@@ -39,6 +39,11 @@ export interface ChatContextInput {
   /** When the "book" is an uploaded spreadsheet/CSV — enables the analyze_data tool. */
   dataTable?: DataTable;
   budgetChars?: number;
+  /** The assistant's own identity "soul" block (WHO YOU ARE — persona, look, voice) and the reader's
+   * (WHO THE READER IS). Emitted as the FIRST, stable section so the companion adopts its identity in
+   * the book chat too — not buried below the book text. Empty/omitted → no identity section. */
+  selfSoul?: string;
+  userSoul?: string;
 }
 
 /** Appended to the chat role clause in mature mode — adult reader, adult text. */
@@ -53,7 +58,7 @@ const OMITTED = "[… omitted for length …]";
 /** One labelled chunk of the system prompt, so the worker can measure where the
  * context budget actually goes (the usage breakdown) — not just join it. */
 export interface ChatContextSection {
-  key: "role" | "bible" | "book" | "tools" | "guard";
+  key: "identity" | "role" | "bible" | "book" | "tools" | "guard";
   label: string;
   text: string;
 }
@@ -79,7 +84,9 @@ export function chatContextSections(input: ChatContextInput): ChatContextSection
   // block a genuine cacheable PREFIX: providers re-read it instead of re-prefilling
   // it (Claude via cache_control; local llama.cpp via KV-cache prefix reuse). The
   // guard therefore forward-references the data below it.
+  const identity = [input.selfSoul, input.userSoul].filter(Boolean).join("\n\n");
   return [
+    { key: "identity", label: "Identity", text: identity },
     { key: "role", label: "Instructions", text: role },
     {
       key: "tools",
@@ -104,7 +111,7 @@ export function chatContextSections(input: ChatContextInput): ChatContextSection
 /** Section keys whose text is byte-stable within a reading session — the cacheable
  * system-prompt prefix (no reader-position or bible volatility). Kept FIRST in the
  * section order so the prefix is a true leading substring of the joined prompt. */
-export const STABLE_CHAT_SECTION_KEYS: readonly ChatContextSection["key"][] = ["role", "tools", "guard"];
+export const STABLE_CHAT_SECTION_KEYS: readonly ChatContextSection["key"][] = ["identity", "role", "tools", "guard"];
 
 /**
  * The cache-friendly leading portion of the system prompt — the stable sections

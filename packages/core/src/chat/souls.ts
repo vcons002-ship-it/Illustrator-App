@@ -81,3 +81,31 @@ export function userSoulPromptBlock(notes: readonly SoulNote[], name = ""): stri
     notes.map((n) => `- ${n.text}`).join("\n")
   );
 }
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * When an in-chat image is of the ASSISTANT ITSELF, fold its identity "soul" appearance into the
+ * image prompt so "draw yourself" reliably renders its real look (the soul is otherwise only TEXT in
+ * the model's context, which it may or may not apply). Triggers when the prompt names the assistant
+ * (whole word) OR self-references it ("yourself", "a selfie", "portrait/picture of you", "draw you").
+ * Returns the prompt UNCHANGED when it isn't about the assistant or there's no look to add (so an
+ * ordinary "draw an apple" is untouched).
+ */
+export function selfPortraitPrompt(prompt: string, name: string, notes: readonly SoulNote[]): string {
+  const look = notes.map((n) => n.text.trim()).filter(Boolean).join(", ");
+  if (!look || !prompt.trim()) return prompt;
+  const p = prompt.toLowerCase();
+  const trimmedName = name.trim();
+  const named = !!trimmedName && new RegExp(`\\b${escapeRegExp(trimmedName.toLowerCase())}\\b`).test(p);
+  const selfRef =
+    /\byourself\b/.test(p) ||
+    /\ba selfie\b/.test(p) ||
+    /\b(portrait|picture|photo|image|drawing|painting|selfie|avatar|likeness)\s+of\s+you\b/.test(p) ||
+    /\b(draw|paint|render|generate|make|create)\s+you\b/.test(p) ||
+    /\byour\s+(self-?portrait|portrait|avatar|likeness)\b/.test(p);
+  if (!named && !selfRef) return prompt;
+  return `${prompt} — depict ${trimmedName || "the assistant"} with this appearance: ${look}`;
+}
