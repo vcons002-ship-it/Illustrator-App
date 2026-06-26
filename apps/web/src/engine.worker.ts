@@ -2799,6 +2799,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const deps: BuddyDeps = {
       ...googleDeps,
       ...fileResearchDeps(),
+      // App-managed-steps mode: the host runs the checklist + ticks steps from evidence, so the worker
+      // refuses a stray complete_step (set_plan still COMPILES the plan; the host owns advancement).
+      ...(msg.appManagedSteps ? { appManagedSteps: true } : {}),
       searchWeb: (q) => imageSearch.searchWeb(q),
       searchBooks: (q) => books.search(q),
       searchImages: (q) => imageSearch.search(q),
@@ -2892,8 +2895,19 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         return (soul ? await forgetSoul(store, soul, m) : await forgetNote(store, m)).length;
       },
       // Lightweight chat-scoped checklist — mutate the in-turn `plan` and mirror each change to the host.
-      setPlan: (goal, steps) => {
-        plan = { ...(goal ? { goal } : {}), steps: steps.map((t) => ({ text: t, status: "pending" as const })) };
+      setPlan: (goal, steps, stepDetails) => {
+        plan = {
+          ...(goal ? { goal } : {}),
+          steps: steps.map((t, i) => {
+            const d = stepDetails?.[i];
+            return {
+              text: t,
+              status: "pending" as const,
+              ...(d?.needs ? { needs: d.needs } : {}),
+              ...(d?.onFail ? { onFail: d.onFail } : {}),
+            };
+          }),
+        };
         post({ type: "buddyPlan", requestId: msg.requestId, plan });
         return plan;
       },
@@ -3386,6 +3400,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // The chat's working checklist — injected so the model re-reads it and resumes from the first
         // unfinished step (set_plan/complete_step are always available; the live state shows only here).
         ...(msg.plan ? { activePlan: msg.plan } : {}),
+        // App-managed steps: the prompt shows ONLY the current step (execution framing) + withdraws
+        // complete_step. The host derives `msg.plan` from the live workflow each turn.
+        ...(msg.appManagedSteps ? { appManagedSteps: true } : {}),
         // A co-written story is open → switch the prompt into story-writing mode (the reply IS the
         // next beat; no tools). storyMode/storyPlay tailor direct vs roleplay narration.
         ...(story ? { storyActive: true, storyMode: story.mode, ...(story.play ? { storyPlay: story.play } : {}) } : {}),

@@ -141,6 +141,13 @@ export const CONTROLLABLE_SETTINGS: ControllableSetting[] = [
     describe: "ground technical facts in web search (on/off)",
   },
   {
+    key: "appManagedSteps",
+    label: "app-managed steps",
+    aliases: ["app managed steps", "app-managed steps", "reliable steps", "reliable multi-step", "managed steps", "step mode"],
+    kind: BOOL,
+    describe: "app-managed steps — the app runs multi-step checklists and ticks each step from observed evidence (on/off)",
+  },
+  {
     key: "lowVram",
     label: "low-VRAM mode",
     aliases: ["low vram", "low-vram mode", "lowvram", "low memory"],

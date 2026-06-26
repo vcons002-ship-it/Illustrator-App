@@ -289,6 +289,12 @@ export interface ReaderSettings {
    * chat. Off keeps a one-on-one chat lean (these are orchestration primitives most chats don't
    * need); a configured sub-agent backend (subAgentServerUrl/subAgentModel) auto-enables them too. */
   allowSubAgents?: boolean;
+  /** App-managed steps (reliable multi-step). When ON, a multi-step chat task runs through the app's
+   * workflow executor: the model compiles the plan, then the APP hands it one step at a time and ticks
+   * each off from OBSERVED evidence (a render, a saved file, a reply) — the model never calls
+   * complete_step. Far more reliable across models (especially weak local ones). Auto-enabled for a
+   * weak/local chat model; OFF otherwise (the model drives its own checklist). */
+  appManagedSteps?: boolean;
   /** OFF by default: advertise the keyless markets tools (stock_quote, market_analysis, price alerts,
    * trading_script) in chat. Off so a non-trading chat isn't carrying the finance suite; connecting
    * Schwab or the TradingView bridge auto-enables them regardless. */
@@ -1504,6 +1510,22 @@ export function SettingsPanel({
               keywords="run commands shell screen capture workspace autonomous test code execute conflicts"
             >
               <>
+                <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 12 }}>
+                  <input
+                    type="checkbox"
+                    checked={value.appManagedSteps ?? false}
+                    onChange={(e) => set({ appManagedSteps: e.target.checked })}
+                  />
+                  <span>
+                    App-managed steps (reliable multi-step)
+                    <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                      For a task with several steps, the assistant lays out the plan and then the app runs it — handing
+                      the model one step at a time and ticking each off only when it sees the step actually happen (an
+                      image rendered, a file saved, an answer given). Far more reliable than letting the model track its
+                      own checklist, especially with smaller local models. Off by default (the model drives its own list).
+                    </span>
+                  </span>
+                </label>
                 <div
                   style={{
                     marginTop: 12,

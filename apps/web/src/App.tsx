@@ -162,6 +162,14 @@ import {
   type BuddyPlan,
   type BuddyToolCall,
   type BuddyToolResultPayload,
+  type Workflow,
+  compileWorkflow,
+  evaluateStep,
+  advanceWorkflow,
+  activeStep,
+  workflowToPlan,
+  workflowParked,
+  resumeWorkflow,
   boundChatHistoryForMirror,
   chunkArrayBuffer,
   concatArrayBuffers,
@@ -1063,6 +1071,41 @@ export function App() {
   const buddyPlanRef = useRef<BuddyPlan | undefined>(undefined);
   buddyPlanRef.current = buddyPlan;
   const planMemoKey = (id: string) => `buddy-plan:${id}`;
+  // App-managed-steps mode: the host-owned WORKFLOW (the compiled plan + per-step DoneWhen contracts +
+  // attempts/status). When active, the app runs the checklist and ticks steps from observed evidence;
+  // buddyPlan above becomes a read-only PROJECTION of this (for the prompt + UI). Persisted per session.
+  const [buddyWorkflow, setBuddyWorkflow] = useState<Workflow | undefined>(undefined);
+  const buddyWorkflowRef = useRef<Workflow | undefined>(undefined);
+  buddyWorkflowRef.current = buddyWorkflow;
+  const workflowMemoKey = (id: string) => `buddy-workflow:${id}`;
+  // Evidence accumulated for the CURRENT step across its turn(s): auto-run tool results (from the
+  // worker's toolResult events) + host-tool outcomes (pushed by the approve* handlers) + the settle
+  // text. Reset when a step advances. The "collar" (evaluateStep) judges the step from THIS, never the
+  // model's claim.
+  const buddyStepEvidenceRef = useRef<{ toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[]; text: string }>({
+    toolResults: [],
+    text: "",
+  });
+  // Whether App-managed steps runs this chat. Opt-in setting (the model's checklist meta-tools are
+  // unreliable across models, so the app drives instead). Off → the legacy model-driven path.
+  const appManagedActive = !!settings.appManagedSteps;
+  // Set + persist the workflow, and mirror its read-only plan projection into buddyPlan (so the prompt,
+  // the existing UI, and the phone mirror all advance with it).
+  const applyWorkflow = useCallback(
+    (wf: Workflow | undefined): void => {
+      buddyWorkflowRef.current = wf;
+      setBuddyWorkflow(wf);
+      const plan = wf ? workflowToPlan(wf) : undefined;
+      buddyPlanRef.current = plan;
+      setBuddyPlan(plan);
+      if (!isRemoteClient && !settings.incognitoRemote) {
+        const id = activeBuddyIdRef.current;
+        void libraryStore.putMemo?.(workflowMemoKey(id), wf ? JSON.stringify(wf) : "").catch(() => {});
+        void libraryStore.putMemo?.(planMemoKey(id), plan ? JSON.stringify(plan) : "").catch(() => {});
+      }
+    },
+    [libraryStore, isRemoteClient, settings.incognitoRemote],
+  );
   const loadBuddyPlan = useCallback(
     async (id: string): Promise<BuddyPlan | undefined> => {
       const raw = await libraryStore.getMemo?.(planMemoKey(id)).catch(() => undefined);
@@ -1070,6 +1113,21 @@ export function App() {
       try {
         const p = JSON.parse(raw) as BuddyPlan;
         return p && Array.isArray(p.steps) && p.steps.length > 0 ? p : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    [libraryStore],
+  );
+  // Restore an app-managed workflow for a session (so a reload mid-run resumes at the active step with
+  // its contracts + attempts intact). Empty/blank memo → none.
+  const loadBuddyWorkflow = useCallback(
+    async (id: string): Promise<Workflow | undefined> => {
+      const raw = await libraryStore.getMemo?.(workflowMemoKey(id)).catch(() => undefined);
+      if (!raw) return undefined;
+      try {
+        const w = JSON.parse(raw) as Workflow;
+        return w && Array.isArray(w.steps) && w.steps.length > 0 ? w : undefined;
       } catch {
         return undefined;
       }
@@ -2135,7 +2193,10 @@ export function App() {
             // The phone dismissed the working checklist — clear it HERE (we own it) so the ChatLive
             // mirror stops re-pushing it.
             setBuddyPlan(undefined);
+            setBuddyWorkflow(undefined);
+            buddyWorkflowRef.current = undefined;
             void libraryStore.deleteMemo?.(planMemoKey(activeBuddyIdRef.current)).catch(() => {});
+            void libraryStore.deleteMemo?.(workflowMemoKey(activeBuddyIdRef.current)).catch(() => {});
             break;
           case "vrcmd:update":
             // The phone asked us to update: run the same pull+rebuild+reload, streaming status back.
@@ -3625,12 +3686,17 @@ export function App() {
       const hist = await libraryStore.getChatHistory?.(active).catch(() => undefined);
       if (cancelled) return;
       const savedPlan = await loadBuddyPlan(active);
+      const savedWorkflow = await loadBuddyWorkflow(active);
       if (cancelled) return;
       setBuddySessions(sessions);
       setActiveBuddyId(active);
       if (hist) setBuddyMessages(hist);
       setBuddyPlan(savedPlan);
       buddyPlanRef.current = savedPlan; // match the ref to the restored session's plan from the first tick
+      // App-managed: restore the workflow too (the plan above is just its projection), so the executor
+      // resumes at the active step with its contracts/attempts instead of stalling.
+      setBuddyWorkflow(savedWorkflow);
+      buddyWorkflowRef.current = savedWorkflow;
       buddyReady.current = true;
     })();
     return () => {
@@ -3960,6 +4026,15 @@ export function App() {
       (r.stdout ? `\n${r.stdout.slice(0, 4000)}` : "") +
       (r.stderr ? `\n⚠ ${r.stderr.slice(0, 2000)}` : "");
     appendBuddy({ role: "tool", text: summary, turns: [...pre, { role: "user", content: feedback }] });
+    // App-managed steps: the command IS this step's action — judge it by exit code (the collar).
+    if (appManagedActive && buddyWorkflowRef.current) {
+      buddyStepEvidenceRef.current.toolResults.push({ call, result: { command: r } });
+      await advanceWorkflowAfterTurn(
+        { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+      );
+      return;
+    }
     // AUTO-REACT: the model reads the output and continues — if it proposes another
     // command, that re-prompts for approval, so the loop stays human-gated.
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
@@ -4222,6 +4297,15 @@ export function App() {
       appendBuddy({ role: "tool", text: `⚠ Couldn't write ${call.path}: ${payload.error}`, turns: [] });
     }
     const feedback = formatBuddyToolResult(call, { writeFile: payload });
+    // App-managed steps: writing the file IS this step's action — judge it by whether it saved.
+    if (appManagedActive && buddyWorkflowRef.current) {
+      buddyStepEvidenceRef.current.toolResults.push({ call, result: { writeFile: payload } });
+      await advanceWorkflowAfterTurn(
+        { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+      );
+      return;
+    }
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
@@ -4571,6 +4655,19 @@ export function App() {
       ...(out.image ? { image: out.image, attachments: [imageAttachment(call.prompt, out.image)] } : {}),
       turns: [...pre, { role: "user", content: feedback }],
     });
+    // App-managed steps: the render IS this step's action — judge the step from whether an image came
+    // back (the collar), then advance/retry. No legacy queue feedback; the executor drives the next step.
+    if (appManagedActive && buddyWorkflowRef.current) {
+      buddyStepEvidenceRef.current.toolResults.push({
+        call,
+        result: { image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) } },
+      });
+      await advanceWorkflowAfterTurn(
+        { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+      );
+      return;
+    }
     if (continueQueue) {
       await dispatchBuddyTurn([...preHistory, ...pre], feedback);
     } else {
@@ -4672,6 +4769,47 @@ export function App() {
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
+  // APP-MANAGED-STEPS EXECUTOR. Judge the active step against its DoneWhen contract using ONLY the
+  // observed `evidence` (the collar), then drive the workflow: advance/retry → re-dispatch the next or
+  // same step via `continueWith`; park/finish/abort → stop. Returns true when it handled the turn, so
+  // the caller skips the legacy model-driven chaining. The model never ticks steps; the app does.
+  const advanceWorkflowAfterTurn = async (
+    evidence: { toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[]; text: string },
+    continueWith: (nudge: string) => Promise<unknown>,
+  ): Promise<boolean> => {
+    const wf = buddyWorkflowRef.current;
+    if (!wf) return false;
+    const step = activeStep(wf);
+    if (!step) {
+      setBuddyBusy(false);
+      return true;
+    }
+    const outcome = evaluateStep(step, evidence);
+    const adv = advanceWorkflow(wf, outcome);
+    applyWorkflow(adv.workflow);
+    buddyStepEvidenceRef.current = { toolResults: [], text: "" }; // fresh evidence for whatever runs next
+    if (adv.action === "advance" || adv.action === "skip") {
+      if (adv.action === "skip")
+        appendBuddy({ role: "tool", text: `⚠ Skipped “${step.instruction}” after ${step.maxAttempts} tries — moving on.`, turns: [] });
+      await continueWith(`[Next step — do JUST this one thing, then stop: ${adv.next!.instruction}]`);
+      return true;
+    }
+    if (adv.action === "retry") {
+      await continueWith(
+        `[That step isn't done yet${outcome.reason ? ` (${outcome.reason})` : ""}. Actually take its action now: ${step.instruction}]`,
+      );
+      return true;
+    }
+    // Terminal — stop the run.
+    if (adv.action === "finish") appendBuddy({ role: "tool", text: "✓ All steps done.", turns: [] });
+    else if (adv.action === "abort")
+      appendBuddy({ role: "tool", text: `⚠ Stopped — couldn't finish “${step.instruction}”${step.note ? ` (${step.note})` : ""}.`, turns: [] });
+    else if (adv.action === "park" && step.doneWhen.kind !== "user_reply")
+      appendBuddy({ role: "tool", text: `⏸ Stuck on “${step.instruction}”${step.note ? ` — ${step.note}` : ""}. Tell me how to proceed.`, turns: [] });
+    setBuddyBusy(false);
+    return true;
+  };
+
   // (when set) is shown as the reader's message; a continuation passes none — its
   // "input" is the tool feedback, recorded in the visible result above it.
   const dispatchBuddyTurn = async (
@@ -4683,6 +4821,20 @@ export function App() {
     if (userBubbleText !== undefined) {
       appendBuddy({ role: "user", text: userBubbleText });
       buddyQueueAdvanceRef.current = { count: 0, noProgress: 0 }; // fresh user turn → reset the chain budget
+      // App-managed steps: a fresh reader message resumes a PARKED workflow. If it was waiting on the
+      // reader (a user_reply step), their answer satisfies that step → advance past it; otherwise just
+      // re-activate the blocked step to retry it with their new input.
+      if (appManagedActive && workflowParked(buddyWorkflowRef.current)) {
+        const wf = buddyWorkflowRef.current!;
+        const blocked = wf.steps.find((s) => s.status === "blocked");
+        if (blocked?.doneWhen.kind === "user_reply") {
+          const reactivated = { ...wf, steps: wf.steps.map((s) => (s === blocked ? { ...s, status: "active" as const } : s)) };
+          applyWorkflow(advanceWorkflow(reactivated, { done: true }).workflow);
+        } else {
+          applyWorkflow(resumeWorkflow(wf));
+        }
+        buddyStepEvidenceRef.current = { toolResults: [], text: "" };
+      }
     }
     // Done-steps before this turn, to tell whether the turn made progress on the checklist.
     const doneAtStart = countDonePlanSteps(buddyPlanRef.current);
@@ -4703,15 +4855,24 @@ export function App() {
       else if (e.kind === "activity") setBuddyActivity(e.text);
       else if (e.kind === "usage") setBuddyUsage(e.usage);
       else if (e.kind === "plan") {
-        // Update the ref SYNCHRONOUSLY (not just via setBuddyPlan's render) so a full-autonomy queue's
-        // FIRST auto-approved image — which can fire before React commits — already sees the fresh
-        // checklist and keeps the queue advancing instead of halting after step 1.
-        buddyPlanRef.current = e.plan;
-        setBuddyPlan(e.plan);
-        // Persist the working checklist per session (desktop owns the store; never on a phone or in
-        // incognito). activeBuddyIdRef is the live session this turn runs for.
-        if (!isRemoteClient && !settings.incognitoRemote)
-          void libraryStore.putMemo?.(planMemoKey(activeBuddyIdRef.current), JSON.stringify(e.plan)).catch(() => {});
+        if (appManagedActive) {
+          // App-managed: the model just COMPILED (or re-compiled) the plan via set_plan. Turn it into a
+          // workflow with per-step DoneWhen contracts; from here the APP runs it and ticks steps from
+          // evidence. applyWorkflow mirrors the read-only plan projection into buddyPlan + persists.
+          applyWorkflow(compileWorkflow(e.plan));
+          buddyStepEvidenceRef.current = { toolResults: [], text: "" };
+        } else {
+          // Legacy model-driven path: keep the model's checklist as the live plan.
+          // Update the ref SYNCHRONOUSLY (not just via setBuddyPlan's render) so a full-autonomy queue's
+          // FIRST auto-approved image — which can fire before React commits — already sees the fresh
+          // checklist and keeps the queue advancing instead of halting after step 1.
+          buddyPlanRef.current = e.plan;
+          setBuddyPlan(e.plan);
+          // Persist the working checklist per session (desktop owns the store; never on a phone or in
+          // incognito). activeBuddyIdRef is the live session this turn runs for.
+          if (!isRemoteClient && !settings.incognitoRemote)
+            void libraryStore.putMemo?.(planMemoKey(activeBuddyIdRef.current), JSON.stringify(e.plan)).catch(() => {});
+        }
       } else if (e.kind === "tool") {
         // Keep any prose the model said before this tool call (a briefing) as its own message.
         const said = stripToolCallJson(buddyStreamingRef.current).trim();
@@ -4839,6 +5000,12 @@ export function App() {
         void libraryStore.putBook(e.book).catch(() => {});
       } else {
         setBuddyActivity("");
+        // App-managed steps: record each auto-run tool's outcome as EVIDENCE for the current step (the
+        // collar reads this, not the model's claim). Host tools (image/file/command) suspend the turn
+        // and add their own evidence in the approve* handlers; here we only see auto-run results, for
+        // which "ran without error" is what a tool_ok contract needs.
+        if (appManagedActive && e.kind === "toolResult" && buddyWorkflowRef.current)
+          buddyStepEvidenceRef.current.toolResults.push({ call: e.call, result: e.error ? { error: e.error } : {} });
         // The agent just read/wrote the calendar or tasks — reflect it in the app's views.
         if (e.kind === "toolResult" && (e.call.tool === "create_event" || e.call.tool === "list_events")) refreshCalendar();
         if (e.kind === "toolResult" && (e.call.tool === "add_task_group" || e.call.tool === "create_task" || e.call.tool === "add_task_steps" || e.call.tool === "mark_step_done" || e.call.tool === "update_task_step")) refreshTaskPlans();
@@ -4909,7 +5076,7 @@ export function App() {
           appendBuddy({ role: "tool", text: "🔍 No results." });
         }
       }
-    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current);
+    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive);
     if (buddyTurnSeq.current !== seq) return;
     setBuddyBusy(false);
     setBuddyStreaming("");
@@ -4977,11 +5144,21 @@ export function App() {
       });
       if (openedBook) appendChat({ role: "assistant", text: res.text });
 
-      // Lean chaining: the working checklist is re-injected into the prompt every turn, so the model
-      // can read what's ✓ done and what's ▸ next on its own. When a plain-text turn settles with steps
-      // still unfinished, just hand it another turn instead of waiting for the reader to type
-      // "continue" — it reads its checklist, does the next step, and complete_steps it. (Tool/host-tool
-      // turns auto-react on their own paths above; this only fires on a plain-text settle.)
+      // APP-MANAGED STEPS: the app — not the model — decides if this step is done, from observed
+      // evidence (the accumulated tool results + this settle's text). It then advances/retries/parks.
+      if (appManagedActive && buddyWorkflowRef.current && !res.paused) {
+        const handled = await advanceWorkflowAfterTurn(
+          { toolResults: buddyStepEvidenceRef.current.toolResults, text: res.text },
+          (nudge) => dispatchBuddyTurn([...history, { role: "user", content: userText }, ...res.transcript], nudge),
+        );
+        if (handled) return res.text || undefined;
+      }
+
+      // Lean chaining (legacy model-driven path): the working checklist is re-injected into the prompt
+      // every turn, so the model can read what's ✓ done and what's ▸ next on its own. When a plain-text
+      // turn settles with steps still unfinished, just hand it another turn instead of waiting for the
+      // reader to type "continue" — it reads its checklist, does the next step, and complete_steps it.
+      // (Tool/host-tool turns auto-react on their own paths above; this only fires on a plain-text settle.)
       const plan = buddyPlanRef.current;
       if (!res.paused && planHasPendingStep(plan)) {
         const adv = buddyQueueAdvanceRef.current;
@@ -5412,9 +5589,13 @@ export function App() {
     setBuddyMessages([]);
     setBuddyPlan(undefined);
     buddyPlanRef.current = undefined; // synchronous — don't let a stale checklist survive the clear
+    setBuddyWorkflow(undefined);
+    buddyWorkflowRef.current = undefined;
+    buddyStepEvidenceRef.current = { toolResults: [], text: "" };
     setBuddyPendingTool(undefined);
     void libraryStore.deleteChatHistory?.(activeBuddyId);
     void libraryStore.deleteMemo?.(planMemoKey(activeBuddyId)).catch(() => {});
+    void libraryStore.deleteMemo?.(workflowMemoKey(activeBuddyId)).catch(() => {});
   }, [isRemoteClient, sendAppSync, libraryStore, buddyCancel, activeBuddyId]);
   // Stop: the turn runs on the DESKTOP (under its worker request id the phone doesn't have), so a
   // linked phone relays the stop; the desktop aborts its in-flight buddy round.
@@ -5441,6 +5622,9 @@ export function App() {
     setBuddyMessages([]);
     setBuddyPlan(undefined); // the new session's plan loads in (or stays empty); don't flash the old one
     buddyPlanRef.current = undefined;
+    setBuddyWorkflow(undefined); // app-managed workflow is per-session too — don't leak it across a switch
+    buddyWorkflowRef.current = undefined;
+    buddyStepEvidenceRef.current = { toolResults: [], text: "" };
     setBuddyPendingTool(undefined);
     // The context-usage badge is per-conversation — clear it on a session switch so it doesn't show
     // the previous window's % (it repopulates from the new session's next turn).
@@ -5465,8 +5649,12 @@ export function App() {
         buddyPlanRef.current = p; // keep the ref in step with the loaded session's plan, not a render behind
         setBuddyPlan(p);
       });
+      void loadBuddyWorkflow(id).then((w) => {
+        buddyWorkflowRef.current = w; // restore the app-managed workflow for the switched-to session
+        setBuddyWorkflow(w);
+      });
     },
-    [isRemoteClient, sendAppSync, activeBuddyId, libraryStore, resetBuddyView, loadBuddyPlan],
+    [isRemoteClient, sendAppSync, activeBuddyId, libraryStore, resetBuddyView, loadBuddyPlan, loadBuddyWorkflow],
   );
   switchBuddyRef.current = onSwitchBuddySession; // so onExitBook (defined earlier) can restore a session
   const onNewBuddySession = useCallback(() => {
@@ -5508,6 +5696,10 @@ export function App() {
           void loadBuddyPlan(fallback).then((p) => {
             buddyPlanRef.current = p;
             setBuddyPlan(p);
+          });
+          void loadBuddyWorkflow(fallback).then((w) => {
+            buddyWorkflowRef.current = w;
+            setBuddyWorkflow(w);
           });
         }
         return next;
