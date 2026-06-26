@@ -3292,7 +3292,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const note = await renderDefaultsNote();
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
     const memory = memoryPromptBlock(await loadMemory(store));
-    const selfSoul = selfSoulPromptBlock(await loadSoul(store, "self"), await loadSoulName(store, "self"));
+    const selfName = await loadSoulName(store, "self");
+    const selfSoul = selfSoulPromptBlock(await loadSoul(store, "self"), selfName);
     const userSoul = userSoulPromptBlock(await loadSoul(store, "user"), await loadSoulName(store, "user"));
     await seedStarterSkills(store); // one-time: ship a few ready-made playbooks on a fresh install
     const skills = skillsIndexBlock(await loadSkills(store));
@@ -3309,6 +3310,12 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       buildBuddySystemPrompt({
         persona: msg.persona,
         library: msg.library,
+        // The assistant's own identity ("soul"): its NAME is woven into the persona's first line and
+        // its WHO-YOU-ARE block sits at the TOP of the prompt (with the reader's WHO-YOU-ARE), so it
+        // actually answers to its name + stays in character — not buried under the tool catalog.
+        ...(selfName ? { selfName } : {}),
+        ...(selfSoul ? { selfSoul } : {}),
+        ...(userSoul ? { userSoul } : {}),
         // Anchor "today"/"this week"/"by when" answers + ISO date math to the reader's
         // own clock (the worker runs in their browser, so this is their local time/zone).
         now: currentDateTimeLabel(),
@@ -3369,8 +3376,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           : {}),
       }) +
       (memory ? `\n\n${memory}` : "") +
-      (selfSoul ? `\n\n${selfSoul}` : "") +
-      (userSoul ? `\n\n${userSoul}` : "") +
+      // selfSoul/userSoul are now injected at the TOP of buildBuddySystemPrompt (see above), not appended here.
       (skills ? `\n\n${skills}` : "") +
       (note ? `\n\n${note}` : "");
     const history = trimChatHistory(

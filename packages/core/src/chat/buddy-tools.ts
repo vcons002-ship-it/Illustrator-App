@@ -574,9 +574,20 @@ export function buildBuddySystemPrompt(opts: {
   /** Roleplay only: the played character names so the narration uses them by name. `me` = the
    * character the READER plays; `you` = the character the assistant plays. */
   storyPlay?: { me?: string; you?: string };
+  /** The assistant's own NAME from its identity "soul" (when set). Woven into the FIRST line of the
+   * persona so the model actually answers to it — instead of the name being buried in the soul block
+   * far below the tool catalog (where "even calling it by name didn't ring a bell"). */
+  selfName?: string;
+  /** The "WHO YOU ARE" identity block (persona/look/voice) and the reader's "WHO THE READER IS" block.
+   * Placed right after the persona — at the TOP of the prompt — so the assistant adopts this identity
+   * in every reply. (Souls change rarely, so keeping them in the cached prefix is fine.) */
+  selfSoul?: string;
+  userSoul?: string;
 }): string {
+  const named = opts.selfName?.trim();
   const persona =
-    opts.persona === "planning"
+    (named ? `Your name is ${named} — answer to it. ` : "") +
+    (opts.persona === "planning"
       ? "You are the PLANNING partner on the home screen of Visual Reader. The reader wants help " +
         "PLANNING something before building it — a CODING PROJECT (an app, script, website, tool, " +
         "automation) or a COMPLEX DELIVERABLE (a report, document, course, study guide, event, " +
@@ -589,7 +600,7 @@ export function buildBuddySystemPrompt(opts: {
         "files and the reader's PC, generating and finding images, researching the web, working with " +
         "documents, spreadsheets and data (and any file they bring), planning and tracking tasks, " +
         "following markets and finances, and reading/illustrating books. None of these is a topic to " +
-        "steer toward — reach for whichever the reader's request actually needs, and otherwise just talk.";
+        "steer toward — reach for whichever the reader's request actually needs, and otherwise just talk.");
   const library =
     opts.library.length === 0
       ? "THE READER'S LIBRARY is empty so far."
@@ -864,6 +875,8 @@ export function buildBuddySystemPrompt(opts: {
     `${mature}\n\n` +
     `${nowBlock}` +
     `${planBlock}` +
+    (opts.selfSoul ? `${opts.selfSoul}\n\n` : "") +
+    (opts.userSoul ? `${opts.userSoul}\n\n` : "") +
     `${library}\n\n` +
     routingGuide +
     "TOOLS — use one by replying with ONLY one JSON object (no prose around it):\n" +
