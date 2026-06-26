@@ -1376,20 +1376,230 @@ export function normalizeToolShape(obj: Record<string, unknown>): Record<string,
   return { tool: name, ...args };
 }
 
-/** Whether a reply was MEANT to be tool JSON (so a parse miss isn't shown to the reader as prose). */
+/** Whether a reply was MEANT to be a tool call (so a parse miss isn't shown to the reader as prose) —
+ * JSON tool object OR a Gemma/Python `tool_code` call to a known tool. */
 export function looksLikeToolJson(text: string): boolean {
   const cleaned = stripControlTokens(stripFences(stripThink(text))).trim();
-  return cleaned.startsWith("{") && isToolJsonChunk(cleaned);
+  if (cleaned.startsWith("{") && isToolJsonChunk(cleaned)) return true;
+  return parseBuddyToolCalls(text).length > 0;
 }
 
-/** Remove tool-call JSON objects (those with a `"tool"` field) from a reply, leaving the prose —
- * so when a model mixes a briefing WITH a tool call, the raw JSON never reaches the reader. */
+/** Remove tool calls (JSON objects with a `"tool"` field AND Gemma/Python `tool_code` call syntax) from
+ * a reply, leaving the prose — so when a model mixes a briefing WITH a call, the raw call never reaches
+ * the reader (and isn't shown twice). */
 export function stripToolCallJson(text: string): string {
   let out = stripControlTokens(stripThink(text));
   for (const chunk of extractJsonObjects(out)) {
     if (isToolJsonChunk(chunk)) out = out.replace(chunk, "");
   }
+  // Drop tool-call fences (```tool_code / ```tool / ```tool_call / an unlabelled fence) whose content
+  // is a recognized call, and standalone call lines — so a Gemma call isn't echoed as prose.
+  out = out.replace(/```(?:tool_code|tool|tool_call)?[ \t]*\r?\n([\s\S]*?)```/g, (m, body: string) =>
+    parseCallSyntax(`\`\`\`tool_code\n${body}\n\`\`\``).some((o) => parseToolObject(o)) ? "" : m,
+  );
+  let inFence = false;
+  out = out
+    .split("\n")
+    .filter((line) => {
+      const t = line.trim();
+      if (t.startsWith("```")) {
+        inFence = !inFence;
+        return true;
+      }
+      if (inFence) return true; // leave a real ```python/```js block the model wrote for the reader
+      if (!/^(?:print\s*\(\s*)?(?:default_api\.|api\.|tools\.|functions\.)?[A-Za-z_]\w*\s*\(.*\)\)?[;,]?$/.test(t)) return true;
+      return !parseCallSyntax(t).some((o) => parseToolObject(o)); // drop a standalone known-tool call line
+    })
+    .join("\n");
   return out.replace(/```(?:json)?\s*```/gi, "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** Tools whose one MAIN argument a small model often passes POSITIONALLY in the function-call form
+ * (`generate_image("a cat")` instead of `generate_image(prompt="a cat")`) — maps that first bare arg
+ * to the right key so the call still validates. */
+const PRIMARY_PARAM: Record<string, string> = {
+  generate_image: "prompt",
+  search_web: "query",
+  search_books: "query",
+  search_images: "query",
+  find_files: "query",
+  read_url: "url",
+  read_file: "path",
+  open_image: "path",
+  run_command: "command",
+  calculate: "expression",
+  wolfram: "query",
+  remember: "note",
+  forget: "match",
+};
+
+/** Coerce one Python/JS literal arg value (a quoted string, number, bool, or bareword) to a JS value. */
+function coerceCallValue(raw: string): unknown {
+  const v = raw.trim();
+  if (!v) return "";
+  const q = v[0];
+  if ((q === '"' || q === "'") && v.length >= 2 && v[v.length - 1] === q) {
+    return v.slice(1, -1).replace(/\\(["'\\n t])/g, (_m, c: string) => (c === "n" ? "\n" : c === "t" ? "\t" : c));
+  }
+  if (/^-?\d+(\.\d+)?$/.test(v)) return Number(v);
+  if (/^(true|false)$/i.test(v)) return /^true$/i.test(v);
+  if (/^(none|null)$/i.test(v)) return null;
+  return v; // an unquoted bareword — keep as-is (e.g. an enum value)
+}
+
+/** Split a call's argument string on TOP-LEVEL commas (never inside quotes, parens, or brackets). */
+function splitCallArgs(s: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let inStr = false;
+  let q = "";
+  let esc = false;
+  let cur = "";
+  for (const c of s) {
+    if (inStr) {
+      cur += c;
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === q) inStr = false;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      inStr = true;
+      q = c;
+      cur += c;
+    } else if (c === "(" || c === "[" || c === "{") {
+      depth++;
+      cur += c;
+    } else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      cur += c;
+    } else if (c === "," && depth === 0) {
+      parts.push(cur);
+      cur = "";
+    } else cur += c;
+  }
+  if (cur.trim()) parts.push(cur);
+  return parts;
+}
+
+/** Index of the `=` that splits a `key=value` kwarg (top-level, not `==`, not inside a string), or -1
+ * for a positional arg. */
+function kwargEq(part: string): number {
+  let inStr = false;
+  let q = "";
+  let esc = false;
+  let depth = 0;
+  for (let i = 0; i < part.length; i++) {
+    const c = part[i]!;
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === q) inStr = false;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      inStr = true;
+      q = c;
+    } else if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") depth--;
+    else if (c === "=" && depth === 0 && part[i + 1] !== "=" && part[i - 1] !== "=" && part[i - 1] !== "!" && part[i - 1] !== "<" && part[i - 1] !== ">") {
+      // Must look like an identifier on the left to be a kwarg (not an expression).
+      return /^[A-Za-z_]\w*$/.test(part.slice(0, i).trim()) ? i : -1;
+    }
+  }
+  return -1;
+}
+
+/** Find every `name(args)` call expression in a region, balancing parens/quotes. Unwraps a `print(…)`
+ * wrapper and `default_api.`/`api.`/`tools.`/`functions.` prefixes (the shapes Gemma emits). */
+function extractCallExprs(s: string): { name: string; args: string }[] {
+  const out: { name: string; args: string }[] = [];
+  const re = /(?:default_api\.|api\.|tools\.|functions\.)?([A-Za-z_]\w*)\s*\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s))) {
+    const name = m[1]!;
+    const open = re.lastIndex - 1; // index of '('
+    let depth = 0;
+    let inStr = false;
+    let q = "";
+    let esc = false;
+    let close = -1;
+    for (let i = open; i < s.length; i++) {
+      const c = s[i]!;
+      if (inStr) {
+        if (esc) esc = false;
+        else if (c === "\\") esc = true;
+        else if (c === q) inStr = false;
+        continue;
+      }
+      if (c === '"' || c === "'") {
+        inStr = true;
+        q = c;
+      } else if (c === "(") depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0) {
+          close = i;
+          break;
+        }
+      }
+    }
+    if (close === -1) continue;
+    if (name === "print") continue; // a print(...) wrapper — the inner call is matched on its own
+    out.push({ name, args: s.slice(open + 1, close) });
+    re.lastIndex = close + 1;
+  }
+  return out;
+}
+
+/**
+ * Parse Gemma/Python `tool_code` tool calls — `generate_image(prompt="a cat")`, often inside a
+ * ```tool_code fence and/or wrapped in `print(...)` — into tool objects. Small models emit THIS instead
+ * of JSON, so without it their "calls" look like prose and nothing runs (the model says it made the
+ * image but didn't). To avoid mistaking real prose/code for a call, only read calls that are in a
+ * tool-call fence (```tool_code / ```tool / ```tool_call, or an unlabelled fence) or stand alone on
+ * their own line; only KNOWN tools survive (validated downstream by parseToolObject).
+ */
+export function parseCallSyntax(text: string): Record<string, unknown>[] {
+  const regions: string[] = [];
+  // Tool-call fences (Gemma uses ```tool_code). NOT ```python/```js/```bash — those are real code the
+  // model writes FOR the reader and must never be run as a tool call.
+  // Recognized tool-call fences only: ```tool_code / ```tool / ```tool_call, or a bare ``` with no lang.
+  // Requiring a newline after the (optional) lang means ```python/```js do NOT match here (those are
+  // real code the model wrote for the reader).
+  const fence = /```(?:tool_code|tool|tool_call)?[ \t]*\r?\n([\s\S]*?)```/g;
+  let f: RegExpExecArray | null;
+  while ((f = fence.exec(text))) regions.push(f[1]!);
+  // Standalone call lines that AREN'T inside any fence (a ```python/```js block is real code the model
+  // wrote for the reader — never run it as a tool call). Track fence depth as we walk the lines.
+  let inFence = false;
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (t.startsWith("```")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    if (/^(?:print\s*\(\s*)?(?:default_api\.|api\.|tools\.|functions\.)?[A-Za-z_]\w*\s*\(.*\)\)?[;,]?$/.test(t)) regions.push(t);
+  }
+  const out: Record<string, unknown>[] = [];
+  for (const region of regions) {
+    for (const { name, args } of extractCallExprs(region)) {
+      const obj: Record<string, unknown> = { tool: name };
+      let positional = 0;
+      for (const part of splitCallArgs(args)) {
+        const eq = kwargEq(part);
+        if (eq >= 0) obj[part.slice(0, eq).trim()] = coerceCallValue(part.slice(eq + 1));
+        else if (part.trim()) {
+          const key = PRIMARY_PARAM[name];
+          if (key && positional === 0) obj[key] = coerceCallValue(part);
+          positional++;
+        }
+      }
+      out.push(obj);
+    }
+  }
+  return out;
 }
 
 /**
@@ -1397,15 +1607,29 @@ export function stripToolCallJson(text: string): string {
  * models routinely (a) BATCH several and (b) put a tool call AFTER some prose (a briefing, "let me
  * check…"). We recover EVERY valid tool call wherever it appears — only objects with a KNOWN tool —
  * so the call runs instead of the raw JSON leaking into the chat. The prose is shown separately.
+ * Also recovers Gemma/Python `tool_code` function-call syntax (see parseCallSyntax).
  */
 export function parseBuddyToolCalls(text: string): BuddyToolCall[] {
   const cleaned = stripControlTokens(stripFences(stripThink(text)));
   const out: BuddyToolCall[] = [];
+  // Keep ALL JSON calls, including legitimate duplicates (e.g. two complete_step in a row — the
+  // anti-skip guard, not dedup, decides what to do with those).
+  const jsonKeys = new Set<string>();
   for (const chunk of extractJsonObjects(cleaned)) {
     const obj = parseJsonLoose(chunk);
     if (!obj) continue;
     const call = parseToolObject(obj);
-    if (call) out.push(call);
+    if (call) {
+      out.push(call);
+      jsonKeys.add(JSON.stringify(call));
+    }
+  }
+  // Fallback for small models that emit Python `tool_code` calls instead of JSON. Run on the
+  // fence-preserving text (only stripThink/control) so the ```tool_code blocks are still visible. Only
+  // skip a call already found as JSON — so the SAME call emitted in both forms isn't run twice.
+  for (const obj of parseCallSyntax(stripControlTokens(stripThink(text)))) {
+    const call = parseToolObject(obj);
+    if (call && !jsonKeys.has(JSON.stringify(call))) out.push(call);
   }
   return out;
 }
