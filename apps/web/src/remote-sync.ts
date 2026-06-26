@@ -172,9 +172,11 @@ export type SyncToPhone =
   // Result of a desktop-runtime host tool the phone relayed (vrcmd:hostTool) — file search/read,
   // run_command, write_file, screenshot — run on the desktop, fed back to the phone's buddy turn.
   | { type: "vrsync:hostToolResult"; requestId: number; payload: BuddyToolResultPayload }
-  // The full bytes of a file card the mirror stripped (vrcmd:fetchFile) — sent back so the phone can
-  // download/open an older generated image on demand. `bytes` absent ⇒ the desktop couldn't find it.
-  | { type: "vrsync:fileData"; reqId: number; bytes?: ArrayBuffer; mime?: string };
+  // The bytes of a file card the mirror stripped (vrcmd:fetchFile), sent back so the phone can show /
+  // download / open a large or older generated image on demand. CHUNKED so any-size file syncs in
+  // pieces instead of being dropped for exceeding one tunnel frame: `total` chunks, `seq` 0..total-1,
+  // each carrying part of the bytes (mime on seq 0). `total === 0` ⇒ the desktop couldn't find it.
+  | { type: "vrsync:fileData"; reqId: number; seq: number; total: number; bytes?: ArrayBuffer; mime?: string };
 
 /** Phone → desktop commands. */
 export type CmdToDesktop =

@@ -160,6 +160,8 @@ import {
   type BuddyToolCall,
   type BuddyToolResultPayload,
   boundChatHistoryForMirror,
+  chunkArrayBuffer,
+  concatArrayBuffers,
   type ChatTurn,
   type ContextUsage,
   type EncryptedSecrets,
@@ -368,6 +370,28 @@ function imageSearchMiss(query: string, error: string | undefined, hasSearchKey:
 /** How many checklist steps are done — used to tell whether a turn advanced the working plan. */
 function countDonePlanSteps(plan: BuddyPlan | undefined): number {
   return plan ? plan.steps.filter((s) => s.status === "done").length : 0;
+}
+
+/**
+ * PHONE: put back the inline image bytes the phone fetched on demand for messages the mirror stripped,
+ * keyed by file-card attachment id. Re-applied on every mirror adopt so a restored image survives the
+ * desktop re-pushing its stripped (image-less) snapshot. Returns the SAME array when nothing changed.
+ */
+function restoreInlineImages(
+  msgs: StoredChatMessage[],
+  cache: Map<string, { bytes: ArrayBuffer; mimeType: string }>,
+): StoredChatMessage[] {
+  if (cache.size === 0) return msgs;
+  let changed = false;
+  const out = msgs.map((m) => {
+    if (m.image) return m;
+    const att = m.attachments?.find((a) => a.id && cache.has(a.id));
+    const got = att?.id ? cache.get(att.id) : undefined;
+    if (!got) return m;
+    changed = true;
+    return { ...m, image: got };
+  });
+  return changed ? out : msgs;
 }
 
 export function App() {
@@ -1860,6 +1884,12 @@ export function App() {
   const hostToolPending = useRef(new Map<number, (p: BuddyToolResultPayload) => void>());
   // PHONE: lazy image-card fetches awaiting the desktop's vrsync:fileData reply, keyed by reqId.
   const fileFetchPending = useRef(new Map<number, (r: { bytes?: ArrayBuffer; mime?: string }) => void>());
+  // Partial chunks of an in-flight chunked file fetch (vrsync:fileData), keyed by reqId.
+  const fileChunkBufs = useRef(new Map<number, { parts: (ArrayBuffer | undefined)[]; got: number; mime?: string }>());
+  // PHONE: inline-image bytes fetched back for stripped messages, kept by attachment id so the restored
+  // picture survives the mirror re-pushing its image-less version; plus the ids being fetched right now.
+  const restoredImages = useRef(new Map<string, { bytes: ArrayBuffer; mimeType: string }>());
+  const fetchingImageIds = useRef(new Set<string>());
   const fileFetchSeq = useRef(0);
   const hostToolReqId = useRef(0);
   const buildSnapshot = useCallback(
@@ -1958,11 +1988,33 @@ export function App() {
             break;
           }
           case "vrsync:fileData": {
-            // The desktop returned the bytes of an older image card we asked for (vrcmd:fetchFile).
+            // The desktop is returning a file's bytes (vrcmd:fetchFile), CHUNKED — accumulate until all
+            // `total` pieces arrive, then reassemble and resolve. `total === 0` ⇒ the desktop couldn't find it.
             const r = fileFetchPending.current.get(msg.reqId);
-            if (r) {
+            if (!r) {
+              fileChunkBufs.current.delete(msg.reqId); // late chunk after a timeout — drop the partial
+              break;
+            }
+            if (msg.total === 0) {
               fileFetchPending.current.delete(msg.reqId);
-              r({ ...(msg.bytes ? { bytes: msg.bytes } : {}), ...(msg.mime ? { mime: msg.mime } : {}) });
+              fileChunkBufs.current.delete(msg.reqId);
+              r({});
+              break;
+            }
+            let acc = fileChunkBufs.current.get(msg.reqId);
+            if (!acc) {
+              acc = { parts: new Array<ArrayBuffer | undefined>(msg.total), got: 0 };
+              fileChunkBufs.current.set(msg.reqId, acc);
+            }
+            if (msg.mime) acc.mime = msg.mime;
+            if (msg.bytes && acc.parts[msg.seq] === undefined) {
+              acc.parts[msg.seq] = msg.bytes;
+              acc.got += 1;
+            }
+            if (acc.got >= msg.total) {
+              fileChunkBufs.current.delete(msg.reqId);
+              fileFetchPending.current.delete(msg.reqId);
+              r({ bytes: concatArrayBuffers(acc.parts as ArrayBuffer[]), ...(acc.mime ? { mime: acc.mime } : {}) });
             }
             break;
           }
@@ -2077,8 +2129,9 @@ export function App() {
             );
             break;
           case "vrcmd:fetchFile": {
-            // The phone tapped an OLDER image card whose bytes the mirror stripped. Find the card by id
-            // in our FULL history (we kept the bytes) and send them back so the phone can open/download.
+            // The phone asked for the full bytes of a file card whose bytes the mirror stripped (a large
+            // or older generated image). Find it in our FULL history (we kept the bytes) and send it back
+            // CHUNKED, so a big image syncs in pieces instead of being dropped for blowing one tunnel frame.
             let found: { bytes?: ArrayBuffer; mime?: string } | undefined;
             for (const m of buddyMessagesRef.current) {
               const a = m.attachments?.find((x) => x.id === msg.id && x.bytes);
@@ -2087,7 +2140,21 @@ export function App() {
                 break;
               }
             }
-            sendAppSync({ type: "vrsync:fileData", reqId: msg.reqId, ...(found?.bytes ? { bytes: found.bytes, mime: found.mime } : {}) });
+            if (!found?.bytes) {
+              sendAppSync({ type: "vrsync:fileData", reqId: msg.reqId, seq: 0, total: 0 }); // not found
+            } else {
+              const chunks = chunkArrayBuffer(found.bytes);
+              chunks.forEach((chunk, seq) =>
+                sendAppSync({
+                  type: "vrsync:fileData",
+                  reqId: msg.reqId,
+                  seq,
+                  total: chunks.length,
+                  bytes: chunk,
+                  ...(seq === 0 && found!.mime ? { mime: found!.mime } : {}),
+                }),
+              );
+            }
             break;
           }
           default:
@@ -2788,7 +2855,8 @@ export function App() {
       c.messages.length < prev.length &&
       c.messages.every((m, i) => prev[i] && prev[i].role === m.role && prev[i].at === m.at)
         ? prev
-        : c.messages,
+        : // put back any inline images this phone already fetched (the mirror re-strips them each push)
+          restoreInlineImages(c.messages, restoredImages.current),
     );
     setBuddyPersona(normalizeBuddyPersona(c.persona));
     setBuddyBusy(c.busy);
@@ -3680,8 +3748,9 @@ export function App() {
         if (!isRemoteClient) return resolve(undefined);
         const reqId = ++fileFetchSeq.current;
         const timer = setTimeout(() => {
+          fileChunkBufs.current.delete(reqId); // drop any partial chunks for this stalled fetch
           if (fileFetchPending.current.delete(reqId)) resolve(undefined);
-        }, 20000);
+        }, 45000); // generous: a big image arrives as several chunked frames
         fileFetchPending.current.set(reqId, ({ bytes }) => {
           clearTimeout(timer);
           resolve(bytes);
@@ -3690,6 +3759,32 @@ export function App() {
       }),
     [isRemoteClient, sendAppSync],
   );
+  // PHONE: when a RECENT message's inline image was stripped by the mirror (a large or just-generated
+  // image that didn't fit one frame), fetch its bytes back (chunked) and restore the full picture inline
+  // — so the phone shows the image, not just a card. Cached by attachment id so it survives mirror
+  // re-pushes; bounded so the restored bytes can't refill the phone's storage the mirror works to spare.
+  useEffect(() => {
+    if (!isRemoteClient) return;
+    for (const m of buddyMessages.slice(-8)) {
+      if (m.image) continue;
+      const att = m.attachments?.find((a) => a.kind === "image" && a.id && !a.bytes);
+      const id = att?.id;
+      if (!id || restoredImages.current.has(id) || fetchingImageIds.current.has(id)) continue;
+      const mime = att!.mime || "image/png";
+      fetchingImageIds.current.add(id);
+      void fetchRemoteFileBytes(id).then((bytes) => {
+        fetchingImageIds.current.delete(id);
+        if (!bytes) return;
+        restoredImages.current.set(id, { bytes, mimeType: mime });
+        while (restoredImages.current.size > 20) {
+          const oldest = restoredImages.current.keys().next().value;
+          if (oldest === undefined) break;
+          restoredImages.current.delete(oldest);
+        }
+        setBuddyMessages((prev) => restoreInlineImages(prev, restoredImages.current));
+      });
+    }
+  }, [isRemoteClient, buddyMessages, fetchRemoteFileBytes]);
   // Fill in a card's bytes from the desktop when the mirror stripped them (older image on a phone).
   const withFetchedBytes = useCallback(
     async (ref: FileRef): Promise<FileRef> => {
