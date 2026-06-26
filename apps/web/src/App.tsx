@@ -487,7 +487,6 @@ export function App() {
     buddyChat,
     buddyCancel,
     summarize,
-    decomposeTask,
     googleConnect,
     planTask,
     scanInbox,
@@ -4930,30 +4929,9 @@ export function App() {
         });
         return;
       }
-      // Auto-plan pre-pass: small models rarely emit set_plan, so derive the checklist HERE and seed
-      // it — the model then just executes the visible CURRENT CHECKLIST one step per turn (far easier
-      // than producing set_plan tool JSON mid-chat). Best-effort: skip if a checklist is already active
-      // or the ask is trivially short, ignore a <2-step result, and on any failure just proceed.
-      if (!planHasPendingStep(buddyPlanRef.current) && text.trim().split(/\s+/).length >= 5) {
-        setBuddyBusy(true);
-        setBuddyActivity("Planning the steps…");
-        try {
-          const { steps } = await decomposeTask(text);
-          if (steps && steps.length >= 2) {
-            const plan: BuddyPlan = {
-              goal: text.trim().slice(0, 80),
-              steps: steps.map((t) => ({ text: t, status: "pending" as const })),
-            };
-            buddyPlanRef.current = plan; // synchronous so the dispatched turn re-injects it immediately
-            setBuddyPlan(plan);
-          }
-        } catch {
-          /* best-effort — a planning miss just means the turn runs with no checklist */
-        }
-      }
       await dispatchBuddyTurn(chatTurnsOf(buddyMessages), text, text);
     },
-    [buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration, libraryStore, hasSearchKey, decomposeTask],
+    [buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration, libraryStore, hasSearchKey],
   );
   const onBuddySendText = useCallback((text: string) => void onBuddySend(text), [onBuddySend]);
 

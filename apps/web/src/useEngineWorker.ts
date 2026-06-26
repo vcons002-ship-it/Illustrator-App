@@ -287,8 +287,6 @@ export interface EngineWorkerApi {
   buddyCancel: () => void;
   /** Compact a chat: summarize the model-facing turns into a continuation brief. */
   summarize: (turns: ChatTurn[]) => Promise<{ text?: string; error?: string }>;
-  /** Auto-plan pre-pass: decompose a request into checklist steps (empty = single-step). */
-  decomposeTask: (text: string) => Promise<{ steps?: string[]; error?: string }>;
   /** Finish Google OAuth in the worker (exchange the consent code for tokens). */
   googleConnect: (args: { code: string; redirectUri: string; codeVerifier: string }) => Promise<{ ok: boolean; email?: string; error?: string }>;
   /** Exchange a pasted Schwab consent code for tokens (manual connect). */
@@ -547,10 +545,6 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const activeBuddyRequestId = useRef<number | undefined>(undefined);
   // In-flight compact-summaries, resolved by `summarized` replies.
   const summarizeRequests = useRef<Map<number, (r: { text?: string; error?: string }) => void>>(
-    new Map(),
-  );
-  // In-flight auto-plan decompositions, resolved by `decomposed` replies.
-  const decomposeRequests = useRef<Map<number, (r: { steps?: string[]; error?: string }) => void>>(
     new Map(),
   );
   // In-flight Google OAuth exchanges, resolved by `googleConnected`.
@@ -1032,12 +1026,6 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           const resolve = summarizeRequests.current.get(msg.requestId);
           summarizeRequests.current.delete(msg.requestId);
           resolve?.(msg.ok && msg.text ? { text: msg.text } : { error: msg.error ?? "Summarize failed." });
-          break;
-        }
-        case "decomposed": {
-          const resolve = decomposeRequests.current.get(msg.requestId);
-          decomposeRequests.current.delete(msg.requestId);
-          resolve?.(msg.ok ? { steps: msg.steps ?? [] } : { error: msg.error ?? "Decompose failed." });
           break;
         }
         case "googleConnected": {
@@ -1714,23 +1702,6 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
-  // Auto-plan pre-pass: ask the model to decompose a request into checklist steps. Best-effort and
-  // short-fused — if it times out or fails, the caller just proceeds with no plan.
-  const decomposeTask = useCallback(
-    (text: string): Promise<{ steps?: string[]; error?: string }> =>
-      new Promise((resolve) => {
-        const requestId = nextRefRequestId.current++;
-        const timeout = setTimeout(() => {
-          if (decomposeRequests.current.delete(requestId)) resolve({ error: "Planning timed out." });
-        }, 30_000);
-        decomposeRequests.current.set(requestId, (r) => {
-          clearTimeout(timeout);
-          resolve(r);
-        });
-        send({ type: "decomposeTask", requestId, text });
-      }),
-    [],
-  );
   const googleConnect = useCallback(
     (args: { code: string; redirectUri: string; codeVerifier: string }): Promise<{ ok: boolean; email?: string; error?: string }> =>
       new Promise((resolve) => {
@@ -2070,7 +2041,6 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     buddyChat,
     buddyCancel,
     summarize,
-    decomposeTask,
     googleConnect,
     schwabConnect,
     schwabPlaceOrder,
