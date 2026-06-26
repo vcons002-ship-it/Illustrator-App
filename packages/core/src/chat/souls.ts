@@ -28,6 +28,43 @@ const SPECS: Record<SoulKind, NoteStoreSpec> = {
 };
 const NAME_KEY: Record<SoulKind, string> = { self: "self-soul-name", user: "about-you-soul-name" };
 const FORGET_LABEL: Record<SoulKind, string> = { self: "self-soul note", user: "about-you note" };
+const IMAGES_KEY: Record<SoulKind, string> = { self: "self-soul-images", user: "about-you-soul-images" };
+/** How many reference photos a soul may hold — a couple of angles is plenty for character conditioning. */
+export const MAX_SOUL_IMAGES = 3;
+
+/** A reference photo attached to a soul: stored base64 (JSON-able in the KV store), decoded to bytes
+ * only when fed to the image model as a character reference. */
+export interface SoulImage {
+  mimeType: string;
+  dataBase64: string;
+}
+
+function isSoulImage(v: unknown): v is SoulImage {
+  return (
+    !!v &&
+    typeof v === "object" &&
+    typeof (v as SoulImage).mimeType === "string" &&
+    typeof (v as SoulImage).dataBase64 === "string" &&
+    (v as SoulImage).dataBase64.length > 0
+  );
+}
+
+/** The soul's reference photos ([] when none). */
+export async function loadSoulImages(store: VisualReaderStore, kind: SoulKind): Promise<SoulImage[]> {
+  const raw = await store.getMemo?.(IMAGES_KEY[kind]).catch(() => undefined);
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter(isSoulImage).slice(0, MAX_SOUL_IMAGES) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Replace the soul's reference photos (capped at MAX_SOUL_IMAGES). */
+export async function saveSoulImages(store: VisualReaderStore, kind: SoulKind, images: readonly SoulImage[]): Promise<void> {
+  await store.putMemo?.(IMAGES_KEY[kind], JSON.stringify(images.filter(isSoulImage).slice(0, MAX_SOUL_IMAGES)));
+}
 
 /** A single durable identity note. */
 export type SoulNote = NoteEntry;
@@ -95,17 +132,52 @@ function escapeRegExp(s: string): string {
  * ordinary "draw an apple" is untouched).
  */
 export function selfPortraitPrompt(prompt: string, name: string, notes: readonly SoulNote[]): string {
-  const look = notes.map((n) => n.text.trim()).filter(Boolean).join(", ");
-  if (!look || !prompt.trim()) return prompt;
+  if (!prompt.trim() || !isSelfPortraitRequest(prompt, name)) return prompt;
+  return foldSoulLook(prompt, name, notes, "the assistant");
+}
+
+/** Symmetric to selfPortraitPrompt for the USER soul — when the image is of the READER ("draw me", "a
+ * picture of me", their character name), fold the user soul's appearance into the prompt. */
+export function userPortraitPrompt(prompt: string, name: string, notes: readonly SoulNote[]): string {
+  if (!prompt.trim() || !isUserPortraitRequest(prompt, name)) return prompt;
+  return foldSoulLook(prompt, name, notes, "the reader");
+}
+
+/** True when an image request is of the ASSISTANT itself — it names the assistant (whole word) or
+ * self-references it ("yourself", "a selfie", "portrait of you", "draw you"). */
+export function isSelfPortraitRequest(prompt: string, name: string): boolean {
   const p = prompt.toLowerCase();
-  const trimmedName = name.trim();
-  const named = !!trimmedName && new RegExp(`\\b${escapeRegExp(trimmedName.toLowerCase())}\\b`).test(p);
-  const selfRef =
+  const t = name.trim();
+  const named = !!t && new RegExp(`\\b${escapeRegExp(t.toLowerCase())}\\b`).test(p);
+  return (
+    named ||
     /\byourself\b/.test(p) ||
     /\ba selfie\b/.test(p) ||
     /\b(portrait|picture|photo|image|drawing|painting|selfie|avatar|likeness)\s+of\s+you\b/.test(p) ||
     /\b(draw|paint|render|generate|make|create)\s+you\b/.test(p) ||
-    /\byour\s+(self-?portrait|portrait|avatar|likeness)\b/.test(p);
-  if (!named && !selfRef) return prompt;
-  return `${prompt} — depict ${trimmedName || "the assistant"} with this appearance: ${look}`;
+    /\byour\s+(self-?portrait|portrait|avatar|likeness)\b/.test(p)
+  );
+}
+
+/** True when an image request is of the READER — names their character or self-references them
+ * ("myself", "a picture of me", "my portrait", "draw me" — but NOT "draw me a/an/the …", which is
+ * "make something FOR me", not a portrait OF me). */
+export function isUserPortraitRequest(prompt: string, name: string): boolean {
+  const p = prompt.toLowerCase();
+  const t = name.trim();
+  const named = !!t && new RegExp(`\\b${escapeRegExp(t.toLowerCase())}\\b`).test(p);
+  return (
+    named ||
+    /\bmyself\b/.test(p) ||
+    /\b(portrait|picture|photo|image|drawing|painting|selfie|avatar|likeness)\s+of\s+me\b/.test(p) ||
+    /\bmy\s+(self-?portrait|portrait|avatar|likeness)\b/.test(p) ||
+    /\b(draw|paint|render|sketch)\s+me\b(?!\s+(a|an|the|some|this|that|one)\b)/.test(p)
+  );
+}
+
+/** Append the soul's appearance to a prompt (no-op when the soul has no look notes). */
+function foldSoulLook(prompt: string, name: string, notes: readonly SoulNote[], fallback: string): string {
+  const look = notes.map((n) => n.text.trim()).filter(Boolean).join(", ");
+  if (!look) return prompt;
+  return `${prompt} — depict ${name.trim() || fallback} with this appearance: ${look}`;
 }

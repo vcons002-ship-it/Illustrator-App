@@ -54,11 +54,15 @@ import {
   loadSkills,
   loadSoul,
   loadSoulName,
+  loadSoulImages,
   rememberSoul,
   forgetSoul,
   selfSoulPromptBlock,
   userSoulPromptBlock,
   selfPortraitPrompt,
+  userPortraitPrompt,
+  isSelfPortraitRequest,
+  isUserPortraitRequest,
   storyStatePromptBlock,
   synopsisRequest,
   storyOpeningRequest,
@@ -1269,6 +1273,8 @@ async function renderFromText(
     /** img2img base photo + strength (the photo-transform path; local engine only). */
     initImage?: { bytes: ArrayBuffer; mimeType: string };
     denoise?: number;
+    /** Character reference photos (a soul's reference images) — used by Gemini/OpenAI native + ComfyUI. */
+    ipAdapterRefs?: { bytes: ArrayBuffer; mimeType: string; weight: number }[];
     /** Output dimensions (the photo path passes the source photo's aspect). */
     width?: number;
     height?: number;
@@ -1327,6 +1333,7 @@ async function renderFromText(
     ...(isLocal && tier.localScheduler ? { localScheduler: tier.localScheduler } : {}),
     ...(opts.initImage ? { initImage: opts.initImage } : {}),
     ...(opts.denoise !== undefined ? { denoise: opts.denoise } : {}),
+    ...(opts.ipAdapterRefs?.length ? { ipAdapterRefs: opts.ipAdapterRefs } : {}),
     ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),
     ...(opts.signal ? { signal: opts.signal } : {}),
   });
@@ -3590,6 +3597,15 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
   }
 }
 
+/** A soul's reference photos, decoded to bytes for use as character references in an image render. */
+async function loadSoulRefs(
+  store: ReturnType<typeof memoryStore>,
+  kind: "self" | "user",
+): Promise<{ bytes: ArrayBuffer; mimeType: string; weight: number }[]> {
+  const imgs = await loadSoulImages(store, kind);
+  return imgs.map((im) => ({ bytes: base64ToBytes(im.dataBase64), mimeType: im.mimeType, weight: 0.85 }));
+}
+
 /**
  * A user-APPROVED generate_image tool call. In-chat render overrides apply here:
  * a named model resolves against the engine's INSTALLED models (a model that
@@ -3650,15 +3666,28 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
     const baseTier = useBook ? bookProviders!.tier : built.tier;
     const tier = styleId ? { ...baseTier, style: styleId } : baseTier;
     cancelChatWarm(); // don't let a pending LLM warm steal VRAM from this render
-    // If the assistant is drawing ITSELF, fold its identity "soul" appearance into the prompt so the
-    // render reliably uses its real look (no-op for any other subject).
-    const prompt = selfPortraitPrompt(
-      call.prompt,
-      await loadSoulName(memoryStore(), "self"),
-      await loadSoul(memoryStore(), "self"),
-    );
+    // If the image is of the assistant ITSELF or of the READER, fold that soul's appearance into the
+    // prompt AND pass its reference photos to the model (Gemini/OpenAI native + ComfyUI use them; other
+    // providers ignore them). No-op for any other subject.
+    const store = memoryStore();
+    const [selfName, selfNotes, userName, userNotes] = await Promise.all([
+      loadSoulName(store, "self"),
+      loadSoul(store, "self"),
+      loadSoulName(store, "user"),
+      loadSoul(store, "user"),
+    ]);
+    let prompt = call.prompt;
+    let soulRefs: { bytes: ArrayBuffer; mimeType: string; weight: number }[] | undefined;
+    if (isSelfPortraitRequest(call.prompt, selfName)) {
+      prompt = selfPortraitPrompt(call.prompt, selfName, selfNotes);
+      soulRefs = await loadSoulRefs(store, "self");
+    } else if (isUserPortraitRequest(call.prompt, userName)) {
+      prompt = userPortraitPrompt(call.prompt, userName, userNotes);
+      soulRefs = await loadSoulRefs(store, "user");
+    }
     const out = await renderFromText(image, tier, prompt, {
       ...(call.steps ? { stepsOverride: call.steps } : {}),
+      ...(soulRefs?.length ? { ipAdapterRefs: soulRefs } : {}),
       signal: ac.signal,
       onProgress: (fraction) => post({ type: "testProgress", requestId, fraction }),
     });

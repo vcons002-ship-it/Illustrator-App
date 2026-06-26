@@ -61,6 +61,8 @@ import {
   saveSoul,
   loadSoulName,
   saveSoulName,
+  loadSoulImages,
+  saveSoulImages,
   MAX_SOUL_NOTES,
   MAX_SOUL_NOTE_CHARS,
   MAX_SOUL_NAME_CHARS,
@@ -151,6 +153,7 @@ import {
   type MemoryNote,
   type SoulNote,
   type SoulKind,
+  type SoulImage,
   type BookSource,
   type BookSummary,
   type ChapterDataset,
@@ -627,13 +630,17 @@ export function App() {
   const [selfSoulName, setSelfSoulName] = useState("");
   const [userSoulNotes, setUserSoulNotes] = useState<SoulNote[]>([]);
   const [userSoulName, setUserSoulName] = useState("");
+  const [selfSoulImages, setSelfSoulImages] = useState<SoulImage[]>([]);
+  const [userSoulImages, setUserSoulImages] = useState<SoulImage[]>([]);
   const setSoulNotes = (kind: SoulKind, n: SoulNote[]) => (kind === "self" ? setSelfSoulNotes(n) : setUserSoulNotes(n));
   const setSoulName = (kind: SoulKind, n: string) => (kind === "self" ? setSelfSoulName(n) : setUserSoulName(n));
+  const setSoulImagesState = (kind: SoulKind, im: SoulImage[]) => (kind === "self" ? setSelfSoulImages(im) : setUserSoulImages(im));
   const openSoul = useCallback(
     async (kind: SoulKind) => {
       await Promise.all([
         loadSoul(libraryStore, kind).then((n) => setSoulNotes(kind, n)),
         loadSoulName(libraryStore, kind).then((n) => setSoulName(kind, n)),
+        loadSoulImages(libraryStore, kind).then((im) => setSoulImagesState(kind, im)),
       ]).catch(() => {});
       setShowSoul(kind);
     },
@@ -7264,6 +7271,7 @@ export function App() {
           variant={showSoul}
           name={showSoul === "self" ? selfSoulName : userSoulName}
           notes={showSoul === "self" ? selfSoulNotes : userSoulNotes}
+          images={showSoul === "self" ? selfSoulImages : userSoulImages}
           limits={{ note: MAX_SOUL_NOTE_CHARS, max: MAX_SOUL_NOTES, name: MAX_SOUL_NAME_CHARS }}
           onSaveNotes={async (notes) => {
             const kind = showSoul;
@@ -7274,6 +7282,11 @@ export function App() {
             const kind = showSoul;
             await saveSoulName(libraryStore, kind, name);
             setSoulName(kind, name.trim().slice(0, MAX_SOUL_NAME_CHARS));
+          }}
+          onSaveImages={async (imgs) => {
+            const kind = showSoul;
+            await saveSoulImages(libraryStore, kind, imgs);
+            setSoulImagesState(kind, imgs);
           }}
           onClose={() => setShowSoul(undefined)}
         />

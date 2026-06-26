@@ -1,5 +1,5 @@
-import { memo, useEffect, useMemo, useState } from "react";
-import type { SoulNote } from "@visual-reader/core";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { MAX_SOUL_IMAGES, type SoulImage, type SoulNote } from "@visual-reader/core";
 
 /**
  * Edit one of the two identity "souls" — durable notes, separate from reader-memory, that
@@ -19,6 +19,10 @@ export interface SoulPanelProps {
   onSaveNotes: (notes: SoulNote[]) => Promise<void>;
   /** Persist the played-character name. */
   onSaveName: (name: string) => Promise<void>;
+  /** Reference photos (base64) the model uses when drawing this character. */
+  images: SoulImage[];
+  /** Persist the WHOLE reference-photo list (capped at MAX_SOUL_IMAGES). */
+  onSaveImages: (images: SoulImage[]) => Promise<void>;
   onClose: () => void;
   limits: { note: number; max: number; name: number };
 }
@@ -49,6 +53,8 @@ export const SoulPanel = memo(function SoulPanel({
   notes,
   onSaveNotes,
   onSaveName,
+  images,
+  onSaveImages,
   onClose,
   limits,
 }: SoulPanelProps) {
@@ -57,6 +63,9 @@ export const SoulPanel = memo(function SoulPanel({
   useEffect(() => setList(notes), [notes]);
   const [nameDraft, setNameDraft] = useState(name);
   useEffect(() => setNameDraft(name), [name]);
+  const [pics, setPics] = useState<SoulImage[]>(images);
+  useEffect(() => setPics(images), [images]);
+  const fileInput = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState("");
   const [editingAt, setEditingAt] = useState<number | undefined>();
   const [editText, setEditText] = useState("");
@@ -120,6 +129,48 @@ export const SoulPanel = memo(function SoulPanel({
   };
 
   const remove = (at: number): void => void persist(list.filter((n) => n.at !== at));
+
+  const persistPics = async (next: SoulImage[]): Promise<void> => {
+    setBusy(true);
+    setError("");
+    try {
+      await onSaveImages(next);
+      setPics(next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const addImageFiles = async (files: FileList | null): Promise<void> => {
+    if (!files?.length) return;
+    const room = MAX_SOUL_IMAGES - pics.length;
+    if (room <= 0) {
+      setError(`Up to ${MAX_SOUL_IMAGES} reference photos.`);
+      return;
+    }
+    const picked = Array.from(files)
+      .filter((f) => f.type.startsWith("image/"))
+      .slice(0, room);
+    if (!picked.length) return;
+    const read = await Promise.all(
+      picked.map(
+        (f) =>
+          new Promise<SoulImage>((resolve, reject) => {
+            const r = new FileReader();
+            r.onload = () => {
+              const url = String(r.result || "");
+              const comma = url.indexOf(","); // strip the "data:<mime>;base64," prefix
+              resolve({ mimeType: f.type || "image/png", dataBase64: comma >= 0 ? url.slice(comma + 1) : url });
+            };
+            r.onerror = () => reject(new Error("couldn't read the image"));
+            r.readAsDataURL(f);
+          }),
+      ),
+    );
+    await persistPics([...pics, ...read]);
+  };
+  const removeImage = (i: number): void => void persistPics(pics.filter((_, idx) => idx !== i));
 
   return (
     <div style={overlay} onClick={onClose}>
@@ -233,6 +284,51 @@ export const SoulPanel = memo(function SoulPanel({
           </div>
         )}
 
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: 10 }}>
+          <div style={{ fontSize: 12, opacity: 0.85, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>📷 Reference photos</span>
+            <span style={{ fontSize: 11, opacity: 0.6 }}>
+              {pics.length}/{MAX_SOUL_IMAGES}
+            </span>
+          </div>
+          <p style={{ fontSize: 11, opacity: 0.6, margin: 0 }}>
+            Photos of {variant === "self" ? "the assistant" : "you"}, used when it draws{" "}
+            {variant === "self" ? "itself" : "you"}. (Gemini & OpenAI image models and ComfyUI use these; some
+            models, like Flux, ignore them.)
+          </p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {pics.map((im, i) => (
+              <div key={i} style={{ position: "relative" }}>
+                <img
+                  src={`data:${im.mimeType};base64,${im.dataBase64}`}
+                  alt="reference"
+                  decoding="async"
+                  style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6, border: "1px solid rgba(255,255,255,0.15)" }}
+                />
+                <button style={removeBadge} onClick={() => removeImage(i)} disabled={busy} title="Remove">
+                  ×
+                </button>
+              </div>
+            ))}
+            {pics.length < MAX_SOUL_IMAGES ? (
+              <button style={addThumb} onClick={() => fileInput.current?.click()} disabled={busy}>
+                + Photo
+              </button>
+            ) : null}
+          </div>
+          <input
+            ref={fileInput}
+            type="file"
+            accept="image/*"
+            multiple
+            style={{ display: "none" }}
+            onChange={(e) => {
+              void addImageFiles(e.target.files);
+              e.target.value = "";
+            }}
+          />
+        </div>
+
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, opacity: 0.5 }}>
           <span>
             {list.length}/{limits.max} notes
@@ -305,4 +401,29 @@ const btnPrimary: React.CSSProperties = {
   ...btn,
   background: "rgba(122,162,255,0.25)",
   border: "1px solid rgba(122,162,255,0.6)",
+};
+const addThumb: React.CSSProperties = {
+  width: 64,
+  height: 64,
+  borderRadius: 6,
+  border: "1px dashed rgba(255,255,255,0.3)",
+  background: "rgba(255,255,255,0.05)",
+  color: "inherit",
+  fontSize: 12,
+  cursor: "pointer",
+};
+const removeBadge: React.CSSProperties = {
+  position: "absolute",
+  top: -6,
+  right: -6,
+  width: 18,
+  height: 18,
+  borderRadius: "50%",
+  border: "none",
+  background: "rgba(0,0,0,0.75)",
+  color: "#fff",
+  fontSize: 13,
+  lineHeight: "16px",
+  cursor: "pointer",
+  padding: 0,
 };
