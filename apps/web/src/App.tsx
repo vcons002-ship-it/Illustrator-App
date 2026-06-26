@@ -3534,6 +3534,7 @@ export function App() {
       setActiveBuddyId(active);
       if (hist) setBuddyMessages(hist);
       setBuddyPlan(savedPlan);
+      buddyPlanRef.current = savedPlan; // match the ref to the restored session's plan from the first tick
       buddyReady.current = true;
     })();
     return () => {
@@ -5277,6 +5278,7 @@ export function App() {
     setBuddyActivity("");
     setBuddyMessages([]);
     setBuddyPlan(undefined);
+    buddyPlanRef.current = undefined; // synchronous — don't let a stale checklist survive the clear
     setBuddyPendingTool(undefined);
     void libraryStore.deleteChatHistory?.(activeBuddyId);
     void libraryStore.deleteMemo?.(planMemoKey(activeBuddyId)).catch(() => {});
@@ -5298,7 +5300,14 @@ export function App() {
     setBuddyThinking("");
     setBuddyActivity("");
     setBuddySteps([]);
+    // ISOLATE the conversation immediately: the switch/new/delete callers load the target session's
+    // history + plan ASYNCHRONOUSLY, so without clearing here the PREVIOUS window's messages + checklist
+    // stay live during the load gap — the model then sees the old chat (e.g. "those 5 images are already
+    // generated") and reports the new task as already done. Clear the ref synchronously too (the
+    // render-time sync at the top of the component otherwise lags a tick behind this state update).
+    setBuddyMessages([]);
     setBuddyPlan(undefined); // the new session's plan loads in (or stays empty); don't flash the old one
+    buddyPlanRef.current = undefined;
     setBuddyPendingTool(undefined);
     // The context-usage badge is per-conversation — clear it on a session switch so it doesn't show
     // the previous window's % (it repopulates from the new session's next turn).
@@ -5319,7 +5328,10 @@ export function App() {
         setActiveBuddyId(id);
         setBuddyMessages(hist ?? []);
       });
-      void loadBuddyPlan(id).then(setBuddyPlan);
+      void loadBuddyPlan(id).then((p) => {
+        buddyPlanRef.current = p; // keep the ref in step with the loaded session's plan, not a render behind
+        setBuddyPlan(p);
+      });
     },
     [isRemoteClient, sendAppSync, activeBuddyId, libraryStore, resetBuddyView, loadBuddyPlan],
   );
@@ -5360,7 +5372,10 @@ export function App() {
             setActiveBuddyId(fallback);
             setBuddyMessages(hist ?? []);
           });
-          void loadBuddyPlan(fallback).then(setBuddyPlan);
+          void loadBuddyPlan(fallback).then((p) => {
+            buddyPlanRef.current = p;
+            setBuddyPlan(p);
+          });
         }
         return next;
       });
