@@ -1085,6 +1085,49 @@ const SEARCHABLE_EXTS: &[&str] = &[
     // Images.
     "png", "jpg", "jpeg", "webp", "gif",
 ];
+/// Filler words people say when phrasing a search ("find my notes file", "any md files") that aren't
+/// part of a filename — dropped before matching so a token like "files" isn't required in the name
+/// (which would make "find my md files" return nothing). Mirrors FIND_STOP_WORDS in local-files.ts.
+fn is_find_stop_word(t: &str) -> bool {
+    matches!(
+        t,
+        "find" | "search" | "look" | "locate" | "get" | "open" | "show" | "give" | "fetch" | "grab"
+            | "me" | "my" | "the" | "a" | "an" | "any" | "some" | "all" | "please" | "and" | "that" | "this"
+            | "for" | "of" | "on" | "in" | "about" | "with" | "named" | "called" | "titled"
+            | "file" | "files" | "doc" | "docs" | "document" | "documents"
+    )
+}
+
+/// Type words → the extensions they mean, so "md files" filters to .md, "a photo of …" to images, etc.
+/// A token matches a file when its NAME contains the token OR it's a type word matching the file's
+/// EXTENSION. Mirrors FILE_TYPE_EXTS in local-files.ts.
+fn type_word_exts(t: &str) -> &'static [&'static str] {
+    match t {
+        "md" | "markdown" => &["md", "markdown"],
+        "pdf" | "pdfs" => &["pdf"],
+        "txt" | "text" => &["txt"],
+        "docx" => &["docx"],
+        "word" => &["doc", "docx"],
+        "rtf" => &["rtf"],
+        "epub" | "ebook" | "ebooks" => &["epub"],
+        "csv" => &["csv"],
+        "tsv" => &["tsv"],
+        "json" => &["json"],
+        "xlsx" | "xls" | "excel" => &["xlsx", "xls"],
+        "spreadsheet" | "spreadsheets" => &["xlsx", "xls", "csv", "ods"],
+        "sheet" => &["xlsx", "xls", "csv"],
+        "html" | "htm" | "webpage" => &["html", "htm"],
+        "png" => &["png"],
+        "jpg" | "jpeg" => &["jpg", "jpeg"],
+        "webp" => &["webp"],
+        "gif" => &["gif"],
+        "image" | "images" | "photo" | "photos" | "picture" | "pictures" | "pic" => {
+            &["png", "jpg", "jpeg", "webp", "gif"]
+        }
+        _ => &[],
+    }
+}
+
 /// Bounds so a broad walk stays fast and can't wander into heavy caches forever.
 const MAX_RESULTS: usize = 100;
 const MAX_VISITS: usize = 400_000;
@@ -1134,8 +1177,14 @@ async fn search_files(
     root: Option<String>,
 ) -> Result<Vec<FoundFile>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let tokens: Vec<String> =
-            query.to_lowercase().split_whitespace().map(|s| s.to_string()).collect();
+        // Split on non-alphanumeric (so "resume.pdf" → "resume","pdf") and drop filler words, matching
+        // the renderer's queryTokens(). What's left is what actually has to match a filename.
+        let tokens: Vec<String> = query
+            .to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|s| !s.is_empty() && !is_find_stop_word(s))
+            .map(|s| s.to_string())
+            .collect();
         if tokens.is_empty() {
             return Ok(Vec::new());
         }
@@ -1178,7 +1227,9 @@ async fn search_files(
                 if !SEARCHABLE_EXTS.contains(&ext) {
                     continue;
                 }
-                if tokens.iter().all(|t| lower.contains(t.as_str())) {
+                // Every token must be satisfied: present in the name, OR a type word ("md", "pdf",
+                // "photo") matching this file's extension — so "md files" finds every .md.
+                if tokens.iter().all(|t| lower.contains(t.as_str()) || type_word_exts(t).contains(&ext)) {
                     let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
                     out.push(FoundFile {
                         path: entry.path().to_string_lossy().to_string(),

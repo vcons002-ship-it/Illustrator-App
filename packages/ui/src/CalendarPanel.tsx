@@ -215,7 +215,18 @@ export const CalendarPanel = memo(function CalendarPanel({
           </div>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(7, 1fr)",
+            // The weekday header is auto-height; the six week-rows split the remaining panel height
+            // equally so the whole month is always visible (bigger cells, no inner scroll).
+            gridTemplateRows: "auto repeat(6, minmax(0, 1fr))",
+            gap: 2,
+            flex: "1 1 auto",
+            minHeight: 0,
+          }}
+        >
           {WEEKDAYS.map((w) => (
             <div key={w} style={{ fontSize: 11, opacity: 0.55, textAlign: "center", padding: "2px 0" }}>
               {w}
@@ -264,7 +275,7 @@ export const CalendarPanel = memo(function CalendarPanel({
         </div>
 
         {selected ? (
-          <div style={{ marginTop: 12, borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: 10 }}>
+          <div style={{ marginTop: 12, borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: 10, flexShrink: 0, overflowY: "auto", maxHeight: "28vh" }}>
             <strong style={{ fontSize: 13 }}>{selected}</strong>
             {selectedEvents.length === 0 && selectedDeadlines.length === 0 ? (
               <div style={{ fontSize: 12, opacity: 0.6, marginTop: 4 }}>Nothing scheduled.</div>
@@ -345,9 +356,12 @@ const overlay: React.CSSProperties = {
   padding: 20,
 };
 const panel: React.CSSProperties = {
-  width: "min(820px, 100%)",
-  maxHeight: "92vh",
-  overflowY: "auto",
+  width: "min(960px, 100%)",
+  // A definite height (capped to the viewport) so the month grid can grow to fill it — the whole
+  // calendar stays on screen without the panel itself scrolling.
+  height: "min(880px, 94vh)",
+  display: "flex",
+  flexDirection: "column",
   background: "#16181d",
   color: "#e6e6e6",
   border: "1px solid rgba(255,255,255,0.12)",
@@ -356,7 +370,9 @@ const panel: React.CSSProperties = {
   fontFamily: "system-ui, sans-serif",
 };
 const dayCell: React.CSSProperties = {
-  minHeight: 78,
+  // Sized by its grid row (the six rows split the panel height) — a floor keeps it tappable when the
+  // viewport is short, and minHeight:0 lets it shrink instead of forcing a scroll.
+  minHeight: 0,
   borderRadius: 6,
   padding: 3,
   textAlign: "left",
@@ -364,6 +380,7 @@ const dayCell: React.CSSProperties = {
   cursor: "pointer",
   display: "flex",
   flexDirection: "column",
+  overflow: "hidden",
 };
 const chip: React.CSSProperties = {
   fontSize: 9.5,

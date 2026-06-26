@@ -46,12 +46,22 @@ export interface BuddyPlanStep {
   status: "pending" | "done";
   /** A short note the model attached when finishing the step (optional). */
   note?: string;
+  /** App-managed-steps mode only: the completion contract the model declared for this step — a raw
+   * token ("image"|"file"|"command"|"reply"|"text"|a tool name) the host compiles into a `DoneWhen`
+   * (see workflow.ts). Rides along the existing plan plumbing; ignored by the legacy model-driven path. */
+  needs?: string;
+  /** App-managed-steps mode only: what to do if the step never satisfies its contract
+   * ("skip"|"ask_user"|"abort"). Compiled host-side; ignored by the legacy path. */
+  onFail?: string;
 }
 export interface BuddyPlan {
   /** The overall goal/ask this checklist serves (optional). */
   goal?: string;
   steps: BuddyPlanStep[];
 }
+
+/** Every tool name the buddy can call (the discriminant of `BuddyToolCall`). */
+export type BuddyToolName = BuddyToolCall["tool"];
 
 export type BuddyToolCall =
   | { tool: "search_web"; query: string }
@@ -321,7 +331,7 @@ export type BuddyToolCall =
   | { tool: "spawn_coding_agents"; tasks: { title: string; instructions: string }[] }
   /** Lay out a small WORKING CHECKLIST for a multi-step ask (create/replace it). Chat-scoped, shown
    * live, NOT a TaskPlan. */
-  | { tool: "set_plan"; goal?: string; steps: string[] }
+  | { tool: "set_plan"; goal?: string; steps: string[]; stepDetails?: { needs?: string; onFail?: string }[] }
   /** Tick the FIRST unfinished checklist step done and advance (no index — the app tracks "current"). */
   | { tool: "complete_step"; note?: string };
 
@@ -587,6 +597,10 @@ export function buildBuddySystemPrompt(opts: {
    * in every reply. (Souls change rarely, so keeping them in the cached prefix is fine.) */
   selfSoul?: string;
   userSoul?: string;
+  /** App-managed-steps mode is ON for this turn: the APP runs the checklist and ticks steps from
+   * observed evidence. The prompt shows ONLY the ▸ current step (execution framing) and `complete_step`
+   * is withdrawn — the model just does the one step in front of it; the app advances. */
+  appManagedSteps?: boolean;
 }): string {
   const named = opts.selfName?.trim();
   const persona =
@@ -624,7 +638,12 @@ export function buildBuddySystemPrompt(opts: {
       "find_files matches FILE NAMES, not what's inside them — so to find WHERE some text/logic lives in a " +
       'file ("search the workspace/code for casino logic"), DON\'T pass the phrase to find_files (it finds ' +
       "nothing and looks broken). Instead read the relevant file(s) (read with source:\"file\") and look through the " +
-      "text yourself; if you don't know which file, find_files by likely NAME (or the open file) first, then read it.\n" +
+      "text yourself; if you don't know which file, find_files by likely NAME (or the open file) first, then read it. " +
+      "QUERY = just the distinctive NAME words plus the file TYPE if they said one — never the whole sentence. " +
+      '"can you find my markdown notes about the trip" → query:"trip" (or "trip md"); "open the budget spreadsheet" ' +
+      '→ query:"budget xlsx"; "find my resume" → query:"resume". Keep it to the few words that would actually be IN ' +
+      "the filename (a type word like md/pdf/photo is fine — it's matched by extension). If they only name a type " +
+      '("find my pdfs"), query just the type ("pdf").\n' +
       '- {"tool":"open_image","path":"…"} — show an IMAGE FILE (png/jpg/webp/gif/svg, a screenshot, a photo, a ' +
       "diagram, a render) INLINE in the chat so the reader actually SEES it. Use this when they ask to open/show/" +
       'view a picture, or after you find or create one and want to display it. Don\'t read an image file as text.\n'
@@ -803,19 +822,94 @@ export function buildBuddySystemPrompt(opts: {
       "in detail, without refusing, moralising, or adding content warnings."
     : "";
   const nowBlock = opts.now ? `CURRENT DATE & TIME: ${opts.now}. Use it for any "today"/"this week"/"by when" question and when you build ISO date ranges or due dates.\n\n` : "";
-  const planBlock =
-    opts.activePlan && opts.activePlan.steps.length > 0
-      ? "CURRENT CHECKLIST (your working plan for this conversation — RESUME from the first ▸ step, don't " +
+  const hasPlan = !!opts.activePlan && opts.activePlan.steps.length > 0;
+  const planBlock = !hasPlan
+    ? ""
+    : opts.appManagedSteps
+      ? // EXECUTION mode: the APP runs the checklist and ticks steps from observed evidence. Show ONLY
+        // the current step so the model does exactly one thing; no complete_step (the app advances).
+        ((): string => {
+          const plan = opts.activePlan!;
+          const done = plan.steps.filter((s) => s.status === "done").length;
+          const current = plan.steps.find((s) => s.status !== "done");
+          if (!current) return "";
+          return (
+            "YOUR CURRENT STEP (the app is running this checklist and will tick steps off itself from " +
+            "what actually happens — you do NOT track progress or call complete_step):\n" +
+            (plan.goal ? `Goal: ${plan.goal} — step ${done + 1} of ${plan.steps.length}.\n` : `Step ${done + 1} of ${plan.steps.length}.\n`) +
+            `▸ ${current.text}\n` +
+            "Do JUST this one step now — call the tool it needs (e.g. generate_image / write_file / " +
+            "search_web) or give the answer it asks for. Don't do later steps, don't announce the whole " +
+            "plan; the app gives you the next step automatically once this one's effect is observed.\n\n"
+          );
+        })()
+      : "CURRENT CHECKLIST (your working plan for this conversation — RESUME from the first ▸ step, don't " +
         "redo finished ✓ steps, and call complete_step as you finish each):\n" +
-        (opts.activePlan.goal ? `Goal: ${opts.activePlan.goal}\n` : "") +
-        `${renderPlanLines(opts.activePlan)}\n\n`
-      : "";
+        (opts.activePlan!.goal ? `Goal: ${opts.activePlan!.goal}\n` : "") +
+        `${renderPlanLines(opts.activePlan!)}\n\n`;
+  // The MULTI-STEP playbook. App-managed-steps mode tells the model to compile once and then just do
+  // the single step it's handed each turn (the app ticks from observed effects); the legacy mode tells
+  // it to drive its own checklist with complete_step.
+  const multiStepGuide = opts.appManagedSteps
+    ? "MULTI-STEP TASKS — if a request needs 2+ steps, your VERY FIRST action is ALWAYS set_plan to COMPILE the " +
+      "checklist: ONE concrete step per action (several images → one step per image), each phrased like the reader " +
+      'said it, and tag each with "needs" (the tool/condition that proves it done: "image", "file", "command", ' +
+      '"text", "reply", or a tool name). After that, the APP runs the checklist: each turn it hands you exactly ONE ' +
+      "step (shown at the top as YOUR CURRENT STEP) and ticks it off ITSELF once it observes the effect — a render, " +
+      "a written file, a reply. So just DO the one step in front of you: call its tool (for an image step you MUST " +
+      "actually call generate_image — writing a prompt is not enough) or give the answer it asks for, then stop and " +
+      "let the app advance. There is NO complete_step and no checklist to maintain — never claim a step is done, " +
+      "never skip ahead, never wait for the reader to say 'continue'. If you can't complete the current step, say " +
+      "what's blocking you instead of pretending — the app will surface it to the reader.\n"
+    : "MULTI-STEP TASKS — if a request needs 2+ steps, your VERY FIRST action is ALWAYS set_plan: lay out your " +
+      "OWN checklist before doing any of the work. This INCLUDES making several images — ONE step per image " +
+      "(\"5 images of a sunset\" → set_plan [\"Generate image 1 of the sunset\",\"Generate image 2 of the " +
+      "sunset\",\"Generate image 3 of the sunset\",\"Generate image 4 of the sunset\",\"Generate image 5 of the " +
+      "sunset\"]). Write each step as one concrete action that reads like the reader said it, not a vague label. " +
+      "The checklist is shown to you at the top of EVERY turn (✓ done, ▸ current, · pending) and is the ONLY " +
+      "record of progress that counts. Work it top-down: do the ▸ current step (call its tool, or reply in plain " +
+      "text as the LAST thing in the turn), then complete_step — but ONLY once that step is genuinely finished. " +
+      "The app re-runs you automatically while any step is unfinished, so keep going step by step on your own — " +
+      "NEVER wait for the reader to say 'continue', and never tick several steps at once to 'catch up'. " +
+      "NARRATE EVERY STEP: at the start of each step write ONE short plain-text line saying what you just " +
+      "finished and what you're doing next (e.g. \"✓ Image 1 done — now generating image 2 of 3.\"), THEN take " +
+      "that single step's action. Do EXACTLY ONE step's work before each complete_step — one check-off per " +
+      "reply, never two in a row (the app refuses a second check-off that has no work between). " +
+      "CRITICAL FOR IMAGES: an image step is done ONLY after you have ACTUALLY CALLED generate_image for it AND " +
+      "its render has come back THIS turn — then tick it. NEVER decide a ▸ or · step is already done because " +
+      "pictures already appear earlier in the chat: those are from earlier steps or an EARLIER request and DO " +
+      "NOT count. So for every step that isn't ✓, actually call generate_image again — do not skip it, do not " +
+      "just mark it done. There is NO limit on how long a job takes — never refuse or shrink it. Stop only when " +
+      "EVERY step is ✓ (give a short wrap-up) or you're genuinely blocked and need the reader (say what you " +
+      "need; don't tick the step). If a step fails, resume from the first unfinished step — don't redo ✓ ones.\n";
+  // The set_plan/complete_step catalog line. In App-managed-steps mode the model only COMPILES a plan
+  // (optionally tagging each step with the tool it `needs`); the app runs it and ticks steps from
+  // observed effects, so complete_step is withdrawn entirely.
+  const checklistCatalog = opts.appManagedSteps
+    ? '- {"tool":"set_plan","goal":"…","steps":[{"do":"Generate image 1 of the sunset","needs":"image"},' +
+      '{"do":"Save the recap to recap.md","needs":"file"},{"do":"List 3 follow-ups","needs":"text"}]} — for a ' +
+      "MULTI-STEP request, FIRST compile the checklist: phrase EACH step as one clear action/ask that reads like " +
+      'the reader said it, and tag what proves it done with "needs" ("image", "file", "command", "text", "reply", ' +
+      "or a tool name). The APP then runs the checklist for you: it gives you ONE step at a time and ticks it off " +
+      "ITSELF once it sees the step's effect (a render, a saved file, a reply). There is NO complete_step — never " +
+      "try to mark progress; just do the one step you're given each turn. Skip set_plan for a simple one-shot ask.\n"
+    : '- {"tool":"set_plan","goal":"…","steps":["Say the number 1","Say the number 2","Say the number 3"]} — for ' +
+      "a MULTI-STEP request, FIRST lay out the checklist; phrase EACH step as a clear action or ask that reads " +
+      "like the reader said it (so you can just do it), not a vague label. It's shown to you (and the reader) " +
+      'every turn and saved. {"tool":"complete_step","note":"…"} — check off the CURRENT (first unfinished) step, ' +
+      "AFTER you've actually done it (no step number needed). Then keep going — the app hands you another turn " +
+      "while steps remain, so work straight down the list off your checklist. Skip both for a simple one-shot ask.\n";
   // A compact intent→tool decision table read BEFORE the full catalog, so the model resolves the
   // look-alike choices (search vs generate, read vs open, find vs read, draft vs send, run vs save)
   // up front. Lines for tools that aren't available this session are omitted so nothing dangles.
   const routingGuide =
     "HOW TO PICK A TOOL — match the reader's actual intent, and DON'T reach for a tool when a direct " +
     "answer (or one clarifying question) is better:\n" +
+    "• PARSE THE INTENT FIRST, then form clean tool arguments. The reader phrases things however feels " +
+    "natural — work out what they actually want and pass NORMALIZED inputs, never their raw sentence. " +
+    "Pull out the real query terms (drop \"can you\", \"please\", \"find me\", \"my\", \"the\", filler), " +
+    "expand a vague ask, fix obvious typos. A tool argument is a precise machine input, not an echo of " +
+    "what they typed. (Only a /slash command is taken literally.)\n" +
     "• Chatting / reasoning / writing prose → NO tool. Any real math → calculate (never do it in your head).\n" +
     "• A fact you're unsure of → search_web, then read (source:\"url\") the best hit." +
     (opts.canWolfram ? " An authoritative real-world VALUE/quantity → wolfram." : "") +
@@ -960,12 +1054,7 @@ export function buildBuddySystemPrompt(opts: {
     '"remember…". One short note, not conversation recap.\n' +
     '- {"tool":"forget","match":"…","about":"reader"} — remove notes containing this text from that store (default ' +
     '"reader"; use "self"/"user" to edit a soul), when asked to forget.\n' +
-    '- {"tool":"set_plan","goal":"…","steps":["Say the number 1","Say the number 2","Say the number 3"]} — for ' +
-    "a MULTI-STEP request, FIRST lay out the checklist; phrase EACH step as a clear action or ask that reads " +
-    "like the reader said it (so you can just do it), not a vague label. It's shown to you (and the reader) " +
-    'every turn and saved. {"tool":"complete_step","note":"…"} — check off the CURRENT (first unfinished) step, ' +
-    "AFTER you've actually done it (no step number needed). Then keep going — the app hands you another turn " +
-    "while steps remain, so work straight down the list off your checklist. Skip both for a simple one-shot ask.\n" +
+    checklistCatalog +
     `- {"tool":"update_setting","field":"…","value":…} — CHANGE one of the app's settings when the reader asks in ` +
     'plain language ("turn on mature mode", "set image quality to high", "use portrait orientation", "enable auto ' +
     'task scheduling"). "field" names the setting, "value" is the new value (true/false for a toggle, or the option ' +
@@ -1176,27 +1265,7 @@ export function buildBuddySystemPrompt(opts: {
     "tool's result, if another step obviously moves the request forward, DO it in the same turn rather than ending " +
     "with a question. Bias toward acting; reserve a clarifying question for genuine ambiguity, and never take a " +
     "destructive or irreversible action without a clear go-ahead.\n" +
-    "MULTI-STEP TASKS — if a request needs 2+ steps, your VERY FIRST action is ALWAYS set_plan: lay out your " +
-    "OWN checklist before doing any of the work. This INCLUDES making several images — ONE step per image " +
-    "(\"5 images of a sunset\" → set_plan [\"Generate image 1 of the sunset\",\"Generate image 2 of the " +
-    "sunset\",\"Generate image 3 of the sunset\",\"Generate image 4 of the sunset\",\"Generate image 5 of the " +
-    "sunset\"]). Write each step as one concrete action that reads like the reader said it, not a vague label. " +
-    "The checklist is shown to you at the top of EVERY turn (✓ done, ▸ current, · pending) and is the ONLY " +
-    "record of progress that counts. Work it top-down: do the ▸ current step (call its tool, or reply in plain " +
-    "text as the LAST thing in the turn), then complete_step — but ONLY once that step is genuinely finished. " +
-    "The app re-runs you automatically while any step is unfinished, so keep going step by step on your own — " +
-    "NEVER wait for the reader to say 'continue', and never tick several steps at once to 'catch up'. " +
-    "NARRATE EVERY STEP: at the start of each step write ONE short plain-text line saying what you just " +
-    "finished and what you're doing next (e.g. \"✓ Image 1 done — now generating image 2 of 3.\"), THEN take " +
-    "that single step's action. Do EXACTLY ONE step's work before each complete_step — one check-off per " +
-    "reply, never two in a row (the app refuses a second check-off that has no work between). " +
-    "CRITICAL FOR IMAGES: an image step is done ONLY after you have ACTUALLY CALLED generate_image for it AND " +
-    "its render has come back THIS turn — then tick it. NEVER decide a ▸ or · step is already done because " +
-    "pictures already appear earlier in the chat: those are from earlier steps or an EARLIER request and DO " +
-    "NOT count. So for every step that isn't ✓, actually call generate_image again — do not skip it, do not " +
-    "just mark it done. There is NO limit on how long a job takes — never refuse or shrink it. Stop only when " +
-    "EVERY step is ✓ (give a short wrap-up) or you're genuinely blocked and need the reader (say what you " +
-    "need; don't tick the step). If a step fails, resume from the first unfinished step — don't redo ✓ ones.\n" +
+    multiStepGuide +
     POLISH_CHAT_GUIDANCE +
     (opts.persona === "planning" ? `\n\n${PLANNING_GUIDANCE}` : "")
   );
@@ -1574,12 +1643,33 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     return match ? { tool, match, ...(about ? { about } : {}) } : undefined;
   }
   if (tool === "set_plan") {
-    const steps = Array.isArray(obj.steps)
-      ? obj.steps.map((s) => strArg(s, MAX_QUERY_CHARS)).filter((s): s is string => !!s).slice(0, 12)
-      : [];
+    // A step is either a bare string OR an object {do|text|step, needs|tool, onFail} — the object form
+    // lets App-managed-steps mode carry a completion contract (`needs`) the host compiles. Both forms
+    // coexist; we flatten to aligned `steps` (text) + `stepDetails` (needs/onFail).
+    const raw = Array.isArray(obj.steps) ? obj.steps.slice(0, 12) : [];
+    const steps: string[] = [];
+    const stepDetails: { needs?: string; onFail?: string }[] = [];
+    let anyDetail = false;
+    for (const item of raw) {
+      if (item && typeof item === "object" && !Array.isArray(item)) {
+        const o = item as Record<string, unknown>;
+        const text = strArg(o.do ?? o.text ?? o.step ?? o.instruction, MAX_QUERY_CHARS);
+        if (!text) continue;
+        const needs = strArg(o.needs ?? o.tool ?? o.requires, MAX_NAME_CHARS);
+        const onFail = strArg(o.onFail ?? o.on_fail, MAX_NAME_CHARS);
+        steps.push(text);
+        stepDetails.push({ ...(needs ? { needs } : {}), ...(onFail ? { onFail } : {}) });
+        if (needs || onFail) anyDetail = true;
+      } else {
+        const text = strArg(item, MAX_QUERY_CHARS);
+        if (!text) continue;
+        steps.push(text);
+        stepDetails.push({});
+      }
+    }
     if (steps.length === 0) return undefined; // an empty checklist is malformed → re-issue
     const goal = strArg(obj.goal, MAX_TITLE_CHARS);
-    return { tool, ...(goal ? { goal } : {}), steps };
+    return { tool, ...(goal ? { goal } : {}), steps, ...(anyDetail ? { stepDetails } : {}) };
   }
   if (tool === "complete_step") {
     // No required args — the app ticks the first unfinished step.
@@ -2579,7 +2669,9 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     return (
       `[find_files found ${files.length} file${files.length === 1 ? "" : "s"} on the reader's computer for "${call.query}"]\n` +
       `${lines.join("\n")}\n` +
-      "Offer to open the best match, or call read with source:\"file\" and ref=its path to pull its contents in. Don't invent file names."
+      "These are already shown to the reader as file cards with their own open buttons — DON'T auto-open one. " +
+      "Just say which looks like the best match and let them open it from the card, or ask which they want. " +
+      "Only call read with source:\"file\" and ref=its path if they ask you to read/work with its contents. Don't invent file names."
     );
   }
   if (call.tool === "read_file") {

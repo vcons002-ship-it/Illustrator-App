@@ -19,6 +19,7 @@ export * from "./action-history.js";
 export * from "./mcp.js";
 export * from "./subagent.js";
 export * from "./coding-agents.js";
+export * from "./workflow.js";
 export * from "./voice.js";
 export * from "./setup-guides.js";
 export * from "./settings-control.js";

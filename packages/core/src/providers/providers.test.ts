@@ -1357,6 +1357,26 @@ describe("ComfyUI prompt formatting by family", () => {
     expect(wf["7"]!.inputs.text).toBe("");
   });
 
+  it("low-VRAM render unloads the image model (POST /free) so a co-resident LLM gets the GPU back", async () => {
+    const t = comfyCkpt("sd_xl_base_1.0.safetensors");
+    await new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 }).generate(
+      { ...imageInput, modelFamily: "sdxl", lowVram: true },
+      "sd_xl_base_1.0.safetensors",
+    );
+    const free = t.requests.find((r) => r.url.endsWith("/free"));
+    expect(free).toBeDefined();
+    expect(free!.body).toEqual({ unload_models: true, free_memory: true });
+  });
+
+  it("a normal render keeps the model hot — no /free call", async () => {
+    const t = comfyCkpt("sd_xl_base_1.0.safetensors");
+    await new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 }).generate(
+      { ...imageInput, modelFamily: "sdxl" },
+      "sd_xl_base_1.0.safetensors",
+    );
+    expect(t.requests.find((r) => r.url.endsWith("/free"))).toBeUndefined();
+  });
+
   it("HiDream Dev (catalog) → QuadrupleCLIPLoader (4 encoders), Flux VAE, SD3 shift, distilled sampler", async () => {
     const encoders = [
       "clip_l_hidream.safetensors",

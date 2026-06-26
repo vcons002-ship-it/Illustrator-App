@@ -26,6 +26,7 @@ export type PlannerCommand =
   | { action: "openTask"; id: string }
   | { action: "advanceStep"; planId: string; stepId: string }
   | { action: "toggleStep"; planId: string; stepId: string; done: boolean }
+  | { action: "completeTask"; planId: string; complete: boolean }
   | { action: "ignoreTask"; id: string }
   | { action: "addDetails"; planId: string; text: string }
   | { action: "deleteTask"; id: string }

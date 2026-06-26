@@ -282,6 +282,7 @@ export interface EngineWorkerApi {
     taskPlanId?: string,
     currentCodeFile?: { name: string; title: string; language?: string },
     plan?: BuddyPlan,
+    appManagedSteps?: boolean,
   ) => Promise<BuddyDoneResult>;
   /** Abort the in-flight buddy round, if any. */
   buddyCancel: () => void;
@@ -1644,6 +1645,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       taskPlanId?: string,
       currentCodeFile?: { name: string; title: string; language?: string },
       plan?: BuddyPlan,
+      appManagedSteps?: boolean,
     ): Promise<BuddyDoneResult> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
@@ -1674,7 +1676,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             resolve(r);
           },
         });
-        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}), ...(plan ? { plan } : {}) });
+        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}), ...(plan ? { plan } : {}), ...(appManagedSteps ? { appManagedSteps: true } : {}) });
       }),
     [],
   );

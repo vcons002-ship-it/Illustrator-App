@@ -114,8 +114,11 @@ export interface BuddyDeps {
   forget?: (match: string, about?: "reader" | "self" | "user") => Promise<number>;
   /** Lightweight chat-scoped working checklist. setPlan creates/replaces it; completeStep ticks the
    * first unfinished step. Both return the updated plan (host owns the canonical object + persistence). */
-  setPlan?: (goal: string | undefined, steps: string[]) => BuddyPlan;
+  setPlan?: (goal: string | undefined, steps: string[], stepDetails?: { needs?: string; onFail?: string }[]) => BuddyPlan;
   completeStep?: (note?: string) => BuddyPlan | undefined;
+  /** App-managed-steps mode: the HOST runs the checklist and ticks steps from observed evidence, so
+   * `complete_step` is withdrawn — a stray call is refused (the model just does the current step). */
+  appManagedSteps?: boolean;
   /** Skills (durable playbooks — see skills.ts). readSkill returns the body ("" if
    * none); saveSkill/forgetSkill return the kept count. */
   readSkill?: (name: string) => Promise<string>;
@@ -653,8 +656,10 @@ export async function runBuddyTool(
         };
       case "set_plan":
         if (!deps.setPlan) return { error: "the working checklist isn't available here" };
-        return { plan: deps.setPlan(call.goal, call.steps) };
+        return { plan: deps.setPlan(call.goal, call.steps, call.stepDetails) };
       case "complete_step": {
+        if (deps.appManagedSteps)
+          return { error: "the app is running this checklist and ticks steps itself — don't mark progress; just do the current step you were given" };
         if (!deps.completeStep) return { error: "no checklist is set — call set_plan first" };
         const updated = deps.completeStep(call.note);
         return updated ? { plan: updated } : { error: "there's no unfinished checklist step — call set_plan first" };

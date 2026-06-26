@@ -38,6 +38,35 @@ describe("rankLocalFiles", () => {
     const many = Array.from({ length: 50 }, (_, i) => ({ path: `/x/book-${i}.epub`, name: `book-${i}.epub` }));
     expect(rankLocalFiles("book", many, 5)).toHaveLength(5);
   });
+
+  const mixed = [
+    { path: "/h/notes.md", name: "notes.md" },
+    { path: "/h/todo.markdown", name: "todo.markdown" },
+    { path: "/h/budget.csv", name: "budget.csv" },
+    { path: "/h/cat.png", name: "cat.png" },
+    { path: "/h/resume.pdf", name: "resume.pdf" },
+    { path: "/h/readme.txt", name: "readme.txt" },
+  ];
+
+  it("a type word matches by extension even when it isn't in the name", () => {
+    // "md files" → drop "files", "md" matches .md AND .markdown by extension.
+    expect(rankLocalFiles("md files", mixed).map((f) => f.name).sort()).toEqual(["notes.md", "todo.markdown"]);
+    expect(rankLocalFiles("find my markdown", mixed).map((f) => f.name).sort()).toEqual(["notes.md", "todo.markdown"]);
+  });
+
+  it("strips filler words so a natural phrasing still matches", () => {
+    expect(rankLocalFiles("find the resume pdf", mixed).map((f) => f.name)).toEqual(["resume.pdf"]);
+    expect(rankLocalFiles("show me my budget spreadsheet", mixed).map((f) => f.name)).toEqual(["budget.csv"]);
+  });
+
+  it("type word + content token narrows by both", () => {
+    expect(rankLocalFiles("notes md", mixed).map((f) => f.name)).toEqual(["notes.md"]);
+    expect(rankLocalFiles("a picture of a cat", mixed).map((f) => f.name)).toEqual(["cat.png"]);
+  });
+
+  it("an all-filler query matches nothing", () => {
+    expect(rankLocalFiles("find my files", mixed)).toEqual([]);
+  });
 });
 
 describe("formatFileSize", () => {

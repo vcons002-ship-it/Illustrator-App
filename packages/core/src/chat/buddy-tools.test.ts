@@ -18,6 +18,27 @@ import {
   toolLimitNudge,
 } from "./buddy-tools.js";
 
+describe("parseBuddyToolCall — set_plan steps", () => {
+  it("accepts bare-string steps (legacy) with no stepDetails", () => {
+    expect(parseBuddyToolCall('{"tool":"set_plan","goal":"count","steps":["Say 1","Say 2"]}')).toEqual({
+      tool: "set_plan",
+      goal: "count",
+      steps: ["Say 1", "Say 2"],
+    });
+  });
+
+  it("accepts object steps with needs/onFail → aligned stepDetails", () => {
+    const parsed = parseBuddyToolCall(
+      '{"tool":"set_plan","steps":[{"do":"Generate image A","needs":"image"},{"do":"Save recap","needs":"file","onFail":"skip"},"Just say hi"]}',
+    );
+    expect(parsed).toEqual({
+      tool: "set_plan",
+      steps: ["Generate image A", "Save recap", "Just say hi"],
+      stepDetails: [{ needs: "image" }, { needs: "file", onFail: "skip" }, {}],
+    });
+  });
+});
+
 describe("parseBuddyToolCall", () => {
   it("parses the search tools", () => {
     expect(parseBuddyToolCall('{"tool":"search_books","query":"frankenstein"}')).toEqual({
@@ -297,6 +318,31 @@ describe("buildBuddySystemPrompt", () => {
     expect(prompt).toMatch(/SAVED TO THE LIBRARY AUTOMATICALLY/);
     expect(prompt).toMatch(/NEVER tell the reader you can't save a created/i);
     expect(prompt).toMatch(/Excel \(\.xlsx\)/);
+  });
+
+  it("tells the buddy to parse intent and pass normalized tool arguments, not the raw phrasing", () => {
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], canSearchFiles: true });
+    expect(prompt).toContain("PARSE THE INTENT FIRST");
+    expect(prompt).toMatch(/NORMALIZED inputs, never their raw sentence/);
+    // find_files specifically: query is the distinctive name/type words, not the whole sentence.
+    expect(prompt).toMatch(/just the distinctive NAME words plus the file TYPE/);
+  });
+
+  it("app-managed steps: shows only the current step and withdraws complete_step", () => {
+    const plan = { goal: "make art", steps: [{ text: "Generate image A", status: "done" as const }, { text: "Generate image B", status: "pending" as const }] };
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], activePlan: plan, appManagedSteps: true });
+    expect(prompt).toContain("YOUR CURRENT STEP");
+    expect(prompt).toContain("▸ Generate image B"); // the first not-done step
+    expect(prompt).not.toContain("Generate image A"); // earlier done step isn't shown
+    expect(prompt).not.toContain('"tool":"complete_step"'); // the meta-tool is withdrawn
+    expect(prompt).toContain('"needs"'); // set_plan is described with the contract annotation
+  });
+
+  it("legacy mode still drives off the full checklist with complete_step", () => {
+    const plan = { goal: "g", steps: [{ text: "A", status: "done" as const }, { text: "B", status: "pending" as const }] };
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], activePlan: plan });
+    expect(prompt).toContain("CURRENT CHECKLIST");
+    expect(prompt).toContain('"tool":"complete_step"');
   });
 
   it("lists the library with ids", () => {
