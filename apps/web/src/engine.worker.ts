@@ -924,9 +924,11 @@ function postWorkflow(): void {
 ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
   const msg = event.data;
   switch (msg.type) {
-    case "init":
+    case "init": {
+      const prevSettings = settings;
       settings = msg.settings;
       corsProxyAvailable = msg.corsProxy === true;
+      void evictReplacedChatModel(prevSettings, settings); // free the old local model on a model switch
       // Report which providers are live vs. a silent mock fallback (and why), so
       // the UI can show it before a book is even opened.
       try {
@@ -939,12 +941,15 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
         });
       }
       break;
-    case "tune":
+    }
+    case "tune": {
       // Tuning-only change: swap the live engine's tier (future renders use it) without
       // disposing anything — in-flight extraction/renders continue uninterrupted. The
       // providers themselves are unchanged for tune-eligible fields, so the freshly
       // built ones are discarded; only the tier they computed is applied.
+      const prevSettings = settings;
       settings = msg.settings;
+      void evictReplacedChatModel(prevSettings, settings); // free the old local model if the model changed
       if (engine) {
         try {
           engine.updateTier(buildProviders(settings).tier);
@@ -956,6 +961,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
         }
       }
       break;
+    }
     case "open":
       void handleOpen(msg.book);
       break;
@@ -1444,6 +1450,28 @@ function chatProviders(): { llm: LLMProvider; image: ImageProvider; tier: TierCo
       ? bookProviders.tier
       : built.tier;
   return { llm, image, tier, imageSearch: built.imageSearch };
+}
+
+/**
+ * When the chat model CHANGES, ask Ollama to evict the PREVIOUS local model (keep_alive 0) so two
+ * models don't sit in VRAM at once — otherwise a freshly-loaded big model has to share the GPU with
+ * the one it replaced (switching e.g. gemma → a 27B left BOTH resident, starving the new one and
+ * making it slow). Only evicts a local-server (Ollama) model that's genuinely being replaced by a
+ * different one; a cloud or unchanged model is a no-op. Best-effort — a non-Ollama server 404s harmlessly.
+ */
+async function evictReplacedChatModel(prev: ReaderSettings | undefined, next: ReaderSettings): Promise<void> {
+  if (!prev) return;
+  try {
+    const cf = corsFetch();
+    const opts = cf ? { corsFetch: cf } : {};
+    const oldP = buildProviders(chatSettingsOf(prev), opts);
+    if (oldP.llm.id !== "local-server") return; // nothing local was loaded to free
+    const newP = buildProviders(chatSettingsOf(next), opts);
+    if (oldP.diagnostics.llm.label === newP.diagnostics.llm.label) return; // same model — keep it warm
+    await oldP.llm.unload?.();
+  } catch {
+    /* best-effort — a build hiccup or non-Ollama server is a silent no-op */
+  }
 }
 
 /**
