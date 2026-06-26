@@ -60,6 +60,61 @@ export function storyStatePromptBlock(input: StoryStateInput): string {
 export const SYNOPSIS_REFRESH_EVERY = 6;
 export const MAX_SYNOPSIS_CHARS = 900;
 
+/**
+ * The system + user messages for generating a story's TITLE + OPENING BEAT from the reader's premise.
+ * "Story as you go" treats the reader's setup text as an idea/seed — the model writes the actual
+ * opening scene and proposes a title — instead of using the typed text verbatim as beat one.
+ */
+export function storyOpeningRequest(
+  premise: string,
+  opts: {
+    characters?: { name: string; description?: string }[];
+    mode?: "direct" | "roleplay";
+    play?: { me?: string; you?: string };
+  } = {},
+): { system: string; user: string } {
+  const cast = (opts.characters ?? []).filter((c) => c.name.trim());
+  const roleplay = opts.mode === "roleplay";
+  const system =
+    "You are opening a collaborative, illustrated story from the reader's idea. Write the OPENING " +
+    "BEAT: vivid, full-scene narrative PROSE (about 2 short paragraphs) that establishes the setting, " +
+    "mood, and the characters present, and ends on a hook that invites the reader's first move. Refer " +
+    "to characters by their established names. " +
+    (roleplay
+      ? "This is ROLEPLAY — set the scene and bring the cast on stage, but do NOT act, speak, or decide " +
+        "for the reader's own character; leave them room to respond. "
+      : "") +
+    "Also propose a SHORT, evocative book TITLE (2–5 words, no quotes). " +
+    'Reply with ONLY a JSON object: {"title": "…", "opening": "…"} — no preamble, no code fence, no commentary.';
+  const castLine = cast.length
+    ? `Characters: ${cast.map((c) => (c.description?.trim() ? `${c.name} (${c.description.trim()})` : c.name)).join("; ")}.\n`
+    : "";
+  const playLine =
+    roleplay && opts.play
+      ? `The reader plays ${opts.play.me || "their character"}; you voice ${opts.play.you || "the other character(s)"}.\n`
+      : "";
+  const user = `Reader's idea for the story:\n${premise.trim()}\n\n${castLine}${playLine}Write the title and opening beat now.`;
+  return { system, user };
+}
+
+/** Parse the model's reply to {@link storyOpeningRequest}: tolerant of code fences / stray prose. */
+export function parseStoryOpening(text: string): { title?: string; opening?: string } {
+  const raw = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  try {
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      const obj = JSON.parse(raw.slice(start, end + 1)) as { title?: unknown; opening?: unknown };
+      const title = typeof obj.title === "string" ? obj.title.trim() : undefined;
+      const opening = typeof obj.opening === "string" ? obj.opening.trim() : undefined;
+      return { ...(title ? { title } : {}), ...(opening ? { opening } : {}) };
+    }
+  } catch {
+    // fall through to the empty result — the caller falls back to the premise verbatim
+  }
+  return {};
+}
+
 /** The system + user messages for a one-shot synopsis refresh (kept here so it's testable). */
 export function synopsisRequest(beats: readonly string[], prevSynopsis?: string): { system: string; user: string } {
   const system =

@@ -1,5 +1,52 @@
 import { describe, expect, it } from "vitest";
-import { storyStatePromptBlock, synopsisRequest, STORY_STATE_MAX_CHARS } from "./story-state.js";
+import {
+  storyStatePromptBlock,
+  synopsisRequest,
+  storyOpeningRequest,
+  parseStoryOpening,
+  STORY_STATE_MAX_CHARS,
+} from "./story-state.js";
+
+describe("storyOpeningRequest", () => {
+  it("asks for a title + opening beat as JSON, grounded in the premise and cast", () => {
+    const { system, user } = storyOpeningRequest("two rivals trapped in a lighthouse", {
+      characters: [{ name: "Wren", description: "lean, grey coat" }, { name: "Cass" }],
+      mode: "direct",
+    });
+    expect(system).toMatch(/OPENING BEAT/);
+    expect(system).toMatch(/"title"/);
+    expect(system).toMatch(/"opening"/);
+    expect(user).toContain("two rivals trapped in a lighthouse");
+    expect(user).toContain("Wren (lean, grey coat)");
+    expect(user).toContain("Cass");
+  });
+
+  it("adds the no-acting-for-the-reader rule + me/you mapping in roleplay", () => {
+    const { system, user } = storyOpeningRequest("a heist goes wrong", {
+      mode: "roleplay",
+      play: { me: "Ada", you: "Vex" },
+    });
+    expect(system).toMatch(/do NOT act, speak, or decide/i);
+    expect(user).toContain("The reader plays Ada");
+    expect(user).toContain("you voice Vex");
+  });
+});
+
+describe("parseStoryOpening", () => {
+  it("parses a clean JSON object", () => {
+    expect(parseStoryOpening('{"title":"Salt and Smoke","opening":"The lamp guttered."}')).toEqual({
+      title: "Salt and Smoke",
+      opening: "The lamp guttered.",
+    });
+  });
+  it("tolerates a code fence and surrounding prose", () => {
+    const out = parseStoryOpening('Here you go:\n```json\n{"title":"Dusk","opening":"Rain fell."}\n```');
+    expect(out).toEqual({ title: "Dusk", opening: "Rain fell." });
+  });
+  it("returns empty on unparseable input (caller falls back to the premise)", () => {
+    expect(parseStoryOpening("sorry, I can't do that")).toEqual({});
+  });
+});
 
 describe("storyStatePromptBlock", () => {
   it("assembles synopsis, present cast, location, and recent beats", () => {

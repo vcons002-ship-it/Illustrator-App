@@ -142,6 +142,9 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   const [draft, setDraft] = useState("");
   const [showHelp, setShowHelp] = useState(false);
   const [loadingModel, setLoadingModel] = useState(false);
+  // The header's secondary controls (new/rename/delete session, model, compact, help, clear) hide
+  // behind a small ⋯ toggle to save space — only the session switcher + the toggle show by default.
+  const [toolsOpen, setToolsOpen] = useState(false);
   const commands = useMemo(() => buddySlashCommands(props.desktop ?? false), [props.desktop]);
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -246,12 +249,12 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 </option>
               ))}
             </select>
-            {props.onNewSession && (
+            {toolsOpen && props.onNewSession && (
               <button style={smallButtonStyle} title="New chat session" onClick={props.onNewSession}>
                 ＋
               </button>
             )}
-            {props.onRenameSession && props.activeSessionId && (
+            {toolsOpen && props.onRenameSession && props.activeSessionId && (
               <button
                 style={smallButtonStyle}
                 title="Rename this chat"
@@ -264,7 +267,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 ✎
               </button>
             )}
-            {props.onDeleteSession && props.sessions.length > 1 && props.activeSessionId && (
+            {toolsOpen && props.onDeleteSession && props.sessions.length > 1 && props.activeSessionId && (
               <button
                 style={smallButtonStyle}
                 title="Delete this session (its history is removed)"
@@ -278,8 +281,8 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           <strong style={{ fontSize: 14 }}>Chat</strong>
         )}
         <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
-          <span style={personaGroupStyle}>{planToggle}</span>
-          {props.onLoadModel && (
+          {toolsOpen && <span style={personaGroupStyle}>{planToggle}</span>}
+          {toolsOpen && props.onLoadModel && (
             <button
               style={smallButtonStyle}
               onClick={() => {
@@ -293,7 +296,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               {loadingModel ? "Loading…" : "⟳ Model"}
             </button>
           )}
-          {props.onCompact && props.messages.length > 4 && (
+          {toolsOpen && props.onCompact && props.messages.length > 4 && (
             <button
               style={smallButtonStyle}
               onClick={props.onCompact}
@@ -303,19 +306,31 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               Compact
             </button>
           )}
-          <button
-            style={smallButtonStyle}
-            onClick={() => setShowHelp((h) => !h)}
-            title="What can this chat do? (commands & tools)"
-            aria-label="Help"
-          >
-            ?
-          </button>
-          {props.messages.length > 0 && (
+          {toolsOpen && (
+            <button
+              style={smallButtonStyle}
+              onClick={() => setShowHelp((h) => !h)}
+              title="What can this chat do? (commands & tools)"
+              aria-label="Help"
+            >
+              ?
+            </button>
+          )}
+          {toolsOpen && props.messages.length > 0 && (
             <button style={smallButtonStyle} onClick={props.onClearHistory} title="Clear the buddy conversation">
               Clear
             </button>
           )}
+          {/* Small ⋯ toggle that reveals/hides the secondary controls above — saves header space. */}
+          <button
+            style={toolsOpen ? { ...smallButtonStyle, borderColor: "rgba(120,160,255,0.6)", color: "#acc4ff" } : smallButtonStyle}
+            onClick={() => setToolsOpen((v) => !v)}
+            title={toolsOpen ? "Hide chat tools" : "More chat tools (new, rename, clear, …)"}
+            aria-expanded={toolsOpen}
+            aria-label="Chat tools"
+          >
+            ⋯
+          </button>
           {props.onToggleHistory && (
             <button
               style={smallButtonStyle}

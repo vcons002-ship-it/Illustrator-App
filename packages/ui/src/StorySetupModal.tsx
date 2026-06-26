@@ -84,11 +84,11 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, onSta
         </div>
 
         <label style={field}>
-          <span style={label}>Opening scene</span>
+          <span style={label}>Your story idea</span>
           <textarea
             style={textarea}
             value={opening}
-            placeholder="Describe how it begins — the setting, who's there, the mood. We co-write from here and illustrate each beat."
+            placeholder="A sentence or two about the premise — the setting, who's there, the mood. The assistant writes the title and opening scene from this, then you co-write and illustrate each beat."
             onChange={(e) => setOpening(e.target.value)}
             autoFocus
           />
