@@ -470,6 +470,10 @@ export function describeBuddyToolActivity(call: BuddyToolCall): string {
       return `Running: ${clip(call.command, 50)}`;
     case "read_skill":
       return "Checking my playbooks…";
+    case "set_plan":
+      return "Planning the steps…";
+    case "complete_step":
+      return "Checking off a step…";
     default:
       return "Working on it…";
   }
@@ -956,11 +960,12 @@ export function buildBuddySystemPrompt(opts: {
     '"remember…". One short note, not conversation recap.\n' +
     '- {"tool":"forget","match":"…","about":"reader"} — remove notes containing this text from that store (default ' +
     '"reader"; use "self"/"user" to edit a soul), when asked to forget.\n' +
-    '- {"tool":"set_plan","goal":"…","steps":["step 1","step 2","step 3"]} — for a MULTI-STEP request, ' +
-    "FIRST lay out a SHORT checklist of the concrete steps you'll take (it's shown live to the reader and " +
-    'saved). Then execute them one at a time. {"tool":"complete_step","note":"…"} — mark the CURRENT (first ' +
-    "unfinished) step done and move on, AFTER you've actually finished it (no step number needed). Skip both " +
-    "for a simple one-shot ask.\n" +
+    '- {"tool":"set_plan","goal":"…","steps":["Say the number 1","Say the number 2","Say the number 3"]} — for ' +
+    "a MULTI-STEP request, FIRST lay out the checklist; phrase EACH step as a clear action or ask that reads " +
+    "like the reader said it (so you can just do it), not a vague label. It's shown to you (and the reader) " +
+    'every turn and saved. {"tool":"complete_step","note":"…"} — check off the CURRENT (first unfinished) step, ' +
+    "AFTER you've actually done it (no step number needed). Then keep going — the app hands you another turn " +
+    "while steps remain, so work straight down the list off your checklist. Skip both for a simple one-shot ask.\n" +
     `- {"tool":"update_setting","field":"…","value":…} — CHANGE one of the app's settings when the reader asks in ` +
     'plain language ("turn on mature mode", "set image quality to high", "use portrait orientation", "enable auto ' +
     'task scheduling"). "field" names the setting, "value" is the new value (true/false for a toggle, or the option ' +
@@ -1171,17 +1176,25 @@ export function buildBuddySystemPrompt(opts: {
     "tool's result, if another step obviously moves the request forward, DO it in the same turn rather than ending " +
     "with a question. Bias toward acting; reserve a clarifying question for genuine ambiguity, and never take a " +
     "destructive or irreversible action without a clear go-ahead.\n" +
-    "MULTI-STEP & LONG TASKS — when a request chains 2+ steps, FIRST call set_plan with the concrete steps " +
-    '(e.g. "write code and run it" → set_plan ["write the script","run it","report the result"]), ' +
-    "then work them one at a time, calling complete_step the moment each is actually done (skip the checklist " +
-    "for a genuine one-shot ask). The checklist is shown live to the reader and SAVED, so if a step fails or " +
-    "pauses, RESUME from the first unfinished step — don't restart or redo finished steps. There is NO fixed " +
-    "limit on how many tools you call or how long a job takes: never refuse or shrink a big task or hand the " +
-    "rest back — keep chaining until it's actually DONE. REPLY AS YOU GO: before each significant step write " +
-    "ONE short plain-text line of what you just finished and what's next, then issue the next tool call IN THE " +
-    "SAME message (the prose first, then the tool JSON — this surfaces progress WITHOUT ending your turn). Each " +
-    "chunk is saved, so a mid-task failure keeps the completed work to resume from instead of losing it. Give " +
-    "the complete result when the whole task is finished.\n" +
+    "MULTI-STEP & LONG TASKS — when a request chains 2+ steps, FIRST call set_plan. Write each step as a " +
+    "clear, self-contained ACTION or ASK that reads like the reader said it — e.g. \"count to 10, one per " +
+    "message\" → set_plan [\"Say the number 1\",\"Say the number 2\", … ,\"Say the number 10\"]; \"research X " +
+    "and write it up\" → [\"Search the web for X and read the top sources\",\"Write the summary\",\"List 3 " +
+    "follow-ups\"] — not vague labels like \"step 1\". Then WORK THE LIST OFF YOUR CHECKLIST: the current " +
+    "checklist is shown to you at the top of EVERY turn (✓ done, ▸ current, · pending) — it is your working " +
+    "memory, so at the start of each turn just READ it and your recent messages to see what you've already " +
+    "done and what's next; nobody needs to tell you. Do the ▸ current step now: if it only needs a reply, " +
+    "answer in plain text (make that reply the LAST thing in the turn — don't bury it next to a tool call, or " +
+    "the reader won't see it); if it needs a tool, call the tool. The MOMENT a step is genuinely done, call " +
+    "complete_step to check it off — honestly: the checklist is the source of truth, so never tick a step you " +
+    "haven't actually done, and never tick several at once to 'catch up'. THE APP AUTOMATICALLY GIVES YOU " +
+    "ANOTHER TURN whenever the checklist still has unfinished steps — so keep going step by step on your own, " +
+    "and NEVER stop to wait for the reader to say 'continue'. A step whose action is a tool/image is only DONE " +
+    "once that tool's result has come back (don't mark 'generate image 4' done until image 4 has rendered). " +
+    "There is NO fixed limit on how long a job takes — never refuse or shrink a big task. Stop only when EVERY " +
+    "step is ✓ (give a short wrap-up of the whole job) or you're genuinely blocked and need the reader (tell " +
+    "them what you need, and do NOT tick the step). If a step fails, RESUME from the first unfinished step — " +
+    "don't restart or redo finished steps.\n" +
     POLISH_CHAT_GUIDANCE +
     (opts.persona === "planning" ? `\n\n${PLANNING_GUIDANCE}` : "")
   );
@@ -1256,7 +1269,12 @@ export function stripControlTokens(s: string): string {
 /** A JSON chunk is a tool call in EITHER the app's `{"tool":X, …flatArgs}` shape OR the
  * `{"name":X,"arguments":{…}}` shape that Hermes/Qwen/ChatML-tools models emit. */
 function isToolJsonChunk(chunk: string): boolean {
-  return /"tool"\s*:/.test(chunk) || (/"(?:name|function)"\s*:/.test(chunk) && /"(?:arguments|parameters|args|input)"\s*:/.test(chunk));
+  return (
+    /"tool"\s*:/.test(chunk) ||
+    (/"(?:name|function)"\s*:/.test(chunk) && /"(?:arguments|parameters|args|input)"\s*:/.test(chunk)) ||
+    // ReAct / LangChain shape: {"action":"generate_image","action_input":{…}}
+    (/"action"\s*:/.test(chunk) && /"action_input"\s*:/.test(chunk))
+  );
 }
 
 /** Accept the `{"name":X,"arguments":{…}}` tool shape that Hermes/Qwen/ChatML-tools models emit (inside
@@ -1266,9 +1284,10 @@ function isToolJsonChunk(chunk: string): boolean {
  * siblings of `name`. */
 export function normalizeToolShape(obj: Record<string, unknown>): Record<string, unknown> {
   if (typeof obj.tool === "string") return obj;
-  const name = obj.name ?? obj.function ?? obj.tool_name;
+  // `action`/`action_input` is the ReAct/LangChain shape capable models fall into; treat it like name/args.
+  const name = obj.name ?? obj.function ?? obj.tool_name ?? obj.action;
   if (typeof name !== "string") return obj;
-  const rawArgs = obj.arguments ?? obj.parameters ?? obj.args ?? obj.input;
+  const rawArgs = obj.arguments ?? obj.parameters ?? obj.args ?? obj.input ?? obj.action_input;
   let args: Record<string, unknown> = {};
   if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
     args = rawArgs as Record<string, unknown>;
@@ -1280,7 +1299,7 @@ export function normalizeToolShape(obj: Record<string, unknown>): Record<string,
       /* not double-encoded JSON — leave args empty */
     }
   } else {
-    const { name: _n, function: _f, tool_name: _t, ...rest } = obj; // args as siblings of `name`
+    const { name: _n, function: _f, tool_name: _t, action: _a, ...rest } = obj; // args as siblings of `name`
     args = rest;
   }
   return { tool: name, ...args };
@@ -2097,6 +2116,45 @@ export interface BuddyToolResultPayload {
    * progress mid-turn, and surfaced to the host to render + persist). */
   plan?: BuddyPlan;
   error?: string;
+}
+
+/** Whether a working checklist still has an unfinished step — i.e. the action QUEUE should keep
+ * advancing rather than halt. PURE. */
+export function planHasPendingStep(plan: BuddyPlan | undefined): boolean {
+  return !!plan && plan.steps.some((s) => s.status !== "done");
+}
+
+/**
+ * The user-role turn that AUTO-RESUMES a working checklist after a host tool (an approved
+ * generate_image, a run_command…) actually completed — so the action queue advances on its OWN
+ * instead of halting for the reader to type "continue" (the bug where, on a bare "continue", the
+ * model lost the thread, thought it was "waiting for a signal", and ticked the next step WITHOUT
+ * doing it). `toolFeedback` is the raw tool-result line; this wraps it with the live progress and the
+ * concrete NEXT step, telling the model to tick the just-finished step and actually DO the next one.
+ * PURE. Assumes the just-finished step is the first unfinished one (the step whose tool just ran), so
+ * call it with the checklist BEFORE that step is ticked. */
+export function planQueueResumeFeedback(toolFeedback: string, plan: BuddyPlan): string {
+  const pending = plan.steps.filter((s) => s.status !== "done");
+  const done = plan.steps.length - pending.length;
+  const current = pending[0];
+  const next = pending[1];
+  const lines = [toolFeedback.trim(), `[working checklist — ${done}/${plan.steps.length} done]`, renderPlanLines(plan)];
+  if (!current) {
+    lines.push("All steps are done — give the reader the final result now.");
+  } else if (!next) {
+    lines.push(
+      `That finishes the LAST step ("${current.text}"). Call complete_step to tick it, then give the ` +
+        "reader a short wrap-up of the whole job.",
+    );
+  } else {
+    lines.push(
+      `That finishes the ▸ current step ("${current.text}"). Call complete_step to tick it, then ` +
+        `immediately DO the next step ("${next.text}") — actually run its tool (e.g. generate_image), do ` +
+        "NOT just mark it done. Keep working straight through the rest of the checklist on your own; the " +
+        "app feeds each result back automatically, so don't stop to wait for the reader between steps.",
+    );
+  }
+  return lines.join("\n");
 }
 
 /** Render a working checklist as ✓ done / ▸ current (first unfinished) / · pending lines for the model

@@ -10,6 +10,8 @@ import {
   normalizeBuddyPersona,
   parseBuddyToolCall,
   parseBuddyToolCalls,
+  planHasPendingStep,
+  planQueueResumeFeedback,
   progressNudge,
   stripToolCallJson,
   toolFailureDirective,
@@ -1091,6 +1093,22 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
     ]);
   });
 
+  it("accepts the ReAct {action, action_input} shape instead of leaking it as prose", () => {
+    // The exact leak from the transcript: a capable model emitted the LangChain/ReAct envelope with a
+    // DOUBLE-ENCODED action_input (a JSON string), which the app didn't recognise, so the raw JSON
+    // showed up in the chat instead of running.
+    expect(parseBuddyToolCalls('{"action":"search_web","action_input":"{\\"query\\":\\"otters\\"}"}')).toEqual([
+      { tool: "search_web", query: "otters" },
+    ]);
+    // action_input as a plain object (not double-encoded) works too.
+    expect(parseBuddyToolCalls('{"action":"generate_image","action_input":{"prompt":"a fox in snow"}}')).toEqual([
+      { tool: "generate_image", prompt: "a fox in snow" },
+    ]);
+    // …and it's recognised as tool JSON, so the guards strip/flag it rather than rendering it.
+    expect(looksLikeToolJson('{"action":"generate_image","action_input":{"prompt":"a fox"}}')).toBe(true);
+    expect(stripToolCallJson('Sure!\n{"action":"search_web","action_input":{"query":"x"}}')).toBe("Sure!");
+  });
+
   it("strips tool-call control tokens from the displayed prose", () => {
     expect(stripToolCallJson('All set.<tool_call>{"name":"list_tasks","arguments":{}}</tool_call>')).toBe("All set.");
     expect(looksLikeToolJson('<tool_call>{"name":"write_file","arguments":{"path":"a","content":"b"}}</tool_call>')).toBe(true);
@@ -1305,5 +1323,64 @@ describe("failure feedback helpers", () => {
     expect(isRetryableError("connection refused")).toBe(true);
     expect(isRetryableError("Schwab isn't connected")).toBe(false);
     expect(isRetryableError("invalid symbol")).toBe(false);
+  });
+});
+
+describe("working-checklist queue auto-advance", () => {
+  const fivePlan = (doneCount: number) => ({
+    goal: "5 images of the scene",
+    steps: Array.from({ length: 5 }, (_, i) => ({
+      text: `Generate image ${i + 1}`,
+      status: (i < doneCount ? "done" : "pending") as "done" | "pending",
+    })),
+  });
+
+  it("planHasPendingStep — true while any step is unfinished, false when all done / no plan", () => {
+    expect(planHasPendingStep(fivePlan(0))).toBe(true);
+    expect(planHasPendingStep(fivePlan(4))).toBe(true);
+    expect(planHasPendingStep(fivePlan(5))).toBe(false);
+    expect(planHasPendingStep(undefined)).toBe(false);
+    expect(planHasPendingStep({ steps: [] })).toBe(false);
+  });
+
+  it("mid-queue resume: tick the current step, then DO the next one (not just mark it)", () => {
+    // Steps 1–2 done; the image for step 3 (▸ current) just rendered.
+    const fb = planQueueResumeFeedback("[tool generate_image: the image was generated and is shown to the reader]", fivePlan(2));
+    expect(fb).toContain("the image was generated"); // the raw tool result is carried through
+    expect(fb).toContain("2/5 done");
+    expect(fb).toContain("complete_step");
+    expect(fb).toContain("Generate image 3"); // the just-finished current step is named
+    expect(fb).toContain("Generate image 4"); // the next step to actually do
+    expect(fb).toMatch(/actually run its tool/i);
+    expect(fb).toMatch(/do NOT just mark it done/i);
+    // It must tell the model to keep going on its own rather than wait for the reader.
+    expect(fb).toMatch(/don't stop to wait for the reader/i);
+  });
+
+  it("last step: tick it, then wrap up — no 'next step' instruction", () => {
+    const fb = planQueueResumeFeedback("[tool generate_image: the image was generated and is shown to the reader]", fivePlan(4));
+    expect(fb).toContain("4/5 done");
+    expect(fb).toMatch(/LAST step/);
+    expect(fb).toContain("Generate image 5");
+    expect(fb).toMatch(/wrap-up/i);
+  });
+
+  it("all steps done: just give the final result", () => {
+    const fb = planQueueResumeFeedback("[tool generate_image: …]", fivePlan(5));
+    expect(fb).toContain("5/5 done");
+    expect(fb).toMatch(/All steps are done/i);
+  });
+});
+
+describe("MULTI-STEP guidance — drive off the checklist, app auto-advances", () => {
+  it("tells the model the app hands it another turn and to phrase steps as actions", () => {
+    const sys = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    // The model is told the app re-invites it, so it must not wait for "continue".
+    expect(sys).toMatch(/AUTOMATICALLY GIVES YOU\s+ANOTHER TURN|hands you another turn/);
+    expect(sys).toMatch(/never stop to wait for the reader to say 'continue'/i);
+    // Steps are concrete actions/asks, and the checklist is the source of truth for completion.
+    expect(sys).toMatch(/Say the number 1/);
+    expect(sys).toMatch(/source of truth/i);
+    expect(sys).toMatch(/never tick a step you\s+haven't actually done/i);
   });
 });

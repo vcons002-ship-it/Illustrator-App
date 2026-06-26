@@ -28,6 +28,8 @@ import {
   toRenderUnits,
   formatToolResult,
   formatBuddyToolResult,
+  planHasPendingStep,
+  planQueueResumeFeedback,
   stripToolCallJson,
   toolFailureDirective,
   anchorByParagraph,
@@ -361,6 +363,11 @@ function imageSearchMiss(query: string, error: string | undefined, hasSearchKey:
         " weak on pop-culture or specific products. Add a Google Programmable Search key in" +
         " Settings → Scientific sources for whole-web image results.)")
   );
+}
+
+/** How many checklist steps are done — used to tell whether a turn advanced the working plan. */
+function countDonePlanSteps(plan: BuddyPlan | undefined): number {
+  return plan ? plan.steps.filter((s) => s.status === "done").length : 0;
 }
 
 export function App() {
@@ -1095,6 +1102,11 @@ export function App() {
   // The model-facing history of the turn that produced a pendingTool — so an
   // approved run_command can auto-react with the exact context up to its call.
   const pendingBuddyHistory = useRef<ChatTurn[]>([]);
+  // Working-checklist auto-advance budget: while a plan has unfinished steps, the host hands the
+  // model another turn so it works straight down the list without the reader typing "continue".
+  // Reset on each fresh user turn; `count` caps a runaway chain, `noProgress` stops a stalled one
+  // (a step that's actually a question to the reader ticks nothing → halts after one tolerated turn).
+  const buddyQueueAdvanceRef = useRef({ count: 0, noProgress: 0 });
   // Session grant for buddy-initiated filesystem search: once the reader picks
   // "Allow this session", later find_files calls run without re-confirming (a
   // direct /find never needed confirming — the reader typed it). Reset on reload.
@@ -4364,26 +4376,44 @@ export function App() {
     if (buddyRenderingRef.current) return; // a render is already in flight — drop the duplicate approval
     buddyRenderingRef.current = true;
     setBuddyPendingTool(undefined);
+    // Capture the model-facing context up to this image call so a multi-step PLAN can AUTO-REACT after
+    // the render (mirrors approveRunCommand) instead of halting for the reader to type "continue".
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
     setBuddyBusy(true);
     setBuddyActivity("Generating the image…");
+    let out: Awaited<ReturnType<typeof chatTool>>;
     try {
-      const out = await chatTool(call, {
+      out = await chatTool(call, {
         onProgress: (f) => setBuddyActivity(`Generating the image… ${Math.round(f * 100)}%`),
       });
-      setBuddyBusy(false);
-      setBuddyActivity("");
-      const feedback = formatToolResult(call, {
-        image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
-      });
-      appendBuddy({
-        role: "tool",
-        text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
-        ...(out.image ? { image: out.image, attachments: [imageAttachment(call.prompt, out.image)] } : {}),
-        turns: [...pendingBuddyTranscript.current, { role: "user", content: feedback }],
-      });
-      pendingBuddyTranscript.current = [];
     } finally {
+      // Release the duplicate-render guard the moment the RENDER finishes — BEFORE any follow-up turn,
+      // so a full-autonomy queue's next auto-approved image isn't dropped as a "duplicate".
       buddyRenderingRef.current = false;
+    }
+    setBuddyActivity("");
+    const imageFeedback = formatToolResult(call, {
+      image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
+    });
+    // A working checklist with steps left → advance the QUEUE: feed the render result back and let the
+    // model tick the current step + start the next one, so the plan runs to completion on its own (each
+    // next image still gets its own approval/gate). A one-shot image (no plan) just shows + stops, as before.
+    const plan = buddyPlanRef.current;
+    const continueQueue = !out.error && planHasPendingStep(plan);
+    const feedback = continueQueue ? planQueueResumeFeedback(imageFeedback, plan!) : imageFeedback;
+    appendBuddy({
+      role: "tool",
+      text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
+      ...(out.image ? { image: out.image, attachments: [imageAttachment(call.prompt, out.image)] } : {}),
+      turns: [...pre, { role: "user", content: feedback }],
+    });
+    if (continueQueue) {
+      await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+    } else {
+      setBuddyBusy(false);
     }
   };
 
@@ -4489,7 +4519,12 @@ export function App() {
     userBubbleText?: string,
   ): Promise<string | undefined> => {
     const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
-    if (userBubbleText !== undefined) appendBuddy({ role: "user", text: userBubbleText });
+    if (userBubbleText !== undefined) {
+      appendBuddy({ role: "user", text: userBubbleText });
+      buddyQueueAdvanceRef.current = { count: 0, noProgress: 0 }; // fresh user turn → reset the chain budget
+    }
+    // Done-steps before this turn, to tell whether the turn made progress on the checklist.
+    const doneAtStart = countDonePlanSteps(buddyPlanRef.current);
     setBuddyBusy(true);
     setBuddyStreaming("");
     buddyStreamingRef.current = "";
@@ -4507,6 +4542,10 @@ export function App() {
       else if (e.kind === "activity") setBuddyActivity(e.text);
       else if (e.kind === "usage") setBuddyUsage(e.usage);
       else if (e.kind === "plan") {
+        // Update the ref SYNCHRONOUSLY (not just via setBuddyPlan's render) so a full-autonomy queue's
+        // FIRST auto-approved image — which can fire before React commits — already sees the fresh
+        // checklist and keeps the queue advancing instead of halting after step 1.
+        buddyPlanRef.current = e.plan;
         setBuddyPlan(e.plan);
         // Persist the working checklist per session (desktop owns the store; never on a phone or in
         // incognito). activeBuddyIdRef is the live session this turn runs for.
@@ -4550,6 +4589,8 @@ export function App() {
           : c.tool === "schedule_task" ? "Scheduling a task…"
           : c.tool === "mark_step_done" || c.tool === "update_task_step" ? "Updating the plan…"
           : c.tool === "open_web_text" ? "Fetching the text and opening it…"
+          : c.tool === "set_plan" ? "Planning the steps…"
+          : c.tool === "complete_step" ? "Checking off a step…"
           : "Working…";
         setBuddyActivity(label);
         setBuddySteps((prev) => [...prev, label.replace(/…$/, "")]); // keep a visible trace of each step
@@ -4768,6 +4809,33 @@ export function App() {
         ...(res.paused ? { actions: [{ label: "▶ Continue", send: "continue" }] } : {}),
       });
       if (openedBook) appendChat({ role: "assistant", text: res.text });
+
+      // Lean chaining: the working checklist is re-injected into the prompt every turn, so the model
+      // can read what's ✓ done and what's ▸ next on its own. When a plain-text turn settles with steps
+      // still unfinished, just hand it another turn instead of waiting for the reader to type
+      // "continue" — it reads its checklist, does the next step, and complete_steps it. (Tool/host-tool
+      // turns auto-react on their own paths above; this only fires on a plain-text settle.)
+      const plan = buddyPlanRef.current;
+      if (!res.paused && planHasPendingStep(plan)) {
+        const adv = buddyQueueAdvanceRef.current;
+        adv.count += 1;
+        adv.noProgress = countDonePlanSteps(plan) > doneAtStart ? 0 : adv.noProgress + 1;
+        const cap = Math.max(20, plan!.steps.length * 2 + 5);
+        // Stop if the chain has run long (cap) or stalled: a step that's really a question to the
+        // reader ticks nothing, so after one tolerated no-progress turn we halt and let them answer.
+        if (adv.count <= cap && adv.noProgress <= 1) {
+          await dispatchBuddyTurn(
+            [...history, { role: "user", content: userText }, ...res.transcript],
+            "[Your checklist still has unfinished steps. Read it above, do the ▸ current step, then complete_step, " +
+              "and keep going on your own — don't wait for me. But if the current step is waiting on my answer to " +
+              "something you already asked, just stop and wait — don't repeat the question.]",
+          );
+          return res.text || undefined;
+        }
+        if (adv.count > cap) {
+          appendBuddy({ role: "tool", text: "Paused — say “continue” to keep working the checklist.", turns: [] });
+        }
+      }
     }
     return res.text || undefined;
   };
