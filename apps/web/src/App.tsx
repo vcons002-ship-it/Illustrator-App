@@ -4402,8 +4402,13 @@ export function App() {
     // model tick the current step + start the next one, so the plan runs to completion on its own (each
     // next image still gets its own approval/gate). A one-shot image (no plan) just shows + stops, as before.
     const plan = buddyPlanRef.current;
+    // Tag a render with its checklist so a SECOND batch of images later in the same chat can be told
+    // apart from this one — the model reads the tag and knows the new checklist's images aren't done
+    // yet, instead of seeing earlier renders and ticking the new steps off without rendering.
+    const taggedImageFeedback =
+      !out.error && plan?.goal ? `${imageFeedback} — part of the checklist “${plan.goal}”.` : imageFeedback;
     const continueQueue = !out.error && planHasPendingStep(plan);
-    const feedback = continueQueue ? planQueueResumeFeedback(imageFeedback, plan!) : imageFeedback;
+    const feedback = continueQueue ? planQueueResumeFeedback(taggedImageFeedback, plan!) : taggedImageFeedback;
     appendBuddy({
       role: "tool",
       text: out.error ? `⚠ Image generation failed: ${out.error}` : "",

@@ -1191,6 +1191,9 @@ export function buildBuddySystemPrompt(opts: {
     "ANOTHER TURN whenever the checklist still has unfinished steps — so keep going step by step on your own, " +
     "and NEVER stop to wait for the reader to say 'continue'. A step whose action is a tool/image is only DONE " +
     "once that tool's result has come back (don't mark 'generate image 4' done until image 4 has rendered). " +
+    "Each render is tagged in your context with its prompt and checklist — before ticking an image step, " +
+    "check that THIS checklist actually rendered it; images from an EARLIER request don't count, so never " +
+    "tick a step off just because the chat already has some pictures in it. " +
     "There is NO fixed limit on how long a job takes — never refuse or shrink a big task. Stop only when EVERY " +
     "step is ✓ (give a short wrap-up of the whole job) or you're genuinely blocked and need the reader (tell " +
     "them what you need, and do NOT tick the step). If a step fails, RESUME from the first unfinished step — " +
@@ -2623,10 +2626,13 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     return `[visual settings updated: ${parts.join(", ") || "nothing changed"}] Confirm briefly and continue.`;
   }
   if (call.tool === "generate_image") {
-    // Ran (or failed) after the reader's approval — mirrors chat-tools.ts.
+    // Ran (or failed) after the reader's approval — mirrors chat-tools.ts. Tag with the PROMPT so a
+    // later batch of renders is distinguishable (else the model thinks a fresh checklist's images
+    // already exist and ticks the steps off without rendering them).
+    const desc = call.prompt ? ` for "${call.prompt.length > 100 ? `${call.prompt.slice(0, 100).trim()}…` : call.prompt}"` : "";
     return result.image?.ok
-      ? "[tool generate_image: the image was generated and is shown to the reader]"
-      : `[tool generate_image failed: ${result.image?.error ?? "unknown error"}]`;
+      ? `[tool generate_image: rendered the image${desc} and showed it to the reader]`
+      : `[tool generate_image failed${desc}: ${result.image?.error ?? "unknown error"}]`;
   }
   if (call.tool === "create_spreadsheet") {
     const o = result.opened;

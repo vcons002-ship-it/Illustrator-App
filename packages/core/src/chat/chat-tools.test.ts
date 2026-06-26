@@ -213,13 +213,15 @@ describe("formatToolResult", () => {
     );
   });
 
-  it("reports an approved image generation's outcome", () => {
-    expect(
-      formatToolResult({ tool: "generate_image", prompt: "p" }, { image: { ok: true } }),
-    ).toContain("generated");
-    expect(
-      formatToolResult({ tool: "generate_image", prompt: "p" }, { image: { ok: false, error: "no engine" } }),
-    ).toContain("no engine");
+  it("reports an approved image generation's outcome, TAGGED with its prompt", () => {
+    // The prompt is echoed back so a later batch of renders in the same chat is distinguishable —
+    // otherwise every render leaves an identical line and the model thinks new images already exist.
+    const ok = formatToolResult({ tool: "generate_image", prompt: "a red apple on a table" }, { image: { ok: true } });
+    expect(ok).toContain("a red apple on a table");
+    expect(ok).toMatch(/rendered|showed/i);
+    const bad = formatToolResult({ tool: "generate_image", prompt: "a red apple" }, { image: { ok: false, error: "no engine" } });
+    expect(bad).toContain("no engine");
+    expect(bad).toContain("a red apple"); // even a failure names what it tried to render
   });
 
   it("feeds a fetched page back as reference data (with a not-instructions guard)", () => {

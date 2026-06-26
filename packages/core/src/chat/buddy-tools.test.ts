@@ -260,9 +260,9 @@ describe("formatBuddyToolResult", () => {
     expect(style).toContain('art style "Oil painting"');
     expect(style).toContain("per chapter");
     expect(style).toContain("as each chapter finishes");
-    expect(
-      formatBuddyToolResult({ tool: "generate_image", prompt: "an apple" }, { image: { ok: true } }),
-    ).toContain("shown to the reader");
+    const imgResult = formatBuddyToolResult({ tool: "generate_image", prompt: "an apple" }, { image: { ok: true } });
+    expect(imgResult).toContain("an apple"); // tagged with the prompt so later batches are distinguishable
+    expect(imgResult).toMatch(/rendered|showed/i);
     expect(
       formatBuddyToolResult(
         { tool: "calculate", expression: "sqrt(144) * 2" },

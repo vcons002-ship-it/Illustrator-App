@@ -435,10 +435,15 @@ export function formatToolResult(call: ToolCall, result: ToolResultPayload): str
       ? `[saved the data as ${e.format}${e.totals ? ` with a live ${e.totals} totals row` : ""}${e.analyze ? " plus a statistical Analysis sheet of live formulas" : ""}${e.chart ? ` with an embedded ${e.chart} chart` : ""} — ${e.where}] Confirm it briefly.`
       : `[export_data failed: ${e.error ?? "unknown error"}] Tell the reader.`;
   }
-  // generate_image: ran (or failed) after the reader's approval.
+  // generate_image: ran (or failed) after the reader's approval. Tag the result with the PROMPT so a
+  // later batch of renders in the same chat can be told apart from this one — otherwise every render
+  // leaves an identical "image was generated" line and the model thinks a fresh checklist's images
+  // already exist (and ticks the steps off without rendering them).
+  const imgPrompt = "prompt" in call && typeof call.prompt === "string" ? call.prompt : "";
+  const imgDesc = imgPrompt ? ` for "${imgPrompt.length > 100 ? `${imgPrompt.slice(0, 100).trim()}…` : imgPrompt}"` : "";
   return result.image?.ok
-    ? "[tool generate_image: the image was generated and is shown to the reader]"
-    : `[tool generate_image failed: ${result.image?.error ?? "unknown error"}]`;
+    ? `[tool generate_image: rendered the image${imgDesc} and showed it to the reader]`
+    : `[tool generate_image failed${imgDesc}: ${result.image?.error ?? "unknown error"}]`;
 }
 
 /** Drop commas that sit right before a closing `}`/`]` (ignoring whitespace), never inside a string
