@@ -21,6 +21,19 @@ describe("parseToolCall", () => {
     });
   });
 
+  it("accepts the ReAct {action, action_input} shape (the leak from the transcript)", () => {
+    // A capable model emitted this LangChain/ReAct envelope with a DOUBLE-ENCODED action_input; it
+    // wasn't recognised, so the raw JSON leaked into the chat instead of rendering an image.
+    expect(
+      parseToolCall('{"action":"generate_image","action_input":"{ \\"prompt\\": \\"a woman in a garden\\" }"}'),
+    ).toEqual({ tool: "generate_image", prompt: "a woman in a garden" });
+    // action_input as a plain object works too.
+    expect(parseToolCall('{"action":"search_web","action_input":{"query":"jasmine"}}')).toEqual({
+      tool: "search_web",
+      query: "jasmine",
+    });
+  });
+
   it("fires a tool that follows a prose preamble (trailing JSON), incl. {r} in a formula", () => {
     // The exact failure: the model explained itself, THEN emitted the call — strict whole-text parsing
     // dropped it, so nothing was added and the model hallucinated a result table.

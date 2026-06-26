@@ -1256,7 +1256,12 @@ export function stripControlTokens(s: string): string {
 /** A JSON chunk is a tool call in EITHER the app's `{"tool":X, …flatArgs}` shape OR the
  * `{"name":X,"arguments":{…}}` shape that Hermes/Qwen/ChatML-tools models emit. */
 function isToolJsonChunk(chunk: string): boolean {
-  return /"tool"\s*:/.test(chunk) || (/"(?:name|function)"\s*:/.test(chunk) && /"(?:arguments|parameters|args|input)"\s*:/.test(chunk));
+  return (
+    /"tool"\s*:/.test(chunk) ||
+    (/"(?:name|function)"\s*:/.test(chunk) && /"(?:arguments|parameters|args|input)"\s*:/.test(chunk)) ||
+    // ReAct / LangChain shape: {"action":"generate_image","action_input":{…}}
+    (/"action"\s*:/.test(chunk) && /"action_input"\s*:/.test(chunk))
+  );
 }
 
 /** Accept the `{"name":X,"arguments":{…}}` tool shape that Hermes/Qwen/ChatML-tools models emit (inside
@@ -1266,9 +1271,10 @@ function isToolJsonChunk(chunk: string): boolean {
  * siblings of `name`. */
 export function normalizeToolShape(obj: Record<string, unknown>): Record<string, unknown> {
   if (typeof obj.tool === "string") return obj;
-  const name = obj.name ?? obj.function ?? obj.tool_name;
+  // `action`/`action_input` is the ReAct/LangChain shape capable models fall into; treat it like name/args.
+  const name = obj.name ?? obj.function ?? obj.tool_name ?? obj.action;
   if (typeof name !== "string") return obj;
-  const rawArgs = obj.arguments ?? obj.parameters ?? obj.args ?? obj.input;
+  const rawArgs = obj.arguments ?? obj.parameters ?? obj.args ?? obj.input ?? obj.action_input;
   let args: Record<string, unknown> = {};
   if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
     args = rawArgs as Record<string, unknown>;
@@ -1280,7 +1286,7 @@ export function normalizeToolShape(obj: Record<string, unknown>): Record<string,
       /* not double-encoded JSON — leave args empty */
     }
   } else {
-    const { name: _n, function: _f, tool_name: _t, ...rest } = obj; // args as siblings of `name`
+    const { name: _n, function: _f, tool_name: _t, action: _a, ...rest } = obj; // args as siblings of `name`
     args = rest;
   }
   return { tool: name, ...args };

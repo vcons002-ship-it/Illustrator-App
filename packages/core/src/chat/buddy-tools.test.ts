@@ -1091,6 +1091,22 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
     ]);
   });
 
+  it("accepts the ReAct {action, action_input} shape instead of leaking it as prose", () => {
+    // The exact leak from the transcript: a capable model emitted the LangChain/ReAct envelope with a
+    // DOUBLE-ENCODED action_input (a JSON string), which the app didn't recognise, so the raw JSON
+    // showed up in the chat instead of running.
+    expect(parseBuddyToolCalls('{"action":"search_web","action_input":"{\\"query\\":\\"otters\\"}"}')).toEqual([
+      { tool: "search_web", query: "otters" },
+    ]);
+    // action_input as a plain object (not double-encoded) works too.
+    expect(parseBuddyToolCalls('{"action":"generate_image","action_input":{"prompt":"a fox in snow"}}')).toEqual([
+      { tool: "generate_image", prompt: "a fox in snow" },
+    ]);
+    // …and it's recognised as tool JSON, so the guards strip/flag it rather than rendering it.
+    expect(looksLikeToolJson('{"action":"generate_image","action_input":{"prompt":"a fox"}}')).toBe(true);
+    expect(stripToolCallJson('Sure!\n{"action":"search_web","action_input":{"query":"x"}}')).toBe("Sure!");
+  });
+
   it("strips tool-call control tokens from the displayed prose", () => {
     expect(stripToolCallJson('All set.<tool_call>{"name":"list_tasks","arguments":{}}</tool_call>')).toBe("All set.");
     expect(looksLikeToolJson('<tool_call>{"name":"write_file","arguments":{"path":"a","content":"b"}}</tool_call>')).toBe(true);
