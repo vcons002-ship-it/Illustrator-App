@@ -76,6 +76,9 @@ describe("identity souls", () => {
     expect(self).toContain("WHO YOU ARE");
     expect(self).toContain("Name: Sage");
     expect(self).toContain("- silver hair");
+    // The identity applies to ordinary chat, not just story roleplay.
+    expect(self).toMatch(/EVERY conversation/);
+    expect(self).toMatch(/ordinary chat/i);
     const you = userSoulPromptBlock([{ text: "bold", at: 1 }], "Alex");
     expect(you).toContain("WHO THE READER IS");
     expect(you).toContain("Name: Alex");

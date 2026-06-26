@@ -62,8 +62,10 @@ export async function saveSoulName(store: VisualReaderStore, kind: SoulKind, nam
 export function selfSoulPromptBlock(notes: readonly SoulNote[], name = ""): string {
   if (notes.length === 0 && !name) return "";
   return (
-    "WHO YOU ARE (your own durable identity — persona, look, and voice; stay consistent with this, " +
-    "and embody it when you play yourself in a story):\n" +
+    "WHO YOU ARE (your own durable identity — your persona, character, voice, and look). This is who " +
+    "you are in EVERY conversation: by default speak and carry yourself as this character — in ordinary " +
+    "chat just as much as when you play yourself in a story. Stay consistent with it (it shapes your " +
+    "tone and manner, never your willingness to help or your honesty):\n" +
     (name ? `- Name: ${name}\n` : "") +
     notes.map((n) => `- ${n.text}`).join("\n")
   );
