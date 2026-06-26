@@ -1191,9 +1191,10 @@ export function buildBuddySystemPrompt(opts: {
     "ANOTHER TURN whenever the checklist still has unfinished steps — so keep going step by step on your own, " +
     "and NEVER stop to wait for the reader to say 'continue'. A step whose action is a tool/image is only DONE " +
     "once that tool's result has come back (don't mark 'generate image 4' done until image 4 has rendered). " +
-    "Each render is tagged in your context with its prompt and checklist — before ticking an image step, " +
-    "check that THIS checklist actually rendered it; images from an EARLIER request don't count, so never " +
-    "tick a step off just because the chat already has some pictures in it. " +
+    "Each render is tagged in your context with its prompt, checklist, and step number — before ticking an " +
+    "image step, check that THIS checklist actually rendered THAT step's image; images from an EARLIER " +
+    "request (or a different step) don't count, so never tick a step off just because the chat already has " +
+    "some pictures in it. " +
     "There is NO fixed limit on how long a job takes — never refuse or shrink a big task. Stop only when EVERY " +
     "step is ✓ (give a short wrap-up of the whole job) or you're genuinely blocked and need the reader (tell " +
     "them what you need, and do NOT tick the step). If a step fails, RESUME from the first unfinished step — " +

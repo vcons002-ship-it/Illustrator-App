@@ -4402,11 +4402,17 @@ export function App() {
     // model tick the current step + start the next one, so the plan runs to completion on its own (each
     // next image still gets its own approval/gate). A one-shot image (no plan) just shows + stops, as before.
     const plan = buddyPlanRef.current;
-    // Tag a render with its checklist so a SECOND batch of images later in the same chat can be told
-    // apart from this one — the model reads the tag and knows the new checklist's images aren't done
-    // yet, instead of seeing earlier renders and ticking the new steps off without rendering.
-    const taggedImageFeedback =
-      !out.error && plan?.goal ? `${imageFeedback} — part of the checklist “${plan.goal}”.` : imageFeedback;
+    // Tag a render with WHICH checklist + step it belongs to, so a SECOND batch of images later in the
+    // same chat can be told apart from this one — the model only ever sees these text tags (never the
+    // image), so without them it reads earlier "image rendered" lines and ticks the new steps off as
+    // already done. At render time the image is for the ▸ current (first unfinished) step.
+    let taggedImageFeedback = imageFeedback;
+    if (!out.error && plan && plan.steps.length > 0) {
+      const idx = plan.steps.findIndex((s) => s.status !== "done");
+      const stepNo = idx >= 0 ? idx + 1 : plan.steps.length;
+      const where = plan.goal ? `the checklist “${plan.goal}”` : "the checklist";
+      taggedImageFeedback = `${imageFeedback} — this is step ${stepNo} of ${plan.steps.length} of ${where}.`;
+    }
     const continueQueue = !out.error && planHasPendingStep(plan);
     const feedback = continueQueue ? planQueueResumeFeedback(taggedImageFeedback, plan!) : taggedImageFeedback;
     appendBuddy({
