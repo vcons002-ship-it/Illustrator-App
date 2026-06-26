@@ -171,7 +171,10 @@ export type SyncToPhone =
   | { type: "vrsync:updateStatus"; status: "working" | "uptodate" | "updated" | "needs-restart" | "error"; message: string; reload?: boolean }
   // Result of a desktop-runtime host tool the phone relayed (vrcmd:hostTool) — file search/read,
   // run_command, write_file, screenshot — run on the desktop, fed back to the phone's buddy turn.
-  | { type: "vrsync:hostToolResult"; requestId: number; payload: BuddyToolResultPayload };
+  | { type: "vrsync:hostToolResult"; requestId: number; payload: BuddyToolResultPayload }
+  // The full bytes of a file card the mirror stripped (vrcmd:fetchFile) — sent back so the phone can
+  // download/open an older generated image on demand. `bytes` absent ⇒ the desktop couldn't find it.
+  | { type: "vrsync:fileData"; reqId: number; bytes?: ArrayBuffer; mime?: string };
 
 /** Phone → desktop commands. */
 export type CmdToDesktop =
@@ -204,7 +207,8 @@ export type CmdToDesktop =
   | { type: "vrcmd:update" } // phone asked the desktop to pull + rebuild + reload (software update)
   | { type: "vrcmd:restart" } // phone asked the desktop to fully relaunch (Settings → Restart app)
   | { type: "vrcmd:openLocalFile"; path: string } // open a PC file (PDF/EPUB/doc) FROM the desktop's disk as a book; the desktop reads + imports it, the open book mirrors back
-  | { type: "vrcmd:hostTool"; requestId: number; call: BuddyToolCall; cwd?: string }; // run a desktop-runtime tool (files/command/screenshot) on the desktop, in the phone's chosen working folder
+  | { type: "vrcmd:hostTool"; requestId: number; call: BuddyToolCall; cwd?: string } // run a desktop-runtime tool (files/command/screenshot) on the desktop, in the phone's chosen working folder
+  | { type: "vrcmd:fetchFile"; reqId: number; id: string }; // ask the desktop for the full bytes of a file card whose bytes the mirror stripped (lazy image fetch)
 
 export type AppSyncMessage = SyncToPhone | CmdToDesktop;
 

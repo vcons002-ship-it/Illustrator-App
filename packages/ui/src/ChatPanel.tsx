@@ -58,6 +58,9 @@ export interface FileRef {
   bytes?: ArrayBuffer;
   /** A path to a file already on the user's computer (a desktop `/find` result). */
   path?: string;
+  /** Stable id for a bytes-bearing card, so a linked phone can fetch the bytes back from the desktop
+   * on demand after the mirror stripped them to stay tunnel-safe. */
+  id?: string;
 }
 
 /** The four universal file-card actions, wired once by the app and reused for every surfaced file.

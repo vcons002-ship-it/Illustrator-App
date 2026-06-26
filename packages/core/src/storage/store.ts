@@ -37,6 +37,10 @@ export interface ChatFileRef {
   content?: string;
   bytes?: ArrayBuffer;
   path?: string;
+  /** Stable id for a bytes-bearing file card. The chat MIRROR strips heavy bytes from older cards to
+   * stay tunnel-safe (see boundChatHistoryForMirror); a linked phone uses this id to fetch the full
+   * bytes back from the desktop ON DEMAND (vrcmd:fetchFile) when the reader opens/downloads it. */
+  id?: string;
 }
 
 /** One persisted reading-companion chat message (per book). Image bytes are kept

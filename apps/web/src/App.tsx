@@ -296,7 +296,9 @@ function imageAttachment(prompt: string, image: { bytes: ArrayBuffer; mimeType: 
       .replace(/[^\w]+/g, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 40) || "image";
-  return { name: `${stem}.${ext}`, mime: image.mimeType, kind: "image", bytes: image.bytes.slice(0) };
+  // Stable id so a linked phone can fetch these bytes back on demand after the mirror strips them.
+  const id = `img-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return { id, name: `${stem}.${ext}`, mime: image.mimeType, kind: "image", bytes: image.bytes.slice(0) };
 }
 
 /** Is this code book renderable markup (HTML/SVG), so we can show the rendered PAGE — not just the
@@ -980,6 +982,11 @@ export function App() {
   const chatRenderingRef = useRef(false);
   // Landing-page buddy (persisted under its own key; finds + opens books via tools).
   const [buddyMessages, setBuddyMessages] = useState<StoredChatMessage[]>([]);
+  // The desktop keeps the FULL history (with image bytes) here; a linked phone fetches a stripped
+  // card's bytes back by id from this (see the vrcmd:fetchFile handler). Ref so the handler isn't
+  // re-bound on every message.
+  const buddyMessagesRef = useRef<StoredChatMessage[]>([]);
+  buddyMessagesRef.current = buddyMessages;
   const [buddyBusy, setBuddyBusy] = useState(false);
   const [buddyStreaming, setBuddyStreaming] = useState("");
   // Mirror of the live stream, so when a tool fires mid-message we can KEEP any prose the model
@@ -1839,6 +1846,9 @@ export function App() {
   // through this per-requestId map.
   const runHostToolForRemoteRef = useRef<(call: BuddyToolCall, cwd?: string) => Promise<BuddyToolResultPayload>>(async () => ({}));
   const hostToolPending = useRef(new Map<number, (p: BuddyToolResultPayload) => void>());
+  // PHONE: lazy image-card fetches awaiting the desktop's vrsync:fileData reply, keyed by reqId.
+  const fileFetchPending = useRef(new Map<number, (r: { bytes?: ArrayBuffer; mime?: string }) => void>());
+  const fileFetchSeq = useRef(0);
   const hostToolReqId = useRef(0);
   const buildSnapshot = useCallback(
     (): SyncToPhone => ({
@@ -1932,6 +1942,15 @@ export function App() {
             if (r) {
               hostToolPending.current.delete(msg.requestId);
               r(msg.payload);
+            }
+            break;
+          }
+          case "vrsync:fileData": {
+            // The desktop returned the bytes of an older image card we asked for (vrcmd:fetchFile).
+            const r = fileFetchPending.current.get(msg.reqId);
+            if (r) {
+              fileFetchPending.current.delete(msg.reqId);
+              r({ ...(msg.bytes ? { bytes: msg.bytes } : {}), ...(msg.mime ? { mime: msg.mime } : {}) });
             }
             break;
           }
@@ -2045,6 +2064,20 @@ export function App() {
               sendAppSync({ type: "vrsync:hostToolResult", requestId: msg.requestId, payload }),
             );
             break;
+          case "vrcmd:fetchFile": {
+            // The phone tapped an OLDER image card whose bytes the mirror stripped. Find the card by id
+            // in our FULL history (we kept the bytes) and send them back so the phone can open/download.
+            let found: { bytes?: ArrayBuffer; mime?: string } | undefined;
+            for (const m of buddyMessagesRef.current) {
+              const a = m.attachments?.find((x) => x.id === msg.id && x.bytes);
+              if (a?.bytes) {
+                found = { bytes: a.bytes, mime: a.mime };
+                break;
+              }
+            }
+            sendAppSync({ type: "vrsync:fileData", reqId: msg.reqId, ...(found?.bytes ? { bytes: found.bytes, mime: found.mime } : {}) });
+            break;
+          }
           default:
             break;
         }
@@ -3625,28 +3658,58 @@ export function App() {
     [],
   );
 
+  // PHONE: fetch an older image card's bytes back from the desktop on demand (the mirror strips heavy
+  // bytes from old cards to stay tunnel-safe; the desktop kept the originals). Resolves undefined on
+  // timeout or if the desktop can't find it. No-op (undefined) off a linked phone.
+  const fetchRemoteFileBytes = useCallback(
+    (id: string): Promise<ArrayBuffer | undefined> =>
+      new Promise((resolve) => {
+        if (!isRemoteClient) return resolve(undefined);
+        const reqId = ++fileFetchSeq.current;
+        const timer = setTimeout(() => {
+          if (fileFetchPending.current.delete(reqId)) resolve(undefined);
+        }, 20000);
+        fileFetchPending.current.set(reqId, ({ bytes }) => {
+          clearTimeout(timer);
+          resolve(bytes);
+        });
+        sendAppSync({ type: "vrcmd:fetchFile", reqId, id });
+      }),
+    [isRemoteClient, sendAppSync],
+  );
+  // Fill in a card's bytes from the desktop when the mirror stripped them (older image on a phone).
+  const withFetchedBytes = useCallback(
+    async (ref: FileRef): Promise<FileRef> => {
+      if (ref.bytes || ref.path || ref.content || !isRemoteClient || !ref.id) return ref;
+      const bytes = await fetchRemoteFileBytes(ref.id);
+      return bytes ? { ...ref, bytes } : ref;
+    },
+    [isRemoteClient, fetchRemoteFileBytes],
+  );
+
   // The universal file-card actions, shared by both chats: Download (save a copy), Open in app
   // (reader), Open in library (save for later), and — on desktop — Open on PC (OS default app).
   const buddyFileActions = useMemo<FileActions>(
     () => ({
-      download: async (ref) => {
+      download: async (ref0) => {
+        const ref = await withFetchedBytes(ref0);
         const data = ref.bytes ? new Uint8Array(ref.bytes) : (ref.content ?? "");
         const saved = await saveNamed(ref.name, data, ref.mime || "application/octet-stream", "Save this file");
         return saved ?? true; // cancel is "handled"
       },
       openInApp: (ref) => {
         if (ref.path) void onOpenLocalFile(ref.path);
-        else void onUpload(fileFromRef(ref));
+        else void withFetchedBytes(ref).then((r) => onUpload(fileFromRef(r)));
       },
-      openInLibrary: (ref) => void addRefToLibrary(ref),
+      openInLibrary: (ref) => void withFetchedBytes(ref).then((r) => addRefToLibrary(r)),
       ...(isDesktop ? { openOnPC: (ref: FileRef) => void revealRefOnPC(ref) } : {}),
       // "Open as…" — re-route the SAME file through a chosen reader (overrides the extension default).
       openAs: (ref, as) => {
         if (ref.path) void readLocalFile(ref.path).then((f) => onUpload(f, as));
-        else void onUpload(fileFromRef(ref), as);
+        else void withFetchedBytes(ref).then((r) => onUpload(fileFromRef(r), as));
       },
     }),
-    [saveNamed, onOpenLocalFile, onUpload, fileFromRef, addRefToLibrary, revealRefOnPC],
+    [saveNamed, onOpenLocalFile, onUpload, fileFromRef, addRefToLibrary, revealRefOnPC, withFetchedBytes],
   );
 
   // Run a local-file search and present the matches as clickable chips. `modelTurns`

@@ -27,17 +27,18 @@ describe("boundChatHistoryForMirror", () => {
       msg({
         text: "img card",
         image: { bytes: buf(2_000_000), mimeType: "image/png" },
-        attachments: [{ name: "art.png", mime: "image/png", kind: "image", bytes: buf(2_000_000) }],
+        attachments: [{ id: "img-1", name: "art.png", mime: "image/png", kind: "image", bytes: buf(2_000_000) }],
       }),
       msg({ text: "fills the budget", image: { bytes: buf(3_000_000), mimeType: "image/png" } }),
     ];
     const out = boundChatHistoryForMirror(msgs, 3_000_000);
     // The newest (3MB) eats the whole budget; the older message's inline + card bytes are both dropped,
-    // but the card METADATA stays so the phone still shows the file card.
+    // but the card METADATA (incl. the id the phone fetches bytes back by) stays so the card still works.
     expect(out[0]!.image).toBeUndefined();
     expect(out[0]!.attachments?.[0]!.bytes).toBeUndefined();
     expect(out[0]!.attachments?.[0]!.name).toBe("art.png");
     expect(out[0]!.attachments?.[0]!.kind).toBe("image");
+    expect(out[0]!.attachments?.[0]!.id).toBe("img-1");
   });
 
   it("counts inline + attachment bytes of the SAME message under one budget", () => {
