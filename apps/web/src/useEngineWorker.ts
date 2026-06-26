@@ -85,15 +85,47 @@ function initRemoteMode(): RemoteMode | undefined {
   // Hash first (LAN), then query (tunnel/Access). One of them, or the remembered one for this host.
   let token = parseLinkToken(hash) ?? parseLinkToken(search) ?? undefined;
   const fromQuery = !parseLinkToken(hash) && !!parseLinkToken(search);
+  const fromUrl = !!token;
+  // Persist the token so a saved BARE link (no token in the URL) keeps working. Write to BOTH stores
+  // and recover from EITHER: a heavy session can exhaust the localStorage quota (cached generated
+  // images), and a failed write there used to silently drop the phone back to a local app on the next
+  // load. sessionStorage has its own quota and survives an in-tab reload, so it's a reliable fallback.
+  let persisted = false;
   try {
-    if (token) localStorage.setItem(key, token);
-    else token = localStorage.getItem(key) ?? undefined;
+    if (token) {
+      localStorage.setItem(key, token);
+      persisted = true;
+    } else {
+      token = localStorage.getItem(key) ?? undefined;
+    }
   } catch {
-    /* storage blocked (private mode) — fall back to whatever the URL gave us */
+    /* localStorage full/blocked — the sessionStorage attempt below still carries the token */
+  }
+  try {
+    if (token) {
+      sessionStorage.setItem(key, token);
+      persisted = true;
+    } else {
+      token = sessionStorage.getItem(key) ?? undefined;
+    }
+  } catch {
+    /* sessionStorage blocked — fall back to whatever the URL gave us */
   }
   if (!token || !host) return undefined;
-  // Drop the ?vrlink= token from the visible URL once captured (keep the path + any hash).
-  if (fromQuery) {
+  // This tab IS a linked phone. Ask the browser to keep this origin's storage from being EVICTED
+  // under pressure: heavy generated-image caching can fill the quota and evict the saved pairing
+  // token, which silently drops the phone back to a local app (the "stopped linking after a bunch of
+  // image generations" failure). Best-effort and async — ignored where unsupported.
+  try {
+    void (navigator as Navigator & { storage?: { persist?: () => Promise<boolean> } }).storage?.persist?.();
+  } catch {
+    /* Storage API unsupported — harmless */
+  }
+  // Drop the ?vrlink= token from the visible URL ONLY once it's safely remembered — otherwise a later
+  // reload (e.g. after a software update, or a PWA relaunch) would have neither the URL token nor a
+  // stored one, and the phone would fall back to a local app. If nowhere would persist it, keep it in
+  // the URL so a reload can still recover it.
+  if (fromQuery && fromUrl && persisted) {
     try {
       window.history.replaceState(null, "", (pathname || "/") + (hash || ""));
     } catch {
