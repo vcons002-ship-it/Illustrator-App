@@ -299,6 +299,14 @@ describe("buildBuddySystemPrompt", () => {
     expect(prompt).toMatch(/Excel \(\.xlsx\)/);
   });
 
+  it("tells the buddy to parse intent and pass normalized tool arguments, not the raw phrasing", () => {
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], canSearchFiles: true });
+    expect(prompt).toContain("PARSE THE INTENT FIRST");
+    expect(prompt).toMatch(/NORMALIZED inputs, never their raw sentence/);
+    // find_files specifically: query is the distinctive name/type words, not the whole sentence.
+    expect(prompt).toMatch(/just the distinctive NAME words plus the file TYPE/);
+  });
+
   it("lists the library with ids", () => {
     const prompt = buildBuddySystemPrompt({
       persona: "assistant",

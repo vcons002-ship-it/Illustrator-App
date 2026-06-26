@@ -624,7 +624,12 @@ export function buildBuddySystemPrompt(opts: {
       "find_files matches FILE NAMES, not what's inside them — so to find WHERE some text/logic lives in a " +
       'file ("search the workspace/code for casino logic"), DON\'T pass the phrase to find_files (it finds ' +
       "nothing and looks broken). Instead read the relevant file(s) (read with source:\"file\") and look through the " +
-      "text yourself; if you don't know which file, find_files by likely NAME (or the open file) first, then read it.\n" +
+      "text yourself; if you don't know which file, find_files by likely NAME (or the open file) first, then read it. " +
+      "QUERY = just the distinctive NAME words plus the file TYPE if they said one — never the whole sentence. " +
+      '"can you find my markdown notes about the trip" → query:"trip" (or "trip md"); "open the budget spreadsheet" ' +
+      '→ query:"budget xlsx"; "find my resume" → query:"resume". Keep it to the few words that would actually be IN ' +
+      "the filename (a type word like md/pdf/photo is fine — it's matched by extension). If they only name a type " +
+      '("find my pdfs"), query just the type ("pdf").\n' +
       '- {"tool":"open_image","path":"…"} — show an IMAGE FILE (png/jpg/webp/gif/svg, a screenshot, a photo, a ' +
       "diagram, a render) INLINE in the chat so the reader actually SEES it. Use this when they ask to open/show/" +
       'view a picture, or after you find or create one and want to display it. Don\'t read an image file as text.\n'
@@ -816,6 +821,11 @@ export function buildBuddySystemPrompt(opts: {
   const routingGuide =
     "HOW TO PICK A TOOL — match the reader's actual intent, and DON'T reach for a tool when a direct " +
     "answer (or one clarifying question) is better:\n" +
+    "• PARSE THE INTENT FIRST, then form clean tool arguments. The reader phrases things however feels " +
+    "natural — work out what they actually want and pass NORMALIZED inputs, never their raw sentence. " +
+    "Pull out the real query terms (drop \"can you\", \"please\", \"find me\", \"my\", \"the\", filler), " +
+    "expand a vague ask, fix obvious typos. A tool argument is a precise machine input, not an echo of " +
+    "what they typed. (Only a /slash command is taken literally.)\n" +
     "• Chatting / reasoning / writing prose → NO tool. Any real math → calculate (never do it in your head).\n" +
     "• A fact you're unsure of → search_web, then read (source:\"url\") the best hit." +
     (opts.canWolfram ? " An authoritative real-world VALUE/quantity → wolfram." : "") +
