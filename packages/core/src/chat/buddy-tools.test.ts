@@ -1109,6 +1109,44 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
     expect(parseBuddyToolCalls("just a normal sentence")).toEqual([]);
   });
 
+  describe("Gemma tool_code / function-call syntax", () => {
+    it("parses a fenced tool_code call (the form Gemma emits instead of JSON)", () => {
+      const reply = "Sure!\n```tool_code\ngenerate_image(prompt=\"a red castle at dusk\")\n```";
+      expect(parseBuddyToolCalls(reply)).toEqual([{ tool: "generate_image", prompt: "a red castle at dusk" }]);
+    });
+
+    it("unwraps print(...) and the default_api. prefix", () => {
+      const reply = "```tool_code\nprint(default_api.generate_image(prompt=\"a fox in snow\"))\n```";
+      expect(parseBuddyToolCalls(reply)).toEqual([{ tool: "generate_image", prompt: "a fox in snow" }]);
+    });
+
+    it("maps a positional arg to the tool's primary param", () => {
+      expect(parseBuddyToolCalls('```tool_code\ngenerate_image("a dog on a skateboard")\n```')).toEqual([
+        { tool: "generate_image", prompt: "a dog on a skateboard" },
+      ]);
+      expect(parseBuddyToolCalls("search_web(query=\"otters holding hands\")")).toEqual([
+        { tool: "search_web", query: "otters holding hands" },
+      ]);
+    });
+
+    it("coerces kwargs (numbers stay numbers)", () => {
+      expect(parseBuddyToolCalls('generate_image(prompt="a sunset", steps=20)')).toEqual([
+        { tool: "generate_image", prompt: "a sunset", steps: 20 },
+      ]);
+    });
+
+    it("does NOT hijack a real ```python code block the model wrote for the reader", () => {
+      const reply = "Here's a script:\n```python\ngenerate_image(\"not a real tool call\")\nprint('hi')\n```";
+      expect(parseBuddyToolCalls(reply)).toEqual([]);
+    });
+
+    it("strips a tool_code call from the visible prose and flags it as a tool reply", () => {
+      const reply = "On it.\n```tool_code\ngenerate_image(prompt=\"a cat\")\n```";
+      expect(stripToolCallJson(reply)).toBe("On it.");
+      expect(looksLikeToolJson(reply)).toBe(true);
+    });
+  });
+
   it("tolerates the TRAILING COMMAS weaker local models emit (which strict JSON drops)", () => {
     // A single trailing comma before } used to make JSON.parse throw → the tool call was silently
     // dropped → the buddy "couldn't string together tools" / fell back to "I didn't catch that".
