@@ -7,7 +7,9 @@ import {
   formatBuddyToolResult,
   isRetryableError,
   looksLikeToolJson,
+  nativeToolCallsToText,
   normalizeBuddyPersona,
+  ollamaToolSchemas,
   parseBuddyToolCall,
   parseBuddyToolCalls,
   planHasPendingStep,
@@ -320,10 +322,10 @@ describe("buildBuddySystemPrompt", () => {
     expect(prompt).toMatch(/Excel \(\.xlsx\)/);
   });
 
-  it("tells the buddy to parse intent and pass normalized tool arguments, not the raw phrasing", () => {
+  it("tells the buddy to pass clean tool arguments, not the raw phrasing", () => {
     const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], canSearchFiles: true });
-    expect(prompt).toContain("PARSE THE INTENT FIRST");
-    expect(prompt).toMatch(/NORMALIZED inputs, never their raw sentence/);
+    expect(prompt).toMatch(/Pass CLEAN tool arguments/);
+    expect(prompt).toMatch(/not the reader's whole sentence/);
     // find_files specifically: query is the distinctive name/type words, not the whole sentence.
     expect(prompt).toMatch(/just the distinctive NAME words plus the file TYPE/);
   });
@@ -1109,6 +1111,54 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
     expect(parseBuddyToolCalls("just a normal sentence")).toEqual([]);
   });
 
+  describe("native tool_calls (Ollama tools) → app text", () => {
+    it("serializes object-arg tool_calls and round-trips through the parser", () => {
+      const text = nativeToolCallsToText([{ function: { name: "generate_image", arguments: { prompt: "a red castle" } } }]);
+      expect(parseBuddyToolCalls(text)).toEqual([{ tool: "generate_image", prompt: "a red castle" }]);
+    });
+    it("handles string (double-encoded) arguments", () => {
+      const text = nativeToolCallsToText([{ function: { name: "search_web", arguments: '{"query":"otters"}' } }]);
+      expect(parseBuddyToolCalls(text)).toEqual([{ tool: "search_web", query: "otters" }]);
+    });
+    it("tolerates the flat {name,arguments} shape and skips a nameless call", () => {
+      const text = nativeToolCallsToText([{ name: "calculate", arguments: { expression: "2+2" } }, { function: { arguments: {} } }]);
+      expect(parseBuddyToolCalls(text)).toEqual([{ tool: "calculate", expression: "2+2" }]);
+    });
+  });
+
+  describe("ollamaToolSchemas", () => {
+    it("always advertises the core tools and gates the rest", () => {
+      const base = ollamaToolSchemas({});
+      const names = base.map((s) => s.function.name);
+      expect(names).toContain("generate_image");
+      expect(names).toContain("search_web");
+      expect(names).not.toContain("run_command");
+      expect(names).not.toContain("find_files");
+      const full = ollamaToolSchemas({ canSearchFiles: true, canRunCommands: true, canWolfram: true }).map((s) => s.function.name);
+      expect(full).toEqual(expect.arrayContaining(["find_files", "read_file", "write_file", "run_command", "wolfram"]));
+    });
+    it("every schema's name round-trips through parseToolObject (names/args match the parser)", () => {
+      for (const s of ollamaToolSchemas({ canSearchFiles: true, canRunCommands: true, canWolfram: true })) {
+        // Fill EVERY property with a valid sample value (enum→first, url→a real URL, array→["x"], …) and
+        // confirm the parser accepts the round-tripped call — catching any name/arg drift from the parser.
+        const args: Record<string, unknown> = {};
+        for (const [key, p] of Object.entries(s.function.parameters.properties)) {
+          args[key] = p.enum
+            ? p.enum[0]
+            : p.type === "array"
+              ? ["x"]
+              : p.type === "boolean"
+                ? true
+                : key === "url" || key === "ref"
+                  ? "http://x.test"
+                  : "x";
+        }
+        const text = nativeToolCallsToText([{ function: { name: s.function.name, arguments: args } }]);
+        expect(parseBuddyToolCalls(text).length, `tool ${s.function.name} should round-trip`).toBe(1);
+      }
+    });
+  });
+
   describe("Gemma tool_code / function-call syntax", () => {
     it("parses a fenced tool_code call (the form Gemma emits instead of JSON)", () => {
       const reply = "Sure!\n```tool_code\ngenerate_image(prompt=\"a red castle at dusk\")\n```";
@@ -1459,23 +1509,25 @@ describe("working-checklist queue auto-advance", () => {
   });
 });
 
-describe("MULTI-STEP guidance — always plan, checklist is the only truth, never skip images", () => {
-  it("makes set_plan the mandatory first action (incl. one step per image) and the app re-runs it", () => {
+describe("MULTI-STEP guidance — LEAN with no plan, discipline only mid-checklist (small-model regression fix)", () => {
+  it("with NO active plan, gives only a short single-vs-multi hint and DROPS the dense planning sermon", () => {
     const sys = buildBuddySystemPrompt({ persona: "assistant", library: [] });
-    // Planning is mandatory and first, and multiple images become one step each.
-    expect(sys).toMatch(/VERY FIRST action is ALWAYS set_plan/i);
-    expect(sys).toMatch(/ONE step per image/i);
-    expect(sys).toContain("Generate image 1 of the sunset");
-    // The app re-invites it, so it must not wait for "continue".
-    expect(sys).toMatch(/re-runs you automatically/i);
-    expect(sys).toMatch(/never wait for the reader to say 'continue'/i);
+    // A single action goes straight to its tool; only a genuine 2+ step task plans first.
+    expect(sys).toMatch(/MULTI-STEP vs SINGLE/);
+    expect(sys).toMatch(/call set_plan FIRST/);
+    expect(sys).toMatch(/do NOT make a plan for one step/);
+    // The bloat that derailed small models from just calling generate_image must be GONE here.
+    expect(sys).not.toMatch(/NARRATE EVERY STEP/);
+    expect(sys).not.toMatch(/VERY FIRST action is ALWAYS set_plan/);
   });
 
-  it("forbids skipping image steps — only ✓ counts, pictures already in chat do NOT", () => {
-    const sys = buildBuddySystemPrompt({ persona: "assistant", library: [] });
-    expect(sys).toMatch(/the ONLY\s+record of progress that counts/i);
-    expect(sys).toMatch(/NEVER decide a ▸ or · step is already done because\s+pictures already appear/i);
-    expect(sys).toMatch(/DO\s+NOT count/);
-    expect(sys).toMatch(/actually call generate_image again — do not skip it/i);
+  it("mid-checklist (active plan), gives terse discipline: image steps need a real call, no waiting for 'continue'", () => {
+    const plan = { goal: "3 suns", steps: [{ text: "Generate image 1", status: "pending" as const }] };
+    const sys = buildBuddySystemPrompt({ persona: "assistant", library: [], activePlan: plan });
+    expect(sys).toMatch(/an image step REQUIRES an actual generate_image call/i);
+    expect(sys).toMatch(/re-runs you while steps remain/i);
+    expect(sys).toMatch(/don't wait for the reader to say 'continue'/i);
+    // Still no verbose narration mandate even mid-plan.
+    expect(sys).not.toMatch(/NARRATE EVERY STEP/);
   });
 });

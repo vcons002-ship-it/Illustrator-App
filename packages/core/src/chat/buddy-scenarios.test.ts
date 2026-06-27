@@ -205,9 +205,11 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     // Anti-empty-promise: don't say you'll run it and then end without the tool call.
     expect(prompt).toContain("end your reply without the write_file / run_command call");
   });
-  it("checklist: multi-image asks are planned one step per image (the worst skip case)", () => {
-    expect(prompt).toContain("Generate image 1 of the sunset");
-    expect(prompt).toMatch(/VERY FIRST action is ALWAYS set_plan/i);
+  it("checklist: a multi-action ask (several images) is told to set_plan first, one step per action", () => {
+    // Lean no-plan guidance: a 2+ action task plans first; a single action just calls its tool.
+    expect(prompt).toMatch(/several images/);
+    expect(prompt).toMatch(/call set_plan FIRST, one step per action/);
+    expect(prompt).toMatch(/do NOT make a plan for one step/);
   });
 });
 

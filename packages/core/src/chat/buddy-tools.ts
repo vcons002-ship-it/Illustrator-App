@@ -1,4 +1,5 @@
 import { stripThink } from "../providers/llm/extraction.js";
+import type { ToolSchema } from "../providers/llm/chat.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
 import type { BookSearchHit } from "../providers/book-search.js";
 import { IMAGE_STYLES } from "../providers/catalog.js";
@@ -847,41 +848,24 @@ export function buildBuddySystemPrompt(opts: {
         "redo finished ✓ steps, and call complete_step as you finish each):\n" +
         (opts.activePlan!.goal ? `Goal: ${opts.activePlan!.goal}\n` : "") +
         `${renderPlanLines(opts.activePlan!)}\n\n`;
-  // The MULTI-STEP playbook. App-managed-steps mode tells the model to compile once and then just do
-  // the single step it's handed each turn (the app ticks from observed effects); the legacy mode tells
-  // it to drive its own checklist with complete_step.
-  const multiStepGuide = opts.appManagedSteps
-    ? "MULTI-STEP TASKS — if a request needs 2+ steps, your VERY FIRST action is ALWAYS set_plan to COMPILE the " +
-      "checklist: ONE concrete step per action (several images → one step per image), each phrased like the reader " +
-      'said it, and tag each with "needs" (the tool/condition that proves it done: "image", "file", "command", ' +
-      '"text", "reply", or a tool name). After that, the APP runs the checklist: each turn it hands you exactly ONE ' +
-      "step (shown at the top as YOUR CURRENT STEP) and ticks it off ITSELF once it observes the effect — a render, " +
-      "a written file, a reply. So just DO the one step in front of you: call its tool (for an image step you MUST " +
-      "actually call generate_image — writing a prompt is not enough) or give the answer it asks for, then stop and " +
-      "let the app advance. There is NO complete_step and no checklist to maintain — never claim a step is done, " +
-      "never skip ahead, never wait for the reader to say 'continue'. If you can't complete the current step, say " +
-      "what's blocking you instead of pretending — the app will surface it to the reader.\n"
-    : "MULTI-STEP TASKS — if a request needs 2+ steps, your VERY FIRST action is ALWAYS set_plan: lay out your " +
-      "OWN checklist before doing any of the work. This INCLUDES making several images — ONE step per image " +
-      "(\"5 images of a sunset\" → set_plan [\"Generate image 1 of the sunset\",\"Generate image 2 of the " +
-      "sunset\",\"Generate image 3 of the sunset\",\"Generate image 4 of the sunset\",\"Generate image 5 of the " +
-      "sunset\"]). Write each step as one concrete action that reads like the reader said it, not a vague label. " +
-      "The checklist is shown to you at the top of EVERY turn (✓ done, ▸ current, · pending) and is the ONLY " +
-      "record of progress that counts. Work it top-down: do the ▸ current step (call its tool, or reply in plain " +
-      "text as the LAST thing in the turn), then complete_step — but ONLY once that step is genuinely finished. " +
-      "The app re-runs you automatically while any step is unfinished, so keep going step by step on your own — " +
-      "NEVER wait for the reader to say 'continue', and never tick several steps at once to 'catch up'. " +
-      "NARRATE EVERY STEP: at the start of each step write ONE short plain-text line saying what you just " +
-      "finished and what you're doing next (e.g. \"✓ Image 1 done — now generating image 2 of 3.\"), THEN take " +
-      "that single step's action. Do EXACTLY ONE step's work before each complete_step — one check-off per " +
-      "reply, never two in a row (the app refuses a second check-off that has no work between). " +
-      "CRITICAL FOR IMAGES: an image step is done ONLY after you have ACTUALLY CALLED generate_image for it AND " +
-      "its render has come back THIS turn — then tick it. NEVER decide a ▸ or · step is already done because " +
-      "pictures already appear earlier in the chat: those are from earlier steps or an EARLIER request and DO " +
-      "NOT count. So for every step that isn't ✓, actually call generate_image again — do not skip it, do not " +
-      "just mark it done. There is NO limit on how long a job takes — never refuse or shrink it. Stop only when " +
-      "EVERY step is ✓ (give a short wrap-up) or you're genuinely blocked and need the reader (say what you " +
-      "need; don't tick the step). If a step fails, resume from the first unfinished step — don't redo ✓ ones.\n";
+  // The MULTI-STEP playbook. CRITICAL: keep this LEAN when there's no active plan — a dense planning
+  // sermon on every turn makes small models narrate or over-plan a SINGLE action ("draw X") instead of
+  // just calling the tool. So with no plan we give a one-line single-vs-multi hint; the full discipline
+  // appears only once a checklist is actually running.
+  const multiStepGuide = !hasPlan
+    ? "MULTI-STEP vs SINGLE: a task with 2+ distinct actions (e.g. several images, or research → write-up) → " +
+      "call set_plan FIRST, one step per action. A SINGLE action (one image, one search, one file, one answer) → " +
+      "just call its tool directly; do NOT make a plan for one step.\n"
+    : opts.appManagedSteps
+      ? // App-managed mid-plan: the YOUR CURRENT STEP block already says do-one-step / no complete_step.
+        ""
+      : // Legacy mid-plan: terse checklist discipline (no verbose "narrate every step" mandate — that
+        // made weak models write prose instead of calling the tool).
+        "WORKING THE CHECKLIST: do the ▸ current step now — call its tool (an image step REQUIRES an actual " +
+        "generate_image call THIS turn, not just a described prompt) or give its answer, then complete_step. " +
+        "ONE step's work per reply (never tick two in a row). The app re-runs you while steps remain, so keep " +
+        "going on your own — don't wait for the reader to say 'continue'. Stop only when every step is ✓ (a short " +
+        "wrap-up) or you're genuinely blocked and need the reader (say what you need; don't tick the step).\n";
   // The set_plan/complete_step catalog line. In App-managed-steps mode the model only COMPILES a plan
   // (optionally tagging each step with the tool it `needs`); the app runs it and ticks steps from
   // observed effects, so complete_step is withdrawn entirely.
@@ -905,11 +889,8 @@ export function buildBuddySystemPrompt(opts: {
   const routingGuide =
     "HOW TO PICK A TOOL — match the reader's actual intent, and DON'T reach for a tool when a direct " +
     "answer (or one clarifying question) is better:\n" +
-    "• PARSE THE INTENT FIRST, then form clean tool arguments. The reader phrases things however feels " +
-    "natural — work out what they actually want and pass NORMALIZED inputs, never their raw sentence. " +
-    "Pull out the real query terms (drop \"can you\", \"please\", \"find me\", \"my\", \"the\", filler), " +
-    "expand a vague ask, fix obvious typos. A tool argument is a precise machine input, not an echo of " +
-    "what they typed. (Only a /slash command is taken literally.)\n" +
+    "• Pass CLEAN tool arguments: the real query terms, not the reader's whole sentence (drop filler like " +
+    "\"can you\"/\"please\"/\"my\"/\"the\"). Only a /slash command is taken literally.\n" +
     "• Chatting / reasoning / writing prose → NO tool. Any real math → calculate (never do it in your head).\n" +
     "• A fact you're unsure of → search_web, then read (source:\"url\") the best hit." +
     (opts.canWolfram ? " An authoritative real-world VALUE/quantity → wolfram." : "") +
@@ -1697,6 +1678,96 @@ export function inferContentMode(sample: string): "fiction" | "technical" {
     return "technical";
   if (/https?:\/\/[^\s]*(\.gov|\.edu|wikipedia\.org|arxiv\.org|github\.com|docs\.)/.test(s)) return "technical";
   return "fiction";
+}
+
+// The native tool_calls→text bridge lives in the providers/llm layer (the provider imports it); re-export
+// it here so buddy-side callers + tests have one import surface.
+export { nativeToolCallsToText, type NativeToolCall } from "../providers/llm/chat.js";
+
+const strParam = (description: string) => ({ type: "string", description });
+function toolFn(
+  name: string,
+  description: string,
+  properties: ToolSchema["function"]["parameters"]["properties"],
+  required: string[] = [],
+): ToolSchema {
+  return { type: "function", function: { name, description, parameters: { type: "object", properties, required } } };
+}
+
+/**
+ * NATIVE tool definitions to hand a tool-capable local model (Ollama `tools`), so it emits structured
+ * `tool_calls` instead of having to follow the text-JSON protocol — the reliable path for small models
+ * (Gemma etc.). A high-value CORE set, gated by the same availability flags as the text catalog; the
+ * full catalog still lives in the prompt, so anything not here still works via the text path. Names +
+ * args MATCH what `parseToolObject` accepts, so the serialized calls round-trip cleanly. PURE.
+ */
+export function ollamaToolSchemas(opts: {
+  canSearchFiles?: boolean;
+  canRunCommands?: boolean;
+  canWolfram?: boolean;
+}): ToolSchema[] {
+  const t: ToolSchema[] = [
+    toolFn(
+      "generate_image",
+      "Generate a NEW image from a text description and show it in the chat. Use this whenever the reader asks you to draw, make, generate, render, or create a picture/image of something.",
+      { prompt: strParam("A vivid, concrete description of what to depict.") },
+      ["prompt"],
+    ),
+    toolFn("search_web", "Search the web for current facts, pages, or sources.", { query: strParam("The search query.") }, ["query"]),
+    toolFn(
+      "search_images",
+      "Find EXISTING photos/pictures on the web (NOT new art — use generate_image for that).",
+      { query: strParam("What to find pictures of.") },
+      ["query"],
+    ),
+    toolFn("search_books", "Search Project Gutenberg for a public-domain book.", { query: strParam("Title, author, or topic.") }, ["query"]),
+    toolFn(
+      "read",
+      "Pull text into the chat: a web page, a saved library book, a local file, or pasted prose.",
+      {
+        source: { type: "string", description: "Where to read from.", enum: ["url", "library", "file", "pasted"] },
+        ref: strParam("The URL, library book id, or file path (per source)."),
+        url: strParam("The URL when source is 'url'."),
+      },
+      ["source"],
+    ),
+    toolFn("open_image", "Show an existing image FILE inline in the chat (a screenshot, photo, render).", { path: strParam("Path to the image file.") }, ["path"]),
+    toolFn("calculate", "Do exact arithmetic/math (never compute in your head).", { expression: strParam("The expression, e.g. 12*(3+4).") }, ["expression"]),
+    toolFn(
+      "set_plan",
+      "Lay out a working checklist for a task that needs 2+ steps. Call this FIRST, before doing the steps.",
+      {
+        goal: strParam("The overall goal."),
+        steps: { type: "array", description: "Each step as one clear action, in order.", items: { type: "string" } },
+      },
+      ["steps"],
+    ),
+    toolFn("complete_step", "Mark the CURRENT checklist step done — only after you've actually done it.", { note: strParam("Optional short note.") }, []),
+    toolFn(
+      "remember",
+      "Save a durable note about the reader, or about your own/their identity.",
+      { note: strParam("The note to remember."), about: { type: "string", description: "Which store.", enum: ["reader", "self", "user"] } },
+      ["note"],
+    ),
+    toolFn("forget", "Remove durable notes containing this text.", { match: strParam("Text identifying the note(s) to forget.") }, ["match"]),
+  ];
+  if (opts.canSearchFiles) {
+    t.push(toolFn("find_files", "Search the reader's OWN COMPUTER for a file by name.", { query: strParam("Distinctive filename words (+ a type like md/pdf).") }, ["query"]));
+    t.push(toolFn("read_file", "Read a local file's text into the chat.", { path: strParam("Absolute path to the file.") }, ["path"]));
+  }
+  if (opts.canRunCommands) {
+    t.push(
+      toolFn(
+        "write_file",
+        "Save a file into the workspace (so you can then run it).",
+        { path: strParam("Workspace-relative path, e.g. analysis.py."), content: strParam("The file's contents."), append: { type: "boolean", description: "Append instead of overwrite." } },
+        ["path", "content"],
+      ),
+    );
+    t.push(toolFn("run_command", "Run ONE approved shell command in the workspace.", { command: strParam("The exact command.") }, ["command"]));
+  }
+  if (opts.canWolfram) t.push(toolFn("wolfram", "Authoritative real-world values/computation via Wolfram|Alpha.", { query: strParam("The question.") }, ["query"]));
+  return t;
 }
 
 /** The first tool call in a reply (back-compat — the planner runs one tool at a time). */
