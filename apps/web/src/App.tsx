@@ -176,6 +176,8 @@ import {
   externalizeChatImages,
   externalizedImageId,
   restoreInlineImages,
+  applyFileEdits,
+  summarizeFileEdits,
   type ChatTurn,
   type CreatedFileRef,
   type ContextUsage,
@@ -272,6 +274,7 @@ import {
   whichInterpreter,
   appRepoRoot,
   writeWorkspaceFile,
+  readWorkspaceFile,
   gitEnsureRepo,
   gitWorktreeCreate,
   gitCommitAll,
@@ -4446,6 +4449,64 @@ export function App() {
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
+  // Edit an EXISTING workspace file in place via search/replace (no whole-file rewrite). Reads the file,
+  // applies the edits (each `search` must match exactly once), writes it back. Mirrors runWriteFile.
+  const runEditFile = async (call: Extract<BuddyToolCall, { tool: "edit_file" }>): Promise<void> => {
+    setBuddyPendingTool(undefined);
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+    if (!isDesktop || !settings.allowCommands) {
+      appendBuddy({ role: "tool", text: "🔒 Editing files needs the desktop app + command access (Settings → assistant abilities).", turns: [] });
+      return;
+    }
+    setBuddyBusy(true);
+    setBuddyActivity(`Editing ${call.path}…`);
+    let payload: { path: string; ok: boolean; applied?: number; summary?: string; error?: string };
+    try {
+      const file = await readWorkspaceFile(call.path, buddyWorkingDir || undefined);
+      if (!file.exists) {
+        payload = { path: call.path, ok: false, error: "file not found — write_file it first, or check the path" };
+        appendBuddy({ role: "tool", text: `⚠ edit_file: ${call.path} doesn't exist yet.`, turns: [] });
+      } else {
+        const r = applyFileEdits(file.text, call.edits);
+        const summary = summarizeFileEdits(call.path, r);
+        if (r.applied > 0) await writeWorkspaceFile(call.path, r.content, buddyWorkingDir || undefined);
+        payload = { path: call.path, ok: r.applied > 0, applied: r.applied, summary };
+        recordCreatedFile(call.path, r.content.split("\n").length, false);
+        appendBuddy({
+          role: "tool",
+          text: r.failures.length === 0 ? `✏️ Edited ${call.path} (${r.applied} edit${r.applied === 1 ? "" : "s"})` : `✏️ ${call.path}: ${r.applied} applied, ${r.failures.length} failed`,
+          attachments: [{ name: call.path.split(/[\\/]/).pop() || call.path, mime: "", kind: createdFileKind(call.path), path: file.path }],
+          turns: [],
+        });
+        // Mirror a live change into the open code window (like runWriteFile).
+        const openCode = bookRef.current;
+        if (r.applied > 0 && openCode?.contentMode === "code" && call.path === codeFileName(openCode)) {
+          setCodeDraft(r.content);
+          setBook((prev) => (prev && prev.id === openCode.id ? { ...prev, code: r.content } : prev));
+          void libraryStore.putBook({ ...openCode, code: r.content }).catch(() => {});
+        }
+      }
+    } catch (err) {
+      payload = { path: call.path, ok: false, error: err instanceof Error ? err.message : String(err) };
+      appendBuddy({ role: "tool", text: `⚠ Couldn't edit ${call.path}: ${payload.error}`, turns: [] });
+    }
+    const feedback = formatBuddyToolResult(call, { editFile: payload });
+    if (appManagedActive && buddyWorkflowRef.current) {
+      // A file step is satisfied by a SUCCESSFUL edit (writeFile-shaped evidence so the collar's `file`
+      // contract reads it the same as a write).
+      buddyStepEvidenceRef.current.toolResults.push({ call, result: { writeFile: { path: call.path, ok: payload.ok, ...(payload.error ? { error: payload.error } : {}) } } });
+      await advanceWorkflowAfterTurn(
+        { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+      );
+      return;
+    }
+    await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+  };
+
   // Approve a buddy-requested screenshot: capture the screen, show it, have the
   // vision model describe it, and feed that observation back so the model reacts.
   const approveScreenshot = async (call: Extract<BuddyToolCall, { tool: "screenshot" }>): Promise<void> => {
@@ -4520,6 +4581,13 @@ export function App() {
           } catch (err) {
             return { writeFile: { path: call.path, ok: false, error: err instanceof Error ? err.message : String(err) } };
           }
+        }
+        if (call.tool === "edit_file") {
+          const file = await readWorkspaceFile(call.path, dir);
+          if (!file.exists) return { editFile: { path: call.path, ok: false, error: "file not found" } };
+          const r = applyFileEdits(file.text, call.edits);
+          if (r.applied > 0) await writeWorkspaceFile(call.path, r.content, dir);
+          return { editFile: { path: call.path, ok: r.applied > 0, applied: r.applied, summary: summarizeFileEdits(call.path, r) } };
         }
         if (call.tool === "screenshot") {
           const shot = await captureScreen(call.window);
@@ -4722,7 +4790,7 @@ export function App() {
   };
   /** Host tools that need the DESKTOP runtime — relayed when a phone drives the buddy. */
   const isDesktopRuntimeTool = (call: BuddyToolCall): boolean =>
-    call.tool === "find_files" || call.tool === "run_command" || call.tool === "write_file" || call.tool === "screenshot";
+    call.tool === "find_files" || call.tool === "run_command" || call.tool === "write_file" || call.tool === "edit_file" || call.tool === "screenshot";
   /** Run a desktop-runtime host tool — locally on the desktop, or via the relay on a linked phone. */
   const runHostToolDispatch = (call: BuddyToolCall): void => {
     if (isRemoteClient && isDesktopRuntimeTool(call)) {
@@ -4732,6 +4800,7 @@ export function App() {
     if (call.tool === "find_files") approveFindFiles(call);
     else if (call.tool === "screenshot") void approveScreenshot(call);
     else if (call.tool === "write_file") void runWriteFile(call);
+    else if (call.tool === "edit_file") void runEditFile(call);
     else if (call.tool === "run_command") void approveRunCommand(call);
   };
 

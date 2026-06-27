@@ -42,6 +42,23 @@ describe("parseBuddyToolCall — set_plan steps", () => {
   });
 });
 
+describe("parseBuddyToolCall — edit_file", () => {
+  it("parses an edit_file with one or more search/replace edits", () => {
+    expect(
+      parseBuddyToolCall('{"tool":"edit_file","path":"src/a.py","edits":[{"search":"x","replace":"y"}]}'),
+    ).toEqual({ tool: "edit_file", path: "src/a.py", edits: [{ search: "x", replace: "y" }] });
+  });
+  it("drops an edit_file with no usable edits or no path", () => {
+    expect(parseBuddyToolCall('{"tool":"edit_file","path":"a.py","edits":[]}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"edit_file","path":"a.py","edits":[{"replace":"y"}]}')).toBeUndefined(); // no search
+    expect(parseBuddyToolCall('{"tool":"edit_file","edits":[{"search":"x","replace":"y"}]}')).toBeUndefined(); // no path
+  });
+  it("formats an edit_file result (applied / failed / hard error)", () => {
+    expect(formatBuddyToolResult({ tool: "edit_file", path: "a.py", edits: [{ search: "x", replace: "y" }] }, { editFile: { path: "a.py", ok: true, applied: 1, summary: "[edit_file applied 1 edit(s) to a.py.]" } })).toContain("applied 1 edit");
+    expect(formatBuddyToolResult({ tool: "edit_file", path: "a.py", edits: [] }, { editFile: { path: "a.py", ok: false, error: "file not found" } })).toContain("read_file it and retry");
+  });
+});
+
 describe("parseBuddyToolCall", () => {
   it("parses the search tools", () => {
     expect(parseBuddyToolCall('{"tool":"search_books","query":"frankenstein"}')).toEqual({
@@ -1177,7 +1194,10 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
           args[key] = p.enum
             ? p.enum[0]
             : p.type === "array"
-              ? ["x"]
+              ? // An array of OBJECTS (e.g. edit_file.edits) → one object with each sub-prop filled.
+                p.items?.properties
+                ? [Object.fromEntries(Object.keys(p.items.properties).map((k) => [k, "x"]))]
+                : ["x"]
               : p.type === "boolean"
                 ? true
                 : key === "url" || key === "ref"

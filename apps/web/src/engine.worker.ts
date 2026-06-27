@@ -3393,6 +3393,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         slash.call.tool === "find_files" ||
         slash.call.tool === "run_command" ||
         slash.call.tool === "write_file" ||
+        slash.call.tool === "edit_file" ||
         slash.call.tool === "screenshot" ||
         slash.call.tool === "plan_task" ||
         slash.call.tool === "prep_order" ||
@@ -3559,7 +3560,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const requiredNeeds = msg.appManagedSteps ? plan?.steps.find((s) => s.status !== "done")?.needs : undefined;
     const toolFormat =
       requiredNeeds && llm.id === "local-server"
-        ? buildToolCallFormat(requiredNeeds === "write_file" ? ["write_file", "read_file"] : [requiredNeeds])
+        ? buildToolCallFormat(requiredNeeds === "write_file" ? ["write_file", "edit_file", "read_file"] : [requiredNeeds])
         : undefined;
     const outcome = await withChatPriority(llm.id, () => runBuddyTurn({
       llm,

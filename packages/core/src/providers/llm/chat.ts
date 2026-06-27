@@ -80,7 +80,16 @@ export interface ToolSchema {
     description: string;
     parameters: {
       type: "object";
-      properties: Record<string, { type: string; description?: string; enum?: string[]; items?: { type: string } }>;
+      properties: Record<
+        string,
+        {
+          type: string;
+          description?: string;
+          enum?: string[];
+          // Array items: a primitive (`{type}`) OR an object schema (for an array of structured edits).
+          items?: { type: string; properties?: Record<string, { type: string; description?: string }>; required?: string[] };
+        }
+      >;
       required?: string[];
     };
   };

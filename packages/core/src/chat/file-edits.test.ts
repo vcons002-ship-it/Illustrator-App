@@ -1,0 +1,50 @@
+import { describe, expect, it } from "vitest";
+import { applyFileEdits, summarizeFileEdits } from "./file-edits.js";
+
+describe("applyFileEdits", () => {
+  it("applies a single unique edit", () => {
+    const r = applyFileEdits("const a = 1;\nconst b = 2;\n", [{ search: "const a = 1;", replace: "const a = 42;" }]);
+    expect(r.content).toBe("const a = 42;\nconst b = 2;\n");
+    expect(r.applied).toBe(1);
+    expect(r.failures).toEqual([]);
+  });
+
+  it("applies multiple edits in order against the evolving text", () => {
+    const r = applyFileEdits("x\ny\nz\n", [
+      { search: "x", replace: "1" },
+      { search: "y", replace: "2" },
+    ]);
+    expect(r.content).toBe("1\n2\nz\n");
+    expect(r.applied).toBe(2);
+  });
+
+  it("reports not_found and leaves the file unchanged for that edit", () => {
+    const r = applyFileEdits("hello world", [{ search: "goodbye", replace: "x" }]);
+    expect(r.content).toBe("hello world");
+    expect(r.applied).toBe(0);
+    expect(r.failures).toEqual([{ index: 0, search: "goodbye", reason: "not_found" }]);
+  });
+
+  it("reports ambiguous when the search matches 2+ times (never guesses)", () => {
+    const r = applyFileEdits("foo\nfoo\n", [{ search: "foo", replace: "bar" }]);
+    expect(r.content).toBe("foo\nfoo\n"); // untouched
+    expect(r.failures[0]).toMatchObject({ reason: "ambiguous" });
+  });
+
+  it("a later edit can disambiguate after an earlier one changed the text", () => {
+    // First edit makes the second occurrence unique.
+    const r = applyFileEdits("foo\nfoo\n", [
+      { search: "foo\nfoo", replace: "FOO\nfoo" }, // unique multi-line anchor
+      { search: "foo", replace: "bar" }, // now only one 'foo' remains
+    ]);
+    expect(r.content).toBe("FOO\nbar\n");
+    expect(r.applied).toBe(2);
+  });
+
+  it("summarizeFileEdits: clean vs failures", () => {
+    expect(summarizeFileEdits("a.ts", { content: "", applied: 2, failures: [] })).toContain("applied 2 edit");
+    const s = summarizeFileEdits("a.ts", { content: "", applied: 1, failures: [{ index: 1, search: "x", reason: "ambiguous" }] });
+    expect(s).toContain("1 applied, 1 FAILED");
+    expect(s).toContain("more surrounding context");
+  });
+});
