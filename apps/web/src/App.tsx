@@ -463,6 +463,13 @@ export function App() {
   const multiFile = useRef<Record<string, { index: number; count: number }>>({});
   const [pullProgress, setPullProgress] = useState<Record<string, { status: string; percent?: number }>>({});
   const [engineStatus, setEngineStatus] = useState("");
+  // Low-VRAM deferred engine start: at boot we DON'T launch the app-managed ComfyUI (so a large local
+  // LLM can take the whole GPU); it spins up on the first image instead. `engineDeferredRef` marks that
+  // we skipped the eager start; `managedBaseUrlRef` holds the URL the moment it starts (read race-free,
+  // before the React settings sync); `engineStartingRef` coalesces concurrent lazy starts.
+  const engineDeferredRef = useRef(false);
+  const managedBaseUrlRef = useRef<string | undefined>(undefined);
+  const engineStartingRef = useRef<Promise<true | string> | undefined>(undefined);
   const [installedLoras, setInstalledLoras] = useState<string[]>([]);
   const [loraFamilyMap, setLoraFamilyMap] = useState<Record<string, string>>({});
   const [library, setLibrary] = useState<BookSummary[]>([]);
@@ -512,6 +519,7 @@ export function App() {
     resolveConflicts,
     chat,
     chatTool,
+    applyEngineConfig,
     chatCancel,
     warmLlm,
     buddyChat,
@@ -1375,6 +1383,10 @@ export function App() {
       } catch {
         /* leave components empty — the fields fall back to manual entry */
       }
+      // Record the URL synchronously (refs don't wait for the React re-render) so a deferred lazy start
+      // can hand it straight to the worker, and clear the deferred flag now that the engine is up.
+      managedBaseUrlRef.current = baseUrl;
+      engineDeferredRef.current = false;
       setSettings((cur) => ({ ...cur, engineBaseUrl: baseUrl, engineBackend: "comfyui", ...(vram ? { gpuVramMb: vram } : {}) }));
       return true;
     } catch (err) {
@@ -1427,6 +1439,15 @@ export function App() {
     const url = (s.localServerUrl ?? "").trim();
     const backendName = backend === "a1111" ? "AUTOMATIC1111" : "ComfyUI";
     setLocalError("");
+    // LOW-VRAM deferred start: don't launch the app-managed ComfyUI at boot — a large local LLM can then
+    // take the whole GPU. It starts lazily on the first standalone image (ensureRenderEngineReady) or
+    // eagerly when a book opens (its bible build needs it). Only the managed paths defer; a configured
+    // user server is still probed (it's their process, not ours to schedule). Skipped once a book is open.
+    const managedStart = source === "managed" || (source === "server" && !url);
+    if (managedStart && isDesktop && s.lowVram && !bookRef.current) {
+      engineDeferredRef.current = true;
+      return;
+    }
     if (source === "server") {
       if (!url) {
         // Nothing configured yet: on desktop start the managed engine; on web just wait for Connect
@@ -1466,6 +1487,32 @@ export function App() {
       }
     }
   }, [probeServer, startManagedEngine]);
+
+  // Lazily start the deferred (low-VRAM) managed engine before a STANDALONE render, then hand its URL to
+  // the worker immediately (applyEngineConfig) so the render — which rebuilds providers fresh from
+  // settings — uses it without waiting on the debounced settings sync. No-op when not deferred (already
+  // running, a user's own server, or low-VRAM off). Concurrent calls share ONE in-flight start.
+  const ensureRenderEngineReady = useCallback(async (): Promise<void> => {
+    if (!engineDeferredRef.current) return;
+    setEngineStatus("Starting the local image engine…");
+    const start = engineStartingRef.current ?? startManagedEngine();
+    engineStartingRef.current = start;
+    try {
+      const res = await start;
+      if (res === true && managedBaseUrlRef.current) applyEngineConfig(managedBaseUrlRef.current);
+    } finally {
+      engineStartingRef.current = undefined;
+    }
+  }, [startManagedEngine, applyEngineConfig]);
+
+  // LOW-VRAM: when a book opens while the managed engine was deferred, start it now — a bible build needs
+  // it, and the full start path rebuilds the book's persistent engine with the real URL (vs. the
+  // tune-only flush used for standalone chat/playground renders). Desktop + local-image only.
+  useEffect(() => {
+    if (!book || !engineDeferredRef.current) return;
+    if (!isDesktop || settingsRef.current.imageProvider !== "local") return;
+    void startManagedEngine();
+  }, [book, startManagedEngine]);
 
   // Re-resolve the active engine when the local path is chosen and whenever the "Generate on" source
   // changes. NOT on URL keystrokes or a backend-dropdown flip — those are committed explicitly via
@@ -3383,6 +3430,7 @@ export function App() {
   // HTML previews/saves as one standalone file. Failed renders just fall back to alt text.
   const onBuildDocument = useCallback(
     async (html: string, onProgress?: (done: number, total: number) => void) => {
+      await ensureRenderEngineReady(); // low-VRAM: start the deferred engine before the first doc image
       const placeholders = parseDocImages(html);
       const srcById = new Map<string, string>();
       let generated = 0;
@@ -3403,7 +3451,16 @@ export function App() {
       onProgress?.(placeholders.length, placeholders.length);
       return { html: embedDocImages(html, srcById), generated, failed };
     },
-    [testRender],
+    [testRender, ensureRenderEngineReady],
+  );
+
+  // Playground render that first spins up the deferred (low-VRAM) managed engine, then renders.
+  const onTestRender = useCallback(
+    async (text: string, opts?: Parameters<typeof testRender>[1]): ReturnType<typeof testRender> => {
+      await ensureRenderEngineReady();
+      return testRender(text, opts);
+    },
+    [ensureRenderEngineReady, testRender],
   );
 
   // Drop a rendered image (from Test image / Transform photo) into the live chat —
@@ -4642,6 +4699,8 @@ export function App() {
     if (buddyRenderingRef.current) return; // a render is already in flight — drop the duplicate approval
     buddyRenderingRef.current = true;
     setBuddyPendingTool(undefined);
+    // Low-VRAM: spin up the app-managed engine now if it was deferred at boot (no-op otherwise).
+    await ensureRenderEngineReady();
     // Capture the model-facing context up to this image call so a multi-step PLAN can AUTO-REACT after
     // the render (mirrors approveRunCommand) instead of halting for the reader to type "continue".
     const pre = pendingBuddyTranscript.current;
@@ -7357,13 +7416,13 @@ export function App() {
       )}
 
       {showTestImage && (
-        <TestImageModal onRender={testRender} onAddToChat={onAddImageToChat} onClose={() => setShowTestImage(false)} />
+        <TestImageModal onRender={onTestRender} onAddToChat={onAddImageToChat} onClose={() => setShowTestImage(false)} />
       )}
 
       {showPhoto && (
         <PhotoTransformModal
           {...(photoInitial ? { initial: photoInitial } : {})}
-          onRender={(text, opts) => testRender(text, opts)}
+          onRender={onTestRender}
           onAddToChat={onAddImageToChat}
           onExtractText={(img) => void extractTextFromImage(img)}
           onClose={() => {

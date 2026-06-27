@@ -245,6 +245,10 @@ export interface EngineWorkerApi {
   ) => Promise<ChatDoneResult>;
   /** Run a user-approved generate_image tool call. */
   chatTool: (call: ToolCall, opts?: { onProgress?: (fraction: number) => void }) => Promise<ChatToolRender>;
+  /** Push a just-resolved managed-engine URL to the worker RIGHT NOW (race-free, ahead of the debounced
+   * settings sync) so the next STANDALONE render — which rebuilds providers fresh from settings — uses
+   * it. Used by the low-VRAM deferred-engine-start path. */
+  applyEngineConfig: (baseUrl: string) => void;
   /** Have the chat's vision model describe a captured screenshot. */
   assessImage: (
     image: { bytes: ArrayBuffer; mimeType: string },
@@ -1257,6 +1261,15 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     return () => clearTimeout(timer);
   }, [identityKey]); // deliberately keyed on the identity FIELDS, not the settings object
 
+  // Hand the worker a just-started managed-engine URL immediately (the low-VRAM deferred-start path),
+  // ahead of the debounced identity sync, so the next standalone render uses it without a race. The URL
+  // is passed EXPLICITLY (settingsRef hasn't re-rendered with it yet); other fields ride the stale-but-
+  // current snapshot and the full identity sync follows shortly after.
+  const applyEngineConfig = useCallback((baseUrl: string) => {
+    if (remoteRef.current) return;
+    send({ type: "tune", settings: { ...settingsRef.current, engineBaseUrl: baseUrl, engineBackend: "comfyui" } });
+  }, []);
+
   useEffect(() => {
     if (remoteRef.current) return; // the desktop tunes its own engine (see the identity effect)
     send({ type: "tune", settings: settingsRef.current });
@@ -2038,6 +2051,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     resolveConflicts,
     chat,
     chatTool,
+    applyEngineConfig,
     chatCancel,
     warmLlm,
     buddyChat,
