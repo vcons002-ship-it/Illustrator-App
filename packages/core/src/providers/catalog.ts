@@ -449,6 +449,39 @@ export function serverModelVramCostGb(name: string): number {
   return Math.ceil(params * bytesPerParam + 1.5);
 }
 
+/**
+ * Whether the chat LLM + the image model both fit in VRAM (with headroom) — drives whether the worker
+ * EVICTS the chat LLM for a render. Returns "fit" / "nofit" / "unknown" ("unknown" when VRAM or either
+ * model size couldn't be estimated). The caller's rule with low-VRAM OFF: free ONLY on "nofit" — keep
+ * the model loaded on "fit" OR "unknown" (a cold reload of a big model is the expensive part; never pay
+ * it on a guess). PURE. */
+export function chatImageVramFit(opts: { gpuVramMb?: number | undefined; imageGb: number; chatGb: number; headroomGb?: number | undefined }): "fit" | "nofit" | "unknown" {
+  const { gpuVramMb, imageGb, chatGb } = opts;
+  const headroomGb = opts.headroomGb ?? 2;
+  if (!gpuVramMb || gpuVramMb <= 0 || imageGb <= 0 || chatGb <= 0) return "unknown";
+  return (imageGb + chatGb + headroomGb) * 1024 <= gpuVramMb ? "fit" : "nofit";
+}
+
+/**
+ * A safe DEFAULT Ollama loaded-context window (num_ctx) so a small model isn't split into shared RAM.
+ * Ollama, given no num_ctx, loads at its own (often huge) default window and pre-allocates a KV cache
+ * sized to that whole window — its load-time fit ESTIMATE then overflows VRAM and it offloads layers to
+ * CPU even when real usage is tiny. A modest window keeps the estimate honest so all layers stay on the
+ * GPU. Sizes from the model's weights + leftover VRAM (reusing the kv math), clamped to 8192..32768;
+ * conservative 8192 when VRAM is unknown. PURE. */
+export function defaultLoadedWindow(modelName: string, gpuVramMb?: number): number {
+  const MIN = 8192;
+  const MAX = 32768;
+  if (!gpuVramMb || gpuVramMb <= 0) return MIN;
+  const weightsGb = serverModelVramCostGb(modelName); // 0 when the tag has no parseable params
+  const freeGb = gpuVramMb / 1024;
+  const kvBudgetGb = Math.max(0, freeGb - (weightsGb || 4) - 1); // leave ~1GB compute/overhead
+  const kvPer8k = Math.max(1, Math.round(((weightsGb || 4) / 20) * 2)); // GB of KV per 8k tokens
+  const extraTokens = Math.floor((kvBudgetGb / kvPer8k) * 8192);
+  const window = MIN + Math.max(0, extraTokens);
+  return Math.min(MAX, Math.max(MIN, Math.floor(window / 2048) * 2048));
+}
+
 /** One installed chat model that can run ALONGSIDE the chosen image model. */
 export interface ImagePairingOption {
   /** Installed chat model id (e.g. an Ollama tag). */

@@ -14,6 +14,7 @@ import {
   LOCAL_IMAGE_MODELS,
   imageModelVramCostGb,
   serverModelVramCostGb,
+  defaultLoadedWindow,
   recommendImageModePairings,
   OLLAMA_TEXT_MODELS,
   getImageStyle,
@@ -810,7 +811,7 @@ export function SettingsPanel({
                       type="number"
                       min={1024}
                       step={1024}
-                      placeholder={textModelContext?.loaded ? `default ${textModelContext.loaded}` : "Ollama default"}
+                      placeholder={`auto ${defaultLoadedWindow(model, value.gpuVramMb)}${textModelContext?.loaded ? ` · Modelfile ${textModelContext.loaded}` : ""}`}
                       value={cur ?? ""}
                       onChange={(e) => {
                         const n = Number(e.target.value);

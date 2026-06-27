@@ -108,3 +108,38 @@ describe("InMemoryStore library", () => {
     expect(await store.getImage("book2:p0")).toBeDefined();
   });
 });
+
+describe("chat image blobs (externalized message bytes)", () => {
+  it("puts and gets a blob keyed by (chatId, id)", async () => {
+    const store = new InMemoryStore();
+    const bytes = new Uint8Array([7, 8, 9]).buffer;
+    await store.putImageBlob("chat-1", "img-a", bytes, "image/png");
+    const got = await store.getImageBlob("chat-1", "img-a");
+    expect(got).toEqual({ bytes, mimeType: "image/png" });
+    // Same id under a DIFFERENT chat is a different blob (no cross-chat collision).
+    expect(await store.getImageBlob("chat-2", "img-a")).toBeUndefined();
+  });
+
+  it("drops a chat's blobs when its history is deleted, leaving other chats intact", async () => {
+    const store = new InMemoryStore();
+    const bytes = new Uint8Array([1]).buffer;
+    await store.putImageBlob("chat-1", "img-a", bytes, "image/png");
+    await store.putImageBlob("chat-1", "img-b", bytes, "image/png");
+    await store.putImageBlob("chat-2", "img-a", bytes, "image/png");
+
+    await store.deleteChatHistory("chat-1");
+
+    expect(await store.getImageBlob("chat-1", "img-a")).toBeUndefined();
+    expect(await store.getImageBlob("chat-1", "img-b")).toBeUndefined();
+    expect(await store.getImageBlob("chat-2", "img-a")).toBeDefined();
+  });
+
+  it("removeBook drops the book's chat blobs too", async () => {
+    const store = new InMemoryStore();
+    const bytes = new Uint8Array([2]).buffer;
+    await store.putBook(book("bk", "Book"));
+    await store.putImageBlob("bk", "img-x", bytes, "image/png");
+    await store.removeBook("bk");
+    expect(await store.getImageBlob("bk", "img-x")).toBeUndefined();
+  });
+});

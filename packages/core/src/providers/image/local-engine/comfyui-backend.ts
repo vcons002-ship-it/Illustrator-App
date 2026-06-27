@@ -669,7 +669,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
    * GPU after a render. Only called in low-VRAM mode (the default keeps the model hot for the next
    * image). Best-effort: freeing is an optimization, never required for correctness.
    */
-  private async freeMemory(): Promise<void> {
+  async freeMemory(): Promise<void> {
     try {
       await this.transport.send({
         url: `${this.baseUrl}/free`,
