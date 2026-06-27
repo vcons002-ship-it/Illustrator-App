@@ -903,7 +903,10 @@ export function buildBuddySystemPrompt(opts: {
       'A step can also name the exact files it must produce ("produces":["a.py","b.py"] — the app verifies they ' +
       'exist) and a check command ("verify":"pytest -q" — the app runs it and won\'t pass the step until it exits ' +
       "0). For a LONG DOCUMENT or many code files, plan it as an OUTLINE first, then ONE step per section/file " +
-      "(each writes its part with write_file/append) — don't try to emit the whole thing in one step.\n"
+      "(each writes its part with write_file/append) — don't try to emit the whole thing in one step. " +
+      "For a job too big for a single plan (a whole app, a long multi-part report), FIRST write the brief " +
+      "to durable artifacts — REQUIREMENTS.md (what to build) and TASKS.md (the checklist) via write_file — " +
+      "then work the tasks plan-by-plan, updating TASKS.md as you finish each, so nothing is lost between turns.\n"
     : '- {"tool":"set_plan","goal":"…","steps":["Say the number 1","Say the number 2","Say the number 3"]} — for ' +
       "a MULTI-STEP request, FIRST lay out the checklist; phrase EACH step as a clear action or ask that reads " +
       "like the reader said it (so you can just do it), not a vague label. It's shown to you (and the reader) " +

@@ -375,9 +375,16 @@ export async function runBuddyTurn(opts: {
         // them to `transcript` persists them as chat history, which leaked the internal directive
         // into the conversation as a "user" message.
         messages.push({ role: "assistant", content: reply });
-        const nudge =
-          "[That looked like a tool call but wasn't something I could run. Re-issue each tool call " +
-          "as its own JSON object (one per line, no prose around them), or just answer in plain text.]";
+        // G8: a tool call that LOOKED valid but was cut off at the length limit (its content/args
+        // argument ran past the token budget) won't parse — and re-issuing the SAME giant call just
+        // truncates again. Steer to chunked writes instead of retrying the oversized argument.
+        const nudge = lastTruncated
+          ? "[That tool call was cut off at the length limit — its argument was too long to finish. " +
+            "Do NOT resend the whole thing. Instead write the file in chunks: a first write_file with " +
+            "the opening portion, then write_file(..., append:true) for each further chunk, or edit_file " +
+            "with a small search/replace to change just one part.]"
+          : "[That looked like a tool call but wasn't something I could run. Re-issue each tool call " +
+            "as its own JSON object (one per line, no prose around them), or just answer in plain text.]";
         messages.push({ role: "user", content: nudge });
         continue;
       }
