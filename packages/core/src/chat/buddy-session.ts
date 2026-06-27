@@ -1,4 +1,4 @@
-import type { ChatCapable, ChatTurn } from "../providers/llm/chat.js";
+import type { ChatCapable, ChatTurn, ToolSchema } from "../providers/llm/chat.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
 import type { BookSearchHit } from "../providers/book-search.js";
 import {
@@ -257,6 +257,10 @@ export async function runBuddyTurn(opts: {
   signal?: AbortSignal;
   /** Thinking level for local reasoning models (passed straight to the provider's chat). */
   reasoningEffort?: "none" | "low" | "medium" | "high";
+  /** Native tool schemas (Ollama `tools`) for a tool-capable local model — passed to the provider so
+   * it emits structured tool_calls. Cloud providers ignore it; the text catalog in `system` is the
+   * universal fallback. Build with `ollamaToolSchemas`. */
+  tools?: ToolSchema[];
   /**
    * Pause the auto-run tool loop after this many rounds for a "keep going?" checkpoint, instead of
    * running to the (much larger) `MAX_BUDDY_TOOL_ROUNDS` backstop. Set it for PAID/cloud models so a
@@ -326,6 +330,9 @@ export async function runBuddyTurn(opts: {
       ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
       ...(opts.cachePrefix ? { cachePrefix: opts.cachePrefix } : {}),
       ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
+      // Native tool schemas: a tool-capable local model emits structured tool_calls (the provider
+      // serializes them back into the text protocol). Cloud providers ignore this field.
+      ...(opts.tools?.length ? { tools: opts.tools } : {}),
       onComplete: (m) => {
         lastTruncated = m.truncated;
       },

@@ -7,7 +7,9 @@ import {
   formatBuddyToolResult,
   isRetryableError,
   looksLikeToolJson,
+  nativeToolCallsToText,
   normalizeBuddyPersona,
+  ollamaToolSchemas,
   parseBuddyToolCall,
   parseBuddyToolCalls,
   planHasPendingStep,
@@ -1107,6 +1109,54 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
   it("still parses a single object and ignores prose", () => {
     expect(parseBuddyToolCalls('{"tool":"search_web","query":"x"}')).toHaveLength(1);
     expect(parseBuddyToolCalls("just a normal sentence")).toEqual([]);
+  });
+
+  describe("native tool_calls (Ollama tools) → app text", () => {
+    it("serializes object-arg tool_calls and round-trips through the parser", () => {
+      const text = nativeToolCallsToText([{ function: { name: "generate_image", arguments: { prompt: "a red castle" } } }]);
+      expect(parseBuddyToolCalls(text)).toEqual([{ tool: "generate_image", prompt: "a red castle" }]);
+    });
+    it("handles string (double-encoded) arguments", () => {
+      const text = nativeToolCallsToText([{ function: { name: "search_web", arguments: '{"query":"otters"}' } }]);
+      expect(parseBuddyToolCalls(text)).toEqual([{ tool: "search_web", query: "otters" }]);
+    });
+    it("tolerates the flat {name,arguments} shape and skips a nameless call", () => {
+      const text = nativeToolCallsToText([{ name: "calculate", arguments: { expression: "2+2" } }, { function: { arguments: {} } }]);
+      expect(parseBuddyToolCalls(text)).toEqual([{ tool: "calculate", expression: "2+2" }]);
+    });
+  });
+
+  describe("ollamaToolSchemas", () => {
+    it("always advertises the core tools and gates the rest", () => {
+      const base = ollamaToolSchemas({});
+      const names = base.map((s) => s.function.name);
+      expect(names).toContain("generate_image");
+      expect(names).toContain("search_web");
+      expect(names).not.toContain("run_command");
+      expect(names).not.toContain("find_files");
+      const full = ollamaToolSchemas({ canSearchFiles: true, canRunCommands: true, canWolfram: true }).map((s) => s.function.name);
+      expect(full).toEqual(expect.arrayContaining(["find_files", "read_file", "write_file", "run_command", "wolfram"]));
+    });
+    it("every schema's name round-trips through parseToolObject (names/args match the parser)", () => {
+      for (const s of ollamaToolSchemas({ canSearchFiles: true, canRunCommands: true, canWolfram: true })) {
+        // Fill EVERY property with a valid sample value (enum→first, url→a real URL, array→["x"], …) and
+        // confirm the parser accepts the round-tripped call — catching any name/arg drift from the parser.
+        const args: Record<string, unknown> = {};
+        for (const [key, p] of Object.entries(s.function.parameters.properties)) {
+          args[key] = p.enum
+            ? p.enum[0]
+            : p.type === "array"
+              ? ["x"]
+              : p.type === "boolean"
+                ? true
+                : key === "url" || key === "ref"
+                  ? "http://x.test"
+                  : "x";
+        }
+        const text = nativeToolCallsToText([{ function: { name: s.function.name, arguments: args } }]);
+        expect(parseBuddyToolCalls(text).length, `tool ${s.function.name} should round-trip`).toBe(1);
+      }
+    });
   });
 
   describe("Gemma tool_code / function-call syntax", () => {

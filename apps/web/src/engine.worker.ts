@@ -38,6 +38,7 @@ import {
   schwabAccountNumbers,
   placeSchwabOrder,
   buildBuddySystemPrompt,
+  ollamaToolSchemas,
   shouldAppendBeat,
   buildDelegatePrompt,
   buildCodingAgentPrompt,
@@ -3472,6 +3473,19 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       // Cloud (paid) models pause for a "keep going?" check every so often so a long task doesn't burn
       // many API calls unattended; local/free models run to the backstop (no pauseEvery).
       ...(CLOUD_LLM_IDS.has(llm.id) ? { pauseEvery: CLOUD_TOOL_PAUSE_ROUNDS } : {}),
+      // NATIVE TOOL CALLING for a local server (Ollama): hand a tool-capable model the schemas so it
+      // emits structured tool_calls instead of having to follow the text protocol — the reliable path
+      // for small models (Gemma etc.). The provider gates on the model's "tools" capability and falls
+      // back to the text catalog (still in `system`) when unsupported. Same availability flags as the prompt.
+      ...(llm.id === "local-server"
+        ? {
+            tools: ollamaToolSchemas({
+              canSearchFiles: corsProxyAvailable,
+              canRunCommands: corsProxyAvailable && !!settings?.allowCommands,
+              canWolfram: !!settings?.keys?.wolfram,
+            }),
+          }
+        : {}),
       // A story is open → STORY MODE: if the model ends a turn empty/tool-only, the wrap-up asks for
       // the next BEAT (prose), so the recovered reply is still appendable to the book.
       ...(story && currentBook?.kind === "story" ? { storyMode: true } : {}),

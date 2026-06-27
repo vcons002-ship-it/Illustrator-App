@@ -1,4 +1,5 @@
 import { stripThink } from "../providers/llm/extraction.js";
+import type { ToolSchema } from "../providers/llm/chat.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
 import type { BookSearchHit } from "../providers/book-search.js";
 import { IMAGE_STYLES } from "../providers/catalog.js";
@@ -1697,6 +1698,96 @@ export function inferContentMode(sample: string): "fiction" | "technical" {
     return "technical";
   if (/https?:\/\/[^\s]*(\.gov|\.edu|wikipedia\.org|arxiv\.org|github\.com|docs\.)/.test(s)) return "technical";
   return "fiction";
+}
+
+// The native tool_calls→text bridge lives in the providers/llm layer (the provider imports it); re-export
+// it here so buddy-side callers + tests have one import surface.
+export { nativeToolCallsToText, type NativeToolCall } from "../providers/llm/chat.js";
+
+const strParam = (description: string) => ({ type: "string", description });
+function toolFn(
+  name: string,
+  description: string,
+  properties: ToolSchema["function"]["parameters"]["properties"],
+  required: string[] = [],
+): ToolSchema {
+  return { type: "function", function: { name, description, parameters: { type: "object", properties, required } } };
+}
+
+/**
+ * NATIVE tool definitions to hand a tool-capable local model (Ollama `tools`), so it emits structured
+ * `tool_calls` instead of having to follow the text-JSON protocol — the reliable path for small models
+ * (Gemma etc.). A high-value CORE set, gated by the same availability flags as the text catalog; the
+ * full catalog still lives in the prompt, so anything not here still works via the text path. Names +
+ * args MATCH what `parseToolObject` accepts, so the serialized calls round-trip cleanly. PURE.
+ */
+export function ollamaToolSchemas(opts: {
+  canSearchFiles?: boolean;
+  canRunCommands?: boolean;
+  canWolfram?: boolean;
+}): ToolSchema[] {
+  const t: ToolSchema[] = [
+    toolFn(
+      "generate_image",
+      "Generate a NEW image from a text description and show it in the chat. Use this whenever the reader asks you to draw, make, generate, render, or create a picture/image of something.",
+      { prompt: strParam("A vivid, concrete description of what to depict.") },
+      ["prompt"],
+    ),
+    toolFn("search_web", "Search the web for current facts, pages, or sources.", { query: strParam("The search query.") }, ["query"]),
+    toolFn(
+      "search_images",
+      "Find EXISTING photos/pictures on the web (NOT new art — use generate_image for that).",
+      { query: strParam("What to find pictures of.") },
+      ["query"],
+    ),
+    toolFn("search_books", "Search Project Gutenberg for a public-domain book.", { query: strParam("Title, author, or topic.") }, ["query"]),
+    toolFn(
+      "read",
+      "Pull text into the chat: a web page, a saved library book, a local file, or pasted prose.",
+      {
+        source: { type: "string", description: "Where to read from.", enum: ["url", "library", "file", "pasted"] },
+        ref: strParam("The URL, library book id, or file path (per source)."),
+        url: strParam("The URL when source is 'url'."),
+      },
+      ["source"],
+    ),
+    toolFn("open_image", "Show an existing image FILE inline in the chat (a screenshot, photo, render).", { path: strParam("Path to the image file.") }, ["path"]),
+    toolFn("calculate", "Do exact arithmetic/math (never compute in your head).", { expression: strParam("The expression, e.g. 12*(3+4).") }, ["expression"]),
+    toolFn(
+      "set_plan",
+      "Lay out a working checklist for a task that needs 2+ steps. Call this FIRST, before doing the steps.",
+      {
+        goal: strParam("The overall goal."),
+        steps: { type: "array", description: "Each step as one clear action, in order.", items: { type: "string" } },
+      },
+      ["steps"],
+    ),
+    toolFn("complete_step", "Mark the CURRENT checklist step done — only after you've actually done it.", { note: strParam("Optional short note.") }, []),
+    toolFn(
+      "remember",
+      "Save a durable note about the reader, or about your own/their identity.",
+      { note: strParam("The note to remember."), about: { type: "string", description: "Which store.", enum: ["reader", "self", "user"] } },
+      ["note"],
+    ),
+    toolFn("forget", "Remove durable notes containing this text.", { match: strParam("Text identifying the note(s) to forget.") }, ["match"]),
+  ];
+  if (opts.canSearchFiles) {
+    t.push(toolFn("find_files", "Search the reader's OWN COMPUTER for a file by name.", { query: strParam("Distinctive filename words (+ a type like md/pdf).") }, ["query"]));
+    t.push(toolFn("read_file", "Read a local file's text into the chat.", { path: strParam("Absolute path to the file.") }, ["path"]));
+  }
+  if (opts.canRunCommands) {
+    t.push(
+      toolFn(
+        "write_file",
+        "Save a file into the workspace (so you can then run it).",
+        { path: strParam("Workspace-relative path, e.g. analysis.py."), content: strParam("The file's contents."), append: { type: "boolean", description: "Append instead of overwrite." } },
+        ["path", "content"],
+      ),
+    );
+    t.push(toolFn("run_command", "Run ONE approved shell command in the workspace.", { command: strParam("The exact command.") }, ["command"]));
+  }
+  if (opts.canWolfram) t.push(toolFn("wolfram", "Authoritative real-world values/computation via Wolfram|Alpha.", { query: strParam("The question.") }, ["query"]));
+  return t;
 }
 
 /** The first tool call in a reply (back-compat — the planner runs one tool at a time). */
