@@ -177,6 +177,7 @@ import {
   externalizedImageId,
   restoreInlineImages,
   type ChatTurn,
+  type CreatedFileRef,
   type ContextUsage,
   type EncryptedSecrets,
   type StoreBackup,
@@ -520,6 +521,7 @@ export function App() {
     chat,
     chatTool,
     applyEngineConfig,
+    setFileLedger,
     chatCancel,
     warmLlm,
     buddyChat,
@@ -1106,6 +1108,40 @@ export function App() {
         return p && Array.isArray(p.steps) && p.steps.length > 0 ? p : undefined;
       } catch {
         return undefined;
+      }
+    },
+    [libraryStore],
+  );
+  // FILE LEDGER (per session): the workspace files the assistant has written this session, so the worker
+  // can keep a terse non-trimmable reminder in the prompt — the model stays aware of what it made and
+  // re-opens a file with read_file before editing instead of forgetting it. Persisted per session.
+  const createdFilesRef = useRef<CreatedFileRef[]>([]);
+  const ledgerMemoKey = (id: string) => `buddy-file-ledger:${id}`;
+  /** Record a workspace file the assistant just wrote (write_file). Appends accumulate the line count
+   * for the same path; a fresh write replaces it. Bounded + persisted; the next buddy turn pushes it. */
+  const recordCreatedFile = useCallback(
+    (path: string, contentLines: number, append: boolean): void => {
+      const prev = createdFilesRef.current.filter((f) => f.path !== path);
+      const existing = createdFilesRef.current.find((f) => f.path === path);
+      const lines = append && existing ? existing.lines + contentLines : contentLines;
+      const next = [...prev, { path, lines }].slice(-20); // most-recent-last, bounded
+      createdFilesRef.current = next;
+      setFileLedger(next);
+      if (!isRemoteClient && !settings.incognitoRemote) {
+        void libraryStore.putMemo?.(ledgerMemoKey(activeBuddyIdRef.current), JSON.stringify(next)).catch(() => {});
+      }
+    },
+    [setFileLedger, libraryStore, isRemoteClient, settings.incognitoRemote],
+  );
+  const loadFileLedger = useCallback(
+    async (id: string): Promise<CreatedFileRef[]> => {
+      const raw = await libraryStore.getMemo?.(ledgerMemoKey(id)).catch(() => undefined);
+      if (!raw) return [];
+      try {
+        const arr = JSON.parse(raw) as CreatedFileRef[];
+        return Array.isArray(arr) ? arr.filter((f) => f && typeof f.path === "string") : [];
+      } catch {
+        return [];
       }
     },
     [libraryStore],
@@ -3745,10 +3781,13 @@ export function App() {
       if (cancelled) return;
       const savedPlan = await loadBuddyPlan(active);
       const savedWorkflow = await loadBuddyWorkflow(active);
+      const savedLedger = await loadFileLedger(active);
       if (cancelled) return;
       setBuddySessions(sessions);
       setActiveBuddyId(active);
       if (hist) setBuddyMessages(hist);
+      createdFilesRef.current = savedLedger; // the active session's written-files ledger (pushed per turn)
+      setFileLedger(savedLedger);
       setBuddyPlan(savedPlan);
       buddyPlanRef.current = savedPlan; // match the ref to the restored session's plan from the first tick
       // App-managed: restore the workflow too (the plan above is just its projection), so the executor
@@ -4370,6 +4409,9 @@ export function App() {
     try {
       const saved = await writeWorkspaceFile(call.path, call.content, buddyWorkingDir || undefined, call.append);
       payload = { path: saved, ok: true };
+      // Ledger it (keyed by the workspace-relative path the model used, so it can read_file it back) so
+      // the model stays aware of the file across history trimming.
+      recordCreatedFile(call.path, call.content ? call.content.split("\n").length : 0, !!call.append);
       // ALWAYS surface the authored file as a universal file card (Open in app / library / on PC /
       // Download), not just a "saved" line — the card reads from the on-disk path so it's correct even
       // for an append (whole file, not the fragment).
@@ -4915,6 +4957,10 @@ export function App() {
     userBubbleText?: string,
   ): Promise<string | undefined> => {
     const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
+    // Make sure the worker has THIS session's current file ledger before the turn builds its prompt
+    // (ordered before the buddyChat send below), so the model sees what it's written regardless of init
+    // timing or a session switch.
+    setFileLedger(createdFilesRef.current);
     if (userBubbleText !== undefined) {
       appendBuddy({ role: "user", text: userBubbleText });
       buddyQueueAdvanceRef.current = { count: 0, noProgress: 0 }; // fresh user turn → reset the chain budget
@@ -5690,10 +5736,13 @@ export function App() {
     buddyWorkflowRef.current = undefined;
     buddyStepEvidenceRef.current = { toolResults: [], text: "" };
     setBuddyPendingTool(undefined);
+    createdFilesRef.current = [];
+    setFileLedger([]);
     void libraryStore.deleteChatHistory?.(activeBuddyId);
     void libraryStore.deleteMemo?.(planMemoKey(activeBuddyId)).catch(() => {});
     void libraryStore.deleteMemo?.(workflowMemoKey(activeBuddyId)).catch(() => {});
-  }, [isRemoteClient, sendAppSync, libraryStore, buddyCancel, activeBuddyId]);
+    void libraryStore.deleteMemo?.(ledgerMemoKey(activeBuddyId)).catch(() => {});
+  }, [isRemoteClient, sendAppSync, libraryStore, buddyCancel, activeBuddyId, setFileLedger]);
   // Stop: the turn runs on the DESKTOP (under its worker request id the phone doesn't have), so a
   // linked phone relays the stop; the desktop aborts its in-flight buddy round.
   const onBuddyCancel = useCallback(() => {
@@ -5750,8 +5799,12 @@ export function App() {
         buddyWorkflowRef.current = w; // restore the app-managed workflow for the switched-to session
         setBuddyWorkflow(w);
       });
+      void loadFileLedger(id).then((files) => {
+        createdFilesRef.current = files; // restore the switched-to session's file ledger
+        setFileLedger(files);
+      });
     },
-    [isRemoteClient, sendAppSync, activeBuddyId, libraryStore, resetBuddyView, loadBuddyPlan, loadBuddyWorkflow],
+    [isRemoteClient, sendAppSync, activeBuddyId, libraryStore, resetBuddyView, loadBuddyPlan, loadBuddyWorkflow, loadFileLedger, setFileLedger],
   );
   switchBuddyRef.current = onSwitchBuddySession; // so onExitBook (defined earlier) can restore a session
   const onNewBuddySession = useCallback(() => {
@@ -5768,8 +5821,10 @@ export function App() {
     });
     setActiveBuddyId(id);
     setBuddyMessages([]);
+    createdFilesRef.current = []; // a brand-new session starts with an empty file ledger
+    setFileLedger([]);
     void libraryStore.putMemo?.("buddy-active-session", id).catch(() => {});
-  }, [isRemoteClient, sendAppSync, libraryStore, persistSessions, resetBuddyView]);
+  }, [isRemoteClient, sendAppSync, libraryStore, persistSessions, resetBuddyView, setFileLedger]);
   const onDeleteBuddySession = useCallback(
     (id: string) => {
       if (isRemoteClient) {
@@ -5782,6 +5837,7 @@ export function App() {
         persistSessions(next);
         void libraryStore.deleteChatHistory?.(id).catch(() => {});
         void libraryStore.deleteMemo?.(planMemoKey(id)).catch(() => {});
+        void libraryStore.deleteMemo?.(ledgerMemoKey(id)).catch(() => {});
         if (id === activeBuddyId) {
           const fallback = next[0]!.id;
           resetBuddyView();
@@ -5797,6 +5853,10 @@ export function App() {
           void loadBuddyWorkflow(fallback).then((w) => {
             buddyWorkflowRef.current = w;
             setBuddyWorkflow(w);
+          });
+          void loadFileLedger(fallback).then((files) => {
+            createdFilesRef.current = files;
+            setFileLedger(files);
           });
         }
         return next;

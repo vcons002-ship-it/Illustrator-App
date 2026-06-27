@@ -425,7 +425,22 @@ describe("buildBuddySystemPrompt", () => {
     const files = buildBuddySystemPrompt({ persona: "assistant", library: [], canSearchFiles: true });
     expect(files).toContain("find it by NAME → find_files");
     const cmds = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true });
-    expect(cmds).toContain("write_file it then run_command");
+    expect(cmds).toContain("write_file then run_command"); // RUN-code routing
+    expect(cmds).toContain("the reader KEEPS"); // substantial files/documents → write_file, not a fenced block
+  });
+
+  it("buildFileLedgerBlock: terse, bounded, read_file cue; empty when no files", async () => {
+    const { buildFileLedgerBlock, LEDGER_MAX } = await import("./buddy-tools.js");
+    expect(buildFileLedgerBlock([])).toBe("");
+    const block = buildFileLedgerBlock([{ path: "dragon.html", lines: 474 }]);
+    expect(block).toContain("dragon.html (474 lines)");
+    expect(block).toContain("read_file"); // tells the model to re-open before editing
+    // Bounded to the most-recent LEDGER_MAX entries.
+    const many = Array.from({ length: LEDGER_MAX + 5 }, (_, i) => ({ path: `f${i}.py`, lines: 1 }));
+    const rows = buildFileLedgerBlock(many).split("\n").filter((l) => l.startsWith("- "));
+    expect(rows).toHaveLength(LEDGER_MAX);
+    expect(rows[rows.length - 1]).toContain(`f${LEDGER_MAX + 4}.py`); // keeps the newest
+    expect(buildFileLedgerBlock([{ path: "a.py", lines: 1 }])).toContain("(1 line)"); // singular
     const g = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true });
     expect(g).toContain("draft_email");
   });

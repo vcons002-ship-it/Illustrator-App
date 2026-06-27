@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chatImageVramFit, defaultLoadedWindow } from "./catalog.js";
+import { chatImageVramFit, defaultLoadedWindow, resolveLoadedContextTokens } from "./catalog.js";
 
 describe("chatImageVramFit (keep-both-resident decision)", () => {
   it("returns 'unknown' when VRAM or a model size is unknown (caller keeps the model loaded)", () => {
@@ -45,5 +45,26 @@ describe("defaultLoadedWindow (Ollama num_ctx default)", () => {
     const small = defaultLoadedWindow("gemma3:4b", 8_000);
     const big = defaultLoadedWindow("gemma3:4b", 48_000);
     expect(big).toBeGreaterThanOrEqual(small);
+  });
+});
+
+describe("resolveLoadedContextTokens (budget = actually-loaded window)", () => {
+  it("Ollama path budgets to the sent num_ctx (defaultLoadedWindow), NOT the Modelfile or 4096", () => {
+    const sent = defaultLoadedWindow("qwen3:27b", 48_000);
+    // A stale Modelfile num_ctx of 4096 must NOT win — our per-request num_ctx overrode it.
+    const ctx = resolveLoadedContextTokens({ isOllama: true, model: "qwen3:27b", gpuVramMb: 48_000, infoLoaded: 4096, infoMax: 262_144 });
+    expect(ctx).toBe(sent);
+    expect(ctx).toBeGreaterThan(4096);
+  });
+
+  it("Ollama path caps the sent window by the architectural max", () => {
+    // Tiny arch max → the loaded window can't exceed it.
+    expect(resolveLoadedContextTokens({ isOllama: true, model: "tiny:1b", gpuVramMb: 48_000, infoMax: 2048 })).toBe(2048);
+  });
+
+  it("non-Ollama (bundled / LM Studio) trusts the Modelfile-loaded value, else arch max capped at the Ollama default", () => {
+    expect(resolveLoadedContextTokens({ isOllama: false, model: "bundled", infoLoaded: 8192, infoMax: 32768 })).toBe(8192);
+    expect(resolveLoadedContextTokens({ isOllama: false, model: "x", infoMax: 32768, ollamaDefault: 4096 })).toBe(4096);
+    expect(resolveLoadedContextTokens({ isOllama: false, model: "x" })).toBeUndefined();
   });
 });

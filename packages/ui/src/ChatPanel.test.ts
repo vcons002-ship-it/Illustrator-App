@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  classifyBlocks,
   fileActionKeys,
   fileForLang,
   linkifyText,
@@ -117,6 +118,38 @@ describe("projectFilesFromBlocks", () => {
 
   it("falls back to a generic name for an unnamed block", () => {
     expect(projectFilesFromBlocks(parseMessageBlocks("```js\nx\n```"))).toEqual([{ name: "file.js", content: "x" }]);
+  });
+});
+
+describe("classifyBlocks (file vs inline snippet — document de-fragmentation)", () => {
+  const big = (n: number) => "x".repeat(n);
+
+  it("a document with several BARE code examples renders them inline, not as saveable files", () => {
+    const doc =
+      "Here is a guide.\n```js\nconst a = 1;\n```\nMore prose explaining things at length.\n" +
+      "```js\nconst b = 2;\n```\nEven more discussion.";
+    const blocks = parseMessageBlocks(doc);
+    const kinds = classifyBlocks(blocks);
+    // No fenced block becomes a "file" — they're illustrative snippets.
+    expect(kinds.filter((k) => k === "file")).toHaveLength(0);
+    expect(kinds.filter((k) => k === "snippet")).toHaveLength(2);
+  });
+
+  it("a sole DOMINANT block (the whole reply IS the file) is a saveable file even unnamed", () => {
+    const blocks = parseMessageBlocks(`Here's your page:\n\`\`\`html\n${big(2000)}\n\`\`\``);
+    const kinds = classifyBlocks(blocks);
+    expect(kinds).toContain("file");
+    expect(kinds.filter((k) => k === "file")).toHaveLength(1);
+  });
+
+  it("a tiny unnamed sole snippet stays inline (not a file card)", () => {
+    const kinds = classifyBlocks(parseMessageBlocks("Sure:\n```js\nfoo();\n```"));
+    expect(kinds).not.toContain("file");
+  });
+
+  it("filename-tagged blocks are always files (genuine multi-file answers keep their cards)", () => {
+    const kinds = classifyBlocks(parseMessageBlocks("```html index.html\n<a></a>\n```\nand\n```css styles.css\nbody{}\n```"));
+    expect(kinds.filter((k) => k === "file")).toHaveLength(2);
   });
 });
 

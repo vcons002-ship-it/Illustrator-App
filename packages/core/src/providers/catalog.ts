@@ -482,6 +482,33 @@ export function defaultLoadedWindow(modelName: string, gpuVramMb?: number): numb
   return Math.min(MAX, Math.max(MIN, Math.floor(window / 2048) * 2048));
 }
 
+/**
+ * The chat model's ACTUALLY-LOADED context window (tokens), used to size the in-context history/reply
+ * budgets. On the Ollama path the app SENDS `num_ctx = defaultLoadedWindow(...)` (see buildProviders),
+ * and a per-request num_ctx OVERRIDES the model's Modelfile — so the loaded window is that sent value,
+ * capped by the architectural max; the Modelfile `num_ctx` (`infoLoaded`) is NOT what's loaded and is
+ * ignored. Other backends (bundled llama-server launched at a fixed `-c`, LM Studio) don't take our
+ * num_ctx, so they trust the queried Modelfile value, else the arch max capped at Ollama's small
+ * default. Returns `undefined` when nothing is known (caller falls back to its conservative defaults).
+ * PURE — the budget code and the num_ctx we send now agree, instead of the budget assuming ~4096 while
+ * Ollama loaded 8k–32k (which trimmed a just-written file out of context). */
+export function resolveLoadedContextTokens(opts: {
+  isOllama: boolean;
+  model: string;
+  gpuVramMb?: number | undefined;
+  infoLoaded?: number | undefined;
+  infoMax?: number | undefined;
+  ollamaDefault?: number | undefined;
+}): number | undefined {
+  const { isOllama, model, gpuVramMb, infoLoaded, infoMax } = opts;
+  if (isOllama) {
+    const sent = defaultLoadedWindow(model, gpuVramMb); // what buildProviders sends as num_ctx
+    return infoMax ? Math.min(infoMax, sent) : sent;
+  }
+  const ollamaDefault = opts.ollamaDefault ?? 4096;
+  return infoLoaded ?? (infoMax ? Math.min(infoMax, ollamaDefault) : undefined);
+}
+
 /** One installed chat model that can run ALONGSIDE the chosen image model. */
 export interface ImagePairingOption {
   /** Installed chat model id (e.g. an Ollama tag). */

@@ -22,6 +22,7 @@ import type {
   BuddyToolResultPayload,
   CharacterPatch,
   ChatTurn,
+  CreatedFileRef,
   ContextUsage,
   ImageResult,
   AnalyzeChart,
@@ -249,6 +250,9 @@ export interface EngineWorkerApi {
    * settings sync) so the next STANDALONE render — which rebuilds providers fresh from settings — uses
    * it. Used by the low-VRAM deferred-engine-start path. */
   applyEngineConfig: (baseUrl: string) => void;
+  /** Update the worker's list of workspace files the assistant wrote this session, so it injects a terse
+   * reminder into the buddy prompt (the model stays aware of what it made + can read_file before editing). */
+  setFileLedger: (files: CreatedFileRef[]) => void;
   /** Have the chat's vision model describe a captured screenshot. */
   assessImage: (
     image: { bytes: ArrayBuffer; mimeType: string },
@@ -1270,6 +1274,11 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     send({ type: "tune", settings: { ...settingsRef.current, engineBaseUrl: baseUrl, engineBackend: "comfyui" } });
   }, []);
 
+  const setFileLedger = useCallback((files: CreatedFileRef[]) => {
+    if (remoteRef.current) return; // a phone's worker is the desktop's; the desktop owns the ledger
+    send({ type: "fileLedger", files });
+  }, []);
+
   useEffect(() => {
     if (remoteRef.current) return; // the desktop tunes its own engine (see the identity effect)
     send({ type: "tune", settings: settingsRef.current });
@@ -2052,6 +2061,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     chat,
     chatTool,
     applyEngineConfig,
+    setFileLedger,
     chatCancel,
     warmLlm,
     buddyChat,

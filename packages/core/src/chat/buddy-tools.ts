@@ -651,16 +651,18 @@ export function buildBuddySystemPrompt(opts: {
     : "";
   const writeFileTool = opts.canRunCommands
     ? '- {"tool":"write_file","path":"script.py","content":"…"} — SAVE a file straight into the workspace ' +
-      "yourself (a script, a data file, a config) so you can then run_command it. `path` is workspace-relative " +
-      "(e.g. `analysis.py` or `src/main.py`) and cannot escape the workspace folder. Saving needs NO approval " +
-      "click (it just writes into the sandboxed workspace). ALWAYS use this to put code/data where run_command " +
-      "can find it — never ask the reader to save a fenced block for you to run, and never rely on the chat's " +
-      "Save button for that (that exports a copy for the reader, NOT into the workspace, so your command won't " +
-      "find it). BIG FILE? One reply can't hold a very large file, so DON'T try to emit it all at once (it gets " +
-      'cut off). Write the FIRST chunk with write_file (it overwrites), then add each next chunk with ' +
-      '{"tool":"write_file","path":"<same path>","content":"…","append":true} — the chunks are appended on DISK ' +
-      "into one whole file. Keep each chunk well under one reply, split at line boundaries, and NEVER paste a giant " +
-      "file into the chat or try to stitch chunks back together yourself — the workspace file is already whole.\n"
+      "yourself: a script or data file to run, OR any sizable thing the reader KEEPS — a long document/.md, an " +
+      ".html page, a report. `path` is workspace-relative (e.g. `analysis.py`, `dragon.html`, `notes.md`) and " +
+      "cannot escape the workspace folder. Saving needs NO approval click. Prefer this over a fenced ```code``` " +
+      "block for anything substantial: the file is saved WHOLE on disk and you can read_file it back next turn, " +
+      "whereas a big pasted block gets cut off AND scrolls out of your context (you forget what you wrote). Never " +
+      "ask the reader to save a fenced block for you to run, and don't rely on the chat's Save button for that (it " +
+      "exports a copy for the reader, NOT into the workspace). BIG FILE OR DOCUMENT? One reply can't hold it all, " +
+      "so DON'T emit it at once (it gets cut off). Write the FIRST chunk with write_file (it overwrites), then add " +
+      'each next chunk with {"tool":"write_file","path":"<same path>","content":"…","append":true} — the chunks ' +
+      "are appended on DISK into one whole file. Keep each chunk well under one reply, split at line boundaries, " +
+      "and NEVER paste a giant file into the chat or try to stitch chunks back together yourself — the workspace " +
+      "file is already whole.\n"
     : "";
   const autonomyNote = opts.canAutonomousWorkspace
     ? "AUTONOMOUS WORKSPACE is ON: write_file and run_command run WITHOUT a per-action click, so you can write " +
@@ -912,11 +914,14 @@ export function buildBuddySystemPrompt(opts: {
     (opts.canSearchFiles
       ? "• A file on THEIR computer (the default home of \"find\"): find it by NAME → find_files; read its CONTENTS → read (source:\"file\"); SEE a picture → open_image.\n"
       : "") +
-    "• Make a file: a spreadsheet → create_spreadsheet; anything else (a script, document, webpage, CSV) → write it " +
-    "in a fenced ```code``` block (the reader gets Download / Open buttons on it)." +
+    "• Make a file: a spreadsheet → create_spreadsheet; " +
     (opts.canRunCommands
-      ? " To actually RUN code, write_file it then run_command — a fenced block alone is NOT executed."
-      : "") +
+      ? "a file/document/page the reader KEEPS (a script, a long .md, an .html, a CSV) → write_file — it saves WHOLE " +
+        "on disk (chunk a big one with append:true), so you can re-read or run it and never lose track of it; a giant " +
+        "fenced block instead TRUNCATES and drops out of your context. A SHORT illustrative snippet can stay in a " +
+        "fenced ```code``` block. To RUN code, write_file then run_command (a fenced block alone is NOT executed)."
+      : "anything else (a script, document, webpage, CSV) → write it in a fenced ```code``` block (the reader gets " +
+        "Download / Open buttons on it).") +
     "\n" +
     (opts.canGoogle ? "• Email: compose → draft_email (the default); only send_email when they explicitly say \"send\".\n" : "") +
     "• A multi-step job → set_plan first, then work the steps (complete_step as you finish each). Every tool's result " +
@@ -1249,6 +1254,34 @@ export function buildBuddySystemPrompt(opts: {
     multiStepGuide +
     POLISH_CHAT_GUIDANCE +
     (opts.persona === "planning" ? `\n\n${PLANNING_GUIDANCE}` : "")
+  );
+}
+
+/** One workspace file the assistant wrote this session via write_file — `path` is workspace-relative
+ * (re-openable with read_file), `lines` is the cumulative line count (appends add up). */
+export interface CreatedFileRef {
+  path: string;
+  lines: number;
+}
+
+/**
+ * A terse, NON-trimmable reminder of the files the assistant has written to the workspace this session,
+ * injected into the prompt AFTER the cached prefix (like the live story-state block) so it survives
+ * history trimming. Without it, a model on a small context window forgets a file it wrote a few turns
+ * ago and can't act on "improve it". Bounded to the most recent {@link LEDGER_MAX} and kept to one line
+ * each (path + line count) so it never crowds a small model. Empty string when nothing's been written.
+ */
+export const LEDGER_MAX = 20;
+export function buildFileLedgerBlock(files: CreatedFileRef[]): string {
+  if (!files.length) return "";
+  const rows = files
+    .slice(-LEDGER_MAX)
+    .map((f) => `- ${f.path} (${f.lines} line${f.lines === 1 ? "" : "s"})`)
+    .join("\n");
+  return (
+    "FILES YOU WROTE this session (they're on disk in the workspace). To change one, read_file it FIRST, " +
+    "then write_file the edited version — never rewrite a big file from memory:\n" +
+    rows
   );
 }
 
