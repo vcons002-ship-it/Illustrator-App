@@ -178,6 +178,7 @@ import {
   restoreInlineImages,
   applyFileEdits,
   summarizeFileEdits,
+  shouldAutoCompact,
   type ChatTurn,
   type CreatedFileRef,
   type ContextUsage,
@@ -6190,6 +6191,38 @@ export function App() {
   }, [chatBusy, chatMessages, summarize]);
   const onCompactBuddyClick = useCallback(() => void onCompactBuddy(), [onCompactBuddy]);
   const onCompactChatClick = useCallback(() => void onCompactChat(), [onCompactChat]);
+
+  // G7 — auto-compaction. A long multi-step job silently loses its early decisions once the
+  // history outgrows a small local window and the worker trims the oldest turns. Before that
+  // happens, fold the OLDER turns into a brief and keep the most recent ones verbatim — the
+  // same flow the manual Compact button uses, but fired automatically when usage crosses ~0.8
+  // of the model's window. The file ledger + plan persist separately, so they survive intact.
+  const autoCompactingRef = useRef(false);
+  const onAutoCompactBuddy = useCallback(async () => {
+    if (autoCompactingRef.current || buddyBusy) return;
+    const msgs = buddyMessagesRef.current;
+    const keepRecent = 6;
+    if (msgs.length <= keepRecent + 1) return; // nothing meaningful to summarize away
+    const older = msgs.slice(0, msgs.length - keepRecent);
+    const recent = msgs.slice(msgs.length - keepRecent);
+    autoCompactingRef.current = true;
+    setBuddyBusy(true);
+    setBuddyActivity("Compacting earlier conversation to stay within context…");
+    const res = await summarize(chatTurnsOf(older));
+    setBuddyBusy(false);
+    setBuddyActivity("");
+    if (res.text) {
+      setBuddyMessages([compactedMessage(res.text), ...recent]);
+      // Drop the stale usage donut: it reflected the pre-compaction history. The next turn
+      // recomputes it — and clearing it stops this effect from re-firing on the old value.
+      setBuddyUsage(undefined);
+    }
+    autoCompactingRef.current = false;
+  }, [buddyBusy, summarize]);
+  useEffect(() => {
+    if (isRemoteClient || buddyBusy || autoCompactingRef.current) return;
+    if (shouldAutoCompact(buddyUsage, buddyMessages.length)) void onAutoCompactBuddy();
+  }, [buddyUsage, buddyBusy, buddyMessages.length, isRemoteClient, onAutoCompactBuddy]);
   const buddyPanelMessages = useMemo(
     () =>
       buddyMessages.map((m) => ({
