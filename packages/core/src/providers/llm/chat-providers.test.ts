@@ -225,6 +225,32 @@ describe("LocalServerLLMProvider native tool calling", () => {
   });
 });
 
+describe("LocalServerLLMProvider.evictOtherModels", () => {
+  it("evicts every resident model except the keep model (keep_alive:0)", async () => {
+    const t = new FakeTransport({ models: [{ model: "keep" }, { model: "stale-a" }, { name: "stale-b" }] });
+    const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "keep", transport: t });
+
+    const evicted = await p.evictOtherModels();
+    expect(evicted.sort()).toEqual(["stale-a", "stale-b"]);
+
+    // First request lists residents; the rest are keep_alive:0 unloads for the stale models only.
+    expect(t.requests[0]).toMatchObject({ method: "GET", url: expect.stringContaining("/api/ps") });
+    const unloaded = t.requests
+      .filter((r) => (r.body as { keep_alive?: number } | undefined)?.keep_alive === 0)
+      .map((r) => (r.body as { model: string }).model)
+      .sort();
+    expect(unloaded).toEqual(["stale-a", "stale-b"]);
+    expect(unloaded).not.toContain("keep");
+  });
+
+  it("evicts nothing when only the keep model is resident", async () => {
+    const t = new FakeTransport({ models: [{ model: "keep" }] });
+    const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "keep", transport: t });
+    expect(await p.evictOtherModels()).toEqual([]);
+    expect(t.requests).toHaveLength(1); // just the /api/ps query, no unloads
+  });
+});
+
 describe("provider chat()", () => {
   it("openai maps the turns 1:1 onto chat/completions", async () => {
     const t = new FakeTransport({ choices: [{ message: { content: " answer " } }] });

@@ -170,15 +170,49 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
    * 404. Best-effort and bounded — a failure (or non-Ollama server) is a silent no-op.
    */
   async unload(): Promise<void> {
+    return this.unloadModel(this.model);
+  }
+
+  /** Evict ONE named model from Ollama's VRAM (keep_alive:0). Best-effort + bounded; a non-Ollama
+   * server (no `/api/generate`) harmlessly 404s and is a silent no-op. */
+  async unloadModel(model: string): Promise<void> {
     try {
       await this.transport.send({
         url: `${ollamaRoot(this.baseUrl)}/api/generate`,
         method: "POST",
-        body: { model: this.model, keep_alive: 0 },
+        body: { model, keep_alive: 0 },
         signal: AbortSignal.timeout(2500),
       });
     } catch {
       /* not Ollama, or already unloaded — nothing to do */
+    }
+  }
+
+  /**
+   * Ensure only the target chat model occupies VRAM: ask Ollama which models are resident (`/api/ps`)
+   * and evict every one EXCEPT `keep` (default: this provider's own model). Stops two LLMs from sitting
+   * in VRAM at once — e.g. after switching models, or a vision/assess model left loaded — which is the
+   * "two models in `ollama ps`" case that starves the GPU in low-VRAM. Best-effort + bounded; a
+   * non-Ollama server (no `/api/ps`) is a silent no-op. Returns the names it evicted (for logging/tests).
+   */
+  async evictOtherModels(keep?: string): Promise<string[]> {
+    const keepModel = keep ?? this.model;
+    try {
+      const res = await this.transport.send({
+        url: `${ollamaRoot(this.baseUrl)}/api/ps`,
+        method: "GET",
+        signal: AbortSignal.timeout(2500),
+      });
+      if (!res.ok) return [];
+      const data = await res.json<{ models?: { name?: string; model?: string }[] }>();
+      const loaded = (data.models ?? [])
+        .map((m) => m.model ?? m.name ?? "")
+        .filter((m) => m && m !== keepModel);
+      const unique = [...new Set(loaded)];
+      await Promise.all(unique.map((m) => this.unloadModel(m)));
+      return unique;
+    } catch {
+      return []; // not Ollama / unreachable — leave VRAM as-is
     }
   }
 

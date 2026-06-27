@@ -471,13 +471,9 @@ function readUrlText(signal: AbortSignal): (url: string) => Promise<{ title?: st
  * the turn finishes. Cloud chat models don't contend, so they never pause it.
  */
 async function withChatPriority<T>(llmId: string, fn: () => Promise<T>): Promise<T> {
-  // Free the idle local image model FIRST, but ONLY when the chat LLM is actually about to (re)load —
-  // i.e. a render evicted it (`chatLlmFreed`) and we're restoring it now. Tying the free to the LLM's
-  // reload (not to every chat turn) avoids needless churn: if the LLM is already resident, unloading the
-  // image model would just force it to cold-reload on the next render for no benefit. So the hand-off is
-  // strictly the reverse of the render→chat eviction — free the image model only to make room for an
-  // incoming LLM, then reload the LLM into that freed VRAM.
-  if (chatLlmFreed) await freeImageModelForChat();
+  // Hand the idle image model's VRAM back (if a render evicted the LLM) AND evict any OTHER resident
+  // local model, THEN reload the chat LLM into the freed VRAM. See prepareChatLlmLoad.
+  await prepareChatLlmLoad();
   // If we freed the bundled LLM for an image burst, relaunch it before this chat turn needs it.
   await restoreChatLlm();
   const eng = engine;
@@ -777,6 +773,26 @@ async function freeImageModelForChat(): Promise<void> {
     await chatProviders().image.freeMemory?.();
   } catch {
     /* best-effort — the image model just stays warm if the engine can't free right now */
+  }
+}
+
+/**
+ * Make room for the local chat LLM before it (re)loads — run at the start of every chat turn and before
+ * a warm. Two steps, both low-VRAM-scoped so an ample-VRAM box keeps its models hot:
+ *  1. If a render evicted the LLM (`chatLlmFreed`), free the idle image model first so the LLM reloads
+ *     into that VRAM — the reverse of the render→chat hand-off (see freeImageModelForChat).
+ *  2. Evict any OTHER resident model on the local server so two LLMs never coexist in VRAM — e.g. after
+ *     a model switch, or a vision/assess model left loaded ("two models in `ollama ps`"). Ollama-only;
+ *     a non-Ollama / cloud backend is a silent no-op.
+ */
+async function prepareChatLlmLoad(): Promise<void> {
+  if (chatLlmFreed) await freeImageModelForChat();
+  if (!settings?.lowVram) return; // ample VRAM: leave co-resident models alone (no churn)
+  try {
+    const { llm } = chatProviders();
+    if (llm.id === "local-server") await llm.evictOtherModels?.();
+  } catch {
+    /* best-effort — leave VRAM as-is if the server can't be queried */
   }
 }
 
@@ -1427,6 +1443,10 @@ function warmChatModel(): void {
  * loads it (cold) for both backends. After a render burst this restores it even in a pure image
  * session, so the reader's next chat is ready instead of waiting on a cold load. */
 async function doWarmChatModel(): Promise<void> {
+  // Same pre-load as a chat turn: hand the image model's VRAM back (low-VRAM, if a render freed the LLM)
+  // and evict any other resident model BEFORE warming, so the warm reload lands into freed VRAM and
+  // doesn't end up co-resident with the image model or a stale LLM.
+  await prepareChatLlmLoad();
   if (chatLlmFreed) await restoreChatLlm();
   try {
     const { llm } = chatProviders();
