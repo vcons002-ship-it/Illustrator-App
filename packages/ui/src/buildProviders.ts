@@ -12,6 +12,7 @@ import {
   createImageProvider,
   capQualityForVram,
   createLLMProvider,
+  defaultLoadedWindow,
   getProvider,
   resolveQuality,
   type FigureSearch,
@@ -268,10 +269,13 @@ function buildLLM(
       const serverModel = settings.localServerTextModel ?? (bundled ? BUNDLED_LLM.model : undefined);
       // Per-model num_ctx is OLLAMA-only (its native /api/chat) — never for the bundled llama-server
       // or LM Studio / llama.cpp, which have no such endpoint. When set, the provider loads the model
-      // at this window so its KV cache fits the GPU.
+      // at this window so its KV cache fits the GPU. An explicit per-model override wins; otherwise we
+      // CAP the window to a safe default — Ollama with no num_ctx loads at its own huge default and
+      // pre-allocates a KV cache sized to that whole window, which makes its load-time fit estimate
+      // overflow VRAM and offload a small model to shared RAM. A modest default keeps it on the GPU.
       const numCtx =
         !bundled && (settings.localTextServer ?? "ollama") === "ollama" && serverModel
-          ? settings.localContextByModel?.[serverModel]
+          ? (settings.localContextByModel?.[serverModel] ?? defaultLoadedWindow(serverModel, settings.gpuVramMb))
           : undefined;
       try {
         return {

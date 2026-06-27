@@ -51,7 +51,13 @@ export interface StoredChatMessage {
   text: string;
   /** ms epoch. */
   at: number;
-  image?: { bytes: ArrayBuffer; mimeType: string } | { sourceUrl: string };
+  /** Inline image: raw bytes (an optional `id` remembers the blob it was re-hydrated from so re-persist
+   * reuses the same blob), a hotlinkable URL, OR a byte-less `{ id }` reference whose bytes were
+   * externalized to the chat blob store (re-hydrated on demand, keyed by the same id). */
+  image?:
+    | { bytes: ArrayBuffer; mimeType: string; id?: string }
+    | { sourceUrl: string }
+    | { id: string; mimeType: string };
   links?: { url: string; title?: string }[];
   /** A set of retrieved images shown as an inline thumbnail gallery (a multi-hit
    * `search_images`); each thumbnail enlarges in place on click. This is what lets
@@ -116,6 +122,16 @@ export interface VisualReaderStore {
   putChatHistory?(bookId: string, messages: StoredChatMessage[]): Promise<void>;
   deleteChatHistory?(bookId: string): Promise<void>;
 
+  /**
+   * Externalized chat IMAGE bytes (optional). A chat message's image/attachment bytes are moved OUT of
+   * the persisted message into this keyed blob store so the chat-history array stays small (a long
+   * image-heavy session no longer re-writes megabytes on every turn) and the in-RAM message array can
+   * stay byte-free, with images re-loaded lazily on demand and bounded by an LRU. Keyed by (chatId, id)
+   * so a chat's blobs are dropped with its history. `deleteChatHistory` also drops the chat's blobs.
+   */
+  putImageBlob?(chatId: string, id: string, bytes: ArrayBuffer, mimeType: string): Promise<void>;
+  getImageBlob?(chatId: string, id: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined>;
+
   /** Small keyed text blobs (the chat's long-term reader memory). Optional. */
   getMemo?(key: string): Promise<string | undefined>;
   putMemo?(key: string, text: string): Promise<void>;
@@ -145,6 +161,8 @@ export class InMemoryStore implements VisualReaderStore {
   private images = new Map<string, { bytes: ArrayBuffer; mimeType: string; prompt?: string }>();
   private books = new Map<string, { book: BookSource; addedAt: number }>();
   private chats = new Map<string, StoredChatMessage[]>();
+  /** Externalized chat image bytes, keyed `${chatId}::${id}`. */
+  private chatBlobs = new Map<string, { bytes: ArrayBuffer; mimeType: string }>();
 
   async getBible(bookId: string): Promise<VisualBible | undefined> {
     return this.bibles.get(bookId);
@@ -195,8 +213,8 @@ export class InMemoryStore implements VisualReaderStore {
     // its chat history — so removed books don't leak storage.
     this.books.delete(id);
     this.bibles.delete(id);
-    this.chats.delete(id);
     await this.clearImages(id);
+    await this.deleteChatHistory(id);
   }
 
   async getChatHistory(bookId: string): Promise<StoredChatMessage[] | undefined> {
@@ -207,6 +225,17 @@ export class InMemoryStore implements VisualReaderStore {
   }
   async deleteChatHistory(bookId: string): Promise<void> {
     this.chats.delete(bookId);
+    const prefix = `${bookId}::`;
+    for (const key of [...this.chatBlobs.keys()]) {
+      if (key.startsWith(prefix)) this.chatBlobs.delete(key);
+    }
+  }
+
+  async putImageBlob(chatId: string, id: string, bytes: ArrayBuffer, mimeType: string): Promise<void> {
+    this.chatBlobs.set(`${chatId}::${id}`, { bytes, mimeType });
+  }
+  async getImageBlob(chatId: string, id: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined> {
+    return this.chatBlobs.get(`${chatId}::${id}`);
   }
 
   private memos = new Map<string, string>();

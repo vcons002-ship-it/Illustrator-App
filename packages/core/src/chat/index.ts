@@ -34,5 +34,6 @@ export * from "./slash-commands.js";
 export * from "./story-state.js";
 export * from "./story-beat.js";
 export * from "./mirror-bound.js";
+export * from "./chat-image-blobs.js";
 export * from "./document-polish.js";
 export * from "./math-engine.js";

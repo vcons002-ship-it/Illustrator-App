@@ -173,6 +173,9 @@ import {
   boundChatHistoryForMirror,
   chunkArrayBuffer,
   concatArrayBuffers,
+  externalizeChatImages,
+  externalizedImageId,
+  restoreInlineImages,
   type ChatTurn,
   type ContextUsage,
   type EncryptedSecrets,
@@ -313,7 +316,9 @@ function imageAttachment(prompt: string, image: { bytes: ArrayBuffer; mimeType: 
       .slice(0, 40) || "image";
   // Stable id so a linked phone can fetch these bytes back on demand after the mirror strips them.
   const id = `img-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  return { id, name: `${stem}.${ext}`, mime: image.mimeType, kind: "image", bytes: image.bytes.slice(0) };
+  // SHARE the generated image's buffer (no defensive copy): the inline image + this card hold the same
+  // bytes, so externalizeChatImages de-dups them to one blob and the in-RAM copy isn't doubled.
+  return { id, name: `${stem}.${ext}`, mime: image.mimeType, kind: "image", bytes: image.bytes };
 }
 
 const DATA_FILE_EXTS = new Set(["csv", "tsv", "json", "xlsx", "xls", "ods", "numbers", "xml", "yaml", "yml"]);
@@ -393,28 +398,6 @@ function imageSearchMiss(query: string, error: string | undefined, hasSearchKey:
 /** How many checklist steps are done — used to tell whether a turn advanced the working plan. */
 function countDonePlanSteps(plan: BuddyPlan | undefined): number {
   return plan ? plan.steps.filter((s) => s.status === "done").length : 0;
-}
-
-/**
- * PHONE: put back the inline image bytes the phone fetched on demand for messages the mirror stripped,
- * keyed by file-card attachment id. Re-applied on every mirror adopt so a restored image survives the
- * desktop re-pushing its stripped (image-less) snapshot. Returns the SAME array when nothing changed.
- */
-function restoreInlineImages(
-  msgs: StoredChatMessage[],
-  cache: Map<string, { bytes: ArrayBuffer; mimeType: string }>,
-): StoredChatMessage[] {
-  if (cache.size === 0) return msgs;
-  let changed = false;
-  const out = msgs.map((m) => {
-    if (m.image) return m;
-    const att = m.attachments?.find((a) => a.id && cache.has(a.id));
-    const got = att?.id ? cache.get(att.id) : undefined;
-    if (!got) return m;
-    changed = true;
-    return { ...m, image: got };
-  });
-  return changed ? out : msgs;
 }
 
 export function App() {
@@ -1977,6 +1960,9 @@ export function App() {
   // picture survives the mirror re-pushing its image-less version; plus the ids being fetched right now.
   const restoredImages = useRef(new Map<string, { bytes: ArrayBuffer; mimeType: string }>());
   const fetchingImageIds = useRef(new Set<string>());
+  // DESKTOP: blob keys (`${chatId}::${id}`) already written to the chat blob store this session, so the
+  // debounced persist doesn't re-write the same image bytes on every subsequent turn.
+  const writtenBlobIds = useRef(new Set<string>());
   const fileFetchSeq = useRef(0);
   const hostToolReqId = useRef(0);
   const buildSnapshot = useCallback(
@@ -2222,29 +2208,44 @@ export function App() {
             // The phone asked for the full bytes of a file card whose bytes the mirror stripped (a large
             // or older generated image). Find it in our FULL history (we kept the bytes) and send it back
             // CHUNKED, so a big image syncs in pieces instead of being dropped for blowing one tunnel frame.
-            let found: { bytes?: ArrayBuffer; mime?: string } | undefined;
-            for (const m of buddyMessagesRef.current) {
-              const a = m.attachments?.find((x) => x.id === msg.id && x.bytes);
-              if (a?.bytes) {
-                found = { bytes: a.bytes, mime: a.mime };
-                break;
+            const reqId = msg.reqId;
+            const fileId = msg.id;
+            void (async () => {
+              let found: { bytes?: ArrayBuffer; mime?: string } | undefined;
+              for (const m of buddyMessagesRef.current) {
+                const a = m.attachments?.find((x) => x.id === fileId && x.bytes);
+                if (a?.bytes) {
+                  found = { bytes: a.bytes, mime: a.mime };
+                  break;
+                }
+                // A live (un-stripped) inline image carrying this id also serves the bytes.
+                if (m.image && "bytes" in m.image && m.image.id === fileId) {
+                  found = { bytes: m.image.bytes, mime: m.image.mimeType };
+                  break;
+                }
               }
-            }
-            if (!found?.bytes) {
-              sendAppSync({ type: "vrsync:fileData", reqId: msg.reqId, seq: 0, total: 0 }); // not found
-            } else {
-              const chunks = chunkArrayBuffer(found.bytes);
-              chunks.forEach((chunk, seq) =>
-                sendAppSync({
-                  type: "vrsync:fileData",
-                  reqId: msg.reqId,
-                  seq,
-                  total: chunks.length,
-                  bytes: chunk,
-                  ...(seq === 0 && found!.mime ? { mime: found!.mime } : {}),
-                }),
-              );
-            }
+              // After a desktop reload the in-memory messages are byte-less (bytes were externalized) —
+              // serve them from the chat blob store instead so the phone can still fetch older images.
+              if (!found?.bytes) {
+                const blob = await libraryStore.getImageBlob?.(activeBuddyIdRef.current, fileId).catch(() => undefined);
+                if (blob) found = { bytes: blob.bytes, mime: blob.mimeType };
+              }
+              if (!found?.bytes) {
+                sendAppSync({ type: "vrsync:fileData", reqId, seq: 0, total: 0 }); // not found
+              } else {
+                const chunks = chunkArrayBuffer(found.bytes);
+                chunks.forEach((chunk, seq) =>
+                  sendAppSync({
+                    type: "vrsync:fileData",
+                    reqId,
+                    seq,
+                    total: chunks.length,
+                    bytes: chunk,
+                    ...(seq === 0 && found!.mime ? { mime: found!.mime } : {}),
+                  }),
+                );
+              }
+            })();
             break;
           }
           default:
@@ -3712,7 +3713,33 @@ export function App() {
     // remote session leaves nothing on disk.
     if (isRemoteClient || settings.incognitoRemote || !buddyReady.current || buddyMessages.length === 0) return;
     const id = activeBuddyId;
-    const t = setTimeout(() => void libraryStore.putChatHistory?.(id, buddyMessages), 500);
+    const t = setTimeout(() => {
+      void (async () => {
+        // Externalize image bytes OUT of the persisted array: write each new blob to the chat blob store
+        // (once per id), then persist the byte-stripped messages so the history stays small (no megabyte
+        // re-write per turn) and a reload starts lean — images re-load lazily from the blob store. The
+        // in-RAM `buddyMessages` keep their bytes for the live session; only the DISK copy is stripped.
+        const stored: StoredChatMessage[] = [];
+        for (const m of buddyMessages) {
+          // Deterministic per-message ids (reset per message, stable order: attachments then inline) so
+          // re-persisting the same message yields the same id — no orphaned blobs across turns.
+          let k = 0;
+          const { message, blobs } = externalizeChatImages(m, () => `img-x-${m.at}-${k++}`);
+          if (libraryStore.putImageBlob) {
+            for (const b of blobs) {
+              const key = `${id}::${b.id}`;
+              if (writtenBlobIds.current.has(key)) continue;
+              await libraryStore.putImageBlob(id, b.id, b.bytes, b.mimeType);
+              writtenBlobIds.current.add(key);
+            }
+            stored.push(message);
+          } else {
+            stored.push(m); // backend without a blob store: persist bytes inline (legacy behavior)
+          }
+        }
+        await libraryStore.putChatHistory?.(id, stored);
+      })();
+    }, 500);
     return () => clearTimeout(t);
   }, [buddyMessages, activeBuddyId, libraryStore, isRemoteClient, settings.incognitoRemote]);
 
@@ -3854,32 +3881,43 @@ export function App() {
       }),
     [isRemoteClient, sendAppSync],
   );
-  // PHONE: when a RECENT message's inline image was stripped by the mirror (a large or just-generated
-  // image that didn't fit one frame), fetch its bytes back (chunked) and restore the full picture inline
-  // — so the phone shows the image, not just a card. Cached by attachment id so it survives mirror
-  // re-pushes; bounded so the restored bytes can't refill the phone's storage the mirror works to spare.
+  // Seed the LRU with a restored image's bytes (bounded to 20 so the cache can't grow without limit),
+  // then re-inline it into the visible messages.
+  const cacheRestoredImage = useCallback((id: string, bytes: ArrayBuffer, mimeType: string) => {
+    restoredImages.current.set(id, { bytes, mimeType });
+    while (restoredImages.current.size > 20) {
+      const oldest = restoredImages.current.keys().next().value;
+      if (oldest === undefined) break;
+      restoredImages.current.delete(oldest);
+    }
+    setBuddyMessages((prev) => restoreInlineImages(prev, restoredImages.current));
+  }, []);
+  // The mime to render a restored image with: the byte-less inline `{ id, mimeType }`, else the image
+  // file-card's mime, else PNG.
+  const restoredImageMime = (m: StoredChatMessage): string => {
+    if (m.image && "id" in m.image) return m.image.mimeType || "image/png";
+    return m.attachments?.find((a) => a.kind === "image" && a.id && !a.bytes)?.mime || "image/png";
+  };
+  // Re-hydrate a RECENT message whose image bytes were stripped — on the PHONE the mirror dropped them
+  // to stay tunnel-safe (fetch back over the tunnel, chunked); on the DESKTOP they were externalized to
+  // the chat blob store on persist (load back from there after a reload). Cached by id so it survives a
+  // mirror re-push; bounded by the LRU so RAM stays flat across a long image-heavy session.
   useEffect(() => {
-    if (!isRemoteClient) return;
+    const chatId = activeBuddyId;
     for (const m of buddyMessages.slice(-8)) {
-      if (m.image) continue;
-      const att = m.attachments?.find((a) => a.kind === "image" && a.id && !a.bytes);
-      const id = att?.id;
+      const id = externalizedImageId(m);
       if (!id || restoredImages.current.has(id) || fetchingImageIds.current.has(id)) continue;
-      const mime = att!.mime || "image/png";
+      const mime = restoredImageMime(m);
       fetchingImageIds.current.add(id);
-      void fetchRemoteFileBytes(id).then((bytes) => {
+      const load: Promise<ArrayBuffer | undefined> = isRemoteClient
+        ? fetchRemoteFileBytes(id)
+        : (libraryStore.getImageBlob?.(chatId, id).then((b) => b?.bytes) ?? Promise.resolve(undefined));
+      void load.then((bytes) => {
         fetchingImageIds.current.delete(id);
-        if (!bytes) return;
-        restoredImages.current.set(id, { bytes, mimeType: mime });
-        while (restoredImages.current.size > 20) {
-          const oldest = restoredImages.current.keys().next().value;
-          if (oldest === undefined) break;
-          restoredImages.current.delete(oldest);
-        }
-        setBuddyMessages((prev) => restoreInlineImages(prev, restoredImages.current));
+        if (bytes) cacheRestoredImage(id, bytes, mime);
       });
     }
-  }, [isRemoteClient, buddyMessages, fetchRemoteFileBytes]);
+  }, [isRemoteClient, buddyMessages, fetchRemoteFileBytes, activeBuddyId, libraryStore, cacheRestoredImage]);
   // Fill in a card's bytes from the desktop when the mirror stripped them (older image on a phone).
   const withFetchedBytes = useCallback(
     async (ref: FileRef): Promise<FileRef> => {

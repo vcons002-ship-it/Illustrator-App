@@ -19,6 +19,7 @@ import {
   analyzeData,
   imageModelVramCostGb,
   serverModelVramCostGb,
+  chatImageVramFit,
   createDataTable,
   recalcTable,
   tableToText,
@@ -470,6 +471,9 @@ function readUrlText(signal: AbortSignal): (url: string) => Promise<{ title?: st
  * the turn finishes. Cloud chat models don't contend, so they never pause it.
  */
 async function withChatPriority<T>(llmId: string, fn: () => Promise<T>): Promise<T> {
+  // Hand the idle image model's VRAM back (if a render evicted the LLM) AND evict any OTHER resident
+  // local model, THEN reload the chat LLM into the freed VRAM. See prepareChatLlmLoad.
+  await prepareChatLlmLoad();
   // If we freed the bundled LLM for an image burst, relaunch it before this chat turn needs it.
   await restoreChatLlm();
   const eng = engine;
@@ -647,6 +651,10 @@ let nextLlmVramId = 1;
 /** True while we've stopped the bundled chat LLM to free VRAM/RAM for image renders — so any later
  * LLM use (a chat turn, opening a book) knows to relaunch it first. */
 let chatLlmFreed = false;
+/** True while we've asked the local image engine to unload its model for a chat burst — the reverse
+ * hand-off of `chatLlmFreed`. Set once per chat burst so we don't spam /free; reset at render start so
+ * the next image reloads the engine. The image engine reloads lazily on the next generate(). */
+let imageModelFreed = false;
 function llmVramOp(action: "stop" | "ensure"): Promise<void> {
   return new Promise((resolve) => {
     const callId = nextLlmVramId++;
@@ -682,22 +690,19 @@ function canFreeChatLlm(): boolean {
   // Only free for engines whose VRAM the app actually coordinates (bundled server / managed ComfyUI).
   // Use the RESOLVED active backend: a fallback from A1111 to the managed ComfyUI does release VRAM.
   if ((settings.engineBackend ?? settings.localBackend) === "a1111") return false;
-  // VRAM HEADROOM: only free when memory is actually tight. If the GPU can hold the chat model AND
-  // the image model at once, keep BOTH resident — evicting the chat model and reloading it is the
-  // expensive part (a big Ollama model is a multi-minute cold reload on the next message), so skip it
-  // when there's clearly room. Free when low-VRAM is forced, when they can't both fit, or when a size
-  // is unknown (the safe default). The bundled LLM's size is fixed; a "server" model's is estimated
-  // from its name (params + quant) — 0/unknown falls through to freeing, so nothing regresses.
-  if (!settings.lowVram && settings.gpuVramMb && settings.gpuVramMb > 0) {
+  // VRAM HEADROOM (low-VRAM OFF): keep BOTH models resident UNLESS we can PROVE they don't both fit.
+  // A cold reload of a big Ollama model is a multi-minute stall, so we never pay it on a guess — only
+  // when the math says it can't fit. Crucially, UNKNOWN (VRAM undetected — non-NVIDIA / nvidia-smi
+  // absent — or a model size we can't estimate, e.g. a ":latest" tag) now KEEPS the model loaded
+  // instead of falling through to freeing, which used to evict the LLM on common configs despite
+  // low-VRAM being off. Low-VRAM ON still forces the free path below (unchanged).
+  if (!settings.lowVram) {
     const imageGb = imageModelVramCostGb(settings.localModel ?? "");
     const chatGb =
       settings.localTextBackend === "bundled"
         ? BUNDLED_LLM_VRAM_GB
         : serverModelVramCostGb(cs.localServerTextModel ?? settings.localServerTextModel ?? "");
-    const HEADROOM_GB = 2; // activations/latents/runtime overhead beyond the weights
-    if (imageGb > 0 && chatGb > 0 && (imageGb + chatGb + HEADROOM_GB) * 1024 <= settings.gpuVramMb) {
-      return false; // both fit — leave the chat model loaded (no evict/cold-reload thrash)
-    }
+    if (chatImageVramFit({ gpuVramMb: settings.gpuVramMb, imageGb, chatGb }) !== "nofit") return false;
   }
   try {
     return chatProviders().llm.id === "local-server";
@@ -736,6 +741,59 @@ async function restoreChatLlm(): Promise<void> {
   // Only the bundled server needs an explicit relaunch. An Ollama ("server") model reloads
   // lazily on the next chat request (which is what triggered this restore), so nothing to start.
   if (settings?.localTextBackend === "bundled") await llmVramOp("ensure");
+}
+
+/** The REVERSE hand-off of freeChatLlmForRender: unload the idle LOCAL image model so the chat LLM can
+ * reload into that VRAM (lets a larger model coexist in the render→chat workflow). Called by
+ * withChatPriority ONLY when the chat LLM is actually about to (re)load (`chatLlmFreed`) — i.e. a render
+ * evicted it and we're restoring it now — so we never unload an image model that a still-resident LLM
+ * doesn't need out of the way (which would just force a needless cold reload on the next render). The
+ * lowVram / proven-tight self-check here is a belt-and-suspenders mirror of canFreeChatLlm (the gate
+ * that set `chatLlmFreed` in the first place). Once per chat burst (imageModelFreed); reset at the next
+ * render start. The image engine reloads lazily on the next generate(), so this is safe to do eagerly. */
+async function freeImageModelForChat(): Promise<void> {
+  if (imageModelFreed || !settings) return;
+  const cs = chatSettingsOf(settings);
+  if (cs.imageProvider !== "local" && settings.imageProvider !== "local") return;
+  // Only the app-managed ComfyUI actually releases VRAM on /free; an external A1111 keeps its
+  // checkpoint resident, so freeing there strands nothing useful — skip it (mirror canFreeChatLlm).
+  if ((settings.engineBackend ?? settings.localBackend) === "a1111") return;
+  if (!settings.lowVram) {
+    const imageGb = imageModelVramCostGb(settings.localModel ?? "");
+    const chatGb =
+      settings.localTextBackend === "bundled"
+        ? BUNDLED_LLM_VRAM_GB
+        : serverModelVramCostGb(cs.localServerTextModel ?? settings.localServerTextModel ?? "");
+    // Keep the image model hot UNLESS we can prove both can't fit (a cold reload of the diffusion
+    // model is the expensive part — never pay it on a guess). "fit"/"unknown" → leave it loaded.
+    if (chatImageVramFit({ gpuVramMb: settings.gpuVramMb, imageGb, chatGb }) !== "nofit") return;
+  }
+  imageModelFreed = true;
+  try {
+    await chatProviders().image.freeMemory?.();
+  } catch {
+    /* best-effort — the image model just stays warm if the engine can't free right now */
+  }
+}
+
+/**
+ * Make room for the local chat LLM before it (re)loads — run at the start of every chat turn and before
+ * a warm. Two steps, both low-VRAM-scoped so an ample-VRAM box keeps its models hot:
+ *  1. If a render evicted the LLM (`chatLlmFreed`), free the idle image model first so the LLM reloads
+ *     into that VRAM — the reverse of the render→chat hand-off (see freeImageModelForChat).
+ *  2. Evict any OTHER resident model on the local server so two LLMs never coexist in VRAM — e.g. after
+ *     a model switch, or a vision/assess model left loaded ("two models in `ollama ps`"). Ollama-only;
+ *     a non-Ollama / cloud backend is a silent no-op.
+ */
+async function prepareChatLlmLoad(): Promise<void> {
+  if (chatLlmFreed) await freeImageModelForChat();
+  if (!settings?.lowVram) return; // ample VRAM: leave co-resident models alone (no churn)
+  try {
+    const { llm } = chatProviders();
+    if (llm.id === "local-server") await llm.evictOtherModels?.();
+  } catch {
+    /* best-effort — leave VRAM as-is if the server can't be queried */
+  }
 }
 
 /** Broadcast the current (independent) bible/image pause state + clear status lines. */
@@ -1290,6 +1348,9 @@ async function renderFromText(
   // the debounced warm or the next chat. The book's bible-illustration path doesn't come through
   // here, so it's never disturbed.
   await freeChatLlmForRender();
+  // A new render means the image engine will (re)load its model — clear the chat-side "freed" flag so
+  // the next chat burst frees it again.
+  imageModelFreed = false;
   const stepsOverride = opts.stepsOverride;
   const style = getImageStyle(tier.style);
   // A photo transform's instruction IS the prompt — don't force the global art style
@@ -1382,6 +1443,10 @@ function warmChatModel(): void {
  * loads it (cold) for both backends. After a render burst this restores it even in a pure image
  * session, so the reader's next chat is ready instead of waiting on a cold load. */
 async function doWarmChatModel(): Promise<void> {
+  // Same pre-load as a chat turn: hand the image model's VRAM back (low-VRAM, if a render freed the LLM)
+  // and evict any other resident model BEFORE warming, so the warm reload lands into freed VRAM and
+  // doesn't end up co-resident with the image model or a stale LLM.
+  await prepareChatLlmLoad();
   if (chatLlmFreed) await restoreChatLlm();
   try {
     const { llm } = chatProviders();

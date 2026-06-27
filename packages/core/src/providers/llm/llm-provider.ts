@@ -66,4 +66,11 @@ export interface LLMProvider {
    * nothing to free and omit this. A later call (chat, re-analysis) reloads lazily.
    */
   unload?(): Promise<void>;
+  /**
+   * Ensure only this provider's own chat model occupies the local server's VRAM: evict every OTHER
+   * resident model (optional; Ollama-only in practice). Called before (re)loading the chat LLM so two
+   * models never coexist — e.g. after a model switch, or a vision/assess model left loaded. Returns the
+   * names it evicted. Cloud / single-model backends omit it.
+   */
+  evictOtherModels?(keep?: string): Promise<string[]>;
 }

@@ -141,4 +141,7 @@ export interface ImageProvider {
   /** Stable provider key, e.g. "flux". */
   readonly id: string;
   generate(input: ImageGenerationInput): Promise<ImageGenerationOutput>;
+  /** Optional: release the image model's VRAM now (e.g. a local ComfyUI /free) so a chat LLM can reload
+   * into the freed memory. No-op / absent for providers whose VRAM the app can't coordinate. */
+  freeMemory?(): Promise<void>;
 }
