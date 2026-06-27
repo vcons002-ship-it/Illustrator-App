@@ -176,6 +176,9 @@ import {
   externalizeChatImages,
   externalizedImageId,
   restoreInlineImages,
+  applyFileEdits,
+  summarizeFileEdits,
+  shouldAutoCompact,
   type ChatTurn,
   type CreatedFileRef,
   type ContextUsage,
@@ -272,6 +275,7 @@ import {
   whichInterpreter,
   appRepoRoot,
   writeWorkspaceFile,
+  readWorkspaceFile,
   gitEnsureRepo,
   gitWorktreeCreate,
   gitCommitAll,
@@ -522,6 +526,7 @@ export function App() {
     chatTool,
     applyEngineConfig,
     setFileLedger,
+    setProjectGuide,
     chatCancel,
     warmLlm,
     buddyChat,
@@ -4446,6 +4451,64 @@ export function App() {
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
+  // Edit an EXISTING workspace file in place via search/replace (no whole-file rewrite). Reads the file,
+  // applies the edits (each `search` must match exactly once), writes it back. Mirrors runWriteFile.
+  const runEditFile = async (call: Extract<BuddyToolCall, { tool: "edit_file" }>): Promise<void> => {
+    setBuddyPendingTool(undefined);
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+    if (!isDesktop || !settings.allowCommands) {
+      appendBuddy({ role: "tool", text: "🔒 Editing files needs the desktop app + command access (Settings → assistant abilities).", turns: [] });
+      return;
+    }
+    setBuddyBusy(true);
+    setBuddyActivity(`Editing ${call.path}…`);
+    let payload: { path: string; ok: boolean; applied?: number; summary?: string; error?: string };
+    try {
+      const file = await readWorkspaceFile(call.path, buddyWorkingDir || undefined);
+      if (!file.exists) {
+        payload = { path: call.path, ok: false, error: "file not found — write_file it first, or check the path" };
+        appendBuddy({ role: "tool", text: `⚠ edit_file: ${call.path} doesn't exist yet.`, turns: [] });
+      } else {
+        const r = applyFileEdits(file.text, call.edits);
+        const summary = summarizeFileEdits(call.path, r);
+        if (r.applied > 0) await writeWorkspaceFile(call.path, r.content, buddyWorkingDir || undefined);
+        payload = { path: call.path, ok: r.applied > 0, applied: r.applied, summary };
+        recordCreatedFile(call.path, r.content.split("\n").length, false);
+        appendBuddy({
+          role: "tool",
+          text: r.failures.length === 0 ? `✏️ Edited ${call.path} (${r.applied} edit${r.applied === 1 ? "" : "s"})` : `✏️ ${call.path}: ${r.applied} applied, ${r.failures.length} failed`,
+          attachments: [{ name: call.path.split(/[\\/]/).pop() || call.path, mime: "", kind: createdFileKind(call.path), path: file.path }],
+          turns: [],
+        });
+        // Mirror a live change into the open code window (like runWriteFile).
+        const openCode = bookRef.current;
+        if (r.applied > 0 && openCode?.contentMode === "code" && call.path === codeFileName(openCode)) {
+          setCodeDraft(r.content);
+          setBook((prev) => (prev && prev.id === openCode.id ? { ...prev, code: r.content } : prev));
+          void libraryStore.putBook({ ...openCode, code: r.content }).catch(() => {});
+        }
+      }
+    } catch (err) {
+      payload = { path: call.path, ok: false, error: err instanceof Error ? err.message : String(err) };
+      appendBuddy({ role: "tool", text: `⚠ Couldn't edit ${call.path}: ${payload.error}`, turns: [] });
+    }
+    const feedback = formatBuddyToolResult(call, { editFile: payload });
+    if (appManagedActive && buddyWorkflowRef.current) {
+      // A file step is satisfied by a SUCCESSFUL edit (writeFile-shaped evidence so the collar's `file`
+      // contract reads it the same as a write).
+      buddyStepEvidenceRef.current.toolResults.push({ call, result: { writeFile: { path: call.path, ok: payload.ok, ...(payload.error ? { error: payload.error } : {}) } } });
+      await advanceWorkflowAfterTurn(
+        { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+      );
+      return;
+    }
+    await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+  };
+
   // Approve a buddy-requested screenshot: capture the screen, show it, have the
   // vision model describe it, and feed that observation back so the model reacts.
   const approveScreenshot = async (call: Extract<BuddyToolCall, { tool: "screenshot" }>): Promise<void> => {
@@ -4520,6 +4583,13 @@ export function App() {
           } catch (err) {
             return { writeFile: { path: call.path, ok: false, error: err instanceof Error ? err.message : String(err) } };
           }
+        }
+        if (call.tool === "edit_file") {
+          const file = await readWorkspaceFile(call.path, dir);
+          if (!file.exists) return { editFile: { path: call.path, ok: false, error: "file not found" } };
+          const r = applyFileEdits(file.text, call.edits);
+          if (r.applied > 0) await writeWorkspaceFile(call.path, r.content, dir);
+          return { editFile: { path: call.path, ok: r.applied > 0, applied: r.applied, summary: summarizeFileEdits(call.path, r) } };
         }
         if (call.tool === "screenshot") {
           const shot = await captureScreen(call.window);
@@ -4722,7 +4792,7 @@ export function App() {
   };
   /** Host tools that need the DESKTOP runtime — relayed when a phone drives the buddy. */
   const isDesktopRuntimeTool = (call: BuddyToolCall): boolean =>
-    call.tool === "find_files" || call.tool === "run_command" || call.tool === "write_file" || call.tool === "screenshot";
+    call.tool === "find_files" || call.tool === "run_command" || call.tool === "write_file" || call.tool === "edit_file" || call.tool === "screenshot";
   /** Run a desktop-runtime host tool — locally on the desktop, or via the relay on a linked phone. */
   const runHostToolDispatch = (call: BuddyToolCall): void => {
     if (isRemoteClient && isDesktopRuntimeTool(call)) {
@@ -4732,6 +4802,7 @@ export function App() {
     if (call.tool === "find_files") approveFindFiles(call);
     else if (call.tool === "screenshot") void approveScreenshot(call);
     else if (call.tool === "write_file") void runWriteFile(call);
+    else if (call.tool === "edit_file") void runEditFile(call);
     else if (call.tool === "run_command") void approveRunCommand(call);
   };
 
@@ -4923,7 +4994,23 @@ export function App() {
       setBuddyBusy(false);
       return true;
     }
-    const outcome = evaluateStep(step, evidence);
+    // G5 — a `files` step is judged on whether the declared deliverables ACTUALLY landed on disk (and
+    // are non-empty), not just that a write tool ran. Verify here (host I/O) and fold it into the evidence.
+    let evi: typeof evidence & { filesPresent?: { path: string; ok: boolean }[] } = evidence;
+    if (step.doneWhen.kind === "files" && isDesktop) {
+      const checks = await Promise.all(
+        step.doneWhen.paths.map(async (p) => {
+          try {
+            const r = await readWorkspaceFile(p, buddyWorkingDir || undefined);
+            return { path: p, ok: r.exists && r.text.trim().length > 0 };
+          } catch {
+            return { path: p, ok: false };
+          }
+        }),
+      );
+      evi = { ...evidence, filesPresent: checks };
+    }
+    const outcome = evaluateStep(step, evi);
     const adv = advanceWorkflow(wf, outcome);
     applyWorkflow(adv.workflow);
     buddyStepEvidenceRef.current = { toolResults: [], text: "" }; // fresh evidence for whatever runs next
@@ -4961,6 +5048,17 @@ export function App() {
     // (ordered before the buddyChat send below), so the model sees what it's written regardless of init
     // timing or a session switch.
     setFileLedger(createdFilesRef.current);
+    // G4 — push the workspace project guide (AGENTS.md, else CONVENTIONS.md) so durable per-project
+    // conventions ride every turn. Desktop only (the model can read/update it via read_file/write_file).
+    if (isDesktop && !isRemoteClient) {
+      try {
+        let g = await readWorkspaceFile("AGENTS.md", buddyWorkingDir || undefined);
+        if (!g.exists) g = await readWorkspaceFile("CONVENTIONS.md", buddyWorkingDir || undefined);
+        setProjectGuide(g.exists ? g.text : "");
+      } catch {
+        setProjectGuide("");
+      }
+    }
     if (userBubbleText !== undefined) {
       appendBuddy({ role: "user", text: userBubbleText });
       buddyQueueAdvanceRef.current = { count: 0, noProgress: 0 }; // fresh user turn → reset the chain budget
@@ -6093,6 +6191,38 @@ export function App() {
   }, [chatBusy, chatMessages, summarize]);
   const onCompactBuddyClick = useCallback(() => void onCompactBuddy(), [onCompactBuddy]);
   const onCompactChatClick = useCallback(() => void onCompactChat(), [onCompactChat]);
+
+  // G7 — auto-compaction. A long multi-step job silently loses its early decisions once the
+  // history outgrows a small local window and the worker trims the oldest turns. Before that
+  // happens, fold the OLDER turns into a brief and keep the most recent ones verbatim — the
+  // same flow the manual Compact button uses, but fired automatically when usage crosses ~0.8
+  // of the model's window. The file ledger + plan persist separately, so they survive intact.
+  const autoCompactingRef = useRef(false);
+  const onAutoCompactBuddy = useCallback(async () => {
+    if (autoCompactingRef.current || buddyBusy) return;
+    const msgs = buddyMessagesRef.current;
+    const keepRecent = 6;
+    if (msgs.length <= keepRecent + 1) return; // nothing meaningful to summarize away
+    const older = msgs.slice(0, msgs.length - keepRecent);
+    const recent = msgs.slice(msgs.length - keepRecent);
+    autoCompactingRef.current = true;
+    setBuddyBusy(true);
+    setBuddyActivity("Compacting earlier conversation to stay within context…");
+    const res = await summarize(chatTurnsOf(older));
+    setBuddyBusy(false);
+    setBuddyActivity("");
+    if (res.text) {
+      setBuddyMessages([compactedMessage(res.text), ...recent]);
+      // Drop the stale usage donut: it reflected the pre-compaction history. The next turn
+      // recomputes it — and clearing it stops this effect from re-firing on the old value.
+      setBuddyUsage(undefined);
+    }
+    autoCompactingRef.current = false;
+  }, [buddyBusy, summarize]);
+  useEffect(() => {
+    if (isRemoteClient || buddyBusy || autoCompactingRef.current) return;
+    if (shouldAutoCompact(buddyUsage, buddyMessages.length)) void onAutoCompactBuddy();
+  }, [buddyUsage, buddyBusy, buddyMessages.length, isRemoteClient, onAutoCompactBuddy]);
   const buddyPanelMessages = useMemo(
     () =>
       buddyMessages.map((m) => ({

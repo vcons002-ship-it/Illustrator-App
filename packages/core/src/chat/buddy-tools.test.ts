@@ -3,6 +3,8 @@ import {
   ALWAYS_GATED_TOOLS,
   MAX_BUDDY_TOOL_ROUNDS,
   buildBuddySystemPrompt,
+  buildProjectGuideBlock,
+  buildToolCallFormat,
   describeBuddyToolActivity,
   formatBuddyToolResult,
   isRetryableError,
@@ -38,6 +40,23 @@ describe("parseBuddyToolCall — set_plan steps", () => {
       steps: ["Generate image A", "Save recap", "Just say hi"],
       stepDetails: [{ needs: "image" }, { needs: "file", onFail: "skip" }, {}],
     });
+  });
+});
+
+describe("parseBuddyToolCall — edit_file", () => {
+  it("parses an edit_file with one or more search/replace edits", () => {
+    expect(
+      parseBuddyToolCall('{"tool":"edit_file","path":"src/a.py","edits":[{"search":"x","replace":"y"}]}'),
+    ).toEqual({ tool: "edit_file", path: "src/a.py", edits: [{ search: "x", replace: "y" }] });
+  });
+  it("drops an edit_file with no usable edits or no path", () => {
+    expect(parseBuddyToolCall('{"tool":"edit_file","path":"a.py","edits":[]}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"edit_file","path":"a.py","edits":[{"replace":"y"}]}')).toBeUndefined(); // no search
+    expect(parseBuddyToolCall('{"tool":"edit_file","edits":[{"search":"x","replace":"y"}]}')).toBeUndefined(); // no path
+  });
+  it("formats an edit_file result (applied / failed / hard error)", () => {
+    expect(formatBuddyToolResult({ tool: "edit_file", path: "a.py", edits: [{ search: "x", replace: "y" }] }, { editFile: { path: "a.py", ok: true, applied: 1, summary: "[edit_file applied 1 edit(s) to a.py.]" } })).toContain("applied 1 edit");
+    expect(formatBuddyToolResult({ tool: "edit_file", path: "a.py", edits: [] }, { editFile: { path: "a.py", ok: false, error: "file not found" } })).toContain("read_file it and retry");
   });
 });
 
@@ -427,6 +446,31 @@ describe("buildBuddySystemPrompt", () => {
     const cmds = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true });
     expect(cmds).toContain("write_file then run_command"); // RUN-code routing
     expect(cmds).toContain("the reader KEEPS"); // substantial files/documents → write_file, not a fenced block
+  });
+
+  it("buildProjectGuideBlock: wraps non-empty AGENTS.md text; empty when blank; capped", async () => {
+    const { PROJECT_GUIDE_MAX_CHARS } = await import("./buddy-tools.js");
+    expect(buildProjectGuideBlock("")).toBe("");
+    expect(buildProjectGuideBlock("   \n  ")).toBe("");
+    const b = buildProjectGuideBlock("Build: npm run build. Use 2-space indent.");
+    expect(b).toContain("PROJECT NOTES");
+    expect(b).toContain("npm run build");
+    expect(buildProjectGuideBlock("x".repeat(PROJECT_GUIDE_MAX_CHARS + 500)).length).toBeLessThanOrEqual(PROJECT_GUIDE_MAX_CHARS + 200);
+  });
+
+  it("buildToolCallFormat: a single tool → an object schema forcing {tool:<name>, …args}", () => {
+    const f = buildToolCallFormat(["generate_image"]) as { type: string; required: string[]; properties: { tool: { enum: string[] }; prompt?: unknown } };
+    expect(f.type).toBe("object");
+    expect(f.required).toEqual(["tool", "prompt"]); // tool + the tool's own required arg
+    expect(f.properties.tool.enum).toEqual(["generate_image"]);
+    expect(f.properties.prompt).toBeDefined();
+  });
+
+  it("buildToolCallFormat: multiple tools → a oneOf union; unknown names dropped → undefined", () => {
+    const u = buildToolCallFormat(["write_file", "read_file"]) as { oneOf: unknown[] };
+    expect(Array.isArray(u.oneOf)).toBe(true);
+    expect(u.oneOf).toHaveLength(2);
+    expect(buildToolCallFormat(["no_such_tool"])).toBeUndefined();
   });
 
   it("buildFileLedgerBlock: terse, bounded, read_file cue; empty when no files", async () => {
@@ -1161,7 +1205,10 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
           args[key] = p.enum
             ? p.enum[0]
             : p.type === "array"
-              ? ["x"]
+              ? // An array of OBJECTS (e.g. edit_file.edits) → one object with each sub-prop filled.
+                p.items?.properties
+                ? [Object.fromEntries(Object.keys(p.items.properties).map((k) => [k, "x"]))]
+                : ["x"]
               : p.type === "boolean"
                 ? true
                 : key === "url" || key === "ref"

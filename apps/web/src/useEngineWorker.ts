@@ -253,6 +253,8 @@ export interface EngineWorkerApi {
   /** Update the worker's list of workspace files the assistant wrote this session, so it injects a terse
    * reminder into the buddy prompt (the model stays aware of what it made + can read_file before editing). */
   setFileLedger: (files: CreatedFileRef[]) => void;
+  /** Update the worker's workspace project-guide text (AGENTS.md / CONVENTIONS.md) injected each turn. */
+  setProjectGuide: (text: string) => void;
   /** Have the chat's vision model describe a captured screenshot. */
   assessImage: (
     image: { bytes: ArrayBuffer; mimeType: string },
@@ -1279,6 +1281,11 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     send({ type: "fileLedger", files });
   }, []);
 
+  const setProjectGuide = useCallback((text: string) => {
+    if (remoteRef.current) return;
+    send({ type: "projectGuide", text });
+  }, []);
+
   useEffect(() => {
     if (remoteRef.current) return; // the desktop tunes its own engine (see the identity effect)
     send({ type: "tune", settings: settingsRef.current });
@@ -2062,6 +2069,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     chatTool,
     applyEngineConfig,
     setFileLedger,
+    setProjectGuide,
     chatCancel,
     warmLlm,
     buddyChat,

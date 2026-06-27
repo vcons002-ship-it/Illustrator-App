@@ -114,7 +114,7 @@ export interface BuddyDeps {
   forget?: (match: string, about?: "reader" | "self" | "user") => Promise<number>;
   /** Lightweight chat-scoped working checklist. setPlan creates/replaces it; completeStep ticks the
    * first unfinished step. Both return the updated plan (host owns the canonical object + persistence). */
-  setPlan?: (goal: string | undefined, steps: string[], stepDetails?: { needs?: string; onFail?: string }[]) => BuddyPlan;
+  setPlan?: (goal: string | undefined, steps: string[], stepDetails?: { needs?: string; onFail?: string; produces?: string[]; verify?: string }[]) => BuddyPlan;
   completeStep?: (note?: string) => BuddyPlan | undefined;
   /** App-managed-steps mode: the HOST runs the checklist and ticks steps from observed evidence, so
    * `complete_step` is withdrawn — a stray call is refused (the model just does the current step). */
@@ -204,6 +204,7 @@ type HostToolName =
   | "find_files"
   | "run_command"
   | "write_file"
+  | "edit_file"
   | "screenshot"
   | "plan_task"
   | "prep_order"
@@ -216,6 +217,7 @@ const HOST_TOOLS = new Set<HostToolName>([
   "find_files",
   "run_command",
   "write_file",
+  "edit_file",
   "screenshot",
   "plan_task",
   "prep_order",
@@ -261,6 +263,11 @@ export async function runBuddyTurn(opts: {
    * it emits structured tool_calls. Cloud providers ignore it; the text catalog in `system` is the
    * universal fallback. Build with `ollamaToolSchemas`. */
   tools?: ToolSchema[];
+  /** GRAMMAR-CONSTRAIN this turn's reply to a valid tool call (Ollama `format`) — set ONLY when a tool
+   * call is required (an app-managed step whose contract demands a specific tool). Forces a stubborn
+   * small model to emit the call instead of narrating. Build with `buildToolCallFormat`. Ignored by
+   * cloud / non-Ollama providers. */
+  toolFormat?: Record<string, unknown>;
   /**
    * Pause the auto-run tool loop after this many rounds for a "keep going?" checkpoint, instead of
    * running to the (much larger) `MAX_BUDDY_TOOL_ROUNDS` backstop. Set it for PAID/cloud models so a
@@ -333,6 +340,9 @@ export async function runBuddyTurn(opts: {
       // Native tool schemas: a tool-capable local model emits structured tool_calls (the provider
       // serializes them back into the text protocol). Cloud providers ignore this field.
       ...(opts.tools?.length ? { tools: opts.tools } : {}),
+      // Force a parseable tool call this turn when the step's contract requires one (provider gates it
+      // to the Ollama path; it suppresses `tools` there since the two can't both apply).
+      ...(opts.toolFormat ? { toolFormat: opts.toolFormat } : {}),
       onComplete: (m) => {
         lastTruncated = m.truncated;
       },
@@ -365,9 +375,16 @@ export async function runBuddyTurn(opts: {
         // them to `transcript` persists them as chat history, which leaked the internal directive
         // into the conversation as a "user" message.
         messages.push({ role: "assistant", content: reply });
-        const nudge =
-          "[That looked like a tool call but wasn't something I could run. Re-issue each tool call " +
-          "as its own JSON object (one per line, no prose around them), or just answer in plain text.]";
+        // G8: a tool call that LOOKED valid but was cut off at the length limit (its content/args
+        // argument ran past the token budget) won't parse — and re-issuing the SAME giant call just
+        // truncates again. Steer to chunked writes instead of retrying the oversized argument.
+        const nudge = lastTruncated
+          ? "[That tool call was cut off at the length limit — its argument was too long to finish. " +
+            "Do NOT resend the whole thing. Instead write the file in chunks: a first write_file with " +
+            "the opening portion, then write_file(..., append:true) for each further chunk, or edit_file " +
+            "with a small search/replace to change just one part.]"
+          : "[That looked like a tool call but wasn't something I could run. Re-issue each tool call " +
+            "as its own JSON object (one per line, no prose around them), or just answer in plain text.]";
         messages.push({ role: "user", content: nudge });
         continue;
       }
@@ -509,7 +526,7 @@ export async function runBuddyTurn(opts: {
 /** Execute one auto-run buddy tool (everything but generate_image). Exported for
  * the slash-command path, which runs tools directly without an LLM round. */
 export async function runBuddyTool(
-  call: Exclude<BuddyToolCall, { tool: "generate_image" | "find_files" | "run_command" | "write_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "spawn_coding_agents" }>,
+  call: Exclude<BuddyToolCall, { tool: "generate_image" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "spawn_coding_agents" }>,
   deps: BuddyDeps,
 ): Promise<BuddyToolResultPayload> {
   try {

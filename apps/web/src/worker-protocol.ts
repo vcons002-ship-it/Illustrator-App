@@ -54,6 +54,9 @@ export type MainToWorker =
   /** The current set of files the assistant has written to the workspace this session, so the worker can
    * inject a terse non-trimmable reminder into the buddy prompt (the model stays aware of what it made). */
   | { type: "fileLedger"; files: CreatedFileRef[] }
+  /** The workspace's AGENTS.md / CONVENTIONS.md text (read by the host each turn), injected into the
+   * buddy prompt as durable project conventions. Empty string when there's no such file. */
+  | { type: "projectGuide"; text: string }
   | { type: "open"; book: BookSource }
   /** Patch the open book's edited data table(s) in place (no re-init), so the chat's
    * analyze_data sees edits made in the grid. Lightweight sibling of "open". */

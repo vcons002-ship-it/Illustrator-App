@@ -41,6 +41,8 @@ import {
   placeSchwabOrder,
   buildBuddySystemPrompt,
   buildFileLedgerBlock,
+  buildProjectGuideBlock,
+  buildToolCallFormat,
   type CreatedFileRef,
   ollamaToolSchemas,
   shouldAppendBeat,
@@ -661,6 +663,9 @@ let imageModelFreed = false;
 /** Workspace files the assistant wrote this session (pushed from the host via the `fileLedger` message);
  * injected as a terse non-trimmable reminder into the buddy prompt so the model remembers what it made. */
 let fileLedger: CreatedFileRef[] = [];
+/** The workspace's AGENTS.md / CONVENTIONS.md text (pushed from the host); injected as durable project
+ * conventions into the buddy prompt. Empty when there's no such file. */
+let projectGuide = "";
 function llmVramOp(action: "stop" | "ensure"): Promise<void> {
   return new Promise((resolve) => {
     const callId = nextLlmVramId++;
@@ -1033,6 +1038,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       // The host's current set of workspace files the assistant wrote this session — injected into the
       // buddy prompt so the model stays aware of what it made (and can read_file before editing).
       fileLedger = msg.files;
+      break;
+    case "projectGuide":
+      projectGuide = msg.text;
       break;
     case "open":
       void handleOpen(msg.book);
@@ -2993,6 +3001,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
               status: "pending" as const,
               ...(d?.needs ? { needs: d.needs } : {}),
               ...(d?.onFail ? { onFail: d.onFail } : {}),
+              ...(d?.produces && d.produces.length ? { produces: d.produces } : {}),
+              ...(d?.verify ? { verify: d.verify } : {}),
             };
           }),
         };
@@ -3392,6 +3402,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         slash.call.tool === "find_files" ||
         slash.call.tool === "run_command" ||
         slash.call.tool === "write_file" ||
+        slash.call.tool === "edit_file" ||
         slash.call.tool === "screenshot" ||
         slash.call.tool === "plan_task" ||
         slash.call.tool === "prep_order" ||
@@ -3549,7 +3560,18 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     // Like the story-state block, the file ledger rides AFTER the cached prefix (it changes as files are
     // written) so the model stays aware of what it created even after history trimming.
     const ledgerBlock = buildFileLedgerBlock(fileLedger);
-    const volatile = [storyStateBlock, ledgerBlock].filter(Boolean).join("\n\n");
+    const guideBlock = buildProjectGuideBlock(projectGuide);
+    const volatile = [storyStateBlock, guideBlock, ledgerBlock].filter(Boolean).join("\n\n");
+    // G3 — in app-managed mode, GRAMMAR-CONSTRAIN the reply to the tool the active step's contract
+    // demands so a stubborn small model can't narrate instead of acting. Only for a concrete tool need
+    // (the step's `needs` token is a tool name); text/narration steps stay free. Local-server only — the
+    // provider applies Ollama `format`; cloud ignores `toolFormat`. A file step also allows read_file
+    // (a sensible precursor) so the model can read before rewriting.
+    const requiredNeeds = msg.appManagedSteps ? plan?.steps.find((s) => s.status !== "done")?.needs : undefined;
+    const toolFormat =
+      requiredNeeds && llm.id === "local-server"
+        ? buildToolCallFormat(requiredNeeds === "write_file" ? ["write_file", "edit_file", "read_file"] : [requiredNeeds])
+        : undefined;
     const outcome = await withChatPriority(llm.id, () => runBuddyTurn({
       llm,
       system: volatile ? `${setup}\n\n${volatile}` : setup,
@@ -3577,6 +3599,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             }),
           }
         : {}),
+      ...(toolFormat ? { toolFormat } : {}),
       // A story is open → STORY MODE: if the model ends a turn empty/tool-only, the wrap-up asks for
       // the next BEAT (prose), so the recovered reply is still appendable to the book.
       ...(story && currentBook?.kind === "story" ? { storyMode: true } : {}),

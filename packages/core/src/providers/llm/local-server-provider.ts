@@ -514,7 +514,14 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
         keep_alive: "30m",
         options: this.ollamaOptions(opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS, 0.7),
         ...(wantsThink !== undefined ? { think: wantsThink } : {}),
-        ...(withTools && opts.tools ? { tools: opts.tools } : {}),
+        // GRAMMAR-CONSTRAINED tool call wins over native `tools`: `format` forces the text-protocol call
+        // into `content` (which parseBuddyToolCalls reads), whereas `tools` would put it in `tool_calls`
+        // with empty content — the two can't both apply. So when a call is REQUIRED, use the grammar.
+        ...(opts.toolFormat
+          ? { format: opts.toolFormat }
+          : withTools && opts.tools
+            ? { tools: opts.tools }
+            : {}),
       },
       this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
       (line) => {

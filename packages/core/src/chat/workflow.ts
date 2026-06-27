@@ -21,6 +21,7 @@ export type DoneWhen =
   | { kind: "file" } // write_file succeeded / a file artifact appeared
   | { kind: "command_ok" } // run_command exited 0
   | { kind: "text"; min?: number; regex?: string } // plain-text output non-empty / matches a pattern
+  | { kind: "files"; paths: string[] } // these specific deliverable files exist + are non-empty (host-verified)
   | { kind: "user_reply" } // PARKS — satisfied by the reader's next message, not by a turn
   | { kind: "narration" }; // a pure "say X" step — done once the model produces any text
 
@@ -55,6 +56,9 @@ export const DEFAULT_MAX_ATTEMPTS = 2;
 export interface StepEvidence {
   toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[];
   text: string;
+  /** Host-verified existence of a `files` step's declared deliverables (path → exists & non-empty), so
+   * the collar checks the artifacts ACTUALLY landed, not just that a write tool ran. */
+  filesPresent?: { path: string; ok: boolean }[];
 }
 
 /** The result of judging a step against its contract. `parks` means "correctly waiting on the reader"
@@ -134,15 +138,28 @@ function normalizeOnFail(onFail: string | undefined): OnFail {
  * into an executable Workflow: every step gets a concrete DoneWhen (declared or inferred), defaults
  * filled, ids assigned, all `pending` and the first `active`. PURE. */
 export function compileWorkflow(plan: BuddyPlan): Workflow {
-  const steps: WorkflowStep[] = plan.steps.map((s, i) => ({
-    id: `s${i + 1}`,
-    instruction: s.text,
-    doneWhen: needsToDoneWhen(s.needs) ?? inferDoneWhen(s.text),
-    onFail: normalizeOnFail(s.onFail),
+  const steps: WorkflowStep[] = [];
+  const mk = (instruction: string, doneWhen: DoneWhen, onFail: OnFail): WorkflowStep => ({
+    id: `s${steps.length + 1}`,
+    instruction,
+    doneWhen,
+    onFail,
     maxAttempts: DEFAULT_MAX_ATTEMPTS,
-    status: i === 0 ? "active" : "pending",
+    status: "pending",
     attempts: 0,
-  }));
+  });
+  for (const s of plan.steps) {
+    // G5 — declared deliverable files (`produces`) become a `files` contract the host VERIFIES exist,
+    // instead of trusting that a write tool merely ran. Otherwise fall back to needs/inference.
+    const produces = s.produces?.map((p) => p.trim()).filter(Boolean);
+    const doneWhen: DoneWhen = produces?.length ? { kind: "files", paths: produces } : (needsToDoneWhen(s.needs) ?? inferDoneWhen(s.text));
+    steps.push(mk(s.text, doneWhen, normalizeOnFail(s.onFail)));
+    // G6 — a `verify` command becomes an ENFORCED follow-up step that must exit 0 (the model can't
+    // declare code "done" without it actually building/passing).
+    const verify = s.verify?.trim();
+    if (verify) steps.push(mk(`Verify the previous step: run \`${verify}\` with run_command and fix any failure until it exits 0.`, { kind: "command_ok" }, "ask_user"));
+  }
+  if (steps[0]) steps[0].status = "active";
   return { ...(plan.goal ? { goal: plan.goal } : {}), steps };
 }
 
@@ -199,6 +216,13 @@ export function evaluateStep(step: WorkflowStep, evidence: StepEvidence): StepOu
         if (re && !re.test(body)) return { done: false, reason: "the answer didn't match the expected pattern" };
       }
       return { done: true };
+    }
+    case "files": {
+      const present = evidence.filesPresent ?? [];
+      const missing = dw.paths.filter((p) => !present.some((f) => f.path === p && f.ok));
+      return missing.length === 0
+        ? { done: true }
+        : { done: false, reason: `these files aren't on disk yet (or are empty): ${missing.join(", ")}` };
     }
     case "narration":
       return evidence.text.trim().length > 0 ? { done: true } : { done: false, reason: "nothing was said" };
@@ -297,10 +321,33 @@ export function workflowParked(wf: Workflow | undefined): boolean {
 export function workflowToPlan(wf: Workflow): BuddyPlan {
   return {
     ...(wf.goal ? { goal: wf.goal } : {}),
-    steps: wf.steps.map((s) => ({
-      text: s.instruction,
-      status: s.status === "done" ? ("done" as const) : ("pending" as const),
-      ...(s.note ? { note: s.note } : {}),
-    })),
+    steps: wf.steps.map((s) => {
+      // Carry the tool the step's contract demands (if any) so the worker can grammar-CONSTRAIN that
+      // turn's reply to a real call — a small model then can't narrate instead of acting (G3).
+      const needs = doneWhenToNeeds(s.doneWhen);
+      return {
+        text: s.instruction,
+        status: s.status === "done" ? ("done" as const) : ("pending" as const),
+        ...(s.note ? { note: s.note } : {}),
+        ...(needs ? { needs } : {}),
+      };
+    }),
   };
+}
+
+/** The specific tool a step's completion contract demands, as a `needs` token — for grammar-constrained
+ * tool calling. `undefined` for text/narration/user_reply steps (no tool required). PURE. */
+export function doneWhenToNeeds(dw: DoneWhen): string | undefined {
+  switch (dw.kind) {
+    case "image":
+      return "generate_image";
+    case "file":
+      return "write_file";
+    case "command_ok":
+      return "run_command";
+    case "tool_ok":
+      return dw.tool;
+    default:
+      return undefined;
+  }
 }
