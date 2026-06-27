@@ -177,6 +177,7 @@ import {
   externalizedImageId,
   restoreInlineImages,
   type ChatTurn,
+  type CreatedFileRef,
   type ContextUsage,
   type EncryptedSecrets,
   type StoreBackup,
@@ -463,6 +464,13 @@ export function App() {
   const multiFile = useRef<Record<string, { index: number; count: number }>>({});
   const [pullProgress, setPullProgress] = useState<Record<string, { status: string; percent?: number }>>({});
   const [engineStatus, setEngineStatus] = useState("");
+  // Low-VRAM deferred engine start: at boot we DON'T launch the app-managed ComfyUI (so a large local
+  // LLM can take the whole GPU); it spins up on the first image instead. `engineDeferredRef` marks that
+  // we skipped the eager start; `managedBaseUrlRef` holds the URL the moment it starts (read race-free,
+  // before the React settings sync); `engineStartingRef` coalesces concurrent lazy starts.
+  const engineDeferredRef = useRef(false);
+  const managedBaseUrlRef = useRef<string | undefined>(undefined);
+  const engineStartingRef = useRef<Promise<true | string> | undefined>(undefined);
   const [installedLoras, setInstalledLoras] = useState<string[]>([]);
   const [loraFamilyMap, setLoraFamilyMap] = useState<Record<string, string>>({});
   const [library, setLibrary] = useState<BookSummary[]>([]);
@@ -512,6 +520,8 @@ export function App() {
     resolveConflicts,
     chat,
     chatTool,
+    applyEngineConfig,
+    setFileLedger,
     chatCancel,
     warmLlm,
     buddyChat,
@@ -1102,6 +1112,40 @@ export function App() {
     },
     [libraryStore],
   );
+  // FILE LEDGER (per session): the workspace files the assistant has written this session, so the worker
+  // can keep a terse non-trimmable reminder in the prompt — the model stays aware of what it made and
+  // re-opens a file with read_file before editing instead of forgetting it. Persisted per session.
+  const createdFilesRef = useRef<CreatedFileRef[]>([]);
+  const ledgerMemoKey = (id: string) => `buddy-file-ledger:${id}`;
+  /** Record a workspace file the assistant just wrote (write_file). Appends accumulate the line count
+   * for the same path; a fresh write replaces it. Bounded + persisted; the next buddy turn pushes it. */
+  const recordCreatedFile = useCallback(
+    (path: string, contentLines: number, append: boolean): void => {
+      const prev = createdFilesRef.current.filter((f) => f.path !== path);
+      const existing = createdFilesRef.current.find((f) => f.path === path);
+      const lines = append && existing ? existing.lines + contentLines : contentLines;
+      const next = [...prev, { path, lines }].slice(-20); // most-recent-last, bounded
+      createdFilesRef.current = next;
+      setFileLedger(next);
+      if (!isRemoteClient && !settings.incognitoRemote) {
+        void libraryStore.putMemo?.(ledgerMemoKey(activeBuddyIdRef.current), JSON.stringify(next)).catch(() => {});
+      }
+    },
+    [setFileLedger, libraryStore, isRemoteClient, settings.incognitoRemote],
+  );
+  const loadFileLedger = useCallback(
+    async (id: string): Promise<CreatedFileRef[]> => {
+      const raw = await libraryStore.getMemo?.(ledgerMemoKey(id)).catch(() => undefined);
+      if (!raw) return [];
+      try {
+        const arr = JSON.parse(raw) as CreatedFileRef[];
+        return Array.isArray(arr) ? arr.filter((f) => f && typeof f.path === "string") : [];
+      } catch {
+        return [];
+      }
+    },
+    [libraryStore],
+  );
   // Restore an app-managed workflow for a session (so a reload mid-run resumes at the active step with
   // its contracts + attempts intact). Empty/blank memo → none.
   const loadBuddyWorkflow = useCallback(
@@ -1375,6 +1419,10 @@ export function App() {
       } catch {
         /* leave components empty — the fields fall back to manual entry */
       }
+      // Record the URL synchronously (refs don't wait for the React re-render) so a deferred lazy start
+      // can hand it straight to the worker, and clear the deferred flag now that the engine is up.
+      managedBaseUrlRef.current = baseUrl;
+      engineDeferredRef.current = false;
       setSettings((cur) => ({ ...cur, engineBaseUrl: baseUrl, engineBackend: "comfyui", ...(vram ? { gpuVramMb: vram } : {}) }));
       return true;
     } catch (err) {
@@ -1427,6 +1475,15 @@ export function App() {
     const url = (s.localServerUrl ?? "").trim();
     const backendName = backend === "a1111" ? "AUTOMATIC1111" : "ComfyUI";
     setLocalError("");
+    // LOW-VRAM deferred start: don't launch the app-managed ComfyUI at boot — a large local LLM can then
+    // take the whole GPU. It starts lazily on the first standalone image (ensureRenderEngineReady) or
+    // eagerly when a book opens (its bible build needs it). Only the managed paths defer; a configured
+    // user server is still probed (it's their process, not ours to schedule). Skipped once a book is open.
+    const managedStart = source === "managed" || (source === "server" && !url);
+    if (managedStart && isDesktop && s.lowVram && !bookRef.current) {
+      engineDeferredRef.current = true;
+      return;
+    }
     if (source === "server") {
       if (!url) {
         // Nothing configured yet: on desktop start the managed engine; on web just wait for Connect
@@ -1466,6 +1523,32 @@ export function App() {
       }
     }
   }, [probeServer, startManagedEngine]);
+
+  // Lazily start the deferred (low-VRAM) managed engine before a STANDALONE render, then hand its URL to
+  // the worker immediately (applyEngineConfig) so the render — which rebuilds providers fresh from
+  // settings — uses it without waiting on the debounced settings sync. No-op when not deferred (already
+  // running, a user's own server, or low-VRAM off). Concurrent calls share ONE in-flight start.
+  const ensureRenderEngineReady = useCallback(async (): Promise<void> => {
+    if (!engineDeferredRef.current) return;
+    setEngineStatus("Starting the local image engine…");
+    const start = engineStartingRef.current ?? startManagedEngine();
+    engineStartingRef.current = start;
+    try {
+      const res = await start;
+      if (res === true && managedBaseUrlRef.current) applyEngineConfig(managedBaseUrlRef.current);
+    } finally {
+      engineStartingRef.current = undefined;
+    }
+  }, [startManagedEngine, applyEngineConfig]);
+
+  // LOW-VRAM: when a book opens while the managed engine was deferred, start it now — a bible build needs
+  // it, and the full start path rebuilds the book's persistent engine with the real URL (vs. the
+  // tune-only flush used for standalone chat/playground renders). Desktop + local-image only.
+  useEffect(() => {
+    if (!book || !engineDeferredRef.current) return;
+    if (!isDesktop || settingsRef.current.imageProvider !== "local") return;
+    void startManagedEngine();
+  }, [book, startManagedEngine]);
 
   // Re-resolve the active engine when the local path is chosen and whenever the "Generate on" source
   // changes. NOT on URL keystrokes or a backend-dropdown flip — those are committed explicitly via
@@ -3383,6 +3466,7 @@ export function App() {
   // HTML previews/saves as one standalone file. Failed renders just fall back to alt text.
   const onBuildDocument = useCallback(
     async (html: string, onProgress?: (done: number, total: number) => void) => {
+      await ensureRenderEngineReady(); // low-VRAM: start the deferred engine before the first doc image
       const placeholders = parseDocImages(html);
       const srcById = new Map<string, string>();
       let generated = 0;
@@ -3403,7 +3487,16 @@ export function App() {
       onProgress?.(placeholders.length, placeholders.length);
       return { html: embedDocImages(html, srcById), generated, failed };
     },
-    [testRender],
+    [testRender, ensureRenderEngineReady],
+  );
+
+  // Playground render that first spins up the deferred (low-VRAM) managed engine, then renders.
+  const onTestRender = useCallback(
+    async (text: string, opts?: Parameters<typeof testRender>[1]): ReturnType<typeof testRender> => {
+      await ensureRenderEngineReady();
+      return testRender(text, opts);
+    },
+    [ensureRenderEngineReady, testRender],
   );
 
   // Drop a rendered image (from Test image / Transform photo) into the live chat —
@@ -3688,10 +3781,13 @@ export function App() {
       if (cancelled) return;
       const savedPlan = await loadBuddyPlan(active);
       const savedWorkflow = await loadBuddyWorkflow(active);
+      const savedLedger = await loadFileLedger(active);
       if (cancelled) return;
       setBuddySessions(sessions);
       setActiveBuddyId(active);
       if (hist) setBuddyMessages(hist);
+      createdFilesRef.current = savedLedger; // the active session's written-files ledger (pushed per turn)
+      setFileLedger(savedLedger);
       setBuddyPlan(savedPlan);
       buddyPlanRef.current = savedPlan; // match the ref to the restored session's plan from the first tick
       // App-managed: restore the workflow too (the plan above is just its projection), so the executor
@@ -4313,6 +4409,9 @@ export function App() {
     try {
       const saved = await writeWorkspaceFile(call.path, call.content, buddyWorkingDir || undefined, call.append);
       payload = { path: saved, ok: true };
+      // Ledger it (keyed by the workspace-relative path the model used, so it can read_file it back) so
+      // the model stays aware of the file across history trimming.
+      recordCreatedFile(call.path, call.content ? call.content.split("\n").length : 0, !!call.append);
       // ALWAYS surface the authored file as a universal file card (Open in app / library / on PC /
       // Download), not just a "saved" line — the card reads from the on-disk path so it's correct even
       // for an append (whole file, not the fragment).
@@ -4642,6 +4741,8 @@ export function App() {
     if (buddyRenderingRef.current) return; // a render is already in flight — drop the duplicate approval
     buddyRenderingRef.current = true;
     setBuddyPendingTool(undefined);
+    // Low-VRAM: spin up the app-managed engine now if it was deferred at boot (no-op otherwise).
+    await ensureRenderEngineReady();
     // Capture the model-facing context up to this image call so a multi-step PLAN can AUTO-REACT after
     // the render (mirrors approveRunCommand) instead of halting for the reader to type "continue".
     const pre = pendingBuddyTranscript.current;
@@ -4856,6 +4957,10 @@ export function App() {
     userBubbleText?: string,
   ): Promise<string | undefined> => {
     const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
+    // Make sure the worker has THIS session's current file ledger before the turn builds its prompt
+    // (ordered before the buddyChat send below), so the model sees what it's written regardless of init
+    // timing or a session switch.
+    setFileLedger(createdFilesRef.current);
     if (userBubbleText !== undefined) {
       appendBuddy({ role: "user", text: userBubbleText });
       buddyQueueAdvanceRef.current = { count: 0, noProgress: 0 }; // fresh user turn → reset the chain budget
@@ -5631,10 +5736,13 @@ export function App() {
     buddyWorkflowRef.current = undefined;
     buddyStepEvidenceRef.current = { toolResults: [], text: "" };
     setBuddyPendingTool(undefined);
+    createdFilesRef.current = [];
+    setFileLedger([]);
     void libraryStore.deleteChatHistory?.(activeBuddyId);
     void libraryStore.deleteMemo?.(planMemoKey(activeBuddyId)).catch(() => {});
     void libraryStore.deleteMemo?.(workflowMemoKey(activeBuddyId)).catch(() => {});
-  }, [isRemoteClient, sendAppSync, libraryStore, buddyCancel, activeBuddyId]);
+    void libraryStore.deleteMemo?.(ledgerMemoKey(activeBuddyId)).catch(() => {});
+  }, [isRemoteClient, sendAppSync, libraryStore, buddyCancel, activeBuddyId, setFileLedger]);
   // Stop: the turn runs on the DESKTOP (under its worker request id the phone doesn't have), so a
   // linked phone relays the stop; the desktop aborts its in-flight buddy round.
   const onBuddyCancel = useCallback(() => {
@@ -5691,8 +5799,12 @@ export function App() {
         buddyWorkflowRef.current = w; // restore the app-managed workflow for the switched-to session
         setBuddyWorkflow(w);
       });
+      void loadFileLedger(id).then((files) => {
+        createdFilesRef.current = files; // restore the switched-to session's file ledger
+        setFileLedger(files);
+      });
     },
-    [isRemoteClient, sendAppSync, activeBuddyId, libraryStore, resetBuddyView, loadBuddyPlan, loadBuddyWorkflow],
+    [isRemoteClient, sendAppSync, activeBuddyId, libraryStore, resetBuddyView, loadBuddyPlan, loadBuddyWorkflow, loadFileLedger, setFileLedger],
   );
   switchBuddyRef.current = onSwitchBuddySession; // so onExitBook (defined earlier) can restore a session
   const onNewBuddySession = useCallback(() => {
@@ -5709,8 +5821,10 @@ export function App() {
     });
     setActiveBuddyId(id);
     setBuddyMessages([]);
+    createdFilesRef.current = []; // a brand-new session starts with an empty file ledger
+    setFileLedger([]);
     void libraryStore.putMemo?.("buddy-active-session", id).catch(() => {});
-  }, [isRemoteClient, sendAppSync, libraryStore, persistSessions, resetBuddyView]);
+  }, [isRemoteClient, sendAppSync, libraryStore, persistSessions, resetBuddyView, setFileLedger]);
   const onDeleteBuddySession = useCallback(
     (id: string) => {
       if (isRemoteClient) {
@@ -5723,6 +5837,7 @@ export function App() {
         persistSessions(next);
         void libraryStore.deleteChatHistory?.(id).catch(() => {});
         void libraryStore.deleteMemo?.(planMemoKey(id)).catch(() => {});
+        void libraryStore.deleteMemo?.(ledgerMemoKey(id)).catch(() => {});
         if (id === activeBuddyId) {
           const fallback = next[0]!.id;
           resetBuddyView();
@@ -5738,6 +5853,10 @@ export function App() {
           void loadBuddyWorkflow(fallback).then((w) => {
             buddyWorkflowRef.current = w;
             setBuddyWorkflow(w);
+          });
+          void loadFileLedger(fallback).then((files) => {
+            createdFilesRef.current = files;
+            setFileLedger(files);
           });
         }
         return next;
@@ -7357,13 +7476,13 @@ export function App() {
       )}
 
       {showTestImage && (
-        <TestImageModal onRender={testRender} onAddToChat={onAddImageToChat} onClose={() => setShowTestImage(false)} />
+        <TestImageModal onRender={onTestRender} onAddToChat={onAddImageToChat} onClose={() => setShowTestImage(false)} />
       )}
 
       {showPhoto && (
         <PhotoTransformModal
           {...(photoInitial ? { initial: photoInitial } : {})}
-          onRender={(text, opts) => testRender(text, opts)}
+          onRender={onTestRender}
           onAddToChat={onAddImageToChat}
           onExtractText={(img) => void extractTextFromImage(img)}
           onClose={() => {

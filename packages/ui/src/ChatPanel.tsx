@@ -151,6 +151,33 @@ export function projectFilesFromBlocks(blocks: MessageBlock[]): ProjectFile[] {
     .map((b) => ({ name: b.filename ?? resolveCodeFile(b.lang, b.filename).filename, content: b.code }));
 }
 
+/** What each parsed block should RENDER as: prose `text`, a saveable `file` card, or an inline read-only
+ * `snippet`. Snippets are the fix for document fragmentation — a research doc full of illustrative code
+ * examples used to shatter into one saveable "file" card per fence. */
+export type BlockKind = "text" | "file" | "snippet";
+
+/** A bare (un-named) sole code block at least this big reads as "the file the model just made" (e.g. a
+ * whole HTML page); smaller un-named blocks are illustrative snippets and render inline. */
+const SAVEABLE_SOLE_MIN_CHARS = 400;
+
+/**
+ * Decide, per block, whether a fenced code block is a SAVEABLE FILE or an inline SNIPPET — so a document
+ * with embedded examples stops fragmenting into many file cards. A block is a file when it (a) carries a
+ * filename hint (the model named it), or (b) is the SOLE code block and DOMINATES the reply (more code
+ * than prose, and non-trivial) — i.e. the "here's the whole file" answer. Everything else is an inline
+ * snippet. Genuine multi-file answers (several filename-tagged blocks) stay files. PURE. */
+export function classifyBlocks(blocks: MessageBlock[]): BlockKind[] {
+  const code = blocks.filter((b): b is Extract<MessageBlock, { type: "code" }> => b.type === "code");
+  const codeChars = code.reduce((n, b) => n + b.code.length, 0);
+  const proseChars = blocks.reduce((n, b) => n + (b.type === "text" ? b.text.trim().length : 0), 0);
+  const soleDominant = code.length === 1 && codeChars >= proseChars && codeChars >= SAVEABLE_SOLE_MIN_CHARS;
+  return blocks.map((b): BlockKind => {
+    if (b.type === "text") return "text";
+    if (b.filename) return "file";
+    return soleDominant ? "file" : "snippet";
+  });
+}
+
 /** An HTML block that asks the app to generate + embed images → render as a DocumentCard. */
 function isDocBlock(b: Extract<MessageBlock, { type: "code" }>): boolean {
   return (b.lang === "html" || b.lang === "htm" || (b.filename ?? "").endsWith(".html")) && hasDocImages(b.code);
@@ -626,7 +653,10 @@ export const MessageBubble = memo(function MessageBubble({
   // Assistant prose may contain fenced code blocks (a file the model created) —
   // render those as saveable cards; the user's own messages stay verbatim.
   const blocks = !isUser && message.text ? parseMessageBlocks(message.text) : undefined;
-  const codeCount = blocks?.reduce((n, b) => n + (b.type === "code" ? 1 : 0), 0) ?? 0;
+  // Per-block render kind: a saveable file card vs an inline snippet (illustrative code inside a doc) vs
+  // prose. Stops a research doc full of examples from shattering into one "file" card per fence.
+  const blockKinds = blocks ? classifyBlocks(blocks) : undefined;
+  const fileCount = blockKinds?.reduce((n, k) => n + (k === "file" ? 1 : 0), 0) ?? 0;
   return (
     <div
       style={{
@@ -656,6 +686,9 @@ export const MessageBubble = memo(function MessageBubble({
                   onBuildDocument={onBuildDocument}
                   {...(onSaveFile ? { onSaveFile } : {})}
                 />
+              ) : blockKinds?.[i] === "snippet" ? (
+                // Illustrative code inside a document — read-only inline (copy), NOT a saveable file card.
+                <InlineCode key={i} lang={b.lang} code={b.code} />
               ) : (
                 <CodeCard
                   key={i}
@@ -681,8 +714,11 @@ export const MessageBubble = memo(function MessageBubble({
             </div>
           )
           : null}
-      {codeCount >= 2 && onSaveProject && blocks ? (
-        <ProjectSaveBar files={projectFilesFromBlocks(blocks)} onSaveProject={onSaveProject} />
+      {fileCount >= 2 && onSaveProject && blocks ? (
+        <ProjectSaveBar
+          files={projectFilesFromBlocks(blocks.filter((_, i) => blockKinds?.[i] === "file"))}
+          onSaveProject={onSaveProject}
+        />
       ) : null}
       {url ? (
         <img
@@ -1076,6 +1112,33 @@ function Linkified({ text }: { text: string }) {
  * The model "creates" the file; the user saves it with a click (a real gesture,
  * so browser downloads aren't blocked).
  */
+/** An illustrative code snippet inside a document — read-only, with a Copy button but NO save/file
+ * actions (it isn't a file the model created, just an example). Keeps a research doc from fragmenting
+ * into many saveable "file" cards. */
+function InlineCode({ lang, code }: { lang: string; code: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div style={{ position: "relative", margin: "6px 0" }}>
+      <div style={{ ...codeHeaderStyle, opacity: 0.7 }}>
+        <span>{lang || "code"}</span>
+        <button
+          style={codeBtnStyle}
+          onClick={() => {
+            void navigator.clipboard?.writeText(code);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1200);
+          }}
+        >
+          {copied ? "Copied" : "📋 Copy"}
+        </button>
+      </div>
+      <pre style={codePreStyle}>
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
 function CodeCard({
   lang,
   code,

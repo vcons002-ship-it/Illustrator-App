@@ -20,6 +20,7 @@ import {
   imageModelVramCostGb,
   serverModelVramCostGb,
   chatImageVramFit,
+  resolveLoadedContextTokens,
   createDataTable,
   recalcTable,
   tableToText,
@@ -39,6 +40,8 @@ import {
   schwabAccountNumbers,
   placeSchwabOrder,
   buildBuddySystemPrompt,
+  buildFileLedgerBlock,
+  type CreatedFileRef,
   ollamaToolSchemas,
   shouldAppendBeat,
   buildDelegatePrompt,
@@ -655,6 +658,9 @@ let chatLlmFreed = false;
  * hand-off of `chatLlmFreed`. Set once per chat burst so we don't spam /free; reset at render start so
  * the next image reloads the engine. The image engine reloads lazily on the next generate(). */
 let imageModelFreed = false;
+/** Workspace files the assistant wrote this session (pushed from the host via the `fileLedger` message);
+ * injected as a terse non-trimmable reminder into the buddy prompt so the model remembers what it made. */
+let fileLedger: CreatedFileRef[] = [];
 function llmVramOp(action: "stop" | "ensure"): Promise<void> {
   return new Promise((resolve) => {
     const callId = nextLlmVramId++;
@@ -1023,6 +1029,11 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       }
       break;
     }
+    case "fileLedger":
+      // The host's current set of workspace files the assistant wrote this session — injected into the
+      // buddy prompt so the model stays aware of what it made (and can read_file before editing).
+      fileLedger = msg.files;
+      break;
     case "open":
       void handleOpen(msg.book);
       break;
@@ -1662,8 +1673,19 @@ async function localContextTokens(llmId: string): Promise<number | undefined> {
     model,
     cf ? new DirectTransport(cf) : undefined,
   );
-  const ctx =
-    info?.loaded ?? (info?.max ? Math.min(info.max, OLLAMA_DEFAULT_LOADED_TOKENS) : undefined);
+  // Budget to the window we ACTUALLY loaded. On the Ollama path buildProviders sends
+  // num_ctx = defaultLoadedWindow(...), which overrides the Modelfile — so size the budget to that (not
+  // the old 4096 fallback, which trimmed a just-written file out of context). Bundled/other servers keep
+  // the queried-or-conservative path. The per-model/global overrides above already returned.
+  const isOllama = settings.localTextBackend !== "bundled" && (settings.localTextServer ?? "ollama") === "ollama";
+  const ctx = resolveLoadedContextTokens({
+    isOllama,
+    model,
+    gpuVramMb: settings.gpuVramMb,
+    infoLoaded: info?.loaded,
+    infoMax: info?.max,
+    ollamaDefault: OLLAMA_DEFAULT_LOADED_TOKENS,
+  });
   localCtxCache = { key, ctx, at: Date.now() };
   return ctx;
 }
@@ -3524,9 +3546,13 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     // beat, so it must not be part of the cached prefix), re-grounding the writer in the present cast,
     // location, recent beats, and synopsis even when chat history has been trimmed.
     const storyStateBlock = story ? buildStoryStateBlock(story) : "";
+    // Like the story-state block, the file ledger rides AFTER the cached prefix (it changes as files are
+    // written) so the model stays aware of what it created even after history trimming.
+    const ledgerBlock = buildFileLedgerBlock(fileLedger);
+    const volatile = [storyStateBlock, ledgerBlock].filter(Boolean).join("\n\n");
     const outcome = await withChatPriority(llm.id, () => runBuddyTurn({
       llm,
-      system: storyStateBlock ? `${setup}\n\n${storyStateBlock}` : setup,
+      system: volatile ? `${setup}\n\n${volatile}` : setup,
       // The buddy prompt (persona + tool defs + library) is stable across a
       // conversation — nothing changes turn-to-turn but the history — so it's the
       // cache prefix (an explicit library edit just rewrites it once); volatile story
