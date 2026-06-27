@@ -114,7 +114,7 @@ export interface BuddyDeps {
   forget?: (match: string, about?: "reader" | "self" | "user") => Promise<number>;
   /** Lightweight chat-scoped working checklist. setPlan creates/replaces it; completeStep ticks the
    * first unfinished step. Both return the updated plan (host owns the canonical object + persistence). */
-  setPlan?: (goal: string | undefined, steps: string[], stepDetails?: { needs?: string; onFail?: string }[]) => BuddyPlan;
+  setPlan?: (goal: string | undefined, steps: string[], stepDetails?: { needs?: string; onFail?: string; produces?: string[]; verify?: string }[]) => BuddyPlan;
   completeStep?: (note?: string) => BuddyPlan | undefined;
   /** App-managed-steps mode: the HOST runs the checklist and ticks steps from observed evidence, so
    * `complete_step` is withdrawn — a stray call is refused (the model just does the current step). */

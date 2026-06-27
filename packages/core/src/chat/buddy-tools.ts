@@ -54,6 +54,12 @@ export interface BuddyPlanStep {
   /** App-managed-steps mode only: what to do if the step never satisfies its contract
    * ("skip"|"ask_user"|"abort"). Compiled host-side; ignored by the legacy path. */
   onFail?: string;
+  /** App-managed-steps mode only: the specific deliverable file(s) this step must produce — the host
+   * VERIFIES they exist + are non-empty (a `files` contract), not just that a write tool ran. */
+  produces?: string[];
+  /** App-managed-steps mode only: a command that must exit 0 to prove the step worked — compiled into
+   * an enforced follow-up `command_ok` step (build/test). */
+  verify?: string;
 }
 export interface BuddyPlan {
   /** The overall goal/ask this checklist serves (optional). */
@@ -335,7 +341,7 @@ export type BuddyToolCall =
   | { tool: "spawn_coding_agents"; tasks: { title: string; instructions: string }[] }
   /** Lay out a small WORKING CHECKLIST for a multi-step ask (create/replace it). Chat-scoped, shown
    * live, NOT a TaskPlan. */
-  | { tool: "set_plan"; goal?: string; steps: string[]; stepDetails?: { needs?: string; onFail?: string }[] }
+  | { tool: "set_plan"; goal?: string; steps: string[]; stepDetails?: { needs?: string; onFail?: string; produces?: string[]; verify?: string }[] }
   /** Tick the FIRST unfinished checklist step done and advance (no index — the app tracks "current"). */
   | { tool: "complete_step"; note?: string };
 
@@ -893,7 +899,11 @@ export function buildBuddySystemPrompt(opts: {
       'the reader said it, and tag what proves it done with "needs" ("image", "file", "command", "text", "reply", ' +
       "or a tool name). The APP then runs the checklist for you: it gives you ONE step at a time and ticks it off " +
       "ITSELF once it sees the step's effect (a render, a saved file, a reply). There is NO complete_step — never " +
-      "try to mark progress; just do the one step you're given each turn. Skip set_plan for a simple one-shot ask.\n"
+      "try to mark progress; just do the one step you're given each turn. Skip set_plan for a simple one-shot ask. " +
+      'A step can also name the exact files it must produce ("produces":["a.py","b.py"] — the app verifies they ' +
+      'exist) and a check command ("verify":"pytest -q" — the app runs it and won\'t pass the step until it exits ' +
+      "0). For a LONG DOCUMENT or many code files, plan it as an OUTLINE first, then ONE step per section/file " +
+      "(each writes its part with write_file/append) — don't try to emit the whole thing in one step.\n"
     : '- {"tool":"set_plan","goal":"…","steps":["Say the number 1","Say the number 2","Say the number 3"]} — for ' +
       "a MULTI-STEP request, FIRST lay out the checklist; phrase EACH step as a clear action or ask that reads " +
       "like the reader said it (so you can just do it), not a vague label. It's shown to you (and the reader) " +
@@ -2058,7 +2068,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     // coexist; we flatten to aligned `steps` (text) + `stepDetails` (needs/onFail).
     const raw = Array.isArray(obj.steps) ? obj.steps.slice(0, 12) : [];
     const steps: string[] = [];
-    const stepDetails: { needs?: string; onFail?: string }[] = [];
+    const stepDetails: { needs?: string; onFail?: string; produces?: string[]; verify?: string }[] = [];
     let anyDetail = false;
     for (const item of raw) {
       if (item && typeof item === "object" && !Array.isArray(item)) {
@@ -2067,9 +2077,20 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
         if (!text) continue;
         const needs = strArg(o.needs ?? o.tool ?? o.requires, MAX_NAME_CHARS);
         const onFail = strArg(o.onFail ?? o.on_fail, MAX_NAME_CHARS);
+        // G5/G6: declared deliverable files + a verify command (both optional).
+        const producesRaw = o.produces ?? o.files ?? o.deliverables;
+        const produces = Array.isArray(producesRaw)
+          ? producesRaw.map((p) => strArg(p, MAX_PATH_CHARS)).filter((p): p is string => !!p).slice(0, 10)
+          : undefined;
+        const verify = strArg(o.verify ?? o.test ?? o.check, MAX_COMMAND_CHARS);
         steps.push(text);
-        stepDetails.push({ ...(needs ? { needs } : {}), ...(onFail ? { onFail } : {}) });
-        if (needs || onFail) anyDetail = true;
+        stepDetails.push({
+          ...(needs ? { needs } : {}),
+          ...(onFail ? { onFail } : {}),
+          ...(produces && produces.length ? { produces } : {}),
+          ...(verify ? { verify } : {}),
+        });
+        if (needs || onFail || (produces && produces.length) || verify) anyDetail = true;
       } else {
         const text = strArg(item, MAX_QUERY_CHARS);
         if (!text) continue;

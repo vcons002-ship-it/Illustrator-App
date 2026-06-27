@@ -4993,7 +4993,23 @@ export function App() {
       setBuddyBusy(false);
       return true;
     }
-    const outcome = evaluateStep(step, evidence);
+    // G5 — a `files` step is judged on whether the declared deliverables ACTUALLY landed on disk (and
+    // are non-empty), not just that a write tool ran. Verify here (host I/O) and fold it into the evidence.
+    let evi: typeof evidence & { filesPresent?: { path: string; ok: boolean }[] } = evidence;
+    if (step.doneWhen.kind === "files" && isDesktop) {
+      const checks = await Promise.all(
+        step.doneWhen.paths.map(async (p) => {
+          try {
+            const r = await readWorkspaceFile(p, buddyWorkingDir || undefined);
+            return { path: p, ok: r.exists && r.text.trim().length > 0 };
+          } catch {
+            return { path: p, ok: false };
+          }
+        }),
+      );
+      evi = { ...evidence, filesPresent: checks };
+    }
+    const outcome = evaluateStep(step, evi);
     const adv = advanceWorkflow(wf, outcome);
     applyWorkflow(adv.workflow);
     buddyStepEvidenceRef.current = { toolResults: [], text: "" }; // fresh evidence for whatever runs next

@@ -196,6 +196,28 @@ describe("resumeWorkflow / workflowToPlan", () => {
     expect(plan.steps[1]).toMatchObject({ text: "Save it", status: "pending", needs: "write_file" });
   });
 
+  it("G5: a `produces` step compiles to a files contract verified against filesPresent evidence", () => {
+    const w = compileWorkflow({ goal: "g", steps: [{ text: "Build the module", status: "pending", produces: ["a.py", "b.py"] }] });
+    expect(w.steps[0]!.doneWhen).toEqual({ kind: "files", paths: ["a.py", "b.py"] });
+    const ev = (present: { path: string; ok: boolean }[]): StepEvidence => ({ toolResults: [], text: "", filesPresent: present });
+    expect(evaluateStep(w.steps[0]!, ev([{ path: "a.py", ok: true }, { path: "b.py", ok: true }])).done).toBe(true);
+    const miss = evaluateStep(w.steps[0]!, ev([{ path: "a.py", ok: true }, { path: "b.py", ok: false }]));
+    expect(miss.done).toBe(false);
+    expect(miss.reason).toContain("b.py");
+    expect(evaluateStep(w.steps[0]!, { toolResults: [], text: "" }).done).toBe(false); // no evidence → not done
+  });
+
+  it("G6: a `verify` step appends an enforced command_ok follow-up step", () => {
+    const w = compileWorkflow({ goal: "g", steps: [{ text: "Write code", status: "pending", needs: "file", verify: "pytest -q" }] });
+    expect(w.steps).toHaveLength(2);
+    expect(w.steps[0]!.doneWhen).toEqual({ kind: "file" });
+    expect(w.steps[1]!.doneWhen).toEqual({ kind: "command_ok" });
+    expect(w.steps[1]!.instruction).toContain("pytest -q");
+    expect(w.steps[0]!.status).toBe("active");
+    // No verify → no extra step.
+    expect(compileWorkflow({ steps: [{ text: "x", status: "pending", needs: "file" }] }).steps).toHaveLength(1);
+  });
+
   it("doneWhenToNeeds maps a contract to the tool it requires (or undefined for prose)", () => {
     expect(doneWhenToNeeds({ kind: "image" })).toBe("generate_image");
     expect(doneWhenToNeeds({ kind: "file" })).toBe("write_file");

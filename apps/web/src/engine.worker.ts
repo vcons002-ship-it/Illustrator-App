@@ -3001,6 +3001,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
               status: "pending" as const,
               ...(d?.needs ? { needs: d.needs } : {}),
               ...(d?.onFail ? { onFail: d.onFail } : {}),
+              ...(d?.produces && d.produces.length ? { produces: d.produces } : {}),
+              ...(d?.verify ? { verify: d.verify } : {}),
             };
           }),
         };
