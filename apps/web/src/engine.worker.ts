@@ -471,9 +471,13 @@ function readUrlText(signal: AbortSignal): (url: string) => Promise<{ title?: st
  * the turn finishes. Cloud chat models don't contend, so they never pause it.
  */
 async function withChatPriority<T>(llmId: string, fn: () => Promise<T>): Promise<T> {
-  // Free the idle local image model FIRST (low-VRAM / proven-tight), THEN reload the chat LLM into
-  // the freed VRAM — the reverse of the render→chat hand-off, so a larger chat model can coexist.
-  await freeImageModelForChat();
+  // Free the idle local image model FIRST, but ONLY when the chat LLM is actually about to (re)load —
+  // i.e. a render evicted it (`chatLlmFreed`) and we're restoring it now. Tying the free to the LLM's
+  // reload (not to every chat turn) avoids needless churn: if the LLM is already resident, unloading the
+  // image model would just force it to cold-reload on the next render for no benefit. So the hand-off is
+  // strictly the reverse of the render→chat eviction — free the image model only to make room for an
+  // incoming LLM, then reload the LLM into that freed VRAM.
+  if (chatLlmFreed) await freeImageModelForChat();
   // If we freed the bundled LLM for an image burst, relaunch it before this chat turn needs it.
   await restoreChatLlm();
   const eng = engine;
@@ -743,11 +747,14 @@ async function restoreChatLlm(): Promise<void> {
   if (settings?.localTextBackend === "bundled") await llmVramOp("ensure");
 }
 
-/** The REVERSE hand-off of freeChatLlmForRender: before a chat turn, unload the idle LOCAL image
- * model so the chat LLM can reload into that VRAM (lets a larger model coexist in the render→chat
- * workflow). Fires when low-VRAM is on OR (low-VRAM off) when we can PROVE both models don't fit —
- * symmetric with canFreeChatLlm. Once per chat burst (imageModelFreed); reset at the next render
- * start. The image engine reloads lazily on the next generate(), so this is safe to do eagerly. */
+/** The REVERSE hand-off of freeChatLlmForRender: unload the idle LOCAL image model so the chat LLM can
+ * reload into that VRAM (lets a larger model coexist in the render→chat workflow). Called by
+ * withChatPriority ONLY when the chat LLM is actually about to (re)load (`chatLlmFreed`) — i.e. a render
+ * evicted it and we're restoring it now — so we never unload an image model that a still-resident LLM
+ * doesn't need out of the way (which would just force a needless cold reload on the next render). The
+ * lowVram / proven-tight self-check here is a belt-and-suspenders mirror of canFreeChatLlm (the gate
+ * that set `chatLlmFreed` in the first place). Once per chat burst (imageModelFreed); reset at the next
+ * render start. The image engine reloads lazily on the next generate(), so this is safe to do eagerly. */
 async function freeImageModelForChat(): Promise<void> {
   if (imageModelFreed || !settings) return;
   const cs = chatSettingsOf(settings);
