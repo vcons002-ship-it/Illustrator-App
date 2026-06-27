@@ -5,6 +5,7 @@ import {
   type WorkflowStep,
   advanceWorkflow,
   compileWorkflow,
+  doneWhenToNeeds,
   evaluateStep,
   inferDoneWhen,
   needsToDoneWhen,
@@ -180,12 +181,28 @@ describe("resumeWorkflow / workflowToPlan", () => {
     expect(resumed.steps[0]!).toMatchObject({ status: "active", attempts: 0 });
   });
 
-  it("workflowToPlan maps done→done, everything else→pending", () => {
-    let w = compileWorkflow({ goal: "g", steps: [{ text: "A", status: "pending" }, { text: "B", status: "pending" }] });
+  it("workflowToPlan maps done→done, everything else→pending, and carries the step's tool need", () => {
+    let w = compileWorkflow({
+      goal: "g",
+      steps: [
+        { text: "Draw it", status: "pending", needs: "image" },
+        { text: "Save it", status: "pending", needs: "file" },
+      ],
+    });
     w = advanceWorkflow(w, { done: true }).workflow; // A done, B active
     const plan = workflowToPlan(w);
     expect(plan.goal).toBe("g");
-    expect(plan.steps[0]).toMatchObject({ text: "A", status: "done" });
-    expect(plan.steps[1]).toMatchObject({ text: "B", status: "pending" }); // active renders as ▸ current
+    expect(plan.steps[0]).toMatchObject({ text: "Draw it", status: "done", needs: "generate_image" });
+    expect(plan.steps[1]).toMatchObject({ text: "Save it", status: "pending", needs: "write_file" });
+  });
+
+  it("doneWhenToNeeds maps a contract to the tool it requires (or undefined for prose)", () => {
+    expect(doneWhenToNeeds({ kind: "image" })).toBe("generate_image");
+    expect(doneWhenToNeeds({ kind: "file" })).toBe("write_file");
+    expect(doneWhenToNeeds({ kind: "command_ok" })).toBe("run_command");
+    expect(doneWhenToNeeds({ kind: "tool_ok", tool: "search_web" })).toBe("search_web");
+    expect(doneWhenToNeeds({ kind: "narration" })).toBeUndefined();
+    expect(doneWhenToNeeds({ kind: "text", min: 1 })).toBeUndefined();
+    expect(doneWhenToNeeds({ kind: "user_reply" })).toBeUndefined();
   });
 });

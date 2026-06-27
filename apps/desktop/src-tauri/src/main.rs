@@ -1031,6 +1031,70 @@ async fn write_workspace_file(
     .map_err(|e| e.to_string())?
 }
 
+/// The result of reading a workspace-relative file: whether it exists and (if so) its bytes.
+#[derive(serde::Serialize)]
+struct WorkspaceReadResult {
+    exists: bool,
+    /// Resolved absolute path (for display / logging).
+    path: String,
+    /// Base64 of the file bytes; empty when the file doesn't exist.
+    #[serde(rename = "bodyBase64")]
+    body_base64: String,
+}
+
+/// Read a workspace-RELATIVE file (the counterpart to `write_workspace_file`). Resolves + sanitizes
+/// the path the SAME way (never escapes the workspace), and returns `exists:false` instead of erroring
+/// when the file is absent — so callers can check existence (`edit_file`, AGENTS.md, deliverable
+/// verification) without exception handling. Capped at `MAX_READ_BYTES`.
+#[tauri::command]
+async fn read_workspace_file(
+    app: AppHandle,
+    rel_path: String,
+    cwd: Option<String>,
+) -> Result<WorkspaceReadResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use base64::Engine as _;
+        let base = match cwd
+            .filter(|c| !c.is_empty())
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.is_dir())
+        {
+            Some(p) => p,
+            None => workspace_dir(&app),
+        };
+        let mut dest = base.clone();
+        let mut any = false;
+        for part in rel_path.split(['/', '\\']) {
+            let p = part.trim();
+            if p.is_empty() || p == "." || p == ".." {
+                continue;
+            }
+            dest.push(sanitize_filename(p));
+            any = true;
+        }
+        if !any {
+            return Err("invalid file path".to_string());
+        }
+        let path = dest.to_string_lossy().to_string();
+        match std::fs::metadata(&dest) {
+            Ok(meta) if meta.is_file() => {
+                if meta.len() > MAX_READ_BYTES {
+                    return Err("File too large.".to_string());
+                }
+                let bytes = std::fs::read(&dest).map_err(|e| e.to_string())?;
+                Ok(WorkspaceReadResult {
+                    exists: true,
+                    path,
+                    body_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+                })
+            }
+            _ => Ok(WorkspaceReadResult { exists: false, path, body_base64: String::new() }),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Strip any path separators / parent refs so a renderer-supplied name can only
 /// ever land a file INSIDE the exports dir (never traverse out of it).
 fn sanitize_filename(name: &str) -> String {
@@ -2436,6 +2500,7 @@ fn main() {
             save_file,
             open_path,
             write_workspace_file,
+            read_workspace_file,
             search_files,
             read_file,
             run_command,

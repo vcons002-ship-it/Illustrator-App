@@ -3,6 +3,7 @@ import {
   ALWAYS_GATED_TOOLS,
   MAX_BUDDY_TOOL_ROUNDS,
   buildBuddySystemPrompt,
+  buildToolCallFormat,
   describeBuddyToolActivity,
   formatBuddyToolResult,
   isRetryableError,
@@ -427,6 +428,21 @@ describe("buildBuddySystemPrompt", () => {
     const cmds = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true });
     expect(cmds).toContain("write_file then run_command"); // RUN-code routing
     expect(cmds).toContain("the reader KEEPS"); // substantial files/documents → write_file, not a fenced block
+  });
+
+  it("buildToolCallFormat: a single tool → an object schema forcing {tool:<name>, …args}", () => {
+    const f = buildToolCallFormat(["generate_image"]) as { type: string; required: string[]; properties: { tool: { enum: string[] }; prompt?: unknown } };
+    expect(f.type).toBe("object");
+    expect(f.required).toEqual(["tool", "prompt"]); // tool + the tool's own required arg
+    expect(f.properties.tool.enum).toEqual(["generate_image"]);
+    expect(f.properties.prompt).toBeDefined();
+  });
+
+  it("buildToolCallFormat: multiple tools → a oneOf union; unknown names dropped → undefined", () => {
+    const u = buildToolCallFormat(["write_file", "read_file"]) as { oneOf: unknown[] };
+    expect(Array.isArray(u.oneOf)).toBe(true);
+    expect(u.oneOf).toHaveLength(2);
+    expect(buildToolCallFormat(["no_such_tool"])).toBeUndefined();
   });
 
   it("buildFileLedgerBlock: terse, bounded, read_file cue; empty when no files", async () => {

@@ -223,6 +223,22 @@ describe("LocalServerLLMProvider native tool calling", () => {
     expect((rec.body as { tools?: unknown }).tools).toBeUndefined(); // no schemas sent
     expect(out).toBe("I made it!"); // unchanged text path
   });
+
+  it("grammar-constrains the reply (sends `format`) and SUPPRESSES native tools when toolFormat is set", async () => {
+    const rec: { body?: unknown } = {};
+    const p = new LocalServerLLMProvider({
+      baseUrl: "http://x/v1",
+      model: "gemma3-tools",
+      numCtx: 8192,
+      transport: new FakeTransport({ capabilities: ["completion", "tools"] }),
+      fetchImpl: ndjsonFetch([{ message: { content: '{"tool":"generate_image","prompt":"a castle"}' } }, { done: true }], rec),
+    });
+    const fmt = { type: "object", required: ["tool"], properties: { tool: { enum: ["generate_image"] } } };
+    const out = await p.chat(turns, { onToken: () => {}, tools: SCHEMA, toolFormat: fmt });
+    expect((rec.body as { format?: unknown }).format).toEqual(fmt); // grammar sent
+    expect((rec.body as { tools?: unknown }).tools).toBeUndefined(); // format wins over native tools
+    expect(out).toContain('{"tool":"generate_image","prompt":"a castle"}');
+  });
 });
 
 describe("LocalServerLLMProvider.evictOtherModels", () => {

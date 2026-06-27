@@ -1803,6 +1803,31 @@ export function ollamaToolSchemas(opts: {
   return t;
 }
 
+/**
+ * A grammar-constraint schema (Ollama `format`) that forces the model's reply to be ONE valid
+ * text-protocol tool call — `{"tool":<name>, …args}` — drawn from `toolNames`. Used to GUARANTEE a
+ * parseable call when one is required (a workflow step whose contract demands a tool, or a retry after
+ * the model narrated instead of acting), so a small model physically can't reply with prose. Reuses the
+ * SAME per-tool argument schemas as {@link ollamaToolSchemas} (so the constrained output round-trips
+ * through `parseToolObject`). Returns `undefined` when no requested name is known (caller then leaves the
+ * turn unconstrained — a safe fallback). PURE. */
+export function buildToolCallFormat(toolNames: string[]): Record<string, unknown> | undefined {
+  const byName = new Map(
+    ollamaToolSchemas({ canSearchFiles: true, canRunCommands: true, canWolfram: true }).map((s) => [s.function.name, s.function] as const),
+  );
+  const variants = toolNames
+    .map((name) => byName.get(name))
+    .filter((fn): fn is ToolSchema["function"] => !!fn)
+    .map((fn) => ({
+      type: "object",
+      required: ["tool", ...(fn.parameters.required ?? [])],
+      properties: { tool: { enum: [fn.name] }, ...fn.parameters.properties },
+      additionalProperties: false,
+    }));
+  if (variants.length === 0) return undefined;
+  return variants.length === 1 ? variants[0] : { oneOf: variants };
+}
+
 /** The first tool call in a reply (back-compat — the planner runs one tool at a time). */
 export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
   return parseBuddyToolCalls(text)[0];

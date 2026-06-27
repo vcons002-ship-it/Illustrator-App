@@ -41,6 +41,7 @@ import {
   placeSchwabOrder,
   buildBuddySystemPrompt,
   buildFileLedgerBlock,
+  buildToolCallFormat,
   type CreatedFileRef,
   ollamaToolSchemas,
   shouldAppendBeat,
@@ -3550,6 +3551,16 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     // written) so the model stays aware of what it created even after history trimming.
     const ledgerBlock = buildFileLedgerBlock(fileLedger);
     const volatile = [storyStateBlock, ledgerBlock].filter(Boolean).join("\n\n");
+    // G3 — in app-managed mode, GRAMMAR-CONSTRAIN the reply to the tool the active step's contract
+    // demands so a stubborn small model can't narrate instead of acting. Only for a concrete tool need
+    // (the step's `needs` token is a tool name); text/narration steps stay free. Local-server only — the
+    // provider applies Ollama `format`; cloud ignores `toolFormat`. A file step also allows read_file
+    // (a sensible precursor) so the model can read before rewriting.
+    const requiredNeeds = msg.appManagedSteps ? plan?.steps.find((s) => s.status !== "done")?.needs : undefined;
+    const toolFormat =
+      requiredNeeds && llm.id === "local-server"
+        ? buildToolCallFormat(requiredNeeds === "write_file" ? ["write_file", "read_file"] : [requiredNeeds])
+        : undefined;
     const outcome = await withChatPriority(llm.id, () => runBuddyTurn({
       llm,
       system: volatile ? `${setup}\n\n${volatile}` : setup,
@@ -3577,6 +3588,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             }),
           }
         : {}),
+      ...(toolFormat ? { toolFormat } : {}),
       // A story is open → STORY MODE: if the model ends a turn empty/tool-only, the wrap-up asks for
       // the next BEAT (prose), so the recovered reply is still appendable to the book.
       ...(story && currentBook?.kind === "story" ? { storyMode: true } : {}),

@@ -373,6 +373,33 @@ export function writeWorkspaceFile(relPath: string, content: string, cwd?: strin
   return invoke<string>("write_workspace_file", { relPath, contentBase64, ...(cwd ? { cwd } : {}), ...(append ? { append: true } : {}) });
 }
 
+/**
+ * Read a workspace-RELATIVE file (the counterpart to {@link writeWorkspaceFile}): the Rust side resolves
+ * + sanitizes the path the SAME way (never escapes the workspace) and returns `{ exists, text }` —
+ * `exists:false` (not an error) when the file is absent, so callers can check existence cheaply. Used by
+ * `edit_file` (read-modify-write), the AGENTS.md project guide, and deliverable verification. Rejects on
+ * the web (no filesystem).
+ */
+export async function readWorkspaceFile(
+  relPath: string,
+  cwd?: string,
+): Promise<{ exists: boolean; path: string; text: string }> {
+  const r = await invoke<{ exists: boolean; path: string; bodyBase64: string }>("read_workspace_file", {
+    relPath,
+    ...(cwd ? { cwd } : {}),
+  });
+  return {
+    exists: r.exists,
+    path: r.path,
+    text: r.exists ? new TextDecoder().decode(base64ToBytes(r.bodyBase64)) : "",
+  };
+}
+
+/** Does a workspace-relative file exist (and is a file)? Convenience over {@link readWorkspaceFile}. */
+export async function workspaceFileExists(relPath: string, cwd?: string): Promise<boolean> {
+  return (await readWorkspaceFile(relPath, cwd)).exists;
+}
+
 // ----------------------------------------------------------- Git worktrees
 //
 // App-managed worktrees for parallel write-capable coding agents — the host owns the whole

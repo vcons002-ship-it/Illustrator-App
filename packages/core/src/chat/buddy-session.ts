@@ -261,6 +261,11 @@ export async function runBuddyTurn(opts: {
    * it emits structured tool_calls. Cloud providers ignore it; the text catalog in `system` is the
    * universal fallback. Build with `ollamaToolSchemas`. */
   tools?: ToolSchema[];
+  /** GRAMMAR-CONSTRAIN this turn's reply to a valid tool call (Ollama `format`) — set ONLY when a tool
+   * call is required (an app-managed step whose contract demands a specific tool). Forces a stubborn
+   * small model to emit the call instead of narrating. Build with `buildToolCallFormat`. Ignored by
+   * cloud / non-Ollama providers. */
+  toolFormat?: Record<string, unknown>;
   /**
    * Pause the auto-run tool loop after this many rounds for a "keep going?" checkpoint, instead of
    * running to the (much larger) `MAX_BUDDY_TOOL_ROUNDS` backstop. Set it for PAID/cloud models so a
@@ -333,6 +338,9 @@ export async function runBuddyTurn(opts: {
       // Native tool schemas: a tool-capable local model emits structured tool_calls (the provider
       // serializes them back into the text protocol). Cloud providers ignore this field.
       ...(opts.tools?.length ? { tools: opts.tools } : {}),
+      // Force a parseable tool call this turn when the step's contract requires one (provider gates it
+      // to the Ollama path; it suppresses `tools` there since the two can't both apply).
+      ...(opts.toolFormat ? { toolFormat: opts.toolFormat } : {}),
       onComplete: (m) => {
         lastTruncated = m.truncated;
       },

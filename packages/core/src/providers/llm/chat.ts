@@ -62,6 +62,14 @@ export interface ChatOptions {
    * `parseBuddyToolCalls` pipeline is unchanged. Ignored by cloud providers and unsupported models
    * (they fall back to the text protocol). */
   tools?: ToolSchema[];
+  /**
+   * GRAMMAR-CONSTRAINED output (Ollama `format` = a JSON schema): when set, the local server is forced
+   * to emit output matching this schema token-by-token — used to GUARANTEE a parseable tool call when
+   * one is required (a step whose contract demands a tool, or a retry after the model narrated instead
+   * of acting), so a small model physically cannot reply with prose like "I made it!". Set ONLY when a
+   * tool call is genuinely required (it forbids a plain prose reply). Ignored by cloud providers and on
+   * the non-Ollama path. See `buildToolCallFormat`. */
+  toolFormat?: Record<string, unknown>;
 }
 
 /** One native tool definition (Ollama / OpenAI `/api/chat` `tools` entry). */

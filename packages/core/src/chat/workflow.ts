@@ -297,10 +297,33 @@ export function workflowParked(wf: Workflow | undefined): boolean {
 export function workflowToPlan(wf: Workflow): BuddyPlan {
   return {
     ...(wf.goal ? { goal: wf.goal } : {}),
-    steps: wf.steps.map((s) => ({
-      text: s.instruction,
-      status: s.status === "done" ? ("done" as const) : ("pending" as const),
-      ...(s.note ? { note: s.note } : {}),
-    })),
+    steps: wf.steps.map((s) => {
+      // Carry the tool the step's contract demands (if any) so the worker can grammar-CONSTRAIN that
+      // turn's reply to a real call — a small model then can't narrate instead of acting (G3).
+      const needs = doneWhenToNeeds(s.doneWhen);
+      return {
+        text: s.instruction,
+        status: s.status === "done" ? ("done" as const) : ("pending" as const),
+        ...(s.note ? { note: s.note } : {}),
+        ...(needs ? { needs } : {}),
+      };
+    }),
   };
+}
+
+/** The specific tool a step's completion contract demands, as a `needs` token — for grammar-constrained
+ * tool calling. `undefined` for text/narration/user_reply steps (no tool required). PURE. */
+export function doneWhenToNeeds(dw: DoneWhen): string | undefined {
+  switch (dw.kind) {
+    case "image":
+      return "generate_image";
+    case "file":
+      return "write_file";
+    case "command_ok":
+      return "run_command";
+    case "tool_ok":
+      return dw.tool;
+    default:
+      return undefined;
+  }
 }
