@@ -1295,9 +1295,23 @@ export function buildFileLedgerBlock(files: CreatedFileRef[]): string {
     .join("\n");
   return (
     "FILES YOU WROTE this session (they're on disk in the workspace). To change one, read_file it FIRST, " +
-    "then write_file the edited version — never rewrite a big file from memory:\n" +
+    "then edit_file (search/replace) — never rewrite a big file from memory:\n" +
     rows
   );
+}
+
+/** Max chars of the workspace AGENTS.md / CONVENTIONS.md folded into the prompt (a brief, not a manual). */
+export const PROJECT_GUIDE_MAX_CHARS = 6_000;
+
+/**
+ * A block carrying the workspace's own project notes (an `AGENTS.md` / `CONVENTIONS.md` the reader or a
+ * past turn wrote — build/test commands, conventions, what's where), injected AFTER the cached prefix so
+ * durable per-project guidance rides every turn (matching Codex's AGENTS.md / Claude Code's CLAUDE.md).
+ * Trimmed to {@link PROJECT_GUIDE_MAX_CHARS}; empty string when there's no such file. PURE. */
+export function buildProjectGuideBlock(text: string): string {
+  const t = text.trim();
+  if (!t) return "";
+  return `PROJECT NOTES (from the workspace AGENTS.md — follow these conventions; you may update the file with write_file/edit_file):\n${t.slice(0, PROJECT_GUIDE_MAX_CHARS)}`;
 }
 
 /** The planning-mode playbook, appended to the system prompt only in the "planning" persona — it

@@ -3,6 +3,7 @@ import {
   ALWAYS_GATED_TOOLS,
   MAX_BUDDY_TOOL_ROUNDS,
   buildBuddySystemPrompt,
+  buildProjectGuideBlock,
   buildToolCallFormat,
   describeBuddyToolActivity,
   formatBuddyToolResult,
@@ -445,6 +446,16 @@ describe("buildBuddySystemPrompt", () => {
     const cmds = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true });
     expect(cmds).toContain("write_file then run_command"); // RUN-code routing
     expect(cmds).toContain("the reader KEEPS"); // substantial files/documents → write_file, not a fenced block
+  });
+
+  it("buildProjectGuideBlock: wraps non-empty AGENTS.md text; empty when blank; capped", async () => {
+    const { PROJECT_GUIDE_MAX_CHARS } = await import("./buddy-tools.js");
+    expect(buildProjectGuideBlock("")).toBe("");
+    expect(buildProjectGuideBlock("   \n  ")).toBe("");
+    const b = buildProjectGuideBlock("Build: npm run build. Use 2-space indent.");
+    expect(b).toContain("PROJECT NOTES");
+    expect(b).toContain("npm run build");
+    expect(buildProjectGuideBlock("x".repeat(PROJECT_GUIDE_MAX_CHARS + 500)).length).toBeLessThanOrEqual(PROJECT_GUIDE_MAX_CHARS + 200);
   });
 
   it("buildToolCallFormat: a single tool → an object schema forcing {tool:<name>, …args}", () => {

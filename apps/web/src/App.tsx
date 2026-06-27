@@ -525,6 +525,7 @@ export function App() {
     chatTool,
     applyEngineConfig,
     setFileLedger,
+    setProjectGuide,
     chatCancel,
     warmLlm,
     buddyChat,
@@ -5030,6 +5031,17 @@ export function App() {
     // (ordered before the buddyChat send below), so the model sees what it's written regardless of init
     // timing or a session switch.
     setFileLedger(createdFilesRef.current);
+    // G4 — push the workspace project guide (AGENTS.md, else CONVENTIONS.md) so durable per-project
+    // conventions ride every turn. Desktop only (the model can read/update it via read_file/write_file).
+    if (isDesktop && !isRemoteClient) {
+      try {
+        let g = await readWorkspaceFile("AGENTS.md", buddyWorkingDir || undefined);
+        if (!g.exists) g = await readWorkspaceFile("CONVENTIONS.md", buddyWorkingDir || undefined);
+        setProjectGuide(g.exists ? g.text : "");
+      } catch {
+        setProjectGuide("");
+      }
+    }
     if (userBubbleText !== undefined) {
       appendBuddy({ role: "user", text: userBubbleText });
       buddyQueueAdvanceRef.current = { count: 0, noProgress: 0 }; // fresh user turn → reset the chain budget
