@@ -148,6 +148,7 @@ import {
   deterministicSeed,
   ComfyUIBackend,
   Automatic1111Backend,
+  summarizeVram,
   type BookSource,
   type StoryScene,
   type StoryRoleplay,
@@ -173,6 +174,7 @@ import { buildProviders } from "@visual-reader/ui/providers";
 import type { ReaderSettings } from "@visual-reader/ui";
 import type { TaskPlan, TaskStep } from "@visual-reader/core";
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
+import type { EngineVram } from "./remote-sync.js";
 
 /**
  * Engine host. Runs the Visual Bible extraction, render pipeline, and JIT buffer
@@ -436,6 +438,56 @@ function thinkingNotifier(post: (text: string) => void): (text: string) => void 
 
 function post(message: WorkerToMain, transfer: Transferable[] = []): void {
   ctx.postMessage(message, transfer);
+}
+
+// --- Live GPU VRAM indicator -------------------------------------------------
+// Poll the local ComfyUI engine's /system_stats so the status bar (and the mirrored phone) shows
+// live VRAM use. Best-effort and self-healing: a miss clears the indicator; an engine-config change
+// (which re-sends `init`) restarts the poll against the current engine. No-op for A1111 or no local
+// engine — nothing to poll there, so the indicator simply stays hidden.
+let vramTimer: ReturnType<typeof setInterval> | undefined;
+let vramAbort: AbortController | undefined;
+let lastVramJson = ""; // dedupe identical ticks so we don't spam postMessage every 4s
+const VRAM_POLL_MS = 4000;
+
+function postVram(vram: EngineVram | undefined): void {
+  const json = vram ? JSON.stringify(vram) : "";
+  if (json === lastVramJson) return; // unchanged since last tick — skip
+  lastVramJson = json;
+  post({ type: "vram", ...(vram ? { vram } : {}) });
+}
+
+function stopVramPoll(): void {
+  if (vramTimer) {
+    clearInterval(vramTimer);
+    vramTimer = undefined;
+  }
+  vramAbort?.abort();
+  vramAbort = undefined;
+}
+
+/** (Re)start the VRAM poll for the CURRENT settings. Called on `init` (engine-config changes, like
+ * connecting/disconnecting the local engine, re-send `init`). */
+function restartVramPoll(): void {
+  stopVramPoll();
+  const s = settings;
+  const baseUrl = s?.engineBaseUrl ?? s?.localServerUrl;
+  const isComfy = (s?.engineBackend ?? s?.localBackend) !== "a1111";
+  if (!s || !baseUrl || !isComfy) {
+    postVram(undefined); // engine removed / switched to A1111 → clear any stale indicator
+    return;
+  }
+  const backend = new ComfyUIBackend({ baseUrl });
+  const tick = async (): Promise<void> => {
+    vramAbort?.abort(); // supersede any still-in-flight prior tick (a slow GET overlapping the next)
+    const ac = new AbortController();
+    vramAbort = ac;
+    const devices = await backend.systemStats(ac.signal);
+    if (ac.signal.aborted) return; // a newer tick/restart superseded this one — don't clobber it
+    postVram(summarizeVram(devices));
+  };
+  void tick(); // immediate first reading (don't wait a full interval)
+  vramTimer = setInterval(() => void tick(), VRAM_POLL_MS);
 }
 
 // --- CORS-exempt fetch via the host -----------------------------------------
@@ -875,6 +927,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
           message: `Provider setup failed: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
+      restartVramPoll(); // (re)point the VRAM indicator at the current engine
       break;
     case "tune":
       // Tuning-only change: swap the live engine's tier (future renders use it) without

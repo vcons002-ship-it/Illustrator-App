@@ -214,7 +214,7 @@ import type { LocalTextServerId } from "@visual-reader/core";
 import { loadSampleBook } from "./sample.js";
 import { useEngineWorker, type ImportResult, type TestRenderResult } from "./useEngineWorker.js";
 import { useActivityLog } from "./useActivityLog.js";
-import type { ChatLive, ChatMirror, ChatSendAttachment, CmdToDesktop, EngineInventory, PlannerCommand, PlannerMirror, SyncToPhone } from "./remote-sync.js";
+import type { ChatLive, ChatMirror, ChatSendAttachment, CmdToDesktop, EngineInventory, EngineVram, PlannerCommand, PlannerMirror, SyncToPhone } from "./remote-sync.js";
 import {
   downloadLora,
   desktopFetch,
@@ -403,6 +403,11 @@ export function App() {
   const multiFile = useRef<Record<string, { index: number; count: number }>>({});
   const [pullProgress, setPullProgress] = useState<Record<string, { status: string; percent?: number }>>({});
   const [engineStatus, setEngineStatus] = useState("");
+  // PHONE-side mirrors of the desktop's model tags + GPU VRAM (the phone has no engine of its own,
+  // so its status bar shows what the desktop reports). On the desktop these stay undefined and the
+  // status bar reads the live hook values instead.
+  const [remoteProviders, setRemoteProviders] = useState<ProvidersDiagnostics | undefined>();
+  const [remoteVram, setRemoteVram] = useState<EngineVram | undefined>();
   const [installedLoras, setInstalledLoras] = useState<string[]>([]);
   const [loraFamilyMap, setLoraFamilyMap] = useState<Record<string, string>>({});
   const [library, setLibrary] = useState<BookSummary[]>([]);
@@ -416,6 +421,7 @@ export function App() {
     workflow,
     avgRenderMs,
     providers,
+    vram,
     generating,
     paused,
     openBook: openInWorker,
@@ -1731,9 +1737,10 @@ export function App() {
       loraFamilies: loraFamilyMap,
       textModels,
       engineStatus,
+      ...(providers ? { providers } : {}),
       ...(textModelContext ? { textModelContext } : {}),
     }),
-    [installedModels, installedTextEncoders, installedVaes, installedLoras, loraFamilyMap, textModels, engineStatus, textModelContext],
+    [installedModels, installedTextEncoders, installedVaes, installedLoras, loraFamilyMap, textModels, engineStatus, providers, textModelContext],
   );
   // The planner (tasks + calendar) state is declared lower in the file, so the hello snapshot and
   // the phone's apply-handler reach it through refs kept current by effects below (the same pattern
@@ -1792,8 +1799,9 @@ export function App() {
       skills,
       ...(book ? { book } : {}),
       ...(bible ? { bible } : {}),
+      ...(vram ? { vram } : {}),
     }),
-    [library, settings, engineInventory, book, bible, memories, skills],
+    [library, settings, engineInventory, book, bible, memories, skills, vram],
   );
   // PHONE side: adopt the desktop's mirrored inventory so the local-model pickers show the SAME
   // installed models/components the desktop has (the phone has no engine to enumerate).
@@ -1805,6 +1813,7 @@ export function App() {
     setLoraFamilyMap(inv.loraFamilies);
     setTextModels(inv.textModels);
     setEngineStatus(inv.engineStatus);
+    setRemoteProviders(inv.providers);
     setTextModelContext(inv.textModelContext);
   }, []);
   const buildSnapshotRef = useRef(buildSnapshot);
@@ -1826,6 +1835,7 @@ export function App() {
             setSkills(msg.skills);
             setBook(msg.book);
             setBible(msg.bible);
+            setRemoteVram(msg.vram);
             setRemoteHost(msg.host);
             break;
           case "vrsync:library":
@@ -1845,6 +1855,9 @@ export function App() {
             break;
           case "vrsync:skills":
             setSkills(msg.skills);
+            break;
+          case "vrsync:vram":
+            setRemoteVram(msg.vram);
             break;
           case "vrsync:chat":
             applyChatRef.current(msg);
@@ -2012,6 +2025,11 @@ export function App() {
     // Mirror the assistant's saved skills to a linked phone so its Skills panel isn't empty.
     if (!isRemoteClient) sendAppSync({ type: "vrsync:skills", skills });
   }, [isRemoteClient, sendAppSync, skills]);
+  useEffect(() => {
+    // Tick the phone's VRAM indicator. Its own lightweight push (not folded into the heavier
+    // inventory mirror) so a ~4s GPU reading doesn't re-send the whole installed-model inventory.
+    if (!isRemoteClient) sendAppSync({ type: "vrsync:vram", ...(vram ? { vram } : {}) });
+  }, [isRemoteClient, sendAppSync, vram]);
   // Settings edits: on the desktop, apply locally (it owns the engine). On a linked PHONE, also push
   // the change to the desktop (vrcmd:settings) so the render the phone triggers uses it — the desktop
   // applies it and re-mirrors it back. (The phone applies the desktop's pushes via setSettings
@@ -6110,13 +6128,15 @@ export function App() {
       {/* On a linked phone the engine lives on the desktop — show the link, not a "set up a model"
           nag or local-provider badges (those reflect a model the phone will never run). */}
       {isRemoteClient ? (
-        <div style={styles.badges}>
+        // On a linked phone, show the link badge AND the desktop's mirrored model tags + GPU VRAM,
+        // so the phone can see which image/LLM models are active and what the GPU is doing.
+        <ProviderBadges providers={remoteProviders} engineStatus={engineStatus} vram={remoteVram}>
           <span style={{ ...styles.badge, ...styles.badgeOk }} title="This phone is mirroring your desktop over the LAN; the engine runs there.">
             🔗 Linked to {remoteHost ?? "your desktop"} — engine runs on the desktop
           </span>
-        </div>
+        </ProviderBadges>
       ) : (
-        <ProviderBadges providers={providers} engineStatus={engineStatus} />
+        <ProviderBadges providers={providers} engineStatus={engineStatus} vram={vram} />
       )}
 
       {/* Status center: what the app is doing right now + the queue behind it (task planning keeps
@@ -8019,13 +8039,19 @@ function PhotoTransformModal({
 function ProviderBadges({
   providers,
   engineStatus,
+  vram,
+  children,
 }: {
   providers: ProvidersDiagnostics | undefined;
   engineStatus: string;
+  vram?: EngineVram | undefined;
+  /** Optional leading badge (e.g. the phone's "Linked to …" chip) rendered before the model tags. */
+  children?: React.ReactNode;
 }) {
-  if (!providers && !engineStatus) return null;
+  if (!children && !providers && !engineStatus && !vram) return null;
   return (
     <div style={styles.badges}>
+      {children}
       {providers && <Badge slot="Text" diag={providers.llm} />}
       {providers && <Badge slot="Image" diag={providers.image} />}
       {engineStatus && (
@@ -8033,7 +8059,25 @@ function ProviderBadges({
           Engine: {engineStatus}
         </span>
       )}
+      {vram && <VramBadge vram={vram} />}
     </div>
+  );
+}
+
+/** Live GPU VRAM chip: "VRAM 14.2 / 24.0 GB" with a usage tint (green < 75%, amber < 92%, red above). */
+function VramBadge({ vram }: { vram: EngineVram }) {
+  const usedGb = vram.usedMb / 1024;
+  const totalGb = vram.totalMb / 1024;
+  const frac = vram.totalMb > 0 ? vram.usedMb / vram.totalMb : 0;
+  const tone = frac >= 0.92 ? styles.badgeWarn : frac >= 0.75 ? styles.badgeBusy : styles.badgeOk;
+  const pct = Math.round(frac * 100);
+  return (
+    <span
+      style={{ ...styles.badge, ...tone }}
+      title={`${vram.device ?? "GPU"} — ${pct}% of VRAM in use (${usedGb.toFixed(1)} of ${totalGb.toFixed(1)} GB)`}
+    >
+      <span aria-hidden style={{ opacity: 0.8 }}>▦</span> VRAM {usedGb.toFixed(1)} / {totalGb.toFixed(1)} GB
+    </span>
   );
 }
 

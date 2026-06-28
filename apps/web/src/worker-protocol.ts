@@ -29,6 +29,7 @@ import type {
   WebSearchHit,
 } from "@visual-reader/core";
 import type { ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
+import type { EngineVram } from "./remote-sync.js";
 
 /**
  * Message protocol between the main thread and the engine Web Worker. The engine
@@ -246,6 +247,9 @@ export type WorkerToMain =
   | { type: "llmVram"; callId: number; action: "stop" | "ensure" }
   | { type: "status"; message: string }
   | { type: "providers"; diagnostics: ProvidersDiagnostics }
+  /** Live GPU VRAM from the local ComfyUI engine (poll of /system_stats), for the status-bar
+   * indicator. `vram` absent ⇒ no local engine / unreachable ⇒ the indicator is hidden. */
+  | { type: "vram"; vram?: EngineVram }
   | { type: "generating"; value: boolean }
   | { type: "paused"; bible: boolean; images: boolean }
   /** Structured workflow progress (chapters read / prompts written), for the status bar. */
