@@ -37,6 +37,38 @@ describe("nonEmptyAnswer", () => {
   });
 });
 
+describe("runBuddyTurn — story-mode empty-reply repair", () => {
+  it("re-prompts for the next BEAT (not a meta wrap-up) and returns the recovered prose", async () => {
+    const llm = scriptedLlm(["", "She steps into the rain, and the door clicks shut behind her."]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "go on" }],
+      deps: baseDeps,
+      storyMode: true,
+    });
+    // The recovered reply IS the beat (so the worker's shouldAppendBeat will append it).
+    expect(outcome.text).toBe("She steps into the rain, and the door clicks shut behind her.");
+    // The second call's wrap directive asked for the next beat, NOT "say what you did".
+    const wrap = llm.calls[1]!.map((t) => t.content).join("\n");
+    expect(wrap).toMatch(/next beat/i);
+    expect(wrap).not.toMatch(/say what you did/i);
+  });
+
+  it("falls back to the generic wrap-up when not in story mode", async () => {
+    const llm = scriptedLlm(["", "I searched and found three results."]);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "go on" }],
+      deps: baseDeps,
+    });
+    const wrap = llm.calls[1]!.map((t) => t.content).join("\n");
+    expect(wrap).toMatch(/plain text/i);
+    expect(wrap).not.toMatch(/next beat/i);
+  });
+});
+
 describe("runBuddyTurn — spawn_agents parallel fan-out", () => {
   it("runs the subtasks via runSubAgents and feeds all results back to synthesize", async () => {
     const llm = scriptedLlm([
@@ -105,6 +137,109 @@ describe("runBuddyTurn — write-capable sub-agent (runHostTool)", () => {
       deps: baseDeps,
     });
     expect(outcome.pendingTool).toEqual({ tool: "run_command", command: "ls" });
+  });
+});
+
+describe("runBuddyTurn — multi-step checklists run EVERY step (no skipping)", () => {
+  // A stateful working checklist, exactly like the host's set_plan/complete_step, so a full plan can
+  // be driven through the loop and we can assert every step's tool actually fired.
+  type Plan = { goal?: string; steps: { text: string; status: "pending" | "done"; note?: string }[] } | undefined;
+  function planHarness() {
+    let plan: Plan;
+    const deps = {
+      ...baseDeps,
+      setPlan: (goal: string | undefined, steps: string[]) => {
+        plan = { ...(goal ? { goal } : {}), steps: steps.map((t) => ({ text: t, status: "pending" as const })) };
+        return plan;
+      },
+      completeStep: (note?: string) => {
+        if (!plan) return undefined;
+        const i = plan.steps.findIndex((s) => s.status !== "done");
+        if (i < 0) return undefined;
+        plan.steps[i] = { ...plan.steps[i]!, status: "done", ...(note ? { note } : {}) };
+        return plan;
+      },
+    };
+    return { deps, get plan() { return plan; } };
+  }
+
+  it("a 3-image checklist renders EVERY image and ticks EVERY step — none skipped", async () => {
+    const h = planHarness();
+    const llm = scriptedLlm([
+      '{"tool":"set_plan","goal":"3 sunset images","steps":["Generate image 1 of the sunset","Generate image 2 of the sunset","Generate image 3 of the sunset"]}',
+      '{"tool":"generate_image","prompt":"sunset one"}\n{"tool":"complete_step","note":"image 1 done"}',
+      '{"tool":"generate_image","prompt":"sunset two"}\n{"tool":"complete_step","note":"image 2 done"}',
+      '{"tool":"generate_image","prompt":"sunset three"}\n{"tool":"complete_step","note":"image 3 done"}',
+      "All three sunsets are done!",
+    ]);
+    const rendered: string[] = [];
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "generate 3 images of a sunset, one at a time" }],
+      deps: h.deps,
+      // Execute the host render in-band (what the app does between turns) so the whole queue runs here.
+      runHostTool: async (call) => {
+        if (call.tool === "generate_image") rendered.push(call.prompt);
+        return { image: { ok: true } };
+      },
+    });
+    // Every image was actually rendered, in order — not skipped, not deduped, not "already done".
+    expect(rendered).toEqual(["sunset one", "sunset two", "sunset three"]);
+    expect(outcome.toolResults.filter((r) => r.call.tool === "generate_image")).toHaveLength(3);
+    expect(outcome.toolResults.filter((r) => r.call.tool === "complete_step")).toHaveLength(3);
+    expect(h.plan!.steps.every((s) => s.status === "done")).toBe(true); // all 3 ticked
+    expect(outcome.pendingTool).toBeUndefined();
+    expect(outcome.text).toBe("All three sunsets are done!");
+  });
+
+  it("refuses a back-to-back complete_step (no work between) so a step can't be skipped", async () => {
+    const h = planHarness();
+    const llm = scriptedLlm([
+      '{"tool":"set_plan","goal":"3 images","steps":["Generate image 1","Generate image 2","Generate image 3"]}',
+      // Renders image 1, then tries to tick TWO steps at once — the exact "jumped ahead" bug.
+      '{"tool":"generate_image","prompt":"img1"}\n{"tool":"complete_step"}\n{"tool":"complete_step"}',
+      "ok",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "3 images" }],
+      deps: h.deps,
+      runHostTool: async () => ({ image: { ok: true } }),
+    });
+    // Only ONE step got ticked — the second check-off (no render between) was refused, so image 2's
+    // step stays unfinished instead of being silently skipped.
+    expect(h.plan!.steps.filter((s) => s.status === "done")).toHaveLength(1);
+    expect(outcome.toolResults.filter((r) => r.call.tool === "complete_step" && r.result.error)).toHaveLength(1);
+    const fedBack = llm.calls.flatMap((c) => c.map((t) => t.content)).join("\n");
+    expect(fedBack).toMatch(/complete_step IGNORED — you just checked off a step with no work in between/);
+  });
+
+  it("a research → compute chain runs each step's tool in order and ticks each step", async () => {
+    const h = planHarness();
+    const llm = scriptedLlm([
+      '{"tool":"set_plan","goal":"research","steps":["Search the web for X","Compute the total"]}',
+      '{"tool":"search_web","query":"X facts"}\n{"tool":"complete_step","note":"searched"}',
+      '{"tool":"calculate","expression":"21 * 2"}\n{"tool":"complete_step","note":"computed"}',
+      "Found it — the total is 42.",
+    ]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "research X then compute the total" }],
+      deps: { ...h.deps, searchWeb: async () => [{ title: "T", link: "http://x.test", snippet: "S" }] },
+    });
+    // The tools ran in the planned order, once each, with a tick after each.
+    expect(outcome.toolResults.map((r) => r.call.tool)).toEqual([
+      "set_plan",
+      "search_web",
+      "complete_step",
+      "calculate",
+      "complete_step",
+    ]);
+    expect(h.plan!.steps.every((s) => s.status === "done")).toBe(true);
+    expect(outcome.text).toBe("Found it — the total is 42.");
   });
 });
 
@@ -475,6 +610,7 @@ describe("runBuddyTurn", () => {
     expect(outcome.toolResults[0]!.result.memory).toEqual({
       action: "remembered",
       note: "prefers watercolor",
+      about: "reader",
       count: 1,
     });
     // Without the dep, the tool fails soft (the model is told and recovers).

@@ -61,3 +61,19 @@ export function measureContextUsage(
 export function chatTurnsChars(history: readonly ChatTurn[]): number {
   return history.reduce((a, t) => a + t.content.length, 0);
 }
+
+/**
+ * Whether the chat is close enough to the model's window that it should AUTO-COMPACT (summarize the
+ * older turns, keep the recent ones) before the next turn trims early decisions out of context. Needs a
+ * known window, a non-trivial conversation, and usage past `fraction` of the window. PURE. */
+export function shouldAutoCompact(
+  usage: ContextUsage | undefined,
+  messageCount: number,
+  opts?: { fraction?: number; minMessages?: number },
+): boolean {
+  const fraction = opts?.fraction ?? 0.8;
+  const minMessages = opts?.minMessages ?? 8;
+  if (!usage?.maxTokens || usage.maxTokens <= 0) return false;
+  if (messageCount < minMessages) return false;
+  return usage.approxTokens >= usage.maxTokens * fraction;
+}

@@ -53,11 +53,87 @@ export interface ChatOptions {
    * the same win for free from the stable-prefix ORDERING and ignore this field.
    */
   cachePrefix?: string;
+  /**
+   * NATIVE tool definitions (Ollama / OpenAI `tools` shape) the model may call. When set AND the
+   * local server + model support tools, the provider sends them so the model emits STRUCTURED
+   * `tool_calls` instead of having to follow the text-JSON protocol from the prompt — far more
+   * reliable for small instruction-tuned models (Gemma, etc.). The provider serializes any returned
+   * tool_calls back into the app's `{"tool":…}` text and appends it to the reply, so the existing
+   * `parseBuddyToolCalls` pipeline is unchanged. Ignored by cloud providers and unsupported models
+   * (they fall back to the text protocol). */
+  tools?: ToolSchema[];
+  /**
+   * GRAMMAR-CONSTRAINED output (Ollama `format` = a JSON schema): when set, the local server is forced
+   * to emit output matching this schema token-by-token — used to GUARANTEE a parseable tool call when
+   * one is required (a step whose contract demands a tool, or a retry after the model narrated instead
+   * of acting), so a small model physically cannot reply with prose like "I made it!". Set ONLY when a
+   * tool call is genuinely required (it forbids a plain prose reply). Ignored by cloud providers and on
+   * the non-Ollama path. See `buildToolCallFormat`. */
+  toolFormat?: Record<string, unknown>;
+}
+
+/** One native tool definition (Ollama / OpenAI `/api/chat` `tools` entry). */
+export interface ToolSchema {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: {
+      type: "object";
+      properties: Record<
+        string,
+        {
+          type: string;
+          description?: string;
+          enum?: string[];
+          // Array items: a primitive (`{type}`) OR an object schema (for an array of structured edits).
+          items?: { type: string; properties?: Record<string, { type: string; description?: string }>; required?: string[] };
+        }
+      >;
+      required?: string[];
+    };
+  };
 }
 
 export interface ChatCapable {
   /** Full final assistant text for the conversation so far. */
   chat(messages: ChatTurn[], opts?: ChatOptions): Promise<string>;
+}
+
+/** A native tool call as returned by Ollama/OpenAI `/api/chat` — `function.name` + `function.arguments`
+ * (an object, or a JSON string on some servers). */
+export interface NativeToolCall {
+  function?: { name?: string; arguments?: unknown };
+  name?: string;
+  arguments?: unknown;
+}
+
+/**
+ * Serialize native `tool_calls` (returned when we pass `tools`) back into the app's `{"tool":…}` text
+ * lines, so the existing tool-call parser validates + runs them unchanged. This is the bridge that lets
+ * a tool-capable local model use RELIABLE native function-calling while the app keeps one text protocol.
+ * Skips a call with no name. PURE.
+ */
+export function nativeToolCallsToText(calls: readonly NativeToolCall[]): string {
+  const lines: string[] = [];
+  for (const c of calls) {
+    const fn = c.function ?? c;
+    const name = typeof fn.name === "string" ? fn.name : undefined;
+    if (!name) continue;
+    let args: Record<string, unknown> = {};
+    const raw = fn.arguments;
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) args = raw as Record<string, unknown>;
+    else if (typeof raw === "string") {
+      try {
+        const p = JSON.parse(raw);
+        if (p && typeof p === "object" && !Array.isArray(p)) args = p as Record<string, unknown>;
+      } catch {
+        /* not JSON — leave args empty so the call still names the tool */
+      }
+    }
+    lines.push(JSON.stringify({ tool: name, ...args }));
+  }
+  return lines.join("\n");
 }
 
 /** A model that can look at an image and answer in text (vision input). */

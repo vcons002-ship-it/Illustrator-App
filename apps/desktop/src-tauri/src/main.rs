@@ -950,6 +950,20 @@ async fn save_file(app: AppHandle, filename: String, body_base64: String) -> Res
     .map_err(|e| e.to_string())?
 }
 
+/// Open an existing file or folder in the OS default handler (the "Open on PC" file-card action).
+/// Reuses the same platform launchers as `open_browser` so a path opens in the user's default app
+/// (or the file manager for a directory). The path must already exist — refuses otherwise so a
+/// stray string can't be handed to the shell.
+#[tauri::command]
+async fn open_path(path: String) -> Result<(), String> {
+    let p = std::path::PathBuf::from(&path);
+    if !p.exists() {
+        return Err(format!("No such file: {path}"));
+    }
+    open_browser(&path); // file paths open in the default app; directories in the file manager
+    Ok(())
+}
+
 /// Write a file the assistant authored INTO the workspace (or the session's chosen folder) so it can
 /// then be run via `run_command` — the autonomous write→run→fix loop. `rel_path` is workspace-relative
 /// and sanitized component-by-component (`..`, `.`, absolute parts and illegal chars are dropped) so it
@@ -1017,6 +1031,70 @@ async fn write_workspace_file(
     .map_err(|e| e.to_string())?
 }
 
+/// The result of reading a workspace-relative file: whether it exists and (if so) its bytes.
+#[derive(serde::Serialize)]
+struct WorkspaceReadResult {
+    exists: bool,
+    /// Resolved absolute path (for display / logging).
+    path: String,
+    /// Base64 of the file bytes; empty when the file doesn't exist.
+    #[serde(rename = "bodyBase64")]
+    body_base64: String,
+}
+
+/// Read a workspace-RELATIVE file (the counterpart to `write_workspace_file`). Resolves + sanitizes
+/// the path the SAME way (never escapes the workspace), and returns `exists:false` instead of erroring
+/// when the file is absent — so callers can check existence (`edit_file`, AGENTS.md, deliverable
+/// verification) without exception handling. Capped at `MAX_READ_BYTES`.
+#[tauri::command]
+async fn read_workspace_file(
+    app: AppHandle,
+    rel_path: String,
+    cwd: Option<String>,
+) -> Result<WorkspaceReadResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use base64::Engine as _;
+        let base = match cwd
+            .filter(|c| !c.is_empty())
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.is_dir())
+        {
+            Some(p) => p,
+            None => workspace_dir(&app),
+        };
+        let mut dest = base.clone();
+        let mut any = false;
+        for part in rel_path.split(['/', '\\']) {
+            let p = part.trim();
+            if p.is_empty() || p == "." || p == ".." {
+                continue;
+            }
+            dest.push(sanitize_filename(p));
+            any = true;
+        }
+        if !any {
+            return Err("invalid file path".to_string());
+        }
+        let path = dest.to_string_lossy().to_string();
+        match std::fs::metadata(&dest) {
+            Ok(meta) if meta.is_file() => {
+                if meta.len() > MAX_READ_BYTES {
+                    return Err("File too large.".to_string());
+                }
+                let bytes = std::fs::read(&dest).map_err(|e| e.to_string())?;
+                Ok(WorkspaceReadResult {
+                    exists: true,
+                    path,
+                    body_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+                })
+            }
+            _ => Ok(WorkspaceReadResult { exists: false, path, body_base64: String::new() }),
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Strip any path separators / parent refs so a renderer-supplied name can only
 /// ever land a file INSIDE the exports dir (never traverse out of it).
 fn sanitize_filename(name: &str) -> String {
@@ -1071,6 +1149,49 @@ const SEARCHABLE_EXTS: &[&str] = &[
     // Images.
     "png", "jpg", "jpeg", "webp", "gif",
 ];
+/// Filler words people say when phrasing a search ("find my notes file", "any md files") that aren't
+/// part of a filename — dropped before matching so a token like "files" isn't required in the name
+/// (which would make "find my md files" return nothing). Mirrors FIND_STOP_WORDS in local-files.ts.
+fn is_find_stop_word(t: &str) -> bool {
+    matches!(
+        t,
+        "find" | "search" | "look" | "locate" | "get" | "open" | "show" | "give" | "fetch" | "grab"
+            | "me" | "my" | "the" | "a" | "an" | "any" | "some" | "all" | "please" | "and" | "that" | "this"
+            | "for" | "of" | "on" | "in" | "about" | "with" | "named" | "called" | "titled"
+            | "file" | "files" | "doc" | "docs" | "document" | "documents"
+    )
+}
+
+/// Type words → the extensions they mean, so "md files" filters to .md, "a photo of …" to images, etc.
+/// A token matches a file when its NAME contains the token OR it's a type word matching the file's
+/// EXTENSION. Mirrors FILE_TYPE_EXTS in local-files.ts.
+fn type_word_exts(t: &str) -> &'static [&'static str] {
+    match t {
+        "md" | "markdown" => &["md", "markdown"],
+        "pdf" | "pdfs" => &["pdf"],
+        "txt" | "text" => &["txt"],
+        "docx" => &["docx"],
+        "word" => &["doc", "docx"],
+        "rtf" => &["rtf"],
+        "epub" | "ebook" | "ebooks" => &["epub"],
+        "csv" => &["csv"],
+        "tsv" => &["tsv"],
+        "json" => &["json"],
+        "xlsx" | "xls" | "excel" => &["xlsx", "xls"],
+        "spreadsheet" | "spreadsheets" => &["xlsx", "xls", "csv", "ods"],
+        "sheet" => &["xlsx", "xls", "csv"],
+        "html" | "htm" | "webpage" => &["html", "htm"],
+        "png" => &["png"],
+        "jpg" | "jpeg" => &["jpg", "jpeg"],
+        "webp" => &["webp"],
+        "gif" => &["gif"],
+        "image" | "images" | "photo" | "photos" | "picture" | "pictures" | "pic" => {
+            &["png", "jpg", "jpeg", "webp", "gif"]
+        }
+        _ => &[],
+    }
+}
+
 /// Bounds so a broad walk stays fast and can't wander into heavy caches forever.
 const MAX_RESULTS: usize = 100;
 const MAX_VISITS: usize = 400_000;
@@ -1120,8 +1241,14 @@ async fn search_files(
     root: Option<String>,
 ) -> Result<Vec<FoundFile>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let tokens: Vec<String> =
-            query.to_lowercase().split_whitespace().map(|s| s.to_string()).collect();
+        // Split on non-alphanumeric (so "resume.pdf" → "resume","pdf") and drop filler words, matching
+        // the renderer's queryTokens(). What's left is what actually has to match a filename.
+        let tokens: Vec<String> = query
+            .to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|s| !s.is_empty() && !is_find_stop_word(s))
+            .map(|s| s.to_string())
+            .collect();
         if tokens.is_empty() {
             return Ok(Vec::new());
         }
@@ -1164,7 +1291,9 @@ async fn search_files(
                 if !SEARCHABLE_EXTS.contains(&ext) {
                     continue;
                 }
-                if tokens.iter().all(|t| lower.contains(t.as_str())) {
+                // Every token must be satisfied: present in the name, OR a type word ("md", "pdf",
+                // "photo") matching this file's extension — so "md files" finds every .md.
+                if tokens.iter().all(|t| lower.contains(t.as_str()) || type_word_exts(t).contains(&ext)) {
                     let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
                     out.push(FoundFile {
                         path: entry.path().to_string_lossy().to_string(),
@@ -2369,7 +2498,9 @@ fn main() {
             gpu_info,
             http_fetch,
             save_file,
+            open_path,
             write_workspace_file,
+            read_workspace_file,
             search_files,
             read_file,
             run_command,

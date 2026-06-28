@@ -19,6 +19,9 @@ import {
   analyzeData,
   imageModelVramCostGb,
   serverModelVramCostGb,
+  chatImageVramFit,
+  staleComfyUrlToFree,
+  resolveLoadedContextTokens,
   createDataTable,
   recalcTable,
   tableToText,
@@ -38,6 +41,12 @@ import {
   schwabAccountNumbers,
   placeSchwabOrder,
   buildBuddySystemPrompt,
+  buildFileLedgerBlock,
+  buildProjectGuideBlock,
+  buildToolCallFormat,
+  type CreatedFileRef,
+  ollamaToolSchemas,
+  shouldAppendBeat,
   buildDelegatePrompt,
   buildCodingAgentPrompt,
   buildConflictResolvePrompt,
@@ -51,6 +60,23 @@ import {
   getImageStyle,
   loadMemory,
   loadSkills,
+  loadSoul,
+  loadSoulName,
+  loadSoulImages,
+  rememberSoul,
+  forgetSoul,
+  selfSoulPromptBlock,
+  userSoulPromptBlock,
+  selfPortraitPrompt,
+  userPortraitPrompt,
+  isSelfPortraitRequest,
+  isUserPortraitRequest,
+  storyStatePromptBlock,
+  synopsisRequest,
+  storyOpeningRequest,
+  parseStoryOpening,
+  SYNOPSIS_REFRESH_EVERY,
+  MAX_SYNOPSIS_CHARS,
   seedStarterSkills,
   memoryPromptBlock,
   saveSkill,
@@ -213,6 +239,13 @@ interface StorySessionState {
    * scene and render_scene of a past beat uses that beat's cast/location. */
   scenes: StoryScene[];
   roleplay?: StoryRoleplay;
+  /** The story workflow: "roleplay" (reader steers a character, the assistant voices everyone) or
+   * "direct" (reader directs, the assistant narrates). Drives the writing prompt. */
+  mode: "direct" | "roleplay";
+  /** Roleplay only: the played character NAMES for narration labels (me = reader, you = assistant). */
+  play?: { me?: string; you?: string };
+  /** Rolling "story so far" synopsis, refreshed every N beats and fed back to the writer. */
+  synopsis?: string;
   cadence: { mode: "per-response" | "every-n" | "manual"; n: number };
   beatsSinceImage: number;
 }
@@ -276,9 +309,44 @@ function beatsFromBook(book: BookSource): string[] {
 function storyConfigOf(s: StorySessionState): NonNullable<BookSource["storyConfig"]> {
   return {
     ...(s.roleplay ? { roleplay: s.roleplay } : {}),
+    mode: s.mode,
+    ...(s.play ? { play: s.play } : {}),
+    ...(s.synopsis ? { synopsis: s.synopsis } : {}),
     cadence: s.cadence,
     scenes: s.scenes.map((sc) => ({ presentCharacterIds: [...sc.presentCharacterIds], ...(sc.locationId ? { locationId: sc.locationId } : {}) })),
   };
+}
+
+/** Persist the live story session onto the open book's storyConfig and hand it to the host (setBook +
+ * putBook), with NO new beat — used by the header controls (cadence / mode) that the reader changes
+ * directly. `requestId: 0` marks a host-initiated (non-turn) update. */
+function persistStoryConfig(): void {
+  if (story && currentBook?.kind === "story" && currentBook.id === story.bookId) {
+    currentBook = { ...currentBook, storyConfig: storyConfigOf(story) };
+    post({ type: "storyConfig", requestId: 0, book: currentBook });
+  }
+}
+
+/** The live STORY STATE block fed to the WRITING model each beat (present cast + location from the
+ * tracker, the last few beats verbatim, and the rolling synopsis) — so a long story keeps continuity
+ * even after chat history is trimmed. "" when there's nothing to say. */
+function buildStoryStateBlock(s: StorySessionState): string {
+  const bible = currentBible;
+  const presentCast = (s.scene.presentCharacterIds ?? []).map((id) => {
+    const c = bible?.characters.find((ch) => ch.id === id);
+    const name = c?.name ?? id;
+    const note = c?.persistentTraits?.slice(0, 2).join(", ");
+    return note ? { name, note } : { name };
+  });
+  const location = s.scene.locationId ? bible?.environments.find((e) => e.id === s.scene.locationId)?.name : undefined;
+  return storyStatePromptBlock({
+    mode: s.mode,
+    ...(s.play ? { play: s.play } : {}),
+    presentCast,
+    ...(location ? { location } : {}),
+    recentBeats: s.beats.slice(-3),
+    ...(s.synopsis ? { synopsis: s.synopsis } : {}),
+  });
 }
 
 /** Rebuild the story session from a reopened story book (fresh worker / library reopen).
@@ -318,6 +386,11 @@ function rebuildStoryFromBook(book: BookSource, bible: VisualBible | undefined):
     scene: scenes[scenes.length - 1] ?? emptyStoryScene(),
     scenes,
     ...(roleplay ? { roleplay } : {}),
+    // Workflow + played names persist on storyConfig (Phase C); fall back to deriving the mode from
+    // whether a played cast exists, so stories created before that still resume in a sensible mode.
+    mode: book.storyConfig?.mode ?? (roleplay ? "roleplay" : "direct"),
+    ...(book.storyConfig?.play ? { play: book.storyConfig.play } : {}),
+    ...(book.storyConfig?.synopsis ? { synopsis: book.storyConfig.synopsis } : {}),
     cadence: { mode: cadence.mode, n: cadence.n ?? 3 },
     beatsSinceImage: 0,
   };
@@ -406,6 +479,9 @@ function readUrlText(signal: AbortSignal): (url: string) => Promise<{ title?: st
  * the turn finishes. Cloud chat models don't contend, so they never pause it.
  */
 async function withChatPriority<T>(llmId: string, fn: () => Promise<T>): Promise<T> {
+  // Hand the idle image model's VRAM back (if a render evicted the LLM) AND evict any OTHER resident
+  // local model, THEN reload the chat LLM into the freed VRAM. See prepareChatLlmLoad.
+  await prepareChatLlmLoad();
   // If we freed the bundled LLM for an image burst, relaunch it before this chat turn needs it.
   await restoreChatLlm();
   const eng = engine;
@@ -633,6 +709,16 @@ let nextLlmVramId = 1;
 /** True while we've stopped the bundled chat LLM to free VRAM/RAM for image renders — so any later
  * LLM use (a chat turn, opening a book) knows to relaunch it first. */
 let chatLlmFreed = false;
+/** True while we've asked the local image engine to unload its model for a chat burst — the reverse
+ * hand-off of `chatLlmFreed`. Set once per chat burst so we don't spam /free; reset at render start so
+ * the next image reloads the engine. The image engine reloads lazily on the next generate(). */
+let imageModelFreed = false;
+/** Workspace files the assistant wrote this session (pushed from the host via the `fileLedger` message);
+ * injected as a terse non-trimmable reminder into the buddy prompt so the model remembers what it made. */
+let fileLedger: CreatedFileRef[] = [];
+/** The workspace's AGENTS.md / CONVENTIONS.md text (pushed from the host); injected as durable project
+ * conventions into the buddy prompt. Empty when there's no such file. */
+let projectGuide = "";
 function llmVramOp(action: "stop" | "ensure"): Promise<void> {
   return new Promise((resolve) => {
     const callId = nextLlmVramId++;
@@ -662,28 +748,26 @@ function canFreeChatLlm(): boolean {
   if (bibleActive || (bibleRunTotal > 0 && bibleRunDone < bibleRunTotal)) return false;
   const cs = chatSettingsOf(settings);
   if (cs.imageProvider !== "local" && settings.imageProvider !== "local") return false;
-  // An external AUTOMATIC1111 server keeps its checkpoint resident in VRAM after a render (unlike the
-  // app's managed ComfyUI, which releases it under memory pressure), so freeing the chat model for it
-  // only strands the LLM — it can't reload into the now-contended GPU and the chat goes unresponsive.
-  // Only free for engines whose VRAM the app actually coordinates (bundled server / managed ComfyUI).
-  // Use the RESOLVED active backend: a fallback from A1111 to the managed ComfyUI does release VRAM.
-  if ((settings.engineBackend ?? settings.localBackend) === "a1111") return false;
-  // VRAM HEADROOM: only free when memory is actually tight. If the GPU can hold the chat model AND
-  // the image model at once, keep BOTH resident — evicting the chat model and reloading it is the
-  // expensive part (a big Ollama model is a multi-minute cold reload on the next message), so skip it
-  // when there's clearly room. Free when low-VRAM is forced, when they can't both fit, or when a size
-  // is unknown (the safe default). The bundled LLM's size is fixed; a "server" model's is estimated
-  // from its name (params + quant) — 0/unknown falls through to freeing, so nothing regresses.
-  if (!settings.lowVram && settings.gpuVramMb && settings.gpuVramMb > 0) {
+  // A1111 is now coordinated like ComfyUI: it can unload its checkpoint (POST /sdapi/v1/unload-checkpoint,
+  // see Automatic1111Backend.freeMemory) so freeing the chat LLM for it no longer strands it — the reverse
+  // hand-off (freeImageModelForChat) unloads A1111 when the LLM reloads. Freeing the LLM BEFORE the render
+  // is in fact essential for A1111: it picks its VRAM/shared-RAM split at LOAD time from whatever's free, so
+  // loading SDXL into a GPU still occupied by the LLM permanently offloads part of it to slow shared RAM
+  // (the reported "32GB VRAM + 10GB shared for one SDXL model"). The fit math below still keeps both
+  // resident on an ample-VRAM box; this only changes the proven-tight / low-VRAM case.
+  // VRAM HEADROOM (low-VRAM OFF): keep BOTH models resident UNLESS we can PROVE they don't both fit.
+  // A cold reload of a big Ollama model is a multi-minute stall, so we never pay it on a guess — only
+  // when the math says it can't fit. Crucially, UNKNOWN (VRAM undetected — non-NVIDIA / nvidia-smi
+  // absent — or a model size we can't estimate, e.g. a ":latest" tag) now KEEPS the model loaded
+  // instead of falling through to freeing, which used to evict the LLM on common configs despite
+  // low-VRAM being off. Low-VRAM ON still forces the free path below (unchanged).
+  if (!settings.lowVram) {
     const imageGb = imageModelVramCostGb(settings.localModel ?? "");
     const chatGb =
       settings.localTextBackend === "bundled"
         ? BUNDLED_LLM_VRAM_GB
         : serverModelVramCostGb(cs.localServerTextModel ?? settings.localServerTextModel ?? "");
-    const HEADROOM_GB = 2; // activations/latents/runtime overhead beyond the weights
-    if (imageGb > 0 && chatGb > 0 && (imageGb + chatGb + HEADROOM_GB) * 1024 <= settings.gpuVramMb) {
-      return false; // both fit — leave the chat model loaded (no evict/cold-reload thrash)
-    }
+    if (chatImageVramFit({ gpuVramMb: settings.gpuVramMb, imageGb, chatGb }) !== "nofit") return false;
   }
   try {
     return chatProviders().llm.id === "local-server";
@@ -722,6 +806,84 @@ async function restoreChatLlm(): Promise<void> {
   // Only the bundled server needs an explicit relaunch. An Ollama ("server") model reloads
   // lazily on the next chat request (which is what triggered this restore), so nothing to start.
   if (settings?.localTextBackend === "bundled") await llmVramOp("ensure");
+}
+
+/** The REVERSE hand-off of freeChatLlmForRender: unload the idle LOCAL image model so the chat LLM can
+ * reload into that VRAM (lets a larger model coexist in the render→chat workflow). Called by
+ * withChatPriority ONLY when the chat LLM is actually about to (re)load (`chatLlmFreed`) — i.e. a render
+ * evicted it and we're restoring it now — so we never unload an image model that a still-resident LLM
+ * doesn't need out of the way (which would just force a needless cold reload on the next render). The
+ * lowVram / proven-tight self-check here is a belt-and-suspenders mirror of canFreeChatLlm (the gate
+ * that set `chatLlmFreed` in the first place). Once per chat burst (imageModelFreed); reset at the next
+ * render start. The image engine reloads lazily on the next generate(), so this is safe to do eagerly. */
+async function freeImageModelForChat(): Promise<void> {
+  if (imageModelFreed || !settings) return;
+  const cs = chatSettingsOf(settings);
+  if (cs.imageProvider !== "local" && settings.imageProvider !== "local") return;
+  // A1111 now releases VRAM too (Automatic1111Backend.freeMemory → /sdapi/v1/unload-checkpoint), so the
+  // reverse hand-off works for it as well as ComfyUI — no A1111 skip here. (It reloads on the next render.)
+  if (!settings.lowVram) {
+    const imageGb = imageModelVramCostGb(settings.localModel ?? "");
+    const chatGb =
+      settings.localTextBackend === "bundled"
+        ? BUNDLED_LLM_VRAM_GB
+        : serverModelVramCostGb(cs.localServerTextModel ?? settings.localServerTextModel ?? "");
+    // Keep the image model hot UNLESS we can prove both can't fit (a cold reload of the diffusion
+    // model is the expensive part — never pay it on a guess). "fit"/"unknown" → leave it loaded.
+    if (chatImageVramFit({ gpuVramMb: settings.gpuVramMb, imageGb, chatGb }) !== "nofit") return;
+  }
+  imageModelFreed = true;
+  try {
+    await chatProviders().image.freeMemory?.();
+  } catch {
+    /* best-effort — the image model just stays warm if the engine can't free right now */
+  }
+}
+
+/** Once-per-arm guard: a ComfyUI we left resident is only /free'd once after a switch to A1111 (re-armed
+ * below whenever A1111 is NOT the active backend, so a later ComfyUI→A1111 switch frees it again). */
+let staleComfyFreed = false;
+/**
+ * Hand the GPU to an external A1111 render: a ComfyUI used earlier this session keeps its checkpoint
+ * resident in VRAM (it only releases on an explicit /free), so after the reader switches the image
+ * backend to A1111 that stale model squats the GPU and the A1111 render spills to system RAM and crawls.
+ * When A1111 is the active backend, POST /free to the last-known ComfyUI URL once. Best-effort; ComfyUI
+ * reloads lazily if the reader ever switches back. No-op for any other backend / when no ComfyUI is known.
+ */
+async function freeStaleComfyForA1111(): Promise<void> {
+  if (!settings) return;
+  const url = staleComfyUrlToFree(settings);
+  if (!url) {
+    staleComfyFreed = false; // not on A1111 (or nothing to free) → re-arm for the next switch
+    return;
+  }
+  if (staleComfyFreed) return;
+  staleComfyFreed = true;
+  try {
+    await new ComfyUIBackend({ baseUrl: url }).freeMemory();
+  } catch {
+    /* best-effort — that ComfyUI may be gone/unreachable, which is fine */
+  }
+}
+
+/**
+ * Make room for the local chat LLM before it (re)loads — run at the start of every chat turn and before
+ * a warm. Two steps, both low-VRAM-scoped so an ample-VRAM box keeps its models hot:
+ *  1. If a render evicted the LLM (`chatLlmFreed`), free the idle image model first so the LLM reloads
+ *     into that VRAM — the reverse of the render→chat hand-off (see freeImageModelForChat).
+ *  2. Evict any OTHER resident model on the local server so two LLMs never coexist in VRAM — e.g. after
+ *     a model switch, or a vision/assess model left loaded ("two models in `ollama ps`"). Ollama-only;
+ *     a non-Ollama / cloud backend is a silent no-op.
+ */
+async function prepareChatLlmLoad(): Promise<void> {
+  if (chatLlmFreed) await freeImageModelForChat();
+  if (!settings?.lowVram) return; // ample VRAM: leave co-resident models alone (no churn)
+  try {
+    const { llm } = chatProviders();
+    if (llm.id === "local-server") await llm.evictOtherModels?.();
+  } catch {
+    /* best-effort — leave VRAM as-is if the server can't be queried */
+  }
 }
 
 /** Broadcast the current (independent) bible/image pause state + clear status lines. */
@@ -913,9 +1075,12 @@ function postWorkflow(): void {
 ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
   const msg = event.data;
   switch (msg.type) {
-    case "init":
+    case "init": {
+      const prevSettings = settings;
       settings = msg.settings;
       corsProxyAvailable = msg.corsProxy === true;
+      void evictReplacedChatModel(prevSettings, settings); // free the old local model on a model switch
+      void freeSwitchedImageEngine(prevSettings, settings); // clear the image engine's VRAM (A1111 startup squat / a switch)
       // Report which providers are live vs. a silent mock fallback (and why), so
       // the UI can show it before a book is even opened.
       try {
@@ -929,12 +1094,16 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       }
       restartVramPoll(); // (re)point the VRAM indicator at the current engine
       break;
-    case "tune":
+    }
+    case "tune": {
       // Tuning-only change: swap the live engine's tier (future renders use it) without
       // disposing anything — in-flight extraction/renders continue uninterrupted. The
       // providers themselves are unchanged for tune-eligible fields, so the freshly
       // built ones are discarded; only the tier they computed is applied.
+      const prevSettings = settings;
       settings = msg.settings;
+      void evictReplacedChatModel(prevSettings, settings); // free the old local model if the model changed
+      void freeSwitchedImageEngine(prevSettings, settings); // free the image engine's VRAM on a backend switch
       if (engine) {
         try {
           engine.updateTier(buildProviders(settings).tier);
@@ -945,6 +1114,15 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
           });
         }
       }
+      break;
+    }
+    case "fileLedger":
+      // The host's current set of workspace files the assistant wrote this session — injected into the
+      // buddy prompt so the model stays aware of what it made (and can read_file before editing).
+      fileLedger = msg.files;
+      break;
+    case "projectGuide":
+      projectGuide = msg.text;
       break;
     case "open":
       void handleOpen(msg.book);
@@ -993,6 +1171,25 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "regenerateStoryboard":
       void engine?.regenerateStoryboard();
       postPaused();
+      break;
+    case "storySetCadence":
+      if (story) {
+        story.cadence = { mode: msg.mode, n: msg.n ?? story.cadence.n };
+        if (msg.mode === "per-response") story.beatsSinceImage = 0;
+        persistStoryConfig();
+      }
+      break;
+    case "storySetMode":
+      if (story) {
+        story.mode = msg.mode;
+        persistStoryConfig();
+      }
+      break;
+    case "storyRenderLatest":
+      if (story && engine && story.beats.length > 0) {
+        const last = story.beats.length - 1;
+        void engine.renderScene(last, last);
+      }
       break;
     case "rebuildPrompts":
       void engine?.rebuildPrompts();
@@ -1236,6 +1433,8 @@ async function renderFromText(
     /** img2img base photo + strength (the photo-transform path; local engine only). */
     initImage?: { bytes: ArrayBuffer; mimeType: string };
     denoise?: number;
+    /** Character reference photos (a soul's reference images) — used by Gemini/OpenAI native + ComfyUI. */
+    ipAdapterRefs?: { bytes: ArrayBuffer; mimeType: string; weight: number }[];
     /** Output dimensions (the photo path passes the source photo's aspect). */
     width?: number;
     height?: number;
@@ -1250,6 +1449,13 @@ async function renderFromText(
   // the debounced warm or the next chat. The book's bible-illustration path doesn't come through
   // here, so it's never disturbed.
   await freeChatLlmForRender();
+  // If the reader switched from ComfyUI to an external A1111, free the ComfyUI we left resident so this
+  // A1111 render gets the GPU instead of spilling to system RAM. No-op unless A1111 is active + a
+  // separate ComfyUI URL is remembered.
+  await freeStaleComfyForA1111();
+  // A new render means the image engine will (re)load its model — clear the chat-side "freed" flag so
+  // the next chat burst frees it again.
+  imageModelFreed = false;
   const stepsOverride = opts.stepsOverride;
   const style = getImageStyle(tier.style);
   // A photo transform's instruction IS the prompt — don't force the global art style
@@ -1294,6 +1500,7 @@ async function renderFromText(
     ...(isLocal && tier.localScheduler ? { localScheduler: tier.localScheduler } : {}),
     ...(opts.initImage ? { initImage: opts.initImage } : {}),
     ...(opts.denoise !== undefined ? { denoise: opts.denoise } : {}),
+    ...(opts.ipAdapterRefs?.length ? { ipAdapterRefs: opts.ipAdapterRefs } : {}),
     ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),
     ...(opts.signal ? { signal: opts.signal } : {}),
   });
@@ -1341,6 +1548,10 @@ function warmChatModel(): void {
  * loads it (cold) for both backends. After a render burst this restores it even in a pure image
  * session, so the reader's next chat is ready instead of waiting on a cold load. */
 async function doWarmChatModel(): Promise<void> {
+  // Same pre-load as a chat turn: hand the image model's VRAM back (low-VRAM, if a render freed the LLM)
+  // and evict any other resident model BEFORE warming, so the warm reload lands into freed VRAM and
+  // doesn't end up co-resident with the image model or a stale LLM.
+  await prepareChatLlmLoad();
   if (chatLlmFreed) await restoreChatLlm();
   try {
     const { llm } = chatProviders();
@@ -1412,6 +1623,54 @@ function chatProviders(): { llm: LLMProvider; image: ImageProvider; tier: TierCo
       ? bookProviders.tier
       : built.tier;
   return { llm, image, tier, imageSearch: built.imageSearch };
+}
+
+/**
+ * When the chat model CHANGES, ask Ollama to evict the PREVIOUS local model (keep_alive 0) so two
+ * models don't sit in VRAM at once — otherwise a freshly-loaded big model has to share the GPU with
+ * the one it replaced (switching e.g. gemma → a 27B left BOTH resident, starving the new one and
+ * making it slow). Only evicts a local-server (Ollama) model that's genuinely being replaced by a
+ * different one; a cloud or unchanged model is a no-op. Best-effort — a non-Ollama server 404s harmlessly.
+ */
+async function evictReplacedChatModel(prev: ReaderSettings | undefined, next: ReaderSettings): Promise<void> {
+  if (!prev) return;
+  try {
+    const cf = corsFetch();
+    const opts = cf ? { corsFetch: cf } : {};
+    const oldP = buildProviders(chatSettingsOf(prev), opts);
+    if (oldP.llm.id !== "local-server") return; // nothing local was loaded to free
+    const newP = buildProviders(chatSettingsOf(next), opts);
+    if (oldP.diagnostics.llm.label === newP.diagnostics.llm.label) return; // same model — keep it warm
+    await oldP.llm.unload?.();
+  } catch {
+    /* best-effort — a build hiccup or non-Ollama server is a silent no-op */
+  }
+}
+
+/**
+ * Free the image engine's resident VRAM when the reader SWITCHES image backends (or on first init), so the
+ * low-VRAM IDLE state is "image model unloaded, chat LLM holds the GPU" — the baseline ComfyUI already has
+ * (it loads lazily). It matters most for AUTOMATIC1111, which auto-loads a checkpoint the moment it starts,
+ * so without this it squats the GPU during idle chat and the LLM spills to slow shared RAM. Unloads BOTH the
+ * newly-active engine's idle model and the one just switched away from; each reloads on its next render.
+ * Low-VRAM only (an ample box keeps models hot); best-effort. The per-render hand-off (freeChatLlmForRender /
+ * freeImageModelForChat) does the rest of the cycle, identically to ComfyUI.
+ */
+async function freeSwitchedImageEngine(prev: ReaderSettings | undefined, next: ReaderSettings): Promise<void> {
+  if (!next.lowVram) return;
+  try {
+    const cf = corsFetch();
+    const opts = cf ? { corsFetch: cf } : {};
+    const newP = buildProviders(next, opts);
+    const oldP = prev ? buildProviders(prev, opts) : undefined;
+    // An unrelated settings tweak that didn't change the image engine → don't churn (a needless unload
+    // forces a cold reload on the next render). A genuine switch (or first init) falls through.
+    if (oldP && oldP.diagnostics.image.label === newP.diagnostics.image.label) return;
+    await newP.image.freeMemory?.(); // A1111's startup checkpoint (a lazy no-op for ComfyUI / cloud)
+    if (oldP) await oldP.image.freeMemory?.(); // the engine we left, if it still holds its model
+  } catch {
+    /* best-effort — a build hiccup / unreachable engine / non-managed provider is a silent no-op */
+  }
 }
 
 /**
@@ -1534,8 +1793,19 @@ async function localContextTokens(llmId: string): Promise<number | undefined> {
     model,
     cf ? new DirectTransport(cf) : undefined,
   );
-  const ctx =
-    info?.loaded ?? (info?.max ? Math.min(info.max, OLLAMA_DEFAULT_LOADED_TOKENS) : undefined);
+  // Budget to the window we ACTUALLY loaded. On the Ollama path buildProviders sends
+  // num_ctx = defaultLoadedWindow(...), which overrides the Modelfile — so size the budget to that (not
+  // the old 4096 fallback, which trimmed a just-written file out of context). Bundled/other servers keep
+  // the queried-or-conservative path. The per-model/global overrides above already returned.
+  const isOllama = settings.localTextBackend !== "bundled" && (settings.localTextServer ?? "ollama") === "ollama";
+  const ctx = resolveLoadedContextTokens({
+    isOllama,
+    model,
+    gpuVramMb: settings.gpuVramMb,
+    infoLoaded: info?.loaded,
+    infoMax: info?.max,
+    ollamaDefault: OLLAMA_DEFAULT_LOADED_TOKENS,
+  });
   localCtxCache = { key, ctx, at: Date.now() };
   return ctx;
 }
@@ -1683,6 +1953,10 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
     }
     const note = await renderDefaultsNote();
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
+    // The assistant's identity ("soul") — emitted as the FIRST section of the book chat too (and kept
+    // in the cached prefix), so the companion stays in character here, not just in the home chat.
+    const selfSoul = selfSoulPromptBlock(await loadSoul(memoryStore(), "self"), await loadSoulName(memoryStore(), "self"));
+    const userSoul = userSoulPromptBlock(await loadSoul(memoryStore(), "user"), await loadSoulName(memoryStore(), "user"));
     const sections = chatContextSections({
       bookTitle: book.title,
       contentMode: book.contentMode ?? "fiction",
@@ -1693,6 +1967,8 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       ...(settings?.allowMature ? { allowMature: true } : {}),
       ...(book.data ? { dataTable: book.data } : {}),
       budgetChars: budgets.book,
+      ...(selfSoul ? { selfSoul } : {}),
+      ...(userSoul ? { userSoul } : {}),
     });
     const sec = (key: string) => sections.find((s) => s.key === key)?.text ?? "";
     const memory = memoryPromptBlock(await loadMemory(memoryStore()));
@@ -1703,6 +1979,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
         .filter(Boolean)
         .join("\n\n") +
       (memory ? `\n\n${memory}` : "") +
+      // selfSoul/userSoul are now the FIRST section (above), not appended here.
       (skills ? `\n\n${skills}` : "") +
       (note ? `\n\n${note}` : "");
     const history = trimChatHistory(
@@ -2730,6 +3007,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const deps: BuddyDeps = {
       ...googleDeps,
       ...fileResearchDeps(),
+      // App-managed-steps mode: the host runs the checklist + ticks steps from evidence, so the worker
+      // refuses a stray complete_step (set_plan still COMPILES the plan; the host owns advancement).
+      ...(msg.appManagedSteps ? { appManagedSteps: true } : {}),
       searchWeb: (q) => imageSearch.searchWeb(q),
       searchBooks: (q) => books.search(q),
       searchImages: (q) => imageSearch.search(q),
@@ -2809,15 +3089,35 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         };
       })()),
       randomBooks: () => books.random(),
-      // Incognito (remote privacy): keep READING memory/skills (so the assistant stays useful) but
-      // never WRITE — a remote session leaves no remembered notes or learned skills behind.
-      remember: async (n) =>
-        settings?.incognitoRemote ? (await loadMemory(store)).length : (await rememberNote(store, n)).length,
-      forget: async (m) =>
-        settings?.incognitoRemote ? (await loadMemory(store)).length : (await forgetNote(store, m)).length,
+      // Incognito (remote privacy): keep READING memory/skills/souls (so the assistant stays useful)
+      // but never WRITE — a remote session leaves no remembered notes or learned identity behind.
+      // `about` routes to one of the two identity souls (self/user); default → reader memory.
+      remember: async (n, about) => {
+        const soul = about === "self" || about === "user" ? about : undefined;
+        if (settings?.incognitoRemote) return (soul ? await loadSoul(store, soul) : await loadMemory(store)).length;
+        return (soul ? await rememberSoul(store, soul, n) : await rememberNote(store, n)).length;
+      },
+      forget: async (m, about) => {
+        const soul = about === "self" || about === "user" ? about : undefined;
+        if (settings?.incognitoRemote) return (soul ? await loadSoul(store, soul) : await loadMemory(store)).length;
+        return (soul ? await forgetSoul(store, soul, m) : await forgetNote(store, m)).length;
+      },
       // Lightweight chat-scoped checklist — mutate the in-turn `plan` and mirror each change to the host.
-      setPlan: (goal, steps) => {
-        plan = { ...(goal ? { goal } : {}), steps: steps.map((t) => ({ text: t, status: "pending" as const })) };
+      setPlan: (goal, steps, stepDetails) => {
+        plan = {
+          ...(goal ? { goal } : {}),
+          steps: steps.map((t, i) => {
+            const d = stepDetails?.[i];
+            return {
+              text: t,
+              status: "pending" as const,
+              ...(d?.needs ? { needs: d.needs } : {}),
+              ...(d?.onFail ? { onFail: d.onFail } : {}),
+              ...(d?.produces && d.produces.length ? { produces: d.produces } : {}),
+              ...(d?.verify ? { verify: d.verify } : {}),
+            };
+          }),
+        };
         post({ type: "buddyPlan", requestId: msg.requestId, plan });
         return plan;
       },
@@ -2954,8 +3254,20 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           : bookFromText(title, page.text, call.mode, "Chat buddy");
         return opened(book, call.visuals);
       },
-      openPastedText: async (call) =>
-        opened(bookFromText(call.title, call.text, call.mode, "Pasted in chat"), call.visuals),
+      openPastedText: async (call) => {
+        // Safety net: HTML/SVG/markup (pasted, or written by the model and mis-routed here instead of
+        // open_code) opens as a CODE book so the SOURCE is kept in book.code — renderable in-app + re-
+        // savable — instead of being reduced to extracted text ("saves the output, not the code").
+        const head = call.text.slice(0, 400);
+        const svg = /^\s*<svg[\s>]/i.test(head);
+        const html = /<!doctype html|<html[\s>]/i.test(head) || /<\/(html|body|head)>/i.test(call.text);
+        return opened(
+          svg || html
+            ? bookFromCode(call.title, call.text, svg ? "svg" : "html", "Pasted in chat")
+            : bookFromText(call.title, call.text, call.mode, "Pasted in chat"),
+          call.visuals,
+        );
+      },
       openCode: async (call) =>
         opened(bookFromCode(call.title, call.code, call.language, "Code in chat"), call.visuals),
       createSpreadsheet: async (call) => {
@@ -2971,8 +3283,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       // active-scene hook, beat one extracts + illustrates). worldStyle/style is applied
       // to the worker's settings so the open renders in the chosen look.
       startStory: async (call) => {
-        const id = `story-${storyCounter++}-${(call.title || "story").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24)}`;
         const played = [call.roleplay?.you, call.roleplay?.me].filter((n): n is string => !!n);
+        const isRoleplay = !!call.roleplay && played.length > 0;
         // Apply the requested art style to the worker's settings immediately, so the open's
         // providers render in it (mirrors set_visual_style's worker-settings update).
         if (call.style && settings) {
@@ -2984,25 +3296,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             ...(styleId ? { style: { id: styleId, label: getImageStyle(styleId).label } } : {}),
           });
         }
-        story = {
-          bookId: id,
-          title: call.title || "Our Story",
-          author: "Story with the chat buddy",
-          beats: [call.opening],
-          scene: emptyStoryScene(),
-          scenes: [],
-          ...(played.length ? { roleplay: { playedCharacterNames: played } } : {}),
-          cadence: { mode: "per-response", n: 3 },
-          beatsSinceImage: 0,
-        };
-        // Pre-seed the named cast (start_story `characters` + the role-played pair) into the
-        // bible BEFORE the open, so the active-scene tracker resolves + keeps them present
-        // from beat one even if the opening prose doesn't name them — closing the "setting-
-        // only opening" gap. A cast entry's `description` seeds its LOOK (persistentTraits) so
-        // the first image isn't arbitrary (e.g. the reader's remembered appearance in a "me and
-        // you" story). Extraction UPSERTS by name on the first beat that describes them,
-        // enriching this same entry (no duplicate). Written to the shared store so openBook
-        // restores it. The played pair is added (name-only) when not already in `characters`.
+        // Dedup the named cast (start_story `characters` + the role-played pair) — used both to seed
+        // the bible and to ground the AI-written opening below.
         const seedCast: { name: string; description?: string }[] = [...(call.characters ?? []), ...played.map((name) => ({ name }))];
         const seen = new Set<string>();
         const cast = seedCast.filter((c) => {
@@ -3011,6 +3306,47 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           seen.add(k);
           return true;
         });
+        // The reader's setup text is a PREMISE, not the opening prose: let the AI write the actual
+        // opening beat and propose a title from it (grounded in the cast/roleplay). Best-effort —
+        // if chat is unavailable or the reply doesn't parse, fall back to the typed text + title.
+        let title = call.title?.trim() || "Our Story";
+        let opening = call.opening;
+        if (supportsChat(llm) && call.opening.trim()) {
+          try {
+            post({ type: "buddyActivity", requestId: msg.requestId, text: "Writing the opening scene…" });
+            const { system, user } = storyOpeningRequest(call.opening, {
+              characters: cast,
+              mode: isRoleplay ? "roleplay" : "direct",
+              ...(isRoleplay && call.roleplay ? { play: call.roleplay } : {}),
+            });
+            const reply = (await llm.chat([{ role: "system", content: system }, { role: "user", content: user }], { maxTokens: 600 })).trim();
+            const parsed = parseStoryOpening(reply);
+            if (parsed.opening) opening = parsed.opening;
+            if (!call.title?.trim() && parsed.title) title = parsed.title;
+          } catch {
+            // Generation is best-effort — keep the typed premise as the opening beat.
+          }
+        }
+        const id = `story-${storyCounter++}-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24)}`;
+        story = {
+          bookId: id,
+          title,
+          author: "Story with the chat buddy",
+          beats: [opening],
+          scene: emptyStoryScene(),
+          scenes: [],
+          ...(played.length ? { roleplay: { playedCharacterNames: played } } : {}),
+          mode: isRoleplay ? "roleplay" : "direct",
+          ...(isRoleplay ? { play: { ...(call.roleplay?.me ? { me: call.roleplay.me } : {}), ...(call.roleplay?.you ? { you: call.roleplay.you } : {}) } } : {}),
+          cadence: { mode: "per-response", n: 3 },
+          beatsSinceImage: 0,
+        };
+        // Pre-seed the named cast into the bible BEFORE the open, so the active-scene tracker resolves
+        // + keeps them present from beat one even if the opening prose doesn't name them — closing the
+        // "setting-only opening" gap. A cast entry's `description` seeds its LOOK (persistentTraits) so
+        // the first image isn't arbitrary. Extraction UPSERTS by name on the first beat that describes
+        // them, enriching this same entry (no duplicate). Written to the shared store so openBook
+        // restores it. The played pair is added (name-only) when not already in `characters`.
         if (cast.length) {
           await store.putBible({
             ...createEmptyBible(id),
@@ -3052,6 +3388,32 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         const { firstNewUnit } = await engine.appendChapter(renderBook, { illustrate });
         currentBook = book; // keep the chat's book context current
         post({ type: "storyBeat", requestId: msg.requestId, book, firstNewUnit, illustrate });
+        // Rolling synopsis: every N beats, refresh the "story so far" in the BACKGROUND (don't block
+        // the beat) so the writer keeps long-range continuity after chat history is trimmed. Persist
+        // via a storyConfig update when it lands.
+        if (story.beats.length % SYNOPSIS_REFRESH_EVERY === 0 && supportsChat(llm)) {
+          const chatLlm = llm;
+          const forBook = story.bookId;
+          const beatsSnapshot = [...story.beats];
+          const prev = story.synopsis;
+          void (async () => {
+            try {
+              const { system, user } = synopsisRequest(beatsSnapshot, prev);
+              const text = (
+                await chatLlm.chat([{ role: "system", content: system }, { role: "user", content: user }], { maxTokens: 320 })
+              ).trim();
+              if (text && story && story.bookId === forBook) {
+                story.synopsis = text.slice(0, MAX_SYNOPSIS_CHARS);
+                if (currentBook?.kind === "story" && currentBook.id === story.bookId) {
+                  currentBook = { ...currentBook, storyConfig: storyConfigOf(story) };
+                  post({ type: "storyConfig", requestId: msg.requestId, book: currentBook });
+                }
+              }
+            } catch {
+              // Best-effort — a failed synopsis just means the writer leans on the recent beats this round.
+            }
+          })();
+        }
         return {
           title: book.title,
           chapters: book.chapters.length,
@@ -3152,12 +3514,14 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         slash.call.tool === "find_files" ||
         slash.call.tool === "run_command" ||
         slash.call.tool === "write_file" ||
+        slash.call.tool === "edit_file" ||
         slash.call.tool === "screenshot" ||
         slash.call.tool === "plan_task" ||
         slash.call.tool === "prep_order" ||
         slash.call.tool === "tv_chart" ||
         slash.call.tool === "delegate" ||
         slash.call.tool === "send_email" ||
+        slash.call.tool === "delegate_coding_task" ||
         slash.call.tool === "spawn_coding_agents"
       ) {
         post({ type: "buddyDone", requestId: msg.requestId, text: "", transcript: [], pendingTool: slash.call });
@@ -3193,14 +3557,30 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const note = await renderDefaultsNote();
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
     const memory = memoryPromptBlock(await loadMemory(store));
+    const selfName = await loadSoulName(store, "self");
+    const selfSoul = selfSoulPromptBlock(await loadSoul(store, "self"), selfName);
+    const userSoul = userSoulPromptBlock(await loadSoul(store, "user"), await loadSoulName(store, "user"));
     await seedStarterSkills(store); // one-time: ship a few ready-made playbooks on a fresh install
     const skills = skillsIndexBlock(await loadSkills(store));
     // When this session is executing a task plan, load its context for the prompt.
     const activePlan = msg.taskPlanId ? (await loadTaskPlans(store)).find((p) => p.id === msg.taskPlanId) : undefined;
+    // Connected when the reader linked their own Schwab app (creds + a live token). Reused below to
+    // auto-enable the keyless markets tools as well.
+    const schwabConnected = !!(
+      settings?.keys?.schwabClientId &&
+      settings?.keys?.schwabClientSecret &&
+      (await loadSchwabTokens(store))
+    );
     const setup =
       buildBuddySystemPrompt({
         persona: msg.persona,
         library: msg.library,
+        // The assistant's own identity ("soul"): its NAME is woven into the persona's first line and
+        // its WHO-YOU-ARE block sits at the TOP of the prompt (with the reader's WHO-YOU-ARE), so it
+        // actually answers to its name + stays in character — not buried under the tool catalog.
+        ...(selfName ? { selfName } : {}),
+        ...(selfSoul ? { selfSoul } : {}),
+        ...(userSoul ? { userSoul } : {}),
         // Anchor "today"/"this week"/"by when" answers + ISO date math to the reader's
         // own clock (the worker runs in their browser, so this is their local time/zone).
         now: currentDateTimeLabel(),
@@ -3214,6 +3594,11 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // Autonomous workspace: write_file + run_command run without a per-action click.
         ...(corsProxyAvailable && settings?.allowCommands && settings?.autonomousWorkspace
           ? { canAutonomousWorkspace: true }
+          : {}),
+        // External coding agent (Aider) delegation: opt-in + commands. The host's runtime PATH check
+        // surfaces a clear "install Aider" message if the tool is used when it isn't installed.
+        ...(corsProxyAvailable && settings?.allowCommands && settings?.delegateCoding
+          ? { canDelegateCoding: true }
           : {}),
         // Wolfram|Alpha grounding when an AppID is configured.
         ...(settings?.keys?.wolfram ? { canWolfram: true } : {}),
@@ -3232,14 +3617,30 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // The chat's working checklist — injected so the model re-reads it and resumes from the first
         // unfinished step (set_plan/complete_step are always available; the live state shows only here).
         ...(msg.plan ? { activePlan: msg.plan } : {}),
+        // App-managed steps: the prompt shows ONLY the current step (execution framing) + withdraws
+        // complete_step. The host derives `msg.plan` from the live workflow each turn.
+        ...(msg.appManagedSteps ? { appManagedSteps: true } : {}),
+        // A co-written story is open → switch the prompt into story-writing mode (the reply IS the
+        // next beat; no tools). storyMode/storyPlay tailor direct vs roleplay narration.
+        ...(story ? { storyActive: true, storyMode: story.mode, ...(story.play ? { storyPlay: story.play } : {}) } : {}),
         // Gmail/Calendar/Tasks tools when Google is connected.
         ...(googleConnected ? { canGoogle: true } : {}),
         // Auto-approval: create reminders without per-item confirm when opted in.
         ...(googleConnected && settings?.allowTaskAutomation ? { canAutomateTasks: true } : {}),
-        // Schwab tools when the user connected their own Schwab app.
-        ...(settings?.keys?.schwabClientId && settings?.keys?.schwabClientSecret && (await loadSchwabTokens(store))
-          ? { canSchwab: true }
+        // Task-orchestrator surface (plan_task + scheduled tasks): opted in, OR a task is already
+        // active, OR we're in planning mode (its natural home). Otherwise a plain chat skips it.
+        ...(settings?.allowTaskAutomation || activePlan || msg.persona === "planning" ? { canTaskTools: true } : {}),
+        // Sub-agent fan-out (delegate + spawn_agents): opt-in, or a sub-agent backend is configured.
+        ...(settings?.allowSubAgents || settings?.subAgentServerUrl || settings?.subAgentModel
+          ? { canSubAgents: true }
           : {}),
+        // Keyless markets suite: opt-in, or auto-on when a broker / TV bridge is connected (which also
+        // keeps the Schwab block's "prefer these over the keyless feeds" reference from dangling).
+        ...(settings?.allowMarkets || schwabConnected || (corsProxyAvailable && settings?.allowTradingViewBridge)
+          ? { canMarkets: true }
+          : {}),
+        // Schwab tools when the user connected their own Schwab app.
+        ...(schwabConnected ? { canSchwab: true } : {}),
         // TradingView Desktop bridge when enabled (desktop + opt-in).
         ...(corsProxyAvailable && settings?.allowTradingViewBridge ? { canTvBridge: true } : {}),
         // MCP servers the reader configured (advertise their tools), when a proxy can reach them.
@@ -3248,6 +3649,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           : {}),
       }) +
       (memory ? `\n\n${memory}` : "") +
+      // selfSoul/userSoul are now injected at the TOP of buildBuddySystemPrompt (see above), not appended here.
       (skills ? `\n\n${skills}` : "") +
       (note ? `\n\n${note}` : "");
     const history = trimChatHistory(
@@ -3269,12 +3671,32 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const thinking = thinkingNotifier((text) =>
       post({ type: "buddyThinking", requestId: msg.requestId, text }),
     );
+    // Story "as you go": inject the live STORY STATE AFTER the stable cache prefix (it changes each
+    // beat, so it must not be part of the cached prefix), re-grounding the writer in the present cast,
+    // location, recent beats, and synopsis even when chat history has been trimmed.
+    const storyStateBlock = story ? buildStoryStateBlock(story) : "";
+    // Like the story-state block, the file ledger rides AFTER the cached prefix (it changes as files are
+    // written) so the model stays aware of what it created even after history trimming.
+    const ledgerBlock = buildFileLedgerBlock(fileLedger);
+    const guideBlock = buildProjectGuideBlock(projectGuide);
+    const volatile = [storyStateBlock, guideBlock, ledgerBlock].filter(Boolean).join("\n\n");
+    // G3 — in app-managed mode, GRAMMAR-CONSTRAIN the reply to the tool the active step's contract
+    // demands so a stubborn small model can't narrate instead of acting. Only for a concrete tool need
+    // (the step's `needs` token is a tool name); text/narration steps stay free. Local-server only — the
+    // provider applies Ollama `format`; cloud ignores `toolFormat`. A file step also allows read_file
+    // (a sensible precursor) so the model can read before rewriting.
+    const requiredNeeds = msg.appManagedSteps ? plan?.steps.find((s) => s.status !== "done")?.needs : undefined;
+    const toolFormat =
+      requiredNeeds && llm.id === "local-server"
+        ? buildToolCallFormat(requiredNeeds === "write_file" ? ["write_file", "edit_file", "read_file"] : [requiredNeeds])
+        : undefined;
     const outcome = await withChatPriority(llm.id, () => runBuddyTurn({
       llm,
-      system: setup,
+      system: volatile ? `${setup}\n\n${volatile}` : setup,
       // The buddy prompt (persona + tool defs + library) is stable across a
-      // conversation — nothing changes turn-to-turn but the history — so the whole
-      // system is the cache prefix (an explicit library edit just rewrites it once).
+      // conversation — nothing changes turn-to-turn but the history — so it's the
+      // cache prefix (an explicit library edit just rewrites it once); volatile story
+      // state rides AFTER it so the prefix stays cacheable.
       cachePrefix: setup,
       history,
       maxTokens: budgets.reply,
@@ -3282,6 +3704,23 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       // Cloud (paid) models pause for a "keep going?" check every so often so a long task doesn't burn
       // many API calls unattended; local/free models run to the backstop (no pauseEvery).
       ...(CLOUD_LLM_IDS.has(llm.id) ? { pauseEvery: CLOUD_TOOL_PAUSE_ROUNDS } : {}),
+      // NATIVE TOOL CALLING for a local server (Ollama): hand a tool-capable model the schemas so it
+      // emits structured tool_calls instead of having to follow the text protocol — the reliable path
+      // for small models (Gemma etc.). The provider gates on the model's "tools" capability and falls
+      // back to the text catalog (still in `system`) when unsupported. Same availability flags as the prompt.
+      ...(llm.id === "local-server"
+        ? {
+            tools: ollamaToolSchemas({
+              canSearchFiles: corsProxyAvailable,
+              canRunCommands: corsProxyAvailable && !!settings?.allowCommands,
+              canWolfram: !!settings?.keys?.wolfram,
+            }),
+          }
+        : {}),
+      ...(toolFormat ? { toolFormat } : {}),
+      // A story is open → STORY MODE: if the model ends a turn empty/tool-only, the wrap-up asks for
+      // the next BEAT (prose), so the recovered reply is still appendable to the book.
+      ...(story && currentBook?.kind === "story" ? { storyMode: true } : {}),
       deps,
       // PARALLEL SUB-AGENTS: the model's `spawn_agents` tool fans independent read-only subtasks out
       // concurrently. Capped by `agentConcurrency` (default 2). TIER ROUTING: when a sub-agent
@@ -3387,6 +3826,20 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // Reflection is best-effort — skip silently on any failure.
       }
     }
+    // Story "as you go": with a story open and the story tools removed, the model's plain prose reply
+    // IS the next beat. Route it into the same append+illustrate path the continue_story tool used, so
+    // the reader grows beside the chat. (shouldAppendBeat encodes the guards — story open, story book,
+    // non-empty prose, and no story tool already ran this turn so the beat isn't appended twice.)
+    if (
+      deps.continueStory &&
+      shouldAppendBeat(outcome, { storyOpen: !!story, isStoryBook: currentBook?.kind === "story" })
+    ) {
+      try {
+        await deps.continueStory({ tool: "continue_story", text: outcome.text.trim() });
+      } catch {
+        // Best-effort: if the beat can't append, the prose still shows in the chat below.
+      }
+    }
     post({
       type: "buddyDone",
       requestId: msg.requestId,
@@ -3405,6 +3858,15 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
   } finally {
     chatAborts.delete(msg.requestId);
   }
+}
+
+/** A soul's reference photos, decoded to bytes for use as character references in an image render. */
+async function loadSoulRefs(
+  store: ReturnType<typeof memoryStore>,
+  kind: "self" | "user",
+): Promise<{ bytes: ArrayBuffer; mimeType: string; weight: number }[]> {
+  const imgs = await loadSoulImages(store, kind);
+  return imgs.map((im) => ({ bytes: base64ToBytes(im.dataBase64), mimeType: im.mimeType, weight: 0.85 }));
 }
 
 /**
@@ -3467,8 +3929,28 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
     const baseTier = useBook ? bookProviders!.tier : built.tier;
     const tier = styleId ? { ...baseTier, style: styleId } : baseTier;
     cancelChatWarm(); // don't let a pending LLM warm steal VRAM from this render
-    const out = await renderFromText(image, tier, call.prompt, {
+    // If the image is of the assistant ITSELF or of the READER, fold that soul's appearance into the
+    // prompt AND pass its reference photos to the model (Gemini/OpenAI native + ComfyUI use them; other
+    // providers ignore them). No-op for any other subject.
+    const store = memoryStore();
+    const [selfName, selfNotes, userName, userNotes] = await Promise.all([
+      loadSoulName(store, "self"),
+      loadSoul(store, "self"),
+      loadSoulName(store, "user"),
+      loadSoul(store, "user"),
+    ]);
+    let prompt = call.prompt;
+    let soulRefs: { bytes: ArrayBuffer; mimeType: string; weight: number }[] | undefined;
+    if (isSelfPortraitRequest(call.prompt, selfName)) {
+      prompt = selfPortraitPrompt(call.prompt, selfName, selfNotes);
+      soulRefs = await loadSoulRefs(store, "self");
+    } else if (isUserPortraitRequest(call.prompt, userName)) {
+      prompt = userPortraitPrompt(call.prompt, userName, userNotes);
+      soulRefs = await loadSoulRefs(store, "user");
+    }
+    const out = await renderFromText(image, tier, prompt, {
       ...(call.steps ? { stepsOverride: call.steps } : {}),
+      ...(soulRefs?.length ? { ipAdapterRefs: soulRefs } : {}),
       signal: ac.signal,
       onProgress: (fraction) => post({ type: "testProgress", requestId, fraction }),
     });

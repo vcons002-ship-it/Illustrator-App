@@ -26,10 +26,33 @@ function gridText(grid: string[][]): string {
  * handles the File/extension/pdf.js parts that need a browser.
  */
 
-/** File extensions the importer understands (used for the input's `accept`). */
+/** File extensions the importer understands (a hint for the picker). The picker also accepts ANY
+ * file — an unknown type opens in the plain-text reader, and "Open as…" can re-route it. */
 export const IMPORT_ACCEPT =
   ".epub,.txt,.md,.markdown,.html,.htm,.pdf,.docx,.rtf,.csv,.tsv,.json,.xlsx," +
   ".png,.jpg,.jpeg,.webp,.gif";
+
+/** How to interpret a file. "auto" follows the extension; the rest are explicit "Open as…" choices
+ * the reader can pick on open or afterward, re-routing the SAME bytes through a different reader. */
+export type FileHandler = "auto" | "reader" | "data" | "text" | "image";
+
+/** The "Open as…" menu options (excludes "auto" — that's the default route). */
+export const FILE_HANDLER_OPTIONS: { id: Exclude<FileHandler, "auto">; label: string }[] = [
+  { id: "reader", label: "📖 Reader (book / article)" },
+  { id: "data", label: "📊 Spreadsheet / data grid" },
+  { id: "text", label: "📝 Plain text" },
+  { id: "image", label: "🖼 Image / photo" },
+];
+
+/** The handler an extension maps to by default — drives the auto route and the picker's pre-selection. */
+export function handlerForExt(ext: string): Exclude<FileHandler, "auto"> {
+  const e = ext.toLowerCase();
+  if (IMAGE_EXTS[e]) return "image";
+  if (e === "xlsx" || e === "csv" || e === "tsv" || e === "json") return "data";
+  if (e === "epub" || e === "pdf" || e === "docx" || e === "rtf" || e === "html" || e === "htm" || e === "md" || e === "markdown")
+    return "reader";
+  return "text"; // txt and any UNKNOWN type → the plain-text reader (never a dead end)
+}
 
 /** Image extensions routed to the photo-transform (img2img) path, not the book importer. */
 const IMAGE_EXTS: Record<string, string> = {
@@ -62,11 +85,29 @@ export type ImportedFile =
     }
   | { kind: "image"; name: string; bytes: ArrayBuffer; mimeType: string };
 
-export async function importBookFile(file: File): Promise<ImportedFile> {
+/** Extensions that parse to a real data grid (so a "data" handler uses the structured parse). */
+const DATA_EXTS = new Set(["xlsx", "csv", "tsv", "json"]);
+
+export async function importBookFile(file: File, handler: FileHandler = "auto"): Promise<ImportedFile> {
   const ext = (file.name.split(".").pop() ?? "").toLowerCase();
   const title = file.name.replace(/\.[^.]+$/, "");
-  if (IMAGE_EXTS[ext]) {
-    return { kind: "image", name: file.name, bytes: await file.arrayBuffer(), mimeType: IMAGE_EXTS[ext]! };
+  const effective = handler === "auto" ? handlerForExt(ext) : handler;
+
+  // Explicit "Open as…" overrides (and the image-extension auto route) short-circuit the parse below.
+  if (effective === "image") {
+    return { kind: "image", name: file.name, bytes: await file.arrayBuffer(), mimeType: IMAGE_EXTS[ext] ?? "image/png" };
+  }
+  if (effective === "text") {
+    // Forced "Plain text" AND the unknown-type fallback: show the raw text in the reader, no mode/grid.
+    return { kind: "text", title, text: await file.text() };
+  }
+  if (effective === "data" && !DATA_EXTS.has(ext)) {
+    // "Open as data" on a non-tabular file: try to read it as delimited text, else fall back to plain text.
+    const grid = csvToGrid(await file.text());
+    const data = dataTableFromGrid(grid);
+    return data
+      ? { kind: "text", title, text: gridText(grid), mode: "technical", data }
+      : { kind: "text", title, text: await file.text() };
   }
   switch (ext) {
     case "epub": {
@@ -137,10 +178,9 @@ export async function importBookFile(file: File): Promise<ImportedFile> {
       return { kind: "text", title, text: await pdfToText(data) };
     }
     default:
-      throw new Error(
-        `Unsupported file type ".${ext}" — supported: EPUB, PDF, Word (.docx), Excel (.xlsx), ` +
-          `CSV/TSV, RTF, JSON, TXT, Markdown, HTML (or paste text directly).`,
-      );
+      // ANY other / unknown extension → the plain-text reader (never a dead end). The reader can
+      // re-route it with "Open as…" if the raw text isn't what they wanted.
+      return { kind: "text", title, text: await file.text() };
   }
 }
 

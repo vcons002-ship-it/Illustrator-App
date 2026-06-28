@@ -22,6 +22,7 @@ import type {
   BuddyToolResultPayload,
   CharacterPatch,
   ChatTurn,
+  CreatedFileRef,
   ContextUsage,
   ImageResult,
   AnalyzeChart,
@@ -85,15 +86,47 @@ function initRemoteMode(): RemoteMode | undefined {
   // Hash first (LAN), then query (tunnel/Access). One of them, or the remembered one for this host.
   let token = parseLinkToken(hash) ?? parseLinkToken(search) ?? undefined;
   const fromQuery = !parseLinkToken(hash) && !!parseLinkToken(search);
+  const fromUrl = !!token;
+  // Persist the token so a saved BARE link (no token in the URL) keeps working. Write to BOTH stores
+  // and recover from EITHER: a heavy session can exhaust the localStorage quota (cached generated
+  // images), and a failed write there used to silently drop the phone back to a local app on the next
+  // load. sessionStorage has its own quota and survives an in-tab reload, so it's a reliable fallback.
+  let persisted = false;
   try {
-    if (token) localStorage.setItem(key, token);
-    else token = localStorage.getItem(key) ?? undefined;
+    if (token) {
+      localStorage.setItem(key, token);
+      persisted = true;
+    } else {
+      token = localStorage.getItem(key) ?? undefined;
+    }
   } catch {
-    /* storage blocked (private mode) — fall back to whatever the URL gave us */
+    /* localStorage full/blocked — the sessionStorage attempt below still carries the token */
+  }
+  try {
+    if (token) {
+      sessionStorage.setItem(key, token);
+      persisted = true;
+    } else {
+      token = sessionStorage.getItem(key) ?? undefined;
+    }
+  } catch {
+    /* sessionStorage blocked — fall back to whatever the URL gave us */
   }
   if (!token || !host) return undefined;
-  // Drop the ?vrlink= token from the visible URL once captured (keep the path + any hash).
-  if (fromQuery) {
+  // This tab IS a linked phone. Ask the browser to keep this origin's storage from being EVICTED
+  // under pressure: heavy generated-image caching can fill the quota and evict the saved pairing
+  // token, which silently drops the phone back to a local app (the "stopped linking after a bunch of
+  // image generations" failure). Best-effort and async — ignored where unsupported.
+  try {
+    void (navigator as Navigator & { storage?: { persist?: () => Promise<boolean> } }).storage?.persist?.();
+  } catch {
+    /* Storage API unsupported — harmless */
+  }
+  // Drop the ?vrlink= token from the visible URL ONLY once it's safely remembered — otherwise a later
+  // reload (e.g. after a software update, or a PWA relaunch) would have neither the URL token nor a
+  // stored one, and the phone would fall back to a local app. If nowhere would persist it, keep it in
+  // the URL so a reload can still recover it.
+  if (fromQuery && fromUrl && persisted) {
     try {
       window.history.replaceState(null, "", (pathname || "/") + (hash || ""));
     } catch {
@@ -162,6 +195,10 @@ export interface EngineWorkerApi {
   pauseImages: () => void;
   resumeImages: () => void;
   regenerateStoryboard: () => void;
+  /** Story header controls (no model round). */
+  storySetCadence: (mode: "per-response" | "every-n" | "manual", n?: number) => void;
+  storyRenderLatest: () => void;
+  storySetMode: (mode: "direct" | "roleplay") => void;
   regenerateAllImages: () => void;
   regenerateImage: (unitIndex: number) => void;
   /** Fill gaps (missing prompts + failed/un-rendered units); finished images are kept. */
@@ -211,6 +248,15 @@ export interface EngineWorkerApi {
   ) => Promise<ChatDoneResult>;
   /** Run a user-approved generate_image tool call. */
   chatTool: (call: ToolCall, opts?: { onProgress?: (fraction: number) => void }) => Promise<ChatToolRender>;
+  /** Push a just-resolved managed-engine URL to the worker RIGHT NOW (race-free, ahead of the debounced
+   * settings sync) so the next STANDALONE render — which rebuilds providers fresh from settings — uses
+   * it. Used by the low-VRAM deferred-engine-start path. */
+  applyEngineConfig: (baseUrl: string) => void;
+  /** Update the worker's list of workspace files the assistant wrote this session, so it injects a terse
+   * reminder into the buddy prompt (the model stays aware of what it made + can read_file before editing). */
+  setFileLedger: (files: CreatedFileRef[]) => void;
+  /** Update the worker's workspace project-guide text (AGENTS.md / CONVENTIONS.md) injected each turn. */
+  setProjectGuide: (text: string) => void;
   /** Have the chat's vision model describe a captured screenshot. */
   assessImage: (
     image: { bytes: ArrayBuffer; mimeType: string },
@@ -248,6 +294,7 @@ export interface EngineWorkerApi {
     taskPlanId?: string,
     currentCodeFile?: { name: string; title: string; language?: string },
     plan?: BuddyPlan,
+    appManagedSteps?: boolean,
   ) => Promise<BuddyDoneResult>;
   /** Abort the in-flight buddy round, if any. */
   buddyCancel: () => void;
@@ -1226,6 +1273,25 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     return () => clearTimeout(timer);
   }, [identityKey]); // deliberately keyed on the identity FIELDS, not the settings object
 
+  // Hand the worker a just-started managed-engine URL immediately (the low-VRAM deferred-start path),
+  // ahead of the debounced identity sync, so the next standalone render uses it without a race. The URL
+  // is passed EXPLICITLY (settingsRef hasn't re-rendered with it yet); other fields ride the stale-but-
+  // current snapshot and the full identity sync follows shortly after.
+  const applyEngineConfig = useCallback((baseUrl: string) => {
+    if (remoteRef.current) return;
+    send({ type: "tune", settings: { ...settingsRef.current, engineBaseUrl: baseUrl, engineBackend: "comfyui" } });
+  }, []);
+
+  const setFileLedger = useCallback((files: CreatedFileRef[]) => {
+    if (remoteRef.current) return; // a phone's worker is the desktop's; the desktop owns the ledger
+    send({ type: "fileLedger", files });
+  }, []);
+
+  const setProjectGuide = useCallback((text: string) => {
+    if (remoteRef.current) return;
+    send({ type: "projectGuide", text });
+  }, []);
+
   useEffect(() => {
     if (remoteRef.current) return; // the desktop tunes its own engine (see the identity effect)
     send({ type: "tune", settings: settingsRef.current });
@@ -1296,6 +1362,16 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const regenerateStoryboard = useCallback(() => {
     generationRequested.current = true;
     send({ type: "regenerateStoryboard" });
+  }, []);
+  // Story header controls (no model round): cadence, illustrate-latest, and mid-story workflow switch.
+  const storySetCadence = useCallback((mode: "per-response" | "every-n" | "manual", n?: number) => {
+    send({ type: "storySetCadence", mode, ...(n !== undefined ? { n } : {}) });
+  }, []);
+  const storyRenderLatest = useCallback(() => {
+    send({ type: "storyRenderLatest" });
+  }, []);
+  const storySetMode = useCallback((mode: "direct" | "roleplay") => {
+    send({ type: "storySetMode", mode });
   }, []);
   const rebuildPrompts = useCallback(() => {
     generationRequested.current = true;
@@ -1604,6 +1680,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       taskPlanId?: string,
       currentCodeFile?: { name: string; title: string; language?: string },
       plan?: BuddyPlan,
+      appManagedSteps?: boolean,
     ): Promise<BuddyDoneResult> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
@@ -1634,7 +1711,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             resolve(r);
           },
         });
-        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}), ...(plan ? { plan } : {}) });
+        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}), ...(plan ? { plan } : {}), ...(appManagedSteps ? { appManagedSteps: true } : {}) });
       }),
     [],
   );
@@ -1972,6 +2049,9 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     pauseImages,
     resumeImages,
     regenerateStoryboard,
+    storySetCadence,
+    storyRenderLatest,
+    storySetMode,
     regenerateAllImages,
     regenerateImage,
     completeBook,
@@ -1994,6 +2074,9 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     resolveConflicts,
     chat,
     chatTool,
+    applyEngineConfig,
+    setFileLedger,
+    setProjectGuide,
     chatCancel,
     warmLlm,
     buddyChat,

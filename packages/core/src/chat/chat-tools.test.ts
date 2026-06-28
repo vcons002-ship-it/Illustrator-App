@@ -21,6 +21,19 @@ describe("parseToolCall", () => {
     });
   });
 
+  it("accepts the ReAct {action, action_input} shape (the leak from the transcript)", () => {
+    // A capable model emitted this LangChain/ReAct envelope with a DOUBLE-ENCODED action_input; it
+    // wasn't recognised, so the raw JSON leaked into the chat instead of rendering an image.
+    expect(
+      parseToolCall('{"action":"generate_image","action_input":"{ \\"prompt\\": \\"a woman in a garden\\" }"}'),
+    ).toEqual({ tool: "generate_image", prompt: "a woman in a garden" });
+    // action_input as a plain object works too.
+    expect(parseToolCall('{"action":"search_web","action_input":{"query":"jasmine"}}')).toEqual({
+      tool: "search_web",
+      query: "jasmine",
+    });
+  });
+
   it("fires a tool that follows a prose preamble (trailing JSON), incl. {r} in a formula", () => {
     // The exact failure: the model explained itself, THEN emitted the call — strict whole-text parsing
     // dropped it, so nothing was added and the model hallucinated a result table.
@@ -200,13 +213,15 @@ describe("formatToolResult", () => {
     );
   });
 
-  it("reports an approved image generation's outcome", () => {
-    expect(
-      formatToolResult({ tool: "generate_image", prompt: "p" }, { image: { ok: true } }),
-    ).toContain("generated");
-    expect(
-      formatToolResult({ tool: "generate_image", prompt: "p" }, { image: { ok: false, error: "no engine" } }),
-    ).toContain("no engine");
+  it("reports an approved image generation's outcome, TAGGED with its prompt", () => {
+    // The prompt is echoed back so a later batch of renders in the same chat is distinguishable —
+    // otherwise every render leaves an identical line and the model thinks new images already exist.
+    const ok = formatToolResult({ tool: "generate_image", prompt: "a red apple on a table" }, { image: { ok: true } });
+    expect(ok).toContain("a red apple on a table");
+    expect(ok).toMatch(/rendered|showed/i);
+    const bad = formatToolResult({ tool: "generate_image", prompt: "a red apple" }, { image: { ok: false, error: "no engine" } });
+    expect(bad).toContain("no engine");
+    expect(bad).toContain("a red apple"); // even a failure names what it tried to render
   });
 
   it("feeds a fetched page back as reference data (with a not-instructions guard)", () => {

@@ -36,10 +36,16 @@ export const TUNING_FIELDS = [
   // Read when building the buddy prompt; toggling it must not rebuild the engine.
   "allowCommands",
   "autonomousWorkspace",
+  "delegateCoding",
+  "codingAgentBackend",
   "commandShell",
   "autoResolveConflicts",
   "allowTaskAutomation",
   "allowTradingViewBridge",
+  // Read when building the buddy prompt (gate the markets / sub-agent tool groups); toggling must
+  // not rebuild the engine.
+  "allowMarkets",
+  "allowSubAgents",
   "autoLearnSkills",
   "remoteBus",
   // Read at chat/persist time + drives the desktop privacy curtain; toggling it must not rebuild.

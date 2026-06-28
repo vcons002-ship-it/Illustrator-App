@@ -13,7 +13,8 @@ import type { RenderQuality } from "../quality.js";
 import type { VisualReaderStore } from "../storage/store.js";
 import { resolvePageEntities } from "../visual-bible/bible.js";
 import { anchorSetting, composeScenePrompt, resolveKeyEvent } from "../visual-bible/key-events.js";
-import { expandPrompt, findBibleTermsInText } from "../providers/image/bible-injection.js";
+import { actionTextForImage } from "../visual-bible/story-image-text.js";
+import { appendSceneWardrobe, expandPrompt, findBibleTermsInText } from "../providers/image/bible-injection.js";
 import { getImageStyle } from "../providers/catalog.js";
 import { buildFigureQuery, type RetrievedImage } from "../providers/image/image-search.js";
 import { profileDimensions, qualityProfile } from "../quality.js";
@@ -90,6 +91,10 @@ export class RenderPipeline {
       ? unique([...scanned.creatureIds, ...tracked.creatureIds])
       : scanned.creatureIds;
     const chapterContext = this.chapterContextFor(page);
+    // For STORY beats, hand the image model the action/narration with quoted dialogue removed, so a
+    // vivid line of speech can't hijack the rendered subject. The reader + Bible keep the full prose.
+    const rawText = page.paragraphs.map((p) => p.text).join("\n\n");
+    const sourceText = this.deps.book.kind === "story" ? actionTextForImage(rawText) : rawText;
     return {
       // Technical books (papers/textbooks, chosen at import) illustrate the passage's
       // CONCEPT instead of a story scene — the LLM picks its prompt template by kind.
@@ -102,7 +107,7 @@ export class RenderPipeline {
       // Always carry a range so a stored prompt can be matched by overlap (a raw single
       // page is [index, index]); keeps buildRequest, hasKeyEvent, and renderPage aligned.
       pageRange: page.pageRange ?? [page.index, page.index],
-      sourceText: page.paragraphs.map((p) => p.text).join("\n\n"),
+      sourceText,
       ...(chapterContext ? { chapterContext } : {}),
       characterIds,
       environmentIds,
@@ -362,10 +367,14 @@ export class RenderPipeline {
       // place are depicted — the active-scene carry-forward made real in the image, not
       // just the request object. Scoped to story books (kind === "story"); a no-op when
       // the prompt already names them, so the book illustrator's prompts are untouched.
-      const sceneBase =
+      const named =
         this.deps.book.kind === "story"
           ? nameActiveScene(basePrompt, present, presentCreatures, bible.environments.filter((e) => request.environmentIds.includes(e.id)))
           : basePrompt;
+      // Deterministic wardrobe: append each present character's storyboard-tagged outfit LABEL
+      // (KeyEvent.cast) so the right clothes inject regardless of how the render LLM worded the
+      // scene — the fix for outfits dropping when the model paraphrases/omits the label.
+      const sceneBase = appendSceneWardrobe(named, keyEvent?.cast, bible);
       // Bible terms mentioned in the prompt (names → descriptors). Local backends expand them
       // family-aware; for cloud we pre-expand here (cloud providers don't know the bible).
       const terms = findBibleTermsInText(sceneBase, bible);

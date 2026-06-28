@@ -5,6 +5,7 @@ import {
   describeLocation,
   describeOutfit,
 } from "../providers/image/bible-injection.js";
+import { storyDigest } from "../visual-bible/story-digest.js";
 import { CHAT_TOOLS_SYSTEM, dataToolsBlock } from "./chat-tools.js";
 import { POLISH_CHAT_GUIDANCE } from "./document-polish.js";
 import { isNonFiction, type ContentMode } from "../types/book.js";
@@ -38,6 +39,11 @@ export interface ChatContextInput {
   /** When the "book" is an uploaded spreadsheet/CSV — enables the analyze_data tool. */
   dataTable?: DataTable;
   budgetChars?: number;
+  /** The assistant's own identity "soul" block (WHO YOU ARE — persona, look, voice) and the reader's
+   * (WHO THE READER IS). Emitted as the FIRST, stable section so the companion adopts its identity in
+   * the book chat too — not buried below the book text. Empty/omitted → no identity section. */
+  selfSoul?: string;
+  userSoul?: string;
 }
 
 /** Appended to the chat role clause in mature mode — adult reader, adult text. */
@@ -52,7 +58,7 @@ const OMITTED = "[… omitted for length …]";
 /** One labelled chunk of the system prompt, so the worker can measure where the
  * context budget actually goes (the usage breakdown) — not just join it. */
 export interface ChatContextSection {
-  key: "role" | "bible" | "book" | "tools" | "guard";
+  key: "identity" | "role" | "bible" | "book" | "tools" | "guard";
   label: string;
   text: string;
 }
@@ -78,7 +84,9 @@ export function chatContextSections(input: ChatContextInput): ChatContextSection
   // block a genuine cacheable PREFIX: providers re-read it instead of re-prefilling
   // it (Claude via cache_control; local llama.cpp via KV-cache prefix reuse). The
   // guard therefore forward-references the data below it.
+  const identity = [input.selfSoul, input.userSoul].filter(Boolean).join("\n\n");
   return [
+    { key: "identity", label: "Identity", text: identity },
     { key: "role", label: "Instructions", text: role },
     {
       key: "tools",
@@ -103,7 +111,7 @@ export function chatContextSections(input: ChatContextInput): ChatContextSection
 /** Section keys whose text is byte-stable within a reading session — the cacheable
  * system-prompt prefix (no reader-position or bible volatility). Kept FIRST in the
  * section order so the prefix is a true leading substring of the joined prompt. */
-export const STABLE_CHAT_SECTION_KEYS: readonly ChatContextSection["key"][] = ["role", "tools", "guard"];
+export const STABLE_CHAT_SECTION_KEYS: readonly ChatContextSection["key"][] = ["identity", "role", "tools", "guard"];
 
 /**
  * The cache-friendly leading portion of the system prompt — the stable sections
@@ -223,9 +231,10 @@ function bibleSlice(input: ChatContextInput, fullView: boolean): string {
   const lines: string[] = [];
   if (bible.worldStyle?.trim()) lines.push(`Art direction: ${bible.worldStyle.trim()}`);
 
-  // The reader's current chapter summary only — recent, small, usually relevant.
-  const here = (bible.storyboard ?? []).find((s) => s.chapterIndex === cur);
-  if (here?.summary?.trim()) lines.push(`This chapter so far: ${here.summary.trim()}`);
+  // "Story so far" — a bounded chapter-by-chapter digest (spoiler-gated to the reader's position),
+  // so the buddy can discuss the whole plot/timeline, not just the current chapter.
+  const digest = storyDigest(bible, fullView ? {} : { upToChapter: cur });
+  if (digest) lines.push(digest);
 
   const names = (list: readonly { name: string; aliases?: string[] }[]): string =>
     list.map((e) => e.name + (e.aliases?.length ? ` (${e.aliases.join(", ")})` : "")).join(", ");

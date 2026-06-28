@@ -16,10 +16,12 @@ import { streamSse } from "./sse.js";
 import type { EntityExtractionInput, LLMProvider } from "./llm-provider.js";
 import {
   DEFAULT_CHAT_MAX_TOKENS,
+  nativeToolCallsToText,
   reasoningSoFar,
   type ChatCapable,
   type ChatOptions,
   type ChatTurn,
+  type NativeToolCall,
   type VisionCapable,
 } from "./chat.js";
 
@@ -68,17 +70,19 @@ interface ModelsResponse {
 
 /** One NDJSON line from Ollama's native `/api/chat`. */
 interface OllamaChatLine {
-  message?: { role?: string; content?: string; thinking?: string };
+  message?: { role?: string; content?: string; thinking?: string; tool_calls?: NativeToolCall[] };
   done?: boolean;
   done_reason?: string;
 }
 
 /** Subset of Ollama `/api/show` we use: `model_info` carries the ARCHITECTURAL
  * max ("<arch>.context_length"); `parameters` is the Modelfile parameter dump
- * ("num_ctx 40960\n…") — when present, num_ctx is what Ollama actually LOADS. */
+ * ("num_ctx 40960\n…") — when present, num_ctx is what Ollama actually LOADS;
+ * `capabilities` lists model abilities ("tools" when it supports function calling). */
 interface OllamaShowResponse {
   model_info?: Record<string, unknown>;
   parameters?: string;
+  capabilities?: string[];
 }
 
 /** A local model's context window, as well as it can be known. */
@@ -104,6 +108,9 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
   private readonly model: string;
   private readonly apiKey: string | undefined;
   private readonly numCtx: number | undefined;
+  /** Cached "does this model support native tool calling" (Ollama `/api/show` capabilities includes
+   * "tools"). Resolved once per provider instance; a fresh model/settings change rebuilds the provider. */
+  private toolSupport?: Promise<boolean>;
 
   private readonly fetchImpl: typeof fetch;
 
@@ -163,15 +170,49 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
    * 404. Best-effort and bounded — a failure (or non-Ollama server) is a silent no-op.
    */
   async unload(): Promise<void> {
+    return this.unloadModel(this.model);
+  }
+
+  /** Evict ONE named model from Ollama's VRAM (keep_alive:0). Best-effort + bounded; a non-Ollama
+   * server (no `/api/generate`) harmlessly 404s and is a silent no-op. */
+  async unloadModel(model: string): Promise<void> {
     try {
       await this.transport.send({
         url: `${ollamaRoot(this.baseUrl)}/api/generate`,
         method: "POST",
-        body: { model: this.model, keep_alive: 0 },
+        body: { model, keep_alive: 0 },
         signal: AbortSignal.timeout(2500),
       });
     } catch {
       /* not Ollama, or already unloaded — nothing to do */
+    }
+  }
+
+  /**
+   * Ensure only the target chat model occupies VRAM: ask Ollama which models are resident (`/api/ps`)
+   * and evict every one EXCEPT `keep` (default: this provider's own model). Stops two LLMs from sitting
+   * in VRAM at once — e.g. after switching models, or a vision/assess model left loaded — which is the
+   * "two models in `ollama ps`" case that starves the GPU in low-VRAM. Best-effort + bounded; a
+   * non-Ollama server (no `/api/ps`) is a silent no-op. Returns the names it evicted (for logging/tests).
+   */
+  async evictOtherModels(keep?: string): Promise<string[]> {
+    const keepModel = keep ?? this.model;
+    try {
+      const res = await this.transport.send({
+        url: `${ollamaRoot(this.baseUrl)}/api/ps`,
+        method: "GET",
+        signal: AbortSignal.timeout(2500),
+      });
+      if (!res.ok) return [];
+      const data = await res.json<{ models?: { name?: string; model?: string }[] }>();
+      const loaded = (data.models ?? [])
+        .map((m) => m.model ?? m.name ?? "")
+        .filter((m) => m && m !== keepModel);
+      const unique = [...new Set(loaded)];
+      await Promise.all(unique.map((m) => this.unloadModel(m)));
+      return unique;
+    } catch {
+      return []; // not Ollama / unreachable — leave VRAM as-is
     }
   }
 
@@ -185,12 +226,17 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
     if (this.numCtx !== undefined) return this.chatViaOllama(messages, opts);
     if (opts.onToken) {
       let emittedAny = false;
+      // Native tool calling on the OpenAI `/v1` path: send the schemas when supported and accumulate
+      // the streamed tool_call deltas (arguments arrive as string fragments, keyed by index).
+      const withTools = await this.nativeToolsEnabled(opts);
+      const toolAcc = new Map<number, { name?: string; args: string }>();
       // One streaming attempt at a given reasoning effort. Returns the full reply + whether the
       // server cut us off at max_tokens (finish_reason "length", surfaced for auto-continuation).
       const attempt = async (effort?: ChatOptions["reasoningEffort"]): Promise<{ full: string; truncated: boolean }> => {
         let full = "";
         let emitted = 0;
         let truncated = false;
+        toolAcc.clear(); // fresh per attempt (a retry re-streams the whole reply)
         await streamSse(this.fetchImpl, `${this.baseUrl}/chat/completions`, {
           headers: this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
           body: {
@@ -202,11 +248,23 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
             stream: true,
             // Thinking level for reasoning models (Qwen3, etc.). Unsupported servers ignore it.
             ...(effort ? { reasoning_effort: effort } : {}),
+            ...(withTools && opts.tools ? { tools: opts.tools } : {}),
           },
           ...(opts.signal ? { signal: opts.signal } : {}),
           onEvent: (e) => {
             const fr = (e as { choices?: { finish_reason?: string }[] }).choices?.[0]?.finish_reason;
             if (fr === "length") truncated = true;
+            const tcs = (e as { choices?: { delta?: { tool_calls?: { index?: number; function?: { name?: string; arguments?: string } }[] } }[] })
+              .choices?.[0]?.delta?.tool_calls;
+            if (tcs) {
+              for (const tc of tcs) {
+                const idx = tc.index ?? 0;
+                const slot = toolAcc.get(idx) ?? { args: "" };
+                if (tc.function?.name) slot.name = tc.function.name;
+                if (typeof tc.function?.arguments === "string") slot.args += tc.function.arguments;
+                toolAcc.set(idx, slot);
+              }
+            }
             const delta = (e as { choices?: { delta?: { content?: string } }[] }).choices?.[0]?.delta
               ?.content;
             if (!delta) return;
@@ -239,7 +297,12 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
         }
       }
       opts.onComplete?.({ truncated: r.truncated });
-      return stripThink(r.full).trim();
+      // Append any native tool_calls as the app's text protocol so parseBuddyToolCalls runs them.
+      const toolCalls: NativeToolCall[] = [...toolAcc.values()]
+        .filter((s) => s.name)
+        .map((s) => ({ function: { name: s.name!, arguments: s.args } }));
+      const tail = toolCalls.length ? nativeToolCallsToText(toolCalls) : "";
+      return [stripThink(r.full).trim(), tail].filter(Boolean).join("\n");
     }
     // Non-streaming path (no onToken) — used rarely; the chat/buddy loop always streams, so
     // continuation (onComplete) rides the streaming branch above.
@@ -388,6 +451,34 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
   }
 
   /**
+   * Whether to send native `tools` this turn: the caller provided schemas AND the model advertises the
+   * "tools" capability (Ollama `/api/show`). Cached per instance. Best-effort — any failure (non-Ollama
+   * server, timeout) resolves false, so we silently fall back to the text-protocol path (no regression).
+   */
+  private nativeToolsEnabled(opts: ChatOptions): Promise<boolean> {
+    if (!opts.tools?.length) return Promise.resolve(false);
+    if (!this.toolSupport) {
+      this.toolSupport = (async () => {
+        try {
+          const res = await this.transport.send({
+            url: `${ollamaRoot(this.baseUrl)}/api/show`,
+            method: "POST",
+            headers: this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
+            body: { model: this.model },
+            signal: AbortSignal.timeout(2500),
+          });
+          if (!res.ok) return false;
+          const data = await res.json<OllamaShowResponse>();
+          return Array.isArray(data.capabilities) && data.capabilities.includes("tools");
+        } catch {
+          return false;
+        }
+      })();
+    }
+    return this.toolSupport;
+  }
+
+  /**
    * Chat over Ollama's NATIVE `/api/chat` (used when `numCtx` is set). The native endpoint —
    * unlike the OpenAI `/v1` one — honours `options.num_ctx`, so the model loads at our window
    * and a big model's KV cache stays on the GPU. Streams NDJSON (one JSON object per line);
@@ -408,6 +499,11 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
     let emitted = 0;
     let truncated = false;
     const wantsThink = this.ollamaThink(opts.reasoningEffort);
+    // Native tool calling: when the model supports it, hand it the tool schemas so it emits structured
+    // tool_calls (reliable) instead of having to type the text protocol. We collect them and append the
+    // serialized calls to the reply so the buddy parser runs them.
+    const withTools = await this.nativeToolsEnabled(opts);
+    const toolCalls: NativeToolCall[] = [];
     await streamOllamaLines(
       this.fetchImpl,
       `${ollamaRoot(this.baseUrl)}/api/chat`,
@@ -418,11 +514,20 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
         keep_alive: "30m",
         options: this.ollamaOptions(opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS, 0.7),
         ...(wantsThink !== undefined ? { think: wantsThink } : {}),
+        // GRAMMAR-CONSTRAINED tool call wins over native `tools`: `format` forces the text-protocol call
+        // into `content` (which parseBuddyToolCalls reads), whereas `tools` would put it in `tool_calls`
+        // with empty content — the two can't both apply. So when a call is REQUIRED, use the grammar.
+        ...(opts.toolFormat
+          ? { format: opts.toolFormat }
+          : withTools && opts.tools
+            ? { tools: opts.tools }
+            : {}),
       },
       this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {},
       (line) => {
         const l = line as OllamaChatLine;
         if (l.done_reason === "length") truncated = true;
+        if (l.message?.tool_calls?.length) toolCalls.push(...l.message.tool_calls);
         // Separated reasoning (think:true) streams in `message.thinking` as DELTAS — accumulate and
         // emit the FULL reasoning so far (onThinking is replace-semantics, like the SSE path's
         // reasoningSoFar). Older builds inline a `<think>` block in `content`, handled below.
@@ -445,7 +550,9 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
       opts.signal,
     );
     opts.onComplete?.({ truncated });
-    return stripThink(full).trim();
+    // Append any native tool_calls as the app's text protocol so parseBuddyToolCalls runs them.
+    const tail = toolCalls.length ? nativeToolCallsToText(toolCalls) : "";
+    return [stripThink(full).trim(), tail].filter(Boolean).join("\n");
   }
 
   /** Buffered native `/api/chat` (stream:false) — the num_ctx-aware twin of `complete()`. */

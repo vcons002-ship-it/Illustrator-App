@@ -27,6 +27,13 @@ describe("parseSettingChange", () => {
     expect(parseSettingChange("command execution", "on")).toMatchObject({ ok: true, key: "allowCommands", sensitive: true });
   });
 
+  it("toggles the new context-trim opt-ins (markets, sub-agent fan-out)", () => {
+    expect(parseSettingChange("markets tools", "on")).toMatchObject({ ok: true, key: "allowMarkets", value: true });
+    expect(parseSettingChange("markets", "off")).toMatchObject({ ok: true, key: "allowMarkets", value: false });
+    expect(parseSettingChange("sub-agent fan-out", "on")).toMatchObject({ ok: true, key: "allowSubAgents", value: true });
+    expect(parseSettingChange("parallel agents", "on")).toMatchObject({ ok: true, key: "allowSubAgents", value: true });
+  });
+
   it("errors helpfully on an unknown setting or a bad value", () => {
     const unknown = parseSettingChange("teleporter", "on");
     expect(unknown.ok).toBe(false);

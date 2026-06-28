@@ -152,7 +152,7 @@ describe("scenario: a realistic ask maps to the right tool call", () => {
 // ───────────────────────────────────────────────────────────────────────────
 describe("scenario: the system prompt instructs the natural-language → tool mapping", () => {
   const prompt = buildBuddySystemPrompt({
-    persona: "freeform",
+    persona: "assistant",
     library: [{ id: "text-1", title: "Dune", author: "Frank Herbert", addedAt: 1 }],
     canSearchFiles: true,
     canRunCommands: true,
@@ -163,6 +163,9 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     canTvBridge: true,
     mcpServers: ["notes"],
     canAutomateTasks: true,
+    canTaskTools: true,
+    canSubAgents: true,
+    canMarkets: true,
   });
 
   it("search_images vs generate_image: real-vs-new image rule is present", () => {
@@ -173,8 +176,9 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
   it("calculate vs wolfram: 'use calculate for pure math' is present", () => {
     expect(prompt).toContain("use calculate for pure math");
   });
-  it("open_code vs open_pasted_text: 'NOT open_pasted_text' for code is present", () => {
-    expect(prompt).toContain("NOT open_pasted_text");
+  it("open_content: code uses source \"code\", pasted prose excludes generated code", () => {
+    expect(prompt).toContain('"code" → {"source":"code"');
+    expect(prompt).toContain("never code/HTML you generated");
   });
   it("write_file vs the chat Save button: 'Save button' caveat is present", () => {
     expect(prompt).toContain("Save button");
@@ -185,6 +189,14 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
   it("find_files vs search_*: local-vs-web domain rule is present", () => {
     expect(prompt).toContain("search_books / search_web");
   });
+  it("verb default: bare 'search' → the web (search_web), bare 'find' → their PC (find_files)", () => {
+    expect(prompt).toContain("THE VERB DECIDES");
+    expect(prompt).toContain('a bare "search …" means the WEB → search_web');
+    expect(prompt).toContain('a bare "find …" means THEIR PC → find_files');
+    // The explicit override flips it either way.
+    expect(prompt).toContain('"search my files/computer/downloads/drive" → find_files');
+    expect(prompt).toContain('"find an article/page/website/source online" → search_web');
+  });
   it("delegate vs spawn_agents: parallel-vs-single rule is present", () => {
     expect(prompt).toContain("faster than delegating");
   });
@@ -193,8 +205,11 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     // Anti-empty-promise: don't say you'll run it and then end without the tool call.
     expect(prompt).toContain("end your reply without the write_file / run_command call");
   });
-  it("checklist: 'write code and run it' is given as a set_plan example so multi-step asks get planned", () => {
-    expect(prompt).toContain('"write code and run it"');
+  it("checklist: a multi-action ask (several images) is told to set_plan first, one step per action", () => {
+    // Lean no-plan guidance: a 2+ action task plans first; a single action just calls its tool.
+    expect(prompt).toMatch(/several images/);
+    expect(prompt).toMatch(/call set_plan FIRST, one step per action/);
+    expect(prompt).toMatch(/do NOT make a plan for one step/);
   });
 });
 
@@ -203,9 +218,10 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
 // ───────────────────────────────────────────────────────────────────────────
 describe("scenario: chains run in order and each result feeds the next round", () => {
   it("research → open: search_books, then open the hit, then answer", async () => {
+    // The model now emits the single open_content tool; the parser normalizes it to open_web_text.
     const llm = scriptedLlm([
       '{"tool":"search_books","query":"thermodynamics"}',
-      '{"tool":"open_web_text","url":"https://g.test/thermo.txt","title":"Thermodynamics","mode":"technical","visuals":true}',
+      '{"tool":"open_content","source":"web","url":"https://g.test/thermo.txt","title":"Thermodynamics","mode":"technical","visuals":true}',
       "Opened it in technical mode so the diagrams come through — want to start with the first law?",
     ]);
     const openedUrls: string[] = [];
@@ -517,7 +533,7 @@ describe("scenario: the buddy plans a multi-step ask and ticks it off", () => {
         { text: "C", status: "pending" },
       ],
     };
-    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [], activePlan: plan });
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], activePlan: plan });
     expect(prompt).toContain("CURRENT CHECKLIST");
     expect(prompt).toContain("✓ A");
     expect(prompt).toContain("▸ B (current)"); // the resume anchor
@@ -544,7 +560,7 @@ describe("scenario: a large file is built in append chunks", () => {
   });
 
   it("the prompt tells the model to chunk a too-big file with append:true instead of stitching in chat", () => {
-    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true });
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true });
     expect(prompt).toContain('"append":true');
     expect(prompt).toContain("appended on DISK");
     expect(prompt).toContain("paste a giant file into the chat");

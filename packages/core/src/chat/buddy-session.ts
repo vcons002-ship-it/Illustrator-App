@@ -1,4 +1,4 @@
-import type { ChatCapable, ChatTurn } from "../providers/llm/chat.js";
+import type { ChatCapable, ChatTurn, ToolSchema } from "../providers/llm/chat.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
 import type { BookSearchHit } from "../providers/book-search.js";
 import {
@@ -110,12 +110,15 @@ export interface BuddyDeps {
   /** Apply a validated settings change (host owns ReaderSettings + persistence). */
   applySetting?: (change: { key: string; value: boolean | number | string; label: string; valueLabel: string }) => Promise<void>;
   /** Long-term reader memory (see reader-memory.ts); returns the kept count. */
-  remember?: (note: string) => Promise<number>;
-  forget?: (match: string) => Promise<number>;
+  remember?: (note: string, about?: "reader" | "self" | "user") => Promise<number>;
+  forget?: (match: string, about?: "reader" | "self" | "user") => Promise<number>;
   /** Lightweight chat-scoped working checklist. setPlan creates/replaces it; completeStep ticks the
    * first unfinished step. Both return the updated plan (host owns the canonical object + persistence). */
-  setPlan?: (goal: string | undefined, steps: string[]) => BuddyPlan;
+  setPlan?: (goal: string | undefined, steps: string[], stepDetails?: { needs?: string; onFail?: string; produces?: string[]; verify?: string }[]) => BuddyPlan;
   completeStep?: (note?: string) => BuddyPlan | undefined;
+  /** App-managed-steps mode: the HOST runs the checklist and ticks steps from observed evidence, so
+   * `complete_step` is withdrawn — a stray call is refused (the model just does the current step). */
+  appManagedSteps?: boolean;
   /** Skills (durable playbooks — see skills.ts). readSkill returns the body ("" if
    * none); saveSkill/forgetSkill return the kept count. */
   readSkill?: (name: string) => Promise<string>;
@@ -201,18 +204,21 @@ type HostToolName =
   | "find_files"
   | "run_command"
   | "write_file"
+  | "edit_file"
   | "screenshot"
   | "plan_task"
   | "prep_order"
   | "tv_chart"
   | "delegate"
   | "send_email"
+  | "delegate_coding_task"
   | "spawn_coding_agents";
 const HOST_TOOLS = new Set<HostToolName>([
   "generate_image",
   "find_files",
   "run_command",
   "write_file",
+  "edit_file",
   "screenshot",
   "plan_task",
   "prep_order",
@@ -223,6 +229,8 @@ const HOST_TOOLS = new Set<HostToolName>([
   "send_email",
   // spawn_coding_agents needs host orchestration (approval, git worktrees, merge) — handed up.
   "spawn_coding_agents",
+  // delegate_coding_task spawns an external agent in the workspace (desktop I/O) — handed up.
+  "delegate_coding_task",
 ]);
 /** Type-guard so the non-host branch narrows to the tools `runBuddyTool` can execute. */
 function isHostTool(call: BuddyToolCall): call is Extract<BuddyToolCall, { tool: HostToolName }> {
@@ -254,6 +262,15 @@ export async function runBuddyTurn(opts: {
   signal?: AbortSignal;
   /** Thinking level for local reasoning models (passed straight to the provider's chat). */
   reasoningEffort?: "none" | "low" | "medium" | "high";
+  /** Native tool schemas (Ollama `tools`) for a tool-capable local model — passed to the provider so
+   * it emits structured tool_calls. Cloud providers ignore it; the text catalog in `system` is the
+   * universal fallback. Build with `ollamaToolSchemas`. */
+  tools?: ToolSchema[];
+  /** GRAMMAR-CONSTRAIN this turn's reply to a valid tool call (Ollama `format`) — set ONLY when a tool
+   * call is required (an app-managed step whose contract demands a specific tool). Forces a stubborn
+   * small model to emit the call instead of narrating. Build with `buildToolCallFormat`. Ignored by
+   * cloud / non-Ollama providers. */
+  toolFormat?: Record<string, unknown>;
   /**
    * Pause the auto-run tool loop after this many rounds for a "keep going?" checkpoint, instead of
    * running to the (much larger) `MAX_BUDDY_TOOL_ROUNDS` backstop. Set it for PAID/cloud models so a
@@ -262,6 +279,10 @@ export async function runBuddyTurn(opts: {
    * summary; the reader continues (a Continue button / "continue") and the next turn re-arms the budget.
    */
   pauseEvery?: number;
+  /** This turn is a "story as you go" beat (the system prompt is in STORY MODE). It makes the
+   * empty/tool-only wrap-up ask for the next BEAT (prose) instead of a "what I did" meta line, so a
+   * recovered reply is still a usable beat the host can append to the book. */
+  storyMode?: boolean;
 }): Promise<BuddyTurnOutcome> {
   const messages: ChatTurn[] = [{ role: "system", content: opts.system }, ...opts.history];
   const transcript: ChatTurn[] = [];
@@ -273,6 +294,10 @@ export async function runBuddyTurn(opts: {
   const effectiveMax =
     opts.pauseEvery && opts.pauseEvery > 0 ? Math.min(opts.pauseEvery, MAX_BUDDY_TOOL_ROUNDS) : MAX_BUDDY_TOOL_ROUNDS;
   let pausedForBudget = false; // hit the budget with tools still pending → a resumable checkpoint, not a finish
+  // Anti-skip guard (turn-scoped): true right after a complete_step, cleared by any real work (a tool /
+  // render). A second complete_step while it's still true is the model "jumping ahead" — ticking a step
+  // it never did (e.g. checking off image 2's step without generating image 2) — and is refused.
+  let lastWasCompleteStep = false;
 
   // One model call against the current `messages` — a FRESH token gate each time (tool JSON never
   // streams visibly), capturing whether the server cut us off at the budget so a long answer can be
@@ -315,6 +340,12 @@ export async function runBuddyTurn(opts: {
       ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
       ...(opts.cachePrefix ? { cachePrefix: opts.cachePrefix } : {}),
       ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
+      // Native tool schemas: a tool-capable local model emits structured tool_calls (the provider
+      // serializes them back into the text protocol). Cloud providers ignore this field.
+      ...(opts.tools?.length ? { tools: opts.tools } : {}),
+      // Force a parseable tool call this turn when the step's contract requires one (provider gates it
+      // to the Ollama path; it suppresses `tools` there since the two can't both apply).
+      ...(opts.toolFormat ? { toolFormat: opts.toolFormat } : {}),
       onComplete: (m) => {
         lastTruncated = m.truncated;
       },
@@ -347,9 +378,16 @@ export async function runBuddyTurn(opts: {
         // them to `transcript` persists them as chat history, which leaked the internal directive
         // into the conversation as a "user" message.
         messages.push({ role: "assistant", content: reply });
-        const nudge =
-          "[That looked like a tool call but wasn't something I could run. Re-issue each tool call " +
-          "as its own JSON object (one per line, no prose around them), or just answer in plain text.]";
+        // G8: a tool call that LOOKED valid but was cut off at the length limit (its content/args
+        // argument ran past the token budget) won't parse — and re-issuing the SAME giant call just
+        // truncates again. Steer to chunked writes instead of retrying the oversized argument.
+        const nudge = lastTruncated
+          ? "[That tool call was cut off at the length limit — its argument was too long to finish. " +
+            "Do NOT resend the whole thing. Instead write the file in chunks: a first write_file with " +
+            "the opening portion, then write_file(..., append:true) for each further chunk, or edit_file " +
+            "with a small search/replace to change just one part.]"
+          : "[That looked like a tool call but wasn't something I could run. Re-issue each tool call " +
+            "as its own JSON object (one per line, no prose around them), or just answer in plain text.]";
         messages.push({ role: "user", content: nudge });
         continue;
       }
@@ -362,8 +400,10 @@ export async function runBuddyTurn(opts: {
         // are internal control flow — persisting them leaked "[Now reply to the reader in plain
         // text…]" into the chat as a user message.
         messages.push({ role: "assistant", content: reply });
-        const wrap =
-          "[Now reply to the reader in plain text — briefly say what you did or found. No tool calls.]";
+        const wrap = opts.storyMode
+          ? "[Now write the next beat of the story as plain prose — continue the scene a little, refer to " +
+            "characters by their established names, no commentary and no tool calls.]"
+          : "[Now reply to the reader in plain text — briefly say what you did or found. No tool calls.]";
         messages.push({ role: "user", content: wrap });
         continue;
       }
@@ -420,6 +460,7 @@ export async function runBuddyTurn(opts: {
         toolResults.push({ call, result });
         opts.onEvent?.({ kind: "toolResult", round, call, result });
         feedbacks.push(formatBuddyToolResult(call, result));
+        lastWasCompleteStep = false; // real work happened
         continue;
       }
       if (isHostTool(call)) {
@@ -431,6 +472,7 @@ export async function runBuddyTurn(opts: {
           toolResults.push({ call, result });
           opts.onEvent?.({ kind: "toolResult", round, call, result });
           feedbacks.push(formatBuddyToolResult(call, result));
+          lastWasCompleteStep = false; // a render/command is real work — the next check-off is earned
           continue;
         }
         if (feedbacks.length === 0) {
@@ -439,6 +481,22 @@ export async function runBuddyTurn(opts: {
         }
         deferred = true;
         break;
+      }
+      // Anti-skip: a complete_step right after another check-off, with no real work in between, is the
+      // model jumping ahead — ticking a step it never did. Refuse it (the step stays unfinished) and tell
+      // it to do that step's action first. The FIRST check-off of a turn is always fine (the work was the
+      // render that ended the previous turn); only back-to-back ticks are blocked.
+      if (call.tool === "complete_step" && lastWasCompleteStep) {
+        opts.onEvent?.({ kind: "tool", round, call });
+        const result: BuddyToolResultPayload = { error: "checked off too fast — do this step's work first" };
+        toolResults.push({ call, result });
+        opts.onEvent?.({ kind: "toolResult", round, call, result });
+        feedbacks.push(
+          "[complete_step IGNORED — you just checked off a step with no work in between. Do the ▸ current " +
+            "step's action FIRST (e.g. actually call generate_image and let its image render), THEN check it " +
+            "off. Exactly one step's work per check-off — never tick two steps in a row.]",
+        );
+        continue; // leave lastWasCompleteStep true — a 3rd tick in a row is refused too
       }
       opts.onEvent?.({ kind: "tool", round, call });
       // Name the specific action in the status line ("Searching the web for …") so the reader sees
@@ -453,6 +511,8 @@ export async function runBuddyTurn(opts: {
       toolResults.push({ call, result });
       opts.onEvent?.({ kind: "toolResult", round, call, result });
       feedbacks.push(formatBuddyToolResult(call, result));
+      // Track for the anti-skip guard: only a successful check-off arms it; any other tool is "work".
+      lastWasCompleteStep = call.tool === "complete_step" && !result.error;
     }
     // On the final tool round, append a wrap-up nudge so the model answers now instead of
     // spending its last round on a tool whose result it can't follow up on.
@@ -469,7 +529,7 @@ export async function runBuddyTurn(opts: {
 /** Execute one auto-run buddy tool (everything but generate_image). Exported for
  * the slash-command path, which runs tools directly without an LLM round. */
 export async function runBuddyTool(
-  call: Exclude<BuddyToolCall, { tool: "generate_image" | "find_files" | "run_command" | "write_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "spawn_coding_agents" }>,
+  call: Exclude<BuddyToolCall, { tool: "generate_image" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" }>,
   deps: BuddyDeps,
 ): Promise<BuddyToolResultPayload> {
   try {
@@ -569,6 +629,14 @@ export async function runBuddyTool(
         });
         return { tradingScript: { lang, script, where } };
       }
+      case "open_content":
+        // open_content is normalized into the open_library_book / open_web_text / open_pasted_text /
+        // open_code shapes by parseBuddyToolCall, so it should never reach the executor directly.
+        return { error: "couldn't open that — try again" };
+      case "read":
+        // read is normalized into the read_url / read_file / read_email / read_attachment shapes by
+        // parseBuddyToolCall, so it should never reach the executor directly.
+        return { error: "couldn't read that — try again" };
       case "open_library_book":
         return { opened: await deps.openLibraryBook(call) };
       case "open_web_text":
@@ -605,14 +673,20 @@ export async function runBuddyTool(
         return { applied: await deps.setVisualStyle(call) };
       case "remember":
         if (!deps.remember) return { error: "memory isn't available right now" };
-        return { memory: { action: "remembered", note: call.note, count: await deps.remember(call.note) } };
+        return {
+          memory: { action: "remembered", note: call.note, about: call.about ?? "reader", count: await deps.remember(call.note, call.about) },
+        };
       case "forget":
         if (!deps.forget) return { error: "memory isn't available right now" };
-        return { memory: { action: "forgot", note: call.match, count: await deps.forget(call.match) } };
+        return {
+          memory: { action: "forgot", note: call.match, about: call.about ?? "reader", count: await deps.forget(call.match, call.about) },
+        };
       case "set_plan":
         if (!deps.setPlan) return { error: "the working checklist isn't available here" };
-        return { plan: deps.setPlan(call.goal, call.steps) };
+        return { plan: deps.setPlan(call.goal, call.steps, call.stepDetails) };
       case "complete_step": {
+        if (deps.appManagedSteps)
+          return { error: "the app is running this checklist and ticks steps itself — don't mark progress; just do the current step you were given" };
         if (!deps.completeStep) return { error: "no checklist is set — call set_plan first" };
         const updated = deps.completeStep(call.note);
         return updated ? { plan: updated } : { error: "there's no unfinished checklist step — call set_plan first" };

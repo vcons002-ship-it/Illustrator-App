@@ -22,4 +22,10 @@ export class ManagedEngineImageProvider implements ImageProvider {
     }
     return this.backend.generate(input, this.model);
   }
+
+  /** Hand the GPU back: unload the image model so a co-resident chat LLM can reload into the freed VRAM.
+   * Best-effort — absent on backends that don't coordinate VRAM (resolves immediately). */
+  freeMemory(): Promise<void> {
+    return this.backend.freeMemory?.() ?? Promise.resolve();
+  }
 }

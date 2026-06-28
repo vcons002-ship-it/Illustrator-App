@@ -1,7 +1,7 @@
 import type { VisualBible } from "../types/bible.js";
 import type { BookSource } from "../types/book.js";
 import { base64ToBytes, bytesToBase64 } from "../providers/image/base64.js";
-import { MAX_CHAT_HISTORY, type BookSummary, type StoreBackup, type StoredChatMessage, type VisualReaderStore } from "./store.js";
+import { MAX_CHAT_HISTORY, libraryTypeOf, type BookSummary, type StoreBackup, type StoredChatMessage, type VisualReaderStore } from "./store.js";
 
 /**
  * IndexedDB-backed store for the web app: caches the Visual Bible and rendered
@@ -10,17 +10,20 @@ import { MAX_CHAT_HISTORY, type BookSummary, type StoreBackup, type StoredChatMe
  */
 const DB_NAME = "visual-reader";
 // v3 adds the per-book chat-history store; v4 adds "memos" (the chat's long-term
-// reader memory). Additive upgrades — existing stores untouched.
-const DB_VERSION = 4;
+// reader memory); v5 adds "chatblobs" (chat image bytes externalized out of the
+// chat-history array so it stays small). Additive upgrades — existing stores untouched.
+const DB_VERSION = 5;
 const BIBLE_STORE = "bibles";
 const IMAGE_STORE = "images";
 const BOOK_STORE = "books";
 const CHAT_STORE = "chats";
 const MEMO_STORE = "memos";
+const CHAT_BLOB_STORE = "chatblobs";
 
 /** Stores included in a backup: the reader's DATA. The IMAGE_STORE (rendered illustrations) is
- * skipped — it's large and re-derivable, so a backup stays small and portable. */
-const BACKUP_STORES = [BIBLE_STORE, BOOK_STORE, CHAT_STORE, MEMO_STORE] as const;
+ * skipped — it's large and re-derivable, so a backup stays small and portable. CHAT_BLOB_STORE IS
+ * included (chat images are NOT re-derivable, and were part of CHAT_STORE before externalization). */
+const BACKUP_STORES = [BIBLE_STORE, BOOK_STORE, CHAT_STORE, MEMO_STORE, CHAT_BLOB_STORE] as const;
 
 interface BookRecord extends BookSource {
   addedAt: number;
@@ -137,7 +140,7 @@ export class IndexedDbStore implements VisualReaderStore {
     const records = await this.getAll<BookRecord>(BOOK_STORE);
     return records
       .sort((a, b) => b.addedAt - a.addedAt)
-      .map((b) => ({ id: b.id, title: b.title, ...(b.author ? { author: b.author } : {}), addedAt: b.addedAt }));
+      .map((b) => ({ id: b.id, title: b.title, ...(b.author ? { author: b.author } : {}), addedAt: b.addedAt, type: libraryTypeOf(b) }));
   }
 
   async removeBook(id: string): Promise<void> {
@@ -165,7 +168,36 @@ export class IndexedDbStore implements VisualReaderStore {
   }
 
   async deleteChatHistory(bookId: string): Promise<void> {
-    return this.delete(CHAT_STORE, bookId);
+    await this.delete(CHAT_STORE, bookId);
+    await this.clearChatBlobs(bookId);
+  }
+
+  /** Externalized chat image bytes, keyed `${chatId}::${id}` so a chat's blobs delete together. */
+  async putImageBlob(chatId: string, id: string, bytes: ArrayBuffer, mimeType: string): Promise<void> {
+    return this.put(CHAT_BLOB_STORE, `${chatId}::${id}`, { bytes, mimeType });
+  }
+
+  async getImageBlob(chatId: string, id: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined> {
+    return this.get(CHAT_BLOB_STORE, `${chatId}::${id}`);
+  }
+
+  /** Drop every externalized image blob for a chat (keys prefixed `${chatId}::`) via a key cursor. */
+  private async clearChatBlobs(chatId: string): Promise<void> {
+    const db = await this.dbPromise;
+    const range = IDBKeyRange.bound(`${chatId}::`, `${chatId}::￿`);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(CHAT_BLOB_STORE, "readwrite");
+      const req = tx.objectStore(CHAT_BLOB_STORE).openKeyCursor(range);
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (cursor) {
+          tx.objectStore(CHAT_BLOB_STORE).delete(cursor.key);
+          cursor.continue();
+        }
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
   }
 
   async getMemo(key: string): Promise<string | undefined> {
@@ -256,6 +288,7 @@ function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(BOOK_STORE)) db.createObjectStore(BOOK_STORE);
       if (!db.objectStoreNames.contains(CHAT_STORE)) db.createObjectStore(CHAT_STORE);
       if (!db.objectStoreNames.contains(MEMO_STORE)) db.createObjectStore(MEMO_STORE);
+      if (!db.objectStoreNames.contains(CHAT_BLOB_STORE)) db.createObjectStore(CHAT_BLOB_STORE);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);

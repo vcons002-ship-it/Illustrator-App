@@ -22,6 +22,9 @@ export interface TasksPanelProps {
   onAdvanceStep: (planId: string, stepId: string) => Promise<void> | void;
   /** Toggle ONE specific step done/undone — the timeline checkbox + detail ticks. */
   onToggleStepDone: (planId: string, stepId: string, done: boolean) => Promise<void> | void;
+  /** Mark a WHOLE task complete (true) or reopen it (false) — the per-card "✓ Complete task" button.
+   * Works for a plain to-do with no steps as well as a multi-step plan. */
+  onCompleteTask: (planId: string, complete: boolean) => Promise<void> | void;
   /** Add a task with an optional due date + repeat rule. `planNow` true → the assistant plans it
    * into dated sub-tasks; false → add a plain stub (no planning) the user can plan later. */
   onCreateTask: (title: string, dueIso?: string, recurrence?: TaskRecurrence, planNow?: boolean) => void;
@@ -65,6 +68,7 @@ function PlanCard({
   onPlan,
   onAdvance,
   onToggleStep,
+  onComplete,
   onIgnoreTask,
   onDelete,
   onAddDetails,
@@ -76,6 +80,8 @@ function PlanCard({
   onPlan: () => void;
   onAdvance: (stepId: string) => void;
   onToggleStep: (stepId: string, done: boolean) => void;
+  /** Mark the whole task complete (true) or reopen it (false). */
+  onComplete: (complete: boolean) => void;
   onIgnoreTask?: () => void;
   onDelete: () => void;
   /** Add details/answers — stored on the task and re-planned with at the next sweep. */
@@ -230,6 +236,15 @@ function PlanCard({
             ✓ Mark step done
           </button>
         ) : null}
+        {plan.status === "completed" ? (
+          <button style={btn} onClick={() => onComplete(false)} title="Reopen this task — mark it not done">
+            ↺ Reopen
+          </button>
+        ) : (
+          <button style={btnPrimary} onClick={() => onComplete(true)} title="Mark this whole task complete">
+            ✓ Complete task
+          </button>
+        )}
         {onIgnoreTask ? (
           <button
             style={btn}
@@ -254,6 +269,7 @@ export const TasksPanel = memo(function TasksPanel({
   onOpenTask,
   onAdvanceStep,
   onToggleStepDone,
+  onCompleteTask,
   onCreateTask,
   onPlanTask,
   onScanNow,
@@ -333,6 +349,7 @@ export const TasksPanel = memo(function TasksPanel({
       onPlan={() => onPlanTask(p.id)}
       onAdvance={(stepId) => void onAdvanceStep(p.id, stepId)}
       onToggleStep={(stepId, done) => void onToggleStepDone(p.id, stepId, done)}
+      onComplete={(complete) => void onCompleteTask(p.id, complete)}
       {...(onIgnoreTask ? { onIgnoreTask: () => onIgnoreTask(p.id) } : {})}
       {...(onAddTaskDetails ? { onAddDetails: (text: string) => onAddTaskDetails(p.id, text) } : {})}
       onDelete={() => void onDelete(p.id)}

@@ -113,6 +113,20 @@ export const CONTROLLABLE_SETTINGS: ControllableSetting[] = [
     describe: "automatic task scheduling — let the task assistant schedule/prep without a click each (on/off)",
   },
   {
+    key: "allowMarkets",
+    label: "markets tools",
+    aliases: ["markets", "markets tools", "stock tools", "trading tools", "market tools", "stocks", "finance tools", "quotes"],
+    kind: BOOL,
+    describe: "markets tools — advertise the keyless stock-quote / technical-analysis / price-alert tools in chat (on/off)",
+  },
+  {
+    key: "allowSubAgents",
+    label: "sub-agent fan-out",
+    aliases: ["sub-agents", "subagents", "sub agent", "fan-out", "fan out", "parallel agents", "delegate", "spawn agents"],
+    kind: BOOL,
+    describe: "sub-agent fan-out — advertise the delegate / spawn_agents tools in chat (on/off)",
+  },
+  {
     key: "nativeIllustration",
     label: "native cloud illustration",
     aliases: ["native illustration", "native mode", "native cloud", "one-api"],
@@ -125,6 +139,13 @@ export const CONTROLLABLE_SETTINGS: ControllableSetting[] = [
     aliases: ["ground facts", "grounding", "fact grounding", "search grounding"],
     kind: BOOL,
     describe: "ground technical facts in web search (on/off)",
+  },
+  {
+    key: "appManagedSteps",
+    label: "app-managed steps",
+    aliases: ["app managed steps", "app-managed steps", "reliable steps", "reliable multi-step", "managed steps", "step mode"],
+    kind: BOOL,
+    describe: "app-managed steps — the app runs multi-step checklists and ticks each step from observed evidence (on/off)",
   },
   {
     key: "lowVram",

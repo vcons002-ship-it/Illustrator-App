@@ -14,6 +14,7 @@ import {
   LOCAL_IMAGE_MODELS,
   imageModelVramCostGb,
   serverModelVramCostGb,
+  defaultLoadedWindow,
   recommendImageModePairings,
   OLLAMA_TEXT_MODELS,
   getImageStyle,
@@ -253,6 +254,12 @@ export interface ReaderSettings {
   /** Windows shell for run_command: "cmd" (default) or "powershell". Ignored on macOS/Linux
    * (always sh). Lets PowerShell-centric workflows run pwsh cmdlets without the `powershell -Command` wrapper. */
   commandShell?: "cmd" | "powershell";
+  /** Desktop + requires allowCommands. Advertise the delegate_coding_task tool: hand a hard, multi-file
+   * coding job to an EXTERNAL coding agent running headless against the same local model. Off by
+   * default; the model only sees the tool when this is on, and the runtime checks the agent is installed. */
+  delegateCoding?: boolean;
+  /** Which external coding agent delegate_coding_task drives: "aider" (default) or "codex" (backup). */
+  codingAgentBackend?: "aider" | "codex";
   /** Parallel coding agents: let the manager model auto-resolve a merge conflict between agent
    * branches (validated, then committed — or aborted if it can't). Default on. */
   autoResolveConflicts?: boolean;
@@ -285,6 +292,20 @@ export interface ReaderSettings {
    * sub-agent work behind a batching server. Falls back to the main model when unset/unreachable. */
   subAgentServerUrl?: string;
   subAgentModel?: string;
+  /** OFF by default: advertise the parallel sub-agent fan-out tools (delegate / spawn_agents) in
+   * chat. Off keeps a one-on-one chat lean (these are orchestration primitives most chats don't
+   * need); a configured sub-agent backend (subAgentServerUrl/subAgentModel) auto-enables them too. */
+  allowSubAgents?: boolean;
+  /** App-managed steps (reliable multi-step). When ON, a multi-step chat task runs through the app's
+   * workflow executor: the model compiles the plan, then the APP hands it one step at a time and ticks
+   * each off from OBSERVED evidence (a render, a saved file, a reply) — the model never calls
+   * complete_step. Far more reliable across models (especially weak local ones). Auto-enabled for a
+   * weak/local chat model; OFF otherwise (the model drives its own checklist). */
+  appManagedSteps?: boolean;
+  /** OFF by default: advertise the keyless markets tools (stock_quote, market_analysis, price alerts,
+   * trading_script) in chat. Off so a non-trading chat isn't carrying the finance suite; connecting
+   * Schwab or the TradingView bridge auto-enables them regardless. */
+  allowMarkets?: boolean;
   /** Desktop only, OFF by default: let the assistant drive your TradingView Desktop chart
    * (set symbol, add studies, read state, inject Pine) via its DevTools bridge. Chart-only
    * — it never trades. Requires TradingView Desktop launched with remote debugging. */
@@ -796,7 +817,7 @@ export function SettingsPanel({
                       type="number"
                       min={1024}
                       step={1024}
-                      placeholder={textModelContext?.loaded ? `default ${textModelContext.loaded}` : "Ollama default"}
+                      placeholder={`auto ${defaultLoadedWindow(model, value.gpuVramMb)}${textModelContext?.loaded ? ` · Modelfile ${textModelContext.loaded}` : ""}`}
                       value={cur ?? ""}
                       onChange={(e) => {
                         const n = Number(e.target.value);
@@ -1496,6 +1517,22 @@ export function SettingsPanel({
               keywords="run commands shell screen capture workspace autonomous test code execute conflicts"
             >
               <>
+                <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 12 }}>
+                  <input
+                    type="checkbox"
+                    checked={value.appManagedSteps ?? false}
+                    onChange={(e) => set({ appManagedSteps: e.target.checked })}
+                  />
+                  <span>
+                    App-managed steps (reliable multi-step)
+                    <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                      For a task with several steps, the assistant lays out the plan and then the app runs it — handing
+                      the model one step at a time and ticking each off only when it sees the step actually happen (an
+                      image rendered, a file saved, an answer given). Far more reliable than letting the model track its
+                      own checklist, especially with smaller local models. Off by default (the model drives its own list).
+                    </span>
+                  </span>
+                </label>
                 <div
                   style={{
                     marginTop: 12,
@@ -1549,6 +1586,41 @@ export function SettingsPanel({
                   </label>
                 )}
                 {(value.allowCommands ?? false) && (
+                  <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 6 }}>
+                    <input
+                      type="checkbox"
+                      checked={value.delegateCoding ?? false}
+                      onChange={(e) => set({ delegateCoding: e.target.checked })}
+                    />
+                    <span>
+                      Delegate hard coding jobs to an external agent
+                      <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                        Adds a <code>delegate_coding_task</code> tool: the assistant can hand a tough,
+                        multi-file coding job to an external coding agent running on your <b>same local
+                        model</b>, which edits the workspace itself; the app captures the diff. Needs the
+                        chosen agent installed; if it isn't, the assistant just does the change the normal
+                        way. Off by default; desktop only.
+                      </span>
+                    </span>
+                  </label>
+                )}
+                {(value.allowCommands ?? false) && (value.delegateCoding ?? false) && (
+                  <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
+                    <span style={{ fontSize: 13 }}>Coding agent</span>
+                    <select
+                      value={value.codingAgentBackend ?? "aider"}
+                      onChange={(e) => set({ codingAgentBackend: e.target.value === "codex" ? "codex" : "aider" })}
+                    >
+                      <option value="aider">Aider (pipx install aider-chat)</option>
+                      <option value="codex">Codex CLI (npm i -g @openai/codex)</option>
+                    </select>
+                    <span style={{ opacity: 0.55, fontSize: 11 }}>
+                      Which agent runs the delegated job. Aider has an architect/editor split; Codex is the
+                      backup. Both run on your local Ollama model.
+                    </span>
+                  </label>
+                )}
+                {(value.allowCommands ?? false) && (
                   <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
                     <span style={{ fontSize: 13 }}>Windows shell</span>
                     <select
@@ -1594,6 +1666,21 @@ export function SettingsPanel({
               keywords="github git gh token google gmail calendar tasks oauth schwab markets options tradingview chart scan inbox focus"
             >
               <>
+                <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={value.allowMarkets ?? false}
+                    onChange={(e) => set({ allowMarkets: e.target.checked })}
+                  />
+                  <span>
+                    Offer markets tools in chat (quotes, technicals, alerts)
+                    <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                      Advertises the keyless <b>stock quote / technical-analysis / price-alert</b> tools to the
+                      assistant. Off by default so a non-trading chat stays lean; connecting Schwab or the TradingView
+                      bridge below turns it on automatically.
+                    </span>
+                  </span>
+                </label>
                 <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
                   <input
                     type="checkbox"
@@ -1738,9 +1825,23 @@ export function SettingsPanel({
               q={query}
               order={11}
               title="🧠 Parallel sub-agents (advanced)"
-              keywords="parallel sub-agents concurrency worker model vllm endpoint qwen fast"
+              keywords="parallel sub-agents concurrency worker model vllm endpoint qwen fast delegate spawn"
             >
               <>
+                <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={value.allowSubAgents ?? false}
+                    onChange={(e) => set({ allowSubAgents: e.target.checked })}
+                  />
+                  <span>
+                    Offer sub-agent fan-out in chat (<code>delegate</code> / <code>spawn_agents</code>)
+                    <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                      Lets the assistant hand off or parallelise read-only research across several sub-agents. Off by
+                      default to keep ordinary chats lean; configuring a worker endpoint below turns it on automatically.
+                    </span>
+                  </span>
+                </label>
                 <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 }}>
                   <span>Parallel sub-agents</span>
                   <select

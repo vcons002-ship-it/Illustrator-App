@@ -449,6 +449,89 @@ export function serverModelVramCostGb(name: string): number {
   return Math.ceil(params * bytesPerParam + 1.5);
 }
 
+/**
+ * Whether the chat LLM + the image model both fit in VRAM (with headroom) — drives whether the worker
+ * EVICTS the chat LLM for a render. Returns "fit" / "nofit" / "unknown" ("unknown" when VRAM or either
+ * model size couldn't be estimated). The caller's rule with low-VRAM OFF: free ONLY on "nofit" — keep
+ * the model loaded on "fit" OR "unknown" (a cold reload of a big model is the expensive part; never pay
+ * it on a guess). PURE. */
+export function chatImageVramFit(opts: { gpuVramMb?: number | undefined; imageGb: number; chatGb: number; headroomGb?: number | undefined }): "fit" | "nofit" | "unknown" {
+  const { gpuVramMb, imageGb, chatGb } = opts;
+  const headroomGb = opts.headroomGb ?? 2;
+  if (!gpuVramMb || gpuVramMb <= 0 || imageGb <= 0 || chatGb <= 0) return "unknown";
+  return (imageGb + chatGb + headroomGb) * 1024 <= gpuVramMb ? "fit" : "nofit";
+}
+
+/**
+ * A ComfyUI used earlier this session keeps its checkpoint RESIDENT in VRAM after a render (ComfyUI
+ * only releases on an explicit `/free`). Once the reader switches the image backend to an external
+ * AUTOMATIC1111, that stale ComfyUI model squats the GPU, so the A1111 render spills to system RAM and
+ * crawls. This returns the last-known ComfyUI URL to `/free` BEFORE an A1111 render, or `undefined` when
+ * there's nothing to do — A1111 isn't the active backend, no ComfyUI URL is remembered, or it's the same
+ * server as A1111. The per-backend URL memory (`localServerUrlByBackend.comfyui`) survives the switch, so
+ * the URL is still available. PURE. */
+export function staleComfyUrlToFree(s: {
+  engineBackend?: string | undefined;
+  localBackend?: string | undefined;
+  engineBaseUrl?: string | undefined;
+  localServerUrl?: string | undefined;
+  localServerUrlByBackend?: { comfyui?: string | undefined } | undefined;
+}): string | undefined {
+  if ((s.engineBackend ?? s.localBackend) !== "a1111") return undefined;
+  const comfyUrl = s.localServerUrlByBackend?.comfyui?.trim();
+  const activeUrl = (s.engineBaseUrl ?? s.localServerUrl)?.trim();
+  if (!comfyUrl) return undefined;
+  if (comfyUrl === activeUrl) return undefined; // ComfyUI URL IS the A1111 server — nothing separate to free
+  return comfyUrl;
+}
+
+/**
+ * A safe DEFAULT Ollama loaded-context window (num_ctx) so a small model isn't split into shared RAM.
+ * Ollama, given no num_ctx, loads at its own (often huge) default window and pre-allocates a KV cache
+ * sized to that whole window — its load-time fit ESTIMATE then overflows VRAM and it offloads layers to
+ * CPU even when real usage is tiny. A modest window keeps the estimate honest so all layers stay on the
+ * GPU. Sizes from the model's weights + leftover VRAM (reusing the kv math), clamped to 8192..32768;
+ * conservative 8192 when VRAM is unknown. PURE. */
+export function defaultLoadedWindow(modelName: string, gpuVramMb?: number): number {
+  const MIN = 8192;
+  const MAX = 32768;
+  if (!gpuVramMb || gpuVramMb <= 0) return MIN;
+  const weightsGb = serverModelVramCostGb(modelName); // 0 when the tag has no parseable params
+  const freeGb = gpuVramMb / 1024;
+  const kvBudgetGb = Math.max(0, freeGb - (weightsGb || 4) - 1); // leave ~1GB compute/overhead
+  const kvPer8k = Math.max(1, Math.round(((weightsGb || 4) / 20) * 2)); // GB of KV per 8k tokens
+  const extraTokens = Math.floor((kvBudgetGb / kvPer8k) * 8192);
+  const window = MIN + Math.max(0, extraTokens);
+  return Math.min(MAX, Math.max(MIN, Math.floor(window / 2048) * 2048));
+}
+
+/**
+ * The chat model's ACTUALLY-LOADED context window (tokens), used to size the in-context history/reply
+ * budgets. On the Ollama path the app SENDS `num_ctx = defaultLoadedWindow(...)` (see buildProviders),
+ * and a per-request num_ctx OVERRIDES the model's Modelfile — so the loaded window is that sent value,
+ * capped by the architectural max; the Modelfile `num_ctx` (`infoLoaded`) is NOT what's loaded and is
+ * ignored. Other backends (bundled llama-server launched at a fixed `-c`, LM Studio) don't take our
+ * num_ctx, so they trust the queried Modelfile value, else the arch max capped at Ollama's small
+ * default. Returns `undefined` when nothing is known (caller falls back to its conservative defaults).
+ * PURE — the budget code and the num_ctx we send now agree, instead of the budget assuming ~4096 while
+ * Ollama loaded 8k–32k (which trimmed a just-written file out of context). */
+export function resolveLoadedContextTokens(opts: {
+  isOllama: boolean;
+  model: string;
+  gpuVramMb?: number | undefined;
+  infoLoaded?: number | undefined;
+  infoMax?: number | undefined;
+  ollamaDefault?: number | undefined;
+}): number | undefined {
+  const { isOllama, model, gpuVramMb, infoLoaded, infoMax } = opts;
+  if (isOllama) {
+    const sent = defaultLoadedWindow(model, gpuVramMb); // what buildProviders sends as num_ctx
+    return infoMax ? Math.min(infoMax, sent) : sent;
+  }
+  const ollamaDefault = opts.ollamaDefault ?? 4096;
+  return infoLoaded ?? (infoMax ? Math.min(infoMax, ollamaDefault) : undefined);
+}
+
 /** One installed chat model that can run ALONGSIDE the chosen image model. */
 export interface ImagePairingOption {
   /** Installed chat model id (e.g. an Ollama tag). */

@@ -714,6 +714,11 @@ export class ComfyUIBackend implements LocalEngineBackend {
     } finally {
       socket?.close();
       signal?.removeEventListener("abort", onAbort);
+      // LOW-VRAM: ComfyUI keeps the diffusion model resident in VRAM after a render (its model cache),
+      // which starves a co-resident local LLM (the prompt/task engine). When low-VRAM is on, explicitly
+      // unload the image model + free the VRAM cache so the GPU is handed back between renders. Awaited
+      // so the VRAM is actually released by the time generate() resolves and the LLM reloads.
+      if (input.lowVram) await this.freeMemory();
     }
   }
 
@@ -742,6 +747,23 @@ export class ComfyUIBackend implements LocalEngineBackend {
       return parseSystemStats(await res.json());
     } catch {
       return [];
+    }
+  }
+
+  /**
+   * Unload models + free ComfyUI's VRAM cache (POST /free) so a co-resident local LLM can reclaim the
+   * GPU after a render. Only called in low-VRAM mode (the default keeps the model hot for the next
+   * image). Best-effort: freeing is an optimization, never required for correctness.
+   */
+  async freeMemory(): Promise<void> {
+    try {
+      await this.transport.send({
+        url: `${this.baseUrl}/free`,
+        method: "POST",
+        body: { unload_models: true, free_memory: true },
+      });
+    } catch {
+      /* best-effort — the GPU just stays warm if ComfyUI can't free right now */
     }
   }
 

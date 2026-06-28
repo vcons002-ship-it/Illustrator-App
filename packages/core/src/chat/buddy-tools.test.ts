@@ -3,17 +3,117 @@ import {
   ALWAYS_GATED_TOOLS,
   MAX_BUDDY_TOOL_ROUNDS,
   buildBuddySystemPrompt,
+  buildProjectGuideBlock,
+  buildToolCallFormat,
   describeBuddyToolActivity,
   formatBuddyToolResult,
   isRetryableError,
   looksLikeToolJson,
+  nativeToolCallsToText,
+  normalizeBuddyPersona,
+  ollamaToolSchemas,
   parseBuddyToolCall,
   parseBuddyToolCalls,
+  planHasPendingStep,
+  planQueueResumeFeedback,
   progressNudge,
   stripToolCallJson,
   toolFailureDirective,
   toolLimitNudge,
 } from "./buddy-tools.js";
+
+describe("parseBuddyToolCall — set_plan steps", () => {
+  it("accepts bare-string steps (legacy) with no stepDetails", () => {
+    expect(parseBuddyToolCall('{"tool":"set_plan","goal":"count","steps":["Say 1","Say 2"]}')).toEqual({
+      tool: "set_plan",
+      goal: "count",
+      steps: ["Say 1", "Say 2"],
+    });
+  });
+
+  it("accepts object steps with needs/onFail → aligned stepDetails", () => {
+    const parsed = parseBuddyToolCall(
+      '{"tool":"set_plan","steps":[{"do":"Generate image A","needs":"image"},{"do":"Save recap","needs":"file","onFail":"skip"},"Just say hi"]}',
+    );
+    expect(parsed).toEqual({
+      tool: "set_plan",
+      steps: ["Generate image A", "Save recap", "Just say hi"],
+      stepDetails: [{ needs: "image" }, { needs: "file", onFail: "skip" }, {}],
+    });
+  });
+});
+
+describe("parseBuddyToolCall — edit_file", () => {
+  it("parses an edit_file with one or more search/replace edits", () => {
+    expect(
+      parseBuddyToolCall('{"tool":"edit_file","path":"src/a.py","edits":[{"search":"x","replace":"y"}]}'),
+    ).toEqual({ tool: "edit_file", path: "src/a.py", edits: [{ search: "x", replace: "y" }] });
+  });
+  it("drops an edit_file with no usable edits or no path", () => {
+    expect(parseBuddyToolCall('{"tool":"edit_file","path":"a.py","edits":[]}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"edit_file","path":"a.py","edits":[{"replace":"y"}]}')).toBeUndefined(); // no search
+    expect(parseBuddyToolCall('{"tool":"edit_file","edits":[{"search":"x","replace":"y"}]}')).toBeUndefined(); // no path
+  });
+  it("formats an edit_file result (applied / failed / hard error)", () => {
+    expect(formatBuddyToolResult({ tool: "edit_file", path: "a.py", edits: [{ search: "x", replace: "y" }] }, { editFile: { path: "a.py", ok: true, applied: 1, summary: "[edit_file applied 1 edit(s) to a.py.]" } })).toContain("applied 1 edit");
+    expect(formatBuddyToolResult({ tool: "edit_file", path: "a.py", edits: [] }, { editFile: { path: "a.py", ok: false, error: "file not found" } })).toContain("read_file it and retry");
+  });
+});
+
+describe("truncation: warn, don't silently cut, on args bound for an external program", () => {
+  it("flags a run_command cut to its cap and warns in the result", () => {
+    const call = parseBuddyToolCall(JSON.stringify({ tool: "run_command", command: "x".repeat(5000) }));
+    expect(call).toBeTruthy();
+    expect((call as { truncated?: boolean }).truncated).toBe(true);
+    expect(formatBuddyToolResult(call!, { command: { stdout: "", stderr: "", code: 0 } })).toContain("CUT before running");
+  });
+
+  it("flags an oversize write_file content (but keeps a normal one unflagged + untrimmed)", () => {
+    const big = parseBuddyToolCall(JSON.stringify({ tool: "write_file", path: "a.txt", content: "y".repeat(200_001) }));
+    expect((big as { truncated?: boolean }).truncated).toBe(true);
+    // a normal write keeps significant whitespace and carries no truncation flag
+    const normal = parseBuddyToolCall(JSON.stringify({ tool: "write_file", path: "a.txt", content: "\n  hi\n" }));
+    expect(normal).toEqual({ tool: "write_file", path: "a.txt", content: "\n  hi\n" });
+  });
+
+  it("flags an oversize delegate_coding_task / generate_image and leaves in-bounds calls clean", () => {
+    expect((parseBuddyToolCall(JSON.stringify({ tool: "delegate_coding_task", task: "z".repeat(40_000) })) as { truncated?: boolean }).truncated).toBe(true);
+    expect((parseBuddyToolCall(JSON.stringify({ tool: "generate_image", prompt: "p".repeat(3000) })) as { truncated?: boolean }).truncated).toBe(true);
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "generate_image", prompt: "a cat" }))).toEqual({ tool: "generate_image", prompt: "a cat" });
+  });
+
+  it("adds no warning when nothing was truncated", () => {
+    const call = parseBuddyToolCall(JSON.stringify({ tool: "run_command", command: "ls" }))!;
+    expect(formatBuddyToolResult(call, { command: { stdout: "", stderr: "", code: 0 } })).not.toContain("CUT before running");
+  });
+});
+
+describe("parseBuddyToolCall — delegate_coding_task", () => {
+  it("parses a task with optional files + verify", () => {
+    expect(
+      parseBuddyToolCall('{"tool":"delegate_coding_task","task":"add an endpoint","files":["a.py","",""],"verify":"pytest -q"}'),
+    ).toEqual({ tool: "delegate_coding_task", task: "add an endpoint", files: ["a.py"], verify: "pytest -q" });
+  });
+  it("parses a bare task, dropping empty file lists", () => {
+    expect(parseBuddyToolCall('{"tool":"delegate_coding_task","task":"refactor"}')).toEqual({
+      tool: "delegate_coding_task",
+      task: "refactor",
+    });
+    expect(parseBuddyToolCall('{"tool":"delegate_coding_task","task":"x","files":["  "]}')).toEqual({
+      tool: "delegate_coding_task",
+      task: "x",
+    });
+  });
+  it("drops a delegate_coding_task with no task", () => {
+    expect(parseBuddyToolCall('{"tool":"delegate_coding_task","files":["a.py"]}')).toBeUndefined();
+  });
+  it("formats the result (changed / not installed / no run)", () => {
+    const call = { tool: "delegate_coding_task" as const, task: "x" };
+    expect(formatBuddyToolResult(call, { delegateCoding: { ok: true, installed: true, summary: "[delegate_coding_task: Aider changed 2 file(s)…]" } })).toContain("Aider changed 2 file");
+    expect(formatBuddyToolResult(call, { delegateCoding: { ok: false, installed: false, summary: "x" } })).toContain("Install Aider");
+    expect(formatBuddyToolResult(call, {})).toContain("did not run");
+  });
+});
 
 describe("parseBuddyToolCall", () => {
   it("parses the search tools", () => {
@@ -62,6 +162,47 @@ describe("parseBuddyToolCall", () => {
     expect(
       parseBuddyToolCall('{"tool":"open_web_text","url":"javascript:alert(1)"}'),
     ).toBeUndefined();
+  });
+
+  it("normalizes the single open_content tool into the internal open_* shapes by source", () => {
+    expect(parseBuddyToolCall('{"tool":"open_content","source":"library","id":"text-1"}')).toEqual({
+      tool: "open_library_book",
+      id: "text-1",
+      visuals: false,
+    });
+    expect(
+      parseBuddyToolCall('{"tool":"open_content","source":"web","url":"https://x.test/a","title":"A"}'),
+    ).toMatchObject({ tool: "open_web_text", url: "https://x.test/a", title: "A" });
+    expect(
+      parseBuddyToolCall('{"tool":"open_content","source":"pasted","text":"Once upon a time"}'),
+    ).toMatchObject({ tool: "open_pasted_text", text: "Once upon a time", mode: "fiction" });
+    expect(
+      parseBuddyToolCall('{"tool":"open_content","source":"code","text":"const x=1","language":"ts"}'),
+    ).toMatchObject({ tool: "open_code", code: "const x=1", language: "ts" });
+    // Invalid / incomplete open_content is rejected (no source, bad url).
+    expect(parseBuddyToolCall('{"tool":"open_content","source":"web"}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"open_content"}')).toBeUndefined();
+  });
+
+  it("auto-detects fiction vs technical for open_content when mode is omitted", () => {
+    expect(parseBuddyToolCall('{"tool":"open_content","source":"web","url":"https://x.test/a-short-story"}')).toMatchObject({
+      mode: "fiction",
+    });
+    expect(
+      parseBuddyToolCall('{"tool":"open_content","source":"web","url":"https://arxiv.org/abs/1234"}'),
+    ).toMatchObject({ mode: "technical" });
+    // An explicit mode always wins over the heuristic.
+    expect(
+      parseBuddyToolCall('{"tool":"open_content","source":"web","url":"https://arxiv.org/abs/1","mode":"fiction"}'),
+    ).toMatchObject({ mode: "fiction" });
+  });
+
+  it("the prompt advertises ONE open_content tool, not the four separate open_* tools", () => {
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(p).toContain('"tool":"open_content"');
+    expect(p).not.toContain('{"tool":"open_web_text"');
+    expect(p).not.toContain('{"tool":"open_library_book"');
+    expect(p).not.toContain('{"tool":"open_pasted_text"');
   });
 
   it("parses the assistant-side tools (images, random picks, style, render)", () => {
@@ -216,9 +357,9 @@ describe("formatBuddyToolResult", () => {
     expect(style).toContain('art style "Oil painting"');
     expect(style).toContain("per chapter");
     expect(style).toContain("as each chapter finishes");
-    expect(
-      formatBuddyToolResult({ tool: "generate_image", prompt: "an apple" }, { image: { ok: true } }),
-    ).toContain("shown to the reader");
+    const imgResult = formatBuddyToolResult({ tool: "generate_image", prompt: "an apple" }, { image: { ok: true } });
+    expect(imgResult).toContain("an apple"); // tagged with the prompt so later batches are distinguishable
+    expect(imgResult).toMatch(/rendered|showed/i);
     expect(
       formatBuddyToolResult(
         { tool: "calculate", expression: "sqrt(144) * 2" },
@@ -249,44 +390,162 @@ describe("formatBuddyToolResult", () => {
 describe("buildBuddySystemPrompt", () => {
   it("tells the buddy that created docs (spreadsheets/code/text) are auto-saved to the library", () => {
     // Guards against the buddy hallucinating "I can't save a created document to your library".
-    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(prompt).toMatch(/SAVED TO THE LIBRARY AUTOMATICALLY/);
     expect(prompt).toMatch(/NEVER tell the reader you can't save a created/i);
     expect(prompt).toMatch(/Excel \(\.xlsx\)/);
   });
 
-  it("lists the library with ids and switches persona text", () => {
+  it("tells the buddy to pass clean tool arguments, not the raw phrasing", () => {
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], canSearchFiles: true });
+    expect(prompt).toMatch(/Pass CLEAN tool arguments/);
+    expect(prompt).toMatch(/not the reader's whole sentence/);
+    // find_files specifically: query is the distinctive name/type words, not the whole sentence.
+    expect(prompt).toMatch(/just the distinctive NAME words plus the file TYPE/);
+  });
+
+  it("app-managed steps: shows only the current step and withdraws complete_step", () => {
+    const plan = { goal: "make art", steps: [{ text: "Generate image A", status: "done" as const }, { text: "Generate image B", status: "pending" as const }] };
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], activePlan: plan, appManagedSteps: true });
+    expect(prompt).toContain("YOUR CURRENT STEP");
+    expect(prompt).toContain("▸ Generate image B"); // the first not-done step
+    expect(prompt).not.toContain("Generate image A"); // earlier done step isn't shown
+    expect(prompt).not.toContain('"tool":"complete_step"'); // the meta-tool is withdrawn
+    expect(prompt).toContain('"needs"'); // set_plan is described with the contract annotation
+  });
+
+  it("legacy mode still drives off the full checklist with complete_step", () => {
+    const plan = { goal: "g", steps: [{ text: "A", status: "done" as const }, { text: "B", status: "pending" as const }] };
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], activePlan: plan });
+    expect(prompt).toContain("CURRENT CHECKLIST");
+    expect(prompt).toContain('"tool":"complete_step"');
+  });
+
+  it("lists the library with ids", () => {
     const prompt = buildBuddySystemPrompt({
-      persona: "entertainment",
+      persona: "assistant",
       library: [{ id: "text-1", title: "Dune", author: "Frank Herbert", addedAt: 1 }],
     });
     expect(prompt).toContain('"Dune" by Frank Herbert — id: text-1');
-    expect(prompt).toContain("reading buddy");
-    const tech = buildBuddySystemPrompt({ persona: "technical", library: [] });
-    expect(tech).toContain("research buddy");
-    expect(tech).toContain("LIBRARY is empty");
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toContain("LIBRARY is empty");
   });
 
-  it("freeform leads as a general assistant and never steers toward books", () => {
-    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+  it("the assistant leads as a general one-stop assistant and never steers toward books", () => {
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(prompt).toContain("general conversational assistant");
-    expect(prompt).toContain("OPERATE ON REQUEST");
+    expect(prompt).toContain("ONE-STOP AI workspace");
+    expect(prompt).toContain("ON REQUEST");
+    // The single voice must not carry the old reading/research-buddy framing.
+    expect(prompt).not.toContain("reading buddy");
+    expect(prompt).not.toContain("research buddy");
     expect(prompt).toContain("NEVER steer the chat toward opening");
   });
 
-  it("planning persona adds the planning playbook (coding project + complex deliverable)", () => {
+  it("weaves the soul name into the FIRST line and puts the identity block before the tools", () => {
+    const p = buildBuddySystemPrompt({
+      persona: "assistant",
+      library: [],
+      selfName: "Sage",
+      selfSoul: "WHO YOU ARE (your own durable identity …):\n- Name: Sage\n- silver hair",
+      userSoul: "WHO THE READER IS …:\n- Name: Alex",
+    });
+    expect(p.startsWith("Your name is Sage — answer to it.")).toBe(true);
+    // The identity blocks come BEFORE the routing guide + tool catalog (so they're not buried).
+    expect(p.indexOf("WHO YOU ARE")).toBeGreaterThan(-1);
+    expect(p.indexOf("WHO YOU ARE")).toBeLessThan(p.indexOf("HOW TO PICK A TOOL"));
+    expect(p.indexOf("WHO THE READER IS")).toBeLessThan(p.indexOf("HOW TO PICK A TOOL"));
+  });
+
+  it("omits the name prefix when no soul name is set", () => {
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(p).not.toContain("Your name is");
+    expect(p).toContain("You are the assistant on the home screen of Visual Reader");
+  });
+
+  it("story mode demands prose-only beats and never an empty/meta reply", () => {
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [], storyActive: true });
+    expect(p).toContain("STORY MODE");
+    expect(p).toMatch(/ONLY the next beat/i);
+    expect(p).toMatch(/Do NOT call any tool/i);
+    // The never-empty clause closes the empty/tool-only reply gap at the source.
+    expect(p).toMatch(/ALWAYS write a beat/i);
+    expect(p).toMatch(/never reply with an empty message/i);
+  });
+
+  it("planning mode adds the planning playbook (coding project + complex deliverable)", () => {
     const p = buildBuddySystemPrompt({ persona: "planning", library: [] });
     expect(p).toContain("PLANNING partner");
     expect(p).toContain("CODING PROJECT");
     expect(p).toContain("COMPLEX DELIVERABLE");
     expect(p).toContain("PLANNING MODE"); // the appended playbook
     expect(p).toMatch(/clarifying questions/i); // understand-first step
-    // The planning playbook is exclusive to the planning persona.
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain("PLANNING MODE");
+    // The planning playbook is exclusive to planning mode.
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).not.toContain("PLANNING MODE");
   });
 
-  it("every persona carries the show-me-vs-generate image-tool rule", () => {
-    for (const persona of ["freeform", "entertainment", "technical"] as const) {
+  it("opens with a tool-routing guide that resolves the look-alike choices", () => {
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(p).toContain("HOW TO PICK A TOOL");
+    // The routing guide precedes the full tool catalog so it's read first.
+    expect(p.indexOf("HOW TO PICK A TOOL")).toBeLessThan(p.indexOf("TOOLS — use one"));
+    // Confusable pairs are disambiguated.
+    expect(p).toMatch(/read \(source:"url"\).*open_web_text/s);
+    expect(p).toMatch(/search_images.*generate_image/s);
+  });
+
+  it("routing guide only mentions desktop/run/google tools when those are available", () => {
+    const base = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(base).not.toContain("find_files"); // no filesystem → no find_files routing line
+    const files = buildBuddySystemPrompt({ persona: "assistant", library: [], canSearchFiles: true });
+    expect(files).toContain("find it by NAME → find_files");
+    const cmds = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true });
+    expect(cmds).toContain("write_file then run_command"); // RUN-code routing
+    expect(cmds).toContain("the reader KEEPS"); // substantial files/documents → write_file, not a fenced block
+  });
+
+  it("buildProjectGuideBlock: wraps non-empty AGENTS.md text; empty when blank; capped", async () => {
+    const { PROJECT_GUIDE_MAX_CHARS } = await import("./buddy-tools.js");
+    expect(buildProjectGuideBlock("")).toBe("");
+    expect(buildProjectGuideBlock("   \n  ")).toBe("");
+    const b = buildProjectGuideBlock("Build: npm run build. Use 2-space indent.");
+    expect(b).toContain("PROJECT NOTES");
+    expect(b).toContain("npm run build");
+    expect(buildProjectGuideBlock("x".repeat(PROJECT_GUIDE_MAX_CHARS + 500)).length).toBeLessThanOrEqual(PROJECT_GUIDE_MAX_CHARS + 200);
+  });
+
+  it("buildToolCallFormat: a single tool → an object schema forcing {tool:<name>, …args}", () => {
+    const f = buildToolCallFormat(["generate_image"]) as { type: string; required: string[]; properties: { tool: { enum: string[] }; prompt?: unknown } };
+    expect(f.type).toBe("object");
+    expect(f.required).toEqual(["tool", "prompt"]); // tool + the tool's own required arg
+    expect(f.properties.tool.enum).toEqual(["generate_image"]);
+    expect(f.properties.prompt).toBeDefined();
+  });
+
+  it("buildToolCallFormat: multiple tools → a oneOf union; unknown names dropped → undefined", () => {
+    const u = buildToolCallFormat(["write_file", "read_file"]) as { oneOf: unknown[] };
+    expect(Array.isArray(u.oneOf)).toBe(true);
+    expect(u.oneOf).toHaveLength(2);
+    expect(buildToolCallFormat(["no_such_tool"])).toBeUndefined();
+  });
+
+  it("buildFileLedgerBlock: terse, bounded, read_file cue; empty when no files", async () => {
+    const { buildFileLedgerBlock, LEDGER_MAX } = await import("./buddy-tools.js");
+    expect(buildFileLedgerBlock([])).toBe("");
+    const block = buildFileLedgerBlock([{ path: "dragon.html", lines: 474 }]);
+    expect(block).toContain("dragon.html (474 lines)");
+    expect(block).toContain("read_file"); // tells the model to re-open before editing
+    // Bounded to the most-recent LEDGER_MAX entries.
+    const many = Array.from({ length: LEDGER_MAX + 5 }, (_, i) => ({ path: `f${i}.py`, lines: 1 }));
+    const rows = buildFileLedgerBlock(many).split("\n").filter((l) => l.startsWith("- "));
+    expect(rows).toHaveLength(LEDGER_MAX);
+    expect(rows[rows.length - 1]).toContain(`f${LEDGER_MAX + 4}.py`); // keeps the newest
+    expect(buildFileLedgerBlock([{ path: "a.py", lines: 1 }])).toContain("(1 line)"); // singular
+    const g = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true });
+    expect(g).toContain("draft_email");
+  });
+
+  it("carries the show-me-vs-generate image-tool rule in both modes", () => {
+    for (const persona of ["assistant", "planning"] as const) {
       const prompt = buildBuddySystemPrompt({ persona, library: [] });
       expect(prompt).toContain("PICKING THE IMAGE TOOL");
       expect(prompt).toContain("search_images");
@@ -295,15 +554,22 @@ describe("buildBuddySystemPrompt", () => {
     }
   });
 
+  it("normalizeBuddyPersona maps legacy voices forward to the single assistant", () => {
+    for (const legacy of ["freeform", "entertainment", "technical", "", undefined, null, "bogus"]) {
+      expect(normalizeBuddyPersona(legacy)).toBe("assistant");
+    }
+    expect(normalizeBuddyPersona("planning")).toBe("planning");
+  });
+
   it("advertises find_files only when filesystem access is available (desktop)", () => {
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain("find_files");
-    const desktop = buildBuddySystemPrompt({ persona: "freeform", library: [], canSearchFiles: true });
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).not.toContain("find_files");
+    const desktop = buildBuddySystemPrompt({ persona: "assistant", library: [], canSearchFiles: true });
     expect(desktop).toContain('"tool":"find_files"');
     expect(desktop).toContain("OWN COMPUTER");
   });
 
   it("routes a compose-the-steps request (research + files + drafting) to plan_task", () => {
-    const g = buildBuddySystemPrompt({ persona: "freeform", library: [], canGoogle: true });
+    const g = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true, canTaskTools: true });
     expect(g).toContain('"tool":"plan_task"');
     // It should tell the model to hand a multi-source job (e.g. job posting + resume on disk) to
     // plan_task in ONE call instead of doing it inline and giving up.
@@ -311,11 +577,51 @@ describe("buildBuddySystemPrompt", () => {
     expect(g).toMatch(/in ONE call|the WHOLE thing/);
   });
 
+  it("gates the task-orchestrator tools (plan_task + scheduling) behind canTaskTools", () => {
+    const off = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true });
+    expect(off).not.toContain('"tool":"plan_task"');
+    expect(off).not.toContain('"tool":"schedule_task"');
+    const on = buildBuddySystemPrompt({ persona: "assistant", library: [], canTaskTools: true });
+    expect(on).toContain('"tool":"plan_task"');
+    expect(on).toContain('"tool":"schedule_task"');
+    expect(on).toContain('"tool":"cancel_scheduled"');
+  });
+
+  it("gates the sub-agent fan-out tools (delegate + spawn_agents) behind canSubAgents", () => {
+    const off = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(off).not.toContain('"tool":"delegate"');
+    expect(off).not.toContain('"tool":"spawn_agents"');
+    const on = buildBuddySystemPrompt({ persona: "assistant", library: [], canSubAgents: true });
+    expect(on).toContain('"tool":"delegate"');
+    expect(on).toContain('"tool":"spawn_agents"');
+  });
+
+  it("gates the keyless markets suite behind canMarkets", () => {
+    const off = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(off).not.toContain('"tool":"stock_quote"');
+    expect(off).not.toContain('"tool":"market_analysis"');
+    expect(off).not.toContain('"tool":"trading_script"');
+    expect(off).not.toContain('"tool":"set_price_alert"');
+    const on = buildBuddySystemPrompt({ persona: "assistant", library: [], canMarkets: true });
+    expect(on).toContain('"tool":"stock_quote"');
+    expect(on).toContain('"tool":"market_analysis"');
+    expect(on).toContain('"tool":"trading_script"');
+    expect(on).toContain('"tool":"set_price_alert"');
+  });
+
+  it("planning persona is NOT required for task tools, but does not itself leak markets/sub-agents", () => {
+    // canTaskTools is driven at the call site (planning mode / active task / opt-in); the prompt itself
+    // just honors the flag. Markets + sub-agents stay independent.
+    const planning = buildBuddySystemPrompt({ persona: "planning", library: [] });
+    expect(planning).not.toContain('"tool":"stock_quote"');
+    expect(planning).not.toContain('"tool":"spawn_agents"');
+  });
+
   it("advertises GitHub repo work only when a token is configured (canGithub)", () => {
-    const off = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    const off = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(off).not.toContain("GITHUB:");
     expect(off).not.toContain("gh repo clone");
-    const on = buildBuddySystemPrompt({ persona: "freeform", library: [], canGithub: true });
+    const on = buildBuddySystemPrompt({ persona: "assistant", library: [], canGithub: true });
     expect(on).toContain("GITHUB:");
     expect(on).toContain("gh pr create");
     expect(on).toContain("gh auth setup-git");
@@ -328,24 +634,24 @@ describe("buildBuddySystemPrompt", () => {
 
   it("explains WHERE code runs whenever commands are on, and names the chosen folder when set", () => {
     // No command access → no execution-context note at all.
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain("WHERE YOUR CODE RUNS");
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).not.toContain("WHERE YOUR CODE RUNS");
     // Commands on, no folder chosen → still explains the default workspace (so the model knows where
     // its code runs) and the non-interactive caveat.
-    const cmds = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true });
+    const cmds = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true });
     expect(cmds).toContain("WHERE YOUR CODE RUNS");
     expect(cmds).toMatch(/workspace/i);
     expect(cmds).toMatch(/NON-INTERACTIVE/i);
     expect(cmds).toMatch(/cd.*does NOT carry|cd.*not carry/i); // the per-command caveat
     // A chosen folder is named explicitly.
-    const folder = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true, workingDir: "/home/u/projects/site" });
+    const folder = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true, workingDir: "/home/u/projects/site" });
     expect(folder).toContain("/home/u/projects/site");
   });
 
   it("advertises run_command + screenshot only when explicitly enabled (opt-in)", () => {
-    const off = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    const off = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(off).not.toContain("run_command");
     expect(off).not.toContain("screenshot");
-    const on = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true });
+    const on = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true });
     expect(on).toContain('"tool":"run_command"');
     expect(on).toContain('"tool":"screenshot"');
     expect(on).toContain("APPROVE");
@@ -357,12 +663,12 @@ describe("buildBuddySystemPrompt", () => {
 
   it("tells the buddy to FOLLOW THROUGH by chaining tools, with the write+run clause only when commands are on", () => {
     // The chaining principle (act on a clear intent, e.g. call generate_image) is always present.
-    const base = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    const base = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(base).toContain("FOLLOW THROUGH");
     expect(base).toMatch(/CALL generate_image/);
     // The write-code-then-run-it clause only makes sense (and only appears) with command access.
     expect(base).not.toMatch(/write_file a Python script and run_command/);
-    const cmds = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true });
+    const cmds = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true });
     expect(cmds).toMatch(/write_file a Python script and run_command/);
   });
 });
@@ -408,17 +714,17 @@ describe("skill tools", () => {
   });
 
   it("always advertises the skill tools and the grounded-in-truth rule", () => {
-    const p = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(p).toContain('"tool":"read_skill"');
     expect(p).toContain('"tool":"save_skill"');
     expect(p).toContain("GROUNDED IN TRUTH");
   });
 
   it("tells the model to ACT (emit the tool JSON) instead of promising a search/read it never runs", () => {
-    const p = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    const p = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(p).toMatch(/ACT, DON'T NARRATE/);
     expect(p).toMatch(/search_web to find sources/);
-    expect(p).toMatch(/read_url to pull a specific page's text/);
+    expect(p).toMatch(/read \(source:"url"\) to pull a specific page's text/);
     expect(p).toMatch(/open_web_text to open a page/);
     expect(p).toMatch(/NEVER state specific facts you have not verified/i);
   });
@@ -442,7 +748,7 @@ describe("update_setting tool", () => {
       value: 4,
     });
     expect(parseBuddyToolCall('{"tool":"update_setting","field":"  ","value":true}')).toBeUndefined();
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"update_setting"');
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toContain('"tool":"update_setting"');
   });
 
   it("confirms an applied change (flagging sensitive ones) and reports a bad one", () => {
@@ -466,7 +772,7 @@ describe("stock_quote tool", () => {
   it("parses + advertises stock_quote, and feeds the quote back for analysis", () => {
     expect(parseBuddyToolCall('{"tool":"stock_quote","symbol":"AAPL"}')).toEqual({ tool: "stock_quote", symbol: "AAPL" });
     expect(parseBuddyToolCall('{"tool":"stock_quote","symbol":"  "}')).toBeUndefined();
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"stock_quote"');
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [], canMarkets: true })).toContain('"tool":"stock_quote"');
     const out = formatBuddyToolResult({ tool: "stock_quote", symbol: "AAPL" }, { quote: { symbol: "AAPL", close: 204, open: 200 } });
     expect(out).toContain("AAPL: 204");
     expect(out).toMatch(/financial advice/i);
@@ -480,7 +786,7 @@ describe("stock_quote tool", () => {
       interval: "5m",
       range: "1d",
     });
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"market_analysis"');
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [], canMarkets: true })).toContain('"tool":"market_analysis"');
     const out = formatBuddyToolResult(
       { tool: "market_analysis", symbol: "AAPL" },
       { indicators: { symbol: "AAPL", bars: 78, last: 204, vwap: 202, rsi14: 61 } },
@@ -498,7 +804,7 @@ describe("stock_quote tool", () => {
       length: 9,
     });
     expect(parseBuddyToolCall('{"tool":"trading_script","platform":"pine","kind":"bogus"}')).toBeUndefined();
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"trading_script"');
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [], canMarkets: true })).toContain('"tool":"trading_script"');
     const out = formatBuddyToolResult(
       { tool: "trading_script", platform: "thinkscript", kind: "vwap_cross" },
       { tradingScript: { lang: "ts", script: "# VWAP\nAlert(...)", where: "thinkorswim → Studies" } },
@@ -532,7 +838,7 @@ describe("create_spreadsheet tool", () => {
   it("requires at least one valid column, and is advertised", () => {
     expect(parseBuddyToolCall('{"tool":"create_spreadsheet","title":"x","columns":[]}')).toBeUndefined();
     expect(parseBuddyToolCall('{"tool":"create_spreadsheet","title":"x"}')).toBeUndefined();
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"create_spreadsheet"');
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toContain('"tool":"create_spreadsheet"');
   });
 });
 
@@ -561,10 +867,26 @@ describe("story as you go tools", () => {
     expect(parseBuddyToolCall('{"tool":"start_story","title":"x"}')).toBeUndefined();
   });
 
-  it("documents 'me and you' role-play in the system prompt", () => {
-    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [] });
-    expect(prompt).toMatch(/me and you/i);
-    expect(prompt).toMatch(/remember/i); // portray the reader's character from memory
+  it("switches into story-writing mode once a story is open (prose, not tools)", () => {
+    const idle = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(idle).not.toMatch(/STORY MODE/);
+    const active = buildBuddySystemPrompt({ persona: "assistant", library: [], storyActive: true, storyMode: "direct" });
+    expect(active).toMatch(/STORY MODE/);
+    // The story tools are no longer advertised — the reply itself becomes the next beat.
+    expect(active).not.toContain('"tool":"continue_story"');
+    expect(active).not.toContain('"tool":"render_scene"');
+    expect(active).not.toContain('"tool":"set_story_cadence"');
+    // Roleplay narration names the played characters.
+    const rp = buildBuddySystemPrompt({
+      persona: "assistant",
+      library: [],
+      storyActive: true,
+      storyMode: "roleplay",
+      storyPlay: { me: "Toll", you: "Mira" },
+    });
+    expect(rp).toMatch(/ROLEPLAY/i);
+    expect(rp).toContain("Toll");
+    expect(rp).toContain("Mira");
   });
 
   it("parses continue_story / render_scene / set_story_cadence", () => {
@@ -614,11 +936,18 @@ describe("story as you go tools", () => {
     ).toMatch(/only when you ask/);
   });
 
-  it("advertises the story tools in the system prompt", () => {
-    const prompt = buildBuddySystemPrompt({ persona: "freeform", library: [] });
-    expect(prompt).toContain('"tool":"start_story"');
-    expect(prompt).toContain('"tool":"continue_story"');
-    expect(prompt).toMatch(/STORY MODE/);
+  it("never advertises any story tool — the reply is the beat", () => {
+    const idle = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(idle).not.toContain('"tool":"start_story"');
+    expect(idle).not.toContain('"tool":"continue_story"'); // nothing to continue when no story is open
+    // It points the reader at the Open Book → Story as you go click instead.
+    expect(idle).toContain("Story as you go");
+    const active = buildBuddySystemPrompt({ persona: "assistant", library: [], storyActive: true, storyMode: "direct" });
+    expect(active).not.toContain('"tool":"start_story"'); // started by a click
+    expect(active).not.toContain('"tool":"continue_story"'); // continuation is a plain prose reply now
+    expect(active).not.toContain('"tool":"render_scene"');
+    expect(active).not.toContain('"tool":"set_story_cadence"');
+    expect(active).toMatch(/STORY MODE/);
   });
 });
 
@@ -629,7 +958,7 @@ describe("setup_help tool", () => {
       topic: "image generation",
     });
     expect(parseBuddyToolCall('{"tool":"setup_help","topic":"  "}')).toBeUndefined();
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"setup_help"');
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toContain('"tool":"setup_help"');
   });
 
   it("feeds a matched guide back as a walkthrough, and falls back to a topic list", () => {
@@ -742,21 +1071,21 @@ describe("google tools", () => {
   });
 
   it("injects the current date/time and advertises schedule/mail lookups when connected", () => {
-    const dated = buildBuddySystemPrompt({ persona: "freeform", library: [], now: "Sunday, June 15, 2026, 4:58 PM (UTC-04:00)" });
+    const dated = buildBuddySystemPrompt({ persona: "assistant", library: [], now: "Sunday, June 15, 2026, 4:58 PM (UTC-04:00)" });
     expect(dated).toContain("CURRENT DATE & TIME: Sunday, June 15, 2026");
-    const g = buildBuddySystemPrompt({ persona: "freeform", library: [], canGoogle: true });
+    const g = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true });
     expect(g).toContain("this week");
     expect(g).toMatch(/when did I last pay/i);
     expect(g).toContain("timeMin");
   });
 
-  it("parses plan_task (natural-language planning) and advertises it always", () => {
+  it("parses plan_task (natural-language planning) and advertises it when task tools are on", () => {
     expect(parseBuddyToolCall('{"tool":"plan_task","request":"plan my car registration renewal"}')).toEqual({
       tool: "plan_task",
       request: "plan my car registration renewal",
     });
     expect(parseBuddyToolCall('{"tool":"plan_task","request":"  "}')).toBeUndefined();
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toContain('"tool":"plan_task"');
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [], canTaskTools: true })).toContain('"tool":"plan_task"');
   });
 
   it("parses the task-execution tools and shows them only with an active task", () => {
@@ -775,8 +1104,8 @@ describe("google tools", () => {
     expect(parseBuddyToolCall('{"tool":"list_task_plans"}')).toEqual({ tool: "list_task_plans" });
     expect(parseBuddyToolCall('{"tool":"mark_step_done","planId":"t1"}')).toBeUndefined(); // no stepId
     // The step tools + the plan context appear only when a task is active.
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain('"tool":"mark_step_done"');
-    const active = buildBuddySystemPrompt({ persona: "freeform", library: [], activeTask: "ACTIVE TASK: Renew (plan id: t1)" });
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).not.toContain('"tool":"mark_step_done"');
+    const active = buildBuddySystemPrompt({ persona: "assistant", library: [], activeTask: "ACTIVE TASK: Renew (plan id: t1)" });
     expect(active).toContain("ACTIVE TASK: Renew");
     expect(active).toContain('"tool":"mark_step_done"');
     // With a task active, "plan/redo this" re-plans THAT task in place (no fork), and an
@@ -786,7 +1115,9 @@ describe("google tools", () => {
   });
 
   it("tells the model that plan_task refines the ACTIVE task in place (no duplicate fork)", () => {
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).toMatch(/re-plans THAT task in place/i);
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [], canTaskTools: true })).toMatch(
+      /re-plans THAT task in place/i,
+    );
   });
 
   it("feeds an email back as the reader's DATA, and confirms a created event/task", () => {
@@ -808,8 +1139,8 @@ describe("google tools", () => {
   });
 
   it("advertises the Google tools only when connected (canGoogle), with the confirm-before-create rule", () => {
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [] })).not.toContain('"tool":"gmail_search"');
-    const on = buildBuddySystemPrompt({ persona: "freeform", library: [], canGoogle: true });
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).not.toContain('"tool":"gmail_search"');
+    const on = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true });
     expect(on).toContain('"tool":"gmail_search"');
     expect(on).toContain('"tool":"create_event"');
     expect(on).toContain('"tool":"create_task"');
@@ -818,18 +1149,18 @@ describe("google tools", () => {
   });
 
   it("when Google is NOT connected, tells the model so it can't fabricate a connection or data", () => {
-    const off = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    const off = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(off).toMatch(/GOOGLE IS NOT CONNECTED/);
     expect(off).toMatch(/NEVER invent emails, events, or to-dos/i);
     expect(off).toMatch(/setup_help/); // offers the real reconnect path
     // The disconnected guard must NOT smuggle the read tools back in.
     expect(off).not.toContain('"tool":"gmail_search"');
     // ...and the connected build must NOT carry the "not connected" warning.
-    expect(buildBuddySystemPrompt({ persona: "freeform", library: [], canGoogle: true })).not.toMatch(/GOOGLE IS NOT CONNECTED/);
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true })).not.toMatch(/GOOGLE IS NOT CONNECTED/);
   });
 
   it("swaps the confirm rule for auto-approval when canAutomateTasks is on", () => {
-    const auto = buildBuddySystemPrompt({ persona: "freeform", library: [], canGoogle: true, canAutomateTasks: true });
+    const auto = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true, canAutomateTasks: true });
     expect(auto).toContain("Task automation is ON");
     expect(auto).toContain("without asking each time");
     expect(auto).toMatch(/NEVER submit forms, pay, or send/);
@@ -894,6 +1225,95 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
     expect(parseBuddyToolCalls("just a normal sentence")).toEqual([]);
   });
 
+  describe("native tool_calls (Ollama tools) → app text", () => {
+    it("serializes object-arg tool_calls and round-trips through the parser", () => {
+      const text = nativeToolCallsToText([{ function: { name: "generate_image", arguments: { prompt: "a red castle" } } }]);
+      expect(parseBuddyToolCalls(text)).toEqual([{ tool: "generate_image", prompt: "a red castle" }]);
+    });
+    it("handles string (double-encoded) arguments", () => {
+      const text = nativeToolCallsToText([{ function: { name: "search_web", arguments: '{"query":"otters"}' } }]);
+      expect(parseBuddyToolCalls(text)).toEqual([{ tool: "search_web", query: "otters" }]);
+    });
+    it("tolerates the flat {name,arguments} shape and skips a nameless call", () => {
+      const text = nativeToolCallsToText([{ name: "calculate", arguments: { expression: "2+2" } }, { function: { arguments: {} } }]);
+      expect(parseBuddyToolCalls(text)).toEqual([{ tool: "calculate", expression: "2+2" }]);
+    });
+  });
+
+  describe("ollamaToolSchemas", () => {
+    it("always advertises the core tools and gates the rest", () => {
+      const base = ollamaToolSchemas({});
+      const names = base.map((s) => s.function.name);
+      expect(names).toContain("generate_image");
+      expect(names).toContain("search_web");
+      expect(names).not.toContain("run_command");
+      expect(names).not.toContain("find_files");
+      const full = ollamaToolSchemas({ canSearchFiles: true, canRunCommands: true, canWolfram: true }).map((s) => s.function.name);
+      expect(full).toEqual(expect.arrayContaining(["find_files", "read_file", "write_file", "run_command", "wolfram"]));
+    });
+    it("every schema's name round-trips through parseToolObject (names/args match the parser)", () => {
+      for (const s of ollamaToolSchemas({ canSearchFiles: true, canRunCommands: true, canWolfram: true })) {
+        // Fill EVERY property with a valid sample value (enum→first, url→a real URL, array→["x"], …) and
+        // confirm the parser accepts the round-tripped call — catching any name/arg drift from the parser.
+        const args: Record<string, unknown> = {};
+        for (const [key, p] of Object.entries(s.function.parameters.properties)) {
+          args[key] = p.enum
+            ? p.enum[0]
+            : p.type === "array"
+              ? // An array of OBJECTS (e.g. edit_file.edits) → one object with each sub-prop filled.
+                p.items?.properties
+                ? [Object.fromEntries(Object.keys(p.items.properties).map((k) => [k, "x"]))]
+                : ["x"]
+              : p.type === "boolean"
+                ? true
+                : key === "url" || key === "ref"
+                  ? "http://x.test"
+                  : "x";
+        }
+        const text = nativeToolCallsToText([{ function: { name: s.function.name, arguments: args } }]);
+        expect(parseBuddyToolCalls(text).length, `tool ${s.function.name} should round-trip`).toBe(1);
+      }
+    });
+  });
+
+  describe("Gemma tool_code / function-call syntax", () => {
+    it("parses a fenced tool_code call (the form Gemma emits instead of JSON)", () => {
+      const reply = "Sure!\n```tool_code\ngenerate_image(prompt=\"a red castle at dusk\")\n```";
+      expect(parseBuddyToolCalls(reply)).toEqual([{ tool: "generate_image", prompt: "a red castle at dusk" }]);
+    });
+
+    it("unwraps print(...) and the default_api. prefix", () => {
+      const reply = "```tool_code\nprint(default_api.generate_image(prompt=\"a fox in snow\"))\n```";
+      expect(parseBuddyToolCalls(reply)).toEqual([{ tool: "generate_image", prompt: "a fox in snow" }]);
+    });
+
+    it("maps a positional arg to the tool's primary param", () => {
+      expect(parseBuddyToolCalls('```tool_code\ngenerate_image("a dog on a skateboard")\n```')).toEqual([
+        { tool: "generate_image", prompt: "a dog on a skateboard" },
+      ]);
+      expect(parseBuddyToolCalls("search_web(query=\"otters holding hands\")")).toEqual([
+        { tool: "search_web", query: "otters holding hands" },
+      ]);
+    });
+
+    it("coerces kwargs (numbers stay numbers)", () => {
+      expect(parseBuddyToolCalls('generate_image(prompt="a sunset", steps=20)')).toEqual([
+        { tool: "generate_image", prompt: "a sunset", steps: 20 },
+      ]);
+    });
+
+    it("does NOT hijack a real ```python code block the model wrote for the reader", () => {
+      const reply = "Here's a script:\n```python\ngenerate_image(\"not a real tool call\")\nprint('hi')\n```";
+      expect(parseBuddyToolCalls(reply)).toEqual([]);
+    });
+
+    it("strips a tool_code call from the visible prose and flags it as a tool reply", () => {
+      const reply = "On it.\n```tool_code\ngenerate_image(prompt=\"a cat\")\n```";
+      expect(stripToolCallJson(reply)).toBe("On it.");
+      expect(looksLikeToolJson(reply)).toBe(true);
+    });
+  });
+
   it("tolerates the TRAILING COMMAS weaker local models emit (which strict JSON drops)", () => {
     // A single trailing comma before } used to make JSON.parse throw → the tool call was silently
     // dropped → the buddy "couldn't string together tools" / fell back to "I didn't catch that".
@@ -922,6 +1342,22 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
     expect(parseBuddyToolCalls('{"name":"search_web","arguments":"{\\"query\\":\\"strawberry\\"}"}')).toEqual([
       { tool: "search_web", query: "strawberry" },
     ]);
+  });
+
+  it("accepts the ReAct {action, action_input} shape instead of leaking it as prose", () => {
+    // The exact leak from the transcript: a capable model emitted the LangChain/ReAct envelope with a
+    // DOUBLE-ENCODED action_input (a JSON string), which the app didn't recognise, so the raw JSON
+    // showed up in the chat instead of running.
+    expect(parseBuddyToolCalls('{"action":"search_web","action_input":"{\\"query\\":\\"otters\\"}"}')).toEqual([
+      { tool: "search_web", query: "otters" },
+    ]);
+    // action_input as a plain object (not double-encoded) works too.
+    expect(parseBuddyToolCalls('{"action":"generate_image","action_input":{"prompt":"a fox in snow"}}')).toEqual([
+      { tool: "generate_image", prompt: "a fox in snow" },
+    ]);
+    // …and it's recognised as tool JSON, so the guards strip/flag it rather than rendering it.
+    expect(looksLikeToolJson('{"action":"generate_image","action_input":{"prompt":"a fox"}}')).toBe(true);
+    expect(stripToolCallJson('Sure!\n{"action":"search_web","action_input":{"query":"x"}}')).toBe("Sure!");
   });
 
   it("strips tool-call control tokens from the displayed prose", () => {
@@ -954,13 +1390,13 @@ describe("read_file tool", () => {
     expect(formatBuddyToolResult({ tool: "read_file", path: "/home/u/form.txt" }, { fileText: "Policy #123" })).toContain("Policy #123");
     expect(formatBuddyToolResult({ tool: "read_file", path: "/x" }, {})).toMatch(/couldn't read/i);
   });
-  it("find_files now surfaces paths so read_file can target a result", () => {
+  it("find_files now surfaces paths so read can target a result", () => {
     const out = formatBuddyToolResult(
       { tool: "find_files", query: "passport" },
       { files: [{ name: "passport.pdf", path: "/home/u/docs/passport.pdf" }] },
     );
     expect(out).toContain("/home/u/docs/passport.pdf");
-    expect(out).toMatch(/read_file/);
+    expect(out).toMatch(/read with source:"file"/);
   });
 });
 
@@ -1050,14 +1486,14 @@ describe("write_file tool", () => {
   });
 
   it("advertises write_file whenever commands are on (so it can save-then-run), but the autonomy note only when Autonomous workspace is on", () => {
-    const none = buildBuddySystemPrompt({ persona: "freeform", library: [] });
+    const none = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(none).not.toContain('"tool":"write_file"');
     // Commands on (but not autonomous): write_file IS available — it saves into the workspace so the
     // buddy can run its own file — but the no-click autonomy note is not shown.
-    const cmds = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true });
+    const cmds = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true });
     expect(cmds).toContain('"tool":"write_file"');
     expect(cmds).not.toMatch(/AUTONOMOUS WORKSPACE is ON/);
-    const auto = buildBuddySystemPrompt({ persona: "freeform", library: [], canRunCommands: true, canAutonomousWorkspace: true });
+    const auto = buildBuddySystemPrompt({ persona: "assistant", library: [], canRunCommands: true, canAutonomousWorkspace: true });
     expect(auto).toContain('"tool":"write_file"');
     expect(auto).toMatch(/AUTONOMOUS WORKSPACE is ON/);
   });
@@ -1138,5 +1574,77 @@ describe("failure feedback helpers", () => {
     expect(isRetryableError("connection refused")).toBe(true);
     expect(isRetryableError("Schwab isn't connected")).toBe(false);
     expect(isRetryableError("invalid symbol")).toBe(false);
+  });
+});
+
+describe("working-checklist queue auto-advance", () => {
+  const fivePlan = (doneCount: number) => ({
+    goal: "5 images of the scene",
+    steps: Array.from({ length: 5 }, (_, i) => ({
+      text: `Generate image ${i + 1}`,
+      status: (i < doneCount ? "done" : "pending") as "done" | "pending",
+    })),
+  });
+
+  it("planHasPendingStep — true while any step is unfinished, false when all done / no plan", () => {
+    expect(planHasPendingStep(fivePlan(0))).toBe(true);
+    expect(planHasPendingStep(fivePlan(4))).toBe(true);
+    expect(planHasPendingStep(fivePlan(5))).toBe(false);
+    expect(planHasPendingStep(undefined)).toBe(false);
+    expect(planHasPendingStep({ steps: [] })).toBe(false);
+  });
+
+  it("mid-queue resume: tick the current step, then DO the next one (not just mark it)", () => {
+    // Steps 1–2 done; the image for step 3 (▸ current) just rendered.
+    const fb = planQueueResumeFeedback("[tool generate_image: the image was generated and is shown to the reader]", fivePlan(2));
+    expect(fb).toContain("the image was generated"); // the raw tool result is carried through
+    expect(fb).toContain("2/5 done");
+    expect(fb).toContain("complete_step");
+    expect(fb).toContain("Generate image 3"); // the just-finished current step is named
+    expect(fb).toContain("Generate image 4"); // the next step to actually do
+    expect(fb).toMatch(/actually run its tool/i);
+    expect(fb).toMatch(/do NOT just mark it done/i);
+    // It must tell the model to keep going on its own rather than wait for the reader.
+    expect(fb).toMatch(/don't wait for the reader/i);
+    // ...and to narrate + tick exactly one step per reply (the anti-skip directive).
+    expect(fb).toMatch(/one short plain-text line/i);
+    expect(fb).toMatch(/never two in a row/i);
+  });
+
+  it("last step: tick it, then wrap up — no 'next step' instruction", () => {
+    const fb = planQueueResumeFeedback("[tool generate_image: the image was generated and is shown to the reader]", fivePlan(4));
+    expect(fb).toContain("4/5 done");
+    expect(fb).toMatch(/LAST step/);
+    expect(fb).toContain("Generate image 5");
+    expect(fb).toMatch(/wrap-up/i);
+  });
+
+  it("all steps done: just give the final result", () => {
+    const fb = planQueueResumeFeedback("[tool generate_image: …]", fivePlan(5));
+    expect(fb).toContain("5/5 done");
+    expect(fb).toMatch(/All steps are done/i);
+  });
+});
+
+describe("MULTI-STEP guidance — LEAN with no plan, discipline only mid-checklist (small-model regression fix)", () => {
+  it("with NO active plan, gives only a short single-vs-multi hint and DROPS the dense planning sermon", () => {
+    const sys = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    // A single action goes straight to its tool; only a genuine 2+ step task plans first.
+    expect(sys).toMatch(/MULTI-STEP vs SINGLE/);
+    expect(sys).toMatch(/call set_plan FIRST/);
+    expect(sys).toMatch(/do NOT make a plan for one step/);
+    // The bloat that derailed small models from just calling generate_image must be GONE here.
+    expect(sys).not.toMatch(/NARRATE EVERY STEP/);
+    expect(sys).not.toMatch(/VERY FIRST action is ALWAYS set_plan/);
+  });
+
+  it("mid-checklist (active plan), gives terse discipline: image steps need a real call, no waiting for 'continue'", () => {
+    const plan = { goal: "3 suns", steps: [{ text: "Generate image 1", status: "pending" as const }] };
+    const sys = buildBuddySystemPrompt({ persona: "assistant", library: [], activePlan: plan });
+    expect(sys).toMatch(/an image step REQUIRES an actual generate_image call/i);
+    expect(sys).toMatch(/re-runs you while steps remain/i);
+    expect(sys).toMatch(/don't wait for the reader to say 'continue'/i);
+    // Still no verbose narration mandate even mid-plan.
+    expect(sys).not.toMatch(/NARRATE EVERY STEP/);
   });
 });

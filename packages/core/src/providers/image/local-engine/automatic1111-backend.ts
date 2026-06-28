@@ -194,4 +194,20 @@ export class Automatic1111Backend implements LocalEngineBackend {
       /* best-effort — the HTTP abort already stopped us waiting */
     }
   }
+
+  /**
+   * Unload A1111's checkpoint from VRAM (POST /sdapi/v1/unload-checkpoint) so a co-resident local LLM can
+   * reclaim the GPU after a render — the same hand-off ComfyUI's /free gives. A1111 reloads the checkpoint
+   * automatically on the next txt2img, so this is safe to call between renders. Crucially it lets the app
+   * FREE the chat LLM before an A1111 render too: A1111 picks its VRAM/shared-RAM split at load time from
+   * whatever's free, so loading into a GPU still occupied by the LLM permanently strands part of the model
+   * in slow shared RAM. Best-effort: freeing is an optimization, never required for correctness.
+   */
+  async freeMemory(): Promise<void> {
+    try {
+      await this.transport.send({ url: `${this.baseUrl}/sdapi/v1/unload-checkpoint`, method: "POST", body: {} });
+    } catch {
+      /* best-effort — the GPU just stays warm if A1111 can't unload right now (e.g. an older build) */
+    }
+  }
 }

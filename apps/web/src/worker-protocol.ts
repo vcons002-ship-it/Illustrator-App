@@ -8,6 +8,7 @@ import type {
   BuddyToolCall,
   BuddyToolResultPayload,
   CalendarEvent,
+  CreatedFileRef,
   StockQuote,
   Indicators,
   PageText,
@@ -51,6 +52,12 @@ export type MainToWorker =
    * work, or re-opening the book (which `init`+`open` do for identity changes).
    */
   | { type: "tune"; settings: ReaderSettings }
+  /** The current set of files the assistant has written to the workspace this session, so the worker can
+   * inject a terse non-trimmable reminder into the buddy prompt (the model stays aware of what it made). */
+  | { type: "fileLedger"; files: CreatedFileRef[] }
+  /** The workspace's AGENTS.md / CONVENTIONS.md text (read by the host each turn), injected into the
+   * buddy prompt as durable project conventions. Empty string when there's no such file. */
+  | { type: "projectGuide"; text: string }
   | { type: "open"; book: BookSource }
   /** Patch the open book's edited data table(s) in place (no re-init), so the chat's
    * analyze_data sees edits made in the grid. Lightweight sibling of "open". */
@@ -65,6 +72,11 @@ export type MainToWorker =
   | { type: "pauseImages" }
   | { type: "resumeImages" }
   | { type: "regenerateStoryboard" }
+  /** Story header controls (no model round): set the auto-illustrate cadence, illustrate the latest
+   * beat on demand, or switch the writing workflow mid-story. */
+  | { type: "storySetCadence"; mode: "per-response" | "every-n" | "manual"; n?: number }
+  | { type: "storyRenderLatest" }
+  | { type: "storySetMode"; mode: "direct" | "roleplay" }
   | { type: "rebuildPrompts" }
   | { type: "regenerateAllImages" }
   | { type: "regenerateImage"; unitIndex: number }
@@ -223,8 +235,12 @@ export type MainToWorker =
        * and language), so the prompt tells the model to edit/run THAT file in place. */
       currentCodeFile?: { name: string; title: string; language?: string };
       /** The chat's current lightweight working checklist (set_plan/complete_step), injected into the
-       * prompt so the model resumes from the first unfinished step. */
+       * prompt so the model resumes from the first unfinished step. In app-managed-steps mode this is
+       * the host's live workflow rendered as a plan (only the current step shows). */
       plan?: BuddyPlan;
+      /** App-managed-steps mode is ON for this turn (the host decides — setting + weak-model auto-on):
+       * the prompt shows only the current step and complete_step is withdrawn (the host advances). */
+      appManagedSteps?: boolean;
     };
 
 export type WorkerToMain =

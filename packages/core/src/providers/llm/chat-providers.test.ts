@@ -167,6 +167,106 @@ describe("LocalServerLLMProvider.unload", () => {
   });
 });
 
+describe("LocalServerLLMProvider native tool calling", () => {
+  const SCHEMA = [
+    {
+      type: "function" as const,
+      function: { name: "generate_image", description: "make art", parameters: { type: "object" as const, properties: { prompt: { type: "string" } }, required: ["prompt"] } },
+    },
+  ];
+  // A fetchImpl that records the /api/chat request body and replays NDJSON lines (no streaming body →
+  // streamOllamaLines uses the buffered text() path).
+  const ndjsonFetch = (lines: unknown[], rec?: { body?: unknown }) =>
+    (async (_url: string, init: { body: string }) => {
+      if (rec) rec.body = JSON.parse(init.body);
+      return {
+        ok: true,
+        status: 200,
+        body: null,
+        text: async () => lines.map((l) => JSON.stringify(l)).join("\n"),
+        json: async () => ({}),
+        arrayBuffer: async () => new ArrayBuffer(0),
+      };
+    }) as unknown as typeof fetch;
+
+  it("sends tools + converts a returned tool_call into the app's text protocol (capability: tools)", async () => {
+    const rec: { body?: unknown } = {};
+    const p = new LocalServerLLMProvider({
+      baseUrl: "http://x/v1",
+      model: "gemma3-tools",
+      numCtx: 8192, // native /api/chat path
+      transport: new FakeTransport({ capabilities: ["completion", "tools"] }), // /api/show
+      fetchImpl: ndjsonFetch(
+        [
+          { message: { content: "" } },
+          { message: { content: "", tool_calls: [{ function: { name: "generate_image", arguments: { prompt: "a red castle" } } }] } },
+          { done: true, done_reason: "stop" },
+        ],
+        rec,
+      ),
+    });
+    const out = await p.chat(turns, { onToken: () => {}, tools: SCHEMA });
+    expect((rec.body as { tools?: unknown }).tools).toBeDefined(); // schemas were sent
+    expect(out).toContain('{"tool":"generate_image","prompt":"a red castle"}'); // tool_call → app text
+  });
+
+  it("does NOT send tools when the model lacks the tools capability (falls back to text)", async () => {
+    const rec: { body?: unknown } = {};
+    const p = new LocalServerLLMProvider({
+      baseUrl: "http://x/v1",
+      model: "gemma3",
+      numCtx: 8192,
+      transport: new FakeTransport({ capabilities: ["completion"] }), // no "tools"
+      fetchImpl: ndjsonFetch([{ message: { content: "I made it!" } }, { done: true }], rec),
+    });
+    const out = await p.chat(turns, { onToken: () => {}, tools: SCHEMA });
+    expect((rec.body as { tools?: unknown }).tools).toBeUndefined(); // no schemas sent
+    expect(out).toBe("I made it!"); // unchanged text path
+  });
+
+  it("grammar-constrains the reply (sends `format`) and SUPPRESSES native tools when toolFormat is set", async () => {
+    const rec: { body?: unknown } = {};
+    const p = new LocalServerLLMProvider({
+      baseUrl: "http://x/v1",
+      model: "gemma3-tools",
+      numCtx: 8192,
+      transport: new FakeTransport({ capabilities: ["completion", "tools"] }),
+      fetchImpl: ndjsonFetch([{ message: { content: '{"tool":"generate_image","prompt":"a castle"}' } }, { done: true }], rec),
+    });
+    const fmt = { type: "object", required: ["tool"], properties: { tool: { enum: ["generate_image"] } } };
+    const out = await p.chat(turns, { onToken: () => {}, tools: SCHEMA, toolFormat: fmt });
+    expect((rec.body as { format?: unknown }).format).toEqual(fmt); // grammar sent
+    expect((rec.body as { tools?: unknown }).tools).toBeUndefined(); // format wins over native tools
+    expect(out).toContain('{"tool":"generate_image","prompt":"a castle"}');
+  });
+});
+
+describe("LocalServerLLMProvider.evictOtherModels", () => {
+  it("evicts every resident model except the keep model (keep_alive:0)", async () => {
+    const t = new FakeTransport({ models: [{ model: "keep" }, { model: "stale-a" }, { name: "stale-b" }] });
+    const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "keep", transport: t });
+
+    const evicted = await p.evictOtherModels();
+    expect(evicted.sort()).toEqual(["stale-a", "stale-b"]);
+
+    // First request lists residents; the rest are keep_alive:0 unloads for the stale models only.
+    expect(t.requests[0]).toMatchObject({ method: "GET", url: expect.stringContaining("/api/ps") });
+    const unloaded = t.requests
+      .filter((r) => (r.body as { keep_alive?: number } | undefined)?.keep_alive === 0)
+      .map((r) => (r.body as { model: string }).model)
+      .sort();
+    expect(unloaded).toEqual(["stale-a", "stale-b"]);
+    expect(unloaded).not.toContain("keep");
+  });
+
+  it("evicts nothing when only the keep model is resident", async () => {
+    const t = new FakeTransport({ models: [{ model: "keep" }] });
+    const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "keep", transport: t });
+    expect(await p.evictOtherModels()).toEqual([]);
+    expect(t.requests).toHaveLength(1); // just the /api/ps query, no unloads
+  });
+});
+
 describe("provider chat()", () => {
   it("openai maps the turns 1:1 onto chat/completions", async () => {
     const t = new FakeTransport({ choices: [{ message: { content: " answer " } }] });

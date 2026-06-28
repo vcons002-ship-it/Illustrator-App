@@ -41,4 +41,6 @@ export interface LocalEngineBackend {
   listComponents(): Promise<LocalEngineComponents>;
   /** Generate one image with the given checkpoint. */
   generate(input: ImageGenerationInput, model: string): Promise<ImageGenerationOutput>;
+  /** Optional: ask the engine to unload its models / free VRAM now (e.g. ComfyUI /free). */
+  freeMemory?(): Promise<void>;
 }

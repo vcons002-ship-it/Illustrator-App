@@ -28,6 +28,8 @@ import {
   toRenderUnits,
   formatToolResult,
   formatBuddyToolResult,
+  planHasPendingStep,
+  planQueueResumeFeedback,
   stripToolCallJson,
   toolFailureDirective,
   anchorByParagraph,
@@ -35,7 +37,6 @@ import {
   conceptIntroductions,
   subjectFromCaption,
   rankLocalFiles,
-  formatFileSize,
   chartDatasetFromTable,
   buildAnalysisTable,
   recalcTable,
@@ -55,6 +56,15 @@ import {
   saveMemory,
   MAX_NOTE_CHARS,
   MAX_MEMORY_NOTES,
+  loadSoul,
+  saveSoul,
+  loadSoulName,
+  saveSoulName,
+  loadSoulImages,
+  saveSoulImages,
+  MAX_SOUL_NOTES,
+  MAX_SOUL_NOTE_CHARS,
+  MAX_SOUL_NAME_CHARS,
   loadTaskPlans,
   deleteTaskPlan,
   archiveTaskPlan,
@@ -62,6 +72,7 @@ import {
   removeIgnore,
   upsertTaskPlan,
   updateTaskStep,
+  setTaskPlanComplete,
   resolveActiveTaskPlanId,
   sessionLabelForPlan,
   agentBranchName,
@@ -140,14 +151,37 @@ import {
   type ProjectFile,
   type Skill,
   type MemoryNote,
+  type SoulNote,
+  type SoulKind,
+  type SoulImage,
   type BookSource,
   type BookSummary,
   type ChapterDataset,
   type BuddyPersona,
+  normalizeBuddyPersona,
   type BuddyPlan,
   type BuddyToolCall,
   type BuddyToolResultPayload,
+  type Workflow,
+  compileWorkflow,
+  evaluateStep,
+  advanceWorkflow,
+  activeStep,
+  isToolContract,
+  workflowToPlan,
+  workflowParked,
+  resumeWorkflow,
+  boundChatHistoryForMirror,
+  chunkArrayBuffer,
+  concatArrayBuffers,
+  externalizeChatImages,
+  externalizedImageId,
+  restoreInlineImages,
+  applyFileEdits,
+  summarizeFileEdits,
+  shouldAutoCompact,
   type ChatTurn,
+  type CreatedFileRef,
   type ContextUsage,
   type EncryptedSecrets,
   type StoreBackup,
@@ -167,7 +201,7 @@ import {
   type ExportImage,
   type ExportImages,
 } from "@visual-reader/epub";
-import { IMPORT_ACCEPT, importBookFile } from "./import-file.js";
+import { IMPORT_ACCEPT, importBookFile, type FileHandler } from "./import-file.js";
 import {
   CharacterBible,
   ChatBuddyPanel,
@@ -178,6 +212,9 @@ import {
   JsonTreeView,
   SkillsPanel,
   MemoriesPanel,
+  SoulPanel,
+  StorySetupModal,
+  type StoryStartPayload,
   TasksPanel,
   ScheduledTasksPanel,
   CalendarPanel,
@@ -197,6 +234,7 @@ import {
   LibraryPanel,
   SettingsPanel,
   useScrollDepth,
+  useNarrow,
   ConceptCard,
   ConceptText,
   HtmlParagraph,
@@ -204,6 +242,8 @@ import {
   InlineFigure,
   SupportRow,
   type DisplayResult,
+  type FileActions,
+  type FileRef,
   type InstalledModel,
   type LocalBackendId,
   type LocalEngineSource,
@@ -236,6 +276,8 @@ import {
   whichInterpreter,
   appRepoRoot,
   writeWorkspaceFile,
+  readWorkspaceFile,
+  delegateCodingTask,
   gitEnsureRepo,
   gitWorktreeCreate,
   gitCommitAll,
@@ -255,6 +297,7 @@ import {
   type RemoteServerStatus,
   saveExportFile,
   searchLocalFiles,
+  openPathOnPC,
 } from "./runtime.js";
 
 /** Chat-history key for the landing-page buddy's FIRST session — reserved, never a
@@ -269,34 +312,50 @@ interface BuddySession {
   label?: string;
 }
 
-/** How many bytes of inline (generated-image) data the chat MIRROR may carry across the active
- * session's history. The snapshot/`vrsync:chat` frame rides one WebSocket message; a tunnel
- * (Cloudflare) silently drops an oversized frame, which left a linked phone connected-but-blank as
- * generated images piled up. ~3 MB keeps the most-recent images and the full text. */
-const CHAT_MIRROR_IMAGE_BUDGET = 3_000_000;
+/** Build the universal-file-card descriptor for a generated image so it gets Download / Open-on-PC
+ * actions, named from its prompt. */
+function imageAttachment(prompt: string, image: { bytes: ArrayBuffer; mimeType: string }): FileRef {
+  const ext = image.mimeType.includes("jpeg") ? "jpg" : image.mimeType.includes("webp") ? "webp" : "png";
+  const stem =
+    (prompt || "image")
+      .replace(/[^\w]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40) || "image";
+  // Stable id so a linked phone can fetch these bytes back on demand after the mirror strips them.
+  const id = `img-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  // SHARE the generated image's buffer (no defensive copy): the inline image + this card hold the same
+  // bytes, so externalizeChatImages de-dups them to one blob and the in-RAM copy isn't doubled.
+  return { id, name: `${stem}.${ext}`, mime: image.mimeType, kind: "image", bytes: image.bytes };
+}
 
-/** Bound the chat history mirrored to a phone so its frame stays tunnel-safe: keep EVERY message's
- * text/structure intact, but carry inline image BYTES only for the most recent messages within the
- * budget (older generated images become a text-only bubble on the phone — they're untouched on the
- * desktop). Walks newest→oldest so recent images survive. */
-function boundChatMessagesForMirror(messages: StoredChatMessage[]): StoredChatMessage[] {
-  let budget = CHAT_MIRROR_IMAGE_BUDGET;
-  let stripped = false;
-  const out = messages.slice();
-  for (let i = out.length - 1; i >= 0; i--) {
-    const m = out[i]!;
-    const img = m.image;
-    if (img && "bytes" in img) {
-      if (img.bytes.byteLength <= budget) {
-        budget -= img.bytes.byteLength;
-      } else {
-        const { image: _drop, ...rest } = m; // keep the bubble (text), drop the heavy bytes
-        out[i] = rest;
-        stripped = true;
-      }
-    }
-  }
-  return stripped ? out : messages; // unchanged reference when nothing was trimmed (stable memo)
+const DATA_FILE_EXTS = new Set(["csv", "tsv", "json", "xlsx", "xls", "ods", "numbers", "xml", "yaml", "yml"]);
+const CODE_FILE_EXTS = new Set([
+  "js", "ts", "tsx", "jsx", "mjs", "cjs", "py", "rs", "go", "java", "kt", "c", "cc", "cpp", "h", "hpp",
+  "cs", "rb", "php", "swift", "sh", "bash", "css", "scss", "html", "htm", "sql", "toml", "ipynb",
+]);
+/** The display kind for a file the assistant just authored (write_file / a saved doc), from its
+ * extension — picks which universal file-card actions show (data grid, code, or document reader). */
+function createdFileKind(name: string): FileRef["kind"] {
+  const ext = (name.toLowerCase().split(".").pop() ?? "");
+  return DATA_FILE_EXTS.has(ext) ? "data" : CODE_FILE_EXTS.has(ext) ? "code" : "doc";
+}
+
+/** Is this code book renderable markup (HTML/SVG), so we can show the rendered PAGE — not just the
+ * source — in an in-app iframe? Detects by language, title extension, or a sniff of the source. PURE. */
+function markupPreviewKind(book: { language?: string; title?: string } | undefined, draft: string): "html" | "svg" | undefined {
+  if (!book) return undefined;
+  const lang = (book.language ?? "").toLowerCase();
+  const title = (book.title ?? "").toLowerCase();
+  const head = draft.slice(0, 400);
+  if (lang === "svg" || title.endsWith(".svg") || /^\s*<svg[\s>]/i.test(head)) return "svg";
+  if (
+    ["html", "htm", "xhtml", "xml", "markup"].includes(lang) ||
+    title.endsWith(".html") ||
+    title.endsWith(".htm") ||
+    /<!doctype html|<html[\s>]/i.test(head)
+  )
+    return "html";
+  return undefined;
 }
 
 /** Last path segment, for a session's display label (so a folder-bound session reads
@@ -343,6 +402,11 @@ function imageSearchMiss(query: string, error: string | undefined, hasSearchKey:
   );
 }
 
+/** How many checklist steps are done — used to tell whether a turn advanced the working plan. */
+function countDonePlanSteps(plan: BuddyPlan | undefined): number {
+  return plan ? plan.steps.filter((s) => s.status === "done").length : 0;
+}
+
 export function App() {
   const stored = useMemo(loadStoredSettings, []);
   const [settings, setSettings] = useState<ReaderSettings>(stored.settings);
@@ -366,6 +430,9 @@ export function App() {
   // Show the code book's analysis (glossary of symbols, module map, current illustration) in a side
   // pane alongside the editor, so it's available without leaving the editor for the read view.
   const [codeAnalysisOpen, setCodeAnalysisOpen] = useState(false);
+  // Render an HTML/SVG code book IN-APP (a sandboxed iframe) instead of showing its source — "open the
+  // page, not just the text". Works on the phone too (plain iframe srcDoc).
+  const [codePreviewOpen, setCodePreviewOpen] = useState(false);
   const [codeRunning, setCodeRunning] = useState(false);
   const [codeRunOutput, setCodeRunOutput] = useState<
     { stdout?: string; stderr?: string; code?: number; error?: string; cwd?: string } | undefined
@@ -408,6 +475,13 @@ export function App() {
   // status bar reads the live hook values instead.
   const [remoteProviders, setRemoteProviders] = useState<ProvidersDiagnostics | undefined>();
   const [remoteVram, setRemoteVram] = useState<EngineVram | undefined>();
+  // Low-VRAM deferred engine start: at boot we DON'T launch the app-managed ComfyUI (so a large local
+  // LLM can take the whole GPU); it spins up on the first image instead. `engineDeferredRef` marks that
+  // we skipped the eager start; `managedBaseUrlRef` holds the URL the moment it starts (read race-free,
+  // before the React settings sync); `engineStartingRef` coalesces concurrent lazy starts.
+  const engineDeferredRef = useRef(false);
+  const managedBaseUrlRef = useRef<string | undefined>(undefined);
+  const engineStartingRef = useRef<Promise<true | string> | undefined>(undefined);
   const [installedLoras, setInstalledLoras] = useState<string[]>([]);
   const [loraFamilyMap, setLoraFamilyMap] = useState<Record<string, string>>({});
   const [library, setLibrary] = useState<BookSummary[]>([]);
@@ -434,6 +508,9 @@ export function App() {
     pauseImages,
     resumeImages,
     regenerateStoryboard,
+    storySetCadence,
+    storyRenderLatest,
+    storySetMode,
     regenerateAllImages,
     regenerateImage,
     completeBook,
@@ -455,6 +532,9 @@ export function App() {
     resolveConflicts,
     chat,
     chatTool,
+    applyEngineConfig,
+    setFileLedger,
+    setProjectGuide,
     chatCancel,
     warmLlm,
     buddyChat,
@@ -568,6 +648,30 @@ export function App() {
     if (!isRemoteClient) await loadMemory(libraryStore).then(setMemories).catch(() => {});
     setShowMemories(true);
   }, [libraryStore, isRemoteClient]);
+
+  // The two identity "souls" — the assistant's own identity (self) and what it knows about the
+  // reader's own character (user). Same shared store the worker reads, edited via the Soul panels.
+  const [showSoul, setShowSoul] = useState<SoulKind | undefined>(undefined);
+  const [selfSoulNotes, setSelfSoulNotes] = useState<SoulNote[]>([]);
+  const [selfSoulName, setSelfSoulName] = useState("");
+  const [userSoulNotes, setUserSoulNotes] = useState<SoulNote[]>([]);
+  const [userSoulName, setUserSoulName] = useState("");
+  const [selfSoulImages, setSelfSoulImages] = useState<SoulImage[]>([]);
+  const [userSoulImages, setUserSoulImages] = useState<SoulImage[]>([]);
+  const setSoulNotes = (kind: SoulKind, n: SoulNote[]) => (kind === "self" ? setSelfSoulNotes(n) : setUserSoulNotes(n));
+  const setSoulName = (kind: SoulKind, n: string) => (kind === "self" ? setSelfSoulName(n) : setUserSoulName(n));
+  const setSoulImagesState = (kind: SoulKind, im: SoulImage[]) => (kind === "self" ? setSelfSoulImages(im) : setUserSoulImages(im));
+  const openSoul = useCallback(
+    async (kind: SoulKind) => {
+      await Promise.all([
+        loadSoul(libraryStore, kind).then((n) => setSoulNotes(kind, n)),
+        loadSoulName(libraryStore, kind).then((n) => setSoulName(kind, n)),
+        loadSoulImages(libraryStore, kind).then((im) => setSoulImagesState(kind, im)),
+      ]).catch(() => {});
+      setShowSoul(kind);
+    },
+    [libraryStore],
+  );
   // A skill the buddy distilled from a recurring task, awaiting the reader's Keep/Dismiss.
   const [pendingSkill, setPendingSkill] = useState<{ name: string; description: string; body: string } | null>(null);
   const keepPendingSkill = useCallback(async () => {
@@ -862,6 +966,16 @@ export function App() {
     },
     [libraryStore, refreshTaskPlans, maybeRollRecurring],
   );
+  // Mark a WHOLE task complete (or reopen it) — the per-card "✓ Complete task" button. Works for a
+  // plain to-do with no steps as well as a multi-step plan; completing a repeating task rolls it on.
+  const onCompleteTask = useCallback(
+    async (planId: string, complete: boolean) => {
+      await setTaskPlanComplete(libraryStore, planId, complete);
+      refreshTaskPlans();
+      if (complete) await maybeRollRecurring(planId);
+    },
+    [libraryStore, refreshTaskPlans, maybeRollRecurring],
+  );
   // Add a task with an optional due date: the assistant researches it and plans the steps
   // (the worker persists the plan), then we honour the user's explicit deadline.
   const [creatingTask, setCreatingTask] = useState(false);
@@ -942,6 +1056,11 @@ export function App() {
   const chatRenderingRef = useRef(false);
   // Landing-page buddy (persisted under its own key; finds + opens books via tools).
   const [buddyMessages, setBuddyMessages] = useState<StoredChatMessage[]>([]);
+  // The desktop keeps the FULL history (with image bytes) here; a linked phone fetches a stripped
+  // card's bytes back by id from this (see the vrcmd:fetchFile handler). Ref so the handler isn't
+  // re-bound on every message.
+  const buddyMessagesRef = useRef<StoredChatMessage[]>([]);
+  buddyMessagesRef.current = buddyMessages;
   const [buddyBusy, setBuddyBusy] = useState(false);
   const [buddyStreaming, setBuddyStreaming] = useState("");
   // Mirror of the live stream, so when a tool fires mid-message we can KEEP any prose the model
@@ -958,6 +1077,41 @@ export function App() {
   const buddyPlanRef = useRef<BuddyPlan | undefined>(undefined);
   buddyPlanRef.current = buddyPlan;
   const planMemoKey = (id: string) => `buddy-plan:${id}`;
+  // App-managed-steps mode: the host-owned WORKFLOW (the compiled plan + per-step DoneWhen contracts +
+  // attempts/status). When active, the app runs the checklist and ticks steps from observed evidence;
+  // buddyPlan above becomes a read-only PROJECTION of this (for the prompt + UI). Persisted per session.
+  const [buddyWorkflow, setBuddyWorkflow] = useState<Workflow | undefined>(undefined);
+  const buddyWorkflowRef = useRef<Workflow | undefined>(undefined);
+  buddyWorkflowRef.current = buddyWorkflow;
+  const workflowMemoKey = (id: string) => `buddy-workflow:${id}`;
+  // Evidence accumulated for the CURRENT step across its turn(s): auto-run tool results (from the
+  // worker's toolResult events) + host-tool outcomes (pushed by the approve* handlers) + the settle
+  // text. Reset when a step advances. The "collar" (evaluateStep) judges the step from THIS, never the
+  // model's claim.
+  const buddyStepEvidenceRef = useRef<{ toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[]; text: string }>({
+    toolResults: [],
+    text: "",
+  });
+  // Whether App-managed steps runs this chat. Opt-in setting (the model's checklist meta-tools are
+  // unreliable across models, so the app drives instead). Off → the legacy model-driven path.
+  const appManagedActive = !!settings.appManagedSteps;
+  // Set + persist the workflow, and mirror its read-only plan projection into buddyPlan (so the prompt,
+  // the existing UI, and the phone mirror all advance with it).
+  const applyWorkflow = useCallback(
+    (wf: Workflow | undefined): void => {
+      buddyWorkflowRef.current = wf;
+      setBuddyWorkflow(wf);
+      const plan = wf ? workflowToPlan(wf) : undefined;
+      buddyPlanRef.current = plan;
+      setBuddyPlan(plan);
+      if (!isRemoteClient && !settings.incognitoRemote) {
+        const id = activeBuddyIdRef.current;
+        void libraryStore.putMemo?.(workflowMemoKey(id), wf ? JSON.stringify(wf) : "").catch(() => {});
+        void libraryStore.putMemo?.(planMemoKey(id), plan ? JSON.stringify(plan) : "").catch(() => {});
+      }
+    },
+    [libraryStore, isRemoteClient, settings.incognitoRemote],
+  );
   const loadBuddyPlan = useCallback(
     async (id: string): Promise<BuddyPlan | undefined> => {
       const raw = await libraryStore.getMemo?.(planMemoKey(id)).catch(() => undefined);
@@ -971,7 +1125,56 @@ export function App() {
     },
     [libraryStore],
   );
-  const [buddyPersona, setBuddyPersona] = useState<BuddyPersona>("freeform");
+  // FILE LEDGER (per session): the workspace files the assistant has written this session, so the worker
+  // can keep a terse non-trimmable reminder in the prompt — the model stays aware of what it made and
+  // re-opens a file with read_file before editing instead of forgetting it. Persisted per session.
+  const createdFilesRef = useRef<CreatedFileRef[]>([]);
+  const ledgerMemoKey = (id: string) => `buddy-file-ledger:${id}`;
+  /** Record a workspace file the assistant just wrote (write_file). Appends accumulate the line count
+   * for the same path; a fresh write replaces it. Bounded + persisted; the next buddy turn pushes it. */
+  const recordCreatedFile = useCallback(
+    (path: string, contentLines: number, append: boolean): void => {
+      const prev = createdFilesRef.current.filter((f) => f.path !== path);
+      const existing = createdFilesRef.current.find((f) => f.path === path);
+      const lines = append && existing ? existing.lines + contentLines : contentLines;
+      const next = [...prev, { path, lines }].slice(-20); // most-recent-last, bounded
+      createdFilesRef.current = next;
+      setFileLedger(next);
+      if (!isRemoteClient && !settings.incognitoRemote) {
+        void libraryStore.putMemo?.(ledgerMemoKey(activeBuddyIdRef.current), JSON.stringify(next)).catch(() => {});
+      }
+    },
+    [setFileLedger, libraryStore, isRemoteClient, settings.incognitoRemote],
+  );
+  const loadFileLedger = useCallback(
+    async (id: string): Promise<CreatedFileRef[]> => {
+      const raw = await libraryStore.getMemo?.(ledgerMemoKey(id)).catch(() => undefined);
+      if (!raw) return [];
+      try {
+        const arr = JSON.parse(raw) as CreatedFileRef[];
+        return Array.isArray(arr) ? arr.filter((f) => f && typeof f.path === "string") : [];
+      } catch {
+        return [];
+      }
+    },
+    [libraryStore],
+  );
+  // Restore an app-managed workflow for a session (so a reload mid-run resumes at the active step with
+  // its contracts + attempts intact). Empty/blank memo → none.
+  const loadBuddyWorkflow = useCallback(
+    async (id: string): Promise<Workflow | undefined> => {
+      const raw = await libraryStore.getMemo?.(workflowMemoKey(id)).catch(() => undefined);
+      if (!raw) return undefined;
+      try {
+        const w = JSON.parse(raw) as Workflow;
+        return w && Array.isArray(w.steps) && w.steps.length > 0 ? w : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    [libraryStore],
+  );
+  const [buddyPersona, setBuddyPersona] = useState<BuddyPersona>("assistant");
   // Multiple landing-page chat SESSIONS — each with its own history (keyed by id) and
   // (desktop) working folder, while skills/memory stay global. Persisted so they
   // survive reloads.
@@ -985,6 +1188,11 @@ export function App() {
   taskPlansRef.current = taskPlans;
   const activeBuddyIdRef = useRef(activeBuddyId);
   activeBuddyIdRef.current = activeBuddyId;
+  // Starting a "story as you go" spins up a fresh dedicated session; this remembers the session we
+  // came from so exiting the story book returns there. The switch fn is held in a ref because
+  // onExitBook is defined far above onSwitchBuddySession (avoids a TDZ in the dep array).
+  const storyReturnSessionRef = useRef<string | undefined>(undefined);
+  const switchBuddyRef = useRef<((id: string) => void) | undefined>(undefined);
   /** The plan whose execution chat is the active session (the task being "worked"), if any. */
   const activeTaskPlanId = () => resolveActiveTaskPlanId(taskPlansRef.current, activeBuddyIdRef.current);
   const persistSessions = useCallback(
@@ -1045,6 +1253,11 @@ export function App() {
   // The model-facing history of the turn that produced a pendingTool — so an
   // approved run_command can auto-react with the exact context up to its call.
   const pendingBuddyHistory = useRef<ChatTurn[]>([]);
+  // Working-checklist auto-advance budget: while a plan has unfinished steps, the host hands the
+  // model another turn so it works straight down the list without the reader typing "continue".
+  // Reset on each fresh user turn; `count` caps a runaway chain, `noProgress` stops a stalled one
+  // (a step that's actually a question to the reader ticks nothing → halts after one tolerated turn).
+  const buddyQueueAdvanceRef = useRef({ count: 0, noProgress: 0 });
   // Session grant for buddy-initiated filesystem search: once the reader picks
   // "Allow this session", later find_files calls run without re-confirming (a
   // direct /find never needed confirming — the reader typed it). Reset on reload.
@@ -1060,6 +1273,14 @@ export function App() {
   // so a buddy-initiated open continues the conversation inside the reader.
   const buddyHandoff = useRef<StoredChatMessage[] | undefined>(undefined);
   const { registerParagraph, activeParagraphId, activeParagraphProgress } = useScrollDepth();
+  // Phone-sized viewport → single-column reader, auto-collapsed toolbar + chat history.
+  const narrow = useNarrow(760);
+  // Top toolbar's big button row collapses behind a "Tools" caret — default collapsed on phones
+  // to reclaim vertical space; the title + Exit book + mode badge stay visible regardless.
+  const [toolbarOpen, setToolbarOpen] = useState(() => !narrow);
+  // The bottom chat dock keeps its input bar always visible; its message history expands/collapses.
+  // Default expanded on desktop, collapsed on phones (the reader gets the room).
+  const [chatHistoryOpen, setChatHistoryOpen] = useState(() => !narrow);
 
   // Decrypt stored keys after mount, then enable persistence. Persisting is gated
   // on hydration so the initial empty-keys render can't clobber the saved keys.
@@ -1211,6 +1432,10 @@ export function App() {
       } catch {
         /* leave components empty — the fields fall back to manual entry */
       }
+      // Record the URL synchronously (refs don't wait for the React re-render) so a deferred lazy start
+      // can hand it straight to the worker, and clear the deferred flag now that the engine is up.
+      managedBaseUrlRef.current = baseUrl;
+      engineDeferredRef.current = false;
       setSettings((cur) => ({ ...cur, engineBaseUrl: baseUrl, engineBackend: "comfyui", ...(vram ? { gpuVramMb: vram } : {}) }));
       return true;
     } catch (err) {
@@ -1263,6 +1488,15 @@ export function App() {
     const url = (s.localServerUrl ?? "").trim();
     const backendName = backend === "a1111" ? "AUTOMATIC1111" : "ComfyUI";
     setLocalError("");
+    // LOW-VRAM deferred start: don't launch the app-managed ComfyUI at boot — a large local LLM can then
+    // take the whole GPU. It starts lazily on the first standalone image (ensureRenderEngineReady) or
+    // eagerly when a book opens (its bible build needs it). Only the managed paths defer; a configured
+    // user server is still probed (it's their process, not ours to schedule). Skipped once a book is open.
+    const managedStart = source === "managed" || (source === "server" && !url);
+    if (managedStart && isDesktop && s.lowVram && !bookRef.current) {
+      engineDeferredRef.current = true;
+      return;
+    }
     if (source === "server") {
       if (!url) {
         // Nothing configured yet: on desktop start the managed engine; on web just wait for Connect
@@ -1302,6 +1536,32 @@ export function App() {
       }
     }
   }, [probeServer, startManagedEngine]);
+
+  // Lazily start the deferred (low-VRAM) managed engine before a STANDALONE render, then hand its URL to
+  // the worker immediately (applyEngineConfig) so the render — which rebuilds providers fresh from
+  // settings — uses it without waiting on the debounced settings sync. No-op when not deferred (already
+  // running, a user's own server, or low-VRAM off). Concurrent calls share ONE in-flight start.
+  const ensureRenderEngineReady = useCallback(async (): Promise<void> => {
+    if (!engineDeferredRef.current) return;
+    setEngineStatus("Starting the local image engine…");
+    const start = engineStartingRef.current ?? startManagedEngine();
+    engineStartingRef.current = start;
+    try {
+      const res = await start;
+      if (res === true && managedBaseUrlRef.current) applyEngineConfig(managedBaseUrlRef.current);
+    } finally {
+      engineStartingRef.current = undefined;
+    }
+  }, [startManagedEngine, applyEngineConfig]);
+
+  // LOW-VRAM: when a book opens while the managed engine was deferred, start it now — a bible build needs
+  // it, and the full start path rebuilds the book's persistent engine with the real URL (vs. the
+  // tune-only flush used for standalone chat/playground renders). Desktop + local-image only.
+  useEffect(() => {
+    if (!book || !engineDeferredRef.current) return;
+    if (!isDesktop || settingsRef.current.imageProvider !== "local") return;
+    void startManagedEngine();
+  }, [book, startManagedEngine]);
 
   // Re-resolve the active engine when the local path is chosen and whenever the "Generate on" source
   // changes. NOT on URL keystrokes or a backend-dropdown flip — those are committed explicitly via
@@ -1651,6 +1911,11 @@ export function App() {
     setShowCharacters(false);
     // On a linked phone, remember which book we closed so the desktop's passive re-mirrors don't reopen it.
     if (isRemoteClient) phoneExitedBookId.current = bookRef.current?.id;
+    // Exiting a "story as you go" returns to the chat session we started it from (its history intact);
+    // the dedicated story session is kept in the list so the book can be resumed later.
+    const ret = storyReturnSessionRef.current;
+    storyReturnSessionRef.current = undefined;
+    if (ret && bookRef.current?.kind === "story") switchBuddyRef.current?.(ret);
     setBook(undefined);
     closeBook();
   }, [closeBook, chatCancel, isRemoteClient]);
@@ -1758,7 +2023,7 @@ export function App() {
   // apply-handler + the desktop's relayed-command runner reach it through refs (same pattern as the
   // planner). `chatMirrorRef` holds the latest mirror for the snapshot; `applyChatRef` is the phone's
   // adopt-the-desktop's-chat setter; `chatCommandRef` runs a phone-relayed chat command on the desktop.
-  const chatMirrorRef = useRef<ChatMirror>({ sessions: [], activeId: "", messages: [], persona: "freeform", busy: false });
+  const chatMirrorRef = useRef<ChatMirror>({ sessions: [], activeId: "", messages: [], persona: "assistant", busy: false });
   const applyChatRef = useRef<(c: ChatMirror) => void>(() => {});
   const chatCommandRef = useRef<(c: CmdToDesktop) => void>(() => {});
   // The live in-flight-turn state (streaming/thinking/activity/steps/pending approvals/usage) — held
@@ -1784,6 +2049,18 @@ export function App() {
   // through this per-requestId map.
   const runHostToolForRemoteRef = useRef<(call: BuddyToolCall, cwd?: string) => Promise<BuddyToolResultPayload>>(async () => ({}));
   const hostToolPending = useRef(new Map<number, (p: BuddyToolResultPayload) => void>());
+  // PHONE: lazy image-card fetches awaiting the desktop's vrsync:fileData reply, keyed by reqId.
+  const fileFetchPending = useRef(new Map<number, (r: { bytes?: ArrayBuffer; mime?: string }) => void>());
+  // Partial chunks of an in-flight chunked file fetch (vrsync:fileData), keyed by reqId.
+  const fileChunkBufs = useRef(new Map<number, { parts: (ArrayBuffer | undefined)[]; got: number; mime?: string }>());
+  // PHONE: inline-image bytes fetched back for stripped messages, kept by attachment id so the restored
+  // picture survives the mirror re-pushing its image-less version; plus the ids being fetched right now.
+  const restoredImages = useRef(new Map<string, { bytes: ArrayBuffer; mimeType: string }>());
+  const fetchingImageIds = useRef(new Set<string>());
+  // DESKTOP: blob keys (`${chatId}::${id}`) already written to the chat blob store this session, so the
+  // debounced persist doesn't re-write the same image bytes on every subsequent turn.
+  const writtenBlobIds = useRef(new Set<string>());
+  const fileFetchSeq = useRef(0);
   const hostToolReqId = useRef(0);
   const buildSnapshot = useCallback(
     (): SyncToPhone => ({
@@ -1886,6 +2163,37 @@ export function App() {
             }
             break;
           }
+          case "vrsync:fileData": {
+            // The desktop is returning a file's bytes (vrcmd:fetchFile), CHUNKED — accumulate until all
+            // `total` pieces arrive, then reassemble and resolve. `total === 0` ⇒ the desktop couldn't find it.
+            const r = fileFetchPending.current.get(msg.reqId);
+            if (!r) {
+              fileChunkBufs.current.delete(msg.reqId); // late chunk after a timeout — drop the partial
+              break;
+            }
+            if (msg.total === 0) {
+              fileFetchPending.current.delete(msg.reqId);
+              fileChunkBufs.current.delete(msg.reqId);
+              r({});
+              break;
+            }
+            let acc = fileChunkBufs.current.get(msg.reqId);
+            if (!acc) {
+              acc = { parts: new Array<ArrayBuffer | undefined>(msg.total), got: 0 };
+              fileChunkBufs.current.set(msg.reqId, acc);
+            }
+            if (msg.mime) acc.mime = msg.mime;
+            if (msg.bytes && acc.parts[msg.seq] === undefined) {
+              acc.parts[msg.seq] = msg.bytes;
+              acc.got += 1;
+            }
+            if (acc.got >= msg.total) {
+              fileChunkBufs.current.delete(msg.reqId);
+              fileFetchPending.current.delete(msg.reqId);
+              r({ bytes: concatArrayBuffers(acc.parts as ArrayBuffer[]), ...(acc.mime ? { mime: acc.mime } : {}) });
+            }
+            break;
+          }
           case "vrsync:updateStatus": {
             // Progress/result of an update the phone asked for. "working" → progress; otherwise it's
             // the final outcome — resolve the in-flight request, and reload to the new UI if applied.
@@ -1974,7 +2282,10 @@ export function App() {
             // The phone dismissed the working checklist — clear it HERE (we own it) so the ChatLive
             // mirror stops re-pushing it.
             setBuddyPlan(undefined);
+            setBuddyWorkflow(undefined);
+            buddyWorkflowRef.current = undefined;
             void libraryStore.deleteMemo?.(planMemoKey(activeBuddyIdRef.current)).catch(() => {});
+            void libraryStore.deleteMemo?.(workflowMemoKey(activeBuddyIdRef.current)).catch(() => {});
             break;
           case "vrcmd:update":
             // The phone asked us to update: run the same pull+rebuild+reload, streaming status back.
@@ -1996,6 +2307,50 @@ export function App() {
               sendAppSync({ type: "vrsync:hostToolResult", requestId: msg.requestId, payload }),
             );
             break;
+          case "vrcmd:fetchFile": {
+            // The phone asked for the full bytes of a file card whose bytes the mirror stripped (a large
+            // or older generated image). Find it in our FULL history (we kept the bytes) and send it back
+            // CHUNKED, so a big image syncs in pieces instead of being dropped for blowing one tunnel frame.
+            const reqId = msg.reqId;
+            const fileId = msg.id;
+            void (async () => {
+              let found: { bytes?: ArrayBuffer; mime?: string } | undefined;
+              for (const m of buddyMessagesRef.current) {
+                const a = m.attachments?.find((x) => x.id === fileId && x.bytes);
+                if (a?.bytes) {
+                  found = { bytes: a.bytes, mime: a.mime };
+                  break;
+                }
+                // A live (un-stripped) inline image carrying this id also serves the bytes.
+                if (m.image && "bytes" in m.image && m.image.id === fileId) {
+                  found = { bytes: m.image.bytes, mime: m.image.mimeType };
+                  break;
+                }
+              }
+              // After a desktop reload the in-memory messages are byte-less (bytes were externalized) —
+              // serve them from the chat blob store instead so the phone can still fetch older images.
+              if (!found?.bytes) {
+                const blob = await libraryStore.getImageBlob?.(activeBuddyIdRef.current, fileId).catch(() => undefined);
+                if (blob) found = { bytes: blob.bytes, mime: blob.mimeType };
+              }
+              if (!found?.bytes) {
+                sendAppSync({ type: "vrsync:fileData", reqId, seq: 0, total: 0 }); // not found
+              } else {
+                const chunks = chunkArrayBuffer(found.bytes);
+                chunks.forEach((chunk, seq) =>
+                  sendAppSync({
+                    type: "vrsync:fileData",
+                    reqId,
+                    seq,
+                    total: chunks.length,
+                    bytes: chunk,
+                    ...(seq === 0 && found!.mime ? { mime: found!.mime } : {}),
+                  }),
+                );
+              }
+            })();
+            break;
+          }
           default:
             break;
         }
@@ -2174,9 +2529,9 @@ export function App() {
     [assessImage],
   );
   const onUpload = useCallback(
-    async (file: File) => {
+    async (file: File, handler: FileHandler = "auto") => {
       try {
-        const imported = await importBookFile(file);
+        const imported = await importBookFile(file, handler);
         if (imported.kind === "book") {
           openBook(imported.book);
         } else if (imported.kind === "image") {
@@ -2671,7 +3026,7 @@ export function App() {
     () => ({
       sessions: buddySessions.map((s) => ({ id: s.id, workingDir: s.workingDir, ...(s.label ? { label: s.label } : {}) })),
       activeId: activeBuddyId,
-      messages: boundChatMessagesForMirror(buddyMessages),
+      messages: boundChatHistoryForMirror(buddyMessages),
       persona: buddyPersona,
       busy: buddyBusy,
     }),
@@ -2699,9 +3054,10 @@ export function App() {
       c.messages.length < prev.length &&
       c.messages.every((m, i) => prev[i] && prev[i].role === m.role && prev[i].at === m.at)
         ? prev
-        : c.messages,
+        : // put back any inline images this phone already fetched (the mirror re-strips them each push)
+          restoreInlineImages(c.messages, restoredImages.current),
     );
-    setBuddyPersona(c.persona);
+    setBuddyPersona(normalizeBuddyPersona(c.persona));
     setBuddyBusy(c.busy);
   }, []);
   useEffect(() => {
@@ -3135,6 +3491,7 @@ export function App() {
   // HTML previews/saves as one standalone file. Failed renders just fall back to alt text.
   const onBuildDocument = useCallback(
     async (html: string, onProgress?: (done: number, total: number) => void) => {
+      await ensureRenderEngineReady(); // low-VRAM: start the deferred engine before the first doc image
       const placeholders = parseDocImages(html);
       const srcById = new Map<string, string>();
       let generated = 0;
@@ -3155,7 +3512,16 @@ export function App() {
       onProgress?.(placeholders.length, placeholders.length);
       return { html: embedDocImages(html, srcById), generated, failed };
     },
-    [testRender],
+    [testRender, ensureRenderEngineReady],
+  );
+
+  // Playground render that first spins up the deferred (low-VRAM) managed engine, then renders.
+  const onTestRender = useCallback(
+    async (text: string, opts?: Parameters<typeof testRender>[1]): ReturnType<typeof testRender> => {
+      await ensureRenderEngineReady();
+      return testRender(text, opts);
+    },
+    [ensureRenderEngineReady, testRender],
   );
 
   // Drop a rendered image (from Test image / Transform photo) into the live chat —
@@ -3439,11 +3805,20 @@ export function App() {
       const hist = await libraryStore.getChatHistory?.(active).catch(() => undefined);
       if (cancelled) return;
       const savedPlan = await loadBuddyPlan(active);
+      const savedWorkflow = await loadBuddyWorkflow(active);
+      const savedLedger = await loadFileLedger(active);
       if (cancelled) return;
       setBuddySessions(sessions);
       setActiveBuddyId(active);
       if (hist) setBuddyMessages(hist);
+      createdFilesRef.current = savedLedger; // the active session's written-files ledger (pushed per turn)
+      setFileLedger(savedLedger);
       setBuddyPlan(savedPlan);
+      buddyPlanRef.current = savedPlan; // match the ref to the restored session's plan from the first tick
+      // App-managed: restore the workflow too (the plan above is just its projection), so the executor
+      // resumes at the active step with its contracts/attempts instead of stalling.
+      setBuddyWorkflow(savedWorkflow);
+      buddyWorkflowRef.current = savedWorkflow;
       buddyReady.current = true;
     })();
     return () => {
@@ -3459,7 +3834,33 @@ export function App() {
     // remote session leaves nothing on disk.
     if (isRemoteClient || settings.incognitoRemote || !buddyReady.current || buddyMessages.length === 0) return;
     const id = activeBuddyId;
-    const t = setTimeout(() => void libraryStore.putChatHistory?.(id, buddyMessages), 500);
+    const t = setTimeout(() => {
+      void (async () => {
+        // Externalize image bytes OUT of the persisted array: write each new blob to the chat blob store
+        // (once per id), then persist the byte-stripped messages so the history stays small (no megabyte
+        // re-write per turn) and a reload starts lean — images re-load lazily from the blob store. The
+        // in-RAM `buddyMessages` keep their bytes for the live session; only the DISK copy is stripped.
+        const stored: StoredChatMessage[] = [];
+        for (const m of buddyMessages) {
+          // Deterministic per-message ids (reset per message, stable order: attachments then inline) so
+          // re-persisting the same message yields the same id — no orphaned blobs across turns.
+          let k = 0;
+          const { message, blobs } = externalizeChatImages(m, () => `img-x-${m.at}-${k++}`);
+          if (libraryStore.putImageBlob) {
+            for (const b of blobs) {
+              const key = `${id}::${b.id}`;
+              if (writtenBlobIds.current.has(key)) continue;
+              await libraryStore.putImageBlob(id, b.id, b.bytes, b.mimeType);
+              writtenBlobIds.current.add(key);
+            }
+            stored.push(message);
+          } else {
+            stored.push(m); // backend without a blob store: persist bytes inline (legacy behavior)
+          }
+        }
+        await libraryStore.putChatHistory?.(id, stored);
+      })();
+    }, 500);
     return () => clearTimeout(t);
   }, [buddyMessages, activeBuddyId, libraryStore, isRemoteClient, settings.incognitoRemote]);
 
@@ -3523,6 +3924,162 @@ export function App() {
     openLocalFileRef.current = openLocalFileDirect;
   }, [openLocalFileDirect]);
 
+  // Materialize a surfaced FileRef (created content or generated bytes) into a real File so it flows
+  // through the SAME importer as an uploaded file.
+  const fileFromRef = useCallback((ref: FileRef): File => {
+    const type = ref.mime || "application/octet-stream";
+    const body: BlobPart = ref.bytes ? new Uint8Array(ref.bytes) : (ref.content ?? "");
+    return new File([body], ref.name, { type });
+  }, []);
+
+  // Import a surfaced file and SAVE it to the library (without taking over the screen). A found PC
+  // file is read first; in-chat content/bytes import directly. Refreshes the library list + notes it.
+  const addRefToLibrary = useCallback(
+    async (ref: FileRef): Promise<void> => {
+      try {
+        const file = ref.path ? await readLocalFile(ref.path) : fileFromRef(ref);
+        const imported = await importBookFile(file);
+        if (imported.kind === "image") {
+          buddyNoteRef.current(`🖼 “${ref.name}” is an image — open it in the photo tools, not the library.`);
+          return;
+        }
+        const book =
+          imported.kind === "book"
+            ? imported.book
+            : {
+                ...bookFromText(imported.title, imported.text, imported.mode ?? "fiction", "Created in chat"),
+                ...(imported.data ? { data: imported.data } : {}),
+                ...(imported.dataSheets ? { dataSheets: imported.dataSheets } : {}),
+                ...(imported.tree !== undefined ? { tree: imported.tree } : {}),
+              };
+        await libraryStore.putBook(book);
+        const lib = await libraryStore.listBooks();
+        setLibrary(lib);
+        buddyNoteRef.current(`📚 Added “${ref.name}” to your library.`);
+      } catch (err) {
+        buddyNoteRef.current(`⚠ Couldn't add to the library: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [fileFromRef, libraryStore],
+  );
+
+  // Desktop "Open on PC": a found file opens by its path; in-chat content/bytes are saved to the
+  // exports folder first, then opened in the OS default app.
+  const revealRefOnPC = useCallback(
+    async (ref: FileRef): Promise<void> => {
+      try {
+        let path = ref.path;
+        if (!path) {
+          const data = ref.bytes ? new Uint8Array(ref.bytes) : (ref.content ?? "");
+          const saved = await saveExportFile(ref.name, data, ref.mime || "application/octet-stream");
+          if (typeof saved === "string") path = saved;
+        }
+        if (path) await openPathOnPC(path);
+      } catch (err) {
+        buddyNoteRef.current(`⚠ Couldn't open it on your PC: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [],
+  );
+
+  // PHONE: fetch an older image card's bytes back from the desktop on demand (the mirror strips heavy
+  // bytes from old cards to stay tunnel-safe; the desktop kept the originals). Resolves undefined on
+  // timeout or if the desktop can't find it. No-op (undefined) off a linked phone.
+  const fetchRemoteFileBytes = useCallback(
+    (id: string): Promise<ArrayBuffer | undefined> =>
+      new Promise((resolve) => {
+        if (!isRemoteClient) return resolve(undefined);
+        const reqId = ++fileFetchSeq.current;
+        const timer = setTimeout(() => {
+          fileChunkBufs.current.delete(reqId); // drop any partial chunks for this stalled fetch
+          if (fileFetchPending.current.delete(reqId)) resolve(undefined);
+        }, 45000); // generous: a big image arrives as several chunked frames
+        fileFetchPending.current.set(reqId, ({ bytes }) => {
+          clearTimeout(timer);
+          resolve(bytes);
+        });
+        sendAppSync({ type: "vrcmd:fetchFile", reqId, id });
+      }),
+    [isRemoteClient, sendAppSync],
+  );
+  // Seed the LRU with a restored image's bytes (bounded to 20 so the cache can't grow without limit),
+  // then re-inline it into the visible messages.
+  const cacheRestoredImage = useCallback((id: string, bytes: ArrayBuffer, mimeType: string) => {
+    restoredImages.current.set(id, { bytes, mimeType });
+    while (restoredImages.current.size > 20) {
+      const oldest = restoredImages.current.keys().next().value;
+      if (oldest === undefined) break;
+      restoredImages.current.delete(oldest);
+    }
+    setBuddyMessages((prev) => restoreInlineImages(prev, restoredImages.current));
+  }, []);
+  // The mime to render a restored image with: the byte-less inline `{ id, mimeType }`, else the image
+  // file-card's mime, else PNG.
+  const restoredImageMime = (m: StoredChatMessage): string => {
+    if (m.image && "id" in m.image) return m.image.mimeType || "image/png";
+    return m.attachments?.find((a) => a.kind === "image" && a.id && !a.bytes)?.mime || "image/png";
+  };
+  // Re-hydrate a RECENT message whose image bytes were stripped — on the PHONE the mirror dropped them
+  // to stay tunnel-safe (fetch back over the tunnel, chunked); on the DESKTOP they were externalized to
+  // the chat blob store on persist (load back from there after a reload). Cached by id so it survives a
+  // mirror re-push; bounded by the LRU so RAM stays flat across a long image-heavy session.
+  useEffect(() => {
+    const chatId = activeBuddyId;
+    for (const m of buddyMessages.slice(-8)) {
+      const id = externalizedImageId(m);
+      if (!id || restoredImages.current.has(id) || fetchingImageIds.current.has(id)) continue;
+      const mime = restoredImageMime(m);
+      fetchingImageIds.current.add(id);
+      const load: Promise<ArrayBuffer | undefined> = isRemoteClient
+        ? fetchRemoteFileBytes(id)
+        : (libraryStore.getImageBlob?.(chatId, id).then((b) => b?.bytes) ?? Promise.resolve(undefined));
+      void load.then((bytes) => {
+        fetchingImageIds.current.delete(id);
+        if (bytes) cacheRestoredImage(id, bytes, mime);
+      });
+    }
+  }, [isRemoteClient, buddyMessages, fetchRemoteFileBytes, activeBuddyId, libraryStore, cacheRestoredImage]);
+  // Fill in a card's bytes from the desktop when the mirror stripped them (older image on a phone).
+  const withFetchedBytes = useCallback(
+    async (ref: FileRef): Promise<FileRef> => {
+      if (ref.bytes || ref.path || ref.content || !isRemoteClient || !ref.id) return ref;
+      const bytes = await fetchRemoteFileBytes(ref.id);
+      return bytes ? { ...ref, bytes } : ref;
+    },
+    [isRemoteClient, fetchRemoteFileBytes],
+  );
+
+  // The universal file-card actions, shared by both chats: Download (save a copy), Open in app
+  // (reader), Open in library (save for later), and — on desktop — Open on PC (OS default app).
+  const buddyFileActions = useMemo<FileActions>(
+    () => ({
+      download: async (ref0) => {
+        const ref = await withFetchedBytes(ref0);
+        // A found PC file carries only a path — read its bytes off disk so "Save a copy" works for it
+        // too (in-chat content/bytes save directly).
+        const data: Uint8Array | string = ref.path
+          ? new Uint8Array(await (await readLocalFile(ref.path)).arrayBuffer())
+          : ref.bytes
+            ? new Uint8Array(ref.bytes)
+            : (ref.content ?? "");
+        const saved = await saveNamed(ref.name, data, ref.mime || "application/octet-stream", "Save this file");
+        return saved ?? true; // cancel is "handled"
+      },
+      openInApp: (ref) => {
+        if (ref.path) void onOpenLocalFile(ref.path);
+        else void withFetchedBytes(ref).then((r) => onUpload(fileFromRef(r)));
+      },
+      openInLibrary: (ref) => void withFetchedBytes(ref).then((r) => addRefToLibrary(r)),
+      ...(isDesktop ? { openOnPC: (ref: FileRef) => void revealRefOnPC(ref) } : {}),
+      // "Open as…" — re-route the SAME file through a chosen reader (overrides the extension default).
+      openAs: (ref, as) => {
+        if (ref.path) void readLocalFile(ref.path).then((f) => onUpload(f, as));
+        else void withFetchedBytes(ref).then((r) => onUpload(fileFromRef(r), as));
+      },
+    }),
+    [saveNamed, onOpenLocalFile, onUpload, fileFromRef, addRefToLibrary, revealRefOnPC, withFetchedBytes],
+  );
+
   // Run a local-file search and present the matches as clickable chips. `modelTurns`
   // (the conversational find_files path) bakes a model-facing feedback turn into the
   // result so the buddy can follow up; the direct `/find` path passes none.
@@ -3544,12 +4101,17 @@ export function App() {
         appendBuddy({ role: "tool", text: `No importable files matched “${query}”.`, ...baked });
       } else {
         lastRefs.current = ranked.map((f) => ({ kind: "file", label: f.name, path: f.path }));
+        // Surface each hit as the universal file CARD (not a bare chip): the reader picks an action —
+        // Open in app, Open in library, Open on PC, Download — instead of a single click jumping
+        // straight into the book reader.
         appendBuddy({
           role: "tool",
-          text: `Found ${ranked.length} file${ranked.length === 1 ? "" : "s"} — click one, or say “open #N”:`,
-          files: ranked.map((f, i) => ({
+          text: `Found ${ranked.length} file${ranked.length === 1 ? "" : "s"} — open one with its buttons:`,
+          attachments: ranked.map((f) => ({
+            name: f.name,
+            mime: "",
+            kind: "found" as const,
             path: f.path,
-            name: `${i + 1}. ${f.name}${formatFileSize(f.size) ? ` · ${formatFileSize(f.size)}` : ""}`,
           })),
           ...baked,
         });
@@ -3623,6 +4185,15 @@ export function App() {
       (r.stdout ? `\n${r.stdout.slice(0, 4000)}` : "") +
       (r.stderr ? `\n⚠ ${r.stderr.slice(0, 2000)}` : "");
     appendBuddy({ role: "tool", text: summary, turns: [...pre, { role: "user", content: feedback }] });
+    // App-managed steps: the command IS this step's action — judge it by exit code (the collar).
+    if (appManagedActive && buddyWorkflowRef.current) {
+      buddyStepEvidenceRef.current.toolResults.push({ call, result: { command: r } });
+      await advanceWorkflowAfterTurn(
+        { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+      );
+      return;
+    }
     // AUTO-REACT: the model reads the output and continues — if it proposes another
     // command, that re-prompts for approval, so the loop stays human-gated.
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
@@ -3863,7 +4434,18 @@ export function App() {
     try {
       const saved = await writeWorkspaceFile(call.path, call.content, buddyWorkingDir || undefined, call.append);
       payload = { path: saved, ok: true };
-      appendBuddy({ role: "tool", text: `📝 ${call.append ? "Appended to" : "Saved"} ${saved}`, turns: [] });
+      // Ledger it (keyed by the workspace-relative path the model used, so it can read_file it back) so
+      // the model stays aware of the file across history trimming.
+      recordCreatedFile(call.path, call.content ? call.content.split("\n").length : 0, !!call.append);
+      // ALWAYS surface the authored file as a universal file card (Open in app / library / on PC /
+      // Download), not just a "saved" line — the card reads from the on-disk path so it's correct even
+      // for an append (whole file, not the fragment).
+      appendBuddy({
+        role: "tool",
+        text: `📝 ${call.append ? "Appended to" : "Saved"} ${saved}`,
+        attachments: [{ name: saved.split(/[\\/]/).pop() || saved, mime: "", kind: createdFileKind(saved), path: saved }],
+        turns: [],
+      });
       // If the assistant just edited the file open in the code window, show its change live there. (Skip
       // append chunks — call.content is a fragment, not the whole file.)
       const openCode = bookRef.current;
@@ -3877,6 +4459,139 @@ export function App() {
       appendBuddy({ role: "tool", text: `⚠ Couldn't write ${call.path}: ${payload.error}`, turns: [] });
     }
     const feedback = formatBuddyToolResult(call, { writeFile: payload });
+    // App-managed steps: writing the file IS this step's action — judge it by whether it saved.
+    if (appManagedActive && buddyWorkflowRef.current) {
+      buddyStepEvidenceRef.current.toolResults.push({ call, result: { writeFile: payload } });
+      await advanceWorkflowAfterTurn(
+        { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+      );
+      return;
+    }
+    await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+  };
+
+  // Edit an EXISTING workspace file in place via search/replace (no whole-file rewrite). Reads the file,
+  // applies the edits (each `search` must match exactly once), writes it back. Mirrors runWriteFile.
+  const runEditFile = async (call: Extract<BuddyToolCall, { tool: "edit_file" }>): Promise<void> => {
+    setBuddyPendingTool(undefined);
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+    if (!isDesktop || !settings.allowCommands) {
+      appendBuddy({ role: "tool", text: "🔒 Editing files needs the desktop app + command access (Settings → assistant abilities).", turns: [] });
+      return;
+    }
+    setBuddyBusy(true);
+    setBuddyActivity(`Editing ${call.path}…`);
+    let payload: { path: string; ok: boolean; applied?: number; summary?: string; error?: string };
+    try {
+      const file = await readWorkspaceFile(call.path, buddyWorkingDir || undefined);
+      if (!file.exists) {
+        payload = { path: call.path, ok: false, error: "file not found — write_file it first, or check the path" };
+        appendBuddy({ role: "tool", text: `⚠ edit_file: ${call.path} doesn't exist yet.`, turns: [] });
+      } else {
+        const r = applyFileEdits(file.text, call.edits);
+        const summary = summarizeFileEdits(call.path, r);
+        if (r.applied > 0) await writeWorkspaceFile(call.path, r.content, buddyWorkingDir || undefined);
+        payload = { path: call.path, ok: r.applied > 0, applied: r.applied, summary };
+        recordCreatedFile(call.path, r.content.split("\n").length, false);
+        appendBuddy({
+          role: "tool",
+          text: r.failures.length === 0 ? `✏️ Edited ${call.path} (${r.applied} edit${r.applied === 1 ? "" : "s"})` : `✏️ ${call.path}: ${r.applied} applied, ${r.failures.length} failed`,
+          attachments: [{ name: call.path.split(/[\\/]/).pop() || call.path, mime: "", kind: createdFileKind(call.path), path: file.path }],
+          turns: [],
+        });
+        // Mirror a live change into the open code window (like runWriteFile).
+        const openCode = bookRef.current;
+        if (r.applied > 0 && openCode?.contentMode === "code" && call.path === codeFileName(openCode)) {
+          setCodeDraft(r.content);
+          setBook((prev) => (prev && prev.id === openCode.id ? { ...prev, code: r.content } : prev));
+          void libraryStore.putBook({ ...openCode, code: r.content }).catch(() => {});
+        }
+      }
+    } catch (err) {
+      payload = { path: call.path, ok: false, error: err instanceof Error ? err.message : String(err) };
+      appendBuddy({ role: "tool", text: `⚠ Couldn't edit ${call.path}: ${payload.error}`, turns: [] });
+    }
+    const feedback = formatBuddyToolResult(call, { editFile: payload });
+    if (appManagedActive && buddyWorkflowRef.current) {
+      // A file step is satisfied by a SUCCESSFUL edit (writeFile-shaped evidence so the collar's `file`
+      // contract reads it the same as a write).
+      buddyStepEvidenceRef.current.toolResults.push({ call, result: { writeFile: { path: call.path, ok: payload.ok, ...(payload.error ? { error: payload.error } : {}) } } });
+      await advanceWorkflowAfterTurn(
+        { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+      );
+      return;
+    }
+    await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+  };
+
+  // Delegate a hard, multi-file coding job to an EXTERNAL agent (Aider) running headless on the same
+  // local model, in the workspace; capture its diff and feed a summary back. Mirrors runEditFile's
+  // shape (capture pre-context, run, ledger the changed files, react in the workflow or plainly).
+  const runDelegateCodingTask = async (call: Extract<BuddyToolCall, { tool: "delegate_coding_task" }>): Promise<void> => {
+    setBuddyPendingTool(undefined);
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+    if (!isDesktop || !settings.allowCommands) {
+      appendBuddy({ role: "tool", text: "🔒 Delegating coding needs the desktop app + command access (Settings → assistant abilities).", turns: [] });
+      return;
+    }
+    const model = (settings.localServerTextModel ?? "").trim();
+    const serverUrl = (settings.localServerTextUrl ?? "").trim();
+    const isOllama = (settings.localTextServer ?? "ollama") === "ollama";
+    if (!model || !serverUrl || !isOllama) {
+      const why = !isOllama ? "the external agent runs against Ollama — switch the chat model to an Ollama server" : "no local Ollama model is connected";
+      const payload = { ok: false, installed: true, summary: `[delegate_coding_task can't run: ${why}. Do the change yourself with write_file/edit_file.]` };
+      await dispatchBuddyTurn([...preHistory, ...pre], formatBuddyToolResult(call, { delegateCoding: payload }));
+      return;
+    }
+    setBuddyBusy(true);
+    setBuddyActivity("Delegating to the coding agent…");
+    let payload: { ok: boolean; installed: boolean; summary: string };
+    try {
+      const editorModel = (settings.subAgentModel ?? "").trim();
+      const r = await delegateCodingTask({
+        task: call.task,
+        backend: settings.codingAgentBackend ?? "aider",
+        model,
+        ...(editorModel ? { editorModel } : {}),
+        textServerUrl: serverUrl,
+        ...(call.files ? { files: call.files } : {}),
+        ...(call.verify ? { verify: call.verify } : {}),
+        ...(buddyWorkingDir ? { cwd: buddyWorkingDir } : {}),
+        ...(settings.keys?.github ? { githubToken: settings.keys.github } : {}),
+        ...(settings.commandShell ? { shell: settings.commandShell } : {}),
+      });
+      payload = { ok: r.ok, installed: r.installed, summary: r.summary };
+      for (const f of r.files) recordCreatedFile(f, 0, false);
+      appendBuddy({
+        role: "tool",
+        text: r.installed
+          ? `🤝 Coding agent ${r.files.length > 0 ? `changed ${r.files.length} file(s)` : "ran"}${r.ok ? "" : " (review needed)"}`
+          : "🤝 Aider isn't installed — install it (pipx install aider-chat) to delegate coding jobs.",
+        turns: [],
+      });
+    } catch (err) {
+      payload = { ok: false, installed: true, summary: `[delegate_coding_task failed: ${err instanceof Error ? err.message : String(err)}]` };
+      appendBuddy({ role: "tool", text: `⚠ Coding delegation failed: ${err instanceof Error ? err.message : String(err)}`, turns: [] });
+    }
+    const feedback = formatBuddyToolResult(call, { delegateCoding: payload });
+    if (appManagedActive && buddyWorkflowRef.current) {
+      // Treat the delegated job like a command step for the collar: a clean run (and any verify pass,
+      // folded into `ok`) satisfies a command_ok contract; a failure nudges a retry/fix.
+      buddyStepEvidenceRef.current.toolResults.push({ call, result: { command: { stdout: payload.summary, stderr: "", code: payload.ok ? 0 : 1 } } });
+      await advanceWorkflowAfterTurn(
+        { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+      );
+      return;
+    }
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
@@ -3955,6 +4670,34 @@ export function App() {
             return { writeFile: { path: call.path, ok: false, error: err instanceof Error ? err.message : String(err) } };
           }
         }
+        if (call.tool === "edit_file") {
+          const file = await readWorkspaceFile(call.path, dir);
+          if (!file.exists) return { editFile: { path: call.path, ok: false, error: "file not found" } };
+          const r = applyFileEdits(file.text, call.edits);
+          if (r.applied > 0) await writeWorkspaceFile(call.path, r.content, dir);
+          return { editFile: { path: call.path, ok: r.applied > 0, applied: r.applied, summary: summarizeFileEdits(call.path, r) } };
+        }
+        if (call.tool === "delegate_coding_task") {
+          const model = (settings.localServerTextModel ?? "").trim();
+          const serverUrl = (settings.localServerTextUrl ?? "").trim();
+          const isOllama = (settings.localTextServer ?? "ollama") === "ollama";
+          if (!model || !serverUrl || !isOllama)
+            return { delegateCoding: { ok: false, installed: true, summary: "[delegate_coding_task needs a connected Ollama model on the desktop.]" } };
+          const editorModel = (settings.subAgentModel ?? "").trim();
+          const r = await delegateCodingTask({
+            task: call.task,
+            backend: settings.codingAgentBackend ?? "aider",
+            model,
+            ...(editorModel ? { editorModel } : {}),
+            textServerUrl: serverUrl,
+            ...(call.files ? { files: call.files } : {}),
+            ...(call.verify ? { verify: call.verify } : {}),
+            ...(dir ? { cwd: dir } : {}),
+            ...(settings.keys?.github ? { githubToken: settings.keys.github } : {}),
+            ...(settings.commandShell ? { shell: settings.commandShell } : {}),
+          });
+          return { delegateCoding: { ok: r.ok, installed: r.installed, summary: r.summary } };
+        }
         if (call.tool === "screenshot") {
           const shot = await captureScreen(call.window);
           const r = await assessImage(shot, call.question);
@@ -3965,7 +4708,7 @@ export function App() {
         return { error: err instanceof Error ? err.message : String(err) };
       }
     },
-    [buddyWorkingDir, settings.keys, settings.commandShell, assessImage],
+    [buddyWorkingDir, settings.keys, settings.commandShell, settings.localServerTextModel, settings.localServerTextUrl, settings.localTextServer, settings.subAgentModel, settings.codingAgentBackend, assessImage],
   );
   useEffect(() => {
     runHostToolForRemoteRef.current = runHostToolForRemote;
@@ -4053,6 +4796,7 @@ export function App() {
     else setCodeDraft("");
     setCodeRunOutput(undefined);
     setCodeRunning(false);
+    setCodePreviewOpen(false); // start a freshly-opened code book on the source, not the render
   }, [book?.id, book?.contentMode]);
 
   // PHONE: when the desktop mirrors a new version of the OPEN code book — a buddy edit, or a
@@ -4155,7 +4899,7 @@ export function App() {
   };
   /** Host tools that need the DESKTOP runtime — relayed when a phone drives the buddy. */
   const isDesktopRuntimeTool = (call: BuddyToolCall): boolean =>
-    call.tool === "find_files" || call.tool === "run_command" || call.tool === "write_file" || call.tool === "screenshot";
+    call.tool === "find_files" || call.tool === "run_command" || call.tool === "write_file" || call.tool === "edit_file" || call.tool === "delegate_coding_task" || call.tool === "screenshot";
   /** Run a desktop-runtime host tool — locally on the desktop, or via the relay on a linked phone. */
   const runHostToolDispatch = (call: BuddyToolCall): void => {
     if (isRemoteClient && isDesktopRuntimeTool(call)) {
@@ -4165,6 +4909,8 @@ export function App() {
     if (call.tool === "find_files") approveFindFiles(call);
     else if (call.tool === "screenshot") void approveScreenshot(call);
     else if (call.tool === "write_file") void runWriteFile(call);
+    else if (call.tool === "edit_file") void runEditFile(call);
+    else if (call.tool === "delegate_coding_task") void runDelegateCodingTask(call);
     else if (call.tool === "run_command") void approveRunCommand(call);
   };
 
@@ -4174,26 +4920,76 @@ export function App() {
     if (buddyRenderingRef.current) return; // a render is already in flight — drop the duplicate approval
     buddyRenderingRef.current = true;
     setBuddyPendingTool(undefined);
+    // Low-VRAM: spin up the app-managed engine now if it was deferred at boot (no-op otherwise).
+    await ensureRenderEngineReady();
+    // Capture the model-facing context up to this image call so a multi-step PLAN can AUTO-REACT after
+    // the render (mirrors approveRunCommand) instead of halting for the reader to type "continue".
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
     setBuddyBusy(true);
     setBuddyActivity("Generating the image…");
+    let out: Awaited<ReturnType<typeof chatTool>>;
     try {
-      const out = await chatTool(call, {
+      out = await chatTool(call, {
         onProgress: (f) => setBuddyActivity(`Generating the image… ${Math.round(f * 100)}%`),
       });
-      setBuddyBusy(false);
-      setBuddyActivity("");
-      const feedback = formatToolResult(call, {
-        image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
-      });
-      appendBuddy({
-        role: "tool",
-        text: out.error ? `⚠ Image generation failed: ${out.error}` : "",
-        ...(out.image ? { image: out.image } : {}),
-        turns: [...pendingBuddyTranscript.current, { role: "user", content: feedback }],
-      });
-      pendingBuddyTranscript.current = [];
     } finally {
+      // Release the duplicate-render guard the moment the RENDER finishes — BEFORE any follow-up turn,
+      // so a full-autonomy queue's next auto-approved image isn't dropped as a "duplicate".
       buddyRenderingRef.current = false;
+    }
+    setBuddyActivity("");
+    const imageFeedback = formatToolResult(call, {
+      image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) },
+    });
+    // A working checklist with steps left → advance the QUEUE: feed the render result back and let the
+    // model tick the current step + start the next one, so the plan runs to completion on its own (each
+    // next image still gets its own approval/gate). A one-shot image (no plan) just shows + stops, as before.
+    const plan = buddyPlanRef.current;
+    // Tag a render with WHICH checklist + step it belongs to, so a SECOND batch of images later in the
+    // same chat can be told apart from this one — the model only ever sees these text tags (never the
+    // image), so without them it reads earlier "image rendered" lines and ticks the new steps off as
+    // already done. At render time the image is for the ▸ current (first unfinished) step.
+    let taggedImageFeedback = imageFeedback;
+    let tagCaption = ""; // a VISIBLE label on the render so the reader sees which checklist/step it's from
+    if (!out.error && plan && plan.steps.length > 0) {
+      const idx = plan.steps.findIndex((s) => s.status !== "done");
+      const stepNo = idx >= 0 ? idx + 1 : plan.steps.length;
+      const where = plan.goal ? `the checklist “${plan.goal}”` : "the checklist";
+      taggedImageFeedback = `${imageFeedback} — this is step ${stepNo} of ${plan.steps.length} of ${where}.`;
+      const goalLabel = plan.goal ? ` · ${plan.goal.length > 50 ? `${plan.goal.slice(0, 50).trim()}…` : plan.goal}` : "";
+      tagCaption = `🖼 Step ${stepNo} of ${plan.steps.length}${goalLabel}`;
+    } else if (!out.error && call.prompt) {
+      // One-shot image (no checklist): still label it with what it depicts.
+      tagCaption = `🖼 ${call.prompt.length > 60 ? `${call.prompt.slice(0, 60).trim()}…` : call.prompt}`;
+    }
+    const continueQueue = !out.error && planHasPendingStep(plan);
+    const feedback = continueQueue ? planQueueResumeFeedback(taggedImageFeedback, plan!) : taggedImageFeedback;
+    appendBuddy({
+      role: "tool",
+      text: out.error ? `⚠ Image generation failed: ${out.error}` : tagCaption,
+      ...(out.image ? { image: out.image, attachments: [imageAttachment(call.prompt, out.image)] } : {}),
+      turns: [...pre, { role: "user", content: feedback }],
+    });
+    // App-managed steps: the render IS this step's action — judge the step from whether an image came
+    // back (the collar), then advance/retry. No legacy queue feedback; the executor drives the next step.
+    if (appManagedActive && buddyWorkflowRef.current) {
+      buddyStepEvidenceRef.current.toolResults.push({
+        call,
+        result: { image: { ok: Boolean(out.image), ...(out.error ? { error: out.error } : {}) } },
+      });
+      await advanceWorkflowAfterTurn(
+        { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+      );
+      return;
+    }
+    if (continueQueue) {
+      await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+    } else {
+      setBuddyBusy(false);
     }
   };
 
@@ -4291,6 +5087,70 @@ export function App() {
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
+  // APP-MANAGED-STEPS EXECUTOR. Judge the active step against its DoneWhen contract using ONLY the
+  // observed `evidence` (the collar), then drive the workflow: advance/retry → re-dispatch the next or
+  // same step via `continueWith`; park/finish/abort → stop. Returns true when it handled the turn, so
+  // the caller skips the legacy model-driven chaining. The model never ticks steps; the app does.
+  const advanceWorkflowAfterTurn = async (
+    evidence: { toolResults: { call: BuddyToolCall; result: BuddyToolResultPayload }[]; text: string },
+    continueWith: (nudge: string) => Promise<unknown>,
+  ): Promise<boolean> => {
+    const wf = buddyWorkflowRef.current;
+    if (!wf) return false;
+    const step = activeStep(wf);
+    if (!step) {
+      setBuddyBusy(false);
+      return true;
+    }
+    // G5 — a `files` step is judged on whether the declared deliverables ACTUALLY landed on disk (and
+    // are non-empty), not just that a write tool ran. Verify here (host I/O) and fold it into the evidence.
+    let evi: typeof evidence & { filesPresent?: { path: string; ok: boolean }[] } = evidence;
+    if (step.doneWhen.kind === "files" && isDesktop) {
+      const checks = await Promise.all(
+        step.doneWhen.paths.map(async (p) => {
+          try {
+            const r = await readWorkspaceFile(p, buddyWorkingDir || undefined);
+            return { path: p, ok: r.exists && r.text.trim().length > 0 };
+          } catch {
+            return { path: p, ok: false };
+          }
+        }),
+      );
+      evi = { ...evidence, filesPresent: checks };
+    }
+    const outcome = evaluateStep(step, evi);
+    const adv = advanceWorkflow(wf, outcome);
+    applyWorkflow(adv.workflow);
+    buddyStepEvidenceRef.current = { toolResults: [], text: "" }; // fresh evidence for whatever runs next
+    if (adv.action === "advance" || adv.action === "skip") {
+      if (adv.action === "skip")
+        appendBuddy({ role: "tool", text: `⚠ Skipped “${step.instruction}” after ${step.maxAttempts} tries — moving on.`, turns: [] });
+      // Tell the model the PRIOR step is settled and give the next step's position, so it stops
+      // "announcing the transition" (the confused "I already did X, moving on") — its prior tool call
+      // is still in context. Ask for the tool only, no recap.
+      const total = adv.workflow.steps.length;
+      const n = adv.workflow.steps.findIndex((s) => s.id === adv.next!.id) + 1;
+      await continueWith(
+        `[✓ Previous step done. Now do ONLY step ${n} of ${total}: ${adv.next!.instruction}. Call its tool and stop — don't recap or explain.]`,
+      );
+      return true;
+    }
+    if (adv.action === "retry") {
+      await continueWith(
+        `[Your last attempt didn't satisfy this step${outcome.reason ? ` (${outcome.reason})` : ""}. Do it again now: ${step.instruction}. Just call the tool — no commentary.]`,
+      );
+      return true;
+    }
+    // Terminal — stop the run.
+    if (adv.action === "finish") appendBuddy({ role: "tool", text: "✓ All steps done.", turns: [] });
+    else if (adv.action === "abort")
+      appendBuddy({ role: "tool", text: `⚠ Stopped — couldn't finish “${step.instruction}”${step.note ? ` (${step.note})` : ""}.`, turns: [] });
+    else if (adv.action === "park" && step.doneWhen.kind !== "user_reply")
+      appendBuddy({ role: "tool", text: `⏸ Stuck on “${step.instruction}”${step.note ? ` — ${step.note}` : ""}. Tell me how to proceed.`, turns: [] });
+    setBuddyBusy(false);
+    return true;
+  };
+
   // (when set) is shown as the reader's message; a continuation passes none — its
   // "input" is the tool feedback, recorded in the visible result above it.
   const dispatchBuddyTurn = async (
@@ -4299,7 +5159,41 @@ export function App() {
     userBubbleText?: string,
   ): Promise<string | undefined> => {
     const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
-    if (userBubbleText !== undefined) appendBuddy({ role: "user", text: userBubbleText });
+    // Make sure the worker has THIS session's current file ledger before the turn builds its prompt
+    // (ordered before the buddyChat send below), so the model sees what it's written regardless of init
+    // timing or a session switch.
+    setFileLedger(createdFilesRef.current);
+    // G4 — push the workspace project guide (AGENTS.md, else CONVENTIONS.md) so durable per-project
+    // conventions ride every turn. Desktop only (the model can read/update it via read_file/write_file).
+    if (isDesktop && !isRemoteClient) {
+      try {
+        let g = await readWorkspaceFile("AGENTS.md", buddyWorkingDir || undefined);
+        if (!g.exists) g = await readWorkspaceFile("CONVENTIONS.md", buddyWorkingDir || undefined);
+        setProjectGuide(g.exists ? g.text : "");
+      } catch {
+        setProjectGuide("");
+      }
+    }
+    if (userBubbleText !== undefined) {
+      appendBuddy({ role: "user", text: userBubbleText });
+      buddyQueueAdvanceRef.current = { count: 0, noProgress: 0 }; // fresh user turn → reset the chain budget
+      // App-managed steps: a fresh reader message resumes a PARKED workflow. If it was waiting on the
+      // reader (a user_reply step), their answer satisfies that step → advance past it; otherwise just
+      // re-activate the blocked step to retry it with their new input.
+      if (appManagedActive && workflowParked(buddyWorkflowRef.current)) {
+        const wf = buddyWorkflowRef.current!;
+        const blocked = wf.steps.find((s) => s.status === "blocked");
+        if (blocked?.doneWhen.kind === "user_reply") {
+          const reactivated = { ...wf, steps: wf.steps.map((s) => (s === blocked ? { ...s, status: "active" as const } : s)) };
+          applyWorkflow(advanceWorkflow(reactivated, { done: true }).workflow);
+        } else {
+          applyWorkflow(resumeWorkflow(wf));
+        }
+        buddyStepEvidenceRef.current = { toolResults: [], text: "" };
+      }
+    }
+    // Done-steps before this turn, to tell whether the turn made progress on the checklist.
+    const doneAtStart = countDonePlanSteps(buddyPlanRef.current);
     setBuddyBusy(true);
     setBuddyStreaming("");
     buddyStreamingRef.current = "";
@@ -4317,11 +5211,24 @@ export function App() {
       else if (e.kind === "activity") setBuddyActivity(e.text);
       else if (e.kind === "usage") setBuddyUsage(e.usage);
       else if (e.kind === "plan") {
-        setBuddyPlan(e.plan);
-        // Persist the working checklist per session (desktop owns the store; never on a phone or in
-        // incognito). activeBuddyIdRef is the live session this turn runs for.
-        if (!isRemoteClient && !settings.incognitoRemote)
-          void libraryStore.putMemo?.(planMemoKey(activeBuddyIdRef.current), JSON.stringify(e.plan)).catch(() => {});
+        if (appManagedActive) {
+          // App-managed: the model just COMPILED (or re-compiled) the plan via set_plan. Turn it into a
+          // workflow with per-step DoneWhen contracts; from here the APP runs it and ticks steps from
+          // evidence. applyWorkflow mirrors the read-only plan projection into buddyPlan + persists.
+          applyWorkflow(compileWorkflow(e.plan));
+          buddyStepEvidenceRef.current = { toolResults: [], text: "" };
+        } else {
+          // Legacy model-driven path: keep the model's checklist as the live plan.
+          // Update the ref SYNCHRONOUSLY (not just via setBuddyPlan's render) so a full-autonomy queue's
+          // FIRST auto-approved image — which can fire before React commits — already sees the fresh
+          // checklist and keeps the queue advancing instead of halting after step 1.
+          buddyPlanRef.current = e.plan;
+          setBuddyPlan(e.plan);
+          // Persist the working checklist per session (desktop owns the store; never on a phone or in
+          // incognito). activeBuddyIdRef is the live session this turn runs for.
+          if (!isRemoteClient && !settings.incognitoRemote)
+            void libraryStore.putMemo?.(planMemoKey(activeBuddyIdRef.current), JSON.stringify(e.plan)).catch(() => {});
+        }
       } else if (e.kind === "tool") {
         // Keep any prose the model said before this tool call (a briefing) as its own message.
         const said = stripToolCallJson(buddyStreamingRef.current).trim();
@@ -4360,6 +5267,8 @@ export function App() {
           : c.tool === "schedule_task" ? "Scheduling a task…"
           : c.tool === "mark_step_done" || c.tool === "update_task_step" ? "Updating the plan…"
           : c.tool === "open_web_text" ? "Fetching the text and opening it…"
+          : c.tool === "set_plan" ? "Planning the steps…"
+          : c.tool === "complete_step" ? "Checking off a step…"
           : "Working…";
         setBuddyActivity(label);
         setBuddySteps((prev) => [...prev, label.replace(/…$/, "")]); // keep a visible trace of each step
@@ -4447,6 +5356,12 @@ export function App() {
         void libraryStore.putBook(e.book).catch(() => {});
       } else {
         setBuddyActivity("");
+        // App-managed steps: record each auto-run tool's outcome as EVIDENCE for the current step (the
+        // collar reads this, not the model's claim). Host tools (image/file/command) suspend the turn
+        // and add their own evidence in the approve* handlers; here we only see auto-run results, for
+        // which "ran without error" is what a tool_ok contract needs.
+        if (appManagedActive && e.kind === "toolResult" && buddyWorkflowRef.current)
+          buddyStepEvidenceRef.current.toolResults.push({ call: e.call, result: e.error ? { error: e.error } : {} });
         // The agent just read/wrote the calendar or tasks — reflect it in the app's views.
         if (e.kind === "toolResult" && (e.call.tool === "create_event" || e.call.tool === "list_events")) refreshCalendar();
         if (e.kind === "toolResult" && (e.call.tool === "add_task_group" || e.call.tool === "create_task" || e.call.tool === "add_task_steps" || e.call.tool === "mark_step_done" || e.call.tool === "update_task_step")) refreshTaskPlans();
@@ -4517,7 +5432,7 @@ export function App() {
           appendBuddy({ role: "tool", text: "🔍 No results." });
         }
       }
-    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current);
+    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive);
     if (buddyTurnSeq.current !== seq) return;
     setBuddyBusy(false);
     setBuddyStreaming("");
@@ -4527,7 +5442,21 @@ export function App() {
       appendBuddy({ role: "tool", text: `⚠ ${res.error}`, turns: [] });
       return;
     }
+    // App-managed + the active step is a TOOL step → the model's between-step prose is the confused
+    // "I already called generate for the goat, so I'll move on to the chicken" narration that comes
+    // from seeing its own just-made tool call in context. The app advances from observed evidence, not
+    // these words, so DON'T render them (they're noise). On a tool step the only legitimate output is
+    // the tool call itself (which arrives via pendingTool, below). Answer steps (text/narration/reply)
+    // and legacy non-app-managed mode keep their prose — there it IS the deliverable.
+    const appManagedStep = appManagedActive ? activeStep(buddyWorkflowRef.current) : undefined;
+    const suppressProse = !!appManagedStep && isToolContract(appManagedStep.doneWhen.kind);
     if (res.pendingTool) {
+      // Persist any plain-text the model wrote BEFORE this tool — its "✓ finished X, ▸ now Y" per-step
+      // narration — so that progress note stays documented in the chat instead of vanishing when the
+      // tool (e.g. a render) suspends the turn. turns:[] keeps it display-only (it's already in the
+      // transcript captured below, so the model's history never double-counts it).
+      const narration = buddyStreamingRef.current.trim();
+      if (narration && !suppressProse) appendBuddy({ role: "assistant", text: narration, turns: [] });
       // Record the exact context up to this tool call so an approved run_command can
       // auto-react. `userText` is in `history` for a continuation; not for a typed turn.
       pendingBuddyHistory.current = history;
@@ -4568,22 +5497,81 @@ export function App() {
       return;
     }
     if (res.text) {
-      appendBuddy({
-        role: "assistant",
-        text: res.text,
-        turns: [{ role: "user", content: userText }, ...res.transcript],
-        ...(res.thinking ? { thinking: res.thinking } : {}),
-        // Cloud "keep going?" checkpoint: the task paused with work remaining (so a long run doesn't
-        // burn API calls unattended). Offer a one-tap Continue that re-arms the budget and resumes.
-        ...(res.paused ? { actions: [{ label: "▶ Continue", send: "continue" }] } : {}),
-      });
-      if (openedBook) appendChat({ role: "assistant", text: res.text });
+      // A plain-text settle ON a tool step is the model narrating instead of acting ("I already did
+      // X…") — hide it (the advance/retry below still runs from evidence). Answer steps + the final
+      // wrap-up (no active step) show their text as the deliverable.
+      if (!suppressProse) {
+        appendBuddy({
+          role: "assistant",
+          text: res.text,
+          turns: [{ role: "user", content: userText }, ...res.transcript],
+          ...(res.thinking ? { thinking: res.thinking } : {}),
+          // Cloud "keep going?" checkpoint: the task paused with work remaining (so a long run doesn't
+          // burn API calls unattended). Offer a one-tap Continue that re-arms the budget and resumes.
+          ...(res.paused ? { actions: [{ label: "▶ Continue", send: "continue" }] } : {}),
+        });
+        if (openedBook) appendChat({ role: "assistant", text: res.text });
+      }
+
+      // APP-MANAGED STEPS: the app — not the model — decides if this step is done, from observed
+      // evidence (the accumulated tool results + this settle's text). It then advances/retries/parks.
+      if (appManagedActive && buddyWorkflowRef.current && !res.paused) {
+        const handled = await advanceWorkflowAfterTurn(
+          { toolResults: buddyStepEvidenceRef.current.toolResults, text: res.text },
+          (nudge) => dispatchBuddyTurn([...history, { role: "user", content: userText }, ...res.transcript], nudge),
+        );
+        if (handled) return res.text || undefined;
+      }
+
+      // Lean chaining (legacy model-driven path): the working checklist is re-injected into the prompt
+      // every turn, so the model can read what's ✓ done and what's ▸ next on its own. When a plain-text
+      // turn settles with steps still unfinished, just hand it another turn instead of waiting for the
+      // reader to type "continue" — it reads its checklist, does the next step, and complete_steps it.
+      // (Tool/host-tool turns auto-react on their own paths above; this only fires on a plain-text settle.)
+      const plan = buddyPlanRef.current;
+      if (!res.paused && planHasPendingStep(plan)) {
+        const adv = buddyQueueAdvanceRef.current;
+        adv.count += 1;
+        adv.noProgress = countDonePlanSteps(plan) > doneAtStart ? 0 : adv.noProgress + 1;
+        const cap = Math.max(20, plan!.steps.length * 2 + 5);
+        // Stop if the chain has run long (cap) or stalled: a step that's really a question to the
+        // reader ticks nothing, so after one tolerated no-progress turn we halt and let them answer.
+        if (adv.count <= cap && adv.noProgress <= 1) {
+          await dispatchBuddyTurn(
+            [...history, { role: "user", content: userText }, ...res.transcript],
+            "[Your checklist still has unfinished steps. Read it above, do the ▸ current step, then complete_step, " +
+              "and keep going on your own — don't wait for me. But if the current step is waiting on my answer to " +
+              "something you already asked, just stop and wait — don't repeat the question.]",
+          );
+          return res.text || undefined;
+        }
+        if (adv.count > cap) {
+          appendBuddy({ role: "tool", text: "Paused — say “continue” to keep working the checklist.", turns: [] });
+        }
+      }
     }
     return res.text || undefined;
   };
 
   const onBuddySend = useCallback(
     async (text: string) => {
+      // `/story {json}` — starting a story as you go. Show a friendly bubble (not the raw JSON) and
+      // run it against an EMPTY history so the writer's context is clean (the same guarantee the
+      // desktop's Story button gives locally). This is the path a PHONE-relayed story start lands on
+      // (vrcmd:chatSend "/story …"), so mobile gets the clean-context behaviour too.
+      const story = text.trim();
+      if (story.startsWith("/story ")) {
+        let bubble = "✍️ Starting a story…";
+        try {
+          const payload = JSON.parse(story.slice("/story ".length)) as { opening?: string };
+          const op = typeof payload.opening === "string" ? payload.opening : "";
+          if (op) bubble = `✍️ Starting a story — ${op.slice(0, 80)}${op.length > 80 ? "…" : ""}`;
+        } catch {
+          /* malformed payload — the generic bubble is fine; the worker reports the parse error */
+        }
+        await dispatchBuddyTurn([], story, bubble);
+        return;
+      }
       // `/find` is a MAIN-THREAD command (desktop only) — filesystem access never
       // routes through the LLM worker, so no web page / book text can trigger it.
       const find = /^\/find\s+(.+)$/i.exec(text.trim());
@@ -4641,6 +5629,71 @@ export function App() {
     [buddyMessages, buddyChat, buddyPersona, library, openBook, startGeneration, libraryStore, hasSearchKey],
   );
   const onBuddySendText = useCallback((text: string) => void onBuddySend(text), [onBuddySend]);
+
+  // "Story as you go": start a brand-new illustrated story the user co-writes — the same
+  // deterministic /story path the chat composer's ✍️ Story button uses, but reachable from the
+  // header next to "Open book…" (which only opens an EXISTING file). Surfacing the chat makes the
+  // workflow visible even when a book is already open.
+  // "Story as you go": open the setup modal (workflow + cast + characters), seeded from the souls so
+  // a "You & me" story already knows the played names + looks. Replaces the old window.prompt.
+  const [showStorySetup, setShowStorySetup] = useState(false);
+  const [storySetupSeed, setStorySetupSeed] = useState<{ self: { name: string; note?: string }; user: { name: string; note?: string } }>({
+    self: { name: "" },
+    user: { name: "" },
+  });
+  const startStoryAsYouGo = useCallback(async () => {
+    const [selfName, selfNotes, userName, userNotes] = await Promise.all([
+      loadSoulName(libraryStore, "self"),
+      loadSoul(libraryStore, "self"),
+      loadSoulName(libraryStore, "user"),
+      loadSoul(libraryStore, "user"),
+    ]).catch(() => ["", [], "", []] as [string, SoulNote[], string, SoulNote[]]);
+    setStorySetupSeed({
+      self: { name: selfName, ...(selfNotes[0]?.text ? { note: selfNotes.map((n) => n.text).join("; ").slice(0, 200) } : {}) },
+      user: { name: userName, ...(userNotes[0]?.text ? { note: userNotes.map((n) => n.text).join("; ").slice(0, 200) } : {}) },
+    });
+    setShowStorySetup(true);
+  }, [libraryStore]);
+  // Dispatch the setup as a deterministic /story call (carrying the cast/roleplay as JSON) through the
+  // normal buddy turn, with a friendly chat bubble instead of the raw payload.
+  const startStoryFromSetup = useCallback(
+    (payload: StoryStartPayload) => {
+      setShowStorySetup(false);
+      setShowChat(true);
+      const bubble = `✍️ Starting a story — ${payload.opening.slice(0, 80)}${payload.opening.length > 80 ? "…" : ""}`;
+      const command = `/story ${JSON.stringify(payload)}`;
+      // Remember where we came from so exiting the story returns us there (history intact).
+      storyReturnSessionRef.current = activeBuddyIdRef.current;
+      // On a linked phone the session + engine live on the DESKTOP. Relay the story start the same way
+      // a normal message relays (the desktop owns session creation and runs the turn, then mirrors the
+      // opened book + each beat back): make a fresh session, then send the /story command into it. This
+      // gives mobile the same clean dedicated chat as desktop, and the book/beats sync back via vrsync.
+      if (isRemoteClient) {
+        sendAppSync({ type: "vrcmd:chatNew" });
+        sendAppSync({ type: "vrcmd:chatSend", text: command });
+        return;
+      }
+      // Open the story in a FRESH, dedicated book-only chat. A clean (empty) writer context is what
+      // makes the model reliably reply with beat prose — which the worker then lands in the book —
+      // instead of conversational filler inherited from whatever chat we were just in.
+      const sid = `${BUDDY_CHAT_ID}-${Date.now().toString(36)}`;
+      const label = `Story · ${payload.title || payload.opening.slice(0, 24)}`.slice(0, 60);
+      resetBuddyView();
+      setBuddySessions((prev) => {
+        const next = [...prev, { id: sid, workingDir: "", label }];
+        persistSessions(next);
+        return next;
+      });
+      setActiveBuddyId(sid);
+      activeBuddyIdRef.current = sid; // synchronous: the dispatch below must run against the new session
+      setBuddyMessages([]);
+      void libraryStore.putMemo?.("buddy-active-session", sid).catch(() => {});
+      void dispatchBuddyTurn([], command, bubble); // empty history → clean story context
+    },
+    // resetBuddyView is intentionally omitted — it's defined later in this component; referencing it
+    // in the dep array would evaluate before initialization (TDZ). It's stable, so this is safe.
+    [buddyMessages, isRemoteClient, libraryStore, persistSessions],
+  );
 
   // Attach a file to the next buddy message. Documents (PDF/Word/Excel/CSV/text/EPUB) are
   // extracted to text via the same importer the "Open a document" path uses; images are held
@@ -4904,10 +5957,18 @@ export function App() {
     setBuddyActivity("");
     setBuddyMessages([]);
     setBuddyPlan(undefined);
+    buddyPlanRef.current = undefined; // synchronous — don't let a stale checklist survive the clear
+    setBuddyWorkflow(undefined);
+    buddyWorkflowRef.current = undefined;
+    buddyStepEvidenceRef.current = { toolResults: [], text: "" };
     setBuddyPendingTool(undefined);
+    createdFilesRef.current = [];
+    setFileLedger([]);
     void libraryStore.deleteChatHistory?.(activeBuddyId);
     void libraryStore.deleteMemo?.(planMemoKey(activeBuddyId)).catch(() => {});
-  }, [isRemoteClient, sendAppSync, libraryStore, buddyCancel, activeBuddyId]);
+    void libraryStore.deleteMemo?.(workflowMemoKey(activeBuddyId)).catch(() => {});
+    void libraryStore.deleteMemo?.(ledgerMemoKey(activeBuddyId)).catch(() => {});
+  }, [isRemoteClient, sendAppSync, libraryStore, buddyCancel, activeBuddyId, setFileLedger]);
   // Stop: the turn runs on the DESKTOP (under its worker request id the phone doesn't have), so a
   // linked phone relays the stop; the desktop aborts its in-flight buddy round.
   const onBuddyCancel = useCallback(() => {
@@ -4925,7 +5986,17 @@ export function App() {
     setBuddyThinking("");
     setBuddyActivity("");
     setBuddySteps([]);
+    // ISOLATE the conversation immediately: the switch/new/delete callers load the target session's
+    // history + plan ASYNCHRONOUSLY, so without clearing here the PREVIOUS window's messages + checklist
+    // stay live during the load gap — the model then sees the old chat (e.g. "those 5 images are already
+    // generated") and reports the new task as already done. Clear the ref synchronously too (the
+    // render-time sync at the top of the component otherwise lags a tick behind this state update).
+    setBuddyMessages([]);
     setBuddyPlan(undefined); // the new session's plan loads in (or stays empty); don't flash the old one
+    buddyPlanRef.current = undefined;
+    setBuddyWorkflow(undefined); // app-managed workflow is per-session too — don't leak it across a switch
+    buddyWorkflowRef.current = undefined;
+    buddyStepEvidenceRef.current = { toolResults: [], text: "" };
     setBuddyPendingTool(undefined);
     // The context-usage badge is per-conversation — clear it on a session switch so it doesn't show
     // the previous window's % (it repopulates from the new session's next turn).
@@ -4946,10 +6017,22 @@ export function App() {
         setActiveBuddyId(id);
         setBuddyMessages(hist ?? []);
       });
-      void loadBuddyPlan(id).then(setBuddyPlan);
+      void loadBuddyPlan(id).then((p) => {
+        buddyPlanRef.current = p; // keep the ref in step with the loaded session's plan, not a render behind
+        setBuddyPlan(p);
+      });
+      void loadBuddyWorkflow(id).then((w) => {
+        buddyWorkflowRef.current = w; // restore the app-managed workflow for the switched-to session
+        setBuddyWorkflow(w);
+      });
+      void loadFileLedger(id).then((files) => {
+        createdFilesRef.current = files; // restore the switched-to session's file ledger
+        setFileLedger(files);
+      });
     },
-    [isRemoteClient, sendAppSync, activeBuddyId, libraryStore, resetBuddyView, loadBuddyPlan],
+    [isRemoteClient, sendAppSync, activeBuddyId, libraryStore, resetBuddyView, loadBuddyPlan, loadBuddyWorkflow, loadFileLedger, setFileLedger],
   );
+  switchBuddyRef.current = onSwitchBuddySession; // so onExitBook (defined earlier) can restore a session
   const onNewBuddySession = useCallback(() => {
     if (isRemoteClient) {
       sendAppSync({ type: "vrcmd:chatNew" }); // create on the desktop; the mirror brings it back
@@ -4964,8 +6047,10 @@ export function App() {
     });
     setActiveBuddyId(id);
     setBuddyMessages([]);
+    createdFilesRef.current = []; // a brand-new session starts with an empty file ledger
+    setFileLedger([]);
     void libraryStore.putMemo?.("buddy-active-session", id).catch(() => {});
-  }, [isRemoteClient, sendAppSync, libraryStore, persistSessions, resetBuddyView]);
+  }, [isRemoteClient, sendAppSync, libraryStore, persistSessions, resetBuddyView, setFileLedger]);
   const onDeleteBuddySession = useCallback(
     (id: string) => {
       if (isRemoteClient) {
@@ -4978,6 +6063,7 @@ export function App() {
         persistSessions(next);
         void libraryStore.deleteChatHistory?.(id).catch(() => {});
         void libraryStore.deleteMemo?.(planMemoKey(id)).catch(() => {});
+        void libraryStore.deleteMemo?.(ledgerMemoKey(id)).catch(() => {});
         if (id === activeBuddyId) {
           const fallback = next[0]!.id;
           resetBuddyView();
@@ -4986,7 +6072,18 @@ export function App() {
             setActiveBuddyId(fallback);
             setBuddyMessages(hist ?? []);
           });
-          void loadBuddyPlan(fallback).then(setBuddyPlan);
+          void loadBuddyPlan(fallback).then((p) => {
+            buddyPlanRef.current = p;
+            setBuddyPlan(p);
+          });
+          void loadBuddyWorkflow(fallback).then((w) => {
+            buddyWorkflowRef.current = w;
+            setBuddyWorkflow(w);
+          });
+          void loadFileLedger(fallback).then((files) => {
+            createdFilesRef.current = files;
+            setFileLedger(files);
+          });
         }
         return next;
       });
@@ -5065,6 +6162,9 @@ export function App() {
         case "toggleStep":
           void onToggleStepDone(c.planId, c.stepId, c.done);
           break;
+        case "completeTask":
+          void onCompleteTask(c.planId, c.complete);
+          break;
         case "ignoreTask":
           void ignoreTask(c.id);
           break;
@@ -5096,6 +6196,7 @@ export function App() {
       openTaskInChat,
       onAdvanceTaskStep,
       onToggleStepDone,
+      onCompleteTask,
       ignoreTask,
       onAddTaskDetails,
       removeTask,
@@ -5137,7 +6238,7 @@ export function App() {
           onRenameBuddySession(c.id, c.label);
           break;
         case "vrcmd:chatPersona":
-          setBuddyPersona(c.persona);
+          setBuddyPersona(normalizeBuddyPersona(c.persona));
           break;
         case "vrcmd:chatClear":
           onClearBuddy();
@@ -5218,6 +6319,38 @@ export function App() {
   }, [chatBusy, chatMessages, summarize]);
   const onCompactBuddyClick = useCallback(() => void onCompactBuddy(), [onCompactBuddy]);
   const onCompactChatClick = useCallback(() => void onCompactChat(), [onCompactChat]);
+
+  // G7 — auto-compaction. A long multi-step job silently loses its early decisions once the
+  // history outgrows a small local window and the worker trims the oldest turns. Before that
+  // happens, fold the OLDER turns into a brief and keep the most recent ones verbatim — the
+  // same flow the manual Compact button uses, but fired automatically when usage crosses ~0.8
+  // of the model's window. The file ledger + plan persist separately, so they survive intact.
+  const autoCompactingRef = useRef(false);
+  const onAutoCompactBuddy = useCallback(async () => {
+    if (autoCompactingRef.current || buddyBusy) return;
+    const msgs = buddyMessagesRef.current;
+    const keepRecent = 6;
+    if (msgs.length <= keepRecent + 1) return; // nothing meaningful to summarize away
+    const older = msgs.slice(0, msgs.length - keepRecent);
+    const recent = msgs.slice(msgs.length - keepRecent);
+    autoCompactingRef.current = true;
+    setBuddyBusy(true);
+    setBuddyActivity("Compacting earlier conversation to stay within context…");
+    const res = await summarize(chatTurnsOf(older));
+    setBuddyBusy(false);
+    setBuddyActivity("");
+    if (res.text) {
+      setBuddyMessages([compactedMessage(res.text), ...recent]);
+      // Drop the stale usage donut: it reflected the pre-compaction history. The next turn
+      // recomputes it — and clearing it stops this effect from re-firing on the old value.
+      setBuddyUsage(undefined);
+    }
+    autoCompactingRef.current = false;
+  }, [buddyBusy, summarize]);
+  useEffect(() => {
+    if (isRemoteClient || buddyBusy || autoCompactingRef.current) return;
+    if (shouldAutoCompact(buddyUsage, buddyMessages.length)) void onAutoCompactBuddy();
+  }, [buddyUsage, buddyBusy, buddyMessages.length, isRemoteClient, onAutoCompactBuddy]);
   const buddyPanelMessages = useMemo(
     () =>
       buddyMessages.map((m) => ({
@@ -5227,6 +6360,7 @@ export function App() {
         ...(m.links ? { links: m.links } : {}),
         ...(m.gallery ? { gallery: m.gallery } : {}),
         ...(m.files ? { files: m.files } : {}),
+        ...(m.attachments ? { attachments: m.attachments } : {}),
         ...(m.actions ? { actions: m.actions } : {}),
         ...(m.thinking ? { thinking: m.thinking } : {}),
       })),
@@ -5614,6 +6748,120 @@ export function App() {
           ? "paint"
           : "done";
 
+  // The buddy chat is rendered in two places that share the same wiring: as the home-screen hero
+  // (no book) and as the always-present bottom dock beneath an open book. Extracted so the ~60
+  // props live once. `fill` makes it stretch to the dock's height; history collapse is dock-only.
+  const renderBuddyChat = (
+    fill: boolean,
+    historyCollapsed?: boolean,
+    onToggleHistory?: () => void,
+  ) => (
+    <ChatBuddyPanel
+      {...(fill ? { fill: true } : {})}
+      {...(historyCollapsed !== undefined ? { historyCollapsed } : {})}
+      {...(onToggleHistory ? { onToggleHistory } : {})}
+      messages={buddyPanelMessages}
+      {...(buddyStreaming ? { streamingText: buddyStreaming } : {})}
+      {...(buddyThinking ? { thinking: buddyThinking } : {})}
+      busy={buddyBusy}
+      {...(buddyActivity ? { activity: buddyActivity } : {})}
+      {...(buddySteps.length ? { steps: buddySteps } : {})}
+      {...(buddyPlan ? { plan: buddyPlan, onDismissPlan } : {})}
+      {...(buddyPendingTool ? { pendingTool: buddyPendingTool } : {})}
+      persona={buddyPersona}
+      onPersonaChange={onBuddyPersonaChange}
+      sessions={buddySessions.map((s, i) => ({
+        id: s.id,
+        label: s.label || (s.workingDir ? lastPathSegment(s.workingDir) : `Chat ${i + 1}`),
+      }))}
+      activeSessionId={activeBuddyId}
+      onSwitchSession={onSwitchBuddySession}
+      onNewSession={onNewBuddySession}
+      onRenameSession={onRenameBuddySession}
+      onDeleteSession={onDeleteBuddySession}
+      onSend={onBuddySendWithAttachments}
+      onStartStory={() => void startStoryAsYouGo()}
+      onAttachFile={onAttachBuddyFile}
+      attachments={buddyAttachments.map((a) => ({
+        id: a.id,
+        name: a.name,
+        kind: a.kind,
+        status: a.status,
+        ...(a.error ? { error: a.error } : {}),
+      }))}
+      onRemoveAttachment={onRemoveBuddyAttachment}
+      onApprovePendingTool={onApproveBuddyPendingTool}
+      onApprovePendingToolAlways={onAllowBuddyAlways}
+      onDismissPendingTool={onDismissBuddyPendingTool}
+      agentApprovals={agentApprovals}
+      onApproveAgentTool={onApproveAgentTool}
+      onDenyAgentTool={onDenyAgentTool}
+      onCancel={onBuddyCancel}
+      onClearHistory={onClearBuddy}
+      onDeleteMessage={onDeleteBuddyMessage}
+      onCompact={onCompactBuddyClick}
+      desktop={isDesktop}
+      {...(isDesktop && (settings.localTextBackend === "bundled" || settings.localTextBackend === "server")
+        ? { onLoadModel: warmLlm }
+        : {})}
+      {...((isDesktop || isRemoteClient) && settings.allowCommands
+        ? {
+            workingDir: buddyWorkingDir,
+            onSetWorkingDir: setWorkingDir,
+            // The native folder-picker dialog is desktop-only; the phone types the path (it's
+            // relayed with each command/file tool so they run in that folder on the desktop).
+            ...(isDesktop ? { onPickFolder: pickFolder } : {}),
+          }
+        : {})}
+      onOpenLocalFile={onOpenLocalFile}
+      onSaveFile={onSaveChatFile}
+      fileActions={buddyFileActions}
+      {...((isDesktop || isRemoteClient) && settings.allowCommands ? { onRunCode } : {})}
+      onSaveProject={onSaveProject}
+      onBuildDocument={onBuildDocument}
+      {...(buddyUsage ? { contextUsage: buddyUsage } : {})}
+    />
+  );
+
+  // The story dock's control row (workflow + cadence + manual illustrate) — shown above the chat
+  // when an open book is a "story as you go".
+  const storyControlsRow = book?.kind === "story" && (
+    <div style={styles.storyControls}>
+      <select
+        style={styles.storyControlSelect}
+        value={book.storyConfig?.mode ?? "direct"}
+        onChange={(e) => storySetMode(e.target.value as "direct" | "roleplay")}
+        title="Workflow — Roleplay (you steer, the assistant plays the scene) or Direct (you direct, it narrates)"
+      >
+        <option value="roleplay">🎭 Roleplay</option>
+        <option value="direct">✍️ Direct</option>
+      </select>
+      <select
+        style={styles.storyControlSelect}
+        value={(() => {
+          const c = book.storyConfig?.cadence;
+          return !c || c.mode === "per-response" ? "per-response" : c.mode === "manual" ? "manual" : "every-n";
+        })()}
+        onChange={(e) => {
+          const v = e.target.value as "per-response" | "every-n" | "manual";
+          storySetCadence(v, v === "every-n" ? 3 : undefined);
+        }}
+        title="How often a beat auto-illustrates"
+      >
+        <option value="per-response">🖼 Every beat</option>
+        <option value="every-n">Every 3 beats</option>
+        <option value="manual">Manual only</option>
+      </select>
+      <button
+        style={styles.button}
+        onClick={() => storyRenderLatest()}
+        title="Illustrate (or redraw) the most recent beat now"
+      >
+        ↻ Illustrate
+      </button>
+    </div>
+  );
+
   return (
     <div style={styles.shell}>
       <style>{KEYFRAMES}</style>
@@ -5683,6 +6931,16 @@ export function App() {
                   : "📖 Story"}
             </span>
           )}
+          <button
+            style={toolbarOpen ? { ...styles.button, borderColor: "rgba(120,160,255,0.6)", color: "#acc4ff" } : styles.button}
+            onClick={() => setToolbarOpen((v) => !v)}
+            title="Show or hide the toolbar — collapse it to reclaim screen space, especially on a phone"
+            aria-expanded={toolbarOpen}
+          >
+            {toolbarOpen ? "▾ Tools" : "▸ Tools"}
+          </button>
+          {toolbarOpen && (
+          <>
           {book?.contentMode === "code" && (
             <button
               style={styles.button}
@@ -5724,6 +6982,13 @@ export function App() {
           </label>
           <button
             style={styles.button}
+            onClick={() => void startStoryAsYouGo()}
+            title="Write a brand-new illustrated story you co-write as you go — no file needed. Saved to your library to keep building."
+          >
+            ✍️ Story
+          </button>
+          <button
+            style={styles.button}
             onClick={() => setShowPasteText(true)}
             title="Paste any text (an article, a chapter, a paper) and read/illustrate it like a book"
           >
@@ -5752,6 +7017,20 @@ export function App() {
             title="What the assistant remembers about you — durable notes it keeps across every chat (view, add, edit, or delete)"
           >
             💭 Memory
+          </button>
+          <button
+            style={styles.button}
+            onClick={() => void openSoul("self")}
+            title="The assistant's own identity — its persona, voice, and look. It speaks and behaves as this character in every chat (and plays itself in a story)."
+          >
+            🪞 Soul
+          </button>
+          <button
+            style={styles.button}
+            onClick={() => void openSoul("user")}
+            title="Who you are — your own character's look & personality, so the assistant can portray you when you play yourself."
+          >
+            👤 You
           </button>
           <button
             style={styles.button}
@@ -5827,7 +7106,7 @@ export function App() {
           >
             🖼 Photo
           </button>
-          {book && (
+          {book && book.kind !== "story" && (
             <button
               style={styles.button}
               onClick={() => setShowChat(true)}
@@ -6103,6 +7382,8 @@ export function App() {
             onConnectGoogle={onConnectGoogle}
             onDisconnectGoogle={onDisconnectGoogle}
           />
+          </>
+          )}
         </div>
         </div>
         {book && (
@@ -6120,6 +7401,9 @@ export function App() {
           />
         )}
       </header>
+
+      {/* Everything between the (fixed-height) header and the bottom chat dock scrolls here. */}
+      <div style={styles.contentScroll}>
 
       {!settings.configured && !isRemoteClient && (
         <FirstRunWizard current={settings} onComplete={setSettings} isDesktop={isDesktop} />
@@ -6169,79 +7453,11 @@ export function App() {
         </div>
       )}
 
-      {(!book || (showChat && book.kind === "story")) && (
-        <section style={!book ? styles.buddySection : styles.storyChatOverlay}>
-          {book?.kind === "story" && (
-            <button
-              style={styles.storyChatClose}
-              onClick={() => setShowChat(false)}
-              title="Hide the chat and view the illustrated story"
-            >
-              ✕ View story
-            </button>
-          )}
-          <ChatBuddyPanel
-            messages={buddyPanelMessages}
-            {...(buddyStreaming ? { streamingText: buddyStreaming } : {})}
-            {...(buddyThinking ? { thinking: buddyThinking } : {})}
-            busy={buddyBusy}
-            {...(buddyActivity ? { activity: buddyActivity } : {})}
-            {...(buddySteps.length ? { steps: buddySteps } : {})}
-            {...(buddyPlan ? { plan: buddyPlan, onDismissPlan } : {})}
-            {...(buddyPendingTool ? { pendingTool: buddyPendingTool } : {})}
-            persona={buddyPersona}
-            onPersonaChange={onBuddyPersonaChange}
-            sessions={buddySessions.map((s, i) => ({
-              id: s.id,
-              label: s.label || (s.workingDir ? lastPathSegment(s.workingDir) : `Chat ${i + 1}`),
-            }))}
-            activeSessionId={activeBuddyId}
-            onSwitchSession={onSwitchBuddySession}
-            onNewSession={onNewBuddySession}
-            onRenameSession={onRenameBuddySession}
-            onDeleteSession={onDeleteBuddySession}
-            onSend={onBuddySendWithAttachments}
-            onAttachFile={onAttachBuddyFile}
-            attachments={buddyAttachments.map((a) => ({
-              id: a.id,
-              name: a.name,
-              kind: a.kind,
-              status: a.status,
-              ...(a.error ? { error: a.error } : {}),
-            }))}
-            onRemoveAttachment={onRemoveBuddyAttachment}
-            onApprovePendingTool={onApproveBuddyPendingTool}
-            onApprovePendingToolAlways={onAllowBuddyAlways}
-            onDismissPendingTool={onDismissBuddyPendingTool}
-            agentApprovals={agentApprovals}
-            onApproveAgentTool={onApproveAgentTool}
-            onDenyAgentTool={onDenyAgentTool}
-            onCancel={onBuddyCancel}
-            onClearHistory={onClearBuddy}
-            onDeleteMessage={onDeleteBuddyMessage}
-            onCompact={onCompactBuddyClick}
-            desktop={isDesktop}
-            {...(isDesktop && (settings.localTextBackend === "bundled" || settings.localTextBackend === "server")
-              ? { onLoadModel: warmLlm }
-              : {})}
-            {...((isDesktop || isRemoteClient) && settings.allowCommands
-              ? {
-                  workingDir: buddyWorkingDir,
-                  onSetWorkingDir: setWorkingDir,
-                  // The native folder-picker dialog is desktop-only; the phone types the path (it's
-                  // relayed with each command/file tool so they run in that folder on the desktop).
-                  ...(isDesktop ? { onPickFolder: pickFolder } : {}),
-                }
-              : {})}
-            onOpenLocalFile={onOpenLocalFile}
-            onSaveFile={onSaveChatFile}
-          {...((isDesktop || isRemoteClient) && settings.allowCommands ? { onRunCode } : {})}
-            {...((isDesktop || isRemoteClient) && settings.allowCommands ? { onRunCode } : {})}
-            onSaveProject={onSaveProject}
-            onBuildDocument={onBuildDocument}
-            {...(buddyUsage ? { contextUsage: buddyUsage } : {})}
-          />
-        </section>
+      {/* Home screen (no book open): the assistant chat is the hero, centered. With a book open the
+          chat instead docks at the bottom of the page (below the reader) — see the dock after this
+          scroll region. */}
+      {!book && (
+        <section style={styles.buddySection}>{renderBuddyChat(false)}</section>
       )}
 
       {book && book.contentMode === "code" && codeEditMode ? (
@@ -6255,6 +7471,20 @@ export function App() {
               {book.language ? ` · ${book.language}` : ""}
             </span>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              {markupPreviewKind(book, codeDraft) && (
+                <button
+                  type="button"
+                  style={
+                    codePreviewOpen
+                      ? { ...styles.button, borderColor: "rgba(122,162,255,0.6)", color: "#bcd0ff" }
+                      : styles.button
+                  }
+                  onClick={() => setCodePreviewOpen((v) => !v)}
+                  title="Render this HTML/SVG page in-app — toggle back to edit the source"
+                >
+                  {codePreviewOpen ? "✏️ Edit" : "👁 Preview"}
+                </button>
+              )}
               {bible && (
                 <button
                   type="button"
@@ -6284,14 +7514,25 @@ export function App() {
           </div>
           <div style={styles.codeBody}>
             <div style={styles.codeMain}>
-              <textarea
-                value={codeDraft}
-                onChange={(e) => onCodeDraftChange(e.target.value)}
-                spellCheck={false}
-                wrap="off"
-                style={styles.codeEditor}
-                aria-label={`Edit ${book.title || "code"}`}
-              />
+              {codePreviewOpen && markupPreviewKind(book, codeDraft) ? (
+                // Sandboxed in-app render: scripts run so a coded page actually works, but it has no
+                // same-origin access (can't touch the app, cookies, or storage). Renders on the phone too.
+                <iframe
+                  title={`Preview of ${book.title || "page"}`}
+                  srcDoc={codeDraft}
+                  sandbox="allow-scripts allow-forms allow-popups allow-modals"
+                  style={styles.codePreview}
+                />
+              ) : (
+                <textarea
+                  value={codeDraft}
+                  onChange={(e) => onCodeDraftChange(e.target.value)}
+                  spellCheck={false}
+                  wrap="off"
+                  style={styles.codeEditor}
+                  aria-label={`Edit ${book.title || "code"}`}
+                />
+              )}
               {codeRunOutput && (
                 <pre style={styles.codeOutput}>
                   {codeRunOutput.error
@@ -6345,7 +7586,7 @@ export function App() {
           </div>
         </section>
       ) : book ? (
-        <main style={book.data || (book.dataSheets && book.dataSheets.length) ? styles.readerData : wideImageColumn ? styles.readerWide : styles.reader}>
+        <main style={book.data || (book.dataSheets && book.dataSheets.length) ? styles.readerData : narrow ? styles.readerNarrow : wideImageColumn ? styles.readerWide : styles.reader}>
           <ReaderColumn
             book={book}
             pageToUnit={units?.pageToUnit}
@@ -6451,6 +7692,18 @@ export function App() {
         </main>
       ) : null}
 
+      </div>{/* end contentScroll */}
+
+      {/* With a book open the assistant chat docks at the BOTTOM of the page, full width, beneath the
+          reader. Its input bar is always visible; the message history expands/collapses (caret in the
+          panel header). A "story as you go" book also gets its workflow/cadence controls here. */}
+      {book && (
+        <section style={chatHistoryOpen ? { ...styles.chatDock, height: "min(62vh, 560px)" } : styles.chatDock}>
+          {storyControlsRow}
+          {renderBuddyChat(true, !chatHistoryOpen, () => setChatHistoryOpen((v) => !v))}
+        </section>
+      )}
+
       {showCharacters && (
         <CharacterBible
           bible={bible}
@@ -6483,13 +7736,13 @@ export function App() {
       )}
 
       {showTestImage && (
-        <TestImageModal onRender={testRender} onAddToChat={onAddImageToChat} onClose={() => setShowTestImage(false)} />
+        <TestImageModal onRender={onTestRender} onAddToChat={onAddImageToChat} onClose={() => setShowTestImage(false)} />
       )}
 
       {showPhoto && (
         <PhotoTransformModal
           {...(photoInitial ? { initial: photoInitial } : {})}
-          onRender={(text, opts) => testRender(text, opts)}
+          onRender={onTestRender}
           onAddToChat={onAddImageToChat}
           onExtractText={(img) => void extractTextFromImage(img)}
           onClose={() => {
@@ -6520,6 +7773,8 @@ export function App() {
           onDeleteMessage={onDeleteChatMessage}
           onCompact={onCompactChatClick}
           onSaveFile={onSaveChatFile}
+          fileActions={buddyFileActions}
+          desktop={isDesktop}
           {...((isDesktop || isRemoteClient) && settings.allowCommands ? { onRunCode } : {})}
           onSaveProject={onSaveProject}
           onBuildDocument={onBuildDocument}
@@ -6665,6 +7920,41 @@ export function App() {
         />
       )}
 
+      {showSoul && (
+        <SoulPanel
+          variant={showSoul}
+          name={showSoul === "self" ? selfSoulName : userSoulName}
+          notes={showSoul === "self" ? selfSoulNotes : userSoulNotes}
+          images={showSoul === "self" ? selfSoulImages : userSoulImages}
+          limits={{ note: MAX_SOUL_NOTE_CHARS, max: MAX_SOUL_NOTES, name: MAX_SOUL_NAME_CHARS }}
+          onSaveNotes={async (notes) => {
+            const kind = showSoul;
+            const saved = await saveSoul(libraryStore, kind, notes);
+            setSoulNotes(kind, saved);
+          }}
+          onSaveName={async (name) => {
+            const kind = showSoul;
+            await saveSoulName(libraryStore, kind, name);
+            setSoulName(kind, name.trim().slice(0, MAX_SOUL_NAME_CHARS));
+          }}
+          onSaveImages={async (imgs) => {
+            const kind = showSoul;
+            await saveSoulImages(libraryStore, kind, imgs);
+            setSoulImagesState(kind, imgs);
+          }}
+          onClose={() => setShowSoul(undefined)}
+        />
+      )}
+
+      {showStorySetup && (
+        <StorySetupModal
+          self={storySetupSeed.self}
+          user={storySetupSeed.user}
+          onStart={startStoryFromSetup}
+          onClose={() => setShowStorySetup(false)}
+        />
+      )}
+
       {showTasks && (
         // On a linked phone, every action is RELAYED to the desktop (which owns the planner data and
         // re-mirrors the result); on the desktop they run locally as before.
@@ -6690,6 +7980,9 @@ export function App() {
           onAdvanceStep={isRemoteClient ? (planId, stepId) => sendPlanner({ action: "advanceStep", planId, stepId }) : onAdvanceTaskStep}
           onToggleStepDone={
             isRemoteClient ? (planId, stepId, done) => sendPlanner({ action: "toggleStep", planId, stepId, done }) : onToggleStepDone
+          }
+          onCompleteTask={
+            isRemoteClient ? (planId, complete) => sendPlanner({ action: "completeTask", planId, complete }) : onCompleteTask
           }
           onIgnoreTask={isRemoteClient ? (id) => sendPlanner({ action: "ignoreTask", id }) : ignoreTask}
           onAddTaskDetails={
@@ -8212,15 +9505,21 @@ const KEYFRAMES =
   `details > summary::-webkit-details-marker { display: none; }`;
 
 const styles: Record<string, React.CSSProperties> = {
+  // Full-height flex column: fixed header on top, a scrolling content region in the middle, and a
+  // fixed-height chat dock pinned at the bottom (when a book is open).
   shell: {
-    minHeight: "100vh",
+    height: "100vh",
+    display: "flex",
+    flexDirection: "column",
     background: "#11131a",
     color: "#e7e7ee",
     fontFamily: "Georgia, 'Iowan Old Style', serif",
   },
+  // The middle region between header and bottom dock — this is what scrolls. `minHeight: 0` is
+  // required so the flex child can shrink below its content height and actually scroll.
+  contentScroll: { flex: "1 1 auto", overflowY: "auto", minHeight: 0 },
   header: {
-    position: "sticky",
-    top: 0,
+    flex: "0 0 auto",
     zIndex: 10,
     display: "flex",
     flexDirection: "column",
@@ -8377,31 +9676,29 @@ const styles: Record<string, React.CSSProperties> = {
   },
   empty: { padding: "10px 24px 8px", maxWidth: 760, fontSize: 13, opacity: 0.8, lineHeight: 1.5 },
   buddySection: { padding: "0 24px 20px", display: "flex", justifyContent: "center" },
-  // A story keeps its buddy/story chat mounted OVER the open reader (toggled by the chat
-  // button): the chat drives the next beat; "✕ View story" hides it to see the growing
-  // illustrated story behind. Reuses ChatBuddyPanel — the full buddy toolset incl. the
-  // story tools — so the same surface that started the story continues it.
-  storyChatOverlay: {
-    position: "fixed",
-    inset: 0,
-    zIndex: 60,
+  // With a book open the chat docks at the bottom of the page (full width), beneath the reader. It's
+  // a fixed-height flex child of the shell; its inner panel scrolls. The story workflow/cadence
+  // controls sit above it when the book is a "story as you go".
+  chatDock: {
+    flex: "0 0 auto",
     display: "flex",
     flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    padding: 12,
-    background: "rgba(0,0,0,0.55)",
-    backdropFilter: "blur(2px)",
+    gap: 6,
+    padding: 10,
+    boxSizing: "border-box",
+    background: "#0e0f13",
+    borderTop: "1px solid rgba(255,255,255,0.12)",
   },
-  storyChatClose: {
-    alignSelf: "flex-end",
-    background: "#23262d",
-    color: "#e6e6e6",
-    border: "1px solid rgba(255,255,255,0.18)",
-    borderRadius: 8,
-    padding: "6px 12px",
-    fontSize: 13,
+  // The story dock's control row: workflow + cadence dropdowns and an Illustrate button (no model round).
+  storyControls: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" },
+  storyControlSelect: {
+    background: "rgba(255,255,255,0.08)",
+    color: "inherit",
+    border: "1px solid rgba(255,255,255,0.2)",
+    borderRadius: 6,
+    padding: "5px 8px",
+    fontSize: 12,
+    fontWeight: 600,
     cursor: "pointer",
   },
   // "Lock this look" control under a story beat's image: pin it as a character's reference.
@@ -8440,6 +9737,14 @@ const styles: Record<string, React.CSSProperties> = {
     display: "block",
     padding: "32px 20px 50vh",
     maxWidth: 1200,
+    margin: "0 auto",
+  },
+  // Narrow / phone viewport: a single column. Because the grid becomes `display:block`, the image
+  // `<aside>` (the second child) flows BELOW the text it illustrates instead of beside it.
+  readerNarrow: {
+    display: "block",
+    padding: "24px 16px 40vh",
+    maxWidth: 680,
     margin: "0 auto",
   },
   column: { maxWidth: 640 },
@@ -8542,6 +9847,15 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: "pre" as const,
     overflow: "auto" as const,
     tabSize: 2,
+    boxSizing: "border-box" as const,
+  },
+  // In-app rendered HTML/SVG page (the 👁 Preview), filling the editor area.
+  codePreview: {
+    flex: 1,
+    width: "100%",
+    border: "1px solid rgba(255,255,255,0.12)",
+    borderRadius: 8,
+    background: "#fff",
     boxSizing: "border-box" as const,
   },
   codeOutput: {

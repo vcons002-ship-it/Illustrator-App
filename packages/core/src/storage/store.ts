@@ -3,6 +3,19 @@ import type { BookSource } from "../types/book.js";
 import type { DataTable } from "../data/data-table.js";
 import type { AnalyzeChart } from "../data/analyze.js";
 
+/** A library book's type tag — what kind of thing it is, used to filter the library and to pick the
+ * reader format it opens in. Derived from the book's kind/contentMode/data via {@link libraryTypeOf}. */
+export type LibraryType = "fiction" | "technical" | "code" | "data" | "story";
+
+/** Derive a book's library type tag from its stored shape. */
+export function libraryTypeOf(book: { kind?: "story"; contentMode?: "fiction" | "technical" | "code"; data?: unknown }): LibraryType {
+  if (book.kind === "story") return "story";
+  if (book.data) return "data";
+  if (book.contentMode === "code") return "code";
+  if (book.contentMode === "technical") return "technical";
+  return "fiction";
+}
+
 /** Lightweight library entry for the "switch between books" picker. */
 export interface BookSummary {
   id: string;
@@ -10,6 +23,24 @@ export interface BookSummary {
   author?: string;
   /** When the book was last opened (ms epoch), for recency ordering. */
   addedAt: number;
+  /** The book's type tag (see {@link LibraryType}) — drives the library filter + reader format. */
+  type?: LibraryType;
+}
+
+/** A file surfaced in a chat message — created by the assistant (a code block, spreadsheet,
+ * export, generated image) or found on the PC (a `/find` hit). Persisted so its action card
+ * survives reload. Structurally mirrors the UI's `FileRef` (bytes stored as ArrayBuffer). */
+export interface ChatFileRef {
+  name: string;
+  mime: string;
+  kind: "code" | "doc" | "data" | "image" | "text" | "found" | "export";
+  content?: string;
+  bytes?: ArrayBuffer;
+  path?: string;
+  /** Stable id for a bytes-bearing file card. The chat MIRROR strips heavy bytes from older cards to
+   * stay tunnel-safe (see boundChatHistoryForMirror); a linked phone uses this id to fetch the full
+   * bytes back from the desktop ON DEMAND (vrcmd:fetchFile) when the reader opens/downloads it. */
+  id?: string;
 }
 
 /** One persisted reading-companion chat message (per book). Image bytes are kept
@@ -20,7 +51,13 @@ export interface StoredChatMessage {
   text: string;
   /** ms epoch. */
   at: number;
-  image?: { bytes: ArrayBuffer; mimeType: string } | { sourceUrl: string };
+  /** Inline image: raw bytes (an optional `id` remembers the blob it was re-hydrated from so re-persist
+   * reuses the same blob), a hotlinkable URL, OR a byte-less `{ id }` reference whose bytes were
+   * externalized to the chat blob store (re-hydrated on demand, keyed by the same id). */
+  image?:
+    | { bytes: ArrayBuffer; mimeType: string; id?: string }
+    | { sourceUrl: string }
+    | { id: string; mimeType: string };
   links?: { url: string; title?: string }[];
   /** A set of retrieved images shown as an inline thumbnail gallery (a multi-hit
    * `search_images`); each thumbnail enlarges in place on click. This is what lets
@@ -30,6 +67,9 @@ export interface StoredChatMessage {
   analysis?: { table: DataTable; summary?: string; chart?: AnalyzeChart };
   /** Clickable local-file results (the desktop `/find` command); each opens on click. */
   files?: { path: string; name: string }[];
+  /** Files surfaced by the turn (created OR found), shown as a universal file card with
+   * Download / Open in app / Open in library / Open on PC actions. Mirrors the UI's `FileRef`. */
+  attachments?: ChatFileRef[];
   /** Quick-reply action buttons (e.g. what to do with a pasted link). */
   actions?: { label: string; send: string }[];
   /** The model's reasoning for this turn (a thinking model's scratchpad), shown as a collapsible
@@ -82,6 +122,16 @@ export interface VisualReaderStore {
   putChatHistory?(bookId: string, messages: StoredChatMessage[]): Promise<void>;
   deleteChatHistory?(bookId: string): Promise<void>;
 
+  /**
+   * Externalized chat IMAGE bytes (optional). A chat message's image/attachment bytes are moved OUT of
+   * the persisted message into this keyed blob store so the chat-history array stays small (a long
+   * image-heavy session no longer re-writes megabytes on every turn) and the in-RAM message array can
+   * stay byte-free, with images re-loaded lazily on demand and bounded by an LRU. Keyed by (chatId, id)
+   * so a chat's blobs are dropped with its history. `deleteChatHistory` also drops the chat's blobs.
+   */
+  putImageBlob?(chatId: string, id: string, bytes: ArrayBuffer, mimeType: string): Promise<void>;
+  getImageBlob?(chatId: string, id: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined>;
+
   /** Small keyed text blobs (the chat's long-term reader memory). Optional. */
   getMemo?(key: string): Promise<string | undefined>;
   putMemo?(key: string, text: string): Promise<void>;
@@ -111,6 +161,8 @@ export class InMemoryStore implements VisualReaderStore {
   private images = new Map<string, { bytes: ArrayBuffer; mimeType: string; prompt?: string }>();
   private books = new Map<string, { book: BookSource; addedAt: number }>();
   private chats = new Map<string, StoredChatMessage[]>();
+  /** Externalized chat image bytes, keyed `${chatId}::${id}`. */
+  private chatBlobs = new Map<string, { bytes: ArrayBuffer; mimeType: string }>();
 
   async getBible(bookId: string): Promise<VisualBible | undefined> {
     return this.bibles.get(bookId);
@@ -152,6 +204,7 @@ export class InMemoryStore implements VisualReaderStore {
         title: book.title,
         ...(book.author ? { author: book.author } : {}),
         addedAt,
+        type: libraryTypeOf(book),
       }));
   }
   async removeBook(id: string): Promise<void> {
@@ -160,8 +213,8 @@ export class InMemoryStore implements VisualReaderStore {
     // its chat history — so removed books don't leak storage.
     this.books.delete(id);
     this.bibles.delete(id);
-    this.chats.delete(id);
     await this.clearImages(id);
+    await this.deleteChatHistory(id);
   }
 
   async getChatHistory(bookId: string): Promise<StoredChatMessage[] | undefined> {
@@ -172,6 +225,17 @@ export class InMemoryStore implements VisualReaderStore {
   }
   async deleteChatHistory(bookId: string): Promise<void> {
     this.chats.delete(bookId);
+    const prefix = `${bookId}::`;
+    for (const key of [...this.chatBlobs.keys()]) {
+      if (key.startsWith(prefix)) this.chatBlobs.delete(key);
+    }
+  }
+
+  async putImageBlob(chatId: string, id: string, bytes: ArrayBuffer, mimeType: string): Promise<void> {
+    this.chatBlobs.set(`${chatId}::${id}`, { bytes, mimeType });
+  }
+  async getImageBlob(chatId: string, id: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined> {
+    return this.chatBlobs.get(`${chatId}::${id}`);
   }
 
   private memos = new Map<string, string>();
