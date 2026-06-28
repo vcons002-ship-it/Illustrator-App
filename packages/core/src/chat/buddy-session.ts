@@ -211,6 +211,7 @@ type HostToolName =
   | "tv_chart"
   | "delegate"
   | "send_email"
+  | "delegate_coding_task"
   | "spawn_coding_agents";
 const HOST_TOOLS = new Set<HostToolName>([
   "generate_image",
@@ -228,6 +229,8 @@ const HOST_TOOLS = new Set<HostToolName>([
   "send_email",
   // spawn_coding_agents needs host orchestration (approval, git worktrees, merge) — handed up.
   "spawn_coding_agents",
+  // delegate_coding_task spawns an external agent in the workspace (desktop I/O) — handed up.
+  "delegate_coding_task",
 ]);
 /** Type-guard so the non-host branch narrows to the tools `runBuddyTool` can execute. */
 function isHostTool(call: BuddyToolCall): call is Extract<BuddyToolCall, { tool: HostToolName }> {
@@ -526,7 +529,7 @@ export async function runBuddyTurn(opts: {
 /** Execute one auto-run buddy tool (everything but generate_image). Exported for
  * the slash-command path, which runs tools directly without an LLM round. */
 export async function runBuddyTool(
-  call: Exclude<BuddyToolCall, { tool: "generate_image" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "spawn_coding_agents" }>,
+  call: Exclude<BuddyToolCall, { tool: "generate_image" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" }>,
   deps: BuddyDeps,
 ): Promise<BuddyToolResultPayload> {
   try {

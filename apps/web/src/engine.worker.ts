@@ -3409,6 +3409,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         slash.call.tool === "tv_chart" ||
         slash.call.tool === "delegate" ||
         slash.call.tool === "send_email" ||
+        slash.call.tool === "delegate_coding_task" ||
         slash.call.tool === "spawn_coding_agents"
       ) {
         post({ type: "buddyDone", requestId: msg.requestId, text: "", transcript: [], pendingTool: slash.call });
@@ -3481,6 +3482,11 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // Autonomous workspace: write_file + run_command run without a per-action click.
         ...(corsProxyAvailable && settings?.allowCommands && settings?.autonomousWorkspace
           ? { canAutonomousWorkspace: true }
+          : {}),
+        // External coding agent (Aider) delegation: opt-in + commands. The host's runtime PATH check
+        // surfaces a clear "install Aider" message if the tool is used when it isn't installed.
+        ...(corsProxyAvailable && settings?.allowCommands && settings?.delegateCoding
+          ? { canDelegateCoding: true }
           : {}),
         // Wolfram|Alpha grounding when an AppID is configured.
         ...(settings?.keys?.wolfram ? { canWolfram: true } : {}),
