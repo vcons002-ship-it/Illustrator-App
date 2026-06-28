@@ -20,6 +20,7 @@ import {
   imageModelVramCostGb,
   serverModelVramCostGb,
   chatImageVramFit,
+  staleComfyUrlToFree,
   resolveLoadedContextTokens,
   createDataTable,
   recalcTable,
@@ -787,6 +788,32 @@ async function freeImageModelForChat(): Promise<void> {
   }
 }
 
+/** Once-per-arm guard: a ComfyUI we left resident is only /free'd once after a switch to A1111 (re-armed
+ * below whenever A1111 is NOT the active backend, so a later ComfyUI→A1111 switch frees it again). */
+let staleComfyFreed = false;
+/**
+ * Hand the GPU to an external A1111 render: a ComfyUI used earlier this session keeps its checkpoint
+ * resident in VRAM (it only releases on an explicit /free), so after the reader switches the image
+ * backend to A1111 that stale model squats the GPU and the A1111 render spills to system RAM and crawls.
+ * When A1111 is the active backend, POST /free to the last-known ComfyUI URL once. Best-effort; ComfyUI
+ * reloads lazily if the reader ever switches back. No-op for any other backend / when no ComfyUI is known.
+ */
+async function freeStaleComfyForA1111(): Promise<void> {
+  if (!settings) return;
+  const url = staleComfyUrlToFree(settings);
+  if (!url) {
+    staleComfyFreed = false; // not on A1111 (or nothing to free) → re-arm for the next switch
+    return;
+  }
+  if (staleComfyFreed) return;
+  staleComfyFreed = true;
+  try {
+    await new ComfyUIBackend({ baseUrl: url }).freeMemory();
+  } catch {
+    /* best-effort — that ComfyUI may be gone/unreachable, which is fine */
+  }
+}
+
 /**
  * Make room for the local chat LLM before it (re)loads — run at the start of every chat turn and before
  * a warm. Two steps, both low-VRAM-scoped so an ample-VRAM box keeps its models hot:
@@ -1367,6 +1394,10 @@ async function renderFromText(
   // the debounced warm or the next chat. The book's bible-illustration path doesn't come through
   // here, so it's never disturbed.
   await freeChatLlmForRender();
+  // If the reader switched from ComfyUI to an external A1111, free the ComfyUI we left resident so this
+  // A1111 render gets the GPU instead of spilling to system RAM. No-op unless A1111 is active + a
+  // separate ComfyUI URL is remembered.
+  await freeStaleComfyForA1111();
   // A new render means the image engine will (re)load its model — clear the chat-side "freed" flag so
   // the next chat burst frees it again.
   imageModelFreed = false;
