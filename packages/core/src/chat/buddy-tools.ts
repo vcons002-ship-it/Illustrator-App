@@ -246,7 +246,7 @@ export type BuddyToolCall =
       illustrateAfter?: "chapter" | "book";
     }
   /** Same shape as the in-book chat's generate_image: approval-gated render. */
-  | { tool: "generate_image"; prompt: string; model?: string; steps?: number; style?: string }
+  | { tool: "generate_image"; prompt: string; model?: string; steps?: number; style?: string; truncated?: boolean }
   /** Search the reader's COMPUTER for a file to open (desktop). Approval-gated:
    * the host stops the loop and asks the reader before touching the filesystem. */
   | { tool: "find_files"; query: string }
@@ -259,11 +259,11 @@ export type BuddyToolCall =
    * approval-gated: every command is shown and the reader must click Run; stdout/
    * stderr/exit come back so the model can test code and react. (When the reader turns
    * on Autonomous workspace, run_command + write_file run without a per-action click.) */
-  | { tool: "run_command"; command: string }
+  | { tool: "run_command"; command: string; truncated?: boolean }
   /** Save a file into the reader's VisualReader workspace (desktop) so the model can write
    * code/data and then run_command it. Path is workspace-relative (can't escape the folder).
    * Only available with the command tool + Autonomous workspace on; runs without a click. */
-  | { tool: "write_file"; path: string; content: string; append?: boolean }
+  | { tool: "write_file"; path: string; content: string; append?: boolean; truncated?: boolean }
   /** Edit an EXISTING workspace file in place via search/replace blocks (no whole-file rewrite). Each
    * `search` must match exactly once. Only with the command tool + Autonomous workspace on. */
   | { tool: "edit_file"; path: string; edits: { search: string; replace: string }[] }
@@ -271,7 +271,7 @@ export type BuddyToolCall =
    * same local model; the app runs it in the workspace and captures the resulting git diff. Optional
    * `files` seed its context; optional `verify` is a build/test command run after. Desktop + command
    * tool + an installed external agent + Ollama. */
-  | { tool: "delegate_coding_task"; task: string; files?: string[]; verify?: string }
+  | { tool: "delegate_coding_task"; task: string; files?: string[]; verify?: string; truncated?: boolean }
   /** Capture the reader's SCREEN (or one window by title) and look at it with a
    * vision model (desktop). The reader approves; the model gets a text observation. */
   | { tool: "screenshot"; question?: string; window?: string }
@@ -1970,13 +1970,20 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     return path ? { tool, path } : undefined;
   }
   if (tool === "run_command") {
-    const command = strArg(obj.command, MAX_COMMAND_CHARS);
-    return command ? { tool, command } : undefined;
+    const { text: command, truncated } = clampArg(obj.command, MAX_COMMAND_CHARS);
+    return command ? { tool, command, ...(truncated ? { truncated: true } : {}) } : undefined;
   }
   if (tool === "write_file") {
     const path = strArg(obj.path, MAX_PATH_CHARS);
-    const content = typeof obj.content === "string" ? obj.content.slice(0, MAX_FILE_CONTENT_CHARS) : undefined;
-    return path && content !== undefined ? { tool, path, content, ...(obj.append === true ? { append: true } : {}) } : undefined;
+    // File content is NOT trimmed (leading/trailing whitespace + a trailing newline are significant),
+    // so it's clamped inline rather than via clampArg; over the cap flags truncation so the model is
+    // told to send the rest with append:true instead of silently losing the tail.
+    const raw = typeof obj.content === "string" ? obj.content : undefined;
+    const content = raw !== undefined ? raw.slice(0, MAX_FILE_CONTENT_CHARS) : undefined;
+    const truncated = raw !== undefined && raw.length > MAX_FILE_CONTENT_CHARS;
+    return path && content !== undefined
+      ? { tool, path, content, ...(obj.append === true ? { append: true } : {}), ...(truncated ? { truncated: true } : {}) }
+      : undefined;
   }
   if (tool === "edit_file") {
     const path = strArg(obj.path, MAX_PATH_CHARS);
@@ -1992,13 +1999,13 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     return path && edits && edits.length > 0 ? { tool, path, edits } : undefined;
   }
   if (tool === "delegate_coding_task") {
-    const task = strArg(obj.task, MAX_DELEGATE_TASK_CHARS);
+    const { text: task, truncated } = clampArg(obj.task, MAX_DELEGATE_TASK_CHARS);
     const files = Array.isArray(obj.files)
       ? obj.files.filter((f): f is string => typeof f === "string" && f.trim().length > 0).slice(0, MAX_DELEGATE_FILES)
       : undefined;
     const verify = strArg(obj.verify, MAX_COMMAND_CHARS);
     return task
-      ? { tool, task, ...(files && files.length > 0 ? { files } : {}), ...(verify ? { verify } : {}) }
+      ? { tool, task, ...(files && files.length > 0 ? { files } : {}), ...(verify ? { verify } : {}), ...(truncated ? { truncated: true } : {}) }
       : undefined;
   }
   if (tool === "screenshot") {
@@ -2401,7 +2408,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     };
   }
   if (tool === "generate_image") {
-    const prompt = strArg(obj.prompt, MAX_PROMPT_CHARS);
+    const { text: prompt, truncated } = clampArg(obj.prompt, MAX_PROMPT_CHARS);
     if (!prompt) return undefined;
     const model = strArg(obj.model, MAX_NAME_CHARS);
     const style = strArg(obj.style, MAX_NAME_CHARS);
@@ -2415,6 +2422,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       ...(model ? { model } : {}),
       ...(style ? { style } : {}),
       ...(steps !== undefined ? { steps } : {}),
+      ...(truncated ? { truncated: true } : {}),
     };
   }
   if (tool === "open_content") {
@@ -2752,6 +2760,18 @@ export function renderPlanLines(plan: BuddyPlan): string {
 
 /** Render a buddy tool's outcome as the user-role turn that continues the loop. */
 export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResultPayload): string {
+  // WARN-don't-silently-truncate: when the parse had to cut an arg bound for an external program (a
+  // shell command, a written file, an image/coding prompt) to fit its cap, prepend a notice so the
+  // model knows the result below ran on TRIMMED input — and can resend shorter / in chunks.
+  const warn =
+    "truncated" in call && call.truncated
+      ? "[⚠ Your input ran past the size limit and was CUT before running — the result below used the trimmed input. " +
+        "If detail was lost, resend it shorter or split it (a big file: write_file with append:true; a long task/prompt: tighten it).]\n"
+      : "";
+  return warn + formatBuddyToolResultBody(call, result);
+}
+
+function formatBuddyToolResultBody(call: BuddyToolCall, result: BuddyToolResultPayload): string {
   if (result.error) {
     return `[tool ${call.tool} failed: ${result.error}] Tell the reader plainly and suggest an alternative (another source, or pasting/uploading the text).`;
   }
@@ -3289,6 +3309,19 @@ function strArg(v: unknown, max: number): string | undefined {
   if (typeof v !== "string") return undefined;
   const t = v.trim();
   return t ? t.slice(0, max) : undefined;
+}
+
+/**
+ * Like {@link strArg}, but also reports whether the value was CUT to fit `max`. Used for the args bound
+ * for an external program (a shell command, a written file, an image/coding prompt): the caller flags
+ * the truncation on the call so the model is WARNED its input was trimmed — instead of silently acting
+ * on a half-sent command/prompt. PURE.
+ */
+export function clampArg(v: unknown, max: number): { text: string | undefined; truncated: boolean } {
+  if (typeof v !== "string") return { text: undefined, truncated: false };
+  const t = v.trim();
+  if (!t) return { text: undefined, truncated: false };
+  return { text: t.slice(0, max), truncated: t.length > max };
 }
 
 /** A 1..25 result cap from the model's `max`, or undefined (use the default). */
