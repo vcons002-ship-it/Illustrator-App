@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chatImageVramFit, defaultLoadedWindow, resolveLoadedContextTokens } from "./catalog.js";
+import { chatImageVramFit, defaultLoadedWindow, resolveLoadedContextTokens, staleComfyUrlToFree } from "./catalog.js";
 
 describe("chatImageVramFit (keep-both-resident decision)", () => {
   it("returns 'unknown' when VRAM or a model size is unknown (caller keeps the model loaded)", () => {
@@ -66,5 +66,25 @@ describe("resolveLoadedContextTokens (budget = actually-loaded window)", () => {
     expect(resolveLoadedContextTokens({ isOllama: false, model: "bundled", infoLoaded: 8192, infoMax: 32768 })).toBe(8192);
     expect(resolveLoadedContextTokens({ isOllama: false, model: "x", infoMax: 32768, ollamaDefault: 4096 })).toBe(4096);
     expect(resolveLoadedContextTokens({ isOllama: false, model: "x" })).toBeUndefined();
+  });
+});
+
+describe("staleComfyUrlToFree (free a leftover ComfyUI's VRAM before an A1111 render)", () => {
+  const comfy = "http://127.0.0.1:8188";
+  const a1111 = "http://127.0.0.1:7860";
+  it("returns the remembered ComfyUI URL when A1111 is the active backend", () => {
+    expect(staleComfyUrlToFree({ localBackend: "a1111", localServerUrl: a1111, localServerUrlByBackend: { comfyui: comfy } })).toBe(comfy);
+    // engineBackend (resolved) wins over localBackend
+    expect(staleComfyUrlToFree({ engineBackend: "a1111", localBackend: "comfyui", engineBaseUrl: a1111, localServerUrlByBackend: { comfyui: comfy } })).toBe(comfy);
+  });
+  it("does nothing when ComfyUI is the active backend", () => {
+    expect(staleComfyUrlToFree({ localBackend: "comfyui", localServerUrl: comfy, localServerUrlByBackend: { comfyui: comfy } })).toBeUndefined();
+  });
+  it("does nothing without a remembered ComfyUI URL", () => {
+    expect(staleComfyUrlToFree({ localBackend: "a1111", localServerUrl: a1111 })).toBeUndefined();
+    expect(staleComfyUrlToFree({ localBackend: "a1111", localServerUrl: a1111, localServerUrlByBackend: { comfyui: "  " } })).toBeUndefined();
+  });
+  it("does nothing when the ComfyUI URL is the same server as A1111", () => {
+    expect(staleComfyUrlToFree({ localBackend: "a1111", localServerUrl: comfy, localServerUrlByBackend: { comfyui: comfy } })).toBeUndefined();
   });
 });

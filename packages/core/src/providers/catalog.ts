@@ -463,6 +463,29 @@ export function chatImageVramFit(opts: { gpuVramMb?: number | undefined; imageGb
 }
 
 /**
+ * A ComfyUI used earlier this session keeps its checkpoint RESIDENT in VRAM after a render (ComfyUI
+ * only releases on an explicit `/free`). Once the reader switches the image backend to an external
+ * AUTOMATIC1111, that stale ComfyUI model squats the GPU, so the A1111 render spills to system RAM and
+ * crawls. This returns the last-known ComfyUI URL to `/free` BEFORE an A1111 render, or `undefined` when
+ * there's nothing to do — A1111 isn't the active backend, no ComfyUI URL is remembered, or it's the same
+ * server as A1111. The per-backend URL memory (`localServerUrlByBackend.comfyui`) survives the switch, so
+ * the URL is still available. PURE. */
+export function staleComfyUrlToFree(s: {
+  engineBackend?: string | undefined;
+  localBackend?: string | undefined;
+  engineBaseUrl?: string | undefined;
+  localServerUrl?: string | undefined;
+  localServerUrlByBackend?: { comfyui?: string | undefined } | undefined;
+}): string | undefined {
+  if ((s.engineBackend ?? s.localBackend) !== "a1111") return undefined;
+  const comfyUrl = s.localServerUrlByBackend?.comfyui?.trim();
+  const activeUrl = (s.engineBaseUrl ?? s.localServerUrl)?.trim();
+  if (!comfyUrl) return undefined;
+  if (comfyUrl === activeUrl) return undefined; // ComfyUI URL IS the A1111 server — nothing separate to free
+  return comfyUrl;
+}
+
+/**
  * A safe DEFAULT Ollama loaded-context window (num_ctx) so a small model isn't split into shared RAM.
  * Ollama, given no num_ctx, loads at its own (often huge) default window and pre-allocates a KV cache
  * sized to that whole window — its load-time fit ESTIMATE then overflows VRAM and it offloads layers to
