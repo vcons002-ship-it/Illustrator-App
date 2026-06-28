@@ -167,6 +167,7 @@ import {
   evaluateStep,
   advanceWorkflow,
   activeStep,
+  isToolContract,
   workflowToPlan,
   workflowParked,
   resumeWorkflow,
@@ -5106,12 +5107,19 @@ export function App() {
     if (adv.action === "advance" || adv.action === "skip") {
       if (adv.action === "skip")
         appendBuddy({ role: "tool", text: `⚠ Skipped “${step.instruction}” after ${step.maxAttempts} tries — moving on.`, turns: [] });
-      await continueWith(`[Next step — do JUST this one thing, then stop: ${adv.next!.instruction}]`);
+      // Tell the model the PRIOR step is settled and give the next step's position, so it stops
+      // "announcing the transition" (the confused "I already did X, moving on") — its prior tool call
+      // is still in context. Ask for the tool only, no recap.
+      const total = adv.workflow.steps.length;
+      const n = adv.workflow.steps.findIndex((s) => s.id === adv.next!.id) + 1;
+      await continueWith(
+        `[✓ Previous step done. Now do ONLY step ${n} of ${total}: ${adv.next!.instruction}. Call its tool and stop — don't recap or explain.]`,
+      );
       return true;
     }
     if (adv.action === "retry") {
       await continueWith(
-        `[That step isn't done yet${outcome.reason ? ` (${outcome.reason})` : ""}. Actually take its action now: ${step.instruction}]`,
+        `[Your last attempt didn't satisfy this step${outcome.reason ? ` (${outcome.reason})` : ""}. Do it again now: ${step.instruction}. Just call the tool — no commentary.]`,
       );
       return true;
     }
@@ -5416,13 +5424,21 @@ export function App() {
       appendBuddy({ role: "tool", text: `⚠ ${res.error}`, turns: [] });
       return;
     }
+    // App-managed + the active step is a TOOL step → the model's between-step prose is the confused
+    // "I already called generate for the goat, so I'll move on to the chicken" narration that comes
+    // from seeing its own just-made tool call in context. The app advances from observed evidence, not
+    // these words, so DON'T render them (they're noise). On a tool step the only legitimate output is
+    // the tool call itself (which arrives via pendingTool, below). Answer steps (text/narration/reply)
+    // and legacy non-app-managed mode keep their prose — there it IS the deliverable.
+    const appManagedStep = appManagedActive ? activeStep(buddyWorkflowRef.current) : undefined;
+    const suppressProse = !!appManagedStep && isToolContract(appManagedStep.doneWhen.kind);
     if (res.pendingTool) {
       // Persist any plain-text the model wrote BEFORE this tool — its "✓ finished X, ▸ now Y" per-step
       // narration — so that progress note stays documented in the chat instead of vanishing when the
       // tool (e.g. a render) suspends the turn. turns:[] keeps it display-only (it's already in the
       // transcript captured below, so the model's history never double-counts it).
       const narration = buddyStreamingRef.current.trim();
-      if (narration) appendBuddy({ role: "assistant", text: narration, turns: [] });
+      if (narration && !suppressProse) appendBuddy({ role: "assistant", text: narration, turns: [] });
       // Record the exact context up to this tool call so an approved run_command can
       // auto-react. `userText` is in `history` for a continuation; not for a typed turn.
       pendingBuddyHistory.current = history;
@@ -5463,16 +5479,21 @@ export function App() {
       return;
     }
     if (res.text) {
-      appendBuddy({
-        role: "assistant",
-        text: res.text,
-        turns: [{ role: "user", content: userText }, ...res.transcript],
-        ...(res.thinking ? { thinking: res.thinking } : {}),
-        // Cloud "keep going?" checkpoint: the task paused with work remaining (so a long run doesn't
-        // burn API calls unattended). Offer a one-tap Continue that re-arms the budget and resumes.
-        ...(res.paused ? { actions: [{ label: "▶ Continue", send: "continue" }] } : {}),
-      });
-      if (openedBook) appendChat({ role: "assistant", text: res.text });
+      // A plain-text settle ON a tool step is the model narrating instead of acting ("I already did
+      // X…") — hide it (the advance/retry below still runs from evidence). Answer steps + the final
+      // wrap-up (no active step) show their text as the deliverable.
+      if (!suppressProse) {
+        appendBuddy({
+          role: "assistant",
+          text: res.text,
+          turns: [{ role: "user", content: userText }, ...res.transcript],
+          ...(res.thinking ? { thinking: res.thinking } : {}),
+          // Cloud "keep going?" checkpoint: the task paused with work remaining (so a long run doesn't
+          // burn API calls unattended). Offer a one-tap Continue that re-arms the budget and resumes.
+          ...(res.paused ? { actions: [{ label: "▶ Continue", send: "continue" }] } : {}),
+        });
+        if (openedBook) appendChat({ role: "assistant", text: res.text });
+      }
 
       // APP-MANAGED STEPS: the app — not the model — decides if this step is done, from observed
       // evidence (the accumulated tool results + this settle's text). It then advances/retries/parks.
