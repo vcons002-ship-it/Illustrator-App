@@ -13,10 +13,13 @@
  * Protocol so it streams + calls back for permissions) is the documented future upgrade.
  */
 
-/** Cap on the delegated task prompt (it's handed to Aider via a message FILE, never the shell). */
+/** Cap on the delegated task prompt (it's handed to the agent via a FILE, never the shell). */
 export const MAX_DELEGATE_TASK_CHARS = 8_000;
 /** Cap on how many files the model may seed the agent's editing context with. */
 export const MAX_DELEGATE_FILES = 20;
+
+/** Which external coding agent backend runs a delegate_coding_task (a user setting). */
+export type CodingAgentBackend = "aider" | "codex";
 
 export interface AiderTaskSpec {
   /** Workspace-relative path to a file holding the task prompt (keeps the prompt off the shell). */
@@ -46,6 +49,22 @@ export function buildAiderArgs(spec: AiderTaskSpec): string[] {
   }
   args.push("--message-file", spec.messageFile);
   return args;
+}
+
+export interface CodexTaskSpec {
+  /** Ollama model id (Codex's `--oss --local-provider ollama` serves it). */
+  model: string;
+}
+
+/**
+ * The argv for ONE non-interactive Codex run (the backup backend): `exec` reads the task prompt from
+ * STDIN (the trailing `-`), `--oss --local-provider ollama` pins it to the local model, `--full-auto`
+ * applies edits in a sandboxed workspace without prompting, and `--skip-git-repo-check` lets it run
+ * whether or not the folder is a git repo. The prompt is piped in by the runtime (so it never touches
+ * the shell); Codex takes the editing scope from the prompt, not file args. PURE.
+ */
+export function buildCodexArgs(spec: CodexTaskSpec): string[] {
+  return ["exec", "--oss", "--local-provider", "ollama", "-m", spec.model, "--full-auto", "--skip-git-repo-check", "-"];
 }
 
 const POSIX_SAFE = /^[A-Za-z0-9_./:@%+=-]+$/;

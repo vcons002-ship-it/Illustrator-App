@@ -1,8 +1,9 @@
 # External coding-agent delegation
 
 The app can hand a hard, multi-file coding job to an **external open-source coding agent**
-(currently [Aider](https://aider.chat)) instead of grinding it out edit-by-edit with the
-in-app `write_file`/`edit_file` tools. The app stays the orchestrator — conversation, the
+([Aider](https://aider.chat) by default, or [Codex CLI](https://developers.openai.com/codex/cli)
+as a backup — a settings toggle) instead of grinding it out edit-by-edit with the in-app
+`write_file`/`edit_file` tools. The app stays the orchestrator — conversation, the
 plan/collar, VRAM coordination, the file ledger — and delegates the heavy edit loop to a
 specialist whose whole job is exactly that.
 

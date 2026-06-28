@@ -4539,6 +4539,7 @@ export function App() {
       const editorModel = (settings.subAgentModel ?? "").trim();
       const r = await delegateCodingTask({
         task: call.task,
+        backend: settings.codingAgentBackend ?? "aider",
         model,
         ...(editorModel ? { editorModel } : {}),
         textServerUrl: serverUrl,
@@ -4666,6 +4667,7 @@ export function App() {
           const editorModel = (settings.subAgentModel ?? "").trim();
           const r = await delegateCodingTask({
             task: call.task,
+            backend: settings.codingAgentBackend ?? "aider",
             model,
             ...(editorModel ? { editorModel } : {}),
             textServerUrl: serverUrl,
@@ -4687,7 +4689,7 @@ export function App() {
         return { error: err instanceof Error ? err.message : String(err) };
       }
     },
-    [buddyWorkingDir, settings.keys, settings.commandShell, settings.localServerTextModel, settings.localServerTextUrl, settings.localTextServer, settings.subAgentModel, assessImage],
+    [buddyWorkingDir, settings.keys, settings.commandShell, settings.localServerTextModel, settings.localServerTextUrl, settings.localTextServer, settings.subAgentModel, settings.codingAgentBackend, assessImage],
   );
   useEffect(() => {
     runHostToolForRemoteRef.current = runHostToolForRemote;

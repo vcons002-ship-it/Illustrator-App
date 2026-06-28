@@ -713,7 +713,7 @@ export function buildBuddySystemPrompt(opts: {
   const delegateCodingTool =
     opts.canRunCommands && opts.canDelegateCoding
       ? '- {"tool":"delegate_coding_task","task":"what to build/change, in detail","files":["src/app.py"],"verify":"pytest -q"} — ' +
-        "hand a HARD, multi-file coding job to an EXTERNAL coding agent (Aider) that runs headless on the SAME local " +
+        "hand a HARD, multi-file coding job to an EXTERNAL coding agent (Aider or Codex) that runs headless on the SAME local " +
         "model, in the workspace, and edits the files itself; the app captures the resulting diff. Use it for a job " +
         "that would take many edit_file/write_file rounds (refactor across files, implement a feature touching several " +
         "modules). Put the FULL spec in `task` (it doesn't see this chat); name known starting `files`; give a `verify` " +
@@ -2844,8 +2844,9 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     if (!d) return "[delegate_coding_task did not run]";
     if (!d.installed)
       return (
-        "[delegate_coding_task: no external coding agent is installed. Install Aider (pipx install aider-chat) " +
-        "or just do the change yourself with write_file/edit_file/run_command.]"
+        "[delegate_coding_task: the selected external coding agent isn't installed. Install Aider " +
+        "(pipx install aider-chat) or Codex CLI (npm i -g @openai/codex), or just do the change yourself " +
+        "with write_file/edit_file/run_command.]"
       );
     return d.summary;
   }

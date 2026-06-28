@@ -37,6 +37,7 @@ export const TUNING_FIELDS = [
   "allowCommands",
   "autonomousWorkspace",
   "delegateCoding",
+  "codingAgentBackend",
   "commandShell",
   "autoResolveConflicts",
   "allowTaskAutomation",

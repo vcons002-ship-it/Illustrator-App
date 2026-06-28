@@ -7,7 +7,7 @@
  * downloads) so the renderer never deals with processes, ports, or CORS.
  */
 
-import { base64ToBytes, classifyLoraHeader, type LocalFile } from "@visual-reader/core";
+import { base64ToBytes, classifyLoraHeader, type LocalFile, type CodingAgentBackend } from "@visual-reader/core";
 
 type UnlistenFn = () => void;
 
@@ -422,11 +422,13 @@ export interface DelegateCodingResult {
 
 export interface DelegateCodingOpts {
   task: string;
-  /** Ollama model id WITHOUT the "ollama/" prefix (Aider adds it). */
+  /** Which external agent to drive: "aider" (default) or "codex". A user setting. */
+  backend?: CodingAgentBackend;
+  /** Ollama model id (Aider prefixes "ollama/"; Codex takes it bare via --oss). */
   model: string;
-  /** Optional cheaper editor model → Aider's architect/editor split. */
+  /** Optional cheaper editor model → Aider's architect/editor split (ignored by Codex). */
   editorModel?: string;
-  /** The app's LLM server URL (e.g. http://localhost:11434/v1) — Aider's OLLAMA_API_BASE is derived. */
+  /** The app's LLM server URL (e.g. http://localhost:11434/v1) — the agent's Ollama base is derived. */
   textServerUrl: string;
   files?: string[];
   verify?: string;
@@ -439,22 +441,26 @@ export interface DelegateCodingOpts {
 const CODING_TASK_FILE = ".vr-coding-task.md";
 
 /**
- * Run Aider headless on a coding task and report what changed. Detects Aider on PATH first (returns
- * `installed:false` cleanly when absent), writes the prompt to a file, records the pre-run commit,
- * runs Aider against the local model, then diffs to summarize the changes and (optionally) runs a
- * verify command. Best-effort + never throws — failures come back in `summary`. Desktop-only.
+ * Run an external coding agent (Aider, or Codex CLI as the backup backend) headless on a coding task
+ * and report what changed. Detects the chosen agent on PATH first (returns `installed:false` cleanly
+ * when absent), writes the prompt to a file, records the pre-run commit, runs the agent against the
+ * local Ollama model, then diffs to summarize the changes and (optionally) runs a verify command.
+ * Best-effort + never throws — failures come back in `summary`. Desktop-only.
  */
 export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<DelegateCodingResult> {
   if (!isDesktop) return { ok: false, installed: false, summary: "(coding delegation is desktop-only)", files: [] };
-  const { buildAiderArgs, quotePosixCommand, ollamaApiBase } = await import("@visual-reader/core");
+  const backend: CodingAgentBackend = opts.backend ?? "aider";
+  const label = backend === "codex" ? "Codex" : "Aider";
+  const bin = backend === "codex" ? "codex" : "aider";
+  const { buildAiderArgs, buildCodexArgs, quotePosixCommand, ollamaApiBase } = await import("@visual-reader/core");
   const run = (command: string) => runCommand(command, opts.githubToken, opts.cwd, opts.shell);
 
-  // 1) Is Aider installed?
+  // 1) Is the chosen agent installed?
   try {
-    const v = await run("aider --version");
-    if (v.code !== 0) return { ok: false, installed: false, summary: "Aider isn't installed.", files: [] };
+    const v = await run(`${bin} --version`);
+    if (v.code !== 0) return { ok: false, installed: false, summary: `${label} isn't installed.`, files: [] };
   } catch {
-    return { ok: false, installed: false, summary: "Aider isn't installed.", files: [] };
+    return { ok: false, installed: false, summary: `${label} isn't installed.`, files: [] };
   }
 
   // 2) Stage the prompt as a file + record the pre-run commit (for the diff).
@@ -464,22 +470,32 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     const r = await run("git rev-parse HEAD");
     if (r.code === 0) beforeSha = r.stdout.trim();
   } catch {
-    /* not a git repo / no commits yet — Aider auto-inits; we fall back to a working-tree diff below */
+    /* not a git repo / no commits yet — the agent may auto-init; we fall back to a working-tree diff */
   }
 
-  // 3) Build + run the Aider command against the local model.
+  // 3) Build + run the agent against the local model. Aider takes the prompt via --message-file;
+  //    Codex `exec -` reads it from STDIN (we redirect the same staged file in). Each gets the Ollama
+  //    base via its own env var (Aider: OLLAMA_API_BASE; Codex: OLLAMA_HOST).
   const base = ollamaApiBase(opts.textServerUrl);
-  const argv = ["aider", ...buildAiderArgs({
-    messageFile: CODING_TASK_FILE,
-    model: opts.model,
-    ...(opts.editorModel ? { editorModel: opts.editorModel } : {}),
-    ...(opts.files ? { files: opts.files } : {}),
-  })];
   const isWin = opts.shell === "cmd" || opts.shell === "powershell";
-  const command = isWin
-    ? `set "OLLAMA_API_BASE=${base}" && ${argv.join(" ")}`
-    : `OLLAMA_API_BASE=${base} ${quotePosixCommand(argv)}`;
-  const aider = await run(command);
+  let command: string;
+  if (backend === "codex") {
+    const argv = ["codex", ...buildCodexArgs({ model: opts.model })];
+    command = isWin
+      ? `set "OLLAMA_HOST=${base}" && ${argv.join(" ")} < ${CODING_TASK_FILE}`
+      : `OLLAMA_HOST=${base} ${quotePosixCommand(argv)} < ${quotePosixCommand([CODING_TASK_FILE])}`;
+  } else {
+    const argv = ["aider", ...buildAiderArgs({
+      messageFile: CODING_TASK_FILE,
+      model: opts.model,
+      ...(opts.editorModel ? { editorModel: opts.editorModel } : {}),
+      ...(opts.files ? { files: opts.files } : {}),
+    })];
+    command = isWin
+      ? `set "OLLAMA_API_BASE=${base}" && ${argv.join(" ")}`
+      : `OLLAMA_API_BASE=${base} ${quotePosixCommand(argv)}`;
+  }
+  const agent = await run(command);
 
   // 4) Summarize what changed (committed range when we have a base, else the working tree).
   const range = beforeSha ? `${beforeSha} HEAD` : "";
@@ -509,12 +525,12 @@ export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<Dele
     }
   }
 
-  const ok = (aider.code === 0 || changed) && verifyOk;
+  const ok = (agent.code === 0 || changed) && verifyOk;
   const summary = changed
-    ? `[delegate_coding_task: Aider changed ${names.length} file(s):\n${stat || names.join("\n")}${verifyLine}` +
+    ? `[delegate_coding_task: ${label} changed ${names.length} file(s):\n${stat || names.join("\n")}${verifyLine}` +
       `\nReview the diff; if something's off, fix it with edit_file or delegate again with a sharper task.]`
-    : `[delegate_coding_task: Aider ran but changed no files (exit ${aider.code}). Output tail:\n` +
-      `${(aider.stdout + aider.stderr).trim().slice(-1200)}${verifyLine}\nTry a clearer task, or do it yourself with write_file/edit_file.]`;
+    : `[delegate_coding_task: ${label} ran but changed no files (exit ${agent.code}). Output tail:\n` +
+      `${(agent.stdout + agent.stderr).trim().slice(-1200)}${verifyLine}\nTry a clearer task, or do it yourself with write_file/edit_file.]`;
   return { ok, installed: true, summary, files: names };
 }
 

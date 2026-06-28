@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAiderArgs, quotePosixCommand, ollamaApiBase, MAX_DELEGATE_FILES } from "./coding-agent.js";
+import { buildAiderArgs, buildCodexArgs, quotePosixCommand, ollamaApiBase, MAX_DELEGATE_FILES } from "./coding-agent.js";
 
 describe("buildAiderArgs", () => {
   it("pins a single model to Ollama and reads the task from a file", () => {
@@ -27,6 +27,15 @@ describe("buildAiderArgs", () => {
     expect(args).not.toContain("  ");
     const fileArgs = args.filter((a) => a.endsWith(".py"));
     expect(fileArgs.length).toBeLessThanOrEqual(MAX_DELEGATE_FILES);
+  });
+});
+
+describe("buildCodexArgs", () => {
+  it("runs exec non-interactive against the local Ollama model, reading the prompt from stdin", () => {
+    const args = buildCodexArgs({ model: "gpt-oss:20b" });
+    expect(args[0]).toBe("exec");
+    expect(args).toEqual(expect.arrayContaining(["--oss", "--local-provider", "ollama", "-m", "gpt-oss:20b", "--full-auto"]));
+    expect(args[args.length - 1]).toBe("-"); // prompt comes from stdin
   });
 });
 

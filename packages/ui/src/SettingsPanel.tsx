@@ -255,9 +255,11 @@ export interface ReaderSettings {
    * (always sh). Lets PowerShell-centric workflows run pwsh cmdlets without the `powershell -Command` wrapper. */
   commandShell?: "cmd" | "powershell";
   /** Desktop + requires allowCommands. Advertise the delegate_coding_task tool: hand a hard, multi-file
-   * coding job to an EXTERNAL coding agent (Aider) running headless against the same local model. Off by
-   * default; the model only sees the tool when this is on, and the runtime checks Aider is installed. */
+   * coding job to an EXTERNAL coding agent running headless against the same local model. Off by
+   * default; the model only sees the tool when this is on, and the runtime checks the agent is installed. */
   delegateCoding?: boolean;
+  /** Which external coding agent delegate_coding_task drives: "aider" (default) or "codex" (backup). */
+  codingAgentBackend?: "aider" | "codex";
   /** Parallel coding agents: let the manager model auto-resolve a merge conflict between agent
    * branches (validated, then committed — or aborted if it can't). Default on. */
   autoResolveConflicts?: boolean;
@@ -1591,14 +1593,30 @@ export function SettingsPanel({
                       onChange={(e) => set({ delegateCoding: e.target.checked })}
                     />
                     <span>
-                      Delegate hard coding jobs to an external agent (Aider)
+                      Delegate hard coding jobs to an external agent
                       <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
                         Adds a <code>delegate_coding_task</code> tool: the assistant can hand a tough,
-                        multi-file coding job to <b>Aider</b> running on your <b>same local model</b>, which
-                        edits the workspace itself; the app captures the diff. Needs Aider installed
-                        (<code>pipx install aider-chat</code>); if it isn't, the assistant just does the change
-                        the normal way. Off by default; desktop only.
+                        multi-file coding job to an external coding agent running on your <b>same local
+                        model</b>, which edits the workspace itself; the app captures the diff. Needs the
+                        chosen agent installed; if it isn't, the assistant just does the change the normal
+                        way. Off by default; desktop only.
                       </span>
+                    </span>
+                  </label>
+                )}
+                {(value.allowCommands ?? false) && (value.delegateCoding ?? false) && (
+                  <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
+                    <span style={{ fontSize: 13 }}>Coding agent</span>
+                    <select
+                      value={value.codingAgentBackend ?? "aider"}
+                      onChange={(e) => set({ codingAgentBackend: e.target.value === "codex" ? "codex" : "aider" })}
+                    >
+                      <option value="aider">Aider (pipx install aider-chat)</option>
+                      <option value="codex">Codex CLI (npm i -g @openai/codex)</option>
+                    </select>
+                    <span style={{ opacity: 0.55, fontSize: 11 }}>
+                      Which agent runs the delegated job. Aider has an architect/editor split; Codex is the
+                      backup. Both run on your local Ollama model.
                     </span>
                   </label>
                 )}
