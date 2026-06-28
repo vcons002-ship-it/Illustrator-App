@@ -13,8 +13,10 @@
  * Protocol so it streams + calls back for permissions) is the documented future upgrade.
  */
 
-/** Cap on the delegated task prompt (it's handed to the agent via a FILE, never the shell). */
-export const MAX_DELEGATE_TASK_CHARS = 8_000;
+/** Cap on the delegated task prompt. It's handed to the agent via a FILE / stdin (never the shell),
+ * so there's no OS arg-length limit — this is just a sanity bound, kept generous so a detailed
+ * multi-file spec isn't clipped. Over it, the parse flags truncation so the model is warned. */
+export const MAX_DELEGATE_TASK_CHARS = 32_000;
 /** Cap on how many files the model may seed the agent's editing context with. */
 export const MAX_DELEGATE_FILES = 20;
 

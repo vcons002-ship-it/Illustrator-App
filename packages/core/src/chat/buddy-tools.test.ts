@@ -60,6 +60,34 @@ describe("parseBuddyToolCall — edit_file", () => {
   });
 });
 
+describe("truncation: warn, don't silently cut, on args bound for an external program", () => {
+  it("flags a run_command cut to its cap and warns in the result", () => {
+    const call = parseBuddyToolCall(JSON.stringify({ tool: "run_command", command: "x".repeat(5000) }));
+    expect(call).toBeTruthy();
+    expect((call as { truncated?: boolean }).truncated).toBe(true);
+    expect(formatBuddyToolResult(call!, { command: { stdout: "", stderr: "", code: 0 } })).toContain("CUT before running");
+  });
+
+  it("flags an oversize write_file content (but keeps a normal one unflagged + untrimmed)", () => {
+    const big = parseBuddyToolCall(JSON.stringify({ tool: "write_file", path: "a.txt", content: "y".repeat(200_001) }));
+    expect((big as { truncated?: boolean }).truncated).toBe(true);
+    // a normal write keeps significant whitespace and carries no truncation flag
+    const normal = parseBuddyToolCall(JSON.stringify({ tool: "write_file", path: "a.txt", content: "\n  hi\n" }));
+    expect(normal).toEqual({ tool: "write_file", path: "a.txt", content: "\n  hi\n" });
+  });
+
+  it("flags an oversize delegate_coding_task / generate_image and leaves in-bounds calls clean", () => {
+    expect((parseBuddyToolCall(JSON.stringify({ tool: "delegate_coding_task", task: "z".repeat(40_000) })) as { truncated?: boolean }).truncated).toBe(true);
+    expect((parseBuddyToolCall(JSON.stringify({ tool: "generate_image", prompt: "p".repeat(3000) })) as { truncated?: boolean }).truncated).toBe(true);
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "generate_image", prompt: "a cat" }))).toEqual({ tool: "generate_image", prompt: "a cat" });
+  });
+
+  it("adds no warning when nothing was truncated", () => {
+    const call = parseBuddyToolCall(JSON.stringify({ tool: "run_command", command: "ls" }))!;
+    expect(formatBuddyToolResult(call, { command: { stdout: "", stderr: "", code: 0 } })).not.toContain("CUT before running");
+  });
+});
+
 describe("parseBuddyToolCall — delegate_coding_task", () => {
   it("parses a task with optional files + verify", () => {
     expect(
