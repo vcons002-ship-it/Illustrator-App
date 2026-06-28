@@ -276,6 +276,7 @@ import {
   appRepoRoot,
   writeWorkspaceFile,
   readWorkspaceFile,
+  delegateCodingTask,
   gitEnsureRepo,
   gitWorktreeCreate,
   gitCommitAll,
@@ -4509,6 +4510,71 @@ export function App() {
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
+  // Delegate a hard, multi-file coding job to an EXTERNAL agent (Aider) running headless on the same
+  // local model, in the workspace; capture its diff and feed a summary back. Mirrors runEditFile's
+  // shape (capture pre-context, run, ledger the changed files, react in the workflow or plainly).
+  const runDelegateCodingTask = async (call: Extract<BuddyToolCall, { tool: "delegate_coding_task" }>): Promise<void> => {
+    setBuddyPendingTool(undefined);
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+    if (!isDesktop || !settings.allowCommands) {
+      appendBuddy({ role: "tool", text: "🔒 Delegating coding needs the desktop app + command access (Settings → assistant abilities).", turns: [] });
+      return;
+    }
+    const model = (settings.localServerTextModel ?? "").trim();
+    const serverUrl = (settings.localServerTextUrl ?? "").trim();
+    const isOllama = (settings.localTextServer ?? "ollama") === "ollama";
+    if (!model || !serverUrl || !isOllama) {
+      const why = !isOllama ? "the external agent runs against Ollama — switch the chat model to an Ollama server" : "no local Ollama model is connected";
+      const payload = { ok: false, installed: true, summary: `[delegate_coding_task can't run: ${why}. Do the change yourself with write_file/edit_file.]` };
+      await dispatchBuddyTurn([...preHistory, ...pre], formatBuddyToolResult(call, { delegateCoding: payload }));
+      return;
+    }
+    setBuddyBusy(true);
+    setBuddyActivity("Delegating to the coding agent…");
+    let payload: { ok: boolean; installed: boolean; summary: string };
+    try {
+      const editorModel = (settings.subAgentModel ?? "").trim();
+      const r = await delegateCodingTask({
+        task: call.task,
+        model,
+        ...(editorModel ? { editorModel } : {}),
+        textServerUrl: serverUrl,
+        ...(call.files ? { files: call.files } : {}),
+        ...(call.verify ? { verify: call.verify } : {}),
+        ...(buddyWorkingDir ? { cwd: buddyWorkingDir } : {}),
+        ...(settings.keys?.github ? { githubToken: settings.keys.github } : {}),
+        ...(settings.commandShell ? { shell: settings.commandShell } : {}),
+      });
+      payload = { ok: r.ok, installed: r.installed, summary: r.summary };
+      for (const f of r.files) recordCreatedFile(f, 0, false);
+      appendBuddy({
+        role: "tool",
+        text: r.installed
+          ? `🤝 Coding agent ${r.files.length > 0 ? `changed ${r.files.length} file(s)` : "ran"}${r.ok ? "" : " (review needed)"}`
+          : "🤝 Aider isn't installed — install it (pipx install aider-chat) to delegate coding jobs.",
+        turns: [],
+      });
+    } catch (err) {
+      payload = { ok: false, installed: true, summary: `[delegate_coding_task failed: ${err instanceof Error ? err.message : String(err)}]` };
+      appendBuddy({ role: "tool", text: `⚠ Coding delegation failed: ${err instanceof Error ? err.message : String(err)}`, turns: [] });
+    }
+    const feedback = formatBuddyToolResult(call, { delegateCoding: payload });
+    if (appManagedActive && buddyWorkflowRef.current) {
+      // Treat the delegated job like a command step for the collar: a clean run (and any verify pass,
+      // folded into `ok`) satisfies a command_ok contract; a failure nudges a retry/fix.
+      buddyStepEvidenceRef.current.toolResults.push({ call, result: { command: { stdout: payload.summary, stderr: "", code: payload.ok ? 0 : 1 } } });
+      await advanceWorkflowAfterTurn(
+        { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+      );
+      return;
+    }
+    await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+  };
+
   // Approve a buddy-requested screenshot: capture the screen, show it, have the
   // vision model describe it, and feed that observation back so the model reacts.
   const approveScreenshot = async (call: Extract<BuddyToolCall, { tool: "screenshot" }>): Promise<void> => {
@@ -4591,6 +4657,26 @@ export function App() {
           if (r.applied > 0) await writeWorkspaceFile(call.path, r.content, dir);
           return { editFile: { path: call.path, ok: r.applied > 0, applied: r.applied, summary: summarizeFileEdits(call.path, r) } };
         }
+        if (call.tool === "delegate_coding_task") {
+          const model = (settings.localServerTextModel ?? "").trim();
+          const serverUrl = (settings.localServerTextUrl ?? "").trim();
+          const isOllama = (settings.localTextServer ?? "ollama") === "ollama";
+          if (!model || !serverUrl || !isOllama)
+            return { delegateCoding: { ok: false, installed: true, summary: "[delegate_coding_task needs a connected Ollama model on the desktop.]" } };
+          const editorModel = (settings.subAgentModel ?? "").trim();
+          const r = await delegateCodingTask({
+            task: call.task,
+            model,
+            ...(editorModel ? { editorModel } : {}),
+            textServerUrl: serverUrl,
+            ...(call.files ? { files: call.files } : {}),
+            ...(call.verify ? { verify: call.verify } : {}),
+            ...(dir ? { cwd: dir } : {}),
+            ...(settings.keys?.github ? { githubToken: settings.keys.github } : {}),
+            ...(settings.commandShell ? { shell: settings.commandShell } : {}),
+          });
+          return { delegateCoding: { ok: r.ok, installed: r.installed, summary: r.summary } };
+        }
         if (call.tool === "screenshot") {
           const shot = await captureScreen(call.window);
           const r = await assessImage(shot, call.question);
@@ -4601,7 +4687,7 @@ export function App() {
         return { error: err instanceof Error ? err.message : String(err) };
       }
     },
-    [buddyWorkingDir, settings.keys, settings.commandShell, assessImage],
+    [buddyWorkingDir, settings.keys, settings.commandShell, settings.localServerTextModel, settings.localServerTextUrl, settings.localTextServer, settings.subAgentModel, assessImage],
   );
   useEffect(() => {
     runHostToolForRemoteRef.current = runHostToolForRemote;
@@ -4792,7 +4878,7 @@ export function App() {
   };
   /** Host tools that need the DESKTOP runtime — relayed when a phone drives the buddy. */
   const isDesktopRuntimeTool = (call: BuddyToolCall): boolean =>
-    call.tool === "find_files" || call.tool === "run_command" || call.tool === "write_file" || call.tool === "edit_file" || call.tool === "screenshot";
+    call.tool === "find_files" || call.tool === "run_command" || call.tool === "write_file" || call.tool === "edit_file" || call.tool === "delegate_coding_task" || call.tool === "screenshot";
   /** Run a desktop-runtime host tool — locally on the desktop, or via the relay on a linked phone. */
   const runHostToolDispatch = (call: BuddyToolCall): void => {
     if (isRemoteClient && isDesktopRuntimeTool(call)) {
@@ -4803,6 +4889,7 @@ export function App() {
     else if (call.tool === "screenshot") void approveScreenshot(call);
     else if (call.tool === "write_file") void runWriteFile(call);
     else if (call.tool === "edit_file") void runEditFile(call);
+    else if (call.tool === "delegate_coding_task") void runDelegateCodingTask(call);
     else if (call.tool === "run_command") void approveRunCommand(call);
   };
 

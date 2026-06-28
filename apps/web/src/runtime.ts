@@ -400,6 +400,124 @@ export async function workspaceFileExists(relPath: string, cwd?: string): Promis
   return (await readWorkspaceFile(relPath, cwd)).exists;
 }
 
+// --------------------------------------------- External coding agent (Aider)
+//
+// "Option A" delegation: hand a hard, multi-file coding job to Aider running HEADLESS against the
+// same local Ollama model, in the workspace folder, and capture the resulting git diff. The app
+// stays the orchestrator; Aider does the edit loop. Pure command-building lives in core
+// (coding-agent.ts); this is the desktop runner that spawns it via the existing run_command bridge.
+// Desktop-only. The forward-looking "Option B" (embedding an agent over Zed's ACP) is tracked
+// separately as a future upgrade.
+
+export interface DelegateCodingResult {
+  /** The agent ran AND (if a verify command was given) it passed. */
+  ok: boolean;
+  /** False when Aider isn't on PATH — the caller tells the model to install it or do it by hand. */
+  installed: boolean;
+  /** Model-facing summary: files changed + diffstat + verify outcome, or why it couldn't run. */
+  summary: string;
+  /** Workspace-relative paths the agent changed (for the host's file ledger + attachments). */
+  files: string[];
+}
+
+export interface DelegateCodingOpts {
+  task: string;
+  /** Ollama model id WITHOUT the "ollama/" prefix (Aider adds it). */
+  model: string;
+  /** Optional cheaper editor model → Aider's architect/editor split. */
+  editorModel?: string;
+  /** The app's LLM server URL (e.g. http://localhost:11434/v1) — Aider's OLLAMA_API_BASE is derived. */
+  textServerUrl: string;
+  files?: string[];
+  verify?: string;
+  cwd?: string;
+  githubToken?: string;
+  shell?: "cmd" | "powershell";
+}
+
+/** Workspace-relative file the task prompt is written to (so it never has to be shell-escaped). */
+const CODING_TASK_FILE = ".vr-coding-task.md";
+
+/**
+ * Run Aider headless on a coding task and report what changed. Detects Aider on PATH first (returns
+ * `installed:false` cleanly when absent), writes the prompt to a file, records the pre-run commit,
+ * runs Aider against the local model, then diffs to summarize the changes and (optionally) runs a
+ * verify command. Best-effort + never throws — failures come back in `summary`. Desktop-only.
+ */
+export async function delegateCodingTask(opts: DelegateCodingOpts): Promise<DelegateCodingResult> {
+  if (!isDesktop) return { ok: false, installed: false, summary: "(coding delegation is desktop-only)", files: [] };
+  const { buildAiderArgs, quotePosixCommand, ollamaApiBase } = await import("@visual-reader/core");
+  const run = (command: string) => runCommand(command, opts.githubToken, opts.cwd, opts.shell);
+
+  // 1) Is Aider installed?
+  try {
+    const v = await run("aider --version");
+    if (v.code !== 0) return { ok: false, installed: false, summary: "Aider isn't installed.", files: [] };
+  } catch {
+    return { ok: false, installed: false, summary: "Aider isn't installed.", files: [] };
+  }
+
+  // 2) Stage the prompt as a file + record the pre-run commit (for the diff).
+  await writeWorkspaceFile(CODING_TASK_FILE, opts.task, opts.cwd);
+  let beforeSha = "";
+  try {
+    const r = await run("git rev-parse HEAD");
+    if (r.code === 0) beforeSha = r.stdout.trim();
+  } catch {
+    /* not a git repo / no commits yet — Aider auto-inits; we fall back to a working-tree diff below */
+  }
+
+  // 3) Build + run the Aider command against the local model.
+  const base = ollamaApiBase(opts.textServerUrl);
+  const argv = ["aider", ...buildAiderArgs({
+    messageFile: CODING_TASK_FILE,
+    model: opts.model,
+    ...(opts.editorModel ? { editorModel: opts.editorModel } : {}),
+    ...(opts.files ? { files: opts.files } : {}),
+  })];
+  const isWin = opts.shell === "cmd" || opts.shell === "powershell";
+  const command = isWin
+    ? `set "OLLAMA_API_BASE=${base}" && ${argv.join(" ")}`
+    : `OLLAMA_API_BASE=${base} ${quotePosixCommand(argv)}`;
+  const aider = await run(command);
+
+  // 4) Summarize what changed (committed range when we have a base, else the working tree).
+  const range = beforeSha ? `${beforeSha} HEAD` : "";
+  let stat = "";
+  let names: string[] = [];
+  try {
+    stat = (await run(`git diff --stat ${range}`)).stdout.trim();
+    const nm = (await run(`git diff --name-only ${range}`)).stdout.trim();
+    names = nm ? nm.split(/\r?\n/).filter(Boolean) : [];
+  } catch {
+    /* diff is best-effort */
+  }
+  const changed = names.length > 0 || stat.length > 0;
+
+  // 5) Optional verify (build/test) so success is checked, not assumed.
+  let verifyLine = "";
+  let verifyOk = true;
+  if (opts.verify) {
+    try {
+      const vr = await run(opts.verify);
+      verifyOk = vr.code === 0;
+      const tail = (vr.stdout + vr.stderr).trim().slice(-1200);
+      verifyLine = `\nVerify \`${opts.verify}\`: ${verifyOk ? "PASSED" : `FAILED (exit ${vr.code})`}${tail ? `\n${tail}` : ""}`;
+    } catch (e) {
+      verifyOk = false;
+      verifyLine = `\nVerify \`${opts.verify}\`: could not run (${e instanceof Error ? e.message : String(e)})`;
+    }
+  }
+
+  const ok = (aider.code === 0 || changed) && verifyOk;
+  const summary = changed
+    ? `[delegate_coding_task: Aider changed ${names.length} file(s):\n${stat || names.join("\n")}${verifyLine}` +
+      `\nReview the diff; if something's off, fix it with edit_file or delegate again with a sharper task.]`
+    : `[delegate_coding_task: Aider ran but changed no files (exit ${aider.code}). Output tail:\n` +
+      `${(aider.stdout + aider.stderr).trim().slice(-1200)}${verifyLine}\nTry a clearer task, or do it yourself with write_file/edit_file.]`;
+  return { ok, installed: true, summary, files: names };
+}
+
 // ----------------------------------------------------------- Git worktrees
 //
 // App-managed worktrees for parallel write-capable coding agents — the host owns the whole

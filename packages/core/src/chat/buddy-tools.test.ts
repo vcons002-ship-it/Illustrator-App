@@ -60,6 +60,33 @@ describe("parseBuddyToolCall — edit_file", () => {
   });
 });
 
+describe("parseBuddyToolCall — delegate_coding_task", () => {
+  it("parses a task with optional files + verify", () => {
+    expect(
+      parseBuddyToolCall('{"tool":"delegate_coding_task","task":"add an endpoint","files":["a.py","",""],"verify":"pytest -q"}'),
+    ).toEqual({ tool: "delegate_coding_task", task: "add an endpoint", files: ["a.py"], verify: "pytest -q" });
+  });
+  it("parses a bare task, dropping empty file lists", () => {
+    expect(parseBuddyToolCall('{"tool":"delegate_coding_task","task":"refactor"}')).toEqual({
+      tool: "delegate_coding_task",
+      task: "refactor",
+    });
+    expect(parseBuddyToolCall('{"tool":"delegate_coding_task","task":"x","files":["  "]}')).toEqual({
+      tool: "delegate_coding_task",
+      task: "x",
+    });
+  });
+  it("drops a delegate_coding_task with no task", () => {
+    expect(parseBuddyToolCall('{"tool":"delegate_coding_task","files":["a.py"]}')).toBeUndefined();
+  });
+  it("formats the result (changed / not installed / no run)", () => {
+    const call = { tool: "delegate_coding_task" as const, task: "x" };
+    expect(formatBuddyToolResult(call, { delegateCoding: { ok: true, installed: true, summary: "[delegate_coding_task: Aider changed 2 file(s)…]" } })).toContain("Aider changed 2 file");
+    expect(formatBuddyToolResult(call, { delegateCoding: { ok: false, installed: false, summary: "x" } })).toContain("Install Aider");
+    expect(formatBuddyToolResult(call, {})).toContain("did not run");
+  });
+});
+
 describe("parseBuddyToolCall", () => {
   it("parses the search tools", () => {
     expect(parseBuddyToolCall('{"tool":"search_books","query":"frankenstein"}')).toEqual({

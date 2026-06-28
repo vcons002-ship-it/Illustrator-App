@@ -14,6 +14,7 @@ import { formatIndicators, type Indicators } from "../providers/market-data.js";
 import type { OptionChain, SchwabPosition, SchwabQuote, SchwabWatchlist } from "../providers/schwab.js";
 import { formatMcpTools, type McpTool } from "./mcp.js";
 import type { TaskPlan } from "./tasks.js";
+import { MAX_DELEGATE_TASK_CHARS, MAX_DELEGATE_FILES } from "./coding-agent.js";
 
 /**
  * Tool protocol for the LANDING-PAGE buddy — the concierge that finds something
@@ -266,6 +267,11 @@ export type BuddyToolCall =
   /** Edit an EXISTING workspace file in place via search/replace blocks (no whole-file rewrite). Each
    * `search` must match exactly once. Only with the command tool + Autonomous workspace on. */
   | { tool: "edit_file"; path: string; edits: { search: string; replace: string }[] }
+  /** Delegate a scoped coding task to an EXTERNAL coding agent (Aider) running headless against the
+   * same local model; the app runs it in the workspace and captures the resulting git diff. Optional
+   * `files` seed its context; optional `verify` is a build/test command run after. Desktop + command
+   * tool + an installed external agent + Ollama. */
+  | { tool: "delegate_coding_task"; task: string; files?: string[]; verify?: string }
   /** Capture the reader's SCREEN (or one window by title) and look at it with a
    * vision model (desktop). The reader approves; the model gets a text observation. */
   | { tool: "screenshot"; question?: string; window?: string }
@@ -551,6 +557,9 @@ export function buildBuddySystemPrompt(opts: {
   /** Desktop + Autonomous workspace on: advertise write_file, and tell the model that
    * write_file + run_command run WITHOUT a per-action click (the hands-free build loop). */
   canAutonomousWorkspace?: boolean;
+  /** Desktop + commands + an installed external coding agent (Aider): advertise delegate_coding_task,
+   * so a hard, multi-file coding job can be handed to a specialist instead of done edit-by-edit. */
+  canDelegateCoding?: boolean;
   /** An AppID is set: advertise the Wolfram|Alpha tool (real-world data + computation). */
   canWolfram?: boolean;
   /** A GitHub token is set (desktop + commands): advertise git/gh repo work. */
@@ -701,6 +710,16 @@ export function buildBuddySystemPrompt(opts: {
         : "Each agent's write/command waits for the reader's approval (siblings keep going). ") +
       "Use this to genuinely parallelise build work; for a single change just write/run it yourself.\n"
     : "";
+  const delegateCodingTool =
+    opts.canRunCommands && opts.canDelegateCoding
+      ? '- {"tool":"delegate_coding_task","task":"what to build/change, in detail","files":["src/app.py"],"verify":"pytest -q"} — ' +
+        "hand a HARD, multi-file coding job to an EXTERNAL coding agent (Aider) that runs headless on the SAME local " +
+        "model, in the workspace, and edits the files itself; the app captures the resulting diff. Use it for a job " +
+        "that would take many edit_file/write_file rounds (refactor across files, implement a feature touching several " +
+        "modules). Put the FULL spec in `task` (it doesn't see this chat); name known starting `files`; give a `verify` " +
+        "build/test command so success is checked, not assumed. For a small one- or two-line change, just edit_file it " +
+        "yourself — this has real startup cost.\n"
+      : "";
   const commandTool = opts.canRunCommands
     ? '- {"tool":"run_command","command":"…"} — run ONE shell command in the reader\'s VisualReader workspace ' +
       "folder (install dependencies, run a build or tests, execute a script you wrote). " +
@@ -717,6 +736,7 @@ export function buildBuddySystemPrompt(opts: {
       editFileTool +
       autonomyNote +
       codingAgentsTool +
+      delegateCodingTool +
       '- {"tool":"screenshot","question":"…","window":"…"} — capture the reader\'s screen and LOOK at it to check ' +
       "whether something visual is working: a game or app you launched, a UI you built, what a command produced. Put " +
       'the thing to verify in "question" (e.g. "is the game showing the player and score?"). Set "window" to a word ' +
@@ -1855,6 +1875,18 @@ export function ollamaToolSchemas(opts: {
       ),
     );
     t.push(toolFn("run_command", "Run ONE approved shell command in the workspace.", { command: strParam("The exact command.") }, ["command"]));
+    t.push(
+      toolFn(
+        "delegate_coding_task",
+        "Hand a hard multi-file coding job to an external coding agent (Aider) that edits the workspace itself.",
+        {
+          task: strParam("Full self-contained spec of what to build/change (the agent doesn't see this chat)."),
+          files: { type: "array", description: "Known starting files (workspace-relative).", items: { type: "string" } },
+          verify: strParam("Optional build/test command run after, to check success."),
+        },
+        ["task"],
+      ),
+    );
   }
   if (opts.canWolfram) t.push(toolFn("wolfram", "Authoritative real-world values/computation via Wolfram|Alpha.", { query: strParam("The question.") }, ["query"]));
   return t;
@@ -1958,6 +1990,16 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       }))
       .filter((e) => e.search.length > 0);
     return path && edits && edits.length > 0 ? { tool, path, edits } : undefined;
+  }
+  if (tool === "delegate_coding_task") {
+    const task = strArg(obj.task, MAX_DELEGATE_TASK_CHARS);
+    const files = Array.isArray(obj.files)
+      ? obj.files.filter((f): f is string => typeof f === "string" && f.trim().length > 0).slice(0, MAX_DELEGATE_FILES)
+      : undefined;
+    const verify = strArg(obj.verify, MAX_COMMAND_CHARS);
+    return task
+      ? { tool, task, ...(files && files.length > 0 ? { files } : {}), ...(verify ? { verify } : {}) }
+      : undefined;
   }
   if (tool === "screenshot") {
     const question = strArg(obj.question, MAX_QUERY_CHARS);
@@ -2640,6 +2682,10 @@ export interface BuddyToolResultPayload {
    * (so the model can retry a missed/ambiguous edit with a better anchor). `ok` is false on a hard error
    * (file missing / not desktop). */
   editFile?: { path: string; ok: boolean; applied?: number; summary?: string; error?: string };
+  /** delegate_coding_task outcome: a model-facing summary of what the external agent changed (files +
+   * diffstat) and the verify result, or why it couldn't run (not installed / not desktop). `ok` reflects
+   * whether the agent ran and (if a verify command was given) it passed. */
+  delegateCoding?: { ok: boolean; installed: boolean; summary: string };
   /** A vision model's observation of an approved screenshot (fed back as text). */
   observation?: string;
   /** The updated working checklist after set_plan / complete_step (rendered back so the model sees
@@ -2792,6 +2838,16 @@ export function formatBuddyToolResult(call: BuddyToolCall, result: BuddyToolResu
     if (!e) return `[edit_file "${call.path}" did not run]`;
     if (!e.ok) return `[edit_file "${call.path}" failed: ${e.error ?? "unknown error"}. read_file it and retry.]`;
     return e.summary ?? `[edit_file applied ${e.applied ?? 0} edit(s) to ${call.path}.]`;
+  }
+  if (call.tool === "delegate_coding_task") {
+    const d = result.delegateCoding;
+    if (!d) return "[delegate_coding_task did not run]";
+    if (!d.installed)
+      return (
+        "[delegate_coding_task: no external coding agent is installed. Install Aider (pipx install aider-chat) " +
+        "or just do the change yourself with write_file/edit_file/run_command.]"
+      );
+    return d.summary;
   }
   if (call.tool === "run_command") {
     const c = result.command;
