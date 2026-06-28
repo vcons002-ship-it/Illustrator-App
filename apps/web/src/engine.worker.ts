@@ -1028,6 +1028,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       settings = msg.settings;
       corsProxyAvailable = msg.corsProxy === true;
       void evictReplacedChatModel(prevSettings, settings); // free the old local model on a model switch
+      void freeSwitchedImageEngine(prevSettings, settings); // clear the image engine's VRAM (A1111 startup squat / a switch)
       // Report which providers are live vs. a silent mock fallback (and why), so
       // the UI can show it before a book is even opened.
       try {
@@ -1049,6 +1050,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       const prevSettings = settings;
       settings = msg.settings;
       void evictReplacedChatModel(prevSettings, settings); // free the old local model if the model changed
+      void freeSwitchedImageEngine(prevSettings, settings); // free the image engine's VRAM on a backend switch
       if (engine) {
         try {
           engine.updateTier(buildProviders(settings).tier);
@@ -1589,6 +1591,32 @@ async function evictReplacedChatModel(prev: ReaderSettings | undefined, next: Re
     await oldP.llm.unload?.();
   } catch {
     /* best-effort — a build hiccup or non-Ollama server is a silent no-op */
+  }
+}
+
+/**
+ * Free the image engine's resident VRAM when the reader SWITCHES image backends (or on first init), so the
+ * low-VRAM IDLE state is "image model unloaded, chat LLM holds the GPU" — the baseline ComfyUI already has
+ * (it loads lazily). It matters most for AUTOMATIC1111, which auto-loads a checkpoint the moment it starts,
+ * so without this it squats the GPU during idle chat and the LLM spills to slow shared RAM. Unloads BOTH the
+ * newly-active engine's idle model and the one just switched away from; each reloads on its next render.
+ * Low-VRAM only (an ample box keeps models hot); best-effort. The per-render hand-off (freeChatLlmForRender /
+ * freeImageModelForChat) does the rest of the cycle, identically to ComfyUI.
+ */
+async function freeSwitchedImageEngine(prev: ReaderSettings | undefined, next: ReaderSettings): Promise<void> {
+  if (!next.lowVram) return;
+  try {
+    const cf = corsFetch();
+    const opts = cf ? { corsFetch: cf } : {};
+    const newP = buildProviders(next, opts);
+    const oldP = prev ? buildProviders(prev, opts) : undefined;
+    // An unrelated settings tweak that didn't change the image engine → don't churn (a needless unload
+    // forces a cold reload on the next render). A genuine switch (or first init) falls through.
+    if (oldP && oldP.diagnostics.image.label === newP.diagnostics.image.label) return;
+    await newP.image.freeMemory?.(); // A1111's startup checkpoint (a lazy no-op for ComfyUI / cloud)
+    if (oldP) await oldP.image.freeMemory?.(); // the engine we left, if it still holds its model
+  } catch {
+    /* best-effort — a build hiccup / unreachable engine / non-managed provider is a silent no-op */
   }
 }
 
