@@ -168,6 +168,17 @@ export function activeStep(wf: Workflow | undefined): WorkflowStep | undefined {
   return wf?.steps.find((s) => s.status === "active");
 }
 
+/**
+ * Whether a step's contract is satisfied by a TOOL effect (an image/file/command/named tool) rather
+ * than by plain text. On a tool step the model's only legitimate output is the tool call itself, so
+ * the host can safely DROP any between-step prose it emits (the confused "I already did X, moving on"
+ * narration) — the app advances from observed evidence, never the words. An ANSWER contract
+ * (`text`/`narration`/`user_reply`) is the opposite: the text IS the deliverable, so it's shown. PURE.
+ */
+export function isToolContract(kind: DoneWhen["kind"]): boolean {
+  return kind === "image" || kind === "file" || kind === "files" || kind === "command_ok" || kind === "tool_ok";
+}
+
 /** Whether every step has reached a terminal state (no `pending`/`active` left). */
 export function workflowFinished(wf: Workflow | undefined): boolean {
   return !!wf && !wf.steps.some((s) => s.status === "pending" || s.status === "active");

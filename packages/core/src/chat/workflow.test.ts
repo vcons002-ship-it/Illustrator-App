@@ -8,6 +8,7 @@ import {
   doneWhenToNeeds,
   evaluateStep,
   inferDoneWhen,
+  isToolContract,
   needsToDoneWhen,
   resumeWorkflow,
   workflowToPlan,
@@ -226,5 +227,18 @@ describe("resumeWorkflow / workflowToPlan", () => {
     expect(doneWhenToNeeds({ kind: "narration" })).toBeUndefined();
     expect(doneWhenToNeeds({ kind: "text", min: 1 })).toBeUndefined();
     expect(doneWhenToNeeds({ kind: "user_reply" })).toBeUndefined();
+  });
+});
+
+describe("isToolContract", () => {
+  it("is true for tool-effect contracts (the model's only output is the tool call)", () => {
+    for (const kind of ["image", "file", "files", "command_ok", "tool_ok"] as const) {
+      expect(isToolContract(kind)).toBe(true);
+    }
+  });
+  it("is false for answer contracts (the text IS the deliverable)", () => {
+    for (const kind of ["text", "narration", "user_reply"] as const) {
+      expect(isToolContract(kind)).toBe(false);
+    }
   });
 });
