@@ -57,7 +57,7 @@ export interface ImportResult {
   error?: string;
 }
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
-import type { AppSyncMessage } from "./remote-sync.js";
+import type { AppSyncMessage, EngineVram } from "./remote-sync.js";
 import {
   desktopHttpFetch,
   mcpStdioExchange,
@@ -174,6 +174,8 @@ export interface EngineWorkerApi {
   avgRenderMs: number;
   /** Which providers are live vs. silent mock fallbacks (undefined until first init). */
   providers: ProvidersDiagnostics | undefined;
+  /** Live GPU VRAM from the local ComfyUI engine (undefined when there's no local engine). */
+  vram: EngineVram | undefined;
   /** Whether generation has been started for the current book. */
   generating: boolean;
   /** Independent pause state for the bible build vs. image rendering. */
@@ -502,6 +504,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const renderStart = useRef<Map<number, number>>(new Map());
   const renderAvg = useRef<{ avg: number; n: number }>({ avg: 0, n: 0 });
   const [providers, setProviders] = useState<ProvidersDiagnostics | undefined>();
+  const [vram, setVram] = useState<EngineVram | undefined>();
   const [generating, setGenerating] = useState(false);
   const [paused, setPaused] = useState<{ bible: boolean; images: boolean }>({
     bible: false,
@@ -761,6 +764,9 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           break;
         case "providers":
           setProviders(msg.diagnostics);
+          break;
+        case "vram":
+          setVram(msg.vram);
           break;
         case "generating":
           setGenerating(msg.value);
@@ -2029,6 +2035,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     workflow,
     avgRenderMs,
     providers,
+    vram,
     generating,
     paused,
     openBook,

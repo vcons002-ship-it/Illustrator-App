@@ -88,6 +88,73 @@ type HistoryResponse = Record<
   }
 >;
 
+/** One GPU device's VRAM totals (bytes) from ComfyUI's GET /system_stats. */
+export interface EngineVramStats {
+  /** Device label, e.g. "cuda:0 NVIDIA GeForce RTX 4090". */
+  name: string;
+  /** Total VRAM in bytes. */
+  vramTotal: number;
+  /** Free VRAM in bytes (0 when the engine doesn't report it). */
+  vramFree: number;
+}
+
+/**
+ * Parse ComfyUI's GET /system_stats payload into a per-device VRAM list. ComfyUI returns
+ * `{ system: {...}, devices: [{ name, vram_total, vram_free, ... }] }`; we keep only the fields
+ * the status bar shows and drop devices that don't report a positive numeric total (e.g. a CPU
+ * device). Tolerant of shape drift — a missing/garbage payload yields [] rather than throwing.
+ */
+export function parseSystemStats(json: unknown): EngineVramStats[] {
+  const devices = (json as { devices?: unknown } | null | undefined)?.devices;
+  if (!Array.isArray(devices)) return [];
+  const out: EngineVramStats[] = [];
+  for (const d of devices) {
+    const dev = d as { name?: unknown; vram_total?: unknown; vram_free?: unknown };
+    const total = typeof dev.vram_total === "number" ? dev.vram_total : NaN;
+    if (!Number.isFinite(total) || total <= 0) continue;
+    const free = typeof dev.vram_free === "number" ? dev.vram_free : NaN;
+    out.push({
+      name: typeof dev.name === "string" && dev.name ? dev.name : "GPU",
+      vramTotal: total,
+      vramFree: Number.isFinite(free) ? Math.max(0, Math.min(free, total)) : 0,
+    });
+  }
+  return out;
+}
+
+/** A status-bar-ready VRAM summary (megabytes), collapsed across the engine's GPU device(s). */
+export interface VramSummary {
+  /** Total VRAM across all GPUs, in MB. */
+  totalMb: number;
+  /** VRAM in use (total − free), in MB. */
+  usedMb: number;
+  /** A short device label: the single GPU's name, or "N GPUs" when aggregated. */
+  device: string;
+}
+
+/** "cuda:0 NVIDIA GeForce RTX 4090" → "NVIDIA GeForce RTX 4090" (drop the cuda:N prefix). */
+function shortGpuName(name: string): string {
+  return name.replace(/^cuda:\d+\s+/i, "").trim() || name;
+}
+
+/**
+ * Collapse per-device /system_stats into one status-bar figure: sum VRAM across GPUs and report
+ * used = total − free, in MB. A single GPU keeps its (shortened) name; multiple show "N GPUs".
+ * Returns undefined when there are no GPU devices — nothing to show.
+ */
+export function summarizeVram(devices: readonly EngineVramStats[]): VramSummary | undefined {
+  const first = devices[0];
+  if (!first) return undefined;
+  const totalBytes = devices.reduce((a, d) => a + d.vramTotal, 0);
+  const freeBytes = devices.reduce((a, d) => a + d.vramFree, 0);
+  const toMb = (b: number): number => Math.round(b / (1024 * 1024));
+  return {
+    totalMb: toMb(totalBytes),
+    usedMb: toMb(Math.max(0, totalBytes - freeBytes)),
+    device: devices.length === 1 ? shortGpuName(first.name) : `${devices.length} GPUs`,
+  };
+}
+
 export class ComfyUIBackend implements LocalEngineBackend {
   private readonly baseUrl: string;
   private readonly transport: Transport;
@@ -661,6 +728,25 @@ export class ComfyUIBackend implements LocalEngineBackend {
       await this.transport.send({ url: `${this.baseUrl}/interrupt`, method: "POST", body: {} });
     } catch {
       /* best-effort — the HTTP abort already stopped us waiting */
+    }
+  }
+
+  /**
+   * The connected ComfyUI's live VRAM per GPU device (GET /system_stats), for the status-bar
+   * indicator. Best-effort: a miss (engine down, endpoint absent, non-JSON) returns [] rather than
+   * throwing, so the polling that drives the indicator never disrupts the UI. Honors an abort signal.
+   */
+  async systemStats(signal?: AbortSignal): Promise<EngineVramStats[]> {
+    try {
+      const res = await this.transport.send({
+        url: `${this.baseUrl}/system_stats`,
+        method: "GET",
+        ...(signal ? { signal } : {}),
+      });
+      if (!res.ok) return [];
+      return parseSystemStats(await res.json());
+    } catch {
+      return [];
     }
   }
 

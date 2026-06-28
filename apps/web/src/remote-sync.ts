@@ -11,7 +11,7 @@
  */
 
 import type { BookSource, BookSummary, BuddyPersona, BuddyPlan, BuddyToolCall, BuddyToolResultPayload, CalendarEvent, ContextUsage, MemoryNote, Skill, StoredChatMessage, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
-import type { InstalledModel, ReaderSettings } from "@visual-reader/ui";
+import type { InstalledModel, ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
 
 /**
  * A Tasks/Calendar action the phone asks the desktop to perform. The desktop owns the planner data
@@ -56,6 +56,15 @@ export interface PlannerMirror {
  * pickers have the SAME options the desktop has. The phone has no engine of its own to enumerate,
  * so without this the pickers are empty and the phone is stuck with "whatever is set on desktop".
  */
+export interface EngineVram {
+  /** Total VRAM across the engine's GPU(s), in MB. */
+  totalMb: number;
+  /** VRAM currently in use (total − free), in MB. */
+  usedMb: number;
+  /** A short device label (the GPU name, or "N GPUs" when aggregated). */
+  device?: string;
+}
+
 export interface EngineInventory {
   installedModels: InstalledModel[];
   installedTextEncoders: string[];
@@ -64,6 +73,9 @@ export interface EngineInventory {
   loraFamilies: Record<string, string>;
   textModels: InstalledModel[];
   engineStatus: string;
+  /** Which providers are live vs. silent mock fallbacks — mirrored so the phone shows the SAME
+   * "Text: …" / "Image: …" model tags the desktop does (its own engine never runs). */
+  providers?: ProvidersDiagnostics;
   /** The selected Ollama chat model's context window from /api/show: `loaded` = the Modelfile
    * num_ctx Ollama actually loads with; `max` = the architecture's ceiling. Lets the UI show the
    * real default + max instead of a blank "uses Ollama default" field. Desktop-fetched, mirrored. */
@@ -153,6 +165,9 @@ export interface MirrorSnapshot {
   book?: BookSource;
   /** The open book's analysis (illustrations/concept cards/charts are anchored from this). */
   bible?: VisualBible;
+  /** The desktop engine's live GPU VRAM (so a freshly-connected phone shows the indicator at once;
+   * thereafter `vrsync:vram` pushes keep it current without re-sending the whole snapshot). */
+  vram?: EngineVram;
 }
 
 /** Desktop → phone state pushes (source of truth). */
@@ -166,6 +181,7 @@ export type SyncToPhone =
   | ({ type: "vrsync:chatLive" } & ChatLive)
   | { type: "vrsync:memories"; memories: MemoryNote[] } // the assistant's remembered notes → phone Memory panel
   | { type: "vrsync:skills"; skills: Skill[] } // the assistant's saved skills/playbooks → phone Skills panel
+  | { type: "vrsync:vram"; vram?: EngineVram } // desktop GPU VRAM tick → phone status-bar indicator (frequent, lightweight; not folded into the heavier inventory push)
   | { type: "vrsync:book"; book?: BookSource; bible?: VisualBible }
   // Progress/result of an update the PHONE triggered (vrcmd:update). `reload` ⇒ the desktop applied a
   // JS update and the phone should reload to pick up the new UI (then it reconnects via its token).
