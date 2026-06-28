@@ -696,12 +696,13 @@ function canFreeChatLlm(): boolean {
   if (bibleActive || (bibleRunTotal > 0 && bibleRunDone < bibleRunTotal)) return false;
   const cs = chatSettingsOf(settings);
   if (cs.imageProvider !== "local" && settings.imageProvider !== "local") return false;
-  // An external AUTOMATIC1111 server keeps its checkpoint resident in VRAM after a render (unlike the
-  // app's managed ComfyUI, which releases it under memory pressure), so freeing the chat model for it
-  // only strands the LLM — it can't reload into the now-contended GPU and the chat goes unresponsive.
-  // Only free for engines whose VRAM the app actually coordinates (bundled server / managed ComfyUI).
-  // Use the RESOLVED active backend: a fallback from A1111 to the managed ComfyUI does release VRAM.
-  if ((settings.engineBackend ?? settings.localBackend) === "a1111") return false;
+  // A1111 is now coordinated like ComfyUI: it can unload its checkpoint (POST /sdapi/v1/unload-checkpoint,
+  // see Automatic1111Backend.freeMemory) so freeing the chat LLM for it no longer strands it — the reverse
+  // hand-off (freeImageModelForChat) unloads A1111 when the LLM reloads. Freeing the LLM BEFORE the render
+  // is in fact essential for A1111: it picks its VRAM/shared-RAM split at LOAD time from whatever's free, so
+  // loading SDXL into a GPU still occupied by the LLM permanently offloads part of it to slow shared RAM
+  // (the reported "32GB VRAM + 10GB shared for one SDXL model"). The fit math below still keeps both
+  // resident on an ample-VRAM box; this only changes the proven-tight / low-VRAM case.
   // VRAM HEADROOM (low-VRAM OFF): keep BOTH models resident UNLESS we can PROVE they don't both fit.
   // A cold reload of a big Ollama model is a multi-minute stall, so we never pay it on a guess — only
   // when the math says it can't fit. Crucially, UNKNOWN (VRAM undetected — non-NVIDIA / nvidia-smi
@@ -767,9 +768,8 @@ async function freeImageModelForChat(): Promise<void> {
   if (imageModelFreed || !settings) return;
   const cs = chatSettingsOf(settings);
   if (cs.imageProvider !== "local" && settings.imageProvider !== "local") return;
-  // Only the app-managed ComfyUI actually releases VRAM on /free; an external A1111 keeps its
-  // checkpoint resident, so freeing there strands nothing useful — skip it (mirror canFreeChatLlm).
-  if ((settings.engineBackend ?? settings.localBackend) === "a1111") return;
+  // A1111 now releases VRAM too (Automatic1111Backend.freeMemory → /sdapi/v1/unload-checkpoint), so the
+  // reverse hand-off works for it as well as ComfyUI — no A1111 skip here. (It reloads on the next render.)
   if (!settings.lowVram) {
     const imageGb = imageModelVramCostGb(settings.localModel ?? "");
     const chatGb =
@@ -1028,6 +1028,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       settings = msg.settings;
       corsProxyAvailable = msg.corsProxy === true;
       void evictReplacedChatModel(prevSettings, settings); // free the old local model on a model switch
+      void freeSwitchedImageEngine(prevSettings, settings); // clear the image engine's VRAM (A1111 startup squat / a switch)
       // Report which providers are live vs. a silent mock fallback (and why), so
       // the UI can show it before a book is even opened.
       try {
@@ -1049,6 +1050,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       const prevSettings = settings;
       settings = msg.settings;
       void evictReplacedChatModel(prevSettings, settings); // free the old local model if the model changed
+      void freeSwitchedImageEngine(prevSettings, settings); // free the image engine's VRAM on a backend switch
       if (engine) {
         try {
           engine.updateTier(buildProviders(settings).tier);
@@ -1589,6 +1591,32 @@ async function evictReplacedChatModel(prev: ReaderSettings | undefined, next: Re
     await oldP.llm.unload?.();
   } catch {
     /* best-effort — a build hiccup or non-Ollama server is a silent no-op */
+  }
+}
+
+/**
+ * Free the image engine's resident VRAM when the reader SWITCHES image backends (or on first init), so the
+ * low-VRAM IDLE state is "image model unloaded, chat LLM holds the GPU" — the baseline ComfyUI already has
+ * (it loads lazily). It matters most for AUTOMATIC1111, which auto-loads a checkpoint the moment it starts,
+ * so without this it squats the GPU during idle chat and the LLM spills to slow shared RAM. Unloads BOTH the
+ * newly-active engine's idle model and the one just switched away from; each reloads on its next render.
+ * Low-VRAM only (an ample box keeps models hot); best-effort. The per-render hand-off (freeChatLlmForRender /
+ * freeImageModelForChat) does the rest of the cycle, identically to ComfyUI.
+ */
+async function freeSwitchedImageEngine(prev: ReaderSettings | undefined, next: ReaderSettings): Promise<void> {
+  if (!next.lowVram) return;
+  try {
+    const cf = corsFetch();
+    const opts = cf ? { corsFetch: cf } : {};
+    const newP = buildProviders(next, opts);
+    const oldP = prev ? buildProviders(prev, opts) : undefined;
+    // An unrelated settings tweak that didn't change the image engine → don't churn (a needless unload
+    // forces a cold reload on the next render). A genuine switch (or first init) falls through.
+    if (oldP && oldP.diagnostics.image.label === newP.diagnostics.image.label) return;
+    await newP.image.freeMemory?.(); // A1111's startup checkpoint (a lazy no-op for ComfyUI / cloud)
+    if (oldP) await oldP.image.freeMemory?.(); // the engine we left, if it still holds its model
+  } catch {
+    /* best-effort — a build hiccup / unreachable engine / non-managed provider is a silent no-op */
   }
 }
 
