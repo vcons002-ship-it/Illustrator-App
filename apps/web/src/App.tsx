@@ -262,6 +262,7 @@ import {
   ensureEngine,
   ensureLocalLlm,
   gpuVramMb,
+  gpuVramUsage,
   restartApp,
   isDesktop,
   listLocalModels,
@@ -475,6 +476,10 @@ export function App() {
   // status bar reads the live hook values instead.
   const [remoteProviders, setRemoteProviders] = useState<ProvidersDiagnostics | undefined>();
   const [remoteVram, setRemoteVram] = useState<EngineVram | undefined>();
+  // Whole-GPU VRAM via nvidia-smi (desktop + NVIDIA): counts ALL processes, so a co-resident LLM
+  // is included — the engine's own /system_stats only sees its image-model context. Preferred over
+  // the worker's engine reading when present (see `effectiveVram`); undefined ⇒ fall back to it.
+  const [gpuVram, setGpuVram] = useState<EngineVram | undefined>();
   // Low-VRAM deferred engine start: at boot we DON'T launch the app-managed ComfyUI (so a large local
   // LLM can take the whole GPU); it spins up on the first image instead. `engineDeferredRef` marks that
   // we skipped the eager start; `managedBaseUrlRef` holds the URL the moment it starts (read race-free,
@@ -564,6 +569,33 @@ export function App() {
     polishText,
     polishCancel,
   } = useEngineWorker(settings, libraryStore);
+  // The VRAM the status bar shows: prefer the whole-GPU nvidia-smi reading (includes the LLM) when
+  // available, else the worker's engine /system_stats reading (image-model context only).
+  const effectiveVram = gpuVram ?? vram;
+  // Poll the whole GPU (nvidia-smi) on desktop so the indicator reflects TOTAL VRAM use — the LLM
+  // and the image model — not just the engine's own context. No-op on the phone (it mirrors the
+  // desktop) and on web / non-NVIDIA (gpuVramUsage resolves undefined ⇒ fall back to the engine).
+  useEffect(() => {
+    if (isRemoteClient || !isDesktop) return undefined;
+    let cancelled = false;
+    let inFlight = false;
+    const tick = async (): Promise<void> => {
+      if (inFlight) return; // don't stack nvidia-smi spawns if one is slow
+      inFlight = true;
+      try {
+        const v = await gpuVramUsage();
+        if (!cancelled) setGpuVram(v);
+      } finally {
+        inFlight = false;
+      }
+    };
+    void tick();
+    const timer = setInterval(() => void tick(), 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [isRemoteClient]);
   // App-wide activity log (the status center) + a way to drop a reference line into the buddy chat
   // when an out-of-chat button does something, so you can always see what worked. `buddyNoteRef` is
   // a ref so callbacks defined ABOVE the chat plumbing can post a note without a forward reference.
@@ -2076,9 +2108,9 @@ export function App() {
       skills,
       ...(book ? { book } : {}),
       ...(bible ? { bible } : {}),
-      ...(vram ? { vram } : {}),
+      ...(effectiveVram ? { vram: effectiveVram } : {}),
     }),
-    [library, settings, engineInventory, book, bible, memories, skills, vram],
+    [library, settings, engineInventory, book, bible, memories, skills, effectiveVram],
   );
   // PHONE side: adopt the desktop's mirrored inventory so the local-model pickers show the SAME
   // installed models/components the desktop has (the phone has no engine to enumerate).
@@ -2383,8 +2415,8 @@ export function App() {
   useEffect(() => {
     // Tick the phone's VRAM indicator. Its own lightweight push (not folded into the heavier
     // inventory mirror) so a ~4s GPU reading doesn't re-send the whole installed-model inventory.
-    if (!isRemoteClient) sendAppSync({ type: "vrsync:vram", ...(vram ? { vram } : {}) });
-  }, [isRemoteClient, sendAppSync, vram]);
+    if (!isRemoteClient) sendAppSync({ type: "vrsync:vram", ...(effectiveVram ? { vram: effectiveVram } : {}) });
+  }, [isRemoteClient, sendAppSync, effectiveVram]);
   // Settings edits: on the desktop, apply locally (it owns the engine). On a linked PHONE, also push
   // the change to the desktop (vrcmd:settings) so the render the phone triggers uses it — the desktop
   // applies it and re-mirrors it back. (The phone applies the desktop's pushes via setSettings
@@ -7420,7 +7452,7 @@ export function App() {
           </span>
         </ProviderBadges>
       ) : (
-        <ProviderBadges providers={providers} engineStatus={engineStatus} vram={vram} />
+        <ProviderBadges providers={providers} engineStatus={engineStatus} vram={effectiveVram} />
       )}
 
       {/* Status center: what the app is doing right now + the queue behind it (task planning keeps

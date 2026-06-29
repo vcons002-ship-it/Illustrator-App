@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ComfyUIBackend, parseSystemStats, summarizeVram } from "./comfyui-backend.js";
+import { ComfyUIBackend, parseNvidiaVramCsv, parseSystemStats, summarizeVram } from "./comfyui-backend.js";
 import type { Transport, TransportRequest, TransportResponse } from "../../transport/transport.js";
 
 /** A canned /system_stats payload shaped like ComfyUI's real response. */
@@ -101,6 +101,38 @@ describe("summarizeVram", () => {
   it("returns undefined when there are no GPU devices", () => {
     expect(summarizeVram([])).toBeUndefined();
     expect(summarizeVram(parseSystemStats({ devices: [{ name: "cpu", vram_total: 0 }] }))).toBeUndefined();
+  });
+});
+
+describe("parseNvidiaVramCsv (whole-GPU usage, includes the LLM)", () => {
+  const MB = 1024 * 1024;
+
+  it("parses 'name, totalMb, usedMb' lines into per-device byte stats", () => {
+    const stats = parseNvidiaVramCsv("NVIDIA GeForce RTX 4090, 24564, 9000\n");
+    expect(stats).toEqual([
+      { name: "NVIDIA GeForce RTX 4090", vramTotal: 24564 * MB, vramFree: (24564 - 9000) * MB },
+    ]);
+    // used = total − free, so summarizeVram reports the nvidia-smi `used` figure straight through.
+    expect(summarizeVram(stats)?.usedMb).toBe(9000);
+  });
+
+  it("handles multiple GPUs and skips blank lines", () => {
+    const stats = parseNvidiaVramCsv("GPU0, 8000, 2000\n\nGPU1, 8000, 6000\n");
+    expect(stats).toHaveLength(2);
+    expect(summarizeVram(stats)).toMatchObject({ totalMb: 16000, usedMb: 8000, device: "2 GPUs" });
+  });
+
+  it("clamps used to [0, total] and keeps a GPU name that contains commas", () => {
+    // A pathological name with a comma: the LAST two CSV fields are total/used, the rest is the name.
+    const stats = parseNvidiaVramCsv("Fancy, Card, 4096, 5000");
+    expect(stats[0]).toEqual({ name: "Fancy, Card", vramTotal: 4096 * MB, vramFree: 0 });
+  });
+
+  it("skips unparseable rows and yields [] for empty/garbage input", () => {
+    expect(parseNvidiaVramCsv("")).toEqual([]);
+    expect(parseNvidiaVramCsv("no driver running")).toEqual([]);
+    expect(parseNvidiaVramCsv("GPU, abc, def")).toEqual([]);
+    expect(parseNvidiaVramCsv("GPU, 0, 0")).toEqual([]); // zero total → not a real device
   });
 });
 

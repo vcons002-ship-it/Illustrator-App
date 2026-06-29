@@ -122,6 +122,32 @@ export function parseSystemStats(json: unknown): EngineVramStats[] {
   return out;
 }
 
+/**
+ * Parse `nvidia-smi --query-gpu=name,memory.total,memory.used --format=csv,noheader,nounits`
+ * output (one "name, totalMb, usedMb" line per GPU) into the neutral per-device shape so the same
+ * `summarizeVram` collapses it. nvidia-smi's `memory.used` is the WHOLE board across ALL processes,
+ * so a co-resident local LLM (Ollama / the bundled llama-server) is included — unlike ComfyUI's
+ * /system_stats, which only sees its own torch context. Blank/garbage lines are skipped; a fully
+ * unparseable input yields [].
+ */
+export function parseNvidiaVramCsv(text: string): EngineVramStats[] {
+  const MB = 1024 * 1024;
+  const out: EngineVramStats[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const parts = trimmed.split(",").map((p) => p.trim());
+    if (parts.length < 3) continue; // need name + total + used (a name may itself contain commas)
+    const totalMb = Number(parts[parts.length - 2]);
+    const usedMb = Number(parts[parts.length - 1]);
+    if (!Number.isFinite(totalMb) || totalMb <= 0 || !Number.isFinite(usedMb)) continue;
+    const name = parts.slice(0, parts.length - 2).join(", ") || "GPU";
+    const used = Math.max(0, Math.min(usedMb, totalMb));
+    out.push({ name, vramTotal: totalMb * MB, vramFree: (totalMb - used) * MB });
+  }
+  return out;
+}
+
 /** A status-bar-ready VRAM summary (megabytes), collapsed across the engine's GPU device(s). */
 export interface VramSummary {
   /** Total VRAM across all GPUs, in MB. */
