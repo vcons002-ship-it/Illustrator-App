@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ALWAYS_GATED_TOOLS,
   MAX_BUDDY_TOOL_ROUNDS,
+  buildActiveDocumentBlock,
   buildBuddySystemPrompt,
   buildProjectGuideBlock,
   buildToolCallFormat,
@@ -839,6 +840,59 @@ describe("create_spreadsheet tool", () => {
     expect(parseBuddyToolCall('{"tool":"create_spreadsheet","title":"x","columns":[]}')).toBeUndefined();
     expect(parseBuddyToolCall('{"tool":"create_spreadsheet","title":"x"}')).toBeUndefined();
     expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toContain('"tool":"create_spreadsheet"');
+  });
+});
+
+describe("create_document tool", () => {
+  it("parses a Markdown document spec with an optional format, and is advertised", () => {
+    const call = parseBuddyToolCall(
+      JSON.stringify({ tool: "create_document", title: "Brief", content: "# Brief\n\nHello **world**.", format: "docx" }),
+    );
+    expect(call).toEqual({ tool: "create_document", title: "Brief", content: "# Brief\n\nHello **world**.", format: "docx" });
+    // Also accepts the {name, arguments} native-tool shape.
+    const native = parseBuddyToolCall(JSON.stringify({ name: "create_document", arguments: { title: "T", content: "body" } }));
+    expect(native).toEqual({ tool: "create_document", title: "T", content: "body" });
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).toContain('"tool":"create_document"');
+  });
+
+  it("requires content; drops an unknown format", () => {
+    expect(parseBuddyToolCall('{"tool":"create_document","title":"x"}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"create_document","title":"x","content":"  "}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"create_document","title":"x","content":"hi","format":"rtf"}')).toEqual({
+      tool: "create_document",
+      title: "x",
+      content: "hi",
+    });
+  });
+
+  it("formats a success result with the formats + revise hint, and a failure", () => {
+    const ok = formatBuddyToolResult(
+      { tool: "create_document", title: "Brief", content: "x" },
+      { document: { ok: true, id: "doc-1-brief", title: "Brief", words: 120, path: "documents/brief.md" } },
+    );
+    expect(ok).toContain("Brief");
+    expect(ok).toMatch(/PDF, Word, or Markdown/);
+    expect(ok).toContain("documents/brief.md");
+    const fail = formatBuddyToolResult(
+      { tool: "create_document", title: "Brief", content: "x" },
+      { document: { ok: false, id: "", title: "Brief", words: 0, error: "boom" } },
+    );
+    expect(fail).toContain("create_document failed");
+    expect(fail).toContain("boom");
+  });
+});
+
+describe("buildActiveDocumentBlock", () => {
+  it("wraps the active document; empty when none/blank; revise cue + bounded", () => {
+    expect(buildActiveDocumentBlock(undefined)).toBe("");
+    expect(buildActiveDocumentBlock({ title: "T", content: "   " })).toBe("");
+    const block = buildActiveDocumentBlock({ title: "Brief", content: "# Brief\n\nBody." });
+    expect(block).toContain('ACTIVE DOCUMENT "Brief"');
+    expect(block).toContain("create_document again with the SAME title");
+    expect(block).toContain("# Brief");
+    const huge = buildActiveDocumentBlock({ title: "Big", content: "x".repeat(20_000) });
+    expect(huge).toContain("…(truncated)");
+    expect(huge.length).toBeLessThan(20_000);
   });
 });
 

@@ -58,6 +58,9 @@ export type MainToWorker =
   /** The workspace's AGENTS.md / CONVENTIONS.md text (read by the host each turn), injected into the
    * buddy prompt as durable project conventions. Empty string when there's no such file. */
   | { type: "projectGuide"; text: string }
+  /** The document the reader is currently viewing (e.g. one they uploaded/opened), so the buddy can
+   * discuss + revise it. `doc` absent ⇒ clear the active document. create_document sets it itself. */
+  | { type: "activeDocument"; doc?: { title: string; content: string } }
   | { type: "open"; book: BookSource }
   /** Patch the open book's edited data table(s) in place (no re-init), so the chat's
    * analyze_data sees edits made in the grid. Lightweight sibling of "open". */
@@ -369,6 +372,18 @@ export type WorkerToMain =
   /** Story config changed (e.g. set_story_cadence) WITHOUT a new beat — the host persists the
    * grown book's `storyConfig` so role-play + cadence survive a reopen. No scroll. */
   | { type: "storyConfig"; requestId: number; book: BookSource }
+  /** create_document made a real document: the host saves the Markdown source to the workspace,
+   * shows a downloadable file card (PDF / Word / Markdown) + a side reader, and caches it (so a
+   * linked phone can fetch the bytes). `content` is the Markdown; `path` the workspace-relative file. */
+  | {
+      type: "documentCreated";
+      requestId: number;
+      id: string;
+      title: string;
+      content: string;
+      path: string;
+      format?: "pdf" | "docx" | "md" | "html";
+    }
   /** The buddy updated its lightweight working checklist (set_plan/complete_step) mid-turn — the host
    * renders + persists it as the canonical per-session plan. */
   | { type: "buddyPlan"; requestId: number; plan: BuddyPlan }

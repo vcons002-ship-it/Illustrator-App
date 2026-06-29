@@ -198,6 +198,11 @@ import {
   dataTableToCsv,
   dataTableToXlsx,
   sheetFromDataTable,
+  markdownToBlocks,
+  blocksToPdf,
+  blocksToDocx,
+  DOCX_MIME,
+  PDF_MIME,
   type ExportImage,
   type ExportImages,
 } from "@visual-reader/epub";
@@ -540,6 +545,7 @@ export function App() {
     applyEngineConfig,
     setFileLedger,
     setProjectGuide,
+    setActiveDocument,
     chatCancel,
     warmLlm,
     buddyChat,
@@ -2579,6 +2585,21 @@ export function App() {
           setPhotoInitial({ name: imported.name, bytes: imported.bytes, mimeType: imported.mimeType });
           setShowPhoto(true);
         } else {
+          // An uploaded DOCUMENT (PDF/Word/CSV/text → extracted text): save it to the workspace so the
+          // buddy can find_files / read_file it, and make it the ACTIVE document so it can be discussed
+          // right away — addressing "uploaded docs aren't saved to the workspace for use".
+          const docTitle = imported.title || file.name.replace(/\.[^.]+$/, "") || "Document";
+          setActiveDocument({ title: docTitle, content: imported.text });
+          if (isDesktop) {
+            const slug = docTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "document";
+            const wsPath = `uploads/${slug}.md`;
+            try {
+              await writeWorkspaceFile(wsPath, imported.text);
+              recordCreatedFile(wsPath, imported.text.split("\n").length, false);
+            } catch {
+              /* workspace write best-effort (no desktop bridge / disk error) */
+            }
+          }
           // Extracted text (PDF/Word/CSV/…): confirm in the paste modal so the user can
           // fix the title and the fiction/technical choice before the book is created
           // (data files arrive pre-marked technical).
@@ -2596,7 +2617,7 @@ export function App() {
         setLocalError(`Couldn't import ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [openBook],
+    [openBook, setActiveDocument, recordCreatedFile],
   );
 
   // Map the active paragraph back to its page and steer the predictive buffer.
@@ -5394,6 +5415,54 @@ export function App() {
         // survives a reopen. setBook keeps the open reader's copy current; no scroll.
         setBook(e.book);
         void libraryStore.putBook(e.book).catch(() => {});
+      } else if (e.kind === "documentCreated") {
+        // create_document: surface the document as downloadable file cards IN THE CHAT (PDF / Word /
+        // Markdown) — NOT a full-screen reader takeover — and auto-save the Markdown source to the
+        // workspace so the buddy can read_file / revise it. The reader opens only on the card's button.
+        setBuddyActivity("");
+        const doc = e;
+        void (async () => {
+          const blocks = markdownToBlocks(doc.content);
+          const stem =
+            (doc.title || "document").replace(/[^\w]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "document";
+          // Build all three formats up-front so each card's Download — and a linked phone's on-demand
+          // relay fetch (by the card's id) — has real bytes. Markdown is the source; PDF + Word render.
+          let pdfBytes: Uint8Array | undefined;
+          let docxBytes: Uint8Array | undefined;
+          try { pdfBytes = await blocksToPdf(doc.title, blocks); } catch { /* PDF best-effort */ }
+          try { docxBytes = blocksToDocx(doc.title, blocks); } catch { /* Word best-effort */ }
+          const mdBytes = new TextEncoder().encode(doc.content);
+          const toBuf = (u: Uint8Array): ArrayBuffer => {
+            const b = new ArrayBuffer(u.byteLength);
+            new Uint8Array(b).set(u);
+            return b;
+          };
+          const cards: Record<"pdf" | "docx" | "md", FileRef | undefined> = {
+            pdf: pdfBytes ? { id: `${doc.id}-pdf`, name: `${stem}.pdf`, mime: PDF_MIME, kind: "export", bytes: toBuf(pdfBytes) } : undefined,
+            docx: docxBytes ? { id: `${doc.id}-docx`, name: `${stem}.docx`, mime: DOCX_MIME, kind: "export", bytes: toBuf(docxBytes) } : undefined,
+            md: { id: `${doc.id}-md`, name: `${stem}.md`, mime: "text/markdown", kind: "doc", content: doc.content, bytes: toBuf(mdBytes) },
+          };
+          // Order the cards with the requested format first (Markdown stands in for an html request).
+          const first: "pdf" | "docx" | "md" = doc.format === "docx" ? "docx" : doc.format === "md" || doc.format === "html" ? "md" : "pdf";
+          const order: ("pdf" | "docx" | "md")[] = [first, ...(["pdf", "docx", "md"] as const).filter((f) => f !== first)];
+          const attachments = order.map((f) => cards[f]).filter((r): r is FileRef => !!r);
+          appendBuddy({
+            role: "tool",
+            text: `📄 **${doc.title}** is ready — download it as PDF, Word, or Markdown (or open it in the reader):`,
+            attachments,
+            turns: [],
+          });
+          // Auto-save the Markdown SOURCE to the workspace (desktop) + ledger so the buddy can
+          // read_file / revise it later. Best-effort: a miss doesn't break the card.
+          if (isDesktop) {
+            try {
+              await writeWorkspaceFile(doc.path, doc.content);
+              recordCreatedFile(doc.path, doc.content.split("\n").length, false);
+            } catch {
+              /* workspace write best-effort */
+            }
+          }
+        })();
       } else {
         setBuddyActivity("");
         // App-managed steps: record each auto-run tool's outcome as EVIDENCE for the current step (the

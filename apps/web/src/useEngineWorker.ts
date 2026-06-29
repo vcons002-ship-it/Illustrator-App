@@ -257,6 +257,8 @@ export interface EngineWorkerApi {
   setFileLedger: (files: CreatedFileRef[]) => void;
   /** Update the worker's workspace project-guide text (AGENTS.md / CONVENTIONS.md) injected each turn. */
   setProjectGuide: (text: string) => void;
+  /** Set/clear the document the reader is viewing so the buddy can discuss + revise it (uploaded docs). */
+  setActiveDocument: (doc?: { title: string; content: string }) => void;
   /** Have the chat's vision model describe a captured screenshot. */
   assessImage: (
     image: { bytes: ArrayBuffer; mimeType: string },
@@ -381,6 +383,9 @@ export type BuddyStreamEvent =
   | { kind: "storyBeat"; book: BookSource; firstNewUnit: number; illustrate: boolean }
   /** Story config changed (cadence/role-play) — persist the book's storyConfig, no scroll. */
   | { kind: "storyConfig"; book: BookSource }
+  /** create_document made a real document — the app shows a downloadable file card (PDF/Word/
+   * Markdown) + side reader, saves the source to the workspace, and caches it for phone download. */
+  | { kind: "documentCreated"; id: string; title: string; content: string; path: string; format?: "pdf" | "docx" | "md" | "html" }
   /** The buddy updated its working checklist (set_plan/complete_step) — the app renders + persists it. */
   | { kind: "plan"; plan: BuddyPlan }
   /** Where the request's context budget is going (for the usage donut). */
@@ -984,6 +989,17 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             ?.onEvent({ kind: "storyBeat", book: msg.book, firstNewUnit: msg.firstNewUnit, illustrate: msg.illustrate });
           break;
         }
+        case "documentCreated": {
+          buddyRequests.current.get(msg.requestId)?.onEvent({
+            kind: "documentCreated",
+            id: msg.id,
+            title: msg.title,
+            content: msg.content,
+            path: msg.path,
+            ...(msg.format ? { format: msg.format } : {}),
+          });
+          break;
+        }
         case "storyConfig": {
           buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "storyConfig", book: msg.book });
           break;
@@ -1290,6 +1306,13 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const setProjectGuide = useCallback((text: string) => {
     if (remoteRef.current) return;
     send({ type: "projectGuide", text });
+  }, []);
+
+  /** Set/clear the document the reader is viewing (e.g. one they uploaded) so the buddy can discuss +
+   * revise it. create_document sets this itself worker-side; this is for host-opened/uploaded docs. */
+  const setActiveDocument = useCallback((doc?: { title: string; content: string }) => {
+    if (remoteRef.current) return;
+    send({ type: "activeDocument", ...(doc ? { doc } : {}) });
   }, []);
 
   useEffect(() => {
@@ -2077,6 +2100,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     applyEngineConfig,
     setFileLedger,
     setProjectGuide,
+    setActiveDocument,
     chatCancel,
     warmLlm,
     buddyChat,

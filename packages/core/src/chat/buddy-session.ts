@@ -84,6 +84,11 @@ export interface BuddyDeps {
   openCode?: (call: Extract<BuddyToolCall, { tool: "open_code" }>) => Promise<BuddyOpenedInfo>;
   /** Generate a new spreadsheet from a column/row spec and open it (host-side). */
   createSpreadsheet?: (call: Extract<BuddyToolCall, { tool: "create_spreadsheet" }>) => Promise<BuddyOpenedInfo>;
+  /** Make a real document (Markdown → PDF/Word), save it to the workspace, and surface it as a
+   * downloadable file card (host-side). Returns the saved-document info for the chat confirmation. */
+  createDocument?: (
+    call: Extract<BuddyToolCall, { tool: "create_document" }>,
+  ) => Promise<NonNullable<BuddyToolResultPayload["document"]>>;
   /** Story "as you go": start a new co-written illustrated story, open it, render beat one. */
   startStory?: (call: Extract<BuddyToolCall, { tool: "start_story" }>) => Promise<BuddyOpenedInfo>;
   /** Append the next beat to the OPEN story (prose + an image per the cadence). Returns the
@@ -649,6 +654,9 @@ export async function runBuddyTool(
       case "create_spreadsheet":
         if (!deps.createSpreadsheet) return { error: "creating spreadsheets isn't available right now" };
         return { opened: await deps.createSpreadsheet(call) };
+      case "create_document":
+        if (!deps.createDocument) return { error: "creating documents isn't available right now" };
+        return { document: await deps.createDocument(call) };
       case "start_story":
         if (!deps.startStory) return { error: "story mode isn't available right now" };
         return { opened: await deps.startStory(call), story: { beats: 1, illustrated: true } };

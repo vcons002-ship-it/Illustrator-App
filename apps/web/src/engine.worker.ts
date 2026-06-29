@@ -43,6 +43,7 @@ import {
   buildBuddySystemPrompt,
   buildFileLedgerBlock,
   buildProjectGuideBlock,
+  buildActiveDocumentBlock,
   buildToolCallFormat,
   type CreatedFileRef,
   ollamaToolSchemas,
@@ -719,6 +720,11 @@ let fileLedger: CreatedFileRef[] = [];
 /** The workspace's AGENTS.md / CONVENTIONS.md text (pushed from the host); injected as durable project
  * conventions into the buddy prompt. Empty when there's no such file. */
 let projectGuide = "";
+/** The document the reader is currently viewing — set by create_document, or pushed from the host
+ * (`activeDocument` message) when they open/upload one. Injected (bounded) AFTER the cache prefix so
+ * the buddy can discuss + revise the REAL text without a read_file round-trip. */
+let activeDocument: { title: string; content: string } | undefined;
+let documentCounter = 0;
 function llmVramOp(action: "stop" | "ensure"): Promise<void> {
   return new Promise((resolve) => {
     const callId = nextLlmVramId++;
@@ -1123,6 +1129,11 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       break;
     case "projectGuide":
       projectGuide = msg.text;
+      break;
+    case "activeDocument":
+      // The host set/cleared the document the reader is viewing (e.g. one they uploaded) so the buddy
+      // can discuss + revise it. create_document sets this itself; this is for host-opened docs.
+      activeDocument = msg.doc;
       break;
     case "open":
       void handleOpen(msg.book);
@@ -3278,6 +3289,28 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         const book = bookFromText(call.title || "Spreadsheet", text, "technical", "Generated in chat");
         return opened({ ...book, data: table }, false);
       },
+      createDocument: async (call) => {
+        // Make a real document from the buddy's Markdown: the HOST renders the PDF/Word bytes on
+        // demand, shows a downloadable file card (+ side reader), and saves the source to the
+        // workspace. The worker keeps it as the ACTIVE document so the reader can revise it by talking.
+        const slug =
+          (call.title || "document").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) ||
+          "document";
+        const id = `doc-${++documentCounter}-${slug}`;
+        const path = `documents/${slug}.md`;
+        const words = call.content.trim() ? call.content.trim().split(/\s+/).length : 0;
+        activeDocument = { title: call.title, content: call.content };
+        post({
+          type: "documentCreated",
+          requestId: msg.requestId,
+          id,
+          title: call.title,
+          content: call.content,
+          path,
+          ...(call.format ? { format: call.format } : {}),
+        });
+        return { ok: true, id, title: call.title, words, path };
+      },
       // Story "as you go": create the story book from the opening beat and open it (the
       // normal `opened` path → the host opens it, the worker rebuilds the engine with the
       // active-scene hook, beat one extracts + illustrates). worldStyle/style is applied
@@ -3679,7 +3712,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     // written) so the model stays aware of what it created even after history trimming.
     const ledgerBlock = buildFileLedgerBlock(fileLedger);
     const guideBlock = buildProjectGuideBlock(projectGuide);
-    const volatile = [storyStateBlock, guideBlock, ledgerBlock].filter(Boolean).join("\n\n");
+    // The active document (last create_document / one the reader opened) rides after the cache prefix
+    // too, so "tighten the intro / add a section" acts on the real text even after history trimming.
+    const activeDocBlock = buildActiveDocumentBlock(activeDocument);
+    const volatile = [storyStateBlock, guideBlock, ledgerBlock, activeDocBlock].filter(Boolean).join("\n\n");
     // G3 — in app-managed mode, GRAMMAR-CONSTRAIN the reply to the tool the active step's contract
     // demands so a stubborn small model can't narrate instead of acting. Only for a concrete tool need
     // (the step's `needs` token is a tool name); text/narration steps stay free. Local-server only — the
