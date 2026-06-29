@@ -572,6 +572,9 @@ export function App() {
   // The VRAM the status bar shows: prefer the whole-GPU nvidia-smi reading (includes the LLM) when
   // available, else the worker's engine /system_stats reading (image-model context only).
   const effectiveVram = gpuVram ?? vram;
+  // The configured local image engine's display name (for the phone's compact engine pill — it can't
+  // reach the engine itself, which runs on the desktop).
+  const localEngineName = (settings.engineBackend ?? settings.localBackend) === "a1111" ? "AUTOMATIC1111" : "ComfyUI";
   // Poll the whole GPU (nvidia-smi) on desktop so the indicator reflects TOTAL VRAM use — the LLM
   // and the image model — not just the engine's own context. No-op on the phone (it mirrors the
   // desktop) and on web / non-NVIDIA (gpuVramUsage resolves undefined ⇒ fall back to the engine).
@@ -1600,9 +1603,14 @@ export function App() {
   // Connect (so flipping to an unconfigured backend never silently auto-starts a different engine).
   // `resolveLocalEngine` is stable, so this only fires on the listed inputs.
   useEffect(() => {
+    // A linked phone has NO local engine — it mirrors the desktop's settings (incl. imageProvider:
+    // "local"), but the engine runs on the desktop. Probing here would hit the PHONE's own
+    // 127.0.0.1 and fail with a misleading "couldn't reach ComfyUI / CORS" error. The phone shows a
+    // compact engine pill in the status bar instead (see the isRemoteClient badge branch).
+    if (isRemoteClient) return;
     if (settings.imageProvider !== "local") return;
     void resolveLocalEngine();
-  }, [settings.imageProvider, settings.localSource, resolveLocalEngine]);
+  }, [isRemoteClient, settings.imageProvider, settings.localSource, resolveLocalEngine]);
 
   // Desktop: list the app-managed engine's installed image models on startup with a CHEAP folder scan
   // (no need to boot ComfyUI), so the picker + the phone-link inventory are populated immediately —
@@ -7446,10 +7454,26 @@ export function App() {
       {isRemoteClient ? (
         // On a linked phone, show the link badge AND the desktop's mirrored model tags + GPU VRAM,
         // so the phone can see which image/LLM models are active and what the GPU is doing.
-        <ProviderBadges providers={remoteProviders} engineStatus={engineStatus} vram={remoteVram}>
+        <ProviderBadges
+          providers={remoteProviders}
+          engineStatus={engineStatus}
+          vram={remoteVram}
+          hideImage={settings.imageProvider === "local"}
+        >
           <span style={{ ...styles.badge, ...styles.badgeOk }} title="This phone is mirroring your desktop over the LAN; the engine runs there.">
             🔗 Linked to {remoteHost ?? "your desktop"} — engine runs on the desktop
           </span>
+          {settings.imageProvider === "local" && (
+            // The local image engine can't be reached FROM the phone (it's on the desktop) — a compact
+            // red pill instead of the phone fruitlessly probing its own 127.0.0.1 and surfacing a
+            // misleading "couldn't reach ComfyUI / CORS" error.
+            <span
+              style={{ ...styles.badge, ...styles.badgeErr }}
+              title={`The local image engine (${localEngineName}) runs on your desktop — this phone can't reach it directly, so renders happen on the desktop and stream here.`}
+            >
+              ⚠ {localEngineName} · on desktop
+            </span>
+          )}
         </ProviderBadges>
       ) : (
         <ProviderBadges providers={providers} engineStatus={engineStatus} vram={effectiveVram} />
@@ -9365,11 +9389,15 @@ function ProviderBadges({
   providers,
   engineStatus,
   vram,
+  hideImage,
   children,
 }: {
   providers: ProvidersDiagnostics | undefined;
   engineStatus: string;
   vram?: EngineVram | undefined;
+  /** Suppress the "Image:" badge — used on the phone for a LOCAL engine, where a dedicated red
+   * engine pill stands in for it (the desktop's image badge would otherwise read green/healthy). */
+  hideImage?: boolean;
   /** Optional leading badge (e.g. the phone's "Linked to …" chip) rendered before the model tags. */
   children?: React.ReactNode;
 }) {
@@ -9378,7 +9406,7 @@ function ProviderBadges({
     <div style={styles.badges}>
       {children}
       {providers && <Badge slot="Text" diag={providers.llm} />}
-      {providers && <Badge slot="Image" diag={providers.image} />}
+      {providers && !hideImage && <Badge slot="Image" diag={providers.image} />}
       {engineStatus && (
         <span style={{ ...styles.badge, ...styles.badgeBusy }} title="Local GPU engine status">
           Engine: {engineStatus}
@@ -9705,6 +9733,11 @@ const styles: Record<string, React.CSSProperties> = {
     background: "rgba(90,120,200,0.16)",
     borderColor: "rgba(120,150,220,0.45)",
     color: "#bcd0ff",
+  },
+  badgeErr: {
+    background: "rgba(200,60,60,0.16)",
+    borderColor: "rgba(230,90,90,0.5)",
+    color: "#ff9c9c",
   },
   empty: { padding: "10px 24px 8px", maxWidth: 760, fontSize: 13, opacity: 0.8, lineHeight: 1.5 },
   buddySection: { padding: "0 24px 20px", display: "flex", justifyContent: "center" },
