@@ -52,14 +52,14 @@ describe("thin-client helpers", () => {
 
   it("remoteModeFromHash uses wss:// over an https page (tunnel), ws:// over http", () => {
     // A Cloudflare tunnel serves the SPA over https; the socket MUST be wss (browsers block ws from https).
-    expect(remoteModeFromHash("#vrlink=tok", "vr.nic024i.app", "https:")).toEqual({ wsUrl: "wss://vr.nic024i.app/", token: "tok" });
+    expect(remoteModeFromHash("#vrlink=tok", "vr.example.com", "https:")).toEqual({ wsUrl: "wss://vr.example.com/", token: "tok" });
     expect(remoteModeFromHash("#vrlink=tok", "192.168.1.20:8787", "http:")).toEqual({ wsUrl: "ws://192.168.1.20:8787/", token: "tok" });
   });
 
   it("buildRemoteLinkUrl makes an https tunnel link with the token in the QUERY (survives Access), normalizing the host", () => {
     // Query, not #hash — a Cloudflare Access login preserves the query but drops a fragment.
-    expect(buildRemoteLinkUrl("vr.nic024i.app", "Tok 1")).toBe("https://vr.nic024i.app/?vrlink=Tok%201");
-    expect(buildRemoteLinkUrl("https://vr.nic024i.app/", "t")).toBe("https://vr.nic024i.app/?vrlink=t"); // scheme + trailing slash stripped
+    expect(buildRemoteLinkUrl("vr.example.com", "Tok 1")).toBe("https://vr.example.com/?vrlink=Tok%201");
+    expect(buildRemoteLinkUrl("https://vr.example.com/", "t")).toBe("https://vr.example.com/?vrlink=t"); // scheme + trailing slash stripped
     expect(buildRemoteLinkUrl("  ", "t")).toBeUndefined();
     expect(buildRemoteLinkUrl("host", "")).toBeUndefined();
     // parseLinkToken accepts the query form too (the client reads it on load).

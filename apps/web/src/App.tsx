@@ -8348,7 +8348,7 @@ export function App() {
                   <input
                     style={{ width: "100%", boxSizing: "border-box", marginTop: 6, background: "rgba(255,255,255,0.06)", color: "inherit", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 6, padding: 8, fontSize: 13 }}
                     value={settings.remoteLinkHost ?? ""}
-                    placeholder="vr.nic024i.app"
+                    placeholder="vr.example.com"
                     onChange={(e) => setSettings((s) => ({ ...s, remoteLinkHost: e.target.value }))}
                   />
                   {(() => {
