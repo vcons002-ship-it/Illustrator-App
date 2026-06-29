@@ -114,4 +114,32 @@ export interface BookSource {
   /** Parsed value for a NESTED/irregular JSON import (one that doesn't normalise to a
    * table) — the reader shows it as a collapsible tree. Absent otherwise. */
   tree?: JsonValue;
+  /**
+   * How this book is DISPLAYED — the reader's editable view category (drop-down). Only "story"
+   * shows the illustration window; the rest render full-screen (formatted text / plain text / data
+   * grid / code). Best-guessed from contentMode/kind/data on open ({@link resolveViewAs}); set
+   * explicitly when the reader picks a different view, and persisted with the book. */
+  viewAs?: BookViewCategory;
+}
+
+/** The reader's view categories (the per-book "view as…" drop-down). Only `story` is illustrated. */
+export type BookViewCategory = "story" | "document" | "text" | "data" | "code";
+
+/**
+ * Best-guess the display category for a book whose view hasn't been chosen yet: an interactive story
+ * OR a fiction novel illustrates (`story`); a spreadsheet/CSV is `data`; source code is `code`;
+ * everything else — technical/non-fiction, Word/Markdown, plain prose — is a plain `document`. An
+ * explicit `book.viewAs` always wins (the reader overrode the guess). PURE. */
+export function resolveViewAs(
+  book: Pick<BookSource, "viewAs" | "kind" | "contentMode" | "data" | "dataSheets">,
+): BookViewCategory {
+  if (book.viewAs) return book.viewAs;
+  if (book.kind === "story") return "story";
+  if (book.data || (book.dataSheets && book.dataSheets.length > 0)) return "data";
+  if (book.contentMode === "code") return "code";
+  // Non-fiction/technical reads as a plain document; fiction OR an unset contentMode (the common case
+  // for imported novels — `bookFromText` leaves fiction unset) keeps the app's illustrate-a-book
+  // default. Created/plain documents carry an explicit `viewAs: "document"`, which wins above.
+  if (book.contentMode === "technical") return "document";
+  return "story";
 }

@@ -14,6 +14,7 @@ import {
 import { ContextUsageDonut } from "./ContextUsageDonut.js";
 import { DataChart } from "./DataChart.js";
 import { DataTablePreview } from "./DataTablePreview.js";
+import { DocBlocksView } from "./DocBlocksView.js";
 
 /**
  * The reading-companion chat panel. Pure presentation: messages, a streaming
@@ -886,6 +887,10 @@ export function FileActionBar({
   label?: boolean;
 }) {
   const [busy, setBusy] = useState<string | undefined>();
+  const [readOpen, setReadOpen] = useState(false);
+  // A document the chat can render INLINE (read it here without switching to the reader window) — a
+  // text/Markdown card that carries its content. Reuses the same block model as the PDF/Word export.
+  const canReadInline = !!file.content && (file.mime === "text/markdown" || /\.(md|markdown|txt)$/i.test(file.name));
   const runFor: Record<FileActionKey, () => void | Promise<unknown>> = {
     dl: () => actions.download!(file),
     app: () => actions.openInApp!(file),
@@ -911,11 +916,21 @@ export function FileActionBar({
   const primary = items[0]!;
   const rest = items.slice(1);
   return (
+    <div>
     <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
       {label ? <span style={{ opacity: 0.7, fontSize: 11, marginRight: 2 }}>📎 {file.name}</span> : null}
       <button style={fileChipStyle} title={primary.title} disabled={busy === primary.key} onClick={() => void fire(primary)}>
         {busy === primary.key ? "…" : primary.label}
       </button>
+      {canReadInline ? (
+        <button
+          style={readOpen ? { ...fileChipStyle, borderColor: "rgba(122,162,255,0.6)", color: "#bcd0ff" } : fileChipStyle}
+          title="Read this document right here in the chat (no need to open the reader)"
+          onClick={() => setReadOpen((v) => !v)}
+        >
+          {readOpen ? "▾ Hide" : "📖 Read here"}
+        </button>
+      ) : null}
       {rest.length >= 1 || actions.openAs ? (
         <details style={{ position: "relative" }}>
           <summary style={{ ...fileChipStyle, listStyle: "none", cursor: "pointer" }}>⋯ More</summary>
@@ -938,6 +953,22 @@ export function FileActionBar({
           </div>
         </details>
       ) : null}
+    </div>
+    {canReadInline && readOpen ? (
+      <div
+        style={{
+          maxHeight: 440,
+          overflowY: "auto",
+          marginTop: 8,
+          padding: "12px 16px",
+          border: "1px solid rgba(255,255,255,0.12)",
+          borderRadius: 8,
+          background: "rgba(255,255,255,0.03)",
+        }}
+      >
+        <DocBlocksView markdown={file.content!} />
+      </div>
+    ) : null}
     </div>
   );
 }
