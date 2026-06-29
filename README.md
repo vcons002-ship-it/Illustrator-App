@@ -16,6 +16,11 @@ planning. Reading and illustration are one capability among many, not the only d
 > New here? **[FEATURES.md](./FEATURES.md)** is a plain-language tour of what the
 > app does, how it works, and what's on the roadmap.
 
+> **Keys are bring-your-own and stay on your device.** You enter your own API keys /
+> OAuth credentials in Settings; they're stored locally and sent only to the provider
+> you chose — never committed to this repo. See **[SECURITY.md](./SECURITY.md)** for the
+> security model and how to report a vulnerability.
+
 ## Quick start
 
 **Windows — no commands, just double-click a file:**
