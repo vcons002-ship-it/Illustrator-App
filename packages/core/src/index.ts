@@ -13,6 +13,7 @@ export * from "./files/local-files.js";
 export * from "./files/project.js";
 export * from "./files/doc-images.js";
 export * from "./files/attachment-text.js";
+export * from "./files/markdown-blocks.js";
 export * from "./files/export-name.js";
 export * from "./render-buffer/index.js";
 export * from "./render-units.js";

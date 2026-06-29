@@ -154,6 +154,8 @@ import {
   type SoulNote,
   type SoulKind,
   type SoulImage,
+  resolveViewAs,
+  type BookViewCategory,
   type BookSource,
   type BookSummary,
   type ChapterDataset,
@@ -242,6 +244,7 @@ import {
   useNarrow,
   ConceptCard,
   ConceptText,
+  DocBlocksView,
   HtmlParagraph,
   ARTICLE_HTML_STYLE,
   InlineFigure,
@@ -1863,6 +1866,27 @@ export function App() {
     [openInWorker, libraryStore],
   );
 
+  // Change the open book's view category (the reader's drop-down): only "story" shows the illustration
+  // window; the rest render the text/data/code full-screen. A pure render switch (no engine re-open —
+  // the worker isn't illustrating until the reader hits Start), persisted on the book so it sticks.
+  const setViewAs = useCallback(
+    (cat: BookViewCategory) => {
+      setBook((cur) => {
+        if (!cur) return cur;
+        const next = { ...cur, viewAs: cat };
+        bookRef.current = next;
+        void libraryStore
+          .putBook(next)
+          .then(() => libraryStore.listBooks())
+          .then(setLibrary)
+          .catch(() => {});
+        return next;
+      });
+      if (cat === "code") setCodeEditMode(true); // the code view IS the full-screen editor
+    },
+    [libraryStore],
+  );
+
   // Apply an edit to the open spreadsheet's active table (the chosen sheet, and `data`
   // when it aliases that sheet), persist the book, and push the new table(s) to the
   // worker so the chat's analyze_data sees the change. All grid edits route through here.
@@ -2600,6 +2624,13 @@ export function App() {
               /* workspace write best-effort (no desktop bridge / disk error) */
             }
           }
+          // A Markdown / created document opens straight as a formatted "document" view (no
+          // illustration window, no fiction/technical modal) — the buddy's docs land here.
+          if (!imported.data && !imported.dataSheets && /\.(md|markdown|txt)$/i.test(file.name)) {
+            const md = /\.(md|markdown)$/i.test(file.name);
+            openBook({ ...bookFromText(docTitle, imported.text, "technical"), viewAs: md ? "document" : "text" });
+            return;
+          }
           // Extracted text (PDF/Word/CSV/…): confirm in the paste modal so the user can
           // fix the title and the fiction/technical choice before the book is created
           // (data files arrive pre-marked technical).
@@ -2754,6 +2785,9 @@ export function App() {
     [book, techConcepts, techFiguresByPage, techDatasetsByPage, techInfographicsByPage],
   );
 
+  // The reader's view category (the header drop-down): only "story" shows the illustration window;
+  // the rest render full-screen text / data / code. Best-guessed from the book, overridable + saved.
+  const viewAs: BookViewCategory = book ? resolveViewAs(book) : "document";
   // --- Reading-companion chat ------------------------------------------------
   const isTechnical = isNonFiction(book?.contentMode);
   // Load this book's chat history; reset transient chat state on book change.
@@ -7029,16 +7063,20 @@ export function App() {
             </button>
           )}
           {book && (
-            <span
-              style={styles.modeBadge}
-              title="What kind of document this is, chosen at import — it sets the reading view and tools"
+            // VIEW-AS drop-down: the app best-guesses how to show this, but the reader decides. Only
+            // "Story" gets the illustration window; the rest show the text/data/code full-screen.
+            <select
+              style={styles.viewAsSelect}
+              value={viewAs}
+              onChange={(e) => setViewAs(e.target.value as BookViewCategory)}
+              title="How to view this document — only “Story” shows the illustration window; the others show the text full-screen. The app guesses; you can change it."
             >
-              {book.contentMode === "code"
-                ? "💻 Code file"
-                : book.contentMode === "technical"
-                  ? "📘 Technical"
-                  : "📖 Story"}
-            </span>
+              <option value="story">📖 Story (illustrated)</option>
+              <option value="document">📄 Document</option>
+              <option value="text">🅣 Plain text</option>
+              {(book.data || (book.dataSheets && book.dataSheets.length > 0)) && <option value="data">▦ Data / sheet</option>}
+              {(book.contentMode === "code" || book.code) && <option value="code">⟨⟩ Code</option>}
+            </select>
           )}
           <button
             style={toolbarOpen ? { ...styles.button, borderColor: "rgba(120,160,255,0.6)", color: "#acc4ff" } : styles.button}
@@ -7224,7 +7262,7 @@ export function App() {
               Chat
             </button>
           )}
-          {book && !generating && (
+          {book && viewAs === "story" && !generating && (
             <button
               style={styles.buttonPrimary}
               onClick={() => {
@@ -7495,7 +7533,7 @@ export function App() {
           )}
         </div>
         </div>
-        {book && (
+        {book && viewAs === "story" && (
           <WorkflowBar
             stage={stage}
             paused={paused}
@@ -7585,7 +7623,7 @@ export function App() {
         <section style={styles.buddySection}>{renderBuddyChat(false)}</section>
       )}
 
-      {book && book.contentMode === "code" && codeEditMode ? (
+      {book && viewAs === "code" && codeEditMode ? (
         // Code books open as a full-screen, editable code workspace: edit the source in place, then
         // ▶ Run it (writes the draft to the workspace and runs it on the desktop / relayed from a
         // phone). The illustrated reading view is still one click away ("📖 Read view" in the header).
@@ -7710,6 +7748,12 @@ export function App() {
             )}
           </div>
         </section>
+      ) : book && (viewAs === "document" || viewAs === "text") ? (
+        // DOCUMENT / PLAIN-TEXT view: the text full-screen in its actual formatting — NO illustration
+        // window (that's reserved for the Story view). The buddy chat still docks beneath it.
+        <main style={styles.readerDoc}>
+          <DocumentReader book={book} plain={viewAs === "text"} articleHtml={bookHasHtml && articleLayout} />
+        </main>
       ) : book ? (
         <main style={book.data || (book.dataSheets && book.dataSheets.length) ? styles.readerData : narrow ? styles.readerNarrow : wideImageColumn ? styles.readerWide : styles.reader}>
           <ReaderColumn
@@ -7727,11 +7771,11 @@ export function App() {
             layoutHtml={articleLayout}
           />
 
+          {viewAs === "story" && (
           <aside style={styles.aside}>
             <div style={styles.panel}>
-              {/* Technical mode shows its support INLINE, anchored to the source
-                  paragraphs (retrieved figures, concept cards) — no generated-art
-                  pane, no progressive blur. The aside keeps the data charts. */}
+              {/* The illustration window — Story view only. (A Document/Text/Data/Code view renders
+                  full-screen without it; see the document branch above.) */}
               {!isTechnical &&
                 (panelsPerView > 1 && units ? (
                   <PanelGrid
@@ -7814,6 +7858,7 @@ export function App() {
               </div>
             </div>
           </aside>
+          )}
         </main>
       ) : null}
 
@@ -8444,6 +8489,53 @@ function autoChartDataset(table: DataTable): ChapterDataset | undefined {
   if (numeric !== 1 || strings > 1 || table.columns.length > 3) return undefined;
   return chartDatasetFromTable(table);
 }
+
+/**
+ * Full-screen text reader for the Document / Plain-text views (no illustration window). Renders the
+ * document in its ACTUAL formatting: an imported article keeps its HTML layout; everything else is
+ * rendered from Markdown via the shared block model (so a created doc matches its PDF/Word download);
+ * "plain text" shows the raw text verbatim. The buddy chat still docks beneath it.
+ */
+const DocumentReader = memo(function DocumentReader({
+  book,
+  plain,
+  articleHtml,
+}: {
+  book: BookSource;
+  plain: boolean;
+  articleHtml: boolean;
+}) {
+  const text = useMemo(
+    () => book.pages.flatMap((p) => p.paragraphs.map((par) => par.text)).join("\n\n"),
+    [book],
+  );
+  if (plain) {
+    return (
+      <div style={styles.readerDocInner}>
+        <pre style={styles.readerPlainText}>{text}</pre>
+      </div>
+    );
+  }
+  if (articleHtml) {
+    return (
+      <div style={styles.readerDocInner}>
+        <style>{ARTICLE_HTML_STYLE}</style>
+        {book.pages
+          .flatMap((p) => p.paragraphs)
+          .map((par) =>
+            par.html ? (
+              <HtmlParagraph key={par.id} html={par.html} />
+            ) : (
+              <p key={par.id} style={{ margin: "0 0 0.9em", lineHeight: 1.7 }}>
+                {par.text}
+              </p>
+            ),
+          )}
+      </div>
+    );
+  }
+  return <DocBlocksView markdown={text} style={styles.readerDocInner} />;
+});
 
 const ReaderColumn = memo(function ReaderColumn({
   book,
@@ -9834,6 +9926,34 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     fontWeight: 600,
     cursor: "pointer",
+  },
+  // The reader's "view as…" category drop-down (replaces the old static mode badge).
+  viewAsSelect: {
+    background: "rgba(255,255,255,0.08)",
+    color: "inherit",
+    border: "1px solid rgba(255,255,255,0.2)",
+    borderRadius: 999,
+    padding: "4px 8px",
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+  // Full-screen text reader (Document / Plain text views — no illustration window).
+  readerDoc: {
+    flex: 1,
+    overflowY: "auto",
+    padding: "24px 24px 40px",
+    display: "flex",
+    justifyContent: "center",
+  },
+  readerDocInner: { width: "100%", maxWidth: 760 },
+  readerPlainText: {
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+    fontFamily: "ui-monospace, 'SF Mono', Menlo, monospace",
+    fontSize: 14,
+    lineHeight: 1.6,
+    margin: 0,
   },
   // "Lock this look" control under a story beat's image: pin it as a character's reference.
   lockLook: { marginTop: 6, display: "flex", flexDirection: "column", gap: 4 },
