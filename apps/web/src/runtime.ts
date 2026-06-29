@@ -7,7 +7,7 @@
  * downloads) so the renderer never deals with processes, ports, or CORS.
  */
 
-import { base64ToBytes, classifyLoraHeader, type LocalFile, type CodingAgentBackend } from "@visual-reader/core";
+import { base64ToBytes, classifyLoraHeader, parseNvidiaVramCsv, summarizeVram, type LocalFile, type CodingAgentBackend, type VramSummary } from "@visual-reader/core";
 
 type UnlistenFn = () => void;
 
@@ -119,6 +119,23 @@ export function gpuVramMb(): Promise<number | undefined> {
   return invoke<number | null>("gpu_info")
     .then((mb) => mb ?? undefined)
     .catch(() => undefined);
+}
+
+/**
+ * Whole-GPU VRAM usage for the status-bar indicator (desktop + NVIDIA only), via `nvidia-smi`.
+ * Its `memory.used` counts ALL processes, so a co-resident LLM is included — unlike ComfyUI's
+ * /system_stats, which sees only its own torch context (the reason the indicator otherwise tracks
+ * image-model VRAM but not LLM VRAM). undefined on web / no NVIDIA / any failure, so the caller
+ * falls back to the engine's own reading.
+ */
+export async function gpuVramUsage(): Promise<VramSummary | undefined> {
+  if (!isDesktop) return undefined;
+  try {
+    const csv = await invoke<string | null>("gpu_vram_usage");
+    return csv ? summarizeVram(parseNvidiaVramCsv(csv)) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Installed LoRA filenames in the managed engine (for style auto-download checks). */

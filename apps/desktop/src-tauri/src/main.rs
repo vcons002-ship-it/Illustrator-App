@@ -202,6 +202,37 @@ fn nvidia_vram_mb() -> Option<u64> {
     text.lines().next()?.trim().parse::<u64>().ok()
 }
 
+/// Per-GPU VRAM usage for the status-bar indicator, as raw `nvidia-smi` CSV lines
+/// ("name, total_mb, used_mb"), parsed on the JS side. Unlike ComfyUI's /system_stats — which
+/// only sees its OWN torch context — `nvidia-smi`'s `memory.used` is the whole board across ALL
+/// processes, so a co-resident local LLM (Ollama / the bundled llama-server) is included. `None`
+/// on any failure (no NVIDIA GPU / `nvidia-smi` absent). Best-effort, never an error.
+#[tauri::command]
+async fn gpu_vram_usage() -> Result<Option<String>, String> {
+    Ok(tauri::async_runtime::spawn_blocking(nvidia_vram_usage_csv)
+        .await
+        .unwrap_or(None))
+}
+
+fn nvidia_vram_usage_csv() -> Option<String> {
+    let out = Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=name,memory.total,memory.used",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
 /// Fully relaunch the app (Settings → Restart app). The bundled engine/LLM children are killed on
 /// exit (see `RunEvent::ExitRequested`), so nothing is left holding the GPU. Never returns.
 #[tauri::command]
@@ -2496,6 +2527,7 @@ fn main() {
             lora_headers,
             download_lora,
             gpu_info,
+            gpu_vram_usage,
             http_fetch,
             save_file,
             open_path,
