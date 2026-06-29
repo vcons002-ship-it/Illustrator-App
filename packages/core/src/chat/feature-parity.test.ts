@@ -75,6 +75,7 @@ describe("every high-value capability still works end to end", () => {
     "open (pasted)": '{"tool":"open_content","source":"pasted","text":"Once upon a time"}',
     "open (code)": '{"tool":"open_content","source":"code","text":"const x=1"}',
     "build a spreadsheet": '{"tool":"create_spreadsheet","title":"Budget","columns":[{"name":"Item"}]}',
+    "write a document": '{"tool":"create_document","title":"Brief","content":"# Brief\\n\\nHello"}',
     "generate an image": '{"tool":"generate_image","prompt":"an apple"}',
     "create a file (run tool)": '{"tool":"write_file","path":"a.py","content":"print(1)"}',
     "run & test code": '{"tool":"run_command","command":"python a.py"}',

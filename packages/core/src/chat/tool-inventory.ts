@@ -50,6 +50,7 @@ export const TOOL_INVENTORY: ToolEntry[] = [
 
   // Spreadsheets & data
   { tool: "create_spreadsheet", capability: "build a spreadsheet", disposition: "kept" },
+  { tool: "create_document", capability: "write a document", disposition: "kept" },
 
   // Story "as you go" — start moves to a click; continuing an OPEN story stays a tool.
   { tool: "start_story", capability: "co-write an illustrated story", disposition: { movedToClick: "Open Book → Story as you go (/story)" } },

@@ -202,6 +202,20 @@ export type BuddyToolCall =
       columns: { name: string; type?: "number" | "string" }[];
       rows?: (string | number | null)[][];
     }
+  /** Make a real DOCUMENT (report, letter, study notes, brief, essay) the reader can download as a
+   * PDF or Word file. Write the FULL document body as Markdown in `content` (# / ## headings,
+   * **bold**, *italic*, - / 1. lists, `code`, --- rules). It is saved to the workspace + shown as a
+   * file card in the chat (NOT the full reader) with Download (PDF / Word / Markdown) + Open in a
+   * side reader, and stays in your context so the reader can ask you to revise it. `format` is just
+   * the download the reader gets first (default pdf) — all formats are always available. Prefer this
+   * over a bare ```fenced block whenever the reader wants a polished, downloadable document. */
+  | {
+      tool: "create_document";
+      title: string;
+      /** The whole document body, in Markdown. */
+      content: string;
+      format?: "pdf" | "docx" | "md" | "html";
+    }
   /** Start co-writing an illustrated STORY with the reader: create the story book from the
    * opening beat, open it in the reader, and generate the first image. Each later beat
    * (continue_story) adds prose + an image while the Visual Bible accumulates the cast/
@@ -473,6 +487,8 @@ export function describeBuddyToolActivity(call: BuddyToolCall): string {
       return `Planning “${clip(call.title, 50)}”…`;
     case "create_spreadsheet":
       return `Building the “${clip(call.title, 50)}” spreadsheet…`;
+    case "create_document":
+      return `Writing the “${clip(call.title, 50)}” document…`;
     case "start_story":
       return `Starting the story “${clip(call.title, 50)}”…`;
     case "continue_story":
@@ -962,7 +978,9 @@ export function buildBuddySystemPrompt(opts: {
     (opts.canSearchFiles
       ? "• A file on THEIR computer (the default home of \"find\"): find it by NAME → find_files; read its CONTENTS → read (source:\"file\"); SEE a picture → open_image.\n"
       : "") +
-    "• Make a file: a spreadsheet → create_spreadsheet; " +
+    "• Make a file: a spreadsheet → create_spreadsheet; a downloadable DOCUMENT — a PDF or Word doc, " +
+    "report, letter, study notes, essay, brief → create_document (write the body as Markdown; the reader " +
+    "gets real PDF/Word downloads + a side reader, and you can revise it); " +
     (opts.canRunCommands
       ? "a file/document/page the reader KEEPS (a script, a long .md, an .html, a CSV) → write_file — it saves WHOLE " +
         "on disk (chunk a big one with append:true), so you can re-read or run it and never lose track of it; a giant " +
@@ -1067,6 +1085,10 @@ export function buildBuddySystemPrompt(opts: {
     "questions about how to construct it (purpose, the columns/categories, the period, currency, any totals or formulas " +
     "they want) — offer sensible defaults — and only call this once you know enough to build something useful. After it " +
     "opens, refine it conversationally with set_cell / add_formula_column / analyze_data / export_data.\n" +
+    '- {"tool":"create_document","title":"Project Brief","content":"# Project Brief\\n\\nThe goal is **X**.\\n\\n## Scope\\n- item one\\n- item two\\n","format":"pdf"} — ' +
+    "make a real, downloadable DOCUMENT (report, letter, notes, essay…). Put the WHOLE body in \"content\" as Markdown; " +
+    "\"format\" is just the first download offered (pdf default) — PDF, Word, and Markdown are all available on the card. " +
+    "It shows as a file card in the chat (with a side reader) and stays in your context, so revise it on request.\n" +
     storyBlock +
     "SAVED TO THE LIBRARY AUTOMATICALLY: every book you OPEN or CREATE — a library pick, web/pasted text, code, or a " +
     "spreadsheet — is added to the reader's LIBRARY the moment it opens (it appears in the library list above and reopens " +
@@ -1247,7 +1269,13 @@ export function buildBuddySystemPrompt(opts: {
     "best match (when they asked you to open/read it) or present the numbered options in prose and ask. After an open " +
     "succeeds, confirm it in plain prose and invite them to keep chatting in the reader — the conversation follows " +
     "them into the book. To answer normally, just write prose (no JSON).\n" +
-    "CREATING FILES: when the reader asks you to make a file, document, webpage, spreadsheet, or code (e.g. 'create a " +
+    "DOCUMENTS (PDF / WORD): when the reader wants a real DOCUMENT to keep or send — a report, letter, essay, study " +
+    "notes, brief, meeting notes, 'make me a PDF', 'write it up as a Word doc' — call create_document with the FULL " +
+    "body as Markdown (# / ## headings, **bold**, *italic*, - and 1. lists, `code`, --- rules). The reader gets real " +
+    "PDF + Word downloads and a side reader, the doc is saved to the workspace, and it stays in YOUR context so you can " +
+    "revise it when they say 'tighten the intro' / 'add a section'. Use this — NOT a bare ```markdown block — for any " +
+    "polished, downloadable document. (A fenced block is for code/snippets they'll read or run.)\n" +
+    "CREATING FILES: when the reader asks you to make a file, webpage, spreadsheet, or code (e.g. 'create a " +
     "worksheet', 'code me a landing page', 'make a CSV of…'), write the COMPLETE file content inside a single fenced " +
     "code block tagged with its language/format (```html, ```csv, ```python, ```json, ```markdown …). The app shows a " +
     "Save button on that block so the reader keeps it as a real file — and a ▶ Preview that renders " +
@@ -1345,6 +1373,27 @@ export function buildProjectGuideBlock(text: string): string {
   const t = text.trim();
   if (!t) return "";
   return `PROJECT NOTES (from the workspace AGENTS.md — follow these conventions; you may update the file with write_file/edit_file):\n${t.slice(0, PROJECT_GUIDE_MAX_CHARS)}`;
+}
+
+/** Max chars of the active document folded into the prompt so a long doc never crowds a small model. */
+export const ACTIVE_DOC_MAX_CHARS = 8_000;
+
+/**
+ * The document the reader is currently looking at (the last create_document, or one they opened),
+ * injected AFTER the cached prefix — like the file ledger / story-state blocks — so it survives
+ * history trimming and the reader can say "tighten the intro / add a section" and have you act on the
+ * REAL text without a read_file round-trip. To revise it, call create_document again with the same
+ * title and the full updated Markdown. Empty string when no document is active. PURE.
+ */
+export function buildActiveDocumentBlock(doc: { title: string; content: string } | undefined): string {
+  if (!doc) return "";
+  const body = doc.content.trim();
+  if (!body) return "";
+  const clipped = body.length > ACTIVE_DOC_MAX_CHARS ? `${body.slice(0, ACTIVE_DOC_MAX_CHARS)}\n…(truncated)` : body;
+  return (
+    `ACTIVE DOCUMENT "${doc.title}" (Markdown — the reader is viewing this; to revise it call ` +
+    `create_document again with the SAME title + the full updated Markdown):\n${clipped}`
+  );
 }
 
 /** The planning-mode playbook, appended to the system prompt only in the "planning" persona — it
@@ -2528,6 +2577,18 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       : undefined;
     return { tool, title: strArg(obj.title, MAX_TITLE_CHARS) ?? "Spreadsheet", columns, ...(rows ? { rows } : {}) };
   }
+  if (tool === "create_document") {
+    const content = strArg(obj.content, MAX_PASTE_CHARS);
+    if (!content) return undefined;
+    const fmt = obj.format;
+    const format = fmt === "pdf" || fmt === "docx" || fmt === "md" || fmt === "html" ? fmt : undefined;
+    return {
+      tool,
+      title: strArg(obj.title, MAX_TITLE_CHARS) ?? "Document",
+      content,
+      ...(format ? { format } : {}),
+    };
+  }
   if (tool === "start_story") {
     const opening = strArg(obj.opening, MAX_PASTE_CHARS);
     if (!opening) return undefined;
@@ -2604,6 +2665,17 @@ export interface BuddyToolResultPayload {
     cadence?: { mode: "per-response" | "every-n" | "manual"; n?: number };
     /** whether this beat auto-illustrated (per the cadence). */
     illustrated?: boolean;
+  };
+  /** create_document outcome: the saved document the chat surfaces as a downloadable file card. */
+  document?: {
+    ok: boolean;
+    id: string;
+    title: string;
+    /** Approx word count, for the confirmation prose. */
+    words: number;
+    /** Workspace-relative path it was saved to (when the workspace write succeeded). */
+    path?: string;
+    error?: string;
   };
   /** Title of a removed library book (remove_library_book). */
   removed?: string;
@@ -3255,6 +3327,17 @@ function formatBuddyToolResultBody(call: BuddyToolCall, result: BuddyToolResultP
       `${call.rows?.length ? `, ${call.rows.length} seed rows` : ""}). The reader can now fill it in, and you can ` +
       "set_cell / add_formula_column / analyze_data / export_data on it.] Confirm it warmly and suggest the next step " +
       "(e.g. add a totals row or a computed column)."
+    );
+  }
+  if (call.tool === "create_document") {
+    const d = result.document;
+    if (!d || !d.ok) return `[create_document failed: ${d?.error ?? result.error ?? "couldn't build the document"}] Tell the reader.`;
+    return (
+      `[created the document "${d.title}" (${d.words} words). It's shown in the chat as a file card the reader can ` +
+      "download as PDF, Word, or Markdown, or open in a side reader" +
+      `${d.path ? `, and saved to the workspace (${d.path})` : ""}. The full text is in your context now — if the ` +
+      "reader asks to revise it, call create_document again with the same title and the updated Markdown.] Confirm " +
+      "warmly in one line and offer to refine it."
     );
   }
   if (call.tool === "start_story") {
