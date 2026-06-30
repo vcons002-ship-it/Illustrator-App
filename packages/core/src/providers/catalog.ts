@@ -485,6 +485,45 @@ export function staleComfyUrlToFree(s: {
   return comfyUrl;
 }
 
+/** Shared shape for the engine-URL resolvers below (a subset of ReaderSettings). */
+interface EngineUrlSettings {
+  engineBackend?: string | undefined;
+  localBackend?: string | undefined;
+  engineBaseUrl?: string | undefined;
+  localServerUrl?: string | undefined;
+  localServerUrlByBackend?: { comfyui?: string | undefined; a1111?: string | undefined } | undefined;
+}
+
+/**
+ * The ComfyUI base URL to use for a VIDEO render, regardless of which engine drives image generation.
+ * Video is ComfyUI-only, so even when the active image backend is AUTOMATIC1111 we must still find a
+ * running ComfyUI. Prefers the per-backend memory (`localServerUrlByBackend.comfyui`, which survives an
+ * image-backend switch), then the active URL when ComfyUI IS the active backend. `undefined` when no
+ * ComfyUI is known (the caller surfaces a "connect/auto-start ComfyUI" error). PURE. */
+export function comfyUrlForVideo(s: EngineUrlSettings): string | undefined {
+  const remembered = s.localServerUrlByBackend?.comfyui?.trim();
+  if (remembered) return remembered;
+  const active = (s.engineBaseUrl ?? s.localServerUrl)?.trim();
+  if (active && (s.engineBackend ?? s.localBackend) === "comfyui") return active;
+  return undefined;
+}
+
+/**
+ * The reverse of `staleComfyUrlToFree`: the AUTOMATIC1111 URL to `/sdapi/v1/unload-checkpoint` BEFORE a
+ * ComfyUI VIDEO render. When images run on A1111 and video on ComfyUI (both alive), A1111's checkpoint
+ * squats VRAM the large video experts need — so unload it first. Returns the remembered A1111 URL when
+ * ComfyUI is the active op (NOT a1111-active) and a SEPARATE A1111 URL is configured; else `undefined`
+ * (A1111 is itself active, none remembered, or it's the same server as the ComfyUI we're rendering on).
+ * PURE. */
+export function staleA1111UrlToFree(s: EngineUrlSettings): string | undefined {
+  if ((s.engineBackend ?? s.localBackend) === "a1111") return undefined; // A1111 is the active op — don't free it
+  const a1111Url = s.localServerUrlByBackend?.a1111?.trim();
+  if (!a1111Url) return undefined;
+  const comfyUrl = comfyUrlForVideo(s);
+  if (a1111Url === comfyUrl) return undefined; // same server — nothing separate to free
+  return a1111Url;
+}
+
 /**
  * A safe DEFAULT Ollama loaded-context window (num_ctx) so a small model isn't split into shared RAM.
  * Ollama, given no num_ctx, loads at its own (often huge) default window and pre-allocates a KV cache

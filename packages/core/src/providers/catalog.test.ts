@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { chatImageVramFit, defaultLoadedWindow, resolveLoadedContextTokens, staleComfyUrlToFree } from "./catalog.js";
+import { chatImageVramFit, comfyUrlForVideo, defaultLoadedWindow, resolveLoadedContextTokens, staleA1111UrlToFree, staleComfyUrlToFree } from "./catalog.js";
 
 describe("chatImageVramFit (keep-both-resident decision)", () => {
   it("returns 'unknown' when VRAM or a model size is unknown (caller keeps the model loaded)", () => {
@@ -86,5 +86,42 @@ describe("staleComfyUrlToFree (free a leftover ComfyUI's VRAM before an A1111 re
   });
   it("does nothing when the ComfyUI URL is the same server as A1111", () => {
     expect(staleComfyUrlToFree({ localBackend: "a1111", localServerUrl: comfy, localServerUrlByBackend: { comfyui: comfy } })).toBeUndefined();
+  });
+});
+
+describe("comfyUrlForVideo (ComfyUI URL for a video render, whatever drives images)", () => {
+  const comfy = "http://127.0.0.1:8188";
+  const a1111 = "http://127.0.0.1:7860";
+  it("prefers the remembered ComfyUI URL even when A1111 is the active image backend", () => {
+    expect(comfyUrlForVideo({ localBackend: "a1111", localServerUrl: a1111, localServerUrlByBackend: { comfyui: comfy } })).toBe(comfy);
+    expect(comfyUrlForVideo({ engineBackend: "a1111", engineBaseUrl: a1111, localServerUrlByBackend: { comfyui: comfy } })).toBe(comfy);
+  });
+  it("falls back to the active URL when ComfyUI IS the active backend", () => {
+    expect(comfyUrlForVideo({ localBackend: "comfyui", localServerUrl: comfy })).toBe(comfy);
+    expect(comfyUrlForVideo({ engineBackend: "comfyui", engineBaseUrl: comfy })).toBe(comfy);
+  });
+  it("is undefined when no ComfyUI is known (A1111 active, none remembered)", () => {
+    expect(comfyUrlForVideo({ localBackend: "a1111", localServerUrl: a1111 })).toBeUndefined();
+    expect(comfyUrlForVideo({ localBackend: "a1111", localServerUrl: a1111, localServerUrlByBackend: { comfyui: "  " } })).toBeUndefined();
+  });
+});
+
+describe("staleA1111UrlToFree (free a leftover A1111's VRAM before a ComfyUI video render)", () => {
+  const comfy = "http://127.0.0.1:8188";
+  const a1111 = "http://127.0.0.1:7860";
+  it("returns the remembered A1111 URL when ComfyUI is the active op", () => {
+    expect(staleA1111UrlToFree({ localBackend: "comfyui", localServerUrl: comfy, localServerUrlByBackend: { comfyui: comfy, a1111 } })).toBe(a1111);
+    // Also when the image backend is A1111 but we're resolving for a ComfyUI video (engineBackend comfyui)
+    expect(staleA1111UrlToFree({ engineBackend: "comfyui", engineBaseUrl: comfy, localServerUrlByBackend: { comfyui: comfy, a1111 } })).toBe(a1111);
+  });
+  it("does nothing when A1111 is the active backend (don't free what's in use)", () => {
+    expect(staleA1111UrlToFree({ localBackend: "a1111", localServerUrl: a1111, localServerUrlByBackend: { comfyui: comfy, a1111 } })).toBeUndefined();
+  });
+  it("does nothing without a remembered A1111 URL", () => {
+    expect(staleA1111UrlToFree({ localBackend: "comfyui", localServerUrl: comfy, localServerUrlByBackend: { comfyui: comfy } })).toBeUndefined();
+    expect(staleA1111UrlToFree({ localBackend: "comfyui", localServerUrl: comfy, localServerUrlByBackend: { comfyui: comfy, a1111: "  " } })).toBeUndefined();
+  });
+  it("does nothing when the A1111 URL is the same server as ComfyUI", () => {
+    expect(staleA1111UrlToFree({ localBackend: "comfyui", localServerUrl: comfy, localServerUrlByBackend: { comfyui: comfy, a1111: comfy } })).toBeUndefined();
   });
 });

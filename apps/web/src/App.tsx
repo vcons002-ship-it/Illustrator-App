@@ -1508,7 +1508,15 @@ export function App() {
       // can hand it straight to the worker, and clear the deferred flag now that the engine is up.
       managedBaseUrlRef.current = baseUrl;
       engineDeferredRef.current = false;
-      setSettings((cur) => ({ ...cur, engineBaseUrl: baseUrl, engineBackend: "comfyui", ...(vram ? { gpuVramMb: vram } : {}) }));
+      setSettings((cur) => ({
+        ...cur,
+        engineBaseUrl: baseUrl,
+        engineBackend: "comfyui",
+        // Remember the managed ComfyUI URL per-backend so VIDEO routing (comfyUrlForVideo) still finds it
+        // even when the user's IMAGE backend is AUTOMATIC1111 — the two engines run side by side.
+        localServerUrlByBackend: { ...cur.localServerUrlByBackend, comfyui: baseUrl },
+        ...(vram ? { gpuVramMb: vram } : {}),
+      }));
       return true;
     } catch (err) {
       setEngineStatus("");
@@ -1546,7 +1554,14 @@ export function App() {
       /* leave components empty (A1111 has none; a ComfyUI miss falls back to manual entry) */
     }
     setSettings((s) => {
-      const base: ReaderSettings = { ...s, engineBaseUrl: url, engineBackend: backend };
+      const base: ReaderSettings = {
+        ...s,
+        engineBaseUrl: url,
+        engineBackend: backend,
+        // Persist this backend's URL so the OTHER engine's URL survives — video always routes to the
+        // remembered ComfyUI URL even while images run on AUTOMATIC1111 (both alive at once).
+        localServerUrlByBackend: { ...s.localServerUrlByBackend, [backend]: url },
+      };
       // Keep the current model if the server still has it; otherwise pick its first + restore that
       // model's remembered encoder/VAE combo.
       if (s.localModel && models.some((m) => m.id === s.localModel)) return base;
