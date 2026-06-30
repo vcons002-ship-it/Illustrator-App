@@ -184,6 +184,8 @@ import {
   shouldAutoCompact,
   resolveVideoModelFiles,
   videoModelDownloads,
+  VIDEO_MODELS,
+  videoModelById,
   type ChatTurn,
   type CreatedFileRef,
   type ContextUsage,
@@ -228,6 +230,7 @@ import {
   ScheduledTasksPanel,
   CalendarPanel,
   ActivityCenter,
+  DownloadStatus,
   ActionHistoryPanel,
   RenameExportModal,
   StockChartPanel,
@@ -1665,6 +1668,20 @@ export function App() {
   // checkpoint. Sequential, with one combined progress bar; already-present files
   // are skipped on the Rust side, so a retry resumes where it failed. On success
   // the model is auto-selected so it "just works".
+  // For the unified download indicator: a friendly label for a progress key (catalog id / filename), and
+  // the set of video component filenames to suppress (they download under their model's parent row).
+  const downloadLabelFor = useCallback(
+    (key: string): string | undefined =>
+      videoModelById(key)?.label ?? LOCAL_IMAGE_MODELS.find((m) => m.id === key)?.label,
+    [],
+  );
+  const videoChildFiles = useMemo(() => {
+    const s = new Set<string>();
+    for (const m of VIDEO_MODELS) for (const d of m.downloads) s.add(d.filename);
+    return s;
+  }, []);
+  const isVideoChildFile = useCallback((key: string) => videoChildFiles.has(key), [videoChildFiles]);
+
   const onDownloadModel = useCallback(async (id: string) => {
     const model = LOCAL_IMAGE_MODELS.find((m) => m.id === id);
     if (!model) return;
@@ -7712,6 +7729,15 @@ export function App() {
       {/* Status center: what the app is doing right now + the queue behind it (task planning keeps
           running after you leave the Tasks window, so this is how you keep an eye on it). */}
       <ActivityCenter activities={activities} />
+      {/* App-wide download indicator: every in-flight model/video/LoRA download + Ollama text-model pull,
+          folded into one floating panel so a big download stays visible after you leave Settings. */}
+      <DownloadStatus
+        modelProgress={modelProgress}
+        downloadStage={downloadStage}
+        pullProgress={pullProgress}
+        labelFor={downloadLabelFor}
+        hideKey={isVideoChildFile}
+      />
       {actionHistory.length > 0 && (
         <button
           style={{ ...styles.badge, ...styles.badgeOk, cursor: "pointer" }}

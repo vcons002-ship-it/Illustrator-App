@@ -97,14 +97,16 @@ export function resolveVideoModelFiles(id?: string, overrides?: VideoFileOverrid
       ...(lora ? { lora } : {}),
     };
   }
-  const lora = o("lora") ?? base.lora;
+  const loraHigh = o("loraHigh") ?? base.loraHigh;
+  const loraLow = o("loraLow") ?? base.loraLow;
   return {
     kind: "wan-i2v",
     highNoise: o("highNoise") ?? base.highNoise,
     lowNoise: o("lowNoise") ?? base.lowNoise,
     textEncoder: o("textEncoder") ?? base.textEncoder,
     vae: o("vae") ?? base.vae,
-    ...(lora ? { lora } : {}),
+    ...(loraHigh ? { loraHigh } : {}),
+    ...(loraLow ? { loraLow } : {}),
   };
 }
 

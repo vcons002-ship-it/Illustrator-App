@@ -73,11 +73,12 @@ interface Ltx2I2VParams {
 export function buildWanI2VWorkflow(p: WanI2VParams): Record<string, unknown> {
   const half = Math.max(1, Math.round(p.steps / 2));
   const shift = p.shift;
-  // Optional LoRA applied to BOTH experts (node 114 = high, 115 = low); ModelSamplingSD3 then samples
-  // from the LoRA-wrapped model when set, or the bare UNET otherwise.
-  const lora = p.models.lora?.trim();
-  const highModel: [string, number] = lora ? ["114", 0] : ["100", 0];
-  const lowModel: [string, number] = lora ? ["115", 0] : ["101", 0];
+  // Independent per-expert LoRAs (node 114 = high, 115 = low); ModelSamplingSD3 then samples from the
+  // LoRA-wrapped model when that expert has a LoRA, or the bare UNET otherwise. Either, both, or neither.
+  const loraHigh = p.models.loraHigh?.trim();
+  const loraLow = p.models.loraLow?.trim();
+  const highModel: [string, number] = loraHigh ? ["114", 0] : ["100", 0];
+  const lowModel: [string, number] = loraLow ? ["115", 0] : ["101", 0];
   const graph: Record<string, unknown> = {
     "100": { class_type: "UNETLoader", inputs: { unet_name: p.models.highNoise, weight_dtype: "default" } },
     "101": { class_type: "UNETLoader", inputs: { unet_name: p.models.lowNoise, weight_dtype: "default" } },
@@ -105,9 +106,11 @@ export function buildWanI2VWorkflow(p: WanI2VParams): Record<string, unknown> {
     "112": { class_type: "VAEDecode", inputs: { samples: ["111", 0], vae: ["103", 0] } },
     "113": { class_type: "SaveAnimatedWEBP", inputs: { images: ["112", 0], filename_prefix: "visual-reader-vid", fps: p.fps, lossless: false, quality: 90, method: "default" } },
   };
-  if (lora) {
-    graph["114"] = { class_type: "LoraLoaderModelOnly", inputs: { model: ["100", 0], lora_name: lora, strength_model: 1 } };
-    graph["115"] = { class_type: "LoraLoaderModelOnly", inputs: { model: ["101", 0], lora_name: lora, strength_model: 1 } };
+  if (loraHigh) {
+    graph["114"] = { class_type: "LoraLoaderModelOnly", inputs: { model: ["100", 0], lora_name: loraHigh, strength_model: 1 } };
+  }
+  if (loraLow) {
+    graph["115"] = { class_type: "LoraLoaderModelOnly", inputs: { model: ["101", 0], lora_name: loraLow, strength_model: 1 } };
   }
   return graph;
 }

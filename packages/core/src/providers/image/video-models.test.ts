@@ -34,6 +34,14 @@ describe("video-models", () => {
       expect(f.lora).toBe("speed.safetensors");
     }
   });
+  it("carries independent high/low-noise LoRA overrides for Wan", () => {
+    const f = resolveVideoModelFiles("wan2.2-i2v-14b", { loraHigh: "hi.safetensors", loraLow: "lo.safetensors" });
+    expect(f.kind).toBe("wan-i2v");
+    if (f.kind === "wan-i2v") {
+      expect(f.loraHigh).toBe("hi.safetensors");
+      expect(f.loraLow).toBe("lo.safetensors");
+    }
+  });
   it("downloads cover every engine file, each into a ComfyUI subfolder, over https", () => {
     const dls = videoModelDownloads("wan2.2-i2v-14b");
     const files = resolveVideoModelFiles("wan2.2-i2v-14b");
