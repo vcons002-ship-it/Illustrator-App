@@ -528,6 +528,21 @@ export class ComfyUIBackend implements LocalEngineBackend {
     return { textEncoders, vaes };
   }
 
+  /**
+   * The installed files for the image-to-video graphs, read from the EXACT node enums ComfyUI exposes
+   * (so a Settings dropdown offers precisely what the engine will accept): Wan's diffusion models
+   * (UNETLoader.unet_name), the LTX 2× upscaler (LatentUpscaleModelLoader.model_name), and the LTX Gemma
+   * text encoder (LTXAVTextEncoderLoader.text_encoder). Best-effort — a node ComfyUI lacks yields [].
+   */
+  async listVideoComponents(): Promise<{ diffusionModels: string[]; upscalers: string[]; ltxTextEncoders: string[] }> {
+    const [diffusionModels, upscalers, ltxTextEncoders] = await Promise.all([
+      this.enumValues("UNETLoader", "unet_name"),
+      this.enumValues("LatentUpscaleModelLoader", "model_name"),
+      this.enumValues("LTXAVTextEncoderLoader", "text_encoder"),
+    ]);
+    return { diffusionModels, upscalers, ltxTextEncoders };
+  }
+
   /** A node's `/object_info` schema, cached per session (failures evicted). */
   private nodeInfo(node: string): Promise<NodeSchema | undefined> {
     const cached = this.nodeInfoCache.get(node);
