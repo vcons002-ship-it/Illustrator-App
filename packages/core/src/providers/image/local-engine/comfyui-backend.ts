@@ -1599,8 +1599,13 @@ export function comfyExecutionError(
 ): string | undefined {
   const errMsg = status?.messages?.find(([type]) => type === "execution_error")?.[1];
   const raw = typeof errMsg?.exception_message === "string" ? errMsg.exception_message : undefined;
+  // ComfyUI's execution_error names the node that threw (node_type + node_id) — surface it so an opaque
+  // Python error ("'NoneType' object has no attribute 'device'") points at the exact failing node.
+  const nodeType = typeof errMsg?.node_type === "string" ? errMsg.node_type : undefined;
+  const nodeId = errMsg?.node_id !== undefined ? String(errMsg.node_id) : undefined;
+  const at = nodeType ? ` [node ${nodeType}${nodeId ? ` #${nodeId}` : ""}]` : "";
   if (!raw) {
-    return status?.status_str === "error" ? "ComfyUI reported an execution error." : undefined;
+    return status?.status_str === "error" ? `ComfyUI reported an execution error${at}.` : undefined;
   }
   if (/shapes cannot be multiplied/i.test(raw)) {
     // HiDream loads FOUR encoders via QuadrupleCLIPLoader. A shape mismatch here is almost
@@ -1631,7 +1636,7 @@ export function comfyExecutionError(
       `(ComfyUI: ${raw})`
     );
   }
-  return `ComfyUI: ${raw}`;
+  return `ComfyUI${at}: ${raw}`;
 }
 
 /** Per-family encoder/VAE matching for split-file models (Flux.2 / Z-Image / Qwen-Image).
