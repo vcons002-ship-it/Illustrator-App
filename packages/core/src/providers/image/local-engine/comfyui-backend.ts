@@ -535,12 +535,32 @@ export class ComfyUIBackend implements LocalEngineBackend {
    * text encoder (LTXAVTextEncoderLoader.text_encoder). Best-effort — a node ComfyUI lacks yields [].
    */
   async listVideoComponents(): Promise<{ diffusionModels: string[]; upscalers: string[]; ltxTextEncoders: string[] }> {
-    const [diffusionModels, upscalers, ltxTextEncoders] = await Promise.all([
+    // Pull each list from EVERY node/folder it might live in, deduped — so a file shows up wherever the
+    // user keeps it (e.g. an upscaler in latent_upscale_models OR upscale_models; the Gemma encoder via
+    // the LTX node OR the generic text_encoders listing) rather than the dropdown coming up empty.
+    const [diffusionModels, latentUpscalers, upscaleModels, ltxEncoders, clipEncoders] = await Promise.all([
       this.enumValues("UNETLoader", "unet_name"),
       this.enumValues("LatentUpscaleModelLoader", "model_name"),
+      this.enumValues("UpscaleModelLoader", "model_name"),
       this.enumValues("LTXAVTextEncoderLoader", "text_encoder"),
+      this.enumValues("CLIPLoader", "clip_name"),
     ]);
-    return { diffusionModels, upscalers, ltxTextEncoders };
+    const dedupe = (...lists: string[][]): string[] => {
+      const seen = new Set<string>();
+      const out: string[] = [];
+      for (const name of lists.flat()) {
+        const k = name.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push(name);
+      }
+      return out;
+    };
+    return {
+      diffusionModels,
+      upscalers: dedupe(latentUpscalers, upscaleModels),
+      ltxTextEncoders: dedupe(ltxEncoders, clipEncoders),
+    };
   }
 
   /** A node's `/object_info` schema, cached per session (failures evicted). */
@@ -569,7 +589,11 @@ export class ComfyUIBackend implements LocalEngineBackend {
   private async enumValues(node: string, key: string): Promise<string[]> {
     const data = await this.nodeInfo(node);
     const enumVal = data?.input?.required?.[key] ?? data?.input?.optional?.[key];
-    return Array.isArray(enumVal) && Array.isArray(enumVal[0]) ? (enumVal[0] as string[]) : [];
+    if (!Array.isArray(enumVal)) return [];
+    // ComfyUI combo inputs are normally `[[...options], {meta}]`; tolerate a bare `[...options]` too.
+    if (Array.isArray(enumVal[0])) return (enumVal[0] as unknown[]).filter((v): v is string => typeof v === "string");
+    if (typeof enumVal[0] === "string") return enumVal.filter((v): v is string => typeof v === "string");
+    return [];
   }
 
   /**

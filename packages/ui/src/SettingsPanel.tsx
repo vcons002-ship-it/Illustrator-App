@@ -886,7 +886,7 @@ export function SettingsPanel({
                         {kind === "ltx2-i2v" ? (
                           <>
                             {fileRow("Checkpoint", "checkpoint", diffNames)}
-                            {fileRow("Text encoder (Gemma)", "textEncoder", installedLtxTextEncoders)}
+                            {fileRow("Text encoder (Gemma)", "textEncoder", installedLtxTextEncoders.length ? installedLtxTextEncoders : installedTextEncoders)}
                             {fileRow("Distilled LoRA (required)", "distilledLora", installedLoras)}
                             {fileRow("Upscaler (required)", "upscaler", installedUpscalers)}
                           </>
