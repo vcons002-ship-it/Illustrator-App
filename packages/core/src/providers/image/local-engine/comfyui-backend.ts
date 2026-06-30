@@ -1,4 +1,4 @@
-import { DirectTransport, type Transport } from "../../transport/transport.js";
+import { DirectTransport, type Transport, type TransportResponse } from "../../transport/transport.js";
 import { catalogEntryForModel } from "../../catalog.js";
 import { scaleSteps } from "../../../quality.js";
 import type {
@@ -222,6 +222,29 @@ function mimeForFilename(name: string): string {
   if (ext === "gif") return "image/gif";
   if (ext === "webp") return "image/webp";
   return "image/png";
+}
+
+/**
+ * Turn a ComfyUI /prompt rejection into a useful message. A 400 carries a JSON body with `error` +
+ * `node_errors` naming the exact node/input that failed validation (a missing custom node, a bad input,
+ * a wiring mismatch) — surface that instead of a bare status code so a graph problem is diagnosable.
+ */
+async function comfyPromptError(res: TransportResponse): Promise<string> {
+  let detail = "";
+  try {
+    const body = (await res.json()) as { error?: unknown; node_errors?: Record<string, unknown> };
+    const parts: string[] = [];
+    if (body.error) parts.push(typeof body.error === "string" ? body.error : JSON.stringify(body.error));
+    if (body.node_errors && Object.keys(body.node_errors).length) parts.push(`node_errors: ${JSON.stringify(body.node_errors)}`);
+    detail = parts.join(" — ");
+  } catch {
+    try {
+      detail = (await res.text()).slice(0, 800);
+    } catch {
+      /* body unreadable — fall back to the status alone */
+    }
+  }
+  return `ComfyUI rejected the workflow (status ${res.status})${detail ? `: ${detail}` : ""}`;
 }
 
 /**
@@ -918,7 +941,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
         body: { prompt: workflow, client_id: this.clientId },
         ...(signal ? { signal } : {}),
       });
-      if (!submit.ok) throw new Error(`ComfyUI prompt failed with status ${submit.status}`);
+      if (!submit.ok) throw new Error(await comfyPromptError(submit));
       const { prompt_id } = await submit.json<PromptResponse>();
       job.promptId = prompt_id;
 
@@ -996,7 +1019,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
         body: { prompt: workflow, client_id: this.clientId },
         ...(signal ? { signal } : {}),
       });
-      if (!submit.ok) throw new Error(`ComfyUI prompt failed with status ${submit.status}`);
+      if (!submit.ok) throw new Error(await comfyPromptError(submit));
       const { prompt_id } = await submit.json<PromptResponse>();
       job.promptId = prompt_id;
       const file = await this.pollForImage(prompt_id, signal);
