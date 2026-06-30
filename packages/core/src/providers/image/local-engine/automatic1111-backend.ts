@@ -1,5 +1,5 @@
 import { base64ToBytes } from "../base64.js";
-import { DirectTransport, type Transport } from "../../transport/transport.js";
+import { DirectTransport, type Transport, type TransportResponse } from "../../transport/transport.js";
 import { scaleSteps } from "../../../quality.js";
 import type { ImageGenerationInput, ImageGenerationOutput } from "../image-provider.js";
 import {
@@ -88,7 +88,7 @@ export class Automatic1111Backend implements LocalEngineBackend {
       url: `${this.baseUrl}/sdapi/v1/sd-models`,
       method: "GET",
     });
-    if (!res.ok) throw new Error(`Automatic1111 listModels failed with status ${res.status}`);
+    if (!res.ok) throw new Error(await a1111Error("listModels", res));
     const data = await res.json<SdModel[]>();
     return (data ?? []).map((m) => ({ id: m.title, label: m.model_name || m.title, sizeGB: 0 }));
   }
@@ -174,7 +174,7 @@ export class Automatic1111Backend implements LocalEngineBackend {
         body,
         ...(signal ? { signal } : {}),
       });
-      if (!res.ok) throw new Error(`Automatic1111 txt2img failed with status ${res.status}`);
+      if (!res.ok) throw new Error(await a1111Error("txt2img", res));
       const data = await res.json<Txt2ImgResponse>();
       const b64 = data.images?.[0];
       if (!b64) throw new Error("Automatic1111 returned no image");
@@ -210,4 +210,35 @@ export class Automatic1111Backend implements LocalEngineBackend {
       /* best-effort — the GPU just stays warm if A1111 can't unload right now (e.g. an older build) */
     }
   }
+}
+
+/**
+ * Turn an A1111 error response into a message that names the actual cause. A1111 returns a JSON body on
+ * failures — `{ error, detail, errors }` (e.g. error: "OutOfMemoryError", or detail naming a checkpoint it
+ * couldn't load) — so a bare "status 500" hides the one fact that explains it. Read that body and surface
+ * it; fall back to a truncated text snippet, then to the status alone if the body is unreadable.
+ */
+async function a1111Error(verb: string, res: TransportResponse): Promise<string> {
+  let detail = "";
+  try {
+    const body = (await res.json()) as { error?: unknown; detail?: unknown; errors?: unknown };
+    const parts: string[] = [];
+    for (const v of [body.error, body.detail, body.errors]) {
+      if (v) parts.push(typeof v === "string" ? v : JSON.stringify(v));
+    }
+    detail = parts.join(" — ");
+  } catch {
+    try {
+      detail = (await res.text()).slice(0, 600).trim();
+    } catch {
+      /* body unreadable — fall back to the status alone */
+    }
+  }
+  // A 500 on txt2img is most often a checkpoint the server doesn't have (a stale/blank model setting — common
+  // after a fresh/incognito session loses its saved settings) or a CUDA out-of-memory.
+  const hint =
+    res.status === 500 && verb === "txt2img"
+      ? " (often a checkpoint the server doesn't have — check the selected model in Settings — or a GPU out-of-memory)"
+      : "";
+  return `Automatic1111 ${verb} failed with status ${res.status}${detail ? `: ${detail}` : ""}${hint}`;
 }

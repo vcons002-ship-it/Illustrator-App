@@ -33,3 +33,41 @@ describe("Automatic1111Backend.freeMemory", () => {
     await expect(backend.freeMemory()).resolves.toBeUndefined();
   });
 });
+
+describe("Automatic1111Backend error messages", () => {
+  /** A transport whose send() returns a non-OK response with the given JSON body. */
+  function failing(status: number, body: unknown): Transport {
+    const res = {
+      ok: false,
+      status,
+      statusText: "Internal Server Error",
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+      arrayBuffer: async () => new ArrayBuffer(0),
+    } as unknown as TransportResponse;
+    return { send: async () => res };
+  }
+
+  it("surfaces A1111's actual error body (not a bare status) on a 500 render", async () => {
+    const backend = new Automatic1111Backend({
+      baseUrl: "http://127.0.0.1:7860",
+      transport: failing(500, { error: "OutOfMemoryError", detail: "CUDA out of memory" }),
+    });
+    await expect(
+      backend.generate(
+        { prompt: "a cat", anchors: [], quality: "standard" },
+        "model.safetensors",
+      ),
+    ).rejects.toThrow(/OutOfMemoryError — CUDA out of memory/);
+  });
+
+  it("adds a checkpoint/OOM hint on a 500 so a stale model setting is diagnosable", async () => {
+    const backend = new Automatic1111Backend({
+      baseUrl: "http://127.0.0.1:7860",
+      transport: failing(500, { detail: "model 'ghost.safetensors' not found" }),
+    });
+    await expect(
+      backend.generate({ prompt: "a cat", anchors: [], quality: "standard" }, "ghost.safetensors"),
+    ).rejects.toThrow(/check the selected model in Settings/);
+  });
+});
