@@ -224,8 +224,9 @@ export interface VideoRenderParams {
 export interface VideoGenerationInput {
   /** What should happen / how the scene should move (the image already fixes what it looks like). */
   prompt: string;
-  /** The source image to animate. */
-  image: { bytes: ArrayBuffer; mimeType: string };
+  /** The source image to animate (image-to-video). Omit for text-to-video — the clip is generated from
+   * the prompt alone, starting from an empty latent. */
+  image?: { bytes: ArrayBuffer; mimeType: string };
   negativePrompt?: string;
   /** Number of frames in the clip. */
   frames?: number;

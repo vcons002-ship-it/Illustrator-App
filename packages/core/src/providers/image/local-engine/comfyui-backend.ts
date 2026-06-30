@@ -33,8 +33,8 @@ const WAN_DEFAULT_NEGATIVE =
   "blurry, low quality, jpeg artifacts, watermark, text, static, still image, frozen, deformed, distorted, extra limbs, bad hands";
 
 interface WanI2VParams {
-  /** The uploaded source-image filename (from /upload/image). */
-  startImage: string;
+  /** The uploaded source-image filename (from /upload/image). Omit for text-to-video. */
+  startImage?: string;
   models: WanVideoFiles;
   prompt: string;
   negative: string;
@@ -50,8 +50,8 @@ interface WanI2VParams {
 }
 
 interface Ltx2I2VParams {
-  /** The uploaded source-image filename (from /upload/image). */
-  startImage: string;
+  /** The uploaded source-image filename (from /upload/image). Omit for text-to-video. */
+  startImage?: string;
   models: Ltx2VideoFiles;
   prompt: string;
   negative: string;
@@ -88,10 +88,19 @@ export function buildWanI2VWorkflow(p: WanI2VParams): Record<string, unknown> {
     "103": { class_type: "VAELoader", inputs: { vae_name: p.models.vae } },
     "104": { class_type: "CLIPTextEncode", inputs: { text: p.prompt, clip: ["102", 0] } },
     "105": { class_type: "CLIPTextEncode", inputs: { text: p.negative, clip: ["102", 0] } },
-    "106": { class_type: "LoadImage", inputs: { image: p.startImage } },
+    // WanImageToVideo's start_image is optional: connect it for image-to-video, omit for text-to-video.
     "107": {
       class_type: "WanImageToVideo",
-      inputs: { positive: ["104", 0], negative: ["105", 0], vae: ["103", 0], start_image: ["106", 0], width: p.width, height: p.height, length: p.frames, batch_size: 1 },
+      inputs: {
+        positive: ["104", 0],
+        negative: ["105", 0],
+        vae: ["103", 0],
+        width: p.width,
+        height: p.height,
+        length: p.frames,
+        batch_size: 1,
+        ...(p.startImage ? { start_image: ["106", 0] } : {}),
+      },
     },
     "108": { class_type: "ModelSamplingSD3", inputs: { model: highModel, shift } },
     "109": { class_type: "ModelSamplingSD3", inputs: { model: lowModel, shift } },
@@ -108,6 +117,9 @@ export function buildWanI2VWorkflow(p: WanI2VParams): Record<string, unknown> {
     "112": { class_type: "VAEDecode", inputs: { samples: ["111", 0], vae: ["103", 0] } },
     "113": { class_type: "SaveAnimatedWEBP", inputs: { images: ["112", 0], filename_prefix: "visual-reader-vid", fps: p.fps, lossless: false, quality: 90, method: "default" } },
   };
+  if (p.startImage) {
+    graph["106"] = { class_type: "LoadImage", inputs: { image: p.startImage } };
+  }
   if (loraHigh) {
     graph["114"] = { class_type: "LoraLoaderModelOnly", inputs: { model: ["100", 0], lora_name: loraHigh, strength_model: 1 } };
   }
@@ -152,6 +164,11 @@ export function buildLtx2I2VWorkflow(p: Ltx2I2VParams): Record<string, unknown> 
     loraNodes[id] = { class_type: "LoraLoaderModelOnly", inputs: { model: modelRef, lora_name: l.name, strength_model: l.strength } };
     modelRef = [id, 0];
   });
+  // Image-to-video injects the source frame (LTXVImgToVideoInplace) into each stage's latent; text-to-video
+  // omits the image nodes and samples the empty/upscaled latent directly.
+  const i2v = !!p.startImage;
+  const stage1Latent: [string, number] = i2v ? ["210", 0] : ["209", 0];
+  const stage2Latent: [string, number] = i2v ? ["218", 0] : ["217", 0];
   const graph: Record<string, unknown> = {
     "200": { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: p.models.checkpoint } },
     // LTX-2 uses a separate Gemma text encoder (it reads the checkpoint too, for the AV head).
@@ -161,32 +178,37 @@ export function buildLtx2I2VWorkflow(p: Ltx2I2VParams): Record<string, unknown> 
     "203": { class_type: "CLIPTextEncode", inputs: { text: p.prompt, clip: ["201", 0] } },
     "204": { class_type: "CLIPTextEncode", inputs: { text: p.negative, clip: ["201", 0] } },
     "205": { class_type: "LTXVConditioning", inputs: { positive: ["203", 0], negative: ["204", 0], frame_rate: p.fps } },
-    "206": { class_type: "LoadImage", inputs: { image: p.startImage } },
-    "207": { class_type: "ImageScale", inputs: { image: ["206", 0], upscale_method: "lanczos", width: p.width, height: p.height, crop: "center" } },
-    "208": { class_type: "LTXVPreprocess", inputs: { image: ["207", 0], img_compression: 18 } },
     // ── Stage 1: generation (half-res when high-res is on, else target size) ──
     "209": { class_type: "EmptyLTXVLatentVideo", inputs: { width: genW, height: genH, length: p.frames, batch_size: 1 } },
-    "210": { class_type: "LTXVImgToVideoInplace", inputs: { strength: 0.7, bypass: false, vae: ["200", 2], image: ["208", 0], latent: ["209", 0] } },
     "211": { class_type: "RandomNoise", inputs: { noise_seed: p.seed } },
     "212": { class_type: "KSamplerSelect", inputs: { sampler_name: "euler" } },
     "213": { class_type: "ManualSigmas", inputs: { sigmas: LTX_STAGE1_SIGMAS } },
     "214": { class_type: "CFGGuider", inputs: { model: modelRef, positive: ["205", 0], negative: ["205", 1], cfg: p.cfg } },
-    "215": { class_type: "SamplerCustomAdvanced", inputs: { noise: ["211", 0], guider: ["214", 0], sampler: ["212", 0], sigmas: ["213", 0], latent_image: ["210", 0] } },
+    "215": { class_type: "SamplerCustomAdvanced", inputs: { noise: ["211", 0], guider: ["214", 0], sampler: ["212", 0], sigmas: ["213", 0], latent_image: stage1Latent } },
     // Decode the final latent — stage 2's output when high-res, else stage 1's directly.
     "225": { class_type: "VAEDecodeTiled", inputs: { samples: p.highRes ? ["224", 0] : ["215", 0], vae: ["200", 2], tile_size: 768, overlap: 64, temporal_size: 4096, temporal_overlap: 4 } },
     "226": { class_type: "SaveAnimatedWEBP", inputs: { images: ["225", 0], filename_prefix: "visual-reader-vid", fps: p.fps, lossless: false, quality: 90, method: "default" } },
   };
+  if (i2v) {
+    // Source-frame nodes (image-to-video only): load → scale → preprocess → inject into the stage-1 latent.
+    graph["206"] = { class_type: "LoadImage", inputs: { image: p.startImage } };
+    graph["207"] = { class_type: "ImageScale", inputs: { image: ["206", 0], upscale_method: "lanczos", width: p.width, height: p.height, crop: "center" } };
+    graph["208"] = { class_type: "LTXVPreprocess", inputs: { image: ["207", 0], img_compression: 18 } };
+    graph["210"] = { class_type: "LTXVImgToVideoInplace", inputs: { strength: 0.7, bypass: false, vae: ["200", 2], image: ["208", 0], latent: ["209", 0] } };
+  }
   if (p.highRes) {
     // ── 2× spatial upscale of the latent, then a full-resolution refine pass ──
     graph["216"] = { class_type: "LatentUpscaleModelLoader", inputs: { model_name: p.models.upscaler } };
     graph["217"] = { class_type: "LTXVLatentUpsampler", inputs: { samples: ["215", 0], upscale_model: ["216", 0], vae: ["200", 2] } };
-    graph["218"] = { class_type: "LTXVImgToVideoInplace", inputs: { strength: 1, bypass: false, vae: ["200", 2], image: ["208", 0], latent: ["217", 0] } };
+    if (i2v) {
+      graph["218"] = { class_type: "LTXVImgToVideoInplace", inputs: { strength: 1, bypass: false, vae: ["200", 2], image: ["208", 0], latent: ["217", 0] } };
+    }
     graph["219"] = { class_type: "LTXVCropGuides", inputs: { positive: ["205", 0], negative: ["205", 1], latent: ["215", 0] } };
     graph["220"] = { class_type: "RandomNoise", inputs: { noise_seed: p.seed + 1 } };
     graph["221"] = { class_type: "KSamplerSelect", inputs: { sampler_name: "euler" } };
     graph["222"] = { class_type: "ManualSigmas", inputs: { sigmas: LTX_STAGE2_SIGMAS } };
     graph["223"] = { class_type: "CFGGuider", inputs: { model: modelRef, positive: ["219", 0], negative: ["219", 1], cfg: p.cfg } };
-    graph["224"] = { class_type: "SamplerCustomAdvanced", inputs: { noise: ["220", 0], guider: ["223", 0], sampler: ["221", 0], sigmas: ["222", 0], latent_image: ["218", 0] } };
+    graph["224"] = { class_type: "SamplerCustomAdvanced", inputs: { noise: ["220", 0], guider: ["223", 0], sampler: ["221", 0], sigmas: ["222", 0], latent_image: stage2Latent } };
   }
   Object.assign(graph, loraNodes);
   return graph;
@@ -939,11 +961,12 @@ export class ComfyUIBackend implements LocalEngineBackend {
    * match the user's ComfyUI install (NEEDS a real-box pass — can't be exercised in CI here).
    */
   async generateVideo(input: VideoGenerationInput, models: VideoModelFiles): Promise<VideoGenerationOutput> {
-    const startImage = await this.uploadedReference(input.image.bytes, input.image.mimeType);
+    // Image-to-video uploads the source frame; text-to-video (no image) starts from an empty latent.
+    const startImage = input.image ? await this.uploadedReference(input.image.bytes, input.image.mimeType) : undefined;
     // Per-family render defaults fill in whatever the caller left blank (Wan ~5s/16fps; LTX longer/24fps).
     const d = VIDEO_RENDER_DEFAULTS[models.kind];
     const common = {
-      startImage,
+      ...(startImage ? { startImage } : {}),
       prompt: input.prompt,
       negative: input.negativePrompt ?? WAN_DEFAULT_NEGATIVE,
       width: input.width ?? d.width,
