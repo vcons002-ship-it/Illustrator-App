@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildWorkflow } from "./comfyui-backend.js";
+import { buildWorkflow, buildWanI2VWorkflow } from "./comfyui-backend.js";
 import type { SamplerSettings } from "../sd-prompt.js";
 
 const sampler: SamplerSettings = { cfg: 7, sampler: "euler", scheduler: "normal", steps: 20 };
@@ -209,5 +209,49 @@ describe("buildWorkflow Hi-Res two-pass", () => {
     expect(g["18"]).toBeUndefined();
     expect(g["19"]).toBeUndefined();
     expect(inputsOf(g, "8").samples).toEqual(["3", 0]);
+  });
+});
+
+describe("buildWanI2VWorkflow (image-to-video, Wan2.2 two-expert)", () => {
+  const wan = {
+    startImage: "vr-ref-1.png",
+    models: { highNoise: "wan_high.safetensors", lowNoise: "wan_low.safetensors", textEncoder: "umt5.safetensors", vae: "wan_vae.safetensors" },
+    prompt: "slow push-in, leaves drift",
+    negative: "static",
+    width: 640,
+    height: 640,
+    frames: 81,
+    fps: 16,
+    steps: 20,
+    cfg: 3.5,
+    seed: 7,
+  };
+  it("wires the source image through WanImageToVideo into a high→low noise sampler chain", () => {
+    const g = buildWanI2VWorkflow(wan);
+    expect(classOf(g, "106")).toBe("LoadImage");
+    expect(inputsOf(g, "106").image).toBe("vr-ref-1.png");
+    expect(classOf(g, "107")).toBe("WanImageToVideo");
+    expect(inputsOf(g, "107").start_image).toEqual(["106", 0]);
+    expect(inputsOf(g, "107").length).toBe(81);
+    // High-noise expert: first half of the schedule, leftover noise handed to the low-noise pass.
+    expect(classOf(g, "110")).toBe("KSamplerAdvanced");
+    expect(inputsOf(g, "110").add_noise).toBe("enable");
+    expect(inputsOf(g, "110").end_at_step).toBe(10);
+    expect(inputsOf(g, "110").latent_image).toEqual(["107", 2]);
+    // Low-noise expert refines from the high-noise latent with no fresh noise.
+    expect(inputsOf(g, "111").add_noise).toBe("disable");
+    expect(inputsOf(g, "111").start_at_step).toBe(10);
+    expect(inputsOf(g, "111").latent_image).toEqual(["110", 0]);
+    // Decoded + saved as an animated webp (no custom nodes).
+    expect(classOf(g, "112")).toBe("VAEDecode");
+    expect(classOf(g, "113")).toBe("SaveAnimatedWEBP");
+    expect(inputsOf(g, "113").fps).toBe(16);
+  });
+  it("loads the two experts + the wan text encoder and vae", () => {
+    const g = buildWanI2VWorkflow(wan);
+    expect(inputsOf(g, "100").unet_name).toBe("wan_high.safetensors");
+    expect(inputsOf(g, "101").unet_name).toBe("wan_low.safetensors");
+    expect(inputsOf(g, "102").type).toBe("wan");
+    expect(inputsOf(g, "103").vae_name).toBe("wan_vae.safetensors");
   });
 });

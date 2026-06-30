@@ -137,10 +137,52 @@ export interface ImageGenerationOutput {
   mimeType: string;
 }
 
+/** The model files an image-to-video engine needs (Wan2.2 ships a two-expert pair + encoder + VAE). */
+export interface VideoModelFiles {
+  /** High-noise diffusion model (first sampling stage). */
+  highNoise: string;
+  /** Low-noise diffusion model (refinement stage). */
+  lowNoise: string;
+  /** Text encoder (umt5 for Wan). */
+  textEncoder: string;
+  /** VAE. */
+  vae: string;
+}
+
+/** Input for an image-to-video render: a source image + a motion prompt + clip params. */
+export interface VideoGenerationInput {
+  /** What should happen / how the scene should move (the image already fixes what it looks like). */
+  prompt: string;
+  /** The source image to animate. */
+  image: { bytes: ArrayBuffer; mimeType: string };
+  negativePrompt?: string;
+  /** Number of frames in the clip. */
+  frames?: number;
+  /** Frames per second of the output file. */
+  fps?: number;
+  width?: number;
+  height?: number;
+  steps?: number;
+  cfg?: number;
+  seed?: number;
+  lowVram?: boolean;
+  onProgress?: (fraction: number) => void;
+  signal?: AbortSignal;
+}
+
+export interface VideoGenerationOutput {
+  bytes: ArrayBuffer;
+  /** The artifact's MIME — "video/mp4", "video/webm", or "image/webp"/"image/gif" for an animated image. */
+  mimeType: string;
+}
+
 export interface ImageProvider {
   /** Stable provider key, e.g. "flux". */
   readonly id: string;
   generate(input: ImageGenerationInput): Promise<ImageGenerationOutput>;
+  /** Optional: animate a source image into a short video (image-to-video). Present only for a local
+   * engine that supports it (ComfyUI); absent / rejects elsewhere. */
+  generateVideo?(input: VideoGenerationInput, models: VideoModelFiles): Promise<VideoGenerationOutput>;
   /** Optional: release the image model's VRAM now (e.g. a local ComfyUI /free) so a chat LLM can reload
    * into the freed memory. No-op / absent for providers whose VRAM the app can't coordinate. */
   freeMemory?(): Promise<void>;

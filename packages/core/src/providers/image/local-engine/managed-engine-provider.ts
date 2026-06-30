@@ -1,4 +1,11 @@
-import type { ImageGenerationInput, ImageGenerationOutput, ImageProvider } from "../image-provider.js";
+import type {
+  ImageGenerationInput,
+  ImageGenerationOutput,
+  ImageProvider,
+  VideoGenerationInput,
+  VideoGenerationOutput,
+  VideoModelFiles,
+} from "../image-provider.js";
 import type { LocalEngineBackend } from "./backend.js";
 
 /**
@@ -21,6 +28,14 @@ export class ManagedEngineImageProvider implements ImageProvider {
       return Promise.reject(new Error("No local model selected"));
     }
     return this.backend.generate(input, this.model);
+  }
+
+  /** Animate a source image into a short video, when the backend supports it (ComfyUI). */
+  generateVideo(input: VideoGenerationInput, models: VideoModelFiles): Promise<VideoGenerationOutput> {
+    if (!this.backend.generateVideo) {
+      return Promise.reject(new Error("This local engine doesn't support image-to-video (use ComfyUI)."));
+    }
+    return this.backend.generateVideo(input, models);
   }
 
   /** Hand the GPU back: unload the image model so a co-resident chat LLM can reload into the freed VRAM.

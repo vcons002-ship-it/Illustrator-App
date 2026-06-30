@@ -1,4 +1,4 @@
-import type { ImageGenerationInput, ImageGenerationOutput } from "../image-provider.js";
+import type { ImageGenerationInput, ImageGenerationOutput, VideoGenerationInput, VideoGenerationOutput, VideoModelFiles } from "../image-provider.js";
 
 /**
  * Adapter interface for an app-managed local inference engine (the desktop tier).
@@ -41,6 +41,9 @@ export interface LocalEngineBackend {
   listComponents(): Promise<LocalEngineComponents>;
   /** Generate one image with the given checkpoint. */
   generate(input: ImageGenerationInput, model: string): Promise<ImageGenerationOutput>;
+  /** Optional: animate a source image into a short video (image-to-video). Present only for engines that
+   * support it (ComfyUI); absent for the rest. */
+  generateVideo?(input: VideoGenerationInput, models: VideoModelFiles): Promise<VideoGenerationOutput>;
   /** Optional: ask the engine to unload its models / free VRAM now (e.g. ComfyUI /free). */
   freeMemory?(): Promise<void>;
 }
