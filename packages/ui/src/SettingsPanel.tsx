@@ -2186,19 +2186,37 @@ export function SettingsPanel({
                 const setParam = (k: keyof NonNullable<typeof value.videoParams>, v: string) =>
                   set({ videoParams: { ...vp, [k]: v === "" ? undefined : Number(v) } });
                 const diffNames = installedModels.map((m) => m.id);
-                const fileRow = (label: string, k: keyof NonNullable<typeof value.videoFiles>, list: string[], listId: string) => (
-                  <label key={k} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }}>
-                    <span style={{ opacity: 0.7 }}>{label}</span>
-                    <input
-                      list={list.length ? listId : undefined}
-                      value={vf[k] ?? ""}
-                      placeholder={k === "lora" || k === "loraHigh" || k === "loraLow" ? "(none)" : defFiles[k] ?? ""}
-                      onChange={(e) => setFile(k, e.target.value)}
-                      style={{ fontSize: 11 }}
-                    />
-                    {list.length ? <datalist id={listId}>{list.map((n) => <option key={n} value={n} />)}</datalist> : null}
-                  </label>
-                );
+                const isLora = (k: string) => k === "lora" || k === "loraHigh" || k === "loraLow";
+                const fileRow = (label: string, k: keyof NonNullable<typeof value.videoFiles>, list: string[], listId: string) => {
+                  const chosen = (vf[k] ?? "").length > 0;
+                  return (
+                    <label key={k} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }}>
+                      <span style={{ opacity: 0.7 }}>{label}</span>
+                      <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                        <input
+                          list={list.length ? listId : undefined}
+                          value={vf[k] ?? ""}
+                          placeholder={isLora(k) ? "(none)" : defFiles[k] ?? ""}
+                          onChange={(e) => setFile(k, e.target.value)}
+                          style={{ fontSize: 11, flex: 1, minWidth: 0 }}
+                        />
+                        {chosen ? (
+                          <button
+                            type="button"
+                            // Clearing reverts to the catalog default; for an optional LoRA that means "no LoRA".
+                            title={isLora(k) ? "Remove this LoRA" : "Reset to default"}
+                            aria-label={isLora(k) ? "Remove this LoRA" : "Reset to default"}
+                            onClick={() => setFile(k, "")}
+                            style={{ fontSize: 11, lineHeight: 1, padding: "2px 6px", cursor: "pointer" }}
+                          >
+                            ✕
+                          </button>
+                        ) : null}
+                      </span>
+                      {list.length ? <datalist id={listId}>{list.map((n) => <option key={n} value={n} />)}</datalist> : null}
+                    </label>
+                  );
+                };
                 const numRow = (label: string, k: "frames" | "fps" | "width" | "height" | "steps" | "cfg" | "shift", ph: number) => (
                   <label key={k} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }}>
                     <span style={{ opacity: 0.7 }}>{label}</span>
