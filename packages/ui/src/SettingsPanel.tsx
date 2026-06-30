@@ -718,9 +718,185 @@ export function SettingsPanel({
               physically reordering the JSX. Headers hide during a search (groups then show flat). */}
           <SectionHeader q={query} title="🧠 LLM" order={10} />
           <SectionHeader q={query} title="🎨 Image generation" order={20} />
+          <SectionHeader q={query} title="🎬 Video generation" order={25} />
           <SectionHeader q={query} title="🔐 Authorizations" order={30} />
           <SectionHeader q={query} title="🔗 Links & APIs" order={40} />
           <SectionHeader q={query} title="⚙️ Other app settings" order={50} />
+
+          <Group
+            q={query}
+            order={26}
+            title="🎬 Image-to-video"
+            hint="Animate an image into a short clip via ComfyUI (image-to-video)."
+            keywords="video wan ltx ltx-2 comfyui image to video i2v animate motion lora high noise low noise frames fps width height steps cfg shift checkpoint text encoder gemma umt5 vae download manual safetensors"
+          >
+            {value.imageProvider === "local" && (value.localBackend ?? "a1111") !== "a1111" ? (
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 600 }}>Image-to-video model</label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
+                  <select value={value.videoModel ?? VIDEO_MODELS[0]?.id ?? ""} onChange={(e) => set({ videoModel: e.target.value })}>
+                    {VIDEO_MODELS.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                  {onDownloadVideoModel ? (
+                    <button type="button" onClick={() => onDownloadVideoModel(value.videoModel ?? VIDEO_MODELS[0]!.id)}>
+                      Download (~{videoModelById(value.videoModel)?.sizeGB ?? VIDEO_MODELS[0]?.sizeGB ?? 0} GB)
+                    </button>
+                  ) : null}
+                </div>
+                <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginTop: 4 }}>
+                  Lets the assistant animate an image into a short video via ComfyUI (the <code>generate_video</code> tool) —
+                  just say “animate this / make it move” in chat. Download places the files into ComfyUI’s model folders.
+                  Large download; runs on ComfyUI only.
+                </span>
+                {(() => {
+                  // The exact files this model needs, so they can be searched for + downloaded by hand (place
+                  // each into ComfyUI/models/<folder>/) if the auto-download is blocked or a file is broken.
+                  const entry = videoModelById(value.videoModel) ?? VIDEO_MODELS[0]!;
+                  return (
+                    <div style={{ marginTop: 8, fontSize: 11 }}>
+                      <span style={{ opacity: 0.75, fontWeight: 600 }}>Required files (for manual download):</span>
+                      <ul style={{ margin: "4px 0 0", paddingLeft: 16 }}>
+                        {entry.downloads.map((d) => (
+                          <li key={d.filename} style={{ marginTop: 3, lineHeight: 1.5 }}>
+                            <code style={{ userSelect: "all", fontSize: 11 }}>{d.filename}</code>
+                            <span style={{ opacity: 0.6 }}>
+                              {" → "}ComfyUI/models/{d.folder}/{" "}
+                            </span>
+                            <a href={d.url} target="_blank" rel="noreferrer" style={{ opacity: 0.85 }}>
+                              source ↗
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                      <span style={{ display: "block", opacity: 0.5, marginTop: 3 }}>
+                        Copy a filename to search for it, or use the Download button above to fetch them all automatically.
+                      </span>
+                    </div>
+                  );
+                })()}
+                {(() => {
+                  const entry = videoModelById(value.videoModel) ?? VIDEO_MODELS[0]!;
+                  const kind = entry.files.kind;
+                  const dflt = VIDEO_RENDER_DEFAULTS[kind];
+                  // Placeholder filenames keyed by field (the union's per-family filenames, kind stripped).
+                  const defFiles: Record<string, string | undefined> = { ...entry.files };
+                  const vf = value.videoFiles ?? {};
+                  const vp = value.videoParams ?? {};
+                  const setFile = (k: keyof NonNullable<typeof value.videoFiles>, v: string) =>
+                    set({ videoFiles: { ...vf, [k]: v || undefined } });
+                  const setParam = (k: keyof NonNullable<typeof value.videoParams>, v: string) =>
+                    set({ videoParams: { ...vp, [k]: v === "" ? undefined : Number(v) } });
+                  const diffNames = installedModels.map((m) => m.id);
+                  const isLora = (k: string) => k === "lora" || k === "loraHigh" || k === "loraLow";
+                  const fileRow = (label: string, k: keyof NonNullable<typeof value.videoFiles>, list: string[], listId: string) => {
+                    const chosen = (vf[k] ?? "").length > 0;
+                    return (
+                      <label key={k} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }}>
+                        <span style={{ opacity: 0.7 }}>{label}</span>
+                        <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                          <input
+                            list={list.length ? listId : undefined}
+                            value={vf[k] ?? ""}
+                            placeholder={isLora(k) ? "(none)" : defFiles[k] ?? ""}
+                            onChange={(e) => setFile(k, e.target.value)}
+                            style={{ fontSize: 11, flex: 1, minWidth: 0 }}
+                          />
+                          {chosen ? (
+                            <button
+                              type="button"
+                              // Clearing reverts to the catalog default; for an optional LoRA that means "no LoRA".
+                              title={isLora(k) ? "Remove this LoRA" : "Reset to default"}
+                              aria-label={isLora(k) ? "Remove this LoRA" : "Reset to default"}
+                              onClick={() => setFile(k, "")}
+                              style={{ fontSize: 11, lineHeight: 1, padding: "2px 6px", cursor: "pointer" }}
+                            >
+                              ✕
+                            </button>
+                          ) : null}
+                        </span>
+                        {list.length ? <datalist id={listId}>{list.map((n) => <option key={n} value={n} />)}</datalist> : null}
+                      </label>
+                    );
+                  };
+                  const numRow = (label: string, k: "frames" | "fps" | "width" | "height" | "steps" | "cfg" | "shift", ph: number) => (
+                    <label key={k} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }}>
+                      <span style={{ opacity: 0.7 }}>{label}</span>
+                      <input type="number" value={vp[k] ?? ""} placeholder={String(ph)} onChange={(e) => setParam(k, e.target.value)} style={{ fontSize: 11, width: 80 }} />
+                    </label>
+                  );
+                  const effFrames = vp.frames ?? dflt.frames;
+                  const effFps = vp.fps ?? dflt.fps;
+                  const durationS = effFps > 0 ? effFrames / effFps : 0;
+                  // Each family samples in fixed-size chunks, so a clean length is a multiple +1: Wan = 4n+1, LTX = 8n+1.
+                  const SUGGESTED = kind === "ltx2-i2v" ? [97, 121, 161, 201] : [49, 81, 121, 161];
+                  const stepLabel = kind === "ltx2-i2v" ? "8n+1" : "4n+1";
+                  return (
+                    <details style={{ marginTop: 8 }}>
+                      <summary style={{ cursor: "pointer", fontSize: 12 }}>Advanced — model files &amp; render settings</summary>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 6 }}>
+                        {kind === "ltx2-i2v" ? (
+                          <>
+                            {fileRow("Checkpoint", "checkpoint", diffNames, "vid-ckpt")}
+                            {fileRow("Text encoder (Gemma)", "textEncoder", installedTextEncoders, "vid-te")}
+                            {fileRow("LoRA (optional)", "lora", installedLoras, "vid-lora")}
+                          </>
+                        ) : (
+                          <>
+                            {fileRow("High-noise model", "highNoise", diffNames, "vid-high")}
+                            {fileRow("Low-noise model", "lowNoise", diffNames, "vid-low")}
+                            {fileRow("Text encoder", "textEncoder", installedTextEncoders, "vid-te")}
+                            {fileRow("VAE", "vae", installedVaes, "vid-vae")}
+                            {fileRow("LoRA — high noise (optional)", "loraHigh", installedLoras, "vid-lora-hi")}
+                            {fileRow("LoRA — low noise (optional)", "loraLow", installedLoras, "vid-lora-lo")}
+                          </>
+                        )}
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+                        {numRow("Frames", "frames", dflt.frames)}
+                        {numRow("FPS", "fps", dflt.fps)}
+                        {numRow("Width", "width", dflt.width)}
+                        {numRow("Height", "height", dflt.height)}
+                        {numRow("Steps", "steps", dflt.steps)}
+                        {numRow("CFG", "cfg", dflt.cfg)}
+                        {kind === "wan-i2v" ? numRow("Shift", "shift", dflt.shift) : null}
+                      </div>
+                      <div style={{ marginTop: 6, fontSize: 11 }}>
+                        <span style={{ fontWeight: 600 }}>≈ {durationS.toFixed(1)}s</span>
+                        <span style={{ opacity: 0.7 }}> at {effFrames} frames ÷ {effFps} fps. </span>
+                        <span style={{ opacity: 0.7 }}>Length (= frames ÷ fps). Clean {stepLabel} frame counts: </span>
+                        {SUGGESTED.map((f, i) => (
+                          <span key={f}>
+                            {i > 0 ? ", " : ""}
+                            <button
+                              type="button"
+                              onClick={() => setParam("frames", String(f))}
+                              style={{ fontSize: 11, padding: "0 4px", cursor: "pointer", background: "none", border: "1px solid currentColor", borderRadius: 4, opacity: 0.8 }}
+                            >
+                              {f} (~{(f / effFps).toFixed(1)}s)
+                            </button>
+                          </span>
+                        ))}
+                        <span style={{ opacity: 0.7 }}>. More frames = more VRAM &amp; time.</span>
+                      </div>
+                      <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginTop: 6 }}>
+                        Override any file (pick an installed one or type a filename) to swap a component or fix a failed
+                        download; blank uses the default. Render settings are the graph’s defaults when blank.
+                      </span>
+                    </details>
+                  );
+                })()}
+              </div>
+            ) : (
+              <span style={{ opacity: 0.6, fontSize: 12 }}>
+                Image-to-video runs on ComfyUI. Set the image engine to “Run on my computer” and choose ComfyUI (under{" "}
+                🎨 Image generation) to enable it.
+              </span>
+            )}
+          </Group>
           <Group
             q={query}
             order={11}
@@ -2149,142 +2325,6 @@ export function SettingsPanel({
               onDownloadModelUrl={onDownloadModelUrl}
               onConnect={onConnectLocalServer}
             />
-          )}
-
-          {value.imageProvider === "local" && (value.localBackend ?? "a1111") !== "a1111" && (
-            <div style={{ marginTop: 10 }}>
-              <label style={{ fontSize: 13, fontWeight: 600 }}>Image-to-video model</label>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
-                <select value={value.videoModel ?? VIDEO_MODELS[0]?.id ?? ""} onChange={(e) => set({ videoModel: e.target.value })}>
-                  {VIDEO_MODELS.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
-                {onDownloadVideoModel ? (
-                  <button type="button" onClick={() => onDownloadVideoModel(value.videoModel ?? VIDEO_MODELS[0]!.id)}>
-                    Download (~{videoModelById(value.videoModel)?.sizeGB ?? VIDEO_MODELS[0]?.sizeGB ?? 0} GB)
-                  </button>
-                ) : null}
-              </div>
-              <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginTop: 4 }}>
-                Lets the assistant animate an image into a short video via ComfyUI (the <code>generate_video</code> tool) —
-                just say “animate this / make it move” in chat. Download places the files into ComfyUI’s model folders.
-                Large download; runs on ComfyUI only.
-              </span>
-              {(() => {
-                const entry = videoModelById(value.videoModel) ?? VIDEO_MODELS[0]!;
-                const kind = entry.files.kind;
-                const dflt = VIDEO_RENDER_DEFAULTS[kind];
-                // Placeholder filenames keyed by field (the union's per-family filenames, kind stripped).
-                const defFiles: Record<string, string | undefined> = { ...entry.files };
-                const vf = value.videoFiles ?? {};
-                const vp = value.videoParams ?? {};
-                const setFile = (k: keyof NonNullable<typeof value.videoFiles>, v: string) =>
-                  set({ videoFiles: { ...vf, [k]: v || undefined } });
-                const setParam = (k: keyof NonNullable<typeof value.videoParams>, v: string) =>
-                  set({ videoParams: { ...vp, [k]: v === "" ? undefined : Number(v) } });
-                const diffNames = installedModels.map((m) => m.id);
-                const isLora = (k: string) => k === "lora" || k === "loraHigh" || k === "loraLow";
-                const fileRow = (label: string, k: keyof NonNullable<typeof value.videoFiles>, list: string[], listId: string) => {
-                  const chosen = (vf[k] ?? "").length > 0;
-                  return (
-                    <label key={k} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }}>
-                      <span style={{ opacity: 0.7 }}>{label}</span>
-                      <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                        <input
-                          list={list.length ? listId : undefined}
-                          value={vf[k] ?? ""}
-                          placeholder={isLora(k) ? "(none)" : defFiles[k] ?? ""}
-                          onChange={(e) => setFile(k, e.target.value)}
-                          style={{ fontSize: 11, flex: 1, minWidth: 0 }}
-                        />
-                        {chosen ? (
-                          <button
-                            type="button"
-                            // Clearing reverts to the catalog default; for an optional LoRA that means "no LoRA".
-                            title={isLora(k) ? "Remove this LoRA" : "Reset to default"}
-                            aria-label={isLora(k) ? "Remove this LoRA" : "Reset to default"}
-                            onClick={() => setFile(k, "")}
-                            style={{ fontSize: 11, lineHeight: 1, padding: "2px 6px", cursor: "pointer" }}
-                          >
-                            ✕
-                          </button>
-                        ) : null}
-                      </span>
-                      {list.length ? <datalist id={listId}>{list.map((n) => <option key={n} value={n} />)}</datalist> : null}
-                    </label>
-                  );
-                };
-                const numRow = (label: string, k: "frames" | "fps" | "width" | "height" | "steps" | "cfg" | "shift", ph: number) => (
-                  <label key={k} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }}>
-                    <span style={{ opacity: 0.7 }}>{label}</span>
-                    <input type="number" value={vp[k] ?? ""} placeholder={String(ph)} onChange={(e) => setParam(k, e.target.value)} style={{ fontSize: 11, width: 80 }} />
-                  </label>
-                );
-                const effFrames = vp.frames ?? dflt.frames;
-                const effFps = vp.fps ?? dflt.fps;
-                const durationS = effFps > 0 ? effFrames / effFps : 0;
-                // Each family samples in fixed-size chunks, so a clean length is a multiple +1: Wan = 4n+1, LTX = 8n+1.
-                const SUGGESTED = kind === "ltx2-i2v" ? [97, 121, 161, 201] : [49, 81, 121, 161];
-                const stepLabel = kind === "ltx2-i2v" ? "8n+1" : "4n+1";
-                return (
-                  <details style={{ marginTop: 8 }}>
-                    <summary style={{ cursor: "pointer", fontSize: 12 }}>Advanced — model files &amp; render settings</summary>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 6 }}>
-                      {kind === "ltx2-i2v" ? (
-                        <>
-                          {fileRow("Checkpoint", "checkpoint", diffNames, "vid-ckpt")}
-                          {fileRow("Text encoder (Gemma)", "textEncoder", installedTextEncoders, "vid-te")}
-                          {fileRow("LoRA (optional)", "lora", installedLoras, "vid-lora")}
-                        </>
-                      ) : (
-                        <>
-                          {fileRow("High-noise model", "highNoise", diffNames, "vid-high")}
-                          {fileRow("Low-noise model", "lowNoise", diffNames, "vid-low")}
-                          {fileRow("Text encoder", "textEncoder", installedTextEncoders, "vid-te")}
-                          {fileRow("VAE", "vae", installedVaes, "vid-vae")}
-                          {fileRow("LoRA — high noise (optional)", "loraHigh", installedLoras, "vid-lora-hi")}
-                          {fileRow("LoRA — low noise (optional)", "loraLow", installedLoras, "vid-lora-lo")}
-                        </>
-                      )}
-                    </div>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
-                      {numRow("Frames", "frames", dflt.frames)}
-                      {numRow("FPS", "fps", dflt.fps)}
-                      {numRow("Width", "width", dflt.width)}
-                      {numRow("Height", "height", dflt.height)}
-                      {numRow("Steps", "steps", dflt.steps)}
-                      {numRow("CFG", "cfg", dflt.cfg)}
-                      {kind === "wan-i2v" ? numRow("Shift", "shift", dflt.shift) : null}
-                    </div>
-                    <div style={{ marginTop: 6, fontSize: 11 }}>
-                      <span style={{ fontWeight: 600 }}>≈ {durationS.toFixed(1)}s</span>
-                      <span style={{ opacity: 0.7 }}> at {effFrames} frames ÷ {effFps} fps. </span>
-                      <span style={{ opacity: 0.7 }}>Length (= frames ÷ fps). Clean {stepLabel} frame counts: </span>
-                      {SUGGESTED.map((f, i) => (
-                        <span key={f}>
-                          {i > 0 ? ", " : ""}
-                          <button
-                            type="button"
-                            onClick={() => setParam("frames", String(f))}
-                            style={{ fontSize: 11, padding: "0 4px", cursor: "pointer", background: "none", border: "1px solid currentColor", borderRadius: 4, opacity: 0.8 }}
-                          >
-                            {f} (~{(f / effFps).toFixed(1)}s)
-                          </button>
-                        </span>
-                      ))}
-                      <span style={{ opacity: 0.7 }}>. More frames = more VRAM &amp; time.</span>
-                    </div>
-                    <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginTop: 6 }}>
-                      Override any file (pick an installed one or type a filename) to swap a component or fix a failed
-                      download; blank uses the default. Render settings are the graph’s defaults when blank.
-                    </span>
-                  </details>
-                );
-              })()}
-            </div>
           )}
 
           {value.imageProvider === "local" && (
