@@ -157,16 +157,24 @@ export interface WanVideoFiles {
   loraLow?: string;
 }
 
+/** One LoRA in a stack: a ComfyUI filename + a model strength (default 1). */
+export interface VideoLora {
+  name: string;
+  /** ComfyUI strength_model weight. Default 1 when omitted. */
+  strength?: number;
+}
+
 /** Files an LTX-2 image-to-video graph needs: one combined checkpoint (model + VAE) plus the separate
- * Gemma text encoder. `lora` is optional (e.g. the distilled speed LoRA). */
+ * Gemma text encoder. `loras` is an optional ordered stack, each chained onto the previous (motion/style
+ * LoRAs, the distilled speed LoRA, etc.). */
 export interface Ltx2VideoFiles {
   readonly kind: "ltx2-i2v";
   /** Combined LTX-2 checkpoint (loaded via CheckpointLoaderSimple — provides the model and VAE). */
   checkpoint: string;
   /** Gemma text encoder. */
   textEncoder: string;
-  /** Optional LoRA (motion/style, or the distilled speed LoRA). */
-  lora?: string;
+  /** Optional ordered stack of LoRAs applied to the model (each chained onto the previous). */
+  loras?: VideoLora[];
 }
 
 /** The model files an image-to-video engine needs — the shape depends on the model family (`kind`).
@@ -181,12 +189,12 @@ export interface VideoFileOverrides {
   textEncoder?: string;
   vae?: string;
   checkpoint?: string;
-  /** LTX-2 single LoRA. */
-  lora?: string;
   /** Wan high-noise expert LoRA. */
   loraHigh?: string;
   /** Wan low-noise expert LoRA. */
   loraLow?: string;
+  /** LTX-2 ordered LoRA stack. */
+  ltxLoras?: VideoLora[];
 }
 
 /** The sampler/size/length choices for an image-to-video render — overridable from Settings. */

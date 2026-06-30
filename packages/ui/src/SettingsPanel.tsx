@@ -34,6 +34,7 @@ import {
   MCP_PRESETS,
   type LocalTextServerId,
   type ProviderInfo,
+  type VideoLora,
 } from "@visual-reader/core";
 
 /**
@@ -268,7 +269,7 @@ export interface ReaderSettings {
   /** Per-file overrides for the image-to-video model — swap a component (a specific checkpoint / text
    * encoder / VAE / LoRA) or point at a renamed file to fix a broken download. Blank → the catalog default.
    * A superset of every family's filenames; only the selected model's fields are shown/used. */
-  videoFiles?: { highNoise?: string; lowNoise?: string; textEncoder?: string; vae?: string; checkpoint?: string; lora?: string; loraHigh?: string; loraLow?: string };
+  videoFiles?: { highNoise?: string; lowNoise?: string; textEncoder?: string; vae?: string; checkpoint?: string; loraHigh?: string; loraLow?: string; ltxLoras?: VideoLora[] };
   /** Image-to-video render-param overrides (the graph's size / length / sampler choices). */
   videoParams?: { frames?: number; fps?: number; width?: number; height?: number; steps?: number; cfg?: number; shift?: number };
   /** Parallel coding agents: let the manager model auto-resolve a merge conflict between agent
@@ -782,17 +783,34 @@ export function SettingsPanel({
                   const entry = videoModelById(value.videoModel) ?? VIDEO_MODELS[0]!;
                   const kind = entry.files.kind;
                   const dflt = VIDEO_RENDER_DEFAULTS[kind];
-                  // Placeholder filenames keyed by field (the union's per-family filenames, kind stripped).
-                  const defFiles: Record<string, string | undefined> = { ...entry.files };
+                  // Placeholder filenames keyed by field (the union's per-family string filenames only —
+                  // the LTX LoRA stack is an array and is edited separately below).
+                  const defFiles: Record<string, string | undefined> = {};
+                  for (const [k, v] of Object.entries(entry.files)) if (typeof v === "string") defFiles[k] = v;
                   const vf = value.videoFiles ?? {};
                   const vp = value.videoParams ?? {};
-                  const setFile = (k: keyof NonNullable<typeof value.videoFiles>, v: string) =>
-                    set({ videoFiles: { ...vf, [k]: v || undefined } });
+                  // String file-override keys only (the LoRA stack `ltxLoras` has its own editor).
+                  type StringFileKey = Exclude<keyof NonNullable<typeof value.videoFiles>, "ltxLoras">;
+                  const setFile = (k: StringFileKey, v: string) => {
+                    // Typed copy + delete (not a computed-key spread, which trips exactOptionalPropertyTypes).
+                    const next: NonNullable<typeof value.videoFiles> = { ...vf };
+                    if (v) next[k] = v;
+                    else delete next[k];
+                    set({ videoFiles: next });
+                  };
                   const setParam = (k: keyof NonNullable<typeof value.videoParams>, v: string) =>
                     set({ videoParams: { ...vp, [k]: v === "" ? undefined : Number(v) } });
+                  // LTX LoRA stack editor state.
+                  const ltxLoras = vf.ltxLoras ?? [];
+                  const setLtxLoras = (nextLoras: VideoLora[]) => {
+                    const next: NonNullable<typeof value.videoFiles> = { ...vf };
+                    if (nextLoras.length) next.ltxLoras = nextLoras;
+                    else delete next.ltxLoras;
+                    set({ videoFiles: next });
+                  };
                   const diffNames = installedModels.map((m) => m.id);
-                  const isLora = (k: string) => k === "lora" || k === "loraHigh" || k === "loraLow";
-                  const fileRow = (label: string, k: keyof NonNullable<typeof value.videoFiles>, list: string[], listId: string) => {
+                  const isLora = (k: string) => k === "loraHigh" || k === "loraLow";
+                  const fileRow = (label: string, k: StringFileKey, list: string[], listId: string) => {
                     const chosen = (vf[k] ?? "").length > 0;
                     return (
                       <label key={k} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }}>
@@ -842,7 +860,6 @@ export function SettingsPanel({
                           <>
                             {fileRow("Checkpoint", "checkpoint", diffNames, "vid-ckpt")}
                             {fileRow("Text encoder (Gemma)", "textEncoder", installedTextEncoders, "vid-te")}
-                            {fileRow("LoRA (optional)", "lora", installedLoras, "vid-lora")}
                           </>
                         ) : (
                           <>
@@ -855,6 +872,51 @@ export function SettingsPanel({
                           </>
                         )}
                       </div>
+                      {kind === "ltx2-i2v" ? (
+                        <div style={{ marginTop: 8 }}>
+                          <span style={{ fontSize: 11, opacity: 0.7 }}>LoRAs (stacked in order, applied to the model)</span>
+                          {ltxLoras.map((l, i) => (
+                            <div key={i} style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 4 }}>
+                              <input
+                                list="vid-ltx-loras"
+                                value={l.name}
+                                placeholder="lora filename"
+                                onChange={(e) => setLtxLoras(ltxLoras.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))}
+                                style={{ fontSize: 11, flex: 1, minWidth: 0 }}
+                              />
+                              <input
+                                type="number"
+                                step="0.05"
+                                value={l.strength ?? 1}
+                                title="strength"
+                                onChange={(e) =>
+                                  setLtxLoras(ltxLoras.map((x, j) => (j === i ? { ...x, strength: e.target.value === "" ? 1 : Number(e.target.value) } : x)))
+                                }
+                                style={{ fontSize: 11, width: 60 }}
+                              />
+                              <button
+                                type="button"
+                                title="Remove this LoRA"
+                                aria-label="Remove this LoRA"
+                                onClick={() => setLtxLoras(ltxLoras.filter((_, j) => j !== i))}
+                                style={{ fontSize: 11, lineHeight: 1, padding: "2px 6px", cursor: "pointer" }}
+                              >
+                                ✕
+                              </button>
+                            </div>
+                          ))}
+                          {installedLoras.length ? (
+                            <datalist id="vid-ltx-loras">{installedLoras.map((n) => <option key={n} value={n} />)}</datalist>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => setLtxLoras([...ltxLoras, { name: "", strength: 1 }])}
+                            style={{ marginTop: 4, fontSize: 11, padding: "2px 8px", cursor: "pointer" }}
+                          >
+                            + Add LoRA
+                          </button>
+                        </div>
+                      ) : null}
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
                         {numRow("Frames", "frames", dflt.frames)}
                         {numRow("FPS", "fps", dflt.fps)}
