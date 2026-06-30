@@ -34,6 +34,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 const COMFY_PORTABLE_URL: &str =
     "https://github.com/comfyanonymous/ComfyUI/releases/latest/download/ComfyUI_windows_portable_nvidia.7z";
 const ENGINE_PORT: u16 = 8188;
+/// AUTOMATIC1111's default REST API port — it runs alongside ComfyUI (image gen on A1111, video on ComfyUI).
+const A1111_PORT: u16 = 7860;
 
 /// Process + endpoint handle for the managed engine. The child is killed on app
 /// exit (see `RunEvent::ExitRequested` in `main`), so no stray GPU process lingers.
@@ -41,6 +43,9 @@ const ENGINE_PORT: u16 = 8188;
 struct EngineState {
     base_url: Mutex<Option<String>>,
     child: Mutex<Option<Child>>,
+    /// A separately-launched AUTOMATIC1111 (image gen on :7860, alongside the managed ComfyUI for video).
+    /// Killed on exit like `child` so no stray GPU process lingers.
+    a1111_child: Mutex<Option<Child>>,
     /// Serializes engine setup so concurrent `ensure_engine` calls (e.g. React
     /// StrictMode double-invoking the effect in dev) never spawn two engines.
     setup: tauri::async_runtime::Mutex<()>,
@@ -91,6 +96,7 @@ async fn ensure_engine(
     app: AppHandle,
     state: State<'_, EngineState>,
     low_vram: Option<bool>,
+    show_console: Option<bool>,
 ) -> Result<String, String> {
     if let Some(existing) = state.base_url.lock().unwrap().clone() {
         return Ok(existing);
@@ -103,13 +109,45 @@ async fn ensure_engine(
     }
     let app2 = app.clone();
     let low = low_vram.unwrap_or(false);
-    let (base, child) = tauri::async_runtime::spawn_blocking(move || ensure_blocking(&app2, low))
+    let console = show_console.unwrap_or(false);
+    let (base, child) = tauri::async_runtime::spawn_blocking(move || ensure_blocking(&app2, low, console))
         .await
         .map_err(|e| e.to_string())??;
     *state.base_url.lock().unwrap() = Some(base.clone());
     if let Some(child) = child {
         *state.child.lock().unwrap() = Some(child);
     }
+    Ok(base)
+}
+
+/// Ensure AUTOMATIC1111 is running for image generation (it runs ALONGSIDE the managed ComfyUI, which
+/// handles video). Returns its base URL (`http://127.0.0.1:7860`). Reuses an A1111 already answering on
+/// :7860 (the user's own, or ours from earlier); otherwise launches it from `path` (the install folder)
+/// with `--api`. `path` empty / not found / non-Windows → an explanatory error, and the caller falls
+/// back to connect-only.
+#[tauri::command]
+async fn ensure_a1111(
+    state: State<'_, EngineState>,
+    path: String,
+    show_console: Option<bool>,
+) -> Result<String, String> {
+    let base = format!("http://127.0.0.1:{A1111_PORT}");
+    // Already up (the user started it, or we did earlier this session) → reuse it.
+    if a1111_health_ok(&base) {
+        return Ok(base);
+    }
+    if path.trim().is_empty() {
+        return Err("Set your AUTOMATIC1111 install folder in Settings to auto-start it (or start it yourself with --api).".into());
+    }
+    if !cfg!(target_os = "windows") {
+        return Err("Auto-starting AUTOMATIC1111 is Windows-only — start it yourself with --api and connect.".into());
+    }
+    let console = show_console.unwrap_or(false);
+    let dir = std::path::PathBuf::from(path);
+    let child = tauri::async_runtime::spawn_blocking(move || spawn_a1111(&dir, console))
+        .await
+        .map_err(|e| e.to_string())??;
+    *state.a1111_child.lock().unwrap() = Some(child);
     Ok(base)
 }
 
@@ -205,6 +243,18 @@ fn quiet_command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     cmd
+}
+
+/// A `Command` for an ENGINE process whose console the user may want to watch (ComfyUI / A1111
+/// generation logs). When `show_console` is true, spawn with a VISIBLE console window (plain
+/// `Command::new`, no `CREATE_NO_WINDOW`); otherwise stay headless like `quiet_command`. The
+/// "Show engine console windows" setting drives this. No visible difference on macOS/Linux.
+fn command_for<S: AsRef<std::ffi::OsStr>>(program: S, show_console: bool) -> Command {
+    if show_console {
+        Command::new(program)
+    } else {
+        quiet_command(program)
+    }
 }
 
 /// Query `nvidia-smi` for the first GPU's total memory in MB. None on any failure.
@@ -2058,7 +2108,7 @@ async fn download_lora(app: AppHandle, model: DownloadableModel) -> Result<(), S
 
 // --------------------------------------------------------------------- blocking
 
-fn ensure_blocking(app: &AppHandle, low_vram: bool) -> Result<(String, Option<Child>), String> {
+fn ensure_blocking(app: &AppHandle, low_vram: bool, show_console: bool) -> Result<(String, Option<Child>), String> {
     let base = format!("http://127.0.0.1:{ENGINE_PORT}");
     // Reuse an engine that's already up (e.g. the user's own ComfyUI, or a
     // previous run of ours).
@@ -2089,7 +2139,7 @@ fn ensure_blocking(app: &AppHandle, low_vram: bool) -> Result<(String, Option<Ch
              (or run stop-comfyui.bat), then try again."
         ));
     }
-    let child = install_and_spawn(app, low_vram)?;
+    let child = install_and_spawn(app, low_vram, show_console)?;
     emit_engine(app, "ready", "Engine ready", Some(100.0));
     Ok((base, Some(child)))
 }
@@ -2099,7 +2149,7 @@ fn port_in_use(port: u16) -> bool {
     std::net::TcpStream::connect(("127.0.0.1", port)).is_ok()
 }
 
-fn install_and_spawn(app: &AppHandle, low_vram: bool) -> Result<Child, String> {
+fn install_and_spawn(app: &AppHandle, low_vram: bool, show_console: bool) -> Result<Child, String> {
     let root = engine_root(app);
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let portable = root.join("ComfyUI_windows_portable");
@@ -2114,7 +2164,7 @@ fn install_and_spawn(app: &AppHandle, low_vram: bool) -> Result<Child, String> {
     }
 
     emit_engine(app, "starting", "Starting the engine…", None);
-    let child = spawn_comfy(&portable, low_vram)?;
+    let child = spawn_comfy(&portable, low_vram, show_console)?;
 
     let base = format!("http://127.0.0.1:{ENGINE_PORT}");
     for _ in 0..180 {
@@ -2126,10 +2176,10 @@ fn install_and_spawn(app: &AppHandle, low_vram: bool) -> Result<Child, String> {
     Err("The engine did not become ready in time.".into())
 }
 
-fn spawn_comfy(portable: &Path, low_vram: bool) -> Result<Child, String> {
+fn spawn_comfy(portable: &Path, low_vram: bool, show_console: bool) -> Result<Child, String> {
     let python = portable.join("python_embeded").join("python.exe");
     let main_py = portable.join("ComfyUI").join("main.py");
-    let mut cmd = quiet_command(python);
+    let mut cmd = command_for(python, show_console);
     cmd.arg("-s")
         .arg(main_py)
         .arg("--port")
@@ -2145,6 +2195,50 @@ fn spawn_comfy(portable: &Path, low_vram: bool) -> Result<Child, String> {
         cmd.arg("--lowvram");
     }
     cmd.spawn().map_err(|e| format!("Failed to start the engine: {e}"))
+}
+
+/// Spawn AUTOMATIC1111 from its install `dir` (the folder with webui-user.bat) with `--api` on
+/// :7860, then wait for the REST API to answer. We pass `--api --port 7860` via `COMMANDLINE_ARGS`
+/// (webui-user.bat forwards that env into launch.py) so the API is on even if the user never edited
+/// the bat. Best-effort launcher: if a setup hard-codes its own COMMANDLINE_ARGS, the user keeps the
+/// API flag there. Visible/hidden console follows `show_console`. (Reached only on Windows at runtime —
+/// `ensure_a1111` guards with `cfg!(windows)` — but the body is plain cross-platform `Command` code, so
+/// it isn't `#[cfg]`-gated and compiles on every target.)
+fn spawn_a1111(dir: &Path, show_console: bool) -> Result<Child, String> {
+    let bat = dir.join("webui-user.bat");
+    if !bat.exists() {
+        return Err(format!(
+            "webui-user.bat not found in {} — point the setting at your AUTOMATIC1111 folder.",
+            dir.display()
+        ));
+    }
+    let mut cmd = command_for("cmd", show_console);
+    cmd.arg("/c")
+        .arg(&bat)
+        .env("COMMANDLINE_ARGS", format!("--api --port {A1111_PORT}"))
+        .current_dir(dir);
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to start AUTOMATIC1111: {e}"))?;
+    let base = format!("http://127.0.0.1:{A1111_PORT}");
+    for _ in 0..180 {
+        if a1111_health_ok(&base) {
+            return Ok(child);
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    Err("AUTOMATIC1111 did not become ready in time.".into())
+}
+
+/// Is an AUTOMATIC1111 REST API answering at `base`? `/sdapi/v1/sd-models` is 200 only when launched
+/// with `--api`, so it doubles as an "API actually enabled" check (unlike ComfyUI's `/system_stats`).
+fn a1111_health_ok(base: &str) -> bool {
+    reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .and_then(|c| c.get(format!("{base}/sdapi/v1/sd-models")).send())
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
 }
 
 /// Download `url` to `dest`, emitting `engine://progress` with a percentage.
@@ -2536,6 +2630,7 @@ fn main() {
         .manage(RemoteServerState::default())
         .invoke_handler(tauri::generate_handler![
             ensure_engine,
+            ensure_a1111,
             ensure_llm,
             stop_llm,
             restart_app,
@@ -2584,6 +2679,12 @@ fn main() {
                 // stray process lingers after the window closes.
                 if let Some(state) = app.try_state::<EngineState>() {
                     if let Ok(mut guard) = state.child.lock() {
+                        if let Some(mut child) = guard.take() {
+                            let _ = child.kill();
+                        }
+                    }
+                    // Also kill a separately-launched AUTOMATIC1111, if we started it.
+                    if let Ok(mut guard) = state.a1111_child.lock() {
                         if let Some(mut child) = guard.take() {
                             let _ = child.kill();
                         }

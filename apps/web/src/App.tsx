@@ -273,6 +273,7 @@ import {
   desktopFetch,
   downloadModel,
   ensureEngine,
+  ensureA1111,
   ensureLocalLlm,
   gpuVramMb,
   gpuVramUsage,
@@ -1479,7 +1480,7 @@ export function App() {
       const modelCostGb = imageModelVramCostGb(s.localModel ?? "");
       const needsLowVram =
         vram === undefined ? !!s.lowVram : modelCostGb > 0 && (modelCostGb + LOWVRAM_HEADROOM_GB) * 1024 > vram;
-      const baseUrl = await ensureEngine(needsLowVram);
+      const baseUrl = await ensureEngine(needsLowVram, s.showEngineConsole);
       const models = await listLocalModels();
       const loras = await listLoras();
       // Detect each LoRA's base architecture (reads only the safetensors header) so the UI can flag
@@ -1885,9 +1886,31 @@ export function App() {
         localServerUrl: url,
         localServerUrlByBackend: { ...(s.localServerUrlByBackend ?? {}), [backend]: url },
       });
+      // Auto-start AUTOMATIC1111 from its install folder (desktop) so the user doesn't have to launch it
+      // by hand. Best-effort: if there's no folder set / it isn't an A1111 install / non-desktop, fall
+      // through to a plain connect (which surfaces its own "is it running?" hint on failure).
+      const cur = settingsRef.current;
+      if (backend === "a1111" && isDesktop && cur.a1111Path) {
+        try {
+          await ensureA1111(cur.a1111Path, cur.showEngineConsole);
+        } catch {
+          /* couldn't auto-start — probeServer below still tries to connect to a manually-started one */
+        }
+      }
       try {
         await probeServer(backend, url); // sets engineBaseUrl/engineBackend/models on success
         setSettings(remember);
+        // Both engines alive: when images run on A1111, also make sure the managed ComfyUI (for VIDEO) is up
+        // and its URL is current — but ONLY if it was set up before (a remembered URL), so we never trigger a
+        // surprise multi-GB ComfyUI download just from connecting A1111. Doesn't touch the active image engine.
+        if (backend === "a1111" && isDesktop && cur.localServerUrlByBackend?.comfyui) {
+          try {
+            const comfyUrl = await ensureEngine(false, cur.showEngineConsole);
+            setSettings((s) => ({ ...s, localServerUrlByBackend: { ...s.localServerUrlByBackend, comfyui: comfyUrl } }));
+          } catch {
+            /* ComfyUI didn't come up — a later video render surfaces a clear "start ComfyUI" message */
+          }
+        }
       } catch (err) {
         const why = err instanceof Error ? err.message : String(err);
         setSettings(remember);

@@ -65,8 +65,21 @@ export interface ModelProgress {
  * Ensure the local engine is installed + running (downloads on first use) and
  * return its base URL. Emits `engine://progress` events on the Rust side.
  */
-export function ensureEngine(lowVram?: boolean): Promise<string> {
-  return invoke<string>("ensure_engine", lowVram ? { lowVram: true } : {});
+export function ensureEngine(lowVram?: boolean, showConsole?: boolean): Promise<string> {
+  return invoke<string>("ensure_engine", {
+    ...(lowVram ? { lowVram: true } : {}),
+    ...(showConsole ? { showConsole: true } : {}),
+  });
+}
+
+/**
+ * Ensure AUTOMATIC1111 is running for image generation (alongside the managed ComfyUI, which renders
+ * video). Returns its base URL (http://127.0.0.1:7860). Reuses an A1111 already on :7860; otherwise
+ * launches it from `path` (the install folder) with `--api`. Rejects when `path` is empty / not an
+ * A1111 folder / non-Windows — the caller then falls back to connect-only.
+ */
+export function ensureA1111(path: string, showConsole?: boolean): Promise<string> {
+  return invoke<string>("ensure_a1111", { path, ...(showConsole ? { showConsole: true } : {}) });
 }
 
 export function listLocalModels(): Promise<InstalledModel[]> {

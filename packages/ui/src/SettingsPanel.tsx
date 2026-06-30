@@ -228,6 +228,13 @@ export interface ReaderSettings {
   /** Last-used server URL for EACH backend, so switching the ComfyUI/A1111 dropdown restores the URL
    * you last entered for it (you don't retype it). Keyed by backend id. */
   localServerUrlByBackend?: Partial<Record<LocalBackendId, string>>;
+  /** Desktop only: the AUTOMATIC1111 install folder (the one containing webui-user.bat). When set and
+   * A1111 is the chosen image backend, the app starts A1111 with --api on :7860 if it isn't already up —
+   * so it can run alongside the managed ComfyUI (images on A1111, video on ComfyUI). Empty = connect-only. */
+  a1111Path?: string;
+  /** Desktop only: spawn the ComfyUI/A1111 engines with a VISIBLE console window so you can watch
+   * generation logs outside the app. Default off (headless). Takes effect at the next engine start. */
+  showEngineConsole?: boolean;
   /** Which local engine renders: the app-managed ComfyUI ("managed") or your own server ("server").
    * Defaults to "managed" on the desktop, "server" elsewhere. The unselected one is used as an
    * automatic fallback when the selected one can't be reached. */
@@ -2456,6 +2463,8 @@ export function SettingsPanel({
               backend={value.localBackend ?? "a1111"}
               serverUrl={value.localServerUrl ?? ""}
               serverUrlByBackend={value.localServerUrlByBackend ?? {}}
+              a1111Path={value.a1111Path ?? ""}
+              showEngineConsole={value.showEngineConsole ?? false}
               source={value.localSource ?? (isDesktop || remote ? "managed" : "server")}
               selected={value.localModel}
               connecting={connectingLocal}
@@ -3085,6 +3094,8 @@ function LocalEngine({
   backend,
   serverUrl,
   serverUrlByBackend,
+  a1111Path,
+  showEngineConsole,
   source,
   selected,
   connecting,
@@ -3104,6 +3115,10 @@ function LocalEngine({
   serverUrl: string;
   /** Last-used URL per backend, so flipping the ComfyUI/A1111 dropdown restores the saved URL. */
   serverUrlByBackend: Partial<Record<LocalBackendId, string>>;
+  /** AUTOMATIC1111 install folder (desktop auto-start). */
+  a1111Path: string;
+  /** Spawn engines with a visible console window. */
+  showEngineConsole: boolean;
   source: LocalEngineSource;
   selected: string | undefined;
   connecting: boolean;
@@ -3196,7 +3211,44 @@ function LocalEngine({
             : " e.g. python main.py --enable-cors-header " + location.origin}
           .
         </span>
+        {isDesktop && backend === "a1111" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
+            <span style={{ fontSize: 12, opacity: 0.8 }}>AUTOMATIC1111 install folder (auto-start)</span>
+            <input
+              style={{ flex: 1 }}
+              value={a1111Path}
+              placeholder="e.g. C:\\stable-diffusion-webui"
+              onChange={(e) => onSet({ a1111Path: e.target.value })}
+            />
+            <span style={{ opacity: 0.6, fontSize: 11 }}>
+              The folder with webui-user.bat — the app starts AUTOMATIC1111 with --api on :7860 when you use
+              it (running alongside ComfyUI, which renders video). Leave blank to start it yourself.
+            </span>
+          </div>
+        )}
       </div>
+
+      {isDesktop && (
+        <label style={{ display: "flex", gap: 6, alignItems: "flex-start", fontSize: 12 }}>
+          <input
+            type="checkbox"
+            checked={showEngineConsole}
+            onChange={(e) => onSet({ showEngineConsole: e.target.checked })}
+          />
+          <span>
+            Show engine console windows
+            <span style={{ opacity: 0.6 }}>
+              {" "}
+              — open the ComfyUI/AUTOMATIC1111 console so you can watch generation logs outside the app.
+              Takes effect at the next engine start.
+            </span>
+          </span>
+        </label>
+      )}
+
+      <span style={{ opacity: 0.55, fontSize: 11 }}>
+        Video always renders on ComfyUI; images use the selected engine — both can run at once.
+      </span>
     </div>
   );
 }
