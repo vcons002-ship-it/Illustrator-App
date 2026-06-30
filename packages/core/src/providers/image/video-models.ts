@@ -87,14 +87,18 @@ export function videoModelById(id: string | undefined): VideoModelCatalogEntry |
  */
 export function resolveVideoModelFiles(id?: string, overrides?: VideoFileOverrides): VideoModelFiles {
   const base = (videoModelById(id) ?? WAN22_I2V_14B).files;
-  const o = (key: keyof VideoFileOverrides): string | undefined => overrides?.[key]?.trim() || undefined;
+  const o = (key: Exclude<keyof VideoFileOverrides, "ltxLoras">): string | undefined =>
+    overrides?.[key]?.trim() || undefined;
   if (base.kind === "ltx2-i2v") {
-    const lora = o("lora") ?? base.lora;
+    // The override stack wins over the catalog default; drop blank-named rows.
+    const loras = (overrides?.ltxLoras ?? base.loras)
+      ?.map((l) => ({ name: l.name.trim(), ...(l.strength !== undefined ? { strength: l.strength } : {}) }))
+      .filter((l) => l.name);
     return {
       kind: "ltx2-i2v",
       checkpoint: o("checkpoint") ?? base.checkpoint,
       textEncoder: o("textEncoder") ?? base.textEncoder,
-      ...(lora ? { lora } : {}),
+      ...(loras && loras.length ? { loras } : {}),
     };
   }
   const loraHigh = o("loraHigh") ?? base.loraHigh;

@@ -26,12 +26,16 @@ describe("video-models", () => {
       expect(f.textEncoder).toContain("gemma");
     }
   });
-  it("applies per-file overrides over the catalog default (any family)", () => {
-    const f = resolveVideoModelFiles("ltx2.3-i2v-22b", { checkpoint: "my-ltx.safetensors", lora: "speed.safetensors" });
+  it("applies per-file overrides + an LTX LoRA stack over the catalog default", () => {
+    const f = resolveVideoModelFiles("ltx2.3-i2v-22b", {
+      checkpoint: "my-ltx.safetensors",
+      ltxLoras: [{ name: "speed.safetensors", strength: 0.7 }, { name: "  " }],
+    });
     expect(f.kind).toBe("ltx2-i2v");
     if (f.kind === "ltx2-i2v") {
       expect(f.checkpoint).toBe("my-ltx.safetensors");
-      expect(f.lora).toBe("speed.safetensors");
+      // Blank-named rows are dropped; strengths preserved.
+      expect(f.loras).toEqual([{ name: "speed.safetensors", strength: 0.7 }]);
     }
   });
   it("carries independent high/low-noise LoRA overrides for Wan", () => {

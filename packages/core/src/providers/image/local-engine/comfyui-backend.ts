@@ -121,12 +121,19 @@ export function buildWanI2VWorkflow(p: WanI2VParams): Record<string, unknown> {
  * source frame, and a SamplerCustomAdvanced (euler + LTXVScheduler sigmas + CFGGuider) pass, decoded and
  * saved as an animated WEBP so the result is fetched exactly like the Wan path. Node ids are in the 200s so
  * they never collide with the Wan (100s) or image graphs. Mirrors the official native LTX-2.3 I2V template;
- * an optional LoRA wraps the model. NEEDS a real-box pass against the user's ComfyUI/LTX-2 install. PURE.
+ * an optional stack of LoRAs wraps the model. NEEDS a real-box pass against the user's ComfyUI/LTX-2 install. PURE.
  */
 export function buildLtx2I2VWorkflow(p: Ltx2I2VParams): Record<string, unknown> {
-  const lora = p.models.lora?.trim();
-  // The model the sampler guides: the bare checkpoint, or the LoRA-wrapped model when a LoRA is set.
-  const modelRef: [string, number] = lora ? ["201", 0] : ["200", 0];
+  // Stack of LoRAs (ids 220+) chained onto the checkpoint, each onto the previous; the sampler guides the
+  // last one (or the bare checkpoint when none). Blank-named entries are dropped.
+  const loras = (p.models.loras ?? []).map((l) => ({ name: l.name.trim(), strength: l.strength ?? 1 })).filter((l) => l.name);
+  let modelRef: [string, number] = ["200", 0];
+  const loraNodes: Record<string, unknown> = {};
+  loras.forEach((l, i) => {
+    const id = String(220 + i);
+    loraNodes[id] = { class_type: "LoraLoaderModelOnly", inputs: { model: modelRef, lora_name: l.name, strength_model: l.strength } };
+    modelRef = [id, 0];
+  });
   const graph: Record<string, unknown> = {
     "200": { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: p.models.checkpoint } },
     // LTX-2 uses a separate Gemma text encoder (not the checkpoint's bundled CLIP).
@@ -153,9 +160,7 @@ export function buildLtx2I2VWorkflow(p: Ltx2I2VParams): Record<string, unknown> 
     "213": { class_type: "VAEDecode", inputs: { samples: ["212", 0], vae: ["200", 2] } },
     "214": { class_type: "SaveAnimatedWEBP", inputs: { images: ["213", 0], filename_prefix: "visual-reader-vid", fps: p.fps, lossless: false, quality: 90, method: "default" } },
   };
-  if (lora) {
-    graph["201"] = { class_type: "LoraLoaderModelOnly", inputs: { model: ["200", 0], lora_name: lora, strength_model: 1 } };
-  }
+  Object.assign(graph, loraNodes);
   return graph;
 }
 

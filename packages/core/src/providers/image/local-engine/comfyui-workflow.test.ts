@@ -326,14 +326,34 @@ describe("buildLtx2I2VWorkflow (image-to-video, LTX-2.3 single-checkpoint)", () 
   });
   it("when no LoRA is set, the CFG guider reads the bare checkpoint model", () => {
     const g = buildLtx2I2VWorkflow(ltx);
-    expect(g["201"]).toBeUndefined();
+    expect(g["220"]).toBeUndefined();
     expect(inputsOf(g, "211").model).toEqual(["200", 0]);
   });
   it("when a LoRA is set, the model routes through LoraLoaderModelOnly", () => {
-    const g = buildLtx2I2VWorkflow({ ...ltx, models: { ...ltx.models, lora: "ltx_lora.safetensors" } });
-    expect(classOf(g, "201")).toBe("LoraLoaderModelOnly");
-    expect(inputsOf(g, "201").lora_name).toBe("ltx_lora.safetensors");
-    expect(inputsOf(g, "201").model).toEqual(["200", 0]);
-    expect(inputsOf(g, "211").model).toEqual(["201", 0]);
+    const g = buildLtx2I2VWorkflow({ ...ltx, models: { ...ltx.models, loras: [{ name: "ltx_lora.safetensors" }] } });
+    expect(classOf(g, "220")).toBe("LoraLoaderModelOnly");
+    expect(inputsOf(g, "220").lora_name).toBe("ltx_lora.safetensors");
+    expect(inputsOf(g, "220").model).toEqual(["200", 0]);
+    expect(inputsOf(g, "220").strength_model).toBe(1);
+    expect(inputsOf(g, "211").model).toEqual(["220", 0]);
+  });
+  it("stacks multiple LoRAs in order, each chained onto the previous, with per-LoRA strength", () => {
+    const g = buildLtx2I2VWorkflow({
+      ...ltx,
+      models: { ...ltx.models, loras: [{ name: "a.safetensors", strength: 0.8 }, { name: "b.safetensors", strength: 0.5 }] },
+    });
+    expect(inputsOf(g, "220").lora_name).toBe("a.safetensors");
+    expect(inputsOf(g, "220").model).toEqual(["200", 0]);
+    expect(inputsOf(g, "220").strength_model).toBe(0.8);
+    expect(inputsOf(g, "221").lora_name).toBe("b.safetensors");
+    expect(inputsOf(g, "221").model).toEqual(["220", 0]); // chained onto the first LoRA
+    expect(inputsOf(g, "221").strength_model).toBe(0.5);
+    expect(inputsOf(g, "211").model).toEqual(["221", 0]); // sampler guides the last LoRA
+  });
+  it("drops blank-named LoRA rows", () => {
+    const g = buildLtx2I2VWorkflow({ ...ltx, models: { ...ltx.models, loras: [{ name: "  " }, { name: "real.safetensors" }] } });
+    expect(inputsOf(g, "220").lora_name).toBe("real.safetensors");
+    expect(g["221"]).toBeUndefined();
+    expect(inputsOf(g, "211").model).toEqual(["220", 0]);
   });
 });
