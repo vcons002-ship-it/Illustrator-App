@@ -268,7 +268,7 @@ export interface ReaderSettings {
   /** Per-file overrides for the image-to-video model — swap a component (a specific checkpoint / text
    * encoder / VAE / LoRA) or point at a renamed file to fix a broken download. Blank → the catalog default.
    * A superset of every family's filenames; only the selected model's fields are shown/used. */
-  videoFiles?: { highNoise?: string; lowNoise?: string; textEncoder?: string; vae?: string; checkpoint?: string; lora?: string };
+  videoFiles?: { highNoise?: string; lowNoise?: string; textEncoder?: string; vae?: string; checkpoint?: string; lora?: string; loraHigh?: string; loraLow?: string };
   /** Image-to-video render-param overrides (the graph's size / length / sampler choices). */
   videoParams?: { frames?: number; fps?: number; width?: number; height?: number; steps?: number; cfg?: number; shift?: number };
   /** Parallel coding agents: let the manager model auto-resolve a merge conflict between agent
@@ -2192,7 +2192,7 @@ export function SettingsPanel({
                     <input
                       list={list.length ? listId : undefined}
                       value={vf[k] ?? ""}
-                      placeholder={k === "lora" ? "(none)" : defFiles[k] ?? ""}
+                      placeholder={k === "lora" || k === "loraHigh" || k === "loraLow" ? "(none)" : defFiles[k] ?? ""}
                       onChange={(e) => setFile(k, e.target.value)}
                       style={{ fontSize: 11 }}
                     />
@@ -2227,7 +2227,8 @@ export function SettingsPanel({
                           {fileRow("Low-noise model", "lowNoise", diffNames, "vid-low")}
                           {fileRow("Text encoder", "textEncoder", installedTextEncoders, "vid-te")}
                           {fileRow("VAE", "vae", installedVaes, "vid-vae")}
-                          {fileRow("LoRA (optional)", "lora", installedLoras, "vid-lora")}
+                          {fileRow("LoRA — high noise (optional)", "loraHigh", installedLoras, "vid-lora-hi")}
+                          {fileRow("LoRA — low noise (optional)", "loraLow", installedLoras, "vid-lora-lo")}
                         </>
                       )}
                     </div>

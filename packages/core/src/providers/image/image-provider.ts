@@ -139,7 +139,8 @@ export interface ImageGenerationOutput {
 
 /** Files a Wan2.2 two-expert image-to-video graph needs (a high/low-noise pair + encoder + VAE).
  * Every field is a ComfyUI filename the reader can override from Settings to swap a component or work
- * around a failed download. `lora` is optional (applied to both experts when set). */
+ * around a failed download. The two experts take independent LoRAs (Wan ships separate high/low-noise
+ * LoRAs); each is optional and wraps only its own expert. */
 export interface WanVideoFiles {
   readonly kind: "wan-i2v";
   /** High-noise diffusion model (first sampling stage). */
@@ -150,8 +151,10 @@ export interface WanVideoFiles {
   textEncoder: string;
   /** VAE. */
   vae: string;
-  /** Optional motion/style LoRA applied to both experts. */
-  lora?: string;
+  /** Optional LoRA wrapping the high-noise expert only. */
+  loraHigh?: string;
+  /** Optional LoRA wrapping the low-noise expert only. */
+  loraLow?: string;
 }
 
 /** Files an LTX-2 image-to-video graph needs: one combined checkpoint (model + VAE) plus the separate
@@ -178,7 +181,12 @@ export interface VideoFileOverrides {
   textEncoder?: string;
   vae?: string;
   checkpoint?: string;
+  /** LTX-2 single LoRA. */
   lora?: string;
+  /** Wan high-noise expert LoRA. */
+  loraHigh?: string;
+  /** Wan low-noise expert LoRA. */
+  loraLow?: string;
 }
 
 /** The sampler/size/length choices for an image-to-video render — overridable from Settings. */

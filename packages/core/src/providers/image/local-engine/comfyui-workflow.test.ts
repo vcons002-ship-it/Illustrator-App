@@ -267,15 +267,23 @@ describe("buildWanI2VWorkflow (image-to-video, Wan2.2 two-expert)", () => {
     expect(inputsOf(g, "108").model).toEqual(["100", 0]);
     expect(inputsOf(g, "109").model).toEqual(["101", 0]);
   });
-  it("when a LoRA is set, both experts route through LoraLoaderModelOnly first", () => {
-    const g = buildWanI2VWorkflow({ ...wan, models: { ...wan.models, lora: "wan_lora.safetensors" } });
+  it("applies independent high/low-noise LoRAs, each wrapping only its own expert", () => {
+    const g = buildWanI2VWorkflow({ ...wan, models: { ...wan.models, loraHigh: "high_lora.safetensors", loraLow: "low_lora.safetensors" } });
     expect(classOf(g, "114")).toBe("LoraLoaderModelOnly");
     expect(classOf(g, "115")).toBe("LoraLoaderModelOnly");
-    expect(inputsOf(g, "114").lora_name).toBe("wan_lora.safetensors");
+    expect(inputsOf(g, "114").lora_name).toBe("high_lora.safetensors");
     expect(inputsOf(g, "114").model).toEqual(["100", 0]);
+    expect(inputsOf(g, "115").lora_name).toBe("low_lora.safetensors");
     expect(inputsOf(g, "115").model).toEqual(["101", 0]);
     expect(inputsOf(g, "108").model).toEqual(["114", 0]);
     expect(inputsOf(g, "109").model).toEqual(["115", 0]);
+  });
+  it("a high-noise LoRA alone wraps only the high expert; the low expert stays bare", () => {
+    const g = buildWanI2VWorkflow({ ...wan, models: { ...wan.models, loraHigh: "high_lora.safetensors" } });
+    expect(classOf(g, "114")).toBe("LoraLoaderModelOnly");
+    expect(g["115"]).toBeUndefined();
+    expect(inputsOf(g, "108").model).toEqual(["114", 0]);
+    expect(inputsOf(g, "109").model).toEqual(["101", 0]);
   });
 });
 
