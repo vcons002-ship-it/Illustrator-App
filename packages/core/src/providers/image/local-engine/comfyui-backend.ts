@@ -331,7 +331,7 @@ interface UploadedImage {
   name: string;
 }
 
-type NodeSchema = { input?: { required?: Record<string, unknown> } };
+type NodeSchema = { input?: { required?: Record<string, unknown>; optional?: Record<string, unknown> } };
 type ObjectInfoNodes = Record<string, NodeSchema | undefined>;
 
 interface PromptResponse {
@@ -563,10 +563,12 @@ export class ComfyUIBackend implements LocalEngineBackend {
     return p;
   }
 
-  /** Read a node's required-input enum (e.g. UNETLoader.unet_name); [] if unavailable. */
+  /** Read a node's input enum (e.g. UNETLoader.unet_name); checks required THEN optional (some loaders —
+   * e.g. LatentUpscaleModelLoader / LTXAVTextEncoderLoader — expose the file list as an optional input).
+   * [] if unavailable. */
   private async enumValues(node: string, key: string): Promise<string[]> {
     const data = await this.nodeInfo(node);
-    const enumVal = data?.input?.required?.[key];
+    const enumVal = data?.input?.required?.[key] ?? data?.input?.optional?.[key];
     return Array.isArray(enumVal) && Array.isArray(enumVal[0]) ? (enumVal[0] as string[]) : [];
   }
 
