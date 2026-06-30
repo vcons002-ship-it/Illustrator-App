@@ -5212,7 +5212,8 @@ export function App() {
       // Settings overrides win over the catalog default (a swapped component / a fixed broken download),
       // and the Settings render params drive the graph's size/length/sampler choices.
       const models = resolveVideoModelFiles(call.model ?? settings.videoModel, settings.videoFiles);
-      out = await chatVideo(call, src, models, settings.videoParams, {
+      // Render params are stored per model family — pick the selected model's set (frames/fps/etc).
+      out = await chatVideo(call, src, models, settings.videoParams?.[models.kind], {
         onProgress: (f) => setBuddyActivity(`${textToVideo ? "Generating the video" : "Animating the image"}… ${Math.round(f * 100)}%`),
       });
     } catch (err) {
@@ -9094,6 +9095,12 @@ function migrate(raw: Record<string, unknown>): ReaderSettings {
       migrated.pagesPerImage = raw.illustrationScope === "chapter" ? "chapter" : 1;
     }
     delete (migrated as Record<string, unknown>).illustrationScope;
+    // Legacy flat `videoParams` (one shared set) → per-family: it used to apply to whatever model was
+    // selected, so seed BOTH families with it. New shape is keyed by `kind` (wan-i2v / ltx2-i2v).
+    const vp = raw.videoParams as Record<string, unknown> | undefined;
+    if (vp && !("wan-i2v" in vp) && !("ltx2-i2v" in vp) && Object.keys(vp).length > 0) {
+      migrated.videoParams = { "wan-i2v": { ...vp }, "ltx2-i2v": { ...vp } } as NonNullable<ReaderSettings["videoParams"]>;
+    }
     return migrated;
   }
   const llmKey = typeof raw.llmKey === "string" ? raw.llmKey : "";
