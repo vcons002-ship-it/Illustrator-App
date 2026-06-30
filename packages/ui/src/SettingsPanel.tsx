@@ -2199,6 +2199,11 @@ export function SettingsPanel({
                     <input type="number" value={vp[k] ?? ""} placeholder={String(ph)} onChange={(e) => setParam(k, e.target.value)} style={{ fontSize: 11, width: 80 }} />
                   </label>
                 );
+                const effFrames = vp.frames ?? 81;
+                const effFps = vp.fps ?? 16;
+                const durationS = effFps > 0 ? effFrames / effFps : 0;
+                // Wan samples in 4-frame chunks, so a length of 4n+1 lands cleanly. Durations shown at the current fps.
+                const SUGGESTED = [49, 81, 121, 161];
                 return (
                   <details style={{ marginTop: 8 }}>
                     <summary style={{ cursor: "pointer", fontSize: 12 }}>Advanced — model files &amp; render settings</summary>
@@ -2217,6 +2222,24 @@ export function SettingsPanel({
                       {numRow("Steps", "steps", 20)}
                       {numRow("CFG", "cfg", 3.5)}
                       {numRow("Shift", "shift", 8)}
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 11 }}>
+                      <span style={{ fontWeight: 600 }}>≈ {durationS.toFixed(1)}s</span>
+                      <span style={{ opacity: 0.7 }}> at {effFrames} frames ÷ {effFps} fps. </span>
+                      <span style={{ opacity: 0.7 }}>Length (= frames ÷ fps). Wan likes 4n+1 frame counts: </span>
+                      {SUGGESTED.map((f, i) => (
+                        <span key={f}>
+                          {i > 0 ? ", " : ""}
+                          <button
+                            type="button"
+                            onClick={() => setParam("frames", String(f))}
+                            style={{ fontSize: 11, padding: "0 4px", cursor: "pointer", background: "none", border: "1px solid currentColor", borderRadius: 4, opacity: 0.8 }}
+                          >
+                            {f} (~{(f / effFps).toFixed(1)}s)
+                          </button>
+                        </span>
+                      ))}
+                      <span style={{ opacity: 0.7 }}>. More frames = more VRAM &amp; time.</span>
                     </div>
                     <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginTop: 6 }}>
                       Override any file (pick an installed one or type a filename) to swap a component or fix a failed
