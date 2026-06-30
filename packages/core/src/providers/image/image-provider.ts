@@ -173,7 +173,11 @@ export interface Ltx2VideoFiles {
   checkpoint: string;
   /** Gemma text encoder. */
   textEncoder: string;
-  /** Optional ordered stack of LoRAs applied to the model (each chained onto the previous). */
+  /** Distilled speed LoRA — the 22B dev checkpoint relies on it (applied as a fixed component). */
+  distilledLora: string;
+  /** 2× spatial latent upscaler (the official graph's two-stage render upsamples between passes). */
+  upscaler: string;
+  /** Optional ordered stack of EXTRA user LoRAs, each chained onto the distilled one. */
   loras?: VideoLora[];
 }
 
@@ -189,6 +193,10 @@ export interface VideoFileOverrides {
   textEncoder?: string;
   vae?: string;
   checkpoint?: string;
+  /** LTX-2 distilled speed LoRA. */
+  distilledLora?: string;
+  /** LTX-2 spatial upscaler. */
+  upscaler?: string;
   /** Wan high-noise expert LoRA. */
   loraHigh?: string;
   /** Wan low-noise expert LoRA. */
@@ -207,6 +215,9 @@ export interface VideoRenderParams {
   cfg?: number;
   /** Sigma shift (Wan's recommended ~8 for video). */
   shift?: number;
+  /** LTX-2 only: render the high-res two-stage path (generate → 2× upscale → refine). Default true;
+   * false does a single-stage pass at the target size (no upscaler — faster, lighter). */
+  highRes?: boolean;
 }
 
 /** Input for an image-to-video render: a source image + a motion prompt + clip params. */
@@ -226,6 +237,8 @@ export interface VideoGenerationInput {
   cfg?: number;
   /** Sigma shift (Wan ~8 for video). */
   shift?: number;
+  /** LTX-2 only: high-res two-stage (generate → 2× upscale → refine). Default true. */
+  highRes?: boolean;
   seed?: number;
   lowVram?: boolean;
   onProgress?: (fraction: number) => void;

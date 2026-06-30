@@ -4071,6 +4071,7 @@ async function handleChatVideo(
         ...(params?.steps ? { steps: params.steps } : {}),
         ...(params?.cfg !== undefined ? { cfg: params.cfg } : {}),
         ...(params?.shift !== undefined ? { shift: params.shift } : {}),
+        ...(params?.highRes !== undefined ? { highRes: params.highRes } : {}),
         lowVram: !!settings.lowVram,
         signal: ac.signal,
         onProgress: (fraction) => post({ type: "testProgress", requestId, fraction }),

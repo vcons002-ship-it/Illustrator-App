@@ -287,10 +287,16 @@ describe("buildWanI2VWorkflow (image-to-video, Wan2.2 two-expert)", () => {
   });
 });
 
-describe("buildLtx2I2VWorkflow (image-to-video, LTX-2.3 single-checkpoint)", () => {
+describe("buildLtx2I2VWorkflow (official video-only 2-stage LTX-2.3)", () => {
   const ltx = {
     startImage: "vr-ref-2.png",
-    models: { kind: "ltx2-i2v" as const, checkpoint: "ltx.safetensors", textEncoder: "gemma.safetensors" },
+    models: {
+      kind: "ltx2-i2v" as const,
+      checkpoint: "ltx.safetensors",
+      textEncoder: "gemma.safetensors",
+      distilledLora: "distilled.safetensors",
+      upscaler: "upscaler.safetensors",
+    },
     prompt: "camera pushes through the doorway",
     negative: "static",
     width: 768,
@@ -298,62 +304,83 @@ describe("buildLtx2I2VWorkflow (image-to-video, LTX-2.3 single-checkpoint)", () 
     frames: 121,
     fps: 24,
     steps: 20,
-    cfg: 3,
+    cfg: 1,
     seed: 11,
+    highRes: true,
   };
-  it("loads the checkpoint + the separate gemma text encoder and conditions the source frame", () => {
+  it("loads the checkpoint + gemma encoder + distilled LoRA and preprocesses the source frame", () => {
     const g = buildLtx2I2VWorkflow(ltx);
     expect(classOf(g, "200")).toBe("CheckpointLoaderSimple");
     expect(inputsOf(g, "200").ckpt_name).toBe("ltx.safetensors");
-    expect(classOf(g, "202")).toBe("LTXAVTextEncoderLoader");
-    expect(inputsOf(g, "202").clip_name).toBe("gemma.safetensors");
-    expect(classOf(g, "205")).toBe("LoadImage");
-    expect(inputsOf(g, "205").image).toBe("vr-ref-2.png");
-    expect(classOf(g, "206")).toBe("LTXVImgToVideo");
-    expect(inputsOf(g, "206").length).toBe(121);
-    expect(inputsOf(g, "206").image).toEqual(["205", 0]);
+    expect(classOf(g, "201")).toBe("LTXAVTextEncoderLoader");
+    expect(inputsOf(g, "201").text_encoder).toBe("gemma.safetensors");
+    expect(classOf(g, "202")).toBe("LoraLoaderModelOnly"); // required distilled LoRA
+    expect(inputsOf(g, "202").lora_name).toBe("distilled.safetensors");
+    expect(inputsOf(g, "202").model).toEqual(["200", 0]);
+    expect(classOf(g, "206")).toBe("LoadImage");
+    expect(inputsOf(g, "206").image).toBe("vr-ref-2.png");
+    expect(classOf(g, "208")).toBe("LTXVPreprocess");
   });
-  it("drives a SamplerCustomAdvanced (euler + LTXV sigmas + CFG guider) and saves an animated webp", () => {
+  it("renders half-res, upscales 2×, then refines — two SamplerCustomAdvanced passes", () => {
     const g = buildLtx2I2VWorkflow(ltx);
-    expect(classOf(g, "208")).toBe("LTXVScheduler");
-    expect(inputsOf(g, "208").steps).toBe(20);
-    expect(classOf(g, "211")).toBe("CFGGuider");
-    expect(inputsOf(g, "211").cfg).toBe(3);
-    expect(inputsOf(g, "211").model).toEqual(["200", 0]);
-    expect(classOf(g, "212")).toBe("SamplerCustomAdvanced");
-    expect(classOf(g, "214")).toBe("SaveAnimatedWEBP");
-    expect(inputsOf(g, "214").fps).toBe(24);
+    // Stage 1 at half resolution.
+    expect(classOf(g, "209")).toBe("EmptyLTXVLatentVideo");
+    expect(inputsOf(g, "209").width).toBe(384);
+    expect(inputsOf(g, "209").height).toBe(256);
+    expect(inputsOf(g, "209").length).toBe(121);
+    expect(classOf(g, "215")).toBe("SamplerCustomAdvanced");
+    expect(inputsOf(g, "215").latent_image).toEqual(["210", 0]);
+    // 2× upscale between passes.
+    expect(classOf(g, "216")).toBe("LatentUpscaleModelLoader");
+    expect(inputsOf(g, "216").model_name).toBe("upscaler.safetensors");
+    expect(classOf(g, "217")).toBe("LTXVLatentUpsampler");
+    expect(inputsOf(g, "217").samples).toEqual(["215", 0]);
+    // Stage 2 refine over the upscaled latent.
+    expect(inputsOf(g, "218").latent).toEqual(["217", 0]);
+    expect(classOf(g, "224")).toBe("SamplerCustomAdvanced");
+    expect(inputsOf(g, "224").latent_image).toEqual(["218", 0]);
+    // Decoded + saved as an animated webp.
+    expect(classOf(g, "225")).toBe("VAEDecodeTiled");
+    expect(classOf(g, "226")).toBe("SaveAnimatedWEBP");
+    expect(inputsOf(g, "226").fps).toBe(24);
   });
-  it("when no LoRA is set, the CFG guider reads the bare checkpoint model", () => {
+  it("both CFG guiders read the distilled-LoRA model when no extra LoRAs are set", () => {
     const g = buildLtx2I2VWorkflow(ltx);
-    expect(g["220"]).toBeUndefined();
-    expect(inputsOf(g, "211").model).toEqual(["200", 0]);
+    expect(g["250"]).toBeUndefined();
+    expect(inputsOf(g, "214").model).toEqual(["202", 0]);
+    expect(inputsOf(g, "223").model).toEqual(["202", 0]);
+    expect(inputsOf(g, "214").cfg).toBe(1);
   });
-  it("when a LoRA is set, the model routes through LoraLoaderModelOnly", () => {
-    const g = buildLtx2I2VWorkflow({ ...ltx, models: { ...ltx.models, loras: [{ name: "ltx_lora.safetensors" }] } });
-    expect(classOf(g, "220")).toBe("LoraLoaderModelOnly");
-    expect(inputsOf(g, "220").lora_name).toBe("ltx_lora.safetensors");
-    expect(inputsOf(g, "220").model).toEqual(["200", 0]);
-    expect(inputsOf(g, "220").strength_model).toBe(1);
-    expect(inputsOf(g, "211").model).toEqual(["220", 0]);
-  });
-  it("stacks multiple LoRAs in order, each chained onto the previous, with per-LoRA strength", () => {
+  it("chains extra user LoRAs onto the distilled one; both guiders read the last", () => {
     const g = buildLtx2I2VWorkflow({
       ...ltx,
       models: { ...ltx.models, loras: [{ name: "a.safetensors", strength: 0.8 }, { name: "b.safetensors", strength: 0.5 }] },
     });
-    expect(inputsOf(g, "220").lora_name).toBe("a.safetensors");
-    expect(inputsOf(g, "220").model).toEqual(["200", 0]);
-    expect(inputsOf(g, "220").strength_model).toBe(0.8);
-    expect(inputsOf(g, "221").lora_name).toBe("b.safetensors");
-    expect(inputsOf(g, "221").model).toEqual(["220", 0]); // chained onto the first LoRA
-    expect(inputsOf(g, "221").strength_model).toBe(0.5);
-    expect(inputsOf(g, "211").model).toEqual(["221", 0]); // sampler guides the last LoRA
+    expect(inputsOf(g, "250").lora_name).toBe("a.safetensors");
+    expect(inputsOf(g, "250").model).toEqual(["202", 0]); // onto the distilled LoRA
+    expect(inputsOf(g, "250").strength_model).toBe(0.8);
+    expect(inputsOf(g, "251").model).toEqual(["250", 0]); // chained onto the first user LoRA
+    expect(inputsOf(g, "251").strength_model).toBe(0.5);
+    expect(inputsOf(g, "214").model).toEqual(["251", 0]);
+    expect(inputsOf(g, "223").model).toEqual(["251", 0]);
   });
-  it("drops blank-named LoRA rows", () => {
+  it("drops blank-named user LoRA rows", () => {
     const g = buildLtx2I2VWorkflow({ ...ltx, models: { ...ltx.models, loras: [{ name: "  " }, { name: "real.safetensors" }] } });
-    expect(inputsOf(g, "220").lora_name).toBe("real.safetensors");
-    expect(g["221"]).toBeUndefined();
-    expect(inputsOf(g, "211").model).toEqual(["220", 0]);
+    expect(inputsOf(g, "250").lora_name).toBe("real.safetensors");
+    expect(g["251"]).toBeUndefined();
+    expect(inputsOf(g, "214").model).toEqual(["250", 0]);
+  });
+  it("single-stage (highRes off): renders at target size and skips the upscaler + refine", () => {
+    const g = buildLtx2I2VWorkflow({ ...ltx, highRes: false });
+    // Generate at the full target size (not halved).
+    expect(inputsOf(g, "209").width).toBe(768);
+    expect(inputsOf(g, "209").height).toBe(512);
+    // No upscaler / stage-2 nodes.
+    expect(g["216"]).toBeUndefined();
+    expect(g["217"]).toBeUndefined();
+    expect(g["224"]).toBeUndefined();
+    // Decode reads stage 1 directly.
+    expect(inputsOf(g, "225").samples).toEqual(["215", 0]);
+    expect(classOf(g, "226")).toBe("SaveAnimatedWEBP");
   });
 });

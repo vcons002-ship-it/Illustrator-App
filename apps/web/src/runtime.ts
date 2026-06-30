@@ -42,7 +42,7 @@ export interface DownloadableModel {
   filename: string;
   url: string;
   /** ComfyUI models subfolder for split-file components (default "checkpoints"). */
-  folder?: "checkpoints" | "diffusion_models" | "text_encoders" | "vae";
+  folder?: "checkpoints" | "diffusion_models" | "text_encoders" | "vae" | "loras" | "latent_upscale_models";
 }
 
 /** Progress while the engine itself is being installed / launched. */
