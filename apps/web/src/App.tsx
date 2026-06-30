@@ -1734,7 +1734,11 @@ export function App() {
         currentFile = f.filename;
         multiFile.current[id] = { index: i, count: files.length };
         setDownloadStage((prev) => ({ ...prev, [id]: `file ${i + 1}/${files.length}: ${f.filename}` }));
-        await downloadModel({ id: f.filename, filename: f.filename, url: f.url, folder: f.folder });
+        // Report progress under the MODEL id (not the filename) so the per-file Rust progress folds into
+        // the model's single combined bar (multiFile above) — matching onDownloadModel. Using the filename
+        // as the id breaks the fold (the bar sits at 0% until each file finishes) and the live per-file
+        // progress lands on a child-file key the download indicator hides, so it looks like nothing happens.
+        await downloadModel({ id, filename: f.filename, url: f.url, folder: f.folder });
         setModelProgress((prev) => ({ ...prev, [id]: ((i + 1) / files.length) * 100 }));
       }
     } catch (err) {
