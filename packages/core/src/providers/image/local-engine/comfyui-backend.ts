@@ -1,4 +1,4 @@
-import { DirectTransport, type Transport } from "../../transport/transport.js";
+import { DirectTransport, type Transport, type TransportResponse } from "../../transport/transport.js";
 import { catalogEntryForModel } from "../../catalog.js";
 import { scaleSteps } from "../../../quality.js";
 import type {
@@ -64,6 +64,8 @@ interface Ltx2I2VParams {
   seed: number;
   /** High-res two-stage (generate → 2× upscale → refine). False = single-stage at the target size. */
   highRes: boolean;
+  /** Generate synchronized audio (faithful audio+video graph → mp4). False = silent video only. */
+  audio: boolean;
 }
 
 /**
@@ -154,8 +156,8 @@ export function buildLtx2I2VWorkflow(p: Ltx2I2VParams): Record<string, unknown> 
   // the target size directly and skips the upscaler + refine pass.
   const genW = p.highRes ? ltxDim(p.width / 2) : ltxDim(p.width);
   const genH = p.highRes ? ltxDim(p.height / 2) : ltxDim(p.height);
-  // The required distilled LoRA (node 202) is the base; any extra user LoRAs (250+) chain onto it. The CFG
-  // guider(s) sample from the end of that chain. Blank-named user entries are dropped.
+  // The required distilled LoRA (node 202, strength 0.5 per the official graph) is the base; extra user
+  // LoRAs (250+) chain onto it. The CFG guider(s) sample from the end of that chain. Blank names dropped.
   const userLoras = (p.models.loras ?? []).map((l) => ({ name: l.name.trim(), strength: l.strength ?? 1 })).filter((l) => l.name);
   let modelRef: [string, number] = ["202", 0];
   const loraNodes: Record<string, unknown> = {};
@@ -165,50 +167,88 @@ export function buildLtx2I2VWorkflow(p: Ltx2I2VParams): Record<string, unknown> 
     modelRef = [id, 0];
   });
   // Image-to-video injects the source frame (LTXVImgToVideoInplace) into each stage's latent; text-to-video
-  // omits the image nodes and samples the empty/upscaled latent directly.
+  // omits the image nodes and samples the empty/upscaled latent directly. Audio runs alongside the video in
+  // a combined AV latent (LTXVConcatAVLatent → sample → LTXVSeparateAVLatent), exactly as the official graph.
   const i2v = !!p.startImage;
-  const stage1Latent: [string, number] = i2v ? ["210", 0] : ["209", 0];
-  const stage2Latent: [string, number] = i2v ? ["218", 0] : ["217", 0];
+  const audio = p.audio;
   const graph: Record<string, unknown> = {
     "200": { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: p.models.checkpoint } },
     // LTX-2 uses a separate Gemma text encoder (it reads the checkpoint too, for the AV head).
     "201": { class_type: "LTXAVTextEncoderLoader", inputs: { text_encoder: p.models.textEncoder, ckpt_name: p.models.checkpoint, device: "default" } },
     // The distilled speed LoRA the 22B dev checkpoint relies on (extra user LoRAs chain after this).
-    "202": { class_type: "LoraLoaderModelOnly", inputs: { model: ["200", 0], lora_name: p.models.distilledLora, strength_model: 1 } },
+    "202": { class_type: "LoraLoaderModelOnly", inputs: { model: ["200", 0], lora_name: p.models.distilledLora, strength_model: 0.5 } },
     "203": { class_type: "CLIPTextEncode", inputs: { text: p.prompt, clip: ["201", 0] } },
     "204": { class_type: "CLIPTextEncode", inputs: { text: p.negative, clip: ["201", 0] } },
     "205": { class_type: "LTXVConditioning", inputs: { positive: ["203", 0], negative: ["204", 0], frame_rate: p.fps } },
-    // ── Stage 1: generation (half-res when high-res is on, else target size) ──
     "209": { class_type: "EmptyLTXVLatentVideo", inputs: { width: genW, height: genH, length: p.frames, batch_size: 1 } },
     "211": { class_type: "RandomNoise", inputs: { noise_seed: p.seed } },
     "212": { class_type: "KSamplerSelect", inputs: { sampler_name: "euler" } },
     "213": { class_type: "ManualSigmas", inputs: { sigmas: LTX_STAGE1_SIGMAS } },
     "214": { class_type: "CFGGuider", inputs: { model: modelRef, positive: ["205", 0], negative: ["205", 1], cfg: p.cfg } },
-    "215": { class_type: "SamplerCustomAdvanced", inputs: { noise: ["211", 0], guider: ["214", 0], sampler: ["212", 0], sigmas: ["213", 0], latent_image: stage1Latent } },
-    // Decode the final latent — stage 2's output when high-res, else stage 1's directly.
-    "225": { class_type: "VAEDecodeTiled", inputs: { samples: p.highRes ? ["224", 0] : ["215", 0], vae: ["200", 2], tile_size: 768, overlap: 64, temporal_size: 4096, temporal_overlap: 4 } },
-    "226": { class_type: "SaveAnimatedWEBP", inputs: { images: ["225", 0], filename_prefix: "visual-reader-vid", fps: p.fps, lossless: false, quality: 90, method: "default" } },
   };
   if (i2v) {
-    // Source-frame nodes (image-to-video only): load → scale → preprocess → inject into the stage-1 latent.
+    // Source-frame nodes (image-to-video only): load → scale → preprocess → inject. A PrimitiveBoolean drives
+    // the inject `bypass` (mirrors the official graph's "Switch to Text to Video?" toggle; false = inject).
     graph["206"] = { class_type: "LoadImage", inputs: { image: p.startImage } };
     graph["207"] = { class_type: "ImageScale", inputs: { image: ["206", 0], upscale_method: "lanczos", width: p.width, height: p.height, crop: "center" } };
     graph["208"] = { class_type: "LTXVPreprocess", inputs: { image: ["207", 0], img_compression: 18 } };
-    graph["210"] = { class_type: "LTXVImgToVideoInplace", inputs: { strength: 0.7, bypass: false, vae: ["200", 2], image: ["208", 0], latent: ["209", 0] } };
+    graph["248"] = { class_type: "PrimitiveBoolean", inputs: { value: false } };
+    graph["210"] = { class_type: "LTXVImgToVideoInplace", inputs: { strength: 0.7, bypass: ["248", 0], vae: ["200", 2], image: ["208", 0], latent: ["209", 0] } };
   }
+  const stage1Video: [string, number] = i2v ? ["210", 0] : ["209", 0];
+  // Audio latent + combine with the video latent for the sampler.
+  if (audio) {
+    graph["230"] = { class_type: "LTXVAudioVAELoader", inputs: { ckpt_name: p.models.checkpoint } };
+    graph["231"] = { class_type: "LTXVEmptyLatentAudio", inputs: { frames_number: p.frames, frame_rate: p.fps, batch_size: 1, audio_vae: ["230", 0] } };
+    graph["232"] = { class_type: "LTXVConcatAVLatent", inputs: { video_latent: stage1Video, audio_latent: ["231", 0] } };
+  }
+  graph["215"] = {
+    class_type: "SamplerCustomAdvanced",
+    inputs: { noise: ["211", 0], guider: ["214", 0], sampler: ["212", 0], sigmas: ["213", 0], latent_image: audio ? ["232", 0] : stage1Video },
+  };
+  if (audio) graph["233"] = { class_type: "LTXVSeparateAVLatent", inputs: { av_latent: ["215", 0] } };
+  // After stage 1: the video latent (and audio latent when on).
+  const s1Video: [string, number] = audio ? ["233", 0] : ["215", 0];
+  const s1Audio: [string, number] | null = audio ? ["233", 1] : null;
+  let finalVideo = s1Video;
+  let finalAudio = s1Audio;
   if (p.highRes) {
-    // ── 2× spatial upscale of the latent, then a full-resolution refine pass ──
+    // ── 2× spatial upscale of the stage-1 video latent, then a full-resolution refine pass ──
     graph["216"] = { class_type: "LatentUpscaleModelLoader", inputs: { model_name: p.models.upscaler } };
-    graph["217"] = { class_type: "LTXVLatentUpsampler", inputs: { samples: ["215", 0], upscale_model: ["216", 0], vae: ["200", 2] } };
+    graph["217"] = { class_type: "LTXVLatentUpsampler", inputs: { samples: s1Video, upscale_model: ["216", 0], vae: ["200", 2] } };
+    let stage2Video: [string, number] = ["217", 0];
     if (i2v) {
-      graph["218"] = { class_type: "LTXVImgToVideoInplace", inputs: { strength: 1, bypass: false, vae: ["200", 2], image: ["208", 0], latent: ["217", 0] } };
+      graph["218"] = { class_type: "LTXVImgToVideoInplace", inputs: { strength: 1, bypass: ["248", 0], vae: ["200", 2], image: ["208", 0], latent: ["217", 0] } };
+      stage2Video = ["218", 0];
     }
-    graph["219"] = { class_type: "LTXVCropGuides", inputs: { positive: ["205", 0], negative: ["205", 1], latent: ["215", 0] } };
+    graph["219"] = { class_type: "LTXVCropGuides", inputs: { positive: ["205", 0], negative: ["205", 1], latent: s1Video } };
+    if (audio) graph["234"] = { class_type: "LTXVConcatAVLatent", inputs: { video_latent: stage2Video, audio_latent: s1Audio! } };
     graph["220"] = { class_type: "RandomNoise", inputs: { noise_seed: p.seed + 1 } };
     graph["221"] = { class_type: "KSamplerSelect", inputs: { sampler_name: "euler" } };
     graph["222"] = { class_type: "ManualSigmas", inputs: { sigmas: LTX_STAGE2_SIGMAS } };
     graph["223"] = { class_type: "CFGGuider", inputs: { model: modelRef, positive: ["219", 0], negative: ["219", 1], cfg: p.cfg } };
-    graph["224"] = { class_type: "SamplerCustomAdvanced", inputs: { noise: ["220", 0], guider: ["223", 0], sampler: ["221", 0], sigmas: ["222", 0], latent_image: stage2Latent } };
+    graph["224"] = {
+      class_type: "SamplerCustomAdvanced",
+      inputs: { noise: ["220", 0], guider: ["223", 0], sampler: ["221", 0], sigmas: ["222", 0], latent_image: audio ? ["234", 0] : stage2Video },
+    };
+    if (audio) {
+      graph["235"] = { class_type: "LTXVSeparateAVLatent", inputs: { av_latent: ["224", 0] } };
+      finalVideo = ["235", 0];
+      finalAudio = ["235", 1];
+    } else {
+      finalVideo = ["224", 0];
+      finalAudio = null;
+    }
+  }
+  graph["225"] = { class_type: "VAEDecodeTiled", inputs: { samples: finalVideo, vae: ["200", 2], tile_size: 768, overlap: 64, temporal_size: 4096, temporal_overlap: 4 } };
+  if (audio) {
+    // Decode audio + mux into an mp4 (the official CreateVideo → SaveVideo tail).
+    graph["236"] = { class_type: "LTXVAudioVAEDecode", inputs: { samples: finalAudio!, audio_vae: ["230", 0] } };
+    graph["237"] = { class_type: "CreateVideo", inputs: { fps: p.fps, images: ["225", 0], audio: ["236", 0] } };
+    graph["238"] = { class_type: "SaveVideo", inputs: { filename_prefix: "video/visual-reader-vid", format: "auto", codec: "auto", video: ["237", 0] } };
+  } else {
+    // Silent: save the decoded frames as an animated WEBP (reuses the image fetch path).
+    graph["226"] = { class_type: "SaveAnimatedWEBP", inputs: { images: ["225", 0], filename_prefix: "visual-reader-vid", fps: p.fps, lossless: false, quality: 90, method: "default" } };
   }
   Object.assign(graph, loraNodes);
   return graph;
@@ -222,6 +262,29 @@ function mimeForFilename(name: string): string {
   if (ext === "gif") return "image/gif";
   if (ext === "webp") return "image/webp";
   return "image/png";
+}
+
+/**
+ * Turn a ComfyUI /prompt rejection into a useful message. A 400 carries a JSON body with `error` +
+ * `node_errors` naming the exact node/input that failed validation (a missing custom node, a bad input,
+ * a wiring mismatch) — surface that instead of a bare status code so a graph problem is diagnosable.
+ */
+async function comfyPromptError(res: TransportResponse): Promise<string> {
+  let detail = "";
+  try {
+    const body = (await res.json()) as { error?: unknown; node_errors?: Record<string, unknown> };
+    const parts: string[] = [];
+    if (body.error) parts.push(typeof body.error === "string" ? body.error : JSON.stringify(body.error));
+    if (body.node_errors && Object.keys(body.node_errors).length) parts.push(`node_errors: ${JSON.stringify(body.node_errors)}`);
+    detail = parts.join(" — ");
+  } catch {
+    try {
+      detail = (await res.text()).slice(0, 800);
+    } catch {
+      /* body unreadable — fall back to the status alone */
+    }
+  }
+  return `ComfyUI rejected the workflow (status ${res.status})${detail ? `: ${detail}` : ""}`;
 }
 
 /**
@@ -284,7 +347,9 @@ interface HistoryImage {
 type HistoryResponse = Record<
   string,
   {
-    outputs?: Record<string, { images?: HistoryImage[] }>;
+    // A node's saved files appear under a per-type key: "images" (SaveImage / SaveAnimatedWEBP),
+    // "gifs"/"videos" (animation/video save nodes like SaveVideo). Collected generically below.
+    outputs?: Record<string, Record<string, HistoryImage[] | undefined>>;
     /** Execution status; `messages` carries an `execution_error` with the real cause. */
     status?: {
       status_str?: string;
@@ -918,7 +983,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
         body: { prompt: workflow, client_id: this.clientId },
         ...(signal ? { signal } : {}),
       });
-      if (!submit.ok) throw new Error(`ComfyUI prompt failed with status ${submit.status}`);
+      if (!submit.ok) throw new Error(await comfyPromptError(submit));
       const { prompt_id } = await submit.json<PromptResponse>();
       job.promptId = prompt_id;
 
@@ -979,7 +1044,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
     };
     const workflow =
       models.kind === "ltx2-i2v"
-        ? buildLtx2I2VWorkflow({ ...common, models, highRes: input.highRes ?? true })
+        ? buildLtx2I2VWorkflow({ ...common, models, highRes: input.highRes ?? true, audio: input.audio ?? true })
         : buildWanI2VWorkflow({ ...common, models, shift: input.shift ?? d.shift });
     const relay = (fraction: number): void => input.onProgress?.(fraction);
     const signal = input.signal;
@@ -996,7 +1061,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
         body: { prompt: workflow, client_id: this.clientId },
         ...(signal ? { signal } : {}),
       });
-      if (!submit.ok) throw new Error(`ComfyUI prompt failed with status ${submit.status}`);
+      if (!submit.ok) throw new Error(await comfyPromptError(submit));
       const { prompt_id } = await submit.json<PromptResponse>();
       job.promptId = prompt_id;
       const file = await this.pollForImage(prompt_id, signal);
@@ -1150,12 +1215,16 @@ export class ComfyUIBackend implements LocalEngineBackend {
       }
       const entry = history[promptId];
       if (entry) {
-        const images = Object.values(entry.outputs ?? {}).flatMap((o) => o.images ?? []);
-        const first = images[0];
+        // A saved artifact can land under any per-type key (images / gifs / videos). Collect every
+        // {filename}-shaped entry across all output nodes so a video (SaveVideo) is found like an image.
+        const files = Object.values(entry.outputs ?? {}).flatMap((node) =>
+          Object.values(node).flatMap((arr) => (Array.isArray(arr) ? arr : [])).filter((f) => f && typeof f.filename === "string"),
+        );
+        const first = files[0];
         if (first) return first;
-        // Finished but no image: surface ComfyUI's REAL execution error (otherwise it's a mystery).
+        // Finished but no file: surface ComfyUI's REAL execution error (otherwise it's a mystery).
         throw new Error(
-          comfyExecutionError(entry.status, family, hidreamClips) ?? "ComfyUI finished but produced no image",
+          comfyExecutionError(entry.status, family, hidreamClips) ?? "ComfyUI finished but produced no output",
         );
       }
       // Not done yet — still queued/running in ComfyUI? Then keep waiting, however long it takes.

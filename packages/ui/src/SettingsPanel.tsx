@@ -271,7 +271,7 @@ export interface ReaderSettings {
    * A superset of every family's filenames; only the selected model's fields are shown/used. */
   videoFiles?: { highNoise?: string; lowNoise?: string; textEncoder?: string; vae?: string; checkpoint?: string; distilledLora?: string; upscaler?: string; loraHigh?: string; loraLow?: string; ltxLoras?: VideoLora[] };
   /** Image-to-video render-param overrides (the graph's size / length / sampler choices). */
-  videoParams?: { frames?: number; fps?: number; width?: number; height?: number; steps?: number; cfg?: number; shift?: number; highRes?: boolean };
+  videoParams?: { frames?: number; fps?: number; width?: number; height?: number; steps?: number; cfg?: number; shift?: number; highRes?: boolean; audio?: boolean };
   /** Parallel coding agents: let the manager model auto-resolve a merge conflict between agent
    * branches (validated, then committed — or aborted if it can't). Default on. */
   autoResolveConflicts?: boolean;
@@ -800,9 +800,11 @@ export function SettingsPanel({
                   };
                   const setParam = (k: Exclude<keyof NonNullable<typeof value.videoParams>, "highRes">, v: string) =>
                     set({ videoParams: { ...vp, [k]: v === "" ? undefined : Number(v) } });
-                  // High-res (2× upscale) toggle — LTX only; default on.
+                  // High-res (2× upscale) + audio toggles — LTX only; both default on.
                   const highRes = vp.highRes ?? true;
                   const setHighRes = (on: boolean) => set({ videoParams: { ...vp, highRes: on } });
+                  const audioOn = vp.audio ?? true;
+                  const setAudio = (on: boolean) => set({ videoParams: { ...vp, audio: on } });
                   // LTX LoRA stack editor state.
                   const ltxLoras = vf.ltxLoras ?? [];
                   const setLtxLoras = (nextLoras: VideoLora[]) => {
@@ -923,13 +925,22 @@ export function SettingsPanel({
                         </div>
                       ) : null}
                       {kind === "ltx2-i2v" ? (
-                        <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 11, marginTop: 8 }}>
-                          <input type="checkbox" checked={highRes} onChange={(e) => setHighRes(e.target.checked)} />
-                          <span>
-                            High resolution (2× upscale) —{" "}
-                            <span style={{ opacity: 0.6 }}>two-stage render; off is a single faster pass at the target size.</span>
-                          </span>
-                        </label>
+                        <>
+                          <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 11, marginTop: 8 }}>
+                            <input type="checkbox" checked={highRes} onChange={(e) => setHighRes(e.target.checked)} />
+                            <span>
+                              High resolution (2× upscale) —{" "}
+                              <span style={{ opacity: 0.6 }}>two-stage render; off is a single faster pass at the target size.</span>
+                            </span>
+                          </label>
+                          <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 11, marginTop: 4 }}>
+                            <input type="checkbox" checked={audioOn} onChange={(e) => setAudio(e.target.checked)} />
+                            <span>
+                              Generate audio —{" "}
+                              <span style={{ opacity: 0.6 }}>LTX-2 makes a synced soundtrack (saved as mp4); off is silent video.</span>
+                            </span>
+                          </label>
+                        </>
                       ) : null}
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
                         {numRow("Frames", "frames", dflt.frames)}

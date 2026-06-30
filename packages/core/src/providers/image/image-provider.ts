@@ -218,6 +218,9 @@ export interface VideoRenderParams {
   /** LTX-2 only: render the high-res two-stage path (generate → 2× upscale → refine). Default true;
    * false does a single-stage pass at the target size (no upscaler — faster, lighter). */
   highRes?: boolean;
+  /** LTX-2 only: generate synchronized audio (the faithful audio+video graph → mp4). Default true;
+   * false renders silent video only. */
+  audio?: boolean;
 }
 
 /** Input for an image-to-video render: a source image + a motion prompt + clip params. */
@@ -240,6 +243,8 @@ export interface VideoGenerationInput {
   shift?: number;
   /** LTX-2 only: high-res two-stage (generate → 2× upscale → refine). Default true. */
   highRes?: boolean;
+  /** LTX-2 only: generate synchronized audio (→ mp4). Default true. */
+  audio?: boolean;
   seed?: number;
   lowVram?: boolean;
   onProgress?: (fraction: number) => void;

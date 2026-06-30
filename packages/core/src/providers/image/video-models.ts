@@ -66,13 +66,13 @@ export const LTX2_I2V_22B: VideoModelCatalogEntry = {
     kind: "ltx2-i2v",
     checkpoint: "ltx-2.3-22b-dev-fp8.safetensors",
     textEncoder: "gemma_3_12B_it_fp4_mixed.safetensors",
-    distilledLora: "ltx-2.3-22b-distilled-lora-384-1.1.safetensors",
+    distilledLora: "ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors",
     upscaler: "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
   },
   downloads: [
     { filename: "ltx-2.3-22b-dev-fp8.safetensors", folder: "checkpoints", url: "https://huggingface.co/Lightricks/LTX-2.3-fp8/resolve/main/ltx-2.3-22b-dev-fp8.safetensors" },
     { filename: "gemma_3_12B_it_fp4_mixed.safetensors", folder: "text_encoders", url: "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors" },
-    { filename: "ltx-2.3-22b-distilled-lora-384-1.1.safetensors", folder: "loras", url: "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-22b-distilled-lora-384-1.1.safetensors" },
+    { filename: "ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors", folder: "loras", url: "https://huggingface.co/Comfy-Org/ltx-2.3/resolve/main/split_files/loras/ltx_2.3_22b_distilled_1.1_lora_dynamic_fro09_avg_rank_111_bf16.safetensors" },
     { filename: "ltx-2.3-spatial-upscaler-x2-1.1.safetensors", folder: "latent_upscale_models", url: "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.1.safetensors" },
   ],
 };

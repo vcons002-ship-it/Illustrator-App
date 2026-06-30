@@ -4073,6 +4073,7 @@ async function handleChatVideo(
         ...(params?.cfg !== undefined ? { cfg: params.cfg } : {}),
         ...(params?.shift !== undefined ? { shift: params.shift } : {}),
         ...(params?.highRes !== undefined ? { highRes: params.highRes } : {}),
+        ...(params?.audio !== undefined ? { audio: params.audio } : {}),
         lowVram: !!settings.lowVram,
         signal: ac.signal,
         onProgress: (fraction) => post({ type: "testProgress", requestId, fraction }),
