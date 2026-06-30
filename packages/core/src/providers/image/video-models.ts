@@ -11,7 +11,7 @@ import type { VideoModelFiles, VideoFileOverrides } from "./image-provider.js";
 export interface VideoModelDownload {
   filename: string;
   url: string;
-  folder: "checkpoints" | "diffusion_models" | "text_encoders" | "vae";
+  folder: "checkpoints" | "diffusion_models" | "text_encoders" | "vae" | "loras" | "latent_upscale_models";
 }
 
 export interface VideoModelCatalogEntry {
@@ -29,7 +29,7 @@ export interface VideoModelCatalogEntry {
  * Shared by the backend (when a render input leaves a field blank) and the Settings UI (placeholders). */
 export const VIDEO_RENDER_DEFAULTS = {
   "wan-i2v": { frames: 81, fps: 16, width: 640, height: 640, steps: 20, cfg: 3.5, shift: 8 },
-  "ltx2-i2v": { frames: 121, fps: 24, width: 768, height: 512, steps: 20, cfg: 3, shift: 0 },
+  "ltx2-i2v": { frames: 121, fps: 24, width: 768, height: 512, steps: 20, cfg: 1, shift: 0 },
 } as const satisfies Record<VideoModelFiles["kind"], { frames: number; fps: number; width: number; height: number; steps: number; cfg: number; shift: number }>;
 
 /** Comfy-Org's repackaged Wan 2.2 weights, laid out exactly as ComfyUI expects. */
@@ -66,10 +66,14 @@ export const LTX2_I2V_22B: VideoModelCatalogEntry = {
     kind: "ltx2-i2v",
     checkpoint: "ltx-2.3-22b-dev-fp8.safetensors",
     textEncoder: "gemma_3_12B_it_fp4_mixed.safetensors",
+    distilledLora: "ltx-2.3-22b-distilled-lora-384-1.1.safetensors",
+    upscaler: "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
   },
   downloads: [
     { filename: "ltx-2.3-22b-dev-fp8.safetensors", folder: "checkpoints", url: "https://huggingface.co/Lightricks/LTX-2.3-fp8/resolve/main/ltx-2.3-22b-dev-fp8.safetensors" },
     { filename: "gemma_3_12B_it_fp4_mixed.safetensors", folder: "text_encoders", url: "https://huggingface.co/Comfy-Org/ltx-2/resolve/main/split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors" },
+    { filename: "ltx-2.3-22b-distilled-lora-384-1.1.safetensors", folder: "loras", url: "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-22b-distilled-lora-384-1.1.safetensors" },
+    { filename: "ltx-2.3-spatial-upscaler-x2-1.1.safetensors", folder: "latent_upscale_models", url: "https://huggingface.co/Lightricks/LTX-2.3/resolve/main/ltx-2.3-spatial-upscaler-x2-1.1.safetensors" },
   ],
 };
 
@@ -98,6 +102,8 @@ export function resolveVideoModelFiles(id?: string, overrides?: VideoFileOverrid
       kind: "ltx2-i2v",
       checkpoint: o("checkpoint") ?? base.checkpoint,
       textEncoder: o("textEncoder") ?? base.textEncoder,
+      distilledLora: o("distilledLora") ?? base.distilledLora,
+      upscaler: o("upscaler") ?? base.upscaler,
       ...(loras && loras.length ? { loras } : {}),
     };
   }

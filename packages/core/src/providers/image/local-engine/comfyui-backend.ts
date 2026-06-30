@@ -62,6 +62,8 @@ interface Ltx2I2VParams {
   steps: number;
   cfg: number;
   seed: number;
+  /** High-res two-stage (generate → 2× upscale → refine). False = single-stage at the target size. */
+  highRes: boolean;
 }
 
 /**
@@ -115,51 +117,77 @@ export function buildWanI2VWorkflow(p: WanI2VParams): Record<string, unknown> {
   return graph;
 }
 
+/** LTX-2.3's distilled two-stage sigma schedules (from the official i2v template): a 9-step low-res pass
+ * then a 4-step refine pass over the 2× upscaled latent. */
+const LTX_STAGE1_SIGMAS = "1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0";
+const LTX_STAGE2_SIGMAS = "0.85, 0.7250, 0.4219, 0.0";
+
+/** Round a dimension to a latent-friendly multiple of 32 (min 64). */
+function ltxDim(n: number): number {
+  return Math.max(64, Math.round(n / 32) * 32);
+}
+
 /**
- * The native ComfyUI LTX-2.3 image-to-video graph (video-only — no audio / no spatial upscaler): a single
- * combined checkpoint (model + VAE) + the separate Gemma text encoder, an LTXVImgToVideo conditioning of the
- * source frame, and a SamplerCustomAdvanced (euler + LTXVScheduler sigmas + CFGGuider) pass, decoded and
- * saved as an animated WEBP so the result is fetched exactly like the Wan path. Node ids are in the 200s so
- * they never collide with the Wan (100s) or image graphs. Mirrors the official native LTX-2.3 I2V template;
- * an optional stack of LoRAs wraps the model. NEEDS a real-box pass against the user's ComfyUI/LTX-2 install. PURE.
+ * The official ComfyUI LTX-2.3 image-to-video graph, VIDEO-ONLY (no audio branch, no prompt-enhancer LLM).
+ * Mirrors Lightricks' native i2v template: a CheckpointLoaderSimple + separate Gemma text encoder + the
+ * required distilled speed LoRA, then a two-stage distilled render — a half-resolution generation
+ * (LTXVImgToVideoInplace → SamplerCustomAdvanced over a 9-step ManualSigmas), a 2× LTXVLatentUpsampler, and
+ * a full-resolution refine (LTXVImgToVideoInplace → SamplerCustomAdvanced over a 4-step ManualSigmas, guided
+ * by LTXVCropGuides) — decoded (VAEDecodeTiled) and saved as an animated WEBP so the result is fetched
+ * exactly like the Wan path. Extra user LoRAs chain onto the distilled one. Node ids 200+ (clear of Wan's
+ * 100s). NEEDS a real-box pass against the user's ComfyUI/LTX-2 install. PURE.
  */
 export function buildLtx2I2VWorkflow(p: Ltx2I2VParams): Record<string, unknown> {
-  // Stack of LoRAs (ids 220+) chained onto the checkpoint, each onto the previous; the sampler guides the
-  // last one (or the bare checkpoint when none). Blank-named entries are dropped.
-  const loras = (p.models.loras ?? []).map((l) => ({ name: l.name.trim(), strength: l.strength ?? 1 })).filter((l) => l.name);
-  let modelRef: [string, number] = ["200", 0];
+  // High-res renders stage 1 at half size (the 2× upscaler brings it to target); single-stage renders at
+  // the target size directly and skips the upscaler + refine pass.
+  const genW = p.highRes ? ltxDim(p.width / 2) : ltxDim(p.width);
+  const genH = p.highRes ? ltxDim(p.height / 2) : ltxDim(p.height);
+  // The required distilled LoRA (node 202) is the base; any extra user LoRAs (250+) chain onto it. The CFG
+  // guider(s) sample from the end of that chain. Blank-named user entries are dropped.
+  const userLoras = (p.models.loras ?? []).map((l) => ({ name: l.name.trim(), strength: l.strength ?? 1 })).filter((l) => l.name);
+  let modelRef: [string, number] = ["202", 0];
   const loraNodes: Record<string, unknown> = {};
-  loras.forEach((l, i) => {
-    const id = String(220 + i);
+  userLoras.forEach((l, i) => {
+    const id = String(250 + i);
     loraNodes[id] = { class_type: "LoraLoaderModelOnly", inputs: { model: modelRef, lora_name: l.name, strength_model: l.strength } };
     modelRef = [id, 0];
   });
   const graph: Record<string, unknown> = {
     "200": { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: p.models.checkpoint } },
-    // LTX-2 uses a separate Gemma text encoder (not the checkpoint's bundled CLIP).
-    "202": { class_type: "LTXAVTextEncoderLoader", inputs: { clip_name: p.models.textEncoder } },
-    "203": { class_type: "CLIPTextEncode", inputs: { text: p.prompt, clip: ["202", 0] } },
-    "204": { class_type: "CLIPTextEncode", inputs: { text: p.negative, clip: ["202", 0] } },
-    "205": { class_type: "LoadImage", inputs: { image: p.startImage } },
-    // Condition on the source frame and build the empty video latent (length/size) in one node.
-    "206": {
-      class_type: "LTXVImgToVideo",
-      inputs: { positive: ["203", 0], negative: ["204", 0], vae: ["200", 2], image: ["205", 0], width: p.width, height: p.height, length: p.frames, batch_size: 1 },
-    },
-    // Bind the chosen frame rate to the conditioning.
-    "207": { class_type: "LTXVConditioning", inputs: { positive: ["206", 0], negative: ["206", 1], frame_rate: p.fps } },
-    // LTX's own scheduler turns a step count into the proper (shifted) sigma schedule.
-    "208": { class_type: "LTXVScheduler", inputs: { steps: p.steps, max_shift: 2.05, base_shift: 0.95, stretch: true, terminal: 0.1, latent: ["206", 2] } },
-    "209": { class_type: "KSamplerSelect", inputs: { sampler_name: "euler" } },
-    "210": { class_type: "RandomNoise", inputs: { noise_seed: p.seed } },
-    "211": { class_type: "CFGGuider", inputs: { model: modelRef, positive: ["207", 0], negative: ["207", 1], cfg: p.cfg } },
-    "212": {
-      class_type: "SamplerCustomAdvanced",
-      inputs: { noise: ["210", 0], guider: ["211", 0], sampler: ["209", 0], sigmas: ["208", 0], latent_image: ["206", 2] },
-    },
-    "213": { class_type: "VAEDecode", inputs: { samples: ["212", 0], vae: ["200", 2] } },
-    "214": { class_type: "SaveAnimatedWEBP", inputs: { images: ["213", 0], filename_prefix: "visual-reader-vid", fps: p.fps, lossless: false, quality: 90, method: "default" } },
+    // LTX-2 uses a separate Gemma text encoder (it reads the checkpoint too, for the AV head).
+    "201": { class_type: "LTXAVTextEncoderLoader", inputs: { text_encoder: p.models.textEncoder, ckpt_name: p.models.checkpoint, device: "default" } },
+    // The distilled speed LoRA the 22B dev checkpoint relies on (extra user LoRAs chain after this).
+    "202": { class_type: "LoraLoaderModelOnly", inputs: { model: ["200", 0], lora_name: p.models.distilledLora, strength_model: 1 } },
+    "203": { class_type: "CLIPTextEncode", inputs: { text: p.prompt, clip: ["201", 0] } },
+    "204": { class_type: "CLIPTextEncode", inputs: { text: p.negative, clip: ["201", 0] } },
+    "205": { class_type: "LTXVConditioning", inputs: { positive: ["203", 0], negative: ["204", 0], frame_rate: p.fps } },
+    "206": { class_type: "LoadImage", inputs: { image: p.startImage } },
+    "207": { class_type: "ImageScale", inputs: { image: ["206", 0], upscale_method: "lanczos", width: p.width, height: p.height, crop: "center" } },
+    "208": { class_type: "LTXVPreprocess", inputs: { image: ["207", 0], img_compression: 18 } },
+    // ── Stage 1: generation (half-res when high-res is on, else target size) ──
+    "209": { class_type: "EmptyLTXVLatentVideo", inputs: { width: genW, height: genH, length: p.frames, batch_size: 1 } },
+    "210": { class_type: "LTXVImgToVideoInplace", inputs: { strength: 0.7, bypass: false, vae: ["200", 2], image: ["208", 0], latent: ["209", 0] } },
+    "211": { class_type: "RandomNoise", inputs: { noise_seed: p.seed } },
+    "212": { class_type: "KSamplerSelect", inputs: { sampler_name: "euler" } },
+    "213": { class_type: "ManualSigmas", inputs: { sigmas: LTX_STAGE1_SIGMAS } },
+    "214": { class_type: "CFGGuider", inputs: { model: modelRef, positive: ["205", 0], negative: ["205", 1], cfg: p.cfg } },
+    "215": { class_type: "SamplerCustomAdvanced", inputs: { noise: ["211", 0], guider: ["214", 0], sampler: ["212", 0], sigmas: ["213", 0], latent_image: ["210", 0] } },
+    // Decode the final latent — stage 2's output when high-res, else stage 1's directly.
+    "225": { class_type: "VAEDecodeTiled", inputs: { samples: p.highRes ? ["224", 0] : ["215", 0], vae: ["200", 2], tile_size: 768, overlap: 64, temporal_size: 4096, temporal_overlap: 4 } },
+    "226": { class_type: "SaveAnimatedWEBP", inputs: { images: ["225", 0], filename_prefix: "visual-reader-vid", fps: p.fps, lossless: false, quality: 90, method: "default" } },
   };
+  if (p.highRes) {
+    // ── 2× spatial upscale of the latent, then a full-resolution refine pass ──
+    graph["216"] = { class_type: "LatentUpscaleModelLoader", inputs: { model_name: p.models.upscaler } };
+    graph["217"] = { class_type: "LTXVLatentUpsampler", inputs: { samples: ["215", 0], upscale_model: ["216", 0], vae: ["200", 2] } };
+    graph["218"] = { class_type: "LTXVImgToVideoInplace", inputs: { strength: 1, bypass: false, vae: ["200", 2], image: ["208", 0], latent: ["217", 0] } };
+    graph["219"] = { class_type: "LTXVCropGuides", inputs: { positive: ["205", 0], negative: ["205", 1], latent: ["215", 0] } };
+    graph["220"] = { class_type: "RandomNoise", inputs: { noise_seed: p.seed + 1 } };
+    graph["221"] = { class_type: "KSamplerSelect", inputs: { sampler_name: "euler" } };
+    graph["222"] = { class_type: "ManualSigmas", inputs: { sigmas: LTX_STAGE2_SIGMAS } };
+    graph["223"] = { class_type: "CFGGuider", inputs: { model: modelRef, positive: ["219", 0], negative: ["219", 1], cfg: p.cfg } };
+    graph["224"] = { class_type: "SamplerCustomAdvanced", inputs: { noise: ["220", 0], guider: ["223", 0], sampler: ["221", 0], sigmas: ["222", 0], latent_image: ["218", 0] } };
+  }
   Object.assign(graph, loraNodes);
   return graph;
 }
@@ -928,7 +956,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
     };
     const workflow =
       models.kind === "ltx2-i2v"
-        ? buildLtx2I2VWorkflow({ ...common, models })
+        ? buildLtx2I2VWorkflow({ ...common, models, highRes: input.highRes ?? true })
         : buildWanI2VWorkflow({ ...common, models, shift: input.shift ?? d.shift });
     const relay = (fraction: number): void => input.onProgress?.(fraction);
     const signal = input.signal;

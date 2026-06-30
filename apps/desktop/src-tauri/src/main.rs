@@ -75,7 +75,7 @@ struct DownloadableModel {
     filename: String,
     url: String,
     /// ComfyUI models subfolder (split-file models): "checkpoints" (default),
-    /// "diffusion_models", "text_encoders" or "vae".
+    /// "diffusion_models", "text_encoders", "vae", "loras" or "latent_upscale_models".
     #[serde(default)]
     folder: Option<String>,
 }
@@ -146,7 +146,8 @@ async fn download_model(app: AppHandle, model: DownloadableModel) -> Result<(), 
     tauri::async_runtime::spawn_blocking(move || {
         let dir = match model.folder.as_deref() {
             None | Some("checkpoints") => checkpoints_dir(&app2),
-            Some(f @ ("diffusion_models" | "text_encoders" | "vae")) => {
+            Some("loras") => loras_dir(&app2),
+            Some(f @ ("diffusion_models" | "text_encoders" | "vae" | "latent_upscale_models")) => {
                 comfy_models_dir(&app2).join(f)
             }
             Some(other) => return Err(format!("Unknown model folder \"{other}\".")),
