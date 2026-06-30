@@ -44,6 +44,37 @@ describe("parseBuddyToolCall — set_plan steps", () => {
   });
 });
 
+describe("parseBuddyToolCall — generate_video", () => {
+  it("parses a motion prompt and defaults the source to the last image shown", () => {
+    expect(parseBuddyToolCall('{"tool":"generate_video","prompt":"slow push-in, leaves drift"}')).toEqual({
+      tool: "generate_video",
+      prompt: "slow push-in, leaves drift",
+      source: { kind: "last" },
+    });
+  });
+  it("keeps a library/file source with a ref, and clamps frames", () => {
+    expect(parseBuddyToolCall('{"tool":"generate_video","prompt":"pan","source":{"kind":"library","ref":"bk1"},"frames":9999}')).toEqual({
+      tool: "generate_video",
+      prompt: "pan",
+      source: { kind: "library", ref: "bk1" },
+      frames: 257,
+    });
+  });
+  it("falls back to last when a non-last source has no ref, and drops a video with no prompt", () => {
+    expect(parseBuddyToolCall('{"tool":"generate_video","prompt":"zoom","source":{"kind":"file"}}')).toEqual({
+      tool: "generate_video",
+      prompt: "zoom",
+      source: { kind: "last" },
+    });
+    expect(parseBuddyToolCall('{"tool":"generate_video","source":{"kind":"last"}}')).toBeUndefined();
+  });
+  it("formats a generate_video result (ok / failed / no run)", () => {
+    const call = { tool: "generate_video" as const, prompt: "drift", source: { kind: "last" as const } };
+    expect(formatBuddyToolResult(call, { video: { ok: true } })).toContain("animated the image into a video");
+    expect(formatBuddyToolResult(call, { video: { ok: false, error: "no model" } })).toContain("generate_video failed");
+  });
+});
+
 describe("parseBuddyToolCall — edit_file", () => {
   it("parses an edit_file with one or more search/replace edits", () => {
     expect(

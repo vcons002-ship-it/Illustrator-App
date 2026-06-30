@@ -137,10 +137,98 @@ export interface ImageGenerationOutput {
   mimeType: string;
 }
 
+/** Files a Wan2.2 two-expert image-to-video graph needs (a high/low-noise pair + encoder + VAE).
+ * Every field is a ComfyUI filename the reader can override from Settings to swap a component or work
+ * around a failed download. `lora` is optional (applied to both experts when set). */
+export interface WanVideoFiles {
+  readonly kind: "wan-i2v";
+  /** High-noise diffusion model (first sampling stage). */
+  highNoise: string;
+  /** Low-noise diffusion model (refinement stage). */
+  lowNoise: string;
+  /** Text encoder (umt5 for Wan). */
+  textEncoder: string;
+  /** VAE. */
+  vae: string;
+  /** Optional motion/style LoRA applied to both experts. */
+  lora?: string;
+}
+
+/** Files an LTX-2 image-to-video graph needs: one combined checkpoint (model + VAE) plus the separate
+ * Gemma text encoder. `lora` is optional (e.g. the distilled speed LoRA). */
+export interface Ltx2VideoFiles {
+  readonly kind: "ltx2-i2v";
+  /** Combined LTX-2 checkpoint (loaded via CheckpointLoaderSimple — provides the model and VAE). */
+  checkpoint: string;
+  /** Gemma text encoder. */
+  textEncoder: string;
+  /** Optional LoRA (motion/style, or the distilled speed LoRA). */
+  lora?: string;
+}
+
+/** The model files an image-to-video engine needs — the shape depends on the model family (`kind`).
+ * Discriminate on `kind` before reading family-specific filenames. */
+export type VideoModelFiles = WanVideoFiles | Ltx2VideoFiles;
+
+/** A flat bag of per-file Settings overrides — a superset of every family's filenames, all optional.
+ * Applied over the selected model's catalog defaults by resolveVideoModelFiles. */
+export interface VideoFileOverrides {
+  highNoise?: string;
+  lowNoise?: string;
+  textEncoder?: string;
+  vae?: string;
+  checkpoint?: string;
+  lora?: string;
+}
+
+/** The sampler/size/length choices for an image-to-video render — overridable from Settings. */
+export interface VideoRenderParams {
+  frames?: number;
+  fps?: number;
+  width?: number;
+  height?: number;
+  steps?: number;
+  cfg?: number;
+  /** Sigma shift (Wan's recommended ~8 for video). */
+  shift?: number;
+}
+
+/** Input for an image-to-video render: a source image + a motion prompt + clip params. */
+export interface VideoGenerationInput {
+  /** What should happen / how the scene should move (the image already fixes what it looks like). */
+  prompt: string;
+  /** The source image to animate. */
+  image: { bytes: ArrayBuffer; mimeType: string };
+  negativePrompt?: string;
+  /** Number of frames in the clip. */
+  frames?: number;
+  /** Frames per second of the output file. */
+  fps?: number;
+  width?: number;
+  height?: number;
+  steps?: number;
+  cfg?: number;
+  /** Sigma shift (Wan ~8 for video). */
+  shift?: number;
+  seed?: number;
+  lowVram?: boolean;
+  onProgress?: (fraction: number) => void;
+  signal?: AbortSignal;
+}
+
+export interface VideoGenerationOutput {
+  bytes: ArrayBuffer;
+  /** The artifact's MIME — "video/mp4", "video/webm", or "image/webp"/"image/gif" for an animated image. */
+  mimeType: string;
+}
+
 export interface ImageProvider {
   /** Stable provider key, e.g. "flux". */
   readonly id: string;
   generate(input: ImageGenerationInput): Promise<ImageGenerationOutput>;
+  /** Optional: animate a source image into a short video (image-to-video). Present only for a local
+   * engine that supports it (ComfyUI); absent / rejects elsewhere. */
+  generateVideo?(input: VideoGenerationInput, models: VideoModelFiles): Promise<VideoGenerationOutput>;
   /** Optional: release the image model's VRAM now (e.g. a local ComfyUI /free) so a chat LLM can reload
    * into the freed memory. No-op / absent for providers whose VRAM the app can't coordinate. */
   freeMemory?(): Promise<void>;

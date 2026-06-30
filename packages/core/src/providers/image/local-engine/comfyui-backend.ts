@@ -1,7 +1,16 @@
 import { DirectTransport, type Transport } from "../../transport/transport.js";
 import { catalogEntryForModel } from "../../catalog.js";
 import { scaleSteps } from "../../../quality.js";
-import type { ImageGenerationInput, ImageGenerationOutput } from "../image-provider.js";
+import type {
+  ImageGenerationInput,
+  ImageGenerationOutput,
+  VideoGenerationInput,
+  VideoGenerationOutput,
+  VideoModelFiles,
+  WanVideoFiles,
+  Ltx2VideoFiles,
+} from "../image-provider.js";
+import { VIDEO_RENDER_DEFAULTS } from "../video-models.js";
 import {
   type ModelFamily,
   type SamplerSettings,
@@ -18,6 +27,144 @@ import {
 } from "../sd-prompt.js";
 import { expandPrompt } from "../bible-injection.js";
 import type { LocalEngineBackend, LocalModelDescriptor } from "./backend.js";
+
+/** Default Wan negative prompt — suppresses the common artifacts + a static (non-moving) result. */
+const WAN_DEFAULT_NEGATIVE =
+  "blurry, low quality, jpeg artifacts, watermark, text, static, still image, frozen, deformed, distorted, extra limbs, bad hands";
+
+interface WanI2VParams {
+  /** The uploaded source-image filename (from /upload/image). */
+  startImage: string;
+  models: WanVideoFiles;
+  prompt: string;
+  negative: string;
+  width: number;
+  height: number;
+  frames: number;
+  fps: number;
+  steps: number;
+  cfg: number;
+  /** Sigma shift (Wan ~8 for video). */
+  shift: number;
+  seed: number;
+}
+
+interface Ltx2I2VParams {
+  /** The uploaded source-image filename (from /upload/image). */
+  startImage: string;
+  models: Ltx2VideoFiles;
+  prompt: string;
+  negative: string;
+  width: number;
+  height: number;
+  frames: number;
+  fps: number;
+  steps: number;
+  cfg: number;
+  seed: number;
+}
+
+/**
+ * The native ComfyUI Wan2.2 14B image-to-video graph: a two-expert (high-noise → low-noise) KSamplerAdvanced
+ * chain over the WanImageToVideo conditioning, decoded and saved as an animated WEBP (no custom nodes). Node
+ * ids are in the 100s so they never collide with the image graph. The node names + model files mirror the
+ * official Wan2.2 native workflow — NEEDS a real-box pass against the user's ComfyUI/Wan install. PURE.
+ */
+export function buildWanI2VWorkflow(p: WanI2VParams): Record<string, unknown> {
+  const half = Math.max(1, Math.round(p.steps / 2));
+  const shift = p.shift;
+  // Optional LoRA applied to BOTH experts (node 114 = high, 115 = low); ModelSamplingSD3 then samples
+  // from the LoRA-wrapped model when set, or the bare UNET otherwise.
+  const lora = p.models.lora?.trim();
+  const highModel: [string, number] = lora ? ["114", 0] : ["100", 0];
+  const lowModel: [string, number] = lora ? ["115", 0] : ["101", 0];
+  const graph: Record<string, unknown> = {
+    "100": { class_type: "UNETLoader", inputs: { unet_name: p.models.highNoise, weight_dtype: "default" } },
+    "101": { class_type: "UNETLoader", inputs: { unet_name: p.models.lowNoise, weight_dtype: "default" } },
+    "102": { class_type: "CLIPLoader", inputs: { clip_name: p.models.textEncoder, type: "wan" } },
+    "103": { class_type: "VAELoader", inputs: { vae_name: p.models.vae } },
+    "104": { class_type: "CLIPTextEncode", inputs: { text: p.prompt, clip: ["102", 0] } },
+    "105": { class_type: "CLIPTextEncode", inputs: { text: p.negative, clip: ["102", 0] } },
+    "106": { class_type: "LoadImage", inputs: { image: p.startImage } },
+    "107": {
+      class_type: "WanImageToVideo",
+      inputs: { positive: ["104", 0], negative: ["105", 0], vae: ["103", 0], start_image: ["106", 0], width: p.width, height: p.height, length: p.frames, batch_size: 1 },
+    },
+    "108": { class_type: "ModelSamplingSD3", inputs: { model: highModel, shift } },
+    "109": { class_type: "ModelSamplingSD3", inputs: { model: lowModel, shift } },
+    // High-noise expert handles the first half of the schedule, leaving leftover noise for the low-noise pass.
+    "110": {
+      class_type: "KSamplerAdvanced",
+      inputs: { add_noise: "enable", noise_seed: p.seed, steps: p.steps, cfg: p.cfg, sampler_name: "euler", scheduler: "simple", start_at_step: 0, end_at_step: half, return_with_leftover_noise: "enable", model: ["108", 0], positive: ["107", 0], negative: ["107", 1], latent_image: ["107", 2] },
+    },
+    // Low-noise expert refines from the high-noise latent (no fresh noise) to the end of the schedule.
+    "111": {
+      class_type: "KSamplerAdvanced",
+      inputs: { add_noise: "disable", noise_seed: p.seed, steps: p.steps, cfg: p.cfg, sampler_name: "euler", scheduler: "simple", start_at_step: half, end_at_step: 10000, return_with_leftover_noise: "disable", model: ["109", 0], positive: ["107", 0], negative: ["107", 1], latent_image: ["110", 0] },
+    },
+    "112": { class_type: "VAEDecode", inputs: { samples: ["111", 0], vae: ["103", 0] } },
+    "113": { class_type: "SaveAnimatedWEBP", inputs: { images: ["112", 0], filename_prefix: "visual-reader-vid", fps: p.fps, lossless: false, quality: 90, method: "default" } },
+  };
+  if (lora) {
+    graph["114"] = { class_type: "LoraLoaderModelOnly", inputs: { model: ["100", 0], lora_name: lora, strength_model: 1 } };
+    graph["115"] = { class_type: "LoraLoaderModelOnly", inputs: { model: ["101", 0], lora_name: lora, strength_model: 1 } };
+  }
+  return graph;
+}
+
+/**
+ * The native ComfyUI LTX-2.3 image-to-video graph (video-only — no audio / no spatial upscaler): a single
+ * combined checkpoint (model + VAE) + the separate Gemma text encoder, an LTXVImgToVideo conditioning of the
+ * source frame, and a SamplerCustomAdvanced (euler + LTXVScheduler sigmas + CFGGuider) pass, decoded and
+ * saved as an animated WEBP so the result is fetched exactly like the Wan path. Node ids are in the 200s so
+ * they never collide with the Wan (100s) or image graphs. Mirrors the official native LTX-2.3 I2V template;
+ * an optional LoRA wraps the model. NEEDS a real-box pass against the user's ComfyUI/LTX-2 install. PURE.
+ */
+export function buildLtx2I2VWorkflow(p: Ltx2I2VParams): Record<string, unknown> {
+  const lora = p.models.lora?.trim();
+  // The model the sampler guides: the bare checkpoint, or the LoRA-wrapped model when a LoRA is set.
+  const modelRef: [string, number] = lora ? ["201", 0] : ["200", 0];
+  const graph: Record<string, unknown> = {
+    "200": { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: p.models.checkpoint } },
+    // LTX-2 uses a separate Gemma text encoder (not the checkpoint's bundled CLIP).
+    "202": { class_type: "LTXAVTextEncoderLoader", inputs: { clip_name: p.models.textEncoder } },
+    "203": { class_type: "CLIPTextEncode", inputs: { text: p.prompt, clip: ["202", 0] } },
+    "204": { class_type: "CLIPTextEncode", inputs: { text: p.negative, clip: ["202", 0] } },
+    "205": { class_type: "LoadImage", inputs: { image: p.startImage } },
+    // Condition on the source frame and build the empty video latent (length/size) in one node.
+    "206": {
+      class_type: "LTXVImgToVideo",
+      inputs: { positive: ["203", 0], negative: ["204", 0], vae: ["200", 2], image: ["205", 0], width: p.width, height: p.height, length: p.frames, batch_size: 1 },
+    },
+    // Bind the chosen frame rate to the conditioning.
+    "207": { class_type: "LTXVConditioning", inputs: { positive: ["206", 0], negative: ["206", 1], frame_rate: p.fps } },
+    // LTX's own scheduler turns a step count into the proper (shifted) sigma schedule.
+    "208": { class_type: "LTXVScheduler", inputs: { steps: p.steps, max_shift: 2.05, base_shift: 0.95, stretch: true, terminal: 0.1, latent: ["206", 2] } },
+    "209": { class_type: "KSamplerSelect", inputs: { sampler_name: "euler" } },
+    "210": { class_type: "RandomNoise", inputs: { noise_seed: p.seed } },
+    "211": { class_type: "CFGGuider", inputs: { model: modelRef, positive: ["207", 0], negative: ["207", 1], cfg: p.cfg } },
+    "212": {
+      class_type: "SamplerCustomAdvanced",
+      inputs: { noise: ["210", 0], guider: ["211", 0], sampler: ["209", 0], sigmas: ["208", 0], latent_image: ["206", 2] },
+    },
+    "213": { class_type: "VAEDecode", inputs: { samples: ["212", 0], vae: ["200", 2] } },
+    "214": { class_type: "SaveAnimatedWEBP", inputs: { images: ["213", 0], filename_prefix: "visual-reader-vid", fps: p.fps, lossless: false, quality: 90, method: "default" } },
+  };
+  if (lora) {
+    graph["201"] = { class_type: "LoraLoaderModelOnly", inputs: { model: ["200", 0], lora_name: lora, strength_model: 1 } };
+  }
+  return graph;
+}
+
+/** MIME for a saved ComfyUI artifact, by extension (a video clip vs. an animated image). */
+function mimeForFilename(name: string): string {
+  const ext = name.toLowerCase().split(".").pop() ?? "";
+  if (ext === "mp4") return "video/mp4";
+  if (ext === "webm") return "video/webm";
+  if (ext === "gif") return "image/gif";
+  if (ext === "webp") return "image/webp";
+  return "image/png";
+}
 
 /**
  * ComfyUI engine backend. Drives a local ComfyUI server (which the desktop shell
@@ -745,6 +892,70 @@ export class ComfyUIBackend implements LocalEngineBackend {
       // unload the image model + free the VRAM cache so the GPU is handed back between renders. Awaited
       // so the VRAM is actually released by the time generate() resolves and the LLM reloads.
       if (input.lowVram) await this.freeMemory();
+    }
+  }
+
+  /**
+   * Animate a source image into a short video (image-to-video) with a Wan2.2 two-expert (high→low noise)
+   * graph. Uploads the source frame, submits the graph, polls /history, and fetches the resulting clip via
+   * /view — the MIME comes from the saved file's extension (an animated .webp by default). Reuses the same
+   * upload / progress / poll / free machinery as an image render. The Wan node names + model files must
+   * match the user's ComfyUI install (NEEDS a real-box pass — can't be exercised in CI here).
+   */
+  async generateVideo(input: VideoGenerationInput, models: VideoModelFiles): Promise<VideoGenerationOutput> {
+    const startImage = await this.uploadedReference(input.image.bytes, input.image.mimeType);
+    // Per-family render defaults fill in whatever the caller left blank (Wan ~5s/16fps; LTX longer/24fps).
+    const d = VIDEO_RENDER_DEFAULTS[models.kind];
+    const common = {
+      startImage,
+      prompt: input.prompt,
+      negative: input.negativePrompt ?? WAN_DEFAULT_NEGATIVE,
+      width: input.width ?? d.width,
+      height: input.height ?? d.height,
+      frames: input.frames ?? d.frames,
+      fps: input.fps ?? d.fps,
+      steps: input.steps ?? d.steps,
+      cfg: input.cfg ?? d.cfg,
+      seed: input.seed ?? Math.floor(Math.random() * 1_000_000_000),
+    };
+    const workflow =
+      models.kind === "ltx2-i2v"
+        ? buildLtx2I2VWorkflow({ ...common, models })
+        : buildWanI2VWorkflow({ ...common, models, shift: input.shift ?? d.shift });
+    const relay = (fraction: number): void => input.onProgress?.(fraction);
+    const signal = input.signal;
+    const onAbort = (): void => {
+      void this.interrupt();
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const job: { promptId?: string } = {};
+    const socket = this.openProgressSocket(relay, job);
+    try {
+      const submit = await this.transport.send({
+        url: `${this.baseUrl}/prompt`,
+        method: "POST",
+        body: { prompt: workflow, client_id: this.clientId },
+        ...(signal ? { signal } : {}),
+      });
+      if (!submit.ok) throw new Error(`ComfyUI prompt failed with status ${submit.status}`);
+      const { prompt_id } = await submit.json<PromptResponse>();
+      job.promptId = prompt_id;
+      const file = await this.pollForImage(prompt_id, signal);
+      const view = await this.transport.send({
+        url:
+          `${this.baseUrl}/view?filename=${encodeURIComponent(file.filename)}` +
+          `&subfolder=${encodeURIComponent(file.subfolder)}&type=${encodeURIComponent(file.type)}`,
+        method: "GET",
+        ...(signal ? { signal } : {}),
+      });
+      if (!view.ok) throw new Error(`ComfyUI view failed with status ${view.status}`);
+      input.onProgress?.(1);
+      return { bytes: await view.arrayBuffer(), mimeType: mimeForFilename(file.filename) };
+    } finally {
+      socket?.close();
+      signal?.removeEventListener("abort", onAbort);
+      // Always release the video model's VRAM — it's large, and a chat LLM is usually waiting to reload.
+      await this.freeMemory();
     }
   }
 

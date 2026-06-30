@@ -34,6 +34,8 @@ export interface ChatMessageVM {
     | { bytes: ArrayBuffer; mimeType: string; id?: string }
     | { sourceUrl: string }
     | { id: string; mimeType: string };
+  /** Inline video: an image-to-video render's output clip (mp4 / animated webp), shown as a looping player. */
+  video?: { bytes: ArrayBuffer; mimeType: string };
   /** Source links from a search tool. */
   links?: { url: string; title?: string }[];
   /** Retrieved images shown as an inline thumbnail gallery (multi-hit search_images);
@@ -56,7 +58,7 @@ export interface ChatMessageVM {
 export interface FileRef {
   name: string;
   mime: string;
-  kind: "code" | "doc" | "data" | "image" | "text" | "found" | "export";
+  kind: "code" | "doc" | "data" | "image" | "video" | "text" | "found" | "export";
   /** In-chat text/code content the assistant authored. */
   content?: string;
   /** Raw bytes (a generated image, an exported document). */
@@ -651,6 +653,7 @@ export const MessageBubble = memo(function MessageBubble({
 }) {
   const isUser = message.role === "user";
   const url = useMessageImageUrl(message.image);
+  const videoUrl = useMessageVideoUrl(message.video);
   // Assistant prose may contain fenced code blocks (a file the model created) —
   // render those as saveable cards; the user's own messages stay verbatim.
   const blocks = !isUser && message.text ? parseMessageBlocks(message.text) : undefined;
@@ -736,6 +739,27 @@ export const MessageBubble = memo(function MessageBubble({
             marginTop: message.text ? 6 : 0,
           }}
         />
+      ) : null}
+      {videoUrl ? (
+        message.video?.mimeType.startsWith("video/") ? (
+          <video
+            src={videoUrl}
+            controls
+            autoPlay
+            loop
+            muted
+            playsInline
+            style={{ display: "block", maxWidth: "100%", height: "auto", maxHeight: 420, borderRadius: 6, marginTop: message.text ? 6 : 0 }}
+          />
+        ) : (
+          // An animated webp/gif loops natively in an <img> (no <video> controls needed).
+          <img
+            src={videoUrl}
+            alt="Generated animation"
+            decoding="async"
+            style={{ display: "block", maxWidth: "100%", height: "auto", maxHeight: 420, objectFit: "contain", borderRadius: 6, marginTop: message.text ? 6 : 0 }}
+          />
+        )
       ) : null}
       {message.analysis ? (
         <AnalysisBlock analysis={message.analysis} {...(onDownloadData ? { onDownloadData } : {})} />
@@ -1471,6 +1495,21 @@ function useMessageImageUrl(image: ChatMessageVM["image"]): string | undefined {
     return () => URL.revokeObjectURL(objectUrl);
   }, [bytes]);
   if (image && "sourceUrl" in image) return image.sourceUrl;
+  return url;
+}
+
+/** Object URL for an inline video clip's bytes (revoked on unmount / change). */
+function useMessageVideoUrl(video: ChatMessageVM["video"]): string | undefined {
+  const [url, setUrl] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (!video) {
+      setUrl(undefined);
+      return;
+    }
+    const objectUrl = URL.createObjectURL(new Blob([video.bytes], { type: video.mimeType }));
+    setUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [video]);
   return url;
 }
 

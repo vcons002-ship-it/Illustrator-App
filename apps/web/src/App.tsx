@@ -182,6 +182,8 @@ import {
   applyFileEdits,
   summarizeFileEdits,
   shouldAutoCompact,
+  resolveVideoModelFiles,
+  videoModelDownloads,
   type ChatTurn,
   type CreatedFileRef,
   type ContextUsage,
@@ -335,6 +337,19 @@ function imageAttachment(prompt: string, image: { bytes: ArrayBuffer; mimeType: 
   // SHARE the generated image's buffer (no defensive copy): the inline image + this card hold the same
   // bytes, so externalizeChatImages de-dups them to one blob and the in-RAM copy isn't doubled.
   return { id, name: `${stem}.${ext}`, mime: image.mimeType, kind: "image", bytes: image.bytes };
+}
+
+/** A downloadable file card for a generated video clip (the chat shows it inline + offers Download). */
+function videoAttachment(prompt: string, video: { bytes: ArrayBuffer; mimeType: string }): FileRef {
+  const m = video.mimeType;
+  const ext = m.includes("mp4") ? "mp4" : m.includes("webm") ? "webm" : m.includes("gif") ? "gif" : "webp";
+  const stem =
+    (prompt || "video")
+      .replace(/[^\w]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40) || "video";
+  const id = `vid-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return { id, name: `${stem}.${ext}`, mime: m, kind: "video", bytes: video.bytes };
 }
 
 const DATA_FILE_EXTS = new Set(["csv", "tsv", "json", "xlsx", "xls", "ods", "numbers", "xml", "yaml", "yml"]);
@@ -545,6 +560,7 @@ export function App() {
     resolveConflicts,
     chat,
     chatTool,
+    chatVideo,
     applyEngineConfig,
     setFileLedger,
     setProjectGuide,
@@ -1678,6 +1694,39 @@ export function App() {
         `Model download failed at ${currentFile}: ${err instanceof Error ? err.message : String(err)}. ` +
           `Retrying skips files that finished.`,
       );
+    } finally {
+      delete multiFile.current[id];
+      setDownloadStage((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    }
+  }, []);
+
+  // Download an image-to-video model's files (Wan 2.2: two experts + encoder + VAE) into ComfyUI's
+  // diffusion_models / text_encoders / vae folders, with the same per-file progress as image models.
+  const onDownloadVideoModel = useCallback(async (id: string) => {
+    const files = videoModelDownloads(id);
+    if (files.length === 0) return;
+    setModelProgress((prev) => ({ ...prev, [id]: 0 }));
+    let currentFile = files[0]!.filename;
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i]!;
+        currentFile = f.filename;
+        multiFile.current[id] = { index: i, count: files.length };
+        setDownloadStage((prev) => ({ ...prev, [id]: `file ${i + 1}/${files.length}: ${f.filename}` }));
+        await downloadModel({ id: f.filename, filename: f.filename, url: f.url, folder: f.folder });
+        setModelProgress((prev) => ({ ...prev, [id]: ((i + 1) / files.length) * 100 }));
+      }
+    } catch (err) {
+      setModelProgress((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setLocalError(`Video model download failed at ${currentFile}: ${err instanceof Error ? err.message : String(err)}. Retrying skips finished files.`);
     } finally {
       delete multiFile.current[id];
       setDownloadStage((prev) => {
@@ -5088,6 +5137,72 @@ export function App() {
     }
   };
 
+  /** Resolve a generate_video `source` to image bytes: a file path → read it; otherwise (last / library)
+   * the most recent image shown in the chat. Copies the bytes so the worker transfer can't detach a
+   * still-displayed image. Throws a clear message when there's nothing to animate. */
+  const resolveVideoSource = async (source?: { kind: "last" | "library" | "file"; ref?: string }): Promise<{ bytes: ArrayBuffer; mimeType: string }> => {
+    if (source?.kind === "file" && source.ref) {
+      const f = await readLocalFile(source.ref);
+      return { bytes: await f.arrayBuffer(), mimeType: f.type || "image/png" };
+    }
+    // "last" (the default) and "library" both fall back to the most recent image shown in the chat.
+    for (let i = buddyMessagesRef.current.length - 1; i >= 0; i--) {
+      const img = buddyMessagesRef.current[i]?.image;
+      if (img && "bytes" in img && img.bytes) return { bytes: img.bytes.slice(0), mimeType: img.mimeType };
+    }
+    throw new Error("there's no image to animate yet — generate or open an image first, then ask to animate it");
+  };
+
+  // Animate an existing image into a short video (image-to-video) via the local ComfyUI engine. Mirrors
+  // approveGenerateImage: resolve the source image + model files on the host, render in the worker (which
+  // frees the chat LLM first), then show the clip + feed the outcome back.
+  const approveGenerateVideo = async (call: Extract<BuddyToolCall, { tool: "generate_video" }>): Promise<void> => {
+    if (buddyRenderingRef.current) return;
+    buddyRenderingRef.current = true;
+    setBuddyPendingTool(undefined);
+    await ensureRenderEngineReady();
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+    setBuddyBusy(true);
+    setBuddyActivity("Animating the image…");
+    let out: Awaited<ReturnType<typeof chatVideo>>;
+    try {
+      const src = await resolveVideoSource(call.source);
+      // The buddy may name a model (e.g. "make an LTX video"); otherwise use the one chosen in Settings.
+      // Settings overrides win over the catalog default (a swapped component / a fixed broken download),
+      // and the Settings render params drive the graph's size/length/sampler choices.
+      const models = resolveVideoModelFiles(call.model ?? settings.videoModel, settings.videoFiles);
+      out = await chatVideo(call, src, models, settings.videoParams, {
+        onProgress: (f) => setBuddyActivity(`Animating the image… ${Math.round(f * 100)}%`),
+      });
+    } catch (err) {
+      out = { error: err instanceof Error ? err.message : String(err) };
+    } finally {
+      buddyRenderingRef.current = false;
+    }
+    setBuddyActivity("");
+    const feedback = formatToolResult(call, { video: { ok: Boolean(out.video), ...(out.error ? { error: out.error } : {}) } });
+    appendBuddy({
+      role: "tool",
+      text: out.error
+        ? `⚠ Video generation failed: ${out.error}`
+        : `🎬 ${call.prompt.length > 60 ? `${call.prompt.slice(0, 60).trim()}…` : call.prompt}`,
+      ...(out.video ? { video: out.video, attachments: [videoAttachment(call.prompt, out.video)] } : {}),
+      turns: [...pre, { role: "user", content: feedback }],
+    });
+    if (appManagedActive && buddyWorkflowRef.current) {
+      buddyStepEvidenceRef.current.toolResults.push({ call, result: { video: { ok: Boolean(out.video), ...(out.error ? { error: out.error } : {}) } } });
+      await advanceWorkflowAfterTurn(
+        { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+      );
+      return;
+    }
+    await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+  };
+
 
   // send and the auto-react continuation after an approved command. `userBubbleText`
   // Natural-language planning: the model emitted plan_task; research + build the plan
@@ -5612,6 +5727,8 @@ export function App() {
         // Full autonomy: render without a click. The hard danger floor (run_command, prep_order)
         // is NEVER reached here — those are routed to their gates above / below.
         void approveGenerateImage(res.pendingTool);
+      } else if (res.pendingTool.tool === "generate_video" && settings.fullAutonomy) {
+        void approveGenerateVideo(res.pendingTool);
       } else if (res.pendingTool.tool === "plan_task") {
         // Planning is a safe, host-run operation (research + build a plan) — no approval
         // click; run it with progress and report back.
@@ -6042,6 +6159,10 @@ export function App() {
     }
     if (call?.tool === "spawn_coding_agents") {
       void approveSpawnCodingAgents(call);
+      return;
+    }
+    if (call?.tool === "generate_video") {
+      await approveGenerateVideo(call);
       return;
     }
     if (!call || call.tool !== "generate_image") return;
@@ -6500,6 +6621,7 @@ export function App() {
         role: m.role,
         text: m.text,
         ...(m.image ? { image: m.image } : {}),
+        ...(m.video ? { video: m.video } : {}),
         ...(m.links ? { links: m.links } : {}),
         ...(m.gallery ? { gallery: m.gallery } : {}),
         ...(m.files ? { files: m.files } : {}),
@@ -7509,6 +7631,7 @@ export function App() {
             installedVaes={installedVaes}
             onDownloadModel={onDownloadModel}
             onDownloadModelUrl={onDownloadModelUrl}
+            onDownloadVideoModel={onDownloadVideoModel}
             downloadProgress={modelProgress}
             downloadStage={downloadStage}
             engineStatus={engineStatus}

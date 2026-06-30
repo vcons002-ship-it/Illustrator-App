@@ -21,6 +21,8 @@ import {
   serverModelVramCostGb,
   chatImageVramFit,
   staleComfyUrlToFree,
+  type VideoModelFiles,
+  type VideoRenderParams,
   resolveLoadedContextTokens,
   createDataTable,
   recalcTable,
@@ -1332,6 +1334,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "chatTool":
       void handleChatTool(msg.requestId, msg.call);
       break;
+    case "chatVideo":
+      void handleChatVideo(msg.requestId, msg.call, msg.image, msg.models, msg.params);
+      break;
     case "assessImage":
       void handleAssessImage(msg.requestId, msg.image, msg.question);
       break;
@@ -1936,6 +1941,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       if ("error" in slash) throw new Error(slash.error);
       if (
         slash.call.tool === "generate_image" ||
+        slash.call.tool === "generate_video" ||
         slash.call.tool === "export_book" ||
         slash.call.tool === "export_data" ||
         slash.call.tool === "set_cell" ||
@@ -3544,6 +3550,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       // a slash) stop for the host instead of auto-running.
       if (
         slash.call.tool === "generate_image" ||
+        slash.call.tool === "generate_video" ||
         slash.call.tool === "find_files" ||
         slash.call.tool === "run_command" ||
         slash.call.tool === "write_file" ||
@@ -3632,6 +3639,11 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // surfaces a clear "install Aider" message if the tool is used when it isn't installed.
         ...(corsProxyAvailable && settings?.allowCommands && settings?.delegateCoding
           ? { canDelegateCoding: true }
+          : {}),
+        // Image-to-video: only on the local ComfyUI engine (not A1111). Advertised when the local image
+        // engine is active; the runtime surfaces a clear error if the Wan model isn't installed yet.
+        ...(corsProxyAvailable && settings?.imageProvider === "local" && (settings?.engineBackend ?? settings?.localBackend) !== "a1111"
+          ? { canGenerateVideo: true }
           : {}),
         // Wolfram|Alpha grounding when an AppID is configured.
         ...(settings?.keys?.wolfram ? { canWolfram: true } : {}),
@@ -4011,6 +4023,72 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
   } finally {
     chatAborts.delete(requestId);
     warmChatModel(); // (debounced) reload + restore the LLM if we freed it — even on failure.
+  }
+}
+
+/**
+ * Run a user-approved generate_video call: the host already resolved the SOURCE image bytes + the model
+ * files (the worker can't reach the chat's images / library). Frees the chat LLM first (the video model is
+ * large), runs the ComfyUI image-to-video graph, and posts the clip back via chatToolResult. Local
+ * ComfyUI only.
+ */
+async function handleChatVideo(
+  requestId: number,
+  call: Extract<BuddyToolCall, { tool: "generate_video" }>,
+  image: { bytes: ArrayBuffer; mimeType: string },
+  models: VideoModelFiles,
+  params?: VideoRenderParams,
+): Promise<void> {
+  const ac = new AbortController();
+  chatAborts.set(requestId, ac);
+  try {
+    if (!settings) throw new Error("Settings not initialised yet.");
+    const cs = chatSettingsOf(settings);
+    if (cs.imageProvider !== "local" && settings.imageProvider !== "local") {
+      throw new Error("Image-to-video needs the local engine — set the image provider to “Run on my computer”.");
+    }
+    if ((settings.engineBackend ?? settings.localBackend) === "a1111") {
+      throw new Error("Image-to-video runs on ComfyUI, not AUTOMATIC1111 — switch the local engine to ComfyUI.");
+    }
+    const cfTool = corsFetch();
+    const provider = buildProviders(cs, cfTool ? { corsFetch: cfTool } : {}).image;
+    if (!provider.generateVideo) throw new Error("The local engine doesn't support image-to-video.");
+    // Hand the GPU to the (large) video model: free the chat LLM + any stale engine first, same as a render.
+    cancelChatWarm();
+    await freeChatLlmForRender();
+    await freeStaleComfyForA1111();
+    imageModelFreed = false;
+    const out = await provider.generateVideo(
+      {
+        prompt: call.prompt,
+        image,
+        // The model's per-call frames wins over the Settings default; the rest of the graph choices
+        // (fps/size/steps/cfg/shift) come from Settings overrides, else the backend's Wan defaults.
+        ...((call.frames ?? params?.frames) !== undefined ? { frames: (call.frames ?? params?.frames)! } : {}),
+        ...(params?.fps ? { fps: params.fps } : {}),
+        ...(params?.width ? { width: params.width } : {}),
+        ...(params?.height ? { height: params.height } : {}),
+        ...(params?.steps ? { steps: params.steps } : {}),
+        ...(params?.cfg !== undefined ? { cfg: params.cfg } : {}),
+        ...(params?.shift !== undefined ? { shift: params.shift } : {}),
+        lowVram: !!settings.lowVram,
+        signal: ac.signal,
+        onProgress: (fraction) => post({ type: "testProgress", requestId, fraction }),
+      },
+      models,
+    );
+    post({ type: "chatToolResult", requestId, call, video: { bytes: out.bytes, mimeType: out.mimeType } }, [out.bytes]);
+  } catch (err) {
+    const aborted = ac.signal.aborted || (err instanceof DOMException && err.name === "AbortError");
+    post({
+      type: "chatToolResult",
+      requestId,
+      call,
+      error: aborted ? "Video generation stopped." : err instanceof Error ? err.message : String(err),
+    });
+  } finally {
+    chatAborts.delete(requestId);
+    warmChatModel();
   }
 }
 

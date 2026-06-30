@@ -26,6 +26,8 @@ import type {
   TaskPlan,
   TaskSource,
   ToolCall,
+  VideoModelFiles,
+  VideoRenderParams,
   VisualBible,
   WebSearchHit,
 } from "@visual-reader/core";
@@ -127,6 +129,17 @@ export type MainToWorker =
   | { type: "assessImage"; requestId: number; image: { bytes: ArrayBuffer; mimeType: string }; question?: string }
   /** Run a user-APPROVED generate_image tool call (answered by `chatToolResult`). */
   | { type: "chatTool"; requestId: number; call: ToolCall }
+  /** Run a user-APPROVED generate_video call: the host resolved the SOURCE image bytes + the model files
+   * (the worker has no access to the chat's images / library); answered by `chatToolResult` (video field). */
+  | {
+      type: "chatVideo";
+      requestId: number;
+      call: Extract<BuddyToolCall, { tool: "generate_video" }>;
+      image: { bytes: ArrayBuffer; mimeType: string };
+      models: VideoModelFiles;
+      /** The reader's Settings render-param overrides (size/length/sampler choices). */
+      params?: VideoRenderParams;
+    }
   /** Send a user-APPROVED send_email tool call (answered by `buddyEmailSent`). */
   | {
       type: "buddySendEmail";
@@ -318,6 +331,8 @@ export type WorkerToMain =
       hits?: WebSearchHit[];
       imageHits?: ImageSearchHit[];
       image?: { bytes: ArrayBuffer; mimeType: string };
+      /** An image-to-video render's output clip (mp4 / animated webp). */
+      video?: { bytes: ArrayBuffer; mimeType: string };
       /** search_book passages (slash commands render these in the panel). */
       passages?: BookPassage[];
       /** lookup_bible detail (slash commands render this in the panel). */

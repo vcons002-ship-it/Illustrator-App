@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildWorkflow } from "./comfyui-backend.js";
+import { buildWorkflow, buildWanI2VWorkflow, buildLtx2I2VWorkflow } from "./comfyui-backend.js";
 import type { SamplerSettings } from "../sd-prompt.js";
 
 const sampler: SamplerSettings = { cfg: 7, sampler: "euler", scheduler: "normal", steps: 20 };
@@ -209,5 +209,123 @@ describe("buildWorkflow Hi-Res two-pass", () => {
     expect(g["18"]).toBeUndefined();
     expect(g["19"]).toBeUndefined();
     expect(inputsOf(g, "8").samples).toEqual(["3", 0]);
+  });
+});
+
+describe("buildWanI2VWorkflow (image-to-video, Wan2.2 two-expert)", () => {
+  const wan = {
+    startImage: "vr-ref-1.png",
+    models: { kind: "wan-i2v" as const, highNoise: "wan_high.safetensors", lowNoise: "wan_low.safetensors", textEncoder: "umt5.safetensors", vae: "wan_vae.safetensors" },
+    prompt: "slow push-in, leaves drift",
+    negative: "static",
+    width: 640,
+    height: 640,
+    frames: 81,
+    fps: 16,
+    steps: 20,
+    cfg: 3.5,
+    shift: 8,
+    seed: 7,
+  };
+  it("wires the source image through WanImageToVideo into a high→low noise sampler chain", () => {
+    const g = buildWanI2VWorkflow(wan);
+    expect(classOf(g, "106")).toBe("LoadImage");
+    expect(inputsOf(g, "106").image).toBe("vr-ref-1.png");
+    expect(classOf(g, "107")).toBe("WanImageToVideo");
+    expect(inputsOf(g, "107").start_image).toEqual(["106", 0]);
+    expect(inputsOf(g, "107").length).toBe(81);
+    // High-noise expert: first half of the schedule, leftover noise handed to the low-noise pass.
+    expect(classOf(g, "110")).toBe("KSamplerAdvanced");
+    expect(inputsOf(g, "110").add_noise).toBe("enable");
+    expect(inputsOf(g, "110").end_at_step).toBe(10);
+    expect(inputsOf(g, "110").latent_image).toEqual(["107", 2]);
+    // Low-noise expert refines from the high-noise latent with no fresh noise.
+    expect(inputsOf(g, "111").add_noise).toBe("disable");
+    expect(inputsOf(g, "111").start_at_step).toBe(10);
+    expect(inputsOf(g, "111").latent_image).toEqual(["110", 0]);
+    // Decoded + saved as an animated webp (no custom nodes).
+    expect(classOf(g, "112")).toBe("VAEDecode");
+    expect(classOf(g, "113")).toBe("SaveAnimatedWEBP");
+    expect(inputsOf(g, "113").fps).toBe(16);
+  });
+  it("loads the two experts + the wan text encoder and vae", () => {
+    const g = buildWanI2VWorkflow(wan);
+    expect(inputsOf(g, "100").unet_name).toBe("wan_high.safetensors");
+    expect(inputsOf(g, "101").unet_name).toBe("wan_low.safetensors");
+    expect(inputsOf(g, "102").type).toBe("wan");
+    expect(inputsOf(g, "103").vae_name).toBe("wan_vae.safetensors");
+  });
+  it("applies the configured shift to ModelSamplingSD3", () => {
+    const g = buildWanI2VWorkflow({ ...wan, shift: 5 });
+    expect(classOf(g, "108")).toBe("ModelSamplingSD3");
+    expect(inputsOf(g, "108").shift).toBe(5);
+  });
+  it("when no LoRA is set, the experts feed ModelSamplingSD3 directly", () => {
+    const g = buildWanI2VWorkflow(wan);
+    expect(g["114"]).toBeUndefined();
+    expect(g["115"]).toBeUndefined();
+    expect(inputsOf(g, "108").model).toEqual(["100", 0]);
+    expect(inputsOf(g, "109").model).toEqual(["101", 0]);
+  });
+  it("when a LoRA is set, both experts route through LoraLoaderModelOnly first", () => {
+    const g = buildWanI2VWorkflow({ ...wan, models: { ...wan.models, lora: "wan_lora.safetensors" } });
+    expect(classOf(g, "114")).toBe("LoraLoaderModelOnly");
+    expect(classOf(g, "115")).toBe("LoraLoaderModelOnly");
+    expect(inputsOf(g, "114").lora_name).toBe("wan_lora.safetensors");
+    expect(inputsOf(g, "114").model).toEqual(["100", 0]);
+    expect(inputsOf(g, "115").model).toEqual(["101", 0]);
+    expect(inputsOf(g, "108").model).toEqual(["114", 0]);
+    expect(inputsOf(g, "109").model).toEqual(["115", 0]);
+  });
+});
+
+describe("buildLtx2I2VWorkflow (image-to-video, LTX-2.3 single-checkpoint)", () => {
+  const ltx = {
+    startImage: "vr-ref-2.png",
+    models: { kind: "ltx2-i2v" as const, checkpoint: "ltx.safetensors", textEncoder: "gemma.safetensors" },
+    prompt: "camera pushes through the doorway",
+    negative: "static",
+    width: 768,
+    height: 512,
+    frames: 121,
+    fps: 24,
+    steps: 20,
+    cfg: 3,
+    seed: 11,
+  };
+  it("loads the checkpoint + the separate gemma text encoder and conditions the source frame", () => {
+    const g = buildLtx2I2VWorkflow(ltx);
+    expect(classOf(g, "200")).toBe("CheckpointLoaderSimple");
+    expect(inputsOf(g, "200").ckpt_name).toBe("ltx.safetensors");
+    expect(classOf(g, "202")).toBe("LTXAVTextEncoderLoader");
+    expect(inputsOf(g, "202").clip_name).toBe("gemma.safetensors");
+    expect(classOf(g, "205")).toBe("LoadImage");
+    expect(inputsOf(g, "205").image).toBe("vr-ref-2.png");
+    expect(classOf(g, "206")).toBe("LTXVImgToVideo");
+    expect(inputsOf(g, "206").length).toBe(121);
+    expect(inputsOf(g, "206").image).toEqual(["205", 0]);
+  });
+  it("drives a SamplerCustomAdvanced (euler + LTXV sigmas + CFG guider) and saves an animated webp", () => {
+    const g = buildLtx2I2VWorkflow(ltx);
+    expect(classOf(g, "208")).toBe("LTXVScheduler");
+    expect(inputsOf(g, "208").steps).toBe(20);
+    expect(classOf(g, "211")).toBe("CFGGuider");
+    expect(inputsOf(g, "211").cfg).toBe(3);
+    expect(inputsOf(g, "211").model).toEqual(["200", 0]);
+    expect(classOf(g, "212")).toBe("SamplerCustomAdvanced");
+    expect(classOf(g, "214")).toBe("SaveAnimatedWEBP");
+    expect(inputsOf(g, "214").fps).toBe(24);
+  });
+  it("when no LoRA is set, the CFG guider reads the bare checkpoint model", () => {
+    const g = buildLtx2I2VWorkflow(ltx);
+    expect(g["201"]).toBeUndefined();
+    expect(inputsOf(g, "211").model).toEqual(["200", 0]);
+  });
+  it("when a LoRA is set, the model routes through LoraLoaderModelOnly", () => {
+    const g = buildLtx2I2VWorkflow({ ...ltx, models: { ...ltx.models, lora: "ltx_lora.safetensors" } });
+    expect(classOf(g, "201")).toBe("LoraLoaderModelOnly");
+    expect(inputsOf(g, "201").lora_name).toBe("ltx_lora.safetensors");
+    expect(inputsOf(g, "201").model).toEqual(["200", 0]);
+    expect(inputsOf(g, "211").model).toEqual(["201", 0]);
   });
 });

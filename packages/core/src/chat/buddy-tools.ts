@@ -261,6 +261,11 @@ export type BuddyToolCall =
     }
   /** Same shape as the in-book chat's generate_image: approval-gated render. */
   | { tool: "generate_image"; prompt: string; model?: string; steps?: number; style?: string; truncated?: boolean }
+  /** Animate an existing image into a short VIDEO via the local ComfyUI engine (image-to-video). `prompt`
+   * describes the MOTION/camera; `source` picks which image to animate — the most recent one shown (default),
+   * a library illustration by id, or an image file by path. Approval-gated like generate_image. Desktop +
+   * a local ComfyUI engine with an installed image-to-video model. */
+  | { tool: "generate_video"; prompt: string; source?: { kind: "last" | "library" | "file"; ref?: string }; model?: string; frames?: number; truncated?: boolean }
   /** Search the reader's COMPUTER for a file to open (desktop). Approval-gated:
    * the host stops the loop and asks the reader before touching the filesystem. */
   | { tool: "find_files"; query: string }
@@ -576,6 +581,8 @@ export function buildBuddySystemPrompt(opts: {
   /** Desktop + commands + an installed external coding agent (Aider): advertise delegate_coding_task,
    * so a hard, multi-file coding job can be handed to a specialist instead of done edit-by-edit. */
   canDelegateCoding?: boolean;
+  /** A local ComfyUI engine with an image-to-video model: advertise generate_video (animate an image). */
+  canGenerateVideo?: boolean;
   /** An AppID is set: advertise the Wolfram|Alpha tool (real-world data + computation). */
   canWolfram?: boolean;
   /** A GitHub token is set (desktop + commands): advertise git/gh repo work. */
@@ -1065,6 +1072,17 @@ export function buildBuddySystemPrompt(opts: {
     'look like" = the reader wants a REAL image → search_images. "generate / draw / make / create / paint / ' +
     'imagine" = the reader wants NEW art → generate_image. If genuinely ambiguous, prefer search_images for ' +
     "real-world subjects and generate_image only for fictional/invented scenes — or ask.\n" +
+    (opts.canGenerateVideo
+      ? '- {"tool":"generate_video","prompt":"how it should move","source":{"kind":"last"}} — ANIMATE an existing ' +
+        "image into a short VIDEO (image-to-video) with the local engine; the reader approves it. `prompt` describes the " +
+        'MOTION/camera (e.g. "slow push-in, leaves drifting"). `source` picks the image: {"kind":"last"} (the most recent ' +
+        'image shown — the default), {"kind":"library","ref":"<book id>"} (a library illustration), or {"kind":"file",' +
+        '"ref":"<path>"} (an image file). Leave "model" off to use the reader\'s chosen video model (recommended); ' +
+        'only set it to switch family on request: "wan2.2-i2v-14b" (~5s, strong motion — the default) or ' +
+        '"ltx2.3-i2v-22b" (longer/faster clips). Optional "frames" sets length (more frames = longer). Use when the ' +
+        'reader says "animate / make it move / turn this into a video / bring it to life". It needs an existing image — ' +
+        "generate_image first if there isn't one.\n"
+      : "") +
     '- {"tool":"open_content","source":"library|web|pasted|code", …} — the ONE way to OPEN something to ' +
     "READ/illustrate IN THE READER (it takes over the screen). Pick `source`:\n" +
     '    • "library" → {"source":"library","id":"…"} open a book from THE READER\'S LIBRARY above (use its id; never invent one).\n' +
@@ -2474,6 +2492,26 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       ...(truncated ? { truncated: true } : {}),
     };
   }
+  if (tool === "generate_video") {
+    const { text: prompt, truncated } = clampArg(obj.prompt, MAX_PROMPT_CHARS);
+    if (!prompt) return undefined;
+    const model = strArg(obj.model, MAX_NAME_CHARS);
+    const frames =
+      typeof obj.frames === "number" && Number.isFinite(obj.frames) ? Math.min(257, Math.max(9, Math.round(obj.frames))) : undefined;
+    // `source` picks which image to animate; default to the last image shown when absent/malformed.
+    const src = obj.source && typeof obj.source === "object" ? (obj.source as Record<string, unknown>) : undefined;
+    const kind = src?.kind === "library" || src?.kind === "file" ? src.kind : "last";
+    const ref = strArg(src?.ref, MAX_PATH_CHARS);
+    const source: { kind: "last" | "library" | "file"; ref?: string } = kind !== "last" && ref ? { kind, ref } : { kind: "last" };
+    return {
+      tool,
+      prompt,
+      source,
+      ...(model ? { model } : {}),
+      ...(frames !== undefined ? { frames } : {}),
+      ...(truncated ? { truncated: true } : {}),
+    };
+  }
   if (tool === "open_content") {
     // The single model-facing open tool: normalize to the internal open_* shapes by `source`, and
     // auto-detect fiction/technical when `mode` is omitted (the reader can flip it after it opens).
@@ -2704,6 +2742,8 @@ export interface BuddyToolResultPayload {
   applied?: { style?: string; pagesPerImage?: number | "chapter"; illustrateAfter?: "chapter" | "book" };
   /** Whether an approved image generation succeeded. */
   image?: { ok: boolean; error?: string };
+  /** Whether an approved image-to-video generation succeeded. */
+  video?: { ok: boolean; error?: string };
   /** A remember/forget outcome (note echoed for the inline chip). `about` names which store. */
   memory?: { action: "remembered" | "forgot"; note: string; about?: "reader" | "self" | "user"; count: number };
   /** A read_skill / save_skill / forget_skill outcome. */
@@ -3318,6 +3358,12 @@ function formatBuddyToolResultBody(call: BuddyToolCall, result: BuddyToolResultP
     return result.image?.ok
       ? `[tool generate_image: rendered the image${desc} and showed it to the reader]`
       : `[tool generate_image failed${desc}: ${result.image?.error ?? "unknown error"}]`;
+  }
+  if (call.tool === "generate_video") {
+    const desc = call.prompt ? ` (${call.prompt.length > 80 ? `${call.prompt.slice(0, 80).trim()}…` : call.prompt})` : "";
+    return result.video?.ok
+      ? `[tool generate_video: animated the image into a video${desc} and showed it to the reader]`
+      : `[tool generate_video failed${desc}: ${result.video?.error ?? "unknown error"}]`;
   }
   if (call.tool === "create_spreadsheet") {
     const o = result.opened;

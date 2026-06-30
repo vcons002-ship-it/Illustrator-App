@@ -39,6 +39,8 @@ import type {
   TaskPlan,
   TaskSource,
   ToolCall,
+  VideoModelFiles,
+  VideoRenderParams,
   VisualBible,
   WebSearchHit,
 } from "@visual-reader/core";
@@ -248,6 +250,14 @@ export interface EngineWorkerApi {
   ) => Promise<ChatDoneResult>;
   /** Run a user-approved generate_image tool call. */
   chatTool: (call: ToolCall, opts?: { onProgress?: (fraction: number) => void }) => Promise<ChatToolRender>;
+  /** Run an approved generate_video call: the host resolves the source image bytes + model files. */
+  chatVideo: (
+    call: Extract<BuddyToolCall, { tool: "generate_video" }>,
+    image: { bytes: ArrayBuffer; mimeType: string },
+    models: VideoModelFiles,
+    params: VideoRenderParams | undefined,
+    opts?: { onProgress?: (fraction: number) => void },
+  ) => Promise<ChatToolRender>;
   /** Push a just-resolved managed-engine URL to the worker RIGHT NOW (race-free, ahead of the debounced
    * settings sync) so the next STANDALONE render — which rebuilds providers fresh from settings — uses
    * it. Used by the low-VRAM deferred-engine-start path. */
@@ -456,6 +466,8 @@ export interface ChatDoneResult {
 
 export interface ChatToolRender {
   image?: { bytes: ArrayBuffer; mimeType: string };
+  /** An image-to-video render's output clip. */
+  video?: { bytes: ArrayBuffer; mimeType: string };
   error?: string;
 }
 
@@ -909,6 +921,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             chatToolRequests.current.delete(msg.requestId);
             toolReq.resolve({
               ...(msg.image ? { image: msg.image } : {}),
+              ...(msg.video ? { video: msg.video } : {}),
               ...(msg.error ? { error: msg.error } : {}),
             });
             break;
@@ -1618,6 +1631,46 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const chatVideo = useCallback(
+    (
+      call: Extract<BuddyToolCall, { tool: "generate_video" }>,
+      image: { bytes: ArrayBuffer; mimeType: string },
+      models: VideoModelFiles,
+      params: VideoRenderParams | undefined,
+      opts?: { onProgress?: (fraction: number) => void },
+    ): Promise<ChatToolRender> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        activeRenderRequestId.current = requestId; // so Stop can interrupt this render
+        // Video is even slower than an image — re-arm the silence deadline on every progress tick so an
+        // actively-rendering clip is never killed; the long backstop only fires on true engine silence.
+        let timeout: ReturnType<typeof setTimeout>;
+        const done = (r: ChatToolRender): void => {
+          clearTimeout(timeout);
+          if (activeRenderRequestId.current === requestId) activeRenderRequestId.current = undefined;
+          resolve(r);
+        };
+        const arm = (): void => {
+          clearTimeout(timeout);
+          timeout = setTimeout(() => {
+            if (chatToolRequests.current.delete(requestId)) {
+              done({ error: "The video render timed out — the engine stopped responding. Try again." });
+            }
+          }, 1_200_000);
+        };
+        arm();
+        chatToolRequests.current.set(requestId, {
+          resolve: done,
+          onProgress: (fraction) => {
+            arm();
+            opts?.onProgress?.(fraction);
+          },
+        });
+        // Bytes travel zero-copy to the worker (the source frame + nothing else big crosses).
+        send({ type: "chatVideo", requestId, call, image, models, ...(params ? { params } : {}) }, [image.bytes]);
+      }),
+    [],
+  );
   const assessImage = useCallback(
     (image: { bytes: ArrayBuffer; mimeType: string }, question?: string): Promise<{ text?: string; error?: string }> =>
       new Promise((resolve) => {
@@ -2097,6 +2150,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     resolveConflicts,
     chat,
     chatTool,
+    chatVideo,
     applyEngineConfig,
     setFileLedger,
     setProjectGuide,

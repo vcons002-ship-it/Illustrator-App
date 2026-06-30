@@ -33,7 +33,7 @@ export interface BookSummary {
 export interface ChatFileRef {
   name: string;
   mime: string;
-  kind: "code" | "doc" | "data" | "image" | "text" | "found" | "export";
+  kind: "code" | "doc" | "data" | "image" | "video" | "text" | "found" | "export";
   content?: string;
   bytes?: ArrayBuffer;
   path?: string;
@@ -58,6 +58,8 @@ export interface StoredChatMessage {
     | { bytes: ArrayBuffer; mimeType: string; id?: string }
     | { sourceUrl: string }
     | { id: string; mimeType: string };
+  /** An image-to-video render's output clip, shown inline as a looping <video>/animated image. */
+  video?: { bytes: ArrayBuffer; mimeType: string };
   links?: { url: string; title?: string }[];
   /** A set of retrieved images shown as an inline thumbnail gallery (a multi-hit
    * `search_images`); each thumbnail enlarges in place on click. This is what lets

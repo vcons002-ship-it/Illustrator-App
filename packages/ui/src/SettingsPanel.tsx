@@ -13,6 +13,9 @@ import {
   TEXT_PROVIDERS,
   LOCAL_IMAGE_MODELS,
   imageModelVramCostGb,
+  VIDEO_MODELS,
+  videoModelById,
+  VIDEO_RENDER_DEFAULTS,
   serverModelVramCostGb,
   defaultLoadedWindow,
   recommendImageModePairings,
@@ -260,6 +263,14 @@ export interface ReaderSettings {
   delegateCoding?: boolean;
   /** Which external coding agent delegate_coding_task drives: "aider" (default) or "codex" (backup). */
   codingAgentBackend?: "aider" | "codex";
+  /** Selected image-to-video model id (see VIDEO_MODELS); undefined → the default (Wan 2.2). */
+  videoModel?: string;
+  /** Per-file overrides for the image-to-video model — swap a component (a specific checkpoint / text
+   * encoder / VAE / LoRA) or point at a renamed file to fix a broken download. Blank → the catalog default.
+   * A superset of every family's filenames; only the selected model's fields are shown/used. */
+  videoFiles?: { highNoise?: string; lowNoise?: string; textEncoder?: string; vae?: string; checkpoint?: string; lora?: string };
+  /** Image-to-video render-param overrides (the graph's size / length / sampler choices). */
+  videoParams?: { frames?: number; fps?: number; width?: number; height?: number; steps?: number; cfg?: number; shift?: number };
   /** Parallel coding agents: let the manager model auto-resolve a merge conflict between agent
    * branches (validated, then committed — or aborted if it can't). Default on. */
   autoResolveConflicts?: boolean;
@@ -516,6 +527,8 @@ export interface SettingsPanelProps {
   onDownloadModel?: (id: string) => void;
   /** Download a checkpoint from a pasted URL into the managed engine. */
   onDownloadModelUrl?: (url: string) => void;
+  /** Download the selected image-to-video model's files into ComfyUI's subfolders (desktop). */
+  onDownloadVideoModel?: (id: string) => void;
   /** Download progress 0..100 per catalog model/LoRA id (desktop). */
   downloadProgress?: Record<string, number>;
   /** Which component file of a split-file model is downloading (per catalog id). */
@@ -577,6 +590,7 @@ export function SettingsPanel({
   installedVaes = [],
   onDownloadModel,
   onDownloadModelUrl,
+  onDownloadVideoModel,
   downloadProgress = {},
   downloadStage = {},
   engineStatus = "",
@@ -2135,6 +2149,123 @@ export function SettingsPanel({
               onDownloadModelUrl={onDownloadModelUrl}
               onConnect={onConnectLocalServer}
             />
+          )}
+
+          {value.imageProvider === "local" && (value.localBackend ?? "a1111") !== "a1111" && (
+            <div style={{ marginTop: 10 }}>
+              <label style={{ fontSize: 13, fontWeight: 600 }}>Image-to-video model</label>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
+                <select value={value.videoModel ?? VIDEO_MODELS[0]?.id ?? ""} onChange={(e) => set({ videoModel: e.target.value })}>
+                  {VIDEO_MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+                {onDownloadVideoModel ? (
+                  <button type="button" onClick={() => onDownloadVideoModel(value.videoModel ?? VIDEO_MODELS[0]!.id)}>
+                    Download (~{videoModelById(value.videoModel)?.sizeGB ?? VIDEO_MODELS[0]?.sizeGB ?? 0} GB)
+                  </button>
+                ) : null}
+              </div>
+              <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginTop: 4 }}>
+                Lets the assistant animate an image into a short video via ComfyUI (the <code>generate_video</code> tool) —
+                just say “animate this / make it move” in chat. Download places the files into ComfyUI’s model folders.
+                Large download; runs on ComfyUI only.
+              </span>
+              {(() => {
+                const entry = videoModelById(value.videoModel) ?? VIDEO_MODELS[0]!;
+                const kind = entry.files.kind;
+                const dflt = VIDEO_RENDER_DEFAULTS[kind];
+                // Placeholder filenames keyed by field (the union's per-family filenames, kind stripped).
+                const defFiles: Record<string, string | undefined> = { ...entry.files };
+                const vf = value.videoFiles ?? {};
+                const vp = value.videoParams ?? {};
+                const setFile = (k: keyof NonNullable<typeof value.videoFiles>, v: string) =>
+                  set({ videoFiles: { ...vf, [k]: v || undefined } });
+                const setParam = (k: keyof NonNullable<typeof value.videoParams>, v: string) =>
+                  set({ videoParams: { ...vp, [k]: v === "" ? undefined : Number(v) } });
+                const diffNames = installedModels.map((m) => m.id);
+                const fileRow = (label: string, k: keyof NonNullable<typeof value.videoFiles>, list: string[], listId: string) => (
+                  <label key={k} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }}>
+                    <span style={{ opacity: 0.7 }}>{label}</span>
+                    <input
+                      list={list.length ? listId : undefined}
+                      value={vf[k] ?? ""}
+                      placeholder={k === "lora" ? "(none)" : defFiles[k] ?? ""}
+                      onChange={(e) => setFile(k, e.target.value)}
+                      style={{ fontSize: 11 }}
+                    />
+                    {list.length ? <datalist id={listId}>{list.map((n) => <option key={n} value={n} />)}</datalist> : null}
+                  </label>
+                );
+                const numRow = (label: string, k: "frames" | "fps" | "width" | "height" | "steps" | "cfg" | "shift", ph: number) => (
+                  <label key={k} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }}>
+                    <span style={{ opacity: 0.7 }}>{label}</span>
+                    <input type="number" value={vp[k] ?? ""} placeholder={String(ph)} onChange={(e) => setParam(k, e.target.value)} style={{ fontSize: 11, width: 80 }} />
+                  </label>
+                );
+                const effFrames = vp.frames ?? dflt.frames;
+                const effFps = vp.fps ?? dflt.fps;
+                const durationS = effFps > 0 ? effFrames / effFps : 0;
+                // Each family samples in fixed-size chunks, so a clean length is a multiple +1: Wan = 4n+1, LTX = 8n+1.
+                const SUGGESTED = kind === "ltx2-i2v" ? [97, 121, 161, 201] : [49, 81, 121, 161];
+                const stepLabel = kind === "ltx2-i2v" ? "8n+1" : "4n+1";
+                return (
+                  <details style={{ marginTop: 8 }}>
+                    <summary style={{ cursor: "pointer", fontSize: 12 }}>Advanced — model files &amp; render settings</summary>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 6 }}>
+                      {kind === "ltx2-i2v" ? (
+                        <>
+                          {fileRow("Checkpoint", "checkpoint", diffNames, "vid-ckpt")}
+                          {fileRow("Text encoder (Gemma)", "textEncoder", installedTextEncoders, "vid-te")}
+                          {fileRow("LoRA (optional)", "lora", installedLoras, "vid-lora")}
+                        </>
+                      ) : (
+                        <>
+                          {fileRow("High-noise model", "highNoise", diffNames, "vid-high")}
+                          {fileRow("Low-noise model", "lowNoise", diffNames, "vid-low")}
+                          {fileRow("Text encoder", "textEncoder", installedTextEncoders, "vid-te")}
+                          {fileRow("VAE", "vae", installedVaes, "vid-vae")}
+                          {fileRow("LoRA (optional)", "lora", installedLoras, "vid-lora")}
+                        </>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+                      {numRow("Frames", "frames", dflt.frames)}
+                      {numRow("FPS", "fps", dflt.fps)}
+                      {numRow("Width", "width", dflt.width)}
+                      {numRow("Height", "height", dflt.height)}
+                      {numRow("Steps", "steps", dflt.steps)}
+                      {numRow("CFG", "cfg", dflt.cfg)}
+                      {kind === "wan-i2v" ? numRow("Shift", "shift", dflt.shift) : null}
+                    </div>
+                    <div style={{ marginTop: 6, fontSize: 11 }}>
+                      <span style={{ fontWeight: 600 }}>≈ {durationS.toFixed(1)}s</span>
+                      <span style={{ opacity: 0.7 }}> at {effFrames} frames ÷ {effFps} fps. </span>
+                      <span style={{ opacity: 0.7 }}>Length (= frames ÷ fps). Clean {stepLabel} frame counts: </span>
+                      {SUGGESTED.map((f, i) => (
+                        <span key={f}>
+                          {i > 0 ? ", " : ""}
+                          <button
+                            type="button"
+                            onClick={() => setParam("frames", String(f))}
+                            style={{ fontSize: 11, padding: "0 4px", cursor: "pointer", background: "none", border: "1px solid currentColor", borderRadius: 4, opacity: 0.8 }}
+                          >
+                            {f} (~{(f / effFps).toFixed(1)}s)
+                          </button>
+                        </span>
+                      ))}
+                      <span style={{ opacity: 0.7 }}>. More frames = more VRAM &amp; time.</span>
+                    </div>
+                    <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginTop: 6 }}>
+                      Override any file (pick an installed one or type a filename) to swap a component or fix a failed
+                      download; blank uses the default. Render settings are the graph’s defaults when blank.
+                    </span>
+                  </details>
+                );
+              })()}
+            </div>
           )}
 
           {value.imageProvider === "local" && (
