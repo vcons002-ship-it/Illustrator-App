@@ -314,6 +314,7 @@ describe("buildLtx2I2VWorkflow (official video-only 2-stage LTX-2.3)", () => {
     cfg: 1,
     seed: 11,
     highRes: true,
+    audio: false,
   };
   it("loads the checkpoint + gemma encoder + distilled LoRA and preprocesses the source frame", () => {
     const g = buildLtx2I2VWorkflow(ltx);
@@ -409,5 +410,40 @@ describe("buildLtx2I2VWorkflow (official video-only 2-stage LTX-2.3)", () => {
     expect(g["210"]).toBeUndefined();
     expect(inputsOf(g, "215").latent_image).toEqual(["209", 0]);
     expect(inputsOf(g, "225").samples).toEqual(["215", 0]);
+  });
+  it("audio on: combines an audio latent through both samplers and muxes an mp4 via CreateVideo/SaveVideo", () => {
+    const g = buildLtx2I2VWorkflow({ ...ltx, audio: true });
+    // Audio latent built + concatenated with the stage-1 video latent into the sampler.
+    expect(classOf(g, "230")).toBe("LTXVAudioVAELoader");
+    expect(classOf(g, "231")).toBe("LTXVEmptyLatentAudio");
+    expect(classOf(g, "232")).toBe("LTXVConcatAVLatent");
+    expect(inputsOf(g, "232").video_latent).toEqual(["210", 0]); // i2v stage-1 video latent
+    expect(inputsOf(g, "215").latent_image).toEqual(["232", 0]); // sampler takes the AV concat
+    expect(classOf(g, "233")).toBe("LTXVSeparateAVLatent");
+    // Stage 2 re-concats the upscaled video with the carried audio, then separates again.
+    expect(inputsOf(g, "234").audio_latent).toEqual(["233", 1]);
+    expect(inputsOf(g, "224").latent_image).toEqual(["234", 0]);
+    expect(classOf(g, "235")).toBe("LTXVSeparateAVLatent");
+    // Decode video + audio, mux to mp4.
+    expect(inputsOf(g, "225").samples).toEqual(["235", 0]);
+    expect(classOf(g, "236")).toBe("LTXVAudioVAEDecode");
+    expect(inputsOf(g, "236").samples).toEqual(["235", 1]);
+    expect(classOf(g, "237")).toBe("CreateVideo");
+    expect(inputsOf(g, "237").audio).toEqual(["236", 0]);
+    expect(classOf(g, "238")).toBe("SaveVideo");
+    // No silent webp output when audio is on.
+    expect(g["226"]).toBeUndefined();
+  });
+  it("audio off: no audio nodes; silent webp output", () => {
+    const g = buildLtx2I2VWorkflow({ ...ltx, audio: false });
+    expect(g["230"]).toBeUndefined();
+    expect(g["232"]).toBeUndefined();
+    expect(g["236"]).toBeUndefined();
+    expect(g["238"]).toBeUndefined();
+    expect(classOf(g, "226")).toBe("SaveAnimatedWEBP");
+  });
+  it("distilled LoRA is applied at strength 0.5 (per the official graph)", () => {
+    const g = buildLtx2I2VWorkflow(ltx);
+    expect(inputsOf(g, "202").strength_model).toBe(0.5);
   });
 });
