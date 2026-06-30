@@ -40,6 +40,7 @@ import type {
   TaskSource,
   ToolCall,
   VideoModelFiles,
+  VideoRenderParams,
   VisualBible,
   WebSearchHit,
 } from "@visual-reader/core";
@@ -254,6 +255,7 @@ export interface EngineWorkerApi {
     call: Extract<BuddyToolCall, { tool: "generate_video" }>,
     image: { bytes: ArrayBuffer; mimeType: string },
     models: VideoModelFiles,
+    params: VideoRenderParams | undefined,
     opts?: { onProgress?: (fraction: number) => void },
   ) => Promise<ChatToolRender>;
   /** Push a just-resolved managed-engine URL to the worker RIGHT NOW (race-free, ahead of the debounced
@@ -1634,6 +1636,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       call: Extract<BuddyToolCall, { tool: "generate_video" }>,
       image: { bytes: ArrayBuffer; mimeType: string },
       models: VideoModelFiles,
+      params: VideoRenderParams | undefined,
       opts?: { onProgress?: (fraction: number) => void },
     ): Promise<ChatToolRender> =>
       new Promise((resolve) => {
@@ -1664,7 +1667,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           },
         });
         // Bytes travel zero-copy to the worker (the source frame + nothing else big crosses).
-        send({ type: "chatVideo", requestId, call, image, models }, [image.bytes]);
+        send({ type: "chatVideo", requestId, call, image, models, ...(params ? { params } : {}) }, [image.bytes]);
       }),
     [],
   );

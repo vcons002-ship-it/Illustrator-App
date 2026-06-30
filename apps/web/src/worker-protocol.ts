@@ -27,6 +27,7 @@ import type {
   TaskSource,
   ToolCall,
   VideoModelFiles,
+  VideoRenderParams,
   VisualBible,
   WebSearchHit,
 } from "@visual-reader/core";
@@ -136,6 +137,8 @@ export type MainToWorker =
       call: Extract<BuddyToolCall, { tool: "generate_video" }>;
       image: { bytes: ArrayBuffer; mimeType: string };
       models: VideoModelFiles;
+      /** The reader's Settings render-param overrides (size/length/sampler choices). */
+      params?: VideoRenderParams;
     }
   /** Send a user-APPROVED send_email tool call (answered by `buddyEmailSent`). */
   | {

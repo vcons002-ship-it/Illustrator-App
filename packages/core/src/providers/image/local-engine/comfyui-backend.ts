@@ -41,6 +41,8 @@ interface WanI2VParams {
   fps: number;
   steps: number;
   cfg: number;
+  /** Sigma shift (Wan ~8 for video). */
+  shift: number;
   seed: number;
 }
 
@@ -52,8 +54,13 @@ interface WanI2VParams {
  */
 export function buildWanI2VWorkflow(p: WanI2VParams): Record<string, unknown> {
   const half = Math.max(1, Math.round(p.steps / 2));
-  const shift = 8; // Wan's recommended sigma shift for video
-  return {
+  const shift = p.shift;
+  // Optional LoRA applied to BOTH experts (node 114 = high, 115 = low); ModelSamplingSD3 then samples
+  // from the LoRA-wrapped model when set, or the bare UNET otherwise.
+  const lora = p.models.lora?.trim();
+  const highModel: [string, number] = lora ? ["114", 0] : ["100", 0];
+  const lowModel: [string, number] = lora ? ["115", 0] : ["101", 0];
+  const graph: Record<string, unknown> = {
     "100": { class_type: "UNETLoader", inputs: { unet_name: p.models.highNoise, weight_dtype: "default" } },
     "101": { class_type: "UNETLoader", inputs: { unet_name: p.models.lowNoise, weight_dtype: "default" } },
     "102": { class_type: "CLIPLoader", inputs: { clip_name: p.models.textEncoder, type: "wan" } },
@@ -65,8 +72,8 @@ export function buildWanI2VWorkflow(p: WanI2VParams): Record<string, unknown> {
       class_type: "WanImageToVideo",
       inputs: { positive: ["104", 0], negative: ["105", 0], vae: ["103", 0], start_image: ["106", 0], width: p.width, height: p.height, length: p.frames, batch_size: 1 },
     },
-    "108": { class_type: "ModelSamplingSD3", inputs: { model: ["100", 0], shift } },
-    "109": { class_type: "ModelSamplingSD3", inputs: { model: ["101", 0], shift } },
+    "108": { class_type: "ModelSamplingSD3", inputs: { model: highModel, shift } },
+    "109": { class_type: "ModelSamplingSD3", inputs: { model: lowModel, shift } },
     // High-noise expert handles the first half of the schedule, leaving leftover noise for the low-noise pass.
     "110": {
       class_type: "KSamplerAdvanced",
@@ -80,6 +87,11 @@ export function buildWanI2VWorkflow(p: WanI2VParams): Record<string, unknown> {
     "112": { class_type: "VAEDecode", inputs: { samples: ["111", 0], vae: ["103", 0] } },
     "113": { class_type: "SaveAnimatedWEBP", inputs: { images: ["112", 0], filename_prefix: "visual-reader-vid", fps: p.fps, lossless: false, quality: 90, method: "default" } },
   };
+  if (lora) {
+    graph["114"] = { class_type: "LoraLoaderModelOnly", inputs: { model: ["100", 0], lora_name: lora, strength_model: 1 } };
+    graph["115"] = { class_type: "LoraLoaderModelOnly", inputs: { model: ["101", 0], lora_name: lora, strength_model: 1 } };
+  }
+  return graph;
 }
 
 /** MIME for a saved ComfyUI artifact, by extension (a video clip vs. an animated image). */
@@ -841,6 +853,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
       fps: input.fps ?? 16,
       steps: input.steps ?? 20,
       cfg: input.cfg ?? 3.5,
+      shift: input.shift ?? 8,
       seed: input.seed ?? Math.floor(Math.random() * 1_000_000_000),
     });
     const relay = (fraction: number): void => input.onProgress?.(fraction);

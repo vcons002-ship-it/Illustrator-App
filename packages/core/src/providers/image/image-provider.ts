@@ -137,7 +137,9 @@ export interface ImageGenerationOutput {
   mimeType: string;
 }
 
-/** The model files an image-to-video engine needs (Wan2.2 ships a two-expert pair + encoder + VAE). */
+/** The model files an image-to-video engine needs (Wan2.2 ships a two-expert pair + encoder + VAE).
+ * Every field is a ComfyUI filename the reader can override from Settings to swap a component or work
+ * around a failed download. `lora` is optional (applied to both experts when set). */
 export interface VideoModelFiles {
   /** High-noise diffusion model (first sampling stage). */
   highNoise: string;
@@ -147,6 +149,20 @@ export interface VideoModelFiles {
   textEncoder: string;
   /** VAE. */
   vae: string;
+  /** Optional motion/style LoRA applied to both experts. */
+  lora?: string;
+}
+
+/** The sampler/size/length choices for an image-to-video render — overridable from Settings. */
+export interface VideoRenderParams {
+  frames?: number;
+  fps?: number;
+  width?: number;
+  height?: number;
+  steps?: number;
+  cfg?: number;
+  /** Sigma shift (Wan's recommended ~8 for video). */
+  shift?: number;
 }
 
 /** Input for an image-to-video render: a source image + a motion prompt + clip params. */
@@ -164,6 +180,8 @@ export interface VideoGenerationInput {
   height?: number;
   steps?: number;
   cfg?: number;
+  /** Sigma shift (Wan ~8 for video). */
+  shift?: number;
   seed?: number;
   lowVram?: boolean;
   onProgress?: (fraction: number) => void;

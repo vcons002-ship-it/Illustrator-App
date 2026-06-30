@@ -264,6 +264,11 @@ export interface ReaderSettings {
   codingAgentBackend?: "aider" | "codex";
   /** Selected image-to-video model id (see VIDEO_MODELS); undefined → the default (Wan 2.2). */
   videoModel?: string;
+  /** Per-file overrides for the image-to-video model — swap a component (a specific text encoder / VAE /
+   * LoRA) or point at a renamed file to fix a broken download. Blank → the catalog default. */
+  videoFiles?: { highNoise?: string; lowNoise?: string; textEncoder?: string; vae?: string; lora?: string };
+  /** Image-to-video render-param overrides (the graph's size / length / sampler choices). */
+  videoParams?: { frames?: number; fps?: number; width?: number; height?: number; steps?: number; cfg?: number; shift?: number };
   /** Parallel coding agents: let the manager model auto-resolve a merge conflict between agent
    * branches (validated, then committed — or aborted if it can't). Default on. */
   autoResolveConflicts?: boolean;
@@ -2166,6 +2171,60 @@ export function SettingsPanel({
                 Download places the files into ComfyUI’s <code>diffusion_models</code>/<code>text_encoders</code>/<code>vae</code>{" "}
                 folders. Large download; runs on ComfyUI only.
               </span>
+              {(() => {
+                const def = (videoModelById(value.videoModel) ?? VIDEO_MODELS[0])?.files;
+                const vf = value.videoFiles ?? {};
+                const vp = value.videoParams ?? {};
+                const setFile = (k: keyof NonNullable<typeof value.videoFiles>, v: string) =>
+                  set({ videoFiles: { ...vf, [k]: v || undefined } });
+                const setParam = (k: keyof NonNullable<typeof value.videoParams>, v: string) =>
+                  set({ videoParams: { ...vp, [k]: v === "" ? undefined : Number(v) } });
+                const diffNames = installedModels.map((m) => m.id);
+                const fileRow = (label: string, k: "highNoise" | "lowNoise" | "textEncoder" | "vae" | "lora", list: string[], listId: string) => (
+                  <label key={k} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }}>
+                    <span style={{ opacity: 0.7 }}>{label}</span>
+                    <input
+                      list={list.length ? listId : undefined}
+                      value={vf[k] ?? ""}
+                      placeholder={k === "lora" ? "(none)" : def?.[k] ?? ""}
+                      onChange={(e) => setFile(k, e.target.value)}
+                      style={{ fontSize: 11 }}
+                    />
+                    {list.length ? <datalist id={listId}>{list.map((n) => <option key={n} value={n} />)}</datalist> : null}
+                  </label>
+                );
+                const numRow = (label: string, k: "frames" | "fps" | "width" | "height" | "steps" | "cfg" | "shift", ph: number) => (
+                  <label key={k} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }}>
+                    <span style={{ opacity: 0.7 }}>{label}</span>
+                    <input type="number" value={vp[k] ?? ""} placeholder={String(ph)} onChange={(e) => setParam(k, e.target.value)} style={{ fontSize: 11, width: 80 }} />
+                  </label>
+                );
+                return (
+                  <details style={{ marginTop: 8 }}>
+                    <summary style={{ cursor: "pointer", fontSize: 12 }}>Advanced — model files &amp; render settings</summary>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 6 }}>
+                      {fileRow("High-noise model", "highNoise", diffNames, "vid-high")}
+                      {fileRow("Low-noise model", "lowNoise", diffNames, "vid-low")}
+                      {fileRow("Text encoder", "textEncoder", installedTextEncoders, "vid-te")}
+                      {fileRow("VAE", "vae", installedVaes, "vid-vae")}
+                      {fileRow("LoRA (optional)", "lora", installedLoras, "vid-lora")}
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+                      {numRow("Frames", "frames", 81)}
+                      {numRow("FPS", "fps", 16)}
+                      {numRow("Width", "width", 640)}
+                      {numRow("Height", "height", 640)}
+                      {numRow("Steps", "steps", 20)}
+                      {numRow("CFG", "cfg", 3.5)}
+                      {numRow("Shift", "shift", 8)}
+                    </div>
+                    <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginTop: 6 }}>
+                      Override any file (pick an installed one or type a filename) to swap a component or fix a failed
+                      download; blank uses the default. Render settings are the Wan graph’s defaults when blank.
+                    </span>
+                  </details>
+                );
+              })()}
             </div>
           )}
 

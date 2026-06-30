@@ -224,6 +224,7 @@ describe("buildWanI2VWorkflow (image-to-video, Wan2.2 two-expert)", () => {
     fps: 16,
     steps: 20,
     cfg: 3.5,
+    shift: 8,
     seed: 7,
   };
   it("wires the source image through WanImageToVideo into a high→low noise sampler chain", () => {
@@ -253,5 +254,27 @@ describe("buildWanI2VWorkflow (image-to-video, Wan2.2 two-expert)", () => {
     expect(inputsOf(g, "101").unet_name).toBe("wan_low.safetensors");
     expect(inputsOf(g, "102").type).toBe("wan");
     expect(inputsOf(g, "103").vae_name).toBe("wan_vae.safetensors");
+  });
+  it("applies the configured shift to ModelSamplingSD3", () => {
+    const g = buildWanI2VWorkflow({ ...wan, shift: 5 });
+    expect(classOf(g, "108")).toBe("ModelSamplingSD3");
+    expect(inputsOf(g, "108").shift).toBe(5);
+  });
+  it("when no LoRA is set, the experts feed ModelSamplingSD3 directly", () => {
+    const g = buildWanI2VWorkflow(wan);
+    expect(g["114"]).toBeUndefined();
+    expect(g["115"]).toBeUndefined();
+    expect(inputsOf(g, "108").model).toEqual(["100", 0]);
+    expect(inputsOf(g, "109").model).toEqual(["101", 0]);
+  });
+  it("when a LoRA is set, both experts route through LoraLoaderModelOnly first", () => {
+    const g = buildWanI2VWorkflow({ ...wan, models: { ...wan.models, lora: "wan_lora.safetensors" } });
+    expect(classOf(g, "114")).toBe("LoraLoaderModelOnly");
+    expect(classOf(g, "115")).toBe("LoraLoaderModelOnly");
+    expect(inputsOf(g, "114").lora_name).toBe("wan_lora.safetensors");
+    expect(inputsOf(g, "114").model).toEqual(["100", 0]);
+    expect(inputsOf(g, "115").model).toEqual(["101", 0]);
+    expect(inputsOf(g, "108").model).toEqual(["114", 0]);
+    expect(inputsOf(g, "109").model).toEqual(["115", 0]);
   });
 });

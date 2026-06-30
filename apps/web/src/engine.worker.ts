@@ -22,6 +22,7 @@ import {
   chatImageVramFit,
   staleComfyUrlToFree,
   type VideoModelFiles,
+  type VideoRenderParams,
   resolveLoadedContextTokens,
   createDataTable,
   recalcTable,
@@ -1334,7 +1335,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       void handleChatTool(msg.requestId, msg.call);
       break;
     case "chatVideo":
-      void handleChatVideo(msg.requestId, msg.call, msg.image, msg.models);
+      void handleChatVideo(msg.requestId, msg.call, msg.image, msg.models, msg.params);
       break;
     case "assessImage":
       void handleAssessImage(msg.requestId, msg.image, msg.question);
@@ -4036,6 +4037,7 @@ async function handleChatVideo(
   call: Extract<BuddyToolCall, { tool: "generate_video" }>,
   image: { bytes: ArrayBuffer; mimeType: string },
   models: VideoModelFiles,
+  params?: VideoRenderParams,
 ): Promise<void> {
   const ac = new AbortController();
   chatAborts.set(requestId, ac);
@@ -4060,7 +4062,15 @@ async function handleChatVideo(
       {
         prompt: call.prompt,
         image,
-        ...(call.frames ? { frames: call.frames } : {}),
+        // The model's per-call frames wins over the Settings default; the rest of the graph choices
+        // (fps/size/steps/cfg/shift) come from Settings overrides, else the backend's Wan defaults.
+        ...((call.frames ?? params?.frames) !== undefined ? { frames: (call.frames ?? params?.frames)! } : {}),
+        ...(params?.fps ? { fps: params.fps } : {}),
+        ...(params?.width ? { width: params.width } : {}),
+        ...(params?.height ? { height: params.height } : {}),
+        ...(params?.steps ? { steps: params.steps } : {}),
+        ...(params?.cfg !== undefined ? { cfg: params.cfg } : {}),
+        ...(params?.shift !== undefined ? { shift: params.shift } : {}),
         lowVram: !!settings.lowVram,
         signal: ac.signal,
         onProgress: (fraction) => post({ type: "testProgress", requestId, fraction }),

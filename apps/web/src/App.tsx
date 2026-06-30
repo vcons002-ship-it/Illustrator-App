@@ -5170,8 +5170,10 @@ export function App() {
     let out: Awaited<ReturnType<typeof chatVideo>>;
     try {
       const src = await resolveVideoSource(call.source);
-      const models = resolveVideoModelFiles(settings.videoModel);
-      out = await chatVideo(call, src, models, {
+      // Settings overrides win over the catalog default (a swapped component / a fixed broken download),
+      // and the Settings render params drive the graph's size/length/sampler choices.
+      const models = resolveVideoModelFiles(settings.videoModel, settings.videoFiles);
+      out = await chatVideo(call, src, models, settings.videoParams, {
         onProgress: (f) => setBuddyActivity(`Animating the image… ${Math.round(f * 100)}%`),
       });
     } catch (err) {

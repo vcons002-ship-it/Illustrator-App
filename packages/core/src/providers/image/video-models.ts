@@ -53,9 +53,29 @@ export function videoModelById(id: string | undefined): VideoModelCatalogEntry |
   return VIDEO_MODELS.find((m) => m.id === id);
 }
 
-/** The model files for the reader's selected video model, or the default (Wan2.2) when unset/unknown. */
-export function resolveVideoModelFiles(id?: string): VideoModelFiles {
-  return (videoModelById(id) ?? WAN22_I2V_14B).files;
+/**
+ * The model files for the reader's selected video model, with per-file Settings OVERRIDES applied over the
+ * catalog default — so a broken download or a deliberate component swap (a different text encoder / VAE /
+ * LoRA) can be fixed without touching code. A blank/whitespace override is ignored (falls back to the
+ * default); an `lora` override turns the optional LoRA on. PURE.
+ */
+export function resolveVideoModelFiles(
+  id?: string,
+  overrides?: Partial<Record<keyof VideoModelFiles, string>>,
+): VideoModelFiles {
+  const base = (videoModelById(id) ?? WAN22_I2V_14B).files;
+  const pick = (key: keyof VideoModelFiles): string | undefined => {
+    const o = overrides?.[key]?.trim();
+    return o || base[key];
+  };
+  const lora = overrides?.lora?.trim() || base.lora;
+  return {
+    highNoise: pick("highNoise")!,
+    lowNoise: pick("lowNoise")!,
+    textEncoder: pick("textEncoder")!,
+    vae: pick("vae")!,
+    ...(lora ? { lora } : {}),
+  };
 }
 
 /** The files to download to install the reader's selected video model (default Wan2.2). */
