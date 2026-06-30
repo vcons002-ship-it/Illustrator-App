@@ -240,6 +240,7 @@ export async function runChatTurn(opts: {
 
     if (
       call.tool === "generate_image" ||
+      call.tool === "generate_video" ||
       call.tool === "export_book" ||
       call.tool === "export_data" ||
       call.tool === "set_cell" ||
@@ -262,7 +263,7 @@ export async function runChatTurn(opts: {
 /** Execute one auto-run tool (everything but generate_image). Exported for the
  * slash-command path, which runs tools directly without an LLM round. */
 export async function runChatTool(
-  call: Exclude<ToolCall, { tool: "generate_image" | "export_book" | "export_data" | "set_cell" | "add_formula_column" }>,
+  call: Exclude<ToolCall, { tool: "generate_image" | "generate_video" | "export_book" | "export_data" | "set_cell" | "add_formula_column" }>,
   tools: ChatToolDeps,
 ): Promise<ToolResultPayload> {
   try {

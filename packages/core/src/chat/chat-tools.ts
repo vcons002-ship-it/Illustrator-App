@@ -24,6 +24,16 @@ export type ToolCall =
       steps?: number;
       style?: string;
     }
+  /** Image-to-video (mirrors the buddy's generate_video; carried so its render result rides
+   * chatToolResult.call). The host resolves the source image bytes before the worker runs it. */
+  | {
+      tool: "generate_video";
+      prompt: string;
+      source?: { kind: "last" | "library" | "file"; ref?: string };
+      model?: string;
+      frames?: number;
+      truncated?: boolean;
+    }
   | { tool: "search_web"; query: string }
   | { tool: "search_images"; query: string }
   /** Read a specific web page's text INTO the chat (docs, examples, references) so
@@ -337,6 +347,8 @@ export interface ToolResultPayload {
   dataEdit?: { ok: boolean; summary?: string; error?: string };
   /** Whether an approved image generation succeeded. */
   image?: { ok: boolean; error?: string };
+  /** Whether an approved image-to-video render succeeded. */
+  video?: { ok: boolean; error?: string };
   /** A grounded analyze_data outcome — the computed result table + summary (+ chart). */
   analysis?: { table: DataTable; summary: string; chart?: AnalyzeChart };
   /** Tool-level failure (missing capability, network error…). */
@@ -434,6 +446,13 @@ export function formatToolResult(call: ToolCall, result: ToolResultPayload): str
     return e.ok
       ? `[saved the data as ${e.format}${e.totals ? ` with a live ${e.totals} totals row` : ""}${e.analyze ? " plus a statistical Analysis sheet of live formulas" : ""}${e.chart ? ` with an embedded ${e.chart} chart` : ""} — ${e.where}] Confirm it briefly.`
       : `[export_data failed: ${e.error ?? "unknown error"}] Tell the reader.`;
+  }
+  if (call.tool === "generate_video") {
+    const vp = "prompt" in call && typeof call.prompt === "string" ? call.prompt : "";
+    const vDesc = vp ? ` (${vp.length > 80 ? `${vp.slice(0, 80).trim()}…` : vp})` : "";
+    return result.video?.ok
+      ? `[tool generate_video: animated the image into a video${vDesc} and showed it to the reader]`
+      : `[tool generate_video failed${vDesc}: ${result.video?.error ?? "unknown error"}]`;
   }
   // generate_image: ran (or failed) after the reader's approval. Tag the result with the PROMPT so a
   // later batch of renders in the same chat can be told apart from this one — otherwise every render

@@ -260,6 +260,8 @@ export interface ReaderSettings {
   delegateCoding?: boolean;
   /** Which external coding agent delegate_coding_task drives: "aider" (default) or "codex" (backup). */
   codingAgentBackend?: "aider" | "codex";
+  /** Selected image-to-video model id (see VIDEO_MODELS); undefined → the default (Wan 2.2). */
+  videoModel?: string;
   /** Parallel coding agents: let the manager model auto-resolve a merge conflict between agent
    * branches (validated, then committed — or aborted if it can't). Default on. */
   autoResolveConflicts?: boolean;
