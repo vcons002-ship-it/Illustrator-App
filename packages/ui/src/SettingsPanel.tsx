@@ -831,11 +831,11 @@ export function SettingsPanel({
                     const cur = vf[k] ?? "";
                     const optional = isLora(k);
                     return (
-                      <label key={k} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }}>
+                      <label key={k} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11, minWidth: 0 }}>
                         <span style={{ opacity: 0.7 }}>{label}</span>
-                        <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                        <span style={{ display: "flex", gap: 4, alignItems: "center", minWidth: 0 }}>
                           {list.length ? (
-                            <select value={cur} onChange={(e) => setFile(k, e.target.value)} style={{ fontSize: 11, flex: 1, minWidth: 0 }}>
+                            <select value={cur} onChange={(e) => setFile(k, e.target.value)} style={{ fontSize: 11, flex: 1, minWidth: 0, maxWidth: "100%" }}>
                               <option value="">{optional ? "(none)" : defFiles[k] ? `Default — ${defFiles[k]}` : "Default"}</option>
                               {list.map((n) => (
                                 <option key={n} value={n}>
@@ -882,7 +882,7 @@ export function SettingsPanel({
                   return (
                     <details style={{ marginTop: 8 }}>
                       <summary style={{ cursor: "pointer", fontSize: 12 }}>Advanced — model files &amp; render settings</summary>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 6 }}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 6, minWidth: 0 }}>
                         {kind === "ltx2-i2v" ? (
                           <>
                             {fileRow("Checkpoint", "checkpoint", diffNames)}
@@ -905,7 +905,7 @@ export function SettingsPanel({
                         <div style={{ marginTop: 8 }}>
                           <span style={{ fontSize: 11, opacity: 0.7 }}>LoRAs (stacked in order, applied to the model)</span>
                           {ltxLoras.map((l, i) => (
-                            <div key={i} style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 4 }}>
+                            <div key={i} style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 4, minWidth: 0 }}>
                               {installedLoras.length ? (
                                 <select
                                   value={l.name}
