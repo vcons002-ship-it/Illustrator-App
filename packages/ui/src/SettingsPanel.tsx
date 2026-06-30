@@ -13,6 +13,8 @@ import {
   TEXT_PROVIDERS,
   LOCAL_IMAGE_MODELS,
   imageModelVramCostGb,
+  VIDEO_MODELS,
+  videoModelById,
   serverModelVramCostGb,
   defaultLoadedWindow,
   recommendImageModePairings,
@@ -518,6 +520,8 @@ export interface SettingsPanelProps {
   onDownloadModel?: (id: string) => void;
   /** Download a checkpoint from a pasted URL into the managed engine. */
   onDownloadModelUrl?: (url: string) => void;
+  /** Download the selected image-to-video model's files into ComfyUI's subfolders (desktop). */
+  onDownloadVideoModel?: (id: string) => void;
   /** Download progress 0..100 per catalog model/LoRA id (desktop). */
   downloadProgress?: Record<string, number>;
   /** Which component file of a split-file model is downloading (per catalog id). */
@@ -579,6 +583,7 @@ export function SettingsPanel({
   installedVaes = [],
   onDownloadModel,
   onDownloadModelUrl,
+  onDownloadVideoModel,
   downloadProgress = {},
   downloadStage = {},
   engineStatus = "",
@@ -2137,6 +2142,31 @@ export function SettingsPanel({
               onDownloadModelUrl={onDownloadModelUrl}
               onConnect={onConnectLocalServer}
             />
+          )}
+
+          {value.imageProvider === "local" && (value.localBackend ?? "a1111") !== "a1111" && (
+            <div style={{ marginTop: 10 }}>
+              <label style={{ fontSize: 13, fontWeight: 600 }}>Image-to-video model</label>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4, flexWrap: "wrap" }}>
+                <select value={value.videoModel ?? VIDEO_MODELS[0]?.id ?? ""} onChange={(e) => set({ videoModel: e.target.value })}>
+                  {VIDEO_MODELS.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.label}
+                    </option>
+                  ))}
+                </select>
+                {onDownloadVideoModel ? (
+                  <button type="button" onClick={() => onDownloadVideoModel(value.videoModel ?? VIDEO_MODELS[0]!.id)}>
+                    Download (~{videoModelById(value.videoModel)?.sizeGB ?? VIDEO_MODELS[0]?.sizeGB ?? 0} GB)
+                  </button>
+                ) : null}
+              </div>
+              <span style={{ display: "block", opacity: 0.55, fontSize: 11, marginTop: 4 }}>
+                Lets the assistant animate an image into a short video via ComfyUI (the <code>generate_video</code> tool).
+                Download places the files into ComfyUI’s <code>diffusion_models</code>/<code>text_encoders</code>/<code>vae</code>{" "}
+                folders. Large download; runs on ComfyUI only.
+              </span>
+            </div>
           )}
 
           {value.imageProvider === "local" && (

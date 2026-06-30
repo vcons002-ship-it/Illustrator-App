@@ -183,6 +183,7 @@ import {
   summarizeFileEdits,
   shouldAutoCompact,
   resolveVideoModelFiles,
+  videoModelDownloads,
   type ChatTurn,
   type CreatedFileRef,
   type ContextUsage,
@@ -1693,6 +1694,39 @@ export function App() {
         `Model download failed at ${currentFile}: ${err instanceof Error ? err.message : String(err)}. ` +
           `Retrying skips files that finished.`,
       );
+    } finally {
+      delete multiFile.current[id];
+      setDownloadStage((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    }
+  }, []);
+
+  // Download an image-to-video model's files (Wan 2.2: two experts + encoder + VAE) into ComfyUI's
+  // diffusion_models / text_encoders / vae folders, with the same per-file progress as image models.
+  const onDownloadVideoModel = useCallback(async (id: string) => {
+    const files = videoModelDownloads(id);
+    if (files.length === 0) return;
+    setModelProgress((prev) => ({ ...prev, [id]: 0 }));
+    let currentFile = files[0]!.filename;
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i]!;
+        currentFile = f.filename;
+        multiFile.current[id] = { index: i, count: files.length };
+        setDownloadStage((prev) => ({ ...prev, [id]: `file ${i + 1}/${files.length}: ${f.filename}` }));
+        await downloadModel({ id: f.filename, filename: f.filename, url: f.url, folder: f.folder });
+        setModelProgress((prev) => ({ ...prev, [id]: ((i + 1) / files.length) * 100 }));
+      }
+    } catch (err) {
+      setModelProgress((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setLocalError(`Video model download failed at ${currentFile}: ${err instanceof Error ? err.message : String(err)}. Retrying skips finished files.`);
     } finally {
       delete multiFile.current[id];
       setDownloadStage((prev) => {
@@ -7594,6 +7628,7 @@ export function App() {
             installedVaes={installedVaes}
             onDownloadModel={onDownloadModel}
             onDownloadModelUrl={onDownloadModelUrl}
+            onDownloadVideoModel={onDownloadVideoModel}
             downloadProgress={modelProgress}
             downloadStage={downloadStage}
             engineStatus={engineStatus}
