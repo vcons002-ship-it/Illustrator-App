@@ -524,6 +524,12 @@ export interface SettingsPanelProps {
   installedTextEncoders?: string[];
   /** VAE files the local engine exposes (for the split-file dropdown). */
   installedVaes?: string[];
+  /** Wan diffusion models (UNETLoader enum), for the video file dropdowns. */
+  installedDiffusionModels?: string[];
+  /** LTX 2× upscalers (LatentUpscaleModelLoader enum). */
+  installedUpscalers?: string[];
+  /** LTX Gemma text encoders (LTXAVTextEncoderLoader enum). */
+  installedLtxTextEncoders?: string[];
   /** Start downloading a curated model; desktop only. */
   onDownloadModel?: (id: string) => void;
   /** Download a checkpoint from a pasted URL into the managed engine. */
@@ -589,6 +595,9 @@ export function SettingsPanel({
   installedModels = [],
   installedTextEncoders = [],
   installedVaes = [],
+  installedDiffusionModels = [],
+  installedUpscalers = [],
+  installedLtxTextEncoders = [],
   onDownloadModel,
   onDownloadModelUrl,
   onDownloadVideoModel,
@@ -815,25 +824,39 @@ export function SettingsPanel({
                   };
                   const diffNames = installedModels.map((m) => m.id);
                   const isLora = (k: string) => k === "loraHigh" || k === "loraLow";
-                  const fileRow = (label: string, k: StringFileKey, list: string[], listId: string) => {
-                    const chosen = (vf[k] ?? "").length > 0;
+                  // A real dropdown read from the engine's actual folder listing (`list`) so the value always
+                  // matches an installed file. Falls back to a free-text input when no listing is available
+                  // (engine not connected, or the node isn't present). The ✕ clears to the catalog default.
+                  const fileRow = (label: string, k: StringFileKey, list: string[]) => {
+                    const cur = vf[k] ?? "";
+                    const optional = isLora(k);
                     return (
                       <label key={k} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: 11 }}>
                         <span style={{ opacity: 0.7 }}>{label}</span>
                         <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                          <input
-                            list={list.length ? listId : undefined}
-                            value={vf[k] ?? ""}
-                            placeholder={isLora(k) ? "(none)" : defFiles[k] ?? ""}
-                            onChange={(e) => setFile(k, e.target.value)}
-                            style={{ fontSize: 11, flex: 1, minWidth: 0 }}
-                          />
-                          {chosen ? (
+                          {list.length ? (
+                            <select value={cur} onChange={(e) => setFile(k, e.target.value)} style={{ fontSize: 11, flex: 1, minWidth: 0 }}>
+                              <option value="">{optional ? "(none)" : defFiles[k] ? `Default — ${defFiles[k]}` : "Default"}</option>
+                              {list.map((n) => (
+                                <option key={n} value={n}>
+                                  {n}
+                                </option>
+                              ))}
+                              {cur !== "" && !list.includes(cur) ? <option value={cur}>{cur} — not in folder</option> : null}
+                            </select>
+                          ) : (
+                            <input
+                              value={cur}
+                              placeholder={optional ? "(none)" : defFiles[k] ?? ""}
+                              onChange={(e) => setFile(k, e.target.value)}
+                              style={{ fontSize: 11, flex: 1, minWidth: 0 }}
+                            />
+                          )}
+                          {cur !== "" ? (
                             <button
                               type="button"
-                              // Clearing reverts to the catalog default; for an optional LoRA that means "no LoRA".
-                              title={isLora(k) ? "Remove this LoRA" : "Reset to default"}
-                              aria-label={isLora(k) ? "Remove this LoRA" : "Reset to default"}
+                              title={optional ? "Remove this LoRA" : "Reset to default"}
+                              aria-label={optional ? "Remove this LoRA" : "Reset to default"}
                               onClick={() => setFile(k, "")}
                               style={{ fontSize: 11, lineHeight: 1, padding: "2px 6px", cursor: "pointer" }}
                             >
@@ -841,7 +864,6 @@ export function SettingsPanel({
                             </button>
                           ) : null}
                         </span>
-                        {list.length ? <datalist id={listId}>{list.map((n) => <option key={n} value={n} />)}</datalist> : null}
                       </label>
                     );
                   };
@@ -863,19 +885,19 @@ export function SettingsPanel({
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 6 }}>
                         {kind === "ltx2-i2v" ? (
                           <>
-                            {fileRow("Checkpoint", "checkpoint", diffNames, "vid-ckpt")}
-                            {fileRow("Text encoder (Gemma)", "textEncoder", installedTextEncoders, "vid-te")}
-                            {fileRow("Distilled LoRA (required)", "distilledLora", installedLoras, "vid-distill")}
-                            {fileRow("Upscaler (required)", "upscaler", [], "vid-ups")}
+                            {fileRow("Checkpoint", "checkpoint", diffNames)}
+                            {fileRow("Text encoder (Gemma)", "textEncoder", installedLtxTextEncoders)}
+                            {fileRow("Distilled LoRA (required)", "distilledLora", installedLoras)}
+                            {fileRow("Upscaler (required)", "upscaler", installedUpscalers)}
                           </>
                         ) : (
                           <>
-                            {fileRow("High-noise model", "highNoise", diffNames, "vid-high")}
-                            {fileRow("Low-noise model", "lowNoise", diffNames, "vid-low")}
-                            {fileRow("Text encoder", "textEncoder", installedTextEncoders, "vid-te")}
-                            {fileRow("VAE", "vae", installedVaes, "vid-vae")}
-                            {fileRow("LoRA — high noise (optional)", "loraHigh", installedLoras, "vid-lora-hi")}
-                            {fileRow("LoRA — low noise (optional)", "loraLow", installedLoras, "vid-lora-lo")}
+                            {fileRow("High-noise model", "highNoise", installedDiffusionModels)}
+                            {fileRow("Low-noise model", "lowNoise", installedDiffusionModels)}
+                            {fileRow("Text encoder", "textEncoder", installedTextEncoders)}
+                            {fileRow("VAE", "vae", installedVaes)}
+                            {fileRow("LoRA — high noise (optional)", "loraHigh", installedLoras)}
+                            {fileRow("LoRA — low noise (optional)", "loraLow", installedLoras)}
                           </>
                         )}
                       </div>
@@ -884,13 +906,28 @@ export function SettingsPanel({
                           <span style={{ fontSize: 11, opacity: 0.7 }}>LoRAs (stacked in order, applied to the model)</span>
                           {ltxLoras.map((l, i) => (
                             <div key={i} style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 4 }}>
-                              <input
-                                list="vid-ltx-loras"
-                                value={l.name}
-                                placeholder="lora filename"
-                                onChange={(e) => setLtxLoras(ltxLoras.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))}
-                                style={{ fontSize: 11, flex: 1, minWidth: 0 }}
-                              />
+                              {installedLoras.length ? (
+                                <select
+                                  value={l.name}
+                                  onChange={(e) => setLtxLoras(ltxLoras.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))}
+                                  style={{ fontSize: 11, flex: 1, minWidth: 0 }}
+                                >
+                                  <option value="">(pick a LoRA)</option>
+                                  {installedLoras.map((n) => (
+                                    <option key={n} value={n}>
+                                      {n}
+                                    </option>
+                                  ))}
+                                  {l.name !== "" && !installedLoras.includes(l.name) ? <option value={l.name}>{l.name} — not in folder</option> : null}
+                                </select>
+                              ) : (
+                                <input
+                                  value={l.name}
+                                  placeholder="lora filename"
+                                  onChange={(e) => setLtxLoras(ltxLoras.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))}
+                                  style={{ fontSize: 11, flex: 1, minWidth: 0 }}
+                                />
+                              )}
                               <input
                                 type="number"
                                 step="0.05"
@@ -912,9 +949,6 @@ export function SettingsPanel({
                               </button>
                             </div>
                           ))}
-                          {installedLoras.length ? (
-                            <datalist id="vid-ltx-loras">{installedLoras.map((n) => <option key={n} value={n} />)}</datalist>
-                          ) : null}
                           <button
                             type="button"
                             onClick={() => setLtxLoras([...ltxLoras, { name: "", strength: 1 }])}

@@ -471,6 +471,11 @@ export function App() {
   // Settings dropdowns + the model-aware suggestion. Empty for an all-in-one (A1111) engine.
   const [installedTextEncoders, setInstalledTextEncoders] = useState<string[]>([]);
   const [installedVaes, setInstalledVaes] = useState<string[]>([]);
+  // Video-graph components, read from the exact ComfyUI node enums (so the Settings dropdowns offer
+  // precisely what the engine accepts): Wan diffusion models, the LTX 2× upscaler, the LTX Gemma encoder.
+  const [installedDiffusionModels, setInstalledDiffusionModels] = useState<string[]>([]);
+  const [installedUpscalers, setInstalledUpscalers] = useState<string[]>([]);
+  const [installedLtxTextEncoders, setInstalledLtxTextEncoders] = useState<string[]>([]);
   // Files attached to the next buddy message — docs become text context, images become a
   // vision-model description; both are read by the buddy. Cleared when the message is sent.
   const [buddyAttachments, setBuddyAttachments] = useState<
@@ -1489,9 +1494,13 @@ export function App() {
       try {
         // Through the Rust bridge (CORS-exempt) — the managed engine is desktop-only, and a browser
         // fetch from the packaged app's Tauri-scheme origin would be CORS-blocked (empty dropdowns).
-        const comps = await new ComfyUIBackend({ baseUrl, transport: new DirectTransport(desktopFetch) }).listComponents();
+        const engine = new ComfyUIBackend({ baseUrl, transport: new DirectTransport(desktopFetch) });
+        const [comps, vid] = await Promise.all([engine.listComponents(), engine.listVideoComponents()]);
         setInstalledTextEncoders(comps.textEncoders);
         setInstalledVaes(comps.vaes);
+        setInstalledDiffusionModels(vid.diffusionModels);
+        setInstalledUpscalers(vid.upscalers);
+        setInstalledLtxTextEncoders(vid.ltxTextEncoders);
       } catch {
         /* leave components empty — the fields fall back to manual entry */
       }
@@ -1527,6 +1536,12 @@ export function App() {
       const comps = await engine.listComponents();
       setInstalledTextEncoders(comps.textEncoders);
       setInstalledVaes(comps.vaes);
+      if (engine instanceof ComfyUIBackend) {
+        const vid = await engine.listVideoComponents();
+        setInstalledDiffusionModels(vid.diffusionModels);
+        setInstalledUpscalers(vid.upscalers);
+        setInstalledLtxTextEncoders(vid.ltxTextEncoders);
+      }
     } catch {
       /* leave components empty (A1111 has none; a ComfyUI miss falls back to manual entry) */
     }
@@ -7652,6 +7667,9 @@ export function App() {
             installedModels={installedModels}
             installedTextEncoders={installedTextEncoders}
             installedVaes={installedVaes}
+            installedDiffusionModels={installedDiffusionModels}
+            installedUpscalers={installedUpscalers}
+            installedLtxTextEncoders={installedLtxTextEncoders}
             onDownloadModel={onDownloadModel}
             onDownloadModelUrl={onDownloadModelUrl}
             onDownloadVideoModel={onDownloadVideoModel}
