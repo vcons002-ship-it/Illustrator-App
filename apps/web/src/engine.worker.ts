@@ -4058,6 +4058,16 @@ async function handleChatVideo(
     await freeChatLlmForRender();
     await freeStaleComfyForA1111();
     imageModelFreed = false;
+    // Video models are far larger than any still-resident image checkpoint (Wan 2.2 = two ~14GB experts +
+    // umt5; LTX-2 = 22B + Gemma) and the per-expert LoRAs add patch/dequant overhead on top — so an image
+    // model squatting VRAM is enough to tip the load past the card and spill into shared system RAM (slow).
+    // Unlike the render→chat hand-off this is unconditional: a fresh, lazy reload of the image model on the
+    // next generate() is cheap next to a multi-minute video render crawling out of system RAM.
+    try {
+      await provider.freeMemory?.();
+    } catch {
+      /* best-effort — if the engine can't free now, the render just starts with less headroom */
+    }
     const out = await provider.generateVideo(
       {
         prompt: call.prompt,
