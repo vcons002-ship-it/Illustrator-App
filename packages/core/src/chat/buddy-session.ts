@@ -206,6 +206,7 @@ export function nonEmptyAnswer(text: string, hadTools: boolean): string {
  * a research pass). They can't run inside the worker turn, so they're handed up as a pendingTool. */
 type HostToolName =
   | "generate_image"
+  | "generate_video"
   | "find_files"
   | "run_command"
   | "write_file"
@@ -220,6 +221,7 @@ type HostToolName =
   | "spawn_coding_agents";
 const HOST_TOOLS = new Set<HostToolName>([
   "generate_image",
+  "generate_video",
   "find_files",
   "run_command",
   "write_file",
@@ -534,7 +536,7 @@ export async function runBuddyTurn(opts: {
 /** Execute one auto-run buddy tool (everything but generate_image). Exported for
  * the slash-command path, which runs tools directly without an LLM round. */
 export async function runBuddyTool(
-  call: Exclude<BuddyToolCall, { tool: "generate_image" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" }>,
+  call: Exclude<BuddyToolCall, { tool: "generate_image" | "generate_video" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" }>,
   deps: BuddyDeps,
 ): Promise<BuddyToolResultPayload> {
   try {
