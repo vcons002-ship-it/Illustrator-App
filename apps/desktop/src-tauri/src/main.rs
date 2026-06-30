@@ -189,9 +189,26 @@ async fn gpu_info() -> Result<Option<u64>, String> {
         .unwrap_or(None))
 }
 
+/// Build a `Command` that never flashes a console window on Windows. This is a GUI app
+/// (`windows_subsystem = "windows"`), so spawning a console child — nvidia-smi, git, python, the
+/// bundled llama-server, an MCP server, a run_command shell — pops a black console window for a split
+/// second unless the process is created with `CREATE_NO_WINDOW`. The recurring `nvidia-smi` VRAM poll
+/// made this especially jarring (a flash every few seconds). No-op on macOS/Linux. Use this in place
+/// of `Command::new` for every subprocess the shell spawns.
+fn quiet_command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
+    let mut cmd = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /// Query `nvidia-smi` for the first GPU's total memory in MB. None on any failure.
 fn nvidia_vram_mb() -> Option<u64> {
-    let out = Command::new("nvidia-smi")
+    let out = quiet_command("nvidia-smi")
         .args(["--query-gpu=memory.total", "--format=csv,noheader,nounits"])
         .output()
         .ok()?;
@@ -215,7 +232,7 @@ async fn gpu_vram_usage() -> Result<Option<String>, String> {
 }
 
 fn nvidia_vram_usage_csv() -> Option<String> {
-    let out = Command::new("nvidia-smi")
+    let out = quiet_command("nvidia-smi")
         .args([
             "--query-gpu=name,memory.total,memory.used",
             "--format=csv,noheader,nounits",
@@ -668,7 +685,7 @@ async fn mcp_stdio_exchange(request: McpStdioRequest) -> Result<Vec<String>, Str
 
 fn mcp_stdio_blocking(req: McpStdioRequest) -> Result<Vec<String>, String> {
     use std::io::{BufRead, BufReader, Write};
-    let mut child = Command::new(&req.command)
+    let mut child = quiet_command(&req.command)
         .args(&req.args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1428,7 +1445,7 @@ fn open_browser(url: &str) {
     // Google rejects it) and also expands `%xx` sequences, corrupting percent-encoded URLs.
     // rundll32 receives the URL as a direct argument (no shell parsing), so it stays intact.
     #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("rundll32.exe")
+    let _ = quiet_command("rundll32.exe")
         .args(["url.dll,FileProtocolHandler", url])
         .spawn();
     #[cfg(target_os = "macos")]
@@ -1578,21 +1595,21 @@ async fn run_command(
         let mut cmd = if use_powershell {
             // raw_arg: pass the command VERBATIM so PowerShell parses its own quotes (see
             // append_raw_command) instead of getting Rust-escaped `\"` it mishandles.
-            let mut c = Command::new("powershell");
+            let mut c = quiet_command("powershell");
             c.arg("-NoProfile").arg("-NonInteractive").arg("-Command");
             append_raw_command(&mut c, &command);
             c
         } else if cfg!(target_os = "windows") {
             // raw_arg: `cmd /C` must see the command verbatim, or a quoted "C:\…\f.py" arrives at the
             // program with literal quotes (Errno 22). See append_raw_command.
-            let mut c = Command::new("cmd");
+            let mut c = quiet_command("cmd");
             c.arg("/C");
             append_raw_command(&mut c, &command);
             c
         } else {
             // Unix: args are a vector (no command-line string), so `sh -c <command>` needs no special
             // handling — sh parses the one command string itself.
-            let mut c = Command::new("sh");
+            let mut c = quiet_command("sh");
             c.arg("-c").arg(&command);
             c
         };
@@ -1675,7 +1692,7 @@ fn quote_interp(s: &str) -> String {
 async fn which_interpreter(app: AppHandle, kind: String) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         fn probe(prog: &str, args: &[&str]) -> bool {
-            Command::new(prog)
+            quiet_command(prog)
                 .args(args)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -1749,7 +1766,7 @@ struct WorktreeInfo {
 
 /// Run `git` with fixed args in `dir`; returns the captured result (never spawns a shell).
 fn git(dir: &str, args: &[&str]) -> Result<CommandResult, String> {
-    let out = Command::new("git")
+    let out = quiet_command("git")
         .args(args)
         .current_dir(dir)
         .env("GIT_AUTHOR_NAME", "Visual Reader")
@@ -2111,7 +2128,7 @@ fn install_and_spawn(app: &AppHandle, low_vram: bool) -> Result<Child, String> {
 fn spawn_comfy(portable: &Path, low_vram: bool) -> Result<Child, String> {
     let python = portable.join("python_embeded").join("python.exe");
     let main_py = portable.join("ComfyUI").join("main.py");
-    let mut cmd = Command::new(python);
+    let mut cmd = quiet_command(python);
     cmd.arg("-s")
         .arg(main_py)
         .arg("--port")
@@ -2308,7 +2325,7 @@ fn health_ok(base: &str) -> bool {
 }
 
 fn has_nvidia() -> bool {
-    Command::new("nvidia-smi")
+    quiet_command("nvidia-smi")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -2468,7 +2485,7 @@ fn resolve_llm_files(app: &AppHandle) -> Result<(PathBuf, PathBuf), String> {
 }
 
 fn spawn_llama(bin: &Path, gguf: &Path) -> Result<Child, String> {
-    let mut cmd = Command::new(bin);
+    let mut cmd = quiet_command(bin);
     cmd.arg("-m")
         .arg(gguf)
         .arg("--host")
