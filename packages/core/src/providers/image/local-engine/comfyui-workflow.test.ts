@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildWorkflow, buildWanI2VWorkflow } from "./comfyui-backend.js";
+import { buildWorkflow, buildWanI2VWorkflow, buildLtx2I2VWorkflow } from "./comfyui-backend.js";
 import type { SamplerSettings } from "../sd-prompt.js";
 
 const sampler: SamplerSettings = { cfg: 7, sampler: "euler", scheduler: "normal", steps: 20 };
@@ -215,7 +215,7 @@ describe("buildWorkflow Hi-Res two-pass", () => {
 describe("buildWanI2VWorkflow (image-to-video, Wan2.2 two-expert)", () => {
   const wan = {
     startImage: "vr-ref-1.png",
-    models: { highNoise: "wan_high.safetensors", lowNoise: "wan_low.safetensors", textEncoder: "umt5.safetensors", vae: "wan_vae.safetensors" },
+    models: { kind: "wan-i2v" as const, highNoise: "wan_high.safetensors", lowNoise: "wan_low.safetensors", textEncoder: "umt5.safetensors", vae: "wan_vae.safetensors" },
     prompt: "slow push-in, leaves drift",
     negative: "static",
     width: 640,
@@ -276,5 +276,56 @@ describe("buildWanI2VWorkflow (image-to-video, Wan2.2 two-expert)", () => {
     expect(inputsOf(g, "115").model).toEqual(["101", 0]);
     expect(inputsOf(g, "108").model).toEqual(["114", 0]);
     expect(inputsOf(g, "109").model).toEqual(["115", 0]);
+  });
+});
+
+describe("buildLtx2I2VWorkflow (image-to-video, LTX-2.3 single-checkpoint)", () => {
+  const ltx = {
+    startImage: "vr-ref-2.png",
+    models: { kind: "ltx2-i2v" as const, checkpoint: "ltx.safetensors", textEncoder: "gemma.safetensors" },
+    prompt: "camera pushes through the doorway",
+    negative: "static",
+    width: 768,
+    height: 512,
+    frames: 121,
+    fps: 24,
+    steps: 20,
+    cfg: 3,
+    seed: 11,
+  };
+  it("loads the checkpoint + the separate gemma text encoder and conditions the source frame", () => {
+    const g = buildLtx2I2VWorkflow(ltx);
+    expect(classOf(g, "200")).toBe("CheckpointLoaderSimple");
+    expect(inputsOf(g, "200").ckpt_name).toBe("ltx.safetensors");
+    expect(classOf(g, "202")).toBe("LTXAVTextEncoderLoader");
+    expect(inputsOf(g, "202").clip_name).toBe("gemma.safetensors");
+    expect(classOf(g, "205")).toBe("LoadImage");
+    expect(inputsOf(g, "205").image).toBe("vr-ref-2.png");
+    expect(classOf(g, "206")).toBe("LTXVImgToVideo");
+    expect(inputsOf(g, "206").length).toBe(121);
+    expect(inputsOf(g, "206").image).toEqual(["205", 0]);
+  });
+  it("drives a SamplerCustomAdvanced (euler + LTXV sigmas + CFG guider) and saves an animated webp", () => {
+    const g = buildLtx2I2VWorkflow(ltx);
+    expect(classOf(g, "208")).toBe("LTXVScheduler");
+    expect(inputsOf(g, "208").steps).toBe(20);
+    expect(classOf(g, "211")).toBe("CFGGuider");
+    expect(inputsOf(g, "211").cfg).toBe(3);
+    expect(inputsOf(g, "211").model).toEqual(["200", 0]);
+    expect(classOf(g, "212")).toBe("SamplerCustomAdvanced");
+    expect(classOf(g, "214")).toBe("SaveAnimatedWEBP");
+    expect(inputsOf(g, "214").fps).toBe(24);
+  });
+  it("when no LoRA is set, the CFG guider reads the bare checkpoint model", () => {
+    const g = buildLtx2I2VWorkflow(ltx);
+    expect(g["201"]).toBeUndefined();
+    expect(inputsOf(g, "211").model).toEqual(["200", 0]);
+  });
+  it("when a LoRA is set, the model routes through LoraLoaderModelOnly", () => {
+    const g = buildLtx2I2VWorkflow({ ...ltx, models: { ...ltx.models, lora: "ltx_lora.safetensors" } });
+    expect(classOf(g, "201")).toBe("LoraLoaderModelOnly");
+    expect(inputsOf(g, "201").lora_name).toBe("ltx_lora.safetensors");
+    expect(inputsOf(g, "201").model).toEqual(["200", 0]);
+    expect(inputsOf(g, "211").model).toEqual(["201", 0]);
   });
 });

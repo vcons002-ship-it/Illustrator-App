@@ -1077,8 +1077,11 @@ export function buildBuddySystemPrompt(opts: {
         "image into a short VIDEO (image-to-video) with the local engine; the reader approves it. `prompt` describes the " +
         'MOTION/camera (e.g. "slow push-in, leaves drifting"). `source` picks the image: {"kind":"last"} (the most recent ' +
         'image shown — the default), {"kind":"library","ref":"<book id>"} (a library illustration), or {"kind":"file",' +
-        '"ref":"<path>"} (an image file). Optional "model" and "frames". Use when the reader says "animate / make it move / ' +
-        'turn this into a video / bring it to life". It needs an existing image — generate_image first if there isn\'t one.\n'
+        '"ref":"<path>"} (an image file). Leave "model" off to use the reader\'s chosen video model (recommended); ' +
+        'only set it to switch family on request: "wan2.2-i2v-14b" (~5s, strong motion — the default) or ' +
+        '"ltx2.3-i2v-22b" (longer/faster clips). Optional "frames" sets length (more frames = longer). Use when the ' +
+        'reader says "animate / make it move / turn this into a video / bring it to life". It needs an existing image — ' +
+        "generate_image first if there isn't one.\n"
       : "") +
     '- {"tool":"open_content","source":"library|web|pasted|code", …} — the ONE way to OPEN something to ' +
     "READ/illustrate IN THE READER (it takes over the screen). Pick `source`:\n" +

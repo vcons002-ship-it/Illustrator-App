@@ -137,10 +137,11 @@ export interface ImageGenerationOutput {
   mimeType: string;
 }
 
-/** The model files an image-to-video engine needs (Wan2.2 ships a two-expert pair + encoder + VAE).
+/** Files a Wan2.2 two-expert image-to-video graph needs (a high/low-noise pair + encoder + VAE).
  * Every field is a ComfyUI filename the reader can override from Settings to swap a component or work
  * around a failed download. `lora` is optional (applied to both experts when set). */
-export interface VideoModelFiles {
+export interface WanVideoFiles {
+  readonly kind: "wan-i2v";
   /** High-noise diffusion model (first sampling stage). */
   highNoise: string;
   /** Low-noise diffusion model (refinement stage). */
@@ -150,6 +151,33 @@ export interface VideoModelFiles {
   /** VAE. */
   vae: string;
   /** Optional motion/style LoRA applied to both experts. */
+  lora?: string;
+}
+
+/** Files an LTX-2 image-to-video graph needs: one combined checkpoint (model + VAE) plus the separate
+ * Gemma text encoder. `lora` is optional (e.g. the distilled speed LoRA). */
+export interface Ltx2VideoFiles {
+  readonly kind: "ltx2-i2v";
+  /** Combined LTX-2 checkpoint (loaded via CheckpointLoaderSimple — provides the model and VAE). */
+  checkpoint: string;
+  /** Gemma text encoder. */
+  textEncoder: string;
+  /** Optional LoRA (motion/style, or the distilled speed LoRA). */
+  lora?: string;
+}
+
+/** The model files an image-to-video engine needs — the shape depends on the model family (`kind`).
+ * Discriminate on `kind` before reading family-specific filenames. */
+export type VideoModelFiles = WanVideoFiles | Ltx2VideoFiles;
+
+/** A flat bag of per-file Settings overrides — a superset of every family's filenames, all optional.
+ * Applied over the selected model's catalog defaults by resolveVideoModelFiles. */
+export interface VideoFileOverrides {
+  highNoise?: string;
+  lowNoise?: string;
+  textEncoder?: string;
+  vae?: string;
+  checkpoint?: string;
   lora?: string;
 }
 

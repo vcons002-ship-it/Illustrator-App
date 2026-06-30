@@ -7,7 +7,10 @@ import type {
   VideoGenerationInput,
   VideoGenerationOutput,
   VideoModelFiles,
+  WanVideoFiles,
+  Ltx2VideoFiles,
 } from "../image-provider.js";
+import { VIDEO_RENDER_DEFAULTS } from "../video-models.js";
 import {
   type ModelFamily,
   type SamplerSettings,
@@ -32,7 +35,7 @@ const WAN_DEFAULT_NEGATIVE =
 interface WanI2VParams {
   /** The uploaded source-image filename (from /upload/image). */
   startImage: string;
-  models: VideoModelFiles;
+  models: WanVideoFiles;
   prompt: string;
   negative: string;
   width: number;
@@ -43,6 +46,21 @@ interface WanI2VParams {
   cfg: number;
   /** Sigma shift (Wan ~8 for video). */
   shift: number;
+  seed: number;
+}
+
+interface Ltx2I2VParams {
+  /** The uploaded source-image filename (from /upload/image). */
+  startImage: string;
+  models: Ltx2VideoFiles;
+  prompt: string;
+  negative: string;
+  width: number;
+  height: number;
+  frames: number;
+  fps: number;
+  steps: number;
+  cfg: number;
   seed: number;
 }
 
@@ -90,6 +108,50 @@ export function buildWanI2VWorkflow(p: WanI2VParams): Record<string, unknown> {
   if (lora) {
     graph["114"] = { class_type: "LoraLoaderModelOnly", inputs: { model: ["100", 0], lora_name: lora, strength_model: 1 } };
     graph["115"] = { class_type: "LoraLoaderModelOnly", inputs: { model: ["101", 0], lora_name: lora, strength_model: 1 } };
+  }
+  return graph;
+}
+
+/**
+ * The native ComfyUI LTX-2.3 image-to-video graph (video-only — no audio / no spatial upscaler): a single
+ * combined checkpoint (model + VAE) + the separate Gemma text encoder, an LTXVImgToVideo conditioning of the
+ * source frame, and a SamplerCustomAdvanced (euler + LTXVScheduler sigmas + CFGGuider) pass, decoded and
+ * saved as an animated WEBP so the result is fetched exactly like the Wan path. Node ids are in the 200s so
+ * they never collide with the Wan (100s) or image graphs. Mirrors the official native LTX-2.3 I2V template;
+ * an optional LoRA wraps the model. NEEDS a real-box pass against the user's ComfyUI/LTX-2 install. PURE.
+ */
+export function buildLtx2I2VWorkflow(p: Ltx2I2VParams): Record<string, unknown> {
+  const lora = p.models.lora?.trim();
+  // The model the sampler guides: the bare checkpoint, or the LoRA-wrapped model when a LoRA is set.
+  const modelRef: [string, number] = lora ? ["201", 0] : ["200", 0];
+  const graph: Record<string, unknown> = {
+    "200": { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: p.models.checkpoint } },
+    // LTX-2 uses a separate Gemma text encoder (not the checkpoint's bundled CLIP).
+    "202": { class_type: "LTXAVTextEncoderLoader", inputs: { clip_name: p.models.textEncoder } },
+    "203": { class_type: "CLIPTextEncode", inputs: { text: p.prompt, clip: ["202", 0] } },
+    "204": { class_type: "CLIPTextEncode", inputs: { text: p.negative, clip: ["202", 0] } },
+    "205": { class_type: "LoadImage", inputs: { image: p.startImage } },
+    // Condition on the source frame and build the empty video latent (length/size) in one node.
+    "206": {
+      class_type: "LTXVImgToVideo",
+      inputs: { positive: ["203", 0], negative: ["204", 0], vae: ["200", 2], image: ["205", 0], width: p.width, height: p.height, length: p.frames, batch_size: 1 },
+    },
+    // Bind the chosen frame rate to the conditioning.
+    "207": { class_type: "LTXVConditioning", inputs: { positive: ["206", 0], negative: ["206", 1], frame_rate: p.fps } },
+    // LTX's own scheduler turns a step count into the proper (shifted) sigma schedule.
+    "208": { class_type: "LTXVScheduler", inputs: { steps: p.steps, max_shift: 2.05, base_shift: 0.95, stretch: true, terminal: 0.1, latent: ["206", 2] } },
+    "209": { class_type: "KSamplerSelect", inputs: { sampler_name: "euler" } },
+    "210": { class_type: "RandomNoise", inputs: { noise_seed: p.seed } },
+    "211": { class_type: "CFGGuider", inputs: { model: modelRef, positive: ["207", 0], negative: ["207", 1], cfg: p.cfg } },
+    "212": {
+      class_type: "SamplerCustomAdvanced",
+      inputs: { noise: ["210", 0], guider: ["211", 0], sampler: ["209", 0], sigmas: ["208", 0], latent_image: ["206", 2] },
+    },
+    "213": { class_type: "VAEDecode", inputs: { samples: ["212", 0], vae: ["200", 2] } },
+    "214": { class_type: "SaveAnimatedWEBP", inputs: { images: ["213", 0], filename_prefix: "visual-reader-vid", fps: p.fps, lossless: false, quality: 90, method: "default" } },
+  };
+  if (lora) {
+    graph["201"] = { class_type: "LoraLoaderModelOnly", inputs: { model: ["200", 0], lora_name: lora, strength_model: 1 } };
   }
   return graph;
 }
@@ -842,20 +904,24 @@ export class ComfyUIBackend implements LocalEngineBackend {
    */
   async generateVideo(input: VideoGenerationInput, models: VideoModelFiles): Promise<VideoGenerationOutput> {
     const startImage = await this.uploadedReference(input.image.bytes, input.image.mimeType);
-    const workflow = buildWanI2VWorkflow({
+    // Per-family render defaults fill in whatever the caller left blank (Wan ~5s/16fps; LTX longer/24fps).
+    const d = VIDEO_RENDER_DEFAULTS[models.kind];
+    const common = {
       startImage,
-      models,
       prompt: input.prompt,
       negative: input.negativePrompt ?? WAN_DEFAULT_NEGATIVE,
-      width: input.width ?? 640,
-      height: input.height ?? 640,
-      frames: input.frames ?? 81,
-      fps: input.fps ?? 16,
-      steps: input.steps ?? 20,
-      cfg: input.cfg ?? 3.5,
-      shift: input.shift ?? 8,
+      width: input.width ?? d.width,
+      height: input.height ?? d.height,
+      frames: input.frames ?? d.frames,
+      fps: input.fps ?? d.fps,
+      steps: input.steps ?? d.steps,
+      cfg: input.cfg ?? d.cfg,
       seed: input.seed ?? Math.floor(Math.random() * 1_000_000_000),
-    });
+    };
+    const workflow =
+      models.kind === "ltx2-i2v"
+        ? buildLtx2I2VWorkflow({ ...common, models })
+        : buildWanI2VWorkflow({ ...common, models, shift: input.shift ?? d.shift });
     const relay = (fraction: number): void => input.onProgress?.(fraction);
     const signal = input.signal;
     const onAbort = (): void => {
