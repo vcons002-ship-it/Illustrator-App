@@ -265,7 +265,7 @@ export type BuddyToolCall =
    * describes the MOTION/camera; `source` picks which image to animate — the most recent one shown (default),
    * a library illustration by id, or an image file by path. Approval-gated like generate_image. Desktop +
    * a local ComfyUI engine with an installed image-to-video model. */
-  | { tool: "generate_video"; prompt: string; source?: { kind: "last" | "library" | "file"; ref?: string }; model?: string; frames?: number; truncated?: boolean }
+  | { tool: "generate_video"; prompt: string; source?: { kind: "last" | "library" | "file" | "text"; ref?: string }; model?: string; frames?: number; truncated?: boolean }
   /** Search the reader's COMPUTER for a file to open (desktop). Approval-gated:
    * the host stops the loop and asks the reader before touching the filesystem. */
   | { tool: "find_files"; query: string }
@@ -1073,15 +1073,16 @@ export function buildBuddySystemPrompt(opts: {
     'imagine" = the reader wants NEW art → generate_image. If genuinely ambiguous, prefer search_images for ' +
     "real-world subjects and generate_image only for fictional/invented scenes — or ask.\n" +
     (opts.canGenerateVideo
-      ? '- {"tool":"generate_video","prompt":"how it should move","source":{"kind":"last"}} — ANIMATE an existing ' +
-        "image into a short VIDEO (image-to-video) with the local engine; the reader approves it. `prompt` describes the " +
-        'MOTION/camera (e.g. "slow push-in, leaves drifting"). `source` picks the image: {"kind":"last"} (the most recent ' +
-        'image shown — the default), {"kind":"library","ref":"<book id>"} (a library illustration), or {"kind":"file",' +
-        '"ref":"<path>"} (an image file). Leave "model" off to use the reader\'s chosen video model (recommended); ' +
-        'only set it to switch family on request: "wan2.2-i2v-14b" (~5s, strong motion — the default) or ' +
-        '"ltx2.3-i2v-22b" (longer/faster clips). Optional "frames" sets length (more frames = longer). Use when the ' +
-        'reader says "animate / make it move / turn this into a video / bring it to life". It needs an existing image — ' +
-        "generate_image first if there isn't one.\n"
+      ? '- {"tool":"generate_video","prompt":"…","source":{"kind":"…"}} — make a short VIDEO with the local engine; ' +
+        "the reader approves it. Two modes via `source`:\n" +
+        '    • {"kind":"text"} → TEXT-TO-VIDEO: generate a clip straight from the prompt (no image needed). Use for ' +
+        '"generate/make a video of X" when there is no specific image to animate. Here `prompt` describes the whole scene.\n' +
+        '    • {"kind":"last"} (most recent image — the default), {"kind":"library","ref":"<book id>"}, or {"kind":"file",' +
+        '"ref":"<path>"} → IMAGE-TO-VIDEO: animate that existing image. Here `prompt` describes the MOTION/camera (e.g. ' +
+        '"slow push-in, leaves drifting"). Use when the reader says "animate / make it move / bring this to life".\n' +
+        '  Leave "model" off to use the reader\'s chosen video model (recommended); only set it to switch family on ' +
+        'request: "wan2.2-i2v-14b" (~5s, strong motion — the default) or "ltx2.3-i2v-22b" (longer/faster). Optional ' +
+        '"frames" sets length (more frames = longer).\n'
       : "") +
     '- {"tool":"open_content","source":"library|web|pasted|code", …} — the ONE way to OPEN something to ' +
     "READ/illustrate IN THE READER (it takes over the screen). Pick `source`:\n" +
@@ -2498,11 +2499,13 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     const model = strArg(obj.model, MAX_NAME_CHARS);
     const frames =
       typeof obj.frames === "number" && Number.isFinite(obj.frames) ? Math.min(257, Math.max(9, Math.round(obj.frames))) : undefined;
-    // `source` picks which image to animate; default to the last image shown when absent/malformed.
+    // `source` picks which image to animate; "text" = text-to-video (no source image); default to the last
+    // image shown when absent/malformed.
     const src = obj.source && typeof obj.source === "object" ? (obj.source as Record<string, unknown>) : undefined;
-    const kind = src?.kind === "library" || src?.kind === "file" ? src.kind : "last";
+    const kind = src?.kind === "library" || src?.kind === "file" || src?.kind === "text" ? src.kind : "last";
     const ref = strArg(src?.ref, MAX_PATH_CHARS);
-    const source: { kind: "last" | "library" | "file"; ref?: string } = kind !== "last" && ref ? { kind, ref } : { kind: "last" };
+    const source: { kind: "last" | "library" | "file" | "text"; ref?: string } =
+      kind === "text" ? { kind: "text" } : (kind === "library" || kind === "file") && ref ? { kind, ref } : { kind: "last" };
     return {
       tool,
       prompt,

@@ -253,7 +253,7 @@ export interface EngineWorkerApi {
   /** Run an approved generate_video call: the host resolves the source image bytes + model files. */
   chatVideo: (
     call: Extract<BuddyToolCall, { tool: "generate_video" }>,
-    image: { bytes: ArrayBuffer; mimeType: string },
+    image: { bytes: ArrayBuffer; mimeType: string } | undefined,
     models: VideoModelFiles,
     params: VideoRenderParams | undefined,
     opts?: { onProgress?: (fraction: number) => void },
@@ -1634,7 +1634,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const chatVideo = useCallback(
     (
       call: Extract<BuddyToolCall, { tool: "generate_video" }>,
-      image: { bytes: ArrayBuffer; mimeType: string },
+      image: { bytes: ArrayBuffer; mimeType: string } | undefined,
       models: VideoModelFiles,
       params: VideoRenderParams | undefined,
       opts?: { onProgress?: (fraction: number) => void },
@@ -1666,8 +1666,11 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             opts?.onProgress?.(fraction);
           },
         });
-        // Bytes travel zero-copy to the worker (the source frame + nothing else big crosses).
-        send({ type: "chatVideo", requestId, call, image, models, ...(params ? { params } : {}) }, [image.bytes]);
+        // Bytes travel zero-copy to the worker (the source frame, if any). Text-to-video sends no image.
+        send(
+          { type: "chatVideo", requestId, call, models, ...(image ? { image } : {}), ...(params ? { params } : {}) },
+          image ? [image.bytes] : [],
+        );
       }),
     [],
   );

@@ -5161,7 +5161,7 @@ export function App() {
   /** Resolve a generate_video `source` to image bytes: a file path → read it; otherwise (last / library)
    * the most recent image shown in the chat. Copies the bytes so the worker transfer can't detach a
    * still-displayed image. Throws a clear message when there's nothing to animate. */
-  const resolveVideoSource = async (source?: { kind: "last" | "library" | "file"; ref?: string }): Promise<{ bytes: ArrayBuffer; mimeType: string }> => {
+  const resolveVideoSource = async (source?: { kind: "last" | "library" | "file" | "text"; ref?: string }): Promise<{ bytes: ArrayBuffer; mimeType: string }> => {
     if (source?.kind === "file" && source.ref) {
       const f = await readLocalFile(source.ref);
       return { bytes: await f.arrayBuffer(), mimeType: f.type || "image/png" };
@@ -5187,16 +5187,18 @@ export function App() {
     pendingBuddyTranscript.current = [];
     pendingBuddyHistory.current = [];
     setBuddyBusy(true);
-    setBuddyActivity("Animating the image…");
+    const textToVideo = call.source?.kind === "text";
+    setBuddyActivity(textToVideo ? "Generating the video…" : "Animating the image…");
     let out: Awaited<ReturnType<typeof chatVideo>>;
     try {
-      const src = await resolveVideoSource(call.source);
+      // Text-to-video has no source frame; image-to-video resolves the image to animate.
+      const src = textToVideo ? undefined : await resolveVideoSource(call.source);
       // The buddy may name a model (e.g. "make an LTX video"); otherwise use the one chosen in Settings.
       // Settings overrides win over the catalog default (a swapped component / a fixed broken download),
       // and the Settings render params drive the graph's size/length/sampler choices.
       const models = resolveVideoModelFiles(call.model ?? settings.videoModel, settings.videoFiles);
       out = await chatVideo(call, src, models, settings.videoParams, {
-        onProgress: (f) => setBuddyActivity(`Animating the image… ${Math.round(f * 100)}%`),
+        onProgress: (f) => setBuddyActivity(`${textToVideo ? "Generating the video" : "Animating the image"}… ${Math.round(f * 100)}%`),
       });
     } catch (err) {
       out = { error: err instanceof Error ? err.message : String(err) };

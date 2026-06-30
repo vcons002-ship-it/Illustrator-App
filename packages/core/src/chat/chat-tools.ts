@@ -29,7 +29,7 @@ export type ToolCall =
   | {
       tool: "generate_video";
       prompt: string;
-      source?: { kind: "last" | "library" | "file"; ref?: string };
+      source?: { kind: "last" | "library" | "file" | "text"; ref?: string };
       model?: string;
       frames?: number;
       truncated?: boolean;

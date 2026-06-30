@@ -135,7 +135,8 @@ export type MainToWorker =
       type: "chatVideo";
       requestId: number;
       call: Extract<BuddyToolCall, { tool: "generate_video" }>;
-      image: { bytes: ArrayBuffer; mimeType: string };
+      /** The source frame for image-to-video; omitted for text-to-video. */
+      image?: { bytes: ArrayBuffer; mimeType: string };
       models: VideoModelFiles;
       /** The reader's Settings render-param overrides (size/length/sampler choices). */
       params?: VideoRenderParams;

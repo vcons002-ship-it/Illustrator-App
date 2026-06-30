@@ -4035,7 +4035,7 @@ async function handleChatTool(requestId: number, call: ToolCall): Promise<void> 
 async function handleChatVideo(
   requestId: number,
   call: Extract<BuddyToolCall, { tool: "generate_video" }>,
-  image: { bytes: ArrayBuffer; mimeType: string },
+  image: { bytes: ArrayBuffer; mimeType: string } | undefined,
   models: VideoModelFiles,
   params?: VideoRenderParams,
 ): Promise<void> {
@@ -4061,7 +4061,8 @@ async function handleChatVideo(
     const out = await provider.generateVideo(
       {
         prompt: call.prompt,
-        image,
+        // Image present → image-to-video; absent → text-to-video.
+        ...(image ? { image } : {}),
         // The model's per-call frames wins over the Settings default; the rest of the graph choices
         // (fps/size/steps/cfg/shift) come from Settings overrides, else the backend's Wan defaults.
         ...((call.frames ?? params?.frames) !== undefined ? { frames: (call.frames ?? params?.frames)! } : {}),

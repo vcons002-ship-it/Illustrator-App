@@ -285,6 +285,13 @@ describe("buildWanI2VWorkflow (image-to-video, Wan2.2 two-expert)", () => {
     expect(inputsOf(g, "108").model).toEqual(["114", 0]);
     expect(inputsOf(g, "109").model).toEqual(["101", 0]);
   });
+  it("text-to-video (no start image): drops LoadImage and the WanImageToVideo start_image", () => {
+    const { startImage: _omit, ...t2v } = wan;
+    const g = buildWanI2VWorkflow(t2v);
+    expect(g["106"]).toBeUndefined();
+    expect(inputsOf(g, "107").start_image).toBeUndefined();
+    expect(inputsOf(g, "107").length).toBe(81);
+  });
 });
 
 describe("buildLtx2I2VWorkflow (official video-only 2-stage LTX-2.3)", () => {
@@ -382,5 +389,25 @@ describe("buildLtx2I2VWorkflow (official video-only 2-stage LTX-2.3)", () => {
     // Decode reads stage 1 directly.
     expect(inputsOf(g, "225").samples).toEqual(["215", 0]);
     expect(classOf(g, "226")).toBe("SaveAnimatedWEBP");
+  });
+  it("text-to-video (no start image): drops the image nodes; samplers read the latents directly", () => {
+    const { startImage: _omit, ...t2v } = ltx;
+    const g = buildLtx2I2VWorkflow(t2v);
+    // No LoadImage / scale / preprocess / img2video-inject nodes.
+    expect(g["206"]).toBeUndefined();
+    expect(g["207"]).toBeUndefined();
+    expect(g["208"]).toBeUndefined();
+    expect(g["210"]).toBeUndefined();
+    expect(g["218"]).toBeUndefined();
+    // Stage 1 samples the empty latent directly; stage 2 the upscaled latent.
+    expect(inputsOf(g, "215").latent_image).toEqual(["209", 0]);
+    expect(inputsOf(g, "224").latent_image).toEqual(["217", 0]);
+  });
+  it("text-to-video single-stage: empty latent straight into the only sampler, decoded", () => {
+    const { startImage: _omit, ...t2v } = ltx;
+    const g = buildLtx2I2VWorkflow({ ...t2v, highRes: false });
+    expect(g["210"]).toBeUndefined();
+    expect(inputsOf(g, "215").latent_image).toEqual(["209", 0]);
+    expect(inputsOf(g, "225").samples).toEqual(["215", 0]);
   });
 });
