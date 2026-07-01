@@ -6,6 +6,7 @@ import { IMAGE_STYLES } from "../providers/catalog.js";
 import type { BookSummary } from "../storage/store.js";
 import { POLISH_CHAT_GUIDANCE } from "./document-polish.js";
 import { MAX_SKILL_BODY_CHARS, MAX_SKILL_DESC_CHARS, MAX_SKILL_NAME_CHARS } from "./skills.js";
+import { MAX_NOTE_CHARS } from "./reader-memory.js";
 import { formatSetupGuide, type SetupGuide } from "./setup-guides.js";
 import { controllableSettingsIndex } from "./settings-control.js";
 import type { CalendarEvent, EmailFull, EmailSummary, TaskItem } from "../providers/google.js";
@@ -556,8 +557,6 @@ const MAX_NAME_CHARS = 80;
 const MAX_PASTE_CHARS = 12_000;
 /** Matches the calculator's own input cap. */
 const MAX_EXPRESSION_CHARS = 300;
-/** Matches reader-memory's MAX_NOTE_CHARS. */
-const MAX_MEMORY_NOTE_CHARS = 200;
 /** A single shell command line — long enough for a real command, not a script. */
 const MAX_COMMAND_CHARS = 1000;
 const MAX_PATH_CHARS = 200;
@@ -2187,12 +2186,12 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     };
   }
   if (tool === "remember") {
-    const note = strArg(obj.note, MAX_MEMORY_NOTE_CHARS);
+    const note = strArg(obj.note, MAX_NOTE_CHARS);
     const about = obj.about === "self" ? "self" : obj.about === "user" ? "user" : undefined;
     return note ? { tool, note, ...(about ? { about } : {}) } : undefined;
   }
   if (tool === "forget") {
-    const match = strArg(obj.match, MAX_MEMORY_NOTE_CHARS);
+    const match = strArg(obj.match, MAX_NOTE_CHARS);
     const about = obj.about === "self" ? "self" : obj.about === "user" ? "user" : undefined;
     return match ? { tool, match, ...(about ? { about } : {}) } : undefined;
   }
