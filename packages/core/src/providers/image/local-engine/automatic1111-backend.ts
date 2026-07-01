@@ -39,6 +39,16 @@ export interface Automatic1111BackendOptions {
   cfgScale?: number;
 }
 
+/**
+ * A1111 base URLs whose checkpoint we UNLOADED via `freeMemory` (VRAM hand-off) and haven't reloaded yet.
+ * `/sdapi/v1/unload-checkpoint` moves the model OFF the GPU and A1111 does NOT auto-reload it on the next
+ * txt2img — worse, a same-name `override_settings.sd_model_checkpoint` reads as "no change" and is skipped,
+ * so the render runs against an unloaded model (blank/`NoneType`). The render must explicitly
+ * `/sdapi/v1/reload-checkpoint` first. Module-level (a Set of base URLs) so it survives the throwaway
+ * backend instances the app builds per call — freeMemory and generate are usually different instances.
+ */
+const unloadedCheckpoints = new Set<string>();
+
 interface SdModel {
   /** "model.safetensors [hash]" — the value `sd_model_checkpoint` expects. */
   title: string;
@@ -168,6 +178,9 @@ export class Automatic1111Backend implements LocalEngineBackend {
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
+      // If we unloaded this A1111's checkpoint for a VRAM hand-off, bring it back onto the GPU FIRST —
+      // txt2img won't reload it on its own, and our same-name override_settings won't trigger a reload.
+      await this.ensureCheckpointLoaded(signal);
       const res = await this.transport.send({
         url: `${this.baseUrl}/sdapi/v1/txt2img`,
         method: "POST",
@@ -178,11 +191,34 @@ export class Automatic1111Backend implements LocalEngineBackend {
       const data = await res.json<Txt2ImgResponse>();
       const b64 = data.images?.[0];
       if (!b64) throw new Error("Automatic1111 returned no image");
+      // The render succeeded, so the checkpoint is definitely loaded now — clear any stale unloaded mark.
+      unloadedCheckpoints.delete(this.baseUrl);
       // Some builds prefix with "data:image/png;base64,"; strip it if present.
       const clean = b64.includes(",") ? b64.slice(b64.indexOf(",") + 1) : b64;
       return { bytes: base64ToBytes(clean), mimeType: "image/png" };
     } finally {
       signal?.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /**
+   * Reload the checkpoint onto the GPU when a prior `freeMemory` unloaded it (see `unloadedCheckpoints`).
+   * `/sdapi/v1/reload-checkpoint` loads A1111's currently-selected checkpoint; the render's
+   * `override_settings` then switches to a different one if needed (a name change DOES trigger a load).
+   * Best-effort + awaited so the model is on the GPU before txt2img; leaves the mark set if it fails so a
+   * later render retries.
+   */
+  private async ensureCheckpointLoaded(signal?: AbortSignal): Promise<void> {
+    if (!unloadedCheckpoints.has(this.baseUrl)) return;
+    try {
+      await this.transport.send({
+        url: `${this.baseUrl}/sdapi/v1/reload-checkpoint`,
+        method: "POST",
+        body: {},
+        ...(signal ? { signal } : {}),
+      });
+    } catch {
+      /* best-effort — the render's override_settings may still bring the checkpoint back */
     }
   }
 
@@ -196,16 +232,18 @@ export class Automatic1111Backend implements LocalEngineBackend {
   }
 
   /**
-   * Unload A1111's checkpoint from VRAM (POST /sdapi/v1/unload-checkpoint) so a co-resident local LLM can
-   * reclaim the GPU after a render — the same hand-off ComfyUI's /free gives. A1111 reloads the checkpoint
-   * automatically on the next txt2img, so this is safe to call between renders. Crucially it lets the app
-   * FREE the chat LLM before an A1111 render too: A1111 picks its VRAM/shared-RAM split at load time from
-   * whatever's free, so loading into a GPU still occupied by the LLM permanently strands part of the model
-   * in slow shared RAM. Best-effort: freeing is an optimization, never required for correctness.
+   * Unload A1111's checkpoint from VRAM (POST /sdapi/v1/unload-checkpoint) so a co-resident local LLM (or a
+   * ComfyUI video render) can reclaim the GPU — the same hand-off ComfyUI's /free gives. A1111 does NOT
+   * reload on its own, so we MARK this base URL as unloaded (`unloadedCheckpoints`) and the next `generate`
+   * reloads the checkpoint before rendering. Crucially this also lets the app FREE the chat LLM before an
+   * A1111 render: A1111 picks its VRAM/shared-RAM split at load time from whatever's free, so loading into a
+   * GPU still occupied by the LLM permanently strands part of the model in slow shared RAM. Best-effort:
+   * freeing is an optimization, never required for correctness.
    */
   async freeMemory(): Promise<void> {
     try {
       await this.transport.send({ url: `${this.baseUrl}/sdapi/v1/unload-checkpoint`, method: "POST", body: {} });
+      unloadedCheckpoints.add(this.baseUrl); // the next render must reload-checkpoint before txt2img
     } catch {
       /* best-effort — the GPU just stays warm if A1111 can't unload right now (e.g. an older build) */
     }
