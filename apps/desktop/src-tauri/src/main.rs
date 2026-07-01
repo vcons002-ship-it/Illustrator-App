@@ -31,8 +31,26 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+// Suppresses the blocking Windows "System Error" dialog (e.g. "xyz.dll was not found") that the OS
+// loader pops up for a broken executable — without this, probing a corrupt/incomplete binary (a
+// half-finished PATH install, a shared ffmpeg build missing a DLL) HANGS the probing process
+// indefinitely waiting for a human to click OK, instead of just failing with a bad exit code. Declared
+// manually (no crate needed) since it's one Win32 call, linked automatically via kernel32 on Windows.
+#[cfg(target_os = "windows")]
+extern "system" {
+    fn SetErrorMode(mode: u32) -> u32;
+}
+#[cfg(target_os = "windows")]
+const SEM_FAILCRITICALERRORS: u32 = 0x0001;
+#[cfg(target_os = "windows")]
+const SEM_NOGPFAULTERRORBOX: u32 = 0x0002;
+
 const COMFY_PORTABLE_URL: &str =
     "https://github.com/comfyanonymous/ComfyUI/releases/latest/download/ComfyUI_windows_portable_nvidia.7z";
+/// A self-contained (static, no external DLL) Windows ffmpeg build — gyan.dev's non "-shared" builds
+/// link everything into one exe, avoiding the "avfilter-10.dll was not found" class of failure a
+/// shared/DLL-based install can hit when its folder gets split up (e.g. by a PATH workaround).
+const FFMPEG_URL: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.7z";
 const ENGINE_PORT: u16 = 8188;
 /// AUTOMATIC1111's default REST API port — it runs alongside ComfyUI (image gen on A1111, video on ComfyUI).
 const A1111_PORT: u16 = 7860;
@@ -1806,8 +1824,11 @@ async fn which_interpreter(app: AppHandle, kind: String) -> Result<Option<String
 const FFMPEG_TIMEOUT_SECS: u64 = 900;
 
 /// Resolve an ffmpeg binary for the long-form video pipeline (stitching clips + extracting last frames).
-/// Prefers `ffmpeg` on PATH; falls back to the ffmpeg that imageio-ffmpeg bundles inside the managed
-/// ComfyUI's embedded Python. `None` when nothing works — the caller surfaces a clear install hint.
+/// Prefers our OWN managed, known-good static build (see `download_ffmpeg`) — checked FIRST so a stray
+/// broken PATH entry (a half-finished install, a shared build missing a DLL — the exact "avfilter-10.dll
+/// was not found" failure mode) never shadows a copy we know works. Falls back to `ffmpeg` on PATH, then
+/// to the ffmpeg that imageio-ffmpeg bundles inside the managed ComfyUI's embedded Python (rarely
+/// present — vanilla ComfyUI doesn't depend on it — but a free check). `None` when nothing works.
 fn resolve_ffmpeg(app: &AppHandle) -> Option<std::path::PathBuf> {
     let ok = |p: &std::path::Path| {
         quiet_command(p)
@@ -1819,11 +1840,16 @@ fn resolve_ffmpeg(app: &AppHandle) -> Option<std::path::PathBuf> {
             .map(|s| s.success())
             .unwrap_or(false)
     };
-    // 1. On PATH (the common case — a user-installed ffmpeg).
+    // 1. Our own managed copy.
+    let managed = ffmpeg_dir(app).join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" });
+    if managed.exists() && ok(&managed) {
+        return Some(managed);
+    }
+    // 2. On PATH (a user-installed ffmpeg).
     if ok(std::path::Path::new("ffmpeg")) {
         return Some(std::path::PathBuf::from("ffmpeg"));
     }
-    // 2. Bundled with the managed ComfyUI (imageio-ffmpeg's binary under site-packages/imageio_ffmpeg).
+    // 3. Bundled with the managed ComfyUI (imageio-ffmpeg's binary under site-packages/imageio_ffmpeg).
     let bin_dir = engine_root(app)
         .join("ComfyUI_windows_portable")
         .join("python_embeded")
@@ -1840,6 +1866,105 @@ fn resolve_ffmpeg(app: &AppHandle) -> Option<std::path::PathBuf> {
                     return Some(p);
                 }
             }
+        }
+    }
+    None
+}
+
+/// Download a self-contained (static, no external DLL) ffmpeg build into the app's own managed folder,
+/// so the long-form video pipeline never depends on PATH or a third-party installer — the exact class
+/// of problem that produces a "some.dll was not found" crash when a shared/DLL-based ffmpeg install
+/// gets split up (e.g. only the exe copied somewhere on PATH, without its neighboring DLLs). Idempotent:
+/// returns immediately if we already have a working copy. Windows-only — ffmpeg is trivially available
+/// via brew/apt elsewhere.
+#[tauri::command]
+async fn download_ffmpeg(app: AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if !cfg!(target_os = "windows") {
+            return Err(
+                "A managed ffmpeg download is only needed on Windows — install ffmpeg with your \
+                 package manager (brew install ffmpeg / apt install ffmpeg) and it'll be found on PATH."
+                    .to_string(),
+            );
+        }
+        let dir = ffmpeg_dir(&app);
+        let dest = dir.join("ffmpeg.exe");
+        if dest.exists() {
+            emit_ffmpeg_progress(&app, "ffmpeg", 0, 0, 100.0);
+            return Ok(dest.to_string_lossy().to_string());
+        }
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let archive = dir.join("ffmpeg.7z");
+        download_ffmpeg_archive(&app, &archive)?;
+        let staging = dir.join("_extract");
+        let _ = std::fs::remove_dir_all(&staging);
+        sevenz_rust::decompress_file(&archive, &staging).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(&archive);
+        // The archive's top-level folder name is version-stamped (e.g. "ffmpeg-7.1-essentials_build"),
+        // so walk the extracted tree for the exe rather than hard-coding that path.
+        let found = find_file_named(&staging, "ffmpeg.exe")
+            .ok_or_else(|| "The downloaded ffmpeg archive didn't contain ffmpeg.exe.".to_string())?;
+        std::fs::copy(&found, &dest).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_dir_all(&staging);
+        emit_ffmpeg_progress(&app, "ffmpeg", 0, 0, 100.0);
+        Ok(dest.to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Stream `FFMPEG_URL` to `dest`, reporting progress the SAME way a catalog model download does
+/// (`model://progress`, keyed by id `"ffmpeg"`) — reuses the existing progress UI in Settings with no
+/// new plumbing needed on the frontend.
+fn download_ffmpeg_archive(app: &AppHandle, dest: &Path) -> Result<(), String> {
+    let mut resp = reqwest::blocking::get(FFMPEG_URL).map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("Download failed ({}).", resp.status()));
+    }
+    let total = resp.content_length().unwrap_or(0);
+    let mut file = std::fs::File::create(dest).map_err(|e| e.to_string())?;
+    let mut buf = [0u8; 1 << 16];
+    let mut received: u64 = 0;
+    let mut last_pct: i64 = -1;
+    loop {
+        let n = resp.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        received += n as u64;
+        if total > 0 {
+            let pct = (received as f64 / total as f64 * 100.0).floor() as i64;
+            if pct != last_pct {
+                last_pct = pct;
+                emit_ffmpeg_progress(app, "ffmpeg", received, total, pct as f64);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn emit_ffmpeg_progress(app: &AppHandle, id: &str, received_bytes: u64, total_bytes: u64, percent: f64) {
+    let _ = app.emit("model://progress", ModelProgress { id: id.to_string(), received_bytes, total_bytes, percent });
+}
+
+/// Depth-first search for a file named `name` (case-insensitive) under `root`. Used to find
+/// `ffmpeg.exe` inside a downloaded archive whose top-level folder name is version-stamped.
+fn find_file_named(root: &Path, name: &str) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_file_named(&path, name) {
+                return Some(found);
+            }
+        } else if path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .map(|f| f.eq_ignore_ascii_case(name))
+            .unwrap_or(false)
+        {
+            return Some(path);
         }
     }
     None
@@ -2530,6 +2655,12 @@ fn loras_dir(app: &AppHandle) -> PathBuf {
     comfy_models_dir(app).join("loras")
 }
 
+/// Where the app's own managed ffmpeg copy lives: `~/VisualReader/ffmpeg`. Kept separate from PATH
+/// and any user install so it's never affected by a broken/incomplete third-party ffmpeg elsewhere.
+fn ffmpeg_dir(app: &AppHandle) -> PathBuf {
+    engine_root(app).join("ffmpeg")
+}
+
 fn health_ok(base: &str) -> bool {
     reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
@@ -2744,6 +2875,13 @@ fn emit_llm(app: &AppHandle, phase: &str, message: &str, percent: Option<f64>) {
 }
 
 fn main() {
+    // Process-wide: a broken/incomplete exe (bad PATH entry, half-installed ffmpeg) fails fast with an
+    // error code instead of popping a blocking Windows dialog that hangs any probe/spawn until a human
+    // clicks OK. Set once, before spawning anything — child processes inherit it.
+    #[cfg(target_os = "windows")]
+    unsafe {
+        SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+    }
     tauri::Builder::default()
         .manage(EngineState::default())
         .manage(LlmState::default())
@@ -2770,6 +2908,7 @@ fn main() {
             read_file,
             run_command,
             run_ffmpeg,
+            download_ffmpeg,
             which_interpreter,
             git_repo_root,
             app_repo_root,

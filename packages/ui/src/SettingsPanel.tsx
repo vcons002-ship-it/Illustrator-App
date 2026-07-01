@@ -557,6 +557,10 @@ export interface SettingsPanelProps {
   onDownloadModelUrl?: (url: string) => void;
   /** Download the selected image-to-video model's files into ComfyUI's subfolders (desktop). */
   onDownloadVideoModel?: (id: string) => void;
+  /** Download a self-contained ffmpeg build (Windows) into the app's own managed folder — needed for
+   * long-form video stitching, without depending on PATH/winget (desktop). Progress rides
+   * `downloadProgress.ffmpeg`, same as a catalog model. */
+  onDownloadFfmpeg?: () => void;
   /** Download progress 0..100 per catalog model/LoRA id (desktop). */
   downloadProgress?: Record<string, number>;
   /** Which component file of a split-file model is downloading (per catalog id). */
@@ -622,6 +626,7 @@ export function SettingsPanel({
   onDownloadModel,
   onDownloadModelUrl,
   onDownloadVideoModel,
+  onDownloadFfmpeg,
   downloadProgress = {},
   downloadStage = {},
   engineStatus = "",
@@ -759,8 +764,32 @@ export function SettingsPanel({
             order={26}
             title="🎬 Image-to-video"
             hint="Animate an image into a short clip via ComfyUI (image-to-video)."
-            keywords="video wan ltx ltx-2 comfyui image to video i2v animate motion lora high noise low noise frames fps width height steps cfg shift checkpoint text encoder gemma umt5 vae download manual safetensors"
+            keywords="video wan ltx ltx-2 comfyui image to video i2v animate motion lora high noise low noise frames fps width height steps cfg shift checkpoint text encoder gemma umt5 vae download manual safetensors ffmpeg stitch long form"
           >
+            {isDesktop && (
+              <div style={rowStyle}>
+                <span>ffmpeg (stitches long-form video into one file)</span>
+                {(() => {
+                  const progress = downloadProgress.ffmpeg;
+                  const downloading = progress !== undefined && progress < 100;
+                  const installed = progress === 100;
+                  return installed ? (
+                    <span style={{ color: "#7dd87f" }}>✓ Installed</span>
+                  ) : downloading ? (
+                    <span style={{ opacity: 0.7 }}>{Math.round(progress)}%</span>
+                  ) : onDownloadFfmpeg ? (
+                    <button type="button" style={buttonStyle} onClick={onDownloadFfmpeg}>
+                      Download ffmpeg (~80 MB)
+                    </button>
+                  ) : null;
+                })()}
+                <span style={{ opacity: 0.55, fontSize: 11 }}>
+                  Only needed for "long-form video" (a series of clips stitched into one). Places a
+                  self-contained copy in the app's own folder — no PATH or system install needed. On
+                  macOS/Linux, install ffmpeg with brew/apt instead; it's already found on PATH.
+                </span>
+              </div>
+            )}
             {value.imageProvider === "local" && (value.localBackend ?? "a1111") !== "a1111" ? (
               <div>
                 <label style={{ fontSize: 13, fontWeight: 600 }}>Image-to-video model</label>
