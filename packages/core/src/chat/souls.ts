@@ -19,7 +19,9 @@ export type SoulKind = "self" | "user";
 export const SELF_SOUL_KEY = "self-soul";
 export const ABOUT_YOU_SOUL_KEY = "about-you-soul";
 export const MAX_SOUL_NOTES = 40;
-export const MAX_SOUL_NOTE_CHARS = 1000;
+/** Per-note character cap — generous enough for a real character bio/paragraph. Matches reader-memory's
+ * MAX_NOTE_CHARS; kept as its own constant since souls are a separate bounded list. */
+export const MAX_SOUL_NOTE_CHARS = 2000;
 export const MAX_SOUL_NAME_CHARS = 80;
 
 const SPECS: Record<SoulKind, NoteStoreSpec> = {

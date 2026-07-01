@@ -14,9 +14,9 @@ import { type NoteEntry, type NoteStoreSpec, loadNotes, saveNotes, rememberIn, f
 
 export const READER_MEMORY_KEY = "reader-memory";
 export const MAX_MEMORY_NOTES = 40;
-/** Per-note character cap. Generous so a memory can hold a real paragraph (a preference with its
+/** Per-note character cap. Generous so a memory can hold several paragraphs (a preference with its
  * reasoning, a multi-part instruction) without being cut off. 40 notes × this is still bounded. */
-export const MAX_NOTE_CHARS = 1000;
+export const MAX_NOTE_CHARS = 2000;
 
 const SPEC: NoteStoreSpec = { key: READER_MEMORY_KEY, maxNotes: MAX_MEMORY_NOTES, maxChars: MAX_NOTE_CHARS };
 

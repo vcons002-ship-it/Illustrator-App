@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CHAT_TOOLS_SYSTEM, formatToolResult, parseToolCall } from "./chat-tools.js";
 import { resolveModelRequest, resolveStyleRequest } from "../providers/catalog.js";
+import { MAX_NOTE_CHARS } from "./reader-memory.js";
 
 describe("parseToolCall", () => {
   it("parses a bare search call", () => {
@@ -191,8 +192,8 @@ describe("parseToolCall", () => {
       tool: "forget",
       match: "watercolor",
     });
-    const long = parseToolCall(`{"tool":"remember","note":"${"x".repeat(500)}"}`);
-    expect(long?.tool === "remember" && long.note.length).toBe(200);
+    const long = parseToolCall(`{"tool":"remember","note":"${"x".repeat(MAX_NOTE_CHARS + 500)}"}`);
+    expect(long?.tool === "remember" && long.note.length).toBe(MAX_NOTE_CHARS);
     expect(parseToolCall('{"tool":"remember","note":"  "}')).toBeUndefined();
   });
 });

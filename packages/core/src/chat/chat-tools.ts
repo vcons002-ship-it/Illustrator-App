@@ -5,6 +5,7 @@ import type { BookPassage } from "./book-passage-search.js";
 import type { AnalyzeChart, AnalyzeSpec, Aggregation, DataFilter, FilterOp } from "../data/analyze.js";
 import { tableToText, type DataTable } from "../data/data-table.js";
 import { MAX_SKILL_BODY_CHARS, MAX_SKILL_DESC_CHARS, MAX_SKILL_NAME_CHARS } from "./skills.js";
+import { MAX_NOTE_CHARS } from "./reader-memory.js";
 
 /**
  * Provider-agnostic tool protocol for the reading-companion chat. Native
@@ -133,8 +134,6 @@ const MAX_NAME_CHARS = 80;
 const MAX_URL_CHARS = 600;
 /** How much of a fetched page is fed back to the model (keeps context bounded). */
 export const READ_URL_MAX_CHARS = 12_000;
-/** Matches reader-memory's MAX_NOTE_CHARS. */
-const MAX_MEMORY_NOTE_CHARS = 200;
 
 export const CHAT_TOOLS_SYSTEM =
   "You are shown the Visual Bible plus the book text AROUND the reader's current position — NOT the " +
@@ -264,11 +263,11 @@ export function parseToolCall(text: string): ToolCall | undefined {
     return query ? { tool, query } : undefined;
   }
   if (tool === "remember") {
-    const note = strArg(obj.note, MAX_MEMORY_NOTE_CHARS);
+    const note = strArg(obj.note, MAX_NOTE_CHARS);
     return note ? { tool, note } : undefined;
   }
   if (tool === "forget") {
-    const match = strArg(obj.match, MAX_MEMORY_NOTE_CHARS);
+    const match = strArg(obj.match, MAX_NOTE_CHARS);
     return match ? { tool, match } : undefined;
   }
   if (tool === "read_skill") {

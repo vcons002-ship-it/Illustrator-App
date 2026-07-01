@@ -817,7 +817,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           ))}
         </div>
       )}
-      <div style={inputRowStyle}>
+      <div style={utilityRowStyle}>
         {props.onAttachFile && (
           <>
             <input
@@ -866,6 +866,8 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             ⚙ Models
           </button>
         )}
+      </div>
+      <div style={inputRowStyle}>
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -952,6 +954,15 @@ const scrollStyle = {
   flexDirection: "column",
   gap: 8,
   padding: 12,
+} as const;
+
+/** Secondary actions (attach / story / models) — their own row above the input, so they never
+ * squeeze the textarea's width on narrow screens. Wraps if it still doesn't fit. */
+const utilityRowStyle = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 8,
+  padding: "6px 10px 0",
 } as const;
 
 const inputRowStyle = {
