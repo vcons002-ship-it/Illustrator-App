@@ -55,6 +55,29 @@ describe("boundChatHistoryForMirror", () => {
     expect(out[0]!.attachments?.[0]!.bytes).toBeUndefined();
   });
 
+  it("counts + strips the inline VIDEO clip (video clips are far larger than images)", () => {
+    // A 5MB clip alone blows the 3MB budget — its inline bytes must drop, not ride every mirror frame.
+    const msgs = [
+      msg({
+        text: "clip",
+        video: { bytes: buf(5_000_000), mimeType: "video/mp4" },
+        attachments: [{ id: "vid-1", name: "clip.mp4", mime: "video/mp4", kind: "video", bytes: buf(5_000_000) }],
+      }),
+    ];
+    const out = boundChatHistoryForMirror(msgs, 3_000_000);
+    expect(out[0]!.video).toBeUndefined(); // inline clip bytes dropped (the fix)
+    expect(out[0]!.attachments?.[0]!.bytes).toBeUndefined(); // card bytes dropped too
+    expect(out[0]!.attachments?.[0]!.id).toBe("vid-1"); // card id kept so the phone can fetch it back
+    expect(out[0]!.text).toBe("clip");
+  });
+
+  it("keeps a small recent clip inline within budget", () => {
+    const msgs = [msg({ text: "tiny clip", video: { bytes: buf(1_000_000), mimeType: "video/mp4" } })];
+    const out = boundChatHistoryForMirror(msgs, 3_000_000);
+    expect(out[0]!.video).toBeDefined(); // 1MB <= 3MB → kept
+    expect(out).toBe(msgs); // nothing trimmed → same reference
+  });
+
   it("leaves non-image attachments' metadata intact (only bytes are dropped)", () => {
     const msgs = [
       msg({ text: "big", image: { bytes: buf(4_000_000), mimeType: "image/png" } }),

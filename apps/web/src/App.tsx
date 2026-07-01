@@ -178,6 +178,7 @@ import {
   concatArrayBuffers,
   externalizeChatImages,
   externalizedImageId,
+  externalizedVideoId,
   restoreInlineImages,
   applyFileEdits,
   summarizeFileEdits,
@@ -4244,17 +4245,23 @@ export function App() {
   useEffect(() => {
     const chatId = activeBuddyId;
     for (const m of buddyMessages.slice(-8)) {
-      const id = externalizedImageId(m);
-      if (!id || restoredImages.current.has(id) || fetchingImageIds.current.has(id)) continue;
-      const mime = restoredImageMime(m);
-      fetchingImageIds.current.add(id);
-      const load: Promise<ArrayBuffer | undefined> = isRemoteClient
-        ? fetchRemoteFileBytes(id)
-        : (libraryStore.getImageBlob?.(chatId, id).then((b) => b?.bytes) ?? Promise.resolve(undefined));
-      void load.then((bytes) => {
-        fetchingImageIds.current.delete(id);
-        if (bytes) cacheRestoredImage(id, bytes, mime);
-      });
+      // Both the inline image AND the inline video clip can be externalized/stripped — fetch either back.
+      const targets: { id: string; mime: string }[] = [];
+      const imgId = externalizedImageId(m);
+      if (imgId) targets.push({ id: imgId, mime: restoredImageMime(m) });
+      const vidId = externalizedVideoId(m);
+      if (vidId) targets.push({ id: vidId, mime: (m.video && "mimeType" in m.video ? m.video.mimeType : "video/mp4") });
+      for (const { id, mime } of targets) {
+        if (restoredImages.current.has(id) || fetchingImageIds.current.has(id)) continue;
+        fetchingImageIds.current.add(id);
+        const load: Promise<ArrayBuffer | undefined> = isRemoteClient
+          ? fetchRemoteFileBytes(id)
+          : (libraryStore.getImageBlob?.(chatId, id).then((b) => b?.bytes) ?? Promise.resolve(undefined));
+        void load.then((bytes) => {
+          fetchingImageIds.current.delete(id);
+          if (bytes) cacheRestoredImage(id, bytes, mime);
+        });
+      }
     }
   }, [isRemoteClient, buddyMessages, fetchRemoteFileBytes, activeBuddyId, libraryStore, cacheRestoredImage]);
   // Fill in a card's bytes from the desktop when the mirror stripped them (older image on a phone).
@@ -6698,7 +6705,9 @@ export function App() {
         role: m.role,
         text: m.text,
         ...(m.image ? { image: m.image } : {}),
-        ...(m.video ? { video: m.video } : {}),
+        // Only render the inline player when the clip's bytes are present — a byte-less `{ id }` video
+        // (stripped for the mirror / externalized to disk) shows via its file card until it re-hydrates.
+        ...(m.video && "bytes" in m.video ? { video: m.video } : {}),
         ...(m.links ? { links: m.links } : {}),
         ...(m.gallery ? { gallery: m.gallery } : {}),
         ...(m.files ? { files: m.files } : {}),

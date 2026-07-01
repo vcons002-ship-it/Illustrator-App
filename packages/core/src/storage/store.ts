@@ -58,8 +58,13 @@ export interface StoredChatMessage {
     | { bytes: ArrayBuffer; mimeType: string; id?: string }
     | { sourceUrl: string }
     | { id: string; mimeType: string };
-  /** An image-to-video render's output clip, shown inline as a looping <video>/animated image. */
-  video?: { bytes: ArrayBuffer; mimeType: string };
+  /** An image-to-video render's output clip, shown inline as a looping <video>/animated image. Like
+   * `image`, a large clip's bytes are externalized to the chat blob store on persist AND stripped from
+   * the phone mirror — leaving a byte-less `{ id }` reference whose bytes re-hydrate on demand (video
+   * clips are far bigger than images, so this keeps the mirror frame tunnel-safe and the disk small). */
+  video?:
+    | { bytes: ArrayBuffer; mimeType: string; id?: string }
+    | { id: string; mimeType: string };
   links?: { url: string; title?: string }[];
   /** A set of retrieved images shown as an inline thumbnail gallery (a multi-hit
    * `search_images`); each thumbnail enlarges in place on click. This is what lets
