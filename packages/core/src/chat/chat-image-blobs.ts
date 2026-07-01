@@ -20,12 +20,15 @@ export function externalizedImageId(m: StoredChatMessage): string | undefined {
   return m.attachments?.find((a) => a.kind === "image" && a.id && !a.bytes)?.id;
 }
 
-/** The externalized blob id for a message's inline VIDEO clip whose bytes were moved out (a byte-less
- * `{ id }` video). `undefined` when the clip still carries its bytes or the message has none. */
+/** The externalized blob id for a message's inline VIDEO clip whose bytes were moved out: a byte-less
+ * `{ id }` video (the desktop-reload/blob-store path), or — when there's no inline video at all (the
+ * PHONE MIRROR path, which drops the `video` field outright rather than leaving a byte-less placeholder,
+ * same as `externalizedImageId`'s image case) — the video file-card attachment's id. `undefined` when
+ * the clip still carries its bytes or the message has none to restore. */
 export function externalizedVideoId(m: StoredChatMessage): string | undefined {
-  if (m.video && "bytes" in m.video) return undefined; // already loaded
+  if (m.video && "bytes" in m.video) return undefined; // already loaded — nothing to fetch
   if (m.video && "id" in m.video) return m.video.id;
-  return undefined;
+  return m.attachments?.find((a) => a.kind === "video" && a.id && !a.bytes)?.id;
 }
 
 /**

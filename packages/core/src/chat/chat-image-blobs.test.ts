@@ -79,6 +79,17 @@ describe("externalizedVideoId", () => {
     expect(externalizedVideoId({ role: "tool", text: "", at: 1, video: { bytes: bytesOf(1), mimeType: "video/mp4" } })).toBeUndefined();
     expect(externalizedVideoId({ role: "tool", text: "", at: 1, video: { id: "vid-9", mimeType: "video/mp4" } })).toBe("vid-9");
   });
+
+  it("falls back to the byte-less video file-card attachment id when there's no inline video at all (the phone-mirror path, which drops `video` entirely rather than leaving a byte-less placeholder)", () => {
+    expect(
+      externalizedVideoId({
+        role: "tool",
+        text: "",
+        at: 1,
+        attachments: [{ id: "vid-att", name: "clip.mp4", mime: "video/mp4", kind: "video" }],
+      }),
+    ).toBe("vid-att");
+  });
 });
 
 describe("externalizedImageId", () => {
