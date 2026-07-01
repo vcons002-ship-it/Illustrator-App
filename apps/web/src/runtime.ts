@@ -373,6 +373,16 @@ export function runFfmpeg(args: string[], cwd?: string): Promise<CommandResult> 
 }
 
 /**
+ * Download a self-contained (static, no external DLL) ffmpeg build into the app's own managed folder —
+ * so long-form video stitching never depends on PATH or a third-party installer. Windows only (ffmpeg
+ * is trivially available via brew/apt elsewhere); idempotent — resolves immediately if already present.
+ * Progress streams over the existing `model://progress` event under id "ffmpeg" (see `onModelProgress`).
+ */
+export function downloadFfmpeg(): Promise<string> {
+  return invoke<string>("download_ffmpeg");
+}
+
+/**
  * The Visual Reader SOURCE repo root (the clone the app runs from), or undefined on the web / when
  * the app isn't inside a git checkout. Used by the in-app "Software update" button to git-pull +
  * rebuild the web bundle in place. Best-effort: returns undefined rather than throwing on older

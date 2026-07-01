@@ -295,6 +295,7 @@ import {
   readLocalFile,
   runCommand,
   runFfmpeg,
+  downloadFfmpeg,
   writeWorkspaceFileBytes,
   whichInterpreter,
   appRepoRoot,
@@ -1804,6 +1805,24 @@ export function App() {
         delete next[id];
         return next;
       });
+    }
+  }, []);
+
+  // Download the app's own managed ffmpeg (static, no external DLL) so long-form video stitching never
+  // depends on PATH/winget — the class of problem that produces a "some.dll was not found" crash when a
+  // shared ffmpeg install gets split up. Progress rides the existing model-download progress dict under
+  // id "ffmpeg" (see the onModelProgress listener above), so no separate progress plumbing is needed.
+  const onDownloadFfmpeg = useCallback(async () => {
+    setModelProgress((prev) => ({ ...prev, ffmpeg: 0 }));
+    try {
+      await downloadFfmpeg();
+    } catch (err) {
+      setModelProgress((prev) => {
+        const next = { ...prev };
+        delete next.ffmpeg;
+        return next;
+      });
+      setLocalError(`ffmpeg download failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }, []);
 
@@ -7908,6 +7927,7 @@ export function App() {
             onDownloadModel={onDownloadModel}
             onDownloadModelUrl={onDownloadModelUrl}
             onDownloadVideoModel={onDownloadVideoModel}
+            onDownloadFfmpeg={onDownloadFfmpeg}
             downloadProgress={modelProgress}
             downloadStage={downloadStage}
             engineStatus={engineStatus}
