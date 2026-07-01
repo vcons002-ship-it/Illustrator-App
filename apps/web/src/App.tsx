@@ -1813,6 +1813,13 @@ export function App() {
   // shared ffmpeg install gets split up. Progress rides the existing model-download progress dict under
   // id "ffmpeg" (see the onModelProgress listener above), so no separate progress plumbing is needed.
   const onDownloadFfmpeg = useCallback(async () => {
+    // On a linked PHONE there's no filesystem of its own — the DESKTOP owns it. Relay the request;
+    // the desktop runs the real download and mirrors progress back via EngineInventory.ffmpegProgress.
+    if (isRemoteClient) {
+      setModelProgress((prev) => ({ ...prev, ffmpeg: 0 }));
+      sendAppSync({ type: "vrcmd:downloadFfmpeg" });
+      return;
+    }
     setModelProgress((prev) => ({ ...prev, ffmpeg: 0 }));
     try {
       await downloadFfmpeg();
@@ -1824,7 +1831,10 @@ export function App() {
       });
       setLocalError(`ffmpeg download failed: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }, []);
+  }, [isRemoteClient, sendAppSync]);
+  useEffect(() => {
+    downloadFfmpegRef.current = onDownloadFfmpeg;
+  }, [onDownloadFfmpeg]);
 
   // Download an image-to-video model's files (Wan 2.2: two experts + encoder + VAE) into ComfyUI's
   // diffusion_models / text_encoders / vae folders, with the same per-file progress as image models.
@@ -2276,6 +2286,9 @@ export function App() {
       cancelled = true;
     };
   }, [isRemoteClient, settings.localTextServer, settings.localServerTextUrl, settings.localServerTextModel, settings.localTextBackend]);
+  // Isolated from the rest of modelProgress (checkpoint/LoRA downloads never mirror to a phone — the
+  // phone gets picker-only for those) so engineInventory only recomputes for an actual ffmpeg change.
+  const ffmpegProgress = modelProgress.ffmpeg;
   const engineInventory = useMemo(
     (): EngineInventory => ({
       installedModels,
@@ -2287,8 +2300,20 @@ export function App() {
       engineStatus,
       ...(providers ? { providers } : {}),
       ...(textModelContext ? { textModelContext } : {}),
+      ...(ffmpegProgress !== undefined ? { ffmpegProgress } : {}),
     }),
-    [installedModels, installedTextEncoders, installedVaes, installedLoras, loraFamilyMap, textModels, engineStatus, providers, textModelContext],
+    [
+      installedModels,
+      installedTextEncoders,
+      installedVaes,
+      installedLoras,
+      loraFamilyMap,
+      textModels,
+      engineStatus,
+      providers,
+      textModelContext,
+      ffmpegProgress,
+    ],
   );
   // The planner (tasks + calendar) state is declared lower in the file, so the hello snapshot and
   // the phone's apply-handler reach it through refs kept current by effects below (the same pattern
@@ -2322,6 +2347,9 @@ export function App() {
   // DESKTOP: probe/auto-start a self-hosted engine the PHONE tapped Connect for (it owns the network +
   // filesystem). Assigned below, since onConnectLocalServer is declared later.
   const connectLocalServerRef = useRef<(backend: LocalBackendId, url: string) => void>(() => {});
+  // DESKTOP: download the managed ffmpeg the PHONE tapped the button for (it owns the filesystem).
+  // Assigned below, since onDownloadFfmpeg is declared later.
+  const downloadFfmpegRef = useRef<() => void>(() => {});
   // Phone-triggered software update: the DESKTOP runs it via this ref (assigned below, since
   // onSoftwareUpdate is declared later); the PHONE holds the in-flight request here so a relayed
   // vrsync:updateStatus can resolve it + reload.
@@ -2378,6 +2406,15 @@ export function App() {
     setEngineStatus(inv.engineStatus);
     setRemoteProviders(inv.providers);
     setTextModelContext(inv.textModelContext);
+    // The phone has no engine of its own, so it never populates modelProgress locally — safe to
+    // mirror the desktop's ffmpeg entry into the SAME dict Settings already reads (downloadProgress.ffmpeg).
+    setModelProgress((prev) => {
+      if (inv.ffmpegProgress !== undefined) return { ...prev, ffmpeg: inv.ffmpegProgress };
+      if (prev.ffmpeg === undefined) return prev;
+      const next = { ...prev };
+      delete next.ffmpeg;
+      return next;
+    });
   }, []);
   const buildSnapshotRef = useRef(buildSnapshot);
   buildSnapshotRef.current = buildSnapshot;
@@ -2590,6 +2627,11 @@ export function App() {
             // The phone tapped Connect for AUTOMATIC1111 / ComfyUI; probe + auto-start it HERE (we have
             // the network + install folder), and the resulting settings mirror back via vrsync:settings.
             connectLocalServerRef.current(msg.backend, msg.url);
+            break;
+          case "vrcmd:downloadFfmpeg":
+            // The phone tapped "Download ffmpeg"; fetch it HERE (we have the filesystem) — progress
+            // mirrors back via the engine inventory's ffmpegProgress field.
+            downloadFfmpegRef.current();
             break;
           case "vrcmd:hostTool":
             // The phone's buddy hit a desktop-runtime tool (files/command/screenshot); run it HERE

@@ -766,7 +766,7 @@ export function SettingsPanel({
             hint="Animate an image into a short clip via ComfyUI (image-to-video)."
             keywords="video wan ltx ltx-2 comfyui image to video i2v animate motion lora high noise low noise frames fps width height steps cfg shift checkpoint text encoder gemma umt5 vae download manual safetensors ffmpeg stitch long form"
           >
-            {isDesktop && (
+            {(isDesktop || remote) && (
               <div style={rowStyle}>
                 <span>ffmpeg (stitches long-form video into one file)</span>
                 {(() => {
@@ -785,8 +785,9 @@ export function SettingsPanel({
                 })()}
                 <span style={{ opacity: 0.55, fontSize: 11 }}>
                   Only needed for "long-form video" (a series of clips stitched into one). Places a
-                  self-contained copy in the app's own folder — no PATH or system install needed. On
-                  macOS/Linux, install ffmpeg with brew/apt instead; it's already found on PATH.
+                  self-contained copy in the app's own folder — no PATH or system install needed.
+                  {remote && !isDesktop ? " Runs on your linked desktop." : ""} On macOS/Linux, install
+                  ffmpeg with brew/apt instead; it's already found on PATH.
                 </span>
               </div>
             )}
