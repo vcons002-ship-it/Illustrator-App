@@ -8,6 +8,7 @@ export * from "./imageObjectUrl.js";
 export * from "./imageStatus.js";
 export * from "./ChatPanel.js";
 export * from "./ChatBuddyPanel.js";
+export * from "./model-menu.js";
 export * from "./ContextUsageDonut.js";
 export * from "./DocumentPolishPanel.js";
 export * from "./DocBlocksView.js";

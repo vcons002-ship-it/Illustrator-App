@@ -221,6 +221,7 @@ import {
   CharacterBible,
   ChatBuddyPanel,
   ChatPanel,
+  buildModelMenu,
   DataChart,
   Infographic,
   DataTablePreview,
@@ -1880,6 +1881,20 @@ export function App() {
   // failure, fall back to the app-managed engine (desktop) instead of dead-ending.
   const onConnectLocalServer = useCallback(
     async (backend: LocalBackendId, url: string) => {
+      // On a linked PHONE there's no engine of its own — the DESKTOP owns the network + install folder.
+      // Remember the URL locally (so the field/mirror keep it), then relay Connect: the desktop probes /
+      // auto-starts the server and mirrors the resulting settings (engineBaseUrl/models) back.
+      if (isRemoteClient) {
+        setSettings((s) => ({
+          ...s,
+          localSource: "server",
+          localBackend: backend,
+          localServerUrl: url,
+          localServerUrlByBackend: { ...(s.localServerUrlByBackend ?? {}), [backend]: url },
+        }));
+        sendAppSync({ type: "vrcmd:connectLocalServer", backend, url });
+        return;
+      }
       setLocalError("");
       setConnectingLocal(true);
       const name = backend === "a1111" ? "AUTOMATIC1111" : "ComfyUI";
@@ -1932,8 +1947,11 @@ export function App() {
         setConnectingLocal(false);
       }
     },
-    [probeServer, startManagedEngine],
+    [probeServer, startManagedEngine, isRemoteClient, sendAppSync],
   );
+  useEffect(() => {
+    connectLocalServerRef.current = onConnectLocalServer;
+  }, [onConnectLocalServer]);
 
   // Connect to a local LLM server (Ollama / LM Studio / llama.cpp), load its model
   // list, and remember it for next time. A direct fetch is fine in the web app
@@ -2235,6 +2253,9 @@ export function App() {
   // DESKTOP: open a PC file (that the phone tapped in a /find result) as a book — assigned below,
   // since the importer/openBook are declared later; the early-registered relay handler reaches it here.
   const openLocalFileRef = useRef<(path: string) => void>(() => {});
+  // DESKTOP: probe/auto-start a self-hosted engine the PHONE tapped Connect for (it owns the network +
+  // filesystem). Assigned below, since onConnectLocalServer is declared later.
+  const connectLocalServerRef = useRef<(backend: LocalBackendId, url: string) => void>(() => {});
   // Phone-triggered software update: the DESKTOP runs it via this ref (assigned below, since
   // onSoftwareUpdate is declared later); the PHONE holds the in-flight request here so a relayed
   // vrsync:updateStatus can resolve it + reload.
@@ -2498,6 +2519,11 @@ export function App() {
             // The phone tapped a desktop file (a /find result) to open into the reader; read + import
             // it HERE (we have the filesystem), and the opened book mirrors back to the phone.
             void openLocalFileRef.current(msg.path);
+            break;
+          case "vrcmd:connectLocalServer":
+            // The phone tapped Connect for AUTOMATIC1111 / ComfyUI; probe + auto-start it HERE (we have
+            // the network + install folder), and the resulting settings mirror back via vrsync:settings.
+            connectLocalServerRef.current(msg.backend, msg.url);
             break;
           case "vrcmd:hostTool":
             // The phone's buddy hit a desktop-runtime tool (files/command/screenshot); run it HERE
@@ -7202,6 +7228,16 @@ export function App() {
           ? "paint"
           : "done";
 
+  // Quick model-switcher for the chat input: the current LLM / image / video options (incl. switching
+  // provider local↔cloud), applied via onSettingsChange (which also relays to a linked phone).
+  const modelMenu = useMemo(
+    () => ({
+      groups: buildModelMenu(settings, { textModels, imageModels: installedModels }, { isDesktop }),
+      onSelect: (patch: Partial<ReaderSettings>) => onSettingsChange({ ...settings, ...patch }),
+    }),
+    [settings, textModels, installedModels, onSettingsChange],
+  );
+
   // The buddy chat is rendered in two places that share the same wiring: as the home-screen hero
   // (no book) and as the always-present bottom dock beneath an open book. Extracted so the ~60
   // props live once. `fill` makes it stretch to the dock's height; history collapse is dock-only.
@@ -7224,6 +7260,7 @@ export function App() {
       {...(buddyPendingTool ? { pendingTool: buddyPendingTool } : {})}
       persona={buddyPersona}
       onPersonaChange={onBuddyPersonaChange}
+      modelMenu={modelMenu}
       sessions={buddySessions.map((s, i) => ({
         id: s.id,
         label: s.label || (s.workingDir ? lastPathSegment(s.workingDir) : `Chat ${i + 1}`),

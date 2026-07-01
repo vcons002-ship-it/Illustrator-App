@@ -3132,12 +3132,6 @@ function LocalEngine({
   onConnect: ((backend: LocalBackendId, url: string) => void) | undefined;
 }) {
   const hasManaged = isDesktop || remote;
-  // Remember the URL under its backend so switching the dropdown swaps back to it (and the active
-  // localServerUrl follows the selected backend, so you never retype it).
-  const rememberUrl = (b: LocalBackendId, url: string): Partial<ReaderSettings> => ({
-    localServerUrl: url,
-    localServerUrlByBackend: { ...serverUrlByBackend, [b]: url },
-  });
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {hasManaged && (
@@ -3172,60 +3166,72 @@ function LocalEngine({
       )}
 
       <div style={rowStyle}>
-        <span>{hasManaged ? "Or use your own server" : "Your Stable Diffusion server"}</span>
-        <select
-          value={backend}
-          onChange={(e) => {
-            const b = e.target.value as LocalBackendId;
-            // Flip the dropdown → restore the URL last entered for that backend (or blank to show its
-            // placeholder), so the user never re-types a server they've used before.
-            onSet({ localBackend: b, localServerUrl: serverUrlByBackend[b] ?? "" });
-          }}
-        >
-          {(["a1111", "comfyui"] as LocalBackendId[]).map((id) => (
-            <option key={id} value={id}>
-              {LOCAL_BACKEND_LABEL[id]}
-            </option>
-          ))}
-        </select>
-        <div style={{ display: "flex", gap: 6 }}>
-          <input
-            style={{ flex: 1 }}
-            value={serverUrl}
-            placeholder={LOCAL_ENGINE_DEFAULT_URL[backend]}
-            onChange={(e) => onSet(rememberUrl(backend, e.target.value))}
-          />
-          <button
-            style={buttonStyle}
-            disabled={connecting}
-            onClick={() => onConnect?.(backend, serverUrl.trim() || LOCAL_ENGINE_DEFAULT_URL[backend])}
-          >
-            {connecting ? "Connecting…" : "Connect"}
-          </button>
-        </div>
-        <ModelSelect installedModels={installedModels} selected={selected} onSelect={onSelect} />
+        <span>{hasManaged ? "Or use your own servers" : "Your image-generation servers"}</span>
         <span style={{ opacity: 0.6, fontSize: 12 }}>
-          Start {LOCAL_BACKEND_LABEL[backend]} with its API and allow this app's origin —
-          {backend === "a1111"
-            ? " e.g. ./webui.sh --api --cors-allow-origins=" + location.origin
-            : " e.g. python main.py --enable-cors-header " + location.origin}
-          .
+          Connect BOTH if you like — then pick which one generates images. Video always renders on ComfyUI, so
+          you can run e.g. images on AUTOMATIC1111 and video on ComfyUI at the same time.
         </span>
-        {isDesktop && backend === "a1111" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
-            <span style={{ fontSize: 12, opacity: 0.8 }}>AUTOMATIC1111 install folder (auto-start)</span>
-            <input
-              style={{ flex: 1 }}
-              value={a1111Path}
-              placeholder="e.g. C:\\stable-diffusion-webui"
-              onChange={(e) => onSet({ a1111Path: e.target.value })}
-            />
-            <span style={{ opacity: 0.6, fontSize: 11 }}>
-              The folder with webui-user.bat — the app starts AUTOMATIC1111 with --api on :7860 when you use
-              it (running alongside ComfyUI, which renders video). Leave blank to start it yourself.
-            </span>
-          </div>
-        )}
+        {/* One independent row PER backend: connect/manage each on its own, and choose which is active for
+            IMAGE generation (a "workflow swap") without losing the other's URL. */}
+        {(["a1111", "comfyui"] as LocalBackendId[]).map((id) => {
+          const isActive = backend === id;
+          const url = isActive ? serverUrl : serverUrlByBackend[id] ?? "";
+          const setUrl = (v: string) =>
+            onSet({
+              localServerUrlByBackend: { ...serverUrlByBackend, [id]: v },
+              ...(isActive ? { localServerUrl: v } : {}),
+            });
+          return (
+            <div key={id} style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 600 }}>
+                {LOCAL_BACKEND_LABEL[id]}
+                {isActive ? <span style={{ marginLeft: 6, opacity: 0.7, fontWeight: 400 }}>✓ active for images</span> : null}
+              </span>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input
+                  style={{ flex: 1, minWidth: 0 }}
+                  value={url}
+                  placeholder={LOCAL_ENGINE_DEFAULT_URL[id]}
+                  onChange={(e) => setUrl(e.target.value)}
+                />
+                <button
+                  style={buttonStyle}
+                  disabled={connecting}
+                  onClick={() => onConnect?.(id, url.trim() || LOCAL_ENGINE_DEFAULT_URL[id])}
+                  title={isActive ? "Reconnect this server" : "Connect this server and use it for image generation"}
+                >
+                  {connecting ? "Connecting…" : isActive ? "Reconnect" : "Use for images"}
+                </button>
+              </div>
+              <span style={{ opacity: 0.55, fontSize: 11 }}>
+                Start {LOCAL_BACKEND_LABEL[id]} with its API and allow this app's origin —
+                {id === "a1111"
+                  ? " e.g. ./webui.sh --api --cors-allow-origins=" + location.origin
+                  : " e.g. python main.py --enable-cors-header " + location.origin}
+                .
+              </span>
+              {id === "a1111" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 2 }}>
+                  <span style={{ fontSize: 11, opacity: 0.8 }}>AUTOMATIC1111 install folder (auto-start)</span>
+                  <input
+                    style={{ flex: 1, minWidth: 0 }}
+                    value={a1111Path}
+                    placeholder="e.g. C:\\stable-diffusion-webui"
+                    onChange={(e) => onSet({ a1111Path: e.target.value })}
+                  />
+                  <span style={{ opacity: 0.55, fontSize: 11 }}>
+                    The folder with webui-user.bat — {isDesktop ? "the app" : "your desktop"} starts AUTOMATIC1111
+                    with --api on :7860 when you connect it (alongside ComfyUI for video). Leave blank to start it
+                    yourself.
+                  </span>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        <div style={{ marginTop: 8 }}>
+          <ModelSelect installedModels={installedModels} selected={selected} onSelect={onSelect} />
+        </div>
       </div>
 
       {isDesktop && (
