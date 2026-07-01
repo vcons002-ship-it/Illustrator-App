@@ -462,6 +462,35 @@ export function chatImageVramFit(opts: { gpuVramMb?: number | undefined; imageGb
   return (imageGb + chatGb + headroomGb) * 1024 <= gpuVramMb ? "fit" : "nofit";
 }
 
+/** Approx VRAM the bundled chat model (Llama 3.2 3B, launched fp16-ish with -c 8192) holds resident,
+ * used only to decide whether it + the image model both fit so we can SKIP freeing/deferring it. */
+export const BUNDLED_LLM_VRAM_GB = 4;
+
+/**
+ * Whether starting a local image engine (app-managed ComfyUI, or auto-launched AUTOMATIC1111) at app
+ * BOOT should be deferred so it doesn't fight a local chat LLM for VRAM. `lowVram` (the manual toggle)
+ * always defers. Otherwise this defers ONLY when `chatImageVramFit` can PROVE the two won't fit — "fit"
+ * and "unknown" (no GPU detected, or a model size we can't estimate) both proceed, mirroring the same
+ * optimistic-unless-proven-tight rule already used by `canFreeChatLlm`/`freeImageModelForChat`. PURE.
+ */
+export function shouldDeferLocalEngineAutostart(opts: {
+  lowVram?: boolean | undefined;
+  gpuVramMb?: number | undefined;
+  imageModel?: string | undefined;
+  chatBackend?: string | undefined;
+  serverTextModel?: string | undefined;
+}): boolean {
+  if (opts.lowVram) return true;
+  const imageGb = imageModelVramCostGb(opts.imageModel ?? "");
+  const chatGb =
+    opts.chatBackend === "bundled"
+      ? BUNDLED_LLM_VRAM_GB
+      : opts.chatBackend === "server"
+        ? serverModelVramCostGb(opts.serverTextModel ?? "")
+        : 0; // webgpu/cloud/none: no local-server VRAM competition to defer for
+  return chatImageVramFit({ gpuVramMb: opts.gpuVramMb, imageGb, chatGb }) === "nofit";
+}
+
 /**
  * A ComfyUI used earlier this session keeps its checkpoint RESIDENT in VRAM after a render (ComfyUI
  * only releases on an explicit `/free`). Once the reader switches the image backend to an external

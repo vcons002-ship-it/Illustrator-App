@@ -190,6 +190,7 @@ import {
   VIDEO_RENDER_DEFAULTS,
   buildConcatArgs,
   buildLastFrameArgs,
+  shouldDeferLocalEngineAutostart,
   type ChatTurn,
   type CreatedFileRef,
   type ContextUsage,
@@ -264,7 +265,7 @@ import {
   type FileRef,
   type InstalledModel,
   type LocalBackendId,
-  type LocalEngineSource,
+  LOCAL_ENGINE_DEFAULT_URL,
   type ProvidersDiagnostics,
   type ReaderSettings,
 } from "@visual-reader/ui";
@@ -475,6 +476,10 @@ export function App() {
   const codeSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [localError, setLocalError] = useState<string>("");
   const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
+  // Same inventory, kept PER BACKEND too (installedModels itself is just whichever backend was last
+  // probed) — lets the quick Models menu show ComfyUI's and AUTOMATIC1111's checkpoints independently,
+  // even when only one of them is currently active for images.
+  const [installedModelsByBackend, setInstalledModelsByBackend] = useState<Partial<Record<LocalBackendId, InstalledModel[]>>>({});
   // Split-file component files (text encoders / VAEs) the local engine has, for the
   // Settings dropdowns + the model-aware suggestion. Empty for an all-in-one (A1111) engine.
   const [installedTextEncoders, setInstalledTextEncoders] = useState<string[]>([]);
@@ -519,13 +524,15 @@ export function App() {
   // is included — the engine's own /system_stats only sees its image-model context. Preferred over
   // the worker's engine reading when present (see `effectiveVram`); undefined ⇒ fall back to it.
   const [gpuVram, setGpuVram] = useState<EngineVram | undefined>();
-  // Low-VRAM deferred engine start: at boot we DON'T launch the app-managed ComfyUI (so a large local
-  // LLM can take the whole GPU); it spins up on the first image instead. `engineDeferredRef` marks that
-  // we skipped the eager start; `managedBaseUrlRef` holds the URL the moment it starts (read race-free,
-  // before the React settings sync); `engineStartingRef` coalesces concurrent lazy starts.
+  // Low-VRAM deferred engine start: at boot we DON'T self-launch a local engine (so a large local LLM can
+  // take the whole GPU); it spins up on the first image instead. `engineDeferredRef` marks that we
+  // skipped the eager start; `managedBaseUrlRef` holds the app-managed ComfyUI's URL the moment IT starts
+  // (read race-free, before the React settings sync); `engineStartingRef` coalesces concurrent lazy starts.
   const engineDeferredRef = useRef(false);
   const managedBaseUrlRef = useRef<string | undefined>(undefined);
-  const engineStartingRef = useRef<Promise<true | string> | undefined>(undefined);
+  const engineStartingRef = useRef<
+    Promise<{ ok: true; baseUrl: string; backend: LocalBackendId } | { ok: false; reason: string }> | undefined
+  >(undefined);
   const [installedLoras, setInstalledLoras] = useState<string[]>([]);
   const [loraFamilyMap, setLoraFamilyMap] = useState<Record<string, string>>({});
   const [library, setLibrary] = useState<BookSummary[]>([]);
@@ -1495,6 +1502,7 @@ export function App() {
       const families = await loraFamilies();
       setEngineStatus("");
       setInstalledModels(models);
+      setInstalledModelsByBackend((m) => ({ ...m, comfyui: models }));
       setInstalledLoras(loras);
       setLoraFamilyMap(families);
       // The managed engine is ComfyUI — read its text-encoder + VAE files over the HTTP API (same as
@@ -1548,6 +1556,7 @@ export function App() {
         : new ComfyUIBackend({ baseUrl: url, ...(transport ? { transport } : {}) });
     const models = await engine.listModels(); // throws when the server is unreachable
     setInstalledModels(models);
+    setInstalledModelsByBackend((m) => ({ ...m, [backend]: models }));
     try {
       const comps = await engine.listComponents();
       setInstalledTextEncoders(comps.textEncoders);
@@ -1578,96 +1587,134 @@ export function App() {
     });
   }, []);
 
-  // Resolve which local engine actually renders, honouring the user's "Generate on" choice and
-  // falling back to the OTHER engine when the chosen one can't be reached (so a wrong server URL no
-  // longer dead-ends — it drops to the app-managed ComfyUI, and vice-versa).
+  /** The URL remembered for a backend — whichever is currently ACTIVE reads `localServerUrl` (kept in
+   * sync with its slot in `localServerUrlByBackend`); the other reads its own slot directly. */
+  const knownUrlFor = useCallback((s: ReaderSettings, backend: LocalBackendId): string => {
+    return ((s.localBackend ?? "comfyui") === backend ? s.localServerUrl : s.localServerUrlByBackend?.[backend]) || "";
+  }, []);
+
+  // Get SOME engine running for `backend`: try a remembered URL first (a server the user is already
+  // running costs us nothing to just probe), then self-provision (app-managed ComfyUI, or auto-launch
+  // AUTOMATIC1111 from its install folder) — falling back to the app-managed ComfyUI on total failure so
+  // images never fully dead-end. Both backends are the SAME kind of thing here: an HTTP engine that's
+  // either already reachable or ours to launch — "who started it" is resolved inside this one function,
+  // not a separate setting. Reused by boot resolution, the low-VRAM deferred-start unstick paths, and the
+  // interactive Connect button's fallback.
+  const startActiveLocalEngine = useCallback(
+    async (backend: LocalBackendId): Promise<{ ok: true; baseUrl: string; backend: LocalBackendId } | { ok: false; reason: string }> => {
+      if (backend === "a1111") {
+        const s = settingsRef.current;
+        const url = knownUrlFor(s, "a1111") || LOCAL_ENGINE_DEFAULT_URL.a1111;
+        const tryProbe = async (): Promise<boolean> => {
+          try {
+            await probeServer("a1111", url);
+            return true;
+          } catch {
+            return false;
+          }
+        };
+        if (await tryProbe()) return { ok: true, baseUrl: url, backend: "a1111" };
+        if (isDesktop && s.a1111Path) {
+          setEngineStatus("Starting AUTOMATIC1111…");
+          try {
+            await ensureA1111(s.a1111Path, s.showEngineConsole);
+          } catch {
+            /* couldn't auto-start — the retry probe below still tries a manually-started one */
+          }
+          setEngineStatus("");
+          if (await tryProbe()) return { ok: true, baseUrl: url, backend: "a1111" };
+        }
+        // Nothing reachable (and nothing more of ours to launch) — fall back to the app-managed ComfyUI.
+        const managed = await startManagedEngine();
+        return managed === true ? { ok: true, baseUrl: managedBaseUrlRef.current ?? "", backend: "comfyui" } : { ok: false, reason: managed };
+      }
+      const url = knownUrlFor(settingsRef.current, "comfyui");
+      if (url) {
+        try {
+          await probeServer("comfyui", url);
+          return { ok: true, baseUrl: url, backend: "comfyui" };
+        } catch {
+          /* fall through to self-provisioning the app-managed engine */
+        }
+      }
+      const managed = await startManagedEngine();
+      return managed === true ? { ok: true, baseUrl: managedBaseUrlRef.current ?? "", backend: "comfyui" } : { ok: false, reason: managed };
+    },
+    [knownUrlFor, probeServer, startManagedEngine],
+  );
+
+  // Resolve which local engine actually renders for the chosen backend, falling back to the OTHER engine
+  // when it can't be reached (so a bad URL or an unreachable server never dead-ends).
   const resolveLocalEngine = useCallback(async (): Promise<void> => {
     const s = settingsRef.current;
     if (s.imageProvider !== "local") return;
-    const source: LocalEngineSource = s.localSource ?? (isDesktop ? "managed" : "server");
     const backend = s.localBackend ?? "comfyui";
-    const url = (s.localServerUrl ?? "").trim();
     const backendName = backend === "a1111" ? "AUTOMATIC1111" : "ComfyUI";
+    const knownUrl = knownUrlFor(s, backend);
     setLocalError("");
-    // LOW-VRAM deferred start: don't launch the app-managed ComfyUI at boot — a large local LLM can then
-    // take the whole GPU. It starts lazily on the first standalone image (ensureRenderEngineReady) or
-    // eagerly when a book opens (its bible build needs it). Only the managed paths defer; a configured
-    // user server is still probed (it's their process, not ours to schedule). Skipped once a book is open.
-    const managedStart = source === "managed" || (source === "server" && !url);
-    if (managedStart && isDesktop && s.lowVram && !bookRef.current) {
+    if (!knownUrl && !isDesktop) return; // nothing configured off-desktop yet — wait for Connect, no error noise
+    // LOW-VRAM deferred start: don't self-launch an engine at boot — a large local LLM can then take the
+    // whole GPU. It starts lazily on the first standalone image (ensureRenderEngineReady) or eagerly when
+    // a book opens (its bible build needs it). A URL the user already configured is still probed now
+    // (it's their process, not ours to schedule) — only the SELF-LAUNCH case defers. Skipped once a book
+    // is open (its bible build needs the engine regardless).
+    if (
+      !knownUrl &&
+      isDesktop &&
+      !bookRef.current &&
+      shouldDeferLocalEngineAutostart({
+        lowVram: s.lowVram,
+        gpuVramMb: s.gpuVramMb,
+        imageModel: s.localModel,
+        chatBackend: s.localTextBackend,
+        serverTextModel: s.localServerTextModel,
+      })
+    ) {
       engineDeferredRef.current = true;
       return;
     }
-    if (source === "server") {
-      if (!url) {
-        // Nothing configured yet: on desktop start the managed engine; on web just wait for Connect
-        // (no error noise before the user has entered anything).
-        await startManagedEngine();
-        return;
-      }
-      try {
-        await probeServer(backend, url);
-        return;
-      } catch (err) {
-        const why = err instanceof Error ? err.message : String(err);
-        // Fallback: drop to the app-managed engine when the server can't be reached.
-        if ((await startManagedEngine()) === true) {
-          setLocalError(`Couldn't reach your ${backendName} server${url ? ` at ${url}` : ""} — using the app-managed engine instead.`);
-          return;
-        }
-        setLocalError(`Couldn't reach your ${backendName} server${url ? ` at ${url}` : ""}: ${why}. Check the URL + that it's running with CORS for ${location.origin}.`);
-      }
-    } else {
-      const managed = await startManagedEngine();
-      if (managed === true) return;
-      // No managed engine here (or it failed) — fall back to the user's server.
-      try {
-        await probeServer(backend, url);
-        setLocalError(
-          managed === "unavailable"
-            ? "The app-managed engine needs the Windows desktop app — using your server instead."
-            : `The app-managed engine couldn't start (${managed}) — using your server instead.`,
-        );
-      } catch {
-        setLocalError(
-          managed === "unavailable"
-            ? "The app-managed engine needs the Windows desktop app. Add your own ComfyUI/AUTOMATIC1111 server URL below."
-            : `Local engine setup failed: ${managed}`,
-        );
-      }
+    const res = await startActiveLocalEngine(backend);
+    if (res.ok) {
+      if (res.backend !== backend) setLocalError(`Couldn't reach ${backendName} — using the app-managed ComfyUI engine instead.`);
+      return;
     }
-  }, [probeServer, startManagedEngine]);
+    setLocalError(
+      knownUrl
+        ? `Couldn't reach your ${backendName} server at ${knownUrl}: ${res.reason}. Check the URL + that it's running with CORS for ${location.origin}.`
+        : `Local engine setup failed: ${res.reason}`,
+    );
+  }, [knownUrlFor, startActiveLocalEngine]);
 
-  // Lazily start the deferred (low-VRAM) managed engine before a STANDALONE render, then hand its URL to
-  // the worker immediately (applyEngineConfig) so the render — which rebuilds providers fresh from
-  // settings — uses it without waiting on the debounced settings sync. No-op when not deferred (already
-  // running, a user's own server, or low-VRAM off). Concurrent calls share ONE in-flight start.
+  // Lazily start the deferred (low-VRAM) engine before a STANDALONE render, then hand its URL to the
+  // worker immediately (applyEngineConfig) so the render — which rebuilds providers fresh from settings —
+  // uses it without waiting on the debounced settings sync. No-op when not deferred (already running, a
+  // user's own server, or low-VRAM off). Concurrent calls share ONE in-flight start.
   const ensureRenderEngineReady = useCallback(async (): Promise<void> => {
     if (!engineDeferredRef.current) return;
     setEngineStatus("Starting the local image engine…");
-    const start = engineStartingRef.current ?? startManagedEngine();
+    const start = engineStartingRef.current ?? startActiveLocalEngine(settingsRef.current.localBackend ?? "comfyui");
     engineStartingRef.current = start;
     try {
       const res = await start;
-      if (res === true && managedBaseUrlRef.current) applyEngineConfig(managedBaseUrlRef.current);
+      if (res.ok) applyEngineConfig(res.baseUrl, res.backend);
     } finally {
       engineStartingRef.current = undefined;
     }
-  }, [startManagedEngine, applyEngineConfig]);
+  }, [startActiveLocalEngine, applyEngineConfig]);
 
-  // LOW-VRAM: when a book opens while the managed engine was deferred, start it now — a bible build needs
-  // it, and the full start path rebuilds the book's persistent engine with the real URL (vs. the
-  // tune-only flush used for standalone chat/playground renders). Desktop + local-image only.
+  // LOW-VRAM: when a book opens while the engine was deferred, start it now — a bible build needs it, and
+  // the full start path rebuilds the book's persistent engine with the real URL (vs. the tune-only flush
+  // used for standalone chat/playground renders). Desktop + local-image only.
   useEffect(() => {
     if (!book || !engineDeferredRef.current) return;
     if (!isDesktop || settingsRef.current.imageProvider !== "local") return;
-    void startManagedEngine();
-  }, [book, startManagedEngine]);
+    void startActiveLocalEngine(settingsRef.current.localBackend ?? "comfyui");
+  }, [book, startActiveLocalEngine]);
 
-  // Re-resolve the active engine when the local path is chosen and whenever the "Generate on" source
-  // changes. NOT on URL keystrokes or a backend-dropdown flip — those are committed explicitly via
-  // Connect (so flipping to an unconfigured backend never silently auto-starts a different engine).
-  // `resolveLocalEngine` is stable, so this only fires on the listed inputs.
+  // Re-resolve the active engine when the local path is chosen and whenever the active BACKEND changes
+  // (incl. a picked-from-the-quick-menu checkpoint on the other backend, which needs its engine actually
+  // connected — not just `localModel` updated). NOT on URL keystrokes — those are committed explicitly
+  // via Connect. `resolveLocalEngine` is stable, so this only fires on the listed inputs.
   useEffect(() => {
     // A linked phone has NO local engine — it mirrors the desktop's settings (incl. imageProvider:
     // "local"), but the engine runs on the desktop. Probing here would hit the PHONE's own
@@ -1676,15 +1723,16 @@ export function App() {
     if (isRemoteClient) return;
     if (settings.imageProvider !== "local") return;
     void resolveLocalEngine();
-  }, [isRemoteClient, settings.imageProvider, settings.localSource, resolveLocalEngine]);
+  }, [isRemoteClient, settings.imageProvider, settings.localBackend, resolveLocalEngine]);
 
   // Desktop: list the app-managed engine's installed image models on startup with a CHEAP folder scan
   // (no need to boot ComfyUI), so the picker + the phone-link inventory are populated immediately —
   // even before the engine resolves, and even when the image provider is currently CLOUD (so the
-  // phone can still see + switch to a local model). Skipped for a user's OWN server (its models live
-  // on the server and are listed by probeServer instead, not in the managed folder).
+  // phone can still see + switch to a local model). Harmless to attempt even when the active backend is
+  // AUTOMATIC1111 or a custom ComfyUI server — `probeServer` overwrites this with the real inventory once
+  // the engine actually resolves; this is just a fast first paint.
   useEffect(() => {
-    if (!isDesktop || settings.localSource === "server") return;
+    if (!isDesktop) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -1699,7 +1747,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [settings.localSource]);
+  }, []);
 
   // Download a catalog model: every component file of a split-file model (diffusion
   // model + text encoder + VAE, each into its ComfyUI subfolder), or the single
@@ -1876,9 +1924,9 @@ export function App() {
     }
   }, []);
 
-  // Connect to a self-hosted engine (AUTOMATIC1111 / ComfyUI): probe it, switch to the "server"
-  // source, and remember the URL UNDER its backend so flipping the dropdown later restores it. On
-  // failure, fall back to the app-managed engine (desktop) instead of dead-ending.
+  // Connect to a backend (AUTOMATIC1111 / ComfyUI): probe it and make it the active image engine,
+  // remembering the URL UNDER its backend so reconnecting later restores it. On failure, fall back to
+  // the app-managed ComfyUI (desktop) instead of dead-ending.
   const onConnectLocalServer = useCallback(
     async (backend: LocalBackendId, url: string) => {
       // On a linked PHONE there's no engine of its own — the DESKTOP owns the network + install folder.
@@ -1887,7 +1935,6 @@ export function App() {
       if (isRemoteClient) {
         setSettings((s) => ({
           ...s,
-          localSource: "server",
           localBackend: backend,
           localServerUrl: url,
           localServerUrlByBackend: { ...(s.localServerUrlByBackend ?? {}), [backend]: url },
@@ -1899,10 +1946,9 @@ export function App() {
       setConnectingLocal(true);
       const name = backend === "a1111" ? "AUTOMATIC1111" : "ComfyUI";
       // Persist the choice + per-backend URL memory whether or not the probe succeeds, so the field
-      // keeps what the user typed and the dropdown restores it next time.
+      // keeps what the user typed and reconnecting restores it.
       const remember = (s: ReaderSettings): ReaderSettings => ({
         ...s,
-        localSource: "server",
         localBackend: backend,
         localServerUrl: url,
         localServerUrlByBackend: { ...(s.localServerUrlByBackend ?? {}), [backend]: url },
@@ -1936,7 +1982,8 @@ export function App() {
         const why = err instanceof Error ? err.message : String(err);
         setSettings(remember);
         // Fallback so a bad URL doesn't leave the user with no engine.
-        if ((await startManagedEngine()) === true) {
+        const managed = await startActiveLocalEngine("comfyui");
+        if (managed.ok) {
           setLocalError(`Couldn't reach ${name} at ${url} — using the app-managed engine instead. (${why})`);
         } else {
           setLocalError(
@@ -1947,7 +1994,7 @@ export function App() {
         setConnectingLocal(false);
       }
     },
-    [probeServer, startManagedEngine, isRemoteClient, sendAppSync],
+    [probeServer, startActiveLocalEngine, isRemoteClient, sendAppSync],
   );
   useEffect(() => {
     connectLocalServerRef.current = onConnectLocalServer;
@@ -7232,10 +7279,10 @@ export function App() {
   // provider local↔cloud), applied via onSettingsChange (which also relays to a linked phone).
   const modelMenu = useMemo(
     () => ({
-      groups: buildModelMenu(settings, { textModels, imageModels: installedModels }, { isDesktop }),
+      groups: buildModelMenu(settings, { textModels, imageModels: installedModels, imageModelsByBackend: installedModelsByBackend }, { isDesktop }),
       onSelect: (patch: Partial<ReaderSettings>) => onSettingsChange({ ...settings, ...patch }),
     }),
-    [settings, textModels, installedModels, onSettingsChange],
+    [settings, textModels, installedModels, installedModelsByBackend, onSettingsChange],
   );
 
   // The buddy chat is rendered in two places that share the same wiring: as the home-screen hero

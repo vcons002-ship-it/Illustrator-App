@@ -49,6 +49,7 @@ import {
   identitySettingsKey,
   tuningSettingsKey,
   type DisplayResult,
+  type LocalBackendId,
   type ProvidersDiagnostics,
   type ReaderSettings,
 } from "@visual-reader/ui";
@@ -258,10 +259,10 @@ export interface EngineWorkerApi {
     params: VideoRenderParams | undefined,
     opts?: { onProgress?: (fraction: number) => void; warmBatch?: boolean },
   ) => Promise<ChatToolRender>;
-  /** Push a just-resolved managed-engine URL to the worker RIGHT NOW (race-free, ahead of the debounced
-   * settings sync) so the next STANDALONE render — which rebuilds providers fresh from settings — uses
-   * it. Used by the low-VRAM deferred-engine-start path. */
-  applyEngineConfig: (baseUrl: string) => void;
+  /** Push a just-resolved engine URL (+ which backend it speaks) to the worker RIGHT NOW (race-free,
+   * ahead of the debounced settings sync) so the next STANDALONE render — which rebuilds providers fresh
+   * from settings — uses it. Used by the low-VRAM deferred-engine-start path (ComfyUI or AUTOMATIC1111). */
+  applyEngineConfig: (baseUrl: string, backend?: LocalBackendId) => void;
   /** Update the worker's list of workspace files the assistant wrote this session, so it injects a terse
    * reminder into the buddy prompt (the model stays aware of what it made + can read_file before editing). */
   setFileLedger: (files: CreatedFileRef[]) => void;
@@ -1306,9 +1307,9 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   // ahead of the debounced identity sync, so the next standalone render uses it without a race. The URL
   // is passed EXPLICITLY (settingsRef hasn't re-rendered with it yet); other fields ride the stale-but-
   // current snapshot and the full identity sync follows shortly after.
-  const applyEngineConfig = useCallback((baseUrl: string) => {
+  const applyEngineConfig = useCallback((baseUrl: string, backend: LocalBackendId = "comfyui") => {
     if (remoteRef.current) return;
-    send({ type: "tune", settings: { ...settingsRef.current, engineBaseUrl: baseUrl, engineBackend: "comfyui" } });
+    send({ type: "tune", settings: { ...settingsRef.current, engineBaseUrl: baseUrl, engineBackend: backend } });
   }, []);
 
   const setFileLedger = useCallback((files: CreatedFileRef[]) => {

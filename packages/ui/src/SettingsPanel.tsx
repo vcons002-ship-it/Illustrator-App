@@ -46,12 +46,11 @@ import {
 
 export type TextProviderId = "claude" | "gemini" | "openai" | "local";
 export type ImageProviderId = "flux" | "gemini" | "openai" | "local";
-/** Which local engine HTTP API to speak when the image provider is "local". */
+/** Which local engine HTTP API to speak when the image provider is "local". Both ComfyUI and
+ * AUTOMATIC1111 can be either the app's own auto-launched process or a server the user runs
+ * themselves — that distinction is an implementation detail (see `startActiveLocalEngine`), not a
+ * separate setting. */
 export type LocalBackendId = "comfyui" | "a1111";
-
-/** Which local engine actually renders: the app-managed ComfyUI the desktop launches itself, or a
- * Stable Diffusion server (ComfyUI/A1111) the user runs and points the app at. */
-export type LocalEngineSource = "managed" | "server";
 
 /** Default localhost URL for each local engine, used as the field placeholder. */
 export const LOCAL_ENGINE_DEFAULT_URL: Record<LocalBackendId, string> = {
@@ -220,7 +219,9 @@ export interface ReaderSettings {
    * high scale it. "auto"/unset leaves the model's default. Models/servers that don't support it
    * ignore the field. */
   localThinkingEffort?: "auto" | "off" | "low" | "medium" | "high";
-  /** Which local engine API to talk to (the "your own server" path). */
+  /** Which local engine API images render on: ComfyUI or AUTOMATIC1111. Whether that engine is the
+   * app's own auto-launched process or a server you run yourself is decided automatically (see
+   * `startActiveLocalEngine` in App.tsx), not a separate setting. */
   localBackend?: LocalBackendId;
   /** Base URL of a local engine you run yourself (persisted). Mirrors the last-used URL for the
    * currently-selected `localBackend`; the full per-backend memory lives in `localServerUrlByBackend`. */
@@ -235,10 +236,6 @@ export interface ReaderSettings {
   /** Desktop only: spawn the ComfyUI/A1111 engines with a VISIBLE console window so you can watch
    * generation logs outside the app. Default off (headless). Takes effect at the next engine start. */
   showEngineConsole?: boolean;
-  /** Which local engine renders: the app-managed ComfyUI ("managed") or your own server ("server").
-   * Defaults to "managed" on the desktop, "server" elsewhere. The unselected one is used as an
-   * automatic fallback when the selected one can't be reached. */
-  localSource?: LocalEngineSource;
   /** Transient: the API the CURRENTLY-ACTIVE engine speaks (set by engine resolution alongside
    * engineBaseUrl; "comfyui" for the managed engine). Not persisted. The provider reads this so a
    * fallback to the managed ComfyUI talks ComfyUI even when localBackend is "a1111". */
@@ -2465,7 +2462,6 @@ export function SettingsPanel({
               serverUrlByBackend={value.localServerUrlByBackend ?? {}}
               a1111Path={value.a1111Path ?? ""}
               showEngineConsole={value.showEngineConsole ?? false}
-              source={value.localSource ?? (isDesktop || remote ? "managed" : "server")}
               selected={value.localModel}
               connecting={connectingLocal}
               downloadProgress={downloadProgress}
@@ -3081,11 +3077,10 @@ function StyleLoraRow({
 }
 
 /**
- * Local-engine settings. Two ways to generate on your own hardware, chosen with the "Generate on"
- * selector (the unselected one is an automatic fallback when the selected one can't be reached):
- *  - Desktop: the app-managed engine, with a curated one-click model download.
- *  - Anywhere (incl. the browser): connect to a Stable Diffusion server you run
- *    yourself — AUTOMATIC1111 or ComfyUI — and pick from its installed models.
+ * Local-engine settings. Two backends (ComfyUI / AUTOMATIC1111), each connectable via its own row
+ * below — whether that engine turns out to be the app's own auto-launched process or a server you run
+ * yourself is resolved automatically (falling back to the app-managed ComfyUI when neither is reachable
+ * yet), so there's nothing to choose here beyond which backend and, for local checkpoints, which model.
  */
 function LocalEngine({
   isDesktop,
@@ -3096,7 +3091,6 @@ function LocalEngine({
   serverUrlByBackend,
   a1111Path,
   showEngineConsole,
-  source,
   selected,
   connecting,
   downloadProgress,
@@ -3119,7 +3113,6 @@ function LocalEngine({
   a1111Path: string;
   /** Spawn engines with a visible console window. */
   showEngineConsole: boolean;
-  source: LocalEngineSource;
   selected: string | undefined;
   connecting: boolean;
   downloadProgress: Record<string, number>;
@@ -3134,21 +3127,6 @@ function LocalEngine({
   const hasManaged = isDesktop || remote;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {hasManaged && (
-        <div style={rowStyle}>
-          <span>Generate on</span>
-          <select value={source} onChange={(e) => onSet({ localSource: e.target.value as LocalEngineSource })}>
-            <option value="managed">App-managed engine (ComfyUI)</option>
-            <option value="server">My own server</option>
-          </select>
-          <span style={{ opacity: 0.6, fontSize: 12 }}>
-            {source === "managed"
-              ? "Uses the engine the app runs for you. If it can't start, your server below is used as a fallback."
-              : "Uses your server below. If it can't be reached, the app-managed engine is used as a fallback."}
-          </span>
-        </div>
-      )}
-
       {hasManaged && (
         // A linked phone gets the app-managed model PICKER (its pick relays to the desktop), but
         // not the DOWNLOAD controls — downloading runs on the desktop where the engine lives.

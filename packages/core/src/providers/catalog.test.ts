@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { chatImageVramFit, comfyUrlForVideo, defaultLoadedWindow, resolveLoadedContextTokens, staleA1111UrlToFree, staleComfyUrlToFree } from "./catalog.js";
+import {
+  chatImageVramFit,
+  comfyUrlForVideo,
+  defaultLoadedWindow,
+  resolveLoadedContextTokens,
+  shouldDeferLocalEngineAutostart,
+  staleA1111UrlToFree,
+  staleComfyUrlToFree,
+} from "./catalog.js";
 
 describe("chatImageVramFit (keep-both-resident decision)", () => {
   it("returns 'unknown' when VRAM or a model size is unknown (caller keeps the model loaded)", () => {
@@ -23,6 +31,30 @@ describe("chatImageVramFit (keep-both-resident decision)", () => {
     // (8 + 4 + 8) * 1024 = 20480 > 16000 → nofit with a big headroom, fit with none
     expect(chatImageVramFit({ gpuVramMb: 16_000, imageGb: 8, chatGb: 4, headroomGb: 8 })).toBe("nofit");
     expect(chatImageVramFit({ gpuVramMb: 16_000, imageGb: 8, chatGb: 4, headroomGb: 0 })).toBe("fit");
+  });
+});
+
+describe("shouldDeferLocalEngineAutostart (boot-time VRAM gate for local image engines)", () => {
+  const SDXL = "sd_xl_base_1.0.safetensors"; // catalog sizeGB 6.6
+
+  it("always defers when the manual low-VRAM toggle is on, regardless of fit", () => {
+    expect(shouldDeferLocalEngineAutostart({ lowVram: true, gpuVramMb: 999_999, imageModel: SDXL, chatBackend: "bundled" })).toBe(true);
+  });
+
+  it("defers only when the bundled chat LLM + image model provably don't fit", () => {
+    // (6.6 + 4 + 2) * 1024 ≈ 12902 MB
+    expect(shouldDeferLocalEngineAutostart({ gpuVramMb: 24_000, imageModel: SDXL, chatBackend: "bundled" })).toBe(false);
+    expect(shouldDeferLocalEngineAutostart({ gpuVramMb: 8_000, imageModel: SDXL, chatBackend: "bundled" })).toBe(true);
+  });
+
+  it("estimates a local-server (Ollama) chat model's cost the same way canFreeChatLlm does", () => {
+    expect(shouldDeferLocalEngineAutostart({ gpuVramMb: 24_000, imageModel: SDXL, chatBackend: "server", serverTextModel: "gemma2:2b" })).toBe(false);
+    expect(shouldDeferLocalEngineAutostart({ gpuVramMb: 16_000, imageModel: SDXL, chatBackend: "server", serverTextModel: "llama3.1:70b-q4_K_M" })).toBe(true);
+  });
+
+  it("never defers when there's no local chat LLM competing for VRAM (webgpu, cloud, or unset)", () => {
+    expect(shouldDeferLocalEngineAutostart({ gpuVramMb: 1_000, imageModel: SDXL, chatBackend: "webgpu" })).toBe(false);
+    expect(shouldDeferLocalEngineAutostart({ gpuVramMb: 1_000, imageModel: SDXL })).toBe(false);
   });
 });
 

@@ -20,6 +20,7 @@ import {
   imageModelVramCostGb,
   serverModelVramCostGb,
   chatImageVramFit,
+  BUNDLED_LLM_VRAM_GB,
   staleComfyUrlToFree,
   comfyUrlForVideo,
   staleA1111UrlToFree,
@@ -785,10 +786,6 @@ function canFreeChatLlm(): boolean {
     return false;
   }
 }
-
-/** Approx VRAM the bundled chat model (Llama 3.2 3B, launched fp16-ish with -c 8192) holds resident,
- * used only to decide whether it + the image model both fit so we can SKIP freeing it. */
-const BUNDLED_LLM_VRAM_GB = 4;
 
 /** Before a STANDALONE image render (no book open): stop the bundled chat LLM so ComfyUI gets the
  * whole GPU AND its model stops squatting system RAM. Once per burst; relaunched only on demand. */

@@ -1,5 +1,5 @@
 import { BUNDLED_LLM, IMAGE_PROVIDERS, LOCAL_TEXT_MODELS, TEXT_PROVIDERS, VIDEO_MODELS } from "@visual-reader/core";
-import type { InstalledModel, ReaderSettings } from "./SettingsPanel.js";
+import { LOCAL_BACKEND_LABEL, type InstalledModel, type LocalBackendId, type ReaderSettings } from "./SettingsPanel.js";
 
 /**
  * The quick model-switcher menu that pops up from the chat input. This PURE builder turns the current
@@ -25,11 +25,22 @@ export interface ModelMenuGroup {
   key: "llm" | "image" | "video";
   label: string;
   options: ModelMenuOption[];
+  /** Image group only, when the caller supplies `imageModelsByBackend`: pick a local backend first, then
+   * `localModelsByBackend[id]` lists ONLY that backend's installed checkpoints — instead of the flat,
+   * backend-mixed list `options` would otherwise carry. */
+  localBackends?: { id: LocalBackendId; label: string; active: boolean }[];
+  localModelsByBackend?: Partial<Record<LocalBackendId, ModelMenuOption[]>>;
 }
 
 export function buildModelMenu(
   s: ReaderSettings,
-  lists: { textModels: InstalledModel[]; imageModels: InstalledModel[] },
+  lists: {
+    textModels: InstalledModel[];
+    imageModels: InstalledModel[];
+    /** Per-backend installed checkpoints (ComfyUI / AUTOMATIC1111). When provided, the image group
+     * becomes provider-first (see `ModelMenuGroup.localBackends`) instead of one flat mixed list. */
+    imageModelsByBackend?: Partial<Record<LocalBackendId, InstalledModel[]>>;
+  },
   opts: { isDesktop: boolean },
 ): ModelMenuGroup[] {
   const keys = s.keys ?? {};
@@ -92,15 +103,35 @@ export function buildModelMenu(
       patch: { imageProvider: p.id as ReaderSettings["imageProvider"] },
     });
   }
-  // Installed local checkpoints on the connected image engine.
-  for (const m of lists.imageModels) {
-    image.push({
-      id: `image:local:${m.id}`,
-      label: m.label,
-      sublabel: "local checkpoint",
-      active: s.imageProvider === "local" && s.localModel === m.id,
-      patch: { imageProvider: "local", localModel: m.id },
-    });
+  const activeBackend = s.localBackend ?? "comfyui";
+  let localBackends: ModelMenuGroup["localBackends"];
+  let localModelsByBackend: ModelMenuGroup["localModelsByBackend"];
+  if (lists.imageModelsByBackend) {
+    // Provider-first: list ComfyUI/AUTOMATIC1111 as backends to choose between, each with ONLY its own
+    // installed checkpoints beneath it (never mixed with the other backend's models).
+    const backendIds = Object.keys(lists.imageModelsByBackend) as LocalBackendId[];
+    localBackends = backendIds.map((id) => ({ id, label: LOCAL_BACKEND_LABEL[id], active: id === activeBackend }));
+    localModelsByBackend = {};
+    for (const id of backendIds) {
+      localModelsByBackend[id] = (lists.imageModelsByBackend[id] ?? []).map((m) => ({
+        id: `image:local:${id}:${m.id}`,
+        label: m.label,
+        sublabel: "local checkpoint",
+        active: s.imageProvider === "local" && activeBackend === id && s.localModel === m.id,
+        patch: { imageProvider: "local", localBackend: id, localModel: m.id },
+      }));
+    }
+  } else {
+    // No by-backend inventory supplied — flat fallback (backend-agnostic, matches legacy behavior).
+    for (const m of lists.imageModels) {
+      image.push({
+        id: `image:local:${m.id}`,
+        label: m.label,
+        sublabel: "local checkpoint",
+        active: s.imageProvider === "local" && s.localModel === m.id,
+        patch: { imageProvider: "local", localModel: m.id },
+      });
+    }
   }
 
   // ---------- Video (local ComfyUI only) ----------
@@ -114,7 +145,15 @@ export function buildModelMenu(
 
   const groups: ModelMenuGroup[] = [];
   if (llm.length) groups.push({ key: "llm", label: "Chat model", options: llm });
-  if (image.length) groups.push({ key: "image", label: "Image model", options: image });
+  if (image.length || localBackends?.length) {
+    groups.push({
+      key: "image",
+      label: "Image model",
+      options: image,
+      ...(localBackends ? { localBackends } : {}),
+      ...(localModelsByBackend ? { localModelsByBackend } : {}),
+    });
+  }
   if (video.length) groups.push({ key: "video", label: "Video model", options: video });
   return groups;
 }
