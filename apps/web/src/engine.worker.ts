@@ -21,6 +21,8 @@ import {
   serverModelVramCostGb,
   chatImageVramFit,
   staleComfyUrlToFree,
+  comfyUrlForVideo,
+  staleA1111UrlToFree,
   type VideoModelFiles,
   type VideoRenderParams,
   resolveLoadedContextTokens,
@@ -871,6 +873,31 @@ async function freeStaleComfyForA1111(): Promise<void> {
     await new ComfyUIBackend({ baseUrl: url }).freeMemory();
   } catch {
     /* best-effort — that ComfyUI may be gone/unreachable, which is fine */
+  }
+}
+
+/** Mirror of staleComfyFreed for the reverse direction (a separate A1111 left resident before a ComfyUI
+ * video render). Re-armed whenever there's nothing to free, so a later switch frees it again. */
+let staleA1111Freed = false;
+/**
+ * The reverse hand-off: when images run on a SEPARATE AUTOMATIC1111 and we're about to render VIDEO on
+ * ComfyUI, A1111's checkpoint squats the VRAM the large video experts need. Unload it (POST
+ * /sdapi/v1/unload-checkpoint) once. Best-effort; A1111 reloads its checkpoint lazily on the next image
+ * render. No-op when A1111 is itself the active op, none is remembered, or it's the same server as ComfyUI.
+ */
+async function freeStaleA1111ForComfy(): Promise<void> {
+  if (!settings) return;
+  const url = staleA1111UrlToFree(settings);
+  if (!url) {
+    staleA1111Freed = false; // nothing to free → re-arm for the next switch
+    return;
+  }
+  if (staleA1111Freed) return;
+  staleA1111Freed = true;
+  try {
+    await new Automatic1111Backend({ baseUrl: url }).freeMemory();
+  } catch {
+    /* best-effort — that A1111 may be gone/unreachable, which is fine */
   }
 }
 
@@ -4047,28 +4074,32 @@ async function handleChatVideo(
     if (cs.imageProvider !== "local" && settings.imageProvider !== "local") {
       throw new Error("Image-to-video needs the local engine — set the image provider to “Run on my computer”.");
     }
-    if ((settings.engineBackend ?? settings.localBackend) === "a1111") {
-      throw new Error("Image-to-video runs on ComfyUI, not AUTOMATIC1111 — switch the local engine to ComfyUI.");
+    // Video is ComfyUI-only, but image generation may be running on AUTOMATIC1111 at the same time — so
+    // resolve a ComfyUI URL independent of the active image backend (the per-backend URL memory survives an
+    // image-backend switch). This lets "images on A1111, video on ComfyUI" work with both engines alive.
+    const comfyUrl = comfyUrlForVideo(settings);
+    if (!comfyUrl) {
+      throw new Error("Video needs ComfyUI running — connect or auto-start ComfyUI in Settings (it runs alongside AUTOMATIC1111).");
     }
     const cfTool = corsFetch();
-    const provider = buildProviders(cs, cfTool ? { corsFetch: cfTool } : {}).image;
-    if (!provider.generateVideo) throw new Error("The local engine doesn't support image-to-video.");
-    // Hand the GPU to the (large) video model: free the chat LLM + any stale engine first, same as a render.
+    const backend = new ComfyUIBackend({ baseUrl: comfyUrl, ...(cfTool ? { transport: new DirectTransport(cfTool) } : {}) });
+    // Hand the GPU to the (large) video model: free the chat LLM first, same as a render.
     cancelChatWarm();
     await freeChatLlmForRender();
-    await freeStaleComfyForA1111();
     imageModelFreed = false;
-    // Video models are far larger than any still-resident image checkpoint (Wan 2.2 = two ~14GB experts +
-    // umt5; LTX-2 = 22B + Gemma) and the per-expert LoRAs add patch/dequant overhead on top — so an image
-    // model squatting VRAM is enough to tip the load past the card and spill into shared system RAM (slow).
-    // Unlike the render→chat hand-off this is unconditional: a fresh, lazy reload of the image model on the
-    // next generate() is cheap next to a multi-minute video render crawling out of system RAM.
+    // When images run on a SEPARATE A1111, its checkpoint squats VRAM the video experts need — unload it.
+    await freeStaleA1111ForComfy();
+    // Also clear ComfyUI's OWN resident image/video state before the big load. Video models are far larger
+    // than any still-resident image checkpoint (Wan 2.2 = two ~14GB experts + umt5; LTX-2 = 22B + Gemma) and
+    // the per-expert LoRAs add patch/dequant overhead on top — so anything squatting VRAM is enough to tip
+    // the load past the card and spill into shared system RAM (slow). A fresh lazy reload is cheap next to a
+    // multi-minute video render crawling out of system RAM.
     try {
-      await provider.freeMemory?.();
+      await backend.freeMemory();
     } catch {
       /* best-effort — if the engine can't free now, the render just starts with less headroom */
     }
-    const out = await provider.generateVideo(
+    const out = await backend.generateVideo(
       {
         prompt: call.prompt,
         // Image present → image-to-video; absent → text-to-video.

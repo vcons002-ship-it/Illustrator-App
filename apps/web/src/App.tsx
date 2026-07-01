@@ -273,6 +273,7 @@ import {
   desktopFetch,
   downloadModel,
   ensureEngine,
+  ensureA1111,
   ensureLocalLlm,
   gpuVramMb,
   gpuVramUsage,
@@ -1479,7 +1480,7 @@ export function App() {
       const modelCostGb = imageModelVramCostGb(s.localModel ?? "");
       const needsLowVram =
         vram === undefined ? !!s.lowVram : modelCostGb > 0 && (modelCostGb + LOWVRAM_HEADROOM_GB) * 1024 > vram;
-      const baseUrl = await ensureEngine(needsLowVram);
+      const baseUrl = await ensureEngine(needsLowVram, s.showEngineConsole);
       const models = await listLocalModels();
       const loras = await listLoras();
       // Detect each LoRA's base architecture (reads only the safetensors header) so the UI can flag
@@ -1508,7 +1509,15 @@ export function App() {
       // can hand it straight to the worker, and clear the deferred flag now that the engine is up.
       managedBaseUrlRef.current = baseUrl;
       engineDeferredRef.current = false;
-      setSettings((cur) => ({ ...cur, engineBaseUrl: baseUrl, engineBackend: "comfyui", ...(vram ? { gpuVramMb: vram } : {}) }));
+      setSettings((cur) => ({
+        ...cur,
+        engineBaseUrl: baseUrl,
+        engineBackend: "comfyui",
+        // Remember the managed ComfyUI URL per-backend so VIDEO routing (comfyUrlForVideo) still finds it
+        // even when the user's IMAGE backend is AUTOMATIC1111 — the two engines run side by side.
+        localServerUrlByBackend: { ...cur.localServerUrlByBackend, comfyui: baseUrl },
+        ...(vram ? { gpuVramMb: vram } : {}),
+      }));
       return true;
     } catch (err) {
       setEngineStatus("");
@@ -1546,7 +1555,14 @@ export function App() {
       /* leave components empty (A1111 has none; a ComfyUI miss falls back to manual entry) */
     }
     setSettings((s) => {
-      const base: ReaderSettings = { ...s, engineBaseUrl: url, engineBackend: backend };
+      const base: ReaderSettings = {
+        ...s,
+        engineBaseUrl: url,
+        engineBackend: backend,
+        // Persist this backend's URL so the OTHER engine's URL survives — video always routes to the
+        // remembered ComfyUI URL even while images run on AUTOMATIC1111 (both alive at once).
+        localServerUrlByBackend: { ...s.localServerUrlByBackend, [backend]: url },
+      };
       // Keep the current model if the server still has it; otherwise pick its first + restore that
       // model's remembered encoder/VAE combo.
       if (s.localModel && models.some((m) => m.id === s.localModel)) return base;
@@ -1870,9 +1886,31 @@ export function App() {
         localServerUrl: url,
         localServerUrlByBackend: { ...(s.localServerUrlByBackend ?? {}), [backend]: url },
       });
+      // Auto-start AUTOMATIC1111 from its install folder (desktop) so the user doesn't have to launch it
+      // by hand. Best-effort: if there's no folder set / it isn't an A1111 install / non-desktop, fall
+      // through to a plain connect (which surfaces its own "is it running?" hint on failure).
+      const cur = settingsRef.current;
+      if (backend === "a1111" && isDesktop && cur.a1111Path) {
+        try {
+          await ensureA1111(cur.a1111Path, cur.showEngineConsole);
+        } catch {
+          /* couldn't auto-start — probeServer below still tries to connect to a manually-started one */
+        }
+      }
       try {
         await probeServer(backend, url); // sets engineBaseUrl/engineBackend/models on success
         setSettings(remember);
+        // Both engines alive: when images run on A1111, also make sure the managed ComfyUI (for VIDEO) is up
+        // and its URL is current — but ONLY if it was set up before (a remembered URL), so we never trigger a
+        // surprise multi-GB ComfyUI download just from connecting A1111. Doesn't touch the active image engine.
+        if (backend === "a1111" && isDesktop && cur.localServerUrlByBackend?.comfyui) {
+          try {
+            const comfyUrl = await ensureEngine(false, cur.showEngineConsole);
+            setSettings((s) => ({ ...s, localServerUrlByBackend: { ...s.localServerUrlByBackend, comfyui: comfyUrl } }));
+          } catch {
+            /* ComfyUI didn't come up — a later video render surfaces a clear "start ComfyUI" message */
+          }
+        }
       } catch (err) {
         const why = err instanceof Error ? err.message : String(err);
         setSettings(remember);
@@ -5212,7 +5250,8 @@ export function App() {
       // Settings overrides win over the catalog default (a swapped component / a fixed broken download),
       // and the Settings render params drive the graph's size/length/sampler choices.
       const models = resolveVideoModelFiles(call.model ?? settings.videoModel, settings.videoFiles);
-      out = await chatVideo(call, src, models, settings.videoParams, {
+      // Render params are stored per model family — pick the selected model's set (frames/fps/etc).
+      out = await chatVideo(call, src, models, settings.videoParams?.[models.kind], {
         onProgress: (f) => setBuddyActivity(`${textToVideo ? "Generating the video" : "Animating the image"}… ${Math.round(f * 100)}%`),
       });
     } catch (err) {
@@ -9094,6 +9133,12 @@ function migrate(raw: Record<string, unknown>): ReaderSettings {
       migrated.pagesPerImage = raw.illustrationScope === "chapter" ? "chapter" : 1;
     }
     delete (migrated as Record<string, unknown>).illustrationScope;
+    // Legacy flat `videoParams` (one shared set) → per-family: it used to apply to whatever model was
+    // selected, so seed BOTH families with it. New shape is keyed by `kind` (wan-i2v / ltx2-i2v).
+    const vp = raw.videoParams as Record<string, unknown> | undefined;
+    if (vp && !("wan-i2v" in vp) && !("ltx2-i2v" in vp) && Object.keys(vp).length > 0) {
+      migrated.videoParams = { "wan-i2v": { ...vp }, "ltx2-i2v": { ...vp } } as NonNullable<ReaderSettings["videoParams"]>;
+    }
     return migrated;
   }
   const llmKey = typeof raw.llmKey === "string" ? raw.llmKey : "";

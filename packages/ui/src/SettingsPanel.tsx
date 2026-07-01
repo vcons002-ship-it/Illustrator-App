@@ -75,6 +75,21 @@ const SAMPLER_OPTIONS = [
 ] as const;
 const SCHEDULER_OPTIONS = ["simple", "normal", "karras", "sgm_uniform", "beta"] as const;
 
+/** One video model family's render-param overrides (size / length / sampler). Structurally a
+ * VideoRenderParams; stored per `kind` under ReaderSettings.videoParams. `shift` is Wan-only; `highRes`
+ * and `audio` are LTX-2-only — the UI shows only the relevant fields for the selected model. */
+export interface VideoRenderSettings {
+  frames?: number;
+  fps?: number;
+  width?: number;
+  height?: number;
+  steps?: number;
+  cfg?: number;
+  shift?: number;
+  highRes?: boolean;
+  audio?: boolean;
+}
+
 export interface ReaderSettings {
   textProvider: TextProviderId;
   imageProvider: ImageProviderId;
@@ -213,6 +228,13 @@ export interface ReaderSettings {
   /** Last-used server URL for EACH backend, so switching the ComfyUI/A1111 dropdown restores the URL
    * you last entered for it (you don't retype it). Keyed by backend id. */
   localServerUrlByBackend?: Partial<Record<LocalBackendId, string>>;
+  /** Desktop only: the AUTOMATIC1111 install folder (the one containing webui-user.bat). When set and
+   * A1111 is the chosen image backend, the app starts A1111 with --api on :7860 if it isn't already up —
+   * so it can run alongside the managed ComfyUI (images on A1111, video on ComfyUI). Empty = connect-only. */
+  a1111Path?: string;
+  /** Desktop only: spawn the ComfyUI/A1111 engines with a VISIBLE console window so you can watch
+   * generation logs outside the app. Default off (headless). Takes effect at the next engine start. */
+  showEngineConsole?: boolean;
   /** Which local engine renders: the app-managed ComfyUI ("managed") or your own server ("server").
    * Defaults to "managed" on the desktop, "server" elsewhere. The unselected one is used as an
    * automatic fallback when the selected one can't be reached. */
@@ -270,8 +292,10 @@ export interface ReaderSettings {
    * encoder / VAE / LoRA) or point at a renamed file to fix a broken download. Blank → the catalog default.
    * A superset of every family's filenames; only the selected model's fields are shown/used. */
   videoFiles?: { highNoise?: string; lowNoise?: string; textEncoder?: string; vae?: string; checkpoint?: string; distilledLora?: string; upscaler?: string; loraHigh?: string; loraLow?: string; ltxLoras?: VideoLora[] };
-  /** Image-to-video render-param overrides (the graph's size / length / sampler choices). */
-  videoParams?: { frames?: number; fps?: number; width?: number; height?: number; steps?: number; cfg?: number; shift?: number; highRes?: boolean; audio?: boolean };
+  /** Image-to-video render-param overrides (the graph's size / length / sampler choices), kept PER MODEL
+   * family — Wan and LTX-2 want different lengths/fps (Wan ~16fps/4n+1, LTX ~24fps/8n+1), so each `kind`
+   * stores its own set and switching models doesn't clobber the other's frames/fps. Blank → catalog defaults. */
+  videoParams?: { "wan-i2v"?: VideoRenderSettings; "ltx2-i2v"?: VideoRenderSettings };
   /** Parallel coding agents: let the manager model auto-resolve a merge conflict between agent
    * branches (validated, then committed — or aborted if it can't). Default on. */
   autoResolveConflicts?: boolean;
@@ -797,7 +821,9 @@ export function SettingsPanel({
                   const defFiles: Record<string, string | undefined> = {};
                   for (const [k, v] of Object.entries(entry.files)) if (typeof v === "string") defFiles[k] = v;
                   const vf = value.videoFiles ?? {};
-                  const vp = value.videoParams ?? {};
+                  // Params are stored per model family, so the selected model's frames/fps/etc are independent
+                  // of the other family's (switching Wan↔LTX no longer clobbers length/fps).
+                  const vp = value.videoParams?.[kind] ?? {};
                   // String file-override keys only (the LoRA stack `ltxLoras` has its own editor).
                   type StringFileKey = Exclude<keyof NonNullable<typeof value.videoFiles>, "ltxLoras">;
                   const setFile = (k: StringFileKey, v: string) => {
@@ -807,13 +833,16 @@ export function SettingsPanel({
                     else delete next[k];
                     set({ videoFiles: next });
                   };
-                  const setParam = (k: Exclude<keyof NonNullable<typeof value.videoParams>, "highRes">, v: string) =>
-                    set({ videoParams: { ...vp, [k]: v === "" ? undefined : Number(v) } });
+                  // Write back into THIS family's slot only, leaving the other family's params untouched.
+                  const setVp = (patch: Partial<VideoRenderSettings>) =>
+                    set({ videoParams: { ...value.videoParams, [kind]: { ...vp, ...patch } } });
+                  const setParam = (k: Exclude<keyof VideoRenderSettings, "highRes" | "audio">, v: string) =>
+                    setVp({ [k]: v === "" ? undefined : Number(v) });
                   // High-res (2× upscale) + audio toggles — LTX only; both default on.
                   const highRes = vp.highRes ?? true;
-                  const setHighRes = (on: boolean) => set({ videoParams: { ...vp, highRes: on } });
+                  const setHighRes = (on: boolean) => setVp({ highRes: on });
                   const audioOn = vp.audio ?? true;
-                  const setAudio = (on: boolean) => set({ videoParams: { ...vp, audio: on } });
+                  const setAudio = (on: boolean) => setVp({ audio: on });
                   // LTX LoRA stack editor state.
                   const ltxLoras = vf.ltxLoras ?? [];
                   const setLtxLoras = (nextLoras: VideoLora[]) => {
@@ -2434,6 +2463,8 @@ export function SettingsPanel({
               backend={value.localBackend ?? "a1111"}
               serverUrl={value.localServerUrl ?? ""}
               serverUrlByBackend={value.localServerUrlByBackend ?? {}}
+              a1111Path={value.a1111Path ?? ""}
+              showEngineConsole={value.showEngineConsole ?? false}
               source={value.localSource ?? (isDesktop || remote ? "managed" : "server")}
               selected={value.localModel}
               connecting={connectingLocal}
@@ -3063,6 +3094,8 @@ function LocalEngine({
   backend,
   serverUrl,
   serverUrlByBackend,
+  a1111Path,
+  showEngineConsole,
   source,
   selected,
   connecting,
@@ -3082,6 +3115,10 @@ function LocalEngine({
   serverUrl: string;
   /** Last-used URL per backend, so flipping the ComfyUI/A1111 dropdown restores the saved URL. */
   serverUrlByBackend: Partial<Record<LocalBackendId, string>>;
+  /** AUTOMATIC1111 install folder (desktop auto-start). */
+  a1111Path: string;
+  /** Spawn engines with a visible console window. */
+  showEngineConsole: boolean;
   source: LocalEngineSource;
   selected: string | undefined;
   connecting: boolean;
@@ -3174,7 +3211,44 @@ function LocalEngine({
             : " e.g. python main.py --enable-cors-header " + location.origin}
           .
         </span>
+        {isDesktop && backend === "a1111" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
+            <span style={{ fontSize: 12, opacity: 0.8 }}>AUTOMATIC1111 install folder (auto-start)</span>
+            <input
+              style={{ flex: 1 }}
+              value={a1111Path}
+              placeholder="e.g. C:\\stable-diffusion-webui"
+              onChange={(e) => onSet({ a1111Path: e.target.value })}
+            />
+            <span style={{ opacity: 0.6, fontSize: 11 }}>
+              The folder with webui-user.bat — the app starts AUTOMATIC1111 with --api on :7860 when you use
+              it (running alongside ComfyUI, which renders video). Leave blank to start it yourself.
+            </span>
+          </div>
+        )}
       </div>
+
+      {isDesktop && (
+        <label style={{ display: "flex", gap: 6, alignItems: "flex-start", fontSize: 12 }}>
+          <input
+            type="checkbox"
+            checked={showEngineConsole}
+            onChange={(e) => onSet({ showEngineConsole: e.target.checked })}
+          />
+          <span>
+            Show engine console windows
+            <span style={{ opacity: 0.6 }}>
+              {" "}
+              — open the ComfyUI/AUTOMATIC1111 console so you can watch generation logs outside the app.
+              Takes effect at the next engine start.
+            </span>
+          </span>
+        </label>
+      )}
+
+      <span style={{ opacity: 0.55, fontSize: 11 }}>
+        Video always renders on ComfyUI; images use the selected engine — both can run at once.
+      </span>
     </div>
   );
 }
