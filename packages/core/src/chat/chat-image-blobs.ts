@@ -20,6 +20,14 @@ export function externalizedImageId(m: StoredChatMessage): string | undefined {
   return m.attachments?.find((a) => a.kind === "image" && a.id && !a.bytes)?.id;
 }
 
+/** The externalized blob id for a message's inline VIDEO clip whose bytes were moved out (a byte-less
+ * `{ id }` video). `undefined` when the clip still carries its bytes or the message has none. */
+export function externalizedVideoId(m: StoredChatMessage): string | undefined {
+  if (m.video && "bytes" in m.video) return undefined; // already loaded
+  if (m.video && "id" in m.video) return m.video.id;
+  return undefined;
+}
+
 /**
  * Put back inline image bytes fetched on demand for messages whose bytes were stripped — the PHONE
  * mirror path (keyed by file-card attachment id) AND the DESKTOP blob-externalized path (keyed by a
@@ -33,12 +41,24 @@ export function restoreInlineImages(
   if (cache.size === 0) return msgs;
   let changed = false;
   const out = msgs.map((m) => {
-    if (m.image && "bytes" in m.image) return m; // already has its bytes
-    const id = externalizedImageId(m);
-    const got = id ? cache.get(id) : undefined;
-    if (!got || !id) return m;
-    changed = true;
-    return { ...m, image: { ...got, id } };
+    let next = m;
+    // Inline image (unless it already has its bytes).
+    if (!(next.image && "bytes" in next.image)) {
+      const id = externalizedImageId(next);
+      const got = id ? cache.get(id) : undefined;
+      if (got && id) {
+        next = { ...next, image: { ...got, id } };
+        changed = true;
+      }
+    }
+    // Inline video clip (same treatment — its bytes were externalized to the blob store).
+    const vid = externalizedVideoId(next);
+    const gotVid = vid ? cache.get(vid) : undefined;
+    if (gotVid && vid) {
+      next = { ...next, video: { ...gotVid, id: vid } };
+      changed = true;
+    }
+    return next;
   });
   return changed ? out : msgs;
 }
@@ -64,8 +84,9 @@ export function externalizeChatImages(
   genId: () => string,
 ): { message: StoredChatMessage; blobs: ChatImageBlob[] } {
   const hasInline = !!(msg.image && "bytes" in msg.image);
+  const hasVideo = !!(msg.video && "bytes" in msg.video);
   const hasAttachmentBytes = !!msg.attachments?.some((a) => a.bytes);
-  if (!hasInline && !hasAttachmentBytes) return { message: msg, blobs: [] };
+  if (!hasInline && !hasVideo && !hasAttachmentBytes) return { message: msg, blobs: [] };
 
   const blobs: ChatImageBlob[] = [];
   const idByBuffer = new Map<ArrayBuffer, string>();
@@ -93,6 +114,13 @@ export function externalizeChatImages(
     const img = msg.image as { bytes: ArrayBuffer; mimeType: string; id?: string };
     const id = emit(img.bytes, img.mimeType, img.id);
     out = { ...out, image: { id, mimeType: img.mimeType } };
+  }
+  // The inline video clip shares its buffer with its file-card attachment (surfaced both ways), so
+  // `emit` de-dups to the attachment's stable id — no second blob. Byte-less `{ id }` is what persists.
+  if (hasVideo) {
+    const vid = msg.video as { bytes: ArrayBuffer; mimeType: string; id?: string };
+    const id = emit(vid.bytes, vid.mimeType, vid.id);
+    out = { ...out, video: { id, mimeType: vid.mimeType } };
   }
   return { message: out, blobs };
 }

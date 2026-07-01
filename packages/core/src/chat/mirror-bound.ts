@@ -9,11 +9,14 @@ import type { StoredChatMessage } from "../storage/store.js";
  */
 export const CHAT_MIRROR_IMAGE_BUDGET = 3_000_000;
 
-/** Total image-byte weight a single message carries: the inline image PLUS every file-card attachment
- * (a generated image is surfaced both inline AND as a universal file card, so its bytes appear twice). */
+/** Total media-byte weight a single message carries: the inline image, the inline VIDEO clip, PLUS every
+ * file-card attachment (a generated image/clip is surfaced both inline AND as a universal file card, so
+ * its bytes appear twice — counted twice here, and both copies drop together when trimmed). Video clips
+ * dwarf images, so counting them here is what actually keeps the frame tunnel-safe. */
 function messageImageBytes(m: StoredChatMessage): number {
   let n = 0;
   if (m.image && "bytes" in m.image) n += m.image.bytes.byteLength;
+  if (m.video && "bytes" in m.video) n += m.video.bytes.byteLength;
   for (const a of m.attachments ?? []) if (a.bytes) n += a.bytes.byteLength;
   return n;
 }
@@ -44,11 +47,16 @@ export function boundChatHistoryForMirror(
       budget -= weight; // keep this message's image bytes whole
       continue;
     }
-    // Over budget: keep the bubble + card metadata, drop the heavy bytes (both inline and attachments).
+    // Over budget: keep the bubble + card metadata, drop the heavy bytes (inline image, inline video clip,
+    // and attachments). The phone shows the text/card; the clip stays whole on the desktop.
     budget = 0;
     let next = m;
     if (m.image && "bytes" in m.image) {
       const { image: _drop, ...rest } = next;
+      next = rest;
+    }
+    if (next.video && "bytes" in next.video) {
+      const { video: _drop, ...rest } = next;
       next = rest;
     }
     if (next.attachments?.some((a) => a.bytes)) {

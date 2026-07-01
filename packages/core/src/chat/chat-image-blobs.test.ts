@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { externalizeChatImages, externalizedImageId, restoreInlineImages } from "./chat-image-blobs.js";
+import { externalizeChatImages, externalizedImageId, externalizedVideoId, restoreInlineImages } from "./chat-image-blobs.js";
 import type { StoredChatMessage } from "../storage/store.js";
 
 const bytesOf = (...n: number[]) => new Uint8Array(n).buffer;
@@ -55,6 +55,30 @@ describe("externalizeChatImages", () => {
     expect(blobs[0]!.id).toBe("img-existing");
     expect(message.image).toEqual({ id: "img-existing", mimeType: "image/png" });
   });
+
+  it("de-dups a video clip's shared inline + card buffer to ONE blob (no inline-video byte leak on disk)", () => {
+    const clip = bytesOf(9, 8, 7);
+    const msg: StoredChatMessage = {
+      role: "tool",
+      text: "🎬 a puppy",
+      at: 7,
+      video: { bytes: clip, mimeType: "video/mp4" },
+      attachments: [{ id: "vid-1", name: "puppy.mp4", mime: "video/mp4", kind: "video", bytes: clip }],
+    };
+    const { message, blobs } = externalizeChatImages(msg, () => "should-not-mint");
+    expect(blobs).toHaveLength(1);
+    expect(blobs[0]).toEqual({ id: "vid-1", bytes: clip, mimeType: "video/mp4" });
+    expect(message.video).toEqual({ id: "vid-1", mimeType: "video/mp4" }); // byte-less on disk
+    expect((message.attachments?.[0] as { bytes?: ArrayBuffer }).bytes).toBeUndefined();
+  });
+});
+
+describe("externalizedVideoId", () => {
+  it("returns undefined for a byte-bearing or absent clip, else the byte-less clip id", () => {
+    expect(externalizedVideoId({ role: "tool", text: "", at: 1 })).toBeUndefined();
+    expect(externalizedVideoId({ role: "tool", text: "", at: 1, video: { bytes: bytesOf(1), mimeType: "video/mp4" } })).toBeUndefined();
+    expect(externalizedVideoId({ role: "tool", text: "", at: 1, video: { id: "vid-9", mimeType: "video/mp4" } })).toBe("vid-9");
+  });
 });
 
 describe("externalizedImageId", () => {
@@ -96,5 +120,20 @@ describe("restoreInlineImages", () => {
   it("returns the SAME array when nothing matches the cache", () => {
     const msgs: StoredChatMessage[] = [{ role: "assistant", text: "no image", at: 1 }];
     expect(restoreInlineImages(msgs, new Map([["other", { bytes: bytesOf(1), mimeType: "image/png" }]]))).toBe(msgs);
+  });
+
+  it("re-inlines a stripped VIDEO clip from the cache (round-trip of externalize)", () => {
+    const clip = bytesOf(4, 4, 4);
+    const original: StoredChatMessage = {
+      role: "tool",
+      text: "🎬 clip",
+      at: 5,
+      video: { bytes: clip, mimeType: "video/mp4" },
+      attachments: [{ id: "vid-1", name: "clip.mp4", mime: "video/mp4", kind: "video", bytes: clip }],
+    };
+    const { message: stripped, blobs } = externalizeChatImages(original, () => "x");
+    const cache = new Map(blobs.map((b) => [b.id, { bytes: b.bytes, mimeType: b.mimeType }]));
+    const [restored] = restoreInlineImages([stripped], cache);
+    expect(restored!.video).toEqual({ bytes: clip, mimeType: "video/mp4", id: "vid-1" });
   });
 });
