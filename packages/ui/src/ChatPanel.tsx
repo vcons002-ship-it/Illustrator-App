@@ -1501,15 +1501,26 @@ function useMessageImageUrl(image: ChatMessageVM["image"]): string | undefined {
 /** Object URL for an inline video clip's bytes (revoked on unmount / change). */
 function useMessageVideoUrl(video: ChatMessageVM["video"]): string | undefined {
   const [url, setUrl] = useState<string | undefined>(undefined);
+  // Latest clip, read inside the effect — so the effect can rebuild the URL without depending on the
+  // `video` object's IDENTITY (see `key` below).
+  const videoRef = useRef(video);
+  videoRef.current = video;
+  // Key the blob URL on the clip's CONTENT (mime + byte size), NOT the object reference. On a linked
+  // phone the desktop mirror re-pushes the chat ~8×/sec, rebuilding the message (and its `video`) object
+  // each time; keying on identity would revoke + recreate the blob URL under the <video> element on every
+  // push, and a URL revoked mid-load leaves the clip blank until a remount (the "only loads after
+  // switching away and back" bug). A stable content key creates the URL once and leaves it alone.
+  const key = video ? `${video.mimeType}:${video.bytes.byteLength}` : "";
   useEffect(() => {
-    if (!video) {
+    const v = videoRef.current;
+    if (!v) {
       setUrl(undefined);
       return;
     }
-    const objectUrl = URL.createObjectURL(new Blob([video.bytes], { type: video.mimeType }));
+    const objectUrl = URL.createObjectURL(new Blob([v.bytes], { type: v.mimeType }));
     setUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
-  }, [video]);
+  }, [key]);
   return url;
 }
 
