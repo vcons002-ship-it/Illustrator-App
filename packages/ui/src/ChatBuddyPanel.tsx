@@ -497,6 +497,42 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             </button>
           </div>
         )}
+        {props.pendingTool?.tool === "generate_video" && (
+          <div style={approvalStyle}>
+            <div style={{ fontSize: 12, marginBottom: 6 }}>
+              🎬 Generate this video?
+              <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
+                “{props.pendingTool.prompt}”
+                {props.pendingTool.model ? ` · model: ${props.pendingTool.model}` : ""}
+                {props.pendingTool.frames ? ` · ${props.pendingTool.frames} frames` : ""}
+              </span>
+            </div>
+            <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+              Run
+            </button>
+            <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+              Dismiss
+            </button>
+          </div>
+        )}
+        {props.pendingTool?.tool === "generate_long_video" && (
+          <div style={approvalStyle}>
+            <div style={{ fontSize: 12, marginBottom: 6 }}>
+              🎬 Generate a long video from {props.pendingTool.clips.length} shots?
+              <span style={{ display: "block", opacity: 0.7, marginTop: 2 }}>
+                {props.pendingTool.title ? `“${props.pendingTool.title}” · ` : ""}
+                renders each clip, chains them, and stitches into one video
+                {props.pendingTool.model ? ` · model: ${props.pendingTool.model}` : ""}
+              </span>
+            </div>
+            <button style={{ ...smallButtonStyle, marginRight: 6 }} onClick={props.onApprovePendingTool}>
+              Run
+            </button>
+            <button style={smallButtonStyle} onClick={props.onDismissPendingTool}>
+              Dismiss
+            </button>
+          </div>
+        )}
         {props.pendingTool?.tool === "find_files" && (
           <div style={approvalStyle}>
             <div style={{ fontSize: 12, marginBottom: 6 }}>

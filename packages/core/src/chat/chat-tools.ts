@@ -34,6 +34,17 @@ export type ToolCall =
       frames?: number;
       truncated?: boolean;
     }
+  /** Long-form video: a SERIES of chained clips stitched into one (mirrors the buddy's
+   * generate_long_video; carried so its render result rides chatToolResult.call). */
+  | {
+      tool: "generate_long_video";
+      clips: string[];
+      source?: { kind: "last" | "library" | "file" | "text"; ref?: string };
+      model?: string;
+      frames?: number;
+      title?: string;
+      truncated?: boolean;
+    }
   | { tool: "search_web"; query: string }
   | { tool: "search_images"; query: string }
   /** Read a specific web page's text INTO the chat (docs, examples, references) so
@@ -453,6 +464,12 @@ export function formatToolResult(call: ToolCall, result: ToolResultPayload): str
     return result.video?.ok
       ? `[tool generate_video: animated the image into a video${vDesc} and showed it to the reader]`
       : `[tool generate_video failed${vDesc}: ${result.video?.error ?? "unknown error"}]`;
+  }
+  if (call.tool === "generate_long_video") {
+    const n = call.clips.length;
+    return result.video?.ok
+      ? `[tool generate_long_video: rendered ${n} clip${n === 1 ? "" : "s"} and stitched them into one video, shown to the reader]`
+      : `[tool generate_long_video failed: ${result.video?.error ?? "unknown error"}]`;
   }
   // generate_image: ran (or failed) after the reader's approval. Tag the result with the PROMPT so a
   // later batch of renders in the same chat can be told apart from this one — otherwise every render

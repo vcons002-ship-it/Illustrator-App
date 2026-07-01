@@ -363,6 +363,16 @@ export function runCommand(
 }
 
 /**
+ * Run ffmpeg with an app-built argument vector (the long-form video pipeline uses this to extract each
+ * clip's last frame and concatenate the clips into one mp4). The desktop shell resolves the ffmpeg binary
+ * (PATH or the managed ComfyUI's bundled one) and rejects with an install hint when it's missing. Because
+ * the args are built by the app — not the model — this needs no `allowCommands` opt-in. Desktop only.
+ */
+export function runFfmpeg(args: string[], cwd?: string): Promise<CommandResult> {
+  return invoke<CommandResult>("run_ffmpeg", { args, ...(cwd ? { cwd } : {}) });
+}
+
+/**
  * The Visual Reader SOURCE repo root (the clone the app runs from), or undefined on the web / when
  * the app isn't inside a git checkout. Used by the in-app "Software update" button to git-pull +
  * rebuild the web bundle in place. Best-effort: returns undefined rather than throwing on older
@@ -401,6 +411,15 @@ export async function whichInterpreter(kind: "python" | "node" | "sh"): Promise<
 export function writeWorkspaceFile(relPath: string, content: string, cwd?: string, append?: boolean): Promise<string> {
   const contentBase64 = bytesToBase64(new TextEncoder().encode(content));
   return invoke<string>("write_workspace_file", { relPath, contentBase64, ...(cwd ? { cwd } : {}), ...(append ? { append: true } : {}) });
+}
+
+/**
+ * Binary counterpart to {@link writeWorkspaceFile}: write RAW BYTES (not text) to a workspace-relative
+ * path. Base64-encodes the bytes directly (no TextEncoder round-trip, which would corrupt binary). Used by
+ * the long-form video pipeline to drop each rendered clip on disk for ffmpeg. Returns the absolute path.
+ */
+export function writeWorkspaceFileBytes(relPath: string, bytes: Uint8Array, cwd?: string): Promise<string> {
+  return invoke<string>("write_workspace_file", { relPath, contentBase64: bytesToBase64(bytes), ...(cwd ? { cwd } : {}) });
 }
 
 /**

@@ -247,6 +247,13 @@ export interface VideoGenerationInput {
   audio?: boolean;
   seed?: number;
   lowVram?: boolean;
+  /**
+   * Batch/long-form render: this clip is one of a SERIES rendered back-to-back on the same ComfyUI, so
+   * SKIP the pre-render VRAM hand-off (freeing the other engine + ComfyUI's own resident model) and keep
+   * the video model resident between clips. Set on clips 2..N of a long-video render; clip 1 (unset) still
+   * does the full hand-off. Ignored by cloud providers.
+   */
+  warmBatch?: boolean;
   onProgress?: (fraction: number) => void;
   signal?: AbortSignal;
 }

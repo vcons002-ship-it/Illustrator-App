@@ -1362,7 +1362,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       void handleChatTool(msg.requestId, msg.call);
       break;
     case "chatVideo":
-      void handleChatVideo(msg.requestId, msg.call, msg.image, msg.models, msg.params);
+      void handleChatVideo(msg.requestId, msg.call, msg.image, msg.models, msg.params, msg.warmBatch);
       break;
     case "assessImage":
       void handleAssessImage(msg.requestId, msg.image, msg.question);
@@ -1969,6 +1969,7 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       if (
         slash.call.tool === "generate_image" ||
         slash.call.tool === "generate_video" ||
+        slash.call.tool === "generate_long_video" ||
         slash.call.tool === "export_book" ||
         slash.call.tool === "export_data" ||
         slash.call.tool === "set_cell" ||
@@ -3578,6 +3579,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       if (
         slash.call.tool === "generate_image" ||
         slash.call.tool === "generate_video" ||
+        slash.call.tool === "generate_long_video" ||
         slash.call.tool === "find_files" ||
         slash.call.tool === "run_command" ||
         slash.call.tool === "write_file" ||
@@ -4067,6 +4069,8 @@ async function handleChatVideo(
   image: { bytes: ArrayBuffer; mimeType: string } | undefined,
   models: VideoModelFiles,
   params?: VideoRenderParams,
+  /** Long-form batch: clips 2..N skip the VRAM hand-off so the video model stays resident between clips. */
+  warmBatch?: boolean,
 ): Promise<void> {
   const ac = new AbortController();
   chatAborts.set(requestId, ac);
@@ -4089,17 +4093,22 @@ async function handleChatVideo(
     cancelChatWarm();
     await freeChatLlmForRender();
     imageModelFreed = false;
-    // When images run on a SEPARATE A1111, its checkpoint squats VRAM the video experts need — unload it.
-    await freeStaleA1111ForComfy();
-    // Also clear ComfyUI's OWN resident image/video state before the big load. Video models are far larger
-    // than any still-resident image checkpoint (Wan 2.2 = two ~14GB experts + umt5; LTX-2 = 22B + Gemma) and
-    // the per-expert LoRAs add patch/dequant overhead on top — so anything squatting VRAM is enough to tip
-    // the load past the card and spill into shared system RAM (slow). A fresh lazy reload is cheap next to a
-    // multi-minute video render crawling out of system RAM.
-    try {
-      await backend.freeMemory();
-    } catch {
-      /* best-effort — if the engine can't free now, the render just starts with less headroom */
+    // A long-form batch renders many clips back-to-back on THIS ComfyUI. Only the FIRST clip does the VRAM
+    // hand-off; clips 2..N skip it so the video model stays resident (a per-clip evict+reload would dominate
+    // the wall-clock). warmBatch is set by the host loop for the follow-on clips.
+    if (!warmBatch) {
+      // When images run on a SEPARATE A1111, its checkpoint squats VRAM the video experts need — unload it.
+      await freeStaleA1111ForComfy();
+      // Also clear ComfyUI's OWN resident image/video state before the big load. Video models are far larger
+      // than any still-resident image checkpoint (Wan 2.2 = two ~14GB experts + umt5; LTX-2 = 22B + Gemma) and
+      // the per-expert LoRAs add patch/dequant overhead on top — so anything squatting VRAM is enough to tip
+      // the load past the card and spill into shared system RAM (slow). A fresh lazy reload is cheap next to a
+      // multi-minute video render crawling out of system RAM.
+      try {
+        await backend.freeMemory();
+      } catch {
+        /* best-effort — if the engine can't free now, the render just starts with less headroom */
+      }
     }
     const out = await backend.generateVideo(
       {

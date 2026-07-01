@@ -1800,6 +1800,126 @@ async fn which_interpreter(app: AppHandle, kind: String) -> Result<Option<String
     .await
     .map_err(|e| e.to_string())?
 }
+
+/// ffmpeg re-encodes can run longer than a shell command (stitching many clips), so give it its own,
+/// more generous ceiling.
+const FFMPEG_TIMEOUT_SECS: u64 = 900;
+
+/// Resolve an ffmpeg binary for the long-form video pipeline (stitching clips + extracting last frames).
+/// Prefers `ffmpeg` on PATH; falls back to the ffmpeg that imageio-ffmpeg bundles inside the managed
+/// ComfyUI's embedded Python. `None` when nothing works — the caller surfaces a clear install hint.
+fn resolve_ffmpeg(app: &AppHandle) -> Option<std::path::PathBuf> {
+    let ok = |p: &std::path::Path| {
+        quiet_command(p)
+            .arg("-version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+    // 1. On PATH (the common case — a user-installed ffmpeg).
+    if ok(std::path::Path::new("ffmpeg")) {
+        return Some(std::path::PathBuf::from("ffmpeg"));
+    }
+    // 2. Bundled with the managed ComfyUI (imageio-ffmpeg's binary under site-packages/imageio_ffmpeg).
+    let bin_dir = engine_root(app)
+        .join("ComfyUI_windows_portable")
+        .join("python_embeded")
+        .join("Lib")
+        .join("site-packages")
+        .join("imageio_ffmpeg")
+        .join("binaries");
+    if let Ok(entries) = std::fs::read_dir(&bin_dir) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_lowercase();
+            if name.starts_with("ffmpeg") && (name.ends_with(".exe") || !name.contains('.')) {
+                let p = e.path();
+                if ok(&p) {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Run ffmpeg with the given argument vector (built by the app, NOT the model — so this needs no
+/// `allowCommands` opt-in) in `cwd` (default the workspace). Used by the long-form video pipeline to
+/// extract each clip's last frame and concatenate the clips into one mp4. Reuses `run_command`'s
+/// concurrent pipe-drain + timeout + output-cap. Errors with an install hint when ffmpeg isn't found.
+#[tauri::command]
+async fn run_ffmpeg(app: AppHandle, args: Vec<String>, cwd: Option<String>) -> Result<CommandResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let bin = resolve_ffmpeg(&app).ok_or_else(|| {
+            "ffmpeg not found — install ffmpeg and add it to your PATH (it's needed to stitch the clips into one video).".to_string()
+        })?;
+        let dir = match cwd
+            .filter(|c| !c.is_empty())
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.is_dir())
+        {
+            Some(p) => p,
+            None => {
+                let d = workspace_dir(&app);
+                std::fs::create_dir_all(&d).map_err(|e| e.to_string())?;
+                d
+            }
+        };
+        let mut cmd = quiet_command(&bin);
+        cmd.args(&args).current_dir(&dir).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = cmd.spawn().map_err(|e| format!("Couldn't start ffmpeg: {e}"))?;
+
+        // Drain both pipes concurrently so a large log never blocks the child (same as run_command).
+        let mut out_pipe = child.stdout.take();
+        let mut err_pipe = child.stderr.take();
+        let out_handle = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(p) = out_pipe.as_mut() {
+                let _ = p.read_to_end(&mut buf);
+            }
+            buf
+        });
+        let err_handle = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(p) = err_pipe.as_mut() {
+                let _ = p.read_to_end(&mut buf);
+            }
+            buf
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(FFMPEG_TIMEOUT_SECS);
+        let mut timed_out = false;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(st)) => break st,
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        timed_out = true;
+                        break child.wait().map_err(|e| e.to_string())?;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(e) => return Err(e.to_string()),
+            }
+        };
+        let cap = |bytes: Vec<u8>| {
+            let s = String::from_utf8_lossy(&bytes);
+            s.chars().take(COMMAND_OUTPUT_CAP).collect::<String>()
+        };
+        Ok(CommandResult {
+            stdout: cap(out_handle.join().unwrap_or_default()),
+            stderr: cap(err_handle.join().unwrap_or_default()),
+            code: status.code().unwrap_or(-1),
+            timed_out,
+            cwd: dir.to_string_lossy().to_string(),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
 //
 // App-managed git worktrees for parallel WRITE-capable coding agents: each agent works in
 // its own worktree+branch so concurrent edits can't collide, and the app (not the model)
@@ -2649,6 +2769,7 @@ fn main() {
             search_files,
             read_file,
             run_command,
+            run_ffmpeg,
             which_interpreter,
             git_repo_root,
             app_repo_root,
