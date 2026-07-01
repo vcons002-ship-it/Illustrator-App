@@ -60,4 +60,34 @@ describe("buildModelMenu", () => {
     const web = groupsOf({ textProvider: "local" }, {}, false).find((g) => g.key === "llm");
     expect(web?.options.some((o) => o.id === "text:local-bundled")).toBeFalsy();
   });
+
+  it("goes provider-first for images when imageModelsByBackend is supplied", () => {
+    const groups = buildModelMenu(
+      { ...DEFAULT_SETTINGS, imageProvider: "local", localBackend: "comfyui", localModel: "sdxl.safetensors" },
+      {
+        textModels: [],
+        imageModels: [],
+        imageModelsByBackend: {
+          comfyui: [model("sdxl.safetensors", "SDXL")],
+          a1111: [model("juggernaut.safetensors", "Juggernaut")],
+        },
+      },
+      { isDesktop: true },
+    );
+    const image = groups.find((g) => g.key === "image")!;
+    // No flat mixed list — checkpoints only live under localModelsByBackend now.
+    expect(image.options.some((o) => o.id.startsWith("image:local:"))).toBe(false);
+    expect(image.localBackends).toEqual([
+      { id: "comfyui", label: "ComfyUI", active: true },
+      { id: "a1111", label: "AUTOMATIC1111", active: false },
+    ]);
+    const comfy = image.localModelsByBackend!.comfyui!;
+    expect(comfy).toHaveLength(1);
+    expect(comfy[0]!.active).toBe(true);
+    expect(comfy[0]!.patch).toEqual({ imageProvider: "local", localBackend: "comfyui", localModel: "sdxl.safetensors" });
+    const a1111 = image.localModelsByBackend!.a1111!;
+    expect(a1111).toHaveLength(1);
+    expect(a1111[0]!.active).toBe(false);
+    expect(a1111[0]!.patch).toEqual({ imageProvider: "local", localBackend: "a1111", localModel: "juggernaut.safetensors" });
+  });
 });

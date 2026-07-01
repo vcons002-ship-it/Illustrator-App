@@ -21,7 +21,7 @@ import {
   type ProjectFile,
 } from "@visual-reader/core";
 import type { ModelMenuGroup } from "./model-menu.js";
-import type { ReaderSettings } from "./SettingsPanel.js";
+import type { LocalBackendId, ReaderSettings } from "./SettingsPanel.js";
 
 /** Minimal shape of the Web Speech recognition API (not in TS's DOM lib). */
 interface SpeechRecognitionLike {
@@ -150,6 +150,9 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   // Quick model-switcher popover state (opened from the input row). Ref wraps the button + popover so an
   // outside click / Escape closes it.
   const [modelsOpen, setModelsOpen] = useState(false);
+  // Which local backend (ComfyUI / AUTOMATIC1111) the Image section's checkpoint list is currently
+  // showing — undefined defaults to whichever is active; reset on close so it re-defaults next open.
+  const [selectedImageBackend, setSelectedImageBackend] = useState<LocalBackendId | undefined>(undefined);
   const modelMenuRef = useRef<HTMLDivElement>(null);
   const modelBtnRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -167,6 +170,9 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
       document.removeEventListener("mousedown", onDoc);
       document.removeEventListener("keydown", onKey);
     };
+  }, [modelsOpen]);
+  useEffect(() => {
+    if (!modelsOpen) setSelectedImageBackend(undefined);
   }, [modelsOpen]);
   // The header's secondary controls (new/rename/delete session, model, compact, help, clear) hide
   // behind a small ⋯ toggle to save space — only the session switcher + the toggle show by default.
@@ -714,27 +720,63 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
 
       {modelsOpen && props.modelMenu && (
         <div ref={modelMenuRef} style={modelMenuStyle}>
-          {props.modelMenu.groups.map((g) => (
-            <div key={g.key}>
-              <div style={modelGroupLabelStyle}>{g.label}</div>
-              {g.options.map((o) => (
-                <button
-                  key={o.id}
-                  style={o.active ? { ...modelItemStyle, ...personaActiveStyle } : modelItemStyle}
-                  // onMouseDown (not click) applies before the input blurs, mirroring the slash menu.
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    props.modelMenu!.onSelect(o.patch);
-                    setModelsOpen(false);
-                  }}
-                >
-                  <span style={{ width: 12, opacity: 0.9 }}>{o.active ? "✓" : ""}</span>
-                  <span style={{ flex: 1 }}>{o.label}</span>
-                  {o.sublabel ? <span style={{ opacity: 0.5, fontSize: 11 }}>{o.sublabel}</span> : null}
-                </button>
-              ))}
-            </div>
-          ))}
+          {props.modelMenu.groups.map((g) => {
+            const backends = g.localBackends;
+            const activeBackendId = selectedImageBackend ?? backends?.find((b) => b.active)?.id ?? backends?.[0]?.id;
+            return (
+              <div key={g.key}>
+                <div style={modelGroupLabelStyle}>{g.label}</div>
+                {g.options.map((o) => (
+                  <button
+                    key={o.id}
+                    style={o.active ? { ...modelItemStyle, ...personaActiveStyle } : modelItemStyle}
+                    // onMouseDown (not click) applies before the input blurs, mirroring the slash menu.
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      props.modelMenu!.onSelect(o.patch);
+                      setModelsOpen(false);
+                    }}
+                  >
+                    <span style={{ width: 12, opacity: 0.9 }}>{o.active ? "✓" : ""}</span>
+                    <span style={{ flex: 1 }}>{o.label}</span>
+                    {o.sublabel ? <span style={{ opacity: 0.5, fontSize: 11 }}>{o.sublabel}</span> : null}
+                  </button>
+                ))}
+                {backends && backends.length > 0 && activeBackendId && (
+                  <>
+                    <select
+                      value={activeBackendId}
+                      onChange={(e) => setSelectedImageBackend(e.target.value as LocalBackendId)}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      style={modelBackendSelectStyle}
+                    >
+                      {backends.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.label}
+                          {b.active ? " (active)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                    {(g.localModelsByBackend?.[activeBackendId] ?? []).map((o) => (
+                      <button
+                        key={o.id}
+                        style={o.active ? { ...modelItemStyle, ...personaActiveStyle } : modelItemStyle}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          props.modelMenu!.onSelect(o.patch);
+                          setModelsOpen(false);
+                        }}
+                      >
+                        <span style={{ width: 12, opacity: 0.9 }}>{o.active ? "✓" : ""}</span>
+                        <span style={{ flex: 1 }}>{o.label}</span>
+                        {o.sublabel ? <span style={{ opacity: 0.5, fontSize: 11 }}>{o.sublabel}</span> : null}
+                      </button>
+                    ))}
+                  </>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
       <SlashMenu draft={draft} commands={commands} onPick={setDraft} />
@@ -1081,6 +1123,18 @@ const modelItemStyle = {
   padding: "5px 12px",
   fontSize: 12,
   cursor: "pointer",
+} as const;
+/** The Image group's ComfyUI/AUTOMATIC1111 picker — choosing a backend here just filters which
+ * checkpoints show beneath it; it doesn't apply anything until a checkpoint row is clicked. */
+const modelBackendSelectStyle = {
+  margin: "2px 12px 4px",
+  width: "calc(100% - 24px)",
+  background: "rgba(255,255,255,0.06)",
+  color: "inherit",
+  border: "1px solid rgba(255,255,255,0.18)",
+  borderRadius: 6,
+  padding: "3px 8px",
+  fontSize: 12,
 } as const;
 
 const personaGroupStyle = {
