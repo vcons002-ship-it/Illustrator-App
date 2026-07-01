@@ -225,6 +225,7 @@ export type CmdToDesktop =
   | { type: "vrcmd:chatAgentDeny"; id: number } // deny one queued coding-agent step
   | { type: "vrcmd:update" } // phone asked the desktop to pull + rebuild + reload (software update)
   | { type: "vrcmd:restart" } // phone asked the desktop to fully relaunch (Settings → Restart app)
+  | { type: "vrcmd:connectLocalServer"; backend: "a1111" | "comfyui"; url: string } // phone tapped Connect for a self-hosted engine → the DESKTOP probes/auto-starts it (it owns the network + filesystem); the resulting settings mirror back
   | { type: "vrcmd:openLocalFile"; path: string } // open a PC file (PDF/EPUB/doc) FROM the desktop's disk as a book; the desktop reads + imports it, the open book mirrors back
   | { type: "vrcmd:hostTool"; requestId: number; call: BuddyToolCall; cwd?: string } // run a desktop-runtime tool (files/command/screenshot) on the desktop, in the phone's chosen working folder
   | { type: "vrcmd:fetchFile"; reqId: number; id: string }; // ask the desktop for the full bytes of a file card whose bytes the mirror stripped (lazy image fetch)
