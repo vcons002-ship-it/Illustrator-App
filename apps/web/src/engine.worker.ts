@@ -3667,9 +3667,11 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         ...(corsProxyAvailable && settings?.allowCommands && settings?.delegateCoding
           ? { canDelegateCoding: true }
           : {}),
-        // Image-to-video: only on the local ComfyUI engine (not A1111). Advertised when the local image
-        // engine is active; the runtime surfaces a clear error if the Wan model isn't installed yet.
-        ...(corsProxyAvailable && settings?.imageProvider === "local" && (settings?.engineBackend ?? settings?.localBackend) !== "a1111"
+        // Image-to-video renders on ComfyUI. Advertise it whenever the local image engine is active AND a
+        // ComfyUI is reachable for video — INCLUDING when images run on AUTOMATIC1111, since video routes to
+        // ComfyUI independently (comfyUrlForVideo). Only withheld when no ComfyUI is known at all. The
+        // runtime surfaces a clear error if the video model isn't installed yet.
+        ...(corsProxyAvailable && settings?.imageProvider === "local" && comfyUrlForVideo(settings ?? {})
           ? { canGenerateVideo: true }
           : {}),
         // Wolfram|Alpha grounding when an AppID is configured.
