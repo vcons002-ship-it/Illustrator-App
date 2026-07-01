@@ -20,6 +20,8 @@ import {
   type ContextUsage,
   type ProjectFile,
 } from "@visual-reader/core";
+import type { ModelMenuGroup } from "./model-menu.js";
+import type { ReaderSettings } from "./SettingsPanel.js";
 
 /** Minimal shape of the Web Speech recognition API (not in TS's DOM lib). */
 interface SpeechRecognitionLike {
@@ -70,6 +72,9 @@ export interface ChatBuddyPanelProps {
   pendingTool?: BuddyToolCall;
   persona: BuddyPersona;
   onPersonaChange: (p: BuddyPersona) => void;
+  /** Quick model switcher popped from the input row: the current LLM / image / video options + the
+   * change to apply when one is picked. Absent → the button/popover don't render. */
+  modelMenu?: { groups: ModelMenuGroup[]; onSelect: (patch: Partial<ReaderSettings>) => void };
   /** Multiple chat sessions (each its own history + folder); switch/create/delete. */
   sessions?: { id: string; label: string }[];
   activeSessionId?: string;
@@ -142,6 +147,27 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   const [draft, setDraft] = useState("");
   const [showHelp, setShowHelp] = useState(false);
   const [loadingModel, setLoadingModel] = useState(false);
+  // Quick model-switcher popover state (opened from the input row). Ref wraps the button + popover so an
+  // outside click / Escape closes it.
+  const [modelsOpen, setModelsOpen] = useState(false);
+  const modelMenuRef = useRef<HTMLDivElement>(null);
+  const modelBtnRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!modelsOpen) return;
+    const onDoc = (e: MouseEvent): void => {
+      const t = e.target as Node;
+      if (!modelMenuRef.current?.contains(t) && !modelBtnRef.current?.contains(t)) setModelsOpen(false);
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") setModelsOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [modelsOpen]);
   // The header's secondary controls (new/rename/delete session, model, compact, help, clear) hide
   // behind a small ⋯ toggle to save space — only the session switcher + the toggle show by default.
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -686,6 +712,31 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         )}
       </div>
 
+      {modelsOpen && props.modelMenu && (
+        <div ref={modelMenuRef} style={modelMenuStyle}>
+          {props.modelMenu.groups.map((g) => (
+            <div key={g.key}>
+              <div style={modelGroupLabelStyle}>{g.label}</div>
+              {g.options.map((o) => (
+                <button
+                  key={o.id}
+                  style={o.active ? { ...modelItemStyle, ...personaActiveStyle } : modelItemStyle}
+                  // onMouseDown (not click) applies before the input blurs, mirroring the slash menu.
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    props.modelMenu!.onSelect(o.patch);
+                    setModelsOpen(false);
+                  }}
+                >
+                  <span style={{ width: 12, opacity: 0.9 }}>{o.active ? "✓" : ""}</span>
+                  <span style={{ flex: 1 }}>{o.label}</span>
+                  {o.sublabel ? <span style={{ opacity: 0.5, fontSize: 11 }}>{o.sublabel}</span> : null}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
       <SlashMenu draft={draft} commands={commands} onPick={setDraft} />
       {props.onAttachFile && (props.attachments?.length ?? 0) > 0 && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "0 10px 4px" }}>
@@ -762,6 +813,17 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         >
           ✍️ Story
         </button>
+        {props.modelMenu && props.modelMenu.groups.length > 0 && (
+          <button
+            ref={modelBtnRef}
+            style={modelsOpen ? { ...smallButtonStyle, ...personaActiveStyle } : smallButtonStyle}
+            onClick={() => setModelsOpen((o) => !o)}
+            title="Switch the chat, image, or video model"
+            aria-pressed={modelsOpen}
+          >
+            ⚙ Models
+          </button>
+        )}
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -989,6 +1051,36 @@ const folderInputStyle = {
   padding: "3px 8px",
   fontSize: 11,
   fontFamily: "ui-monospace, Menlo, monospace",
+} as const;
+
+// Quick model-switcher popover (opens above the input, mirroring the slash menu).
+const modelMenuStyle = {
+  borderTop: "1px solid rgba(255,255,255,0.1)",
+  maxHeight: 260,
+  overflowY: "auto",
+  display: "flex",
+  flexDirection: "column",
+  padding: "4px 0",
+} as const;
+const modelGroupLabelStyle = {
+  fontSize: 10,
+  textTransform: "uppercase",
+  letterSpacing: 0.4,
+  opacity: 0.5,
+  padding: "6px 12px 2px",
+} as const;
+const modelItemStyle = {
+  display: "flex",
+  gap: 8,
+  alignItems: "baseline",
+  width: "100%",
+  background: "transparent",
+  color: "inherit",
+  border: "none",
+  textAlign: "left",
+  padding: "5px 12px",
+  fontSize: 12,
+  cursor: "pointer",
 } as const;
 
 const personaGroupStyle = {

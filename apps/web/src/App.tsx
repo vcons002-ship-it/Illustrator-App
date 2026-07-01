@@ -221,6 +221,7 @@ import {
   CharacterBible,
   ChatBuddyPanel,
   ChatPanel,
+  buildModelMenu,
   DataChart,
   Infographic,
   DataTablePreview,
@@ -7202,6 +7203,16 @@ export function App() {
           ? "paint"
           : "done";
 
+  // Quick model-switcher for the chat input: the current LLM / image / video options (incl. switching
+  // provider local↔cloud), applied via onSettingsChange (which also relays to a linked phone).
+  const modelMenu = useMemo(
+    () => ({
+      groups: buildModelMenu(settings, { textModels, imageModels: installedModels }, { isDesktop }),
+      onSelect: (patch: Partial<ReaderSettings>) => onSettingsChange({ ...settings, ...patch }),
+    }),
+    [settings, textModels, installedModels, onSettingsChange],
+  );
+
   // The buddy chat is rendered in two places that share the same wiring: as the home-screen hero
   // (no book) and as the always-present bottom dock beneath an open book. Extracted so the ~60
   // props live once. `fill` makes it stretch to the dock's height; history collapse is dock-only.
@@ -7224,6 +7235,7 @@ export function App() {
       {...(buddyPendingTool ? { pendingTool: buddyPendingTool } : {})}
       persona={buddyPersona}
       onPersonaChange={onBuddyPersonaChange}
+      modelMenu={modelMenu}
       sessions={buddySessions.map((s, i) => ({
         id: s.id,
         label: s.label || (s.workingDir ? lastPathSegment(s.workingDir) : `Chat ${i + 1}`),
