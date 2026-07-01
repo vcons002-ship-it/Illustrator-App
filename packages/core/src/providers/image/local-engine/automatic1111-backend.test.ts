@@ -34,6 +34,50 @@ describe("Automatic1111Backend.freeMemory", () => {
   });
 });
 
+describe("Automatic1111Backend reloads the checkpoint after an unload", () => {
+  /** Records URLs and returns a valid txt2img image so generate() succeeds. */
+  function txt2imgTransport(): { transport: Transport; urls: string[] } {
+    const urls: string[] = [];
+    const res = (body: unknown): TransportResponse =>
+      ({ ok: true, status: 200, json: async () => body, arrayBuffer: async () => new ArrayBuffer(0), text: async () => "" }) as unknown as TransportResponse;
+    return {
+      urls,
+      transport: {
+        send: async (r) => {
+          urls.push(r.url);
+          return r.url.endsWith("/txt2img") ? res({ images: ["AA=="] }) : res({});
+        },
+      },
+    };
+  }
+  const input = { prompt: "a cat", anchors: [], quality: "standard" as const };
+
+  it("reload-checkpoints BEFORE the next txt2img once freeMemory unloaded it", async () => {
+    const { transport, urls } = txt2imgTransport();
+    const base = "http://127.0.0.1:7899"; // unique base URL — the unloaded set is module-global
+    const backend = new Automatic1111Backend({ baseUrl: base, transport });
+    await backend.freeMemory(); // marks this base URL unloaded
+    urls.length = 0;
+    await backend.generate(input, "model.safetensors");
+    // reload-checkpoint must be sent, and BEFORE the txt2img.
+    const reloadIdx = urls.indexOf(`${base}/sdapi/v1/reload-checkpoint`);
+    const txt2imgIdx = urls.indexOf(`${base}/sdapi/v1/txt2img`);
+    expect(reloadIdx).toBeGreaterThanOrEqual(0);
+    expect(reloadIdx).toBeLessThan(txt2imgIdx);
+  });
+
+  it("does NOT reload again on the next render (the successful render cleared the mark)", async () => {
+    const { transport, urls } = txt2imgTransport();
+    const base = "http://127.0.0.1:7898";
+    const backend = new Automatic1111Backend({ baseUrl: base, transport });
+    await backend.freeMemory();
+    await backend.generate(input, "model.safetensors"); // reloads + clears the mark
+    urls.length = 0;
+    await backend.generate(input, "model.safetensors"); // second render: no reload
+    expect(urls).not.toContain(`${base}/sdapi/v1/reload-checkpoint`);
+  });
+});
+
 describe("Automatic1111Backend error messages", () => {
   /** A transport whose send() returns a non-OK response with the given JSON body. */
   function failing(status: number, body: unknown): Transport {
