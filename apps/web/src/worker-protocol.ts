@@ -140,6 +140,8 @@ export type MainToWorker =
       models: VideoModelFiles;
       /** The reader's Settings render-param overrides (size/length/sampler choices). */
       params?: VideoRenderParams;
+      /** Long-form batch clip 2..N: keep the video model resident (skip the pre-render VRAM hand-off). */
+      warmBatch?: boolean;
     }
   /** Send a user-APPROVED send_email tool call (answered by `buddyEmailSent`). */
   | {

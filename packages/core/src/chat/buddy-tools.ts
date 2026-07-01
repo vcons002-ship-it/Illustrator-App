@@ -266,6 +266,12 @@ export type BuddyToolCall =
    * a library illustration by id, or an image file by path. Approval-gated like generate_image. Desktop +
    * a local ComfyUI engine with an installed image-to-video model. */
   | { tool: "generate_video"; prompt: string; source?: { kind: "last" | "library" | "file" | "text"; ref?: string }; model?: string; frames?: number; truncated?: boolean }
+  /** Make a LONGER video from a SERIES of short shots. `clips` is the ordered list of short motion prompts
+   * (one per clip); the app renders each, SEAMLESSLY CHAINS them (clip N+1 continues from clip N's last
+   * frame), and stitches them into ONE video. `source` seeds the FIRST clip (most recent image / library
+   * id / file path / "text" for text-to-video). Approval-gated once for the whole batch. Desktop + a local
+   * ComfyUI video model + ffmpeg. */
+  | { tool: "generate_long_video"; clips: string[]; source?: { kind: "last" | "library" | "file" | "text"; ref?: string }; model?: string; frames?: number; title?: string; truncated?: boolean }
   /** Search the reader's COMPUTER for a file to open (desktop). Approval-gated:
    * the host stops the loop and asks the reader before touching the filesystem. */
   | { tool: "find_files"; query: string }
@@ -1082,7 +1088,15 @@ export function buildBuddySystemPrompt(opts: {
         '"slow push-in, leaves drifting"). Use when the reader says "animate / make it move / bring this to life".\n' +
         '  Leave "model" off to use the reader\'s chosen video model (recommended); only set it to switch family on ' +
         'request: "wan2.2-i2v-14b" (~5s, strong motion — the default) or "ltx2.3-i2v-22b" (longer/faster). Optional ' +
-        '"frames" sets length (more frames = longer).\n'
+        '"frames" sets length (more frames = longer).\n' +
+        '- {"tool":"generate_long_video","clips":["shot 1 …","shot 2 …",…],"source":{"kind":"…"}} — make a LONGER video ' +
+        "from a SERIES of shots. Use this (not generate_video) when the reader wants something longer than a single clip " +
+        '("a 20-second video", "a short scene", "a longer clip"). Give `clips` as an ORDERED list of short motion prompts, ' +
+        "one per shot — each continues the previous one; the app renders them all, seamlessly chains each from the last " +
+        "clip's final frame, and stitches them into ONE video (approve once for the whole batch). Write 3–8 shots for a " +
+        'typical request (each shot ≈ the clip length). `source` seeds the FIRST clip (same options as generate_video: ' +
+        '"text" to start from the prompt, else the last image / a library id / a file). Optional "model", "frames" ' +
+        '(per clip), "title".\n'
       : "") +
     '- {"tool":"open_content","source":"library|web|pasted|code", …} — the ONE way to OPEN something to ' +
     "READ/illustrate IN THE READER (it takes over the screen). Pick `source`:\n" +
@@ -2515,6 +2529,42 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       ...(truncated ? { truncated: true } : {}),
     };
   }
+  if (tool === "generate_long_video") {
+    // `clips` is the ordered shot list — accept a real array OR a newline/`;`-delimited string (models
+    // sometimes emit either). Cap the count so a runaway list can't queue dozens of multi-minute renders.
+    const rawList: unknown[] = Array.isArray(obj.clips)
+      ? obj.clips
+      : typeof obj.clips === "string"
+        ? obj.clips.split(/\r?\n|;/)
+        : [];
+    const usableCount = rawList.filter((c) => typeof c === "string" && c.trim().length > 0).length;
+    const clips = rawList
+      .map((c) => (clampArg(c, MAX_PROMPT_CHARS).text ?? "").trim())
+      .filter((c) => c.length > 0)
+      .slice(0, 12);
+    if (clips.length === 0) return undefined;
+    const truncated = clips.length < usableCount;
+    const model = strArg(obj.model, MAX_NAME_CHARS);
+    const title = strArg(obj.title, MAX_TITLE_CHARS);
+    const frames =
+      typeof obj.frames === "number" && Number.isFinite(obj.frames) ? Math.min(257, Math.max(9, Math.round(obj.frames))) : undefined;
+    // `source` seeds the FIRST clip; the rest chain from the previous clip's last frame. Same shape/default
+    // as generate_video: "text" = start from a prompt, else the last image shown / a library id / a file.
+    const src = obj.source && typeof obj.source === "object" ? (obj.source as Record<string, unknown>) : undefined;
+    const kind = src?.kind === "library" || src?.kind === "file" || src?.kind === "text" ? src.kind : "last";
+    const ref = strArg(src?.ref, MAX_PATH_CHARS);
+    const source: { kind: "last" | "library" | "file" | "text"; ref?: string } =
+      kind === "text" ? { kind: "text" } : (kind === "library" || kind === "file") && ref ? { kind, ref } : { kind: "last" };
+    return {
+      tool,
+      clips,
+      source,
+      ...(model ? { model } : {}),
+      ...(title ? { title } : {}),
+      ...(frames !== undefined ? { frames } : {}),
+      ...(truncated ? { truncated: true } : {}),
+    };
+  }
   if (tool === "open_content") {
     // The single model-facing open tool: normalize to the internal open_* shapes by `source`, and
     // auto-detect fiction/technical when `mode` is omitted (the reader can flip it after it opens).
@@ -3367,6 +3417,12 @@ function formatBuddyToolResultBody(call: BuddyToolCall, result: BuddyToolResultP
     return result.video?.ok
       ? `[tool generate_video: animated the image into a video${desc} and showed it to the reader]`
       : `[tool generate_video failed${desc}: ${result.video?.error ?? "unknown error"}]`;
+  }
+  if (call.tool === "generate_long_video") {
+    const n = call.clips.length;
+    return result.video?.ok
+      ? `[tool generate_long_video: rendered ${n} clip${n === 1 ? "" : "s"} and stitched them into one video, shown to the reader]`
+      : `[tool generate_long_video failed: ${result.video?.error ?? "unknown error"}]`;
   }
   if (call.tool === "create_spreadsheet") {
     const o = result.opened;

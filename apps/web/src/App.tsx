@@ -187,6 +187,9 @@ import {
   videoModelDownloads,
   VIDEO_MODELS,
   videoModelById,
+  VIDEO_RENDER_DEFAULTS,
+  buildConcatArgs,
+  buildLastFrameArgs,
   type ChatTurn,
   type CreatedFileRef,
   type ContextUsage,
@@ -289,6 +292,8 @@ import {
   onModelProgress,
   readLocalFile,
   runCommand,
+  runFfmpeg,
+  writeWorkspaceFileBytes,
   whichInterpreter,
   appRepoRoot,
   writeWorkspaceFile,
@@ -5287,6 +5292,98 @@ export function App() {
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
+  /** File extension for a rendered clip's mime (mp4 / webm / gif / animated webp). */
+  const clipExt = (mime: string): string =>
+    mime.includes("mp4") ? "mp4" : mime.includes("webm") ? "webm" : mime.includes("gif") ? "gif" : "webp";
+
+  // Long-form video: render the ordered `clips` shot list, seamlessly CHAIN each from the previous clip's
+  // last frame (image-to-video), then stitch them into ONE mp4 with ffmpeg. One approval for the whole
+  // batch. Desktop-only (needs the filesystem + ffmpeg); a phone relays this to the desktop.
+  const approveGenerateLongVideo = async (call: Extract<BuddyToolCall, { tool: "generate_long_video" }>): Promise<void> => {
+    if (buddyRenderingRef.current) return;
+    buddyRenderingRef.current = true;
+    setBuddyPendingTool(undefined);
+    await ensureRenderEngineReady();
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+    setBuddyBusy(true);
+    const title = call.title?.trim() || call.clips[0] || "long video";
+    const n = call.clips.length;
+    let out: { video?: { bytes: ArrayBuffer; mimeType: string }; error?: string } = {};
+    try {
+      if (!isDesktop) throw new Error("Long-form video needs the desktop app (it renders each clip and stitches them on your computer).");
+      const models = resolveVideoModelFiles(call.model ?? settings.videoModel, settings.videoFiles);
+      const params = settings.videoParams?.[models.kind];
+      const d = VIDEO_RENDER_DEFAULTS[models.kind];
+      const width = params?.width ?? d.width;
+      const height = params?.height ?? d.height;
+      const fps = params?.fps ?? d.fps;
+      // Clip 1's seed: an image (last / library / file) unless the first shot is text-to-video.
+      let src: { bytes: ArrayBuffer; mimeType: string } | undefined =
+        call.source?.kind === "text" ? undefined : await resolveVideoSource(call.source);
+      const runDir = `longvideo/${Date.now().toString(36)}`;
+      const clipAbsPaths: string[] = [];
+      let dirAbs = "";
+      for (let i = 0; i < n; i++) {
+        setBuddyActivity(`Rendering clip ${i + 1}/${n}…`);
+        const clipCall = {
+          tool: "generate_video" as const,
+          prompt: call.clips[i]!,
+          source: { kind: "last" as const },
+          ...(call.frames !== undefined ? { frames: call.frames } : {}),
+        };
+        // Only clip 1 does the VRAM hand-off; the rest keep the video model resident (warmBatch).
+        const r = await chatVideo(clipCall, src, models, params, {
+          warmBatch: i > 0,
+          onProgress: (f) => setBuddyActivity(`Rendering clip ${i + 1}/${n}… ${Math.round(f * 100)}%`),
+        });
+        if (r.error || !r.video) throw new Error(`clip ${i + 1} of ${n} failed: ${r.error ?? "no clip produced"}`);
+        const abs = await writeWorkspaceFileBytes(`${runDir}/clip_${i}.${clipExt(r.video.mimeType)}`, new Uint8Array(r.video.bytes));
+        clipAbsPaths.push(abs);
+        if (i === 0) dirAbs = abs.replace(/[\\/][^\\/]+$/, ""); // the run dir, from clip 0's absolute path
+        // Seed the NEXT clip with this clip's last frame (skip after the final clip).
+        if (i < n - 1) {
+          setBuddyActivity(`Chaining clip ${i + 2}/${n}…`);
+          const frameAbs = `${dirAbs}/frame_${i}.png`;
+          const ff = await runFfmpeg(buildLastFrameArgs(abs, frameAbs));
+          if (ff.code !== 0) throw new Error(`couldn't extract the last frame of clip ${i + 1}: ${ff.stderr.slice(-200) || "ffmpeg error"}`);
+          const frameFile = await readLocalFile(frameAbs);
+          src = { bytes: await frameFile.arrayBuffer(), mimeType: "image/png" };
+        }
+      }
+      // Stitch all clips into one mp4.
+      setBuddyActivity(`Stitching ${n} clips…`);
+      const finalAbs = `${dirAbs}/final.mp4`;
+      const stitch = await runFfmpeg(buildConcatArgs(clipAbsPaths, { width, height, fps, out: finalAbs }));
+      if (stitch.code !== 0) throw new Error(`stitching failed: ${stitch.stderr.slice(-300) || "ffmpeg error"}`);
+      const finalFile = await readLocalFile(finalAbs);
+      out = { video: { bytes: await finalFile.arrayBuffer(), mimeType: "video/mp4" } };
+    } catch (err) {
+      out = { error: err instanceof Error ? err.message : String(err) };
+    } finally {
+      buddyRenderingRef.current = false;
+    }
+    setBuddyActivity("");
+    const feedback = formatToolResult(call, { video: { ok: Boolean(out.video), ...(out.error ? { error: out.error } : {}) } });
+    appendBuddy({
+      role: "tool",
+      text: out.error ? `⚠ Long video failed: ${out.error}` : `🎬 ${title.length > 60 ? `${title.slice(0, 60).trim()}…` : title} (${n} clips)`,
+      ...(out.video ? { video: out.video, attachments: [videoAttachment(title, out.video)] } : {}),
+      turns: [...pre, { role: "user", content: feedback }],
+    });
+    if (appManagedActive && buddyWorkflowRef.current) {
+      buddyStepEvidenceRef.current.toolResults.push({ call, result: { video: { ok: Boolean(out.video), ...(out.error ? { error: out.error } : {}) } } });
+      await advanceWorkflowAfterTurn(
+        { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+      );
+      return;
+    }
+    await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+  };
+
 
   // send and the auto-react continuation after an approved command. `userBubbleText`
   // Natural-language planning: the model emitted plan_task; research + build the plan
@@ -5813,6 +5910,8 @@ export function App() {
         void approveGenerateImage(res.pendingTool);
       } else if (res.pendingTool.tool === "generate_video" && settings.fullAutonomy) {
         void approveGenerateVideo(res.pendingTool);
+      } else if (res.pendingTool.tool === "generate_long_video" && settings.fullAutonomy) {
+        void approveGenerateLongVideo(res.pendingTool);
       } else if (res.pendingTool.tool === "plan_task") {
         // Planning is a safe, host-run operation (research + build a plan) — no approval
         // click; run it with progress and report back.
@@ -6247,6 +6346,10 @@ export function App() {
     }
     if (call?.tool === "generate_video") {
       await approveGenerateVideo(call);
+      return;
+    }
+    if (call?.tool === "generate_long_video") {
+      await approveGenerateLongVideo(call);
       return;
     }
     if (!call || call.tool !== "generate_image") return;

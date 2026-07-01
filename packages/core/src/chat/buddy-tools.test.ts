@@ -75,6 +75,44 @@ describe("parseBuddyToolCall — generate_video", () => {
   });
 });
 
+describe("parseBuddyToolCall — generate_long_video", () => {
+  it("parses an ordered shot list + defaults the source to the last image", () => {
+    expect(
+      parseBuddyToolCall('{"tool":"generate_long_video","clips":["push in on the gate","pan across the garden","tilt up to the sky"]}'),
+    ).toEqual({
+      tool: "generate_long_video",
+      clips: ["push in on the gate", "pan across the garden", "tilt up to the sky"],
+      source: { kind: "last" },
+    });
+  });
+  it("accepts a newline/semicolon string for clips, keeps a text source + title, clamps frames", () => {
+    expect(
+      parseBuddyToolCall('{"tool":"generate_long_video","clips":"shot one\\nshot two; shot three","source":{"kind":"text"},"title":"Garden","frames":9999}'),
+    ).toEqual({
+      tool: "generate_long_video",
+      clips: ["shot one", "shot two", "shot three"],
+      source: { kind: "text" },
+      title: "Garden",
+      frames: 257,
+    });
+  });
+  it("caps the clip count at 12 and marks the call truncated", () => {
+    const many = Array.from({ length: 20 }, (_, i) => `shot ${i}`);
+    const out = parseBuddyToolCall(JSON.stringify({ tool: "generate_long_video", clips: many })) as { clips: string[]; truncated?: boolean };
+    expect(out.clips).toHaveLength(12);
+    expect(out.truncated).toBe(true);
+  });
+  it("drops a long-video call with no usable clips", () => {
+    expect(parseBuddyToolCall('{"tool":"generate_long_video","clips":[]}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"generate_long_video","clips":["   ",""]}')).toBeUndefined();
+  });
+  it("formats a generate_long_video result (ok / failed)", () => {
+    const call = { tool: "generate_long_video" as const, clips: ["a", "b", "c"], source: { kind: "last" as const } };
+    expect(formatBuddyToolResult(call, { video: { ok: true } })).toContain("rendered 3 clips and stitched");
+    expect(formatBuddyToolResult(call, { video: { ok: false, error: "ffmpeg not found" } })).toContain("generate_long_video failed");
+  });
+});
+
 describe("parseBuddyToolCall — edit_file", () => {
   it("parses an edit_file with one or more search/replace edits", () => {
     expect(

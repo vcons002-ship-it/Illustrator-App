@@ -256,7 +256,7 @@ export interface EngineWorkerApi {
     image: { bytes: ArrayBuffer; mimeType: string } | undefined,
     models: VideoModelFiles,
     params: VideoRenderParams | undefined,
-    opts?: { onProgress?: (fraction: number) => void },
+    opts?: { onProgress?: (fraction: number) => void; warmBatch?: boolean },
   ) => Promise<ChatToolRender>;
   /** Push a just-resolved managed-engine URL to the worker RIGHT NOW (race-free, ahead of the debounced
    * settings sync) so the next STANDALONE render — which rebuilds providers fresh from settings — uses
@@ -1637,7 +1637,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       image: { bytes: ArrayBuffer; mimeType: string } | undefined,
       models: VideoModelFiles,
       params: VideoRenderParams | undefined,
-      opts?: { onProgress?: (fraction: number) => void },
+      opts?: { onProgress?: (fraction: number) => void; warmBatch?: boolean },
     ): Promise<ChatToolRender> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
@@ -1668,7 +1668,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
         });
         // Bytes travel zero-copy to the worker (the source frame, if any). Text-to-video sends no image.
         send(
-          { type: "chatVideo", requestId, call, models, ...(image ? { image } : {}), ...(params ? { params } : {}) },
+          { type: "chatVideo", requestId, call, models, ...(image ? { image } : {}), ...(params ? { params } : {}), ...(opts?.warmBatch ? { warmBatch: true } : {}) },
           image ? [image.bytes] : [],
         );
       }),
