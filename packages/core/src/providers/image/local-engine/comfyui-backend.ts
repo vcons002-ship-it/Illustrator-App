@@ -28,8 +28,9 @@ import {
 import { expandPrompt } from "../bible-injection.js";
 import type { LocalEngineBackend, LocalModelDescriptor } from "./backend.js";
 
-/** Default Wan negative prompt — suppresses the common artifacts + a static (non-moving) result. */
-const WAN_DEFAULT_NEGATIVE =
+/** Default Wan negative prompt — suppresses the common artifacts + a static (non-moving) result.
+ * Exported so the long-video path can EXTEND it (a caller-supplied negative replaces it). */
+export const WAN_DEFAULT_NEGATIVE =
   "blurry, low quality, jpeg artifacts, watermark, text, static, still image, frozen, deformed, distorted, extra limbs, bad hands";
 
 interface WanI2VParams {

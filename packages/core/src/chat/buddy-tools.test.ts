@@ -96,6 +96,19 @@ describe("parseBuddyToolCall — generate_long_video", () => {
       frames: 257,
     });
   });
+  it("keeps the persistent subject anchor and teaches the continuity rules", () => {
+    expect(
+      parseBuddyToolCall('{"tool":"generate_long_video","subject":"a red vintage pickup truck","clips":["it accelerates"]}'),
+    ).toEqual({
+      tool: "generate_long_video",
+      subject: "a red vintage pickup truck",
+      clips: ["it accelerates"],
+      source: { kind: "last" },
+    });
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], canGenerateVideo: true });
+    expect(prompt).toContain("CONTINUITY RULES");
+    expect(prompt).toContain("ALWAYS pass `subject`");
+  });
   it("caps the clip count at 12 and marks the call truncated", () => {
     const many = Array.from({ length: 20 }, (_, i) => `shot ${i}`);
     const out = parseBuddyToolCall(JSON.stringify({ tool: "generate_long_video", clips: many })) as { clips: string[]; truncated?: boolean };

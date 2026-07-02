@@ -4134,6 +4134,8 @@ async function handleChatVideo(
     const out = await backend.generateVideo(
       {
         prompt: call.prompt,
+        // The long-video loop's scene-lock negative (replaces the family default, which it extends).
+        ...(call.negativePrompt ? { negativePrompt: call.negativePrompt } : {}),
         // Image present → image-to-video; absent → text-to-video.
         ...(image ? { image } : {}),
         // The model's per-call frames wins over the Settings default; the rest of the graph choices
