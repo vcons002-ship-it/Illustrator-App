@@ -16,6 +16,11 @@ import type { OptionChain, SchwabPosition, SchwabQuote, SchwabWatchlist } from "
 import { formatMcpTools, type McpTool } from "./mcp.js";
 import type { TaskPlan } from "./tasks.js";
 import { MAX_DELEGATE_TASK_CHARS, MAX_DELEGATE_FILES } from "./coding-agent.js";
+import { extractJsonObjects, normalizeToolShape, strArg, stripControlTokens, stripFences, stripTrailingCommas } from "./tool-protocol.js";
+
+// The shared protocol primitives were first published from THIS file; re-export them from their new
+// home (tool-protocol.ts) so existing imports keep working unchanged.
+export { extractJsonObjects, normalizeToolShape, stripControlTokens } from "./tool-protocol.js";
 
 /**
  * Tool protocol for the LANDING-PAGE buddy — the concierge that finds something
@@ -1452,48 +1457,6 @@ const PLANNING_GUIDANCE =
   "off in parallel with spawn_coding_agents; or start drafting/building the first piece. Default to a " +
   "plan in PROSE; reach for tools to GROUND it or, once the reader says go, to act on it.\n";
 
-/** Pull every top-level JSON object out of a string (brace-matched, string-aware), so a batch
- * of tool calls the model put on separate lines is recovered individually. */
-export function extractJsonObjects(s: string): string[] {
-  const out: string[] = [];
-  let depth = 0;
-  let start = -1;
-  let inStr = false;
-  let esc = false;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i]!;
-    if (inStr) {
-      if (esc) esc = false;
-      else if (c === "\\") esc = true;
-      else if (c === '"') inStr = false;
-      continue;
-    }
-    if (c === '"') inStr = true;
-    else if (c === "{") {
-      if (depth === 0) start = i;
-      depth++;
-    } else if (c === "}" && depth > 0) {
-      depth--;
-      if (depth === 0 && start >= 0) {
-        out.push(s.slice(start, i + 1));
-        start = -1;
-      }
-    }
-  }
-  return out;
-}
-
-/** Strip the wrapper CONTROL tokens that common local-model tool formats emit AROUND their JSON —
- * Hermes/Qwen/ChatML `<tool_call>…</tool_call>` (+ `<tool_response>`) and gpt-oss "harmony"
- * `<|channel|>…<|message|>…<|call|>` — so they never leak into the chat as garbage. The JSON payload
- * is left in place (extractJsonObjects still finds it). Only known tokens are removed, never content. */
-export function stripControlTokens(s: string): string {
-  return s
-    .replace(/<\/?tool_call>/gi, "")
-    .replace(/<\/?tool_response>/gi, "")
-    .replace(/<\|(?:im_start|im_end|channel|message|start|end|call|return|constrain|tool_call|tool_response)\|>/gi, "");
-}
-
 /** A JSON chunk is a tool call in EITHER the app's `{"tool":X, …flatArgs}` shape OR the
  * `{"name":X,"arguments":{…}}` shape that Hermes/Qwen/ChatML-tools models emit. */
 function isToolJsonChunk(chunk: string): boolean {
@@ -1503,34 +1466,6 @@ function isToolJsonChunk(chunk: string): boolean {
     // ReAct / LangChain shape: {"action":"generate_image","action_input":{…}}
     (/"action"\s*:/.test(chunk) && /"action_input"\s*:/.test(chunk))
   );
-}
-
-/** Accept the `{"name":X,"arguments":{…}}` tool shape that Hermes/Qwen/ChatML-tools models emit (inside
- * `<tool_call>…`), not just the app's `{"tool":X, …flatArgs}`. Without this, those very common local
- * models' tool calls are silently ignored — the model "calls" write_file but nothing is written, so a
- * follow-up run_command finds no file. `arguments` may be an object, a double-encoded JSON string, or
- * siblings of `name`. */
-export function normalizeToolShape(obj: Record<string, unknown>): Record<string, unknown> {
-  if (typeof obj.tool === "string") return obj;
-  // `action`/`action_input` is the ReAct/LangChain shape capable models fall into; treat it like name/args.
-  const name = obj.name ?? obj.function ?? obj.tool_name ?? obj.action;
-  if (typeof name !== "string") return obj;
-  const rawArgs = obj.arguments ?? obj.parameters ?? obj.args ?? obj.input ?? obj.action_input;
-  let args: Record<string, unknown> = {};
-  if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
-    args = rawArgs as Record<string, unknown>;
-  } else if (typeof rawArgs === "string") {
-    try {
-      const parsed = JSON.parse(rawArgs);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) args = parsed as Record<string, unknown>;
-    } catch {
-      /* not double-encoded JSON — leave args empty */
-    }
-  } else {
-    const { name: _n, function: _f, tool_name: _t, action: _a, ...rest } = obj; // args as siblings of `name`
-    args = rest;
-  }
-  return { tool: name, ...args };
 }
 
 /** Whether a reply was MEANT to be a tool call (so a parse miss isn't shown to the reader as prose) —
@@ -1809,36 +1744,6 @@ function parseJsonLoose(chunk: string): Record<string, unknown> | undefined {
       return undefined;
     }
   }
-}
-
-/** Drop commas that sit right before a closing `}`/`]` (ignoring whitespace), but NEVER inside a
- * string literal — so `{"q":"a, ",}` loses only the structural trailing comma, not the one in "a, ". */
-function stripTrailingCommas(s: string): string {
-  let out = "";
-  let inStr = false;
-  let esc = false;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i]!;
-    if (inStr) {
-      out += c;
-      if (esc) esc = false;
-      else if (c === "\\") esc = true;
-      else if (c === '"') inStr = false;
-      continue;
-    }
-    if (c === '"') {
-      inStr = true;
-      out += c;
-      continue;
-    }
-    if (c === ",") {
-      let j = i + 1;
-      while (j < s.length && /\s/.test(s[j]!)) j++;
-      if (j < s.length && (s[j] === "}" || s[j] === "]")) continue; // structural trailing comma → drop
-    }
-    out += c;
-  }
-  return out;
 }
 
 /** Best-effort fiction-vs-technical guess for open_content when `mode` is omitted, from the
@@ -3500,12 +3405,6 @@ function formatBuddyToolResultBody(call: BuddyToolCall, result: BuddyToolResultP
   );
 }
 
-function strArg(v: unknown, max: number): string | undefined {
-  if (typeof v !== "string") return undefined;
-  const t = v.trim();
-  return t ? t.slice(0, max) : undefined;
-}
-
 /**
  * Like {@link strArg}, but also reports whether the value was CUT to fit `max`. Used for the args bound
  * for an external program (a shell command, a written file, an image/coding prompt): the caller flags
@@ -3522,12 +3421,4 @@ export function clampArg(v: unknown, max: number): { text: string | undefined; t
 /** A 1..25 result cap from the model's `max`, or undefined (use the default). */
 function boundedMax(v: unknown): number | undefined {
   return typeof v === "number" && Number.isFinite(v) ? Math.min(25, Math.max(1, Math.round(v))) : undefined;
-}
-
-function stripFences(s: string): string {
-  const t = s.trim();
-  // Accept ANY fence language tag — models wrap tool JSON in ```json but also ```tool_code (Gemma),
-  // ```python, ```bash, etc. Only the OPENING tag is a bare word; without this those calls leak.
-  const m = /^```[a-zA-Z0-9_-]*\s*([\s\S]*?)```$/.exec(t);
-  return (m ? m[1]! : t).trim();
 }

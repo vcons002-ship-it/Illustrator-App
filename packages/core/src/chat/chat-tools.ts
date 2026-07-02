@@ -1,5 +1,5 @@
 import { stripThink } from "../providers/llm/extraction.js";
-import { extractJsonObjects, normalizeToolShape, stripControlTokens } from "./buddy-tools.js";
+import { extractJsonObjects, normalizeToolShape, strArg, stripControlTokens, stripFences, stripTrailingCommas } from "./tool-protocol.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
 import type { BookPassage } from "./book-passage-search.js";
 import type { AnalyzeChart, AnalyzeSpec, Aggregation, DataFilter, FilterOp } from "../data/analyze.js";
@@ -489,48 +489,4 @@ export function formatToolResult(call: ToolCall, result: ToolResultPayload): str
   return result.image?.ok
     ? `[tool generate_image: rendered the image${imgDesc} and showed it to the reader]`
     : `[tool generate_image failed${imgDesc}: ${result.image?.error ?? "unknown error"}]`;
-}
-
-/** Drop commas that sit right before a closing `}`/`]` (ignoring whitespace), never inside a string
- * literal — so a trailing comma from a weak local model parses, but `"a, "` is untouched. */
-function stripTrailingCommas(s: string): string {
-  let out = "";
-  let inStr = false;
-  let esc = false;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i]!;
-    if (inStr) {
-      out += c;
-      if (esc) esc = false;
-      else if (c === "\\") esc = true;
-      else if (c === '"') inStr = false;
-      continue;
-    }
-    if (c === '"') {
-      inStr = true;
-      out += c;
-      continue;
-    }
-    if (c === ",") {
-      let j = i + 1;
-      while (j < s.length && /\s/.test(s[j]!)) j++;
-      if (j < s.length && (s[j] === "}" || s[j] === "]")) continue;
-    }
-    out += c;
-  }
-  return out;
-}
-
-function strArg(v: unknown, max: number): string | undefined {
-  if (typeof v !== "string") return undefined;
-  const t = v.trim();
-  return t ? t.slice(0, max) : undefined;
-}
-
-function stripFences(s: string): string {
-  const t = s.trim();
-  // Accept ANY fence language tag (matches buddy-tools) — models wrap tool JSON in ```json but also
-  // ```tool_code (Gemma), ```python, etc. Without this those calls silently become prose.
-  const m = /^```[a-zA-Z0-9_-]*\s*([\s\S]*?)```$/.exec(t);
-  return (m ? m[1]! : t).trim();
 }

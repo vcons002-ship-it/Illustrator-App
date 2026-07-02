@@ -204,16 +204,42 @@ Documented so the seams are known; each is a contained extraction with the line 
 
 1. **`useRemoteMirror`** — App.tsx ~2320-2831 (snapshot builder, sync-handler switch, per-slice push
    effects). Biggest single win; the switch is self-contained already.
+   **Shipped** as `apps/web/src/useRemoteMirror.ts`: the hook owns the mirror refs (chat/planner/
+   host-tool seams stay late-bound — App assigns them via effects, now through an explicit returned
+   interface instead of closure coupling), the handler switch, the per-slice push effects, and the
+   phone's debounced settings relay. Pure code motion; App.tsx shed ~430 lines.
 2. **`useLocalEngine`** — App.tsx ~1396-2300 (managed engine, downloads, connects, bundled LLM).
+   **Shipped** as `apps/web/src/useLocalEngine.ts` (~840 lines): engine start/probe/fallback
+   resolution, low-VRAM deferred start, bundled/local-server LLM bring-up, and every Settings
+   download + Connect handler. The resolver chain (probe → self-provision → managed fallback) is
+   hook-private; only the UI handler props + `ensureRenderEngineReady` are returned. Pure code
+   motion; inventory/progress/status stay in App state via passed setters.
 3. **Tool-approval dispatcher** — App.tsx ~5268-5680 + 6466 (approve/deny/allow-always for every tool).
+   **Policy shipped** as `packages/core/src/chat/tool-approval.ts` (`routePendingTool` — the
+   grants/settings table deciding auto-run vs ask, unit-tested incl. the "full autonomy never
+   unlocks run_command / prep_order always gates" invariants); the host's triage is now a switch on
+   the returned route. The approve/dismiss executors themselves stay in App.tsx (they're glue over
+   host machinery); consolidate them only if a feature adds several new gated tools at once.
 4. **`tool-protocol.ts` merge** — buddy-tools vs chat-tools share ~250-300 duplicated lines (strArg,
    stripTrailingCommas, stripFences, parse branches, format blocks). Merge the primitives first (zero
    behavior change), then the per-tool branches tool-by-tool.
+   **Primitives shipped** as `packages/core/src/chat/tool-protocol.ts` (strArg, stripTrailingCommas,
+   stripFences, extractJsonObjects, stripControlTokens, normalizeToolShape — byte-identical code
+   motion, 30 direct tests). Still staged for later: `parseJsonLoose` vs chat-tools' inlined repair
+   (subtly different shapes), the per-tool parse/format branches, and the stray private `stripFences`
+   copies in task-scan/document-polish/task-planner/skill-proposal/webllm-provider.
 5. **Chat runner unification** — the reading chat and buddy chat duplicate pendingTool triage, send
    paths, silence watchdogs, and debounced persistence. Unify AFTER 1-4; riskiest, largest.
+   **Deliberately not done** (1–4 are). The two runners have real behavioral differences (spoiler
+   gating + book context vs sessions/workflows/file ledgers) that must survive as explicit
+   parameters; unify only when a feature genuinely needs both chats to behave identically. The
+   shared policy/protocol layers extracted in 3 and 4 already remove most of the drift risk.
 
 Also: top untested-risky modules for when adding tests — comfyui-backend generate/poll state machine,
 local-server-provider streaming merge, `nativeToolCallsToText`, indexeddb-store, note-store (direct).
+**All covered now** — 50 direct tests: comfyui-backend generate/poll/retry/cancel (12),
+local-server-provider streaming merge + nativeToolCallsToText (12), indexeddb-store via
+fake-indexeddb incl. cascade/prefix-range/backup-roundtrip (13), note-store (13).
 
 ---
 
