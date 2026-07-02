@@ -69,6 +69,49 @@ describe("runBuddyTurn — story-mode empty-reply repair", () => {
   });
 });
 
+describe("runBuddyTurn — transient-error auto-retry", () => {
+  it("retries a read-only tool once, turning the blip into a silent recovery", async () => {
+    const llm = scriptedLlm(['{"tool":"search_web","query":"q"}', "Found it."]);
+    let attempts = 0;
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "?" }],
+      deps: {
+        ...baseDeps,
+        searchWeb: async () => {
+          attempts += 1;
+          if (attempts === 1) throw new Error("fetch failed");
+          return [{ title: "T", link: "http://x.test", snippet: "S" }];
+        },
+      },
+    });
+    expect(attempts).toBe(2);
+    expect(outcome.text).toBe("Found it.");
+  });
+
+  it("never re-runs a write tool — the error surfaces instead of duplicating the side effect", async () => {
+    // A "retryable" error can arrive AFTER the write landed (a timeout on the response);
+    // re-running create_task here would create the task twice.
+    const llm = scriptedLlm(['{"tool":"create_task","title":"buy milk"}', "That failed, sorry."]);
+    let attempts = 0;
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "add it" }],
+      deps: {
+        ...baseDeps,
+        createTask: async () => {
+          attempts += 1;
+          throw new Error("Request timed out");
+        },
+      },
+    });
+    expect(attempts).toBe(1);
+    expect(outcome.toolResults[0]?.result.error).toMatch(/timed out/i);
+  });
+});
+
 describe("runBuddyTurn — spawn_agents parallel fan-out", () => {
   it("runs the subtasks via runSubAgents and feeds all results back to synthesize", async () => {
     const llm = scriptedLlm([

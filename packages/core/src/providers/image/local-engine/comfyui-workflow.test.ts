@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildWorkflow, buildWanI2VWorkflow, buildLtx2I2VWorkflow } from "./comfyui-backend.js";
+import { buildWorkflow, buildWanI2VWorkflow, buildLtx2I2VWorkflow, shouldRetryPromptSubmit } from "./comfyui-backend.js";
 import type { SamplerSettings } from "../sd-prompt.js";
 
 const sampler: SamplerSettings = { cfg: 7, sampler: "euler", scheduler: "normal", steps: 20 };
@@ -445,5 +445,20 @@ describe("buildLtx2I2VWorkflow (official video-only 2-stage LTX-2.3)", () => {
   it("distilled LoRA is applied at strength 0.5 (per the official graph)", () => {
     const g = buildLtx2I2VWorkflow(ltx);
     expect(inputsOf(g, "202").strength_model).toBe(0.5);
+  });
+});
+
+describe("shouldRetryPromptSubmit", () => {
+  it("retries transient server failures only", () => {
+    expect(shouldRetryPromptSubmit(500)).toBe(true);
+    expect(shouldRetryPromptSubmit(502)).toBe(true);
+    expect(shouldRetryPromptSubmit(503)).toBe(true);
+  });
+  it("never retries a workflow rejection (4xx) or a success", () => {
+    // A 400 names the broken node/input — resending the identical graph can't succeed.
+    expect(shouldRetryPromptSubmit(400)).toBe(false);
+    expect(shouldRetryPromptSubmit(404)).toBe(false);
+    expect(shouldRetryPromptSubmit(422)).toBe(false);
+    expect(shouldRetryPromptSubmit(200)).toBe(false);
   });
 });

@@ -57,6 +57,17 @@ export interface GeminiProviderOptions {
   fetchImpl?: typeof fetch;
 }
 
+/** Bound for BUFFERED cloud calls (matches OpenAILLMProvider): generous — a long extraction can
+ * take a while — but a dead connection must not hang a chapter forever. Streaming is exempt: it
+ * goes through streamSse, which bounds only its connect phase. A caller signal still cancels earlier. */
+const CLOUD_REQUEST_TIMEOUT_MS = 120_000;
+
+/** The request timeout composed with an optional caller cancel signal. */
+function boundedSignal(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(CLOUD_REQUEST_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
 interface GeminiResponse {
   candidates?: {
     content?: { parts?: { text?: string }[] };
@@ -164,7 +175,7 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable, VisionCapabl
     const res = await this.transport.send({
       url: `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`,
       method: "POST",
-      ...(opts.signal ? { signal: opts.signal } : {}),
+      signal: boundedSignal(opts.signal),
       body,
     });
     if (!res.ok) throw new Error(`Gemini chat request failed with status ${res.status}`);
@@ -182,7 +193,7 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable, VisionCapabl
     const res = await this.transport.send({
       url: `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`,
       method: "POST",
-      ...(input.signal ? { signal: input.signal } : {}),
+      signal: boundedSignal(input.signal),
       body: {
         contents: [
           {
@@ -215,13 +226,13 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable, VisionCapabl
       ...(this.safetySettings ? { safetySettings: this.safetySettings } : {}),
     });
     const url = `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`;
-    let res = await this.transport.send({ url, method: "POST", body: body(opts.ground === true) });
+    let res = await this.transport.send({ url, method: "POST", body: body(opts.ground === true), signal: boundedSignal() });
     // Some model/mode combinations reject tools alongside JSON output (a 400) — retry
     // plain rather than failing the chapter (grounding is an enhancement, never a
     // gate). Only on 400: a 429/5xx would fail ungrounded too, and re-sending the
     // full chapter immediately doubles traffic exactly when the API is saturated.
     if (!res.ok && res.status === 400 && opts.ground) {
-      res = await this.transport.send({ url, method: "POST", body: body(false) });
+      res = await this.transport.send({ url, method: "POST", body: body(false), signal: boundedSignal() });
     }
     if (!res.ok) throw new Error(`Gemini request failed with status ${res.status}`);
     const data = await res.json<GeminiResponse>();

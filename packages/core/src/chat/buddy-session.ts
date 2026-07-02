@@ -246,6 +246,42 @@ function isHostTool(call: BuddyToolCall): call is Extract<BuddyToolCall, { tool:
   return (HOST_TOOLS as Set<string>).has(call.tool);
 }
 
+/**
+ * Tools the automatic transient-error retry (below) may re-run: read-only lookups/searches whose
+ * repeat has no side effects. Write tools (create_event, create_task, schedule_task, continue_story,
+ * draft_email, remember, mcp_call, trading_script, …) must NEVER be auto-retried — a "retryable"
+ * error can arrive AFTER the write actually landed (e.g. a timeout on the response), so a retry
+ * duplicates the event/task/note. Their errors go back to the model as the tool result instead.
+ */
+const AUTO_RETRY_SAFE_TOOLS: ReadonlySet<string> = new Set([
+  "search_web",
+  "read_url",
+  "search_books",
+  "search_images",
+  "random_books",
+  "calculate",
+  "wolfram",
+  "stock_quote",
+  "market_analysis",
+  "schwab_quote",
+  "schwab_options",
+  "schwab_positions",
+  "schwab_watchlists",
+  "list_alerts",
+  "mcp_tools",
+  "gmail_search",
+  "read_email",
+  "read_attachment",
+  "read_file",
+  "read",
+  "read_skill",
+  "list_events",
+  "list_tasks",
+  "list_scheduled",
+  "list_task_plans",
+  "get_task_plan",
+]);
+
 export async function runBuddyTurn(opts: {
   llm: ChatCapable;
   system: string;
@@ -513,8 +549,9 @@ export async function runBuddyTurn(opts: {
       opts.onEvent?.({ kind: "activity", text: describeBuddyToolActivity(call) });
       let result = await runBuddyTool(call, opts.deps);
       // One automatic retry for a transient (network/timeout/rate-limit) failure before the
-      // error is shown to the model — turns a flaky blip into a silent recovery.
-      if (result.error && isRetryableError(result.error)) {
+      // error is shown to the model — turns a flaky blip into a silent recovery. Read-only
+      // tools only (AUTO_RETRY_SAFE_TOOLS): re-running a write here could duplicate its effect.
+      if (result.error && isRetryableError(result.error) && AUTO_RETRY_SAFE_TOOLS.has(call.tool)) {
         result = await runBuddyTool(call, opts.deps);
       }
       toolResults.push({ call, result });

@@ -112,7 +112,9 @@ export async function importBookFile(file: File, handler: FileHandler = "auto"):
   switch (ext) {
     case "epub": {
       const bytes = await file.arrayBuffer();
-      return { kind: "book", book: await parseEpubOffMain(bytes, `epub-${file.name}-${file.size}`) };
+      // No ':' in a book id — image-store keys are `${bookId}:${requestId}`, so a colon smuggled in
+      // via a macOS/Linux filename would make one book's prefix range overlap another's on delete.
+      return { kind: "book", book: await parseEpubOffMain(bytes, `epub-${file.name.replace(/:/g, "_")}-${file.size}`) };
     }
     case "txt":
     case "md":

@@ -164,7 +164,9 @@ export class ClaudeProvider implements LLMProvider, ChatCapable, VisionCapable {
     const response = await this.client.beta.messages.parse(
       {
         model: this.model,
-        max_tokens: 4096,
+        // Parity with the local extraction path (local-server-provider uses 12288 for JSON output):
+        // at 4096 a long chapter's JSON was cut off mid-object and silently parsed as an empty bible.
+        max_tokens: 12288,
         // The system prompt is identical for every chapter of a build — mark it
         // cacheable so chapters 2..N read it from the prompt cache (same output,
         // lower input cost/latency; ignored when under the model's cache minimum).

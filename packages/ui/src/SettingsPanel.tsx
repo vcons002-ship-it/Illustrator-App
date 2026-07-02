@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useNarrow } from "./useMediaQuery.js";
 import {
   IMAGE_PROVIDERS,
   IMAGE_STYLES,
@@ -652,6 +653,8 @@ export function SettingsPanel({
   onImportData,
 }: SettingsPanelProps) {
   const [open, setOpen] = useState(false);
+  // Phone-width: the floating panel goes edge-to-edge instead of a 340px strip.
+  const narrow = useNarrow(520);
   // Settings filter: typing hides non-matching groups and force-opens matches.
   const [query, setQuery] = useState("");
   // Worker-endpoint connection test: status for the "Test" button under the sub-agent settings.
@@ -679,6 +682,12 @@ export function SettingsPanel({
   const textInfo = getProvider("text", value.textProvider);
   const imageInfo = getProvider("image", value.imageProvider);
 
+  // ONE canonical local-text-backend fallback — the desktop AND a linked phone (which mirrors the
+  // desktop's engine) default to the bundled model, plain web to on-device WebGPU. Several hand-rolled
+  // copies of this expression had drifted (one omitted `remote`, one defaulted to webgpu everywhere),
+  // so the panel could list the wrong model set for the actually-active backend.
+  const textBackend = value.localTextBackend ?? (isDesktop || remote ? "bundled" : "webgpu");
+
   // Resolved per-model sampler defaults, surfaced in the Advanced "auto = …" placeholders
   // so the user can see what blank actually does (mirrors the backend's resolution order:
   // catalog entry's own sampler → family default).
@@ -701,9 +710,10 @@ export function SettingsPanel({
         {open ? "Hide settings" : "Settings"}
       </button>
       {open && (
-        <div style={panelStyle}>
+        <div style={narrow ? { ...panelStyle, left: 8, width: "auto" } : panelStyle}>
           {/* The panel floats at the viewport's top-right, over the Settings button —
-              so it needs its OWN always-visible close control. */}
+              so it needs its OWN always-visible close control. On a narrow screen it spans
+              edge-to-edge instead of a cramped 340px strip. */}
           <div style={closeRowStyle}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
               <strong>Settings</strong>
@@ -1100,7 +1110,7 @@ export function SettingsPanel({
             <div style={rowStyle}>
               <span>How to run it</span>
               <select
-                value={value.localTextBackend ?? (isDesktop ? "bundled" : "webgpu")}
+                value={textBackend}
                 onChange={(e) =>
                   set({ localTextBackend: e.target.value as "webgpu" | "server" | "bundled" })
                 }
@@ -1111,13 +1121,13 @@ export function SettingsPanel({
                 <option value="webgpu">On-device (WebGPU, no install)</option>
                 <option value="server">Local server (Ollama / LM Studio / llama.cpp)</option>
               </select>
-              {(value.localTextBackend ?? (isDesktop ? "bundled" : "webgpu")) === "bundled" ? (
+              {textBackend === "bundled" ? (
                 <span style={{ opacity: 0.6, fontSize: 12 }}>
                   {BUNDLED_LLM.label} runs automatically inside the app — nothing to install or
                   connect. Best for reading and chat out of the box; switch to a Local server for a
                   bigger model, or keep Text on a cloud key for the strongest story understanding.
                 </span>
-              ) : (value.localTextBackend ?? (isDesktop ? "bundled" : "webgpu")) === "webgpu" ? (
+              ) : textBackend === "webgpu" ? (
                 <label style={rowStyle}>
                   <span>On-device text model</span>
                   <select
@@ -1155,7 +1165,7 @@ export function SettingsPanel({
                 // options.num_ctx; the OpenAI /v1 path can't). When set, the app loads THIS model at
                 // THIS window, so its KV cache (and VRAM) shrink to fit the GPU — the fix for slow
                 // CPU-offloaded generation. Stored per model id (mirrors localComponentsByModel).
-                const backend = value.localTextBackend ?? (isDesktop || remote ? "bundled" : "webgpu");
+                const backend = textBackend;
                 const server = value.localTextServer ?? "ollama";
                 const model = value.localServerTextModel;
                 if (backend !== "server" || server !== "ollama" || !model) return null;
@@ -1250,7 +1260,7 @@ export function SettingsPanel({
                 // we DON'T claim it fits — we flag the large-default-context trap, which is the usual
                 // cause of slow dense generation. (An MoE model activates few params/token, so it
                 // stays fast even when offloaded.)
-                const backend = value.localTextBackend ?? (isDesktop || remote ? "bundled" : "webgpu");
+                const backend = textBackend;
                 if (backend !== "server") return null;
                 const model = value.localServerTextModel ?? "";
                 const chatGb = serverModelVramCostGb(model);
@@ -1813,7 +1823,7 @@ export function SettingsPanel({
                   onChange={(e) => set({ chatLocalModel: e.target.value })}
                 >
                   <option value="">Same as the book’s local model</option>
-                  {((value.localTextBackend ?? "webgpu") === "server"
+                  {(textBackend === "server"
                     ? textModels.map((m) => ({ id: m.id, label: m.label }))
                     : LOCAL_TEXT_MODELS.map((m) => ({ id: m.id, label: m.label }))
                   ).map((m) => (
@@ -2427,13 +2437,15 @@ export function SettingsPanel({
           >
           {sameVendorNative(value) && <NativeModeRow value={value} set={set} />}
 
-          {isDesktop && value.imageProvider === "local" && (
+          {(isDesktop || remote) && value.imageProvider === "local" && (
+            // A linked phone sees the style-pack STATUS too (installed/size — mirrored via
+            // installedLoras); the download button stays desktop-only, where the files land.
             <StyleLoraRow
               styleId={value.imageStyle ?? "auto"}
               family={localFamily}
               installedLoras={installedLoras}
               progress={downloadProgress}
-              onDownload={onDownloadStyleLora}
+              onDownload={isDesktop ? onDownloadStyleLora : undefined}
             />
           )}
 
@@ -2516,7 +2528,7 @@ export function SettingsPanel({
               const imgName = value.localModel || "(none selected)";
               const CHAT_GB = 4; // built-in Llama 3.2 3B, approx
               const textLocal = value.textProvider === "local";
-              const usingBundled = textLocal && (value.localTextBackend ?? (isDesktop || remote ? "bundled" : "webgpu")) === "bundled";
+              const usingBundled = textLocal && textBackend === "bundled";
               const chatName = !textLocal
                 ? `cloud (${value.textProvider})`
                 : usingBundled
