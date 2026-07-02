@@ -1166,6 +1166,19 @@ describe("comfyExecutionError + flux2EncoderPatterns (encoder/model mismatch)", 
     // Without the resolved names it still works (no "Resolved files:" tail).
     expect(comfyExecutionError(status, "hidream")!).not.toMatch(/Resolved files/);
   });
+  it("translates the pinned-memory HostBuffer failure into restart + --disable-pinned-memory guidance", () => {
+    const status = {
+      status_str: "error",
+      messages: [
+        ["execution_error", { exception_message: "HostBuffer.read_file_slice failed", node_type: "KSampler", node_id: 3 }],
+      ] as [string, Record<string, unknown>][],
+    };
+    const msg = comfyExecutionError(status)!;
+    expect(msg).toContain("[node KSampler #3]");
+    expect(msg).toContain("HostBuffer.read_file_slice failed"); // raw kept
+    expect(msg).toMatch(/pinned-memory bug/);
+    expect(msg).toContain("--disable-pinned-memory");
+  });
   it("passes a non-cryptic error through, and returns undefined for success", () => {
     expect(
       comfyExecutionError({ status_str: "error", messages: [["execution_error", { exception_message: "Out of memory" }]] }),

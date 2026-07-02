@@ -1677,6 +1677,18 @@ export function comfyExecutionError(
       `(ComfyUI: ${raw})`
     );
   }
+  if (/hostbuffer|pinned memory/i.test(raw)) {
+    // ComfyUI's pinned-memory weight streaming (HostBuffer) failing to page-lock host RAM — a known
+    // upstream bug (Comfy-Org/ComfyUI#14250). It typically spares the first render and kills the
+    // second: the model re-streams after an unload with the pinned pool fragmented (and, here, a
+    // co-resident LLM holding the rest of RAM). The managed engine launches with
+    // --disable-pinned-memory; a self-hosted server needs the flag added by hand.
+    return (
+      `ComfyUI${at}: ${raw} — a known ComfyUI pinned-memory bug (it usually spares the first render ` +
+      "and hits the next one, when the model reloads). Restart the engine to clear it now; if you run " +
+      "your own ComfyUI server, launch it with --disable-pinned-memory to fix it for good."
+    );
+  }
   return `ComfyUI${at}: ${raw}`;
 }
 

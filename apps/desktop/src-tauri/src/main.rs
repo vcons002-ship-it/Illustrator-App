@@ -2434,12 +2434,33 @@ fn spawn_comfy(portable: &Path, low_vram: bool, show_console: bool) -> Result<Ch
         .current_dir(portable);
     if !has_nvidia() {
         cmd.arg("--cpu");
-    } else if low_vram {
-        // Keep the big text encoder / weights on CPU and stream into VRAM on demand,
-        // instead of ComfyUI's default "grab all free VRAM" mode. Only on a GPU box.
-        cmd.arg("--lowvram");
+    } else {
+        // Recent ComfyUI streams weights to the GPU through pinned (page-locked) host-RAM buffers.
+        // When the pool can't grow — fragmented after an unload/reload cycle, or the co-resident
+        // local LLM holding the rest of RAM — the render dies mid-KSampler with
+        // "HostBuffer.read_file_slice failed" (Comfy-Org/ComfyUI#14250), classically on the SECOND
+        // render. Pinned copies are only a transfer-speed optimization, so turn them off whenever
+        // the installed build knows the flag (an older build would reject it at argparse and never
+        // bind the port).
+        if comfy_supports_flag(portable, "--disable-pinned-memory") {
+            cmd.arg("--disable-pinned-memory");
+        }
+        if low_vram {
+            // Keep the big text encoder / weights on CPU and stream into VRAM on demand,
+            // instead of ComfyUI's default "grab all free VRAM" mode. Only on a GPU box.
+            cmd.arg("--lowvram");
+        }
     }
     cmd.spawn().map_err(|e| format!("Failed to start the engine: {e}"))
+}
+
+/// Whether the installed ComfyUI build's CLI accepts `flag` (a grep of comfy/cli_args.py — the
+/// argparse definitions live there as string literals). Passing an unknown flag would make
+/// argparse exit before the server ever binds, so callers gate optional flags on this.
+fn comfy_supports_flag(portable: &Path, flag: &str) -> bool {
+    std::fs::read_to_string(portable.join("ComfyUI").join("comfy").join("cli_args.py"))
+        .map(|s| s.contains(flag))
+        .unwrap_or(false)
 }
 
 /// Spawn AUTOMATIC1111 from its install `dir` (the folder with webui-user.bat) with `--api` on
