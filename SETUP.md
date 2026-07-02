@@ -162,6 +162,12 @@ system-wide) and your chosen checkpoint, shows progress bars, launches it, and
 connects — no separate `comfyui-setup.bat` needed. (macOS/Linux still connect to
 an engine you run yourself; see below.)
 
+> **Windows-first.** Everything the app *manages for you* — the auto-downloaded
+> ComfyUI, AUTOMATIC1111 auto-start, the bundled llama.cpp text model, and the
+> managed ffmpeg for long-form video — is **Windows-only** today. On macOS/Linux
+> the app runs fine, but you connect your **own** servers (Ollama / LM Studio for
+> text, your own ComfyUI or AUTOMATIC1111 for images/video) by URL in Settings.
+
 ### Hands-on assistant tools (desktop only — approval-gated)
 
 The desktop app lets the chat assistant reach your machine to *do* things, with a
@@ -564,6 +570,28 @@ Notes for **manually installed** files (everything above is automatic):
 - The split-file families (**Flux.2 / Z-Image / Qwen-Image / HiDream**) are **ComfyUI
   only** (not AUTOMATIC1111).
 
+### Video generation setup (image-to-video · text-to-video · long-form)
+
+Video renders on **ComfyUI** — even if your *images* run on AUTOMATIC1111. Both engines
+can be connected at the same time (each has its own connection row in Settings); video
+automatically uses the ComfyUI connection, so nothing else is locked out.
+
+1. Open **Settings → 🎬 Image-to-video** and pick a model, then click **Download** —
+   the app fetches every file it needs into the managed ComfyUI:
+   - **Wan 2.2** (the default) — 640×640 at 16fps, ~5-second clips, strong motion.
+   - **LTX-2.3** — 768×512 at 24fps, longer clips, optional **2× high-res** + **synced audio** (mp4).
+2. For **long-form video** (several clips stitched into one mp4), also click
+   **Download ffmpeg (~80 MB)** in the same section. A static ffmpeg build is stored in
+   `%USERPROFILE%\VisualReader\ffmpeg` — no system install, nothing added to your PATH.
+3. Ask the chat: *"make a video of the dragon taking off"* (one clip), or *"make a
+   30-second video of…"* — the assistant plans the shots, renders each clip continuing
+   from the previous clip's last frame, and ffmpeg stitches them into one video.
+
+> **Windows-first:** the managed engine, the model downloads, and the ffmpeg button are
+> Windows-only, like the rest of the managed stack. On macOS/Linux, connect your own
+> ComfyUI with the video model files installed. From a **linked phone** you can pick the
+> model, download ffmpeg, and start long-form videos — the desktop does the actual work.
+
 ### Local text model (prompt quality)
 
 Illustration **prompts** are written by your text LLM, and the prompt is the ceiling on
@@ -883,3 +911,7 @@ do.
 | `desktop.bat`: "Rust/build tools just installed… run again" | Close the window and double-click `desktop.bat` again so the new toolchain is on PATH. |
 | Desktop build fails with a linker error | Install the Visual C++ build tools ("Desktop development with C++"): <https://visualstudio.microsoft.com/visual-cpp-build-tools/>. |
 | `cargo: command not found` (macOS/Linux) | Install Rust from <https://rustup.rs>, then `cargo install tauri-cli --version "^2" --locked`. |
+
+More runtime problems — the engine won't start, ffmpeg DLL errors, the phone link,
+Google OAuth, storage warnings, A1111 auto-start — are covered in
+**[docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md)**.

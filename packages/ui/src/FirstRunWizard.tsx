@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { getProvider } from "@visual-reader/core";
 import type { ReaderSettings } from "./SettingsPanel.js";
+import { ModalShell } from "./ModalShell.js";
+import { ACCENT_BLUE } from "./tokens.js";
 
 /**
  * First-run experience. Visual Reader is an AI assistant that also illustrates
@@ -71,8 +73,9 @@ export function FirstRunWizard({ current, onComplete, isDesktop = false }: First
   const finishDemo = () => onComplete({ ...current, configured: true });
 
   return (
-    <div style={overlay}>
-      <div style={card}>
+    // No onClose: first-run setup is non-dismissable (there is nothing behind it yet),
+    // so ModalShell contributes the dialog semantics + focus handling only.
+    <ModalShell title="Welcome to Visual Reader" cardStyle={card}>
         <h2 style={{ margin: "0 0 4px" }}>Welcome to Visual Reader</h2>
         <p style={{ marginTop: 0, opacity: 0.75 }}>
           An AI assistant that also illustrates whatever you read. How do you want to start?
@@ -123,7 +126,7 @@ export function FirstRunWizard({ current, onComplete, isDesktop = false }: First
             <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <span style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
                 <span>API key</span>
-                <a href={getProvider("text", provider)?.keyUrl} target="_blank" rel="noreferrer" style={{ color: "#9db4ff" }}>
+                <a href={getProvider("text", provider)?.keyUrl} target="_blank" rel="noreferrer" style={{ color: ACCENT_BLUE }}>
                   Get a key ↗
                 </a>
               </span>
@@ -153,31 +156,22 @@ export function FirstRunWizard({ current, onComplete, isDesktop = false }: First
             </div>
           </div>
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 }
-
-const overlay: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  background: "rgba(8,9,13,0.7)",
-  backdropFilter: "blur(6px)",
-  zIndex: 100,
-  padding: 20,
-};
 
 const card: React.CSSProperties = {
   width: "min(460px, 100%)",
   background: "#1a1d27",
   color: "#e7e7ee",
-  border: "1px solid rgba(255,255,255,0.12)",
   borderRadius: 14,
   padding: 24,
-  fontFamily: "system-ui, sans-serif",
+  // Back to the browser defaults ModalShell's shared card overrides — this card is
+  // block-flow (spacing from the h2/p margins) and never taller than its content.
+  display: "block",
+  gap: 0,
+  maxHeight: "none",
+  overflowY: "visible",
 };
 
 const choice: React.CSSProperties = {
@@ -199,7 +193,7 @@ const sub: React.CSSProperties = { fontSize: 13, opacity: 0.7, fontWeight: 400 }
 const linkBtn: React.CSSProperties = {
   background: "transparent",
   border: "none",
-  color: "#9db4ff",
+  color: ACCENT_BLUE,
   cursor: "pointer",
   padding: 4,
   fontSize: 13,

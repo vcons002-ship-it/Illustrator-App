@@ -180,6 +180,10 @@ import {
   externalizedImageId,
   externalizedVideoId,
   restoreInlineImages,
+  collectCreations,
+  creationKey,
+  removeCreationFromMessages,
+  type CreationItem,
   applyFileEdits,
   summarizeFileEdits,
   shouldAutoCompact,
@@ -250,6 +254,9 @@ import {
   ImagePanel,
   PanelGrid,
   LibraryPanel,
+  CreationsPanel,
+  ToastHost,
+  type ToastItem,
   SettingsPanel,
   useScrollDepth,
   useNarrow,
@@ -475,7 +482,25 @@ export function App() {
     { stdout?: string; stderr?: string; code?: number; error?: string; cwd?: string } | undefined
   >();
   const codeSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const [localError, setLocalError] = useState<string>("");
+  const [localError, setLocalErrorRaw] = useState<string>("");
+  // App-wide toast stack: errors/confirmations that must be visible in EVERY view. The inline status
+  // line only renders on the bookless home screen, so before this a failure mid-reading was silent.
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const toastSeq = useRef(0);
+  const pushToast = useCallback((text: string, tone: "error" | "info" | "success" = "info") => {
+    const id = ++toastSeq.current;
+    setToasts((prev) => [...prev.slice(-3), { id, text, tone }]); // at most 4 on screen — drop the oldest
+    window.setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), tone === "error" ? 8000 : 5000);
+  }, []);
+  // Every error routed through setLocalError also raises a toast (the ~30 existing call sites get
+  // visible-everywhere errors without being rewritten). Callers pass plain strings, never updaters.
+  const setLocalError = useCallback(
+    (text: string) => {
+      setLocalErrorRaw(text);
+      if (text) pushToast(text, "error");
+    },
+    [pushToast],
+  );
   const [installedModels, setInstalledModels] = useState<InstalledModel[]>([]);
   // Same inventory, kept PER BACKEND too (installedModels itself is just whichever backend was last
   // probed) — lets the quick Models menu show ComfyUI's and AUTOMATIC1111's checkpoints independently,
@@ -1118,6 +1143,11 @@ export function App() {
   const [showPolish, setShowPolish] = useState(false);
   const [polishInitial, setPolishInitial] = useState<{ title?: string; text?: string } | undefined>();
   const [showLibrary, setShowLibrary] = useState(false);
+  // Creations gallery: every assistant-generated image/video across all chats and books, gathered
+  // from persisted histories when the panel opens (desktop/local only — a linked phone's store is
+  // empty; its chat is the desktop's mirror). Bytes hydrate lazily from the chat blob store.
+  const [showCreations, setShowCreations] = useState(false);
+  const [creations, setCreations] = useState<CreationItem[]>([]);
   // Reading-companion chat (per book; persisted in IndexedDB).
   const [showChat, setShowChat] = useState(false);
   const [chatMessages, setChatMessages] = useState<StoredChatMessage[]>([]);
@@ -4282,6 +4312,70 @@ export function App() {
     }, 500);
     return () => clearTimeout(t);
   }, [buddyMessages, activeBuddyId, libraryStore, isRemoteClient, settings.incognitoRemote]);
+
+  // ---- Creations gallery: gather / hydrate / delete ------------------------------------------
+  // Walk every chat's history for assistant-generated media. The ACTIVE buddy session and the open
+  // book's chat read from RAM (they have the newest turn, with bytes); everything else loads its
+  // persisted copy from the store.
+  const openCreations = async () => {
+    const out: CreationItem[] = [];
+    const walked = new Set<string>();
+    const walk = (chatId: string, label: string, msgs: StoredChatMessage[]) => {
+      if (walked.has(chatId)) return;
+      walked.add(chatId);
+      out.push(...collectCreations(chatId, label, msgs));
+    };
+    const sessionLabel = (s: BuddySession, i: number) => s.label || (s.id === BUDDY_CHAT_ID ? "Assistant chat" : `Chat ${i + 1}`);
+    buddySessions.forEach((s, i) => {
+      if (s.id === activeBuddyId) walk(s.id, sessionLabel(s, i), buddyMessages);
+    });
+    for (const [i, s] of buddySessions.entries()) {
+      if (walked.has(s.id)) continue;
+      const hist = await libraryStore.getChatHistory?.(s.id).catch(() => undefined);
+      if (hist) walk(s.id, sessionLabel(s, i), hist);
+    }
+    const books = await libraryStore.listBooks().catch(() => [] as BookSummary[]);
+    for (const b of books) {
+      if (walked.has(b.id)) continue;
+      const msgs = b.id === book?.id ? chatMessages : await libraryStore.getChatHistory?.(b.id).catch(() => undefined);
+      if (msgs) walk(b.id, b.title || "Book chat", msgs);
+    }
+    out.sort((a, b) => b.at - a.at);
+    setCreations(out);
+    setShowCreations(true);
+  };
+  const loadCreation = async (key: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined> => {
+    const item = creations.find((c) => creationKey(c) === key);
+    if (!item) return undefined;
+    if (item.bytes) return { bytes: item.bytes, mimeType: item.mimeType };
+    if (!item.blobId) return undefined;
+    return libraryStore.getImageBlob?.(item.chatId, item.blobId);
+  };
+  // Delete = strip the media out of the chat message it lives in (the message text survives), then
+  // drop its blob. Active chats strip IN RAM — their persist effects re-write the stripped history;
+  // a byte-carrying in-RAM copy left behind would otherwise re-persist a pointer to the dead blob.
+  const deleteCreation = async (key: string) => {
+    const item = creations.find((c) => creationKey(c) === key);
+    if (!item) return;
+    if (item.chatId === activeBuddyId) {
+      setBuddyMessages((prev) => removeCreationFromMessages(prev, item));
+    } else if (book && item.chatId === book.id) {
+      setChatMessages((prev) => removeCreationFromMessages(prev, item));
+    } else {
+      const hist = await libraryStore.getChatHistory?.(item.chatId).catch(() => undefined);
+      if (hist) {
+        const next = removeCreationFromMessages(hist, item);
+        if (next !== hist) await libraryStore.putChatHistory?.(item.chatId, next).catch(() => {});
+      }
+    }
+    if (item.blobId) {
+      await libraryStore.deleteImageBlob?.(item.chatId, item.blobId).catch(() => {});
+      // Forget we wrote it, so a future externalization of a same-id buffer re-writes cleanly.
+      writtenBlobIds.current.delete(`${item.chatId}::${item.blobId}`);
+    }
+    setCreations((prev) => prev.filter((c) => creationKey(c) !== key));
+    pushToast("Creation deleted.", "success");
+  };
 
   const appendBuddy = (msg: Omit<StoredChatMessage, "at">) =>
     setBuddyMessages((prev) => [...prev, { ...msg, at: Date.now() }]);
@@ -7636,6 +7730,15 @@ export function App() {
               Library ({library.length})
             </button>
           )}
+          {!isRemoteClient && (
+            <button
+              style={styles.button}
+              onClick={() => void openCreations()}
+              title="Every image and video the assistant has generated, across all chats and books — view, download, or delete"
+            >
+              🎨 Creations
+            </button>
+          )}
           <label
             style={styles.upload}
             title="Open a book or document — EPUB, PDF, Word, Excel, CSV, RTF, JSON, text, Markdown, HTML — or drop an image to transform it"
@@ -8115,6 +8218,8 @@ export function App() {
       {/* Status center: what the app is doing right now + the queue behind it (task planning keeps
           running after you leave the Tasks window, so this is how you keep an eye on it). */}
       <ActivityCenter activities={activities} />
+      {/* App-wide toasts: errors (every setLocalError) + confirmations, visible in every view. */}
+      <ToastHost toasts={toasts} onDismiss={(id) => setToasts((prev) => prev.filter((t) => t.id !== id))} />
       {/* App-wide download indicator: every in-flight model/video/LoRA download + Ollama text-model pull,
           folded into one floating panel so a big download stays visible after you leave Settings. */}
       <DownloadStatus
@@ -8571,6 +8676,22 @@ export function App() {
             setShowLibrary(false);
           }}
           onClose={() => setShowLibrary(false)}
+        />
+      )}
+
+      {showCreations && (
+        <CreationsPanel
+          items={creations.map((c) => ({
+            key: creationKey(c),
+            chatLabel: c.chatLabel,
+            at: c.at,
+            kind: c.kind,
+            mimeType: c.mimeType,
+            ...(c.label ? { label: c.label } : {}),
+          }))}
+          load={loadCreation}
+          onDelete={(key) => void deleteCreation(key)}
+          onClose={() => setShowCreations(false)}
         />
       )}
 

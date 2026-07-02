@@ -1,4 +1,5 @@
 import { memo, useState } from "react";
+import { ModalShell } from "./ModalShell.js";
 
 /**
  * Review-and-place gate for a Schwab order the assistant composed. The assistant NEVER
@@ -22,8 +23,9 @@ export interface OrderReviewModalProps {
 export const OrderReviewModal = memo(function OrderReviewModal({ summary, order, connected, placing, result, onPlace, onClose }: OrderReviewModalProps) {
   const [confirmed, setConfirmed] = useState(false);
   return (
-    <div style={overlay} onClick={onClose}>
-      <div style={panel} onClick={(e) => e.stopPropagation()}>
+    // A backdrop tap mid-placement must NOT dismiss a real-money flow — only the
+    // explicit buttons (and Escape, which mirrors the always-enabled Close) do.
+    <ModalShell title="Review order" onClose={onClose} disableBackdropClose={placing} overlayStyle={overlay} cardStyle={panel}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
           <strong style={{ fontSize: 15 }}>🧾 Review order</strong>
           <button style={{ ...btn, marginLeft: "auto" }} onClick={onClose}>
@@ -63,32 +65,22 @@ export const OrderReviewModal = memo(function OrderReviewModal({ summary, order,
             </div>
           </>
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 });
 
+// Deltas from ModalShell's shared look (this modal predates the shell): a slightly
+// darker backdrop above other overlays, a narrower block-flow card.
 const overlay: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
   background: "rgba(8,9,13,0.72)",
-  backdropFilter: "blur(6px)",
   zIndex: 120,
-  padding: 20,
 };
 const panel: React.CSSProperties = {
   width: "min(540px, 100%)",
   maxHeight: "90vh",
-  overflowY: "auto",
-  background: "#16181d",
-  color: "#e6e6e6",
   border: "1px solid rgba(255,255,255,0.14)",
-  borderRadius: 12,
-  padding: 18,
-  fontFamily: "system-ui, sans-serif",
+  display: "block",
+  gap: 0,
 };
 const pre: React.CSSProperties = {
   background: "#0d1017",

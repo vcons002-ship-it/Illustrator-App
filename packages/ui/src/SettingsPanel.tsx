@@ -653,6 +653,16 @@ export function SettingsPanel({
   onImportData,
 }: SettingsPanelProps) {
   const [open, setOpen] = useState(false);
+  // Escape closes the floating panel like the ✕ button — it isn't a centered modal
+  // (no ModalShell), so it needs its own keyboard dismissal.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
   // Phone-width: the floating panel goes edge-to-edge instead of a 340px strip.
   const narrow = useNarrow(520);
   // Settings filter: typing hides non-matching groups and force-opens matches.
