@@ -1255,6 +1255,28 @@ describe("google tools", () => {
     expect(active).toMatch(/all steps are done/i);
   });
 
+  it("parses complete_task (whole-task check-off) and advertises checking off with the task tools", () => {
+    expect(parseBuddyToolCall('{"tool":"complete_task","planId":"t1"}')).toEqual({ tool: "complete_task", planId: "t1" });
+    expect(parseBuddyToolCall('{"tool":"complete_task","planId":"t1","done":false}')).toEqual({
+      tool: "complete_task",
+      planId: "t1",
+      done: false,
+    });
+    expect(parseBuddyToolCall('{"tool":"complete_task"}')).toBeUndefined(); // no planId
+    const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], canTaskTools: true });
+    expect(prompt).toContain('"tool":"complete_task"');
+    expect(prompt).toMatch(/CHECKING TASKS OFF/);
+    // Formatting: completed vs reopened vs not-found.
+    const call = { tool: "complete_task", planId: "t1" } as const;
+    expect(formatBuddyToolResult(call, { taskAction: { planTitle: "Renew registration", completed: true } })).toContain(
+      'marked "Renew registration" complete',
+    );
+    expect(formatBuddyToolResult(call, { taskAction: { planTitle: "Renew registration", completed: false } })).toContain(
+      'reopened "Renew registration"',
+    );
+    expect(formatBuddyToolResult(call, {})).toContain("wasn't found");
+  });
+
   it("tells the model that plan_task refines the ACTIVE task in place (no duplicate fork)", () => {
     expect(buildBuddySystemPrompt({ persona: "assistant", library: [], canTaskTools: true })).toMatch(
       /re-plans THAT task in place/i,

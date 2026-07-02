@@ -150,7 +150,8 @@ import {
   describeAlert,
   updateTaskStep,
   applyStepEdits,
-  advanceStep,
+  completeStepById,
+  setTaskPlanComplete,
   nextReadyStep,
   tasksIndexBlock,
   patchTask,
@@ -3182,19 +3183,42 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       markStepDone: async (planId, stepId) => {
         const plan = (await loadTaskPlans(store)).find((p) => p.id === planId);
         if (!plan) return undefined;
-        const step = plan.steps.find((s) => s.id === stepId);
-        const { plan: next, ready } = advanceStep(plan);
-        await upsertTaskPlan(store, next);
-        if (step?.googleTaskId && googleConnected) {
+        // Complete the NAMED step (the reader can finish sub-tasks in any order) — advanceStep
+        // would silently check off the FIRST pending step instead, which is only right for
+        // strictly-ordered execution.
+        const r = completeStepById(plan, stepId);
+        if (!r) return undefined;
+        await upsertTaskPlan(store, r.plan);
+        if (r.step.googleTaskId && googleConnected) {
           try {
             const t = new DirectTransport(corsFetch());
             const at = await getFreshAccessToken(store, { clientId: googleId!, clientSecret: googleSecret!, transport: t });
-            await patchTask(t, at, step.googleTaskId, { status: "completed" });
+            await patchTask(t, at, r.step.googleTaskId, { status: "completed" });
           } catch {
             /* best-effort write-back */
           }
         }
-        return { planTitle: next.title, ...(ready ? { nextStep: ready.title } : {}), completed: next.status === "completed" };
+        return { planTitle: r.plan.title, ...(r.ready ? { nextStep: r.ready.title } : {}), completed: r.completed };
+      },
+      // The whole-task check-off ("that's all done" / "reopen it"): flip the plan + every step,
+      // then mirror the parent AND its synced sub-tasks to Google Tasks (best-effort).
+      completeTask: async (planId, done) => {
+        const plan = (await loadTaskPlans(store)).find((p) => p.id === planId);
+        if (!plan) return undefined;
+        await setTaskPlanComplete(store, planId, done);
+        if (googleConnected && (plan.googleTaskId || plan.steps.some((s) => s.googleTaskId))) {
+          try {
+            const t = new DirectTransport(corsFetch());
+            const at = await getFreshAccessToken(store, { clientId: googleId!, clientSecret: googleSecret!, transport: t });
+            const status = done ? ("completed" as const) : ("needsAction" as const);
+            for (const id of [plan.googleTaskId, ...plan.steps.map((s) => s.googleTaskId)]) {
+              if (id) await patchTask(t, at, id, { status }).catch(() => {});
+            }
+          } catch {
+            /* best-effort write-back — the in-app plan is saved regardless */
+          }
+        }
+        return { planTitle: plan.title, completed: done };
       },
       updateTaskStep: async (planId, stepId, patch) => {
         const plan = (await loadTaskPlans(store)).find((p) => p.id === planId);

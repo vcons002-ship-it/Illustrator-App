@@ -88,6 +88,7 @@ export const TOOL_INVENTORY: ToolEntry[] = [
   { tool: "add_task_steps", capability: "task planning", disposition: "kept" },
   { tool: "update_task_step", capability: "task planning", disposition: "kept" },
   { tool: "mark_step_done", capability: "task planning", disposition: "kept" },
+  { tool: "complete_task", capability: "task planning", disposition: "kept" },
   { tool: "schedule_task", capability: "scheduled tasks", disposition: "kept" },
   { tool: "list_scheduled", capability: "scheduled tasks", disposition: "kept" },
   { tool: "cancel_scheduled", capability: "scheduled tasks", disposition: "kept" },

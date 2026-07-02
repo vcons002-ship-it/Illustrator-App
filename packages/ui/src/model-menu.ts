@@ -32,6 +32,73 @@ export interface ModelMenuGroup {
   localModelsByBackend?: Partial<Record<LocalBackendId, ModelMenuOption[]>>;
 }
 
+/** One provider/source section inside a tab of the switcher ("Cloud" / "Local"), derived from a group
+ * by `sectionizeGroup` so the popover renders headers without re-deriving anything in JSX. */
+export interface ModelMenuSection {
+  /** Section header. Absent on a group's sole section (e.g. video), where a header would be noise. */
+  label?: string;
+  /** Dim caption under the header (e.g. video's "runs on local ComfyUI" note). */
+  note?: string;
+  options: ModelMenuOption[];
+  /** Image group's "Local" section in provider-first mode: render the group's `localBackends` picker
+   * here, with the chosen backend's `localModelsByBackend` checkpoints beneath it. */
+  backendPicker?: boolean;
+}
+
+/**
+ * Split a group's flat option list into provider/source sections. Pure and lossless: every option
+ * lands in exactly one section, unchanged. Cloud vs local is read off each option's `patch` (the
+ * one field that can't drift from what picking it actually does), not off id spelling.
+ */
+export function sectionizeGroup(g: ModelMenuGroup): ModelMenuSection[] {
+  if (g.key === "video") {
+    // Single-source group — a "Local" header over everything says nothing; a note does.
+    if (!g.options.length) return [];
+    return [{ note: "Video renders on your local ComfyUI.", options: g.options }];
+  }
+  const isLocal = (o: ModelMenuOption): boolean =>
+    g.key === "llm" ? o.patch.textProvider === "local" : o.patch.imageProvider === "local";
+  const cloud = g.options.filter((o) => !isLocal(o));
+  const local = g.options.filter(isLocal);
+  const sections: ModelMenuSection[] = [];
+  if (cloud.length) sections.push({ label: "Cloud", options: cloud });
+  // Provider-first image mode keeps its local checkpoints under localBackends/localModelsByBackend,
+  // so the "Local" section exists (to host the backend picker) even with zero flat options.
+  const hasBackendPicker = g.key === "image" && (g.localBackends?.length ?? 0) > 0;
+  if (local.length || hasBackendPicker) {
+    sections.push({ label: "Local", options: local, ...(hasBackendPicker ? { backendPicker: true } : {}) });
+  }
+  return sections;
+}
+
+/** The label of a group's active option — shown as the per-tab summary in the switcher's tab strip.
+ * Checks the provider-first image lists too, where the active checkpoint isn't in `options`. */
+export function activeModelLabel(g: ModelMenuGroup): string | undefined {
+  const flat = g.options.find((o) => o.active);
+  if (flat) return flat.label;
+  for (const opts of Object.values(g.localModelsByBackend ?? {})) {
+    const hit = opts?.find((o) => o.active);
+    if (hit) return hit.label;
+  }
+  return undefined;
+}
+
+/** Which tab the switcher opens on: chat when it holds the active selection (the common case),
+ * else the first group that does, else the first group at all. */
+export function defaultMenuTab(groups: ModelMenuGroup[]): ModelMenuGroup["key"] {
+  const llm = groups.find((g) => g.key === "llm");
+  if (llm && activeModelLabel(llm) !== undefined) return "llm";
+  const withActive = groups.find((g) => activeModelLabel(g) !== undefined);
+  return withActive?.key ?? groups[0]?.key ?? "llm";
+}
+
+/** Case-insensitive label filter for the switcher's search box. Blank query → the list untouched. */
+export function filterOptions(options: ModelMenuOption[], query: string): ModelMenuOption[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return options;
+  return options.filter((o) => o.label.toLowerCase().includes(q));
+}
+
 export function buildModelMenu(
   s: ReaderSettings,
   lists: {

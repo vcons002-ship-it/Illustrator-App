@@ -5,6 +5,16 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ## July 2026
 
+### Assistant & UI
+
+- **The assistant can check tasks off** — say "I booked the flight" or "mark that done" and it
+  marks the sub-task (or the whole task) complete, in the app and in Google Tasks when connected.
+  It can also reopen a finished task. Checking off a specific sub-task now works in any order
+  (previously the first pending step was silently completed instead of the one you named).
+- **Models menu redesign** — the chat's ⚙ Models switcher is now tabbed (💬 Chat / 🖼 Image /
+  🎬 Video) with provider sections, the active pick shown per tab, and a filter box for long
+  model lists.
+
 ### Reliability & security (audit phases 1–2)
 
 - **Engine crash recovery** — if the background engine crashes, in-flight chats and renders
