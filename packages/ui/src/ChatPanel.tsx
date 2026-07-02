@@ -304,6 +304,8 @@ export interface ChatPanelProps {
   onDownloadData?: (table: DataTable, name: string, format: "xlsx" | "csv") => void;
   /** Universal file-card actions (Download / Open in app / Open in library / Open on PC). */
   fileActions?: FileActions;
+  /** Open a found-file chip (a /find result on the desktop's disk) as a book. */
+  onOpenLocalFile?: (path: string) => void;
   /** Desktop build — enables the Open-on-PC file action. */
   desktop?: boolean;
   /** Latest context-usage breakdown (for the usage donut). */
@@ -395,12 +397,14 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
               message={m}
               index={i}
               {...(props.onDeleteMessage ? { onDelete: props.onDeleteMessage } : {})}
+              {...(props.onOpenLocalFile ? { onOpenLocalFile: props.onOpenLocalFile } : {})}
               {...(props.onSaveFile ? { onSaveFile: props.onSaveFile } : {})}
               {...(props.onSaveProject ? { onSaveProject: props.onSaveProject } : {})}
               {...(props.onBuildDocument ? { onBuildDocument: props.onBuildDocument } : {})}
               {...(props.onDownloadData ? { onDownloadData: props.onDownloadData } : {})}
               {...(props.fileActions ? { fileActions: props.fileActions } : {})}
               {...(props.desktop ? { desktop: props.desktop } : {})}
+              onAction={props.onSend}
             />
           ))}
           {props.thinking ? <ThinkingBlock text={props.thinking} /> : null}
@@ -1224,8 +1228,13 @@ function CodeCard({
   const runnable = !!onRunCode && (["py", "js", "sh"].includes(ext) || ["python", "js", "javascript", "node", "sh", "bash", "shell"].includes(l));
   const save = async () => {
     if (!onSaveFile) return;
-    const r = await onSaveFile(saveName, code, mime);
-    setSaved(typeof r === "string" ? r : "saved");
+    try {
+      const r = await onSaveFile(saveName, code, mime);
+      setSaved(typeof r === "string" ? r : "saved");
+    } catch (e) {
+      // Surface a failed save where the "saved to …" note would go — not an unhandled rejection.
+      setSaved(`save failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
   };
   const run = async () => {
     if (!onRunCode) return;

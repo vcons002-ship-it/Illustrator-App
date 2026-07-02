@@ -26,11 +26,18 @@ const CLOUD_CHOICES = ["gemini", "openai"] as const;
 const TEXT_CHOICES = ["claude", "gemini", "openai"] as const;
 
 export function FirstRunWizard({ current, onComplete, isDesktop = false }: FirstRunWizardProps) {
-  const [path, setPath] = useState<"none" | "cloud" | "text">("none");
+  const [path, setPathState] = useState<"none" | "cloud" | "text">("none");
   const [provider, setProvider] = useState<(typeof TEXT_CHOICES)[number]>("gemini");
   const [key, setKey] = useState("");
   const textOnly = path === "text";
   const choices = textOnly ? TEXT_CHOICES : CLOUD_CHOICES;
+  // Clamp the provider to the new path's list — text-only offers Claude, cloud doesn't, so
+  // text→back→cloud would otherwise leave a selection the dropdown can't even display.
+  const setPath = (next: "none" | "cloud" | "text"): void => {
+    setPathState(next);
+    const valid: readonly string[] = next === "text" ? TEXT_CHOICES : CLOUD_CHOICES;
+    if (!valid.includes(provider)) setProvider(valid[0] as (typeof TEXT_CHOICES)[number]);
+  };
 
   const finishCloud = () => {
     if (!key.trim()) return;

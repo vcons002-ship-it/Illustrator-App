@@ -129,7 +129,9 @@ export function dataToolsBlock(table: DataTable): string {
 
 /** Injection guard: lengths a tool argument can't exceed (book text can't smuggle essays). */
 const MAX_QUERY_CHARS = 200;
-const MAX_PROMPT_CHARS = 600;
+/** Matches buddy-tools: natural-language image models reward long, detailed prompts — the old
+ * 600-char cap visibly truncated both the render prompt AND the approval preview. */
+const MAX_PROMPT_CHARS = 2_000;
 const MAX_NAME_CHARS = 80;
 const MAX_URL_CHARS = 600;
 /** How much of a fetched page is fed back to the model (keeps context bounded). */
@@ -519,6 +521,8 @@ function strArg(v: unknown, max: number): string | undefined {
 
 function stripFences(s: string): string {
   const t = s.trim();
-  const m = /^```(?:json)?\s*([\s\S]*?)```$/i.exec(t);
+  // Accept ANY fence language tag (matches buddy-tools) — models wrap tool JSON in ```json but also
+  // ```tool_code (Gemma), ```python, etc. Without this those calls silently become prose.
+  const m = /^```[a-zA-Z0-9_-]*\s*([\s\S]*?)```$/.exec(t);
   return (m ? m[1]! : t).trim();
 }

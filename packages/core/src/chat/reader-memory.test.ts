@@ -62,6 +62,17 @@ describe("reader memory", () => {
     expect(await loadMemory(store)).toEqual([]);
   });
 
+  it("keeps the NEWEST notes when a stored list exceeds the cap (load matches eviction direction)", async () => {
+    const store = new InMemoryStore();
+    // Simulate a memo written by an older build / larger cap: more entries than MAX_MEMORY_NOTES.
+    const over = Array.from({ length: MAX_MEMORY_NOTES + 5 }, (_, i) => ({ text: `note ${i}`, at: i }));
+    await store.putMemo("reader-memory", JSON.stringify(over));
+    const notes = await loadMemory(store);
+    expect(notes).toHaveLength(MAX_MEMORY_NOTES);
+    expect(notes[0]!.text).toBe("note 5"); // oldest 5 dropped, newest kept
+    expect(notes[notes.length - 1]!.text).toBe(`note ${MAX_MEMORY_NOTES + 4}`);
+  });
+
   it("renders a prompt block only when notes exist", () => {
     expect(memoryPromptBlock([])).toBe("");
     const block = memoryPromptBlock([{ text: "prefers watercolor", at: 1 }]);
