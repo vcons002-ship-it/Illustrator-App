@@ -1388,9 +1388,25 @@ export function App() {
     };
   }, [stored]);
 
+  // Debounced: saveSettings runs AES key-encryption + a full JSON.stringify + localStorage write —
+  // per-keystroke (e.g. while typing an API key) that's needless crypto churn. Trailing 400ms write,
+  // flushed on pagehide so a quick close never loses the last edit.
+  const settingsSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => {
-    if (hydrated.current) void saveSettings(settings);
+    if (!hydrated.current) return;
+    clearTimeout(settingsSaveTimer.current);
+    settingsSaveTimer.current = setTimeout(() => void saveSettings(settings), 400);
+    return () => clearTimeout(settingsSaveTimer.current);
   }, [settings]);
+  useEffect(() => {
+    const flush = (): void => {
+      if (!hydrated.current) return;
+      clearTimeout(settingsSaveTimer.current);
+      void saveSettings(settingsRef.current);
+    };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, []);
 
   // Desktop: subscribe to engine-setup and model-download progress (Rust events).
   useEffect(() => {
@@ -2635,10 +2651,11 @@ export function App() {
             break;
           case "vrcmd:hostTool":
             // The phone's buddy hit a desktop-runtime tool (files/command/screenshot); run it HERE
-            // (we have the runtime + the working folder) and relay the result back.
-            void runHostToolForRemoteRef.current(msg.call, msg.cwd).then((payload) =>
-              sendAppSync({ type: "vrsync:hostToolResult", requestId: msg.requestId, payload }),
-            );
+            // (we have the runtime + the working folder) and relay the result back. ALWAYS reply —
+            // a rejection with no reply would stall the phone's turn until its 600s timeout.
+            void runHostToolForRemoteRef.current(msg.call, msg.cwd)
+              .catch((err): BuddyToolResultPayload => ({ command: { stdout: "", stderr: err instanceof Error ? err.message : String(err), code: -1 } }))
+              .then((payload) => sendAppSync({ type: "vrsync:hostToolResult", requestId: msg.requestId, payload }));
             break;
           case "vrcmd:fetchFile": {
             // The phone asked for the full bytes of a file card whose bytes the mirror stripped (a large
@@ -6441,6 +6458,9 @@ export function App() {
     [noteAction],
   );
   useEffect(() => {
+    // A linked phone mirrors the desktop's alerts — the DESKTOP evaluates them (same guard as the
+    // scheduled-task + remote-bus runners); running here too would double-fire + double-persist.
+    if (isRemoteClient) return;
     const id = setInterval(() => {
       void (async () => {
         const enabled = (await loadPriceAlerts(libraryStore)).filter((a) => a.enabled);
@@ -6460,7 +6480,7 @@ export function App() {
       })();
     }, 60_000);
     return () => clearInterval(id);
-  }, [libraryStore, marketIndicators, notifyAlert, refreshAlerts]);
+  }, [isRemoteClient, libraryStore, marketIndicators, notifyAlert, refreshAlerts]);
   // Approved buddy render: the worker's chatTool path serves both chats (the
   // buddy's generate_image call has the identical shape by design).
   const onApproveBuddyTool = useCallback(async () => {
@@ -8413,6 +8433,7 @@ export function App() {
           onDeleteMessage={onDeleteChatMessage}
           onCompact={onCompactChatClick}
           onSaveFile={onSaveChatFile}
+          onOpenLocalFile={onOpenLocalFile}
           fileActions={buddyFileActions}
           desktop={isDesktop}
           {...((isDesktop || isRemoteClient) && settings.allowCommands ? { onRunCode } : {})}

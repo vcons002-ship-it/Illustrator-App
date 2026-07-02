@@ -29,7 +29,9 @@ export async function loadNotes(store: VisualReaderStore, spec: NoteStoreSpec): 
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter((n): n is NoteEntry => typeof (n as NoteEntry)?.text === "string")
-      .slice(0, spec.maxNotes);
+      // Keep the NEWEST notes (the list is append-ordered), matching persist/rememberIn's
+      // slice(-maxNotes) eviction — slice(0, …) would drop the most recent notes instead.
+      .slice(-spec.maxNotes);
   } catch {
     return [];
   }

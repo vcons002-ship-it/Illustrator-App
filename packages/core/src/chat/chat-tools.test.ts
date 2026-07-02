@@ -57,6 +57,11 @@ describe("parseToolCall", () => {
       tool: "search_images",
       query: "mitochondrion",
     });
+    // Any fence language works (Gemma emits ```tool_code) — parity with the buddy parser.
+    expect(parseToolCall('```tool_code\n{"tool":"search_images","query":"ribosome"}\n```')).toEqual({
+      tool: "search_images",
+      query: "ribosome",
+    });
     expect(parseToolCall('<think>should I search?</think>{"tool":"search_web","query":"x"}')).toEqual(
       { tool: "search_web", query: "x" },
     );
@@ -70,11 +75,11 @@ describe("parseToolCall", () => {
 
   it("clamps steps and caps over-length arguments", () => {
     const call = parseToolCall(
-      `{"tool":"generate_image","prompt":"${"x".repeat(2000)}","steps":9001}`,
+      `{"tool":"generate_image","prompt":"${"x".repeat(2500)}","steps":9001}`,
     );
     expect(call?.tool).toBe("generate_image");
     if (call?.tool === "generate_image") {
-      expect(call.prompt.length).toBe(600);
+      expect(call.prompt.length).toBe(2000); // matches buddy-tools' MAX_PROMPT_CHARS
       expect(call.steps).toBe(150);
     }
   });

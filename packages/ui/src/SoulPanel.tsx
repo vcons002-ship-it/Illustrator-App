@@ -153,22 +153,28 @@ export const SoulPanel = memo(function SoulPanel({
       .filter((f) => f.type.startsWith("image/"))
       .slice(0, room);
     if (!picked.length) return;
-    const read = await Promise.all(
-      picked.map(
-        (f) =>
-          new Promise<SoulImage>((resolve, reject) => {
-            const r = new FileReader();
-            r.onload = () => {
-              const url = String(r.result || "");
-              const comma = url.indexOf(","); // strip the "data:<mime>;base64," prefix
-              resolve({ mimeType: f.type || "image/png", dataBase64: comma >= 0 ? url.slice(comma + 1) : url });
-            };
-            r.onerror = () => reject(new Error("couldn't read the image"));
-            r.readAsDataURL(f);
-          }),
-      ),
-    );
-    await persistPics([...pics, ...read]);
+    try {
+      const read = await Promise.all(
+        picked.map(
+          (f) =>
+            new Promise<SoulImage>((resolve, reject) => {
+              const r = new FileReader();
+              r.onload = () => {
+                const url = String(r.result || "");
+                const comma = url.indexOf(","); // strip the "data:<mime>;base64," prefix
+                resolve({ mimeType: f.type || "image/png", dataBase64: comma >= 0 ? url.slice(comma + 1) : url });
+              };
+              r.onerror = () => reject(new Error("couldn't read the image"));
+              r.readAsDataURL(f);
+            }),
+        ),
+      );
+      await persistPics([...pics, ...read]);
+    } catch (err) {
+      // Callers fire-and-forget (`void addImageFiles(...)`) — an unreadable file must land in the
+      // panel's error line, not as an unhandled rejection.
+      setError(err instanceof Error ? err.message : String(err));
+    }
   };
   const removeImage = (i: number): void => void persistPics(pics.filter((_, idx) => idx !== i));
 

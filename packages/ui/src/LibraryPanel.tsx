@@ -90,7 +90,14 @@ export function LibraryPanel({ books, currentId, onOpen, onRemove, onCarryOver, 
                         Carry bible →
                       </button>
                     )}
-                    <button style={buttonStyle} title="Remove from library" onClick={() => onRemove(b.id)}>
+                    <button
+                      style={buttonStyle}
+                      title="Remove from library"
+                      aria-label={`Remove ${b.title} from library`}
+                      onClick={() => {
+                        if (window.confirm(`Remove "${b.title}" from your library? Its illustrations and bible are deleted too.`)) onRemove(b.id);
+                      }}
+                    >
                       ✕
                     </button>
                   </div>

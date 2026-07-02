@@ -303,7 +303,12 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               <button
                 style={smallButtonStyle}
                 title="Delete this session (its history is removed)"
-                onClick={() => props.onDeleteSession!(props.activeSessionId!)}
+                aria-label="Delete this session"
+                onClick={() => {
+                  if (window.confirm("Delete this chat session? Its history is removed permanently.")) {
+                    props.onDeleteSession!(props.activeSessionId!);
+                  }
+                }}
               >
                 🗑
               </button>
@@ -349,7 +354,13 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             </button>
           )}
           {toolsOpen && props.messages.length > 0 && (
-            <button style={smallButtonStyle} onClick={props.onClearHistory} title="Clear the buddy conversation">
+            <button
+              style={smallButtonStyle}
+              onClick={() => {
+                if (window.confirm("Clear this conversation? All its messages are removed permanently.")) props.onClearHistory();
+              }}
+              title="Clear the buddy conversation"
+            >
               Clear
             </button>
           )}

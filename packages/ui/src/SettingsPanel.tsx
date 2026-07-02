@@ -2822,6 +2822,9 @@ function GoogleConnectBlock({
     try {
       const r = await onConnect();
       if (!r.ok) setError(r.error ?? "Couldn't connect.");
+    } catch (err) {
+      // A thrown failure (loopback bind, network) must surface like an { ok:false } one.
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -2865,7 +2868,13 @@ function GoogleConnectBlock({
           <>
             <span style={{ fontSize: 12, color: "#7ddf9a" }}>✓ Connected{email ? ` as ${email}` : ""}</span>
             {onDisconnect && (
-              <button type="button" onClick={onDisconnect} style={{ ...btn, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.2)" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm("Disconnect Google? The saved sign-in is forgotten — you'll need to approve access again to reconnect.")) onDisconnect();
+                }}
+                style={{ ...btn, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.2)" }}
+              >
                 Disconnect
               </button>
             )}

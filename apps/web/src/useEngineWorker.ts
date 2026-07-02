@@ -1445,7 +1445,15 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     (refId: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
-        refRequests.current.set(requestId, resolve);
+        // Timeout like every sibling request — a lost reply (worker crash/HMR) must not leak an
+        // unresolvable promise; resolving undefined just renders the reference as missing.
+        const timeout = setTimeout(() => {
+          if (refRequests.current.delete(requestId)) resolve(undefined);
+        }, 15_000);
+        refRequests.current.set(requestId, (img) => {
+          clearTimeout(timeout);
+          resolve(img);
+        });
         send({ type: "getCharacterReference", refId, requestId });
       }),
     [],
