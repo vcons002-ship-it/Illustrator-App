@@ -34,6 +34,7 @@ export type ToolAutoRoute =
   | "order-review" // ALWAYS opens the review-and-place gate; never auto-submits
   | "tv-chart" // drives the reader's own TradingView chart (chart-only CDP bridge)
   | "delegate" // isolated read-only sub-agent
+  | "stitch" // join existing clips with ffmpeg — local, non-destructive, no new rendering
   | "ask";
 
 /**
@@ -71,6 +72,10 @@ export function routePendingTool(tool: string, f: ToolAutoFlags): ToolAutoRoute 
       return "delegate";
     case "write_file":
       return "host";
+    case "stitch_videos":
+      // Joining clips the reader already has is a local, non-destructive file operation (no new
+      // rendering, nothing leaves the machine) — no click needed.
+      return "stitch";
     case "run_command":
       return f.allowCommands && f.autonomousWorkspace ? "host" : "ask";
     default:

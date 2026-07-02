@@ -96,6 +96,39 @@ describe("parseBuddyToolCall — generate_long_video", () => {
       frames: 257,
     });
   });
+  it("parses generate_video's optional end frame (first+last-frame conditioning)", () => {
+    expect(parseBuddyToolCall('{"tool":"generate_video","prompt":"morph","end":{"kind":"file","ref":"C:/pics/b.png"}}')).toEqual({
+      tool: "generate_video",
+      prompt: "morph",
+      source: { kind: "last" },
+      end: { kind: "file", ref: "C:/pics/b.png" },
+    });
+    // Malformed end kinds fall back to "last"; a missing end stays absent.
+    expect(parseBuddyToolCall('{"tool":"generate_video","prompt":"m","end":{"kind":"text"}}')).toMatchObject({ end: { kind: "last" } });
+    expect(parseBuddyToolCall('{"tool":"generate_video","prompt":"m"}')).not.toHaveProperty("end");
+  });
+
+  it("parses stitch_videos (ordered refs, string form, 2-clip minimum, 24-clip cap) and formats results", () => {
+    expect(parseBuddyToolCall('{"tool":"stitch_videos","clips":["vid-a.mp4","vid-b.mp4"],"title":"Combined"}')).toEqual({
+      tool: "stitch_videos",
+      clips: ["vid-a.mp4", "vid-b.mp4"],
+      title: "Combined",
+    });
+    expect(parseBuddyToolCall('{"tool":"stitch_videos","clips":"one.mp4\\ntwo.mp4; three.mp4"}')).toMatchObject({
+      clips: ["one.mp4", "two.mp4", "three.mp4"],
+    });
+    expect(parseBuddyToolCall('{"tool":"stitch_videos","clips":["only-one.mp4"]}')).toBeUndefined();
+    const many = Array.from({ length: 30 }, (_, i) => `clip${i}.mp4`);
+    const capped = parseBuddyToolCall(JSON.stringify({ tool: "stitch_videos", clips: many })) as { clips: string[]; truncated?: boolean };
+    expect(capped.clips).toHaveLength(24);
+    expect(capped.truncated).toBe(true);
+    const call = { tool: "stitch_videos" as const, clips: ["a.mp4", "b.mp4"] };
+    expect(formatBuddyToolResult(call, { video: { ok: true } })).toContain("joined 2 clips into one video");
+    expect(formatBuddyToolResult(call, { video: { ok: false, error: 'couldn\'t read clip "x"' } })).toContain("stitch_videos failed");
+    // Advertised alongside the other video tools.
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [], canGenerateVideo: true })).toContain('"tool":"stitch_videos"');
+  });
+
   it("keeps the persistent subject anchor and teaches the continuity rules", () => {
     expect(
       parseBuddyToolCall('{"tool":"generate_long_video","subject":"a red vintage pickup truck","clips":["it accelerates"]}'),

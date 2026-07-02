@@ -36,6 +36,9 @@ export const WAN_DEFAULT_NEGATIVE =
 interface WanI2VParams {
   /** The uploaded source-image filename (from /upload/image). Omit for text-to-video. */
   startImage?: string;
+  /** The uploaded END-frame filename: the clip morphs from startImage to THIS (first+last-frame
+   * conditioning via WanFirstLastFrameToVideo). Only honored alongside startImage. */
+  endImage?: string;
   models: WanVideoFiles;
   prompt: string;
   negative: string;
@@ -92,8 +95,11 @@ export function buildWanI2VWorkflow(p: WanI2VParams): Record<string, unknown> {
     "104": { class_type: "CLIPTextEncode", inputs: { text: p.prompt, clip: ["102", 0] } },
     "105": { class_type: "CLIPTextEncode", inputs: { text: p.negative, clip: ["102", 0] } },
     // WanImageToVideo's start_image is optional: connect it for image-to-video, omit for text-to-video.
+    // With an END frame too, the stock WanFirstLastFrameToVideo node swaps in — same conditioning
+    // outputs (positive/negative/latent), plus end_image: the clip is pinned to START at one image
+    // and ARRIVE at the other (a controlled morph/camera move between two stills).
     "107": {
-      class_type: "WanImageToVideo",
+      class_type: p.startImage && p.endImage ? "WanFirstLastFrameToVideo" : "WanImageToVideo",
       inputs: {
         positive: ["104", 0],
         negative: ["105", 0],
@@ -103,6 +109,7 @@ export function buildWanI2VWorkflow(p: WanI2VParams): Record<string, unknown> {
         length: p.frames,
         batch_size: 1,
         ...(p.startImage ? { start_image: ["106", 0] } : {}),
+        ...(p.startImage && p.endImage ? { end_image: ["116", 0] } : {}),
       },
     },
     "108": { class_type: "ModelSamplingSD3", inputs: { model: highModel, shift } },
@@ -122,6 +129,9 @@ export function buildWanI2VWorkflow(p: WanI2VParams): Record<string, unknown> {
   };
   if (p.startImage) {
     graph["106"] = { class_type: "LoadImage", inputs: { image: p.startImage } };
+  }
+  if (p.startImage && p.endImage) {
+    graph["116"] = { class_type: "LoadImage", inputs: { image: p.endImage } };
   }
   if (loraHigh) {
     graph["114"] = { class_type: "LoraLoaderModelOnly", inputs: { model: ["100", 0], lora_name: loraHigh, strength_model: 1 } };
@@ -1086,6 +1096,15 @@ export class ComfyUIBackend implements LocalEngineBackend {
   async generateVideo(input: VideoGenerationInput, models: VideoModelFiles): Promise<VideoGenerationOutput> {
     // Image-to-video uploads the source frame; text-to-video (no image) starts from an empty latent.
     const startImage = input.image ? await this.uploadedReference(input.image.bytes, input.image.mimeType) : undefined;
+    // First+last-frame conditioning is a Wan-graph feature (WanFirstLastFrameToVideo); the LTX-2
+    // graph has no equivalent seam, so fail loudly rather than silently ignoring the end frame.
+    if (input.endImage && models.kind !== "wan-i2v") {
+      throw new Error("First+last-frame video needs the Wan model — switch the video model to Wan 2.2, or drop the end frame.");
+    }
+    if (input.endImage && !startImage) {
+      throw new Error("First+last-frame video needs a START image too — give it a source image alongside the end frame.");
+    }
+    const endImage = input.endImage ? await this.uploadedReference(input.endImage.bytes, input.endImage.mimeType) : undefined;
     // Per-family render defaults fill in whatever the caller left blank (Wan ~5s/16fps; LTX longer/24fps).
     const d = VIDEO_RENDER_DEFAULTS[models.kind];
     const common = {
@@ -1103,7 +1122,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
     const workflow =
       models.kind === "ltx2-i2v"
         ? buildLtx2I2VWorkflow({ ...common, models, highRes: input.highRes ?? true, audio: input.audio ?? true })
-        : buildWanI2VWorkflow({ ...common, models, shift: input.shift ?? d.shift });
+        : buildWanI2VWorkflow({ ...common, models, shift: input.shift ?? d.shift, ...(endImage ? { endImage } : {}) });
     const relay = (fraction: number): void => input.onProgress?.(fraction);
     const signal = input.signal;
     const onAbort = (): void => {

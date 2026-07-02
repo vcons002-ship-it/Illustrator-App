@@ -4542,12 +4542,16 @@ export function App() {
     try {
       // Text-to-video has no source frame; image-to-video resolves the image to animate.
       const src = textToVideo ? undefined : await resolveVideoSource(call.source);
+      // First+last frame: resolve the END image too — the clip is pinned to arrive at it (Wan only;
+      // the backend rejects it for LTX with a clear message).
+      const end = call.end ? await resolveVideoSource(call.end) : undefined;
       // The buddy may name a model (e.g. "make an LTX video"); otherwise use the one chosen in Settings.
       // Settings overrides win over the catalog default (a swapped component / a fixed broken download),
       // and the Settings render params drive the graph's size/length/sampler choices.
       const models = resolveVideoModelFiles(call.model ?? settings.videoModel, settings.videoFiles);
       // Render params are stored per model family — pick the selected model's set (frames/fps/etc).
       out = await chatVideo(call, src, models, settings.videoParams?.[models.kind], {
+        ...(end ? { endImage: end } : {}),
         onProgress: (f) => setBuddyActivity(`${textToVideo ? "Generating the video" : "Animating the image"}… ${Math.round(f * 100)}%`),
       });
     } catch (err) {
@@ -4672,6 +4676,141 @@ export function App() {
     await dispatchBuddyTurn([...preHistory, ...pre], feedback);
   };
 
+  /** Join already-rendered clips into one mp4 — NO new rendering: write each clip's bytes into a
+   * workspace run dir, normalize + concat with the managed ffmpeg (mixed sizes/framerates get scaled
+   * to one format), and read the result back. Shared by the stitch_videos tool and the Creations
+   * gallery's multi-select Stitch. Desktop-only (ffmpeg + the filesystem live there). */
+  const stitchClipsToVideo = async (clips: { bytes: ArrayBuffer; mimeType: string }[]): Promise<{ bytes: ArrayBuffer; mimeType: string }> => {
+    if (!isDesktop) throw new Error("Stitching runs on the desktop app (it uses ffmpeg on your computer).");
+    if (clips.length < 2) throw new Error("stitching needs at least two clips");
+    // Output format: the selected video model's Settings params, else its family defaults — same
+    // normalization target the long-form renderer uses. No video model configured? Wan defaults.
+    let kind: keyof typeof VIDEO_RENDER_DEFAULTS = "wan-i2v";
+    try {
+      kind = resolveVideoModelFiles(settingsRef.current.videoModel, settingsRef.current.videoFiles).kind;
+    } catch {
+      /* stitching doesn't need a render model — fall back to the default output format */
+    }
+    const params = settingsRef.current.videoParams?.[kind];
+    const d = VIDEO_RENDER_DEFAULTS[kind];
+    const runDir = `stitched/${Date.now().toString(36)}`;
+    const abs: string[] = [];
+    let dirAbs = "";
+    for (let i = 0; i < clips.length; i++) {
+      const a = await writeWorkspaceFileBytes(`${runDir}/in_${i}.${clipExt(clips[i]!.mimeType)}`, new Uint8Array(clips[i]!.bytes));
+      abs.push(a);
+      if (i === 0) dirAbs = a.replace(/[\\/][^\\/]+$/, "");
+    }
+    const finalAbs = `${dirAbs}/final.mp4`;
+    const stitch = await runFfmpeg(buildConcatArgs(abs, { width: params?.width ?? d.width, height: params?.height ?? d.height, fps: params?.fps ?? d.fps, out: finalAbs }));
+    if (stitch.code !== 0) throw new Error(`stitching failed: ${stitch.stderr.slice(-300) || "ffmpeg error"}`);
+    const f = await readLocalFile(finalAbs);
+    return { bytes: await f.arrayBuffer(), mimeType: "video/mp4" };
+  };
+  /** Resolve one stitch_videos clip reference to bytes: a video from THIS chat (file-card id or exact
+   * filename — live bytes, else re-hydrated from the chat blob store), a bare blob id, or a local
+   * file path. Throws with the ref named so the model can tell the reader which one failed. */
+  const resolveStitchClip = async (ref: string): Promise<{ bytes: ArrayBuffer; mimeType: string }> => {
+    const r = ref.trim();
+    for (let i = buddyMessagesRef.current.length - 1; i >= 0; i--) {
+      const m = buddyMessagesRef.current[i]!;
+      const a = m.attachments?.find((x) => x.kind === "video" && (x.id === r || x.name === r));
+      if (a?.bytes) return { bytes: a.bytes.slice(0), mimeType: a.mime || "video/mp4" };
+      if (a?.id) {
+        const blob = await libraryStore.getImageBlob?.(activeBuddyIdRef.current, a.id).catch(() => undefined);
+        if (blob) return { bytes: blob.bytes.slice(0), mimeType: blob.mimeType };
+      }
+      const v = m.video;
+      if (v && "bytes" in v && v.id === r) return { bytes: v.bytes.slice(0), mimeType: v.mimeType };
+      if (v && !("bytes" in v) && "id" in v && v.id === r) {
+        const blob = await libraryStore.getImageBlob?.(activeBuddyIdRef.current, r).catch(() => undefined);
+        if (blob) return { bytes: blob.bytes.slice(0), mimeType: blob.mimeType };
+      }
+    }
+    // Not a chat video — a bare blob id (an older session's clip), else a local file path.
+    const blob = await libraryStore.getImageBlob?.(activeBuddyIdRef.current, r).catch(() => undefined);
+    if (blob) return { bytes: blob.bytes.slice(0), mimeType: blob.mimeType };
+    const file = await readLocalFile(r);
+    return { bytes: await file.arrayBuffer(), mimeType: file.type || "video/mp4" };
+  };
+  // stitch_videos: join clips the reader already has (chat videos and/or local files) into one mp4.
+  // Auto-runs (routePendingTool → "stitch"): local, non-destructive, no new rendering.
+  const approveStitchVideos = async (call: Extract<BuddyToolCall, { tool: "stitch_videos" }>): Promise<void> => {
+    if (buddyRenderingRef.current) return;
+    buddyRenderingRef.current = true;
+    setBuddyPendingTool(undefined);
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+    setBuddyBusy(true);
+    const title = call.title?.trim() || "Stitched video";
+    let out: { video?: { bytes: ArrayBuffer; mimeType: string }; error?: string } = {};
+    try {
+      setBuddyActivity(`Stitching ${call.clips.length} clips…`);
+      const clips: { bytes: ArrayBuffer; mimeType: string }[] = [];
+      for (const ref of call.clips) {
+        try {
+          clips.push(await resolveStitchClip(ref));
+        } catch (err) {
+          throw new Error(`couldn't read clip "${ref}": ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      out = { video: await stitchClipsToVideo(clips) };
+    } catch (err) {
+      out = { error: err instanceof Error ? err.message : String(err) };
+    } finally {
+      buddyRenderingRef.current = false;
+    }
+    setBuddyActivity("");
+    const feedback = formatBuddyToolResult(call, { video: { ok: Boolean(out.video), ...(out.error ? { error: out.error } : {}) } });
+    appendBuddy({
+      role: "tool",
+      text: out.error ? `⚠ Stitch failed: ${out.error}` : `🎬 ${title.length > 60 ? `${title.slice(0, 60).trim()}…` : title} (${call.clips.length} clips joined)`,
+      ...(out.video ? { video: out.video, attachments: [videoAttachment(title, out.video)] } : {}),
+      turns: [...pre, { role: "user", content: feedback }],
+    });
+    if (appManagedActive && buddyWorkflowRef.current) {
+      buddyStepEvidenceRef.current.toolResults.push({ call, result: { video: { ok: Boolean(out.video), ...(out.error ? { error: out.error } : {}) } } });
+      await advanceWorkflowAfterTurn(
+        { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+      );
+      return;
+    }
+    await dispatchBuddyTurn([...preHistory, ...pre], feedback);
+  };
+  // Creations-gallery multi-select Stitch: same pipeline, but sourced from gallery items and reported
+  // via a chat note + toast (there's no model turn to feed back into).
+  const onStitchCreations = async (keys: string[]): Promise<void> => {
+    setShowCreations(false);
+    try {
+      const picked = keys
+        .map((k) => creations.find((c) => creationKey(c) === k))
+        .filter((c): c is CreationItem => !!c && c.kind === "video");
+      if (picked.length < 2) throw new Error("pick at least two video clips");
+      const clips: { bytes: ArrayBuffer; mimeType: string }[] = [];
+      for (const item of picked) {
+        const got = item.bytes
+          ? { bytes: item.bytes, mimeType: item.mimeType }
+          : item.blobId
+            ? await libraryStore.getImageBlob?.(item.chatId, item.blobId)
+            : undefined;
+        if (!got) throw new Error(`couldn't load "${item.label ?? "a selected clip"}" from storage`);
+        clips.push({ bytes: got.bytes.slice(0), mimeType: got.mimeType });
+      }
+      const video = await stitchClipsToVideo(clips);
+      appendBuddy({
+        role: "tool",
+        text: `🎬 Stitched video (${picked.length} clips joined from your Creations)`,
+        video,
+        attachments: [videoAttachment("Stitched video", video)],
+      });
+      pushToast(`Stitched ${picked.length} clips into one video — it's in the chat (and your Creations).`, "success");
+    } catch (err) {
+      setLocalError(`Stitching failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
 
   // send and the auto-react continuation after an approved command. `userBubbleText`
   // Natural-language planning: the model emitted plan_task; research + build the plan
@@ -4946,6 +5085,7 @@ export function App() {
           : c.tool === "schedule_task" ? "Scheduling a task…"
           : c.tool === "mark_step_done" || c.tool === "update_task_step" ? "Updating the plan…"
           : c.tool === "complete_task" ? "Checking the task off…"
+          : c.tool === "stitch_videos" ? "Stitching your clips…"
           : c.tool === "open_web_text" ? "Fetching the text and opening it…"
           : c.tool === "set_plan" ? "Planning the steps…"
           : c.tool === "complete_step" ? "Checking off a step…"
@@ -5224,6 +5364,9 @@ export function App() {
           break;
         case "delegate":
           if (call.tool === "delegate") void runDelegate(call.task);
+          break;
+        case "stitch":
+          if (call.tool === "stitch_videos") void approveStitchVideos(call);
           break;
         case "ask":
           setBuddyPendingTool(call);
@@ -5641,6 +5784,10 @@ export function App() {
     }
     if (call?.tool === "generate_video") {
       await approveGenerateVideo(call);
+      return;
+    }
+    if (call?.tool === "stitch_videos") {
+      await approveStitchVideos(call);
       return;
     }
     if (call?.tool === "generate_long_video") {
@@ -7694,6 +7841,7 @@ export function App() {
           }))}
           load={loadCreation}
           onDelete={(key) => void deleteCreation(key)}
+          {...(isDesktop ? { onStitch: (keys: string[]) => void onStitchCreations(keys) } : {})}
           onClose={() => setShowCreations(false)}
         />
       )}

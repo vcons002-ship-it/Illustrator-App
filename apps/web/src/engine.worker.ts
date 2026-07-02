@@ -1360,7 +1360,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       void handleChatTool(msg.requestId, msg.call);
       break;
     case "chatVideo":
-      void handleChatVideo(msg.requestId, msg.call, msg.image, msg.models, msg.params, msg.warmBatch);
+      void handleChatVideo(msg.requestId, msg.call, msg.image, msg.models, msg.params, msg.warmBatch, msg.endImage);
       break;
     case "assessImage":
       void handleAssessImage(msg.requestId, msg.image, msg.question);
@@ -3601,6 +3601,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         slash.call.tool === "generate_image" ||
         slash.call.tool === "generate_video" ||
         slash.call.tool === "generate_long_video" ||
+        slash.call.tool === "stitch_videos" ||
         slash.call.tool === "find_files" ||
         slash.call.tool === "run_command" ||
         slash.call.tool === "write_file" ||
@@ -4092,6 +4093,8 @@ async function handleChatVideo(
   params?: VideoRenderParams,
   /** Long-form batch: clips 2..N skip the VRAM hand-off so the video model stays resident between clips. */
   warmBatch?: boolean,
+  /** First+last-frame conditioning (Wan only): the clip arrives at this frame. */
+  endImage?: { bytes: ArrayBuffer; mimeType: string },
 ): Promise<void> {
   const ac = new AbortController();
   chatAborts.set(requestId, ac);
@@ -4138,6 +4141,8 @@ async function handleChatVideo(
         ...(call.negativePrompt ? { negativePrompt: call.negativePrompt } : {}),
         // Image present → image-to-video; absent → text-to-video.
         ...(image ? { image } : {}),
+        // End frame present → first+last-frame conditioning (the backend validates model support).
+        ...(endImage ? { endImage } : {}),
         // The model's per-call frames wins over the Settings default; the rest of the graph choices
         // (fps/size/steps/cfg/shift) come from Settings overrides, else the backend's Wan defaults.
         ...((call.frames ?? params?.frames) !== undefined ? { frames: (call.frames ?? params?.frames)! } : {}),

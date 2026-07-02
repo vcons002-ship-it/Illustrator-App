@@ -49,6 +49,8 @@ describe("routePendingTool", () => {
     expect(routePendingTool("tv_chart", OFF)).toBe("tv-chart");
     expect(routePendingTool("delegate", OFF)).toBe("delegate");
     expect(routePendingTool("write_file", OFF)).toBe("host");
+    // Joining existing clips is local + non-destructive — never needs a click.
+    expect(routePendingTool("stitch_videos", OFF)).toBe("stitch");
   });
 
   it("prep_order ALWAYS opens the review gate — even under full autonomy", () => {
