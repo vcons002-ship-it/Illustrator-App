@@ -488,6 +488,67 @@ export function advanceStep(plan: TaskPlan): { plan: TaskPlan; ready?: TaskStep 
   };
 }
 
+/**
+ * Deterministic context harvest from ONE task-chat user turn: pasted links and attached-file names.
+ * The host folds attachments into the turn text as `[Attached file "name"]` / `[Attached image
+ * "name" …]` blocks, so both are recoverable from the text alone. This is the guarantee that
+ * closing a task chat never loses what the reader HANDED it, even when the model saves nothing —
+ * the model's own save_task_context notes add the meaning on top. PURE.
+ */
+export function harvestTaskContext(userText: string): string[] {
+  const notes: string[] = [];
+  const urls = userText.match(/https?:\/\/[^\s"'<>)\]]+/g) ?? [];
+  for (const u of [...new Set(urls)].slice(0, 5)) notes.push(`Link from chat: ${u}`);
+  const attRe = /\[Attached (?:file|image) "([^"]+)"/g;
+  const seen = new Set<string>();
+  for (let m = attRe.exec(userText); m; m = attRe.exec(userText)) {
+    const name = m[1]!;
+    if (!seen.has(name)) {
+      seen.add(name);
+      notes.push(`Attached in chat: ${name}`);
+    }
+  }
+  return notes;
+}
+
+/** Merge fresh context notes into a plan's `userNotes`: one bullet per note, deduped against what's
+ * already there (verbatim containment), capped keeping the NEWEST content. Returns the existing
+ * value unchanged (same reference) when every note is already present. PURE. */
+export function mergeUserNotes(existing: string | undefined, notes: string[], capChars = MAX_NOTES_CHARS): string | undefined {
+  const cur = existing?.trim() ?? "";
+  const fresh = notes.map((n) => n.trim()).filter((n) => n.length > 0 && !cur.includes(n));
+  if (fresh.length === 0) return existing;
+  let next = [cur, ...fresh.map((n) => (n.startsWith("•") ? n : `• ${n}`))].filter(Boolean).join("\n");
+  if (next.length > capChars) next = next.slice(next.length - capChars);
+  return next;
+}
+
+/** Append context notes to a plan's `userNotes` (see {@link mergeUserNotes}) and optionally flag it
+ * for an in-place re-plan (the background sweep folds userNotes into the rebuilt plan). No-op write
+ * is skipped. Returns the saved (or unchanged) plan; undefined when the id doesn't exist. */
+export async function appendTaskContext(
+  store: VisualReaderStore,
+  planId: string,
+  notes: string[],
+  opts: { replan?: boolean } = {},
+): Promise<TaskPlan | undefined> {
+  const plans = await loadTaskPlans(store);
+  const plan = plans.find((p) => p.id === planId);
+  if (!plan) return undefined;
+  const merged = mergeUserNotes(plan.userNotes, notes);
+  const notesChanged = merged !== plan.userNotes;
+  const replanChanged = !!opts.replan && !plan.needsReplan;
+  if (!notesChanged && !replanChanged) return plan;
+  const next: TaskPlan = {
+    ...plan,
+    ...(merged !== undefined ? { userNotes: merged } : {}),
+    ...(opts.replan ? { needsReplan: true } : {}),
+    updatedAt: Date.now(),
+  };
+  await upsertTaskPlan(store, next);
+  return next;
+}
+
 /** Mark ONE NAMED step done (or reopen it with `done:false`) — the chat's "check off this
  * sub-task" path. Unlike {@link advanceStep} (which always completes the FIRST pending step,
  * for strictly-ordered execution), this targets the step the user actually named, in any order.

@@ -392,6 +392,10 @@ export type BuddyToolCall =
   /** Execute/track an active task plan (in its preloaded chat). */
   | { tool: "mark_step_done"; planId: string; stepId: string }
   | { tool: "complete_task"; planId: string; done?: boolean }
+  /** Persist NEW information from the conversation onto the task plan (a link, an uploaded file's
+   * gist, an answered question, a decision) so the task reflects the chat when the window closes.
+   * planId defaults to the task this chat is working; replan flags an in-place re-plan. */
+  | { tool: "save_task_context"; note: string; planId?: string; replan?: boolean }
   | { tool: "update_task_step"; planId: string; stepId: string; status?: string; notes?: string }
   /** Add (or replace) the sub-tasks of an EXISTING plan — captures planning the reader worked out
    * in chat. `planId` defaults to the active task; `replace` swaps the whole step list. */
@@ -1329,7 +1333,14 @@ export function buildBuddySystemPrompt(opts: {
         'prep parts yourself, walk them through the parts only they can do. {"tool":"mark_step_done","planId":"…",' +
         '"stepId":"…"} when they finish a step (it advances the plan); {"tool":"update_task_step","planId":"…",' +
         '"stepId":"…","status":"blocked","notes":"…"} to note a blocker; {"tool":"list_task_plans"} / ' +
-        '{"tool":"get_task_plan","id":"…"} to check state. To ADD or change a few specific sub-tasks you worked out ' +
+        '{"tool":"get_task_plan","id":"…"} to check state. ' +
+        "PERSIST EVERYTHING: the task must reflect this conversation when the window closes. Whenever the reader gives " +
+        "you something NEW — a link, an uploaded file, an answer to an open question, a decision, a constraint — save " +
+        'it onto the task IMMEDIATELY with {"tool":"save_task_context","note":"…"} (a concise, self-contained note: ' +
+        'e.g. "Job posting: <url> — senior data analyst at Acme, deadline Jul 20" or "Resume uploaded (resume.pdf): ' +
+        '8y analytics, SQL/Python, led team of 4"), THEN answer. Add "replan":true when the new info changes what the ' +
+        "steps should be — it re-plans the task in place with everything saved so far. " +
+        "To ADD or change a few specific sub-tasks you worked out " +
         'with the reader (without redoing the whole plan), use {"tool":"add_task_steps","steps":[{"title":"Call the ' +
         'vendor","detail":"…","actor":"user_action","dueIso":"2026-07-01"}]} — it appends to the task above (add ' +
         '"replace":true to swap the whole list). When the reader says "plan/redo/refine/update this" (or once ' +
@@ -2341,6 +2352,12 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     const planId = strArg(obj.planId, MAX_ID_CHARS);
     return planId ? { tool, planId, ...(obj.done === false ? { done: false } : {}) } : undefined;
   }
+  if (tool === "save_task_context") {
+    const note = strArg(obj.note, MAX_GOOGLE_TEXT_CHARS);
+    if (!note) return undefined;
+    const planId = strArg(obj.planId, MAX_ID_CHARS);
+    return { tool, note, ...(planId ? { planId } : {}), ...(obj.replan === true ? { replan: true } : {}) };
+  }
   if (tool === "update_task_step") {
     const planId = strArg(obj.planId, MAX_ID_CHARS);
     const stepId = strArg(obj.stepId, MAX_ID_CHARS);
@@ -3319,6 +3336,13 @@ function formatBuddyToolResultBody(call: BuddyToolCall, result: BuddyToolResultP
     return a.completed === false
       ? `[reopened "${a.planTitle}" — its steps are back in progress] Confirm briefly.`
       : `[marked "${a.planTitle}" complete 🎉] Confirm briefly to the reader.`;
+  }
+  if (call.tool === "save_task_context") {
+    const a = result.taskAction;
+    if (!a) return "[save_task_context: no task to save to — this chat isn't working a task (or the id is wrong)]";
+    return call.replan
+      ? `[saved to "${a.planTitle}" and flagged it for an in-place re-plan] Now answer the reader.`
+      : `[saved to "${a.planTitle}"] Now answer the reader.`;
   }
   if (call.tool === "update_task_step") {
     return result.taskAction ? `[updated the step in "${result.taskAction.planTitle}"] Confirm briefly.` : "[update_task_step: not found]";
