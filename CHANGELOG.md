@@ -7,6 +7,13 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Assistant & UI
 
+- **Stitch existing clips into one video** — ask the assistant to "combine those clips" (it joins
+  videos from the chat and/or local files, in order, normalizing mixed sizes/framerates), or open
+  🎨 Creations → "Select clips", tap videos in play order, and hit Stitch. No re-rendering — hard
+  cuts between clips, which is exactly right for multi-scene edits.
+- **First + last frame videos (Wan)** — give the assistant two images ("morph this into that",
+  "transition from A to B") and the clip is pinned to start at one and arrive exactly at the
+  other. Wan 2.2 only; the LTX model reports it clearly instead of ignoring the end frame.
 - **Long-form video keeps its subject** — chained clips used to "forget" the source material the
   moment the subject left the frame or a shot invented a scene change (each clip only sees the
   previous clip's last frame). Every clip now carries a persistent subject description, an explicit

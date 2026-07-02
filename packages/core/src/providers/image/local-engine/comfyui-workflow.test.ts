@@ -248,6 +248,23 @@ describe("buildWanI2VWorkflow (image-to-video, Wan2.2 two-expert)", () => {
     expect(classOf(g, "113")).toBe("SaveAnimatedWEBP");
     expect(inputsOf(g, "113").fps).toBe(16);
   });
+  it("swaps in WanFirstLastFrameToVideo when an END frame is given (first+last-frame conditioning)", () => {
+    const g = buildWanI2VWorkflow({ ...wan, endImage: "vr-ref-2.png" });
+    expect(classOf(g, "107")).toBe("WanFirstLastFrameToVideo");
+    expect(inputsOf(g, "107").start_image).toEqual(["106", 0]);
+    expect(inputsOf(g, "107").end_image).toEqual(["116", 0]);
+    expect(classOf(g, "116")).toBe("LoadImage");
+    expect(inputsOf(g, "116").image).toBe("vr-ref-2.png");
+    // The sampler chain is untouched — same conditioning outputs, same latent wiring.
+    expect(inputsOf(g, "110").latent_image).toEqual(["107", 2]);
+  });
+  it("ignores an end frame without a start image (text-to-video stays WanImageToVideo)", () => {
+    const { startImage: _drop, ...noStart } = wan;
+    const g = buildWanI2VWorkflow({ ...noStart, endImage: "vr-ref-2.png" });
+    expect(classOf(g, "107")).toBe("WanImageToVideo");
+    expect(inputsOf(g, "107").end_image).toBeUndefined();
+    expect(g["116"]).toBeUndefined();
+  });
   it("loads the two experts + the wan text encoder and vae", () => {
     const g = buildWanI2VWorkflow(wan);
     expect(inputsOf(g, "100").unet_name).toBe("wan_high.safetensors");

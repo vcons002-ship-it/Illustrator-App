@@ -21,6 +21,9 @@ export interface CreationsPanelProps {
   load: (key: string) => Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined>;
   /** Permanently remove the creation (from its chat's history AND the blob store). */
   onDelete: (key: string) => void;
+  /** Join the selected VIDEO clips (in pick order) into one mp4 — desktop only; absent hides the
+   * whole select-and-stitch affordance. */
+  onStitch?: (keys: string[]) => void;
   onClose: () => void;
 }
 
@@ -29,9 +32,15 @@ export interface CreationsPanelProps {
  * one grid — view full-size, download, or delete. Image thumbnails hydrate as their cards mount;
  * videos hydrate on click (clips are big), showing a play tile until then.
  */
-export function CreationsPanel({ items, load, onDelete, onClose }: CreationsPanelProps) {
+export function CreationsPanel({ items, load, onDelete, onStitch, onClose }: CreationsPanelProps) {
   const [filter, setFilter] = useState<"all" | "image" | "video">("all");
   const [viewing, setViewing] = useState<CreationCard | undefined>(undefined);
+  // Stitch mode: pick video clips IN ORDER, then join them. `selected` preserves pick order —
+  // that IS the final clip order.
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const toggleSelected = (key: string) =>
+    setSelected((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
   // One object-URL cache for the panel's lifetime: cards fill it as they hydrate, the lightbox and
   // Download reuse it, and closing the panel revokes everything (the effect below).
   const [urls, setUrls] = useState<Record<string, string>>({});
@@ -85,10 +94,41 @@ export function CreationsPanel({ items, load, onDelete, onClose }: CreationsPane
           <span style={{ opacity: 0.6, fontSize: 12 }}>
             {items.length} item{items.length === 1 ? "" : "s"}
           </span>
+          {onStitch && counts.video >= 2 && (
+            <button
+              style={selecting ? { ...buttonStyle, borderColor: "rgba(120,180,255,0.7)" } : buttonStyle}
+              title="Pick video clips in order, then join them into one video"
+              onClick={() => {
+                setSelected([]);
+                setSelecting((s) => !s);
+                if (!selecting) setFilter("video"); // stitch mode is videos-only — show them
+              }}
+            >
+              {selecting ? "Cancel select" : "🎬 Select clips"}
+            </button>
+          )}
           <button style={buttonStyle} onClick={onClose}>
             Close
           </button>
         </div>
+        {selecting && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <span style={{ opacity: 0.7, fontSize: 12, flex: 1 }}>
+              Tap video clips in the order they should play{selected.length > 0 ? ` — ${selected.length} picked` : ""}.
+            </span>
+            <button
+              style={selected.length >= 2 ? { ...buttonStyle, borderColor: "rgba(120,220,150,0.6)" } : { ...buttonStyle, opacity: 0.5, cursor: "default" }}
+              disabled={selected.length < 2}
+              onClick={() => {
+                onStitch?.(selected);
+                setSelecting(false);
+                setSelected([]);
+              }}
+            >
+              Stitch {selected.length >= 2 ? `${selected.length} clips` : "clips"}
+            </button>
+          </div>
+        )}
         {counts.image > 0 && counts.video > 0 && (
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
             {(["all", "image", "video"] as const).map((f) => (
@@ -110,7 +150,15 @@ export function CreationsPanel({ items, load, onDelete, onClose }: CreationsPane
                 card={card}
                 url={urls[card.key]}
                 hydrate={hydrate}
-                onView={() => setViewing(card)}
+                // Stitch mode: video tiles toggle selection (badge shows play order); other kinds inert.
+                {...(selecting && card.kind === "video" ? { selectedIndex: selected.indexOf(card.key) } : {})}
+                onView={() => {
+                  if (selecting) {
+                    if (card.kind === "video") toggleSelected(card.key);
+                    return;
+                  }
+                  setViewing(card);
+                }}
               />
             ))}
           </div>
@@ -156,11 +204,14 @@ function CreationTile({
   url,
   hydrate,
   onView,
+  selectedIndex,
 }: {
   card: CreationCard;
   url: string | undefined;
   hydrate: (card: CreationCard) => Promise<string | undefined>;
   onView: () => void;
+  /** Stitch-select mode: this tile's pick order (-1 = selectable but unpicked; absent = normal mode). */
+  selectedIndex?: number;
 }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => {
@@ -179,8 +230,16 @@ function CreationTile({
     if (!url) void hydrate(card).then((got) => { if (!got) setFailed(true); });
     onView();
   };
+  const picked = selectedIndex !== undefined && selectedIndex >= 0;
   return (
-    <button style={tileStyle} onClick={open} title={card.label ?? card.chatLabel} aria-label={`View creation from ${card.chatLabel}`}>
+    <button
+      style={picked ? { ...tileStyle, position: "relative", borderColor: "rgba(120,180,255,0.8)", background: "rgba(96,170,255,0.12)" } : { ...tileStyle, position: "relative" }}
+      onClick={open}
+      title={card.label ?? card.chatLabel}
+      aria-label={selectedIndex !== undefined ? `${picked ? "Unselect" : "Select"} clip from ${card.chatLabel}` : `View creation from ${card.chatLabel}`}
+      {...(selectedIndex !== undefined ? { "aria-pressed": picked } : {})}
+    >
+      {picked && <span style={orderBadgeStyle}>{selectedIndex! + 1}</span>}
       {card.kind === "image" && url ? (
         <img src={url} style={thumbStyle} alt={card.label ?? "creation"} loading="lazy" />
       ) : (
@@ -272,6 +331,25 @@ const placeholderStyle = {
 } as const;
 
 const tileCaption = { padding: "6px 8px", fontSize: 11 } as const;
+
+/** Stitch-select pick-order badge (1-based play order) on a selected video tile. */
+const orderBadgeStyle = {
+  position: "absolute",
+  top: 6,
+  left: 6,
+  zIndex: 1,
+  minWidth: 20,
+  height: 20,
+  borderRadius: 999,
+  background: "rgba(96,170,255,0.9)",
+  color: "#0b1220",
+  fontSize: 12,
+  fontWeight: 700,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "0 5px",
+} as const;
 
 const lightboxStyle = {
   position: "fixed",

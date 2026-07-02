@@ -137,6 +137,8 @@ export type MainToWorker =
       call: Extract<BuddyToolCall, { tool: "generate_video" }>;
       /** The source frame for image-to-video; omitted for text-to-video. */
       image?: { bytes: ArrayBuffer; mimeType: string };
+      /** END-frame conditioning (first+last frame, Wan only): the clip arrives at this image. */
+      endImage?: { bytes: ArrayBuffer; mimeType: string };
       models: VideoModelFiles;
       /** The reader's Settings render-param overrides (size/length/sampler choices). */
       params?: VideoRenderParams;

@@ -276,11 +276,22 @@ export type BuddyToolCall =
       tool: "generate_video";
       prompt: string;
       source?: { kind: "last" | "library" | "file" | "text"; ref?: string };
+      /** END-frame conditioning (first+last frame, Wan only): the clip starts at `source` and ARRIVES
+       * at this image — a controlled morph/camera move between two stills. Same ref kinds as `source`
+       * minus "text" (an end frame is always a real image). */
+      end?: { kind: "last" | "library" | "file"; ref?: string };
       model?: string;
       frames?: number;
       truncated?: boolean;
       /** Internal (not model-facing): the long-video loop's scene-lock negative for each chained clip. */
       negativePrompt?: string;
+    }
+  | {
+      tool: "stitch_videos";
+      /** Ordered clip references: a chat video's file-card id/filename, or a local file path. */
+      clips: string[];
+      title?: string;
+      truncated?: boolean;
     }
   /** Make a LONGER video from a SERIES of short shots. `clips` is the ordered list of short motion prompts
    * (one per clip); the app renders each, SEAMLESSLY CHAINS them (clip N+1 continues from clip N's last
@@ -1116,6 +1127,10 @@ export function buildBuddySystemPrompt(opts: {
         '  Leave "model" off to use the reader\'s chosen video model (recommended); only set it to switch family on ' +
         'request: "wan2.2-i2v-14b" (~5s, strong motion — the default) or "ltx2.3-i2v-22b" (longer/faster). Optional ' +
         '"frames" sets length (more frames = longer).\n' +
+        '  Optional "end":{"kind":"last"|"library"|"file","ref":"…"} — FIRST+LAST FRAME (Wan only): the clip starts at ' +
+        "`source` and ARRIVES exactly at the end image (a controlled morph / camera move between two stills). Use when " +
+        'the reader gives two images ("from this to that", "morph A into B", "transition between these"). Needs a real ' +
+        "source image (not text-to-video); with the LTX model selected it fails with a clear message.\n" +
         '- {"tool":"generate_long_video","subject":"…","clips":["shot 1 …","shot 2 …",…],"source":{"kind":"…"}} — make a ' +
         "LONGER video from a SERIES of shots. Use this (not generate_video) when the reader wants something longer than a " +
         'single clip ("a 20-second video", "a short scene", "a longer clip"). Give `clips` as an ORDERED list of short ' +
@@ -1128,7 +1143,13 @@ export function buildBuddySystemPrompt(opts: {
         'the subject in frame (never "he walks away", "cut to", "meanwhile", a new location, or the subject exiting); ' +
         "evolve the ACTION between shots, not the scene. `source` seeds the FIRST clip (same options as generate_video: " +
         '"text" to start from the prompt, else the last image / a library id / a file). Optional "model", "frames" ' +
-        '(per clip), "title".\n'
+        '(per clip), "title".\n' +
+        '- {"tool":"stitch_videos","clips":["…","…"],"title":"…"} — JOIN videos that ALREADY EXIST into one mp4 (no new ' +
+        "rendering; hard cuts between clips — right for multi-scene edits). Each entry is a video from THIS chat (its " +
+        "file-card id or exact filename) or a local file path (e.g. a /find hit, or the workspace longvideo folders). " +
+        "Order = final order; 2–24 clips; mixed sizes/framerates are normalized. Use when the reader says \"combine / " +
+        'join / stitch these clips", "put those videos together". For NEW footage that flows continuously, use ' +
+        "generate_long_video instead.\n"
       : "") +
     '- {"tool":"open_content","source":"library|web|pasted|code", …} — the ONE way to OPEN something to ' +
     "READ/illustrate IN THE READER (it takes over the screen). Pick `source`:\n" +
@@ -2461,13 +2482,46 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     const ref = strArg(src?.ref, MAX_PATH_CHARS);
     const source: { kind: "last" | "library" | "file" | "text"; ref?: string } =
       kind === "text" ? { kind: "text" } : (kind === "library" || kind === "file") && ref ? { kind, ref } : { kind: "last" };
+    // Optional END frame (first+last-frame conditioning, Wan only) — same shape minus "text".
+    const endRaw = obj.end && typeof obj.end === "object" ? (obj.end as Record<string, unknown>) : undefined;
+    let end: { kind: "last" | "library" | "file"; ref?: string } | undefined;
+    if (endRaw) {
+      const endRef = strArg(endRaw.ref, MAX_PATH_CHARS);
+      end =
+        (endRaw.kind === "library" || endRaw.kind === "file") && endRef
+          ? { kind: endRaw.kind, ref: endRef }
+          : { kind: "last" };
+    }
     return {
       tool,
       prompt,
       source,
+      ...(end ? { end } : {}),
       ...(model ? { model } : {}),
       ...(frames !== undefined ? { frames } : {}),
       ...(truncated ? { truncated: true } : {}),
+    };
+  }
+  if (tool === "stitch_videos") {
+    // Ordered clip references (chat file-card ids/filenames or local paths) — array or delimited string,
+    // capped so a runaway list can't queue an absurd concat.
+    const rawList: unknown[] = Array.isArray(obj.clips)
+      ? obj.clips
+      : typeof obj.clips === "string"
+        ? obj.clips.split(/\r?\n|;/)
+        : [];
+    const usableCount = rawList.filter((c) => typeof c === "string" && c.trim().length > 0).length;
+    const clips = rawList
+      .map((c) => strArg(c, MAX_PATH_CHARS) ?? "")
+      .filter((c) => c.length > 0)
+      .slice(0, 24);
+    if (clips.length < 2) return undefined; // stitching needs at least two clips
+    const title = strArg(obj.title, MAX_TITLE_CHARS);
+    return {
+      tool,
+      clips,
+      ...(title ? { title } : {}),
+      ...(clips.length < usableCount ? { truncated: true } : {}),
     };
   }
   if (tool === "generate_long_video") {
@@ -3381,6 +3435,12 @@ function formatBuddyToolResultBody(call: BuddyToolCall, result: BuddyToolResultP
     return result.video?.ok
       ? `[tool generate_long_video: rendered ${n} clip${n === 1 ? "" : "s"} and stitched them into one video, shown to the reader]`
       : `[tool generate_long_video failed: ${result.video?.error ?? "unknown error"}]`;
+  }
+  if (call.tool === "stitch_videos") {
+    const n = call.clips.length;
+    return result.video?.ok
+      ? `[tool stitch_videos: joined ${n} clip${n === 1 ? "" : "s"} into one video, shown to the reader]`
+      : `[tool stitch_videos failed: ${result.video?.error ?? "unknown error"}] Tell the reader which clip couldn't be found/read.`;
   }
   if (call.tool === "create_spreadsheet") {
     const o = result.opened;

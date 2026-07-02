@@ -230,6 +230,9 @@ export interface VideoGenerationInput {
   /** The source image to animate (image-to-video). Omit for text-to-video — the clip is generated from
    * the prompt alone, starting from an empty latent. */
   image?: { bytes: ArrayBuffer; mimeType: string };
+  /** END-frame conditioning (first+last frame): the clip starts at `image` and ARRIVES at this frame —
+   * a controlled morph/camera move between two stills. Wan only; requires `image` too. */
+  endImage?: { bytes: ArrayBuffer; mimeType: string };
   negativePrompt?: string;
   /** Number of frames in the clip. */
   frames?: number;

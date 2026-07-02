@@ -1713,7 +1713,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       image: { bytes: ArrayBuffer; mimeType: string } | undefined,
       models: VideoModelFiles,
       params: VideoRenderParams | undefined,
-      opts?: { onProgress?: (fraction: number) => void; warmBatch?: boolean },
+      opts?: { onProgress?: (fraction: number) => void; warmBatch?: boolean; endImage?: { bytes: ArrayBuffer; mimeType: string } },
     ): Promise<ChatToolRender> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
@@ -1742,10 +1742,20 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             opts?.onProgress?.(fraction);
           },
         });
-        // Bytes travel zero-copy to the worker (the source frame, if any). Text-to-video sends no image.
+        // Bytes travel zero-copy to the worker (the source frame + the optional end frame).
+        // Text-to-video sends no image.
         send(
-          { type: "chatVideo", requestId, call, models, ...(image ? { image } : {}), ...(params ? { params } : {}), ...(opts?.warmBatch ? { warmBatch: true } : {}) },
-          image ? [image.bytes] : [],
+          {
+            type: "chatVideo",
+            requestId,
+            call,
+            models,
+            ...(image ? { image } : {}),
+            ...(opts?.endImage ? { endImage: opts.endImage } : {}),
+            ...(params ? { params } : {}),
+            ...(opts?.warmBatch ? { warmBatch: true } : {}),
+          },
+          [...(image ? [image.bytes] : []), ...(opts?.endImage ? [opts.endImage.bytes] : [])],
         );
       }),
     [],
