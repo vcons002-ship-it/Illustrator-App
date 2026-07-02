@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildModelMenu } from "./model-menu.js";
+import { activeModelLabel, buildModelMenu, defaultMenuTab, filterOptions, sectionizeGroup } from "./model-menu.js";
 import { DEFAULT_SETTINGS, type InstalledModel, type ReaderSettings } from "./SettingsPanel.js";
 
 const model = (id: string, label = id): InstalledModel => ({ id, label });
@@ -89,5 +89,120 @@ describe("buildModelMenu", () => {
     expect(a1111).toHaveLength(1);
     expect(a1111[0]!.active).toBe(false);
     expect(a1111[0]!.patch).toEqual({ imageProvider: "local", localBackend: "a1111", localModel: "juggernaut.safetensors" });
+  });
+});
+
+describe("sectionizeGroup", () => {
+  it("splits the chat group into Cloud and Local sections without losing or reordering options", () => {
+    const groups = groupsOf(
+      { textProvider: "local", localTextBackend: "server", localServerTextModel: "qwen3:8b", keys: { claude: "k", openai: "k" } },
+      { textModels: [model("qwen3:8b", "Qwen3 8B")] },
+    );
+    const llm = groups.find((g) => g.key === "llm")!;
+    const sections = sectionizeGroup(llm);
+    expect(sections.map((s) => s.label)).toEqual(["Cloud", "Local"]);
+    const cloud = sections[0]!;
+    const local = sections[1]!;
+    expect(cloud.options.every((o) => o.patch.textProvider !== "local")).toBe(true);
+    expect(local.options.map((o) => o.id)).toEqual(["text:local-bundled", "text:server:qwen3:8b"]);
+    // Lossless: every option lands in exactly one section, unchanged.
+    expect([...cloud.options, ...local.options]).toEqual(llm.options);
+  });
+
+  it("omits an empty section (no cloud keys → Local only)", () => {
+    const llm = groupsOf({ textProvider: "local" }).find((g) => g.key === "llm")!;
+    const sections = sectionizeGroup(llm);
+    expect(sections.map((s) => s.label)).toEqual(["Local"]);
+  });
+
+  it("splits the flat image group into Cloud and Local (no backend picker)", () => {
+    const groups = groupsOf(
+      { imageProvider: "local", localModel: "a.safetensors", keys: { flux: "k" } },
+      { imageModels: [model("a.safetensors")] },
+    );
+    const sections = sectionizeGroup(groups.find((g) => g.key === "image")!);
+    expect(sections.map((s) => s.label)).toEqual(["Cloud", "Local"]);
+    expect(sections[1]!.backendPicker).toBeUndefined();
+    expect(sections[1]!.options.map((o) => o.id)).toEqual(["image:local:a.safetensors"]);
+  });
+
+  it("flags the image Local section as the backend picker in provider-first mode", () => {
+    const groups = buildModelMenu(
+      { ...DEFAULT_SETTINGS, imageProvider: "local", keys: { flux: "k" } },
+      { textModels: [], imageModels: [], imageModelsByBackend: { comfyui: [model("sdxl.safetensors")] } },
+      { isDesktop: true },
+    );
+    const sections = sectionizeGroup(groups.find((g) => g.key === "image")!);
+    const local = sections.find((s) => s.label === "Local")!;
+    expect(local.backendPicker).toBe(true);
+    // Checkpoints live under localModelsByBackend, so the section itself carries none.
+    expect(local.options).toEqual([]);
+  });
+
+  it("gives the video group one unlabeled section with the local-ComfyUI note", () => {
+    const video = groupsOf({}).find((g) => g.key === "video")!;
+    const sections = sectionizeGroup(video);
+    expect(sections).toHaveLength(1);
+    expect(sections[0]!.label).toBeUndefined();
+    expect(sections[0]!.note).toMatch(/ComfyUI/);
+    expect(sections[0]!.options).toEqual(video.options);
+  });
+});
+
+describe("activeModelLabel", () => {
+  it("returns the active flat option's label", () => {
+    const llm = groupsOf({ textProvider: "claude", keys: { claude: "k" } }).find((g) => g.key === "llm")!;
+    expect(activeModelLabel(llm)).toBe("Claude (Anthropic)");
+  });
+
+  it("finds the active checkpoint inside the provider-first image lists", () => {
+    const groups = buildModelMenu(
+      { ...DEFAULT_SETTINGS, imageProvider: "local", localBackend: "comfyui", localModel: "sdxl.safetensors" },
+      { textModels: [], imageModels: [], imageModelsByBackend: { comfyui: [model("sdxl.safetensors", "SDXL")] } },
+      { isDesktop: true },
+    );
+    expect(activeModelLabel(groups.find((g) => g.key === "image")!)).toBe("SDXL");
+  });
+
+  it("is undefined when nothing in the group is active", () => {
+    // Cloud text provider selected but its key unset → the bundled option is the only row, inactive.
+    const llm = groupsOf({ textProvider: "claude" }).find((g) => g.key === "llm")!;
+    expect(activeModelLabel(llm)).toBeUndefined();
+  });
+});
+
+describe("defaultMenuTab", () => {
+  it("opens on chat when it holds the active selection", () => {
+    const groups = groupsOf({ textProvider: "claude", keys: { claude: "k" } });
+    expect(defaultMenuTab(groups)).toBe("llm");
+  });
+
+  it("falls to the first group WITH an active selection when chat has none", () => {
+    // textProvider "claude" without a key → the chat group exists but nothing in it is active.
+    const groups = groupsOf({ textProvider: "claude", imageProvider: "local", localModel: "a.safetensors" }, { imageModels: [model("a.safetensors")] });
+    expect(defaultMenuTab(groups)).toBe("image");
+  });
+
+  it("defaults to llm on an empty menu", () => {
+    expect(defaultMenuTab([])).toBe("llm");
+  });
+});
+
+describe("filterOptions", () => {
+  const llmOf = (): ReturnType<typeof groupsOf>[number] =>
+    groupsOf({ textProvider: "local" }, { textModels: [model("qwen3:8b", "Qwen3 8B"), model("gemma3:4b", "Gemma3 4B")] }).find(
+      (g) => g.key === "llm",
+    )!;
+
+  it("filters by label, case-insensitively", () => {
+    const opts = llmOf().options;
+    expect(filterOptions(opts, "QWEN").map((o) => o.id)).toEqual(["text:server:qwen3:8b"]);
+    expect(filterOptions(opts, "nope")).toEqual([]);
+  });
+
+  it("returns the list untouched for a blank query", () => {
+    const opts = llmOf().options;
+    expect(filterOptions(opts, "")).toEqual(opts);
+    expect(filterOptions(opts, "   ")).toEqual(opts);
   });
 });

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ChangeEvent, type Ref } from "react";
 import {
   CommandHelp,
   MessageBubble,
@@ -20,7 +20,7 @@ import {
   type ContextUsage,
   type ProjectFile,
 } from "@visual-reader/core";
-import type { ModelMenuGroup } from "./model-menu.js";
+import { activeModelLabel, defaultMenuTab, filterOptions, sectionizeGroup, type ModelMenuGroup, type ModelMenuOption } from "./model-menu.js";
 import type { LocalBackendId, ReaderSettings } from "./SettingsPanel.js";
 import {
   approvalStyle,
@@ -164,9 +164,6 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   // Quick model-switcher popover state (opened from the input row). Ref wraps the button + popover so an
   // outside click / Escape closes it.
   const [modelsOpen, setModelsOpen] = useState(false);
-  // Which local backend (ComfyUI / AUTOMATIC1111) the Image section's checkpoint list is currently
-  // showing — undefined defaults to whichever is active; reset on close so it re-defaults next open.
-  const [selectedImageBackend, setSelectedImageBackend] = useState<LocalBackendId | undefined>(undefined);
   const modelMenuRef = useRef<HTMLDivElement>(null);
   const modelBtnRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -184,9 +181,6 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
       document.removeEventListener("mousedown", onDoc);
       document.removeEventListener("keydown", onKey);
     };
-  }, [modelsOpen]);
-  useEffect(() => {
-    if (!modelsOpen) setSelectedImageBackend(undefined);
   }, [modelsOpen]);
   // The header's secondary controls (new/rename/delete session, model, compact, help, clear) hide
   // behind a small ⋯ toggle to save space — only the session switcher + the toggle show by default.
@@ -768,81 +762,14 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
       </div>
 
       {modelsOpen && props.modelMenu && (
-        <div ref={modelMenuRef} style={modelMenuStyle}>
-          {props.modelMenu.groups.map((g) => {
-            const backends = g.localBackends;
-            const activeBackendId = selectedImageBackend ?? backends?.find((b) => b.active)?.id ?? backends?.[0]?.id;
-            return (
-              <div key={g.key}>
-                <div style={modelGroupLabelStyle}>{g.label}</div>
-                {g.options.map((o) => (
-                  <button
-                    key={o.id}
-                    style={o.active ? { ...modelItemStyle, ...personaActiveStyle } : modelItemStyle}
-                    // onMouseDown (not click) applies before the input blurs, mirroring the slash
-                    // menu; preventDefault also stops the later click, so keyboard activation below
-                    // (a Tab-focused item) can't double-fire with a mouse pick.
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      props.modelMenu!.onSelect(o.patch);
-                      setModelsOpen(false);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        props.modelMenu!.onSelect(o.patch);
-                        setModelsOpen(false);
-                      }
-                    }}
-                  >
-                    <span style={{ width: 12, opacity: 0.9 }}>{o.active ? "✓" : ""}</span>
-                    <span style={{ flex: 1 }}>{o.label}</span>
-                    {o.sublabel ? <span style={{ opacity: 0.5, fontSize: 11 }}>{o.sublabel}</span> : null}
-                  </button>
-                ))}
-                {backends && backends.length > 0 && activeBackendId && (
-                  <>
-                    <select
-                      value={activeBackendId}
-                      onChange={(e) => setSelectedImageBackend(e.target.value as LocalBackendId)}
-                      onMouseDown={(e) => e.stopPropagation()}
-                      style={modelBackendSelectStyle}
-                    >
-                      {backends.map((b) => (
-                        <option key={b.id} value={b.id}>
-                          {b.label}
-                          {b.active ? " (active)" : ""}
-                        </option>
-                      ))}
-                    </select>
-                    {(g.localModelsByBackend?.[activeBackendId] ?? []).map((o) => (
-                      <button
-                        key={o.id}
-                        style={o.active ? { ...modelItemStyle, ...personaActiveStyle } : modelItemStyle}
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          props.modelMenu!.onSelect(o.patch);
-                          setModelsOpen(false);
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            props.modelMenu!.onSelect(o.patch);
-                            setModelsOpen(false);
-                          }
-                        }}
-                      >
-                        <span style={{ width: 12, opacity: 0.9 }}>{o.active ? "✓" : ""}</span>
-                        <span style={{ flex: 1 }}>{o.label}</span>
-                        {o.sublabel ? <span style={{ opacity: 0.5, fontSize: 11 }}>{o.sublabel}</span> : null}
-                      </button>
-                    ))}
-                  </>
-                )}
-              </div>
-            );
-          })}
-        </div>
+        <ModelMenuPopover
+          menuRef={modelMenuRef}
+          groups={props.modelMenu.groups}
+          onSelect={(patch) => {
+            props.modelMenu!.onSelect(patch);
+            setModelsOpen(false);
+          }}
+        />
       )}
       <SlashMenu draft={draft} commands={commands} onPick={setDraft} />
       {props.onAttachFile && (props.attachments?.length ?? 0) > 0 && (
@@ -1130,48 +1057,6 @@ const folderInputStyle = {
   fontFamily: "ui-monospace, Menlo, monospace",
 } as const;
 
-// Quick model-switcher popover (opens above the input, mirroring the slash menu).
-const modelMenuStyle = {
-  borderTop: "1px solid rgba(255,255,255,0.1)",
-  maxHeight: 260,
-  overflowY: "auto",
-  display: "flex",
-  flexDirection: "column",
-  padding: "4px 0",
-} as const;
-const modelGroupLabelStyle = {
-  fontSize: 10,
-  textTransform: "uppercase",
-  letterSpacing: 0.4,
-  opacity: 0.5,
-  padding: "6px 12px 2px",
-} as const;
-const modelItemStyle = {
-  display: "flex",
-  gap: 8,
-  alignItems: "baseline",
-  width: "100%",
-  background: "transparent",
-  color: "inherit",
-  border: "none",
-  textAlign: "left",
-  padding: "5px 12px",
-  fontSize: 12,
-  cursor: "pointer",
-} as const;
-/** The Image group's ComfyUI/AUTOMATIC1111 picker — choosing a backend here just filters which
- * checkpoints show beneath it; it doesn't apply anything until a checkpoint row is clicked. */
-const modelBackendSelectStyle = {
-  margin: "2px 12px 4px",
-  width: "calc(100% - 24px)",
-  background: "rgba(255,255,255,0.06)",
-  color: "inherit",
-  border: "1px solid rgba(255,255,255,0.18)",
-  borderRadius: 6,
-  padding: "3px 8px",
-  fontSize: 12,
-} as const;
-
 const personaGroupStyle = {
   display: "inline-flex",
   border: "1px solid rgba(255,255,255,0.2)",
@@ -1193,3 +1078,253 @@ const personaActiveStyle = {
   background: "rgba(122,162,255,0.22)",
   opacity: 1,
 } as const;
+
+/** The quick model switcher's tab labels — one tab per builder group, shown one at a time. */
+const MODEL_TAB_LABEL: Record<ModelMenuGroup["key"], string> = {
+  llm: "💬 Chat",
+  image: "🖼 Image",
+  video: "🎬 Video",
+};
+
+/**
+ * The quick model-switcher popover (opens above the input, mirroring the slash menu). Tabbed —
+ * 💬 Chat / 🖼 Image / 🎬 Video — with each tab split into Cloud/Local sections by the pure
+ * `sectionizeGroup`, so this stays presentation-only. Mounted only while open, so mount-time
+ * state IS the fresh-open state: tab defaults to the active selection's group, filter starts
+ * blank, and the image tab's backend toggle re-defaults to the active backend.
+ */
+function ModelMenuPopover({
+  groups,
+  onSelect,
+  menuRef,
+}: {
+  groups: ModelMenuGroup[];
+  onSelect: (patch: Partial<ReaderSettings>) => void;
+  /** The outer panel's outside-click ref — attached here so clicks inside don't close the popover. */
+  menuRef: Ref<HTMLDivElement>;
+}) {
+  const [tab, setTab] = useState<ModelMenuGroup["key"]>(() => defaultMenuTab(groups));
+  const [filter, setFilter] = useState("");
+  // Which local backend (ComfyUI / AUTOMATIC1111) the Image tab's checkpoint list shows —
+  // undefined defaults to whichever is active in settings.
+  const [pickedBackend, setPickedBackend] = useState<LocalBackendId | undefined>(undefined);
+
+  const group = groups.find((g) => g.key === tab) ?? groups[0];
+  if (!group) return null;
+  const sections = sectionizeGroup(group);
+  const backends = group.localBackends ?? [];
+  const backendId = pickedBackend ?? backends.find((b) => b.active)?.id ?? backends[0]?.id;
+  const backendModels = backendId ? (group.localModelsByBackend?.[backendId] ?? []) : [];
+  // The filter box only appears once this tab is long enough to need it; short lists stay clean.
+  const optionCount = sections.reduce((n, s) => n + s.options.length, 0) + backendModels.length;
+  const showFilter = optionCount > 8;
+  const query = showFilter ? filter : "";
+  const shownBackendModels = filterOptions(backendModels, query);
+  // A section renders when it has matches — or hosts the backend picker, which must stay visible.
+  const shownSections = sections
+    .map((s) => ({ section: s, options: filterOptions(s.options, query) }))
+    .filter(({ section, options }) => options.length > 0 || section.backendPicker);
+
+  const item = (o: ModelMenuOption) => (
+    <button
+      key={o.id}
+      style={o.active ? { ...modelItemStyle, ...personaActiveStyle } : modelItemStyle}
+      // onMouseDown (not click) applies before the input blurs, mirroring the slash
+      // menu; preventDefault also stops the later click, so keyboard activation below
+      // (a Tab-focused item) can't double-fire with a mouse pick.
+      onMouseDown={(e) => {
+        e.preventDefault();
+        onSelect(o.patch);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect(o.patch);
+        }
+      }}
+    >
+      <span style={{ width: 12, opacity: 0.9 }}>{o.active ? "✓" : ""}</span>
+      <span style={{ flex: 1 }}>{o.label}</span>
+      {o.sublabel ? <span style={{ opacity: 0.5, fontSize: 11 }}>{o.sublabel}</span> : null}
+    </button>
+  );
+
+  return (
+    <div ref={menuRef} style={modelMenuStyle}>
+      {/* Fixed header: the tab strip (each tab previews its current pick) + the filter box. */}
+      <div style={modelTabRowStyle} role="tablist" aria-label="Model type">
+        {groups.map((g) => {
+          const active = g.key === group.key;
+          const summary = activeModelLabel(g);
+          return (
+            <button
+              key={g.key}
+              role="tab"
+              aria-selected={active}
+              style={active ? { ...modelTabStyle, ...modelTabActiveStyle } : modelTabStyle}
+              onClick={() => {
+                setTab(g.key);
+                setFilter("");
+              }}
+              title={summary ? `${g.label}: ${summary}` : g.label}
+            >
+              <span>{MODEL_TAB_LABEL[g.key]}</span>
+              <span style={modelTabSummaryStyle}>{summary ?? "—"}</span>
+            </button>
+          );
+        })}
+      </div>
+      {showFilter && (
+        <input
+          style={modelFilterStyle}
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter models…"
+          aria-label="Filter models"
+        />
+      )}
+      {/* Only this list scrolls; the tabs + filter above stay put. */}
+      <div style={modelListStyle}>
+        {shownSections.map(({ section, options }, i) => (
+          <div key={section.label ?? i}>
+            {section.label ? <div style={modelGroupLabelStyle}>{section.label}</div> : null}
+            {section.note ? <div style={modelNoteStyle}>{section.note}</div> : null}
+            {options.map(item)}
+            {section.backendPicker && backends.length > 0 && (
+              <>
+                {/* Choosing a backend here just filters which checkpoints show beneath it; nothing
+                    applies until a checkpoint row is clicked. */}
+                <div style={modelBackendRowStyle} role="group" aria-label="Local image backend">
+                  {backends.map((b) => (
+                    <button
+                      key={b.id}
+                      style={b.id === backendId ? { ...modelBackendBtnStyle, ...personaActiveStyle } : modelBackendBtnStyle}
+                      aria-pressed={b.id === backendId}
+                      onClick={() => setPickedBackend(b.id)}
+                      title={`Show ${b.label} checkpoints${b.active ? " (current backend)" : ""}`}
+                    >
+                      {b.label}
+                    </button>
+                  ))}
+                </div>
+                {shownBackendModels.map(item)}
+                {shownBackendModels.length === 0 && (
+                  <div style={modelNoteStyle}>
+                    {query.trim() ? "No matching checkpoints." : "No checkpoints installed for this backend."}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        ))}
+        {shownSections.length === 0 && (
+          <div style={modelNoteStyle}>{query.trim() ? "No models match." : "No models available."}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Quick model-switcher popover (opens above the input, mirroring the slash menu). Capped so long
+// checkpoint lists scroll inside `modelListStyle` instead of swallowing the chat.
+const modelMenuStyle = {
+  borderTop: "1px solid rgba(255,255,255,0.1)",
+  maxHeight: "60vh",
+  display: "flex",
+  flexDirection: "column",
+} as const;
+const modelTabRowStyle = {
+  display: "flex",
+  gap: 4,
+  padding: "6px 8px 4px",
+  borderBottom: "1px solid rgba(255,255,255,0.08)",
+  flex: "none",
+} as const;
+const modelTabStyle = {
+  flex: 1,
+  minWidth: 0,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: 1,
+  background: "transparent",
+  color: "inherit",
+  border: "1px solid transparent",
+  borderRadius: 6,
+  padding: "4px 6px",
+  fontSize: 12,
+  cursor: "pointer",
+  opacity: 0.75,
+} as const;
+const modelTabActiveStyle = {
+  ...personaActiveStyle,
+  border: "1px solid rgba(122,162,255,0.5)",
+} as const;
+/** Each tab's one-line preview of its current pick — see all three at a glance without switching. */
+const modelTabSummaryStyle = {
+  fontSize: 10,
+  opacity: 0.55,
+  maxWidth: "100%",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+} as const;
+const modelFilterStyle = {
+  flex: "none",
+  margin: "6px 12px 2px",
+  background: "rgba(255,255,255,0.06)",
+  color: "inherit",
+  border: "1px solid rgba(255,255,255,0.15)",
+  borderRadius: 6,
+  padding: "4px 8px",
+  fontSize: 12,
+  fontFamily: "inherit",
+} as const;
+const modelListStyle = {
+  overflowY: "auto",
+  minHeight: 0,
+  padding: "4px 0",
+} as const;
+const modelGroupLabelStyle = {
+  fontSize: 10,
+  textTransform: "uppercase",
+  letterSpacing: 0.4,
+  opacity: 0.5,
+  padding: "6px 12px 2px",
+} as const;
+const modelNoteStyle = {
+  fontSize: 11,
+  opacity: 0.5,
+  padding: "2px 12px 4px",
+} as const;
+const modelItemStyle = {
+  display: "flex",
+  gap: 8,
+  alignItems: "baseline",
+  width: "100%",
+  background: "transparent",
+  color: "inherit",
+  border: "none",
+  textAlign: "left",
+  padding: "5px 12px",
+  fontSize: 12,
+  cursor: "pointer",
+} as const;
+/** The Image tab's ComfyUI / AUTOMATIC1111 segmented toggle. */
+const modelBackendRowStyle = {
+  display: "inline-flex",
+  margin: "2px 12px 4px",
+  border: "1px solid rgba(255,255,255,0.18)",
+  borderRadius: 6,
+  overflow: "hidden",
+} as const;
+const modelBackendBtnStyle = {
+  background: "transparent",
+  color: "inherit",
+  border: "none",
+  padding: "4px 10px",
+  fontSize: 12,
+  cursor: "pointer",
+  opacity: 0.75,
+} as const;
+

@@ -158,6 +158,8 @@ export interface BuddyDeps {
   cancelScheduled?: (id: string) => Promise<boolean>;
   /** Task-plan execution (the orchestrator) — wired over the shared store. */
   markStepDone?: (planId: string, stepId: string) => Promise<{ planTitle: string; nextStep?: string; completed: boolean } | undefined>;
+  /** Mark a WHOLE task plan complete (or reopen it) — the chat's "that's all done" check-off. */
+  completeTask?: (planId: string, done: boolean) => Promise<{ planTitle: string; completed: boolean } | undefined>;
   updateTaskStep?: (planId: string, stepId: string, patch: { status?: string; notes?: string }) => Promise<{ planTitle: string } | undefined>;
   /** Add/replace the steps of an existing plan (defaults to the active task when planId omitted). */
   addTaskSteps?: (args: { planId?: string; steps: { title: string; detail?: string; actor?: "ai_prep" | "user_action"; dueIso?: string }[]; replace?: boolean }) => Promise<{ planTitle: string; count: number; replaced: boolean } | undefined>;
@@ -843,6 +845,11 @@ export async function runBuddyTool(
         if (!deps.markStepDone) return { error: "task plans aren't available" };
         const r = await deps.markStepDone(call.planId, call.stepId);
         return r ? { taskAction: { planTitle: r.planTitle, ...(r.nextStep ? { nextStep: r.nextStep } : {}), completed: r.completed } } : {};
+      }
+      case "complete_task": {
+        if (!deps.completeTask) return { error: "task plans aren't available" };
+        const r = await deps.completeTask(call.planId, call.done !== false);
+        return r ? { taskAction: { planTitle: r.planTitle, completed: r.completed } } : {};
       }
       case "update_task_step": {
         if (!deps.updateTaskStep) return { error: "task plans aren't available" };

@@ -488,6 +488,41 @@ export function advanceStep(plan: TaskPlan): { plan: TaskPlan; ready?: TaskStep 
   };
 }
 
+/** Mark ONE NAMED step done (or reopen it with `done:false`) — the chat's "check off this
+ * sub-task" path. Unlike {@link advanceStep} (which always completes the FIRST pending step,
+ * for strictly-ordered execution), this targets the step the user actually named, in any order.
+ * Recomputes the plan around it: every step done → the plan completes; un-checking a step of a
+ * completed plan reactivates it; and when nothing is left ready/in-progress afterwards, the first
+ * non-done step (by order) is promoted to ready so the plan always shows a next action. Returns
+ * undefined when the step id doesn't exist. PURE. */
+export function completeStepById(
+  plan: TaskPlan,
+  stepId: string,
+  done = true,
+): { plan: TaskPlan; step: TaskStep; ready?: TaskStep; completed: boolean } | undefined {
+  const target = plan.steps.find((s) => s.id === stepId);
+  if (!target) return undefined;
+  const flipped: TaskStep = { ...target, status: done ? "done" : "ready" };
+  let steps = plan.steps.map((s) => (s.id === stepId ? flipped : s));
+  const allDone = steps.length > 0 && steps.every((s) => s.status === "done");
+  let ready: TaskStep | undefined;
+  if (!allDone && !steps.some((s) => s.status === "ready" || s.status === "in_progress")) {
+    const next = [...steps].sort((a, b) => a.order - b.order).find((s) => s.status !== "done");
+    if (next) {
+      ready = { ...next, status: "ready" };
+      const promoted = ready;
+      steps = steps.map((s) => (s.id === promoted.id ? promoted : s));
+    }
+  }
+  const status: PlanStatus = allDone ? "completed" : plan.status === "completed" ? "active" : plan.status;
+  return {
+    plan: { ...plan, steps, status, updatedAt: Date.now() },
+    step: flipped,
+    ...(ready ? { ready } : {}),
+    completed: allDone,
+  };
+}
+
 /** What to do with each plan step when syncing to Google Tasks: reuse an existing sub-task or
  * create one, and whether to mark it completed. Pure so the matching is unit-tested; the host runs
  * the create/patch calls. Never proposes a DELETE — superseded sub-tasks are kept for history. */

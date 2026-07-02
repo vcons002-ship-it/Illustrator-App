@@ -4,6 +4,7 @@ import {
   MAX_TASK_PLANS,
   addIgnore,
   advanceStep,
+  completeStepById,
   deleteTaskPlan,
   archiveTaskPlan,
   restoreTaskPlan,
@@ -454,6 +455,39 @@ describe("advanceStep / nextReadyStep", () => {
     const last = advanceStep(p); // step 2 done → all done
     expect(last.plan.status).toBe("completed");
     expect(last.ready).toBeUndefined();
+  });
+
+  it("completeStepById checks off the NAMED step, out of order", () => {
+    const p = plan();
+    const middle = p.steps[1]!; // "Pay the fee online" — not the first pending step
+    const r = completeStepById(p, middle.id)!;
+    expect(r.step.status).toBe("done");
+    expect(r.plan.steps[1]!.status).toBe("done");
+    expect(r.plan.steps[0]!.status).toBe("ready"); // untouched — still the visible next action
+    expect(r.completed).toBe(false);
+    expect(r.ready).toBeUndefined(); // something was already ready, so nothing is promoted
+  });
+
+  it("completeStepById promotes the next step to ready when nothing is left in flight", () => {
+    const p = plan(); // step 0 ready, 1-2 pending
+    const r = completeStepById(p, p.steps[0]!.id)!;
+    expect(r.plan.steps[0]!.status).toBe("done");
+    expect(r.ready!.title).toBe("Pay the fee online");
+    expect(r.plan.steps[1]!.status).toBe("ready");
+  });
+
+  it("completeStepById completes the plan on the last step, and un-checking reopens it", () => {
+    let p = plan();
+    for (const s of p.steps) p = completeStepById(p, s.id)!.plan;
+    expect(p.status).toBe("completed");
+    const reopened = completeStepById(p, p.steps[2]!.id, false)!;
+    expect(reopened.plan.status).toBe("active");
+    expect(reopened.plan.steps[2]!.status).toBe("ready");
+    expect(reopened.completed).toBe(false);
+  });
+
+  it("completeStepById returns undefined for an unknown step id", () => {
+    expect(completeStepById(plan(), "step-nope")).toBeUndefined();
   });
 
   it("nextReadyStep returns the ready step, else the first non-done", () => {

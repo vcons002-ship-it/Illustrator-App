@@ -358,6 +358,7 @@ export type BuddyToolCall =
   | { tool: "cancel_scheduled"; id: string }
   /** Execute/track an active task plan (in its preloaded chat). */
   | { tool: "mark_step_done"; planId: string; stepId: string }
+  | { tool: "complete_task"; planId: string; done?: boolean }
   | { tool: "update_task_step"; planId: string; stepId: string; status?: string; notes?: string }
   /** Add (or replace) the sub-tasks of an EXISTING plan — captures planning the reader worked out
    * in chat. `planId` defaults to the active task; `replace` swaps the whole step list. */
@@ -1263,6 +1264,11 @@ export function buildBuddySystemPrompt(opts: {
         "Reserve inline answers for genuine one-offs you can settle in a sentence. If a task is already active (see ACTIVE " +
         "TASK below), calling this re-plans THAT task in place — use it to refine, redo, or fold in the reader's answers, " +
         "not to start a new one.\n" +
+        'CHECKING TASKS OFF: when the reader says they did something ("I booked the flight", "mark X done", "that\'s ' +
+        'finished"), actually check it off — {"tool":"complete_task","planId":"…"} marks a WHOLE task complete (add ' +
+        '"done":false to reopen one); {"tool":"mark_step_done","planId":"…","stepId":"…"} checks off ONE sub-task. Get the ' +
+        "ids from list_task_plans / get_task_plan first if you don't have them — never guess an id, and confirm briefly " +
+        "once it's done.\n" +
         '- {"tool":"schedule_task","title":"Morning email recap","prompt":"Summarise my unread email from the last day",' +
         '"rule":"daily","time":"08:00"} — schedule a RECURRING action the assistant runs automatically while the app is open ' +
         '(daily/weekly/monthly/once). Use when the reader says "every morning/day/week/Friday…", "remind me to…", "each ' +
@@ -2283,6 +2289,10 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     const stepId = strArg(obj.stepId, MAX_ID_CHARS);
     return planId && stepId ? { tool, planId, stepId } : undefined;
   }
+  if (tool === "complete_task") {
+    const planId = strArg(obj.planId, MAX_ID_CHARS);
+    return planId ? { tool, planId, ...(obj.done === false ? { done: false } : {}) } : undefined;
+  }
   if (tool === "update_task_step") {
     const planId = strArg(obj.planId, MAX_ID_CHARS);
     const stepId = strArg(obj.stepId, MAX_ID_CHARS);
@@ -3219,6 +3229,13 @@ function formatBuddyToolResultBody(call: BuddyToolCall, result: BuddyToolResultP
       (a.completed ? " The whole plan is now complete! 🎉]" : a.nextStep ? ` Next step: ${a.nextStep}]` : "]") +
       " Confirm to the reader and offer to help with the next step (or set its reminder)."
     );
+  }
+  if (call.tool === "complete_task") {
+    const a = result.taskAction;
+    if (!a) return "[complete_task: that task wasn't found — list_task_plans shows the ids]";
+    return a.completed === false
+      ? `[reopened "${a.planTitle}" — its steps are back in progress] Confirm briefly.`
+      : `[marked "${a.planTitle}" complete 🎉] Confirm briefly to the reader.`;
   }
   if (call.tool === "update_task_step") {
     return result.taskAction ? `[updated the step in "${result.taskAction.planTitle}"] Confirm briefly.` : "[update_task_step: not found]";
