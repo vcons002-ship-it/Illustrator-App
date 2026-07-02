@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNarrow } from "./useMediaQuery.js";
+import { ACCENT_BLUE, DANGER_RED, SUCCESS_GREEN } from "./tokens.js";
 import {
   IMAGE_PROVIDERS,
   IMAGE_STYLES,
@@ -486,7 +487,7 @@ function SoftwareUpdateRow({
     }
   };
   const color =
-    result?.status === "error" ? "#e0716f" : result?.status === "needs-restart" ? "#e0b050" : "#7dd87f";
+    result?.status === "error" ? "#e0716f" : result?.status === "needs-restart" ? "#e0b050" : SUCCESS_GREEN;
   return (
     <div style={{ ...rowStyle, borderBottom: "1px solid rgba(255,255,255,0.1)", paddingBottom: 10, marginBottom: 2 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
@@ -794,7 +795,7 @@ export function SettingsPanel({
                   const downloading = progress !== undefined && progress < 100;
                   const installed = progress === 100;
                   return installed ? (
-                    <span style={{ color: "#7dd87f" }}>✓ Installed</span>
+                    <span style={{ color: SUCCESS_GREEN }}>✓ Installed</span>
                   ) : downloading ? (
                     <span style={{ opacity: 0.7 }}>{Math.round(progress)}%</span>
                   ) : onDownloadFfmpeg ? (
@@ -1781,7 +1782,7 @@ export function SettingsPanel({
               <span style={{ opacity: 0.6, fontSize: 11 }}>
                 Lets the chat ground answers in Wolfram|Alpha for <b>real-world data &amp; computation</b>
                 {" "}(facts/figures, equation solving, step-by-step). Free AppID at{" "}
-                <a href="https://developer.wolframalpha.com/access" target="_blank" rel="noreferrer" style={{ color: "#9db4ff" }}>
+                <a href="https://developer.wolframalpha.com/access" target="_blank" rel="noreferrer" style={{ color: ACCENT_BLUE }}>
                   developer.wolframalpha.com ↗
                 </a>
                 . Without it, math still works via the built-in calculator (units, matrices, calculus,
@@ -2098,7 +2099,7 @@ export function SettingsPanel({
                     issues</b> on your repos using <code>git</code> and the <code>gh</code> CLI in its workspace. The
                     token is injected into the command’s environment — never shown to the model, printed, or committed.
                     Create a fine-scoped token at{" "}
-                    <a href="https://github.com/settings/tokens" target="_blank" rel="noreferrer" style={{ color: "#9db4ff" }}>
+                    <a href="https://github.com/settings/tokens" target="_blank" rel="noreferrer" style={{ color: ACCENT_BLUE }}>
                       github.com/settings/tokens ↗
                     </a>
                     {" "}(<code>git</code>/<code>gh</code> must be installed).
@@ -2321,7 +2322,7 @@ export function SettingsPanel({
                         {subTest.state === "testing" ? "Testing…" : "Test connection"}
                       </button>
                       {subTest.state !== "idle" && subTest.state !== "testing" && (
-                        <span style={{ fontSize: 11, color: subTest.state === "ok" ? "#6ee7a8" : "#f0a868" }}>{subTest.msg}</span>
+                        <span style={{ fontSize: 11, color: subTest.state === "ok" ? SUCCESS_GREEN : "#f0a868" }}>{subTest.msg}</span>
                       )}
                     </div>
                   )}
@@ -2341,7 +2342,7 @@ export function SettingsPanel({
                           <>
                             {" "}
                             · main ≈ <b>{v.mainGb} GB</b> · total ≈ <b>{v.totalGb} GB</b> on your {cardGb} GB card —{" "}
-                            <span style={{ color: fit.fits ? "#6ee7a8" : "#f0a868" }}>
+                            <span style={{ color: fit.fits ? SUCCESS_GREEN : "#f0a868" }}>
                               {fit.fits ? `fits, ~${fit.headroomGb} GB free for KV cache` : `tight (~${fit.headroomGb} GB left)`}
                             </span>
                           </>
@@ -2628,7 +2629,7 @@ export function SettingsPanel({
                             {f.model} · ~{f.vramGb} GB · loads at {Math.round(f.suggestedNumCtx / 1024)}k
                           </span>
                           {value.textProvider === "local" && value.localServerTextModel === f.model ? (
-                            <span style={{ color: "#7dd87f" }}>✓ In use</span>
+                            <span style={{ color: SUCCESS_GREEN }}>✓ In use</span>
                           ) : (
                             <button style={{ ...buttonStyle, padding: "1px 6px" }} onClick={() => useModel(f.model, f.suggestedNumCtx)}>
                               Use
@@ -2888,7 +2889,7 @@ function GoogleConnectBlock({
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
         {connected ? (
           <>
-            <span style={{ fontSize: 12, color: "#7ddf9a" }}>✓ Connected{email ? ` as ${email}` : ""}</span>
+            <span style={{ fontSize: 12, color: SUCCESS_GREEN }}>✓ Connected{email ? ` as ${email}` : ""}</span>
             {onDisconnect && (
               <button
                 type="button"
@@ -2907,7 +2908,7 @@ function GoogleConnectBlock({
           </button>
         )}
       </div>
-      {error && <div style={{ color: "#ff9b9b", fontSize: 11, marginTop: 4 }}>{error}</div>}
+      {error && <div style={{ color: DANGER_RED, fontSize: 11, marginTop: 4 }}>{error}</div>}
     </div>
   );
 }
@@ -2942,10 +2943,10 @@ function KeyField({ info, value, onChange }: { info: ProviderInfo; value: string
     <label style={rowStyle}>
       <span style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
         <span>
-          {info.label} key {saved && <span style={{ color: "#7dd87f" }}>✓ saved</span>}
+          {info.label} key {saved && <span style={{ color: SUCCESS_GREEN }}>✓ saved</span>}
         </span>
         {info.keyUrl && (
-          <a href={info.keyUrl} target="_blank" rel="noreferrer" style={{ color: "#9db4ff" }}>
+          <a href={info.keyUrl} target="_blank" rel="noreferrer" style={{ color: ACCENT_BLUE }}>
             Get a key ↗
           </a>
         )}
@@ -3107,7 +3108,7 @@ function StyleLoraRow({
           {label} style pack (LoRA){catalog?.sizeMB ? ` · ${catalog.sizeMB} MB` : ""}
         </span>
         {installed ? (
-          <span style={{ color: "#7dd87f" }}>✓ installed</span>
+          <span style={{ color: SUCCESS_GREEN }}>✓ installed</span>
         ) : downloading ? (
           <span style={{ opacity: 0.7 }}>{Math.round(pct)}%</span>
         ) : catalog && compatible ? (
@@ -3349,7 +3350,7 @@ function ManagedEngine({
                   {m.label} · {m.sizeGB} GB{m.note ? ` · ${m.note}` : ""}
                 </span>
                 {installed ? (
-                  <span style={{ color: "#7dd87f" }}>✓ Installed</span>
+                  <span style={{ color: SUCCESS_GREEN }}>✓ Installed</span>
                 ) : downloading ? (
                   <span style={{ opacity: 0.7 }}>{Math.round(progress)}%</span>
                 ) : m.url ? (
@@ -3488,7 +3489,7 @@ function OllamaModelMenu({
                   {m.label} · {m.sizeGB} GB{m.note ? ` · ${m.note}` : ""}
                 </span>
                 {installed ? (
-                  <span style={{ color: "#7dd87f" }}>✓ Installed</span>
+                  <span style={{ color: SUCCESS_GREEN }}>✓ Installed</span>
                 ) : pull ? (
                   <span style={{ opacity: 0.7 }}>
                     {pull.percent !== undefined ? `${Math.round(pull.percent)}%` : pull.status}

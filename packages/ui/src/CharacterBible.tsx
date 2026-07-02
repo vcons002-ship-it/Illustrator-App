@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import type { Character, CharacterAppearance, Outfit, VisualBible } from "@visual-reader/core";
 import { MAX_CHARACTER_REFS, referenceIdsOf } from "@visual-reader/core";
+import { SUCCESS_GREEN } from "./tokens.js";
 
 /**
  * Read + correct the Visual Bible's characters. The LLM fills in each character's
@@ -256,7 +257,7 @@ const CharacterCard = memo(function CharacterCard({
         />
       )}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
-        {saved && <span style={{ color: "#7dd87f", fontSize: 12 }}>✓ saved</span>}
+        {saved && <span style={{ color: SUCCESS_GREEN, fontSize: 12 }}>✓ saved</span>}
         <button style={buttonStyle} disabled={!dirty} onClick={save}>
           Save
         </button>
