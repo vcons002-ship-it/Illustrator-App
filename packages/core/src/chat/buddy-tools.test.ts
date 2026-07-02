@@ -1323,6 +1323,31 @@ describe("google tools", () => {
     expect(formatBuddyToolResult(call, {})).toContain("wasn't found");
   });
 
+  it("parses save_task_context and mandates persisting new info while a task is active", () => {
+    expect(parseBuddyToolCall('{"tool":"save_task_context","note":"Job posting: https://a.com — senior analyst","replan":true}')).toEqual({
+      tool: "save_task_context",
+      note: "Job posting: https://a.com — senior analyst",
+      replan: true,
+    });
+    expect(parseBuddyToolCall('{"tool":"save_task_context","note":"n","planId":"t1"}')).toEqual({
+      tool: "save_task_context",
+      note: "n",
+      planId: "t1",
+    });
+    expect(parseBuddyToolCall('{"tool":"save_task_context"}')).toBeUndefined(); // no note
+    const active = buildBuddySystemPrompt({ persona: "assistant", library: [], activeTask: "ACTIVE TASK: Apply (plan id: t1)" });
+    expect(active).toContain("PERSIST EVERYTHING");
+    expect(active).toContain('"tool":"save_task_context"');
+    // Formatting: saved / saved+replan / no task.
+    expect(
+      formatBuddyToolResult({ tool: "save_task_context", note: "n" }, { taskAction: { planTitle: "Apply to Acme" } }),
+    ).toContain('saved to "Apply to Acme"');
+    expect(
+      formatBuddyToolResult({ tool: "save_task_context", note: "n", replan: true }, { taskAction: { planTitle: "Apply to Acme" } }),
+    ).toContain("flagged it for an in-place re-plan");
+    expect(formatBuddyToolResult({ tool: "save_task_context", note: "n" }, {})).toContain("no task to save to");
+  });
+
   it("tells the model that plan_task refines the ACTIVE task in place (no duplicate fork)", () => {
     expect(buildBuddySystemPrompt({ persona: "assistant", library: [], canTaskTools: true })).toMatch(
       /re-plans THAT task in place/i,

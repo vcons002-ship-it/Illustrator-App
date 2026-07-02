@@ -4,7 +4,10 @@ import {
   MAX_TASK_PLANS,
   addIgnore,
   advanceStep,
+  appendTaskContext,
   completeStepById,
+  harvestTaskContext,
+  mergeUserNotes,
   deleteTaskPlan,
   archiveTaskPlan,
   restoreTaskPlan,
@@ -455,6 +458,46 @@ describe("advanceStep / nextReadyStep", () => {
     const last = advanceStep(p); // step 2 done → all done
     expect(last.plan.status).toBe("completed");
     expect(last.ready).toBeUndefined();
+  });
+
+  it("harvestTaskContext pulls pasted links + attached-file names from a turn's text", () => {
+    const text =
+      '[Attached file "resume.pdf"]\nJane Doe — 8y analytics…\n\n' +
+      '[Attached image "headshot.jpg" — what it shows]\nA portrait.\n\n' +
+      "Here's the job: https://jobs.acme.com/senior-analyst?id=42 and their site (https://acme.com).";
+    expect(harvestTaskContext(text)).toEqual([
+      "Link from chat: https://jobs.acme.com/senior-analyst?id=42",
+      "Link from chat: https://acme.com",
+      "Attached in chat: resume.pdf",
+      "Attached in chat: headshot.jpg",
+    ]);
+    expect(harvestTaskContext("no links here")).toEqual([]);
+  });
+
+  it("mergeUserNotes appends bullets, dedupes verbatim repeats, and caps keeping the newest", () => {
+    const first = mergeUserNotes(undefined, ["Link from chat: https://a.com"]);
+    expect(first).toBe("• Link from chat: https://a.com");
+    // Re-sending the same link changes nothing (same reference back).
+    expect(mergeUserNotes(first, ["Link from chat: https://a.com"])).toBe(first);
+    const grown = mergeUserNotes(first, ["Attached in chat: resume.pdf"]);
+    expect(grown).toBe("• Link from chat: https://a.com\n• Attached in chat: resume.pdf");
+    // Over the cap, the OLDEST content falls off the front.
+    const capped = mergeUserNotes("x".repeat(90), ["newest note"], 40);
+    expect(capped!.length).toBe(40);
+    expect(capped).toContain("newest note");
+  });
+
+  it("appendTaskContext persists notes onto the plan and can flag a re-plan", async () => {
+    const store = new InMemoryStore();
+    const [saved] = await upsertTaskPlan(store, plan());
+    const next = await appendTaskContext(store, saved!.id, ["Link from chat: https://jobs.acme.com/42"], { replan: true });
+    expect(next!.userNotes).toContain("https://jobs.acme.com/42");
+    expect(next!.needsReplan).toBe(true);
+    const reloaded = (await loadTaskPlans(store)).find((p) => p.id === saved!.id);
+    expect(reloaded!.userNotes).toContain("https://jobs.acme.com/42");
+    // A repeat of the same note is a no-op; an unknown id returns undefined.
+    expect((await appendTaskContext(store, saved!.id, ["Link from chat: https://jobs.acme.com/42"]))!.userNotes).toBe(next!.userNotes);
+    expect(await appendTaskContext(store, "task-nope", ["x"])).toBeUndefined();
   });
 
   it("completeStepById checks off the NAMED step, out of order", () => {

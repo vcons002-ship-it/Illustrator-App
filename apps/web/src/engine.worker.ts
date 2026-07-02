@@ -150,6 +150,8 @@ import {
   describeAlert,
   updateTaskStep,
   applyStepEdits,
+  appendTaskContext,
+  harvestTaskContext,
   completeStepById,
   setTaskPlanComplete,
   nextReadyStep,
@@ -3200,6 +3202,14 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         }
         return { planTitle: r.plan.title, ...(r.ready ? { nextStep: r.ready.title } : {}), completed: r.completed };
       },
+      // Persist new conversation context onto the task (planId absent = this chat's active task),
+      // optionally flagging an in-place re-plan so the background sweep folds it into the steps.
+      saveTaskContext: async (planId, note, replan) => {
+        const id = planId ?? msg.taskPlanId;
+        if (!id) return undefined;
+        const next = await appendTaskContext(store, id, [note], { ...(replan ? { replan: true } : {}) });
+        return next ? { planTitle: next.title } : undefined;
+      },
       // The whole-task check-off ("that's all done" / "reopen it"): flip the plan + every step,
       // then mirror the parent AND its synced sub-tasks to Google Tasks (best-effort).
       completeTask: async (planId, done) => {
@@ -3654,7 +3664,17 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     await seedStarterSkills(store); // one-time: ship a few ready-made playbooks on a fresh install
     const skills = skillsIndexBlock(await loadSkills(store));
     // When this session is executing a task plan, load its context for the prompt.
-    const activePlan = msg.taskPlanId ? (await loadTaskPlans(store)).find((p) => p.id === msg.taskPlanId) : undefined;
+    let activePlan = msg.taskPlanId ? (await loadTaskPlans(store)).find((p) => p.id === msg.taskPlanId) : undefined;
+    // CONTEXT CAPTURE: anything the reader HANDS a task chat (pasted links, attached files — both
+    // recoverable from the turn text) lands on the plan deterministically, BEFORE the model even
+    // answers — so closing the window never loses what was shared. The model's save_task_context
+    // notes add the meaning on top; this is the floor, not the ceiling.
+    if (activePlan) {
+      const harvested = harvestTaskContext(msg.userText);
+      if (harvested.length > 0) {
+        activePlan = (await appendTaskContext(store, activePlan.id, harvested)) ?? activePlan;
+      }
+    }
     // Connected when the reader linked their own Schwab app (creds + a live token). Reused below to
     // auto-enable the keyless markets tools as well.
     const schwabConnected = !!(

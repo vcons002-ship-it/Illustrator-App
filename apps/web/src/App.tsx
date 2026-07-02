@@ -5086,6 +5086,7 @@ export function App() {
           : c.tool === "mark_step_done" || c.tool === "update_task_step" ? "Updating the plan…"
           : c.tool === "complete_task" ? "Checking the task off…"
           : c.tool === "stitch_videos" ? "Stitching your clips…"
+          : c.tool === "save_task_context" ? "Saving that to the task…"
           : c.tool === "open_web_text" ? "Fetching the text and opening it…"
           : c.tool === "set_plan" ? "Planning the steps…"
           : c.tool === "complete_step" ? "Checking off a step…"
@@ -5232,7 +5233,7 @@ export function App() {
           buddyStepEvidenceRef.current.toolResults.push({ call: e.call, result: e.error ? { error: e.error } : {} });
         // The agent just read/wrote the calendar or tasks — reflect it in the app's views.
         if (e.kind === "toolResult" && (e.call.tool === "create_event" || e.call.tool === "list_events")) refreshCalendar();
-        if (e.kind === "toolResult" && (e.call.tool === "add_task_group" || e.call.tool === "create_task" || e.call.tool === "add_task_steps" || e.call.tool === "mark_step_done" || e.call.tool === "complete_task" || e.call.tool === "update_task_step")) refreshTaskPlans();
+        if (e.kind === "toolResult" && (e.call.tool === "add_task_group" || e.call.tool === "create_task" || e.call.tool === "add_task_steps" || e.call.tool === "mark_step_done" || e.call.tool === "complete_task" || e.call.tool === "save_task_context" || e.call.tool === "update_task_step")) refreshTaskPlans();
         const typed = userBubbleText ?? "";
         if (e.openedImage) {
           // open_image: show the picture file inline in the chat (the bytes rode home base64-encoded).
@@ -5306,6 +5307,10 @@ export function App() {
     setBuddyStreaming("");
     setBuddyThinking("");
     setBuddyActivity("");
+    // A task-bound turn may have captured context onto the plan (the worker's deterministic
+    // link/attachment harvest writes with NO toolResult event) — refresh so the Tasks panel
+    // shows it the moment the turn settles, not the next time a task tool happens to run.
+    if (activeTaskPlanId()) refreshTaskPlans();
     if (res.error) {
       appendBuddy({ role: "tool", text: `⚠ ${res.error}`, turns: [] });
       return;

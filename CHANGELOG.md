@@ -7,6 +7,12 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Assistant & UI
 
+- **Task chats keep the task up to date** — anything you hand a task's chat now lands on the task
+  itself: pasted links and uploaded files are captured onto the plan automatically the moment you
+  send them, and the assistant is required to save the meaning (answers, decisions, a resume's key
+  points) as it works — flagging the task for an in-place re-plan when the new info changes the
+  steps. Closing the chat window no longer loses what you shared; the Tasks panel reflects it
+  immediately.
 - **Stitch existing clips into one video** — ask the assistant to "combine those clips" (it joins
   videos from the chat and/or local files, in order, normalizing mixed sizes/framerates), or open
   🎨 Creations → "Select clips", tap videos in play order, and hit Stitch. No re-rendering — hard
