@@ -179,6 +179,9 @@ import {
   shouldAutoCompact,
   resolveVideoModelFiles,
   VIDEO_RENDER_DEFAULTS,
+  anchorClipPrompt,
+  longVideoNegative,
+  WAN_DEFAULT_NEGATIVE,
   buildConcatArgs,
   buildLastFrameArgs,
   type ChatTurn,
@@ -4609,9 +4612,13 @@ export function App() {
       let dirAbs = "";
       for (let i = 0; i < n; i++) {
         setBuddyActivity(`Rendering clip ${i + 1}/${n}…`);
+        // CONTINUITY: each clip only sees the previous clip's last frame, so the persistent subject
+        // anchor is re-stated into every prompt and the negative locks the scene (no cuts / exits /
+        // pans-away) — otherwise one shot losing the subject makes every later clip forget the source.
         const clipCall = {
           tool: "generate_video" as const,
-          prompt: call.clips[i]!,
+          prompt: anchorClipPrompt(call.subject, call.clips[i]!),
+          negativePrompt: longVideoNegative(WAN_DEFAULT_NEGATIVE),
           source: { kind: "last" as const },
           ...(call.frames !== undefined ? { frames: call.frames } : {}),
         };

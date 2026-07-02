@@ -3,6 +3,7 @@ import type { ToolSchema } from "../providers/llm/chat.js";
 import type { ImageSearchHit, WebSearchHit } from "../providers/image/image-search.js";
 import type { BookSearchHit } from "../providers/book-search.js";
 import { IMAGE_STYLES } from "../providers/catalog.js";
+import { MAX_SUBJECT_CHARS } from "../providers/image/video-continuity.js";
 import type { BookSummary } from "../storage/store.js";
 import { POLISH_CHAT_GUIDANCE } from "./document-polish.js";
 import { MAX_SKILL_BODY_CHARS, MAX_SKILL_DESC_CHARS, MAX_SKILL_NAME_CHARS } from "./skills.js";
@@ -271,13 +272,34 @@ export type BuddyToolCall =
    * describes the MOTION/camera; `source` picks which image to animate — the most recent one shown (default),
    * a library illustration by id, or an image file by path. Approval-gated like generate_image. Desktop +
    * a local ComfyUI engine with an installed image-to-video model. */
-  | { tool: "generate_video"; prompt: string; source?: { kind: "last" | "library" | "file" | "text"; ref?: string }; model?: string; frames?: number; truncated?: boolean }
+  | {
+      tool: "generate_video";
+      prompt: string;
+      source?: { kind: "last" | "library" | "file" | "text"; ref?: string };
+      model?: string;
+      frames?: number;
+      truncated?: boolean;
+      /** Internal (not model-facing): the long-video loop's scene-lock negative for each chained clip. */
+      negativePrompt?: string;
+    }
   /** Make a LONGER video from a SERIES of short shots. `clips` is the ordered list of short motion prompts
    * (one per clip); the app renders each, SEAMLESSLY CHAINS them (clip N+1 continues from clip N's last
    * frame), and stitches them into ONE video. `source` seeds the FIRST clip (most recent image / library
    * id / file path / "text" for text-to-video). Approval-gated once for the whole batch. Desktop + a local
    * ComfyUI video model + ffmpeg. */
-  | { tool: "generate_long_video"; clips: string[]; source?: { kind: "last" | "library" | "file" | "text"; ref?: string }; model?: string; frames?: number; title?: string; truncated?: boolean }
+  | {
+      tool: "generate_long_video";
+      clips: string[];
+      /** Persistent one-line description of the main subject + setting, re-stated into EVERY clip's
+       * prompt so the chained render can't drift off the source material (each clip only sees the
+       * previous clip's last frame — the subject anchor is the only cross-clip memory). */
+      subject?: string;
+      source?: { kind: "last" | "library" | "file" | "text"; ref?: string };
+      model?: string;
+      frames?: number;
+      title?: string;
+      truncated?: boolean;
+    }
   /** Search the reader's COMPUTER for a file to open (desktop). Approval-gated:
    * the host stops the loop and asks the reader before touching the filesystem. */
   | { tool: "find_files"; query: string }
@@ -1094,12 +1116,17 @@ export function buildBuddySystemPrompt(opts: {
         '  Leave "model" off to use the reader\'s chosen video model (recommended); only set it to switch family on ' +
         'request: "wan2.2-i2v-14b" (~5s, strong motion — the default) or "ltx2.3-i2v-22b" (longer/faster). Optional ' +
         '"frames" sets length (more frames = longer).\n' +
-        '- {"tool":"generate_long_video","clips":["shot 1 …","shot 2 …",…],"source":{"kind":"…"}} — make a LONGER video ' +
-        "from a SERIES of shots. Use this (not generate_video) when the reader wants something longer than a single clip " +
-        '("a 20-second video", "a short scene", "a longer clip"). Give `clips` as an ORDERED list of short motion prompts, ' +
-        "one per shot — each continues the previous one; the app renders them all, seamlessly chains each from the last " +
-        "clip's final frame, and stitches them into ONE video (approve once for the whole batch). Write 3–8 shots for a " +
-        'typical request (each shot ≈ the clip length). `source` seeds the FIRST clip (same options as generate_video: ' +
+        '- {"tool":"generate_long_video","subject":"…","clips":["shot 1 …","shot 2 …",…],"source":{"kind":"…"}} — make a ' +
+        "LONGER video from a SERIES of shots. Use this (not generate_video) when the reader wants something longer than a " +
+        'single clip ("a 20-second video", "a short scene", "a longer clip"). Give `clips` as an ORDERED list of short ' +
+        "motion prompts, one per shot — each continues the previous one; the app renders them all, seamlessly chains each " +
+        "from the last clip's final frame, and stitches them into ONE video (approve once for the whole batch). Write 3–8 " +
+        "shots for a typical request (each shot ≈ the clip length). CONTINUITY RULES (each clip only sees the PREVIOUS " +
+        "clip's last frame, so anything that leaves the frame is forgotten): ALWAYS pass `subject` — one line describing " +
+        'the main character/object and setting ("a red vintage pickup truck on a desert highway at sunset") — it\'s ' +
+        "repeated into every shot so the render can't drift; write every shot as ONE continuous camera move that KEEPS " +
+        'the subject in frame (never "he walks away", "cut to", "meanwhile", a new location, or the subject exiting); ' +
+        "evolve the ACTION between shots, not the scene. `source` seeds the FIRST clip (same options as generate_video: " +
         '"text" to start from the prompt, else the last image / a library id / a file). Optional "model", "frames" ' +
         '(per clip), "title".\n'
       : "") +
@@ -2460,6 +2487,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     const truncated = clips.length < usableCount;
     const model = strArg(obj.model, MAX_NAME_CHARS);
     const title = strArg(obj.title, MAX_TITLE_CHARS);
+    const subject = strArg(obj.subject, MAX_SUBJECT_CHARS);
     const frames =
       typeof obj.frames === "number" && Number.isFinite(obj.frames) ? Math.min(257, Math.max(9, Math.round(obj.frames))) : undefined;
     // `source` seeds the FIRST clip; the rest chain from the previous clip's last frame. Same shape/default
@@ -2472,6 +2500,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     return {
       tool,
       clips,
+      ...(subject ? { subject } : {}),
       source,
       ...(model ? { model } : {}),
       ...(title ? { title } : {}),

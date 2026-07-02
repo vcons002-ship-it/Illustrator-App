@@ -7,6 +7,14 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Assistant & UI
 
+- **Long-form video keeps its subject** — chained clips used to "forget" the source material the
+  moment the subject left the frame or a shot invented a scene change (each clip only sees the
+  previous clip's last frame). Every clip now carries a persistent subject description, an explicit
+  single-continuous-shot / stay-in-frame directive, and a scene-lock negative prompt (no cuts, no
+  new scene, no panning away) — and the assistant is instructed to write shots that never let the
+  subject exit. Drift can't be fully eliminated (it's inherent to last-frame chaining), but the
+  render is now strongly anchored to the original subject.
+
 - **The assistant can check tasks off** — say "I booked the flight" or "mark that done" and it
   marks the sub-task (or the whole task) complete, in the app and in Google Tasks when connected.
   It can also reopen a finished task. Checking off a specific sub-task now works in any order
