@@ -1133,8 +1133,12 @@ export function buildBuddySystemPrompt(opts: {
         '"frames" sets length (more frames = longer).\n' +
         '  Optional "end":{"kind":"last"|"library"|"file","ref":"…"} — FIRST+LAST FRAME (Wan only): the clip starts at ' +
         "`source` and ARRIVES exactly at the end image (a controlled morph / camera move between two stills). Use when " +
-        'the reader gives two images ("from this to that", "morph A into B", "transition between these"). Needs a real ' +
-        "source image (not text-to-video); with the LTX model selected it fails with a clear message.\n" +
+        'the reader gives two images ("from this to that", "morph A into B", "transition between these"). With TWO chat ' +
+        'images (e.g. two uploads), point each frame at ITS image via "ref" on kind "last": a filename ({"kind":"last",' +
+        '"ref":"photoA.jpg"}) or a position ("1" = the newest image, "2" = the one before it). Uploads appear oldest-' +
+        "first, so \"from A to B\" usually means source ref = the EARLIER upload (\"2\"), end ref = the newest (\"1\") — " +
+        "follow the reader's stated order, and NEVER leave both refs off (they'd both resolve to the same newest image). " +
+        "Needs a real source image (not text-to-video); with the LTX model selected it fails with a clear message.\n" +
         '- {"tool":"generate_long_video","subject":"…","clips":["shot 1 …","shot 2 …",…],"source":{"kind":"…"}} — make a ' +
         "LONGER video from a SERIES of shots. Use this (not generate_video) when the reader wants something longer than a " +
         'single clip ("a 20-second video", "a short scene", "a longer clip"). Give `clips` as an ORDERED list of short ' +
@@ -2497,8 +2501,16 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     const src = obj.source && typeof obj.source === "object" ? (obj.source as Record<string, unknown>) : undefined;
     const kind = src?.kind === "library" || src?.kind === "file" || src?.kind === "text" ? src.kind : "last";
     const ref = strArg(src?.ref, MAX_PATH_CHARS);
+    // `ref` on kind "last" names a SPECIFIC chat image (a filename, or "1"/"2" = newest/one-before) —
+    // that's how first+last frame addresses TWO uploads instead of both resolving to the newest.
     const source: { kind: "last" | "library" | "file" | "text"; ref?: string } =
-      kind === "text" ? { kind: "text" } : (kind === "library" || kind === "file") && ref ? { kind, ref } : { kind: "last" };
+      kind === "text"
+        ? { kind: "text" }
+        : (kind === "library" || kind === "file") && ref
+          ? { kind, ref }
+          : ref
+            ? { kind: "last", ref }
+            : { kind: "last" };
     // Optional END frame (first+last-frame conditioning, Wan only) — same shape minus "text".
     const endRaw = obj.end && typeof obj.end === "object" ? (obj.end as Record<string, unknown>) : undefined;
     let end: { kind: "last" | "library" | "file"; ref?: string } | undefined;
@@ -2507,7 +2519,9 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       end =
         (endRaw.kind === "library" || endRaw.kind === "file") && endRef
           ? { kind: endRaw.kind, ref: endRef }
-          : { kind: "last" };
+          : endRef
+            ? { kind: "last", ref: endRef }
+            : { kind: "last" };
     }
     return {
       tool,

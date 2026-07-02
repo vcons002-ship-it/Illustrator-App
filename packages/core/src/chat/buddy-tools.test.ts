@@ -106,6 +106,16 @@ describe("parseBuddyToolCall — generate_long_video", () => {
     // Malformed end kinds fall back to "last"; a missing end stays absent.
     expect(parseBuddyToolCall('{"tool":"generate_video","prompt":"m","end":{"kind":"text"}}')).toMatchObject({ end: { kind: "last" } });
     expect(parseBuddyToolCall('{"tool":"generate_video","prompt":"m"}')).not.toHaveProperty("end");
+    // Two-upload addressing: "ref" survives on kind "last" for BOTH frames (filename or position),
+    // so source and end can each name their own chat image instead of both resolving to the newest.
+    expect(
+      parseBuddyToolCall('{"tool":"generate_video","prompt":"morph","source":{"kind":"last","ref":"photoA.jpg"},"end":{"kind":"last","ref":"1"}}'),
+    ).toEqual({
+      tool: "generate_video",
+      prompt: "morph",
+      source: { kind: "last", ref: "photoA.jpg" },
+      end: { kind: "last", ref: "1" },
+    });
   });
 
   it("parses stitch_videos (ordered refs, string form, 2-clip minimum, 24-clip cap) and formats results", () => {

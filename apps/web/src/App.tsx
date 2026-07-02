@@ -4507,20 +4507,46 @@ export function App() {
     }
   };
 
-  /** Resolve a generate_video `source` to image bytes: a file path → read it; otherwise (last / library)
-   * the most recent image shown in the chat. Copies the bytes so the worker transfer can't detach a
-   * still-displayed image. Throws a clear message when there's nothing to animate. */
+  /** Resolve a generate_video `source`/`end` to image bytes: a file path → read it; otherwise a CHAT
+   * image — the most recent by default, or a SPECIFIC one via `ref` (a filename to match, or a
+   * 1-based position: "1" = newest, "2" = the one before it). The ref forms are what make FIRST+LAST
+   * frame work on two uploads — without them both frames would resolve to the same newest image.
+   * Copies the bytes so the worker transfer can't detach a still-displayed image. Throws a clear
+   * message when nothing matches. */
   const resolveVideoSource = async (source?: { kind: "last" | "library" | "file" | "text"; ref?: string }): Promise<{ bytes: ArrayBuffer; mimeType: string }> => {
     if (source?.kind === "file" && source.ref) {
       const f = await readLocalFile(source.ref);
       return { bytes: await f.arrayBuffer(), mimeType: f.type || "image/png" };
     }
-    // "last" (the default) and "library" both fall back to the most recent image shown in the chat.
+    // Chat images, newest first, each with the label it's addressable by (an upload bubble's
+    // "🖼 name" text, a generated image's file-card name, or the message text).
+    const chatImages: { bytes: ArrayBuffer; mimeType: string; label: string }[] = [];
     for (let i = buddyMessagesRef.current.length - 1; i >= 0; i--) {
-      const img = buddyMessagesRef.current[i]?.image;
-      if (img && "bytes" in img && img.bytes) return { bytes: img.bytes.slice(0), mimeType: img.mimeType };
+      const m = buddyMessagesRef.current[i]!;
+      const img = m.image;
+      if (img && "bytes" in img && img.bytes) {
+        const attName = m.attachments?.find((a) => a.kind === "image")?.name;
+        chatImages.push({ bytes: img.bytes, mimeType: img.mimeType, label: attName || m.text || "" });
+      }
     }
-    throw new Error("there's no image to animate yet — generate or open an image first, then ask to animate it");
+    if (chatImages.length === 0) {
+      throw new Error("there's no image to animate yet — generate or open an image first, then ask to animate it");
+    }
+    const ref = source?.kind === "last" || source?.kind === "library" ? source.ref?.trim() : undefined;
+    let picked = chatImages[0]!;
+    if (ref) {
+      const byIndex = /^\d{1,2}$/.test(ref) ? chatImages[Number(ref) - 1] : undefined;
+      const byName = chatImages.find((c) => c.label.toLowerCase().includes(ref.toLowerCase()));
+      const match = byIndex ?? byName;
+      if (!match) {
+        throw new Error(
+          `no chat image matches "${ref}" — the ${chatImages.length} image${chatImages.length === 1 ? "" : "s"} here: ` +
+            chatImages.slice(0, 6).map((c, i) => `${i + 1}=${(c.label || "untitled").slice(0, 40)}`).join(", "),
+        );
+      }
+      picked = match;
+    }
+    return { bytes: picked.bytes.slice(0), mimeType: picked.mimeType };
   };
 
   // Animate an existing image into a short video (image-to-video) via the local ComfyUI engine. Mirrors
