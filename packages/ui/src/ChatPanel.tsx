@@ -15,6 +15,16 @@ import { ContextUsageDonut } from "./ContextUsageDonut.js";
 import { DataChart } from "./DataChart.js";
 import { DataTablePreview } from "./DataTablePreview.js";
 import { DocBlocksView } from "./DocBlocksView.js";
+import {
+  ACCENT_BLUE,
+  DANGER_RED,
+  approvalStyle,
+  chatHeaderStyle as headerStyle,
+  chatInputRowStyle as inputRowStyle,
+  chatScrollStyle as scrollStyle,
+  chatTextareaStyle as textareaStyle,
+  smallButtonStyle,
+} from "./tokens.js";
 
 /**
  * The reading-companion chat panel. Pure presentation: messages, a streaming
@@ -316,10 +326,18 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
   const [draft, setDraft] = useState("");
   const [showHelp, setShowHelp] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Follow the conversation: stick to the bottom as messages/tokens arrive.
+  // Follow the conversation: stick to the bottom as messages/tokens arrive — but only
+  // while the reader is already near it, so scrolling up to re-read isn't yanked back.
+  // "Was near bottom" is captured in the onScroll handler: the effect runs AFTER render,
+  // when scrollHeight has already grown, so it can't measure the pre-update position.
+  const nearBottomRef = useRef(true);
+  const trackNearBottom = (): void => {
+    const el = scrollRef.current;
+    if (el) nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && nearBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [props.messages.length, props.streamingText, props.pendingTool, props.activity]);
 
   const send = () => {
@@ -333,7 +351,7 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
     <div style={overlayStyle}>
       <div style={panelStyle}>
         <div style={headerStyle}>
-          <strong style={{ fontSize: 14 }}>Chat · {props.title}</strong>
+          <strong style={{ fontSize: 14 }} title={props.title}>Chat · {props.title}</strong>
           <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
             {!props.technical && (
               <label style={{ display: "flex", gap: 4, alignItems: "center", fontSize: 11, opacity: 0.8 }}>
@@ -380,7 +398,7 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
           />
         )}
 
-        <div ref={scrollRef} style={scrollStyle}>
+        <div ref={scrollRef} onScroll={trackNearBottom} style={scrollStyle}>
           {props.messages.length === 0 && !props.streamingText && (
             <div style={{ opacity: 0.55, fontSize: 12, padding: 12 }}>
               Ask about what you’re reading — characters, concepts, “find a diagram of…”,
@@ -496,10 +514,18 @@ export function SlashMenu({
         <button
           key={c.name}
           style={slashItemStyle}
-          // onMouseDown (not click) so the textarea keeps focus for typing the args.
+          // onMouseDown (not click) so the textarea keeps focus for typing the args;
+          // preventDefault also stops the later click, so keyboard activation below
+          // (a Tab-focused item) can't double-fire with a mouse pick.
           onMouseDown={(e) => {
             e.preventDefault();
             onPick(`/${c.name} `);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onPick(`/${c.name} `);
+            }
           }}
         >
           <code style={slashCodeStyle}>
@@ -579,7 +605,7 @@ const slashItemStyle = {
 } as const;
 
 const slashCodeStyle = {
-  color: "#9db8ff",
+  color: ACCENT_BLUE,
   whiteSpace: "nowrap",
   fontSize: 12,
 } as const;
@@ -775,7 +801,7 @@ export const MessageBubble = memo(function MessageBubble({
         <ol style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 11 }}>
           {message.links.map((l, i) => (
             <li key={i}>
-              <a href={l.url} target="_blank" rel="noreferrer" style={{ color: "#9db8ff" }}>
+              <a href={l.url} target="_blank" rel="noreferrer" style={{ color: ACCENT_BLUE }}>
                 {l.title || l.url}
               </a>
             </li>
@@ -1009,6 +1035,15 @@ export function FileActionBar({
 function ImageGallery({ items }: { items: { thumb: string; full: string; title?: string }[] }) {
   const [enlarged, setEnlarged] = useState<number | null>(null);
   const open = enlarged != null ? items[enlarged] : undefined;
+  // Escape closes the enlarged view (the lightbox has no close chrome of its own).
+  useEffect(() => {
+    if (enlarged == null) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") setEnlarged(null);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [enlarged]);
   return (
     <div style={{ marginTop: 6 }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -1020,7 +1055,18 @@ function ImageGallery({ items }: { items: { thumb: string; full: string; title?:
             title={g.title || ""}
             loading="lazy"
             decoding="async"
+            // Real button semantics for the click-to-enlarge behavior (an <img> is
+            // otherwise unreachable by keyboard).
+            role="button"
+            tabIndex={0}
+            aria-label={`${enlarged === i ? "Shrink" : "Enlarge"} ${g.title || "image result"}`}
             onClick={() => setEnlarged(enlarged === i ? null : i)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setEnlarged(enlarged === i ? null : i);
+              }
+            }}
             style={{
               width: 116,
               height: 116,
@@ -1028,7 +1074,7 @@ function ImageGallery({ items }: { items: { thumb: string; full: string; title?:
               borderRadius: 6,
               cursor: enlarged === i ? "zoom-out" : "zoom-in",
               border:
-                enlarged === i ? "2px solid #9db8ff" : "1px solid rgba(255,255,255,0.18)",
+                enlarged === i ? `2px solid ${ACCENT_BLUE}` : "1px solid rgba(255,255,255,0.18)",
             }}
           />
         ))}
@@ -1038,7 +1084,16 @@ function ImageGallery({ items }: { items: { thumb: string; full: string; title?:
           src={open.full}
           alt={open.title || "enlarged image"}
           decoding="async"
+          role="button"
+          tabIndex={0}
+          aria-label="Close enlarged image"
           onClick={() => setEnlarged(null)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setEnlarged(null);
+            }
+          }}
           style={{
             display: "block",
             maxWidth: "100%",
@@ -1154,7 +1209,7 @@ function Linkified({ text }: { text: string }) {
     <>
       {linkifyText(text).map((seg, i) =>
         "url" in seg ? (
-          <a key={i} href={seg.url} target="_blank" rel="noreferrer" style={{ color: "#9db8ff" }}>
+          <a key={i} href={seg.url} target="_blank" rel="noreferrer" style={{ color: ACCENT_BLUE }}>
             {seg.label ?? seg.url}
           </a>
         ) : (
@@ -1221,6 +1276,15 @@ function CodeCard({
   const [previewOpen, setPreviewOpen] = useState(false);
   const [running, setRunning] = useState(false);
   const [output, setOutput] = useState<RunCodeResult | undefined>();
+  // Object URLs handed to new tabs, revoked on unmount as well as by the grace timer —
+  // a card unmounted before the timer fires must not leak its blob.
+  const tabUrls = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const urls = tabUrls.current;
+    return () => {
+      for (const u of urls) URL.revokeObjectURL(u);
+    };
+  }, []);
   const { filename, saveName, mime } = resolveCodeFile(lang, rawFilename);
   const ext = (filename.split(".").pop() ?? "").toLowerCase();
   const previewable = ext === "html" || ext === "svg";
@@ -1248,16 +1312,21 @@ function CodeCard({
       setRunning(false);
     }
   };
-  // Open the rendered page in a new tab (a real click → not blocked).
+  // Open the rendered page in a new tab (a real click → not blocked). The 30s grace
+  // period gives the tab time to load before the blob URL is revoked.
   const openInTab = () => {
     const url = URL.createObjectURL(new Blob([code], { type: mime }));
+    tabUrls.current.add(url);
     window.open(url, "_blank", "noreferrer");
-    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    setTimeout(() => {
+      tabUrls.current.delete(url);
+      URL.revokeObjectURL(url);
+    }, 30_000);
   };
   return (
     <div style={codeCardStyle}>
       <div style={codeHeaderStyle}>
-        <span style={{ opacity: 0.7 }}>{lang || "text"} · {filename}</span>
+        <span style={{ opacity: 0.7 }} title={filename}>{lang || "text"} · {filename}</span>
         <span style={{ display: "flex", gap: 6 }}>
           {onSaveFile && (
             <button style={codeBtnStyle} onClick={() => void save()}>
@@ -1275,7 +1344,12 @@ function CodeCard({
             </button>
           )}
           {previewable && (
-            <button style={codeBtnStyle} onClick={openInTab} title="Open the rendered page in a new browser tab">
+            <button
+              style={codeBtnStyle}
+              onClick={openInTab}
+              title="Open the rendered page in a new browser tab"
+              aria-label="Open the rendered page in a new browser tab"
+            >
               ↗ Tab
             </button>
           )}
@@ -1390,6 +1464,15 @@ function DocumentCard({
   const [built, setBuilt] = useState<{ html: string; generated: number; failed: number }>();
   const [saved, setSaved] = useState<string | undefined>();
   const [error, setError] = useState("");
+  // Object URLs handed to preview tabs, revoked on unmount as well as by the grace
+  // timer — a card unmounted before the timer fires must not leak its blob.
+  const tabUrls = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const urls = tabUrls.current;
+    return () => {
+      for (const u of urls) URL.revokeObjectURL(u);
+    };
+  }, []);
 
   const html = built?.html ?? code;
   const build = async () => {
@@ -1408,8 +1491,12 @@ function DocumentCard({
   };
   const preview = () => {
     const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    tabUrls.current.add(url);
     window.open(url, "_blank", "noreferrer");
-    setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    setTimeout(() => {
+      tabUrls.current.delete(url);
+      URL.revokeObjectURL(url);
+    }, 30_000);
   };
   const save = async () => {
     if (!onSaveFile) return;
@@ -1445,7 +1532,7 @@ function DocumentCard({
       <pre style={codePreStyle}>
         <code>{built ? "<!-- images embedded — Preview or Save the finished document -->" : code}</code>
       </pre>
-      {error ? <div style={{ fontSize: 11, color: "#ff9b9b", padding: "4px 8px" }}>{error}</div> : null}
+      {error ? <div style={{ fontSize: 11, color: DANGER_RED, padding: "4px 8px" }}>{error}</div> : null}
       {saved && (
         <div style={{ fontSize: 11, opacity: 0.7, padding: "4px 8px" }}>
           {saved === "saved" ? "✓ Saved (check your downloads)" : `✓ Saved to ${saved}`}
@@ -1555,23 +1642,6 @@ const panelStyle = {
   overflow: "hidden",
 } as const;
 
-const headerStyle = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "10px 12px",
-  borderBottom: "1px solid rgba(255,255,255,0.1)",
-} as const;
-
-const scrollStyle = {
-  flex: 1,
-  overflowY: "auto",
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-  padding: 12,
-} as const;
-
 const bubbleStyle = {
   maxWidth: "85%",
   padding: "8px 10px",
@@ -1592,42 +1662,4 @@ const deleteButtonStyle = {
   opacity: 0.35,
   cursor: "pointer",
   padding: "2px 4px",
-} as const;
-
-const approvalStyle = {
-  alignSelf: "flex-start",
-  border: "1px solid rgba(122,162,255,0.5)",
-  borderRadius: 8,
-  padding: 10,
-  background: "rgba(122,162,255,0.08)",
-} as const;
-
-const inputRowStyle = {
-  display: "flex",
-  gap: 8,
-  padding: 10,
-  borderTop: "1px solid rgba(255,255,255,0.1)",
-  alignItems: "flex-end",
-} as const;
-
-const textareaStyle = {
-  flex: 1,
-  resize: "none",
-  background: "rgba(255,255,255,0.06)",
-  color: "inherit",
-  border: "1px solid rgba(255,255,255,0.15)",
-  borderRadius: 6,
-  padding: 8,
-  fontSize: 13,
-  fontFamily: "inherit",
-} as const;
-
-const smallButtonStyle = {
-  background: "rgba(255,255,255,0.08)",
-  color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
-  borderRadius: 6,
-  padding: "6px 10px",
-  fontSize: 12,
-  cursor: "pointer",
 } as const;

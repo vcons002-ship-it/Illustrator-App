@@ -1,5 +1,16 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { MAX_SOUL_IMAGES, type SoulImage, type SoulNote } from "@visual-reader/core";
+import { ModalShell } from "./ModalShell.js";
+import {
+  DANGER_RED,
+  modalAddRowStyle as addRow,
+  modalBtnStyle as btn,
+  modalBtnPrimaryStyle as btnPrimary,
+  modalEditRowStyle as editRow,
+  modalHeaderRowStyle as headerRow,
+  modalInputStyle as input,
+  modalNoteRowStyle as noteRow,
+} from "./tokens.js";
 
 /**
  * Edit one of the two identity "souls" — durable notes, separate from reader-memory, that
@@ -179,8 +190,7 @@ export const SoulPanel = memo(function SoulPanel({
   const removeImage = (i: number): void => void persistPics(pics.filter((_, idx) => idx !== i));
 
   return (
-    <div style={overlay} onClick={onClose}>
-      <div style={card} onClick={(e) => e.stopPropagation()}>
+    <ModalShell title={copy.title} onClose={onClose}>
         <div style={headerRow}>
           <strong>{copy.title}</strong>
           <button style={btn} onClick={onClose}>
@@ -311,7 +321,7 @@ export const SoulPanel = memo(function SoulPanel({
                   decoding="async"
                   style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 6, border: "1px solid rgba(255,255,255,0.15)" }}
                 />
-                <button style={removeBadge} onClick={() => removeImage(i)} disabled={busy} title="Remove">
+                <button style={removeBadge} onClick={() => removeImage(i)} disabled={busy} title="Remove" aria-label="Remove reference photo">
                   ×
                 </button>
               </div>
@@ -339,75 +349,12 @@ export const SoulPanel = memo(function SoulPanel({
           <span>
             {list.length}/{limits.max} notes
           </span>
-          {error ? <span style={{ color: "#ff9b9b", opacity: 1 }}>{error}</span> : <span>{busy ? "Saving…" : ""}</span>}
+          {error ? <span style={{ color: DANGER_RED, opacity: 1 }}>{error}</span> : <span>{busy ? "Saving…" : ""}</span>}
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 });
 
-const overlay: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  background: "rgba(8,9,13,0.7)",
-  backdropFilter: "blur(6px)",
-  zIndex: 100,
-  padding: 20,
-};
-const card: React.CSSProperties = {
-  width: "min(620px, 100%)",
-  maxHeight: "92vh",
-  overflowY: "auto",
-  background: "#16181d",
-  color: "#e6e6e6",
-  border: "1px solid rgba(255,255,255,0.12)",
-  borderRadius: 12,
-  padding: 18,
-  display: "flex",
-  flexDirection: "column",
-  gap: 10,
-  fontFamily: "system-ui, sans-serif",
-};
-const headerRow: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between" };
-const input: React.CSSProperties = {
-  background: "rgba(255,255,255,0.06)",
-  color: "inherit",
-  border: "1px solid rgba(255,255,255,0.15)",
-  borderRadius: 6,
-  padding: 8,
-  fontSize: 13,
-  fontFamily: "inherit",
-  boxSizing: "border-box",
-};
-const addRow: React.CSSProperties = { display: "flex", gap: 6 };
-const noteRow: React.CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  gap: 10,
-  border: "1px solid rgba(255,255,255,0.1)",
-  borderRadius: 8,
-  padding: "8px 10px",
-  fontSize: 13,
-};
-const editRow: React.CSSProperties = { ...noteRow, border: "1px solid rgba(122,162,255,0.4)", background: "rgba(122,162,255,0.06)" };
-const btn: React.CSSProperties = {
-  background: "rgba(255,255,255,0.08)",
-  color: "inherit",
-  border: "1px solid rgba(255,255,255,0.18)",
-  borderRadius: 6,
-  padding: "4px 10px",
-  fontSize: 13,
-  cursor: "pointer",
-};
-const btnPrimary: React.CSSProperties = {
-  ...btn,
-  background: "rgba(122,162,255,0.25)",
-  border: "1px solid rgba(122,162,255,0.6)",
-};
 const addThumb: React.CSSProperties = {
   width: 64,
   height: 64,

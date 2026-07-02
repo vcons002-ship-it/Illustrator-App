@@ -1,4 +1,5 @@
 import { useState, type CSSProperties } from "react";
+import { ModalShell } from "./ModalShell.js";
 
 /**
  * A small "name this file before saving" modal. Opened with a content-derived default (e.g. a
@@ -21,8 +22,7 @@ export function RenameExportModal({ defaultName, what, onConfirm, onCancel }: Re
     onConfirm(n || defaultName);
   };
   return (
-    <div style={overlay} onClick={onCancel}>
-      <div style={panel} onClick={(e) => e.stopPropagation()}>
+    <ModalShell title="Save as" onClose={onCancel} overlayStyle={overlay} cardStyle={panel}>
         <strong style={{ fontSize: 15 }}>💾 Save as…</strong>
         {what ? <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>{what}</div> : null}
         <input
@@ -31,7 +31,7 @@ export function RenameExportModal({ defaultName, what, onConfirm, onCancel }: Re
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") confirm();
-            if (e.key === "Escape") onCancel();
+            // Escape is handled by ModalShell.
           }}
           onFocus={(e) => {
             // Pre-select the stem (not the extension) so a quick rename keeps the type.
@@ -44,30 +44,18 @@ export function RenameExportModal({ defaultName, what, onConfirm, onCancel }: Re
           <button style={btn} onClick={onCancel}>Cancel</button>
           <button style={btnPrimary} onClick={confirm} disabled={!name.trim()}>Save</button>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }
 
-const overlay: CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  background: "rgba(8,9,13,0.7)",
-  backdropFilter: "blur(6px)",
-  zIndex: 120,
-  padding: 20,
-};
+// Deltas from ModalShell's shared look: above other overlays, a narrow block-flow card.
+const overlay: CSSProperties = { zIndex: 120 };
 const panel: CSSProperties = {
   width: "min(440px, 100%)",
-  background: "#16181d",
-  color: "#e6e6e6",
-  border: "1px solid rgba(255,255,255,0.12)",
-  borderRadius: 12,
-  padding: 18,
-  fontFamily: "system-ui, sans-serif",
+  display: "block",
+  gap: 0,
+  maxHeight: "none",
+  overflowY: "visible",
 };
 const input: CSSProperties = {
   width: "100%",

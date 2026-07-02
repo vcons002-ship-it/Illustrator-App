@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { BookSummary, LibraryType } from "@visual-reader/core";
+import { ModalShell } from "./ModalShell.js";
 
 /** Human labels + emoji for each library type tag (the filter chips + per-book badge). */
 const TYPE_LABELS: Record<LibraryType, string> = {
@@ -27,14 +28,32 @@ export interface LibraryPanelProps {
   onClose: () => void;
 }
 
+type LibrarySort = "recent" | "title" | "type";
+
 export function LibraryPanel({ books, currentId, onOpen, onRemove, onCarryOver, onClose }: LibraryPanelProps) {
   const [filter, setFilter] = useState<LibraryType | "all">("all");
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<LibrarySort>("recent");
   // The type tags actually present, in a stable order, so the chip row only offers real options.
-  const presentTypes = (Object.keys(TYPE_LABELS) as LibraryType[]).filter((t) => books.some((b) => (b.type ?? "fiction") === t));
-  const shown = filter === "all" ? books : books.filter((b) => (b.type ?? "fiction") === filter);
+  const typeOrder = Object.keys(TYPE_LABELS) as LibraryType[];
+  const presentTypes = typeOrder.filter((t) => books.some((b) => (b.type ?? "fiction") === t));
+  const q = search.trim().toLowerCase();
+  const shown = books.filter(
+    (b) =>
+      (filter === "all" || (b.type ?? "fiction") === filter) &&
+      (!q || b.title.toLowerCase().includes(q) || (b.author ?? "").toLowerCase().includes(q)),
+  );
+  // Recent = last-opened first (addedAt is bumped on open); Type groups in the chip row's
+  // stable order, most recent first within each group.
+  const sorted = [...shown].sort((a, b) =>
+    sort === "title"
+      ? a.title.localeCompare(b.title)
+      : sort === "type"
+        ? typeOrder.indexOf(a.type ?? "fiction") - typeOrder.indexOf(b.type ?? "fiction") || b.addedAt - a.addedAt
+        : b.addedAt - a.addedAt,
+  );
   return (
-    <div style={overlayStyle} onClick={onClose}>
-      <div style={panelStyle} onClick={(e) => e.stopPropagation()}>
+    <ModalShell title="Library" onClose={onClose} overlayStyle={overlayStyle} cardStyle={panelStyle}>
         <div style={headerStyle}>
           <strong>Library</strong>
           <span style={{ opacity: 0.6, fontSize: 12 }}>
@@ -44,6 +63,28 @@ export function LibraryPanel({ books, currentId, onOpen, onRemove, onCarryOver, 
             Close
           </button>
         </div>
+        {books.length > 0 && (
+          <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+            <input
+              type="search"
+              style={searchStyle}
+              value={search}
+              placeholder="Search title or author…"
+              aria-label="Search library by title or author"
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            <select
+              style={sortStyle}
+              value={sort}
+              aria-label="Sort library"
+              onChange={(e) => setSort(e.target.value as LibrarySort)}
+            >
+              <option value="recent">Recent</option>
+              <option value="title">Title A–Z</option>
+              <option value="type">Type</option>
+            </select>
+          </div>
+        )}
         {presentTypes.length > 1 && (
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
             <button style={filter === "all" ? chipActive : chipStyle} onClick={() => setFilter("all")}>
@@ -58,14 +99,16 @@ export function LibraryPanel({ books, currentId, onOpen, onRemove, onCarryOver, 
         )}
         {books.length === 0 ? (
           <p style={{ opacity: 0.7 }}>No books yet — open an EPUB and it'll appear here.</p>
+        ) : sorted.length === 0 ? (
+          <p style={{ opacity: 0.7 }}>No books match your search.</p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {shown.map((b) => {
+            {sorted.map((b) => {
               const current = b.id === currentId;
               return (
                 <div key={b.id} style={current ? { ...rowStyle, ...rowCurrent } : rowStyle}>
                   <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <div title={b.title} style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {b.title}
                       {current && <span style={{ opacity: 0.6, fontWeight: 400 }}> · open now</span>}
                     </div>
@@ -106,8 +149,7 @@ export function LibraryPanel({ books, currentId, onOpen, onRemove, onCarryOver, 
             })}
           </div>
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 }
 
@@ -120,13 +162,12 @@ function relativeTime(ms: number): string {
   return `${Math.round(d / 86400000)}d ago`;
 }
 
+// Deltas from ModalShell's shared look (this panel predates the shell): a lighter
+// un-blurred backdrop, top-aligned with the OVERLAY scrolling, a block-flow card.
 const overlayStyle = {
-  position: "fixed",
-  inset: 0,
   background: "rgba(0,0,0,0.5)",
-  display: "flex",
+  backdropFilter: "none",
   alignItems: "flex-start",
-  justifyContent: "center",
   padding: "8vh 16px",
   zIndex: 50,
   overflowY: "auto",
@@ -136,13 +177,29 @@ const panelStyle = {
   width: "min(640px, 100%)",
   background: "#171922",
   border: "1px solid rgba(255,255,255,0.15)",
-  borderRadius: 12,
-  padding: 16,
-  fontFamily: "system-ui, sans-serif",
   color: "#e9ecf2",
+  display: "block",
+  gap: 0,
+  maxHeight: "none",
+  overflowY: "visible",
+  padding: 16,
 } as const;
 
 const headerStyle = { display: "flex", alignItems: "center", gap: 12, marginBottom: 10 } as const;
+
+const searchStyle = {
+  flex: 1,
+  minWidth: 0,
+  background: "rgba(255,255,255,0.06)",
+  border: "1px solid rgba(255,255,255,0.2)",
+  color: "inherit",
+  borderRadius: 6,
+  padding: "4px 10px",
+  fontSize: 13,
+  fontFamily: "inherit",
+} as const;
+
+const sortStyle = { ...searchStyle, flex: "0 0 auto", cursor: "pointer" } as const;
 
 const rowStyle = {
   display: "flex",

@@ -132,13 +132,22 @@ that switches it into structured-planning mode for a coding project or a complex
   images (with approval), manage the library — it knows your current settings and only overrides on request.
 - **The conversation follows you** — when it opens a book, the discussion continues in the book chat, context intact.
 - **Remembers what you like** — *"I prefer watercolor"*, *"never spoil endings"* → a **long-term
-  memory** applied in every future chat (ask it to forget, too).
+  memory** applied in every future chat (ask it to forget, too). Memories and the assistant's
+  own "soul" notes are durable notes of up to **2,000 characters** each, reviewable and
+  editable in their panels.
 - **Learns skills from experience** — when you do a similar multi-step task **more than once**, it
   distils a reusable **skill** (a saved playbook) and **offers it for you to Keep or Dismiss** —
   nothing is saved silently, and near-duplicates are skipped. The skills you actually reuse stay put
   as the list fills; review/edit/delete (and see each one's use count) in the 🧠 Skills panel. *(opt-in)*
-- **Delegates subtasks** — hands a chunky lookup to a short-lived **read-only sub-agent** that
-  researches and returns a concise result, keeping the main answer clean (it can't change anything).
+- **Delegates subtasks — in parallel** — hands a chunky lookup to a short-lived **read-only
+  sub-agent**, or splits a big job into independent subtasks and runs **several sub-agents at
+  once** (capped by **Settings → Parallel sub-agents**). An optional "worker model" setting can
+  point sub-agents at a vLLM server so they truly run concurrently on one GPU — see
+  [VLLM-SETUP.md](./VLLM-SETUP.md).
+- **Delegates hard coding jobs** — hands a multi-file coding task to an external open-source
+  **coding agent** (Aider by default, Codex CLI as the alternative) that edits and commits in
+  the workspace; the app reads back the diff and runs your verify command. *(desktop · opt-in ·
+  needs the run-commands flag; see [docs/coding-agent-delegation.md](./docs/coding-agent-delegation.md))*
 - **Uses your MCP servers** — add **Model Context Protocol** servers in Settings and the assistant
   lists + calls their tools as part of a task. Both kinds: **HTTP** servers (`name https://host/mcp`)
   and **stdio** servers — a local command the desktop runs, like the official filesystem/git servers
@@ -151,6 +160,28 @@ that switches it into structured-planning mode for a coding project or a complex
 - **Makes files** — ask for a worksheet, quiz, CSV, or *"code me a landing page"* and it writes the full content with a **Save** button.
 - **Walks you through setup** — *"how do I set up image generation?"*, *"connect my calendar"*,
   *"how do I connect Schwab?"* → it pulls the built-in step-by-step guide and walks you through it one step at a time. *(no setup)*
+
+### 🎬 Video generation
+
+Make short video clips — or a longer stitched video — on your own GPU. Video renders on
+**ComfyUI**, even if your *images* run on AUTOMATIC1111 (both engines can be connected at
+once — each has its own connection row in Settings, and video automatically uses the
+ComfyUI one). Model files download from **Settings → 🎬 Image-to-video**. *(image model on
+your GPU; the managed engine + downloads are Windows-only — on macOS/Linux connect your own ComfyUI)*
+
+- **Image-to-video** — animate a generated image (or one you provide) into a clip. Two
+  models, one click each: **Wan 2.2** (the default — 640×640 at 16fps, ~5-second clips,
+  strong motion) and **LTX-2.3** (768×512 at 24fps, longer clips, with optional **2×
+  high-res** and a **synced audio** track, saved as mp4).
+- **Text-to-video** — the same two models, straight from a prompt with no source image.
+- **Long-form video** — ask for a longer video and the assistant plans a series of shots,
+  renders each clip **continuing from the last frame of the previous one**, and stitches
+  them into a single mp4 with a **managed ffmpeg**: a one-click **"Download ffmpeg
+  (~80 MB)"** button in Settings → Image-to-video fetches a static build into
+  `~/VisualReader/ffmpeg` (no system install, nothing touches your PATH).
+- **Works from a linked phone** — start a long-form video, download ffmpeg, or switch the
+  video model from your phone; the action relays to the desktop, which does the rendering,
+  and the finished video plays on the phone.
 
 ### 🌐 Web & research
 
@@ -236,6 +267,10 @@ Drive the desktop assistant from your phone — no cloud.
   email"*); the desktop runs it and writes the answer back into the task. *(needs Google · opt-in · desktop must be open)*
 - **Live link over Wi-Fi** — **🔗 Link phone** shows a URL; open it on a phone on the same Wi-Fi and it
   becomes a thin client of the desktop's engine (no keys/models on the phone). See [REMOTE-LINK.md](./REMOTE-LINK.md). *(desktop · same Wi-Fi · experimental)*
+- **The phone can do more than chat** — from a linked phone you can **connect the image server**,
+  **download ffmpeg**, **start long-form videos**, and **switch models** (the ⚙ Models popover works
+  there too); each action relays to the desktop, which does the work. Generated videos play on the
+  phone as well — the clip is fetched over the link from the desktop.
 
 ### 🛠 Hands-on desktop tools
 
@@ -287,6 +322,9 @@ Open **Chat** while reading to discuss the book with an AI that actually knows i
   **desktop app can auto-manage** ComfyUI and fetch every file a model needs. *(a key or a GPU)*
 - **Vision (seeing images):** Claude/Gemini/OpenAI all see images; **locally** a vision model does too
   (Ollama llama3.2-vision/llava/qwen2-vl, or LM Studio). *(a vision-capable model)*
+- **⚙ Models quick-switcher** — a popover on the chat input swaps the **text model, image model,
+  and video model** (including the image provider — a ComfyUI ↔ AUTOMATIC1111 dropdown) without
+  opening Settings; works from a linked phone too. *(no setup)*
 - **One-API native mode** — when one vendor (Gemini/OpenAI) runs text **and** images, opt into its
   multimodal model so your character reference photos guide cloud renders. *(one Gemini or OpenAI key · opt-in)*
 - **No keys? Still works** — built-in placeholder art shows the whole flow. *(no setup)*
@@ -375,6 +413,9 @@ Open **Chat** while reading to discuss the book with an AI that actually knows i
   would let it work away from home (needs a server + end-to-end encryption).
 
 **Done recently**
+- **Video generation** — image-to-video and text-to-video on your own GPU (two one-click
+  downloadable models), plus **long-form videos**: continuity-chained clips stitched into one
+  mp4 by a managed ffmpeg, startable from a linked phone too.
 - **Assistant roadmap (Phases 1–5)** — clearer **failure feedback** (the buddy explains a failed tool
   and suggests a next step), **self-improving skills** (opt-in; it distils reusable playbooks),
   an **in-app browser** (readable text + a live isolated webview), **phone/remote control** (a `VR:`

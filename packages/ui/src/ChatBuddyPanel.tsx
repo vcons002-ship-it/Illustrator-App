@@ -22,6 +22,14 @@ import {
 } from "@visual-reader/core";
 import type { ModelMenuGroup } from "./model-menu.js";
 import type { LocalBackendId, ReaderSettings } from "./SettingsPanel.js";
+import {
+  approvalStyle,
+  chatHeaderStyle as headerStyle,
+  chatInputRowStyle as inputRowStyle,
+  chatScrollStyle as scrollStyle,
+  chatTextareaStyle as textareaStyle,
+  smallButtonStyle,
+} from "./tokens.js";
 
 /** Minimal shape of the Web Speech recognition API (not in TS's DOM lib). */
 interface SpeechRecognitionLike {
@@ -150,6 +158,9 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   const [draft, setDraft] = useState("");
   const [showHelp, setShowHelp] = useState(false);
   const [loadingModel, setLoadingModel] = useState(false);
+  // The "Loading…" reset timer, cleared on unmount so it can't fire into a gone panel.
+  const loadingTimerRef = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(loadingTimerRef.current), []);
   // Quick model-switcher popover state (opened from the input row). Ref wraps the button + popover so an
   // outside click / Escape closes it.
   const [modelsOpen, setModelsOpen] = useState(false);
@@ -185,9 +196,18 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     [props.desktop, props.remote],
   );
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Stick to the bottom as messages/tokens arrive — but only while the reader is already
+  // near it, so scrolling up to re-read isn't yanked back. "Was near bottom" is captured
+  // in the onScroll handler: the effect runs AFTER render, when scrollHeight has already
+  // grown, so it can't measure the pre-update position.
+  const nearBottomRef = useRef(true);
+  const trackNearBottom = (): void => {
+    const el = scrollRef.current;
+    if (el) nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && nearBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [props.messages.length, props.streamingText, props.activity, props.pendingTool]);
 
   // Voice mode (optional, browser-only): dictate with the mic, hear replies read aloud.
@@ -203,6 +223,15 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   const [listening, setListening] = useState(false);
   const [speakOn, setSpeakOn] = useState(false);
   const recogRef = useRef<SpeechRecognitionLike | null>(null);
+  // Unmount cleanup: a live dictation session and queued speech must not outlive the
+  // panel (the mic would stay hot and replies would keep talking over the next screen).
+  useEffect(
+    () => () => {
+      recogRef.current?.stop();
+      if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
+    },
+    [],
+  );
   const toggleMic = () => {
     if (listening) {
       recogRef.current?.stop();
@@ -288,7 +317,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               ))}
             </select>
             {toolsOpen && props.onNewSession && (
-              <button style={smallButtonStyle} title="New chat session" onClick={props.onNewSession}>
+              <button style={smallButtonStyle} title="New chat session" aria-label="New chat session" onClick={props.onNewSession}>
                 ＋
               </button>
             )}
@@ -296,6 +325,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               <button
                 style={smallButtonStyle}
                 title="Rename this chat"
+                aria-label="Rename this chat"
                 onClick={() => {
                   const cur = props.sessions?.find((s) => s.id === props.activeSessionId)?.label ?? "";
                   const next = window.prompt("Rename this chat (leave blank to reset):", cur);
@@ -331,7 +361,8 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               onClick={() => {
                 props.onLoadModel!();
                 setLoadingModel(true);
-                window.setTimeout(() => setLoadingModel(false), 4000);
+                window.clearTimeout(loadingTimerRef.current);
+                loadingTimerRef.current = window.setTimeout(() => setLoadingModel(false), 4000);
               }}
               disabled={loadingModel}
               title="Load the local chat model into memory now — image generation evicts it to free the GPU, so this brings it back without waiting for your next message"
@@ -408,7 +439,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         />
       )}
 
-      <div ref={scrollRef} style={props.historyCollapsed ? { ...scrollStyle, display: "none" } : scrollStyle}>
+      <div ref={scrollRef} onScroll={trackNearBottom} style={props.historyCollapsed ? { ...scrollStyle, display: "none" } : scrollStyle}>
         {props.messages.length === 0 && !props.streamingText && (
           <div style={{ opacity: 0.55, fontSize: 12, padding: 12, lineHeight: 1.5 }}>
             {props.persona === "planning"
@@ -450,6 +481,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                   type="button"
                   onClick={() => props.onDismissPlan?.()}
                   title="Dismiss this checklist"
+                  aria-label="Dismiss this checklist"
                   style={{ background: "none", border: "none", color: "inherit", opacity: 0.5, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}
                 >
                   ✕
@@ -747,11 +779,20 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                   <button
                     key={o.id}
                     style={o.active ? { ...modelItemStyle, ...personaActiveStyle } : modelItemStyle}
-                    // onMouseDown (not click) applies before the input blurs, mirroring the slash menu.
+                    // onMouseDown (not click) applies before the input blurs, mirroring the slash
+                    // menu; preventDefault also stops the later click, so keyboard activation below
+                    // (a Tab-focused item) can't double-fire with a mouse pick.
                     onMouseDown={(e) => {
                       e.preventDefault();
                       props.modelMenu!.onSelect(o.patch);
                       setModelsOpen(false);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        props.modelMenu!.onSelect(o.patch);
+                        setModelsOpen(false);
+                      }
                     }}
                   >
                     <span style={{ width: 12, opacity: 0.9 }}>{o.active ? "✓" : ""}</span>
@@ -782,6 +823,13 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                           e.preventDefault();
                           props.modelMenu!.onSelect(o.patch);
                           setModelsOpen(false);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            props.modelMenu!.onSelect(o.patch);
+                            setModelsOpen(false);
+                          }
                         }}
                       >
                         <span style={{ width: 12, opacity: 0.9 }}>{o.active ? "✓" : ""}</span>
@@ -826,6 +874,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                   onClick={() => props.onRemoveAttachment!(a.id)}
                   style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", padding: 0, opacity: 0.7 }}
                   title="Remove"
+                  aria-label={`Remove attachment ${a.name}`}
                 >
                   ✕
                 </button>
@@ -849,6 +898,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               style={smallButtonStyle}
               onClick={() => fileInputRef.current?.click()}
               title="Attach a file (PDF, Word, Excel, CSV, text, or image) for me to read"
+              aria-label="Attach a file"
             >
               📎
             </button>
@@ -915,6 +965,8 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             style={listening ? { ...smallButtonStyle, borderColor: "#ff8c8c", color: "#ff8c8c" } : smallButtonStyle}
             onClick={toggleMic}
             title={listening ? "Stop dictation" : "Dictate with your microphone"}
+            aria-label={listening ? "Stop dictation" : "Dictate with your microphone"}
+            aria-pressed={listening}
           >
             {listening ? "● Rec" : "🎤"}
           </button>
@@ -924,6 +976,8 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             style={speakOn ? { ...smallButtonStyle, borderColor: "rgba(90,209,155,0.6)", color: "#9be8c0" } : smallButtonStyle}
             onClick={toggleSpeak}
             title={speakOn ? "Stop reading replies aloud" : "Read replies aloud"}
+            aria-label={speakOn ? "Stop reading replies aloud" : "Read replies aloud"}
+            aria-pressed={speakOn}
           >
             {speakOn ? "🔊 On" : "🔈"}
           </button>
@@ -956,23 +1010,6 @@ const panelStyle = {
   overflow: "hidden",
 } as const;
 
-const headerStyle = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  padding: "10px 12px",
-  borderBottom: "1px solid rgba(255,255,255,0.1)",
-} as const;
-
-const scrollStyle = {
-  flex: 1,
-  overflowY: "auto",
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-  padding: 12,
-} as const;
-
 /** Secondary actions (attach / story / models) — their own row above the input, so they never
  * squeeze the textarea's width on narrow screens. Wraps if it still doesn't fit. */
 const utilityRowStyle = {
@@ -980,36 +1017,6 @@ const utilityRowStyle = {
   flexWrap: "wrap",
   gap: 8,
   padding: "6px 10px 0",
-} as const;
-
-const inputRowStyle = {
-  display: "flex",
-  gap: 8,
-  padding: 10,
-  borderTop: "1px solid rgba(255,255,255,0.1)",
-  alignItems: "flex-end",
-} as const;
-
-const textareaStyle = {
-  flex: 1,
-  resize: "none",
-  background: "rgba(255,255,255,0.06)",
-  color: "inherit",
-  border: "1px solid rgba(255,255,255,0.15)",
-  borderRadius: 6,
-  padding: 8,
-  fontSize: 13,
-  fontFamily: "inherit",
-} as const;
-
-const smallButtonStyle = {
-  background: "rgba(255,255,255,0.08)",
-  color: "inherit",
-  border: "1px solid rgba(255,255,255,0.2)",
-  borderRadius: 6,
-  padding: "6px 10px",
-  fontSize: 12,
-  cursor: "pointer",
 } as const;
 
 const stepsBoxStyle = {
@@ -1185,12 +1192,4 @@ const personaButtonStyle = {
 const personaActiveStyle = {
   background: "rgba(122,162,255,0.22)",
   opacity: 1,
-} as const;
-
-const approvalStyle = {
-  alignSelf: "flex-start",
-  border: "1px solid rgba(122,162,255,0.5)",
-  borderRadius: 8,
-  padding: 10,
-  background: "rgba(122,162,255,0.08)",
 } as const;

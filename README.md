@@ -46,6 +46,17 @@ Full, beginner-friendly instructions (and how to add API keys) are in
 **[SETUP.md](./SETUP.md)**. The app works with **no API keys** via built-in
 placeholder art so you can see the whole flow.
 
+## Platform support
+
+Visual Reader is **Windows-first**. The managed local stack — auto-downloaded/launched
+ComfyUI, AUTOMATIC1111 auto-start, the bundled llama.cpp text model, and the managed
+ffmpeg used for long-form video — is **Windows-only**. On **macOS / Linux** the app
+itself runs fine, but you connect your **own** servers instead: Ollama / LM Studio /
+llama.cpp for text and your own ComfyUI or AUTOMATIC1111 for images and video (enter
+their URLs in Settings). A **linked phone** acts as a thin client of the desktop and
+can connect the image server, download ffmpeg, start long-form videos, and switch
+models — each action relays to the desktop, which does the work.
+
 ## How it works
 
 ```
@@ -83,6 +94,23 @@ EPUB ──▶ segment ──▶ Visual Bible (LLM pre-pass) ──▶ pipeline 
   context-usage breakdown in the UI. Both chats expose a **`/` slash-command menu**
   (`chat/slash-commands.ts`) that runs any tool directly, **clarify-when-ambiguous**
   prompting, and **file creation** (a fenced code block in a reply gets a Save button).
+  A **⚙ Models** popover on the chat input swaps the text, image, and video models —
+  including the ComfyUI ↔ AUTOMATIC1111 image-provider choice — without opening Settings
+  (works from a linked phone too). The assistant can also fan a big job out to **parallel
+  read-only sub-agents** (`spawn_agents`, capped by Settings → Parallel sub-agents; see
+  [VLLM-SETUP.md](./VLLM-SETUP.md)) and hand a multi-file coding task to an **external
+  coding agent** (Aider / Codex CLI — see
+  [docs/coding-agent-delegation.md](./docs/coding-agent-delegation.md)).
+- **Video generation (local GPU, via ComfyUI)** — the chat can animate a generated image
+  into a short clip (**image-to-video**), render a clip straight from a prompt
+  (**text-to-video**), or build a **long-form video**: it plans a series of shots, renders
+  each clip continuing from the last frame of the previous one, and stitches them into one
+  mp4 with a **managed ffmpeg** (one-click "Download ffmpeg (~80 MB)" in Settings →
+  Image-to-video; a static build stored in `~/VisualReader/ffmpeg`). Two downloadable
+  models: **Wan 2.2** (default — 640×640 @ 16fps, ~5s clips) and **LTX-2.3** (768×512 @
+  24fps, longer clips, optional 2× high-res + synced audio). Video always renders on
+  **ComfyUI**, even when images run on AUTOMATIC1111 — both engines can be connected side
+  by side, each with its own connection row.
 - **Agentic desktop tools (opt-in, approval-gated)** — on the desktop app the chat can
   reach the machine, every step human-gated: **`find_files`** (search your computer for a
   document to open), **`run_command`** (run one shell command in the `VisualReader`
@@ -127,7 +155,7 @@ apps/
 
 | Seam | Where | Enables |
 |---|---|---|
-| `VisualRequest.kind` discriminator | `core/src/types/content.ts` | Info-graphics (diagrams/flowcharts/summaries) without touching the pipeline |
+| `VisualRequest.kind` discriminator | `core/src/types/content.ts` | Info-graphics (diagrams/flowcharts/summaries/Gantt — now shipped) without touching the pipeline |
 | `ComputeTier` + provider factory | `core/src/types/tier.ts`, `providers/factory.ts` | Cloud default now; opt-in local WebGPU tier later |
 | `Transport` | `core/src/providers/transport` | "Client now, server-ready" — swap direct fetch for a hosted proxy |
 | Provider interfaces | `core/src/providers/{llm,image}` | Claude/Flux default; Gemini/OpenAI/Midjourney/on-device are drop-ins |
@@ -245,8 +273,12 @@ v1 covers the fiction scene-illustration path end to end, plus the technical
 companion with tools, slash commands, long-term memory, and clarify-when-ambiguous
 prompting), the agentic desktop tools (file find/create, `run_command` with
 test-and-fix iteration, vision screenshots), illustrated HTML/EPUB export, expanded
-import formats + photo transform, keyless web/book search, a Markets panel (keyless
+import formats + photo transform, keyless web/book search, **info-graphics for
+non-fiction** (flowcharts, diagrams, summaries, Gantt timelines — rendered as exact
+SVG beside the paragraph they illustrate), **video generation** (image-to-video,
+text-to-video, and long-form videos stitched by a managed ffmpeg — see above),
+coding-agent delegation + parallel sub-agents, a Markets panel (keyless
 charts/analysis/alerts + optional Schwab/thinkorswim account and TradingView Desktop
 bridge), and opt-in mature mode.
-Deliberately deferred (seams in place): info-graphics output, sanitized-HTML
+Deliberately deferred (seams in place): sanitized-HTML
 article rendering, a hosted backend/billing, and the full local-WebGPU image tier.

@@ -181,6 +181,10 @@ export class IndexedDbStore implements VisualReaderStore {
     return this.get(CHAT_BLOB_STORE, `${chatId}::${id}`);
   }
 
+  async deleteImageBlob(chatId: string, id: string): Promise<void> {
+    return this.delete(CHAT_BLOB_STORE, `${chatId}::${id}`);
+  }
+
   /** Drop every externalized image blob for a chat (keys prefixed `${chatId}::`) via a key cursor. */
   private async clearChatBlobs(chatId: string): Promise<void> {
     const db = await this.dbPromise;

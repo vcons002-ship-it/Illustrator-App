@@ -1,4 +1,6 @@
 import { memo, useMemo, useState } from "react";
+import { ModalShell } from "./ModalShell.js";
+import { modalHeaderRowStyle as headerRow, modalInputStyle as input } from "./tokens.js";
 
 /**
  * Set up a "story as you go" before it starts: the opening scene, the workflow (Roleplay vs Direct
@@ -74,8 +76,7 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, onSta
   };
 
   return (
-    <div style={overlay} onClick={onClose}>
-      <div style={card} onClick={(e) => e.stopPropagation()}>
+    <ModalShell title="Story as you go" onClose={onClose} width="min(640px, 100%)" cardStyle={{ gap: 12 }}>
         <div style={headerRow}>
           <strong>✍️ Story as you go</strong>
           <button style={btn} onClick={onClose}>
@@ -147,7 +148,7 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, onSta
                   placeholder="Look, personality, anything important"
                   onChange={(e) => setChar(i, { description: e.target.value })}
                 />
-                <button style={btn} onClick={() => removeChar(i)} disabled={chars.length <= 1} title="Remove">
+                <button style={btn} onClick={() => removeChar(i)} disabled={chars.length <= 1} title="Remove" aria-label={`Remove character ${c.name || i + 1}`}>
                   ✕
                 </button>
               </div>
@@ -190,37 +191,10 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, onSta
             Start story
           </button>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 });
 
-const overlay: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  background: "rgba(8,9,13,0.7)",
-  backdropFilter: "blur(6px)",
-  zIndex: 100,
-  padding: 20,
-};
-const card: React.CSSProperties = {
-  width: "min(640px, 100%)",
-  maxHeight: "92vh",
-  overflowY: "auto",
-  background: "#16181d",
-  color: "#e6e6e6",
-  border: "1px solid rgba(255,255,255,0.12)",
-  borderRadius: 12,
-  padding: 18,
-  display: "flex",
-  flexDirection: "column",
-  gap: 12,
-  fontFamily: "system-ui, sans-serif",
-};
-const headerRow: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between" };
 const field: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 4 };
 const row: React.CSSProperties = { display: "flex", gap: 10 };
 const panel: React.CSSProperties = {
@@ -233,16 +207,6 @@ const panel: React.CSSProperties = {
 };
 const label: React.CSSProperties = { fontSize: 12, opacity: 0.75 };
 const hint: React.CSSProperties = { fontSize: 11, opacity: 0.55, marginTop: 4 };
-const input: React.CSSProperties = {
-  background: "rgba(255,255,255,0.06)",
-  color: "inherit",
-  border: "1px solid rgba(255,255,255,0.15)",
-  borderRadius: 6,
-  padding: 8,
-  fontSize: 13,
-  fontFamily: "inherit",
-  boxSizing: "border-box",
-};
 const textarea: React.CSSProperties = { ...input, minHeight: 90, resize: "vertical" };
 const select: React.CSSProperties = { ...input, cursor: "pointer" };
 const btn: React.CSSProperties = {

@@ -138,6 +138,8 @@ export interface VisualReaderStore {
    */
   putImageBlob?(chatId: string, id: string, bytes: ArrayBuffer, mimeType: string): Promise<void>;
   getImageBlob?(chatId: string, id: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined>;
+  /** Drop ONE externalized blob (the Creations gallery's per-item delete). */
+  deleteImageBlob?(chatId: string, id: string): Promise<void>;
 
   /** Small keyed text blobs (the chat's long-term reader memory). Optional. */
   getMemo?(key: string): Promise<string | undefined>;
@@ -243,6 +245,9 @@ export class InMemoryStore implements VisualReaderStore {
   }
   async getImageBlob(chatId: string, id: string): Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined> {
     return this.chatBlobs.get(`${chatId}::${id}`);
+  }
+  async deleteImageBlob(chatId: string, id: string): Promise<void> {
+    this.chatBlobs.delete(`${chatId}::${id}`);
   }
 
   private memos = new Map<string, string>();

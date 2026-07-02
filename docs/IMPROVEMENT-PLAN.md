@@ -7,6 +7,13 @@ the exact files/lines so it can be picked up cold.
 
 Legend: 🔴 high · 🟡 medium · 🟢 low — severity/impact if left unfixed.
 
+**Status (July 2026): Phases 1–4 are shipped.** Phase 1 + 2 landed in the reliability/parity PR;
+Phase 3 (modal shell, keyboard access, tokens, small fixes, library search/sort) and Phase 4
+(Creations gallery, toast system, docs truth pass incl. TROUBLESHOOTING.md + CHANGELOG.md) landed in
+the follow-up PR. 4.5 was decided as **Windows-first** (documented in README/SETUP); 4.6 is
+**deferred** (see the item). Phase 5 remains deferred by design — pick up any item when a feature
+forces that seam open.
+
 ---
 
 ## Phase 1 — Reliability (do first)
@@ -150,6 +157,11 @@ generated media, and a 50s long-form video is unfindable a week later.
 (id, kind, prompt, date, size) with view/download/delete; desktop adds "open folder" for
 `~/VisualReader/workspace/longvideo/*`. The store already externalizes blobs with stable ids — the panel
 is mostly a reader over `libraryStore.getImageBlob` plus an index memo maintained on externalize.
+**Shipped** as `packages/ui/src/CreationsPanel.tsx` + `packages/core/src/chat/creations.ts`: instead
+of a separate index memo (a second source of truth to keep in sync), the gallery derives its items by
+walking the persisted chat histories (`collectCreations`) and hydrates bytes lazily from the blob
+store; delete strips the media from its message (`removeCreationFromMessages`) and drops the blob
+(`deleteImageBlob`). Desktop "open folder" for longvideo outputs remains a follow-up.
 
 ### 4.2 Library at scale
 `LibraryPanel` has type-filter chips only. Add: text search over title/author, sort (recent/title/type),
@@ -171,11 +183,18 @@ info/success/warn/error, auto-dismiss, click-through to Settings section when ac
 All four `ensure_*` commands are Windows-only (clear errors, but zero bundled AI elsewhere). Either ship a
 pip/venv ComfyUI + llama.cpp path for macOS/Linux, or state "Windows-first; mac/Linux = connect your own
 servers" in README. Decision needed before investing.
+**Decided: Windows-first.** README/SETUP now carry an honest "Platform support" section (managed
+engines/ffmpeg/bundled LLM are Windows-only; macOS/Linux connect their own ComfyUI/A1111/Ollama
+servers). A pip/venv path can be revisited if demand shows up.
 
 ### 4.6 Spoiler-reveal feature is dead code
 `spoiler.ts:23` — `revealParagraphId` is always `""` from extraction (`extraction.ts:991`), so per-paragraph
 spoiler reveal never fires (images just stay blurred). Either wire the extractor to emit real paragraph ids
 or remove the plumbing and keep the simpler position-based gating.
+**Deferred.** Position-based gating already covers the user-visible behavior (images un-blur as you
+reach them); wiring real paragraph ids through extraction would grow the extraction prompt/schema for
+a marginal win, and removing the plumbing is churn in tested code with no behavior change. Revisit if
+per-paragraph reveal becomes a requested feature.
 
 ---
 

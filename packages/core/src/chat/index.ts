@@ -35,6 +35,7 @@ export * from "./story-state.js";
 export * from "./story-beat.js";
 export * from "./mirror-bound.js";
 export * from "./chat-image-blobs.js";
+export * from "./creations.js";
 export * from "./file-edits.js";
 export * from "./coding-agent.js";
 export * from "./document-polish.js";
