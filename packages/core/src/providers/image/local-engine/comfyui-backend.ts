@@ -287,6 +287,20 @@ async function comfyPromptError(res: TransportResponse): Promise<string> {
   return `ComfyUI rejected the workflow (status ${res.status})${detail ? `: ${detail}` : ""}`;
 }
 
+/** Whether a failed /prompt submit is worth ONE retry: 5xx only — a 4xx is ComfyUI rejecting the
+ * workflow itself (bad node/input/model), which resending the identical graph can never fix. */
+export function shouldRetryPromptSubmit(status: number): boolean {
+  return status >= 500;
+}
+
+/** Pause before the single /prompt resubmit — long enough for an engine hiccup/proxy blip to clear. */
+const SUBMIT_RETRY_DELAY_MS = 1_500;
+
+/** Discovery/inventory endpoints (/object_info, /system_stats) answer instantly on a live engine —
+ * bound them so a wedged connection can't hang model listings forever. Renders are never bounded
+ * this way (a slow-but-working render must not be killed; see idleTimeoutMs). */
+const DISCOVERY_TIMEOUT_MS = 10_000;
+
 /**
  * ComfyUI engine backend. Drives a local ComfyUI server (which the desktop shell
  * launches) over its HTTP API:
@@ -569,7 +583,11 @@ export class ComfyUIBackend implements LocalEngineBackend {
     if (cached) return cached;
     const p = (async (): Promise<NodeSchema | undefined> => {
       try {
-        const res = await this.transport.send({ url: `${this.baseUrl}/object_info/${node}`, method: "GET" });
+        const res = await this.transport.send({
+          url: `${this.baseUrl}/object_info/${node}`,
+          method: "GET",
+          signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
+        });
         if (!res.ok) return undefined;
         return (await res.json<Record<string, NodeSchema>>())[node];
       } catch {
@@ -769,6 +787,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
           const res = await this.transport.send({
             url: `${this.baseUrl}/object_info/LoraLoader`,
             method: "GET",
+            signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
           });
           if (!res.ok) return new Set<string>();
           const data = await res.json<LoraObjectInfo>();
@@ -790,7 +809,11 @@ export class ComfyUIBackend implements LocalEngineBackend {
     if (!this.ipAdapterCache) {
       this.ipAdapterCache = (async () => {
         try {
-          const res = await this.transport.send({ url: `${this.baseUrl}/object_info`, method: "GET" });
+          const res = await this.transport.send({
+            url: `${this.baseUrl}/object_info`,
+            method: "GET",
+            signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
+          });
           if (!res.ok) return null;
           const nodes = await res.json<ObjectInfoNodes>();
           const has = (n: string): boolean => Boolean(nodes[n]);
@@ -1018,14 +1041,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
     const job: { promptId?: string } = {};
     const socket = this.openProgressSocket(relay, job);
     try {
-      const submit = await this.transport.send({
-        url: `${this.baseUrl}/prompt`,
-        method: "POST",
-        body: { prompt: workflow, client_id: this.clientId },
-        ...(signal ? { signal } : {}),
-      });
-      if (!submit.ok) throw new Error(await comfyPromptError(submit));
-      const { prompt_id } = await submit.json<PromptResponse>();
+      const { prompt_id } = await this.submitPrompt(workflow, signal);
       job.promptId = prompt_id;
 
       // For HiDream, carry the EXACT clip_l/clip_g files we resolved into the poller so a
@@ -1096,14 +1112,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
     const job: { promptId?: string } = {};
     const socket = this.openProgressSocket(relay, job);
     try {
-      const submit = await this.transport.send({
-        url: `${this.baseUrl}/prompt`,
-        method: "POST",
-        body: { prompt: workflow, client_id: this.clientId },
-        ...(signal ? { signal } : {}),
-      });
-      if (!submit.ok) throw new Error(await comfyPromptError(submit));
-      const { prompt_id } = await submit.json<PromptResponse>();
+      const { prompt_id } = await this.submitPrompt(workflow, signal);
       job.promptId = prompt_id;
       const file = await this.pollForImage(prompt_id, signal);
       const view = await this.transport.send({
@@ -1122,6 +1131,33 @@ export class ComfyUIBackend implements LocalEngineBackend {
       // Always release the video model's VRAM — it's large, and a chat LLM is usually waiting to reload.
       await this.freeMemory();
     }
+  }
+
+  /** POST a workflow to /prompt with ONE retry after a short pause for transient failures (network
+   * error / 5xx) — a single blip (engine restarting, proxy 502) used to kill the whole render. A user
+   * cancel and 4xx rejections are never retried, and a second failure surfaces exactly as before. */
+  private async submitPrompt(workflow: Record<string, unknown>, signal?: AbortSignal): Promise<PromptResponse> {
+    const send = (): Promise<TransportResponse> =>
+      this.transport.send({
+        url: `${this.baseUrl}/prompt`,
+        method: "POST",
+        body: { prompt: workflow, client_id: this.clientId },
+        ...(signal ? { signal } : {}),
+      });
+    let submit: TransportResponse | undefined;
+    try {
+      submit = await send();
+    } catch (err) {
+      if (signal?.aborted) throw err; // the reader cancelled — not a transient failure
+    }
+    if (submit && !shouldRetryPromptSubmit(submit.status)) {
+      if (!submit.ok) throw new Error(await comfyPromptError(submit));
+      return submit.json<PromptResponse>();
+    }
+    await new Promise((r) => setTimeout(r, SUBMIT_RETRY_DELAY_MS));
+    const retry = await send();
+    if (!retry.ok) throw new Error(await comfyPromptError(retry));
+    return retry.json<PromptResponse>();
   }
 
   /** Tell ComfyUI to interrupt the running job (best-effort; ignores errors). */
@@ -1143,7 +1179,8 @@ export class ComfyUIBackend implements LocalEngineBackend {
       const res = await this.transport.send({
         url: `${this.baseUrl}/system_stats`,
         method: "GET",
-        ...(signal ? { signal } : {}),
+        // Caller's abort still wins; the timeout only stops a hung poll from piling up.
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(DISCOVERY_TIMEOUT_MS)]) : AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
       });
       if (!res.ok) return [];
       return parseSystemStats(await res.json());

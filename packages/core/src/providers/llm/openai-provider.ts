@@ -40,6 +40,17 @@ export interface OpenAIProviderOptions {
   fetchImpl?: typeof fetch;
 }
 
+/** Bound for BUFFERED cloud calls: generous (a long extraction can take a while) but a dead
+ * connection must not hang a chapter forever. Streaming is exempt — it goes through streamSse,
+ * which bounds only its connect phase. The caller's own signal still cancels earlier. */
+const CLOUD_REQUEST_TIMEOUT_MS = 120_000;
+
+/** The request timeout composed with an optional caller cancel signal. */
+function boundedSignal(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(CLOUD_REQUEST_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
 interface ChatResponse {
   choices?: { message?: { content?: string } }[];
 }
@@ -139,7 +150,7 @@ export class OpenAILLMProvider implements LLMProvider, ChatCapable, VisionCapabl
       url: `${this.baseUrl}/chat/completions`,
       method: "POST",
       headers: { authorization: `Bearer ${this.apiKey}` },
-      ...(input.signal ? { signal: input.signal } : {}),
+      signal: boundedSignal(input.signal),
       body: {
         model: this.model,
         max_tokens: 1024,
@@ -170,7 +181,7 @@ export class OpenAILLMProvider implements LLMProvider, ChatCapable, VisionCapabl
       url: `${this.baseUrl}/chat/completions`,
       method: "POST",
       headers: { authorization: `Bearer ${this.apiKey}` },
-      ...(opts.signal ? { signal: opts.signal } : {}),
+      signal: boundedSignal(opts.signal),
       body: {
         model: this.model,
         messages,

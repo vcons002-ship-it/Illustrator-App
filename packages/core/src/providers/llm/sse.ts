@@ -7,6 +7,11 @@
  * chunk, degrading to the buffered behaviour instead of breaking.
  */
 
+/** Bound on the CONNECT phase only (until response headers arrive) — a dead server must fail fast,
+ * but the stream itself may legitimately run for many minutes, so the timer is cleared the moment
+ * the connection is established rather than being tied to the whole request. */
+const SSE_CONNECT_TIMEOUT_MS = 30_000;
+
 /** POST `body` to `url`, parse the SSE response, invoke `onEvent` per data event.
  * Throws with the response body's text on a non-ok status. */
 export async function streamSse(
@@ -19,12 +24,25 @@ export async function streamSse(
     onEvent: (data: unknown) => void;
   },
 ): Promise<void> {
-  const res = await fetchImpl(url, {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "text/event-stream", ...opts.headers },
-    body: JSON.stringify(opts.body),
-    ...(opts.signal ? { signal: opts.signal } : {}),
-  });
+  // A fetch signal governs the body read too, so a plain AbortSignal.timeout would kill a long
+  // stream mid-read — instead abort via a controller whose timer dies once headers are in. The
+  // caller's own signal is composed in, so it still cancels mid-stream as before.
+  const connect = new AbortController();
+  const connectTimer = setTimeout(
+    () => connect.abort(new DOMException("SSE connect timed out", "TimeoutError")),
+    SSE_CONNECT_TIMEOUT_MS,
+  );
+  let res: Response;
+  try {
+    res = await fetchImpl(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "text/event-stream", ...opts.headers },
+      body: JSON.stringify(opts.body),
+      signal: opts.signal ? AbortSignal.any([opts.signal, connect.signal]) : connect.signal,
+    });
+  } finally {
+    clearTimeout(connectTimer);
+  }
   if (!res.ok) {
     const detail = (await res.text().catch(() => "")).trim().slice(0, 300);
     throw new Error(`status ${res.status}${detail ? `: ${detail}` : ""}`);

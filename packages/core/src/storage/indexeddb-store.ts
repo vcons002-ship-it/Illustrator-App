@@ -290,6 +290,10 @@ function openDb(): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(MEMO_STORE)) db.createObjectStore(MEMO_STORE);
       if (!db.objectStoreNames.contains(CHAT_BLOB_STORE)) db.createObjectStore(CHAT_BLOB_STORE);
     };
+    // An older tab still holding the DB open blocks a version upgrade FOREVER — without this handler
+    // the open request just never settles and every store call upstream hangs silently.
+    req.onblocked = () =>
+      reject(new Error("The app's storage is locked by another open tab — close other Visual Reader tabs and reload."));
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });

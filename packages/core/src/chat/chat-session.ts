@@ -9,6 +9,7 @@ import {
   type ToolCall,
   type ToolResultPayload,
 } from "./chat-tools.js";
+import { looksLikeToolJson, stripToolCallJson } from "./buddy-tools.js";
 
 /** Safety cap on auto-continue passes (mirrors runBuddyTurn) — bounds a runaway/looping model, NOT
  * the content: at ~30k tokens/pass it's hundreds of thousands of tokens, and hitting it ends with a
@@ -212,9 +213,17 @@ export async function runChatTurn(opts: {
     const reply = await chatOnce();
     const call = round < MAX_TOOL_ROUNDS ? parseToolCall(reply) : undefined;
     if (!call) {
+      // At the tool-round cap the model may STILL be emitting a tool call — parseToolCall was
+      // skipped above, so without this the raw JSON would be shown verbatim as the answer
+      // (mirrors runBuddyTurn's strip + fallback path).
+      let answer = reply;
+      if (round >= MAX_TOOL_ROUNDS && looksLikeToolJson(reply)) {
+        answer =
+          stripToolCallJson(reply).trim() ||
+          "I hit the tool limit for this message before I could finish — see the results above, or ask again and I'll continue.";
+      }
       // AUTO-CONTINUE a CUT-OFF answer and stitch the parts so a long document isn't capped at one
       // reply (mirrors runBuddyTurn). Pure prose only — a final answer never carries a tool call.
-      let answer = reply;
       let rawSoFar = reply;
       for (let part = 0; lastTruncated && part < MAX_REPLY_CONTINUATIONS; part++) {
         opts.onEvent?.({ kind: "activity", text: `Writing the answer… (part ${part + 2})` });

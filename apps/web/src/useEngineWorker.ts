@@ -551,6 +551,8 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const agentToolHandler = useRef<
     ((call: BuddyToolCall, cwd: string, agentIdx: number) => Promise<BuddyToolResultPayload>) | undefined
   >(undefined);
+  // The in-flight parallel coding-agent run, so Stop can send `codingAgentCancel` at it.
+  const activeCodingAgentsRequestId = useRef<number | undefined>(undefined);
   // In-flight chat rounds: streaming events + the final resolve, keyed by requestId.
   const chatRequests = useRef<
     Map<
@@ -613,6 +615,47 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     Map<number, { onToken?: (delta: string) => void; resolve: (r: PolishResult) => void }>
   >(new Map());
 
+  // A worker crash must not strand in-flight promises: drain EVERY pending-request map with an
+  // error-shaped result (chat turns get { error }, ok-shaped ops get ok:false) and reset the busy
+  // flags, so callers settle into a retryable state instead of hanging forever behind a dead worker.
+  const failAllPending = useCallback((error: string): void => {
+    const drain = <T,>(map: { current: Map<number, T> }, fn: (entry: T) => void): void => {
+      const entries = [...map.current.values()];
+      map.current.clear(); // clear FIRST so a resolver that sends a follow-up can re-register cleanly
+      for (const entry of entries) fn(entry);
+    };
+    drain(refRequests, (resolve) => resolve(undefined));
+    drain(testRequests, (r) => r.resolve({ ok: false, error }));
+    drain(assessRequests, (resolve) => resolve({ error }));
+    drain(emailRequests, (resolve) => resolve({ error }));
+    drain(codingAgentsRequests, (resolve) => resolve({ error }));
+    drain(conflictRequests, (resolve) => resolve({ error }));
+    drain(chatRequests, (r) => r.resolve({ text: "", transcript: [], error }));
+    drain(chatToolRequests, (r) => r.resolve({ error }));
+    drain(buddyRequests, (r) => r.resolve({ text: "", transcript: [], error }));
+    drain(summarizeRequests, (resolve) => resolve({ error }));
+    drain(googleConnectRequests, (resolve) => resolve({ ok: false, error }));
+    drain(schwabConnectRequests, (resolve) => resolve({ ok: false, error }));
+    drain(schwabOrderRequests, (resolve) => resolve({ ok: false, error }));
+    drain(planRequests, (r) => r.resolve({ ok: false, error }));
+    drain(scanRequests, (resolve) => resolve({ ok: false, error }));
+    drain(importTaskRequests, (resolve) => resolve({ ok: false, error }));
+    drain(createTaskRequests, (resolve) => resolve({ ok: false, error }));
+    drain(createEventRequests, (resolve) => resolve({ ok: false, error }));
+    drain(calendarRequests, (resolve) => resolve({ ok: false, error }));
+    drain(quoteRequests, (resolve) => resolve({ ok: false }));
+    drain(pageRequests, (resolve) => resolve({ ok: false, error }));
+    drain(busListRequests, (resolve) => resolve({ ok: false }));
+    drain(busReplyRequests, (resolve) => resolve({ ok: false, error }));
+    drain(indicatorRequests, (resolve) => resolve({ ok: false }));
+    drain(polishRequests, (r) => r.resolve({ error }));
+    activeChatRequestId.current = undefined;
+    activeRenderRequestId.current = undefined;
+    activeBuddyRequestId.current = undefined;
+    activeCodingAgentsRequestId.current = undefined;
+    setGenerating(false);
+  }, []);
+
   // PHONE-CLIENT MODE: when opened via a #vrlink=… link, this tab drives a remote desktop
   // engine over the relay instead of a local Web Worker. Detected once. (Undefined normally —
   // the default local-worker path below is unchanged.)
@@ -630,12 +673,32 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const setAppSyncHandler = useCallback((fn: (msg: AppSyncMessage) => void) => {
     appSyncRef.current = fn;
   }, []);
+  // PHONE: frames produced while the relay socket is reconnecting (a wifi blip) used to vanish
+  // silently — a tapped command just never happened. Queue a small burst instead and flush it in
+  // order when the socket re-opens (bounded: a phone's frames are commands/settings, not media).
+  const phonePendingFrames = useRef<string[]>([]);
+  const PHONE_PENDING_MAX = 32;
+  const phoneSendOrQueue = useCallback((frame: string): void => {
+    const ws = phoneWsRef.current;
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(frame);
+      return;
+    }
+    phonePendingFrames.current.push(frame);
+    if (phonePendingFrames.current.length > PHONE_PENDING_MAX) phonePendingFrames.current.shift(); // drop OLDEST
+  }, []);
+  const flushPhonePending = useCallback((ws: WebSocket): void => {
+    const pending = phonePendingFrames.current;
+    phonePendingFrames.current = [];
+    for (const frame of pending) ws.send(frame);
+  }, []);
+
   // Send an app-state mirror frame to the other side: the phone sends commands up its relay socket;
   // the desktop pushes state down the host-bridge socket. No-op when this side isn't linked.
   const sendAppSync = useCallback((msg: AppSyncMessage) => {
     const remote = remoteRef.current;
-    if (remote && phoneWsRef.current?.readyState === WebSocket.OPEN) {
-      phoneWsRef.current.send(encodeFrame(remote.token, serializeForRemote(msg, bytesToBase64)));
+    if (remote) {
+      phoneSendOrQueue(encodeFrame(remote.token, serializeForRemote(msg, bytesToBase64)));
       return;
     }
     const hb = hostBridgeRef.current;
@@ -646,11 +709,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
 
   const send = (msg: MainToWorker, transfer: Transferable[] = []) => {
     const remote = remoteRef.current;
-    if (remote && phoneWsRef.current) {
-      // No local worker on the phone — frame the request to the desktop over the relay.
-      if (phoneWsRef.current.readyState === WebSocket.OPEN) {
-        phoneWsRef.current.send(encodeFrame(remote.token, serializeForRemote(msg, bytesToBase64)));
-      }
+    if (remote) {
+      // No local worker on the phone — frame the request to the desktop over the relay
+      // (queued while the socket is still connecting/reconnecting).
+      phoneSendOrQueue(encodeFrame(remote.token, serializeForRemote(msg, bytesToBase64)));
       return;
     }
     workerRef.current?.postMessage(msg, transfer);
@@ -1205,8 +1267,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
         ws.onopen = () => {
           attempt = 0;
           setStatus("Linked to a desktop");
-          // Re-ask for a full snapshot every (re)connect, so the phone re-syncs after a gap.
+          // Re-ask for a full snapshot every (re)connect, so the phone re-syncs after a gap —
+          // BEFORE flushing commands queued during the gap (they act on the re-synced state).
           ws.send(encodeFrame(remote.token, { type: "vrcmd:hello" }));
+          flushPhonePending(ws);
         };
         ws.onclose = () => {
           if (phoneWsRef.current === ws) phoneWsRef.current = undefined;
@@ -1251,12 +1315,15 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       return;
     }
     // Surface worker load/runtime crashes instead of failing silently (a dead
-    // worker = no badges, no generation, endless "painting…").
+    // worker = no badges, no generation, endless "painting…"), and settle every
+    // in-flight promise so chat turns / renders / plan requests error out
+    // retryably instead of hanging behind the crash.
     worker.onerror = (e: ErrorEvent) => {
-      setStatus(
-        `Error: engine worker crashed — ${e.message || "module failed to load"}` +
-          (e.filename ? ` (${e.filename}:${e.lineno})` : ""),
-      );
+      const why =
+        `engine worker crashed — ${e.message || "module failed to load"}` +
+        (e.filename ? ` (${e.filename}:${e.lineno})` : "");
+      setStatus(`Error: ${why}`);
+      failAllPending(`The ${why}. Try again.`);
     };
     worker.onmessageerror = () => setStatus("Error: engine worker sent an undecodable message");
     worker.onmessage = (event: MessageEvent<WorkerToMain>) => handleMsg(event.data);
@@ -1722,8 +1789,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
         agentToolHandler.current = onAgentTool;
+        activeCodingAgentsRequestId.current = requestId;
         codingAgentsRequests.current.set(requestId, (r) => {
           agentToolHandler.current = undefined;
+          if (activeCodingAgentsRequestId.current === requestId) activeCodingAgentsRequestId.current = undefined;
           resolve(r);
         });
         send({ type: "runCodingAgents", requestId, runId, agents });
@@ -1809,6 +1878,10 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     // Also interrupt a standalone image render the buddy kicked off (runs under its own requestId).
     const rid = activeRenderRequestId.current;
     if (rid !== undefined) send({ type: "chatCancel", requestId: rid });
+    // And a parallel coding-agent run — its cancel type existed in the protocol but nothing sent it,
+    // so Stop couldn't end a run.
+    const cid = activeCodingAgentsRequestId.current;
+    if (cid !== undefined) send({ type: "codingAgentCancel", requestId: cid });
   }, []);
   const summarize = useCallback(
     (turns: ChatTurn[]): Promise<{ text?: string; error?: string }> =>

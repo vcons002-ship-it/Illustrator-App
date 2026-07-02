@@ -115,6 +115,9 @@ export interface ChatBuddyPanelProps {
   contextUsage?: ContextUsage;
   /** Desktop build: enables the `/find` local-file command. */
   desktop?: boolean;
+  /** Linked-phone client: desktop-runtime commands (/find, run) RELAY to the desktop, so the slash
+   * list must offer them here too — gating on `desktop` alone hid permitted tools from the phone. */
+  remote?: boolean;
   /** Open a local file from a `/find` result (desktop). Must be stable (memo). */
   onOpenLocalFile?: (path: string) => void;
   /** Save a file the assistant wrote in a code block. */
@@ -177,7 +180,10 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   // The header's secondary controls (new/rename/delete session, model, compact, help, clear) hide
   // behind a small ⋯ toggle to save space — only the session switcher + the toggle show by default.
   const [toolsOpen, setToolsOpen] = useState(false);
-  const commands = useMemo(() => buddySlashCommands(props.desktop ?? false), [props.desktop]);
+  const commands = useMemo(
+    () => buddySlashCommands((props.desktop ?? false) || (props.remote ?? false)),
+    [props.desktop, props.remote],
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = scrollRef.current;

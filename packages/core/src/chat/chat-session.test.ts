@@ -121,7 +121,20 @@ describe("runChatTurn", () => {
     // MAX_TOOL_ROUNDS tool rounds + the final forced-prose round.
     expect(llm.calls.length).toBe(MAX_TOOL_ROUNDS + 1);
     expect(out.toolResults).toHaveLength(MAX_TOOL_ROUNDS);
-    expect(out.text).toBe(SEARCH); // surfaced as the answer rather than executed again
+    // The cap round's reply is still tool JSON — it must be stripped, never shown verbatim.
+    expect(out.text).not.toContain('"tool"');
+    expect(out.text).toMatch(/tool limit/i);
+  });
+
+  it("keeps the prose when the cap round mixes an answer with a tool call", async () => {
+    const llm = new FakeChat([SEARCH, SEARCH, SEARCH, `Here is what I found so far.\n${SEARCH}`]);
+    const out = await runChatTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "?" }],
+      tools: { searchWeb: async () => [] },
+    });
+    expect(out.text).toBe("Here is what I found so far.");
   });
 
   it("returns generate_image as pendingTool WITHOUT executing anything", async () => {

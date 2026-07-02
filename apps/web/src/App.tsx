@@ -2089,6 +2089,21 @@ export function App() {
     [],
   );
 
+  // IndexedDB writes must fail loud enough to notice: quota exhaustion (or a private-mode block)
+  // means books/chats silently stop persisting — surface it ONCE per session as a status warning
+  // instead of letting every save vanish into a bare catch.
+  const persistWarnedRef = useRef(false);
+  const persistWarn = useCallback((err: unknown): void => {
+    if (persistWarnedRef.current) return;
+    persistWarnedRef.current = true;
+    const quota = err instanceof DOMException && err.name === "QuotaExceededError";
+    setLocalError(
+      quota
+        ? "Storage is full — new books, chats, and images are NOT being saved. Remove some library books or exports, then reload."
+        : `Saving to this device failed (${err instanceof Error ? err.message : String(err)}) — recent changes may not persist.`,
+    );
+  }, []);
+
   const openBook = useCallback(
     (source: BookSource) => {
       setLocalError("");
@@ -2100,9 +2115,9 @@ export function App() {
         .putBook(source)
         .then(() => libraryStore.listBooks())
         .then(setLibrary)
-        .catch(() => {});
+        .catch(persistWarn);
     },
-    [openInWorker, libraryStore],
+    [openInWorker, libraryStore, persistWarn],
   );
 
   // Change the open book's view category (the reader's drop-down): only "story" shows the illustration
@@ -2118,12 +2133,12 @@ export function App() {
           .putBook(next)
           .then(() => libraryStore.listBooks())
           .then(setLibrary)
-          .catch(() => {});
+          .catch(persistWarn);
         return next;
       });
       if (cat === "code") setCodeEditMode(true); // the code view IS the full-screen editor
     },
-    [libraryStore],
+    [libraryStore, persistWarn],
   );
 
   // Apply an edit to the open spreadsheet's active table (the chosen sheet, and `data`
@@ -2144,7 +2159,7 @@ export function App() {
         } else {
           return prev;
         }
-        void libraryStore.putBook(next).catch(() => {});
+        void libraryStore.putBook(next).catch(persistWarn);
         updateBookData({
           ...(next.data ? { data: next.data } : {}),
           ...(next.dataSheets ? { dataSheets: next.dataSheets } : {}),
@@ -2152,7 +2167,7 @@ export function App() {
         return next;
       });
     },
-    [libraryStore, updateBookData],
+    [libraryStore, updateBookData, persistWarn],
   );
   // Cell + structure edits for the data grid (sheetIndex is null for a single table).
   const dataEdit = useMemo(
@@ -2181,11 +2196,11 @@ export function App() {
       const withoutOld = base.filter((s) => s.name !== "Analysis");
       const sheets = recalcWorkbook([...withoutOld, { name: "Analysis", table: analysis }]);
       const next: BookSource = { ...prev, dataSheets: sheets, ...(sheets[0] ? { data: sheets[0].table } : {}) };
-      void libraryStore.putBook(next).catch(() => {});
+      void libraryStore.putBook(next).catch(persistWarn);
       updateBookData({ ...(next.data ? { data: next.data } : {}), dataSheets: sheets });
       return next;
     });
-  }, [libraryStore, updateBookData]);
+  }, [libraryStore, updateBookData, persistWarn]);
 
   // Transient "✓ your click did X" feedback, so a Redo press is never ambiguous.
   // (Declared up here because handlers below — mode toggle, redo — depend on it.)
@@ -2366,6 +2381,10 @@ export function App() {
   // DESKTOP: download the managed ffmpeg the PHONE tapped the button for (it owns the filesystem).
   // Assigned below, since onDownloadFfmpeg is declared later.
   const downloadFfmpegRef = useRef<() => void>(() => {});
+  // PHONE: debounce for the vrcmd:settings relay + the timestamp of the last local settings edit,
+  // for the vrsync:settings echo guard (see onSettingsChange).
+  const phoneSettingsRelayTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const phoneSettingsEditAt = useRef(0);
   // Phone-triggered software update: the DESKTOP runs it via this ref (assigned below, since
   // onSoftwareUpdate is declared later); the PHONE holds the in-flight request here so a relayed
   // vrsync:updateStatus can resolve it + reload.
@@ -2458,6 +2477,10 @@ export function App() {
             setLibrary(msg.library);
             break;
           case "vrsync:settings":
+            // ECHO GUARD: the desktop re-mirrors every settings frame we relay up — while a local edit
+            // is still in flight (debounce pending, or applied within the last moments), that echo is
+            // OLDER than what the user has typed since; applying it would eat their keystrokes.
+            if (phoneSettingsRelayTimer.current !== undefined || Date.now() - phoneSettingsEditAt.current < 1500) break;
             setSettings(msg.settings);
             break;
           case "vrsync:inventory":
@@ -2737,12 +2760,19 @@ export function App() {
   }, [isRemoteClient, sendAppSync, effectiveVram]);
   // Settings edits: on the desktop, apply locally (it owns the engine). On a linked PHONE, also push
   // the change to the desktop (vrcmd:settings) so the render the phone triggers uses it — the desktop
-  // applies it and re-mirrors it back. (The phone applies the desktop's pushes via setSettings
-  // directly, so this never loops.)
+  // applies it and re-mirrors it back. The relay is DEBOUNCED (typing a URL/key was one full-settings
+  // frame per keystroke) and the echo window below keeps the desktop's re-mirror of our own edit from
+  // clobbering newer local typing (last-write-wins over relay latency ate characters).
   const onSettingsChange = useCallback(
     (next: ReaderSettings) => {
       setSettings(next);
-      if (isRemoteClient) sendAppSync({ type: "vrcmd:settings", settings: next });
+      if (!isRemoteClient) return;
+      phoneSettingsEditAt.current = Date.now();
+      clearTimeout(phoneSettingsRelayTimer.current);
+      phoneSettingsRelayTimer.current = setTimeout(() => {
+        phoneSettingsRelayTimer.current = undefined;
+        sendAppSync({ type: "vrcmd:settings", settings: settingsRef.current });
+      }, 400);
     },
     [isRemoteClient, sendAppSync],
   );
@@ -3468,9 +3498,23 @@ export function App() {
       chatLiveSentAt.current = Date.now();
       sendAppSync({ type: "vrsync:chatLive", ...chatLiveRef.current });
     };
+    // The frame carries the CUMULATIVE streaming text, so total bytes grow quadratically with reply
+    // length at a fixed cadence — stretch the interval as the payload grows (120ms for short replies,
+    // up to 1s for very long ones) to keep a long answer's total mirror traffic roughly linear.
+    const payloadKb = (chatLiveRef.current.streaming.length + chatLiveRef.current.thinking.length) / 1024;
+    const interval = Math.min(1000, 120 + Math.floor(payloadKb) * 8);
     const since = Date.now() - chatLiveSentAt.current;
-    if (since >= 120) fire();
-    else chatLiveTimer.current = setTimeout(fire, 120 - since);
+    if (since >= interval) fire();
+    else chatLiveTimer.current = setTimeout(fire, interval - since);
+    return () => {
+      // Clear on every re-run: the body reschedules against the same last-SENT deadline, so the
+      // ~8/s cadence is unchanged — and on unmount no trailing send fires into a torn-down handler
+      // (this timer used to leak).
+      if (chatLiveTimer.current) {
+        clearTimeout(chatLiveTimer.current);
+        chatLiveTimer.current = undefined;
+      }
+    };
   }, [isRemoteClient, sendAppSync, chatLive]);
   // PHONE side: adopt the desktop's live turn state (via a ref, like applyChat). These setters drive
   // the same streaming view / approval modal the desktop shows; the approve/dismiss buttons relay back.
@@ -4833,7 +4877,7 @@ export function App() {
       if (!call.append && openCode?.contentMode === "code" && call.path === codeFileName(openCode)) {
         setCodeDraft(call.content);
         setBook((prev) => (prev && prev.id === openCode.id ? { ...prev, code: call.content } : prev));
-        void libraryStore.putBook({ ...openCode, code: call.content }).catch(() => {});
+        void libraryStore.putBook({ ...openCode, code: call.content }).catch(persistWarn);
       }
     } catch (err) {
       payload = { path: call.path, ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -4889,7 +4933,7 @@ export function App() {
         if (r.applied > 0 && openCode?.contentMode === "code" && call.path === codeFileName(openCode)) {
           setCodeDraft(r.content);
           setBook((prev) => (prev && prev.id === openCode.id ? { ...prev, code: r.content } : prev));
-          void libraryStore.putBook({ ...openCode, code: r.content }).catch(() => {});
+          void libraryStore.putBook({ ...openCode, code: r.content }).catch(persistWarn);
         }
       }
     } catch (err) {
@@ -5201,7 +5245,7 @@ export function App() {
       if (codeSaveTimer.current) clearTimeout(codeSaveTimer.current);
       codeSaveTimer.current = setTimeout(() => {
         setBook((prev) => (prev && prev.id === id ? { ...prev, code: text } : prev));
-        void libraryStore.putBook({ ...b, code: text }).catch(() => {});
+        void libraryStore.putBook({ ...b, code: text }).catch(persistWarn);
         if ((isDesktop || isRemoteClient) && settings.allowCommands) {
           void execHostTool({ tool: "write_file", path: codeFileName(b), content: text }).catch(() => {});
         }
@@ -5874,7 +5918,7 @@ export function App() {
           .putBook(e.book)
           .then(() => libraryStore.listBooks())
           .then(setLibrary)
-          .catch(() => {});
+          .catch(persistWarn);
         const chapter = e.book.chapters[e.book.chapters.length - 1];
         const paraId = chapter
           ? e.book.pages.find((p) => p.chapterId === chapter.id)?.paragraphs[0]?.id
@@ -5895,7 +5939,7 @@ export function App() {
         // Role-play / cadence changed (no new beat) — persist the book's storyConfig so it
         // survives a reopen. setBook keeps the open reader's copy current; no scroll.
         setBook(e.book);
-        void libraryStore.putBook(e.book).catch(() => {});
+        void libraryStore.putBook(e.book).catch(persistWarn);
       } else if (e.kind === "documentCreated") {
         // create_document: surface the document as downloadable file cards IN THE CHAT (PDF / Word /
         // Markdown) — NOT a full-screen reader takeover — and auto-save the Markdown source to the
@@ -7420,6 +7464,7 @@ export function App() {
       onDeleteMessage={onDeleteBuddyMessage}
       onCompact={onCompactBuddyClick}
       desktop={isDesktop}
+      remote={isRemoteClient}
       {...(isDesktop && (settings.localTextBackend === "bundled" || settings.localTextBackend === "server")
         ? { onLoadModel: warmLlm }
         : {})}

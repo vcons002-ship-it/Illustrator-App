@@ -25,7 +25,7 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -44,6 +44,113 @@ extern "system" {
 const SEM_FAILCRITICALERRORS: u32 = 0x0001;
 #[cfg(target_os = "windows")]
 const SEM_NOGPFAULTERRORBOX: u32 = 0x0002;
+
+// Kill-on-close Job Object: every long-lived child (ComfyUI / A1111 / llama-server) is assigned to
+// ONE job created with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE. The job handle is never closed by us, so
+// the OS closes it when THIS process dies — including a crash or a Task Manager kill, where
+// `RunEvent::ExitRequested` never fires — and then terminates every process in the job. Without it,
+// an app crash orphans multi-GB GPU processes until the user hunts them down. Manual FFI like
+// `SetErrorMode` above (a handful of kernel32 calls, no crate). Best-effort: if job creation fails,
+// children are simply not adopted and the exit handler still kills them on a normal quit.
+#[cfg(target_os = "windows")]
+mod job_object {
+    use std::process::Child;
+    use std::sync::OnceLock;
+
+    type Handle = *mut core::ffi::c_void;
+    extern "system" {
+        fn CreateJobObjectW(attrs: Handle, name: *const u16) -> Handle;
+        fn SetInformationJobObject(job: Handle, class: u32, info: *const core::ffi::c_void, len: u32) -> i32;
+        fn AssignProcessToJobObject(job: Handle, process: Handle) -> i32;
+        fn CloseHandle(handle: Handle) -> i32;
+    }
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x2000;
+    /// JobObjectExtendedLimitInformation in the JOBOBJECTINFOCLASS enum.
+    const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: u32 = 9;
+
+    // Only the layout matters — SetInformationJobObject reads a raw buffer with these exact
+    // sizes/offsets (64-bit: 64 + 48 + 32 bytes). Every field except `limit_flags` stays zero.
+    #[repr(C)]
+    #[derive(Default)]
+    struct BasicLimits {
+        per_process_user_time_limit: i64,
+        per_job_user_time_limit: i64,
+        limit_flags: u32,
+        minimum_working_set_size: usize,
+        maximum_working_set_size: usize,
+        active_process_limit: u32,
+        affinity: usize,
+        priority_class: u32,
+        scheduling_class: u32,
+    }
+    #[repr(C)]
+    #[derive(Default)]
+    struct IoCounters {
+        read_operation_count: u64,
+        write_operation_count: u64,
+        other_operation_count: u64,
+        read_transfer_count: u64,
+        write_transfer_count: u64,
+        other_transfer_count: u64,
+    }
+    #[repr(C)]
+    #[derive(Default)]
+    struct ExtendedLimits {
+        basic: BasicLimits,
+        io: IoCounters,
+        process_memory_limit: usize,
+        job_memory_limit: usize,
+        peak_process_memory_used: usize,
+        peak_job_memory_used: usize,
+    }
+
+    /// The one process-wide job handle, created on first use. Stored as usize because a raw
+    /// pointer isn't Send/Sync; 0 = creation failed (checked before every assignment).
+    static JOB: OnceLock<usize> = OnceLock::new();
+
+    fn job_handle() -> Handle {
+        *JOB.get_or_init(|| unsafe {
+            let job = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
+            if job.is_null() {
+                return 0;
+            }
+            let mut info = ExtendedLimits::default();
+            info.basic.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let ok = SetInformationJobObject(
+                job,
+                JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                &info as *const _ as *const core::ffi::c_void,
+                std::mem::size_of::<ExtendedLimits>() as u32,
+            );
+            if ok == 0 {
+                // A job WITHOUT kill-on-close would silently do nothing — don't hand children to it.
+                CloseHandle(job);
+                return 0;
+            }
+            job as usize
+        }) as Handle
+    }
+
+    /// Tie a freshly spawned long-lived child's lifetime to ours (see the module comment).
+    /// Best-effort: a failure (e.g. an outer job on a pre-Win8 nesting-less system) leaves the
+    /// child exactly as unmanaged as before this feature existed.
+    pub(crate) fn adopt_child(child: &Child) {
+        use std::os::windows::io::AsRawHandle;
+        let job = job_handle();
+        if job.is_null() {
+            return;
+        }
+        unsafe {
+            let _ = AssignProcessToJobObject(job, child.as_raw_handle() as Handle);
+        }
+    }
+}
+#[cfg(target_os = "windows")]
+use job_object::adopt_child;
+/// On Unix the managed children are killed by the exit handler; there is no job-object
+/// equivalent to wire up here (and the managed engines are Windows-only at runtime anyway).
+#[cfg(not(target_os = "windows"))]
+fn adopt_child(_child: &Child) {}
 
 const COMFY_PORTABLE_URL: &str =
     "https://github.com/comfyanonymous/ComfyUI/releases/latest/download/ComfyUI_windows_portable_nvidia.7z";
@@ -275,6 +382,21 @@ fn command_for<S: AsRef<std::ffi::OsStr>>(program: S, show_console: bool) -> Com
     }
 }
 
+/// Stop a long-lived engine child AND its descendants. A1111 is spawned as `cmd /c webui-user.bat`,
+/// so a plain `child.kill()` only kills cmd.exe and leaves the python tree holding the GPU;
+/// `taskkill /T` walks the whole tree. The direct `kill()` afterwards covers a taskkill failure
+/// (worst case: the old single-process kill), and `wait()` reaps the handle so nothing zombies.
+fn kill_tree(child: &mut Child) {
+    #[cfg(target_os = "windows")]
+    let _ = quiet_command("taskkill")
+        .args(["/T", "/F", "/PID", &child.id().to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Query `nvidia-smi` for the first GPU's total memory in MB. None on any failure.
 fn nvidia_vram_mb() -> Option<u64> {
     let out = quiet_command("nvidia-smi")
@@ -430,6 +552,43 @@ fn is_local_target(url: &str) -> bool {
     }
 }
 
+/// True when `host` names this machine or a private/link-local network — the targets a
+/// prompt-injected page would pivot the CORS proxy to (cloud metadata at 169.254.169.254, the
+/// router's admin panel, local daemons). Pure classifier; the proxy's policy (which of these are
+/// still reachable) lives at the call site in `http_fetch_blocking`.
+fn is_private_host(host: &str) -> bool {
+    let h = host.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+    if h == "localhost"
+        || h.ends_with(".localhost")
+        || h.ends_with(".local")
+        || h.ends_with(".internal")
+    {
+        return true;
+    }
+    fn v4_private(v4: std::net::Ipv4Addr) -> bool {
+        v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+    }
+    match h.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => v4_private(v4),
+        Ok(std::net::IpAddr::V6(v6)) => {
+            let seg0 = v6.segments()[0];
+            v6.is_loopback()
+                || v6.is_unspecified()
+                // fe80::/10 (link-local) and fc00::/7 (ULA) — no stable is_* helpers yet.
+                || (seg0 & 0xffc0) == 0xfe80
+                || (seg0 & 0xfe00) == 0xfc00
+                // An IPv4 address smuggled as ::ffff:a.b.c.d must classify like the IPv4.
+                || v6.to_ipv4_mapped().is_some_and(v4_private)
+        }
+        Err(_) => false,
+    }
+}
+
+/// The local-inference ports the proxy may still reach on a private host: the managed
+/// ComfyUI / AUTOMATIC1111 / bundled llama-server, plus the Ollama / LM Studio defaults
+/// the Text settings offer. Everything else private is refused (see `http_fetch_blocking`).
+const LOCAL_ENGINE_PORTS: &[u16] = &[ENGINE_PORT, A1111_PORT, LLM_PORT, 11434, 1234];
+
 /// Flatten an error + its source chain into one message, so a wrapped transport failure surfaces its
 /// real cause (e.g. "error sending request for url (…) — error trying to connect — Connection
 /// refused") instead of just the opaque top line.
@@ -462,6 +621,18 @@ fn http_fetch_blocking(req: HttpFetchRequest) -> Result<HttpFetchResult, String>
     let engine = base64::engine::general_purpose::STANDARD;
     if !(req.url.starts_with("https://") || req.url.starts_with("http://")) {
         return Err("Only http(s) URLs can be fetched.".into());
+    }
+    // SSRF guard: a model-driven fetch (keyless web search, "open this URL") must not pivot to
+    // local/private addresses. The app's OWN engine traffic goes through this same proxy —
+    // verified against the apps/web/src call sites: `desktopFetch` (App.tsx) reaches self-hosted
+    // ComfyUI/A1111 and the worker's `corsFetch` reaches local LLM servers, which is exactly why
+    // the `is_local_target` no_proxy branch below exists — so private targets stay reachable on
+    // the known local-inference ports only; every other private target is refused.
+    let parsed = reqwest::Url::parse(&req.url).map_err(|e| e.to_string())?;
+    if parsed.host_str().is_some_and(is_private_host)
+        && !parsed.port_or_known_default().is_some_and(|p| LOCAL_ENGINE_PORTS.contains(&p))
+    {
+        return Err("blocked: this proxy can't reach local/private addresses".into());
     }
     // A real User-Agent is REQUIRED by some hosts: Wikimedia (the keyless image/
     // figure search) returns 403 to a client with none, and reqwest built with
@@ -1099,12 +1270,9 @@ async fn write_workspace_file(
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(content_base64.as_bytes())
             .map_err(|e| e.to_string())?;
-        // Base: the session's working folder when it's a real directory, else the sandbox workspace.
-        let base = match cwd
-            .filter(|c| !c.is_empty())
-            .map(std::path::PathBuf::from)
-            .filter(|p| p.is_dir())
-        {
+        // Base: the session's working folder when it's a real, APPROVED directory (see
+        // resolve_approved_cwd), else the sandbox workspace.
+        let base = match resolve_approved_cwd(&app, cwd)? {
             Some(p) => p,
             None => {
                 let d = workspace_dir(&app);
@@ -1171,11 +1339,7 @@ async fn read_workspace_file(
 ) -> Result<WorkspaceReadResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use base64::Engine as _;
-        let base = match cwd
-            .filter(|c| !c.is_empty())
-            .map(std::path::PathBuf::from)
-            .filter(|p| p.is_dir())
-        {
+        let base = match resolve_approved_cwd(&app, cwd)? {
             Some(p) => p,
             None => workspace_dir(&app),
         };
@@ -1245,6 +1409,53 @@ fn unique_path(dir: &Path, filename: &str) -> PathBuf {
 }
 
 // ------------------------------------------------------------- local file search
+
+/// Folders the model's file tools may touch. `read_file` used to accept ANY absolute path — a
+/// prompt-injected page could pull `~/.ssh` or a browser profile through the import pipeline.
+/// Roots are: the app's own folders (workspace + engine root, seeded lazily), every folder the
+/// reader picked this session (`pick_folder`), and the folder of every `search_files` hit (the
+/// reader initiated that search, and clicking a hit is the intended way into `read_file`).
+static APPROVED_ROOTS: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
+
+/// The reader-facing refusal, shared by every approved-roots check so the fix is always named.
+const OUTSIDE_APPROVED_ROOTS: &str =
+    "outside the approved folders — pick the folder first (📁) or search for the file, then retry.";
+
+fn approved_roots(app: &AppHandle) -> &'static Mutex<Vec<PathBuf>> {
+    APPROVED_ROOTS.get_or_init(|| Mutex::new(vec![workspace_dir(app), engine_root(app)]))
+}
+
+fn approve_root(app: &AppHandle, dir: &Path) {
+    let mut roots = approved_roots(app).lock().unwrap();
+    if !roots.iter().any(|r| r == dir) {
+        roots.push(dir.to_path_buf());
+    }
+}
+
+/// Is `path` inside an approved root? Both sides are canonicalized so `..` segments, symlinks and
+/// 8.3 aliases can't dodge the prefix check; a path that can't be canonicalized (doesn't exist /
+/// unreadable) is denied — nothing legitimate reads a nonexistent file.
+fn is_approved_path(app: &AppHandle, path: &Path) -> bool {
+    let Ok(real) = std::fs::canonicalize(path) else {
+        return false;
+    };
+    let roots = approved_roots(app).lock().unwrap();
+    roots.iter().any(|root| {
+        let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
+        real.starts_with(&root)
+    })
+}
+
+/// Resolve the optional `cwd` parameter of run_command / the workspace file ops: an existing
+/// directory must be inside the approved roots (the picked session folder always is); a missing /
+/// not-a-directory value keeps the old silent fallback to the sandbox workspace (`None`).
+fn resolve_approved_cwd(app: &AppHandle, cwd: Option<String>) -> Result<Option<PathBuf>, String> {
+    match cwd.filter(|c| !c.is_empty()).map(PathBuf::from).filter(|p| p.is_dir()) {
+        Some(p) if is_approved_path(app, &p) => Ok(Some(p)),
+        Some(_) => Err(OUTSIDE_APPROVED_ROOTS.to_string()),
+        None => Ok(None),
+    }
+}
 
 #[derive(Serialize)]
 struct FoundFile {
@@ -1370,7 +1581,15 @@ async fn search_files(
             return Ok(Vec::new());
         }
         let start = match root {
-            Some(r) if !r.trim().is_empty() => PathBuf::from(r),
+            // An explicit search root is subject to the same approved-roots check as a cwd
+            // (it arrives from the picked working folder, which is always approved).
+            Some(r) if !r.trim().is_empty() => {
+                let p = PathBuf::from(r);
+                if !is_approved_path(&app, &p) {
+                    return Err(OUTSIDE_APPROVED_ROOTS.to_string());
+                }
+                p
+            }
             _ => app.path().home_dir().unwrap_or_else(|_| PathBuf::from(".")),
         };
         let mut out: Vec<FoundFile> = Vec::new();
@@ -1421,6 +1640,15 @@ async fn search_files(
                 }
             }
         }
+        // The reader initiated this search, and clicking a hit calls `read_file` on it — approve
+        // each hit's folder (deduped in approve_root) so that follow-up read is in scope. NOT the
+        // whole search root: the default root is the home dir, and approving that would undo the
+        // scoping for everything under it.
+        for f in &out {
+            if let Some(parent) = Path::new(&f.path).parent() {
+                approve_root(&app, parent);
+            }
+        }
         Ok(out)
     })
     .await
@@ -1437,12 +1665,16 @@ struct ReadFileResult {
 
 /// Read ONE chosen file's bytes (base64) so the renderer can import it through
 /// the same parsers as an uploaded file. Bounded; only invoked from the explicit
-/// `/open <path>` command or a click on a `/find` result.
+/// `/open <path>` command or a click on a `/find` result — and scoped to the
+/// approved roots, so a fabricated path can't exfiltrate `~/.ssh` or a browser profile.
 #[tauri::command]
-async fn read_file(path: String) -> Result<ReadFileResult, String> {
+async fn read_file(app: AppHandle, path: String) -> Result<ReadFileResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use base64::Engine as _;
         let p = PathBuf::from(&path);
+        if !is_approved_path(&app, &p) {
+            return Err(OUTSIDE_APPROVED_ROOTS.to_string());
+        }
         let meta = std::fs::metadata(&p).map_err(|e| e.to_string())?;
         if !meta.is_file() {
             return Err("That path isn't a file.".into());
@@ -1605,12 +1837,15 @@ async fn oauth_loopback(
 /// Returns the chosen absolute path, or None if the reader cancelled. AsyncFileDialog
 /// drives the dialog on the platform's UI thread without blocking the command runtime.
 #[tauri::command]
-async fn pick_folder() -> Option<String> {
-    rfd::AsyncFileDialog::new()
+async fn pick_folder(app: AppHandle) -> Option<String> {
+    let picked = rfd::AsyncFileDialog::new()
         .set_title("Choose a working folder for the assistant")
         .pick_folder()
-        .await
-        .map(|h| h.path().to_string_lossy().into_owned())
+        .await?;
+    // An explicit pick is the user's consent: the folder joins the approved roots, so the file
+    // tools (read_file, run_command's cwd, …) can work there for the rest of the session.
+    approve_root(&app, picked.path());
+    Some(picked.path().to_string_lossy().into_owned())
 }
 
 /// Append a shell command to `cmd` VERBATIM on Windows, so `cmd /C` / PowerShell get the command
@@ -1644,13 +1879,9 @@ async fn run_command(
     shell: Option<String>,
 ) -> Result<CommandResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        // The session's chosen working folder when it's a real directory; otherwise the
-        // default sandbox workspace (created on demand).
-        let dir = match cwd
-            .filter(|c| !c.is_empty())
-            .map(std::path::PathBuf::from)
-            .filter(|p| p.is_dir())
-        {
+        // The session's chosen working folder when it's a real, APPROVED directory (see
+        // resolve_approved_cwd); otherwise the default sandbox workspace (created on demand).
+        let dir = match resolve_approved_cwd(&app, cwd)? {
             Some(p) => p,
             None => {
                 let d = workspace_dir(&app);
@@ -2409,7 +2640,7 @@ fn install_and_spawn(app: &AppHandle, low_vram: bool, show_console: bool) -> Res
     }
 
     emit_engine(app, "starting", "Starting the engine…", None);
-    let child = spawn_comfy(&portable, low_vram, show_console)?;
+    let mut child = spawn_comfy(&portable, low_vram, show_console)?;
 
     let base = format!("http://127.0.0.1:{ENGINE_PORT}");
     for _ in 0..180 {
@@ -2418,6 +2649,9 @@ fn install_and_spawn(app: &AppHandle, low_vram: bool, show_console: bool) -> Res
         }
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
+    // The child is spawned and consuming VRAM even though it never answered — returning without
+    // killing it would drop the handle and orphan a running GPU process.
+    kill_tree(&mut child);
     Err("The engine did not become ready in time.".into())
 }
 
@@ -2439,7 +2673,9 @@ fn spawn_comfy(portable: &Path, low_vram: bool, show_console: bool) -> Result<Ch
         // instead of ComfyUI's default "grab all free VRAM" mode. Only on a GPU box.
         cmd.arg("--lowvram");
     }
-    cmd.spawn().map_err(|e| format!("Failed to start the engine: {e}"))
+    let child = cmd.spawn().map_err(|e| format!("Failed to start the engine: {e}"))?;
+    adopt_child(&child); // dies with the app even on crash/task-kill (see job_object)
+    Ok(child)
 }
 
 /// Spawn AUTOMATIC1111 from its install `dir` (the folder with webui-user.bat) with `--api` on
@@ -2462,9 +2698,10 @@ fn spawn_a1111(dir: &Path, show_console: bool) -> Result<Child, String> {
         .arg(&bat)
         .env("COMMANDLINE_ARGS", format!("--api --port {A1111_PORT}"))
         .current_dir(dir);
-    let child = cmd
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to start AUTOMATIC1111: {e}"))?;
+    adopt_child(&child); // dies with the app even on crash/task-kill (see job_object)
     let base = format!("http://127.0.0.1:{A1111_PORT}");
     for _ in 0..180 {
         if a1111_health_ok(&base) {
@@ -2472,6 +2709,9 @@ fn spawn_a1111(dir: &Path, show_console: bool) -> Result<Child, String> {
         }
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
+    // Never answered, but the python tree under `cmd /c` is running and holding VRAM — kill the
+    // whole tree before erroring, or the handle drops and the process is orphaned.
+    kill_tree(&mut child);
     Err("AUTOMATIC1111 did not become ready in time.".into())
 }
 
@@ -2760,8 +3000,7 @@ async fn ensure_llm(app: AppHandle, state: State<'_, LlmState>) -> Result<LlmInf
 async fn stop_llm(state: State<'_, LlmState>) -> Result<(), String> {
     let child = state.child.lock().unwrap().take();
     if let Some(mut child) = child {
-        let _ = child.kill();
-        let _ = child.wait();
+        kill_tree(&mut child);
     }
     *state.base_url.lock().unwrap() = None;
     *state.model.lock().unwrap() = None;
@@ -2795,7 +3034,7 @@ fn ensure_llm_blocking(app: &AppHandle) -> Result<(String, Option<Child>), Strin
     }
     let (bin, gguf) = resolve_llm_files(app)?;
     emit_llm(app, "starting", "Starting the built-in model…", None);
-    let child = spawn_llama(&bin, &gguf)?;
+    let mut child = spawn_llama(&bin, &gguf)?;
     for _ in 0..120 {
         if llm_health_ok(&root) {
             emit_llm(app, "ready", "Built-in model ready", Some(100.0));
@@ -2803,6 +3042,9 @@ fn ensure_llm_blocking(app: &AppHandle) -> Result<(String, Option<Child>), Strin
         }
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
+    // Never answered, but the server is running and may hold VRAM — kill it before erroring,
+    // or the dropped handle orphans it.
+    kill_tree(&mut child);
     Err("The built-in model did not become ready in time.".into())
 }
 
@@ -2851,7 +3093,9 @@ fn spawn_llama(bin: &Path, gguf: &Path) -> Result<Child, String> {
     if let Some(dir) = bin.parent() {
         cmd.current_dir(dir); // find the ggml/llama DLLs shipped beside the exe
     }
-    cmd.spawn().map_err(|e| format!("Failed to start the built-in model: {e}"))
+    let child = cmd.spawn().map_err(|e| format!("Failed to start the built-in model: {e}"))?;
+    adopt_child(&child); // dies with the app even on crash/task-kill (see job_object)
+    Ok(child)
 }
 
 fn llm_health_ok(root: &str) -> bool {
@@ -2935,28 +3179,70 @@ fn main() {
         .expect("error while building Visual Reader")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
-                // Kill both managed children (image engine + built-in model) so no
-                // stray process lingers after the window closes.
+                // Kill both managed children (image engine + built-in model) so no stray process
+                // lingers after the window closes — kill_tree, because A1111's `cmd /c` wrapper
+                // (and any engine that forks workers) would survive a single-process kill.
                 if let Some(state) = app.try_state::<EngineState>() {
                     if let Ok(mut guard) = state.child.lock() {
                         if let Some(mut child) = guard.take() {
-                            let _ = child.kill();
+                            kill_tree(&mut child);
                         }
                     }
                     // Also kill a separately-launched AUTOMATIC1111, if we started it.
                     if let Ok(mut guard) = state.a1111_child.lock() {
                         if let Some(mut child) = guard.take() {
-                            let _ = child.kill();
+                            kill_tree(&mut child);
                         }
                     }
                 }
                 if let Some(state) = app.try_state::<LlmState>() {
                     if let Ok(mut guard) = state.child.lock() {
                         if let Some(mut child) = guard.take() {
-                            let _ = child.kill();
+                            kill_tree(&mut child);
                         }
                     }
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_private_host;
+
+    #[test]
+    fn private_hosts_are_classified() {
+        // Loopback v4/v6 (bare and URL-bracketed, as reqwest::Url::host_str returns it).
+        assert!(is_private_host("127.0.0.1"));
+        assert!(is_private_host("127.8.9.10"));
+        assert!(is_private_host("::1"));
+        assert!(is_private_host("[::1]"));
+        // Link-local — the cloud metadata service lives here.
+        assert!(is_private_host("169.254.169.254"));
+        assert!(is_private_host("fe80::1"));
+        // RFC-1918 / ULA / unspecified.
+        assert!(is_private_host("10.0.0.7"));
+        assert!(is_private_host("172.16.0.1"));
+        assert!(is_private_host("192.168.1.1"));
+        assert!(is_private_host("fd00::2"));
+        assert!(is_private_host("0.0.0.0"));
+        // An IPv4 target smuggled as an IPv4-mapped IPv6 literal.
+        assert!(is_private_host("::ffff:192.168.0.1"));
+        // Local-only hostnames.
+        assert!(is_private_host("localhost"));
+        assert!(is_private_host("LOCALHOST"));
+        assert!(is_private_host("printer.local"));
+        assert!(is_private_host("db.corp.internal"));
+    }
+
+    #[test]
+    fn public_hosts_are_not() {
+        assert!(!is_private_host("8.8.8.8"));
+        assert!(!is_private_host("93.184.216.34"));
+        assert!(!is_private_host("2606:4700::1111"));
+        assert!(!is_private_host("example.com"));
+        assert!(!is_private_host("en.wikipedia.org"));
+        // 172.32.x is just OUTSIDE the 172.16/12 block.
+        assert!(!is_private_host("172.32.0.1"));
+    }
 }

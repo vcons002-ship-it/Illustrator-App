@@ -97,6 +97,8 @@ export class Automatic1111Backend implements LocalEngineBackend {
     const res = await this.transport.send({
       url: `${this.baseUrl}/sdapi/v1/sd-models`,
       method: "GET",
+      // Inventory endpoint: answers instantly on a live engine — never let it hang a model listing.
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) throw new Error(await a1111Error("listModels", res));
     const data = await res.json<SdModel[]>();
