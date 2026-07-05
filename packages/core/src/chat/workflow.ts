@@ -243,6 +243,44 @@ export function evaluateStep(step: WorkflowStep, evidence: StepEvidence): StepOu
   }
 }
 
+/**
+ * Did the turn make a GENUINE attempt at THIS step's work — the contract's tool actually ran (whether
+ * it succeeded OR failed), or (for a text/narration step) some text was produced? Returns FALSE when
+ * the model instead only poked the checklist meta-tools (set_plan/complete_step — the "let me check
+ * the box" instinct, which is withdrawn in app-managed mode) or narrated on a TOOL step without
+ * calling the tool. The executor uses this to RE-NUDGE toward the real tool WITHOUT spending one of
+ * the step's few attempts, so a model confused about who tracks progress doesn't march the step into
+ * a premature "stuck — how do I proceed?" park (the checklist-image bug). PURE.
+ */
+export function attemptedStepWork(step: WorkflowStep, evidence: StepEvidence): boolean {
+  const dw = step.doneWhen;
+  const ran = (pred: (r: StepEvidence["toolResults"][number]) => boolean): boolean => evidence.toolResults.some(pred);
+  switch (dw.kind) {
+    case "image":
+      return ran((r) => "image" in r.result); // a render was attempted (image.ok true OR false)
+    case "file":
+    case "files":
+      return ran((r) => "writeFile" in r.result);
+    case "command_ok":
+      return ran((r) => "command" in r.result);
+    case "tool_ok":
+      return ran((r) => r.call.tool === dw.tool);
+    case "text":
+    case "narration":
+      return evidence.text.trim().length > 0; // for answer steps the text IS the attempt
+    case "user_reply":
+      return true; // parks by design — never a "no attempt" nudge
+  }
+}
+
+/** The turn's ONLY tool activity was the checklist meta-tools (set_plan/complete_step) — the model
+ * tried to MANAGE the checklist instead of doing the step. Lets the nudge be specific ("the app tracks
+ * progress; don't check it off"), distinct from a plain narration miss. PURE. */
+export function checklistMetaOnly(evidence: StepEvidence): boolean {
+  const meta = new Set(["set_plan", "complete_step"]);
+  return evidence.toolResults.length > 0 && evidence.toolResults.every((r) => meta.has(r.call.tool));
+}
+
 /** What the executor should do next after judging the active step. */
 export type WorkflowAction = "advance" | "retry" | "park" | "skip" | "finish" | "abort";
 
