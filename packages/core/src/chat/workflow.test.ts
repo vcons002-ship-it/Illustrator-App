@@ -4,6 +4,8 @@ import {
   type StepEvidence,
   type WorkflowStep,
   advanceWorkflow,
+  attemptedStepWork,
+  checklistMetaOnly,
   compileWorkflow,
   doneWhenToNeeds,
   evaluateStep,
@@ -240,5 +242,43 @@ describe("isToolContract", () => {
     for (const kind of ["text", "narration", "user_reply"] as const) {
       expect(isToolContract(kind)).toBe(false);
     }
+  });
+});
+
+describe("attemptedStepWork — did the model actually TRY the step (vs fiddle the checklist)", () => {
+  const gi: BuddyToolCall = { tool: "generate_image", prompt: "a castle" };
+  const cs: BuddyToolCall = { tool: "complete_step" };
+  const sp: BuddyToolCall = { tool: "set_plan", steps: ["x"] };
+
+  it("counts a render attempt on an image step whether it succeeded OR failed", () => {
+    const img = step({ doneWhen: { kind: "image" } });
+    expect(attemptedStepWork(img, ev([{ call: gi, result: { image: { ok: true } } }]))).toBe(true);
+    expect(attemptedStepWork(img, ev([{ call: gi, result: { image: { ok: false, error: "vram" } } }]))).toBe(true);
+  });
+
+  it("is FALSE on an image step when the model only checked the box or narrated", () => {
+    const img = step({ doneWhen: { kind: "image" } });
+    // The exact bug: tried to complete_step (refused) instead of rendering.
+    expect(attemptedStepWork(img, ev([{ call: cs, result: { error: "the app runs this checklist" } }]))).toBe(false);
+    // Or just narrated "I made all four!" with no tool at all.
+    expect(attemptedStepWork(img, ev([], "Here are all four images."))).toBe(false);
+  });
+
+  it("keys tool_ok on the SPECIFIC tool, and text/narration on non-empty text", () => {
+    const sw = step({ doneWhen: { kind: "tool_ok", tool: "search_web" } });
+    expect(attemptedStepWork(sw, ev([{ call: { tool: "search_web", query: "q" }, result: {} }]))).toBe(true);
+    expect(attemptedStepWork(sw, ev([{ call: { tool: "search_books", query: "q" }, result: {} }]))).toBe(false);
+    const txt = step({ doneWhen: { kind: "text", min: 1 } });
+    expect(attemptedStepWork(txt, ev([], "an answer"))).toBe(true);
+    expect(attemptedStepWork(txt, ev([], "   "))).toBe(false);
+    // user_reply parks by design — always "attempted" so it never triggers a nudge.
+    expect(attemptedStepWork(step({ doneWhen: { kind: "user_reply" } }), ev())).toBe(true);
+  });
+
+  it("checklistMetaOnly flags a turn that only touched set_plan/complete_step", () => {
+    expect(checklistMetaOnly(ev([{ call: cs, result: {} }]))).toBe(true);
+    expect(checklistMetaOnly(ev([{ call: sp, result: {} }, { call: cs, result: {} }]))).toBe(true);
+    expect(checklistMetaOnly(ev([{ call: cs, result: {} }, { call: gi, result: { image: { ok: true } } }]))).toBe(false);
+    expect(checklistMetaOnly(ev())).toBe(false); // no tools at all is a narration miss, not meta-fiddling
   });
 });

@@ -161,6 +161,9 @@ import {
   advanceWorkflow,
   activeStep,
   isToolContract,
+  attemptedStepWork,
+  checklistMetaOnly,
+  doneWhenToNeeds,
   workflowToPlan,
   workflowParked,
   resumeWorkflow,
@@ -392,6 +395,9 @@ const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.s
 /** Per-attachment text cap for a chat-attached document — generous (a long report) but bounded
  * so several attachments can't blow the chat's context budget. */
 const ATTACH_DOC_MAX_CHARS = 30_000;
+/** App-managed steps: how many times to re-nudge the model toward a step's tool when it produced NO
+ * genuine attempt (narrated / tried to check the box) before letting the step retry/park normally. */
+const MAX_STEP_REMINDERS = 3;
 
 /**
  * If a message is really a request to just SHOW a web image (a bare image link, or
@@ -1169,6 +1175,10 @@ export function App() {
     toolResults: [],
     text: "",
   });
+  // App-managed steps: when the model DIDN'T attempt the current step's work (it narrated, or tried to
+  // check the box itself — complete_step is withdrawn here), re-nudge toward the exact tool WITHOUT
+  // burning one of the step's few attempts. Bounded per-step so a genuinely stuck model still parks.
+  const appManagedNudgeRef = useRef<{ stepId: string; count: number }>({ stepId: "", count: 0 });
   // Whether App-managed steps runs this chat. Opt-in setting (the model's checklist meta-tools are
   // unreliable across models, so the app drives instead). Off → the legacy model-driven path.
   const appManagedActive = !!settings.appManagedSteps;
@@ -4963,6 +4973,27 @@ export function App() {
       evi = { ...evidence, filesPresent: checks };
     }
     const outcome = evaluateStep(step, evi);
+    // The model didn't even ATTEMPT this step's work (it narrated, or tried to check the box itself —
+    // complete_step is refused in app-managed mode): don't spend one of the step's few attempts on a
+    // no-op that would march it toward a premature "⏸ Stuck — how do I proceed?" park. Re-nudge toward
+    // the exact tool instead, bounded per step so a genuinely stuck model still parks.
+    if (!outcome.done && !outcome.parks && !attemptedStepWork(step, evi)) {
+      const rem = appManagedNudgeRef.current;
+      const used = rem.stepId === step.id ? rem.count : 0;
+      if (used < MAX_STEP_REMINDERS) {
+        appManagedNudgeRef.current = { stepId: step.id, count: used + 1 };
+        buddyStepEvidenceRef.current = { toolResults: [], text: "" };
+        const need = doneWhenToNeeds(step.doneWhen);
+        const toolLine = need ? `This step needs an ACTUAL ${need} call this turn (not a description). ` : "";
+        const trackLine = checklistMetaOnly(evi)
+          ? "The app tracks progress and ticks steps off itself — do NOT call complete_step or re-plan; just do the step. "
+          : "";
+        await continueWith(`[You haven't done the current step yet. ${trackLine}${toolLine}Do it now: ${step.instruction}. Call the tool and stop — no commentary.]`);
+        return true;
+      }
+      // Reminders exhausted — fall through to the normal retry/park path (a truly stuck run must end).
+    }
+    appManagedNudgeRef.current = { stepId: "", count: 0 }; // a real attempt / advance resets the reminder budget
     const adv = advanceWorkflow(wf, outcome);
     applyWorkflow(adv.workflow);
     buddyStepEvidenceRef.current = { toolResults: [], text: "" }; // fresh evidence for whatever runs next

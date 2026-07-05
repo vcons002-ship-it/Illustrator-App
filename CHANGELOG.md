@@ -7,6 +7,13 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Assistant & UI
 
+- **App-managed checklists no longer get stuck mid-run** — when working an app-managed plan (e.g.
+  generating several images from a checklist), the assistant would sometimes try to "check the box"
+  itself or narrate "done!" instead of actually running the step's tool — and the app counted each
+  such turn as a failed attempt, parking after two with "⏸ Stuck — how do I proceed?". Turns where
+  the step's real work was never attempted now re-nudge toward the exact tool instead of burning an
+  attempt, so a checklist of renders runs to completion.
+
 - **Task chats keep the task up to date** — anything you hand a task's chat now lands on the task
   itself: pasted links and uploaded files are captured onto the plan automatically the moment you
   send them, and the assistant is required to save the meaning (answers, decisions, a resume's key
