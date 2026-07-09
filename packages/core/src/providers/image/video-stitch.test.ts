@@ -2,10 +2,19 @@ import { describe, expect, it } from "vitest";
 import { buildConcatArgs, buildLastFrameArgs } from "./video-stitch.js";
 
 describe("buildLastFrameArgs", () => {
-  it("seeks near the end and writes a single frame", () => {
+  it("extracts the last frame WITHOUT end-relative seeking (webp-safe): -update 1 overwrites one PNG", () => {
     expect(buildLastFrameArgs("clips/clip_0.webp", "clips/frame_0.png")).toEqual([
-      "-y", "-sseof", "-0.2", "-i", "clips/clip_0.webp", "-frames:v", "1", "clips/frame_0.png",
+      "-y", "-i", "clips/clip_0.webp", "-update", "1", "clips/frame_0.png",
     ]);
+  });
+  it("uses no -sseof (the webp demuxer can't seek from the end) and no -frames:v 1 (that keeps frame 0)", () => {
+    const args = buildLastFrameArgs("in.webp", "out.png");
+    expect(args).not.toContain("-sseof");
+    // -update present but not a 1-frame cap: the whole stream is decoded so the final write wins.
+    expect(args).toContain("-update");
+    expect(args.slice(args.indexOf("-update"))).not.toContain("-frames:v");
+    // Single PNG output, still last.
+    expect(args[args.length - 1]).toBe("out.png");
   });
 });
 

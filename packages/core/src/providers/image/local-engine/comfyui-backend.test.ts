@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ComfyUIBackend } from "./comfyui-backend.js";
+import type { WanVideoFiles } from "../image-provider.js";
 import type { Transport, TransportRequest, TransportResponse } from "../../transport/transport.js";
 
 /**
@@ -116,27 +117,21 @@ describe("ComfyUIBackend.generate state machine", () => {
     expect(calls.filter((c) => c.url === `${BASE}/prompt`)).toHaveLength(2);
   });
 
-  it("retries the submit once after a network error too", async () => {
-    vi.useFakeTimers();
-    let first = true;
+  it("does NOT retry a thrown network error (can't prove the render wasn't already enqueued)", async () => {
+    // A thrown error carries no Response, so we can't tell a pre-send failure from a response-read loss
+    // AFTER ComfyUI already accepted + enqueued the job — resending would double-render. It surfaces
+    // instead, after exactly one attempt.
+    let attempts = 0;
     const { transport, calls } = routedTransport({
-      "/prompt": (req) => {
-        void req;
-        if (first) {
-          first = false;
-          throw new Error("socket hang up");
-        }
-        return res({ prompt_id: "p1" });
+      "/prompt": () => {
+        attempts++;
+        throw new Error("socket hang up");
       },
-      "/history/p1": res(DONE_HISTORY),
-      "/view": bytesRes(new Uint8Array([2]).buffer),
     });
     const backend = new ComfyUIBackend({ baseUrl: BASE, transport, pollIntervalMs: 0 });
-    const promise = backend.generate(INPUT, "model.safetensors");
-    await vi.advanceTimersByTimeAsync(1_500);
-    vi.useRealTimers();
-    await expect(promise).resolves.toBeDefined();
-    expect(calls.filter((c) => c.url === `${BASE}/prompt`)).toHaveLength(2);
+    await expect(backend.generate(INPUT, "model.safetensors")).rejects.toThrow(/socket hang up/);
+    expect(attempts).toBe(1);
+    expect(calls.filter((c) => c.url === `${BASE}/prompt`)).toHaveLength(1);
   });
 
   it("does NOT retry a 4xx rejection and surfaces the error + node_errors detail", async () => {
@@ -279,5 +274,47 @@ describe("ComfyUIBackend.generate state machine", () => {
       await backend.generate(INPUT, "model.safetensors");
       expect(urls()).not.toContain(`${BASE}/free`);
     }
+  });
+});
+
+describe("ComfyUIBackend.generateVideo VRAM residency (long-form warmBatch)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("WebSocket", undefined);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // Text-to-video (no source image) so no /upload/image round-trip is needed.
+  const wanModels: WanVideoFiles = {
+    kind: "wan-i2v",
+    highNoise: "wan_high.safetensors",
+    lowNoise: "wan_low.safetensors",
+    textEncoder: "umt5.safetensors",
+    vae: "wan_vae.safetensors",
+  };
+  const VID_HISTORY = { p1: { outputs: { "113": { images: [{ filename: "vid.webp", subfolder: "", type: "output" }] } } } };
+  const routes = (): Record<string, Route> => ({
+    "/prompt": res({ prompt_id: "p1" }),
+    "/history/p1": res(VID_HISTORY),
+    "/view": bytesRes(new Uint8Array([1]).buffer),
+    "/free": res({}),
+  });
+
+  it("frees the video model after a single clip (keepResident unset)", async () => {
+    const { transport, urls } = routedTransport(routes());
+    const backend = new ComfyUIBackend({ baseUrl: BASE, transport, pollIntervalMs: 0 });
+    const out = await backend.generateVideo({ prompt: "pan across the valley" }, wanModels);
+    expect(out.mimeType).toBe("image/webp"); // extension-derived MIME (SaveAnimatedWEBP)
+    // The large video model is handed back so a chat LLM can reload.
+    expect(urls()).toContain(`${BASE}/free`);
+  });
+
+  it("keeps the model resident between clips (keepResident: true skips the post-render /free)", async () => {
+    const { transport, urls } = routedTransport(routes());
+    const backend = new ComfyUIBackend({ baseUrl: BASE, transport, pollIntervalMs: 0 });
+    await backend.generateVideo({ prompt: "next clip continues the motion", keepResident: true }, wanModels);
+    // No /free — the orchestrator keeps the ~30 GB model loaded and frees ONCE after the last clip.
+    expect(urls()).not.toContain(`${BASE}/free`);
   });
 });

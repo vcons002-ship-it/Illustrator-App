@@ -41,6 +41,18 @@ describe("applyFileEdits", () => {
     expect(r.applied).toBe(2);
   });
 
+  it("inserts the replacement VERBATIM even when it contains $-substitution sequences", () => {
+    // String.replace treats `$&`, `` $` ``, `$'`, `$$`, `$1` in a STRING replacement as substitution
+    // patterns — a model-supplied replacement using those (regex code, shell/awk snippets, prices) would
+    // be corrupted. The function-form replacer inserts the text literally, so every `$…` survives.
+    const r = applyFileEdits("const price = OLD;", [{ search: "OLD", replace: "$& $` $' $$ $1 $100" }]);
+    expect(r.content).toBe("const price = $& $` $' $$ $1 $100;");
+    expect(r.applied).toBe(1);
+    // `$&` would otherwise re-insert the whole match; confirm it stays the two literal characters.
+    const amp = applyFileEdits("X", [{ search: "X", replace: "[$&]" }]);
+    expect(amp.content).toBe("[$&]");
+  });
+
   it("summarizeFileEdits: clean vs failures", () => {
     expect(summarizeFileEdits("a.ts", { content: "", applied: 2, failures: [] })).toContain("applied 2 edit");
     const s = summarizeFileEdits("a.ts", { content: "", applied: 1, failures: [{ index: 1, search: "x", reason: "ambiguous" }] });

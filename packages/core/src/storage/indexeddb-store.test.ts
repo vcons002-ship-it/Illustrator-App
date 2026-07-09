@@ -198,6 +198,25 @@ describe("IndexedDbStore backup export/import", () => {
     expect(await restored.getImage("a:p0")).toBeUndefined(); // images stayed out of the backup
   });
 
+  it("encodes only a typed-array SUBVIEW's own bytes (byteOffset/byteLength), not the whole buffer", async () => {
+    const store = new IndexedDbStore();
+    // A 3-byte window over a larger backing buffer (byteOffset 3) — the classic subarray view. The
+    // structured clone into IndexedDB preserves the offset + the full backing buffer, so encoding via
+    // `.buffer` alone would smuggle the foreign 9s into the backup.
+    const backing = new Uint8Array([9, 9, 9, 1, 2, 3, 9, 9]);
+    const sub = backing.subarray(3, 6);
+    await store.putImageBlob("a", "sub", sub as unknown as ArrayBuffer, "image/png");
+
+    const wire = JSON.parse(JSON.stringify(await store.exportData())) as StoreBackup;
+
+    vi.stubGlobal("indexedDB", new IDBFactory());
+    const restored = new IndexedDbStore();
+    await restored.importData(wire);
+    const blob = await restored.getImageBlob("a", "sub");
+    // Just the subview window survives the round-trip — no foreign bytes from the shared buffer.
+    expect(new Uint8Array(blob!.bytes)).toEqual(new Uint8Array([1, 2, 3]));
+  });
+
   it("importData merges into existing data (same-key records overwritten, others kept)", async () => {
     const donor = new IndexedDbStore();
     await donor.putMemo("clobber", "new");

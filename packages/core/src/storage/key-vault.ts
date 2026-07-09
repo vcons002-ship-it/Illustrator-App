@@ -56,8 +56,20 @@ async function loadOrGenerateKey(): Promise<CryptoKey> {
     if (existing) return existing;
     // Non-extractable: stored in IndexedDB via structured clone, never exportable.
     const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
-    await idb(db, "readwrite", (store) => store.put(key, KEY_ID));
-    return key;
+    // Persist with `add` (insert-only), NOT `put` (upsert): a get→generate→put race across contexts
+    // (the page + the engine worker + the extension SW all run this) could each generate a fresh key
+    // and clobber the others' — so a secret encrypted under one key becomes undecryptable once another
+    // context overwrites it. `add` makes exactly ONE writer win: the loser hits a ConstraintError,
+    // re-reads the winner's key, and everyone converges on the same key.
+    try {
+      await idb(db, "readwrite", (store) => store.add(key, KEY_ID));
+      return key;
+    } catch (err) {
+      if ((err as DOMException | null)?.name !== "ConstraintError") throw err;
+      const winner = await idb<CryptoKey>(db, "readonly", (store) => store.get(KEY_ID));
+      if (winner) return winner;
+      throw err; // the row vanished between add and re-get — genuinely broken, surface it
+    }
   } finally {
     db.close();
   }

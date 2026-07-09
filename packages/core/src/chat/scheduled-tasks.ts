@@ -61,6 +61,15 @@ function addDays(d: Date, n: number): Date {
   x.setDate(x.getDate() + n);
   return x;
 }
+/** A date at `dom` (day-of-month) in year/month, at `time`, with `dom` CLAMPED to that month's real last
+ * day. `new Date(y, m, 31)` silently OVERFLOWS a 30-day month (Sep 31 → Oct 1) / February (Feb 31 → Mar 3),
+ * which would make a day-31 monthly schedule skip the short months entirely. Clamping instead fires it on
+ * the month's LAST day (Sep 30, Feb 28/29) and — because the stored dayOfMonth is unchanged — the following
+ * long month still fires on the 31st. `new Date(y, m+1, 0)` is day 0 of the next month = this month's last. */
+function atDayOfMonth(year: number, month: number, dom: number, time: string): Date {
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  return atTime(new Date(year, month, Math.min(dom, lastDay)), time);
+}
 
 /**
  * The next datetime (strictly after `from`) a recurring task should run, per its rule +
@@ -79,10 +88,11 @@ export function nextDue(task: Pick<ScheduledTask, "rule" | "time" | "weekday" | 
     if (delta === 0 && atTime(from, time) <= from) delta = 7;
     return atTime(addDays(from, delta), time);
   }
-  // monthly
+  // monthly — clamp the day to each target month's length (see atDayOfMonth) so a day-29/30/31 schedule
+  // fires on a short month's LAST day instead of overflowing into the next month.
   const dom = task.dayOfMonth ?? from.getDate();
-  const thisMonth = atTime(new Date(from.getFullYear(), from.getMonth(), dom), time);
-  return thisMonth > from ? thisMonth : atTime(new Date(from.getFullYear(), from.getMonth() + 1, dom), time);
+  const thisMonth = atDayOfMonth(from.getFullYear(), from.getMonth(), dom, time);
+  return thisMonth > from ? thisMonth : atDayOfMonth(from.getFullYear(), from.getMonth() + 1, dom, time);
 }
 
 /** Normalise/cap a partial task into a stored ScheduledTask, computing its first due time. */

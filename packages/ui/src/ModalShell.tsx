@@ -2,6 +2,40 @@ import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import { modalCardStyle, modalOverlayStyle } from "./tokens.js";
 
 /**
+ * Module-level stack of the currently-mounted shells (most-recently-mounted last). `aria-modal` claims
+ * the background is inert, so for stacked shells only the top-most may respond to a single Escape — and
+ * only the top-most traps Tab. Each shell registers a unique token; the handlers act only when their
+ * token is on top.
+ */
+const openShellStack: symbol[] = [];
+
+/** Focusable descendants of the card, in DOM order, that a real Tab press would visit. */
+function focusablesIn(root: HTMLElement | null): HTMLElement[] {
+  if (!root) return [];
+  const sel =
+    'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
+  return Array.from(root.querySelectorAll<HTMLElement>(sel)).filter(
+    (el) => el.offsetParent !== null || el === document.activeElement,
+  );
+}
+
+/**
+ * Pure focus-trap decision: given the card's focusables (DOM order), the currently-focused element, and
+ * whether Shift is held, return the element Tab should wrap to — or `null` to let the browser move focus
+ * normally (no wrap needed). Exported so the wrap-around logic is unit-testable without a DOM. `active`
+ * outside the list (e.g. the card itself, or the page) is treated as "focus is leaving" → wrap to the
+ * edge Tab would re-enter from.
+ */
+export function nextTrapFocus<T>(focusables: readonly T[], active: T | null, shiftKey: boolean): T | null {
+  if (focusables.length === 0) return null;
+  const first = focusables[0]!;
+  const last = focusables[focusables.length - 1]!;
+  const inList = active != null && focusables.includes(active);
+  if (shiftKey) return !inList || active === first ? last : null;
+  return !inList || active === last ? first : null;
+}
+
+/**
  * Shared overlay+card wrapper for the centered modals — owns the accessibility
  * contract the hand-rolled overlays lacked: role="dialog"/aria-modal with the
  * dialog named from `title`, Escape to close, focus moved into the card on mount
@@ -43,17 +77,48 @@ export function ModalShell({
   // would re-steal focus from whatever field the user tabbed into).
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  // Stable per-mount token for this shell's slot in the open-shell stack.
+  const tokenRef = useRef<symbol | null>(null);
+  tokenRef.current ??= Symbol("modal-shell");
   useEffect(() => {
+    const token = tokenRef.current!;
+    openShellStack.push(token);
+    const isTop = (): boolean => openShellStack[openShellStack.length - 1] === token;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // Only take focus when nothing inside the card claimed it already (an autoFocus
     // input must win, or the modal would steal its own field's focus).
     if (!cardRef.current?.contains(document.activeElement)) cardRef.current?.focus();
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") onCloseRef.current?.();
+      if (!isTop()) return; // stacked: only the top-most shell handles keys
+      if (e.key === "Escape") {
+        // An inner control (an inline-edit input cancelling just its edit) may have already handled
+        // this Escape — respect that and don't also close the whole dialog.
+        if (e.defaultPrevented) return;
+        onCloseRef.current?.();
+        return;
+      }
+      if (e.key === "Tab") {
+        // Real focus trap: `aria-modal` says the background is inert, so Tab/Shift+Tab must wrap within
+        // the card (the non-dismissable wizard especially must never let focus escape to the page).
+        const focusables = focusablesIn(cardRef.current);
+        if (focusables.length === 0) {
+          e.preventDefault();
+          cardRef.current?.focus();
+          return;
+        }
+        const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        const target = nextTrapFocus(focusables, active, e.shiftKey);
+        if (target) {
+          e.preventDefault();
+          target.focus();
+        }
+      }
     };
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
+      const i = openShellStack.indexOf(token);
+      if (i >= 0) openShellStack.splice(i, 1);
       opener?.focus();
     };
   }, []);

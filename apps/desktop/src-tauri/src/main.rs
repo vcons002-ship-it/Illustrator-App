@@ -589,6 +589,44 @@ fn is_private_host(host: &str) -> bool {
 /// the Text settings offer. Everything else private is refused (see `http_fetch_blocking`).
 const LOCAL_ENGINE_PORTS: &[u16] = &[ENGINE_PORT, A1111_PORT, LLM_PORT, 11434, 1234];
 
+/// True ONLY for this machine's own loopback (127.0.0.0/8, ::1, an IPv4-mapped loopback, and the
+/// `localhost` family) — NOT the rest of the private range. The `LOCAL_ENGINE_PORTS` exemption keys
+/// off this, so a private-but-routable LAN host (a co-worker's Ollama / LM Studio) gets NO exemption
+/// even on an engine port. The app's own engines all run on 127.0.0.1, so loopback keeps them reachable.
+fn is_loopback_host(host: &str) -> bool {
+    let h = host.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+    if h == "localhost" || h.ends_with(".localhost") {
+        return true;
+    }
+    match h.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => v4.is_loopback(),
+        Ok(std::net::IpAddr::V6(v6)) => {
+            v6.is_loopback() || v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+        }
+        Err(_) => false,
+    }
+}
+
+/// SSRF guard for ONE fetch target — the initial URL AND every redirect hop (see the manual redirect
+/// loop in `http_fetch_blocking`). A model-driven fetch must not pivot to local/private addresses
+/// (cloud metadata at 169.254.169.254, a router panel, local daemons). The sole exception is the
+/// app's own local-inference engines on the known `LOCAL_ENGINE_PORTS` — and ONLY on loopback, so the
+/// exemption can't be aimed at a LAN peer's engine on the same port.
+fn guard_fetch_target(url: &reqwest::Url) -> Result<(), String> {
+    let Some(host) = url.host_str() else {
+        return Ok(());
+    };
+    if !is_private_host(host) {
+        return Ok(());
+    }
+    let engine_port =
+        url.port_or_known_default().is_some_and(|p| LOCAL_ENGINE_PORTS.contains(&p));
+    if engine_port && is_loopback_host(host) {
+        return Ok(());
+    }
+    Err("blocked: this proxy can't reach local/private addresses".into())
+}
+
 /// Flatten an error + its source chain into one message, so a wrapped transport failure surfaces its
 /// real cause (e.g. "error sending request for url (…) — error trying to connect — Connection
 /// refused") instead of just the opaque top line.
@@ -629,11 +667,7 @@ fn http_fetch_blocking(req: HttpFetchRequest) -> Result<HttpFetchResult, String>
     // the `is_local_target` no_proxy branch below exists — so private targets stay reachable on
     // the known local-inference ports only; every other private target is refused.
     let parsed = reqwest::Url::parse(&req.url).map_err(|e| e.to_string())?;
-    if parsed.host_str().is_some_and(is_private_host)
-        && !parsed.port_or_known_default().is_some_and(|p| LOCAL_ENGINE_PORTS.contains(&p))
-    {
-        return Err("blocked: this proxy can't reach local/private addresses".into());
-    }
+    guard_fetch_target(&parsed)?;
     // A real User-Agent is REQUIRED by some hosts: Wikimedia (the keyless image/
     // figure search) returns 403 to a client with none, and reqwest built with
     // default-features=false sends no default UA. The browser/extension paths get
@@ -641,6 +675,10 @@ fn http_fetch_blocking(req: HttpFetchRequest) -> Result<HttpFetchResult, String>
     // 403s. A request that carries its own User-Agent header still overrides this.
     let mut client_builder = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
+        // Follow redirects MANUALLY (loop below) instead of letting reqwest chase them: its own
+        // follower re-runs no SSRF guard, so a public page could 302 → 127.0.0.1:PORT / 169.254.169.254
+        // and defeat the up-front check. `Policy::none()` returns the 3xx so we re-guard each hop.
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent("VisualReader/1.0 (https://github.com/vcons002-ship-it/illustrator-app)");
     // A self-hosted engine on this machine/LAN must bypass any system/env proxy (see is_local_target).
     if is_local_target(&req.url) {
@@ -649,14 +687,44 @@ fn http_fetch_blocking(req: HttpFetchRequest) -> Result<HttpFetchResult, String>
     let client = client_builder.build().map_err(|e| e.to_string())?;
     let method =
         reqwest::Method::from_bytes(req.method.as_bytes()).map_err(|e| e.to_string())?;
-    let mut builder = client.request(method, &req.url);
-    for (name, value) in &req.headers {
-        builder = builder.header(name, value);
-    }
-    if let Some(b64) = &req.body_base64 {
-        builder = builder.body(engine.decode(b64).map_err(|e| e.to_string())?);
-    }
-    let mut resp = builder.send().map_err(|e| err_with_sources(&e))?;
+    // Decode the request body once (re-sent verbatim on each redirect hop).
+    let body = match &req.body_base64 {
+        Some(b64) => Some(engine.decode(b64).map_err(|e| e.to_string())?),
+        None => None,
+    };
+    // Bounded manual redirect loop (max 5 hops). Some legitimate hosts DO redirect (Wikimedia upload,
+    // Hugging Face), so we follow — but each `Location` is re-parsed (relative ones joined against the
+    // CURRENT url) and re-run through the SAME private-host guard before it's followed, so a redirect
+    // can never reach a target the guard would have refused up front.
+    let mut current = parsed;
+    let mut redirects = 0u8;
+    let mut resp = loop {
+        let mut builder = client.request(method.clone(), current.clone());
+        for (name, value) in &req.headers {
+            builder = builder.header(name, value);
+        }
+        if let Some(bytes) = &body {
+            builder = builder.body(bytes.clone());
+        }
+        let resp = builder.send().map_err(|e| err_with_sources(&e))?;
+        if resp.status().is_redirection() {
+            if let Some(loc) = resp.headers().get(reqwest::header::LOCATION) {
+                if redirects >= 5 {
+                    return Err("Too many redirects (max 5).".into());
+                }
+                redirects += 1;
+                let loc = loc.to_str().map_err(|e| e.to_string())?.to_string();
+                let next = current.join(&loc).map_err(|e| e.to_string())?;
+                if !matches!(next.scheme(), "http" | "https") {
+                    return Err("blocked: redirect to a non-http(s) URL".into());
+                }
+                guard_fetch_target(&next)?;
+                current = next;
+                continue;
+            }
+        }
+        break resp;
+    };
     let status = resp.status();
     let mut headers = std::collections::HashMap::new();
     for (name, value) in resp.headers() {
@@ -954,7 +1022,8 @@ fn mcp_stdio_blocking(req: McpStdioRequest) -> Result<Vec<String>, String> {
             Ok(lines)
         }
         Err(_) => {
-            let _ = child.kill();
+            // Reap the whole process tree — an MCP server may itself have spawned children.
+            kill_tree(&mut child);
             Err("the MCP server timed out (no response in 30s)".into())
         }
     }
@@ -973,6 +1042,22 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
+/// Cap concurrent WebSocket peers on the internet-exposable relay: an unauthenticated flood must not
+/// exhaust memory/handles before the token check runs. Phone pairing needs only a couple of peers.
+const MAX_RELAY_WS_CONNS: usize = 32;
+/// Per-message size limit for relay frames — well above any legitimate control-JSON/payload frame,
+/// far below tokio-tungstenite's 64 MB default, so a pre-auth peer can't buffer a giant frame.
+const RELAY_MAX_WS_MSG_BYTES: usize = 4 * 1024 * 1024;
+
+/// RAII counter for live relay WS connections — decrements on drop so a dropped/aborted task frees
+/// its slot (see `MAX_RELAY_WS_CONNS`).
+struct RelayConnGuard(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+impl Drop for RelayConnGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// The relay loop: accept connections, classify each (peek the request bytes) as either a
 /// WebSocket upgrade (authorize by the pairing token, then relay frames between peers) or a
 /// plain HTTP GET (serve the bundled web app so the phone can LOAD it from this same port —
@@ -988,6 +1073,8 @@ async fn run_remote_server(
     let listener = tokio::net::TcpListener::bind(&bind).await.map_err(|e| e.to_string())?;
     let (tx, _rx) = tokio::sync::broadcast::channel::<(u64, String)>(256);
     let mut next_id: u64 = 0;
+    // Live WS-peer count (see MAX_RELAY_WS_CONNS) — HTTP asset requests aren't counted (they're short).
+    let conns = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     loop {
         let (stream, _addr) = tokio::select! {
             _ = stop.notified() => return Ok(()),
@@ -1010,13 +1097,27 @@ async fn run_remote_server(
             });
             continue;
         }
+        // Enforce the concurrent-peer cap BEFORE upgrading, so a flood is dropped cheaply.
+        use std::sync::atomic::Ordering;
+        if conns.fetch_add(1, Ordering::SeqCst) >= MAX_RELAY_WS_CONNS {
+            conns.fetch_sub(1, Ordering::SeqCst);
+            continue;
+        }
+        let conn_guard = RelayConnGuard(conns.clone());
         let peer_id = next_id;
         next_id += 1;
         let tx = tx.clone();
         let mut rx = tx.subscribe();
         let token = token.clone();
         tauri::async_runtime::spawn(async move {
-            let ws = match tokio_tungstenite::accept_async(stream).await {
+            // Held for the connection's lifetime; frees the slot on drop (normal exit or abort).
+            let _conn_guard = conn_guard;
+            // Bound each frame's size so a pre-auth peer can't buffer a huge message (tungstenite's
+            // default is 64 MB).
+            let mut ws_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
+            ws_config.max_message_size = Some(RELAY_MAX_WS_MSG_BYTES);
+            ws_config.max_frame_size = Some(RELAY_MAX_WS_MSG_BYTES);
+            let ws = match tokio_tungstenite::accept_async_with_config(stream, Some(ws_config)).await {
                 Ok(ws) => ws,
                 Err(_) => return,
             };
@@ -1035,8 +1136,15 @@ async fn run_remote_server(
                                     .ok()
                                     .and_then(|v| v.get("token").and_then(|t| t.as_str()).map(|s| ct_eq(s.as_bytes(), token.as_bytes())))
                                     .unwrap_or(false);
-                                if !ok { break; }
+                                if !ok {
+                                    // Small fixed delay before dropping a bad-token peer, to blunt online
+                                    // brute-forcing over the tunnel (the ct_eq compare above stays constant-time).
+                                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                                    break;
+                                }
                                 authorized = true;
+                                // The auth frame carries the pairing token — never relay it to peers.
+                                continue;
                             }
                             // Relay this peer's frame to the others.
                             let _ = tx.send((peer_id, txt));
@@ -1132,8 +1240,11 @@ async fn serve_http_asset(mut stream: tokio::net::TcpStream, app: &AppHandle) {
     } else {
         "no-cache"
     };
+    // No `Access-Control-Allow-Origin: *`: the SPA loads from THIS origin (the relay port), so its
+    // asset/API fetches are same-origin and need no CORS grant — and a wildcard would needlessly let
+    // any other web page read responses from this internet-exposable server.
     let header = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nCache-Control: {cache}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nCache-Control: {cache}\r\nConnection: close\r\n\r\n",
         body.len()
     );
     let _ = stream.write_all(header.as_bytes()).await;
@@ -1455,6 +1566,50 @@ fn resolve_approved_cwd(app: &AppHandle, cwd: Option<String>) -> Result<Option<P
         Some(_) => Err(OUTSIDE_APPROVED_ROOTS.to_string()),
         None => Ok(None),
     }
+}
+
+/// Validate an ffmpeg path operand (an `-i <input>` or the final output) against the approved roots.
+/// Relative operands resolve against `cwd` (itself already approved via `resolve_approved_cwd`). An
+/// input clip already exists → validated directly by `is_approved_path`. The output usually does NOT
+/// exist yet, so we canonicalize its PARENT (resolving `..`/symlinks / 8.3 aliases) and confirm the
+/// resolved location sits under a root — mirroring `is_approved_path`, which requires the file to exist.
+fn is_approved_ffmpeg_operand(app: &AppHandle, cwd: &Path, operand: &str) -> bool {
+    let raw = Path::new(operand);
+    let full = if raw.is_absolute() { raw.to_path_buf() } else { cwd.join(raw) };
+    if full.exists() {
+        return is_approved_path(app, &full);
+    }
+    let (Some(parent), Some(name)) = (full.parent(), full.file_name()) else {
+        return false;
+    };
+    let Ok(real_parent) = std::fs::canonicalize(parent) else {
+        return false;
+    };
+    let candidate = real_parent.join(name);
+    let roots = approved_roots(app).lock().unwrap();
+    roots.iter().any(|root| {
+        let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
+        candidate.starts_with(&root)
+    })
+}
+
+/// The path operands an ffmpeg argv touches: the token after every `-i` (inputs) and the final arg
+/// (the output — how `buildConcatArgs`/`buildLastFrameArgs` in packages/core always shape it). Flags,
+/// filter strings and numeric options are left alone; only these operands are roots-checked.
+fn ffmpeg_path_operands(args: &[String]) -> Vec<&str> {
+    let mut ops = Vec::new();
+    let mut it = args.iter().enumerate().peekable();
+    while let Some((i, a)) = it.next() {
+        if a == "-i" {
+            if let Some((_, next)) = it.peek() {
+                ops.push(next.as_str());
+            }
+        } else if i == args.len() - 1 && !a.starts_with('-') {
+            // The final operand is the output path (never a flag in the app-built argv).
+            ops.push(a.as_str());
+        }
+    }
+    ops
 }
 
 #[derive(Serialize)]
@@ -1948,7 +2103,10 @@ async fn run_command(
                 Ok(Some(st)) => break st,
                 Ok(None) => {
                     if Instant::now() >= deadline {
-                        let _ = child.kill();
+                        // Reap the whole tree, not just the shell/ffmpeg parent, so a spawned child
+                        // (a GPU-holding process) can't orphan on timeout. kill_tree also wait()s;
+                        // the cached status is returned by the wait() below.
+                        kill_tree(&mut child);
                         timed_out = true;
                         break child.wait().map_err(|e| e.to_string())?;
                     }
@@ -2211,11 +2369,9 @@ async fn run_ffmpeg(app: AppHandle, args: Vec<String>, cwd: Option<String>) -> R
         let bin = resolve_ffmpeg(&app).ok_or_else(|| {
             "ffmpeg not found — install ffmpeg and add it to your PATH (it's needed to stitch the clips into one video).".to_string()
         })?;
-        let dir = match cwd
-            .filter(|c| !c.is_empty())
-            .map(std::path::PathBuf::from)
-            .filter(|p| p.is_dir())
-        {
+        // Gate the cwd through the approved roots, exactly like run_command (default: the sandbox
+        // workspace when none/not-a-dir is given).
+        let dir = match resolve_approved_cwd(&app, cwd)? {
             Some(p) => p,
             None => {
                 let d = workspace_dir(&app);
@@ -2223,6 +2379,14 @@ async fn run_ffmpeg(app: AppHandle, args: Vec<String>, cwd: Option<String>) -> R
                 d
             }
         };
+        // These args come from the app (not the model), but validate the file operands anyway so a
+        // compromised caller can't make ffmpeg read/write outside the roots (or reach a URL via an
+        // ffmpeg protocol handler): every `-i <input>` and the output path must be approved.
+        for operand in ffmpeg_path_operands(&args) {
+            if !is_approved_ffmpeg_operand(&app, &dir, operand) {
+                return Err(format!("{OUTSIDE_APPROVED_ROOTS} (ffmpeg path: {operand})"));
+            }
+        }
         let mut cmd = quiet_command(&bin);
         cmd.args(&args).current_dir(&dir).stdout(Stdio::piped()).stderr(Stdio::piped());
         let mut child = cmd.spawn().map_err(|e| format!("Couldn't start ffmpeg: {e}"))?;
@@ -2252,7 +2416,10 @@ async fn run_ffmpeg(app: AppHandle, args: Vec<String>, cwd: Option<String>) -> R
                 Ok(Some(st)) => break st,
                 Ok(None) => {
                     if Instant::now() >= deadline {
-                        let _ = child.kill();
+                        // Reap the whole tree, not just the shell/ffmpeg parent, so a spawned child
+                        // (a GPU-holding process) can't orphan on timeout. kill_tree also wait()s;
+                        // the cached status is returned by the wait() below.
+                        kill_tree(&mut child);
                         timed_out = true;
                         break child.wait().map_err(|e| e.to_string())?;
                     }
@@ -2310,6 +2477,28 @@ fn git(dir: &str, args: &[&str]) -> Result<CommandResult, String> {
         timed_out: false,
         cwd: dir.to_string(),
     })
+}
+
+/// The app-managed agent-worktree base (temp_dir/vr-agents) — app-created, so paths under it are
+/// trusted for the worktree git_* commands even though they sit OUTSIDE the approved roots.
+fn agent_worktree_base() -> PathBuf {
+    std::env::temp_dir().join("vr-agents")
+}
+
+/// May a git_* command run against `dir`? Allowed when `dir` is inside an approved root (the picked
+/// session folder / workspace) OR inside the app's own agent-worktree base — but NOT an arbitrary
+/// caller-supplied repo (e.g. the user's real project), which a prompt-injected flow could otherwise
+/// commit into, read via `git show`, or have branches deleted from. Canonicalized both sides so
+/// `..`/symlinks can't dodge the check.
+fn is_git_dir_allowed(app: &AppHandle, dir: &str) -> bool {
+    let p = Path::new(dir);
+    if is_approved_path(app, p) {
+        return true;
+    }
+    match (std::fs::canonicalize(p), std::fs::canonicalize(agent_worktree_base())) {
+        (Ok(real), Ok(base)) => real.starts_with(&base),
+        _ => false,
+    }
 }
 
 /// The repo root for `dir`, or None when it isn't inside a git repo.
@@ -2409,8 +2598,11 @@ async fn git_worktree_create(repo_dir: String, branch: String) -> Result<Worktre
 /// Stage + commit everything in `dir` (an agent's worktree, or the base after a conflict
 /// resolution). `--allow-empty` so it never errors when there's nothing to commit.
 #[tauri::command]
-async fn git_commit_all(dir: String, message: String) -> Result<CommandResult, String> {
+async fn git_commit_all(app: AppHandle, dir: String, message: String) -> Result<CommandResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        if !is_git_dir_allowed(&app, &dir) {
+            return Err(OUTSIDE_APPROVED_ROOTS.to_string());
+        }
         git(&dir, &["add", "-A"])?;
         git(&dir, &["commit", "--allow-empty", "-m", &message])
     })
@@ -2420,8 +2612,11 @@ async fn git_commit_all(dir: String, message: String) -> Result<CommandResult, S
 
 /// A worktree branch's diff against `base` (name-stat summary + full patch).
 #[tauri::command]
-async fn git_worktree_diff(path: String, base: String) -> Result<String, String> {
+async fn git_worktree_diff(app: AppHandle, path: String, base: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        if !is_git_dir_allowed(&app, &path) {
+            return Err(OUTSIDE_APPROVED_ROOTS.to_string());
+        }
         let range = format!("{base}...HEAD");
         let stat = git(&path, &["diff", &range, "--stat"])?;
         let full = git(&path, &["diff", &range])?;
@@ -2434,8 +2629,11 @@ async fn git_worktree_diff(path: String, base: String) -> Result<String, String>
 /// Merge an agent branch into the current base (no-ff). Returns the raw git output; the
 /// caller parses "CONFLICT (…): Merge conflict in <file>" lines to detect conflicts.
 #[tauri::command]
-async fn git_merge_branch(repo_dir: String, branch: String) -> Result<CommandResult, String> {
+async fn git_merge_branch(app: AppHandle, repo_dir: String, branch: String) -> Result<CommandResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        if !is_git_dir_allowed(&app, &repo_dir) {
+            return Err(OUTSIDE_APPROVED_ROOTS.to_string());
+        }
         git(&repo_dir, &["merge", "--no-ff", "--no-edit", &branch])
     })
     .await
@@ -2460,8 +2658,11 @@ struct ConflictVersions {
 /// The three merge stages of a conflicted file (:1: base, :2: ours, :3: theirs) — fed to the
 /// manager model to auto-resolve. A missing stage (add/delete conflict) yields an empty string.
 #[tauri::command]
-async fn git_conflict_versions(repo_dir: String, file: String) -> Result<ConflictVersions, String> {
+async fn git_conflict_versions(app: AppHandle, repo_dir: String, file: String) -> Result<ConflictVersions, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        if !is_git_dir_allowed(&app, &repo_dir) {
+            return Err(OUTSIDE_APPROVED_ROOTS.to_string());
+        }
         let stage = |n: u8| git(&repo_dir, &["show", &format!(":{n}:{file}")]).map(|r| r.stdout).unwrap_or_default();
         Ok(ConflictVersions { base: stage(1), ours: stage(2), theirs: stage(3) })
     })
@@ -2474,8 +2675,11 @@ async fn git_conflict_versions(repo_dir: String, file: String) -> Result<Conflic
 /// markers (`git diff --cached --check`) — only then commit. So a bad auto-resolution can never be
 /// committed; the caller aborts the merge on a non-zero code.
 #[tauri::command]
-async fn git_complete_merge(repo_dir: String, message: String) -> Result<CommandResult, String> {
+async fn git_complete_merge(app: AppHandle, repo_dir: String, message: String) -> Result<CommandResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        if !is_git_dir_allowed(&app, &repo_dir) {
+            return Err(OUTSIDE_APPROVED_ROOTS.to_string());
+        }
         git(&repo_dir, &["add", "-A"])?;
         let unmerged = git(&repo_dir, &["ls-files", "-u"])?;
         if !unmerged.stdout.trim().is_empty() {
@@ -2493,8 +2697,11 @@ async fn git_complete_merge(repo_dir: String, message: String) -> Result<Command
 
 /// Remove an agent worktree + delete its branch (best-effort cleanup after merge).
 #[tauri::command]
-async fn git_worktree_remove(repo_dir: String, path: String, branch: String) -> Result<(), String> {
+async fn git_worktree_remove(app: AppHandle, repo_dir: String, path: String, branch: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
+        if !is_git_dir_allowed(&app, &repo_dir) {
+            return Err(OUTSIDE_APPROVED_ROOTS.to_string());
+        }
         let _ = git(&repo_dir, &["worktree", "remove", "--force", &path]);
         let _ = git(&repo_dir, &["branch", "-D", &branch]);
         Ok(())
@@ -3208,7 +3415,72 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::is_private_host;
+    use super::{
+        ffmpeg_path_operands, guard_fetch_target, is_loopback_host, is_private_host,
+    };
+
+    fn guard(url: &str) -> Result<(), String> {
+        guard_fetch_target(&reqwest::Url::parse(url).unwrap())
+    }
+
+    #[test]
+    fn loopback_is_only_loopback() {
+        // Loopback: v4 (whole 127/8), v6, IPv4-mapped loopback, localhost family.
+        assert!(is_loopback_host("127.0.0.1"));
+        assert!(is_loopback_host("127.9.9.9"));
+        assert!(is_loopback_host("::1"));
+        assert!(is_loopback_host("[::1]"));
+        assert!(is_loopback_host("::ffff:127.0.0.1"));
+        assert!(is_loopback_host("localhost"));
+        assert!(is_loopback_host("app.localhost"));
+        // Private but NOT loopback — these must be rejected by the port exemption (S4).
+        assert!(!is_loopback_host("192.168.1.50"));
+        assert!(!is_loopback_host("10.0.0.7"));
+        assert!(!is_loopback_host("169.254.169.254"));
+        assert!(!is_loopback_host("printer.local"));
+        assert!(!is_loopback_host("8.8.8.8"));
+    }
+
+    #[test]
+    fn fetch_guard_allows_public_and_loopback_engines() {
+        // Public targets always pass.
+        assert!(guard("https://en.wikipedia.org/wiki/Rust").is_ok());
+        assert!(guard("http://93.184.216.34/").is_ok());
+        // The app's own engines on loopback engine ports stay reachable.
+        assert!(guard("http://127.0.0.1:8188/prompt").is_ok()); // ComfyUI
+        assert!(guard("http://127.0.0.1:7860/sdapi").is_ok()); // A1111
+        assert!(guard("http://localhost:11434/api").is_ok()); // Ollama on loopback
+    }
+
+    #[test]
+    fn fetch_guard_blocks_private_and_lan_engines() {
+        // Cloud metadata / router / arbitrary private targets.
+        assert!(guard("http://169.254.169.254/latest/meta-data/").is_err());
+        assert!(guard("http://192.168.1.1/").is_err());
+        // S4: an engine PORT on a private-but-routable LAN host is NOT exempt.
+        assert!(guard("http://192.168.1.50:11434/api").is_err());
+        assert!(guard("http://10.0.0.7:8188/prompt").is_err());
+        // Loopback but a non-engine port is still refused.
+        assert!(guard("http://127.0.0.1:22/").is_err());
+    }
+
+    #[test]
+    fn ffmpeg_operands_are_inputs_and_output() {
+        // buildLastFrameArgs shape.
+        let last = vec![
+            "-y".to_string(), "-sseof".into(), "-0.2".into(), "-i".into(),
+            "clips/clip_0.webp".into(), "-frames:v".into(), "1".into(), "clips/frame_0.png".into(),
+        ];
+        assert_eq!(ffmpeg_path_operands(&last), vec!["clips/clip_0.webp", "clips/frame_0.png"]);
+        // buildConcatArgs shape: two inputs + a filter string (must NOT be treated as a path) + output.
+        let concat = vec![
+            "-y".to_string(), "-i".into(), "a.webp".into(), "-i".into(), "b.mp4".into(),
+            "-filter_complex".into(), "[0:v]scale=768:512[v0];[v0]concat=n=1[out]".into(),
+            "-map".into(), "[out]".into(), "-pix_fmt".into(), "yuv420p".into(), "final.mp4".into(),
+        ];
+        assert_eq!(ffmpeg_path_operands(&concat), vec!["a.webp", "b.mp4", "final.mp4"]);
+    }
+
 
     #[test]
     fn private_hosts_are_classified() {

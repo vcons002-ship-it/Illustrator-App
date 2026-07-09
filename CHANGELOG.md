@@ -5,6 +5,36 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ## July 2026
 
+### Audit #2 fixes (reliability, security, video, UI)
+
+- **Long-form video is dramatically faster** — a bug meant the ~30 GB video model was unloaded and
+  reloaded from scratch between *every* clip (minutes of dead time per clip). Clips now keep the model
+  resident across the batch and free it once at the end, so a 10-clip render no longer pays ten full
+  reloads.
+- **Approved renders can't leak into the next chat** — if you hit Clear, switch sessions, or Stop
+  while an image/video/stitch was rendering, its result is now dropped instead of appearing in (and
+  driving a follow-up turn on) whichever conversation you moved to.
+- **Send a photo from your phone** — full-resolution phone photos were silently too big for the
+  desktop link and the send would just vanish; photos are now downscaled before they're relayed, so
+  "look at this picture" works from a linked phone.
+- **Phone + desktop no longer cross wires** — a linked phone and the desktop could collide on the same
+  internal request id, occasionally delivering a result to the wrong device; their id spaces are now
+  separated, and heavy renders the phone didn't ask for are no longer pushed down the link.
+- **Cloud extraction fails loud, not empty** — when a cloud model (Claude/Gemini) hit its token limit
+  mid-extraction, the app used to silently commit an empty result; it now reports the failure so the
+  chapter isn't quietly blanked.
+- **Deleting a chat message no longer scrambles the others** — a code card's run output, an inline
+  preview, or an enlarged image could jump onto the wrong message after a delete; messages now keep
+  their own state.
+- **Security hardening** — the web-fetch proxy now re-checks every redirect hop (so a public URL can't
+  bounce to your LAN), file/ffmpeg/git tools are confined to approved folders, the phone-link relay
+  has connection and message-size limits, and the Gemini API key is sent as a header instead of in the
+  URL.
+- **Smaller fixes** — "Clear" on a book chat now asks first (matching the assistant chat); the file
+  card's "⋯ More" menu closes after you pick something; the assistant chat scrolls to keep the newest
+  plan/step/thinking updates in view; the playground stops hanging forever if a render reply is lost;
+  monthly recurring tasks no longer skip a month on the 29th–31st.
+
 ### Assistant & UI
 
 - **App-managed checklists no longer get stuck mid-run** — when working an app-managed plan (e.g.

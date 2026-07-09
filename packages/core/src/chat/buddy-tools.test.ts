@@ -103,9 +103,14 @@ describe("parseBuddyToolCall — generate_long_video", () => {
       source: { kind: "last" },
       end: { kind: "file", ref: "C:/pics/b.png" },
     });
-    // Malformed end kinds fall back to "last"; a missing end stays absent.
-    expect(parseBuddyToolCall('{"tool":"generate_video","prompt":"m","end":{"kind":"text"}}')).toMatchObject({ end: { kind: "last" } });
+    // An UNUSABLE end (no ref to address a real image) is DROPPED, not coerced to {kind:"last"} — coercing
+    // made the end resolve to the same newest image as a defaulted source, i.e. a same-image no-op morph.
+    expect(parseBuddyToolCall('{"tool":"generate_video","prompt":"m","end":{"kind":"text"}}')).not.toHaveProperty("end");
+    expect(parseBuddyToolCall('{"tool":"generate_video","prompt":"m","end":{"kind":"library"}}')).not.toHaveProperty("end"); // library w/o ref
+    expect(parseBuddyToolCall('{"tool":"generate_video","prompt":"m","end":{}}')).not.toHaveProperty("end");
     expect(parseBuddyToolCall('{"tool":"generate_video","prompt":"m"}')).not.toHaveProperty("end");
+    // But a valid {kind:"last",ref} end is KEPT.
+    expect(parseBuddyToolCall('{"tool":"generate_video","prompt":"m","end":{"kind":"last","ref":"2"}}')).toMatchObject({ end: { kind: "last", ref: "2" } });
     // Two-upload addressing: "ref" survives on kind "last" for BOTH frames (filename or position),
     // so source and end can each name their own chat image instead of both resolving to the newest.
     expect(
@@ -139,6 +144,22 @@ describe("parseBuddyToolCall — generate_long_video", () => {
     expect(buildBuddySystemPrompt({ persona: "assistant", library: [], canGenerateVideo: true })).toContain('"tool":"stitch_videos"');
   });
 
+  it("rejects clip refs ffmpeg would read as a FLAG or a PROTOCOL (option/protocol injection)", () => {
+    // stitch_videos auto-runs and its refs flow into an ffmpeg command line, so a "-…" (parsed as a flag)
+    // or a "scheme:" ref (concat:/http:/pipe:/file:… — opens a protocol/demuxer, not a file) is dropped.
+    expect(parseBuddyToolCall('{"tool":"stitch_videos","clips":["-i","clip.mp4","clip2.mp4"]}')).toMatchObject({
+      clips: ["clip.mp4", "clip2.mp4"], // the leading-dash ref is stripped
+    });
+    expect(
+      parseBuddyToolCall('{"tool":"stitch_videos","clips":["concat:a.mp4|b.mp4","http://evil/x.mp4","file:///etc/passwd","pipe:0"]}'),
+    ).toBeUndefined(); // every ref is a protocol → fewer than 2 usable clips → dropped entirely
+    // Plain filenames, chat ids, and real paths (incl. a Windows drive letter) are KEPT — a drive letter
+    // is a single char before the colon, not a protocol scheme.
+    expect(parseBuddyToolCall('{"tool":"stitch_videos","clips":["vid-1.mp4","C:/clips/b.mp4"]}')).toMatchObject({
+      clips: ["vid-1.mp4", "C:/clips/b.mp4"],
+    });
+  });
+
   it("keeps the persistent subject anchor and teaches the continuity rules", () => {
     expect(
       parseBuddyToolCall('{"tool":"generate_long_video","subject":"a red vintage pickup truck","clips":["it accelerates"]}'),
@@ -151,6 +172,21 @@ describe("parseBuddyToolCall — generate_long_video", () => {
     const prompt = buildBuddySystemPrompt({ persona: "assistant", library: [], canGenerateVideo: true });
     expect(prompt).toContain("CONTINUITY RULES");
     expect(prompt).toContain("ALWAYS pass `subject`");
+  });
+  it("carries a {kind:'last',ref} source EXACTLY like generate_video (the ref used to be dropped)", () => {
+    // A "last" ref names a specific chat image ("2" = one-before-newest) to seed the FIRST clip. The old
+    // parser collapsed it to a bare {kind:"last"}, silently reseeding from the newest image instead.
+    expect(
+      parseBuddyToolCall('{"tool":"generate_long_video","clips":["it drives off"],"source":{"kind":"last","ref":"2"}}'),
+    ).toEqual({
+      tool: "generate_long_video",
+      clips: ["it drives off"],
+      source: { kind: "last", ref: "2" },
+    });
+    // A library/file ref still resolves; a bare "last" with no ref still defaults cleanly.
+    expect(parseBuddyToolCall('{"tool":"generate_long_video","clips":["x"],"source":{"kind":"library","ref":"bk1"}}')).toMatchObject({
+      source: { kind: "library", ref: "bk1" },
+    });
   });
   it("caps the clip count at 12 and marks the call truncated", () => {
     const many = Array.from({ length: 20 }, (_, i) => `shot ${i}`);
@@ -1467,6 +1503,24 @@ describe("parseBuddyToolCalls (batched tool calls)", () => {
   it("still parses a single object and ignores prose", () => {
     expect(parseBuddyToolCalls('{"tool":"search_web","query":"x"}')).toHaveLength(1);
     expect(parseBuddyToolCalls("just a normal sentence")).toEqual([]);
+  });
+
+  it("S5: a tool object QUOTED mid-sentence or shown as a display fence example does NOT execute", () => {
+    // The model explaining a tool — the JSON is embedded in prose (not at a line start, not trailing) —
+    // must NOT fire, or a description of draft_email would silently send/queue one.
+    expect(
+      parseBuddyToolCalls('You can email people by writing {"tool":"draft_email","to":["a@b.com"],"subject":"Hi","body":"yo"} and I run it.'),
+    ).toEqual([]);
+    // A DISPLAY code fence WITH prose after it (an example, not the model's own call) also doesn't fire.
+    expect(
+      parseBuddyToolCalls('Here is the shape:\n```json\n{"tool":"draft_email","to":["a@b.com"],"subject":"Hi","body":"yo"}\n```\nThat is how it works.'),
+    ).toEqual([]);
+    // But the intended positions STILL parse: a bare call, prose-then-trailing-call, a trailing fenced
+    // call, and a multi-line batch (regression guard for the tightening).
+    expect(parseBuddyToolCalls('{"tool":"search_web","query":"x"}')).toHaveLength(1);
+    expect(parseBuddyToolCalls('Let me look: {"tool":"search_web","query":"x"}')).toHaveLength(1);
+    expect(parseBuddyToolCalls('On it!\n```json\n{"tool":"search_web","query":"x"}\n```')).toHaveLength(1);
+    expect(parseBuddyToolCalls('{"tool":"list_tasks"}\n{"tool":"search_web","query":"x"}')).toHaveLength(2);
   });
 
   describe("native tool_calls (Ollama tools) → app text", () => {

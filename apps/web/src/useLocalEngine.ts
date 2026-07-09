@@ -446,11 +446,18 @@ export function useLocalEngine(deps: LocalEngineDeps) {
     engineStartingRef.current = start;
     try {
       const res = await start;
-      if (res.ok) applyEngineConfig(res.baseUrl, res.backend);
+      if (res.ok) {
+        applyEngineConfig(res.baseUrl, res.backend);
+        // The engine is up (via ANY backend — the A1111 branch resolves here too, not just
+        // startManagedEngine). Clear the deferred flag + the "Starting…" status, or every later
+        // standalone render would re-run the whole ensure/probe path and the banner would stick (H6).
+        engineDeferredRef.current = false;
+        setEngineStatus("");
+      }
     } finally {
       engineStartingRef.current = undefined;
     }
-  }, [startActiveLocalEngine, applyEngineConfig]);
+  }, [startActiveLocalEngine, applyEngineConfig, setEngineStatus]);
 
   // LOW-VRAM: when a book opens while the engine was deferred, start it now — a bible build needs it, and
   // the full start path rebuilds the book's persistent engine with the real URL (vs. the tune-only flush

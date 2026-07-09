@@ -57,6 +57,13 @@ export const TUNING_FIELDS = [
   "agentConcurrency",
   "subAgentServerUrl",
   "subAgentModel",
+  // Video is rendered host-side at video-render time (the book engine never reads these): the model,
+  // the per-kind render params (frames/fps/steps…), and the resolved model files. Switching the video
+  // model or nudging frames/fps while a book is open must NOT dispose the engine — that would abort the
+  // bible build and wipe the already-rendered illustrations for a setting the engine doesn't consult.
+  "videoModel",
+  "videoParams",
+  "videoFiles",
 ] as const satisfies readonly (keyof ReaderSettings)[];
 
 /** Settings the engine never needs at all (pure presentation / bookkeeping). */

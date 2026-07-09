@@ -1,4 +1,4 @@
-import type { BuddyPlan, BuddyToolCall, BuddyToolName, BuddyToolResultPayload } from "./buddy-tools.js";
+import { BUDDY_TOOL_NAMES, type BuddyPlan, type BuddyToolCall, type BuddyToolName, type BuddyToolResultPayload } from "./buddy-tools.js";
 
 /**
  * Compiled workflows — the "App-managed steps" engine.
@@ -98,8 +98,13 @@ export function needsToDoneWhen(needs: string | undefined): DoneWhen | undefined
   if (n === "generate_image") return { kind: "image" };
   if (n === "write_file") return { kind: "file" };
   if (n === "run_command") return { kind: "command_ok" };
-  // A bare tool name → require that tool to run without error.
-  return { kind: "tool_ok", tool: n as BuddyToolName };
+  // A bare tool name → require that tool to run without error — but ONLY when it names a REAL tool.
+  // An unrecognized token (e.g. "research", a topic word the model wrote in `needs`) must fall through
+  // to `undefined` so the caller runs `inferDoneWhen` on the instruction instead. Returning
+  // `tool_ok("research")` would compile a contract no evidence can EVER satisfy (no tool by that name
+  // ever runs), permanently wedging the step — the opposite of this function's documented fall-through.
+  if (BUDDY_TOOL_NAMES.has(n as BuddyToolName)) return { kind: "tool_ok", tool: n as BuddyToolName };
+  return undefined;
 }
 
 /** Heuristic fallback when a step declares no `needs`: read the instruction and guess the contract.
@@ -184,9 +189,20 @@ export function workflowFinished(wf: Workflow | undefined): boolean {
   return !!wf && !wf.steps.some((s) => s.status === "pending" || s.status === "active");
 }
 
-/** True when a tool of `name` ran this turn and didn't error. */
+/** True when a tool of `name` ran this turn and didn't error. Host tools report failure NESTED, not at
+ * the top level: a failed render/clip carries `{video:{ok:false}}`, a failed write `{writeFile:{ok:false}}`,
+ * a failed image `{image:{ok:false}}` — all with a top-level `error` absent. Checking only `!r.result.error`
+ * would call those SUCCESSES (the collar hole: a `tool_ok("generate_video")` step marked done off a failed
+ * render). So a match counts as success only when it has no top-level `error` AND no nested `ok:false`. */
 function toolSucceeded(evidence: StepEvidence, name: BuddyToolName): boolean {
-  return evidence.toolResults.some((r) => r.call.tool === name && !r.result.error);
+  return evidence.toolResults.some(
+    (r) =>
+      r.call.tool === name &&
+      !r.result.error &&
+      r.result.video?.ok !== false &&
+      r.result.writeFile?.ok !== false &&
+      r.result.image?.ok !== false,
+  );
 }
 
 /**

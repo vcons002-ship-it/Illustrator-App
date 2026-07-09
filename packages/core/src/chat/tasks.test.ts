@@ -362,7 +362,13 @@ describe("task plan store", () => {
     expect(describeRecurrence({ freq: "daily", interval: 1 })).toBe("every day"); // label
     expect(describeRecurrence({ freq: "weekly", interval: 2 })).toBe("every 2 weeks");
     expect(shiftIso("2026-07-01", { freq: "weekly", interval: 1 })).toBe("2026-07-08");
-    expect(shiftIso("2026-01-31", { freq: "monthly", interval: 1 })).toBe("2026-03-03"); // JS month roll
+    // Monthly from a day-31 date CLAMPS to the target month's last day instead of overflowing: Jan 31
+    // rolls to Feb 28 (2026 is not a leap year), never skipping into March.
+    expect(shiftIso("2026-01-31", { freq: "monthly", interval: 1 })).toBe("2026-02-28");
+    expect(shiftIso("2024-01-31", { freq: "monthly", interval: 1 })).toBe("2024-02-29"); // leap-year Feb
+    expect(shiftIso("2026-08-31", { freq: "monthly", interval: 1 })).toBe("2026-09-30"); // 30-day month
+    expect(shiftIso("2026-11-15", { freq: "monthly", interval: 1 })).toBe("2026-12-15"); // no clamp needed
+    expect(shiftIso("2026-12-31", { freq: "monthly", interval: 1 })).toBe("2027-01-31"); // year roll intact
 
     const weekly = plan({
       deadlineIso: "2026-07-01",

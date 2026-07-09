@@ -1,4 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { ModalShell } from "./ModalShell.js";
+
+/** How many tiles may hydrate (read + materialize their Blob) at once. Opening a 200-image gallery must
+ * not fire 200 parallel blob reads — the rest queue behind this cap as tiles scroll into view. */
+const MAX_CONCURRENT_HYDRATIONS = 4;
 
 /** A gallery entry, byte-free: the panel hydrates media lazily through `load` (keyed by `key`),
  * so opening the gallery never pulls every stored video into RAM at once. */
@@ -42,20 +47,50 @@ export function CreationsPanel({ items, load, onDelete, onStitch, onClose }: Cre
   const toggleSelected = (key: string) =>
     setSelected((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
   // One object-URL cache for the panel's lifetime: cards fill it as they hydrate, the lightbox and
-  // Download reuse it, and closing the panel revokes everything (the effect below).
+  // Download reuse it. Deleted items are revoked immediately (see `remove`); the rest on unmount.
   const [urls, setUrls] = useState<Record<string, string>>({});
-  const urlsRef = useRef(urls); // the unmount cleanup must see the LATEST map, not render #1's
+  const urlsRef = useRef(urls); // the unmount cleanup + delete-revoke must see the LATEST map
   urlsRef.current = urls;
+  // Keys whose bytes are missing/failed to load — so a tile shows "⚠ missing" and the lightbox shows a
+  // real error instead of an eternal "Loading…".
+  const [failed, setFailed] = useState<Record<string, true>>({});
   useEffect(() => {
     return () => {
       for (const u of Object.values(urlsRef.current)) URL.revokeObjectURL(u);
     };
-    // Revoke-on-unmount only — revoking mid-session would break mounted <img>/<video> tags.
+    // Revoke-on-unmount for whatever survived — revoking a still-mounted URL would break its <img>/<video>.
   }, []);
 
+  // Drop selections + object URLs for items the host has since deleted, so a stale key is never passed to
+  // onStitch and the deleted item's URL doesn't linger until panel close.
+  useEffect(() => {
+    const live = new Set(items.map((i) => i.key));
+    setSelected((prev) => {
+      const next = prev.filter((k) => live.has(k));
+      return next.length === prev.length ? prev : next;
+    });
+    setUrls((prev) => {
+      let changed = false;
+      const next: Record<string, string> = {};
+      for (const [k, u] of Object.entries(prev)) {
+        if (live.has(k)) next[k] = u;
+        else {
+          URL.revokeObjectURL(u);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [items]);
+
   const hydrate = async (card: CreationCard): Promise<string | undefined> => {
+    const existing = urlsRef.current[card.key];
+    if (existing) return existing; // already materialized — never re-read the same bytes
     const got = await load(card.key).catch(() => undefined);
-    if (!got) return undefined;
+    if (!got) {
+      setFailed((prev) => (prev[card.key] ? prev : { ...prev, [card.key]: true }));
+      return undefined;
+    }
     const url = URL.createObjectURL(new Blob([got.bytes], { type: got.mimeType || card.mimeType }));
     setUrls((prev) => {
       if (prev[card.key]) {
@@ -65,6 +100,23 @@ export function CreationsPanel({ items, load, onDelete, onStitch, onClose }: Cre
       return { ...prev, [card.key]: url };
     });
     return url;
+  };
+
+  // Concurrency-capped queue for scroll-in (lazy) hydrations. A direct click hydrates immediately (below);
+  // only the auto-hydrate-when-visible path funnels through here.
+  const gateRef = useRef<{ active: number; queue: (() => void)[] }>({ active: 0, queue: [] });
+  const requestHydrate = (card: CreationCard) => {
+    if (urlsRef.current[card.key] || failed[card.key]) return;
+    const g = gateRef.current;
+    const run = () => {
+      g.active++;
+      void hydrate(card).finally(() => {
+        g.active--;
+        g.queue.shift()?.();
+      });
+    };
+    if (g.active < MAX_CONCURRENT_HYDRATIONS) run();
+    else g.queue.push(run);
   };
 
   const download = async (card: CreationCard) => {
@@ -80,6 +132,15 @@ export function CreationsPanel({ items, load, onDelete, onStitch, onClose }: Cre
   const remove = (card: CreationCard) => {
     if (!window.confirm("Delete this creation? It's removed from the chat it appeared in too.")) return;
     setViewing((v) => (v?.key === card.key ? undefined : v));
+    // Revoke this item's object URL right away, not just on panel close.
+    const url = urlsRef.current[card.key];
+    if (url) URL.revokeObjectURL(url);
+    setUrls((prev) => {
+      if (!(card.key in prev)) return prev;
+      const { [card.key]: _drop, ...rest } = prev;
+      return rest;
+    });
+    setSelected((prev) => prev.filter((k) => k !== card.key));
     onDelete(card.key);
   };
 
@@ -87,14 +148,14 @@ export function CreationsPanel({ items, load, onDelete, onStitch, onClose }: Cre
   const counts = { image: items.filter((i) => i.kind === "image").length, video: items.filter((i) => i.kind === "video").length };
 
   return (
-    <div style={overlayStyle} onClick={onClose}>
-      <div style={panelStyle} onClick={(e) => e.stopPropagation()}>
+    <>
+      <ModalShell title="Creations" onClose={onClose} overlayStyle={overlayStyle} cardStyle={panelCardStyle}>
         <div style={headerStyle}>
           <strong>🎨 Creations</strong>
           <span style={{ opacity: 0.6, fontSize: 12 }}>
             {items.length} item{items.length === 1 ? "" : "s"}
           </span>
-          {onStitch && counts.video >= 2 && (
+          {onStitch && (counts.video >= 2 || selecting) && (
             <button
               style={selecting ? { ...buttonStyle, borderColor: "rgba(120,180,255,0.7)" } : buttonStyle}
               title="Pick video clips in order, then join them into one video"
@@ -149,7 +210,9 @@ export function CreationsPanel({ items, load, onDelete, onStitch, onClose }: Cre
                 key={card.key}
                 card={card}
                 url={urls[card.key]}
+                failed={!!failed[card.key]}
                 hydrate={hydrate}
+                requestHydrate={requestHydrate}
                 // Stitch mode: video tiles toggle selection (badge shows play order); other kinds inert.
                 {...(selecting && card.kind === "video" ? { selectedIndex: selected.indexOf(card.key) } : {})}
                 onView={() => {
@@ -163,76 +226,103 @@ export function CreationsPanel({ items, load, onDelete, onStitch, onClose }: Cre
             ))}
           </div>
         )}
-      </div>
+      </ModalShell>
       {viewing && (
-        <div style={lightboxStyle} onClick={(e) => { e.stopPropagation(); setViewing(undefined); }}>
-          <div style={lightboxInner} onClick={(e) => e.stopPropagation()}>
-            {urls[viewing.key] ? (
-              viewing.kind === "video" ? (
-                <video src={urls[viewing.key]} style={mediaStyle} controls autoPlay loop />
-              ) : (
-                <img src={urls[viewing.key]} style={mediaStyle} alt={viewing.label ?? "creation"} />
-              )
+        // The lightbox is its own dialog stacked over the gallery: a single Escape closes just the
+        // lightbox (ModalShell's open-shell stack routes it to the top-most), and it gets role=dialog +
+        // focus handling for free.
+        <ModalShell
+          title={`Creation from ${viewing.chatLabel}`}
+          onClose={() => setViewing(undefined)}
+          overlayStyle={lightboxStyle}
+          cardStyle={lightboxCardStyle}
+        >
+          {urls[viewing.key] ? (
+            viewing.kind === "video" ? (
+              <video src={urls[viewing.key]} style={mediaStyle} controls autoPlay loop />
             ) : (
-              <div style={{ padding: 40, opacity: 0.7 }}>Loading…</div>
-            )}
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <span style={{ opacity: 0.7, fontSize: 12, flex: 1, minWidth: 120 }}>
-                {viewing.chatLabel} · {new Date(viewing.at).toLocaleString()}
-              </span>
-              <button style={buttonStyle} onClick={() => void download(viewing)}>
-                ⬇ Download
-              </button>
-              <button style={buttonStyle} onClick={() => remove(viewing)}>
-                🗑 Delete
-              </button>
-              <button style={buttonStyle} onClick={() => setViewing(undefined)}>
-                Close
-              </button>
-            </div>
+              <img src={urls[viewing.key]} style={mediaStyle} alt={viewing.label ?? "creation"} />
+            )
+          ) : failed[viewing.key] ? (
+            <div style={{ padding: 40, opacity: 0.7 }}>⚠ This creation's file is missing — it may have been cleared.</div>
+          ) : (
+            <div style={{ padding: 40, opacity: 0.7 }}>Loading…</div>
+          )}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <span style={{ opacity: 0.7, fontSize: 12, flex: 1, minWidth: 120 }}>
+              {viewing.chatLabel} · {new Date(viewing.at).toLocaleString()}
+            </span>
+            <button style={buttonStyle} onClick={() => void download(viewing)}>
+              ⬇ Download
+            </button>
+            <button style={buttonStyle} onClick={() => remove(viewing)}>
+              🗑 Delete
+            </button>
+            <button style={buttonStyle} onClick={() => setViewing(undefined)}>
+              Close
+            </button>
           </div>
-        </div>
+        </ModalShell>
       )}
-    </div>
+    </>
   );
 }
 
-/** One grid cell. Images hydrate on mount; a video stays a play tile until clicked (then the
+/** One grid cell. Images hydrate when they scroll into view (IntersectionObserver-gated, so a big
+ * gallery never issues every blob read at once); a video stays a play tile until clicked (then the
  * lightbox opens once its bytes arrive). */
 function CreationTile({
   card,
   url,
+  failed,
   hydrate,
+  requestHydrate,
   onView,
   selectedIndex,
 }: {
   card: CreationCard;
   url: string | undefined;
+  /** The panel already tried and failed to load this key's bytes. */
+  failed: boolean;
   hydrate: (card: CreationCard) => Promise<string | undefined>;
+  /** Enqueue a visibility-triggered hydration behind the panel's concurrency cap. */
+  requestHydrate: (card: CreationCard) => void;
   onView: () => void;
   /** Stitch-select mode: this tile's pick order (-1 = selectable but unpicked; absent = normal mode). */
   selectedIndex?: number;
 }) {
-  const [failed, setFailed] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  // Always call the LATEST requestHydrate without re-subscribing the observer on every render.
+  const requestRef = useRef(requestHydrate);
+  requestRef.current = requestHydrate;
   useEffect(() => {
     if (card.kind !== "image" || url || failed) return;
-    let cancelled = false;
-    void hydrate(card).then((got) => {
-      if (!cancelled && !got) setFailed(true);
-    });
-    return () => {
-      cancelled = true;
-    };
-    // hydrate is recreated per render but only closes over stable setters/load; keying on the
-    // card + url keeps this to one fetch per tile.
-  }, [card.key, url, failed]);
+    const el = btnRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") {
+      // No observer (e.g. non-DOM env) — hydrate straight away so the tile still fills.
+      requestRef.current(card);
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          requestRef.current(card);
+          io.disconnect(); // one hydration per tile — stop watching once we've asked
+        }
+      },
+      { rootMargin: "200px" }, // start loading a little before the tile actually enters the viewport
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [card.key, card.kind, url, failed]);
   const open = () => {
-    if (!url) void hydrate(card).then((got) => { if (!got) setFailed(true); });
+    if (!url) void hydrate(card); // click hydrates immediately (bypasses the visibility gate)
     onView();
   };
   const picked = selectedIndex !== undefined && selectedIndex >= 0;
   return (
     <button
+      ref={btnRef}
       style={picked ? { ...tileStyle, position: "relative", borderColor: "rgba(120,180,255,0.8)", background: "rgba(96,170,255,0.12)" } : { ...tileStyle, position: "relative" }}
       onClick={open}
       title={card.label ?? card.chatLabel}
@@ -253,10 +343,13 @@ function CreationTile({
   );
 }
 
+// Overlay/card overrides handed to ModalShell so the migrated gallery keeps its original look (no
+// blur, top-aligned, its own dark surface) while gaining the shell's role=dialog / Escape / focus trap.
 const overlayStyle = {
   position: "fixed",
   inset: 0,
   background: "rgba(0,0,0,0.5)",
+  backdropFilter: "none", // the gallery predates the shared blurred backdrop — keep it crisp
   display: "flex",
   alignItems: "flex-start",
   justifyContent: "center",
@@ -265,7 +358,7 @@ const overlayStyle = {
   overflowY: "auto",
 } as const;
 
-const panelStyle = {
+const panelCardStyle = {
   width: "min(820px, 100%)",
   background: "#171922",
   border: "1px solid rgba(255,255,255,0.15)",
@@ -273,6 +366,12 @@ const panelStyle = {
   padding: 16,
   fontFamily: "system-ui, sans-serif",
   color: "#e9ecf2",
+  // Neutralize the shared card's flex/scroll defaults so the panel keeps its original block layout and
+  // grows within the scrolling overlay rather than becoming an inner scroll region.
+  display: "block",
+  gap: 0,
+  maxHeight: "none",
+  overflowY: "visible",
 } as const;
 
 const headerStyle = { display: "flex", alignItems: "center", gap: 12, marginBottom: 10 } as const;
@@ -355,17 +454,19 @@ const lightboxStyle = {
   position: "fixed",
   inset: 0,
   background: "rgba(0,0,0,0.75)",
+  backdropFilter: "none",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
   padding: 24,
-  zIndex: 60,
+  zIndex: 60, // above the gallery panel (50) so it stacks correctly as a second dialog
 } as const;
 
-const lightboxInner = {
+const lightboxCardStyle = {
   display: "flex",
   flexDirection: "column",
   gap: 10,
+  width: "auto", // shrink to the media, not the shared card's fixed width
   maxWidth: "min(920px, 92vw)",
   maxHeight: "90vh",
   background: "#171922",

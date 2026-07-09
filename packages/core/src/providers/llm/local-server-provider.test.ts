@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { LocalServerLLMProvider } from "./local-server-provider.js";
 import { nativeToolCallsToText, type ToolSchema } from "./chat.js";
 import type { Transport, TransportResponse } from "../transport/transport.js";
@@ -207,5 +207,43 @@ describe("LocalServerLLMProvider Ollama native path (numCtx)", () => {
     });
     expect(text).toBe("partial");
     expect(meta).toEqual({ truncated: true });
+  });
+});
+
+describe("LocalServerLLMProvider stream hygiene (R4)", () => {
+  it("pullModel cancels the reader (releases the socket) when an error frame throws", async () => {
+    let cancelled = false;
+    const fetchImpl: typeof fetch = async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(JSON.stringify({ error: "pull failed on the server" }) + "\n"));
+            // Deliberately DON'T close — only reader.cancel() (in the finally) releases this stream.
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }),
+        { status: 200 },
+      );
+    await expect(
+      LocalServerLLMProvider.pullModel("http://x", "llama3.2", undefined, fetchImpl),
+    ).rejects.toThrow(/pull failed on the server/);
+    expect(cancelled).toBe(true); // the socket wasn't left dangling for GC
+  });
+
+  it("the native NDJSON /api/chat path bounds the CONNECT phase (a wedged Ollama can't hang the turn)", async () => {
+    vi.useFakeTimers();
+    // A fetch that never resolves on its own — only the 30s connect-timeout abort rejects it.
+    const fetchImpl: typeof fetch = (_input, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject((init.signal as AbortSignal).reason), { once: true });
+      });
+    const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", fetchImpl, numCtx: 4096 });
+    const promise = p.chat([{ role: "user", content: "hi" }], { onToken: () => {} });
+    const assertion = expect(promise).rejects.toMatchObject({ name: "TimeoutError" });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await assertion;
+    vi.useRealTimers();
   });
 });

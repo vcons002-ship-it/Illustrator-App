@@ -303,7 +303,17 @@ export function shiftIso(iso: string, rec: TaskRecurrence): string {
   const n = Math.max(1, rec.interval);
   if (rec.freq === "daily") d.setUTCDate(d.getUTCDate() + n);
   else if (rec.freq === "weekly") d.setUTCDate(d.getUTCDate() + 7 * n);
-  else d.setUTCMonth(d.getUTCMonth() + n);
+  else {
+    // Monthly: `setUTCMonth(m + n)` on a day-29/30/31 date OVERFLOWS a shorter target month — Jan 31 + 1
+    // month asks for "Feb 31", which JS rolls forward to Mar 3, silently SKIPPING February. Change the
+    // month off day 1 (never overflows), then clamp the day to the target month's last day, so Jan 31
+    // rolls to Feb 28/29 (the month's end), not into March.
+    const day = d.getUTCDate();
+    d.setUTCDate(1);
+    d.setUTCMonth(d.getUTCMonth() + n);
+    const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+    d.setUTCDate(Math.min(day, lastDay));
+  }
   return d.toISOString().slice(0, 10);
 }
 

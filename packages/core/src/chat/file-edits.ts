@@ -54,7 +54,11 @@ export function applyFileEdits(content: string, edits: FileEdit[]): FileEditResu
     const { search, replace } = edit;
     const matches = countOccurrences(out, search);
     if (matches === 1) {
-      out = out.replace(search, replace);
+      // Use the function form of replace so `replace` is inserted VERBATIM. String.replace treats
+      // `$&`, `` $` ``, `$'`, `$$`, `$1` in a STRING replacement as substitution patterns — a
+      // model-supplied replacement containing those would be silently corrupted. A replacer function's
+      // return value is never interpreted, so the swap is always literal.
+      out = out.replace(search, () => replace);
       applied++;
     } else {
       failures.push({ index, search, reason: matches > 1 ? "ambiguous" : "not_found" });

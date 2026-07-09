@@ -30,6 +30,10 @@ export interface ModelMenuGroup {
    * backend-mixed list `options` would otherwise carry. */
   localBackends?: { id: LocalBackendId; label: string; active: boolean }[];
   localModelsByBackend?: Partial<Record<LocalBackendId, ModelMenuOption[]>>;
+  /** Label for the group's active selection when it isn't in `options` yet — e.g. a configured local
+   * chat server model before its model list has been fetched. Lets the tab summary show the real model
+   * id (not "—") and keeps the chat tab treated as active. */
+  activeFallbackLabel?: string;
 }
 
 /** One provider/source section inside a tab of the switcher ("Cloud" / "Local"), derived from a group
@@ -80,7 +84,9 @@ export function activeModelLabel(g: ModelMenuGroup): string | undefined {
     const hit = opts?.find((o) => o.active);
     if (hit) return hit.label;
   }
-  return undefined;
+  // Nothing listed is active yet — fall back to the configured selection's label (e.g. a local server
+  // chat model whose list hasn't loaded) so the tab summary never shows "—" for a real configuration.
+  return g.activeFallbackLabel;
 }
 
 /** Which tab the switcher opens on: chat when it holds the active selection (the common case),
@@ -210,8 +216,17 @@ export function buildModelMenu(
     patch: { videoModel: m.id },
   }));
 
+  // When a local chat server model is configured but its model list hasn't been fetched yet, no llm
+  // option carries `active` — surface the configured id so the tab summary + default-tab logic still
+  // treat chat as the active group instead of falling through to "—" / the wrong tab.
+  const llmActive = llm.some((o) => o.active);
+  const llmFallback =
+    !llmActive && localText && s.localTextBackend === "server" && s.localServerTextModel
+      ? s.localServerTextModel
+      : undefined;
+
   const groups: ModelMenuGroup[] = [];
-  if (llm.length) groups.push({ key: "llm", label: "Chat model", options: llm });
+  if (llm.length) groups.push({ key: "llm", label: "Chat model", options: llm, ...(llmFallback ? { activeFallbackLabel: llmFallback } : {}) });
   if (image.length || localBackends?.length) {
     groups.push({
       key: "image",
