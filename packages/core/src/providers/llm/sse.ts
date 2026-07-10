@@ -55,13 +55,20 @@ export async function streamSse(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   const state = { buffer: "" };
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    parseSseChunk(decoder.decode(value, { stream: true }), opts.onEvent, state);
+  // Cancel the reader on ANY exit — including `onEvent` throwing mid-stream — so the underlying socket
+  // is released promptly instead of being held open until GC. (`cancel` on an already-drained reader is a
+  // harmless no-op.)
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parseSseChunk(decoder.decode(value, { stream: true }), opts.onEvent, state);
+    }
+    // Flush a final event that lacked a trailing newline.
+    parseSseChunk("\n\n", opts.onEvent, state);
+  } finally {
+    await reader.cancel().catch(() => {});
   }
-  // Flush a final event that lacked a trailing newline.
-  parseSseChunk("\n\n", opts.onEvent, state);
 }
 
 /** Incremental SSE line parser: `data: {...}` events, multi-line safe, "[DONE]" skipped. */

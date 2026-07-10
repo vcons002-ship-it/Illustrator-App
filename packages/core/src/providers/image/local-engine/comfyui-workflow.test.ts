@@ -40,9 +40,15 @@ describe("buildWorkflow img2img", () => {
     expect(g["5"]).toBeUndefined(); // empty latent replaced
     expect(classOf(g, "15")).toBe("LoadImage");
     expect(inputsOf(g, "15").image).toBe("photo.png");
+    // The source photo is scaled to the clamped target BEFORE encoding (node 2), not fed at native res.
+    expect(classOf(g, "2")).toBe("ImageScale");
+    expect(inputsOf(g, "2").image).toEqual(["15", 0]);
+    expect(inputsOf(g, "2").upscale_method).toBe("lanczos");
+    expect(inputsOf(g, "2").width).toBe(1024);
+    expect(inputsOf(g, "2").height).toBe(1024);
     expect(classOf(g, "16")).toBe("VAEEncode");
-    // VAEEncode pulls pixels from LoadImage and shares the checkpoint's VAE (node 4, slot 2).
-    expect(inputsOf(g, "16").pixels).toEqual(["15", 0]);
+    // VAEEncode pulls pixels from the SCALED image and shares the checkpoint's VAE (node 4, slot 2).
+    expect(inputsOf(g, "16").pixels).toEqual(["2", 0]);
     expect(inputsOf(g, "16").vae).toEqual(["4", 2]);
     // The sampler denoises partway, from the encoded latent.
     expect(inputsOf(g, "3").denoise).toBe(0.55);
@@ -143,9 +149,10 @@ describe("buildWorkflow shift families", () => {
   it("img2img + shift no longer collide (LoadImage at 15, shift node at 17)", () => {
     const g = buildWorkflow({ ...hidream, initImage: { filename: "photo.png", denoise: 0.6 } });
     expect(classOf(g, "15")).toBe("LoadImage"); // img2img kept its node
+    expect(classOf(g, "2")).toBe("ImageScale"); // and its resize node (id 2, clear of the shift node)
     expect(classOf(g, "16")).toBe("VAEEncode");
     expect(classOf(g, "17")).toBe("ModelSamplingSD3"); // shift kept its own node
-    expect(inputsOf(g, "16").pixels).toEqual(["15", 0]); // VAEEncode reads the real LoadImage
+    expect(inputsOf(g, "16").pixels).toEqual(["2", 0]); // VAEEncode reads the SCALED LoadImage
     expect(inputsOf(g, "3").latent_image).toEqual(["16", 0]);
     expect(inputsOf(g, "3").model).toEqual(["17", 0]); // and still samples the shifted model
   });

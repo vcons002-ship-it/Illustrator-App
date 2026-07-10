@@ -136,6 +136,10 @@ export const MemoriesPanel = memo(function MemoriesPanel({ notes, onSave, onClos
                     onKeyDown={(e) => {
                       if (e.key === "Enter") void saveEdit();
                       if (e.key === "Escape") {
+                        // Cancel just this inline edit — mark the event handled so the ModalShell's
+                        // Escape doesn't also close the whole dialog.
+                        e.preventDefault();
+                        e.stopPropagation();
                         setEditingAt(undefined);
                         setEditText("");
                       }

@@ -421,6 +421,29 @@ export type BuddyToolCall =
   | { tool: "complete_step"; note?: string };
 
 /**
+ * The runtime roster of EVERY real tool name (the `BuddyToolCall` union is a compile-time type; this is
+ * the value form). Kept in sync with the union above — a name here that isn't a union member, or vice
+ * versa, is a bug. Callers that receive a model-supplied tool TOKEN (e.g. workflow `needs`, which can be
+ * any free-form word) validate it against this set so an invented name ("research") is rejected as a
+ * contract instead of compiling into an unsatisfiable `tool_ok("research")` that no evidence can ever
+ * match. The `Set<BuddyToolName>` element type makes TypeScript reject any name that isn't a real tool. */
+export const BUDDY_TOOL_NAMES: ReadonlySet<BuddyToolName> = new Set<BuddyToolName>([
+  "search_web", "search_books", "search_images", "read", "read_url", "random_books", "calculate", "wolfram",
+  "stock_quote", "market_analysis", "set_price_alert", "list_alerts", "cancel_alert", "schwab_quote",
+  "schwab_options", "schwab_positions", "schwab_watchlists", "prep_order", "tv_chart", "trading_script",
+  "open_content", "open_library_book", "open_web_text", "open_pasted_text", "open_code", "create_spreadsheet",
+  "create_document", "start_story", "continue_story", "render_scene", "set_story_cadence", "remove_library_book",
+  "set_visual_style", "generate_image", "generate_video", "stitch_videos", "generate_long_video", "find_files",
+  "read_file", "open_image", "run_command", "write_file", "edit_file", "delegate_coding_task", "screenshot",
+  "remember", "forget", "update_setting", "setup_help", "read_skill", "save_skill", "forget_skill", "gmail_search",
+  "read_email", "read_attachment", "draft_email", "send_email", "list_events", "create_event", "list_tasks",
+  "create_task", "add_task_group", "plan_task", "schedule_task", "list_scheduled", "cancel_scheduled",
+  "mark_step_done", "complete_task", "save_task_context", "update_task_step", "add_task_steps", "list_task_plans",
+  "get_task_plan", "mcp_tools", "mcp_call", "delegate", "spawn_agents", "spawn_coding_agents", "set_plan",
+  "complete_step",
+]);
+
+/**
  * The HARD danger floor: tools that ALWAYS require explicit human approval — even when the reader
  * has opted into "full autonomy". These are the irreversible / dangerous primitives:
  *  - `run_command` — executes a program in a shell (this is what could run a downloaded `.exe`);
@@ -1764,11 +1787,74 @@ export function parseCallSyntax(text: string): Record<string, unknown>[] {
 }
 
 /**
+ * Extract the JSON tool-call objects from an ALREADY-cleaned reply (post stripThink/stripFences/
+ * stripControlTokens) that sit in an EXECUTABLE position — so a `{"tool":…}` the model merely QUOTED
+ * inside prose, or SHOWED inside a display code fence, never runs. (The sibling chat-tools.ts is strict
+ * the same way; buddy was looser and would execute quoted/example JSON anywhere in the reply.) Real
+ * models legitimately (a) emit the bare call, (b) BATCH several one-per-line, or (c) narrate then append
+ * the call — so an object qualifies when it starts AT A LINE START (covers a batch + a leading call) OR
+ * is TRAILING ("let me check: {json}"). An object inside a ``` fence is a DISPLAY example UNLESS that
+ * fence is itself the reply's trailing content (a weak model wrapping its REAL call in ```json), so a
+ * fenced object fires only when its fence trails the reply. Needs byte offsets, so this brace-matches
+ * like extractJsonObjects but keeps each object's position. PURE. */
+function extractCallableToolJson(s: string): string[] {
+  // Fenced regions (```…```), so an object's position can be tested against them. A dangling open fence
+  // (no close) runs to end-of-string. `trailing` = nothing but whitespace follows the closing fence.
+  const ticks: number[] = [];
+  for (let i = 0; i + 2 < s.length; i++) {
+    if (s[i] === "`" && s[i + 1] === "`" && s[i + 2] === "`") {
+      ticks.push(i);
+      i += 2;
+    }
+  }
+  const regions: { openEnd: number; closeStart: number; trailing: boolean }[] = [];
+  for (let k = 0; k < ticks.length; k += 2) {
+    const openEnd = ticks[k]! + 3;
+    const closeStart = k + 1 < ticks.length ? ticks[k + 1]! : s.length;
+    const closeEnd = k + 1 < ticks.length ? closeStart + 3 : s.length;
+    regions.push({ openEnd, closeStart, trailing: s.slice(closeEnd).trim() === "" });
+  }
+  // Brace-match top-level objects (string-aware) and keep each one's [start, end) span.
+  const out: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!;
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (c === "}" && depth > 0) {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        const region = regions.find((r) => start > r.openEnd && start < r.closeStart);
+        const callable = region
+          ? region.trailing // inside a fence → only a TRAILING fence is a real call, not a shown example
+          : /(?:^|\n)[ \t]*$/.test(s.slice(0, start)) /* line start */ || s.slice(i + 1).trim() === ""; /* trailing */
+        if (callable) out.push(s.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Parse a model reply into buddy tool calls. The model is told to emit ONE JSON object, but real
  * models routinely (a) BATCH several and (b) put a tool call AFTER some prose (a briefing, "let me
- * check…"). We recover EVERY valid tool call wherever it appears — only objects with a KNOWN tool —
- * so the call runs instead of the raw JSON leaking into the chat. The prose is shown separately.
- * Also recovers Gemma/Python `tool_code` function-call syntax (see parseCallSyntax).
+ * check…"). We recover every valid tool call in an EXECUTABLE position (line-start / trailing / a
+ * trailing fence — see extractCallableToolJson) — only objects with a KNOWN tool — so the call runs
+ * instead of the raw JSON leaking into the chat, while a `{"tool":…}` merely quoted mid-prose or shown
+ * as a fenced example does NOT execute. The prose is shown separately. Also recovers Gemma/Python
+ * `tool_code` function-call syntax (see parseCallSyntax).
  */
 export function parseBuddyToolCalls(text: string): BuddyToolCall[] {
   const cleaned = stripControlTokens(stripFences(stripThink(text)));
@@ -1776,7 +1862,7 @@ export function parseBuddyToolCalls(text: string): BuddyToolCall[] {
   // Keep ALL JSON calls, including legitimate duplicates (e.g. two complete_step in a row — the
   // anti-skip guard, not dedup, decides what to do with those).
   const jsonKeys = new Set<string>();
-  for (const chunk of extractJsonObjects(cleaned)) {
+  for (const chunk of extractCallableToolJson(cleaned)) {
     const obj = parseJsonLoose(chunk);
     if (!obj) continue;
     const call = parseToolObject(obj);
@@ -1975,6 +2061,17 @@ export function buildToolCallFormat(toolNames: string[]): Record<string, unknown
 /** The first tool call in a reply (back-compat — the planner runs one tool at a time). */
 export function parseBuddyToolCall(text: string): BuddyToolCall | undefined {
   return parseBuddyToolCalls(text)[0];
+}
+
+/** A stitch_videos clip ref ffmpeg would misread as an OPTION or a PROTOCOL rather than a plain file:
+ *  - a leading "-" is parsed as an ffmpeg command-line flag (option injection);
+ *  - a `scheme:` prefix (`concat:`, `http:`, `pipe:`, `file:`, …) opens a protocol/demuxer, not a file.
+ * A Windows drive letter ("C:\clips\a.mp4") is a SINGLE letter before the colon — that's a real path,
+ * not a protocol, so it's allowed. Plain filenames, chat ids, and normal absolute/relative paths pass. */
+function isUnsafeClipRef(ref: string): boolean {
+  if (ref.startsWith("-")) return true;
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(ref);
+  return !!scheme && scheme[1]!.length > 1; // 2+ char scheme = protocol; 1 char = a drive letter
 }
 
 function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefined {
@@ -2516,12 +2613,16 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     let end: { kind: "last" | "library" | "file"; ref?: string } | undefined;
     if (endRaw) {
       const endRef = strArg(endRaw.ref, MAX_PATH_CHARS);
+      // Only KEEP an end frame that names a REAL image: a library/file id with a ref, or any kind carrying
+      // a ref (→ "last" + ref). An `end` with no usable ref — `{kind:"library"}` sans ref, `{kind:"text"}`,
+      // `{}`, or a bare `{kind:"last"}` — is DROPPED, not coerced to `{kind:"last"}`. Coercing made the end
+      // frame resolve to the same newest image as a defaulted source, producing a same-image no-op morph.
       end =
         (endRaw.kind === "library" || endRaw.kind === "file") && endRef
           ? { kind: endRaw.kind, ref: endRef }
           : endRef
             ? { kind: "last", ref: endRef }
-            : { kind: "last" };
+            : undefined;
     }
     return {
       tool,
@@ -2542,9 +2643,13 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
         ? obj.clips.split(/\r?\n|;/)
         : [];
     const usableCount = rawList.filter((c) => typeof c === "string" && c.trim().length > 0).length;
+    // Drop refs ffmpeg would treat as something OTHER than a plain file. stitch_videos auto-runs (no
+    // approval click), and these refs flow straight into an ffmpeg command line: a leading "-" is parsed
+    // as an ffmpeg FLAG (option injection), and a "scheme:" prefix (concat:, http:, pipe:, file:, …) makes
+    // ffmpeg open a protocol/demuxer instead of a file. Plain names, chat ids, and normal paths pass.
     const clips = rawList
       .map((c) => strArg(c, MAX_PATH_CHARS) ?? "")
-      .filter((c) => c.length > 0)
+      .filter((c) => c.length > 0 && !isUnsafeClipRef(c))
       .slice(0, 24);
     if (clips.length < 2) return undefined; // stitching needs at least two clips
     const title = strArg(obj.title, MAX_TITLE_CHARS);
@@ -2580,8 +2685,17 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     const src = obj.source && typeof obj.source === "object" ? (obj.source as Record<string, unknown>) : undefined;
     const kind = src?.kind === "library" || src?.kind === "file" || src?.kind === "text" ? src.kind : "last";
     const ref = strArg(src?.ref, MAX_PATH_CHARS);
+    // Carry a "last" ref EXACTLY like generate_video does: `{kind:"last",ref:"2"}` addresses a SPECIFIC
+    // chat image (filename, or "1"/"2" = newest/one-before) to seed the first clip. Dropping the ref
+    // (the old bug) silently reseeded from the newest image instead of the one the reader named.
     const source: { kind: "last" | "library" | "file" | "text"; ref?: string } =
-      kind === "text" ? { kind: "text" } : (kind === "library" || kind === "file") && ref ? { kind, ref } : { kind: "last" };
+      kind === "text"
+        ? { kind: "text" }
+        : (kind === "library" || kind === "file") && ref
+          ? { kind, ref }
+          : ref
+            ? { kind: "last", ref }
+            : { kind: "last" };
     return {
       tool,
       clips,

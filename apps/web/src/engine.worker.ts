@@ -1362,7 +1362,7 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       void handleChatTool(msg.requestId, msg.call);
       break;
     case "chatVideo":
-      void handleChatVideo(msg.requestId, msg.call, msg.image, msg.models, msg.params, msg.warmBatch, msg.endImage);
+      void handleChatVideo(msg.requestId, msg.call, msg.image, msg.models, msg.params, msg.warmBatch, msg.endImage, msg.keepResident);
       break;
     case "assessImage":
       void handleAssessImage(msg.requestId, msg.image, msg.question);
@@ -4115,6 +4115,9 @@ async function handleChatVideo(
   warmBatch?: boolean,
   /** First+last-frame conditioning (Wan only): the clip arrives at this frame. */
   endImage?: { bytes: ArrayBuffer; mimeType: string },
+  /** Long-form batch, every clip but the last: keep the video model resident AFTER the render so the
+   * next clip finds it warm (the backend's finally skips its /free). The last clip frees. */
+  keepResident?: boolean,
 ): Promise<void> {
   const ac = new AbortController();
   chatAborts.set(requestId, ac);
@@ -4174,6 +4177,8 @@ async function handleChatVideo(
         ...(params?.shift !== undefined ? { shift: params.shift } : {}),
         ...(params?.highRes !== undefined ? { highRes: params.highRes } : {}),
         ...(params?.audio !== undefined ? { audio: params.audio } : {}),
+        // Skip the post-render /free between long-video clips so the ~30 GB model stays warm (V1).
+        ...(keepResident ? { keepResident: true } : {}),
         lowVram: !!settings.lowVram,
         signal: ac.signal,
         onProgress: (fraction) => post({ type: "testProgress", requestId, fraction }),

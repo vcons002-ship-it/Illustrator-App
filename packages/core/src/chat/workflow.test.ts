@@ -43,6 +43,16 @@ describe("needsToDoneWhen", () => {
     expect(needsToDoneWhen("")).toBeUndefined();
     expect(needsToDoneWhen(undefined)).toBeUndefined();
   });
+
+  it("W2: an unrecognized token (not a real tool name) falls through to undefined so the caller infers", () => {
+    // "research" is a topic word, not a tool — returning tool_ok("research") would be unsatisfiable
+    // (no tool by that name ever runs), so the contract must fall through to inferDoneWhen instead.
+    expect(needsToDoneWhen("research")).toBeUndefined();
+    expect(needsToDoneWhen("summarize")).toBeUndefined();
+    // A REAL (but non-aliased) tool name still compiles to tool_ok.
+    expect(needsToDoneWhen("generate_video")).toEqual({ kind: "tool_ok", tool: "generate_video" });
+    expect(needsToDoneWhen("edit_file")).toEqual({ kind: "tool_ok", tool: "edit_file" });
+  });
 });
 
 describe("inferDoneWhen", () => {
@@ -98,6 +108,21 @@ describe("evaluateStep — the collar (evidence only)", () => {
     expect(evaluateStep(step({ doneWhen: { kind: "command_ok" } }), ev([{ call: { tool: "run_command", command: "ls" }, result: { command: { stdout: "", stderr: "boom", code: 1 } } }])).done).toBe(false);
     expect(evaluateStep(step({ doneWhen: { kind: "tool_ok", tool: "search_web" } }), ev([{ call: { tool: "search_web", query: "x" }, result: { hits: [] } }])).done).toBe(true);
     expect(evaluateStep(step({ doneWhen: { kind: "tool_ok", tool: "search_web" } }), ev([{ call: { tool: "search_web", query: "x" }, result: { error: "network" } }])).done).toBe(false);
+  });
+
+  it("W1: a tool_ok step is NOT done when the host tool reported a NESTED failure (video/writeFile/image ok:false)", () => {
+    // Host tools carry failure nested, with no top-level `error` — a failed render is `{video:{ok:false}}`.
+    // The collar must see through that and NOT mark the step done, or a failed generate_video advances the run.
+    const vid = (ok: boolean): { call: BuddyToolCall; result: BuddyToolResultPayload } => ({
+      call: { tool: "generate_video", prompt: "morph", source: { kind: "last" } },
+      result: { video: { ok } },
+    });
+    expect(evaluateStep(step({ doneWhen: { kind: "tool_ok", tool: "generate_video" } }), ev([vid(false)])).done).toBe(false);
+    expect(evaluateStep(step({ doneWhen: { kind: "tool_ok", tool: "generate_video" } }), ev([vid(true)])).done).toBe(true);
+    // Same for a nested write failure surfaced through a tool_ok contract.
+    expect(
+      evaluateStep(step({ doneWhen: { kind: "tool_ok", tool: "write_file" } }), ev([{ call: { tool: "write_file", path: "a", content: "" }, result: { writeFile: { path: "a", ok: false, error: "denied" } } }])).done,
+    ).toBe(false);
   });
 
   it("text: honors min length and optional regex", () => {

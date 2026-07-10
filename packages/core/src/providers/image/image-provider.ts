@@ -257,6 +257,13 @@ export interface VideoGenerationInput {
    * does the full hand-off. Ignored by cloud providers.
    */
   warmBatch?: boolean;
+  /**
+   * Long-form batch: skip the post-render VRAM free so the video model stays loaded for the next clip;
+   * the caller frees once after the last clip. Set on clips 1..N-1 of a long-video render (the final
+   * clip, unset, still frees). Distinct from `warmBatch` (which skips the PRE-render hand-off): this
+   * governs the FINALLY-free after the clip is fetched. Ignored by cloud providers.
+   */
+  keepResident?: boolean;
   onProgress?: (fraction: number) => void;
   signal?: AbortSignal;
 }

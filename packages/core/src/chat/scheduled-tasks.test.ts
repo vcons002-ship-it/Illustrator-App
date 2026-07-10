@@ -31,6 +31,21 @@ describe("nextDue", () => {
     // 2026-06-16 → day 1 already passed this month → 2026-07-01
     expect(nextDue(t, new Date("2026-06-16T07:00:00")).toISOString()).toBe(new Date("2026-07-01T06:00:00").toISOString());
   });
+
+  it("monthly: a day-31 schedule CLAMPS to short months instead of overflowing (Aug 31 → Sep 30 → Oct 31)", () => {
+    // `new Date(y, m, 31)` for a 30-day month rolls forward to the 1st of the NEXT month, which would make
+    // a day-31 schedule skip every short month. Clamping fires it on the month's last day and — because
+    // dayOfMonth stays 31 — the following long month still fires on the 31st.
+    const t = make({ rule: "monthly", dayOfMonth: 31, time: "09:00" });
+    expect(nextDue(t, new Date("2026-08-31T10:00:00")).toISOString()).toBe(new Date("2026-09-30T09:00:00").toISOString());
+    expect(nextDue(t, new Date("2026-09-30T09:00:05")).toISOString()).toBe(new Date("2026-10-31T09:00:00").toISOString());
+    // February clamps to 28 (non-leap) / 29 (leap).
+    expect(nextDue(t, new Date("2026-01-31T10:00:00")).toISOString()).toBe(new Date("2026-02-28T09:00:00").toISOString());
+    expect(nextDue(t, new Date("2024-01-31T10:00:00")).toISOString()).toBe(new Date("2024-02-29T09:00:00").toISOString());
+    // advanceSchedule (which uses nextDue) rolls Aug 31 → Sep 30 the same way.
+    const advanced = advanceSchedule({ ...t, dayOfMonth: 31 }, new Date("2026-08-31T09:00:05"));
+    expect(new Date(advanced.nextDueIso).toISOString()).toBe(new Date("2026-09-30T09:00:00").toISOString());
+  });
 });
 
 describe("normalize + due + advance", () => {

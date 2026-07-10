@@ -44,7 +44,7 @@ export type ToolAutoRoute =
  * - renders (image/video/long video) auto-run ONLY under full autonomy;
  * - plan_task / tv_chart / delegate always run (safe, host-side, read-only or reviewable);
  * - prep_order always routes to the order-review gate (the gate itself is the approval);
- * - write_file always runs — writing into the sandboxed workspace folder is harmless (the
+ * - write_file / edit_file always run — writing into the sandboxed workspace folder is harmless (the
  *   dangerous step, run_command, keeps its own gate);
  * - run_command runs only when commands are enabled AND the autonomous workspace is on —
  *   full autonomy alone NEVER reaches it (the hard danger floor);
@@ -71,6 +71,9 @@ export function routePendingTool(tool: string, f: ToolAutoFlags): ToolAutoRoute 
     case "delegate":
       return "delegate";
     case "write_file":
+    case "edit_file":
+      // edit_file is the same sandboxed workspace write as write_file (search/replace in place vs full
+      // rewrite) — it must route identically, or it would default to "ask" while write_file runs freely.
       return "host";
     case "stitch_videos":
       // Joining clips the reader already has is a local, non-destructive file operation (no new

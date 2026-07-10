@@ -82,6 +82,11 @@ import { pdfToText } from "./import-file.js";
  * bar so it isn't left in history / re-shared. ws:// (LAN/http) vs wss:// (tunnel/https) is derived
  * from the page protocol. Undefined on a normal desktop/web load (no token anywhere).
  */
+/** Worker requestIds minted by a linked PHONE start here, so they can never collide with the desktop's
+ * own (which count from 1) in the shared worker's routing tables (H2). Also the marker the host-bridge
+ * mirror uses to tell a phone-owned reply from a desktop-owned one (H5). */
+const PHONE_REQUEST_ID_BASE = 1_000_000_000;
+
 function initRemoteMode(): RemoteMode | undefined {
   if (typeof window === "undefined") return undefined;
   const { hash, search, host, protocol, pathname } = window.location;
@@ -257,7 +262,7 @@ export interface EngineWorkerApi {
     image: { bytes: ArrayBuffer; mimeType: string } | undefined,
     models: VideoModelFiles,
     params: VideoRenderParams | undefined,
-    opts?: { onProgress?: (fraction: number) => void; warmBatch?: boolean },
+    opts?: { onProgress?: (fraction: number) => void; warmBatch?: boolean; keepResident?: boolean; endImage?: { bytes: ArrayBuffer; mimeType: string } },
   ) => Promise<ChatToolRender>;
   /** Push a just-resolved engine URL (+ which backend it speaks) to the worker RIGHT NOW (race-free,
    * ahead of the debounced settings sync) so the next STANDALONE render — which rebuilds providers fresh
@@ -285,6 +290,7 @@ export interface EngineWorkerApi {
     runId: string,
     agents: { title: string; instructions: string; dir: string }[],
     onAgentTool: (call: BuddyToolCall, cwd: string, agentIdx: number) => Promise<BuddyToolResultPayload>,
+    onProgress?: (text: string) => void,
   ) => Promise<{ results?: { title: string; result: string }[]; error?: string }>;
   /** Auto-resolve git merge conflicts on the main model — returns the merged content per file
    * (the caller validates + completes the merge). */
@@ -533,7 +539,6 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const refRequests = useRef<
     Map<number, (image: { bytes: ArrayBuffer; mimeType: string } | undefined) => void>
   >(new Map());
-  const nextRefRequestId = useRef(1);
   // In-flight playground renders, resolved by `testRendered` replies.
   const testRequests = useRef<
     Map<number, { resolve: (result: TestRenderResult) => void; onProgress?: (fraction: number) => void }>
@@ -543,7 +548,13 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   // In-flight coding-agent runs + the live handler that executes one agent's host tool in its
   // worktree (set for the duration of a run; only one run is active at a time — approval is serial).
   const codingAgentsRequests = useRef<
-    Map<number, (r: { results?: { title: string; result: string }[]; error?: string }) => void>
+    Map<
+      number,
+      {
+        resolve: (r: { results?: { title: string; result: string }[]; error?: string }) => void;
+        onProgress?: (text: string) => void;
+      }
+    >
   >(new Map());
   const conflictRequests = useRef<
     Map<number, (r: { files?: { file: string; content: string }[]; error?: string }) => void>
@@ -628,7 +639,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     drain(testRequests, (r) => r.resolve({ ok: false, error }));
     drain(assessRequests, (resolve) => resolve({ error }));
     drain(emailRequests, (resolve) => resolve({ error }));
-    drain(codingAgentsRequests, (resolve) => resolve({ error }));
+    drain(codingAgentsRequests, (r) => r.resolve({ error }));
     drain(conflictRequests, (resolve) => resolve({ error }));
     drain(chatRequests, (r) => r.resolve({ text: "", transcript: [], error }));
     drain(chatToolRequests, (r) => r.resolve({ error }));
@@ -660,6 +671,12 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   // engine over the relay instead of a local Web Worker. Detected once. (Undefined normally —
   // the default local-worker path below is unchanged.)
   const remoteRef = useRef<RemoteMode | undefined>(initRemoteMode());
+  // Worker requestId counter. A linked phone relays its raw worker frames into the DESKTOP's shared
+  // worker, which routes replies purely by requestId — so the phone's ids must NOT overlap the
+  // desktop's own (both would otherwise count from 1 and a same-type collision delivers a result to
+  // the wrong side, or the phone's silence-watchdog aborts the desktop's turn). Namespace the phone's
+  // ids into a high band so the two counters can never meet (H2).
+  const nextRefRequestId = useRef(remoteRef.current ? PHONE_REQUEST_ID_BASE : 1);
   const phoneWsRef = useRef<WebSocket | undefined>(undefined);
   // HOST-BRIDGE: on the desktop, when a phone is linked, mirror the engine worker to the relay.
   const hostBridgeRef = useRef<{ ws: WebSocket; token: string } | undefined>(undefined);
@@ -771,9 +788,16 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   useEffect(() => {
     // The entire message-handling switch, reused by both the local worker and the phone WS.
     const handleMsg = (msg: WorkerToMain) => {
-      // Host bridge: mirror the engine's output to a linked phone (skip local-only CORS msgs).
+      // Host bridge: mirror the engine's output to a linked phone (skip local-only CORS msgs). A
+      // byte-heavy reply (rendered image / video / character-ref, tens of MB) is only worth sending
+      // to the phone that ASKED for it — mirroring a desktop-owned one just floods the tunnel with
+      // bytes the phone discards, and can kill the socket. Phone requestIds live in the high band, so
+      // a heavy reply below it is desktop-owned → don't mirror it (H5).
       const hb = hostBridgeRef.current;
-      if (hb && hb.ws.readyState === WebSocket.OPEN && !isLocalOnlyMessage(msg)) {
+      const heavyDesktopReply =
+        (msg.type === "chatToolResult" || msg.type === "testRendered" || msg.type === "characterReference") &&
+        msg.requestId < PHONE_REQUEST_ID_BASE;
+      if (hb && hb.ws.readyState === WebSocket.OPEN && !isLocalOnlyMessage(msg) && !heavyDesktopReply) {
         hb.ws.send(encodeFrame(hb.token, serializeForRemote(msg, bytesToBase64)));
       }
       switch (msg.type) {
@@ -933,9 +957,9 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           break;
         }
         case "codingAgentsDone": {
-          const resolve = codingAgentsRequests.current.get(msg.requestId);
+          const req = codingAgentsRequests.current.get(msg.requestId);
           codingAgentsRequests.current.delete(msg.requestId);
-          resolve?.(msg.error ? { error: msg.error } : { results: msg.results });
+          req?.resolve(msg.error ? { error: msg.error } : { results: msg.results });
           break;
         }
         case "conflictsResolved": {
@@ -1030,6 +1054,9 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
         }
         case "buddyActivity": {
           buddyRequests.current.get(msg.requestId)?.onEvent({ kind: "activity", text: msg.text });
+          // A parallel coding-agents run posts its "X/N done" progress under ITS own requestId (not a
+          // buddy turn), so route that to the run's progress callback too — otherwise it never shows (H8).
+          codingAgentsRequests.current.get(msg.requestId)?.onProgress?.(msg.text);
           break;
         }
         case "buddyTool": {
@@ -1610,13 +1637,30 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
         activeRenderRequestId.current = requestId; // so Stop can interrupt this render
+        // Silence watchdog: a lost `testRendered` reply (worker crash, dropped message) otherwise hangs
+        // the playground spinner forever. Fail the render if there's been NO progress AND no reply for a
+        // generous window; each progress tick re-arms it, so a slow-but-alive render is never killed (H8).
+        let watchdog: ReturnType<typeof setTimeout> | undefined;
+        const settle = (r: TestRenderResult) => {
+          if (watchdog) clearTimeout(watchdog);
+          testRequests.current.delete(requestId);
+          if (activeRenderRequestId.current === requestId) activeRenderRequestId.current = undefined;
+          resolve(r);
+        };
+        const arm = () => {
+          if (watchdog) clearTimeout(watchdog);
+          watchdog = setTimeout(() => {
+            if (testRequests.current.has(requestId)) settle({ ok: false, error: "the render timed out — no response from the engine" });
+          }, 600_000);
+        };
         testRequests.current.set(requestId, {
-          resolve: (r) => {
-            if (activeRenderRequestId.current === requestId) activeRenderRequestId.current = undefined;
-            resolve(r);
+          resolve: settle,
+          onProgress: (f) => {
+            arm();
+            opts?.onProgress?.(f);
           },
-          ...(opts?.onProgress ? { onProgress: opts.onProgress } : {}),
         });
+        arm();
         send({
           type: "testRender",
           requestId,
@@ -1713,7 +1757,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       image: { bytes: ArrayBuffer; mimeType: string } | undefined,
       models: VideoModelFiles,
       params: VideoRenderParams | undefined,
-      opts?: { onProgress?: (fraction: number) => void; warmBatch?: boolean; endImage?: { bytes: ArrayBuffer; mimeType: string } },
+      opts?: { onProgress?: (fraction: number) => void; warmBatch?: boolean; keepResident?: boolean; endImage?: { bytes: ArrayBuffer; mimeType: string } },
     ): Promise<ChatToolRender> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
@@ -1754,6 +1798,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             ...(opts?.endImage ? { endImage: opts.endImage } : {}),
             ...(params ? { params } : {}),
             ...(opts?.warmBatch ? { warmBatch: true } : {}),
+            ...(opts?.keepResident ? { keepResident: true } : {}),
           },
           [...(image ? [image.bytes] : []), ...(opts?.endImage ? [opts.endImage.bytes] : [])],
         );
@@ -1795,15 +1840,19 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       runId: string,
       agents: { title: string; instructions: string; dir: string }[],
       onAgentTool: (call: BuddyToolCall, cwd: string, agentIdx: number) => Promise<BuddyToolResultPayload>,
+      onProgress?: (text: string) => void,
     ): Promise<{ results?: { title: string; result: string }[]; error?: string }> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
         agentToolHandler.current = onAgentTool;
         activeCodingAgentsRequestId.current = requestId;
-        codingAgentsRequests.current.set(requestId, (r) => {
-          agentToolHandler.current = undefined;
-          if (activeCodingAgentsRequestId.current === requestId) activeCodingAgentsRequestId.current = undefined;
-          resolve(r);
+        codingAgentsRequests.current.set(requestId, {
+          resolve: (r) => {
+            agentToolHandler.current = undefined;
+            if (activeCodingAgentsRequestId.current === requestId) activeCodingAgentsRequestId.current = undefined;
+            resolve(r);
+          },
+          ...(onProgress ? { onProgress } : {}),
         });
         send({ type: "runCodingAgents", requestId, runId, agents });
       }),

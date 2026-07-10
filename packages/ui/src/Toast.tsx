@@ -40,7 +40,9 @@ const stackStyle = {
   display: "flex",
   flexDirection: "column",
   gap: 8,
-  zIndex: 80,
+  // Above every modal overlay (ModalShell 100, OrderReviewModal 120) so an error toast fired while any
+  // modal is open stays legible instead of being dimmed under the backdrop blur.
+  zIndex: 130,
   width: "min(380px, calc(100vw - 24px))",
   pointerEvents: "none",
 } as const;

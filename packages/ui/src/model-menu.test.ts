@@ -169,6 +169,16 @@ describe("activeModelLabel", () => {
     const llm = groupsOf({ textProvider: "claude" }).find((g) => g.key === "llm")!;
     expect(activeModelLabel(llm)).toBeUndefined();
   });
+
+  it("falls back to the configured local server model id before the model list loads", () => {
+    // Local chat server configured, but lists.textModels is still empty (not yet fetched) → no option
+    // is active, so without a fallback the tab summary would read "—".
+    const llm = groupsOf({ textProvider: "local", localTextBackend: "server", localServerTextModel: "qwen3:8b" }).find(
+      (g) => g.key === "llm",
+    )!;
+    expect(llm.options.some((o) => o.active)).toBe(false);
+    expect(activeModelLabel(llm)).toBe("qwen3:8b");
+  });
 });
 
 describe("defaultMenuTab", () => {
@@ -185,6 +195,16 @@ describe("defaultMenuTab", () => {
 
   it("defaults to llm on an empty menu", () => {
     expect(defaultMenuTab([])).toBe("llm");
+  });
+
+  it("treats a configured local chat server as chat-active even before its model list loads", () => {
+    // Local server chat configured with no fetched models AND a local image checkpoint that IS active.
+    // Without the fallback, chat has no active option and the menu would open on the image tab.
+    const groups = groupsOf(
+      { textProvider: "local", localTextBackend: "server", localServerTextModel: "qwen3:8b", imageProvider: "local", localModel: "a.safetensors" },
+      { imageModels: [model("a.safetensors")] },
+    );
+    expect(defaultMenuTab(groups)).toBe("llm");
   });
 });
 

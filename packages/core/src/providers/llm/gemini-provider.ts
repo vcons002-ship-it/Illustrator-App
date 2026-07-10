@@ -10,6 +10,7 @@ import {
   promptSystemFor,
   type RawExtraction,
   extractionUserContent,
+  isEmptyExtraction,
   mergeExtraction,
   promptUserContent,
 } from "./extraction.js";
@@ -71,6 +72,8 @@ function boundedSignal(signal?: AbortSignal): AbortSignal {
 interface GeminiResponse {
   candidates?: {
     content?: { parts?: { text?: string }[] };
+    /** Why the candidate stopped — "STOP" is clean; "MAX_TOKENS" means the JSON was truncated. */
+    finishReason?: string;
     groundingMetadata?: {
       groundingChunks?: { web?: { uri?: string; title?: string } }[];
     };
@@ -99,24 +102,39 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable, VisionCapabl
 
   async extractEntities(input: EntityExtractionInput): Promise<VisualBible> {
     const technical = input.contentMode === "technical";
-    const { text, sources } = await this.generate(extractionUserContent(input), {
+    const { text, sources, finishReason } = await this.generate(extractionUserContent(input), {
       system: extractionSystemFor(input.contentMode),
       json: true,
       ground: this.ground && technical,
     });
     let raw: RawExtraction = { characters: [], environments: [], spoilers: [] };
+    let parseFailed = false;
     try {
       raw = { ...raw, ...(JSON.parse(text) as Partial<RawExtraction>) };
     } catch {
-      /* fall through with empty extraction; chapter still marked processed */
+      parseFailed = true;
     }
     // Grounded facts come with citations — keep them: fold the source URLs into the
-    // glossary as a per-chapter References entry (visible in the bible/export).
+    // glossary as a per-chapter References entry (visible in the bible/export). Folded BEFORE the
+    // empty-guard so a chapter that yielded only grounded References still counts as real output.
     if (sources.length > 0) {
       raw.glossary = [
         ...(raw.glossary ?? []),
         { term: `References (chapter ${input.chapterIndex + 1})`, definition: sources.join(" · ") },
       ];
+    }
+    // FAIL rather than commit an empty chapter (matches LocalServerLLMProvider.extractEntities): a
+    // parse error, a MAX_TOKENS truncation, or a body that carried nothing usable would otherwise mark
+    // the chapter processed with no keyEvents — leaving its units stuck "waiting to be illustrated"
+    // forever, with no error and no retry. Throwing lets the engine's retry/recovery kick in.
+    if (parseFailed || finishReason === "MAX_TOKENS" || isEmptyExtraction(raw)) {
+      throw new Error(
+        parseFailed
+          ? "Gemini extraction response was not parseable JSON (likely truncated)."
+          : finishReason === "MAX_TOKENS"
+            ? "Gemini extraction was truncated at the token limit — the chapter will be retried."
+            : "Gemini returned an empty extraction response.",
+      );
     }
     return mergeExtraction(input.existing, raw, input.chapterIndex, input.unitRanges);
   }
@@ -153,8 +171,9 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable, VisionCapabl
       let text = "";
       await streamSse(
         this.fetchImpl,
-        `${this.baseUrl}/models/${this.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`,
+        `${this.baseUrl}/models/${this.model}:streamGenerateContent?alt=sse`,
         {
+          headers: { "x-goog-api-key": this.apiKey },
           body,
           ...(opts.signal ? { signal: opts.signal } : {}),
           onEvent: (e) => {
@@ -173,8 +192,9 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable, VisionCapabl
       return text.trim();
     }
     const res = await this.transport.send({
-      url: `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`,
+      url: `${this.baseUrl}/models/${this.model}:generateContent`,
       method: "POST",
+      headers: { "x-goog-api-key": this.apiKey },
       signal: boundedSignal(opts.signal),
       body,
     });
@@ -191,8 +211,9 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable, VisionCapabl
     signal?: AbortSignal;
   }): Promise<string> {
     const res = await this.transport.send({
-      url: `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`,
+      url: `${this.baseUrl}/models/${this.model}:generateContent`,
       method: "POST",
+      headers: { "x-goog-api-key": this.apiKey },
       signal: boundedSignal(input.signal),
       body: {
         contents: [
@@ -215,7 +236,7 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable, VisionCapabl
   private async generate(
     userText: string,
     opts: { system: string; json?: boolean; ground?: boolean },
-  ): Promise<{ text: string; sources: string[] }> {
+  ): Promise<{ text: string; sources: string[]; finishReason?: string }> {
     const body = (withTool: boolean): Record<string, unknown> => ({
       systemInstruction: { parts: [{ text: opts.system }] },
       contents: [{ role: "user", parts: [{ text: userText }] }],
@@ -225,14 +246,16 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable, VisionCapabl
       ...(withTool ? { tools: [{ google_search: {} }] } : {}),
       ...(this.safetySettings ? { safetySettings: this.safetySettings } : {}),
     });
-    const url = `${this.baseUrl}/models/${this.model}:generateContent?key=${this.apiKey}`;
-    let res = await this.transport.send({ url, method: "POST", body: body(opts.ground === true), signal: boundedSignal() });
+    const url = `${this.baseUrl}/models/${this.model}:generateContent`;
+    // API key in the header, not the `?key=` query string (query strings get logged by proxies / devtools).
+    const headers = { "x-goog-api-key": this.apiKey };
+    let res = await this.transport.send({ url, method: "POST", headers, body: body(opts.ground === true), signal: boundedSignal() });
     // Some model/mode combinations reject tools alongside JSON output (a 400) — retry
     // plain rather than failing the chapter (grounding is an enhancement, never a
     // gate). Only on 400: a 429/5xx would fail ungrounded too, and re-sending the
     // full chapter immediately doubles traffic exactly when the API is saturated.
     if (!res.ok && res.status === 400 && opts.ground) {
-      res = await this.transport.send({ url, method: "POST", body: body(false), signal: boundedSignal() });
+      res = await this.transport.send({ url, method: "POST", headers, body: body(false), signal: boundedSignal() });
     }
     if (!res.ok) throw new Error(`Gemini request failed with status ${res.status}`);
     const data = await res.json<GeminiResponse>();
@@ -243,6 +266,6 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable, VisionCapabl
       .filter((u): u is string => Boolean(u))
       .filter((u, i, all) => all.indexOf(u) === i)
       .slice(0, 5);
-    return { text, sources };
+    return { text, sources, ...(candidate?.finishReason ? { finishReason: candidate.finishReason } : {}) };
   }
 }

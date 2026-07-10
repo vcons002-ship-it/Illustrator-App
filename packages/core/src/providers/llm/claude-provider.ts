@@ -183,13 +183,17 @@ export class ClaudeProvider implements LLMProvider, ChatCapable, VisionCapable {
       input.signal ? { signal: input.signal } : undefined,
     );
 
+    // FAIL rather than commit an empty chapter (matches LocalServerLLMProvider.extractEntities): a null
+    // `parsed_output` (schema mismatch / refusal) or a `max_tokens` truncation would otherwise merge an
+    // empty extraction and return success — marking the chapter processed with no keyEvents, leaving its
+    // units stuck "waiting to be illustrated" forever, with no error and no retry. Throwing lets the
+    // engine's retry/recovery kick in.
     const parsed = response.parsed_output;
-    if (!parsed) {
-      return mergeExtraction(
-        input.existing,
-        { characters: [], glossary: [], environments: [], spoilers: [] },
-        input.chapterIndex,
-        input.unitRanges,
+    if (!parsed || response.stop_reason === "max_tokens") {
+      throw new Error(
+        response.stop_reason === "max_tokens"
+          ? "Claude extraction was truncated at the token limit — the chapter will be retried."
+          : "Claude extraction returned no structured output (schema mismatch or refusal).",
       );
     }
     return mergeExtraction(input.existing, parsed, input.chapterIndex, input.unitRanges);

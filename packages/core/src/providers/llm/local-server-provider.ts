@@ -691,15 +691,21 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      lines.forEach(emit);
+    // Cancel the reader on ANY exit — including `emit` throwing on an error frame — so the socket is
+    // released promptly instead of being held until GC. (`cancel` on a drained reader is a no-op.)
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        lines.forEach(emit);
+      }
+      emit(buffer);
+    } finally {
+      await reader.cancel().catch(() => {});
     }
-    emit(buffer);
   }
 
   /**
@@ -742,6 +748,9 @@ function ollamaRoot(baseUrl: string): string {
  * Mirrors the buffered line-split in `pullModel`; degrades to a single buffered parse on a host
  * without body streaming (the extension's proxy). Throws the server's body text on a bad status.
  */
+/** Connect-phase bound for the native NDJSON `/api/chat` path — matches streamSse's 30s. */
+const OLLAMA_CONNECT_TIMEOUT_MS = 30_000;
+
 async function streamOllamaLines(
   fetchImpl: typeof fetch,
   url: string,
@@ -750,12 +759,25 @@ async function streamOllamaLines(
   onLine: (obj: unknown) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const res = await fetchImpl(url, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...headers },
-    body: JSON.stringify(body),
-    ...(signal ? { signal } : {}),
-  });
+  // Bound the CONNECT phase only (until headers arrive), same as streamSse: a wedged Ollama must fail
+  // fast rather than hanging the whole chat turn, but the stream itself may run for many minutes — so the
+  // timer is cleared the moment the connection is established. The caller's own signal is composed in.
+  const connect = new AbortController();
+  const connectTimer = setTimeout(
+    () => connect.abort(new DOMException("Ollama connect timed out", "TimeoutError")),
+    OLLAMA_CONNECT_TIMEOUT_MS,
+  );
+  let res: Response;
+  try {
+    res = await fetchImpl(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+      signal: signal ? AbortSignal.any([signal, connect.signal]) : connect.signal,
+    });
+  } finally {
+    clearTimeout(connectTimer);
+  }
   if (!res.ok) {
     const detail = (await res.text().catch(() => "")).trim().slice(0, 300);
     throw new Error(`Ollama /api/chat failed with status ${res.status}${detail ? `: ${detail}` : ""}`);
@@ -775,15 +797,21 @@ async function streamOllamaLines(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    lines.forEach(emit);
+  // Cancel the reader on ANY exit — including `onLine` throwing — so the socket is released promptly
+  // instead of being held until GC. (`cancel` on a drained reader is a no-op.)
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      lines.forEach(emit);
+    }
+    emit(buffer);
+  } finally {
+    await reader.cancel().catch(() => {});
   }
-  emit(buffer);
 }
 
 /** Pull a human reason out of a server error body: `{"error":{"message":…}}`,

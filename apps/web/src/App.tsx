@@ -320,6 +320,40 @@ interface BuddySession {
   label?: string;
 }
 
+/** Downscale a phone-attached photo before it rides the relay to the desktop. A full-res phone photo
+ * (5–12 MB) base64-encodes to a 7–16 MB frame that a Cloudflare tunnel silently drops (the relay
+ * documents a ~3 MB frame ceiling), so "send photo from phone" would do nothing. Bounded to ≤1280 px
+ * on the long edge and re-encoded JPEG — plenty for the vision model that reads it. Best-effort:
+ * anything unsupported/failed returns the original bytes unchanged (H4). */
+async function downscaleImageForRelay(image: { bytes: ArrayBuffer; mimeType: string }): Promise<{ bytes: ArrayBuffer; mimeType: string }> {
+  const LIMIT = 1280;
+  try {
+    if (typeof createImageBitmap !== "function" || typeof OffscreenCanvas !== "function") return image;
+    const bitmap = await createImageBitmap(new Blob([image.bytes], { type: image.mimeType }));
+    const longEdge = Math.max(bitmap.width, bitmap.height);
+    // Already small enough AND already a compact frame → leave it be (avoid a needless re-encode).
+    if (longEdge <= LIMIT && image.bytes.byteLength <= 2_000_000) {
+      bitmap.close();
+      return image;
+    }
+    const scale = longEdge > LIMIT ? LIMIT / longEdge : 1;
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = new OffscreenCanvas(w, h);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      bitmap.close();
+      return image;
+    }
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close();
+    const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.85 });
+    return { bytes: await blob.arrayBuffer(), mimeType: "image/jpeg" };
+  } catch {
+    return image; // unsupported/decoding failure → send the original (a small photo still fits)
+  }
+}
+
 /** Build the universal-file-card descriptor for a generated image so it gets Download / Open-on-PC
  * actions, named from its prompt. */
 function imageAttachment(prompt: string, image: { bytes: ArrayBuffer; mimeType: string }): FileRef {
@@ -3212,6 +3246,7 @@ export function App() {
       chatMessages.map((m) => ({
         role: m.role,
         text: m.text,
+        ...(typeof m.at === "number" ? { at: m.at } : {}), // stable React key so a delete doesn't shift child state (U1)
         ...(m.image ? { image: m.image } : {}),
         ...(m.links ? { links: m.links } : {}),
         ...(m.gallery ? { gallery: m.gallery } : {}),
@@ -3880,6 +3915,7 @@ export function App() {
       runId,
       created.map((c) => ({ title: c.title, instructions: c.instructions, dir: c.path })),
       (call, cwd, agentIdx) => runOrQueueAgentTool(call, cwd, created[agentIdx]?.title ?? `agent ${agentIdx + 1}`),
+      (text) => setBuddyActivity(text), // live "X/N done" progress from the worker (H8)
     );
     const resultFor = (title: string): string =>
       run.results?.find((r) => r.title === title)?.result ?? "(no summary returned)";
@@ -4444,6 +4480,9 @@ export function App() {
     if (buddyRenderingRef.current) return; // a render is already in flight — drop the duplicate approval
     buddyRenderingRef.current = true;
     setBuddyPendingTool(undefined);
+    // Snapshot the turn epoch: if the reader hits Clear, switches sessions, or Stops mid-render,
+    // buddyTurnSeq is bumped and this continuation must NOT append/dispatch into the new session.
+    const seq = buddyTurnSeq.current;
     // Low-VRAM: spin up the app-managed engine now if it was deferred at boot (no-op otherwise).
     await ensureRenderEngineReady();
     // Capture the model-facing context up to this image call so a multi-step PLAN can AUTO-REACT after
@@ -4489,6 +4528,9 @@ export function App() {
       // One-shot image (no checklist): still label it with what it depicts.
       tagCaption = `🖼 ${call.prompt.length > 60 ? `${call.prompt.slice(0, 60).trim()}…` : call.prompt}`;
     }
+    // Superseded mid-render (Clear / session switch / Stop) → drop this result silently; appending or
+    // dispatching now would leak the old session's render into the new one.
+    if (buddyTurnSeq.current !== seq) return;
     const continueQueue = !out.error && planHasPendingStep(plan);
     const feedback = continueQueue ? planQueueResumeFeedback(taggedImageFeedback, plan!) : taggedImageFeedback;
     appendBuddy({
@@ -4529,14 +4571,29 @@ export function App() {
       return { bytes: await f.arrayBuffer(), mimeType: f.type || "image/png" };
     }
     // Chat images, newest first, each with the label it's addressable by (an upload bubble's
-    // "🖼 name" text, a generated image's file-card name, or the message text).
-    const chatImages: { bytes: ArrayBuffer; mimeType: string; label: string }[] = [];
+    // "🖼 name" text, a generated image's file-card name, or the message text). An image may be
+    // INLINE (live bytes) or externalized to the blob store (byte-less {id}) — collect a lazy
+    // getter for each so a mirror-trimmed / reloaded session's images are still animatable (H3).
+    const chatImages: { label: string; get: () => Promise<{ bytes: ArrayBuffer; mimeType: string }> }[] = [];
+    const seen = new Set<string>();
     for (let i = buddyMessagesRef.current.length - 1; i >= 0; i--) {
       const m = buddyMessagesRef.current[i]!;
+      const attName = m.attachments?.find((a) => a.kind === "image")?.name;
+      const label = attName || m.text || "";
       const img = m.image;
       if (img && "bytes" in img && img.bytes) {
-        const attName = m.attachments?.find((a) => a.kind === "image")?.name;
-        chatImages.push({ bytes: img.bytes, mimeType: img.mimeType, label: attName || m.text || "" });
+        chatImages.push({ label, get: async () => ({ bytes: img.bytes.slice(0), mimeType: img.mimeType }) });
+      } else if (img && !("bytes" in img) && "id" in img && img.id && !seen.has(img.id)) {
+        const id = img.id;
+        seen.add(id);
+        chatImages.push({
+          label,
+          get: async () => {
+            const blob = await libraryStore.getImageBlob?.(activeBuddyIdRef.current, id).catch(() => undefined);
+            if (!blob) throw new Error(`couldn't load image "${label || id}" from storage`);
+            return { bytes: blob.bytes.slice(0), mimeType: blob.mimeType };
+          },
+        });
       }
     }
     if (chatImages.length === 0) {
@@ -4556,7 +4613,7 @@ export function App() {
       }
       picked = match;
     }
-    return { bytes: picked.bytes.slice(0), mimeType: picked.mimeType };
+    return picked.get();
   };
 
   // Animate an existing image into a short video (image-to-video) via the local ComfyUI engine. Mirrors
@@ -4566,6 +4623,7 @@ export function App() {
     if (buddyRenderingRef.current) return;
     buddyRenderingRef.current = true;
     setBuddyPendingTool(undefined);
+    const seq = buddyTurnSeq.current; // bail if Clear/switch/Stop supersedes this render (H1)
     await ensureRenderEngineReady();
     const pre = pendingBuddyTranscript.current;
     const preHistory = pendingBuddyHistory.current;
@@ -4596,6 +4654,7 @@ export function App() {
       buddyRenderingRef.current = false;
     }
     setBuddyActivity("");
+    if (buddyTurnSeq.current !== seq) return; // superseded mid-render → drop silently (H1)
     const feedback = formatToolResult(call, { video: { ok: Boolean(out.video), ...(out.error ? { error: out.error } : {}) } });
     appendBuddy({
       role: "tool",
@@ -4627,6 +4686,7 @@ export function App() {
     if (buddyRenderingRef.current) return;
     buddyRenderingRef.current = true;
     setBuddyPendingTool(undefined);
+    const seq = buddyTurnSeq.current; // bail if Clear/switch/Stop supersedes this render (H1)
     await ensureRenderEngineReady();
     const pre = pendingBuddyTranscript.current;
     const preHistory = pendingBuddyHistory.current;
@@ -4662,9 +4722,13 @@ export function App() {
           source: { kind: "last" as const },
           ...(call.frames !== undefined ? { frames: call.frames } : {}),
         };
-        // Only clip 1 does the VRAM hand-off; the rest keep the video model resident (warmBatch).
+        // VRAM residency across the batch: only clip 1 does the pre-render hand-off (warmBatch skips it
+        // for 2..N); every clip BUT the last keeps the ~30 GB model resident afterward (keepResident
+        // skips the post-render /free), so the next clip finds it warm. The last clip frees. Without
+        // both flags every clip evict+reloaded the model — minutes of dead time per clip (V1).
         const r = await chatVideo(clipCall, src, models, params, {
           warmBatch: i > 0,
+          keepResident: i < n - 1,
           onProgress: (f) => setBuddyActivity(`Rendering clip ${i + 1}/${n}… ${Math.round(f * 100)}%`),
         });
         if (r.error || !r.video) throw new Error(`clip ${i + 1} of ${n} failed: ${r.error ?? "no clip produced"}`);
@@ -4694,6 +4758,7 @@ export function App() {
       buddyRenderingRef.current = false;
     }
     setBuddyActivity("");
+    if (buddyTurnSeq.current !== seq) return; // superseded mid-render → drop silently (H1)
     const feedback = formatToolResult(call, { video: { ok: Boolean(out.video), ...(out.error ? { error: out.error } : {}) } });
     appendBuddy({
       role: "tool",
@@ -4775,6 +4840,7 @@ export function App() {
     if (buddyRenderingRef.current) return;
     buddyRenderingRef.current = true;
     setBuddyPendingTool(undefined);
+    const seq = buddyTurnSeq.current; // bail if Clear/switch/Stop supersedes this stitch (H1)
     const pre = pendingBuddyTranscript.current;
     const preHistory = pendingBuddyHistory.current;
     pendingBuddyTranscript.current = [];
@@ -4799,6 +4865,7 @@ export function App() {
       buddyRenderingRef.current = false;
     }
     setBuddyActivity("");
+    if (buddyTurnSeq.current !== seq) return; // superseded mid-stitch → drop silently (H1)
     const feedback = formatBuddyToolResult(call, { video: { ok: Boolean(out.video), ...(out.error ? { error: out.error } : {}) } });
     appendBuddy({
       role: "tool",
@@ -5720,7 +5787,14 @@ export function App() {
       );
       if (atts.length) setBuddyAttachments([]); // consumed the ready chips (a still-reading one stays)
       if (isRemoteClient) {
-        if (text.trim() || atts.length) sendAppSync({ type: "vrcmd:chatSend", text, ...(atts.length ? { attachments: atts } : {}) });
+        // Shrink image attachments before they ride the relay — a full-res phone photo overruns the
+        // tunnel frame ceiling and the send silently vanishes (H4).
+        const relayAtts: ChatSendAttachment[] = await Promise.all(
+          atts.map(async (a) =>
+            a.kind === "image" && a.image ? { ...a, image: await downscaleImageForRelay(a.image) } : a,
+          ),
+        );
+        if (text.trim() || relayAtts.length) sendAppSync({ type: "vrcmd:chatSend", text, ...(relayAtts.length ? { attachments: relayAtts } : {}) });
         return;
       }
       await runBuddyTurnWithAttachments(text, atts);
@@ -5916,6 +5990,7 @@ export function App() {
     setBuddyWorkflow(undefined);
     buddyWorkflowRef.current = undefined;
     buddyStepEvidenceRef.current = { toolResults: [], text: "" };
+    appManagedNudgeRef.current = { stepId: "", count: 0 }; // else a cleared step's nudge budget leaks into the next chat (H7)
     setBuddyPendingTool(undefined);
     createdFilesRef.current = [];
     setFileLedger([]);
@@ -5952,6 +6027,7 @@ export function App() {
     setBuddyWorkflow(undefined); // app-managed workflow is per-session too — don't leak it across a switch
     buddyWorkflowRef.current = undefined;
     buddyStepEvidenceRef.current = { toolResults: [], text: "" };
+    appManagedNudgeRef.current = { stepId: "", count: 0 }; // per-session nudge budget — don't leak across a switch (H7)
     setBuddyPendingTool(undefined);
     // The context-usage badge is per-conversation — clear it on a session switch so it doesn't show
     // the previous window's % (it repopulates from the new session's next turn).
@@ -6311,6 +6387,7 @@ export function App() {
       buddyMessages.map((m) => ({
         role: m.role,
         text: m.text,
+        ...(typeof m.at === "number" ? { at: m.at } : {}), // stable React key so a delete doesn't shift child state (U1)
         ...(m.image ? { image: m.image } : {}),
         // Only render the inline player when the clip's bytes are present — a byte-less `{ id }` video
         // (stripped for the mirror / externalized to disk) shows via its file card until it re-hydrates.

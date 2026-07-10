@@ -5,6 +5,7 @@ import {
   SlashMenu,
   ThinkingBlock,
   UsageDisclosure,
+  chatMessageKeys,
   completeSlash,
   type BuildDocumentFn,
   type ChatMessageVM,
@@ -202,7 +203,18 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
   useEffect(() => {
     const el = scrollRef.current;
     if (el && nearBottomRef.current) el.scrollTop = el.scrollHeight;
-  }, [props.messages.length, props.streamingText, props.activity, props.pendingTool]);
+    // Every element rendered INTO the scroll area must be a dep, or its growth leaves the view stranded
+    // above the newest content: the thinking disclosure, the plan checklist, and the live step log all
+    // grow the column but were missing here (U5).
+  }, [
+    props.messages.length,
+    props.streamingText,
+    props.activity,
+    props.pendingTool,
+    props.thinking,
+    props.plan?.steps.length,
+    props.steps?.length,
+  ]);
 
   // Voice mode (optional, browser-only): dictate with the mic, hear replies read aloud.
   const speechApi = useMemo(() => {
@@ -444,9 +456,11 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                   : "")}
           </div>
         )}
-        {props.messages.map((m, i) => (
+        {chatMessageKeys(props.messages).map((mkey, i) => {
+          const m = props.messages[i]!;
+          return (
           <MessageBubble
-            key={i}
+            key={mkey}
             message={m}
             index={i}
             {...(props.onDeleteMessage ? { onDelete: props.onDeleteMessage } : {})}
@@ -459,7 +473,8 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             {...(props.desktop ? { desktop: props.desktop } : {})}
             onAction={props.onSend}
           />
-        ))}
+          );
+        })}
         {props.thinking ? <ThinkingBlock text={props.thinking} /> : null}
         {props.streamingText ? (
           <MessageBubble message={{ role: "assistant", text: props.streamingText }} />

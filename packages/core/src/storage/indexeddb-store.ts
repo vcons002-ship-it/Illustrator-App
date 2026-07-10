@@ -50,7 +50,13 @@ function dumpStore(db: IDBDatabase, name: string): Promise<{ key: string; value:
 /** Recursively replace ArrayBuffers with `{ __ab: <base64> }` so a value round-trips through JSON. */
 function encodeBuffers(value: unknown): unknown {
   if (value instanceof ArrayBuffer) return { __ab: bytesToBase64(value) };
-  if (ArrayBuffer.isView(value)) return { __ab: bytesToBase64((value as ArrayBufferView).buffer as ArrayBuffer) };
+  if (ArrayBuffer.isView(value)) {
+    // Encode ONLY the view's own window. A typed-array/DataView subview (e.g. `u8.subarray(4, 8)`)
+    // shares a larger backing buffer; `.buffer` alone would embed the whole thing — foreign bytes and
+    // all — so slice out exactly [byteOffset, byteOffset + byteLength).
+    const v = value as ArrayBufferView;
+    return { __ab: bytesToBase64((v.buffer as ArrayBuffer).slice(v.byteOffset, v.byteOffset + v.byteLength)) };
+  }
   if (Array.isArray(value)) return value.map(encodeBuffers);
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};

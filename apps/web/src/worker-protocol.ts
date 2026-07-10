@@ -144,6 +144,9 @@ export type MainToWorker =
       params?: VideoRenderParams;
       /** Long-form batch clip 2..N: keep the video model resident (skip the pre-render VRAM hand-off). */
       warmBatch?: boolean;
+      /** Long-form batch, every clip BUT the last: keep the video model resident AFTER the render (skip
+       * the post-render /free), so the next clip finds it warm. The last clip leaves this unset and frees. */
+      keepResident?: boolean;
     }
   /** Send a user-APPROVED send_email tool call (answered by `buddyEmailSent`). */
   | {

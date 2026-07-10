@@ -9,6 +9,7 @@ import { GeminiNativeImageProvider, pickBestGeminiImageModel } from "./image/gem
 import { OpenAIImageProvider } from "./image/openai-image-provider.js";
 import { OpenAINativeImageProvider } from "./image/openai-native-image-provider.js";
 import { FluxProvider } from "./image/flux-provider.js";
+import { ClaudeProvider } from "./llm/claude-provider.js";
 import {
   ComfyUIBackend,
   assetStem,
@@ -195,7 +196,10 @@ describe("GeminiLLMProvider", () => {
     });
 
     const req = transport.requests[0]!;
-    expect(req.url).toContain("models/gemini-2.0-flash:generateContent?key=KEY");
+    expect(req.url).toContain("models/gemini-2.0-flash:generateContent");
+    // The key travels in the header, never the query string (proxies/devtools log URLs).
+    expect(req.url).not.toContain("key=");
+    expect(req.headers?.["x-goog-api-key"]).toBe("KEY");
     expect((req.body as Record<string, unknown>).generationConfig).toMatchObject({
       responseMimeType: "application/json",
     });
@@ -240,9 +244,11 @@ describe("GeminiLLMProvider", () => {
   });
 
   it("ground=true never sends tools for FICTION, and retries ungrounded if the grounded call is rejected", async () => {
-    const emptyExtraction = JSON.stringify({ characters: [], environments: [], spoilers: [] });
+    // A minimal but NON-empty extraction (a summary) — an all-empty body now fails the extraction guard,
+    // so use real-ish content: this test is about tool selection + retry, not the empty-commit path.
+    const extraction = JSON.stringify({ characters: [], environments: [], spoilers: [], summary: "s" });
     const fiction = new FakeTransport(() => ({
-      json: { candidates: [{ content: { parts: [{ text: emptyExtraction }] } }] },
+      json: { candidates: [{ content: { parts: [{ text: extraction }] } }] },
     }));
     const p1 = new GeminiLLMProvider({ apiKey: "KEY", transport: fiction, ground: true });
     await p1.extractEntities({ bookId: "b", chapterIndex: 0, chapterText: "x", existing: emptyBible() });
@@ -252,7 +258,7 @@ describe("GeminiLLMProvider", () => {
     const flaky = new FakeTransport((_req, i) =>
       i === 0
         ? { ok: false, status: 400 }
-        : { json: { candidates: [{ content: { parts: [{ text: emptyExtraction }] } }] } },
+        : { json: { candidates: [{ content: { parts: [{ text: extraction }] } }] } },
     );
     const p2 = new GeminiLLMProvider({ apiKey: "KEY", transport: flaky, ground: true });
     const bible = await p2.extractEntities({
@@ -265,6 +271,73 @@ describe("GeminiLLMProvider", () => {
     expect(flaky.requests).toHaveLength(2);
     expect((flaky.requests[1]!.body as { tools?: unknown[] }).tools).toBeUndefined();
     expect(bible.processedChapters).toContain(0); // analysis survived the rejection
+  });
+
+  it("THROWS instead of committing an empty chapter on unparseable JSON", async () => {
+    const transport = new FakeTransport(() => ({
+      json: { candidates: [{ content: { parts: [{ text: "{ not valid json" }] } }] },
+    }));
+    const provider = new GeminiLLMProvider({ apiKey: "KEY", transport });
+    await expect(
+      provider.extractEntities({ bookId: "b", chapterIndex: 0, chapterText: "x", existing: emptyBible() }),
+    ).rejects.toThrow(/not parseable JSON/);
+  });
+
+  it("THROWS on a MAX_TOKENS truncation even if the partial JSON happened to parse", async () => {
+    const transport = new FakeTransport(() => ({
+      json: {
+        candidates: [
+          { content: { parts: [{ text: JSON.stringify({ summary: "s" }) }] }, finishReason: "MAX_TOKENS" },
+        ],
+      },
+    }));
+    const provider = new GeminiLLMProvider({ apiKey: "KEY", transport });
+    await expect(
+      provider.extractEntities({ bookId: "b", chapterIndex: 0, chapterText: "x", existing: emptyBible() }),
+    ).rejects.toThrow(/truncated at the token limit/);
+  });
+
+  it("THROWS on an empty-but-valid extraction body (no entities, no grounded sources)", async () => {
+    const transport = new FakeTransport(() => ({
+      json: { candidates: [{ content: { parts: [{ text: JSON.stringify({ characters: [] }) }] } }] },
+    }));
+    const provider = new GeminiLLMProvider({ apiKey: "KEY", transport });
+    await expect(
+      provider.extractEntities({ bookId: "b", chapterIndex: 0, chapterText: "x", existing: emptyBible() }),
+    ).rejects.toThrow(/empty extraction/);
+  });
+});
+
+describe("ClaudeProvider extraction (fail-loud on empty/truncated)", () => {
+  /** A fetch returning a canned Anthropic Message; `content`/`stop_reason` drive the parse outcome. */
+  const claudeFetch = (content: unknown[], stopReason: string): typeof fetch =>
+    (async () =>
+      new Response(
+        JSON.stringify({
+          id: "msg_1",
+          type: "message",
+          role: "assistant",
+          model: "claude-haiku-4-5",
+          content,
+          stop_reason: stopReason,
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+
+  it("THROWS when parsed_output is null (no text block → schema mismatch / refusal)", async () => {
+    const p = new ClaudeProvider({ apiKey: "k", fetch: claudeFetch([], "end_turn") });
+    await expect(
+      p.extractEntities({ bookId: "b", chapterIndex: 0, chapterText: "x", existing: emptyBible() }),
+    ).rejects.toThrow(/no structured output/);
+  });
+
+  it("THROWS on a max_tokens stop (truncation) rather than committing an empty chapter", async () => {
+    const p = new ClaudeProvider({ apiKey: "k", fetch: claudeFetch([], "max_tokens") });
+    await expect(
+      p.extractEntities({ bookId: "b", chapterIndex: 0, chapterText: "x", existing: emptyBible() }),
+    ).rejects.toThrow(/truncated at the token limit/);
   });
 });
 
@@ -480,6 +553,26 @@ describe("FluxProvider", () => {
     );
     const provider = new FluxProvider({ apiKey: "KEY", transport, pollIntervalMs: 0 });
     await expect(provider.generate(imageInput)).rejects.toThrow(/Content Moderated/);
+  });
+
+  it("uses input.seed when set (a pinned keyEvent seed), else the anchor seed", async () => {
+    const png = new TextEncoder().encode("X").buffer;
+    const submit = (): { json: unknown } => ({ json: { id: "a", polling_url: "https://p" } });
+    const ready = (): { json: unknown } => ({ json: { status: "Ready", result: { sample: "https://i/x.png" } } });
+    // Explicit seed wins over the anchor.
+    {
+      const transport = new FakeTransport((_req, i) => (i === 0 ? submit() : i === 1 ? ready() : { bytes: png }));
+      const provider = new FluxProvider({ apiKey: "KEY", transport, pollIntervalMs: 0 });
+      await provider.generate({ ...imageInput, seed: 123, anchors: [{ seed: 999 }] });
+      expect((transport.requests[0]!.body as { seed?: number }).seed).toBe(123);
+    }
+    // No explicit seed → fall back to the first anchor's seed.
+    {
+      const transport = new FakeTransport((_req, i) => (i === 0 ? submit() : i === 1 ? ready() : { bytes: png }));
+      const provider = new FluxProvider({ apiKey: "KEY", transport, pollIntervalMs: 0 });
+      await provider.generate({ ...imageInput, anchors: [{ seed: 999 }] });
+      expect((transport.requests[0]!.body as { seed?: number }).seed).toBe(999);
+    }
   });
 });
 

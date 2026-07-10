@@ -15,12 +15,19 @@ export interface ConcatOptions {
 }
 
 /**
- * ffmpeg argv to grab a still near the END of a clip — its last frame — to seed the NEXT clip in a
- * seamless chained render. `-sseof -0.2` seeks to 0.2s before the end (robust across containers, avoids
- * landing past the final frame), then `-frames:v 1` writes exactly one image to `outPath` (a .png).
+ * ffmpeg argv to grab a clip's LAST frame — to seed the NEXT clip in a seamless chained render.
+ *
+ * Deliberately NO end-relative seek (`-sseof`): the animated-WEBP demuxer (Wan clips are
+ * `SaveAnimatedWEBP`) doesn't support it, so `-sseof` either errors or silently seeds every clip from
+ * frame 0 — freezing the whole "seamless" chain. Instead decode forward and `-update 1` overwrites the
+ * SAME single-image output for every frame, so the last write left on disk IS the real final frame.
+ * That works on every demuxer (webp / mp4 / gif alike), buffers nothing (clips can be any length), and
+ * keeps the output a single `.png`. `reverse`-then-first-frame would also work but must buffer the
+ * whole clip in memory, so `-update 1` is the more robust pick. (No `-frames:v 1` — that would stop
+ * after frame 0; `-update 1` must decode the WHOLE stream so the FINAL overwrite is the last frame.)
  */
 export function buildLastFrameArgs(clipPath: string, outPath: string): string[] {
-  return ["-y", "-sseof", "-0.2", "-i", clipPath, "-frames:v", "1", outPath];
+  return ["-y", "-i", clipPath, "-update", "1", outPath];
 }
 
 /**

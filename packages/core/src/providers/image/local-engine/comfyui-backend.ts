@@ -1148,14 +1148,29 @@ export class ComfyUIBackend implements LocalEngineBackend {
     } finally {
       socket?.close();
       signal?.removeEventListener("abort", onAbort);
-      // Always release the video model's VRAM — it's large, and a chat LLM is usually waiting to reload.
-      await this.freeMemory();
+      // Release the video model's VRAM — it's large, and a chat LLM is usually waiting to reload.
+      // EXCEPT in a long-form batch (`keepResident`): freeing here would unload the ~30 GB video
+      // model between clips, forcing a full multi-minute reload for every clip; the orchestrator
+      // keeps it resident and frees ONCE after the last clip (whose input leaves keepResident unset).
+      if (input.keepResident !== true) await this.freeMemory();
     }
   }
 
-  /** POST a workflow to /prompt with ONE retry after a short pause for transient failures (network
-   * error / 5xx) — a single blip (engine restarting, proxy 502) used to kill the whole render. A user
-   * cancel and 4xx rejections are never retried, and a second failure surfaces exactly as before. */
+  /**
+   * POST a workflow to /prompt with ONE retry after a short pause — but ONLY when it's IDEMPOTENT-safe.
+   *
+   * A resubmit is safe only if ComfyUI provably never accepted the first submit. A definitive 5xx STATUS
+   * proves that: the server responded and rejected the submit WITHOUT enqueuing a render (engine
+   * restarting, proxy 502), so resending the identical graph can't double-render. A THROWN error (no
+   * Response at all) is NOT retried: we can't tell a pre-send failure (connection refused / DNS) from a
+   * response-read failure AFTER the POST was already accepted and the render enqueued — and blindly
+   * resending the latter would double-render (a 5-minute video rendered twice). Distinguishing the two
+   * isn't possible at the Transport seam, so we narrow the retry to 5xx and let a thrown error surface.
+   *
+   * Residual risk: a genuine pre-send blip while the engine is still starting is now surfaced instead of
+   * silently retried; the engine-ready/caller flow re-attempts. That trades a little startup resilience
+   * for never double-rendering an accepted job. A user cancel and 4xx rejections are never retried.
+   */
   private async submitPrompt(workflow: Record<string, unknown>, signal?: AbortSignal): Promise<PromptResponse> {
     const send = (): Promise<TransportResponse> =>
       this.transport.send({
@@ -1164,13 +1179,10 @@ export class ComfyUIBackend implements LocalEngineBackend {
         body: { prompt: workflow, client_id: this.clientId },
         ...(signal ? { signal } : {}),
       });
-    let submit: TransportResponse | undefined;
-    try {
-      submit = await send();
-    } catch (err) {
-      if (signal?.aborted) throw err; // the reader cancelled — not a transient failure
-    }
-    if (submit && !shouldRetryPromptSubmit(submit.status)) {
+    // No try/catch: a thrown error (network drop / abort) propagates immediately — resending it could
+    // double-render an already-accepted job.
+    const submit = await send();
+    if (!shouldRetryPromptSubmit(submit.status)) {
       if (!submit.ok) throw new Error(await comfyPromptError(submit));
       return submit.json<PromptResponse>();
     }
@@ -1473,9 +1485,17 @@ export function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
     graph["4"] = { class_type: "CheckpointLoaderSimple", inputs: { ckpt_name: p.model } };
   }
   if (p.initImage) {
-    // img2img: load the uploaded photo and encode it to the latent the sampler denoises from.
+    // img2img: load the uploaded photo, SCALE it to the clamped target (so a 4032×3024 phone photo
+    // doesn't sample at ~12 MP → OOM/artifacts), then encode to the latent the sampler denoises from.
+    // Mirrors the LTX graph's LoadImage→ImageScale→… ordering. The scale node sits at "2" (the base
+    // graph starts at "3", so "0".."2" are always free) — clear of shift (17), hires (18/19), and the
+    // IP-Adapter chain (20+), whatever combination is active.
     graph["15"] = { class_type: "LoadImage", inputs: { image: p.initImage.filename } };
-    graph["16"] = { class_type: "VAEEncode", inputs: { pixels: ["15", 0], vae: vaeRef } };
+    graph["2"] = {
+      class_type: "ImageScale",
+      inputs: { image: ["15", 0], upscale_method: "lanczos", width: p.width, height: p.height, crop: "center" },
+    };
+    graph["16"] = { class_type: "VAEEncode", inputs: { pixels: ["2", 0], vae: vaeRef } };
   } else {
     // HiDream uses the 16-channel SD3 latent (it shares the Flux VAE), matching the official
     // workflow; other families' EmptyLatentImage is channel-fixed by the sampler at run time.

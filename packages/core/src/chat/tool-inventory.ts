@@ -63,6 +63,10 @@ export const TOOL_INVENTORY: ToolEntry[] = [
 
   // Image generation & settings
   { tool: "generate_image", capability: "generate an image", disposition: "kept" },
+  // Video generation (image-to-video via the local ComfyUI engine) — stitch_videos already listed below
+  // under task orchestration; these two are the render entry points and must be guarded too.
+  { tool: "generate_video", capability: "video generation", disposition: "kept" },
+  { tool: "generate_long_video", capability: "video generation", disposition: "kept" },
   { tool: "set_visual_style", capability: "art style & cadence", disposition: "kept" },
   { tool: "update_setting", capability: "change a setting", disposition: "kept" },
   { tool: "setup_help", capability: "guided setup", disposition: "kept" },
@@ -113,7 +117,11 @@ export const TOOL_INVENTORY: ToolEntry[] = [
   { tool: "find_files", capability: "find files on the PC", disposition: "kept" },
   { tool: "read_file", capability: "read any local file", disposition: { mergedInto: "read" } },
   { tool: "write_file", capability: "write to the workspace", disposition: "kept" },
+  // In-place search/replace editing of an existing workspace file (no whole-file rewrite).
+  { tool: "edit_file", capability: "edit a workspace file", disposition: "kept" },
   { tool: "run_command", capability: "run & test code", disposition: "kept" },
+  // Hand a scoped multi-file coding job to an external headless coding agent (Aider).
+  { tool: "delegate_coding_task", capability: "delegate a coding task", disposition: "kept" },
   { tool: "screenshot", capability: "see the screen", disposition: "kept" },
   { tool: "spawn_agents", capability: "parallel sub-agents", disposition: "kept" },
   { tool: "spawn_coding_agents", capability: "parallel coding agents", disposition: "kept" },

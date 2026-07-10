@@ -71,8 +71,10 @@ export class FluxProvider implements ImageProvider {
       headers,
       body: {
         prompt: input.prompt,
-        // Identity anchors → deterministic seed for character consistency.
-        seed: input.anchors[0]?.seed,
+        // An explicit render seed (e.g. a pinned keyEvent seed) wins, else the identity anchor's
+        // seed for character consistency — matching the local backends' `input.seed ?? anchor` order,
+        // so a pinned-seed re-render actually reproduces.
+        seed: input.seed ?? input.anchors[0]?.seed,
         width: input.width ?? 1024,
         height: input.height ?? 1024,
         steps: input.quality === "sketch" ? 4 : input.quality === "standard" ? 20 : 40,

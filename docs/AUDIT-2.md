@@ -1,5 +1,13 @@
 # Full-code audit #2 (July 2026)
 
+> **✅ RESOLVED (July 2026).** Every finding below — all 5 areas, ~30 items across security, video,
+> workflow, host, reliability, and UI — has been fixed and shipped, verified green against the full
+> suite (`pnpm -r typecheck`, `npx vitest run` 1677 pass, `pnpm lint`, web build, and
+> `cargo check --target x86_64-pc-windows-gnu`). This document is kept as the historical record of
+> what was found and why. The one deliberate non-change is S8's `spawn_a1111` adopt race (left as-is
+> by design — a suspended-spawn would need a manual `CreateProcessW` reimplementation; the
+> kill-on-close Job Object already reaps any child spawned in the race window).
+
 A five-track read-only audit (core chat/tools/workflow · core providers/storage/epub · web host +
 worker · UI + extension · Rust shell + security), run after Phases 1–5 and the video/task/gallery
 work. Findings are grouped by area and ordered by severity within each. Every item names file:line
