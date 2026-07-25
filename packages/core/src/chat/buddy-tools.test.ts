@@ -765,6 +765,30 @@ describe("buildBuddySystemPrompt", () => {
     expect(on).toContain('"tool":"plan_task"');
     expect(on).toContain('"tool":"schedule_task"');
     expect(on).toContain('"tool":"cancel_scheduled"');
+    // The catalog must teach the ONE-TIME form too, or the model only ever writes recurring rules.
+    expect(on).toContain('"rule":"once"');
+    expect(on).toContain('"date":"YYYY-MM-DD"');
+  });
+
+  it("parses a ONE-TIME schedule_task with a run date (and drops a malformed / recurring-rule date)", () => {
+    const once = parseBuddyToolCall(
+      JSON.stringify({ tool: "schedule_task", title: "Call the dentist", prompt: "remind me to call the dentist", rule: "once", date: "2026-07-04", time: "17:30" }),
+    );
+    expect(once).toEqual({ tool: "schedule_task", title: "Call the dentist", prompt: "remind me to call the dentist", rule: "once", time: "17:30", date: "2026-07-04" });
+    // Not a YYYY-MM-DD → dropped (the scheduler then falls back to the next occurrence of `time`).
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "schedule_task", title: "T", prompt: "p", rule: "once", date: "next friday" }))).toEqual({
+      tool: "schedule_task",
+      title: "T",
+      prompt: "p",
+      rule: "once",
+    });
+    // A date means nothing on a recurring rule → dropped.
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "schedule_task", title: "T", prompt: "p", rule: "daily", date: "2026-07-04" }))).toEqual({
+      tool: "schedule_task",
+      title: "T",
+      prompt: "p",
+      rule: "daily",
+    });
   });
 
   it("gates the sub-agent fan-out tools (delegate + spawn_agents) behind canSubAgents", () => {

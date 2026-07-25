@@ -21,6 +21,10 @@ export interface ScheduledTask {
   rule: ScheduleRule;
   /** Local time-of-day "HH:MM" (24h) it should run. Default "09:00". */
   time: string;
+  /** ONE-TIME (`rule: "once"`): the local calendar day "YYYY-MM-DD" it runs on, paired with `time`.
+   * Omitted ⇒ the next time `time` comes around (today if it's still ahead, else tomorrow), which is
+   * what "remind me at 5pm" means. Ignored by the recurring rules. */
+  date?: string;
   /** Weekly: 0–6 (Sun–Sat). */
   weekday?: number;
   /** Monthly: day-of-month 1–31. */
@@ -70,14 +74,41 @@ function atDayOfMonth(year: number, month: number, dom: number, time: string): D
   const lastDay = new Date(year, month + 1, 0).getDate();
   return atTime(new Date(year, month, Math.min(dom, lastDay)), time);
 }
+/** A LOCAL datetime from "YYYY-MM-DD" + "HH:MM", or undefined when the date isn't a real calendar day.
+ * Built field-wise (not `new Date(string)`, which reads a bare date as UTC and would shift the run into
+ * the wrong local day); the round-trip check rejects overflow like "2026-02-31". */
+function onDate(date: string, time: string): Date | undefined {
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(date.trim());
+  if (!m) return undefined;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const at = atTime(new Date(y, mo - 1, d), time);
+  if (at.getFullYear() !== y || at.getMonth() !== mo - 1 || at.getDate() !== d) return undefined;
+  return at;
+}
+/** Is this a usable ISO datetime string? (Guards every place a bad/absent value would otherwise become
+ * an `Invalid Date` — whose `.toISOString()` THROWS.) */
+function validIso(iso: string | undefined): boolean {
+  return !!iso && !Number.isNaN(new Date(iso).getTime());
+}
 
 /**
- * The next datetime (strictly after `from`) a recurring task should run, per its rule +
- * time. "once" returns its current nextDue unchanged (it's a one-shot).
+ * The next datetime (strictly after `from`) a task should run, per its rule + time.
+ *
+ * "once" resolves its ONE run time from `date` + `time` (or, with no date, the next time `time` comes
+ * around). It deliberately does NOT read `nextDueIso`: that used to be the only source, so a fresh
+ * one-shot — which has no nextDueIso yet — produced `new Date("")` = Invalid Date, and the caller's
+ * `.toISOString()` threw. One-time scheduling was therefore impossible until this computed a real date.
  */
-export function nextDue(task: Pick<ScheduledTask, "rule" | "time" | "weekday" | "dayOfMonth" | "nextDueIso">, from: Date): Date {
+export function nextDue(task: Pick<ScheduledTask, "rule" | "time" | "weekday" | "dayOfMonth" | "nextDueIso" | "date">, from: Date): Date {
   const time = clampTime(task.time);
-  if (task.rule === "once") return new Date(task.nextDueIso);
+  if (task.rule === "once") {
+    const exact = task.date ? onDate(task.date, time) : undefined;
+    if (exact) return exact;
+    // Already-scheduled one-shot with no (or an unparseable) date: keep the time it was given.
+    if (!task.date && validIso(task.nextDueIso)) return new Date(task.nextDueIso);
+    const today = atTime(from, time);
+    return today > from ? today : atTime(addDays(from, 1), time);
+  }
   if (task.rule === "daily") {
     const d = atTime(from, time);
     return d > from ? d : atTime(addDays(from, 1), time);
@@ -105,6 +136,9 @@ export function normalizeScheduledTask(input: Partial<ScheduledTask> & { title: 
     prompt: input.prompt.trim().slice(0, MAX_PROMPT),
     rule,
     time,
+    // A calendar day only means anything for a one-shot; drop it on the recurring rules so it can't
+    // linger and confuse a later edit.
+    ...(rule === "once" && input.date ? { date: input.date.trim() } : {}),
     ...(input.weekday !== undefined ? { weekday: Math.min(6, Math.max(0, Math.round(input.weekday))) } : {}),
     ...(input.dayOfMonth !== undefined ? { dayOfMonth: Math.min(31, Math.max(1, Math.round(input.dayOfMonth))) } : {}),
     enabled: input.enabled ?? true,
@@ -112,8 +146,9 @@ export function normalizeScheduledTask(input: Partial<ScheduledTask> & { title: 
     ...(input.lastRunIso ? { lastRunIso: input.lastRunIso } : {}),
     nextDueIso: input.nextDueIso ?? "",
   };
-  // Compute the first run when not supplied (or for a fresh recurring task).
-  if (!base.nextDueIso) base.nextDueIso = nextDue(base, now).toISOString();
+  // Compute the first run when not supplied (fresh task) — or when what we were handed isn't a real
+  // datetime, so a corrupt/empty stored value can never survive as an Invalid Date.
+  if (!validIso(base.nextDueIso)) base.nextDueIso = nextDue(base, now).toISOString();
   return base;
 }
 
@@ -136,7 +171,8 @@ export function describeSchedule(task: ScheduledTask): string {
   if (task.rule === "daily") return `Daily ${at}`;
   if (task.rule === "weekly") return `Weekly on ${WEEKDAYS[task.weekday ?? 1]} ${at}`;
   if (task.rule === "monthly") return `Monthly on day ${task.dayOfMonth ?? 1} ${at}`;
-  return `Once — ${new Date(task.nextDueIso).toLocaleString()}`;
+  // One-shot: show the actual moment it runs (never "Invalid Date" — see validIso).
+  return validIso(task.nextDueIso) ? `Once — ${new Date(task.nextDueIso).toLocaleString()}` : `Once ${at}`;
 }
 
 // ---- Store (bounded JSON array under one key, mirroring tasks.ts) -----------

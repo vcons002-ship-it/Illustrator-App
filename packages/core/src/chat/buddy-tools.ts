@@ -376,14 +376,17 @@ export type BuddyToolCall =
   /** Plan a multi-step real-world task from a natural-language request (the host
    * researches it, builds a step plan, schedules reminders, and opens it). */
   | { tool: "plan_task"; request: string }
-  /** Schedule a RECURRING action the assistant runs on a cadence while the app is open
-   * (e.g. "every morning summarise my unread email"). `prompt` is what to do each time. */
+  /** Schedule an action the assistant runs while the app is open — either RECURRING on a cadence
+   * ("every morning summarise my unread email") or ONE-TIME with `rule:"once"` ("remind me to call
+   * the dentist on Friday at 5pm", `date:"2026-07-04"`). `prompt` is what to do when it fires. */
   | {
       tool: "schedule_task";
       title: string;
       prompt: string;
       rule: "daily" | "weekly" | "monthly" | "once";
       time?: string;
+      /** One-time only: the calendar day "YYYY-MM-DD" to run on (omit ⇒ the next time `time` comes around). */
+      date?: string;
       weekday?: number;
       dayOfMonth?: number;
     }
@@ -1349,11 +1352,14 @@ export function buildBuddySystemPrompt(opts: {
         "ids from list_task_plans / get_task_plan first if you don't have them — never guess an id, and confirm briefly " +
         "once it's done.\n" +
         '- {"tool":"schedule_task","title":"Morning email recap","prompt":"Summarise my unread email from the last day",' +
-        '"rule":"daily","time":"08:00"} — schedule a RECURRING action the assistant runs automatically while the app is open ' +
-        '(daily/weekly/monthly/once). Use when the reader says "every morning/day/week/Friday…", "remind me to…", "each ' +
-        'month…". "prompt" is exactly what you should DO when it fires (a self-contained instruction). For weekly add ' +
-        '"weekday" (0=Sun…6=Sat); for monthly add "dayOfMonth" (1–31); "time" is 24h "HH:MM". ' +
-        '{"tool":"list_scheduled"} to show them; {"tool":"cancel_scheduled","id":"…"} to remove one.\n'
+        '"rule":"daily","time":"08:00"} — schedule an action the assistant runs automatically while the app is open. ' +
+        '"prompt" is exactly what you should DO when it fires (a self-contained instruction); "time" is 24h "HH:MM".\n' +
+        '  · RECURRING — "rule":"daily" | "weekly" (add "weekday" 0=Sun…6=Sat) | "monthly" (add "dayOfMonth" 1–31). Use for ' +
+        '"every morning/day/week/Friday…", "each month…".\n' +
+        '  · ONE-TIME — "rule":"once" with "date":"YYYY-MM-DD" for the day it should fire (omit "date" and it runs the next ' +
+        'time "time" comes around — today if still ahead, else tomorrow). Use for "remind me on Friday at 5", "tomorrow ' +
+        'morning…", "on July 4th…". Resolve the reader\'s words to a REAL date from today\'s date, and say back when it will run.\n' +
+        '  {"tool":"list_scheduled"} to show them; {"tool":"cancel_scheduled","id":"…"} to remove one.\n'
       : "") +
     (opts.activeTask
       ? `${opts.activeTask}\nThis chat is working the task above. Help the reader finish the CURRENT step — do the ` +
@@ -2427,6 +2433,10 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     if (!title || !prompt) return undefined;
     const rule = obj.rule === "weekly" || obj.rule === "monthly" || obj.rule === "once" ? obj.rule : "daily";
     const time = strArg(obj.time, 8);
+    // One-time run day. Only a well-formed YYYY-MM-DD survives; anything else is dropped so the
+    // scheduler falls back to "the next time `time` comes around" rather than carrying junk.
+    const rawDate = strArg(obj.date, 10);
+    const date = rawDate && /^\d{4}-\d{1,2}-\d{1,2}$/.test(rawDate) ? rawDate : undefined;
     const weekday = typeof obj.weekday === "number" && Number.isFinite(obj.weekday) ? Math.min(6, Math.max(0, Math.round(obj.weekday))) : undefined;
     const dayOfMonth = typeof obj.dayOfMonth === "number" && Number.isFinite(obj.dayOfMonth) ? Math.min(31, Math.max(1, Math.round(obj.dayOfMonth))) : undefined;
     return {
@@ -2435,6 +2445,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       prompt,
       rule,
       ...(time ? { time } : {}),
+      ...(date && rule === "once" ? { date } : {}),
       ...(weekday !== undefined ? { weekday } : {}),
       ...(dayOfMonth !== undefined ? { dayOfMonth } : {}),
     };
