@@ -2,12 +2,18 @@ import type { StoredChatMessage } from "../storage/store.js";
 
 /**
  * How many bytes of inline image data the chat MIRROR may carry across the active session's history.
- * The snapshot / `vrsync:chat` frame rides ONE WebSocket message; a tunnel (Cloudflare) silently
- * drops an oversized frame, and on the phone the cached bytes can exhaust the storage quota (which
- * evicts the saved pairing token → the phone drops back to a local app). ~3 MB keeps the most-recent
- * images and the full text/structure of every message.
+ * The `vrsync:chat` frame rides ONE WebSocket message; a tunnel (Cloudflare) silently drops an
+ * oversized frame and the desktop relay hard-caps a message at 4 MiB, and on the phone the cached
+ * bytes can exhaust the storage quota (which evicts the saved pairing token → the phone drops back to
+ * a local app).
+ *
+ * Counted in RAW bytes, but they travel base64 — ~4/3 the size — so the budget must be derived from
+ * the on-the-wire ceiling, not set equal to it. At the old 3 MB this produced a ~4 MB frame: over the
+ * tunnel's limit and at the relay's cap, so a chat carrying its full allowance of images was dropped
+ * outright and the phone showed nothing. 2 MB raw ≈ 2.7 MB on the wire, leaving real headroom for the
+ * message text/structure in the same frame while still keeping the most-recent images.
  */
-export const CHAT_MIRROR_IMAGE_BUDGET = 3_000_000;
+export const CHAT_MIRROR_IMAGE_BUDGET = 2_000_000;
 
 /** Total media-byte weight a single message carries: the inline image, the inline VIDEO clip, PLUS every
  * file-card attachment (a generated image/clip is surfaced both inline AND as a universal file card, so

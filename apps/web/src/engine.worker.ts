@@ -3281,6 +3281,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           prompt: call.prompt,
           rule: call.rule,
           ...(call.time ? { time: call.time } : {}),
+          ...(call.date ? { date: call.date } : {}), // one-time run day
           ...(call.weekday !== undefined ? { weekday: call.weekday } : {}),
           ...(call.dayOfMonth !== undefined ? { dayOfMonth: call.dayOfMonth } : {}),
         });

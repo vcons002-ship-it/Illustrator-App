@@ -5,6 +5,26 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ## July 2026
 
+### Scheduled actions & the phone link
+
+- **One-time scheduled actions** — "remind me to call the dentist on Friday at 5" now works. Only
+  recurring cadences (daily/weekly/monthly) could actually be created before: a one-off had no way to
+  say *which day*, and attempting one failed outright. You can now give a specific date, or just a
+  time (it runs the next time that time comes around).
+- **Your phone shows the full chat again on open** — a linked phone used to sit on an empty "Chat 1"
+  until you sent a message, which then made everything appear. The desktop was packing the whole
+  re-sync — chat history, images, the open book — into a single message too big for the link, so the
+  phone silently received *nothing*. The re-sync is now sent in separate pieces, so your chat, tasks,
+  and library land immediately on connect.
+- **Scheduled actions appear on your phone** — the ⏰ Scheduled panel was always empty on mobile
+  (the phone was reading its own empty storage instead of the desktop's). It now mirrors the
+  desktop's schedule, and enabling/disabling or deleting one from your phone applies on the desktop.
+- **Scheduled actions no longer hijack your conversation** — a task firing used to drop itself into
+  whatever chat you had open, interrupting you and leaving its instructions in that conversation's
+  context (so the assistant would carry an unrelated "summarise my email" into later replies).
+  Scheduled work now runs in its own ⏰ Scheduled chat, and only after you've been idle a couple of
+  minutes — a due task waits for a lull rather than cutting in, and nothing is skipped.
+
 ### Audit #2 fixes (reliability, security, video, UI)
 
 - **Long-form video is dramatically faster** — a bug meant the ~30 GB video model was unloaded and

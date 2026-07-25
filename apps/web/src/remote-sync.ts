@@ -10,7 +10,7 @@
  * stream back over the same relay, so no model or data ever needs to live on the phone.
  */
 
-import type { BookSource, BookSummary, BuddyPersona, BuddyPlan, BuddyToolCall, BuddyToolResultPayload, CalendarEvent, ContextUsage, MemoryNote, Skill, StoredChatMessage, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
+import type { BookSource, BookSummary, BuddyPersona, BuddyPlan, BuddyToolCall, BuddyToolResultPayload, CalendarEvent, ContextUsage, MemoryNote, ScheduledTask, Skill, StoredChatMessage, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
 import type { InstalledModel, ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
 
 /**
@@ -147,7 +147,17 @@ export interface ChatSendAttachment {
   text?: string;
 }
 
-/** A full snapshot of what the desktop is showing — sent when a phone first asks (`vrcmd:hello`). */
+/**
+ * The LIGHT half of what the desktop is showing — sent first when a phone asks (`vrcmd:hello`).
+ *
+ * Deliberately excludes the two heavyweights, the CHAT (whose history carries up to
+ * CHAT_MIRROR_IMAGE_BUDGET ≈ 3 MB of inline images) and the open BOOK + bible (a whole novel's text):
+ * every frame rides ONE WebSocket message, and a tunnel silently DROPS an oversized one. Bundling
+ * everything together used to push the snapshot past that ceiling, so the phone got nothing at all and
+ * sat on an empty "Chat 1" until some later change pushed a small enough incremental frame. Those two
+ * now follow as their own `vrsync:chat` / `vrsync:book` frames (see `snapshotFrames`), so one heavy
+ * section can't blank the whole phone. Everything left here is metadata-sized.
+ */
 export interface MirrorSnapshot {
   /** A friendly desktop name for the phone's "Linked to …" header. */
   host?: string;
@@ -157,18 +167,15 @@ export interface MirrorSnapshot {
   inventory: EngineInventory;
   /** The desktop's tasks + calendar (so the phone's planner panels aren't empty). */
   planner: PlannerMirror;
-  /** The desktop's landing-page chat (sessions + active history) so the phone's chat isn't empty. */
-  chat: ChatMirror;
   /** The assistant's remembered notes (so the phone's Memory panel isn't empty). */
   memories: MemoryNote[];
   /** The assistant's saved skills/playbooks (so the phone's Skills panel isn't empty). */
   skills: Skill[];
+  /** The desktop's scheduled/periodic tasks (so the phone's ⏰ Scheduled panel isn't empty — the
+   * phone has no scheduler of its own; the desktop owns and fires them). */
+  scheduled: ScheduledTask[];
   /** The live state of any in-flight turn (so a phone joining mid-turn sees streaming/approvals). */
   live: ChatLive;
-  /** The currently-open book (undefined when the desktop is on the home screen). */
-  book?: BookSource;
-  /** The open book's analysis (illustrations/concept cards/charts are anchored from this). */
-  bible?: VisualBible;
   /** The desktop engine's live GPU VRAM (so a freshly-connected phone shows the indicator at once;
    * thereafter `vrsync:vram` pushes keep it current without re-sending the whole snapshot). */
   vram?: EngineVram;
@@ -185,6 +192,7 @@ export type SyncToPhone =
   | ({ type: "vrsync:chatLive" } & ChatLive)
   | { type: "vrsync:memories"; memories: MemoryNote[] } // the assistant's remembered notes → phone Memory panel
   | { type: "vrsync:skills"; skills: Skill[] } // the assistant's saved skills/playbooks → phone Skills panel
+  | { type: "vrsync:scheduled"; scheduled: ScheduledTask[] } // the desktop's scheduled tasks → phone ⏰ Scheduled panel
   | { type: "vrsync:vram"; vram?: EngineVram } // desktop GPU VRAM tick → phone status-bar indicator (frequent, lightweight; not folded into the heavier inventory push)
   | { type: "vrsync:book"; book?: BookSource; bible?: VisualBible }
   // Progress/result of an update the PHONE triggered (vrcmd:update). `reload` ⇒ the desktop applied a
@@ -207,6 +215,10 @@ export type CmdToDesktop =
   | { type: "vrcmd:home" } // leave the open book (back to the desktop's home screen)
   | { type: "vrcmd:settings"; settings: ReaderSettings } // phone edited settings → apply on the desktop (it renders)
   | { type: "vrcmd:planner"; command: PlannerCommand } // phone Tasks/Calendar action → run on the desktop
+  // Phone ⏰ Scheduled action → apply on the desktop (it owns the schedule store AND the runner, so a
+  // phone-local write would be invisible to the thing that actually fires them, then clobbered by the
+  // next vrsync:scheduled push).
+  | { type: "vrcmd:scheduled"; command: { action: "toggle"; id: string; enabled: boolean } | { action: "delete"; id: string } }
   // Landing-page chat actions the phone relays — the desktop owns the chat (it has the models + the
   // working folder), so the phone never runs a turn locally: it relays the intent, the desktop runs
   // its existing buddy handler, and the result flows back via the `vrsync:chat` mirror.

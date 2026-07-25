@@ -312,6 +312,15 @@ import {
  * book id. Additional sessions use ids like "__buddy__-<n>". */
 const BUDDY_CHAT_ID = "__buddy__";
 
+/** The session ⏰ scheduled tasks run in. They get their OWN conversation so a task firing can never
+ * be injected into (and pollute the context of) whichever chat the reader has open — its history is
+ * the scheduled runs, nothing else. Created on first fire. */
+const SCHEDULED_CHAT_ID = `${BUDDY_CHAT_ID}-scheduled`;
+/** How long the reader must be idle before a due scheduled task is allowed to fire. Firing switches
+ * the view to the Scheduled chat, so it waits for a lull instead of interrupting mid-conversation;
+ * a task stays due until then (nothing is skipped, just deferred). */
+const SCHEDULED_IDLE_MS = 120_000;
+
 /** One landing-page chat session: its own history (keyed by id) + working folder. */
 interface BuddySession {
   id: string;
@@ -1733,6 +1742,57 @@ export function App() {
     void libraryStore.deleteMemo?.(planMemoKey(activeBuddyIdRef.current)).catch(() => {});
     void libraryStore.deleteMemo?.(workflowMemoKey(activeBuddyIdRef.current)).catch(() => {});
   }, [libraryStore]);
+  // Scheduled / periodic tasks (agentic actions fired while the app is open — recurring or one-shot).
+  // Declared ABOVE the mirror hook because the phone snapshot carries them: the DESKTOP owns the store
+  // and the runner, and a linked phone only renders the mirrored list + relays its toggles/deletes back
+  // (a phone-local write would be invisible to the runner, then clobbered by the next mirror push).
+  const [showScheduled, setShowScheduled] = useState(false);
+  const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
+  const refreshScheduled = useCallback(() => {
+    // The phone shows the desktop's MIRRORED schedule; loading its own (empty) store would clobber it.
+    if (isRemoteClient) return;
+    void loadScheduledTasks(libraryStore).then(setScheduledTasks).catch(() => {});
+  }, [libraryStore, isRemoteClient]);
+  const toggleScheduled = useCallback(
+    async (id: string, enabled: boolean) => {
+      if (isRemoteClient) {
+        sendAppSync({ type: "vrcmd:scheduled", command: { action: "toggle", id, enabled } });
+        return;
+      }
+      const t = (await loadScheduledTasks(libraryStore)).find((x) => x.id === id);
+      if (t) await upsertScheduledTask(libraryStore, { ...t, enabled });
+      refreshScheduled();
+    },
+    [libraryStore, refreshScheduled, isRemoteClient, sendAppSync],
+  );
+  const removeScheduled = useCallback(
+    async (id: string) => {
+      if (isRemoteClient) {
+        sendAppSync({ type: "vrcmd:scheduled", command: { action: "delete", id } });
+        return;
+      }
+      await deleteScheduledTask(libraryStore, id);
+      refreshScheduled();
+    },
+    [libraryStore, refreshScheduled, isRemoteClient, sendAppSync],
+  );
+  useEffect(() => {
+    refreshScheduled();
+  }, [refreshScheduled]);
+  /** DESKTOP: run a ⏰ Scheduled action the phone relayed, then re-push the mirrored list. */
+  const applyScheduledCommand = useCallback(
+    (command: { action: "toggle"; id: string; enabled: boolean } | { action: "delete"; id: string }) => {
+      void (async () => {
+        if (command.action === "delete") await deleteScheduledTask(libraryStore, command.id).catch(() => {});
+        else {
+          const t = (await loadScheduledTasks(libraryStore)).find((x) => x.id === command.id);
+          if (t) await upsertScheduledTask(libraryStore, { ...t, enabled: command.enabled }).catch(() => {});
+        }
+        refreshScheduled();
+      })();
+    },
+    [libraryStore, refreshScheduled],
+  );
   // The whole phone-link mirror — hello snapshot, the vrsync/vrcmd relay-handler switch, the
   // per-slice desktop→phone push effects, and the phone's debounced settings relay — lives in
   // useRemoteMirror.ts. The refs it returns bridge the handler to chat/planner/host-tool machinery
@@ -1752,7 +1812,7 @@ export function App() {
     openLocalFileRef,
     connectLocalServerRef,
     downloadFfmpegRef,
-    buildSnapshotRef,
+    sendSnapshotRef,
     runUpdateForPhoneRef,
     phoneUpdatePending,
     runHostToolForRemoteRef,
@@ -1774,6 +1834,7 @@ export function App() {
     engineInventory,
     memories,
     skills,
+    scheduled: scheduledTasks,
     book,
     bible,
     effectiveVram,
@@ -1782,6 +1843,7 @@ export function App() {
     applyInventory,
     setMemories,
     setSkills,
+    setScheduled: setScheduledTasks,
     setBook,
     setBible,
     setRemoteVram,
@@ -1790,6 +1852,7 @@ export function App() {
     closeBook,
     refreshSkills,
     clearBuddyPlan,
+    applyScheduledCommand,
     bookRef,
     settingsRef,
     phoneExitedBookId,
@@ -2681,30 +2744,6 @@ export function App() {
     },
     [loadCalendarFor],
   );
-  // Scheduled / periodic tasks (recurring agentic actions fired while the app is open).
-  const [showScheduled, setShowScheduled] = useState(false);
-  const [scheduledTasks, setScheduledTasks] = useState<ScheduledTask[]>([]);
-  const refreshScheduled = useCallback(() => {
-    void loadScheduledTasks(libraryStore).then(setScheduledTasks).catch(() => {});
-  }, [libraryStore]);
-  const toggleScheduled = useCallback(
-    async (id: string, enabled: boolean) => {
-      const t = (await loadScheduledTasks(libraryStore)).find((x) => x.id === id);
-      if (t) await upsertScheduledTask(libraryStore, { ...t, enabled });
-      refreshScheduled();
-    },
-    [libraryStore, refreshScheduled],
-  );
-  const removeScheduled = useCallback(
-    async (id: string) => {
-      await deleteScheduledTask(libraryStore, id);
-      refreshScheduled();
-    },
-    [libraryStore, refreshScheduled],
-  );
-  useEffect(() => {
-    refreshScheduled();
-  }, [refreshScheduled]);
   // Markets panel: a TradingView chart for a ticker + a keyless quote snapshot.
   const [showStocks, setShowStocks] = useState(false);
   const [stockSymbol, setStockSymbol] = useState("AAPL");
@@ -2808,8 +2847,9 @@ export function App() {
       if (status.running && status.port) {
         // On every (re)connect, push a fresh snapshot so a phone already on the relay re-populates
         // even when only the desktop's bridge dropped (the phone won't re-`hello` while its own
-        // socket stayed up). `buildSnapshotRef` reads live state without re-binding this callback.
-        startHostBridge(`ws://127.0.0.1:${status.port}/`, token, () => sendAppSync(buildSnapshotRef.current()));
+        // socket stayed up). `sendSnapshotRef` reads live state without re-binding this callback, and
+        // sends the state as SEPARATE frames so one heavy section can't sink the whole re-sync.
+        startHostBridge(`ws://127.0.0.1:${status.port}/`, token, () => sendSnapshotRef.current());
       }
     },
     [startHostBridge, sendAppSync],
@@ -5811,29 +5851,56 @@ export function App() {
     [isRemoteClient, sendAppSync],
   );
 
-  // Scheduled-task runner: while the app is open, every ~minute fire the FIRST due task
-  // into the buddy chat (so the assistant executes its instruction), then advance its
-  // schedule. One per tick, and never while a turn is in flight, so it can't stampede.
+  // Scheduled-task runner: while the app is open, fire the FIRST due task so the assistant executes
+  // its instruction, then advance its schedule. One per tick, never while a turn is in flight.
+  //
+  // Scheduled work runs in its OWN session (SCHEDULED_CHAT_ID) and only once the reader has been idle:
+  // it used to be sent straight into whatever chat happened to be open, which both interrupted the
+  // conversation and left the task's prompt + answer in THAT session's context (the model then carried
+  // "summarise my unread email" into unrelated later turns). Now a due task can only land in the
+  // Scheduled chat, and only during a lull — it stays due until one comes, so nothing is dropped.
   const buddyBusyRef = useRef(buddyBusy);
   buddyBusyRef.current = buddyBusy;
+  const buddyPendingToolRef = useRef(buddyPendingTool);
+  buddyPendingToolRef.current = buddyPendingTool;
+  /** Make the ⏰ Scheduled session exist and switch to it (creating it on first use). */
+  const openScheduledSession = useCallback(() => {
+    setBuddySessions((prev) => {
+      if (prev.some((s) => s.id === SCHEDULED_CHAT_ID)) return prev;
+      const next = [...prev, { id: SCHEDULED_CHAT_ID, workingDir: "", label: "⏰ Scheduled" }];
+      persistSessions(next);
+      return next;
+    });
+    switchBuddyRef.current?.(SCHEDULED_CHAT_ID);
+  }, [persistSessions]);
   useEffect(() => {
     if (isRemoteClient) return; // the desktop runs scheduled tasks (it owns the chat + the data)
     const id = setInterval(() => {
       if (buddyBusyRef.current) return;
+      if (buddyPendingToolRef.current) return; // an approval is on screen — don't switch out from under it
+      if (Date.now() - lastRequestAt.current < SCHEDULED_IDLE_MS) return; // mid-conversation: defer, stay due
       void (async () => {
         const tasks = await loadScheduledTasks(libraryStore);
         const due = dueScheduledTasks(tasks);
         if (due.length === 0) return;
+        // Not in the Scheduled chat yet → switch and let the NEXT tick fire it. The switch loads that
+        // session's history asynchronously, and sending before it lands would hand the model the
+        // previous conversation as context — exactly the leak this separation exists to prevent.
+        if (activeBuddyIdRef.current !== SCHEDULED_CHAT_ID) {
+          openScheduledSession();
+          return;
+        }
         const task = due[0]!;
         // Advance first (so a slow turn can't double-fire), then run it.
         await upsertScheduledTask(libraryStore, advanceSchedule(task)).catch(() => {});
         refreshScheduled();
         logActionRef.current("scheduled_run", `Ran scheduled: ${task.title}`);
+        pushToast(`⏰ Running scheduled task “${task.title}” in the Scheduled chat.`, "info");
         onBuddySendText(`⏰ Scheduled task “${task.title}”. Do this now: ${task.prompt}`);
       })();
-    }, 60_000);
+    }, 30_000);
     return () => clearInterval(id);
-  }, [libraryStore, onBuddySendText, refreshScheduled, isRemoteClient]);
+  }, [libraryStore, onBuddySendText, refreshScheduled, isRemoteClient, openScheduledSession, pushToast]);
 
   // Remote bus (phone↔Google↔desktop): when enabled + Google's connected, poll the user's
   // Google Tasks for "VR:" commands they added from their phone, run each through the buddy,

@@ -10,6 +10,7 @@ import {
   type BuddyToolCall,
   type BuddyToolResultPayload,
   type MemoryNote,
+  type ScheduledTask,
   type Skill,
   type StoredChatMessage,
   type VisualBible,
@@ -65,6 +66,8 @@ export interface RemoteMirrorDeps {
   engineInventory: EngineInventory;
   memories: MemoryNote[];
   skills: Skill[];
+  /** The desktop's scheduled/periodic tasks (mirrored down; the phone has no scheduler of its own). */
+  scheduled: ScheduledTask[];
   book: BookSource | undefined;
   bible: VisualBible | undefined;
   effectiveVram: EngineVram | undefined;
@@ -75,6 +78,8 @@ export interface RemoteMirrorDeps {
   applyInventory: (inv: EngineInventory) => void;
   setMemories: (notes: MemoryNote[]) => void;
   setSkills: (skills: Skill[]) => void;
+  /** PHONE: adopt the desktop's scheduled tasks (the phone has no scheduler of its own). */
+  setScheduled: (tasks: ScheduledTask[]) => void;
   setBook: (book: BookSource | undefined) => void;
   setBible: (bible: VisualBible | undefined) => void;
   setRemoteVram: (vram: EngineVram | undefined) => void;
@@ -86,6 +91,8 @@ export interface RemoteMirrorDeps {
   refreshSkills: () => void;
   /** vrcmd:chatPlanClear — the phone dismissed the working checklist; clear plan+workflow+memos. */
   clearBuddyPlan: () => void;
+  /** DESKTOP: apply a phone-relayed ⏰ Scheduled action (the desktop owns the store + the runner). */
+  applyScheduledCommand: (command: { action: "toggle"; id: string; enabled: boolean } | { action: "delete"; id: string }) => void;
 
   // Host-owned refs the handler reads (declared in App.tsx, passed in so the single registration
   // sees live values).
@@ -108,6 +115,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
     engineInventory,
     memories,
     skills,
+    scheduled,
     book,
     bible,
     effectiveVram,
@@ -116,6 +124,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
     applyInventory,
     setMemories,
     setSkills,
+    setScheduled,
     setBook,
     setBible,
     setRemoteVram,
@@ -124,6 +133,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
     closeBook,
     refreshSkills,
     clearBuddyPlan,
+    applyScheduledCommand,
     bookRef,
     settingsRef,
     phoneExitedBookId,
@@ -194,26 +204,52 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
   const fileFetchSeq = useRef(0);
   const hostToolReqId = useRef(0);
 
-  const buildSnapshot = useCallback(
-    (): SyncToPhone => ({
-      type: "vrsync:state",
-      host: "this desktop",
-      library,
-      settings,
-      inventory: engineInventory,
-      planner: plannerMirrorRef.current,
-      chat: chatMirrorRef.current,
-      live: chatLiveRef.current,
-      memories,
-      skills,
-      ...(book ? { book } : {}),
-      ...(bible ? { bible } : {}),
-      ...(effectiveVram ? { vram: effectiveVram } : {}),
-    }),
+  // Live scheduled tasks for the snapshot builder (which is read from a ref by the once-registered
+  // relay handler, so it must not close over a stale array).
+  const scheduledRef = useRef(scheduled);
+  scheduledRef.current = scheduled;
+  /**
+   * The phone's full re-sync, as SEPARATE frames instead of one bundle.
+   *
+   * Each frame rides its own WebSocket message: a tunnel silently drops an oversized one and the
+   * desktop relay hard-caps a message at 4 MiB. The chat history alone may carry its whole inline-image
+   * allowance and the open book is a novel's worth of text, so one combined snapshot regularly blew
+   * that ceiling and was dropped WHOLESALE — the phone then showed an empty "Chat 1" until some later,
+   * smaller incremental push happened to arrive (typically only once the reader sent a message).
+   * Split, a heavy section can at worst lose ITSELF, and the light state always lands. Ordered
+   * light-first so the phone paints immediately.
+   */
+  const snapshotFrames = useCallback(
+    (): SyncToPhone[] => [
+      {
+        type: "vrsync:state",
+        host: "this desktop",
+        library,
+        settings,
+        inventory: engineInventory,
+        planner: plannerMirrorRef.current,
+        memories,
+        skills,
+        scheduled: scheduledRef.current,
+        live: chatLiveRef.current,
+        ...(effectiveVram ? { vram: effectiveVram } : {}),
+      },
+      { type: "vrsync:chat", ...chatMirrorRef.current },
+      // ALWAYS sent, even with nothing open: a re-sync must be able to CLEAR a book the phone still
+      // shows but the desktop has since closed (the old combined snapshot carried `book: undefined`
+      // for that; omitting the frame entirely would strand the stale book on the phone).
+      { type: "vrsync:book", ...(book ? { book } : {}), ...(bible ? { bible } : {}) },
+    ],
     [library, settings, engineInventory, book, bible, memories, skills, effectiveVram],
   );
-  const buildSnapshotRef = useRef(buildSnapshot);
-  buildSnapshotRef.current = buildSnapshot;
+  const snapshotFramesRef = useRef(snapshotFrames);
+  snapshotFramesRef.current = snapshotFrames;
+  const sendSnapshot = useCallback(() => {
+    for (const frame of snapshotFramesRef.current()) sendAppSync(frame);
+  }, [sendAppSync]);
+  // Held in a ref so the once-registered relay handler always calls the current builder.
+  const sendSnapshotRef = useRef(sendSnapshot);
+  sendSnapshotRef.current = sendSnapshot;
 
   // Register the relay handler once: the PHONE applies the desktop's state pushes; the DESKTOP
   // answers the phone's commands. (Reads live refs so the single registration stays current.)
@@ -222,16 +258,16 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
       if (isRemoteClient) {
         switch (msg.type) {
           case "vrsync:state":
+            // The LIGHT half of a re-sync; the chat and the open book follow as their own frames
+            // (see snapshotFrames) so an oversized one can't take this down with it.
             setLibrary(msg.library);
             setSettings(msg.settings);
             applyInventory(msg.inventory);
             applyPlannerRef.current(msg.planner);
-            applyChatRef.current(msg.chat);
             applyChatLiveRef.current(msg.live);
             setMemories(msg.memories);
             setSkills(msg.skills);
-            setBook(msg.book);
-            setBible(msg.bible);
+            setScheduled(msg.scheduled);
             setRemoteVram(msg.vram);
             setRemoteHost(msg.host);
             break;
@@ -256,6 +292,9 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
             break;
           case "vrsync:skills":
             setSkills(msg.skills);
+            break;
+          case "vrsync:scheduled":
+            setScheduled(msg.scheduled);
             break;
           case "vrsync:vram":
             setRemoteVram(msg.vram);
@@ -337,7 +376,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
       } else {
         switch (msg.type) {
           case "vrcmd:hello":
-            sendAppSync(buildSnapshotRef.current());
+            sendSnapshotRef.current();
             break;
           case "vrcmd:open":
             void libraryStore
@@ -369,6 +408,11 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
             // The phone triggered a Tasks/Calendar action; run it here (we own the data) and the
             // planner mirror re-pushes the result.
             plannerCommandRef.current(msg.command);
+            break;
+          case "vrcmd:scheduled":
+            // The phone toggled/deleted a scheduled task; apply it HERE (we own the schedule store and
+            // the runner that fires them) — the scheduled mirror re-pushes the result.
+            applyScheduledCommand(msg.command);
             break;
           case "vrcmd:memory":
             // The phone edited the Memory panel; save the whole list HERE (we own the store) — our
@@ -538,6 +582,11 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
     if (!isRemoteClient) sendAppSync({ type: "vrsync:skills", skills });
   }, [isRemoteClient, sendAppSync, skills]);
   useEffect(() => {
+    // Mirror the desktop's scheduled tasks so the phone's ⏰ Scheduled panel isn't empty — it has no
+    // scheduler of its own (the desktop owns the store AND fires them), so this push is its only source.
+    if (!isRemoteClient) sendAppSync({ type: "vrsync:scheduled", scheduled });
+  }, [isRemoteClient, sendAppSync, scheduled]);
+  useEffect(() => {
     // Tick the phone's VRAM indicator. Its own lightweight push (not folded into the heavier
     // inventory mirror) so a ~4s GPU reading doesn't re-send the whole installed-model inventory.
     if (!isRemoteClient) sendAppSync({ type: "vrsync:vram", ...(effectiveVram ? { vram: effectiveVram } : {}) });
@@ -579,7 +628,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
     /** Reads live state without re-binding callers — the host bridge pushes a fresh snapshot on
      * every (re)connect (a phone already on the relay won't re-`hello` when only the desktop's
      * bridge dropped). */
-    buildSnapshotRef,
+    sendSnapshotRef,
     runUpdateForPhoneRef,
     phoneUpdatePending,
     runHostToolForRemoteRef,
