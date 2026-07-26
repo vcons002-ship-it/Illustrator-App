@@ -1143,8 +1143,16 @@ async fn run_remote_server(
                                     break;
                                 }
                                 authorized = true;
-                                // The auth frame carries the pairing token — never relay it to peers.
-                                continue;
+                                // FALL THROUGH — do NOT swallow this frame. There is no separate
+                                // handshake: EVERY frame is `{token, payload}` (see encodeFrame), so a
+                                // peer's first frame is already a real message. For a phone that is
+                                // `vrcmd:hello`, the request that asks the desktop for its state
+                                // snapshot — dropping it left a freshly-linked phone showing an empty
+                                // chat until the reader happened to send something (which, as the
+                                // SECOND frame, relayed normally and made everything appear at once).
+                                // Relaying the token along with it is by design, not a leak: a peer can
+                                // only decode a frame whose token matches the one it already holds, and
+                                // only authorized peers ever receive a broadcast (see the recv arm).
                             }
                             // Relay this peer's frame to the others.
                             let _ = tx.send((peer_id, txt));

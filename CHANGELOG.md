@@ -12,10 +12,13 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   say *which day*, and attempting one failed outright. You can now give a specific date, or just a
   time (it runs the next time that time comes around).
 - **Your phone shows the full chat again on open** — a linked phone used to sit on an empty "Chat 1"
-  until you sent a message, which then made everything appear. The desktop was packing the whole
-  re-sync — chat history, images, the open book — into a single message too big for the link, so the
-  phone silently received *nothing*. The re-sync is now sent in separate pieces, so your chat, tasks,
-  and library land immediately on connect.
+  until you sent a message, which then made everything appear at once. The phone's opening "send me
+  your state" request was being discarded by the link itself, so the desktop never knew to answer;
+  the message you typed was the next request through, which got there fine. The phone now also keeps
+  asking until the desktop actually replies, so connecting before the desktop is ready (or during a
+  restart or Wi-Fi blip) recovers on its own instead of leaving you on a blank chat. Separately, the
+  desktop was packing the whole re-sync — chat history, images, the open book — into a single message
+  too big for the link; it's now sent in pieces so nothing gets dropped for size.
 - **Scheduled actions appear on your phone** — the ⏰ Scheduled panel was always empty on mobile
   (the phone was reading its own empty storage instead of the desktop's). It now mirrors the
   desktop's schedule, and enabling/disabling or deleting one from your phone applies on the desktop.
