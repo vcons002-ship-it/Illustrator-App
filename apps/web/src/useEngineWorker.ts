@@ -1289,8 +1289,21 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       let stopped = false; // set on unmount — stop reconnecting then
       let attempt = 0;
       let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+      // Re-ask for the desktop's snapshot until it actually answers. Reaching the relay is NOT the
+      // same as reaching the desktop: the desktop attaches to that relay over its own independent
+      // bridge socket, so a phone that opens first (or during a desktop restart / tunnel blip) sends
+      // its `vrcmd:hello` into a relay with nobody behind it — it's dropped, and the phone would sit
+      // on an empty chat until the reader happened to send something, which is what finally reached
+      // the by-then-attached desktop and made everything appear at once.
+      let helloTimer: ReturnType<typeof setInterval> | undefined;
+      const stopHelloRetry = (): void => {
+        if (helloTimer) clearInterval(helloTimer);
+        helloTimer = undefined;
+      };
       const connect = (): void => {
         const ws = new WebSocket(remote.wsUrl);
+        // Set once the desktop replies with ANY state frame — proof it's attached and heard us.
+        let answered = false;
         ws.onopen = () => {
           attempt = 0;
           setStatus("Linked to a desktop");
@@ -1298,9 +1311,20 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           // BEFORE flushing commands queued during the gap (they act on the re-synced state).
           ws.send(encodeFrame(remote.token, { type: "vrcmd:hello" }));
           flushPhonePending(ws);
+          answered = false;
+          stopHelloRetry();
+          let tries = 0;
+          helloTimer = setInterval(() => {
+            if (answered || stopped || ws.readyState !== WebSocket.OPEN || ++tries > 15) {
+              stopHelloRetry();
+              return;
+            }
+            ws.send(encodeFrame(remote.token, { type: "vrcmd:hello" }));
+          }, 2000);
         };
         ws.onclose = () => {
           if (phoneWsRef.current === ws) phoneWsRef.current = undefined;
+          stopHelloRetry();
           if (stopped) return;
           const delay = Math.min(1000 * 2 ** attempt, 10_000); // 1s, 2s, 4s, 8s, 10s, 10s…
           attempt++;
@@ -1317,14 +1341,18 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           const msg = deserializeFromRemote(payload, base64ToBytes);
           // App-sync state pushes (library/book/bible/settings) go to App; everything else is an
           // engine message streamed from the desktop's worker.
-          if (isAppSyncMessage(msg)) appSyncRef.current?.(msg as AppSyncMessage);
-          else if (!isLocalOnlyMessage(msg)) handleMsg(msg as WorkerToMain);
+          if (isAppSyncMessage(msg)) {
+            answered = true; // the desktop is attached and talking — stop re-asking
+            stopHelloRetry();
+            appSyncRef.current?.(msg as AppSyncMessage);
+          } else if (!isLocalOnlyMessage(msg)) handleMsg(msg as WorkerToMain);
         };
         phoneWsRef.current = ws;
       };
       connect();
       return () => {
         stopped = true;
+        stopHelloRetry();
         if (reconnectTimer) clearTimeout(reconnectTimer);
         phoneWsRef.current?.close();
       };
