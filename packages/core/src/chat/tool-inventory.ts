@@ -109,6 +109,7 @@ export const TOOL_INVENTORY: ToolEntry[] = [
   { tool: "send_email", capability: "Gmail", disposition: "kept" },
   { tool: "list_events", capability: "Calendar", disposition: "kept" },
   { tool: "create_event", capability: "Calendar", disposition: "kept" },
+  { tool: "update_event", capability: "Calendar", disposition: "kept" },
   { tool: "list_tasks", capability: "Google Tasks", disposition: "kept" },
   { tool: "create_task", capability: "Google Tasks", disposition: "kept" },
   { tool: "add_task_group", capability: "Google Tasks", disposition: "kept" },

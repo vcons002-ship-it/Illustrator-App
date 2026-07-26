@@ -551,6 +551,58 @@ export async function createEvent(
   return parseCalendarEvent(await apiPost<RawEvent>(transport, token, `${CAL_BASE}/primary/events`, body));
 }
 
+/** One event by id — used to read what an event already says before adding to it. */
+export async function getEvent(transport: Transport, token: string, id: string, calendarId = "primary"): Promise<CalendarEvent> {
+  const cal = encodeURIComponent(calendarId);
+  return parseCalendarEvent(await apiGet<RawEvent>(transport, token, `${CAL_BASE}/${cal}/events/${encodeURIComponent(id)}`));
+}
+
+/** A start/end value as Calendar wants it: a bare "YYYY-MM-DD" is an ALL-DAY date, anything else a
+ * datetime. Sending `dateTime` for a bare date would silently convert an all-day event into a timed
+ * one at midnight. PURE. */
+export function eventTimeField(value: string): { date: string } | { dateTime: string } {
+  const v = value.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(v) ? { date: v } : { dateTime: value };
+}
+
+/**
+ * Update an existing event in place (PATCH — only the fields given change).
+ *
+ * `appendDescription` is the "add what we learned to this event" path: Calendar's PATCH REPLACES a
+ * field wholesale, so appending has to read the current description and send the combined text, or
+ * each new note would erase the last one. Everything else is a straight replace.
+ */
+export async function patchEvent(
+  transport: Transport,
+  token: string,
+  id: string,
+  patch: { summary?: string; start?: string; end?: string; description?: string; appendDescription?: string; location?: string },
+  calendarId = "primary",
+): Promise<CalendarEvent> {
+  const body: Record<string, unknown> = {};
+  if (patch.summary !== undefined) body.summary = patch.summary;
+  if (patch.start !== undefined) body.start = eventTimeField(patch.start);
+  if (patch.end !== undefined) body.end = eventTimeField(patch.end);
+  if (patch.location !== undefined) body.location = patch.location;
+  if (patch.description !== undefined) body.description = patch.description;
+  if (patch.appendDescription) {
+    // An explicit `description` in the same call wins as the base to append onto; otherwise read the
+    // event's current text (one extra GET, only on the append path).
+    const existing = patch.description ?? (await getEvent(transport, token, id, calendarId)).description ?? "";
+    body.description = existing.trim() ? `${existing.trimEnd()}\n${patch.appendDescription}` : patch.appendDescription;
+  }
+  if (Object.keys(body).length === 0) throw new Error("nothing to update — pass at least one field to change");
+  const cal = encodeURIComponent(calendarId);
+  const res = await transport.send({
+    url: `${CAL_BASE}/${cal}/events/${encodeURIComponent(id)}`,
+    method: "PATCH",
+    headers: { authorization: `Bearer ${token}` },
+    body,
+  });
+  if (!res.ok) throw new Error(await apiError(res));
+  return parseCalendarEvent(await res.json<RawEvent>());
+}
+
 // ---------------------------------------------------------------------- Tasks
 
 export interface TaskItem {

@@ -119,6 +119,7 @@ import {
   extractAttachmentText,
   listEvents,
   createEvent,
+  patchEvent,
   createDraft,
   sendEmail,
   listTasks,
@@ -3010,6 +3011,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             listEvents: async (o: { max?: number; timeMin?: string; timeMax?: string }) =>
               listEvents(transport, await tok(), o),
             createEvent: async (ev) => createEvent(transport, await tok(), ev),
+            updateEvent: async (eventId, patch, calendarId) => patchEvent(transport, await tok(), eventId, patch, calendarId),
             listTasks: async (max?: number) => listTasks(transport, await tok(), max),
             // Create the Google Task AND mirror it as a simple in-app task so it shows in the 📋
             // panel (0 steps → it carries a "Plan it" button to break it down later).

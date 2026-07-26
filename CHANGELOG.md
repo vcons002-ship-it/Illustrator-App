@@ -5,6 +5,16 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ## July 2026
 
+### Calendar
+
+- **The assistant can now edit calendar events, not just create them** — and in particular it can keep
+  adding to one as things firm up. Tell it the confirmation number, the gate, the address, who's
+  coming, or that a meeting moved, and it puts that on the event itself instead of only replying.
+  Details **accumulate**: adding a note appends to what the event already says rather than wiping it,
+  so an event you booked last week can gain a line at a time. It can also rename, move (start/end),
+  or set the location of an existing event. Events it lists or creates now carry their id, so it can
+  find the right one to update later — including in a conversation days after it made the booking.
+
 ### Scheduled actions & the phone link
 
 - **One-time scheduled actions** — "remind me to call the dentist on Friday at 5" now works. Only
