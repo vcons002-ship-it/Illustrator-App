@@ -420,3 +420,26 @@ describe("patchEvent (edit an existing calendar event)", () => {
     expect(t.requests[0]!.url).toContain("/calendars/work%40group.calendar.google.com/events/a%2Fb");
   });
 });
+
+describe("listEvents search (finding an event to edit later)", () => {
+  it("passes a free-text query as Calendar's q param", async () => {
+    const t = new FakeTransport({ items: [{ id: "e9", summary: "Flight to Denver" }] });
+    const evs = await listEvents(t, "tok", { query: "flight" });
+    expect(t.requests[0]!.url).toContain("q=flight");
+    expect(evs[0]!.id).toBe("e9"); // the id is what makes it addressable by patchEvent
+  });
+
+  it("omits q entirely when no query is given (or it's blank)", async () => {
+    const t = new FakeTransport({ items: [] });
+    await listEvents(t, "tok", {});
+    expect(t.requests[0]!.url).not.toContain("q=");
+    await listEvents(t, "tok", { query: "   " });
+    expect(t.requests[1]!.url).not.toContain("q=");
+  });
+
+  it("honours an explicit PAST timeMin, so an event that already happened can be found", async () => {
+    const t = new FakeTransport({ items: [] });
+    await listEvents(t, "tok", { query: "flight", timeMin: "2020-01-01T00:00:00Z" });
+    expect(t.requests[0]!.url).toContain("timeMin=2020-01-01T00%3A00%3A00Z");
+  });
+});

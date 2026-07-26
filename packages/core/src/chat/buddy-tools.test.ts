@@ -812,6 +812,19 @@ describe("buildBuddySystemPrompt", () => {
     expect(g).toMatch(/REPLACES/); // the append-vs-replace distinction must be explicit
   });
 
+  it("parses a list_events search, and teaches how to FIND an event to update", () => {
+    // Without search, a later session (or a scheduled run) holding no eventId can't locate the event
+    // it needs to edit — it would have to dump a window and guess.
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "list_events", query: "flight", timeMin: "2026-01-01T00:00:00Z" }))).toEqual({
+      tool: "list_events",
+      query: "flight",
+      timeMin: "2026-01-01T00:00:00Z",
+    });
+    const g = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true });
+    expect(g).toContain('"query"');
+    expect(g).toMatch(/ALREADY HAPPENED/); // past events need an explicit timeMin — say so
+  });
+
   it("parses a ONE-TIME schedule_task with a run date (and drops a malformed / recurring-rule date)", () => {
     const once = parseBuddyToolCall(
       JSON.stringify({ tool: "schedule_task", title: "Call the dentist", prompt: "remind me to call the dentist", rule: "once", date: "2026-07-04", time: "17:30" }),

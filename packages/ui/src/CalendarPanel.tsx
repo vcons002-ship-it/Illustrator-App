@@ -30,6 +30,14 @@ export interface CalendarPanelProps {
   onOpenTask?: (planId: string) => void;
   /** Create a calendar event on the selected day (shown only when present, i.e. Google connected). */
   onCreateEvent?: (ev: { summary: string; start: string; end: string; description?: string; location?: string }) => Promise<{ ok: boolean; error?: string }>;
+  /** Edit an existing event IN GOOGLE (only the given fields change). Present ⇒ each event in the
+   * day list gets an Edit control. The change is written straight through to the user's calendar, so
+   * what the assistant records and what the user types here land in the same place. */
+  onUpdateEvent?: (
+    eventId: string,
+    patch: { summary?: string; start?: string; end?: string; description?: string; location?: string },
+    calendarId?: string,
+  ) => Promise<{ ok: boolean; error?: string }>;
   onClose: () => void;
   loading?: boolean;
   /** When set, the last Google sync failed — shown in the header (the last-good grid stays). */
@@ -94,6 +102,15 @@ function timeLabel(ev: CalendarEvent): string {
   return new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
+/** Local "HH:MM" for an ISO datetime — what an `<input type="time">` wants. Empty when unparseable
+ * (or for a bare all-day date, which carries no clock time). */
+function clockOf(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const d = new Date(t);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 export const CalendarPanel = memo(function CalendarPanel({
   events,
   deadlines = [],
@@ -103,6 +120,7 @@ export const CalendarPanel = memo(function CalendarPanel({
   onToday,
   onOpenTask,
   onCreateEvent,
+  onUpdateEvent,
   onClose,
   loading = false,
   error,
@@ -140,6 +158,58 @@ export const CalendarPanel = memo(function CalendarPanel({
     } else {
       setEvError(res.error ?? "Couldn't create the event.");
     }
+  };
+
+  // Inline EDIT of an existing event (one at a time), keyed by event id. Seeded from the event so an
+  // untouched field is submitted unchanged; times are omitted for an all-day event (editing those
+  // here would convert it to a timed one).
+  const [editId, setEditId] = useState<string | null>(null);
+  const [edSummary, setEdSummary] = useState("");
+  const [edStart, setEdStart] = useState("");
+  const [edEnd, setEdEnd] = useState("");
+  const [edLocation, setEdLocation] = useState("");
+  const [edDescription, setEdDescription] = useState("");
+  const [edBusy, setEdBusy] = useState(false);
+  const [edError, setEdError] = useState<string | null>(null);
+  const beginEdit = (ev: CalendarEvent): void => {
+    setEditId(ev.id ?? null);
+    setEdSummary(ev.summary === "(no title)" ? "" : ev.summary);
+    setEdStart(ev.allDay ? "" : clockOf(ev.start));
+    setEdEnd(ev.allDay ? "" : clockOf(ev.end));
+    setEdLocation(ev.location ?? "");
+    setEdDescription(ev.description ?? "");
+    setEdError(null);
+  };
+  const submitEdit = async (ev: CalendarEvent): Promise<void> => {
+    if (!onUpdateEvent || !ev.id) return;
+    const patch: { summary?: string; start?: string; end?: string; description?: string; location?: string } = {};
+    if (edSummary.trim() && edSummary.trim() !== ev.summary) patch.summary = edSummary.trim();
+    if (edLocation !== (ev.location ?? "")) patch.location = edLocation.trim();
+    if (edDescription !== (ev.description ?? "")) patch.description = edDescription;
+    if (!ev.allDay && (edStart || edEnd)) {
+      const day = eventStartDay(ev);
+      const s = new Date(`${day}T${edStart || clockOf(ev.start)}`);
+      const e = new Date(`${day}T${edEnd || clockOf(ev.end)}`);
+      if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime()) || e <= s) {
+        setEdError("Pick a valid start before end.");
+        return;
+      }
+      if (clockOf(ev.start) !== edStart || clockOf(ev.end) !== edEnd) {
+        // Google needs both ends when either moves, or the event would be left inverted.
+        patch.start = s.toISOString();
+        patch.end = e.toISOString();
+      }
+    }
+    if (Object.keys(patch).length === 0) {
+      setEditId(null);
+      return;
+    }
+    setEdBusy(true);
+    setEdError(null);
+    const res = await onUpdateEvent(ev.id, patch, ev.calendarId);
+    setEdBusy(false);
+    if (res.ok) setEditId(null);
+    else setEdError(res.error ?? "Couldn't save the change.");
   };
 
   // Build the 6×7 grid of days covering the visible month (leading/trailing spill).
@@ -290,16 +360,56 @@ export const CalendarPanel = memo(function CalendarPanel({
                     ⏰ {dl.title} {dl.planId && onOpenTask ? <span style={{ opacity: 0.6 }}>· open task →</span> : null}
                   </div>
                 ))}
-                {selectedEvents.map((ev, i) => (
-                  <div key={`se-${i}`} style={{ fontSize: 12, display: "flex", gap: 6 }}>
-                    <span style={{ width: 8, height: 8, borderRadius: 2, background: ev.color ?? "#7aa2ff", marginTop: 4, flexShrink: 0 }} />
-                    <span>
-                      {ev.allDay ? <span style={{ opacity: 0.6 }}>all day</span> : <span style={{ opacity: 0.7 }}>{timeLabel(ev)}</span>}{" "}
-                      {ev.summary}
-                      {ev.location ? <span style={{ opacity: 0.5 }}> · {ev.location}</span> : null}
-                    </span>
-                  </div>
-                ))}
+                {selectedEvents.map((ev, i) =>
+                  editId && ev.id === editId ? (
+                    <div key={`se-${i}`} style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", padding: "4px 0" }}>
+                      <input autoFocus value={edSummary} onChange={(e) => setEdSummary(e.target.value)} placeholder="Event title" style={evInput} />
+                      {ev.allDay ? (
+                        <span style={{ fontSize: 11, opacity: 0.6 }}>all day</span>
+                      ) : (
+                        <>
+                          <input type="time" value={edStart} onChange={(e) => setEdStart(e.target.value)} style={evTime} title="Start" />
+                          <span style={{ opacity: 0.5 }}>→</span>
+                          <input type="time" value={edEnd} onChange={(e) => setEdEnd(e.target.value)} style={evTime} title="End" />
+                        </>
+                      )}
+                      <input value={edLocation} onChange={(e) => setEdLocation(e.target.value)} placeholder="Location" style={evInput} />
+                      <textarea
+                        value={edDescription}
+                        onChange={(e) => setEdDescription(e.target.value)}
+                        placeholder="Details (notes, confirmation numbers…)"
+                        rows={2}
+                        style={{ ...evInput, width: "100%", resize: "vertical", fontFamily: "inherit" }}
+                      />
+                      <button style={btn} onClick={() => void submitEdit(ev)} disabled={edBusy}>
+                        {edBusy ? "Saving…" : "Save"}
+                      </button>
+                      <button style={btn} onClick={() => { setEditId(null); setEdError(null); }} disabled={edBusy}>
+                        Cancel
+                      </button>
+                      {edError ? <span style={{ fontSize: 11, color: "#ff9b9b", width: "100%" }}>⚠ {edError}</span> : null}
+                    </div>
+                  ) : (
+                    <div key={`se-${i}`} style={{ fontSize: 12, display: "flex", gap: 6 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 2, background: ev.color ?? "#7aa2ff", marginTop: 4, flexShrink: 0 }} />
+                      <span style={{ flex: 1 }}>
+                        {ev.allDay ? <span style={{ opacity: 0.6 }}>all day</span> : <span style={{ opacity: 0.7 }}>{timeLabel(ev)}</span>}{" "}
+                        {ev.summary}
+                        {ev.location ? <span style={{ opacity: 0.5 }}> · {ev.location}</span> : null}
+                        {/* The details the assistant accumulates on an event live here — show them, so
+                            what it recorded is visible (and editable) rather than hidden in Google. */}
+                        {ev.description ? (
+                          <span style={{ display: "block", opacity: 0.55, whiteSpace: "pre-wrap", marginTop: 2 }}>{ev.description}</span>
+                        ) : null}
+                      </span>
+                      {onUpdateEvent && ev.id ? (
+                        <button style={{ ...btn, padding: "1px 6px", fontSize: 11, flexShrink: 0 }} onClick={() => beginEdit(ev)} title="Edit this event in Google Calendar">
+                          Edit
+                        </button>
+                      ) : null}
+                    </div>
+                  ),
+                )}
               </div>
             )}
             {onCreateEvent ? (

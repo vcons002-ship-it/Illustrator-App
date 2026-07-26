@@ -146,7 +146,7 @@ export interface BuddyDeps {
    * mime + base64 bytes (the host renders them; never folded into the model turn) and an optional
    * vision observation. */
   openImage?: (path: string) => Promise<{ name: string; mimeType: string; base64: string; observation?: string }>;
-  listEvents?: (opts: { max?: number; timeMin?: string; timeMax?: string }) => Promise<CalendarEvent[]>;
+  listEvents?: (opts: { max?: number; timeMin?: string; timeMax?: string; query?: string }) => Promise<CalendarEvent[]>;
   createEvent?: (ev: { summary: string; start: string; end: string; description?: string; location?: string }) => Promise<CalendarEvent>;
   /** Edit an existing event in place — only the given fields change; `appendDescription` adds to what
    * the event already says (so details can accumulate on it) rather than replacing the text. */
@@ -820,6 +820,7 @@ export async function runBuddyTool(
             ...(call.max !== undefined ? { max: call.max } : {}),
             ...(call.timeMin ? { timeMin: call.timeMin } : {}),
             ...(call.timeMax ? { timeMax: call.timeMax } : {}),
+            ...(call.query ? { query: call.query } : {}),
           }),
         };
       case "create_event":

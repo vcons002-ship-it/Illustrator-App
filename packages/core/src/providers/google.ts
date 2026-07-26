@@ -477,7 +477,7 @@ const CAL_BASE = "https://www.googleapis.com/calendar/v3/calendars";
 export async function listEvents(
   transport: Transport,
   token: string,
-  opts: { max?: number; timeMin?: string; timeMax?: string; calendarId?: string } = {},
+  opts: { max?: number; timeMin?: string; timeMax?: string; calendarId?: string; query?: string } = {},
 ): Promise<CalendarEvent[]> {
   const params = new URLSearchParams({
     maxResults: String(Math.min(250, Math.max(1, opts.max ?? 10))),
@@ -485,6 +485,9 @@ export async function listEvents(
     orderBy: "startTime",
     timeMin: opts.timeMin ?? new Date().toISOString(),
     ...(opts.timeMax ? { timeMax: opts.timeMax } : {}),
+    // Free-text search across an event's title/description/location — how an event is FOUND when its
+    // id isn't already at hand (a later session, or a scheduled run, that needs to update "the flight").
+    ...(opts.query?.trim() ? { q: opts.query.trim() } : {}),
   });
   const cal = encodeURIComponent(opts.calendarId ?? "primary");
   const data = await apiGet<{ items?: RawEvent[] }>(transport, token, `${CAL_BASE}/${cal}/events?${params.toString()}`);

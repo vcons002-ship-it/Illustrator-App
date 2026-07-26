@@ -12,8 +12,17 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   coming, or that a meeting moved, and it puts that on the event itself instead of only replying.
   Details **accumulate**: adding a note appends to what the event already says rather than wiping it,
   so an event you booked last week can gain a line at a time. It can also rename, move (start/end),
-  or set the location of an existing event. Events it lists or creates now carry their id, so it can
-  find the right one to update later — including in a conversation days after it made the booking.
+  or set the location of an existing event.
+- **It can find an event to update, from any chat** — the calendar is now searchable by text, so a
+  scheduled action or a brand-new conversation can look up "the flight" and add to it without ever
+  having seen the booking happen. (Events that already happened are findable too, by asking for a
+  window that reaches back.) Listed events show their existing details, so it can see what's already
+  recorded before adding.
+- **Edit events yourself, in the app** — 📅 Calendar now has an Edit control on each event: change the
+  title, time, location, or the details/notes, and it's written straight through to Google. Events
+  also show their details inline, so anything the assistant recorded is visible where you'd expect it
+  rather than only in Google. Editing works from a linked phone too (the change is applied by the
+  desktop, which holds the Google connection).
 
 ### Scheduled actions & the phone link
 

@@ -335,6 +335,13 @@ export interface EngineWorkerApi {
   createGoogleTask: (args: { title: string; notes?: string; due?: string }) => Promise<{ ok: boolean; id?: string; error?: string }>;
   /** Create a Google Calendar event (manual "+ Add event"); resolves with its id when connected. */
   createEvent: (args: { summary: string; start: string; end: string; description?: string; location?: string }) => Promise<{ ok: boolean; id?: string; error?: string }>;
+  /** Edit an existing calendar event (Calendar panel). Only the given fields change; `appendDescription`
+   * adds to the event's current text instead of replacing it. */
+  updateEvent: (
+    eventId: string,
+    patch: { summary?: string; start?: string; end?: string; description?: string; appendDescription?: string; location?: string },
+    calendarId?: string,
+  ) => Promise<{ ok: boolean; id?: string; error?: string }>;
   /** Load events across all Google calendars in a window (the calendar grid). */
   loadCalendar: (timeMin: string, timeMax: string) => Promise<{ ok: boolean; events?: CalendarEvent[]; error?: string }>;
   /** Fetch a keyless stock quote (Stooq via the CORS-exempt transport). */
@@ -610,6 +617,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const createTaskRequests = useRef<Map<number, (r: { ok: boolean; id?: string; error?: string }) => void>>(new Map());
   // In-flight manual calendar-event creations, resolved by `eventCreated`.
   const createEventRequests = useRef<Map<number, (r: { ok: boolean; id?: string; error?: string }) => void>>(new Map());
+  const updateEventRequests = useRef<Map<number, (r: { ok: boolean; id?: string; error?: string }) => void>>(new Map());
   // In-flight calendar loads, resolved by `calendarLoaded`.
   const calendarRequests = useRef<Map<number, (r: { ok: boolean; events?: CalendarEvent[]; error?: string }) => void>>(new Map());
   // In-flight stock-quote fetches, resolved by `stockQuoted`.
@@ -653,6 +661,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     drain(importTaskRequests, (resolve) => resolve({ ok: false, error }));
     drain(createTaskRequests, (resolve) => resolve({ ok: false, error }));
     drain(createEventRequests, (resolve) => resolve({ ok: false, error }));
+    drain(updateEventRequests, (resolve) => resolve({ ok: false, error }));
     drain(calendarRequests, (resolve) => resolve({ ok: false, error }));
     drain(quoteRequests, (resolve) => resolve({ ok: false }));
     drain(pageRequests, (resolve) => resolve({ ok: false, error }));
@@ -1217,6 +1226,12 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
         case "eventCreated": {
           const resolve = createEventRequests.current.get(msg.requestId);
           createEventRequests.current.delete(msg.requestId);
+          resolve?.({ ok: msg.ok, ...(msg.id ? { id: msg.id } : {}), ...(msg.error ? { error: msg.error } : {}) });
+          break;
+        }
+        case "eventUpdated": {
+          const resolve = updateEventRequests.current.get(msg.requestId);
+          updateEventRequests.current.delete(msg.requestId);
           resolve?.({ ok: msg.ok, ...(msg.id ? { id: msg.id } : {}), ...(msg.error ? { error: msg.error } : {}) });
           break;
         }
@@ -2145,6 +2160,25 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const updateEvent = useCallback(
+    (
+      eventId: string,
+      patch: { summary?: string; start?: string; end?: string; description?: string; appendDescription?: string; location?: string },
+      calendarId?: string,
+    ): Promise<{ ok: boolean; id?: string; error?: string }> =>
+      new Promise((resolve) => {
+        const requestId = nextRefRequestId.current++;
+        const timeout = setTimeout(() => {
+          if (updateEventRequests.current.delete(requestId)) resolve({ ok: false, error: "Updating the event timed out." });
+        }, 30_000);
+        updateEventRequests.current.set(requestId, (r) => {
+          clearTimeout(timeout);
+          resolve(r);
+        });
+        send({ type: "updateEvent", requestId, eventId, patch, ...(calendarId ? { calendarId } : {}) });
+      }),
+    [],
+  );
   const loadCalendar = useCallback(
     (timeMin: string, timeMax: string): Promise<{ ok: boolean; events?: CalendarEvent[] }> =>
       new Promise((resolve) => {
@@ -2340,6 +2374,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     importGoogleTasks,
     createGoogleTask,
     createEvent,
+    updateEvent,
     loadCalendar,
     stockQuote,
     readPage,

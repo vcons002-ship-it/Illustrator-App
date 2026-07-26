@@ -367,7 +367,10 @@ export type BuddyToolCall =
   | { tool: "send_email"; to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[] }
   /** Google Calendar (read + create). For "what's on today / this week", set
    * timeMin/timeMax (ISO 8601 with the reader's UTC offset) to that window. */
-  | { tool: "list_events"; max?: number; timeMin?: string; timeMax?: string }
+  /** Read the calendar. `query` free-text searches title/description/location — that's how an event is
+   * FOUND to update it when its id isn't already at hand. `timeMin` defaults to NOW, so finding an
+   * event that already happened needs an explicit past `timeMin`. */
+  | { tool: "list_events"; max?: number; timeMin?: string; timeMax?: string; query?: string }
   | { tool: "create_event"; summary: string; start: string; end: string; description?: string; location?: string }
   /** Edit an EXISTING calendar event in place (only the fields given change). `appendDescription` adds
    * a line to what the event already says — the way details accumulate on an event over time without
@@ -921,9 +924,12 @@ export function buildBuddySystemPrompt(opts: {
       '- {"tool":"send_email","to":["a@b.com"],"subject":"…","body":"…"} — actually SEND it. Use this ONLY when the ' +
       'reader explicitly says to send (e.g. "send it", "email it now"); it always asks them to confirm first. When ' +
       "in doubt, draft_email instead.\n" +
-      '- {"tool":"list_events","max":10,"timeMin":"…","timeMax":"…"} — calendar events. Omit the window for ' +
-      'simply "what\'s next"; for "what do I have TODAY / THIS WEEK / THIS MONTH" set timeMin/timeMax to that ' +
-      "range in ISO 8601 WITH the reader's UTC offset (compute it from CURRENT DATE & TIME above). " +
+      '- {"tool":"list_events","max":10,"timeMin":"…","timeMax":"…","query":"…"} — calendar events. Omit the ' +
+      'window for simply "what\'s next"; for "what do I have TODAY / THIS WEEK / THIS MONTH" set timeMin/timeMax ' +
+      "to that range in ISO 8601 WITH the reader's UTC offset (compute it from CURRENT DATE & TIME above). " +
+      '"query" free-text searches title/description/location — use it to FIND a specific event you need to ' +
+      'update (e.g. "flight", "dentist") instead of listing everything and eyeballing it. timeMin defaults to ' +
+      "NOW, so to find an event that ALREADY HAPPENED you must pass an explicit past timeMin. " +
       '- {"tool":"create_event","summary":"…","start":"2026-06-18T14:00:00-04:00",' +
       '"end":"2026-06-18T15:00:00-04:00","description":"…","location":"…"} — add an event (ISO 8601 with offset). ' +
       "The result includes its eventId — keep it, that's how you edit this event later.\n" +
@@ -2406,6 +2412,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       ...(boundedMax(obj.max) ? { max: boundedMax(obj.max)! } : {}),
       ...(strArg(obj.timeMin, MAX_NAME_CHARS) ? { timeMin: strArg(obj.timeMin, MAX_NAME_CHARS)! } : {}),
       ...(strArg(obj.timeMax, MAX_NAME_CHARS) ? { timeMax: strArg(obj.timeMax, MAX_NAME_CHARS)! } : {}),
+      ...(strArg(obj.query, MAX_QUERY_CHARS) ? { query: strArg(obj.query, MAX_QUERY_CHARS)! } : {}),
     };
   }
   if (tool === "list_tasks") {
