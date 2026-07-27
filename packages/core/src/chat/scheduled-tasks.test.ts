@@ -3,6 +3,7 @@ import {
   advanceSchedule,
   describeSchedule,
   dueScheduledTasks,
+  runnableScheduledTasks,
   nextDue,
   scheduledRunPrompt,
   normalizeScheduledTask,
@@ -91,6 +92,29 @@ describe("one-time ('once') scheduling", () => {
     const after = advanceSchedule(t, new Date("2026-06-16T08:00:01"));
     expect(after.enabled).toBe(false);
     expect(dueScheduledTasks([after], new Date("2026-06-17T09:00:00"))).toHaveLength(0);
+  });
+
+  it("runnableScheduledTasks skips actions whose task is finished, and keeps the rest", () => {
+    const bound = (planId?: string) => normalizeScheduledTask({ title: `T${planId ?? "-"}`, prompt: "p", rule: "daily", ...(planId ? { planId } : {}) }, NOW);
+    const due = [bound(), bound("done"), bound("gone"), bound("live"), bound("dropped")];
+    const plans = [
+      { id: "done", status: "completed" },
+      { id: "live", status: "active" },
+      { id: "dropped", status: "archived" }, // ignored/removed
+    ];
+    const runnable = runnableScheduledTasks(due, plans);
+    // Unbound and live-task actions run; a completed or archived task's do not.
+    expect(runnable.map((t) => t.planId)).toEqual([undefined, "gone", "live"]);
+  });
+
+  it("runnableScheduledTasks judges at fire time, so reopening a task revives its actions", () => {
+    // Nothing is mutated when an action is skipped — which is what lets a completed task, or a
+    // recurring one rolling forward onto the SAME plan id, bring its watches back untouched.
+    const t = normalizeScheduledTask({ title: "RSVP", prompt: "p", rule: "daily", planId: "p1" }, NOW);
+    expect(runnableScheduledTasks([t], [{ id: "p1", status: "completed" }])).toHaveLength(0);
+    expect(runnableScheduledTasks([t], [{ id: "p1", status: "active" }])).toEqual([t]);
+    // A plan with no status at all (older stored shape) counts as live rather than silently dead.
+    expect(runnableScheduledTasks([t], [{ id: "p1" }])).toEqual([t]);
   });
 
   it("a stored one-shot keeps its scheduled moment when re-normalised", () => {

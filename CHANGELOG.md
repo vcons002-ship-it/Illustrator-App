@@ -16,6 +16,10 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   task they belong to and guessing would be worse; this is how you attach them.
 - **The assistant is told where an action will run** when it schedules one, so it can say so — and
   notice when something meant for a task isn't attached to one.
+- **Actions on a finished task stop running** — an action attached to a task you've completed, ignored
+  or removed used to keep firing, reopening that task's chat to chase work that no longer mattered.
+  It's skipped rather than cancelled, so reopening the task (or a repeating one coming round again)
+  brings its checks straight back.
 
 ### Tasks & chats
 

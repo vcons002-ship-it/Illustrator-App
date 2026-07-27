@@ -163,6 +163,30 @@ export function dueScheduledTasks(tasks: ScheduledTask[], now = new Date()): Sch
   return tasks.filter((t) => t.enabled && t.nextDueIso && new Date(t.nextDueIso) <= now);
 }
 
+/**
+ * Of the DUE actions, the ones that should actually fire now.
+ *
+ * An action bound to a task the reader has finished — completed, or archived by ignoring/removing it —
+ * has nothing left to maintain, and firing it reopens that task's chat to do work that no longer
+ * matters (chasing RSVPs for a party that already happened). Those are SKIPPED, not cancelled: the
+ * judgement is made against the plan's status at fire time, so reopening the task, or a recurring task
+ * rolling forward onto the same plan id, makes its actions live again with nothing to re-create.
+ *
+ * An action whose plan is GONE still runs — it falls back to the shared chat. A deleted plan can't
+ * distinguish "the reader tidied up and wants this to stop" from "the plan was lost", and ⏰ Scheduled
+ * already flags these for the reader to remove. PURE.
+ */
+export function runnableScheduledTasks(
+  due: readonly ScheduledTask[],
+  plans: readonly { id: string; status?: string }[],
+): ScheduledTask[] {
+  return due.filter((t) => {
+    if (!t.planId) return true;
+    const plan = plans.find((p) => p.id === t.planId);
+    return !plan || (plan.status !== "completed" && plan.status !== "archived");
+  });
+}
+
 /** After a task runs: stamp lastRun, advance nextDue (or disable a "once" task). */
 export function advanceSchedule(task: ScheduledTask, ranAt = new Date()): ScheduledTask {
   if (task.rule === "once") return { ...task, enabled: false, lastRunIso: ranAt.toISOString() };

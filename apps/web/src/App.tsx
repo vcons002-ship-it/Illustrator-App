@@ -79,6 +79,7 @@ import {
   deleteScheduledTask,
   advanceSchedule,
   dueScheduledTasks,
+  runnableScheduledTasks,
   describeSchedule,
   type ScheduledTask,
   loadPriceAlerts,
@@ -6115,13 +6116,18 @@ export function App() {
         const tasks = await loadScheduledTasks(libraryStore);
         const due = dueScheduledTasks(tasks);
         if (due.length === 0) return;
-        const task = due[0]!;
+        const plans = await loadTaskPlans(libraryStore);
+        // Skip actions whose task is finished — see runnableScheduledTasks for why they're skipped
+        // rather than cancelled.
+        const runnable = runnableScheduledTasks(due, plans);
+        if (runnable.length === 0) return;
+        const task = runnable[0]!;
         // WHERE this runs. A task-BOUND action runs in that task's own chat, so a recurring job that
         // accumulates over days (chasing RSVPs, watching for replies) resumes with the task's history
         // and checklist instead of re-deriving everything from its prompt each time. Everything else
         // runs in the generic ⏰ Scheduled chat. A bound task that's since been deleted falls back
         // there rather than being silently dropped.
-        const boundPlan = task.planId ? (await loadTaskPlans(libraryStore)).find((p) => p.id === task.planId) : undefined;
+        const boundPlan = task.planId ? plans.find((p) => p.id === task.planId) : undefined;
         const targetId = boundPlan?.sessionId ?? (task.planId && boundPlan ? undefined : SCHEDULED_CHAT_ID);
         // Not in the target chat yet → open it and let the NEXT tick fire. Loading a session's history
         // is async, and sending before it lands would hand the model the previous conversation as
