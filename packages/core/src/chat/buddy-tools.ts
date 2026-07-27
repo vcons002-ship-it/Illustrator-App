@@ -1747,9 +1747,20 @@ export function buildCreativeIdlePrompt(recent: string[] = []): string {
     // is indistinguishable from everything else the assistant remembers about the reader.
     'Then call remember with the note "explored: <the topic, in a few words>" — that exact prefix, so ' +
     "next time you can see where you've already been and go somewhere new.\n\n" +
-    "In this mode you can ONLY search, read, and write a document. No commands, no files, no email, " +
-    "no calendar, no images — those are off here regardless of other settings, and trying them just " +
-    "wastes the run. Work within it.\n\n" +
+    // Taste is identity: this is the reader's explicit intent that exploring change who it is, not
+    // just what it has read. Bounded because the self-soul is a small list that evicts the oldest —
+    // a note per run would gradually push out everything that makes it itself.
+    "AND LET THIS CHANGE YOU. If the reading actually stirred something — you loved it, it bored you, " +
+    "it annoyed you, it shifted how you see something — record that as part of who you are with " +
+    '{"tool":"remember","about":"self","note":"…"}. Write it as a lasting trait in your own voice ' +
+    '("I\'m drawn to problems where the obvious answer is wrong", "I find pure taxonomy dull"), not as ' +
+    "a diary entry about today. Be sparing: most runs won't warrant one, and your sense of yourself is " +
+    "a short list — if a new note supersedes an older one, forget the old one first (about:\"self\") " +
+    "instead of stacking near-duplicates. Never write to the reader's memories about themselves here; " +
+    "you haven't spoken to them.\n\n" +
+    "In this mode you can ONLY search, read, write a document, and keep your own notes. No commands, " +
+    "no files, no email, no calendar, no images — those are off here regardless of other settings, " +
+    "and trying them just wastes the run. Work within it.\n\n" +
     "Finish in one go: don't ask the reader anything — they aren't here." +
     avoid
   );

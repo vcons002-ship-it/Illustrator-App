@@ -405,6 +405,37 @@ describe("scenario: chains run in order and each result feeds the next round", (
     expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).not.toContain("✨ Creative");
   });
 
+  it("an idle run can shape its own identity but not touch the reader's memories", async () => {
+    const llm = scriptedLlm([
+      '{"tool":"remember","about":"self","note":"I\'m drawn to problems where the obvious answer is wrong."}',
+      '{"tool":"forget","about":"reader","match":"prefers watercolor"}',
+      "Noted something about myself.",
+    ]);
+    const wrote: string[] = [];
+    const forgot: string[] = [];
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: buildCreativeIdlePrompt() }],
+      creativeIdle: true,
+      deps: baseDeps({
+        remember: async (note, about) => {
+          wrote.push(`${about ?? "reader"}:${note}`);
+          return 1;
+        },
+        forget: async (match, about) => {
+          forgot.push(`${about ?? "reader"}:${match}`);
+          return 1;
+        },
+      }),
+    });
+    expect(wrote).toEqual(["self:I'm drawn to problems where the obvious answer is wrong."]);
+    // The reader's own memories are never reachable from an unattended run, whatever it asks for.
+    expect(forgot).toEqual([]);
+    const refused = outcome.toolResults.find((r) => r.call.tool === "forget");
+    expect(refused?.result.error).toMatch(/can't run while you're exploring on your own/);
+  });
+
   it("the creative brief asks for research, a written-up document, and a topic note", () => {
     const p = buildCreativeIdlePrompt();
     expect(p).toContain("create_document");
@@ -413,6 +444,14 @@ describe("scenario: chains run in order and each result feeds the next round", (
     expect(p).toMatch(/don't ask the reader anything/i); // nobody is there to answer
     // Told what it can't do, so it doesn't burn the run finding out.
     expect(p).toMatch(/No commands, no files, no email/);
+    // Exploring is meant to change WHO IT IS, not just what it has read — but sparingly, because the
+    // self-soul is a short list that evicts the oldest.
+    expect(p).toMatch(/LET THIS CHANGE YOU/);
+    expect(p).toContain('"about":"self"');
+    expect(p).toMatch(/lasting trait in your own voice/);
+    expect(p).toMatch(/Be sparing/);
+    expect(p).toMatch(/forget the old one first/);
+    expect(p).toMatch(/Never write to the reader's memories about themselves here/);
     // Previous topics steer it somewhere new.
     expect(buildCreativeIdlePrompt(["tardigrades", "Roman concrete"])).toMatch(/tardigrades; Roman concrete/);
   });

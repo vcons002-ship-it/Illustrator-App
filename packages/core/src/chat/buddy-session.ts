@@ -570,7 +570,7 @@ export async function runBuddyTurn(opts: {
       // THE CREATIVE-RUN GATE. Before any dispatch branch, so nothing — sub-agents, host tools, the
       // auto-run executor — can route around it. Nobody is watching this turn, so the limit is
       // enforced here rather than trusted to the prompt.
-      if (opts.creativeIdle && !allowedInCreativeIdle(call.tool)) {
+      if (opts.creativeIdle && !allowedInCreativeIdle(call)) {
         const result: BuddyToolResultPayload = {
           error:
             `${call.tool} can't run while you're exploring on your own — these runs are limited to reading and ` +

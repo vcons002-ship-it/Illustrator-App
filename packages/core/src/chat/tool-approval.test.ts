@@ -73,7 +73,7 @@ describe("routePendingTool", () => {
 describe("creative idle: what an unattended run may touch", () => {
   it("allows only look-things-up-and-write-them-up", () => {
     for (const t of ["search_web", "read_url", "read", "create_document", "edit_document", "remember", "calculate"]) {
-      expect(allowedInCreativeIdle(t)).toBe(true);
+      expect(allowedInCreativeIdle({ tool: t })).toBe(true);
     }
   });
 
@@ -109,11 +109,33 @@ describe("creative idle: what an unattended run may touch", () => {
       "set_cell",
       "create_spreadsheet",
     ];
-    for (const t of forbidden) expect(allowedInCreativeIdle(t)).toBe(false);
+    for (const t of forbidden) expect(allowedInCreativeIdle({ tool: t })).toBe(false);
   });
 
   it("is an allowlist, so a tool added later is refused until someone opts it in", () => {
-    expect(allowedInCreativeIdle("some_tool_invented_next_year")).toBe(false);
-    expect(allowedInCreativeIdle("")).toBe(false);
+    expect(allowedInCreativeIdle({ tool: "some_tool_invented_next_year" })).toBe(false);
+    expect(allowedInCreativeIdle({ tool: "" })).toBe(false);
+  });
+});
+
+describe("creative idle: the memory tools are judged per CALL, not per name", () => {
+  it("lets it shape its own identity from what it explored", () => {
+    expect(allowedInCreativeIdle({ tool: "remember", about: "self" })).toBe(true);
+    expect(allowedInCreativeIdle({ tool: "forget", match: "x", about: "self" } as { tool: string; about?: string })).toBe(true);
+  });
+
+  it("never lets an unattended run touch the READER's memories", () => {
+    // `forget` defaults to the reader's memories, so a name-only allowlist would have let a run with
+    // nobody watching delete what the reader asked it to remember.
+    expect(allowedInCreativeIdle({ tool: "forget" })).toBe(false);
+    expect(allowedInCreativeIdle({ tool: "forget", about: "reader" })).toBe(false);
+    expect(allowedInCreativeIdle({ tool: "forget", about: "user" })).toBe(false);
+  });
+
+  it("won't revise its picture of the reader with nobody there to inform it", () => {
+    expect(allowedInCreativeIdle({ tool: "remember", about: "user" })).toBe(false);
+    // Noting what it explored (reader-memory, additive) stays fine.
+    expect(allowedInCreativeIdle({ tool: "remember" })).toBe(true);
+    expect(allowedInCreativeIdle({ tool: "remember", about: "reader" })).toBe(true);
   });
 });

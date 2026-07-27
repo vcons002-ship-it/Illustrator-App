@@ -72,14 +72,27 @@ export const CREATIVE_IDLE_TOOLS: ReadonlySet<string> = new Set([
   "create_document",
   "edit_document",
   "read_document",
-  // Remembering what it explored is what stops it circling the same topic every time.
+  // Remembering what it explored is what stops it circling the same topic every time, and what lets
+  // exploring shape who it is. `forget` is deliberately NOT here — it's allowed by the per-call rule
+  // below, and only against its own identity notes.
   "remember",
   "read_skill",
 ]);
 
-/** May this tool run in an idle creative turn? PURE. */
-export function allowedInCreativeIdle(tool: string): boolean {
-  return CREATIVE_IDLE_TOOLS.has(tool);
+/**
+ * May this CALL run in an idle creative turn? PURE.
+ *
+ * Per-call, not per-tool-name, because the memory tools take an `about` that changes what they touch:
+ *  - `forget` defaults to the READER's memories. A name-only allowlist would let an unattended run
+ *    delete what the reader asked it to remember. It may only tidy its OWN self-soul.
+ *  - `remember` may write reader-memory (what it explored) or its self-soul (what that exploring
+ *    told it about itself) — but not the assistant's picture of the READER, which it has no basis to
+ *    revise with nobody there.
+ */
+export function allowedInCreativeIdle(call: { tool: string; about?: string }): boolean {
+  if (call.tool === "forget") return call.about === "self";
+  if (call.tool === "remember") return call.about !== "user";
+  return CREATIVE_IDLE_TOOLS.has(call.tool);
 }
 
 export function routePendingTool(tool: string, f: ToolAutoFlags): ToolAutoRoute {

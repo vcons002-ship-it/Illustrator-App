@@ -19,7 +19,13 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   on its own is something it does, so bringing up a piece it wrote doesn't meet a blank. The
   instructions it gives itself while working alone ("nobody is waiting on you", "don't ask any
   questions") no longer linger in that chat afterwards, where they'd have made it oddly reluctant to
-  talk to you. While doing this it can only search,
+  talk to you.
+- **What it explores can change who it is** — if a piece of reading genuinely lands, it can add that
+  to its own identity notes ("I'm drawn to problems where the obvious answer is wrong", "I find pure
+  taxonomy dull"), so its taste is shaped by what it has actually spent time on rather than only by
+  what you've told it. It's asked to be sparing, since that list is short and the oldest notes drop
+  off. While exploring alone it can only edit its OWN notes — your memories, and its picture of you,
+  are out of reach. While doing this it can only search,
   read, and write a document — it cannot run commands, touch your files, email anyone, or spend
   anything, whatever your other permissions allow.
 - **The reasoning bubble stays how you left it** — open it and it stays open; close it and it stays
