@@ -900,6 +900,22 @@ describe("buildBuddySystemPrompt", () => {
     expect(g).toMatch(/accumulates over days|RSVP/i);
   });
 
+  it("reports WHERE a scheduled action will run — bound to a task, or cold in the shared chat", () => {
+    const call = { tool: "schedule_task", title: "RSVP check", prompt: "check replies", rule: "daily" } as const;
+    const bound = formatBuddyToolResult(call, {
+      scheduled: { id: "s1", title: "RSVP check", describe: "every day at 08:00", planTitle: "Ada's party" },
+    });
+    expect(bound).toContain('on the task "Ada\'s party"');
+    expect(bound).toContain("picks up where the last left off");
+
+    // Unbound is the failure mode worth naming: it runs with no task history behind it, which reads
+    // as working but silently loses the thread between runs.
+    const loose = formatBuddyToolResult(call, { scheduled: { id: "s2", title: "Weather", describe: "every day at 07:00" } });
+    expect(loose).toContain("shared ⏰ Scheduled chat");
+    expect(loose).toContain("no task history behind it");
+    expect(loose).toContain('"planId"');
+  });
+
   it("parses a list_events search, and teaches how to FIND an event to update", () => {
     // Without search, a later session (or a scheduled run) holding no eventId can't locate the event
     // it needs to edit — it would have to dump a window and guess.
