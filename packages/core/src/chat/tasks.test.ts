@@ -491,8 +491,27 @@ describe("advanceStep / nextReadyStep", () => {
     expect(grown).toBe("• Link from chat: https://a.com\n• Attached in chat: resume.pdf");
     // Over the cap, the OLDEST content falls off the front.
     const capped = mergeUserNotes("x".repeat(90), ["newest note"], 40);
-    expect(capped!.length).toBe(40);
+    expect(capped!.length).toBeLessThanOrEqual(40);
     expect(capped).toContain("newest note");
+  });
+
+  it("mergeUserNotes drops WHOLE oldest notes and says so, instead of cutting one in half", () => {
+    const existing = ["• paid the deposit on the 3rd", "• venue confirmed for the 14th", "• catering still open"].join("\n");
+    const r = mergeUserNotes(existing, ["band booked"], 80)!;
+    expect(r.length).toBeLessThanOrEqual(80);
+    // The newest note survives, and so does the note before it — whole.
+    expect(r).toContain("• band booked");
+    expect(r).toContain("• catering still open");
+    // The loss is stated rather than silent, and nothing is left as a half-sentence fragment.
+    expect(r).toMatch(/earlier notes? dropped/);
+    expect(r).not.toContain("ed the deposit"); // no mid-note fragment
+    for (const line of r.split("\n")) expect(line.startsWith("•")).toBe(true);
+  });
+
+  it("mergeUserNotes still respects the cap when a single note is longer than it", () => {
+    const r = mergeUserNotes(undefined, ["y".repeat(200)], 50)!;
+    expect(r.length).toBeLessThanOrEqual(50);
+    expect(r.startsWith("…")).toBe(true); // marked as cut, not passed off as whole
   });
 
   it("appendTaskContext persists notes onto the plan and can flag a re-plan", async () => {

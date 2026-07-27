@@ -89,6 +89,14 @@ export interface BuddyDeps {
   createDocument?: (
     call: Extract<BuddyToolCall, { tool: "create_document" }>,
   ) => Promise<NonNullable<BuddyToolResultPayload["document"]>>;
+  /** Revise the active document by search/replace against its FULL stored text — the path that lets a
+   * document be changed without re-emitting it (and without losing the part the model never saw). */
+  editDocument?: (patch: {
+    edits?: { search: string; replace: string }[];
+    setLines?: { match: string; line: string }[];
+  }) => Promise<NonNullable<BuddyToolResultPayload["documentEdit"]>>;
+  /** The active document's real text — the whole thing, or one section by heading. */
+  readDocument?: (section?: string) => Promise<NonNullable<BuddyToolResultPayload["documentText"]>>;
   /** Story "as you go": start a new co-written illustrated story, open it, render beat one. */
   startStory?: (call: Extract<BuddyToolCall, { tool: "start_story" }>) => Promise<BuddyOpenedInfo>;
   /** Append the next beat to the OPEN story (prose + an image per the cadence). Returns the
@@ -148,11 +156,21 @@ export interface BuddyDeps {
   openImage?: (path: string) => Promise<{ name: string; mimeType: string; base64: string; observation?: string }>;
   listEvents?: (opts: { max?: number; timeMin?: string; timeMax?: string; query?: string }) => Promise<CalendarEvent[]>;
   createEvent?: (ev: { summary: string; start: string; end: string; description?: string; location?: string }) => Promise<CalendarEvent>;
-  /** Edit an existing event in place — only the given fields change; `appendDescription` adds to what
-   * the event already says (so details can accumulate on it) rather than replacing the text. */
+  /** Edit an existing event in place — only the given fields change. The description can be edited IN
+   * PLACE (`setLines` upserts a labelled line, `editDescription` find/replaces) or merely added to
+   * (`appendDescription`); in-place is what keeps a running list from growing duplicate entries. */
   updateEvent?: (
     eventId: string,
-    patch: { summary?: string; start?: string; end?: string; description?: string; appendDescription?: string; location?: string },
+    patch: {
+      summary?: string;
+      start?: string;
+      end?: string;
+      description?: string;
+      appendDescription?: string;
+      editDescription?: { find: string; replace: string }[];
+      setLines?: { match: string; line: string }[];
+      location?: string;
+    },
     calendarId?: string,
   ) => Promise<CalendarEvent>;
   listTasks?: (max?: number) => Promise<TaskItem[]>;
@@ -231,7 +249,10 @@ type HostToolName =
   | "delegate"
   | "send_email"
   | "delegate_coding_task"
-  | "spawn_coding_agents";
+  | "spawn_coding_agents"
+  | "set_cell"
+  | "add_formula_column"
+  | "read_data";
 const HOST_TOOLS = new Set<HostToolName>([
   "generate_image",
   "generate_video",
@@ -252,6 +273,11 @@ const HOST_TOOLS = new Set<HostToolName>([
   "send_email",
   // spawn_coding_agents needs host orchestration (approval, git worktrees, merge) — handed up.
   "spawn_coding_agents",
+  // The open spreadsheet lives in the host's book state, not the worker's — the data-view grid and
+  // the persisted book are both there, so a cell edit has to happen where the table is.
+  "set_cell",
+  "add_formula_column",
+  "read_data",
   // delegate_coding_task spawns an external agent in the workspace (desktop I/O) — handed up.
   "delegate_coding_task",
 ]);
@@ -597,7 +623,7 @@ export async function runBuddyTurn(opts: {
 /** Execute one auto-run buddy tool (everything but generate_image). Exported for
  * the slash-command path, which runs tools directly without an LLM round. */
 export async function runBuddyTool(
-  call: Exclude<BuddyToolCall, { tool: "generate_image" | "generate_video" | "generate_long_video" | "stitch_videos" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" }>,
+  call: Exclude<BuddyToolCall, { tool: "generate_image" | "generate_video" | "generate_long_video" | "stitch_videos" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" | "set_cell" | "add_formula_column" | "read_data" }>,
   deps: BuddyDeps,
 ): Promise<BuddyToolResultPayload> {
   try {
@@ -720,6 +746,17 @@ export async function runBuddyTool(
       case "create_document":
         if (!deps.createDocument) return { error: "creating documents isn't available right now" };
         return { document: await deps.createDocument(call) };
+      case "edit_document":
+        if (!deps.editDocument) return { error: "editing documents isn't available right now" };
+        return {
+          documentEdit: await deps.editDocument({
+            ...(call.edits?.length ? { edits: call.edits } : {}),
+            ...(call.setLines?.length ? { setLines: call.setLines } : {}),
+          }),
+        };
+      case "read_document":
+        if (!deps.readDocument) return { error: "reading the document isn't available right now" };
+        return { documentText: await deps.readDocument(call.section) };
       case "start_story":
         if (!deps.startStory) return { error: "story mode isn't available right now" };
         return { opened: await deps.startStory(call), story: { beats: 1, illustrated: true } };
@@ -852,6 +889,8 @@ export async function runBuddyTool(
               ...(call.end ? { end: call.end } : {}),
               ...(call.description ? { description: call.description } : {}),
               ...(call.appendDescription ? { appendDescription: call.appendDescription } : {}),
+              ...(call.editDescription?.length ? { editDescription: call.editDescription } : {}),
+              ...(call.setLines?.length ? { setLines: call.setLines } : {}),
               ...(call.location ? { location: call.location } : {}),
             },
             call.calendarId,

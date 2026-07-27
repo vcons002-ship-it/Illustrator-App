@@ -573,16 +573,37 @@ export function harvestTaskContext(userText: string): string[] {
   return notes;
 }
 
-/** Merge fresh context notes into a plan's `userNotes`: one bullet per note, deduped against what's
- * already there (verbatim containment), capped keeping the NEWEST content. Returns the existing
- * value unchanged (same reference) when every note is already present. PURE. */
+/**
+ * Merge fresh context notes into a plan's `userNotes`: one bullet per note, deduped against what's
+ * already there (verbatim containment), capped keeping the NEWEST content. Returns the existing value
+ * unchanged (same reference) when every note is already present.
+ *
+ * The cap drops WHOLE oldest notes and says how many went. A blind `slice` cut mid-note, leaving a
+ * fragment that read as a real note ("…ed the deposit on the 3rd"), and left no sign that anything had
+ * been lost at all — on a long-running task that's the earliest context disappearing silently. PURE.
+ */
 export function mergeUserNotes(existing: string | undefined, notes: string[], capChars = MAX_NOTES_CHARS): string | undefined {
   const cur = existing?.trim() ?? "";
   const fresh = notes.map((n) => n.trim()).filter((n) => n.length > 0 && !cur.includes(n));
   if (fresh.length === 0) return existing;
-  let next = [cur, ...fresh.map((n) => (n.startsWith("•") ? n : `• ${n}`))].filter(Boolean).join("\n");
-  if (next.length > capChars) next = next.slice(next.length - capChars);
-  return next;
+  const lines = [cur, ...fresh.map((n) => (n.startsWith("•") ? n : `• ${n}`))].filter(Boolean).join("\n").split("\n");
+  let next = lines.join("\n");
+  if (next.length <= capChars) return next;
+  // Drop from the front, a whole line at a time, until what's left PLUS the marker fits. The marker is
+  // terse on purpose: a wordy one eats the budget it's accounting for, evicting notes to explain that
+  // notes were evicted.
+  const marker = (n: number) => `• (${n} earlier note${n === 1 ? "" : "s"} dropped)`;
+  const kept = [...lines];
+  let dropped = 0;
+  const size = (): number => (dropped === 0 ? 0 : marker(dropped).length + 1) + kept.join("\n").length;
+  while (kept.length > 1 && size() > capChars) {
+    kept.shift();
+    dropped++;
+  }
+  next = dropped > 0 ? [marker(dropped), ...kept].join("\n") : kept.join("\n");
+  // A single note longer than the whole cap still has to be cut somewhere; keep its END (the newest
+  // writing) and mark it, rather than returning something over budget.
+  return next.length > capChars ? `…${next.slice(next.length - capChars + 1)}` : next;
 }
 
 /** Append context notes to a plan's `userNotes` (see {@link mergeUserNotes}) and optionally flag it

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyFileEdits, summarizeFileEdits } from "./file-edits.js";
+import { applyFileEdits, applyLineUpserts, extractSection, summarizeAmbiguousLines, summarizeFileEdits } from "./file-edits.js";
 
 describe("applyFileEdits", () => {
   it("applies a single unique edit", () => {
@@ -51,6 +51,90 @@ describe("applyFileEdits", () => {
     // `$&` would otherwise re-insert the whole match; confirm it stays the two literal characters.
     const amp = applyFileEdits("X", [{ search: "X", replace: "[$&]" }]);
     expect(amp.content).toBe("[$&]");
+  });
+
+  it("applyLineUpserts: overwrites a checklist entry in place instead of adding a second one", () => {
+    const doc = "## Attendees\n\n- [x] Ada — confirmed\n- [ ] Bo — no reply\n- [ ] Cy — no reply\n\nNotes below.";
+    const r = applyLineUpserts(doc, [{ match: "Bo", line: "[x] Bo — confirmed" }]);
+    expect(r.text).toBe("## Attendees\n\n- [x] Ada — confirmed\n- [x] Bo — confirmed\n- [ ] Cy — no reply\n\nNotes below.");
+    expect(r.replaced).toEqual(["Bo"]);
+  });
+
+  it("applyLineUpserts: a new entry joins the list rather than trailing after the prose under it", () => {
+    const doc = "## Attendees\n\n- [ ] Ada\n\nNotes below.";
+    expect(applyLineUpserts(doc, [{ match: "Bo", line: "[x] Bo" }]).text).toBe("## Attendees\n\n- [ ] Ada\n- [x] Bo\n\nNotes below.");
+  });
+
+  it("applyLineUpserts: a checkbox is STATE (the caller can tick it); the bullet is formatting to keep", () => {
+    // Ticking: the new text brings "[x]", so the box changes but the "- " stays.
+    expect(applyLineUpserts("- [ ] Bo", [{ match: "Bo", line: "[x] Bo — confirmed" }]).text).toBe("- [x] Bo — confirmed");
+    // No box in the new text → the existing one is left exactly as it was.
+    expect(applyLineUpserts("- [x] Bo", [{ match: "Bo", line: "Bo — still in" }]).text).toBe("- [x] Bo — still in");
+    // A bullet in the new text wins, and is never doubled up with the old one.
+    expect(applyLineUpserts("- Bo: ?", [{ match: "Bo", line: "* Bo: yes" }]).text).toBe("* Bo: yes");
+    // Indentation of a nested list item survives.
+    expect(applyLineUpserts("- Team\n  - Bo: ?", [{ match: "Bo", line: "Bo: yes" }]).text).toBe("- Team\n  - Bo: yes");
+  });
+
+  it("applyLineUpserts: a label matching SEVERAL lines changes nothing and hands them back", () => {
+    // Sharing an opening does not make two lines duplicates. Rewriting the first and deleting the rest
+    // (which it used to do) destroys real content to satisfy a vague match.
+    const doc = "## Expenses\n- Bo: brought chips\n- Bo: allergic to nuts\n- Cy: cake";
+    const r = applyLineUpserts(doc, [{ match: "Bo", line: "Bo: paid $20" }]);
+    expect(r.text).toBe(doc); // untouched — nothing lost
+    expect(r.replaced).toEqual([]);
+    expect(r.added).toEqual([]);
+    expect(r.ambiguous).toEqual([{ match: "Bo", lines: ["- Bo: brought chips", "- Bo: allergic to nuts"] }]);
+    // A longer label singles one out, and only that line changes.
+    expect(applyLineUpserts(doc, [{ match: "Bo: allergic", line: "Bo: allergic to nuts and shellfish" }]).text).toBe(
+      "## Expenses\n- Bo: brought chips\n- Bo: allergic to nuts and shellfish\n- Cy: cake",
+    );
+  });
+
+  it("applyLineUpserts: dedupe is opt-in, and is what heals a genuinely double-entered list", () => {
+    const doubled = "- Bo: ?\n- Cy: yes\n- Bo: yes";
+    expect(applyLineUpserts(doubled, [{ match: "Bo", line: "Bo: no" }]).text).toBe(doubled); // ambiguous by default
+    const healed = applyLineUpserts(doubled, [{ match: "Bo", line: "Bo: no", dedupe: true }]);
+    expect(healed.text).toBe("- Bo: no\n- Cy: yes");
+    expect(healed.ambiguous).toEqual([]);
+  });
+
+  it("applyLineUpserts: one ambiguous entry doesn't block the others in the same call", () => {
+    const doc = "- Bo: chips\n- Bo: nuts\n- Cy: ?";
+    const r = applyLineUpserts(doc, [
+      { match: "Bo", line: "Bo: x" },
+      { match: "Cy", line: "Cy: yes" },
+    ]);
+    expect(r.text).toBe("- Bo: chips\n- Bo: nuts\n- Cy: yes");
+    expect(r.replaced).toEqual(["Cy"]);
+    expect(r.ambiguous.map((a) => a.match)).toEqual(["Bo"]);
+  });
+
+  it("summarizeAmbiguousLines quotes the candidates so the next call can name one", () => {
+    const s = summarizeAmbiguousLines([{ match: "Bo", lines: ["- Bo: chips", "- Bo: nuts"] }]);
+    expect(s).toContain('"Bo" matches 2 lines');
+    expect(s).toContain("Bo: chips");
+    expect(s).toContain("Bo: nuts");
+    expect(summarizeAmbiguousLines([])).toBe("");
+  });
+
+  it("applyLineUpserts: matches on a word boundary, and handles numbered lists + empty text", () => {
+    expect(applyLineUpserts("- Bobby: no\n- Bo: ?", [{ match: "Bo:", line: "Bo: yes" }]).text).toBe("- Bobby: no\n- Bo: yes");
+    expect(applyLineUpserts("1. Ada\n2. Bo: ?", [{ match: "Bo", line: "Bo: yes" }]).text).toBe("1. Ada\n2. Bo: yes");
+    // A new entry can't reuse "2." verbatim (it would repeat the number), so it falls back to a dash.
+    expect(applyLineUpserts("1. Ada", [{ match: "Bo", line: "Bo: yes" }]).text).toBe("1. Ada\n- Bo: yes");
+    expect(applyLineUpserts("", [{ match: "Bo", line: "Bo: yes" }]).text).toBe("Bo: yes");
+  });
+
+  it("extractSection: a heading and everything under it, including deeper subsections", () => {
+    const doc = "# Brief\n\nintro\n\n## Scope\n\nin scope\n\n### Detail\n\nfine print\n\n## Risks\n\nthings\n";
+    expect(extractSection(doc, "Scope")).toBe("## Scope\n\nin scope\n\n### Detail\n\nfine print");
+    expect(extractSection(doc, "## Scope")).toBe("## Scope\n\nin scope\n\n### Detail\n\nfine print"); // hashes optional
+    expect(extractSection(doc, "risks")).toBe("## Risks\n\nthings"); // case-insensitive
+    // The top heading takes the whole document; a shallower heading is what ends a section.
+    expect(extractSection(doc, "Brief")).toBe(doc.trimEnd());
+    expect(extractSection(doc, "Budget")).toBeUndefined();
+    expect(extractSection(doc, "")).toBeUndefined();
   });
 
   it("summarizeFileEdits: clean vs failures", () => {

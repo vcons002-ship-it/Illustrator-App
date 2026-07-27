@@ -1,3 +1,11 @@
+import {
+  applyLineUpserts,
+  reline,
+  splitLineMarker,
+  summarizeAmbiguousLines,
+  type AmbiguousLine,
+  type LineUpsert,
+} from "../chat/file-edits.js";
 import type { Transport } from "./transport/transport.js";
 import type { VisualReaderStore } from "../storage/store.js";
 
@@ -219,6 +227,11 @@ async function apiError(res: { status: number; json: <T>() => Promise<T> }): Pro
 export interface EmailSummary {
   id: string;
   from: string;
+  /** Recipients, as the raw header ("A <a@x>, B <b@y>"). Absent when the header isn't set. Needed for
+   * any "who was this sent to / who hasn't replied" question — without it the assistant can see a
+   * thread but not who's on it. */
+  to?: string;
+  cc?: string;
   subject: string;
   date: string;
   snippet: string;
@@ -303,6 +316,9 @@ export function parseGmailMessage(msg: GmailMessage): EmailFull {
   return {
     id: msg.id,
     from: header(headers, "From"),
+    // Only when actually present — an absent header reads as "" and an empty To: is noise.
+    ...(header(headers, "To") ? { to: header(headers, "To") } : {}),
+    ...(header(headers, "Cc") ? { cc: header(headers, "Cc") } : {}),
     subject: header(headers, "Subject"),
     date: header(headers, "Date"),
     snippet: msg.snippet ?? "",
@@ -331,7 +347,9 @@ export async function gmailSearch(
       apiGet<GmailMessage>(
         transport,
         token,
-        `${GMAIL}/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`,
+        // Ask for To/Cc as well: `format=metadata` returns ONLY the headers named here, so leaving them
+        // out is why a search result could never show who an email was addressed to.
+        `${GMAIL}/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Subject&metadataHeaders=Date`,
       ),
     ),
   );
@@ -602,18 +620,114 @@ export function patchTimeField(field: { date: string } | { dateTime: string }): 
   return "date" in field ? { date: field.date, dateTime: null } : { dateTime: field.dateTime, date: null };
 }
 
+// ------------------------------------------------- description line editing
+//
+// An event's description is where running detail lives — an RSVP list, a packing list, a set of
+// confirmation numbers. Blind appending is the wrong primitive for all of those: when the answer for
+// someone ALREADY on the list changes, appending writes a SECOND line for them at the bottom, and now
+// the event says both "Bo: ?" and "Bo: yes". The helpers below edit the text in place instead, so an
+// update lands on the line it belongs to.
+
+/** One find/replace against an event's description. */
+export interface DescriptionEdit {
+  /** Text to find: a whole line (matched trimmed + case-insensitively, ignoring any bullet) or, failing
+   * that, a substring of one. */
+  find: string;
+  /** What to put there. Empty replaces a whole-line match by DELETING the line. */
+  replace: string;
+}
+
+/** An event description's labelled-line upsert — the shared primitive, which documents use too. */
+export type DescriptionLine = LineUpsert;
+
+/**
+ * Apply find/replace edits to a description. Returns the new text, any `find` that matched NOTHING,
+ * and any that matched SEVERAL places. Both are refusals, for the same reason: a miss means the
+ * caller's picture of the text is stale, and an ambiguous hit means the caller hasn't said which line
+ * it meant. Guessing either one — appending on a miss, or taking the first of several — is how a
+ * description ends up with the right text in the wrong place. PURE.
+ */
+export function applyDescriptionEdits(
+  description: string,
+  edits: readonly DescriptionEdit[],
+): { text: string; missed: string[]; ambiguous: AmbiguousLine[] } {
+  const lines = description.split("\n");
+  const missed: string[] = [];
+  const ambiguous: AmbiguousLine[] = [];
+  for (const edit of edits) {
+    const find = edit.find.trim();
+    if (!find) continue;
+    // Whole-line first: that's the precise case, and it lets an empty `replace` mean "drop this line".
+    // The bullet is stripped from BOTH sides — a caller copying a line verbatim brings "- " along with
+    // it, and matching that against the bare body would silently drop to the substring path instead.
+    const findBody = splitLineMarker(find)[1].trim().toLowerCase();
+    const lineHits = findBody
+      ? lines.reduce<number[]>((acc, l, i) => {
+          if (splitLineMarker(l)[1].trim().toLowerCase() === findBody) acc.push(i);
+          return acc;
+        }, [])
+      : [];
+    if (lineHits.length > 1) {
+      ambiguous.push({ match: edit.find, lines: lineHits.map((i) => lines[i] ?? "") });
+      continue;
+    }
+    if (lineHits.length === 1) {
+      const idx = lineHits[0]!;
+      if (edit.replace.trim()) lines[idx] = reline(lines[idx] ?? "", edit.replace);
+      else lines.splice(idx, 1);
+      continue;
+    }
+    // Then as a substring — again only when it identifies ONE line. Two lines containing the same
+    // phrase are two different edits, and the caller has to say which by quoting more of it.
+    const subHits = lines.reduce<number[]>((acc, l, i) => {
+      if (l.includes(find)) acc.push(i);
+      return acc;
+    }, []);
+    if (subHits.length > 1) {
+      ambiguous.push({ match: edit.find, lines: subHits.map((i) => lines[i] ?? "") });
+      continue;
+    }
+    if (subHits.length === 1) {
+      const idx = subHits[0]!;
+      // Within that one line, still the FIRST occurrence only — a repeated word gets fixed one spot at
+      // a time rather than everywhere at once.
+      lines[idx] = (lines[idx] ?? "").replace(find, () => edit.replace);
+      continue;
+    }
+    missed.push(edit.find);
+  }
+  return { text: lines.join("\n"), missed, ambiguous };
+}
+
+/**
+ * Upsert labelled lines in an event description — {@link applyLineUpserts}, which documents share.
+ * Kept as a named re-export so the calendar's call sites read in calendar terms. PURE.
+ */
+export const applyDescriptionLines = applyLineUpserts;
+
 /**
  * Update an existing event in place (PATCH — only the fields given change).
  *
- * `appendDescription` is the "add what we learned to this event" path: Calendar's PATCH REPLACES a
- * field wholesale, so appending has to read the current description and send the combined text, or
- * each new note would erase the last one. Everything else is a straight replace.
+ * The description paths all read the event first, because Calendar's PATCH REPLACES a field wholesale —
+ * sending only the new note would erase everything already there. Which path to use matters:
+ * `setLines` and `editDescription` change text IN PLACE (use these for anything that updates something
+ * the description already says), while `appendDescription` only adds at the bottom. All three are
+ * computed before the PATCH goes out, so a rejected edit changes nothing at all.
  */
 export async function patchEvent(
   transport: Transport,
   token: string,
   id: string,
-  patch: { summary?: string; start?: string; end?: string; description?: string; appendDescription?: string; location?: string },
+  patch: {
+    summary?: string;
+    start?: string;
+    end?: string;
+    description?: string;
+    appendDescription?: string;
+    editDescription?: readonly DescriptionEdit[];
+    setLines?: readonly DescriptionLine[];
+    location?: string;
+  },
   calendarId = "primary",
 ): Promise<CalendarEvent> {
   const body: Record<string, unknown> = {};
@@ -629,11 +743,45 @@ export async function patchEvent(
   }
   if (patch.location !== undefined) body.location = patch.location;
   if (patch.description !== undefined) body.description = patch.description;
-  if (patch.appendDescription) {
-    // An explicit `description` in the same call wins as the base to append onto; otherwise read the
-    // event's current text (one extra GET, only on the append path).
+  const edits = patch.editDescription ?? [];
+  const setLines = patch.setLines ?? [];
+  if (patch.appendDescription || edits.length > 0 || setLines.length > 0) {
+    // An explicit `description` in the same call wins as the base to build on; otherwise read the
+    // event's current text (one extra GET, only on the description-editing paths).
     const existing = patch.description ?? (await getEvent(transport, token, id, calendarId)).description ?? "";
-    body.description = existing.trim() ? `${existing.trimEnd()}\n${patch.appendDescription}` : patch.appendDescription;
+    let text = existing;
+    if (edits.length > 0) {
+      const result = applyDescriptionEdits(text, edits);
+      if (result.missed.length > 0) {
+        // Refuse the whole call rather than apply half of it — and hand back what the description
+        // ACTUALLY says, so the caller can retry against the real text instead of guessing again.
+        throw new Error(
+          `nothing in the description matched ${result.missed.map((m) => JSON.stringify(m)).join(", ")}. ` +
+            `It currently reads:\n${existing || "(empty)"}`,
+        );
+      }
+      if (result.ambiguous.length > 0) {
+        throw new Error(
+          `${summarizeAmbiguousLines(result.ambiguous)}\nQuote more of the line you mean so it matches only one.`,
+        );
+      }
+      text = result.text;
+    }
+    if (setLines.length > 0) {
+      const up = applyDescriptionLines(text, setLines);
+      if (up.ambiguous.length > 0) {
+        // Several lines open the same way — they may well be different facts about the same person
+        // ("Bo: brought chips" / "Bo: allergic to nuts"). Collapsing them is destructive, so it has to
+        // be asked for explicitly after seeing them, never inferred from a vague label.
+        throw new Error(
+          `${summarizeAmbiguousLines(up.ambiguous)}\nUse a longer "match" to name one of them, or pass ` +
+            `"dedupe":true on that entry if they really are duplicates of one entry and the rest should go.`,
+        );
+      }
+      text = up.text;
+    }
+    if (patch.appendDescription) text = text.trim() ? `${text.trimEnd()}\n${patch.appendDescription}` : patch.appendDescription;
+    body.description = text;
   }
   if (Object.keys(body).length === 0) throw new Error("nothing to update — pass at least one field to change");
   const cal = encodeURIComponent(calendarId);

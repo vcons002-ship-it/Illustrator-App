@@ -7,6 +7,8 @@ import {
   decodeBase64UrlBytes,
   createTask,
   createEvent,
+  applyDescriptionEdits,
+  applyDescriptionLines,
   nextDayIso,
   toTaskDue,
   patchTask,
@@ -15,6 +17,7 @@ import {
   decodeBase64Url,
   exchangeGoogleCode,
   gmailReadEmail,
+  gmailSearch,
   listEvents,
   listAllEvents,
   listTaskTree,
@@ -145,6 +148,59 @@ describe("parseGmailMessage", () => {
       { attachmentId: "att-1", filename: "itinerary.pdf", mimeType: "application/pdf" },
     ]);
     expect(parseGmailMessage({ id: "m4", payload: { mimeType: "text/plain", body: { data: b64url("hi") } } }).attachments).toBeUndefined();
+  });
+
+  it("carries To/Cc through (so 'who was this sent to' is answerable), and omits them when unset", () => {
+    const withRecipients = parseGmailMessage({
+      id: "m5",
+      payload: {
+        headers: [
+          { name: "From", value: "Ada <ada@x.com>" },
+          { name: "To", value: "Bo <bo@x.com>, Cy <cy@x.com>" },
+          { name: "Cc", value: "Dee <dee@x.com>" },
+          { name: "Subject", value: "Party" },
+        ],
+        mimeType: "text/plain",
+        body: { data: b64url("rsvp please") },
+      },
+    });
+    expect(withRecipients.to).toBe("Bo <bo@x.com>, Cy <cy@x.com>");
+    expect(withRecipients.cc).toBe("Dee <dee@x.com>");
+
+    const bare = parseGmailMessage({
+      id: "m6",
+      payload: { headers: [{ name: "From", value: "Ada <ada@x.com>" }], mimeType: "text/plain", body: { data: b64url("hi") } },
+    });
+    expect(bare.to).toBeUndefined();
+    expect(bare.cc).toBeUndefined();
+  });
+});
+
+describe("gmailSearch", () => {
+  it("asks Gmail for the To/Cc headers — format=metadata returns ONLY the ones named", async () => {
+    // One transport for both calls: the list response and the per-message response share a body here,
+    // which is fine because we only assert on the URLs and the recipient fields.
+    const transport = new FakeTransport({
+      messages: [{ id: "m1" }],
+      id: "m1",
+      snippet: "rsvp please",
+      payload: {
+        headers: [
+          { name: "From", value: "Ada <ada@x.com>" },
+          { name: "To", value: "Bo <bo@x.com>" },
+          { name: "Cc", value: "Dee <dee@x.com>" },
+          { name: "Subject", value: "Party" },
+        ],
+      },
+    });
+    const emails = await gmailSearch(transport, "tok", "party");
+    const messageUrl = transport.requests[1]?.url ?? "";
+    expect(messageUrl).toContain("metadataHeaders=To");
+    expect(messageUrl).toContain("metadataHeaders=Cc");
+    expect(emails[0]?.to).toBe("Bo <bo@x.com>");
+    expect(emails[0]?.cc).toBe("Dee <dee@x.com>");
+    // Summaries stay summaries — no body.
+    expect(emails[0]).not.toHaveProperty("body");
   });
 });
 
@@ -365,6 +421,62 @@ class SequencedTransport implements Transport {
   }
 }
 
+describe("applyDescriptionLines (upsert a labelled line)", () => {
+  // The line-upsert behaviour itself is covered in file-edits.test.ts — documents share the same
+  // primitive. This just holds the calendar's end of it: an RSVP list updating in place, not doubling.
+  it("overwrites the entry already in the list rather than appending a second one", () => {
+    const rsvp = "Party at 6.\nRSVP:\n- Ada: yes\n- Bo: ?\n- Cy: ?\nBring a dish.";
+    const r = applyDescriptionLines(rsvp, [{ match: "Bo", line: "Bo: yes" }]);
+    expect(r.text).toBe("Party at 6.\nRSVP:\n- Ada: yes\n- Bo: yes\n- Cy: ?\nBring a dish.");
+    expect(r.replaced).toEqual(["Bo"]);
+    // A genuinely new name joins the list, ahead of the prose that follows it.
+    expect(applyDescriptionLines(rsvp, [{ match: "Dee", line: "Dee: yes" }]).text).toBe(
+      "Party at 6.\nRSVP:\n- Ada: yes\n- Bo: ?\n- Cy: ?\n- Dee: yes\nBring a dish.",
+    );
+  });
+});
+
+describe("applyDescriptionEdits (find/replace in a description)", () => {
+  it("replaces a whole line by its text, keeping the bullet, and reports nothing missed", () => {
+    const r = applyDescriptionEdits("- Bo: ?\n- Cy: ?", [{ find: "Bo: ?", replace: "Bo: yes" }]);
+    expect(r).toEqual({ text: "- Bo: yes\n- Cy: ?", missed: [], ambiguous: [] });
+  });
+
+  it("deletes the line when the replacement is empty", () => {
+    expect(applyDescriptionEdits("- Bo: ?\n- Cy: ?", [{ find: "- Cy: ?", replace: "" }]).text).toBe("- Bo: ?");
+  });
+
+  it("falls back to a substring, first occurrence only", () => {
+    expect(applyDescriptionEdits("gate B12, gate B12", [{ find: "B12", replace: "C4" }]).text).toBe("gate C4, gate B12");
+  });
+
+  it("reports a miss rather than guessing — the caller must not append instead", () => {
+    const r = applyDescriptionEdits("- Bo: ?", [{ find: "- Zed: ?", replace: "- Zed: no" }]);
+    expect(r).toEqual({ text: "- Bo: ?", missed: ["- Zed: ?"], ambiguous: [] });
+  });
+
+  it("refuses a find that matches several lines instead of silently taking the first", () => {
+    // Two identical lines, or two containing the same phrase, are two different edits — which one was
+    // meant is the caller's to say, not this function's to guess.
+    const dup = applyDescriptionEdits("- Bo: ?\n- Cy: ok\n- Bo: ?", [{ find: "Bo: ?", replace: "Bo: yes" }]);
+    expect(dup.text).toBe("- Bo: ?\n- Cy: ok\n- Bo: ?"); // untouched
+    expect(dup.ambiguous).toEqual([{ match: "Bo: ?", lines: ["- Bo: ?", "- Bo: ?"] }]);
+
+    const sub = applyDescriptionEdits("gate B12 outbound\ngate B12 return", [{ find: "gate B12", replace: "gate C4" }]);
+    expect(sub.text).toBe("gate B12 outbound\ngate B12 return");
+    expect(sub.ambiguous).toHaveLength(1);
+    // Quoting more of the line resolves it, and touches only that line.
+    expect(applyDescriptionEdits("gate B12 outbound\ngate B12 return", [{ find: "gate B12 return", replace: "gate C4 return" }]).text).toBe(
+      "gate B12 outbound\ngate C4 return",
+    );
+  });
+
+  it("inserts a replacement VERBATIM even when it contains $-substitution sequences", () => {
+    // Same hazard applyFileEdits guards: a string replacement makes `$&`/`$1` substitution patterns.
+    expect(applyDescriptionEdits("cost: OLD", [{ find: "OLD", replace: "$100 ($& saved)" }]).text).toBe("cost: $100 ($& saved)");
+  });
+});
+
 describe("patchEvent (edit an existing calendar event)", () => {
   it("PATCHes only the fields given, at the event's URL", async () => {
     const t = new FakeTransport({ id: "e1", summary: "Dentist", start: { dateTime: "2026-07-04T17:00:00-04:00" }, end: { dateTime: "2026-07-04T18:00:00-04:00" } });
@@ -413,6 +525,61 @@ describe("patchEvent (edit an existing calendar event)", () => {
     const t2 = new FakeTransport({ id: "e3", summary: "Holiday" });
     await patchEvent(t2, "tok", "e3", { start: "2026-07-04T09:00:00-04:00" });
     expect(t2.requests[0]!.body).toEqual({ start: { dateTime: "2026-07-04T09:00:00-04:00", date: null } });
+  });
+
+  it("setLines overwrites the line already there instead of appending a second one", async () => {
+    const before = "Party at 6.\nRSVP:\n- Ada: yes\n- Bo: ?\n- Cy: ?\nBring a dish.";
+    const t = new SequencedTransport([{ id: "e1", summary: "Party", description: before }, { id: "e1", summary: "Party" }]);
+    await patchEvent(t, "tok", "e1", { setLines: [{ match: "Bo", line: "Bo: yes" }] });
+    expect((t.requests[1]!.body as { description: string }).description).toBe(
+      "Party at 6.\nRSVP:\n- Ada: yes\n- Bo: yes\n- Cy: ?\nBring a dish.",
+    );
+  });
+
+  it("editDescription refuses the WHOLE call when a find misses, and says what the text really is", async () => {
+    const t = new SequencedTransport([{ id: "e1", summary: "Party", description: "RSVP:\n- Bo: ?" }]);
+    await expect(
+      patchEvent(t, "tok", "e1", {
+        editDescription: [
+          { find: "- Bo: ?", replace: "- Bo: yes" },
+          { find: "- Zed: ?", replace: "- Zed: no" },
+        ],
+      }),
+    ).rejects.toThrow(/"- Zed: \?"[\s\S]*RSVP:/);
+    // Nothing was written — a half-applied edit is worse than none.
+    expect(t.requests.filter((r) => r.method === "PATCH")).toHaveLength(0);
+  });
+
+  it("refuses a setLines label that hits several lines, naming them, and writes nothing", async () => {
+    const before = "Bring:\n- Bo: chips\n- Bo: allergic to nuts";
+    const t = new SequencedTransport([{ id: "e1", summary: "Party", description: before }]);
+    await expect(patchEvent(t, "tok", "e1", { setLines: [{ match: "Bo", line: "Bo: paid" }] })).rejects.toThrow(
+      /"Bo" matches 2 lines[\s\S]*allergic to nuts[\s\S]*dedupe/,
+    );
+    expect(t.requests.filter((r) => r.method === "PATCH")).toHaveLength(0);
+  });
+
+  it("dedupe:true is honoured once the caller has actually asked for it", async () => {
+    const t = new SequencedTransport([
+      { id: "e1", summary: "Party", description: "RSVP:\n- Bo: ?\n- Cy: yes\n- Bo: yes" },
+      { id: "e1", summary: "Party" },
+    ]);
+    await patchEvent(t, "tok", "e1", { setLines: [{ match: "Bo", line: "Bo: no", dedupe: true }] });
+    expect((t.requests[1]!.body as { description: string }).description).toBe("RSVP:\n- Bo: no\n- Cy: yes");
+  });
+
+  it("applies edits, then setLines, then append — all in one read/write round-trip", async () => {
+    const t = new SequencedTransport([
+      { id: "e1", summary: "Party", description: "Party at 6.\n- Bo: ?" },
+      { id: "e1", summary: "Party" },
+    ]);
+    await patchEvent(t, "tok", "e1", {
+      editDescription: [{ find: "Party at 6.", replace: "Party at 7." }],
+      setLines: [{ match: "Bo", line: "Bo: yes" }],
+      appendDescription: "Parking out back.",
+    });
+    expect(t.requests.filter((r) => r.method === "GET")).toHaveLength(1); // one read, not three
+    expect((t.requests[1]!.body as { description: string }).description).toBe("Party at 7.\n- Bo: yes\nParking out back.");
   });
 
   it("refuses an empty patch rather than issuing a no-op write", async () => {
