@@ -273,7 +273,7 @@ import {
   type ReaderSettings,
 } from "@visual-reader/ui";
 import { loadSampleBook } from "./sample.js";
-import { buildStamp } from "./build-stamp.js";
+import { formatBuildStamp, loadBuildStamp } from "./build-stamp.js";
 import { useEngineWorker, type ImportResult, type TestRenderResult } from "./useEngineWorker.js";
 import { useRemoteMirror, type UpdateResult } from "./useRemoteMirror.js";
 import { useLocalEngine } from "./useLocalEngine.js";
@@ -1222,6 +1222,11 @@ export function App() {
   // said first (a briefing) instead of losing it when the turn's final answer replaces the stream.
   const buddyStreamingRef = useRef("");
   const [buddyThinking, setBuddyThinking] = useState("");
+  /** The running build, read from /build.json once (see build-stamp.ts). */
+  const [buildStampLabel, setBuildStampLabel] = useState("");
+  useEffect(() => {
+    void loadBuildStamp().then((s) => setBuildStampLabel(formatBuildStamp(s)));
+  }, []);
   /**
    * Is the reasoning disclosure open? Remembered ACROSS replies (and restarts), because the block is
    * rebuilt every turn: without this it reverted to open on the next message, so closing it only ever
@@ -2104,12 +2109,14 @@ export function App() {
             "check that this is the branch it went to — Settings shows the build this app is actually running.",
         };
       }
-      // What did the pull change? Some things a reload cannot pick up:
+      // What did the pull change? Two things a reload cannot pick up:
       //  - src-tauri: the Rust shell is a compiled binary.
       //  - vite.config.ts / package.json / the lockfile: the app runs under `cargo tauri dev`, so the
-      //    page is served by a LONG-LIVED vite dev server that reads its config once, at startup. A
-      //    reload re-fetches modules from that same server and so keeps the old config — which is how
-      //    a build-time `define` can be pulled, "rebuilt", and still not be there.
+      //    page is served by a LONG-LIVED vite dev server that reads its config once, at startup, and
+      //    is NOT relaunched by app.restart() (that restarts the Tauri binary; the dev server is a
+      //    sibling child of the tauri CLI). Only closing the window running desktop.bat restarts it.
+      // Everything else — all app source — a rebuild + reload applies, which is why the build stamp
+      // is a file read at runtime rather than a value baked into the vite config.
       const diff = await runCommand("git diff --name-only ORIG_HEAD HEAD", token, root);
       const coreChanged = /apps\/desktop\/src-tauri\//.test(diff.stdout);
       const buildConfigChanged = /(^|\/)(vite\.config\.ts|package\.json|pnpm-lock\.yaml)$/m.test(diff.stdout);
@@ -6179,20 +6186,48 @@ export function App() {
     });
     switchBuddyRef.current?.(CREATIVE_CHAT_ID);
   }, [persistSessions]);
+  /** Where to put the reader back after a run. `pendingReturn` is captured when we switch INTO the
+   * creative chat; it only becomes `returnToChat` once a run has actually been dispatched — otherwise
+   * the very next tick would restore before anything ran. */
+  const pendingReturn = useRef<string | undefined>(undefined);
+  const returnToChat = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (isRemoteClient || !settings.allowCreativeIdle) return;
     const id = setInterval(() => {
       if (buddyBusyRef.current || buddyPendingToolRef.current || processActiveRef.current) return;
+      // PUT THE READER'S CHAT BACK once the run is done. Dispatching a turn requires making that
+      // session active, so a creative run necessarily moves the visible chat — and leaving it there
+      // means coming back to the computer and finding a different conversation open, which is exactly
+      // the interruption this feature is supposed to avoid. Checked before the idle/gap guards below,
+      // because the run itself counts as recent activity and would otherwise hold the reader in the
+      // creative chat for another ten minutes. If they've already navigated somewhere themselves,
+      // drop the intent rather than yanking them again.
+      if (returnToChat.current) {
+        const back = returnToChat.current;
+        returnToChat.current = undefined;
+        // Only while they're STILL away. If they've come back and done something — including opening
+        // the creative chat to read what it wrote — moving the view under them would be worse than
+        // leaving it. `lastRequestAt` tracks user entry points only, not this runner's own dispatch,
+        // so it stays a true "has the reader touched anything" signal across the run.
+        const stillAway = Date.now() - lastRequestAt.current >= CREATIVE_IDLE_MS;
+        if (stillAway && activeBuddyIdRef.current === CREATIVE_CHAT_ID && back !== CREATIVE_CHAT_ID) {
+          switchBuddyRef.current?.(back);
+        }
+        return;
+      }
       if (Date.now() - lastRequestAt.current < CREATIVE_IDLE_MS) return;
       if (Date.now() - lastCreativeAt.current < CREATIVE_GAP_MS) return;
       void (async () => {
         // Two-phase, like the other sweeps: switch first and let the NEXT tick send, so the session's
         // history has landed and the turn doesn't inherit whatever chat was open.
         if (activeBuddyIdRef.current !== CREATIVE_CHAT_ID) {
+          pendingReturn.current = activeBuddyIdRef.current; // where to put them back afterwards
           openCreativeSession();
           return;
         }
         lastCreativeAt.current = Date.now();
+        returnToChat.current = pendingReturn.current; // arm the restore now that a run is really starting
+        pendingReturn.current = undefined;
         // What it already wrote about, from its own memory — so it moves on rather than circling.
         const recent = memoriesRef.current
           .filter((m) => /^explored:/i.test(m.text))
@@ -7960,7 +7995,7 @@ export function App() {
           <SettingsPanel
             value={settings}
             onChange={onSettingsChange}
-            buildStamp={buildStamp()}
+            buildStamp={buildStampLabel}
             isDesktop={isDesktop}
             remote={isRemoteClient}
             {...(isDesktop

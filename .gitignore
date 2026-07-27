@@ -10,3 +10,7 @@ coverage/
 .vite/
 .turbo/
 apps/extension/dist/
+
+# Generated on every build (scripts/build-stamp.mjs) — the running build id the app reads at
+# runtime. Regenerated per build, so committing it would churn on every rebuild.
+apps/web/public/build.json
