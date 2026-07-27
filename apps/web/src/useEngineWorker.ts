@@ -314,6 +314,9 @@ export interface EngineWorkerApi {
     currentCodeFile?: { name: string; title: string; language?: string },
     plan?: BuddyPlan,
     appManagedSteps?: boolean,
+    /** Unattended creative run: the worker narrows the prompt AND the tool loop refuses anything
+     * outside CREATIVE_IDLE_TOOLS. */
+    creativeIdle?: boolean,
   ) => Promise<BuddyDoneResult>;
   /** Abort the in-flight buddy round, if any. */
   buddyCancel: () => void;
@@ -1940,6 +1943,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       currentCodeFile?: { name: string; title: string; language?: string },
       plan?: BuddyPlan,
       appManagedSteps?: boolean,
+      creativeIdle?: boolean,
     ): Promise<BuddyDoneResult> =>
       new Promise((resolve) => {
         const requestId = nextRefRequestId.current++;
@@ -1970,7 +1974,7 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
             resolve(r);
           },
         });
-        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}), ...(plan ? { plan } : {}), ...(appManagedSteps ? { appManagedSteps: true } : {}) });
+        send({ type: "buddyChat", requestId, history, userText, persona, library, ...(workingDir ? { workingDir } : {}), ...(taskPlanId ? { taskPlanId } : {}), ...(currentCodeFile ? { currentCodeFile } : {}), ...(plan ? { plan } : {}), ...(appManagedSteps ? { appManagedSteps: true } : {}), ...(creativeIdle ? { creativeIdle: true } : {}) });
       }),
     [],
   );

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { routePendingTool, type ToolAutoFlags } from "./tool-approval.js";
+import { allowedInCreativeIdle, routePendingTool, type ToolAutoFlags } from "./tool-approval.js";
 
 const OFF: ToolAutoFlags = {
   fileAccessGranted: false,
@@ -67,5 +67,53 @@ describe("routePendingTool", () => {
         autonomousWorkspace: true,
       }),
     ).toBe("order-review");
+  });
+});
+
+describe("creative idle: what an unattended run may touch", () => {
+  it("allows only look-things-up-and-write-them-up", () => {
+    for (const t of ["search_web", "read_url", "read", "create_document", "edit_document", "remember", "calculate"]) {
+      expect(allowedInCreativeIdle(t)).toBe(true);
+    }
+  });
+
+  it("refuses everything that touches the machine, sends, or spends — this is the whole safety story", () => {
+    // Named individually rather than asserting a count: the point is that ADDING a tool to the app
+    // must not quietly widen what runs while nobody is watching, and a test that just counts would.
+    const forbidden = [
+      "run_command",
+      "write_file",
+      "edit_file",
+      "delegate_coding_task",
+      "spawn_coding_agents",
+      "spawn_agents",
+      "delegate",
+      "find_files",
+      "read_file",
+      "screenshot",
+      "open_image",
+      "send_email",
+      "draft_email",
+      "edit_draft",
+      "create_event",
+      "update_event",
+      "create_task",
+      "schedule_task",
+      "prep_order",
+      "trading_script",
+      "generate_image",
+      "generate_video",
+      "generate_long_video",
+      "mcp_call",
+      "update_setting",
+      "set_cell",
+      "create_spreadsheet",
+    ];
+    for (const t of forbidden) expect(allowedInCreativeIdle(t)).toBe(false);
+  });
+
+  it("is an allowlist, so a tool added later is refused until someone opts it in", () => {
+    expect(allowedInCreativeIdle("some_tool_invented_next_year")).toBe(false);
+    expect(allowedInCreativeIdle("")).toBe(false);
   });
 });

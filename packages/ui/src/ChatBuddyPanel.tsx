@@ -66,6 +66,11 @@ export interface ChatBuddyPanelProps {
   streamingText?: string;
   /** A thinking model's live reasoning (shown dimmed/collapsible while it works). */
   thinking?: string;
+  /** Whether the reasoning disclosure is open. Owned by the HOST so the reader's choice survives the
+   * next reply — the block is rebuilt each turn, so without this it springs back to its default and
+   * re-opens what they just closed. */
+  thinkingOpen?: boolean;
+  onThinkingOpenChange?: (open: boolean) => void;
   busy: boolean;
   /** Transient activity line ("searching Project Gutenberg…"). */
   activity?: string;
@@ -518,7 +523,13 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           />
           );
         })}
-        {props.thinking ? <ThinkingBlock text={props.thinking} /> : null}
+        {props.thinking ? (
+          <ThinkingBlock
+            text={props.thinking}
+            open={props.thinkingOpen ?? true}
+            {...(props.onThinkingOpenChange ? { onOpenChange: props.onThinkingOpenChange } : {})}
+          />
+        ) : null}
         {props.streamingText ? (
           <MessageBubble message={{ role: "assistant", text: props.streamingText }} />
         ) : null}

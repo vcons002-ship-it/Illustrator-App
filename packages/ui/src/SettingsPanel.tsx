@@ -305,6 +305,11 @@ export interface ReaderSettings {
    * & Calendar reminders, run inbox scans, research, draft docs) without asking each
    * time. Never submits forms, pays, or sends. Default off. */
   allowTaskAutomation?: boolean;
+  /** Let the assistant follow its own curiosity while you're idle: every so often it researches
+   * something on the web and writes it up, in a chat of its own (✨ Creative). Read-and-write-a-document
+   * only — it can NEVER run commands, touch files, or send anything, whatever the other permissions
+   * say. Default off. */
+  allowCreativeIdle?: boolean;
   /** ON by default (when Google is connected): while the desktop app is open and you're idle,
    * periodically scan recent email + the calendar for tasks worth planning, and pre-plan them
    * into the 📋 Tasks panel (research only — no external writes). Set false to stop background scans. */
@@ -2423,6 +2428,23 @@ export function SettingsPanel({
                     </span>
                   </label>
                 )}
+                <label style={{ ...rowStyle, flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={value.allowCreativeIdle ?? false}
+                    onChange={(e) => set({ allowCreativeIdle: e.target.checked })}
+                  />
+                  <span>
+                    Let it explore something of its own while you're idle
+                    <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+                      A few times an hour, when you haven't been using the app, it follows its own curiosity: reads
+                      around a topic on the web and writes up what it found interesting. It appears in its own{" "}
+                      <b>✨ Creative</b> chat, so it never interrupts your conversations. It can only search, read and
+                      write a document — it can <b>never</b> run commands, change your files, email anyone, or spend
+                      anything, whatever your other permissions allow. <b>Off by default.</b>
+                    </span>
+                  </span>
+                </label>
               </>
             </Group>
           )}

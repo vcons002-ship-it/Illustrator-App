@@ -302,6 +302,10 @@ export interface ChatPanelProps {
   streamingText?: string;
   /** A thinking model's live reasoning (shown dimmed/collapsible while it works). */
   thinking?: string;
+  /** Whether the reasoning disclosure is open — owned by the HOST so the reader's choice survives the
+   * next reply (see ThinkingBlock). */
+  thinkingOpen?: boolean;
+  onThinkingOpenChange?: (open: boolean) => void;
   busy: boolean;
   /** Transient activity line ("searching the web…"). */
   activity?: string;
@@ -454,7 +458,13 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
             />
             );
           })}
-          {props.thinking ? <ThinkingBlock text={props.thinking} /> : null}
+          {props.thinking ? (
+            <ThinkingBlock
+              text={props.thinking}
+              open={props.thinkingOpen ?? true}
+              {...(props.onThinkingOpenChange ? { onOpenChange: props.onThinkingOpenChange } : {})}
+            />
+          ) : null}
           {props.streamingText ? (
             <MessageBubble message={{ role: "assistant", text: props.streamingText }} />
           ) : null}
@@ -1165,15 +1175,37 @@ function ImageGallery({ items }: { items: { thumb: string; full: string; title?:
  * A thinking model's live reasoning, shown dimmed and auto-scrolling while it works
  * (so a long reason-before-answering reads as visible progress, not a frozen hang).
  * Collapsible — the reasoning isn't the answer, so it stays out of the way.
+ *
+ * `onOpenChange` reports the reader opening or closing it, so the HOST can remember that choice and
+ * feed it back as `open` next time. Without that the block is re-created on every reply and springs
+ * back to its default, re-opening something the reader just closed (and vice versa) — the collapse
+ * only ever lasted until the next message.
  */
-export function ThinkingBlock({ text, open = true, label = "💭 Thinking…" }: { text: string; open?: boolean; label?: string }) {
+export function ThinkingBlock({
+  text,
+  open = true,
+  label = "💭 Thinking…",
+  onOpenChange,
+}: {
+  text: string;
+  open?: boolean;
+  label?: string;
+  onOpenChange?: (open: boolean) => void;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = ref.current;
     if (el && open) el.scrollTop = el.scrollHeight;
   }, [text, open]);
   return (
-    <details open={open} style={thinkingStyle}>
+    <details
+      open={open}
+      onToggle={(e) => {
+        const next = (e.currentTarget as HTMLDetailsElement).open;
+        if (next !== open) onOpenChange?.(next);
+      }}
+      style={thinkingStyle}
+    >
       <summary style={{ cursor: "pointer", fontSize: 11, opacity: 0.7 }}>{label}</summary>
       <div
         ref={ref}

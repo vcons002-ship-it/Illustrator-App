@@ -24,6 +24,7 @@ import { parseSettingChange } from "./settings-control.js";
 import { evaluateExpression, formatCalcResult } from "./calculator.js";
 import { evaluateMath } from "./math-engine.js";
 import { jsonGatedTokenSink } from "./chat-session.js";
+import { allowedInCreativeIdle } from "./tool-approval.js";
 
 /**
  * One user-message round of the landing-page buddy, including the tool loop —
@@ -391,6 +392,15 @@ export async function runBuddyTurn(opts: {
    * empty/tool-only wrap-up ask for the next BEAT (prose) instead of a "what I did" meta line, so a
    * recovered reply is still a usable beat the host can append to the book. */
   storyMode?: boolean;
+  /**
+   * This is an UNATTENDED creative run. Only {@link CREATIVE_IDLE_TOOLS} may execute; anything else is
+   * refused here, in the loop, before it reaches a dep or the host.
+   *
+   * Enforced at the executor rather than by leaving tools out of the prompt, because those are
+   * different guarantees: a prompt that omits a tool is a suggestion, and this turn runs with nobody
+   * watching. The refusal is fed back as a tool result so the model adapts rather than stalling.
+   */
+  creativeIdle?: boolean;
 }): Promise<BuddyTurnOutcome> {
   const messages: ChatTurn[] = [{ role: "system", content: opts.system }, ...opts.history];
   const transcript: ChatTurn[] = [];
@@ -557,6 +567,20 @@ export async function runBuddyTurn(opts: {
     const feedbacks: string[] = [];
     let deferred = false;
     for (const call of calls) {
+      // THE CREATIVE-RUN GATE. Before any dispatch branch, so nothing — sub-agents, host tools, the
+      // auto-run executor — can route around it. Nobody is watching this turn, so the limit is
+      // enforced here rather than trusted to the prompt.
+      if (opts.creativeIdle && !allowedInCreativeIdle(call.tool)) {
+        const result: BuddyToolResultPayload = {
+          error:
+            `${call.tool} can't run while you're exploring on your own — these runs are limited to reading and ` +
+            "writing things up. Stay with searching, reading, and create_document; don't try to work around it.",
+        };
+        toolResults.push({ call, result });
+        opts.onEvent?.({ kind: "toolResult", round, call, result });
+        feedbacks.push(formatBuddyToolResult(call, result));
+        continue;
+      }
       // Parallel fan-out: run the independent subtasks as concurrent read-only sub-agents (the host
       // caps how many run at once) and feed all their results back at once.
       if (call.tool === "spawn_agents") {

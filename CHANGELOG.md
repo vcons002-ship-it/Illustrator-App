@@ -5,6 +5,19 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ## July 2026
 
+### The assistant
+
+- **It can potter about on its own** (off by default) — turn on "Let it explore something of its own
+  while you're idle" and, a few times an hour when you're not using the app, it follows its own
+  curiosity: reads around a topic on the web and writes up what it found interesting. It lands in its
+  own **✨ Creative** chat, so it never appears in a conversation you're having, and it remembers what
+  it has already covered so it goes somewhere new each time. While doing this it can only search,
+  read, and write a document — it cannot run commands, touch your files, email anyone, or spend
+  anything, whatever your other permissions allow.
+- **The reasoning bubble stays how you left it** — open it and it stays open; close it and it stays
+  closed, through the next reply and after a restart. It used to spring back open every time the
+  assistant spoke, so closing it only lasted one message.
+
 ### The app itself
 
 - **Settings shows which build you're running** — right under the title, above the search box. The app

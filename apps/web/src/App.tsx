@@ -200,6 +200,7 @@ import {
   type StoredChatMessage,
   type ToolCall,
   type ToolResultPayload,
+  buildCreativeIdlePrompt,
 } from "@visual-reader/core";
 import {
   bookFromText,
@@ -322,6 +323,15 @@ const BUDDY_CHAT_ID = "__buddy__";
  * be injected into (and pollute the context of) whichever chat the reader has open — its history is
  * the scheduled runs, nothing else. Created on first fire. */
 const SCHEDULED_CHAT_ID = `${BUDDY_CHAT_ID}-scheduled`;
+/** The assistant's own chat for idle creative work — separate so it never lands in a conversation. */
+const CREATIVE_CHAT_ID = `${BUDDY_CHAT_ID}-creative`;
+/** How long the reader must be idle before a creative run may start. Longer than the scheduled/task
+ * sweeps: this is the lowest-priority work in the app and must never look like an interruption. */
+const CREATIVE_IDLE_MS = 10 * 60_000;
+/** Minimum gap between creative runs — "a few times an hour", not a treadmill. */
+const CREATIVE_GAP_MS = 18 * 60_000;
+/** localStorage key for whether the reasoning disclosure is left open (see thinkingOpen). */
+const THINKING_OPEN_KEY = "vr-thinking-open";
 /** How long the reader must be idle before a due scheduled task is allowed to fire. Firing switches
  * the view to the Scheduled chat, so it waits for a lull instead of interrupting mid-conversation;
  * a task stays due until then (nothing is skipped, just deferred). */
@@ -1212,6 +1222,27 @@ export function App() {
   // said first (a briefing) instead of losing it when the turn's final answer replaces the stream.
   const buddyStreamingRef = useRef("");
   const [buddyThinking, setBuddyThinking] = useState("");
+  /**
+   * Is the reasoning disclosure open? Remembered ACROSS replies (and restarts), because the block is
+   * rebuilt every turn: without this it reverted to open on the next message, so closing it only ever
+   * lasted until the assistant spoke again. Persisted here rather than inside the UI component so
+   * packages/ui stays free of browser storage.
+   */
+  const [thinkingOpen, setThinkingOpenState] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(THINKING_OPEN_KEY) !== "0";
+    } catch {
+      return true; // storage blocked/full — the visible default, not a crash
+    }
+  });
+  const setThinkingOpen = useCallback((open: boolean) => {
+    setThinkingOpenState(open);
+    try {
+      localStorage.setItem(THINKING_OPEN_KEY, open ? "1" : "0");
+    } catch {
+      /* a lost preference is not worth failing a click over */
+    }
+  }, []);
   const [buddyActivity, setBuddyActivity] = useState("");
   // A running log of the steps (tools) the buddy takes this turn, so its process is visible.
   const [buddySteps, setBuddySteps] = useState<string[]>([]);
@@ -5722,7 +5753,7 @@ export function App() {
           appendBuddy({ role: "tool", text: "🔍 No results." });
         }
       }
-    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive);
+    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive, creativeIdleRef.current);
     if (buddyTurnSeq.current !== seq) return;
     setBuddyBusy(false);
     setBuddyStreaming("");
@@ -6120,6 +6151,67 @@ export function App() {
   buddyBusyRef.current = buddyBusy;
   const buddyPendingToolRef = useRef(buddyPendingTool);
   buddyPendingToolRef.current = buddyPendingTool;
+  /**
+   * IDLE CREATIVE WORK (off by default). Every so often, while the reader is away, let the assistant
+   * follow its own curiosity: read around something on the web and write it up.
+   *
+   * Two things keep it from being a nuisance or a risk:
+   *  - it lives in its own ✨ Creative chat, so it never appears in a conversation the reader is
+   *    having, and its context never mixes with theirs;
+   *  - `creativeIdle` narrows the prompt AND makes the tool loop refuse anything outside
+   *    CREATIVE_IDLE_TOOLS, so it cannot run commands, touch files, or send anything — regardless of
+   *    what the reader has allowed for normal chats.
+   * Same idle/busy conditions as the other sweeps, plus a much longer gap: this is the lowest-value
+   * work in the app and yields to everything else.
+   */
+  const creativeIdleRef = useRef(false);
+  // Read inside the interval without making it a dependency (which would restart the timer whenever
+  // a memory is saved).
+  const memoriesRef = useRef(memories);
+  memoriesRef.current = memories;
+  const lastCreativeAt = useRef(0);
+  const openCreativeSession = useCallback(() => {
+    setBuddySessions((prev) => {
+      if (prev.some((s) => s.id === CREATIVE_CHAT_ID)) return prev;
+      const next = [...prev, { id: CREATIVE_CHAT_ID, workingDir: "", label: "✨ Creative" }];
+      persistSessions(next);
+      return next;
+    });
+    switchBuddyRef.current?.(CREATIVE_CHAT_ID);
+  }, [persistSessions]);
+  useEffect(() => {
+    if (isRemoteClient || !settings.allowCreativeIdle) return;
+    const id = setInterval(() => {
+      if (buddyBusyRef.current || buddyPendingToolRef.current || processActiveRef.current) return;
+      if (Date.now() - lastRequestAt.current < CREATIVE_IDLE_MS) return;
+      if (Date.now() - lastCreativeAt.current < CREATIVE_GAP_MS) return;
+      void (async () => {
+        // Two-phase, like the other sweeps: switch first and let the NEXT tick send, so the session's
+        // history has landed and the turn doesn't inherit whatever chat was open.
+        if (activeBuddyIdRef.current !== CREATIVE_CHAT_ID) {
+          openCreativeSession();
+          return;
+        }
+        lastCreativeAt.current = Date.now();
+        // What it already wrote about, from its own memory — so it moves on rather than circling.
+        const recent = memoriesRef.current
+          .filter((m) => /^explored:/i.test(m.text))
+          .slice(-8)
+          .map((m) => m.text.replace(/^explored:\s*/i, ""));
+        creativeIdleRef.current = true;
+        try {
+          onBuddySendText(buildCreativeIdlePrompt(recent));
+        } finally {
+          // Cleared on the next tick of the event loop: onBuddySendText reads it synchronously when
+          // it dispatches, and leaving it set would mark the reader's own next message creative.
+          setTimeout(() => {
+            creativeIdleRef.current = false;
+          }, 0);
+        }
+      })();
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [isRemoteClient, settings.allowCreativeIdle, openCreativeSession, onBuddySendText]);
   /** Make the ⏰ Scheduled session exist and switch to it (creating it on first use). */
   const openScheduledSession = useCallback(() => {
     setBuddySessions((prev) => {
@@ -7262,6 +7354,8 @@ export function App() {
       messages={buddyPanelMessages}
       {...(buddyStreaming ? { streamingText: buddyStreaming } : {})}
       {...(buddyThinking ? { thinking: buddyThinking } : {})}
+      thinkingOpen={thinkingOpen}
+      onThinkingOpenChange={setThinkingOpen}
       busy={buddyBusy}
       {...(buddyActivity ? { activity: buddyActivity } : {})}
       {...(buddySteps.length ? { steps: buddySteps } : {})}

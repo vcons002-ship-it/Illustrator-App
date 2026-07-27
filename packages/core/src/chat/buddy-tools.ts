@@ -1691,6 +1691,43 @@ export function buildProjectGuideBlock(text: string): string {
 }
 
 /**
+ * The brief for an unattended creative run: go and be interested in something, then write it up.
+ *
+ * Deliberately not a task. The reader asked for the assistant to follow its own curiosity while idle,
+ * so this gives it latitude about WHAT and a firm shape for HOW — read around, then leave one document
+ * behind. `recent` is what it already covered (from its own memory), so it moves on instead of
+ * circling the same subject.
+ *
+ * The tool limits are stated because a model that understands the boundary works within it usefully,
+ * rather than wasting the run discovering it — but the boundary itself is enforced in the loop
+ * (CREATIVE_IDLE_TOOLS), not here. PURE.
+ */
+export function buildCreativeIdlePrompt(recent: string[] = []): string {
+  const avoid = recent.length
+    ? `\n\nYou've recently written about: ${recent.slice(0, 8).join("; ")}. Pick something different — a new field, ` +
+      "a different angle, or a question those left open."
+    : "";
+  return (
+    "You have some free time and nobody is waiting on you. Follow your own curiosity.\n\n" +
+    "Pick something you're genuinely interested in — an idea, a question, an odd corner of history or " +
+    "science or craft, something you noticed and want to understand better. Search the web and read " +
+    "around it properly (several sources, not one). Then write it up with create_document: what you " +
+    "went looking for, what you actually found, and what you make of it. Aim for something worth the " +
+    "reader's five minutes — specific, sourced, and with a point of view. A piece that only says " +
+    "\"here are some facts\" isn't worth writing.\n\n" +
+    // The "explored:" prefix is what the next run greps for to build `recent` — without it the note
+    // is indistinguishable from everything else the assistant remembers about the reader.
+    'Then call remember with the note "explored: <the topic, in a few words>" — that exact prefix, so ' +
+    "next time you can see where you've already been and go somewhere new.\n\n" +
+    "In this mode you can ONLY search, read, and write a document. No commands, no files, no email, " +
+    "no calendar, no images — those are off here regardless of other settings, and trying them just " +
+    "wastes the run. Work within it.\n\n" +
+    "Finish in one go: don't ask the reader anything — they aren't here." +
+    avoid
+  );
+}
+
+/**
  * The draft the assistant most recently saved or edited, injected AFTER the cached prefix — like the
  * active document and the file ledger.
  *
