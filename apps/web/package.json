@@ -5,8 +5,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "node ../../scripts/build-stamp.mjs && vite",
+    "build": "node ../../scripts/build-stamp.mjs && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json"
   },

@@ -222,7 +222,7 @@ import { buildProviders } from "@visual-reader/ui/providers";
 import type { ReaderSettings } from "@visual-reader/ui";
 import type { TaskPlan, TaskStep } from "@visual-reader/core";
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
-import { buildStamp } from "./build-stamp.js";
+import { formatBuildStamp, loadBuildStamp } from "./build-stamp.js";
 import type { EngineVram } from "./remote-sync.js";
 
 /**
@@ -3861,6 +3861,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       throw new Error(`The "${llm.id}" text provider doesn't support chat yet.`);
     }
     const note = await renderDefaultsNote();
+    // Cached after the first turn; a fetch of a local file, and it can't change while loaded.
+    const buildStampLabel = formatBuildStamp(await loadBuildStamp());
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
     const memory = memoryPromptBlock(await loadMemory(store));
     const selfName = await loadSoulName(store, "self");
@@ -3900,9 +3902,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // Anchor "today"/"this week"/"by when" answers + ISO date math to the reader's
         // own clock (the worker runs in their browser, so this is their local time/zone).
         now: currentDateTimeLabel(),
-        // Which bundle this is, baked in at build time — so "which build are you on?" is answerable
-        // and a stale build stops looking like an unfixed bug.
-        buildStamp: buildStamp(),
+        // Which bundle this is — so "which build are you on?" is answerable and a stale build stops
+        // looking like an unfixed bug. Resolved before the turn (see below); "" until then, and the
+        // prompt omits the line rather than showing a blank.
+        ...(buildStampLabel ? { buildStamp: buildStampLabel } : {}),
         ...(activePlan ? { activeTask: tasksIndexBlock(activePlan) } : {}),
         ...(settings?.allowMature ? { allowMature: true } : {}),
         // Desktop only: the find_files tool needs the native filesystem bridge,

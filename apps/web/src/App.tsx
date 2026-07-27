@@ -273,7 +273,7 @@ import {
   type ReaderSettings,
 } from "@visual-reader/ui";
 import { loadSampleBook } from "./sample.js";
-import { buildStamp } from "./build-stamp.js";
+import { formatBuildStamp, loadBuildStamp } from "./build-stamp.js";
 import { useEngineWorker, type ImportResult, type TestRenderResult } from "./useEngineWorker.js";
 import { useRemoteMirror, type UpdateResult } from "./useRemoteMirror.js";
 import { useLocalEngine } from "./useLocalEngine.js";
@@ -1222,6 +1222,11 @@ export function App() {
   // said first (a briefing) instead of losing it when the turn's final answer replaces the stream.
   const buddyStreamingRef = useRef("");
   const [buddyThinking, setBuddyThinking] = useState("");
+  /** The running build, read from /build.json once (see build-stamp.ts). */
+  const [buildStampLabel, setBuildStampLabel] = useState("");
+  useEffect(() => {
+    void loadBuildStamp().then((s) => setBuildStampLabel(formatBuildStamp(s)));
+  }, []);
   /**
    * Is the reasoning disclosure open? Remembered ACROSS replies (and restarts), because the block is
    * rebuilt every turn: without this it reverted to open on the next message, so closing it only ever
@@ -2104,12 +2109,14 @@ export function App() {
             "check that this is the branch it went to — Settings shows the build this app is actually running.",
         };
       }
-      // What did the pull change? Some things a reload cannot pick up:
+      // What did the pull change? Two things a reload cannot pick up:
       //  - src-tauri: the Rust shell is a compiled binary.
       //  - vite.config.ts / package.json / the lockfile: the app runs under `cargo tauri dev`, so the
-      //    page is served by a LONG-LIVED vite dev server that reads its config once, at startup. A
-      //    reload re-fetches modules from that same server and so keeps the old config — which is how
-      //    a build-time `define` can be pulled, "rebuilt", and still not be there.
+      //    page is served by a LONG-LIVED vite dev server that reads its config once, at startup, and
+      //    is NOT relaunched by app.restart() (that restarts the Tauri binary; the dev server is a
+      //    sibling child of the tauri CLI). Only closing the window running desktop.bat restarts it.
+      // Everything else — all app source — a rebuild + reload applies, which is why the build stamp
+      // is a file read at runtime rather than a value baked into the vite config.
       const diff = await runCommand("git diff --name-only ORIG_HEAD HEAD", token, root);
       const coreChanged = /apps\/desktop\/src-tauri\//.test(diff.stdout);
       const buildConfigChanged = /(^|\/)(vite\.config\.ts|package\.json|pnpm-lock\.yaml)$/m.test(diff.stdout);
@@ -7960,7 +7967,7 @@ export function App() {
           <SettingsPanel
             value={settings}
             onChange={onSettingsChange}
-            buildStamp={buildStamp()}
+            buildStamp={buildStampLabel}
             isDesktop={isDesktop}
             remote={isRemoteClient}
             {...(isDesktop

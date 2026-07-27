@@ -29,11 +29,13 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   change reports exactly that, indefinitely, while the fix you're waiting for sits somewhere else.
   Comparing the commit it reports against the build shown in Settings also separates "didn't
   download" from "didn't rebuild".
-- **Updates that change the build setup now tell you to restart** — the desktop app is served by a
-  development server that reads its configuration once, when it starts. So a pulled change to that
-  configuration was downloaded, reported as rebuilt, and then quietly not applied, because reloading
-  the page re-fetches from the same already-running server. Those updates now say to close and reopen
-  the app, the way core updates already did.
+- **The update button now applies the build number by itself** — no closing and reopening. The build
+  is recorded to a small file each time the app is built and read when it starts, instead of being
+  baked into the build settings. Those settings are only read when the app's development server
+  starts, and nothing the app can do restarts that server — so anything kept there was beyond the
+  update button's reach by construction.
+- **Updates that change the build setup still tell you to restart** — that case is now rare rather
+  than routine, and it's stated instead of silently not applying.
 
 ### Scheduled actions
 
