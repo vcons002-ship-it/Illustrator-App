@@ -2390,11 +2390,14 @@ export function SettingsPanel({
                       onChange={(e) => set({ allowTaskAutomation: e.target.checked })}
                     />
                     <span>
-                      Let the Task Assistant create reminders without asking
+                      Let the Task Assistant work on tasks by itself
                       <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
                         When working a task, create/update Google Tasks &amp; Calendar reminders, research, and draft
-                        documents <b>without confirming each one</b>. It will <b>never</b> submit forms, pay, or send
-                        email — those stay your action. <b>Off by default</b> (it asks first); needs Google connected.
+                        documents <b>without confirming each one</b>. It also picks up the next step it's allowed to do
+                        on its own <b>while you're away</b> (only steps marked as its to do, on plans that aren't
+                        waiting on an answer from you — and it stops after two tries rather than retrying forever). It
+                        will <b>never</b> submit forms, pay, or send email — those stay your action. <b>Off by
+                        default</b> (it asks first); needs Google connected.
                       </span>
                     </span>
                   </label>

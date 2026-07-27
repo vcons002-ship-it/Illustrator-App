@@ -140,6 +140,7 @@ import {
   upsertTaskPlan,
   loadTaskPlans,
   normalizeScheduledTask,
+  type VisualReaderStore,
   upsertScheduledTask,
   loadScheduledTasks,
   deleteScheduledTask,
@@ -2360,6 +2361,11 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
     // SAVE + return the plan FIRST, so the steps show in the app immediately and can't be lost to a
     // slow/hung Google call. The Google mirror is then best-effort in the BACKGROUND (below).
     await upsertTaskPlan(store, finalPlan);
+    // Turn the plan's WATCHES into scheduled actions bound to it, so the task can advance on its own
+    // between visits. Reconciled (not re-created): re-planning happens repeatedly, and recreating them
+    // each time would both pile up duplicates and reset each watch's run history — losing the
+    // "what's new since last time" window that keeps a repeating check incremental.
+    await reconcilePlanWatches(store, finalPlan).catch(() => {});
     post({ type: "planned", requestId: msg.requestId, ok: true, plan: finalPlan });
     // Mirror to Google Tasks in the background: sync sub-tasks + notes under the existing parent, or
     // create a parent first for a user-typed plan with none yet. Re-saves with the Google ids when
@@ -2392,6 +2398,41 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
     });
   } finally {
     chatAborts.delete(msg.requestId);
+  }
+}
+
+/**
+ * Bring a plan's bound scheduled actions in line with the watches it asked for.
+ *
+ * Matched by title (the planner is told to keep them stable), so re-planning a task UPDATES a watch
+ * in place — keeping its `lastRunIso`, and therefore the incremental window each run is given —
+ * rather than replacing it with a fresh one that would re-read everything from scratch. Watches the
+ * plan no longer lists are removed, so a re-plan that drops a check stops it firing. Only touches
+ * actions bound to THIS plan; standalone scheduled actions are never in scope.
+ */
+async function reconcilePlanWatches(store: VisualReaderStore, plan: TaskPlan): Promise<void> {
+  const wanted = plan.watches ?? [];
+  const all = await loadScheduledTasks(store);
+  const mine = all.filter((t) => t.planId === plan.id);
+  for (const stale of mine.filter((t) => !wanted.some((w) => w.title === t.title))) {
+    await deleteScheduledTask(store, stale.id).catch(() => {});
+  }
+  for (const w of wanted) {
+    const existing = mine.find((t) => t.title === w.title);
+    await upsertScheduledTask(
+      store,
+      normalizeScheduledTask({
+        ...(existing ?? {}), // keep id, enabled, lastRunIso, nextDueIso
+        title: w.title,
+        prompt: w.prompt,
+        rule: w.rule,
+        planId: plan.id,
+        ...(w.time ? { time: w.time } : {}),
+        ...(w.date ? { date: w.date } : {}),
+        ...(w.weekday !== undefined ? { weekday: w.weekday } : {}),
+        ...(w.dayOfMonth !== undefined ? { dayOfMonth: w.dayOfMonth } : {}),
+      }),
+    ).catch(() => {});
   }
 }
 

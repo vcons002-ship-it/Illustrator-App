@@ -57,6 +57,7 @@ import {
   MAX_SOUL_NOTE_CHARS,
   MAX_SOUL_NAME_CHARS,
   loadTaskPlans,
+  nextAutoStep,
   deleteTaskPlan,
   archiveTaskPlan,
   restoreTaskPlan,
@@ -322,6 +323,13 @@ const SCHEDULED_CHAT_ID = `${BUDDY_CHAT_ID}-scheduled`;
  * the view to the Scheduled chat, so it waits for a lull instead of interrupting mid-conversation;
  * a task stays due until then (nothing is skipped, just deferred). */
 const SCHEDULED_IDLE_MS = 120_000;
+/** How long the reader must be idle before the assistant works a task step on its own. Longer than
+ * the scheduled-action gate: this one switches the view AND takes real action, so it should only
+ * happen when they've clearly stepped away. */
+const AUTO_TASK_IDLE_MS = 5 * 60_000;
+/** Attempts per step before it's left for the reader — a step that can't be finished unattended
+ * must not be retried every sweep forever. */
+const MAX_AUTO_STEP_TRIES = 2;
 
 /** One landing-page chat session: its own history (keyed by id) + working folder. */
 interface BuddySession {
@@ -5960,6 +5968,53 @@ export function App() {
     }, 30_000);
     return () => clearInterval(id);
   }, [libraryStore, onBuddySendText, refreshScheduled, isRemoteClient, openScheduledSession, pushToast]);
+
+  // AUTONOMOUS TASK WORK: while you're away, pick up the next step the assistant is allowed to do
+  // ITSELF and attempt it in that task's own chat. This is the half the background sweep never had —
+  // that sweep only ever (re-)PLANS, so `ai_prep` steps sat there described but undone until someone
+  // opened the task. Deliberately narrow:
+  //  - OFF unless `allowTaskAutomation` is on (it's the setting that already means "may act on tasks").
+  //  - only what `nextAutoStep` allows (ai_prep, planned, not stale, no open questions — see there).
+  //  - one step per sweep, only when idle, never mid-turn or over an approval prompt.
+  //  - two tries per step, then it's left for the reader rather than retried forever.
+  // Tool approvals still apply inside the turn, so this widens WHEN work happens, not what may run.
+  const autoStepTries = useRef<Map<string, number>>(new Map());
+  const autoStepSkip = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (isRemoteClient || !settings.allowTaskAutomation) return;
+    const id = setInterval(() => {
+      if (buddyBusyRef.current || buddyPendingToolRef.current || processActiveRef.current) return;
+      if (Date.now() - lastRequestAt.current < AUTO_TASK_IDLE_MS) return;
+      void (async () => {
+        const pick = nextAutoStep(await loadTaskPlans(libraryStore), { skipStepIds: autoStepSkip.current });
+        if (!pick) return;
+        // Work happens in the task's OWN chat (same two-phase open-then-send as the scheduled runner:
+        // loading a session's history is async, and sending early would hand the model the previous
+        // conversation as context).
+        if (activeBuddyIdRef.current !== pick.plan.sessionId) {
+          await openTaskRef.current?.(pick.plan.id);
+          return;
+        }
+        const tries = (autoStepTries.current.get(pick.step.id) ?? 0) + 1;
+        autoStepTries.current.set(pick.step.id, tries);
+        if (tries > MAX_AUTO_STEP_TRIES) {
+          autoStepSkip.current.add(pick.step.id); // leave it for the reader
+          return;
+        }
+        logActionRef.current("task_auto", `Working “${pick.step.title}” on ${pick.plan.title}`);
+        pushToast(`🤖 Working “${pick.step.title}” on “${pick.plan.title}”.`, "info");
+        onBuddySendText(
+          `[Working this task on my own while you're away.] Do ONLY this step of “${pick.plan.title}”: ` +
+            `${pick.step.title}${pick.step.detail ? ` — ${pick.step.detail}` : ""}. ` +
+            "Use your tools to actually do it. When it's genuinely finished, check it off with " +
+            `mark_step_done (planId "${pick.plan.id}", stepId "${pick.step.id}") and save anything worth ` +
+            "keeping onto the task. If it needs the reader, or you can't finish it alone, say exactly what's " +
+            "needed and DON'T check it off.",
+        );
+      })();
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [isRemoteClient, settings.allowTaskAutomation, libraryStore, onBuddySendText, pushToast]);
 
   // Remote bus (phone↔Google↔desktop): when enabled + Google's connected, poll the user's
   // Google Tasks for "VR:" commands they added from their phone, run each through the buddy,

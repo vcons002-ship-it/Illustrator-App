@@ -100,7 +100,19 @@ export function buildPlanPrompt(sourceText: string, researchNotes: string, today
     '"estCost": string, "clarifyingQuestions": [string], "steps": [{"title": string, "detail": ' +
     'string, "actor": "ai_prep" | "user_action", "dueIso": string, "estCost": string, "links": ' +
     '[{"label": string, "url": string, "official": boolean}], "docs": [{"title": string, "kind": ' +
-    '"reference" | "checklist", "body": string, "fence": string}], "researchNotes": string}]}\n' +
+    '"reference" | "checklist", "body": string, "fence": string}], "researchNotes": string}], ' +
+    '"watches": [{"title": string, "prompt": string, "rule": "daily" | "weekly" | "monthly" | "once", ' +
+    '"time": "HH:MM", "date": "YYYY-MM-DD", "weekday": number, "dayOfMonth": number}]}\n' +
+    'WATCHES — the recurring/dated checks this task needs to advance ON ITS OWN while the reader is ' +
+    "away. The app runs each one automatically, in this task's own chat, and records what it finds " +
+    "back onto the task. Add one ONLY where progress genuinely depends on something arriving or " +
+    'changing over time, and where you could act on it with the tools you have: replies landing ("check ' +
+    'for RSVP/replies to X each morning"), a dated nudge before a deadline ("chase whoever hasn\'t ' +
+    'replied", "once", with a date a few days ahead), a price/availability re-check before a booking ' +
+    "step's due date. Write \"prompt\" as a self-contained instruction — it runs with no other context " +
+    "than this task. Keep titles stable and specific (they're matched across re-plans). At most 4, and " +
+    "NONE at all for a task that's just a list of things the reader does themselves — a watch that has " +
+    "nothing to check is noise. Omit the key entirely when there's nothing to watch.\n" +
     "Omit a field rather than inventing it. Base every fact on the research below — never invent " +
     "deadlines, costs, URLs or steps.";
   const user =
@@ -212,8 +224,26 @@ export function parsePlan(raw: string): ParsedPlan | undefined {
   const clarifyingQuestions = Array.isArray(obj.clarifyingQuestions)
     ? obj.clarifyingQuestions.map(str).filter((q): q is string => !!q)
     : [];
+  // Background checks the plan wants running on its own (normalised/capped by normalizeTaskPlan).
+  const watches = Array.isArray(obj.watches)
+    ? obj.watches
+        .map((w) => (w && typeof w === "object" ? (w as Record<string, unknown>) : undefined))
+        .filter((w): w is Record<string, unknown> => !!w)
+        .map((w) => ({
+          title: str(w.title) ?? "",
+          prompt: str(w.prompt) ?? "",
+          // Left OUT when absent/unrecognised rather than set to undefined (exactOptionalPropertyTypes);
+          // normalizeWatch then drops the whole watch, since a cadence can't be guessed.
+          ...(str(w.rule) ? { rule: str(w.rule) as "daily" | "weekly" | "monthly" | "once" } : {}),
+          ...(str(w.time) ? { time: str(w.time)! } : {}),
+          ...(str(w.date) ? { date: str(w.date)! } : {}),
+          ...(num(w.weekday) !== undefined ? { weekday: num(w.weekday)! } : {}),
+          ...(num(w.dayOfMonth) !== undefined ? { dayOfMonth: num(w.dayOfMonth)! } : {}),
+        }))
+    : [];
   return {
     title,
+    ...(watches.length ? { watches } : {}),
     ...(str(obj.summary) ? { summary: str(obj.summary)! } : {}),
     ...(str(obj.deadlineIso) ? { deadlineIso: str(obj.deadlineIso)! } : {}),
     ...(num(obj.leadTimeDays) !== undefined ? { leadTimeDays: num(obj.leadTimeDays)! } : {}),
