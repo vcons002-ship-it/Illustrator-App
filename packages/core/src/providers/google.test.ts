@@ -15,6 +15,7 @@ import {
   decodeBase64Url,
   exchangeGoogleCode,
   gmailReadEmail,
+  gmailSearch,
   listEvents,
   listAllEvents,
   listTaskTree,
@@ -145,6 +146,59 @@ describe("parseGmailMessage", () => {
       { attachmentId: "att-1", filename: "itinerary.pdf", mimeType: "application/pdf" },
     ]);
     expect(parseGmailMessage({ id: "m4", payload: { mimeType: "text/plain", body: { data: b64url("hi") } } }).attachments).toBeUndefined();
+  });
+
+  it("carries To/Cc through (so 'who was this sent to' is answerable), and omits them when unset", () => {
+    const withRecipients = parseGmailMessage({
+      id: "m5",
+      payload: {
+        headers: [
+          { name: "From", value: "Ada <ada@x.com>" },
+          { name: "To", value: "Bo <bo@x.com>, Cy <cy@x.com>" },
+          { name: "Cc", value: "Dee <dee@x.com>" },
+          { name: "Subject", value: "Party" },
+        ],
+        mimeType: "text/plain",
+        body: { data: b64url("rsvp please") },
+      },
+    });
+    expect(withRecipients.to).toBe("Bo <bo@x.com>, Cy <cy@x.com>");
+    expect(withRecipients.cc).toBe("Dee <dee@x.com>");
+
+    const bare = parseGmailMessage({
+      id: "m6",
+      payload: { headers: [{ name: "From", value: "Ada <ada@x.com>" }], mimeType: "text/plain", body: { data: b64url("hi") } },
+    });
+    expect(bare.to).toBeUndefined();
+    expect(bare.cc).toBeUndefined();
+  });
+});
+
+describe("gmailSearch", () => {
+  it("asks Gmail for the To/Cc headers — format=metadata returns ONLY the ones named", async () => {
+    // One transport for both calls: the list response and the per-message response share a body here,
+    // which is fine because we only assert on the URLs and the recipient fields.
+    const transport = new FakeTransport({
+      messages: [{ id: "m1" }],
+      id: "m1",
+      snippet: "rsvp please",
+      payload: {
+        headers: [
+          { name: "From", value: "Ada <ada@x.com>" },
+          { name: "To", value: "Bo <bo@x.com>" },
+          { name: "Cc", value: "Dee <dee@x.com>" },
+          { name: "Subject", value: "Party" },
+        ],
+      },
+    });
+    const emails = await gmailSearch(transport, "tok", "party");
+    const messageUrl = transport.requests[1]?.url ?? "";
+    expect(messageUrl).toContain("metadataHeaders=To");
+    expect(messageUrl).toContain("metadataHeaders=Cc");
+    expect(emails[0]?.to).toBe("Bo <bo@x.com>");
+    expect(emails[0]?.cc).toBe("Dee <dee@x.com>");
+    // Summaries stay summaries — no body.
+    expect(emails[0]).not.toHaveProperty("body");
   });
 });
 

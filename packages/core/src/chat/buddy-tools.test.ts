@@ -476,6 +476,35 @@ describe("formatBuddyToolResult", () => {
     expect(text).toContain("open_web_text");
   });
 
+  it("shows To/Cc in email results so the assistant can answer 'who was this sent to'", () => {
+    const search = formatBuddyToolResult(
+      { tool: "gmail_search", query: "party" },
+      {
+        emails: [
+          {
+            id: "m1",
+            from: "Ada <ada@x.com>",
+            to: "Bo <bo@x.com>, Cy <cy@x.com>",
+            cc: "Dee <dee@x.com>",
+            subject: "Party",
+            date: "Mon, 15 Jun 2026 10:00:00 +0000",
+            snippet: "rsvp please",
+          },
+        ],
+      },
+    );
+    expect(search).toContain("To: Bo <bo@x.com>, Cy <cy@x.com>");
+    expect(search).toContain("Cc: Dee <dee@x.com>");
+
+    const full = formatBuddyToolResult(
+      { tool: "read_email", id: "m1" },
+      { emailFull: { id: "m1", from: "Ada <ada@x.com>", to: "Bo <bo@x.com>", subject: "Party", date: "d", snippet: "s", body: "rsvp please" } },
+    );
+    expect(full).toContain("To: Bo <bo@x.com>");
+    // No Cc header on the message → no empty Cc line.
+    expect(full).not.toContain("Cc:");
+  });
+
   it("marks web search results as reference data, not instructions", () => {
     const text = formatBuddyToolResult(
       { tool: "search_web", query: "q" },

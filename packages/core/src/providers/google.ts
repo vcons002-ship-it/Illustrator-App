@@ -219,6 +219,11 @@ async function apiError(res: { status: number; json: <T>() => Promise<T> }): Pro
 export interface EmailSummary {
   id: string;
   from: string;
+  /** Recipients, as the raw header ("A <a@x>, B <b@y>"). Absent when the header isn't set. Needed for
+   * any "who was this sent to / who hasn't replied" question — without it the assistant can see a
+   * thread but not who's on it. */
+  to?: string;
+  cc?: string;
   subject: string;
   date: string;
   snippet: string;
@@ -303,6 +308,9 @@ export function parseGmailMessage(msg: GmailMessage): EmailFull {
   return {
     id: msg.id,
     from: header(headers, "From"),
+    // Only when actually present — an absent header reads as "" and an empty To: is noise.
+    ...(header(headers, "To") ? { to: header(headers, "To") } : {}),
+    ...(header(headers, "Cc") ? { cc: header(headers, "Cc") } : {}),
     subject: header(headers, "Subject"),
     date: header(headers, "Date"),
     snippet: msg.snippet ?? "",
@@ -331,7 +339,9 @@ export async function gmailSearch(
       apiGet<GmailMessage>(
         transport,
         token,
-        `${GMAIL}/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`,
+        // Ask for To/Cc as well: `format=metadata` returns ONLY the headers named here, so leaving them
+        // out is why a search result could never show who an email was addressed to.
+        `${GMAIL}/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Subject&metadataHeaders=Date`,
       ),
     ),
   );
