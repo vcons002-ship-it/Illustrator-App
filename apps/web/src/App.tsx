@@ -6186,20 +6186,48 @@ export function App() {
     });
     switchBuddyRef.current?.(CREATIVE_CHAT_ID);
   }, [persistSessions]);
+  /** Where to put the reader back after a run. `pendingReturn` is captured when we switch INTO the
+   * creative chat; it only becomes `returnToChat` once a run has actually been dispatched — otherwise
+   * the very next tick would restore before anything ran. */
+  const pendingReturn = useRef<string | undefined>(undefined);
+  const returnToChat = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (isRemoteClient || !settings.allowCreativeIdle) return;
     const id = setInterval(() => {
       if (buddyBusyRef.current || buddyPendingToolRef.current || processActiveRef.current) return;
+      // PUT THE READER'S CHAT BACK once the run is done. Dispatching a turn requires making that
+      // session active, so a creative run necessarily moves the visible chat — and leaving it there
+      // means coming back to the computer and finding a different conversation open, which is exactly
+      // the interruption this feature is supposed to avoid. Checked before the idle/gap guards below,
+      // because the run itself counts as recent activity and would otherwise hold the reader in the
+      // creative chat for another ten minutes. If they've already navigated somewhere themselves,
+      // drop the intent rather than yanking them again.
+      if (returnToChat.current) {
+        const back = returnToChat.current;
+        returnToChat.current = undefined;
+        // Only while they're STILL away. If they've come back and done something — including opening
+        // the creative chat to read what it wrote — moving the view under them would be worse than
+        // leaving it. `lastRequestAt` tracks user entry points only, not this runner's own dispatch,
+        // so it stays a true "has the reader touched anything" signal across the run.
+        const stillAway = Date.now() - lastRequestAt.current >= CREATIVE_IDLE_MS;
+        if (stillAway && activeBuddyIdRef.current === CREATIVE_CHAT_ID && back !== CREATIVE_CHAT_ID) {
+          switchBuddyRef.current?.(back);
+        }
+        return;
+      }
       if (Date.now() - lastRequestAt.current < CREATIVE_IDLE_MS) return;
       if (Date.now() - lastCreativeAt.current < CREATIVE_GAP_MS) return;
       void (async () => {
         // Two-phase, like the other sweeps: switch first and let the NEXT tick send, so the session's
         // history has landed and the turn doesn't inherit whatever chat was open.
         if (activeBuddyIdRef.current !== CREATIVE_CHAT_ID) {
+          pendingReturn.current = activeBuddyIdRef.current; // where to put them back afterwards
           openCreativeSession();
           return;
         }
         lastCreativeAt.current = Date.now();
+        returnToChat.current = pendingReturn.current; // arm the restore now that a run is really starting
+        pendingReturn.current = undefined;
         // What it already wrote about, from its own memory — so it moves on rather than circling.
         const recent = memoriesRef.current
           .filter((m) => /^explored:/i.test(m.text))

@@ -11,7 +11,9 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   while you're idle" and, a few times an hour when you're not using the app, it follows its own
   curiosity: reads around a topic on the web and writes up what it found interesting. It lands in its
   own **✨ Creative** chat, so it never appears in a conversation you're having, and it remembers what
-  it has already covered so it goes somewhere new each time. While doing this it can only search,
+  it has already covered so it goes somewhere new each time. Running one has to bring that chat to the
+  front briefly, so it puts you back in the chat you had open when it finishes — unless you've come
+  back and started doing something, in which case it leaves your view alone. While doing this it can only search,
   read, and write a document — it cannot run commands, touch your files, email anyone, or spend
   anything, whatever your other permissions allow.
 - **The reasoning bubble stays how you left it** — open it and it stays open; close it and it stays
