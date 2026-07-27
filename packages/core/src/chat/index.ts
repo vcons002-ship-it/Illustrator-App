@@ -34,6 +34,7 @@ export * from "./slash-commands.js";
 export * from "./story-state.js";
 export * from "./story-beat.js";
 export * from "./mirror-bound.js";
+export * from "./transcript-hygiene.js";
 export * from "./chat-image-blobs.js";
 export * from "./creations.js";
 export * from "./tool-approval.js";

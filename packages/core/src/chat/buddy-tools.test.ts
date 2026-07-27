@@ -812,6 +812,15 @@ describe("buildBuddySystemPrompt", () => {
     expect(g).toMatch(/REPLACES/); // the append-vs-replace distinction must be explicit
   });
 
+  it("binds a scheduled action to a task, and teaches the background-keep-up-to-date pattern", () => {
+    expect(
+      parseBuddyToolCall(JSON.stringify({ tool: "schedule_task", title: "RSVP check", prompt: "check replies", rule: "daily", planId: "plan-7" })),
+    ).toEqual({ tool: "schedule_task", title: "RSVP check", prompt: "check replies", rule: "daily", planId: "plan-7" });
+    const g = buildBuddySystemPrompt({ persona: "assistant", library: [], canTaskTools: true });
+    expect(g).toContain('"planId"');
+    expect(g).toMatch(/accumulates over days|RSVP/i);
+  });
+
   it("parses a list_events search, and teaches how to FIND an event to update", () => {
     // Without search, a later session (or a scheduled run) holding no eventId can't locate the event
     // it needs to edit — it would have to dump a window and guess.

@@ -5,8 +5,31 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ## July 2026
 
+### Tasks & chats
+
+- **Background jobs that keep a task up to date** — a scheduled action can now be attached to a task,
+  and it runs inside that task's own chat instead of the generic Scheduled one. So a recurring job
+  picks up with the task's conversation, checklist and files already in front of it, and writes what
+  it finds back onto the task. Each run is also told when it last ran, so it covers only what's new
+  rather than re-reading everything and re-reporting things it already handled. This is what makes
+  something like "track RSVPs for the party and chase whoever hasn't replied" hold together over
+  weeks: ask for it once, and each run adds to the same task.
+
+- **Re-opening a task keeps your work** — opening a task replaced its chat with a one-line summary,
+  and moments later saved that over the top of the conversation you'd had in it. Everything you and
+  the assistant had worked through on that task was lost, every time you re-opened it. A task now
+  reopens where you left off: the full conversation, its working checklist, and the files it wrote.
+  The summary opener is now only shown the first time you start a task.
+- **Chat names stick** — renamed chats (and the task chats named after their task) reverted to
+  "Chat 1", "Chat 2"… on every restart, because the name was saved but thrown away on load. Names
+  now survive restarts, and a task's chat follows the task if you rename it.
+
 ### Assistant
 
+- **Old conversations stop repeating stale instructions** — the fix below stopped NEW leakage, but
+  chats saved beforehand still carried the stray instruction in their history and kept acting on it.
+  Those are now cleaned as they're loaded. Nothing is deleted: your visible chat is untouched, and
+  only what the assistant is shown changes.
 - **Internal instructions no longer leak into later conversations** — when a long turn hit its
   per-turn tool budget, the app told the assistant "don't call another tool now; summarise instead".
   That was a one-turn instruction, but it was being saved into the conversation — so from then on the

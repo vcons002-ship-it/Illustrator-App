@@ -71,6 +71,8 @@ import {
   countChangedFiles,
   hasConflictMarkers,
   loadScheduledTasks,
+  scheduledRunPrompt,
+  stripPersistedDirectives,
   upsertScheduledTask,
   deleteScheduledTask,
   advanceSchedule,
@@ -1324,6 +1326,9 @@ export function App() {
   // onExitBook is defined far above onSwitchBuddySession (avoids a TDZ in the dep array).
   const storyReturnSessionRef = useRef<string | undefined>(undefined);
   const switchBuddyRef = useRef<((id: string) => void) | undefined>(undefined);
+  /** openTaskInChat, reachable from the scheduled runner declared above it (same late-binding
+   * pattern as switchBuddyRef) — a task-bound action opens the task's own chat to run in. */
+  const openTaskRef = useRef<((planId: string) => Promise<void>) | undefined>(undefined);
   /** The plan whose execution chat is the active session (the task being "worked"), if any. */
   const activeTaskPlanId = () => resolveActiveTaskPlanId(taskPlansRef.current, activeBuddyIdRef.current);
   const persistSessions = useCallback(
@@ -2292,10 +2297,16 @@ export function App() {
   }, [book, chatMessages, libraryStore]);
 
   /** Model-facing history: each stored message contributes its explicit turns
-   * (tool messages) or maps 1:1 (plain user/assistant prose). */
+   * (tool messages) or maps 1:1 (plain user/assistant prose).
+   *
+   * The single place saved messages become model history — so it's also where conversations saved
+   * BEFORE the leak was fixed get healed. Turn-local directives ("Do NOT call another tool now", the
+   * app-managed step nudges) were briefly persisted here and then replayed on every later turn as if
+   * the reader had said them. Filtering on read leaves storage and the visible chat untouched; only
+   * what the model is shown changes. */
   const chatTurnsOf = (messages: StoredChatMessage[]): ChatTurn[] =>
     messages.flatMap((m): ChatTurn[] => {
-      if (m.turns) return m.turns;
+      if (m.turns) return stripPersistedDirectives(m.turns);
       if (m.role === "tool") return [];
       return m.text ? [{ role: m.role, content: m.text }] : [];
     });
@@ -3339,7 +3350,14 @@ export function App() {
         if (Array.isArray(parsed)) {
           sessions = parsed
             .filter((s): s is BuddySession => !!s && typeof (s as BuddySession).id === "string")
-            .map((s) => ({ id: s.id, workingDir: typeof s.workingDir === "string" ? s.workingDir : "" }));
+            // KEEP the label: it's persisted by persistSessions (a reader's rename, and the task title
+            // a task's dedicated chat is named after), and dropping it here silently reset every chat
+            // name to the "Chat N" fallback on each restart.
+            .map((s) => ({
+              id: s.id,
+              workingDir: typeof s.workingDir === "string" ? s.workingDir : "",
+              ...(typeof s.label === "string" && s.label.trim() ? { label: s.label } : {}),
+            }));
         }
       } catch {
         /* corrupt — start fresh below */
@@ -5910,20 +5928,34 @@ export function App() {
         const tasks = await loadScheduledTasks(libraryStore);
         const due = dueScheduledTasks(tasks);
         if (due.length === 0) return;
-        // Not in the Scheduled chat yet → switch and let the NEXT tick fire it. The switch loads that
-        // session's history asynchronously, and sending before it lands would hand the model the
-        // previous conversation as context — exactly the leak this separation exists to prevent.
-        if (activeBuddyIdRef.current !== SCHEDULED_CHAT_ID) {
-          openScheduledSession();
+        const task = due[0]!;
+        // WHERE this runs. A task-BOUND action runs in that task's own chat, so a recurring job that
+        // accumulates over days (chasing RSVPs, watching for replies) resumes with the task's history
+        // and checklist instead of re-deriving everything from its prompt each time. Everything else
+        // runs in the generic ⏰ Scheduled chat. A bound task that's since been deleted falls back
+        // there rather than being silently dropped.
+        const boundPlan = task.planId ? (await loadTaskPlans(libraryStore)).find((p) => p.id === task.planId) : undefined;
+        const targetId = boundPlan?.sessionId ?? (task.planId && boundPlan ? undefined : SCHEDULED_CHAT_ID);
+        // Not in the target chat yet → open it and let the NEXT tick fire. Loading a session's history
+        // is async, and sending before it lands would hand the model the previous conversation as
+        // context — exactly the bleed this separation exists to prevent.
+        if (!targetId || activeBuddyIdRef.current !== targetId) {
+          if (boundPlan) await openTaskRef.current?.(boundPlan.id); // creates + names the task's chat if needed
+          else openScheduledSession();
           return;
         }
-        const task = due[0]!;
-        // Advance first (so a slow turn can't double-fire), then run it.
+        // Advance first (so a slow turn can't double-fire), then run it. `task` is the PRE-advance
+        // copy, so the prompt quotes the PREVIOUS run as the "what's new since" window.
         await upsertScheduledTask(libraryStore, advanceSchedule(task)).catch(() => {});
         refreshScheduled();
         logActionRef.current("scheduled_run", `Ran scheduled: ${task.title}`);
-        pushToast(`⏰ Running scheduled task “${task.title}” in the Scheduled chat.`, "info");
-        onBuddySendText(`⏰ Scheduled task “${task.title}”. Do this now: ${task.prompt}`);
+        pushToast(
+          boundPlan
+            ? `⏰ Running “${task.title}” on the task “${boundPlan.title}”.`
+            : `⏰ Running scheduled task “${task.title}” in the Scheduled chat.`,
+          "info",
+        );
+        onBuddySendText(scheduledRunPrompt(task));
       })();
     }, 30_000);
     return () => clearInterval(id);
@@ -6234,7 +6266,18 @@ export function App() {
         });
         await upsertTaskPlan(libraryStore, { ...plan, sessionId: sid });
         refreshTaskPlans();
+      } else {
+        // Keep the chat's name in step with a renamed task.
+        const label = sessionLabelForPlan(plan);
+        setBuddySessions((prev) => {
+          if (prev.some((s) => s.id === sessionId && s.label === label)) return prev;
+          const next = prev.map((s) => (s.id === sessionId ? { ...s, label } : s));
+          persistSessions(next);
+          return next;
+        });
       }
+      // Clears the live view FIRST (and, because the persist effect skips an empty history, stops the
+      // outgoing session's messages being written into this one during the load below).
       resetBuddyView();
       setActiveBuddyId(sessionId);
       void libraryStore.putMemo?.("buddy-active-session", sessionId).catch(() => {});
@@ -6250,15 +6293,45 @@ export function App() {
         ready?.links.length ? `Links: ${ready.links.map((l) => l.url).join("  ")}` : "",
         questions.length ? "Answer above and I'll refine the plan; or ask me to help with this step." : "Ask me to help with this step.",
       ].filter(Boolean);
+      // RESUME the task's own chat, exactly like switching to it: its saved conversation, working
+      // checklist, app-managed workflow, and written-files ledger. This used to replace the messages
+      // with just the primer — which not only hid the previous conversation but, 500ms later, made the
+      // persist effect overwrite the task chat's stored history with that single line. Re-opening a
+      // task destroyed the work you'd done in it, which is why picking a task back up felt inconsistent.
+      const [hist, savedPlan, savedWorkflow, savedLedger] = await Promise.all([
+        libraryStore.getChatHistory?.(sessionId).catch(() => undefined),
+        loadBuddyPlan(sessionId),
+        loadBuddyWorkflow(sessionId),
+        loadFileLedger(sessionId),
+      ]);
+      buddyPlanRef.current = savedPlan; // sync the ref too — the render-time copy lags a tick
+      setBuddyPlan(savedPlan);
+      buddyWorkflowRef.current = savedWorkflow;
+      setBuddyWorkflow(savedWorkflow);
+      createdFilesRef.current = savedLedger;
+      setFileLedger(savedLedger);
       // The primer is shown to the reader only; the MODEL gets this same task context from the
       // system prompt's ACTIVE TASK block (tasksIndexBlock) on every turn — see the worker's
       // buildBuddySystemPrompt({ activeTask }) path, reached now that activeTaskPlanId() resolves
       // reliably. We deliberately do NOT seed it into history: a leading assistant/tool turn would
       // be rejected by providers (e.g. Anthropic requires the first message to be "user").
-      setBuddyMessages([{ role: "tool", text: primer.join("\n"), at: Date.now() }]);
+      // On a RESUMED task the conversation itself is the context, so the primer is only the opener
+      // for a task being worked for the first time.
+      setBuddyMessages(hist?.length ? hist : [{ role: "tool", text: primer.join("\n"), at: Date.now() }]);
     },
-    [libraryStore, buddySessions, persistSessions, resetBuddyView, refreshTaskPlans],
+    [
+      libraryStore,
+      buddySessions,
+      persistSessions,
+      resetBuddyView,
+      refreshTaskPlans,
+      loadBuddyPlan,
+      loadBuddyWorkflow,
+      loadFileLedger,
+      setFileLedger,
+    ],
   );
+  openTaskRef.current = openTaskInChat; // so the scheduled runner (declared above) can open a bound task
 
   // DESKTOP side: run a Tasks/Calendar action the phone relayed (vrcmd:planner). Each maps to the
   // SAME handler the desktop UI uses, so the result persists + re-mirrors to the phone via
