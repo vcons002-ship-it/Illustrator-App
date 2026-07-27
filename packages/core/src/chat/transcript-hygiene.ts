@@ -1,4 +1,5 @@
 import type { ChatTurn } from "../providers/llm/chat.js";
+import { CREATIVE_IDLE_MARKER } from "./buddy-tools.js";
 
 /**
  * Scrub TURN-LOCAL steering out of a saved transcript before it's replayed as history.
@@ -38,6 +39,18 @@ const WHOLE_TURN_DIRECTIVES = [
   "[Your last attempt didn't satisfy this step",
 ] as const;
 
+/**
+ * The idle-creative brief. Unlike the directives above this is NOT noise — it's why a stretch of that
+ * chat exists — so it's replaced rather than dropped. What must not survive is its instructions:
+ * "nobody is waiting on you", "don't ask the reader anything", "you can ONLY search". Replayed into a
+ * real conversation in the same chat, those read as the reader's own words and would make the model
+ * refuse to ask questions of someone sitting right there.
+ */
+// Imported, not re-typed: a copy here would silently stop matching if the marker were ever renamed,
+// and the failure is invisible — the brief simply starts leaking again.
+const CREATIVE_BRIEF_MARKER = CREATIVE_IDLE_MARKER;
+const CREATIVE_BRIEF_REPLACEMENT = "(I had some free time, so I went off and explored something on my own.)";
+
 /** Is this entire turn nothing but an internal step directive? PURE. */
 function isWholeTurnDirective(content: string): boolean {
   const t = content.trimStart();
@@ -76,6 +89,12 @@ export function stripPersistedDirectives(turns: ChatTurn[]): ChatTurn[] {
     }
     if (isWholeTurnDirective(turn.content)) {
       changed = true; // drop it entirely
+      continue;
+    }
+    if (turn.content.trimStart().startsWith(CREATIVE_BRIEF_MARKER)) {
+      // Kept, but reduced to the fact of it: the model should still know why it went exploring.
+      changed = true;
+      out.push({ ...turn, content: CREATIVE_BRIEF_REPLACEMENT });
       continue;
     }
     const cleaned = withoutAppendedDirective(turn.content);

@@ -392,6 +392,19 @@ describe("scenario: chains run in order and each result feeds the next round", (
     expect(outcome.text).toContain("tardigrades");
   });
 
+  it("knows it explores on its own, so it can talk about what it wrote", () => {
+    const on = buildBuddySystemPrompt({ persona: "assistant", library: [], hasCreativeChat: true });
+    expect(on).toContain("✨ Creative");
+    expect(on).toMatch(/the documents from it are YOURS/);
+    // Without this it meets its own writing as a stranger's when the reader brings it up.
+    expect(on).toMatch(/talk about it as your own/);
+    // And in that chat WITH the reader it's a normal conversation — the solo limits don't apply.
+    expect(on).toMatch(/do NOT apply when they're there with you/);
+    expect(on).toMatch(/say so plainly and offer to open it rather than guessing/);
+    // Silent unless the feature is on.
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).not.toContain("✨ Creative");
+  });
+
   it("the creative brief asks for research, a written-up document, and a topic note", () => {
     const p = buildCreativeIdlePrompt();
     expect(p).toContain("create_document");

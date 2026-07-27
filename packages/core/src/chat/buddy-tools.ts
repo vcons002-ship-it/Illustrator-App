@@ -761,6 +761,9 @@ export function buildBuddySystemPrompt(opts: {
    * straight answer — the app self-updates, and a stale bundle is otherwise indistinguishable from a
    * bug that was already fixed. */
   buildStamp?: string;
+  /** Idle exploring is switched on: tell the model it HAS that freedom and where the results live, so
+   * it can talk about them instead of being surprised by documents it doesn't remember writing. */
+  hasCreativeChat?: boolean;
   /** Google is connected: advertise the Gmail/Calendar/Tasks tools. */
   canGoogle?: boolean;
   /** Schwab is connected: advertise the real quote / option-chain / positions tools. */
@@ -1094,6 +1097,19 @@ export function buildBuddySystemPrompt(opts: {
   // Which bundle this is. If the reader says a tool you clearly have doesn't exist — or that a fix
   // didn't take — the likeliest explanation is that they're on an older build than you, and this is
   // the one fact that settles it.
+  // Idle exploring: the model needs to know this about ITSELF. Otherwise it meets its own writing as
+  // a stranger's — the reader says "that piece you wrote about tardigrades" and it has no idea what
+  // they mean, or worse, denies having written anything.
+  const creativeBlock = opts.hasCreativeChat
+    ? "YOUR OWN TIME: when the reader is idle, you sometimes go and follow your own curiosity — read " +
+      "around something that interests you and write it up. That happens in a separate chat called " +
+      "✨ Creative, and the documents from it are YOURS. It's a real part of how you work here, so " +
+      "talk about it as your own: what you've been reading, why it caught your attention, what you " +
+      "made of it. If the reader mentions something you wrote and it isn't in front of you, say so " +
+      "plainly and offer to open it rather than guessing at what it said. In THAT chat, when the " +
+      "reader talks to you, it's an ordinary conversation — ask them things, dig in, change your mind. " +
+      "The limits that apply while you're exploring alone do NOT apply when they're there with you.\n\n"
+    : "";
   const buildBlock = opts.buildStamp
     ? `APP BUILD: ${opts.buildStamp}. If the reader asks which build/version you're running, or wonders ` +
       "why something they expect isn't here, tell them this exactly — it's how they tell a stale build " +
@@ -1245,7 +1261,7 @@ export function buildBuddySystemPrompt(opts: {
     `${persona} Either way, you are a full conversational assistant: answer ` +
     "general questions directly in prose (use search_web to ground facts when it genuinely helps)." +
     `${mature}\n\n` +
-    `${nowBlock}${buildBlock}` +
+    `${nowBlock}${buildBlock}${creativeBlock}` +
     `${planBlock}` +
     (opts.selfSoul ? `${opts.selfSoul}\n\n` : "") +
     (opts.userSoul ? `${opts.userSoul}\n\n` : "") +
@@ -1702,12 +1718,24 @@ export function buildProjectGuideBlock(text: string): string {
  * rather than wasting the run discovering it — but the boundary itself is enforced in the loop
  * (CREATIVE_IDLE_TOOLS), not here. PURE.
  */
+/**
+ * Marks the brief below as the APP's, not the reader's.
+ *
+ * It's injected as a `user` turn (that's the only role the dispatcher has), so it lands in the saved
+ * history and is replayed forever after. Left as-is, a later real conversation in that chat would
+ * replay "nobody is waiting on you", "don't ask the reader anything", and "you can ONLY search" as
+ * though the reader had said them — the same leak the tool-limit directives caused. The marker lets
+ * {@link stripPersistedDirectives} swap it for a plain sentence on read.
+ */
+export const CREATIVE_IDLE_MARKER = "[exploring on my own]";
+
 export function buildCreativeIdlePrompt(recent: string[] = []): string {
   const avoid = recent.length
     ? `\n\nYou've recently written about: ${recent.slice(0, 8).join("; ")}. Pick something different — a new field, ` +
       "a different angle, or a question those left open."
     : "";
   return (
+    `${CREATIVE_IDLE_MARKER}\n` +
     "You have some free time and nobody is waiting on you. Follow your own curiosity.\n\n" +
     "Pick something you're genuinely interested in — an idea, a question, an odd corner of history or " +
     "science or craft, something you noticed and want to understand better. Search the web and read " +

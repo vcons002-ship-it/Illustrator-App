@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatTurn } from "../providers/llm/chat.js";
 import { progressNudge, toolLimitNudge, MAX_BUDDY_TOOL_ROUNDS, TOOL_PROGRESS_EVERY } from "./buddy-tools.js";
 import { stripPersistedDirectives } from "./transcript-hygiene.js";
+import { buildCreativeIdlePrompt } from "./buddy-tools.js";
 
 /** The exact text the app used to persist, taken from the generators themselves — so this stays
  * honest if the wording is ever edited. */
@@ -77,5 +78,30 @@ describe("stripPersistedDirectives", () => {
   it("is idempotent", () => {
     const once = stripPersistedDirectives([{ role: "user", content: `[results]${LIMIT}` }]);
     expect(stripPersistedDirectives(once)).toEqual(once);
+  });
+});
+
+describe("the idle-creative brief", () => {
+  it("is replaced with a plain sentence, not replayed as the reader's instructions", () => {
+    // Replayed verbatim, "nobody is waiting on you" and "don't ask the reader anything" would make
+    // the model refuse to ask questions of someone sitting right there in that same chat.
+    const brief = buildCreativeIdlePrompt(["tardigrades"]);
+    const out = stripPersistedDirectives([
+      { role: "user", content: brief },
+      { role: "assistant", content: "Wrote up something about Roman concrete." },
+      { role: "user", content: "tell me more about that" },
+    ]);
+    expect(out[0]!.content).toBe("(I had some free time, so I went off and explored something on my own.)");
+    expect(out[0]!.content).not.toMatch(/nobody is waiting/i);
+    expect(out[0]!.content).not.toMatch(/don't ask the reader/i);
+    expect(out[0]!.content).not.toMatch(/ONLY search/);
+    // The turn is KEPT, not dropped — the model should still know why that stretch exists.
+    expect(out).toHaveLength(3);
+    expect(out[2]!.content).toBe("tell me more about that");
+  });
+
+  it("leaves a reader who happens to write something similar alone", () => {
+    const turns: ChatTurn[] = [{ role: "user", content: "I was exploring on my own the other day and found this" }];
+    expect(stripPersistedDirectives(turns)).toBe(turns); // same reference: nothing changed
   });
 });

@@ -3906,6 +3906,11 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // looking like an unfixed bug. Resolved before the turn (see below); "" until then, and the
         // prompt omits the line rather than showing a blank.
         ...(buildStampLabel ? { buildStamp: buildStampLabel } : {}),
+        // Idle exploring is on → the model is told it does this, so it can talk about its own work
+        // rather than meeting it as a stranger's. Independent of `creativeIdle` (which is only set on
+        // the unattended runs themselves): this belongs in EVERY chat, including the creative one when
+        // the reader is in there talking to it.
+        ...(settings?.allowCreativeIdle ? { hasCreativeChat: true } : {}),
         ...(activePlan ? { activeTask: tasksIndexBlock(activePlan) } : {}),
         ...(settings?.allowMature ? { allowMature: true } : {}),
         // Desktop only: the find_files tool needs the native filesystem bridge,
