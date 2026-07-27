@@ -20,6 +20,11 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   step at a time once you've been idle a few minutes, and gives up after two tries instead of
   retrying forever. It still never submits forms, pays, or sends email.
 
+- **⏰ Scheduled shows which task each action belongs to** — it was one flat list, so once actions
+  started being attached to tasks there was no way to tell what an entry was for. Actions are now
+  grouped under the task they maintain, with anything standalone listed separately. An action whose
+  task has since been deleted is called out, since it would otherwise keep running with nothing to
+  update. With nothing tied to a task, it's the same plain list as before.
 - **Background jobs that keep a task up to date** — a scheduled action can now be attached to a task,
   and it runs inside that task's own chat instead of the generic Scheduled one. So a recurring job
   picks up with the task's conversation, checklist and files already in front of it, and writes what

@@ -1793,6 +1793,12 @@ export function App() {
   useEffect(() => {
     refreshScheduled();
   }, [refreshScheduled]);
+  /** planId → task title, so ⏰ Scheduled can show WHICH task a bound action maintains rather than
+   * listing everything together. Built from the mirrored plans, so it's right on the phone too. */
+  const scheduledTaskTitles = useMemo(
+    () => Object.fromEntries(taskPlans.map((p) => [p.id, p.title])),
+    [taskPlans],
+  );
   /** DESKTOP: run a ⏰ Scheduled action the phone relayed, then re-push the mirrored list. */
   const applyScheduledCommand = useCallback(
     (command: { action: "toggle"; id: string; enabled: boolean } | { action: "delete"; id: string }) => {
@@ -8599,6 +8605,7 @@ export function App() {
         <ScheduledTasksPanel
           tasks={scheduledTasks}
           describe={describeSchedule}
+          taskTitles={scheduledTaskTitles}
           onToggle={(id, enabled) => void toggleScheduled(id, enabled)}
           onDelete={(id) => void removeScheduled(id)}
           onClose={() => setShowScheduled(false)}

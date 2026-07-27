@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import type { ScheduledTask } from "@visual-reader/core";
 
 /**
@@ -11,16 +11,69 @@ export interface ScheduledTasksPanelProps {
   tasks: ScheduledTask[];
   /** Human cadence label per task (host passes describeSchedule). */
   describe: (task: ScheduledTask) => string;
+  /** Title per bound task plan (`planId` → title), so an action that maintains a task is shown under
+   * it instead of floating in one undifferentiated list. A `planId` missing from this map means the
+   * task was deleted — surfaced as such, since that action now has nothing to maintain. */
+  taskTitles?: Record<string, string>;
   onToggle: (id: string, enabled: boolean) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
 }
 
-export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({ tasks, describe, onToggle, onDelete, onClose }: ScheduledTasksPanelProps) {
+/** A heading + the actions under it. Task-bound groups come first (alphabetical, so the list is
+ * stable as actions are added), standalone actions last. PURE. */
+export function groupByTask(
+  tasks: ScheduledTask[],
+  taskTitles: Record<string, string>,
+): {
+  key: string;
+  label?: string;
+  missing?: boolean;
+  items: ScheduledTask[];
+}[] {
+  const bound = new Map<string, ScheduledTask[]>();
+  const loose: ScheduledTask[] = [];
+  for (const t of tasks) {
+    if (!t.planId) loose.push(t);
+    else bound.set(t.planId, [...(bound.get(t.planId) ?? []), t]);
+  }
+  const groups = [...bound.entries()]
+    .map(([planId, items]) => ({
+      key: planId,
+      label: taskTitles[planId] ?? "Task no longer exists",
+      missing: !taskTitles[planId],
+      items,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+  return loose.length ? [...groups, { key: "", items: loose }] : groups;
+}
+
+export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
+  tasks,
+  describe,
+  taskTitles = {},
+  onToggle,
+  onDelete,
+  onClose,
+}: ScheduledTasksPanelProps) {
+  const groups = useMemo(
+    () => groupByTask(tasks, taskTitles),
+    [tasks, taskTitles],
+  );
+  // Headings only earn their space once something IS tied to a task — with none, this is the same
+  // flat list it always was.
+  const showHeadings = groups.some((g) => g.key !== "");
   return (
     <div style={overlay} onClick={onClose}>
       <div style={panel} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 10,
+          }}
+        >
           <strong style={{ fontSize: 15 }}>⏰ Scheduled tasks</strong>
           <span style={{ fontSize: 12, opacity: 0.6 }}>· {tasks.length}</span>
           <button style={{ ...btn, marginLeft: "auto" }} onClick={onClose}>
@@ -30,39 +83,92 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({ tasks, de
 
         {tasks.length === 0 ? (
           <div style={{ fontSize: 13, opacity: 0.65, padding: "8px 2px" }}>
-            No scheduled tasks yet. Ask the assistant something like <em>“every morning summarise my unread email”</em> or
-            <em> “every Friday at 4pm give me a market recap”</em> and it’ll create one here. They run automatically while
-            the app is open.
+            No scheduled tasks yet. Ask the assistant something like{" "}
+            <em>“every morning summarise my unread email”</em> or
+            <em> “every Friday at 4pm give me a market recap”</em> and it’ll
+            create one here. They run automatically while the app is open.
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {tasks.map((t) => (
-              <div key={t.id} style={{ ...card, opacity: t.enabled ? 1 : 0.55 }}>
-                <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                  <strong style={{ fontSize: 13 }}>{t.title}</strong>
-                  <span style={{ fontSize: 11, opacity: 0.7 }}>{describe(t)}</span>
-                  {t.enabled ? null : <span style={{ fontSize: 11, color: "#ffcf8b" }}>paused</span>}
-                  <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-                    <button style={btn} onClick={() => onToggle(t.id, !t.enabled)}>
-                      {t.enabled ? "Pause" : "Resume"}
-                    </button>
-                    <button style={{ ...btn, color: "#ff9c9c" }} onClick={() => onDelete(t.id)}>
-                      Delete
-                    </button>
-                  </span>
-                </div>
-                <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>{t.prompt}</div>
-                <div style={{ fontSize: 11, opacity: 0.5, marginTop: 3 }}>
-                  Next: {t.enabled ? new Date(t.nextDueIso).toLocaleString() : "—"}
-                  {t.lastRunIso ? ` · last ran ${new Date(t.lastRunIso).toLocaleString()}` : ""}
-                </div>
+            {groups.map((g) => (
+              <div
+                key={g.key || "__loose__"}
+                style={{ display: "flex", flexDirection: "column", gap: 8 }}
+              >
+                {showHeadings ? (
+                  <div
+                    style={{
+                      fontSize: 11,
+                      opacity: g.missing ? 0.75 : 0.6,
+                      marginTop: 4,
+                      color: g.missing ? "#ffcf8b" : undefined,
+                    }}
+                  >
+                    {g.key
+                      ? `📋 ${g.label}${g.missing ? " — delete these, or they'll keep running" : ""}`
+                      : "Not tied to a task"}
+                  </div>
+                ) : null}
+                {g.items.map((t) => (
+                  <div
+                    key={t.id}
+                    style={{ ...card, opacity: t.enabled ? 1 : 0.55 }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "baseline",
+                        gap: 8,
+                      }}
+                    >
+                      <strong style={{ fontSize: 13 }}>{t.title}</strong>
+                      <span style={{ fontSize: 11, opacity: 0.7 }}>
+                        {describe(t)}
+                      </span>
+                      {t.enabled ? null : (
+                        <span style={{ fontSize: 11, color: "#ffcf8b" }}>
+                          paused
+                        </span>
+                      )}
+                      <span
+                        style={{ marginLeft: "auto", display: "flex", gap: 6 }}
+                      >
+                        <button
+                          style={btn}
+                          onClick={() => onToggle(t.id, !t.enabled)}
+                        >
+                          {t.enabled ? "Pause" : "Resume"}
+                        </button>
+                        <button
+                          style={{ ...btn, color: "#ff9c9c" }}
+                          onClick={() => onDelete(t.id)}
+                        >
+                          Delete
+                        </button>
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
+                      {t.prompt}
+                    </div>
+                    <div style={{ fontSize: 11, opacity: 0.5, marginTop: 3 }}>
+                      Next:{" "}
+                      {t.enabled
+                        ? new Date(t.nextDueIso).toLocaleString()
+                        : "—"}
+                      {t.lastRunIso
+                        ? ` · last ran ${new Date(t.lastRunIso).toLocaleString()}`
+                        : ""}
+                    </div>
+                  </div>
+                ))}
               </div>
             ))}
           </div>
         )}
         <div style={{ fontSize: 11, opacity: 0.5, marginTop: 10 }}>
-          Scheduled tasks run while the app is open (there’s no always-on server). For phone-side reminders, ask the
-          assistant to also add a Google Calendar/Tasks reminder.
+          Scheduled tasks run while the app is open (there’s no always-on
+          server). For phone-side reminders, ask the assistant to also add a
+          Google Calendar/Tasks reminder.
         </div>
       </div>
     </div>
