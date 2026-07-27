@@ -3899,6 +3899,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // Anchor "today"/"this week"/"by when" answers + ISO date math to the reader's
         // own clock (the worker runs in their browser, so this is their local time/zone).
         now: currentDateTimeLabel(),
+        // Which bundle this is, baked in at build time — so "which build are you on?" is answerable
+        // and a stale build stops looking like an unfixed bug.
+        buildStamp: __BUILD_STAMP__,
         ...(activePlan ? { activeTask: tasksIndexBlock(activePlan) } : {}),
         ...(settings?.allowMature ? { allowMature: true } : {}),
         // Desktop only: the find_files tool needs the native filesystem bridge,

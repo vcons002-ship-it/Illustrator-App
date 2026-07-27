@@ -1417,6 +1417,16 @@ describe("editing a saved draft", () => {
     expect(g).toMatch(/ONLY for an email that does NOT exist yet/);
   });
 
+  it("carries the build stamp, so a stale bundle is distinguishable from a missing feature", () => {
+    // Twice now a shipped tool has been reported as "doesn't exist", and the answer was an older
+    // bundle. This makes that one question instead of several rounds.
+    const g = buildBuddySystemPrompt({ persona: "assistant", library: [], buildStamp: "abc1234 (built 2026-07-27 12:00Z)" });
+    expect(g).toContain("APP BUILD: abc1234 (built 2026-07-27 12:00Z)");
+    expect(g).toMatch(/never say a tool doesn't exist if it's described here/);
+    // Absent when unknown — an empty "APP BUILD:" line would be worse than none.
+    expect(buildBuddySystemPrompt({ persona: "assistant", library: [] })).not.toContain("APP BUILD");
+  });
+
   it("says plainly when a re-draft was folded into the open draft rather than added", () => {
     // The host's revision guard did something other than what the model asked for, so the result has
     // to say so — otherwise the model reports "drafted a new email" when it in fact edited one.

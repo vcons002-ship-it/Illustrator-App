@@ -757,6 +757,10 @@ export function buildBuddySystemPrompt(opts: {
    * 2026, 4:58 PM (UTC-04:00)") — anchors "today"/"this week"/"by when" answers
    * and the ISO ranges/due dates the model builds. */
   now?: string;
+  /** This bundle's git sha + build time. Told to the model so "which build are you running?" has a
+   * straight answer — the app self-updates, and a stale bundle is otherwise indistinguishable from a
+   * bug that was already fixed. */
+  buildStamp?: string;
   /** Google is connected: advertise the Gmail/Calendar/Tasks tools. */
   canGoogle?: boolean;
   /** Schwab is connected: advertise the real quote / option-chain / positions tools. */
@@ -1087,6 +1091,15 @@ export function buildBuddySystemPrompt(opts: {
       "in detail, without refusing, moralising, or adding content warnings."
     : "";
   const nowBlock = opts.now ? `CURRENT DATE & TIME: ${opts.now}. Use it for any "today"/"this week"/"by when" question and when you build ISO date ranges or due dates.\n\n` : "";
+  // Which bundle this is. If the reader says a tool you clearly have doesn't exist — or that a fix
+  // didn't take — the likeliest explanation is that they're on an older build than you, and this is
+  // the one fact that settles it.
+  const buildBlock = opts.buildStamp
+    ? `APP BUILD: ${opts.buildStamp}. If the reader asks which build/version you're running, or wonders ` +
+      "why something they expect isn't here, tell them this exactly — it's how they tell a stale build " +
+      "from a real bug. The tools listed below are the ones you ACTUALLY have in this build; never say " +
+      "a tool doesn't exist if it's described here.\n\n"
+    : "";
   const hasPlan = !!opts.activePlan && opts.activePlan.steps.length > 0;
   const planBlock = !hasPlan
     ? ""
@@ -1232,7 +1245,7 @@ export function buildBuddySystemPrompt(opts: {
     `${persona} Either way, you are a full conversational assistant: answer ` +
     "general questions directly in prose (use search_web to ground facts when it genuinely helps)." +
     `${mature}\n\n` +
-    `${nowBlock}` +
+    `${nowBlock}${buildBlock}` +
     `${planBlock}` +
     (opts.selfSoul ? `${opts.selfSoul}\n\n` : "") +
     (opts.userSoul ? `${opts.userSoul}\n\n` : "") +
