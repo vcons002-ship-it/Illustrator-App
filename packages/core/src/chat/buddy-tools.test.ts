@@ -770,6 +770,61 @@ describe("buildBuddySystemPrompt", () => {
     expect(on).toContain('"date":"YYYY-MM-DD"');
   });
 
+  it("parses update_event, and rejects a call that names no event or changes nothing", () => {
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "update_event", eventId: "e1", appendDescription: "Gate B12" }))).toEqual({
+      tool: "update_event",
+      eventId: "e1",
+      appendDescription: "Gate B12",
+    });
+    expect(
+      parseBuddyToolCall(JSON.stringify({ tool: "update_event", eventId: "e1", start: "2026-07-04T09:00:00-04:00", end: "2026-07-04T10:00:00-04:00", location: "Room 2" })),
+    ).toEqual({ tool: "update_event", eventId: "e1", start: "2026-07-04T09:00:00-04:00", end: "2026-07-04T10:00:00-04:00", location: "Room 2" });
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "update_event", appendDescription: "x" }))).toBeUndefined(); // no eventId
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "update_event", eventId: "e1" }))).toBeUndefined(); // nothing to change
+  });
+
+  it("hands the model the event ids it needs to edit an event later", () => {
+    // Without an id in the tool result there is no way to address an event — update_event would be
+    // unusable no matter how well it's described in the prompt.
+    const listed = formatBuddyToolResult(
+      { tool: "list_events" },
+      { events: [{ id: "abc123", summary: "Dentist", start: "2026-07-04T17:00", end: "2026-07-04T18:00" }] },
+    );
+    expect(listed).toContain("eventId: abc123");
+    const created = formatBuddyToolResult(
+      { tool: "create_event", summary: "Dentist", start: "2026-07-04T17:00", end: "2026-07-04T18:00" },
+      { eventCreated: { id: "abc123", summary: "Dentist", start: "2026-07-04T17:00", end: "2026-07-04T18:00" } },
+    );
+    expect(created).toContain("abc123");
+    expect(created).toMatch(/update_event/);
+  });
+
+  it("reports an append distinctly from a plain update", () => {
+    const ev = { id: "e1", summary: "Flight", start: "2026-07-04T09:00", end: "2026-07-04T12:00" };
+    expect(formatBuddyToolResult({ tool: "update_event", eventId: "e1", appendDescription: "Gate B12" }, { eventUpdated: ev })).toContain("added a note to");
+    expect(formatBuddyToolResult({ tool: "update_event", eventId: "e1", location: "JFK" }, { eventUpdated: ev })).toContain("updated calendar event");
+  });
+
+  it("teaches the model to accumulate detail on an existing event", () => {
+    const g = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true });
+    expect(g).toContain('"tool":"update_event"');
+    expect(g).toContain("appendDescription");
+    expect(g).toMatch(/REPLACES/); // the append-vs-replace distinction must be explicit
+  });
+
+  it("parses a list_events search, and teaches how to FIND an event to update", () => {
+    // Without search, a later session (or a scheduled run) holding no eventId can't locate the event
+    // it needs to edit — it would have to dump a window and guess.
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "list_events", query: "flight", timeMin: "2026-01-01T00:00:00Z" }))).toEqual({
+      tool: "list_events",
+      query: "flight",
+      timeMin: "2026-01-01T00:00:00Z",
+    });
+    const g = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true });
+    expect(g).toContain('"query"');
+    expect(g).toMatch(/ALREADY HAPPENED/); // past events need an explicit timeMin — say so
+  });
+
   it("parses a ONE-TIME schedule_task with a run date (and drops a malformed / recurring-rule date)", () => {
     const once = parseBuddyToolCall(
       JSON.stringify({ tool: "schedule_task", title: "Call the dentist", prompt: "remind me to call the dentist", rule: "once", date: "2026-07-04", time: "17:30" }),

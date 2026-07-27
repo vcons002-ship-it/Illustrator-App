@@ -119,6 +119,7 @@ import {
   extractAttachmentText,
   listEvents,
   createEvent,
+  patchEvent,
   createDraft,
   sendEmail,
   listTasks,
@@ -1331,6 +1332,9 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "createEvent":
       void handleCreateEvent(msg);
       break;
+    case "updateEvent":
+      void handleUpdateEvent(msg);
+      break;
     case "loadCalendar":
       void handleLoadCalendar(msg);
       break;
@@ -2310,7 +2314,7 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
             gmailSearch: makeBuddyGmailSearch(transport, tok),
             readEmail: async (id: string) => gmailReadEmail(transport, await tok(), id),
             readAttachment: makeReadAttachment(transport, tok),
-            listEvents: async (o: { max?: number; timeMin?: string; timeMax?: string }) =>
+            listEvents: async (o: { max?: number; timeMin?: string; timeMax?: string; query?: string }) =>
               listEvents(transport, await tok(), o),
           }
         : {}),
@@ -2593,6 +2597,26 @@ async function handleCreateEvent(msg: Extract<MainToWorker, { type: "createEvent
     post({ type: "eventCreated", requestId: msg.requestId, ok: true, ...(ev.id ? { id: ev.id } : {}) });
   } catch (err) {
     post({ type: "eventCreated", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+/** Edit an existing Google Calendar event (the Calendar panel's inline edit). Mirrors
+ * handleCreateEvent; `patchEvent` handles the append-vs-replace read-modify-write. */
+async function handleUpdateEvent(msg: Extract<MainToWorker, { type: "updateEvent" }>): Promise<void> {
+  try {
+    const store = memoryStore();
+    const googleId = settings?.keys?.googleClientId;
+    const googleSecret = settings?.keys?.googleClientSecret;
+    if (!googleId || !googleSecret || !(await loadGoogleTokens(store))) {
+      post({ type: "eventUpdated", requestId: msg.requestId, ok: false, error: "Connect Google first." });
+      return;
+    }
+    const transport = new DirectTransport(corsFetch());
+    const token = await getFreshAccessToken(store, { clientId: googleId, clientSecret: googleSecret, transport });
+    const ev = await patchEvent(transport, token, msg.eventId, msg.patch, msg.calendarId);
+    post({ type: "eventUpdated", requestId: msg.requestId, ok: true, ...(ev.id ? { id: ev.id } : {}) });
+  } catch (err) {
+    post({ type: "eventUpdated", requestId: msg.requestId, ok: false, error: err instanceof Error ? err.message : String(err) });
   }
 }
 
@@ -3007,9 +3031,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             readAttachment: makeReadAttachment(transport, tok),
             // Draft an email (auto-run — a draft just lands in Gmail Drafts for the reader to send).
             draftEmail: async (d) => createDraft(transport, await tok(), d),
-            listEvents: async (o: { max?: number; timeMin?: string; timeMax?: string }) =>
+            listEvents: async (o: { max?: number; timeMin?: string; timeMax?: string; query?: string }) =>
               listEvents(transport, await tok(), o),
             createEvent: async (ev) => createEvent(transport, await tok(), ev),
+            updateEvent: async (eventId, patch, calendarId) => patchEvent(transport, await tok(), eventId, patch, calendarId),
             listTasks: async (max?: number) => listTasks(transport, await tok(), max),
             // Create the Google Task AND mirror it as a simple in-app task so it shows in the 📋
             // panel (0 steps → it carries a "Plan it" button to break it down later).

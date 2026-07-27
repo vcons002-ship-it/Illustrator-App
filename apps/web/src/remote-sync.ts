@@ -33,7 +33,15 @@ export type PlannerCommand =
   | { action: "restoreTask"; id: string }
   | { action: "deleteForever"; id: string }
   | { action: "calShift"; delta: number | "today" }
-  | { action: "createEvent"; ev: { summary: string; start: string; end: string; description?: string; location?: string } };
+  | { action: "createEvent"; ev: { summary: string; start: string; end: string; description?: string; location?: string } }
+  // Edit an existing calendar event from the phone's Calendar panel — applied on the desktop, which
+  // owns the Google connection (`appendDescription` adds to the event's text rather than replacing it).
+  | {
+      action: "updateEvent";
+      eventId: string;
+      patch: { summary?: string; start?: string; end?: string; description?: string; appendDescription?: string; location?: string };
+      calendarId?: string;
+    };
 
 /**
  * Tasks + calendar state mirrored to the phone so its Tasks/Calendar panels show the desktop's

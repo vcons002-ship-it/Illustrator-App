@@ -6,8 +6,11 @@ import {
   sendEmail,
   decodeBase64UrlBytes,
   createTask,
+  createEvent,
+  nextDayIso,
   toTaskDue,
   patchTask,
+  patchEvent,
   decodeBase64Url,
   exchangeGoogleCode,
   gmailReadEmail,
@@ -340,5 +343,145 @@ describe("listEvents / createTask network shape", () => {
     expect(t.requests[0]!.method).toBe("PATCH");
     expect(t.requests[0]!.url).toContain("/tasks/t3");
     expect(t.requests[0]!.body).toEqual({ status: "completed" });
+  });
+});
+
+/** Fake transport that returns a DIFFERENT scripted body per call (for read-modify-write paths). */
+class SequencedTransport implements Transport {
+  readonly requests: TransportRequest[] = [];
+  private i = 0;
+  constructor(private readonly bodies: unknown[]) {}
+  send(request: TransportRequest): Promise<TransportResponse> {
+    this.requests.push(request);
+    const json = this.bodies[Math.min(this.i++, this.bodies.length - 1)];
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: <T>() => Promise.resolve(json as T),
+      arrayBuffer: () => Promise.resolve(new ArrayBuffer(0)),
+      text: () => Promise.resolve(""),
+    });
+  }
+}
+
+describe("patchEvent (edit an existing calendar event)", () => {
+  it("PATCHes only the fields given, at the event's URL", async () => {
+    const t = new FakeTransport({ id: "e1", summary: "Dentist", start: { dateTime: "2026-07-04T17:00:00-04:00" }, end: { dateTime: "2026-07-04T18:00:00-04:00" } });
+    const ev = await patchEvent(t, "tok", "e1", { location: "12 Main St" });
+    expect(ev.id).toBe("e1");
+    expect(t.requests[0]!.method).toBe("PATCH");
+    expect(t.requests[0]!.url).toContain("/calendars/primary/events/e1");
+    expect(t.requests[0]!.body).toEqual({ location: "12 Main St" }); // untouched fields aren't sent
+  });
+
+  it("appendDescription ADDS to the event's existing text instead of replacing it", async () => {
+    // GET (current state) then PATCH — appending has to read first, because Calendar's PATCH replaces
+    // a field wholesale, so a naive write would erase every earlier note.
+    const t = new SequencedTransport([
+      { id: "e1", summary: "Flight", description: "Booked with Delta." },
+      { id: "e1", summary: "Flight", description: "Booked with Delta.\nConfirmation #A1234" },
+    ]);
+    const ev = await patchEvent(t, "tok", "e1", { appendDescription: "Confirmation #A1234" });
+    expect(t.requests[0]!.method).toBe("GET");
+    expect(t.requests[1]!.method).toBe("PATCH");
+    expect((t.requests[1]!.body as { description: string }).description).toBe("Booked with Delta.\nConfirmation #A1234");
+    expect(ev.description).toContain("Confirmation #A1234");
+  });
+
+  it("appendDescription on an event with no description yet doesn't lead with a blank line", async () => {
+    const t = new SequencedTransport([{ id: "e2", summary: "Lunch" }, { id: "e2", summary: "Lunch", description: "Table for 4" }]);
+    await patchEvent(t, "tok", "e2", { appendDescription: "Table for 4" });
+    expect((t.requests[1]!.body as { description: string }).description).toBe("Table for 4");
+  });
+
+  it("description REPLACES (and skips the read) — the rewrite/correct path", async () => {
+    const t = new FakeTransport({ id: "e1", summary: "S", description: "fresh" });
+    await patchEvent(t, "tok", "e1", { description: "fresh" });
+    expect(t.requests).toHaveLength(1); // no GET
+    expect(t.requests[0]!.method).toBe("PATCH");
+  });
+
+  it("sends a bare date as an ALL-DAY date, not a midnight dateTime", async () => {
+    const t = new FakeTransport({ id: "e3", summary: "Holiday", start: { date: "2026-07-04" }, end: { date: "2026-07-05" } });
+    await patchEvent(t, "tok", "e3", { start: "2026-07-04", end: "2026-07-05" });
+    expect(t.requests[0]!.body).toEqual({ start: { date: "2026-07-04" }, end: { date: "2026-07-05" } });
+    const t2 = new FakeTransport({ id: "e3", summary: "Holiday" });
+    await patchEvent(t2, "tok", "e3", { start: "2026-07-04T09:00:00-04:00" });
+    expect(t2.requests[0]!.body).toEqual({ start: { dateTime: "2026-07-04T09:00:00-04:00" } });
+  });
+
+  it("refuses an empty patch rather than issuing a no-op write", async () => {
+    const t = new FakeTransport({});
+    await expect(patchEvent(t, "tok", "e1", {})).rejects.toThrow(/nothing to update/i);
+    expect(t.requests).toHaveLength(0);
+  });
+
+  it("escapes the event id and honours a non-primary calendar", async () => {
+    const t = new FakeTransport({ id: "a/b", summary: "S" });
+    await patchEvent(t, "tok", "a/b", { summary: "S" }, "work@group.calendar.google.com");
+    expect(t.requests[0]!.url).toContain("/calendars/work%40group.calendar.google.com/events/a%2Fb");
+  });
+});
+
+describe("listEvents search (finding an event to edit later)", () => {
+  it("passes a free-text query as Calendar's q param", async () => {
+    const t = new FakeTransport({ items: [{ id: "e9", summary: "Flight to Denver" }] });
+    const evs = await listEvents(t, "tok", { query: "flight" });
+    expect(t.requests[0]!.url).toContain("q=flight");
+    expect(evs[0]!.id).toBe("e9"); // the id is what makes it addressable by patchEvent
+  });
+
+  it("omits q entirely when no query is given (or it's blank)", async () => {
+    const t = new FakeTransport({ items: [] });
+    await listEvents(t, "tok", {});
+    expect(t.requests[0]!.url).not.toContain("q=");
+    await listEvents(t, "tok", { query: "   " });
+    expect(t.requests[1]!.url).not.toContain("q=");
+  });
+
+  it("honours an explicit PAST timeMin, so an event that already happened can be found", async () => {
+    const t = new FakeTransport({ items: [] });
+    await listEvents(t, "tok", { query: "flight", timeMin: "2020-01-01T00:00:00Z" });
+    expect(t.requests[0]!.url).toContain("timeMin=2020-01-01T00%3A00%3A00Z");
+  });
+});
+
+describe("all-day events (bare dates + Google's exclusive end)", () => {
+  it("nextDayIso rolls across month and year ends", () => {
+    expect(nextDayIso("2026-07-04")).toBe("2026-07-05");
+    expect(nextDayIso("2026-07-31")).toBe("2026-08-01");
+    expect(nextDayIso("2026-02-28")).toBe("2026-03-01");
+    expect(nextDayIso("2028-02-28")).toBe("2028-02-29"); // leap year
+    expect(nextDayIso("2026-12-31")).toBe("2027-01-01");
+  });
+
+  it("createEvent sends bare dates as an all-day event, bumping the exclusive end", async () => {
+    // "July 4 → July 4" is how a one-day event is naturally written; Google needs the end to be the
+    // day AFTER, and rejects an end that isn't strictly after the start.
+    const t = new FakeTransport({ id: "e1", summary: "Holiday", start: { date: "2026-07-04" }, end: { date: "2026-07-05" } });
+    const ev = await createEvent(t, "tok", { summary: "Holiday", start: "2026-07-04", end: "2026-07-04" });
+    expect(t.requests[0]!.body).toMatchObject({ start: { date: "2026-07-04" }, end: { date: "2026-07-05" } });
+    expect(ev.allDay).toBe(true);
+  });
+
+  it("createEvent keeps a multi-day all-day span's own end (bumped past the last day)", async () => {
+    const t = new FakeTransport({ id: "e2", summary: "Trip" });
+    await createEvent(t, "tok", { summary: "Trip", start: "2026-07-04", end: "2026-07-08" });
+    expect(t.requests[0]!.body).toMatchObject({ start: { date: "2026-07-04" }, end: { date: "2026-07-08" } });
+  });
+
+  it("createEvent still sends timed events as dateTime (unchanged)", async () => {
+    const t = new FakeTransport({ id: "e3", summary: "Call" });
+    await createEvent(t, "tok", { summary: "Call", start: "2026-06-18T14:00:00-04:00", end: "2026-06-18T15:00:00-04:00" });
+    expect(t.requests[0]!.body).toMatchObject({
+      start: { dateTime: "2026-06-18T14:00:00-04:00" },
+      end: { dateTime: "2026-06-18T15:00:00-04:00" },
+    });
+  });
+
+  it("patchEvent applies the same all-day normalisation when moving both ends", async () => {
+    const t = new FakeTransport({ id: "e1", summary: "Holiday" });
+    await patchEvent(t, "tok", "e1", { start: "2026-07-04", end: "2026-07-04" });
+    expect(t.requests[0]!.body).toEqual({ start: { date: "2026-07-04" }, end: { date: "2026-07-05" } });
   });
 });

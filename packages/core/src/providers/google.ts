@@ -477,7 +477,7 @@ const CAL_BASE = "https://www.googleapis.com/calendar/v3/calendars";
 export async function listEvents(
   transport: Transport,
   token: string,
-  opts: { max?: number; timeMin?: string; timeMax?: string; calendarId?: string } = {},
+  opts: { max?: number; timeMin?: string; timeMax?: string; calendarId?: string; query?: string } = {},
 ): Promise<CalendarEvent[]> {
   const params = new URLSearchParams({
     maxResults: String(Math.min(250, Math.max(1, opts.max ?? 10))),
@@ -485,6 +485,9 @@ export async function listEvents(
     orderBy: "startTime",
     timeMin: opts.timeMin ?? new Date().toISOString(),
     ...(opts.timeMax ? { timeMax: opts.timeMax } : {}),
+    // Free-text search across an event's title/description/location — how an event is FOUND when its
+    // id isn't already at hand (a later session, or a scheduled run, that needs to update "the flight").
+    ...(opts.query?.trim() ? { q: opts.query.trim() } : {}),
   });
   const cal = encodeURIComponent(opts.calendarId ?? "primary");
   const data = await apiGet<{ items?: RawEvent[] }>(transport, token, `${CAL_BASE}/${cal}/events?${params.toString()}`);
@@ -535,7 +538,28 @@ export async function listAllEvents(
   return lists.flat();
 }
 
-/** Create an event. `start`/`end` are ISO datetimes (with offset or Z). */
+/** The day after a "YYYY-MM-DD" (calendar-correct across month/year ends). PURE. */
+export function nextDayIso(date: string): string {
+  const [y, m, d] = date.split("-").map(Number);
+  const next = new Date(y ?? 1970, (m ?? 1) - 1, (d ?? 1) + 1);
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-${String(next.getDate()).padStart(2, "0")}`;
+}
+
+/**
+ * Normalise an event's start/end for the API. A bare "YYYY-MM-DD" on BOTH ends means an ALL-DAY
+ * event, where Google's `end.date` is EXCLUSIVE — the day AFTER the last day. Callers (and the model)
+ * naturally write "July 4 → July 4" for a one-day event, which the API rejects for not being strictly
+ * after the start, so the end is bumped to the next day. PURE.
+ */
+export function eventTimeFields(start: string, end: string): { start: { date: string } | { dateTime: string }; end: { date: string } | { dateTime: string } } {
+  const s = eventTimeField(start);
+  let e = eventTimeField(end);
+  if ("date" in s && "date" in e && e.date <= s.date) e = { date: nextDayIso(s.date) };
+  return { start: s, end: e };
+}
+
+/** Create an event. `start`/`end` are ISO datetimes (with offset or Z) — or bare "YYYY-MM-DD" dates
+ * for an ALL-DAY event (see eventTimeFields for the exclusive-end handling). */
 export async function createEvent(
   transport: Transport,
   token: string,
@@ -543,12 +567,70 @@ export async function createEvent(
 ): Promise<CalendarEvent> {
   const body = {
     summary: ev.summary,
-    start: { dateTime: ev.start },
-    end: { dateTime: ev.end },
+    ...eventTimeFields(ev.start, ev.end),
     ...(ev.description ? { description: ev.description } : {}),
     ...(ev.location ? { location: ev.location } : {}),
   };
   return parseCalendarEvent(await apiPost<RawEvent>(transport, token, `${CAL_BASE}/primary/events`, body));
+}
+
+/** One event by id — used to read what an event already says before adding to it. */
+export async function getEvent(transport: Transport, token: string, id: string, calendarId = "primary"): Promise<CalendarEvent> {
+  const cal = encodeURIComponent(calendarId);
+  return parseCalendarEvent(await apiGet<RawEvent>(transport, token, `${CAL_BASE}/${cal}/events/${encodeURIComponent(id)}`));
+}
+
+/** A start/end value as Calendar wants it: a bare "YYYY-MM-DD" is an ALL-DAY date, anything else a
+ * datetime. Sending `dateTime` for a bare date would silently convert an all-day event into a timed
+ * one at midnight. PURE. */
+export function eventTimeField(value: string): { date: string } | { dateTime: string } {
+  const v = value.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(v) ? { date: v } : { dateTime: value };
+}
+
+/**
+ * Update an existing event in place (PATCH — only the fields given change).
+ *
+ * `appendDescription` is the "add what we learned to this event" path: Calendar's PATCH REPLACES a
+ * field wholesale, so appending has to read the current description and send the combined text, or
+ * each new note would erase the last one. Everything else is a straight replace.
+ */
+export async function patchEvent(
+  transport: Transport,
+  token: string,
+  id: string,
+  patch: { summary?: string; start?: string; end?: string; description?: string; appendDescription?: string; location?: string },
+  calendarId = "primary",
+): Promise<CalendarEvent> {
+  const body: Record<string, unknown> = {};
+  if (patch.summary !== undefined) body.summary = patch.summary;
+  if (patch.start !== undefined && patch.end !== undefined) {
+    // Both ends move together → same all-day exclusive-end normalisation as creating one.
+    const { start, end } = eventTimeFields(patch.start, patch.end);
+    body.start = start;
+    body.end = end;
+  } else {
+    if (patch.start !== undefined) body.start = eventTimeField(patch.start);
+    if (patch.end !== undefined) body.end = eventTimeField(patch.end);
+  }
+  if (patch.location !== undefined) body.location = patch.location;
+  if (patch.description !== undefined) body.description = patch.description;
+  if (patch.appendDescription) {
+    // An explicit `description` in the same call wins as the base to append onto; otherwise read the
+    // event's current text (one extra GET, only on the append path).
+    const existing = patch.description ?? (await getEvent(transport, token, id, calendarId)).description ?? "";
+    body.description = existing.trim() ? `${existing.trimEnd()}\n${patch.appendDescription}` : patch.appendDescription;
+  }
+  if (Object.keys(body).length === 0) throw new Error("nothing to update — pass at least one field to change");
+  const cal = encodeURIComponent(calendarId);
+  const res = await transport.send({
+    url: `${CAL_BASE}/${cal}/events/${encodeURIComponent(id)}`,
+    method: "PATCH",
+    headers: { authorization: `Bearer ${token}` },
+    body,
+  });
+  if (!res.ok) throw new Error(await apiError(res));
+  return parseCalendarEvent(await res.json<RawEvent>());
 }
 
 // ---------------------------------------------------------------------- Tasks

@@ -637,6 +637,7 @@ export function App() {
     importGoogleTasks,
     createGoogleTask,
     createEvent: createCalendarEvent,
+    updateEvent: updateCalendarEvent,
     loadCalendar,
     stockQuote,
     readPage,
@@ -2523,6 +2524,25 @@ export function App() {
       return { ok: res.ok, ...(res.error ? { error: res.error } : {}) };
     },
     [createCalendarEvent, refreshCalendar],
+  );
+  /** Save a Calendar-panel edit straight through to Google, then re-pull the grid so the change is
+   * visible immediately (and the mirrored planner re-pushes it to a linked phone). */
+  const onUpdateCalendarEvent = useCallback(
+    async (
+      eventId: string,
+      patch: { summary?: string; start?: string; end?: string; description?: string; location?: string },
+      calendarId?: string,
+    ): Promise<{ ok: boolean; error?: string }> => {
+      const res = await updateCalendarEvent(eventId, patch, calendarId);
+      if (res.ok) {
+        refreshCalendar();
+        const what = patch.summary ?? "the event";
+        buddyNoteRef.current(`📅 Updated “${what}” on your calendar.`);
+        logActionRef.current("calendar", `Updated event: ${what}`);
+      }
+      return { ok: res.ok, ...(res.error ? { error: res.error } : {}) };
+    },
+    [updateCalendarEvent, refreshCalendar],
   );
   // Mirror the planner (tasks + calendar) to a linked phone. The desktop owns the data (Google +
   // the task store); the phone renders this snapshot so its panels aren't empty. Re-pushed whenever
@@ -6284,6 +6304,9 @@ export function App() {
         case "createEvent":
           void onCreateCalendarEvent(c.ev);
           break;
+        case "updateEvent":
+          void onUpdateCalendarEvent(c.eventId, c.patch, c.calendarId);
+          break;
       }
     },
     [
@@ -8202,6 +8225,18 @@ export function App() {
                       return Promise.resolve({ ok: true });
                     }
                   : onCreateCalendarEvent,
+                // A phone has no Google connection of its own — relay the edit to the desktop, which
+                // writes it through and re-pushes the refreshed calendar in the planner mirror.
+                onUpdateEvent: isRemoteClient
+                  ? (
+                      eventId: string,
+                      patch: { summary?: string; start?: string; end?: string; description?: string; location?: string },
+                      calendarId?: string,
+                    ) => {
+                      sendPlanner({ action: "updateEvent", eventId, patch, ...(calendarId ? { calendarId } : {}) });
+                      return Promise.resolve({ ok: true });
+                    }
+                  : onUpdateCalendarEvent,
               }
             : {})}
           onClose={() => setShowCalendar(false)}

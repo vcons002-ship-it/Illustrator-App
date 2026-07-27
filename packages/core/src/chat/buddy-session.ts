@@ -146,8 +146,15 @@ export interface BuddyDeps {
    * mime + base64 bytes (the host renders them; never folded into the model turn) and an optional
    * vision observation. */
   openImage?: (path: string) => Promise<{ name: string; mimeType: string; base64: string; observation?: string }>;
-  listEvents?: (opts: { max?: number; timeMin?: string; timeMax?: string }) => Promise<CalendarEvent[]>;
+  listEvents?: (opts: { max?: number; timeMin?: string; timeMax?: string; query?: string }) => Promise<CalendarEvent[]>;
   createEvent?: (ev: { summary: string; start: string; end: string; description?: string; location?: string }) => Promise<CalendarEvent>;
+  /** Edit an existing event in place — only the given fields change; `appendDescription` adds to what
+   * the event already says (so details can accumulate on it) rather than replacing the text. */
+  updateEvent?: (
+    eventId: string,
+    patch: { summary?: string; start?: string; end?: string; description?: string; appendDescription?: string; location?: string },
+    calendarId?: string,
+  ) => Promise<CalendarEvent>;
   listTasks?: (max?: number) => Promise<TaskItem[]>;
   createTask?: (t: { title: string; notes?: string; due?: string }) => Promise<TaskItem>;
   /** Create a PARENT to-do with nested SUB-TASKS (Google Tasks + a mirrored in-app plan). */
@@ -255,10 +262,11 @@ function isHostTool(call: BuddyToolCall): call is Extract<BuddyToolCall, { tool:
 
 /**
  * Tools the automatic transient-error retry (below) may re-run: read-only lookups/searches whose
- * repeat has no side effects. Write tools (create_event, create_task, schedule_task, continue_story,
- * draft_email, remember, mcp_call, trading_script, …) must NEVER be auto-retried — a "retryable"
- * error can arrive AFTER the write actually landed (e.g. a timeout on the response), so a retry
- * duplicates the event/task/note. Their errors go back to the model as the tool result instead.
+ * repeat has no side effects. Write tools (create_event, update_event, create_task, schedule_task,
+ * continue_story, draft_email, remember, mcp_call, trading_script, …) must NEVER be auto-retried — a
+ * "retryable" error can arrive AFTER the write actually landed (e.g. a timeout on the response), so a
+ * retry duplicates the event/task/note — or, for update_event's appendDescription, appends the same
+ * line twice. Their errors go back to the model as the tool result instead.
  */
 const AUTO_RETRY_SAFE_TOOLS: ReadonlySet<string> = new Set([
   "search_web",
@@ -812,6 +820,7 @@ export async function runBuddyTool(
             ...(call.max !== undefined ? { max: call.max } : {}),
             ...(call.timeMin ? { timeMin: call.timeMin } : {}),
             ...(call.timeMax ? { timeMax: call.timeMax } : {}),
+            ...(call.query ? { query: call.query } : {}),
           }),
         };
       case "create_event":
@@ -824,6 +833,22 @@ export async function runBuddyTool(
             ...(call.description ? { description: call.description } : {}),
             ...(call.location ? { location: call.location } : {}),
           }),
+        };
+      case "update_event":
+        if (!deps.updateEvent) return { error: "Google isn't connected (connect it in Settings)." };
+        return {
+          eventUpdated: await deps.updateEvent(
+            call.eventId,
+            {
+              ...(call.summary ? { summary: call.summary } : {}),
+              ...(call.start ? { start: call.start } : {}),
+              ...(call.end ? { end: call.end } : {}),
+              ...(call.description ? { description: call.description } : {}),
+              ...(call.appendDescription ? { appendDescription: call.appendDescription } : {}),
+              ...(call.location ? { location: call.location } : {}),
+            },
+            call.calendarId,
+          ),
         };
       case "list_tasks":
         if (!deps.listTasks) return { error: "Google isn't connected (connect it in Settings)." };

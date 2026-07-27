@@ -367,8 +367,25 @@ export type BuddyToolCall =
   | { tool: "send_email"; to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[] }
   /** Google Calendar (read + create). For "what's on today / this week", set
    * timeMin/timeMax (ISO 8601 with the reader's UTC offset) to that window. */
-  | { tool: "list_events"; max?: number; timeMin?: string; timeMax?: string }
+  /** Read the calendar. `query` free-text searches title/description/location — that's how an event is
+   * FOUND to update it when its id isn't already at hand. `timeMin` defaults to NOW, so finding an
+   * event that already happened needs an explicit past `timeMin`. */
+  | { tool: "list_events"; max?: number; timeMin?: string; timeMax?: string; query?: string }
   | { tool: "create_event"; summary: string; start: string; end: string; description?: string; location?: string }
+  /** Edit an EXISTING calendar event in place (only the fields given change). `appendDescription` adds
+   * a line to what the event already says — the way details accumulate on an event over time without
+   * overwriting what's there. `eventId` comes from list_events / the create_event result. */
+  | {
+      tool: "update_event";
+      eventId: string;
+      summary?: string;
+      start?: string;
+      end?: string;
+      description?: string;
+      appendDescription?: string;
+      location?: string;
+      calendarId?: string;
+    }
   /** Google Tasks (read + create). */
   | { tool: "list_tasks"; max?: number }
   | { tool: "create_task"; title: string; notes?: string; due?: string }
@@ -439,7 +456,7 @@ export const BUDDY_TOOL_NAMES: ReadonlySet<BuddyToolName> = new Set<BuddyToolNam
   "set_visual_style", "generate_image", "generate_video", "stitch_videos", "generate_long_video", "find_files",
   "read_file", "open_image", "run_command", "write_file", "edit_file", "delegate_coding_task", "screenshot",
   "remember", "forget", "update_setting", "setup_help", "read_skill", "save_skill", "forget_skill", "gmail_search",
-  "read_email", "read_attachment", "draft_email", "send_email", "list_events", "create_event", "list_tasks",
+  "read_email", "read_attachment", "draft_email", "send_email", "list_events", "create_event", "update_event", "list_tasks",
   "create_task", "add_task_group", "plan_task", "schedule_task", "list_scheduled", "cancel_scheduled",
   "mark_step_done", "complete_task", "save_task_context", "update_task_step", "add_task_steps", "list_task_plans",
   "get_task_plan", "mcp_tools", "mcp_call", "delegate", "spawn_agents", "spawn_coding_agents", "set_plan",
@@ -559,6 +576,8 @@ export function describeBuddyToolActivity(call: BuddyToolCall): string {
       return "Checking your calendar…";
     case "create_event":
       return `Adding “${clip(call.summary, 50)}” to your calendar…`;
+    case "update_event":
+      return "Updating a calendar event…";
     case "list_tasks":
     case "list_task_plans":
       return "Checking your tasks…";
@@ -905,11 +924,29 @@ export function buildBuddySystemPrompt(opts: {
       '- {"tool":"send_email","to":["a@b.com"],"subject":"…","body":"…"} — actually SEND it. Use this ONLY when the ' +
       'reader explicitly says to send (e.g. "send it", "email it now"); it always asks them to confirm first. When ' +
       "in doubt, draft_email instead.\n" +
-      '- {"tool":"list_events","max":10,"timeMin":"…","timeMax":"…"} — calendar events. Omit the window for ' +
-      'simply "what\'s next"; for "what do I have TODAY / THIS WEEK / THIS MONTH" set timeMin/timeMax to that ' +
-      "range in ISO 8601 WITH the reader's UTC offset (compute it from CURRENT DATE & TIME above). " +
+      '- {"tool":"list_events","max":10,"timeMin":"…","timeMax":"…","query":"…"} — calendar events. Omit the ' +
+      'window for simply "what\'s next"; for "what do I have TODAY / THIS WEEK / THIS MONTH" set timeMin/timeMax ' +
+      "to that range in ISO 8601 WITH the reader's UTC offset (compute it from CURRENT DATE & TIME above). " +
+      '"query" free-text searches title/description/location — use it to FIND a specific event you need to ' +
+      'update (e.g. "flight", "dentist") instead of listing everything and eyeballing it. timeMin defaults to ' +
+      "NOW, so to find an event that ALREADY HAPPENED you must pass an explicit past timeMin. " +
       '- {"tool":"create_event","summary":"…","start":"2026-06-18T14:00:00-04:00",' +
-      '"end":"2026-06-18T15:00:00-04:00","description":"…","location":"…"} — add an event (ISO 8601 with offset).\n' +
+      '"end":"2026-06-18T15:00:00-04:00","description":"…","location":"…"} — add an event (ISO 8601 with offset). ' +
+      "The result includes its eventId — keep it, that's how you edit this event later. " +
+      'For an ALL-DAY event (a birthday, a holiday, a whole-day trip) pass BARE DATES instead: ' +
+      '{"start":"2026-07-04","end":"2026-07-04"} — no times, no offset. Use the SAME date on both ends for a ' +
+      "single day (the app handles the calendar's exclusive end date); for a multi-day span use the first and " +
+      "LAST day. Same in update_event.\n" +
+      '- {"tool":"update_event","eventId":"…","appendDescription":"Confirmation #A1234; gate B12"} — change an ' +
+      "EXISTING event. Only the fields you pass change; the rest are untouched. Get the eventId from the " +
+      "create_event result or from a list_events line ([eventId: …]).\n" +
+      "  · ADDING DETAIL AS IT ARRIVES is the main use: prefer \"appendDescription\" — it ADDS a line to what the " +
+      "event already says. Plain \"description\" REPLACES the whole text, so only use it to rewrite/correct.\n" +
+      "  · Also takes \"summary\", \"start\", \"end\", \"location\" — for a rescheduled or renamed event (pass BOTH " +
+      "start and end when moving one).\n" +
+      "  · When the reader tells you something that belongs on an event they already have (a confirmation number, " +
+      "an address, who's coming, what to bring, a change of plan), put it ON that event with update_event rather " +
+      "than only saying it back — that's what makes the calendar entry actually useful later.\n" +
       '- {"tool":"list_tasks","max":20} — open to-dos. - {"tool":"create_task","title":"…","notes":"…",' +
       '"due":"2026-06-20T00:00:00Z"} — add a SINGLE to-do.\n' +
       '- {"tool":"add_task_group","title":"Iowa trip","due":"…","subtasks":[{"title":"Book outbound flight",' +
@@ -2379,6 +2416,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       ...(boundedMax(obj.max) ? { max: boundedMax(obj.max)! } : {}),
       ...(strArg(obj.timeMin, MAX_NAME_CHARS) ? { timeMin: strArg(obj.timeMin, MAX_NAME_CHARS)! } : {}),
       ...(strArg(obj.timeMax, MAX_NAME_CHARS) ? { timeMax: strArg(obj.timeMax, MAX_NAME_CHARS)! } : {}),
+      ...(strArg(obj.query, MAX_QUERY_CHARS) ? { query: strArg(obj.query, MAX_QUERY_CHARS)! } : {}),
     };
   }
   if (tool === "list_tasks") {
@@ -2396,6 +2434,30 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       end,
       ...(strArg(obj.description, MAX_GOOGLE_TEXT_CHARS) ? { description: strArg(obj.description, MAX_GOOGLE_TEXT_CHARS)! } : {}),
       ...(strArg(obj.location, MAX_QUERY_CHARS) ? { location: strArg(obj.location, MAX_QUERY_CHARS)! } : {}),
+    };
+  }
+  if (tool === "update_event") {
+    const eventId = strArg(obj.eventId, MAX_ID_CHARS);
+    if (!eventId) return undefined;
+    const summary = strArg(obj.summary, MAX_QUERY_CHARS);
+    const start = strArg(obj.start, MAX_NAME_CHARS);
+    const end = strArg(obj.end, MAX_NAME_CHARS);
+    const description = strArg(obj.description, MAX_GOOGLE_TEXT_CHARS);
+    const appendDescription = strArg(obj.appendDescription, MAX_GOOGLE_TEXT_CHARS);
+    const location = strArg(obj.location, MAX_QUERY_CHARS);
+    const calendarId = strArg(obj.calendarId, MAX_ID_CHARS);
+    // Nothing to change → not a usable call (the API would reject it anyway).
+    if (!summary && !start && !end && !description && !appendDescription && !location) return undefined;
+    return {
+      tool,
+      eventId,
+      ...(summary ? { summary } : {}),
+      ...(start ? { start } : {}),
+      ...(end ? { end } : {}),
+      ...(description ? { description } : {}),
+      ...(appendDescription ? { appendDescription } : {}),
+      ...(location ? { location } : {}),
+      ...(calendarId ? { calendarId } : {}),
     };
   }
   if (tool === "create_task") {
@@ -2968,6 +3030,7 @@ export interface BuddyToolResultPayload {
   email?: { sent: boolean; to: string[]; subject: string; id?: string; error?: string };
   events?: CalendarEvent[];
   eventCreated?: CalendarEvent;
+  eventUpdated?: CalendarEvent;
   tasks?: TaskItem[];
   taskCreated?: TaskItem;
   /** add_task_group outcome: the parent task title + how many sub-tasks were nested under it. */
@@ -3419,15 +3482,34 @@ function formatBuddyToolResultBody(call: BuddyToolCall, result: BuddyToolResultP
     const events = result.events ?? [];
     const window = call.timeMin || call.timeMax ? ` (${call.timeMin ?? "now"} → ${call.timeMax ?? "…"})` : "";
     if (events.length === 0) return `[list_events: nothing on the calendar in that window${window}]`;
+    // Each line carries its id — that's what makes an event addressable by update_event (without it
+    // the model can read the calendar but has no way to name which event to change).
     return (
       `[list_events — events${window}]\n` +
-      events.map((e) => `· ${e.start} → ${e.end}: ${e.summary}${e.location ? ` @ ${e.location}` : ""}`).join("\n")
+      events
+        .map(
+          (e) =>
+            `· ${e.start} → ${e.end}: ${e.summary}${e.location ? ` @ ${e.location}` : ""}` +
+            `${e.description ? ` — ${e.description.length > 200 ? `${e.description.slice(0, 200).trim()}…` : e.description}` : ""}` +
+            `${e.id ? ` [eventId: ${e.id}]` : ""}`,
+        )
+        .join("\n")
     );
   }
   if (call.tool === "create_event") {
-    return result.eventCreated
-      ? `[created calendar event "${result.eventCreated.summary}" (${result.eventCreated.start})] Confirm it to the reader.`
-      : "[create_event did nothing]";
+    const ev = result.eventCreated;
+    if (!ev) return "[create_event did nothing]";
+    // Hand the id back so this same event can be updated later (add details as they're settled).
+    return (
+      `[created calendar event "${ev.summary}" (${ev.start})${ev.id ? ` — eventId: ${ev.id}` : ""}] ` +
+      "Confirm it to the reader. Use that eventId with update_event to add details to THIS event later."
+    );
+  }
+  if (call.tool === "update_event") {
+    const ev = result.eventUpdated;
+    if (!ev) return "[update_event did nothing]";
+    const what = call.appendDescription ? "added a note to" : "updated";
+    return `[${what} calendar event "${ev.summary}" (${ev.start})] Confirm the change to the reader.`;
   }
   if (call.tool === "list_tasks") {
     const tasks = result.tasks ?? [];
