@@ -16,6 +16,11 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   change reports exactly that, indefinitely, while the fix you're waiting for sits somewhere else.
   Comparing the commit it reports against the build shown in Settings also separates "didn't
   download" from "didn't rebuild".
+- **Updates that change the build setup now tell you to restart** — the desktop app is served by a
+  development server that reads its configuration once, when it starts. So a pulled change to that
+  configuration was downloaded, reported as rebuilt, and then quietly not applied, because reloading
+  the page re-fetches from the same already-running server. Those updates now say to close and reopen
+  the app, the way core updates already did.
 
 ### Scheduled actions
 

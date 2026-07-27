@@ -272,6 +272,7 @@ import {
   type ReaderSettings,
 } from "@visual-reader/ui";
 import { loadSampleBook } from "./sample.js";
+import { buildStamp } from "./build-stamp.js";
 import { useEngineWorker, type ImportResult, type TestRenderResult } from "./useEngineWorker.js";
 import { useRemoteMirror, type UpdateResult } from "./useRemoteMirror.js";
 import { useLocalEngine } from "./useLocalEngine.js";
@@ -2072,9 +2073,15 @@ export function App() {
             "check that this is the branch it went to — Settings shows the build this app is actually running.",
         };
       }
-      // What did the pull change? A core/shell (src-tauri) change can't be applied by a reload.
+      // What did the pull change? Some things a reload cannot pick up:
+      //  - src-tauri: the Rust shell is a compiled binary.
+      //  - vite.config.ts / package.json / the lockfile: the app runs under `cargo tauri dev`, so the
+      //    page is served by a LONG-LIVED vite dev server that reads its config once, at startup. A
+      //    reload re-fetches modules from that same server and so keeps the old config — which is how
+      //    a build-time `define` can be pulled, "rebuilt", and still not be there.
       const diff = await runCommand("git diff --name-only ORIG_HEAD HEAD", token, root);
       const coreChanged = /apps\/desktop\/src-tauri\//.test(diff.stdout);
+      const buildConfigChanged = /(^|\/)(vite\.config\.ts|package\.json|pnpm-lock\.yaml)$/m.test(diff.stdout);
       onProgress("Installing dependencies…");
       const install = await runCommand("pnpm install", token, root);
       if (install.timedOut || install.code !== 0) {
@@ -2085,10 +2092,13 @@ export function App() {
       if (build.timedOut || build.code !== 0) {
         return { status: "error", message: `Rebuild failed: ${trim(build.stderr || build.stdout)}. Try update.bat.` };
       }
-      if (coreChanged) {
+      if (coreChanged || buildConfigChanged) {
         return {
           status: "needs-restart",
-          message: `Updated to ${at.trim() || "the latest version"}! This release also changes the core app — fully close and reopen Visual Reader (run desktop.bat) to finish.`,
+          message:
+            `Updated${at}! This release changes ${coreChanged ? "the core app" : "the build setup"}, which a reload ` +
+            "can't pick up — fully close and reopen Visual Reader (run desktop.bat) to finish. Settings will show " +
+            "the new build once it's back.",
         };
       }
       onProgress("Reloading…");
@@ -7856,7 +7866,7 @@ export function App() {
           <SettingsPanel
             value={settings}
             onChange={onSettingsChange}
-            buildStamp={__BUILD_STAMP__}
+            buildStamp={buildStamp()}
             isDesktop={isDesktop}
             remote={isRemoteClient}
             {...(isDesktop

@@ -222,6 +222,7 @@ import { buildProviders } from "@visual-reader/ui/providers";
 import type { ReaderSettings } from "@visual-reader/ui";
 import type { TaskPlan, TaskStep } from "@visual-reader/core";
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
+import { buildStamp } from "./build-stamp.js";
 import type { EngineVram } from "./remote-sync.js";
 
 /**
@@ -3901,7 +3902,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         now: currentDateTimeLabel(),
         // Which bundle this is, baked in at build time — so "which build are you on?" is answerable
         // and a stale build stops looking like an unfixed bug.
-        buildStamp: __BUILD_STAMP__,
+        buildStamp: buildStamp(),
         ...(activePlan ? { activeTask: tasksIndexBlock(activePlan) } : {}),
         ...(settings?.allowMature ? { allowMature: true } : {}),
         // Desktop only: the find_files tool needs the native filesystem bridge,
