@@ -49,6 +49,20 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   "Chat 1", "Chat 2"… on every restart, because the name was saved but thrown away on load. Names
   now survive restarts, and a task's chat follows the task if you rename it.
 
+### Documents
+
+- **Revising a document changes just that part, instead of rewriting the whole thing** — ask for a
+  tightened intro or an extra section and the assistant now edits those lines in place. Before, every
+  revision meant re-typing the entire document from scratch.
+- **Long documents stop losing their endings** — the assistant only ever held the first 8,000
+  characters of the document it was working on (roughly 1,200 words), and the copy it had just
+  trailed off with no indication there was more. So on anything longer, "revise this" quietly
+  rebuilt the document out of the part it could see and threw away the rest. It can now read any part
+  of a document on demand, it's told plainly when it's looking at an excerpt — including a list of
+  every section, so it knows what's past the cut — and revisions apply to the real, whole document
+  rather than to the excerpt. How much it holds at once now also scales with the model you're using
+  instead of one fixed number.
+
 ### Assistant
 
 - **Old conversations stop repeating stale instructions** — the fix below stopped NEW leakage, but
@@ -63,7 +77,19 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   These now steer only the turn they belong to; what actually happened (results, renders, files
   written) is still kept.
 
+### Email
+
+- **The assistant can see who an email was sent to** — To and Cc were never fetched or shown, so it
+  could read a thread but not tell you who was on it, and couldn't answer "who hasn't replied yet".
+
 ### Calendar
+
+- **A list kept on an event gets updated, not duplicated** — when the assistant tracks something on a
+  calendar event (who's RSVP'd, what's packed, a status per person), a changed answer now overwrites
+  that person's line where it already sits. Before, it could only add text to the bottom, so the event
+  ended up saying both "Bo: ?" and "Bo: yes". Pointing it at an event that already has duplicates
+  cleans them up. It also no longer works from a shortened copy of the event's notes, which is how it
+  came to write the same update in two places.
 
 - **The assistant can now edit calendar events, not just create them** — and in particular it can keep
   adding to one as things firm up. Tell it the confirmation number, the gate, the address, who's

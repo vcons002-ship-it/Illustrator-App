@@ -89,6 +89,13 @@ export interface BuddyDeps {
   createDocument?: (
     call: Extract<BuddyToolCall, { tool: "create_document" }>,
   ) => Promise<NonNullable<BuddyToolResultPayload["document"]>>;
+  /** Revise the active document by search/replace against its FULL stored text — the path that lets a
+   * document be changed without re-emitting it (and without losing the part the model never saw). */
+  editDocument?: (
+    edits: { search: string; replace: string }[],
+  ) => Promise<NonNullable<BuddyToolResultPayload["documentEdit"]>>;
+  /** The active document's real text — the whole thing, or one section by heading. */
+  readDocument?: (section?: string) => Promise<NonNullable<BuddyToolResultPayload["documentText"]>>;
   /** Story "as you go": start a new co-written illustrated story, open it, render beat one. */
   startStory?: (call: Extract<BuddyToolCall, { tool: "start_story" }>) => Promise<BuddyOpenedInfo>;
   /** Append the next beat to the OPEN story (prose + an image per the cadence). Returns the
@@ -730,6 +737,12 @@ export async function runBuddyTool(
       case "create_document":
         if (!deps.createDocument) return { error: "creating documents isn't available right now" };
         return { document: await deps.createDocument(call) };
+      case "edit_document":
+        if (!deps.editDocument) return { error: "editing documents isn't available right now" };
+        return { documentEdit: await deps.editDocument(call.edits) };
+      case "read_document":
+        if (!deps.readDocument) return { error: "reading the document isn't available right now" };
+        return { documentText: await deps.readDocument(call.section) };
       case "start_story":
         if (!deps.startStory) return { error: "story mode isn't available right now" };
         return { opened: await deps.startStory(call), story: { beats: 1, illustrated: true } };

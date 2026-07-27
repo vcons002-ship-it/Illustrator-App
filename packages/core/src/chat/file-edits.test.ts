@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyFileEdits, summarizeFileEdits } from "./file-edits.js";
+import { applyFileEdits, extractSection, summarizeFileEdits } from "./file-edits.js";
 
 describe("applyFileEdits", () => {
   it("applies a single unique edit", () => {
@@ -51,6 +51,17 @@ describe("applyFileEdits", () => {
     // `$&` would otherwise re-insert the whole match; confirm it stays the two literal characters.
     const amp = applyFileEdits("X", [{ search: "X", replace: "[$&]" }]);
     expect(amp.content).toBe("[$&]");
+  });
+
+  it("extractSection: a heading and everything under it, including deeper subsections", () => {
+    const doc = "# Brief\n\nintro\n\n## Scope\n\nin scope\n\n### Detail\n\nfine print\n\n## Risks\n\nthings\n";
+    expect(extractSection(doc, "Scope")).toBe("## Scope\n\nin scope\n\n### Detail\n\nfine print");
+    expect(extractSection(doc, "## Scope")).toBe("## Scope\n\nin scope\n\n### Detail\n\nfine print"); // hashes optional
+    expect(extractSection(doc, "risks")).toBe("## Risks\n\nthings"); // case-insensitive
+    // The top heading takes the whole document; a shallower heading is what ends a section.
+    expect(extractSection(doc, "Brief")).toBe(doc.trimEnd());
+    expect(extractSection(doc, "Budget")).toBeUndefined();
+    expect(extractSection(doc, "")).toBeUndefined();
   });
 
   it("summarizeFileEdits: clean vs failures", () => {

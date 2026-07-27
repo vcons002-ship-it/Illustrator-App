@@ -49,6 +49,11 @@ import {
   buildFileLedgerBlock,
   buildProjectGuideBlock,
   buildActiveDocumentBlock,
+  activeDocBudget,
+  documentOutline,
+  applyFileEdits,
+  summarizeFileEdits,
+  extractSection,
   buildToolCallFormat,
   type CreatedFileRef,
   ollamaToolSchemas,
@@ -734,6 +739,9 @@ let projectGuide = "";
  * (`activeDocument` message) when they open/upload one. Injected (bounded) AFTER the cache prefix so
  * the buddy can discuss + revise the REAL text without a read_file round-trip. */
 let activeDocument: { title: string; content: string } | undefined;
+/** Ceiling on ONE read_document reply — matches the read_file ceiling. This is an on-demand read, not
+ * the per-turn excerpt, so it can be generous: it's paid once, when the model actually asks. */
+const MAX_DOCUMENT_READ_CHARS = 60_000;
 let documentCounter = 0;
 function llmVramOp(action: "stop" | "ensure"): Promise<void> {
   return new Promise((resolve) => {
@@ -3444,6 +3452,53 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         });
         return { ok: true, id, title: call.title, words, path };
       },
+      editDocument: async (edits) => {
+        // Edits land on the FULL stored text, NOT on the bounded excerpt the model sees in its prompt.
+        // That's the whole point: a document can be revised correctly without the model ever holding
+        // all of it, so a long one can no longer lose the part that didn't fit.
+        if (!activeDocument) {
+          return { ok: false, title: "", applied: 0, failures: 0, words: 0, summary: "", error: "no document is open" };
+        }
+        const doc = activeDocument;
+        const r = applyFileEdits(doc.content, edits);
+        const summary = summarizeFileEdits(doc.title, r);
+        if (r.applied === 0) return { ok: false, title: doc.title, applied: 0, failures: r.failures.length, words: 0, summary };
+        activeDocument = { title: doc.title, content: r.content };
+        const slug =
+          (doc.title || "document").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) ||
+          "document";
+        // Re-post through the normal create path so the host rebuilds the file card and the PDF/Word
+        // bytes from the revised source — an edited document the reader can't download is half-done.
+        post({
+          type: "documentCreated",
+          requestId: msg.requestId,
+          id: `doc-${++documentCounter}-${slug}`,
+          title: doc.title,
+          content: r.content,
+          path: `documents/${slug}.md`,
+        });
+        const words = r.content.trim() ? r.content.trim().split(/\s+/).length : 0;
+        return { ok: true, title: doc.title, applied: r.applied, failures: r.failures.length, words, summary };
+      },
+      readDocument: async (section) => {
+        if (!activeDocument) return { title: "", text: "", total: 0, found: false };
+        const { title, content } = activeDocument;
+        const body = section ? extractSection(content, section) : content;
+        if (section && body === undefined) {
+          return { title, text: "", total: content.length, found: false, outline: documentOutline(content).join(" › ") };
+        }
+        const full = body ?? content;
+        // Bounded by the same ceiling as read_file — generous (a book chapter's worth), and far above
+        // the standing excerpt, which is what makes "read the rest of it" actually work.
+        const text = full.slice(0, MAX_DOCUMENT_READ_CHARS);
+        return {
+          title,
+          text,
+          total: content.length,
+          found: true,
+          ...(full.length > text.length ? { truncated: true } : {}),
+        };
+      },
       // Story "as you go": create the story book from the opening beat and open it (the
       // normal `opened` path → the host opens it, the worker rebuilds the engine with the
       // active-scene hook, beat one extracts + illustrates). worldStyle/style is applied
@@ -3867,7 +3922,11 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     const guideBlock = buildProjectGuideBlock(projectGuide);
     // The active document (last create_document / one the reader opened) rides after the cache prefix
     // too, so "tighten the intro / add a section" acts on the real text even after history trimming.
-    const activeDocBlock = buildActiveDocumentBlock(activeDocument);
+    // Its size is budgeted off the SAME window the rest of the context is: a flat cap held a cloud
+    // model with a 200k window to a 4k local model's excerpt for no reason. Whatever doesn't fit is
+    // reachable with read_document and editable with edit_document, so the cap costs nothing but a
+    // round-trip now.
+    const activeDocBlock = buildActiveDocumentBlock(activeDocument, activeDocBudget(budgets.history));
     const volatile = [storyStateBlock, guideBlock, ledgerBlock, activeDocBlock].filter(Boolean).join("\n\n");
     // G3 — in app-managed mode, GRAMMAR-CONSTRAIN the reply to the tool the active step's contract
     // demands so a stubborn small model can't narrate instead of acting. Only for a concrete tool need

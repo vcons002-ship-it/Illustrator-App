@@ -67,6 +67,23 @@ export function applyFileEdits(content: string, edits: FileEdit[]): FileEditResu
   return { content: out, applied, failures };
 }
 
+/**
+ * One Markdown section of `body` — the named ATX heading plus everything under it, up to the next
+ * heading at the SAME OR SHALLOWER level (so asking for "## Scope" gets its "###" subsections too).
+ * Matched case-insensitively on the heading text. Undefined when no heading matches. PURE.
+ */
+export function extractSection(body: string, heading: string): string | undefined {
+  const want = heading.trim().replace(/^#+\s*/, "").toLowerCase();
+  if (!want) return undefined;
+  const lines = body.split("\n");
+  const headings = lines.map((l) => /^(#{1,6})\s+(.+?)\s*#*$/.exec(l));
+  const start = headings.findIndex((m) => m && (m[2] ?? "").trim().toLowerCase() === want);
+  if (start < 0) return undefined;
+  const depth = (headings[start]?.[1] ?? "#").length;
+  const after = headings.findIndex((m, i) => i > start && m && (m[1] ?? "").length <= depth);
+  return lines.slice(start, after < 0 ? lines.length : after).join("\n").trimEnd();
+}
+
 /** A one-line, model-facing summary of an edit result (for the tool feedback). */
 export function summarizeFileEdits(path: string, r: FileEditResult): string {
   if (r.failures.length === 0) return `[edit_file applied ${r.applied} edit(s) to ${path}.]`;
