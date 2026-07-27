@@ -49,6 +49,7 @@ import {
   buildFileLedgerBlock,
   buildProjectGuideBlock,
   buildActiveDocumentBlock,
+  buildActiveDraftBlock,
   activeDocBudget,
   documentOutline,
   applyFileEdits,
@@ -743,6 +744,9 @@ let projectGuide = "";
  * (`activeDocument` message) when they open/upload one. Injected (bounded) AFTER the cache prefix so
  * the buddy can discuss + revise the REAL text without a read_file round-trip. */
 let activeDocument: { title: string; content: string } | undefined;
+/** The last email draft saved or edited this session — surfaced every turn so a follow-up revision
+ * edits it instead of drafting a second copy (see buildActiveDraftBlock). */
+let lastDraft: { id: string; to: string[]; subject: string } | undefined;
 /** Ceiling on ONE read_document reply — matches the read_file ceiling. This is an on-demand read, not
  * the per-turn excerpt, so it can be generous: it's paid once, when the model actually asks. */
 const MAX_DOCUMENT_READ_CHARS = 60_000;
@@ -3083,9 +3087,19 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             readEmail: async (id: string) => gmailReadEmail(transport, await tok(), id),
             readAttachment: makeReadAttachment(transport, tok),
             // Draft an email (auto-run — a draft just lands in Gmail Drafts for the reader to send).
-            draftEmail: async (d) => createDraft(transport, await tok(), d),
+            draftEmail: async (d) => {
+              const r = await createDraft(transport, await tok(), d);
+              // Remember it for the DRAFT IN PROGRESS block: the id would otherwise survive only in
+              // this one tool result, and a later "make it warmer" would draft a second copy.
+              if (r.id) lastDraft = { id: r.id, to: d.to, subject: d.subject };
+              return r;
+            },
             listDrafts: async (max) => listDrafts(transport, await tok(), max),
-            editDraft: async (draftId, patch) => editDraft(transport, await tok(), draftId, patch),
+            editDraft: async (draftId, patch) => {
+              const d = await editDraft(transport, await tok(), draftId, patch);
+              lastDraft = { id: d.id, to: d.to, subject: d.subject };
+              return d;
+            },
             listEvents: async (o: { max?: number; timeMin?: string; timeMax?: string; query?: string }) =>
               listEvents(transport, await tok(), o),
             createEvent: async (ev) => createEvent(transport, await tok(), ev),
@@ -3975,7 +3989,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
     // reachable with read_document and editable with edit_document, so the cap costs nothing but a
     // round-trip now.
     const activeDocBlock = buildActiveDocumentBlock(activeDocument, activeDocBudget(budgets.history));
-    const volatile = [storyStateBlock, guideBlock, ledgerBlock, activeDocBlock].filter(Boolean).join("\n\n");
+    const draftBlock = buildActiveDraftBlock(lastDraft);
+    const volatile = [storyStateBlock, guideBlock, ledgerBlock, activeDocBlock, draftBlock].filter(Boolean).join("\n\n");
     // G3 — in app-managed mode, GRAMMAR-CONSTRAIN the reply to the tool the active step's contract
     // demands so a stubborn small model can't narrate instead of acting. Only for a concrete tool need
     // (the step's `needs` token is a tool name); text/narration steps stay free. Local-server only — the
