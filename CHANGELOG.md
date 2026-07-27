@@ -82,10 +82,12 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   told where it stopped and how far the file goes, so it keeps reading until it has the part it needs.
   The old advice for long files was to run a shell command, which isn't available unless you've
   enabled it.
-- **The assistant no longer offers to change spreadsheet cells it can't reach** — it was told it could
-  edit cells from the main chat, but those tools only exist in the spreadsheet's own chat in the data
-  view. Calls to them silently did nothing, so it could report a change that never happened. It now
-  builds the sheet as before and points you to the data view for cell-level edits.
+- **The assistant can edit spreadsheet cells from the main chat** — it could build you a sheet and then
+  not touch it, so "make the margin column a formula" meant rebuilding the whole thing and losing
+  anything you'd typed in since. Worse, it had been told it *could* edit cells from there, and those
+  calls silently did nothing — so it would report a change that never happened. It can now set a cell,
+  add a computed column, and read the sheet back with the cell references shown, all from the chat
+  you're already in. It reads before it writes, so your own edits aren't overwritten.
 - **A long-running task stops quietly losing its earliest notes** — accumulated task context is capped,
   and the cap used to cut mid-sentence, leaving a fragment that read like a real note with no sign
   anything had been lost. It now drops whole notes and says how many.

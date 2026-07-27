@@ -75,6 +75,13 @@ export function routePendingTool(tool: string, f: ToolAutoFlags): ToolAutoRoute 
       // edit_file is the same sandboxed workspace write as write_file (search/replace in place vs full
       // rewrite) — it must route identically, or it would default to "ask" while write_file runs freely.
       return "host";
+    case "set_cell":
+    case "add_formula_column":
+    case "read_data":
+      // The reader's OWN open spreadsheet, in the app's own data view — no filesystem, no network, and
+      // undoable by typing over the cell. Gating these behind a click would make a sheet the assistant
+      // just built un-editable without one approval per cell.
+      return "host";
     case "stitch_videos":
       // Joining clips the reader already has is a local, non-destructive file operation (no new
       // rendering, nothing leaves the machine) — no click needed.

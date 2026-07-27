@@ -3773,7 +3773,11 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         slash.call.tool === "delegate" ||
         slash.call.tool === "send_email" ||
         slash.call.tool === "delegate_coding_task" ||
-        slash.call.tool === "spawn_coding_agents"
+        slash.call.tool === "spawn_coding_agents" ||
+        // The open spreadsheet lives in the host's book state, so its cell tools run there too.
+        slash.call.tool === "set_cell" ||
+        slash.call.tool === "add_formula_column" ||
+        slash.call.tool === "read_data"
       ) {
         post({ type: "buddyDone", requestId: msg.requestId, text: "", transcript: [], pendingTool: slash.call });
         return;

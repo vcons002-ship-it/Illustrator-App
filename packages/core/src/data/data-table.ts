@@ -330,6 +330,41 @@ export function renameColumn(table: DataTable, index: number, name: string): Dat
 }
 
 /** A compact text preview of a table (header + first `maxRows`) for a model/summary. */
+/** 0-based column index → its Excel letters (0 → "A", 26 → "AA"). The inverse of lettersToColumn. PURE. */
+export function columnToLetters(index: number): string {
+  let n = index;
+  let out = "";
+  do {
+    out = String.fromCharCode(65 + (n % 26)) + out;
+    n = Math.floor(n / 26) - 1;
+  } while (n >= 0);
+  return out;
+}
+
+/**
+ * The table rendered WITH its Excel coordinates — column letters on the header and the Excel row
+ * number down the side. `tableToText` deliberately omits these (it feeds prose summaries), but an
+ * agent that is going to call set_cell needs the exact ref for each cell; without them it has to
+ * count columns by hand, which is precisely how an edit lands one column over. `from`/`to` are
+ * 1-based DATA rows, inclusive, so a long sheet can be read in pieces. PURE.
+ */
+export function tableToRefText(table: DataTable, from = 1, to = table.rows.length): string {
+  const start = Math.max(1, from);
+  const end = Math.min(to, table.rows.length);
+  const width = String(end + 1).length;
+  const gutter = " ".repeat(width);
+  const head = `${gutter} | ${table.columns.map((c, i) => `${columnToLetters(i)}: ${c.name}`).join(" | ")}`;
+  const body = table.rows
+    .slice(start - 1, end)
+    .map((r, i) => {
+      // Data row 1 is Excel row 2 — the header owns row 1, and that offset is what set_cell expects.
+      const excelRow = String(start + i + 1).padStart(width);
+      return `${excelRow} | ${r.map((v) => (v === null ? "" : String(v))).join(" | ")}`;
+    })
+    .join("\n");
+  return body ? `${head}\n${body}` : head;
+}
+
 export function tableToText(table: DataTable, maxRows = 20): string {
   const head = table.columns.map((c) => c.name).join(" | ");
   const body = table.rows

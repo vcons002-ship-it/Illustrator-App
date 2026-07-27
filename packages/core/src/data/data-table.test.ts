@@ -3,6 +3,8 @@ import {
   addColumn,
   addRow,
   createDataTable,
+  columnToLetters,
+  tableToRefText,
   dataTableFromGrid,
   parseA1,
   removeColumn,
@@ -125,6 +127,41 @@ describe("A1 references + fill-down formulas", () => {
     const t = setColumnFormula(addColumn(base, "Double"), 2, "B{r}*2");
     expect(t.formulas).toEqual({ "0,2": "B2*2", "1,2": "B3*2" });
     expect(setColumnFormula(base, 9, "x")).toBe(base); // out-of-range column: no-op
+  });
+});
+
+describe("tableToRefText (cells with their A1 coordinates)", () => {
+  const t = createDataTable(
+    [{ name: "Category" }, { name: "Budget" }],
+    [
+      ["Rent", 1500],
+      ["Food", 400],
+      ["Gas", 90],
+    ],
+  );
+
+  it("labels columns with letters and rows with their EXCEL number", () => {
+    // Data row 1 is Excel row 2 — the header owns row 1, and that's the offset set_cell expects, so
+    // getting it wrong here would aim every edit one row off.
+    const out = tableToRefText(t);
+    expect(out.split("\n")[0]).toContain("A: Category");
+    expect(out.split("\n")[0]).toContain("B: Budget");
+    expect(out).toContain("2 | Rent | 1500");
+    expect(out).toContain("4 | Gas | 90");
+    // parseA1 agrees with what was printed: "B4" is Gas's budget.
+    expect(parseA1(t, "B4")).toEqual({ row: 2, col: 1 });
+  });
+
+  it("windows to a row range and clamps one that overruns", () => {
+    expect(tableToRefText(t, 2, 2)).toContain("3 | Food | 400");
+    expect(tableToRefText(t, 2, 2)).not.toContain("Rent");
+    expect(tableToRefText(t, 3, 99)).toContain("4 | Gas | 90");
+    // An empty table still shows its header, so the model can see the shape it's writing into.
+    expect(tableToRefText(createDataTable([{ name: "X" }], []))).toContain("A: X");
+  });
+
+  it("columnToLetters follows Excel past Z", () => {
+    expect([0, 1, 25, 26, 27, 51, 52].map(columnToLetters)).toEqual(["A", "B", "Z", "AA", "AB", "AZ", "BA"]);
   });
 });
 

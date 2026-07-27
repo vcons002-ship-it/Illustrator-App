@@ -35,6 +35,7 @@ import {
   setTableCell,
   setColumnFormula,
   parseA1,
+  tableToRefText,
   addRow,
   removeRow,
   addColumn,
@@ -4645,6 +4646,61 @@ export function App() {
     else if (call.tool === "edit_file") void runEditFile(call);
     else if (call.tool === "delegate_coding_task") void runDelegateCodingTask(call);
     else if (call.tool === "run_command") void approveRunCommand(call);
+    else if (call.tool === "set_cell" || call.tool === "add_formula_column" || call.tool === "read_data") {
+      void runBuddyDataTool(call);
+    }
+  };
+
+  // set_cell / add_formula_column / read_data against the OPEN spreadsheet, from the buddy chat. The
+  // reader chat has had these all along (runChatDataEdit); the buddy could BUILD a sheet and then not
+  // touch it, so "change the margin column" meant rebuilding the whole thing — losing whatever the
+  // reader had typed in. Local, in-app, and undoable by typing over the cell, so it runs without a
+  // click (see routePendingTool).
+  const runBuddyDataTool = async (
+    call: Extract<BuddyToolCall, { tool: "set_cell" | "add_formula_column" | "read_data" }>,
+  ): Promise<void> => {
+    setBuddyPendingTool(undefined);
+    const pre = pendingBuddyTranscript.current;
+    const preHistory = pendingBuddyHistory.current;
+    pendingBuddyTranscript.current = [];
+    pendingBuddyHistory.current = [];
+    const open = bookRef.current;
+    const multi = !!(open?.dataSheets && open.dataSheets.length > 1);
+    const target = multi ? open!.dataSheets![0]!.table : open?.data;
+    let payload: BuddyToolResultPayload;
+    if (!open || !target) {
+      payload = call.tool === "read_data" ? {} : { dataEdit: { ok: false, error: "no spreadsheet is open" } };
+    } else if (call.tool === "read_data") {
+      const from = Math.max(1, call.from ?? 1);
+      const to = Math.min(call.to ?? target.rows.length, target.rows.length);
+      payload = {
+        dataText: {
+          title: open.title,
+          text: tableToRefText(target, from, to),
+          rows: target.rows.length,
+          from,
+          to: Math.max(to, from),
+        },
+      };
+    } else {
+      const sheetIndex = multi ? 0 : null;
+      if (call.tool === "set_cell") {
+        const at = parseA1(target, call.ref);
+        if (!at) {
+          payload = { dataEdit: { ok: false, error: `"${call.ref}" isn't an editable data cell in this sheet` } };
+        } else {
+          const raw = call.formula !== undefined ? `=${call.formula}` : String(call.value ?? "");
+          mutateBookTable(sheetIndex, (t) => setTableCell(t, at.row, at.col, raw));
+          payload = { dataEdit: { ok: true, summary: `Set ${call.ref} to ${raw || "(empty)"}` } };
+        }
+      } else {
+        mutateBookTable(sheetIndex, (t) => setColumnFormula(addColumn(t, call.name), t.columns.length, call.formula));
+        payload = { dataEdit: { ok: true, summary: `Added a computed column “${call.name}” = ${call.formula}` } };
+      }
+      const edit = payload.dataEdit;
+      appendBuddy({ role: "tool", text: edit?.ok ? `✎ ${edit.summary}` : `⚠ ${edit?.error ?? "sheet edit failed"}`, turns: [] });
+    }
+    await dispatchBuddyTurn([...preHistory, ...pre], formatBuddyToolResult(call, payload));
   };
 
   // Run an approved generate_image call: render it, show it, and feed the outcome back.

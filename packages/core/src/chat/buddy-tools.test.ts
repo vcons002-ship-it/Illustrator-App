@@ -25,6 +25,7 @@ import {
   toolFailureDirective,
   toolLimitNudge,
 } from "./buddy-tools.js";
+import { routePendingTool } from "./tool-approval.js";
 
 describe("parseBuddyToolCall — set_plan steps", () => {
   it("accepts bare-string steps (legacy) with no stepDetails", () => {
@@ -1330,18 +1331,70 @@ describe("read_file line ranges (a file bigger than one read)", () => {
   });
 });
 
-describe("spreadsheet cell edits belong to the data view's chat", () => {
-  it("stops promising set_cell, which the assistant doesn't have here (calls to it vanish silently)", () => {
-    // An unparseable tool name is DROPPED, so telling the model to use set_cell here produced a reply
-    // claiming a cell had changed when nothing had.
-    expect(parseBuddyToolCall('{"tool":"set_cell","ref":"B2","value":5}')).toBeUndefined();
+describe("spreadsheet cell edits from the assistant's own chat", () => {
+  it("parses set_cell (value, formula, and clearing) and rejects a cell with nothing to put in it", () => {
+    expect(parseBuddyToolCall('{"tool":"set_cell","ref":"B2","value":5}')).toEqual({ tool: "set_cell", ref: "B2", value: 5 });
+    // 0 and "" are real values, not "missing" — ?? rather than || decides this.
+    expect(parseBuddyToolCall('{"tool":"set_cell","ref":"B2","value":0}')).toEqual({ tool: "set_cell", ref: "B2", value: 0 });
+    expect(parseBuddyToolCall('{"tool":"set_cell","ref":"B2","value":""}')).toEqual({ tool: "set_cell", ref: "B2", value: "" });
+    expect(parseBuddyToolCall('{"tool":"set_cell","ref":"C2","formula":"A2*B2"}')).toEqual({ tool: "set_cell", ref: "C2", formula: "A2*B2" });
+    expect(parseBuddyToolCall('{"tool":"set_cell","ref":"C2"}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"set_cell","value":5}')).toBeUndefined();
+  });
+
+  it("parses add_formula_column and read_data (with an optional row window)", () => {
+    expect(parseBuddyToolCall('{"tool":"add_formula_column","name":"Margin","formula":"B{r}-C{r}"}')).toEqual({
+      tool: "add_formula_column",
+      name: "Margin",
+      formula: "B{r}-C{r}",
+    });
+    expect(parseBuddyToolCall('{"tool":"add_formula_column","name":"x"}')).toBeUndefined();
+    expect(parseBuddyToolCall('{"tool":"read_data"}')).toEqual({ tool: "read_data" });
+    expect(parseBuddyToolCall('{"tool":"read_data","from":50,"to":80}')).toEqual({ tool: "read_data", from: 50, to: 80 });
+  });
+
+  it("runs without an approval click — a sheet it just built must not need one edit per cell", () => {
+    const off = { fileAccessGranted: false, screenCaptureGranted: false, autonomousFileSearch: false, fullAutonomy: false, allowCommands: false, autonomousWorkspace: false };
+    expect(routePendingTool("set_cell", off)).toBe("host");
+    expect(routePendingTool("add_formula_column", off)).toBe("host");
+    expect(routePendingTool("read_data", off)).toBe("host");
+  });
+
+  it("points a failed edit at read_data, and never at rebuilding the sheet", () => {
+    const bad = formatBuddyToolResult(
+      { tool: "set_cell", ref: "Z9", value: 1 },
+      { dataEdit: { ok: false, error: '"Z9" isn\'t an editable data cell in this sheet' } },
+    );
+    expect(bad).toContain("read_data");
+    expect(bad).not.toContain("create_spreadsheet");
+    expect(formatBuddyToolResult({ tool: "set_cell", ref: "B2", value: 1 }, {})).toContain("no spreadsheet is open");
+    const ok = formatBuddyToolResult({ tool: "set_cell", ref: "B2", value: 1 }, { dataEdit: { ok: true, summary: "Set B2 to 1" } });
+    expect(ok).toContain("Set B2 to 1");
+  });
+
+  it("read_data reports the row window and how to read on", () => {
+    const out = formatBuddyToolResult(
+      { tool: "read_data", from: 1, to: 2 },
+      { dataText: { title: "Budget", text: "  | A: Item | B: Cost\n2 | Rent | 1500", rows: 40, from: 1, to: 2 } },
+    );
+    expect(out).toContain("rows 1–2 of 40");
+    expect(out).toContain('{"tool":"read_data","from":3}');
+    expect(out).toContain("A1 refs to aim set_cell at");
+  });
+
+  it("tells the model to edit the sheet cell by cell, never to rebuild it", () => {
     const g = buildBuddySystemPrompt({ persona: "assistant", library: [] });
-    expect(g).toMatch(/belongs? to the data view's own chat, not to you/);
+    expect(g).toContain('"tool":"set_cell"');
+    expect(g).toContain('"tool":"add_formula_column"');
+    expect(g).toContain('"tool":"read_data"');
+    // Rebuilding is the destructive alternative, so it has to be named as forbidden.
+    expect(g).toMatch(/never rebuild it with another create_spreadsheet/i);
     const made = formatBuddyToolResult(
       { tool: "create_spreadsheet", title: "Budget", columns: [{ name: "Item" }] },
       { opened: { title: "Budget", chapters: 1, pages: 1, visuals: false } },
     );
-    expect(made).toContain("You do NOT have those here");
+    expect(made).toContain("set_cell");
+    expect(made).toMatch(/NEVER call create_spreadsheet again/);
   });
 });
 

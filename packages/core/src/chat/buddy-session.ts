@@ -249,7 +249,10 @@ type HostToolName =
   | "delegate"
   | "send_email"
   | "delegate_coding_task"
-  | "spawn_coding_agents";
+  | "spawn_coding_agents"
+  | "set_cell"
+  | "add_formula_column"
+  | "read_data";
 const HOST_TOOLS = new Set<HostToolName>([
   "generate_image",
   "generate_video",
@@ -270,6 +273,11 @@ const HOST_TOOLS = new Set<HostToolName>([
   "send_email",
   // spawn_coding_agents needs host orchestration (approval, git worktrees, merge) — handed up.
   "spawn_coding_agents",
+  // The open spreadsheet lives in the host's book state, not the worker's — the data-view grid and
+  // the persisted book are both there, so a cell edit has to happen where the table is.
+  "set_cell",
+  "add_formula_column",
+  "read_data",
   // delegate_coding_task spawns an external agent in the workspace (desktop I/O) — handed up.
   "delegate_coding_task",
 ]);
@@ -615,7 +623,7 @@ export async function runBuddyTurn(opts: {
 /** Execute one auto-run buddy tool (everything but generate_image). Exported for
  * the slash-command path, which runs tools directly without an LLM round. */
 export async function runBuddyTool(
-  call: Exclude<BuddyToolCall, { tool: "generate_image" | "generate_video" | "generate_long_video" | "stitch_videos" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" }>,
+  call: Exclude<BuddyToolCall, { tool: "generate_image" | "generate_video" | "generate_long_video" | "stitch_videos" | "find_files" | "run_command" | "write_file" | "edit_file" | "screenshot" | "plan_task" | "prep_order" | "tv_chart" | "delegate" | "spawn_agents" | "send_email" | "delegate_coding_task" | "spawn_coding_agents" | "set_cell" | "add_formula_column" | "read_data" }>,
   deps: BuddyDeps,
 ): Promise<BuddyToolResultPayload> {
   try {
