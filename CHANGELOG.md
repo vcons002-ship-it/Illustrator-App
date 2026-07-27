@@ -5,6 +5,22 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ## July 2026
 
+### Scheduled actions
+
+- **A scheduled action set up while working a task now belongs to that task** — and runs in that task's
+  own chat, picking up its history and checklist, instead of starting cold in the shared ⏰ Scheduled
+  window. Attaching it was previously left entirely to the assistant remembering to, which it usually
+  didn't, so almost everything ended up in the one shared chat regardless of what it was for.
+- **You can move an existing action onto a task** — ⏰ Scheduled now has a "Runs on:" picker on each
+  action. Actions created before this stay unattached, because nothing in them reliably says which
+  task they belong to and guessing would be worse; this is how you attach them.
+- **The assistant is told where an action will run** when it schedules one, so it can say so — and
+  notice when something meant for a task isn't attached to one.
+- **Actions on a finished task stop running** — an action attached to a task you've completed, ignored
+  or removed used to keep firing, reopening that task's chat to chase work that no longer mattered.
+  It's skipped rather than cancelled, so reopening the task (or a repeating one coming round again)
+  brings its checks straight back.
+
 ### Tasks & chats
 
 - **Planning now sets up its own follow-through** — when the assistant plans a task, it can also ask

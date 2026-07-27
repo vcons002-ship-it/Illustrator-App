@@ -228,7 +228,15 @@ export type CmdToDesktop =
   // Phone ⏰ Scheduled action → apply on the desktop (it owns the schedule store AND the runner, so a
   // phone-local write would be invisible to the thing that actually fires them, then clobbered by the
   // next vrsync:scheduled push).
-  | { type: "vrcmd:scheduled"; command: { action: "toggle"; id: string; enabled: boolean } | { action: "delete"; id: string } }
+  | {
+      type: "vrcmd:scheduled";
+      command:
+        | { action: "toggle"; id: string; enabled: boolean }
+        | { action: "delete"; id: string }
+        // Move an action onto a task (or off one, with planId absent) — it decides which chat the
+        // action runs in, so the phone needs it as much as the desktop.
+        | { action: "bind"; id: string; planId?: string };
+    }
   // Landing-page chat actions the phone relays — the desktop owns the chat (it has the models + the
   // working folder), so the phone never runs a turn locally: it relays the intent, the desktop runs
   // its existing buddy handler, and the result flows back via the `vrsync:chat` mirror.

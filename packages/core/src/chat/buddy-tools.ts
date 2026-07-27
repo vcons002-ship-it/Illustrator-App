@@ -3288,7 +3288,10 @@ export interface BuddyToolResultPayload {
   /** add_task_group outcome: the parent task title + how many sub-tasks were nested under it. */
   taskGroup?: { title: string; count: number };
   /** Scheduled-task outcomes. */
-  scheduled?: { id: string; title: string; describe: string };
+  /** `planTitle` is the task this action was bound to — absent when it's a standalone action. It
+   * decides WHERE the action runs (that task's chat vs the shared ⏰ Scheduled one), so it's reported
+   * back rather than left implicit. */
+  scheduled?: { id: string; title: string; describe: string; planTitle?: string };
   scheduledList?: { id: string; title: string; describe: string; enabled: boolean }[];
   /** Task-plan execution outcomes. */
   taskAction?: { planTitle: string; nextStep?: string; completed?: boolean };
@@ -3806,10 +3809,18 @@ function formatBuddyToolResultBody(call: BuddyToolCall, result: BuddyToolResultP
       : "[add_task_group did nothing]";
   }
   if (call.tool === "schedule_task") {
-    return result.scheduled
-      ? `[scheduled "${result.scheduled.title}" — ${result.scheduled.describe}. It runs automatically while the app is ` +
-          "open; confirm it to the reader and mention they can manage it in the ⏰ Scheduled panel.]"
-      : "[schedule_task did nothing]";
+    const s = result.scheduled;
+    if (!s) return "[schedule_task did nothing]";
+    // Say WHERE it will run. The difference is not cosmetic: a bound action resumes inside the task's
+    // own chat with its history and checklist, an unbound one starts cold in the shared window.
+    const where = s.planTitle
+      ? ` It runs on the task "${s.planTitle}", in that task's own chat, so each run picks up where the last left off.`
+      : " It runs in the shared ⏰ Scheduled chat, with no task history behind it — if this is really part of a task, " +
+        'say so and re-schedule it with that task\'s "planId" so it keeps its thread.';
+    return (
+      `[scheduled "${s.title}" — ${s.describe}.${where} It runs automatically while the app is open; confirm it to ` +
+      "the reader and mention they can manage it in the ⏰ Scheduled panel.]"
+    );
   }
   if (call.tool === "list_scheduled") {
     const list = result.scheduledList ?? [];

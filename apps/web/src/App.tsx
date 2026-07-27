@@ -79,6 +79,7 @@ import {
   deleteScheduledTask,
   advanceSchedule,
   dueScheduledTasks,
+  runnableScheduledTasks,
   describeSchedule,
   type ScheduledTask,
   loadPriceAlerts,
@@ -1801,6 +1802,24 @@ export function App() {
     },
     [libraryStore, refreshScheduled, isRemoteClient, sendAppSync],
   );
+  /** Move a scheduled action onto a task (or off one). This is the only way to fix an action created
+   * before binding existed: nothing in the action reliably says which task it belongs to, so guessing
+   * would be worse than asking. Binding changes WHERE it runs from the next fire onwards. */
+  const bindScheduledToTask = useCallback(
+    async (id: string, planId: string | undefined) => {
+      if (isRemoteClient) {
+        sendAppSync({ type: "vrcmd:scheduled", command: { action: "bind", id, ...(planId ? { planId } : {}) } });
+        return;
+      }
+      const t = (await loadScheduledTasks(libraryStore)).find((x) => x.id === id);
+      if (!t) return;
+      // Strip the key rather than storing undefined — normalizeScheduledTask treats absent as loose.
+      const { planId: _drop, ...rest } = t;
+      await upsertScheduledTask(libraryStore, { ...rest, ...(planId ? { planId } : {}) });
+      refreshScheduled();
+    },
+    [libraryStore, refreshScheduled, isRemoteClient, sendAppSync],
+  );
   useEffect(() => {
     refreshScheduled();
   }, [refreshScheduled]);
@@ -1868,14 +1887,32 @@ export function App() {
     () => Object.fromEntries(taskPlans.map((p) => [p.id, p.title])),
     [taskPlans],
   );
+  /** The tasks an action can be bound to, for ⏰ Scheduled's picker. */
+  const scheduledTaskOptions = useMemo(
+    () => taskPlans.map((p) => ({ id: p.id, title: p.title })),
+    [taskPlans],
+  );
   /** DESKTOP: run a ⏰ Scheduled action the phone relayed, then re-push the mirrored list. */
   const applyScheduledCommand = useCallback(
-    (command: { action: "toggle"; id: string; enabled: boolean } | { action: "delete"; id: string }) => {
+    (
+      command:
+        | { action: "toggle"; id: string; enabled: boolean }
+        | { action: "delete"; id: string }
+        | { action: "bind"; id: string; planId?: string },
+    ) => {
       void (async () => {
         if (command.action === "delete") await deleteScheduledTask(libraryStore, command.id).catch(() => {});
         else {
           const t = (await loadScheduledTasks(libraryStore)).find((x) => x.id === command.id);
-          if (t) await upsertScheduledTask(libraryStore, { ...t, enabled: command.enabled }).catch(() => {});
+          if (!t) {
+            /* gone already — nothing to change */
+          } else if (command.action === "toggle") {
+            await upsertScheduledTask(libraryStore, { ...t, enabled: command.enabled }).catch(() => {});
+          } else {
+            // Drop the key rather than setting undefined — absent is what "not on a task" means.
+            const { planId: _drop, ...rest } = t;
+            await upsertScheduledTask(libraryStore, { ...rest, ...(command.planId ? { planId: command.planId } : {}) }).catch(() => {});
+          }
         }
         refreshScheduled();
       })();
@@ -6079,13 +6116,18 @@ export function App() {
         const tasks = await loadScheduledTasks(libraryStore);
         const due = dueScheduledTasks(tasks);
         if (due.length === 0) return;
-        const task = due[0]!;
+        const plans = await loadTaskPlans(libraryStore);
+        // Skip actions whose task is finished — see runnableScheduledTasks for why they're skipped
+        // rather than cancelled.
+        const runnable = runnableScheduledTasks(due, plans);
+        if (runnable.length === 0) return;
+        const task = runnable[0]!;
         // WHERE this runs. A task-BOUND action runs in that task's own chat, so a recurring job that
         // accumulates over days (chasing RSVPs, watching for replies) resumes with the task's history
         // and checklist instead of re-deriving everything from its prompt each time. Everything else
         // runs in the generic ⏰ Scheduled chat. A bound task that's since been deleted falls back
         // there rather than being silently dropped.
-        const boundPlan = task.planId ? (await loadTaskPlans(libraryStore)).find((p) => p.id === task.planId) : undefined;
+        const boundPlan = task.planId ? plans.find((p) => p.id === task.planId) : undefined;
         const targetId = boundPlan?.sessionId ?? (task.planId && boundPlan ? undefined : SCHEDULED_CHAT_ID);
         // Not in the target chat yet → open it and let the NEXT tick fire. Loading a session's history
         // is async, and sending before it lands would hand the model the previous conversation as
@@ -8769,6 +8811,8 @@ export function App() {
           taskTitles={scheduledTaskTitles}
           onToggle={(id, enabled) => void toggleScheduled(id, enabled)}
           onDelete={(id) => void removeScheduled(id)}
+          onBindTask={(id, planId) => void bindScheduledToTask(id, planId)}
+          taskOptions={scheduledTaskOptions}
           onClose={() => setShowScheduled(false)}
         />
       )}

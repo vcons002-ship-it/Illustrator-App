@@ -178,7 +178,7 @@ export interface BuddyDeps {
   /** Create a PARENT to-do with nested SUB-TASKS (Google Tasks + a mirrored in-app plan). */
   addTaskGroup?: (group: { title: string; due?: string; subtasks: { title: string; due?: string }[] }) => Promise<{ title: string; count: number }>;
   /** Scheduled/periodic tasks — created/listed/cancelled over the shared store. */
-  scheduleTask?: (call: Extract<BuddyToolCall, { tool: "schedule_task" }>) => Promise<{ id: string; title: string; describe: string }>;
+  scheduleTask?: (call: Extract<BuddyToolCall, { tool: "schedule_task" }>) => Promise<{ id: string; title: string; describe: string; planTitle?: string }>;
   listScheduled?: () => Promise<{ id: string; title: string; describe: string; enabled: boolean }[]>;
   cancelScheduled?: (id: string) => Promise<boolean>;
   /** Task-plan execution (the orchestrator) — wired over the shared store. */

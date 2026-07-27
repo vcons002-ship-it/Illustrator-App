@@ -17,6 +17,13 @@ export interface ScheduledTasksPanelProps {
   taskTitles?: Record<string, string>;
   onToggle: (id: string, enabled: boolean) => void;
   onDelete: (id: string) => void;
+  /** Move an action onto a task (or off one, with `undefined`). Where an action is bound decides
+   * WHERE it runs — on its task, it resumes in that task's chat with its history; loose, it starts
+   * cold in the shared Scheduled chat. Actions made before binding existed are all loose, and there's
+   * no safe way to guess which task they belong to, so this is how they get attached. */
+  onBindTask?: (id: string, planId: string | undefined) => void;
+  /** Tasks that an action can be bound to (id + title), for the picker. */
+  taskOptions?: { id: string; title: string }[];
   onClose: () => void;
 }
 
@@ -54,6 +61,8 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
   taskTitles = {},
   onToggle,
   onDelete,
+  onBindTask,
+  taskOptions,
   onClose,
 }: ScheduledTasksPanelProps) {
   const groups = useMemo(
@@ -150,6 +159,44 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                     <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
                       {t.prompt}
                     </div>
+                    {onBindTask && (taskOptions?.length ?? 0) > 0 ? (
+                      <label
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          fontSize: 11,
+                          opacity: 0.75,
+                          marginTop: 5,
+                        }}
+                      >
+                        Runs on:
+                        <select
+                          value={t.planId ?? ""}
+                          onChange={(e) =>
+                            onBindTask(t.id, e.target.value || undefined)
+                          }
+                          style={{
+                            background: "#1b1b1b",
+                            color: "inherit",
+                            border: "1px solid #3a3a3a",
+                            borderRadius: 5,
+                            fontSize: 11,
+                            padding: "2px 4px",
+                            maxWidth: 240,
+                          }}
+                        >
+                          <option value="">
+                            Nothing — the shared Scheduled chat
+                          </option>
+                          {taskOptions!.map((o) => (
+                            <option key={o.id} value={o.id}>
+                              {o.title}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
                     <div style={{ fontSize: 11, opacity: 0.5, marginTop: 3 }}>
                       Next:{" "}
                       {t.enabled

@@ -3352,19 +3352,32 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       // Scheduled/periodic tasks over the shared store (the host's while-open loop fires
       // the due ones into the chat).
       scheduleTask: async (call) => {
+        // BIND TO THE CHAT'S TASK BY DEFAULT. An action scheduled while working a task belongs to
+        // that task, and `planId` is what makes it run in the task's own chat rather than the generic
+        // ⏰ Scheduled one. Leaving that to the model meant it was usually omitted — the prompt asks
+        // for it, but nothing enforced it — so actions set up inside a task ran cold in the shared
+        // window, without the task's history or checklist. Same fallback as saveTaskContext:
+        // planId absent = the chat's active task. An explicit planId still wins.
+        const planId = call.planId ?? msg.taskPlanId;
         const task = normalizeScheduledTask({
           title: call.title,
           prompt: call.prompt,
           rule: call.rule,
           ...(call.time ? { time: call.time } : {}),
           ...(call.date ? { date: call.date } : {}), // one-time run day
-          ...(call.planId ? { planId: call.planId } : {}), // bound task: runs in that task's chat
+          ...(planId ? { planId } : {}), // bound task: runs in that task's chat
           ...(call.weekday !== undefined ? { weekday: call.weekday } : {}),
           ...(call.dayOfMonth !== undefined ? { dayOfMonth: call.dayOfMonth } : {}),
         });
         await upsertScheduledTask(store, task);
         post({ type: "buddyScheduledChanged", requestId: msg.requestId });
-        return { id: task.id, title: task.title, describe: describeSchedule(task) };
+        const bound = task.planId ? (await loadTaskPlans(store)).find((p) => p.id === task.planId) : undefined;
+        return {
+          id: task.id,
+          title: task.title,
+          describe: describeSchedule(task),
+          ...(bound ? { planTitle: bound.title } : {}),
+        };
       },
       listScheduled: async () =>
         (await loadScheduledTasks(store)).map((t) => ({ id: t.id, title: t.title, describe: describeSchedule(t), enabled: t.enabled })),

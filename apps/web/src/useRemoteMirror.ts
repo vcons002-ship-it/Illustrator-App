@@ -92,7 +92,12 @@ export interface RemoteMirrorDeps {
   /** vrcmd:chatPlanClear — the phone dismissed the working checklist; clear plan+workflow+memos. */
   clearBuddyPlan: () => void;
   /** DESKTOP: apply a phone-relayed ⏰ Scheduled action (the desktop owns the store + the runner). */
-  applyScheduledCommand: (command: { action: "toggle"; id: string; enabled: boolean } | { action: "delete"; id: string }) => void;
+  applyScheduledCommand: (
+    command:
+      | { action: "toggle"; id: string; enabled: boolean }
+      | { action: "delete"; id: string }
+      | { action: "bind"; id: string; planId?: string },
+  ) => void;
 
   // Host-owned refs the handler reads (declared in App.tsx, passed in so the single registration
   // sees live values).
