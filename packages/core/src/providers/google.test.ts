@@ -27,6 +27,7 @@ import {
   parseCalendarEvent,
   parseGmailMessage,
   parseTask,
+  sameDraftTarget,
   GOOGLE_SCOPES,
 } from "./google.js";
 import type { Transport, TransportRequest, TransportResponse } from "./transport/transport.js";
@@ -423,6 +424,31 @@ class SequencedTransport implements Transport {
     });
   }
 }
+
+describe("sameDraftTarget (is this re-draft actually a revision?)", () => {
+  const open = { to: ["Bo <bo@x.com>"], subject: "Party" };
+
+  it("matches the same people about the same thing, however the model spells it", () => {
+    // A re-draft routinely writes a bare address where the first wrote a display name, and adds or
+    // drops "Re:" freely. Both are the same email, and treating them as different is what leaves two.
+    expect(sameDraftTarget(open, { to: ["bo@x.com"], subject: "Party" })).toBe(true);
+    expect(sameDraftTarget(open, { to: ["BO@X.COM"], subject: "  party  " })).toBe(true);
+    expect(sameDraftTarget(open, { to: ["bo@x.com"], subject: "Re: Party" })).toBe(true);
+    expect(sameDraftTarget({ to: ["bo@x.com"], subject: "Re: Party" }, { to: ["bo@x.com"], subject: "Party" })).toBe(true);
+  });
+
+  it("does NOT fold together a genuinely different email", () => {
+    expect(sameDraftTarget(open, { to: ["bo@x.com"], subject: "Invoice" })).toBe(false); // other subject
+    expect(sameDraftTarget(open, { to: ["cy@x.com"], subject: "Party" })).toBe(false); // other person
+    expect(sameDraftTarget(open, { to: ["bo@x.com", "cy@x.com"], subject: "Party" })).toBe(false); // added a recipient
+    expect(sameDraftTarget({ to: [], subject: "Party" }, { to: [], subject: "Party" })).toBe(false); // no recipients: never match
+  });
+
+  it("ignores recipient ORDER and duplicates", () => {
+    const two = { to: ["bo@x.com", "cy@x.com"], subject: "Party" };
+    expect(sameDraftTarget(two, { to: ["Cy <cy@x.com>", "bo@x.com", "bo@x.com"], subject: "Party" })).toBe(true);
+  });
+});
 
 describe("drafts (read + edit in place)", () => {
   const draftMessage = (body: string, headers: { name: string; value: string }[]) => ({

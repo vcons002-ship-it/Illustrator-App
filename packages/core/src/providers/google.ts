@@ -443,6 +443,29 @@ export async function createDraft(
   return apiPost(transport, token, `${GMAIL}/drafts`, { message: { raw: buildRawEmail(d) } });
 }
 
+/**
+ * Do two drafts address the same email — same recipients, same subject?
+ *
+ * Used to catch "draft this again" when what was meant was "change the draft". Prompting alone can't
+ * be relied on for that: the model picks a tool, and picking `draft_email` for a revision leaves the
+ * reader with two drafts and no sign of which is current. Comparing the TARGET (who + what it's
+ * about) rather than the body is the point — the body is exactly what a revision changes. PURE.
+ */
+export function sameDraftTarget(
+  a: { to: string[]; subject: string },
+  b: { to: string[]; subject: string },
+): boolean {
+  const norm = (s: string) => s.trim().toLowerCase();
+  // Compare addresses, not display names: "Bo <bo@x.com>" and "bo@x.com" are the same person, and a
+  // re-draft routinely writes one where the first wrote the other.
+  const addrs = (list: string[]) =>
+    [...new Set(list.map((r) => norm(/<([^>]+)>/.exec(r)?.[1] ?? r)))].sort().join(",");
+  if (!addrs(a.to) || addrs(a.to) !== addrs(b.to)) return false;
+  // "Re: X" and "X" are the same thread to a person, and models add or drop the prefix freely.
+  const subj = (s: string) => norm(s).replace(/^(re|fwd?)\s*:\s*/i, "");
+  return subj(a.subject) === subj(b.subject);
+}
+
 /** A saved draft: its id plus the message as it currently stands, so it can be edited without the
  * caller having to remember what it wrote. */
 export interface DraftEmail extends EmailDraft {

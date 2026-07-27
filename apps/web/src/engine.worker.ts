@@ -130,6 +130,7 @@ import {
   patchEvent,
   createDraft,
   listDrafts,
+  sameDraftTarget,
   editDraft,
   sendEmail,
   listTasks,
@@ -3088,6 +3089,24 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             readAttachment: makeReadAttachment(transport, tok),
             // Draft an email (auto-run — a draft just lands in Gmail Drafts for the reader to send).
             draftEmail: async (d) => {
+              // REVISION GUARD. Being told to use edit_draft isn't enough — the model still reaches
+              // for draft_email on "change it", and the cost is a second draft in the reader's Gmail
+              // with nothing marking which is current. When this call targets the SAME people about
+              // the SAME subject as the draft already open, it IS that revision: update that draft
+              // instead of adding another. Only the target is compared, never the body — the body is
+              // what a revision changes. A genuinely different email (new recipient, new subject)
+              // drafts normally, and the result says which happened so the model can tell.
+              if (lastDraft && sameDraftTarget(lastDraft, d)) {
+                const updated = await editDraft(transport, await tok(), lastDraft.id, {
+                  to: d.to,
+                  subject: d.subject,
+                  body: d.body,
+                  ...(d.cc ? { cc: d.cc } : {}),
+                  ...(d.bcc ? { bcc: d.bcc } : {}),
+                });
+                lastDraft = { id: updated.id, to: updated.to, subject: updated.subject };
+                return { id: updated.id, updatedExisting: true };
+              }
               const r = await createDraft(transport, await tok(), d);
               // Remember it for the DRAFT IN PROGRESS block: the id would otherwise survive only in
               // this one tool result, and a later "make it warmer" would draft a second copy.

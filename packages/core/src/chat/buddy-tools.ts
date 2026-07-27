@@ -3375,7 +3375,7 @@ export interface BuddyToolResultPayload {
   attachment?: { filename: string; mimeType: string; text?: string; bytesLen: number; error?: string };
   /** draft_email / send_email outcome: whether it was sent (vs drafted) + ids/recipients for the
    * confirmation, or an error string when the write failed (e.g. a scope 403). */
-  email?: { sent: boolean; to: string[]; subject: string; id?: string; error?: string };
+  email?: { sent: boolean; to: string[]; subject: string; id?: string; updatedExisting?: boolean; error?: string };
   events?: CalendarEvent[];
   eventCreated?: CalendarEvent;
   eventUpdated?: CalendarEvent;
@@ -3840,10 +3840,16 @@ function formatBuddyToolResultBody(call: BuddyToolCall, result: BuddyToolResultP
       ? `[sent email "${e.subject}" to ${e.to.join(", ")}] Confirm it to the reader.`
       : // Hand the DRAFT id back, the same way create_event hands back an eventId. Without it the
         // draft can't be addressed afterwards, so "make it warmer" had nowhere to land.
-        `[drafted email "${e.subject}" to ${e.to.join(", ")} — it's saved in their Gmail Drafts to review and send` +
-          `${e.id ? `; draftId: ${e.id}` : ""}. To change it, use edit_draft with that id — do NOT draft_email again, ` +
-          "that leaves a second draft next to the first.] Tell the reader the draft is ready and they can review/send " +
-          "it (or ask you to send it).";
+        (e.updatedExisting
+          ? // The revision guard fired: this call targeted the draft already open, so it was UPDATED
+            // rather than added to. Said plainly, because the model asked for one thing and got another.
+            `[this was the SAME email as the draft already open, so it was UPDATED in place instead of ` +
+            `creating a second draft${e.id ? ` (draftId: ${e.id})` : ""}. Next time use edit_draft for a change ` +
+            "like this.] Tell the reader you updated the draft.\n"
+          : `[drafted email "${e.subject}" to ${e.to.join(", ")} — it's saved in their Gmail Drafts to review and send` +
+            `${e.id ? `; draftId: ${e.id}` : ""}. To change it, use edit_draft with that id — do NOT draft_email again, ` +
+            "that leaves a second draft next to the first.] Tell the reader the draft is ready and they can review/send " +
+            "it (or ask you to send it).");
   }
   if (call.tool === "list_drafts") {
     const drafts = result.drafts ?? [];

@@ -1417,6 +1417,25 @@ describe("editing a saved draft", () => {
     expect(g).toMatch(/ONLY for an email that does NOT exist yet/);
   });
 
+  it("says plainly when a re-draft was folded into the open draft rather than added", () => {
+    // The host's revision guard did something other than what the model asked for, so the result has
+    // to say so — otherwise the model reports "drafted a new email" when it in fact edited one.
+    const folded = formatBuddyToolResult(
+      { tool: "draft_email", to: ["bo@x.com"], subject: "Party", body: "See you at 7." },
+      { email: { sent: false, to: ["bo@x.com"], subject: "Party", id: "d1", updatedExisting: true } },
+    );
+    expect(folded).toContain("UPDATED in place instead of creating a second draft");
+    expect(folded).toContain("draftId: d1");
+    expect(folded).toContain("Tell the reader you updated the draft");
+    // A genuinely new draft still reads as one.
+    expect(
+      formatBuddyToolResult(
+        { tool: "draft_email", to: ["cy@x.com"], subject: "Invoice", body: "x" },
+        { email: { sent: false, to: ["cy@x.com"], subject: "Invoice", id: "d2" } },
+      ),
+    ).toContain("drafted email");
+  });
+
   it("keeps the draft addressable after history is trimmed", () => {
     // The draftId otherwise survives only in the tool result that created it. Once that's out of
     // history the model can't edit the draft, and "make it warmer" becomes a second draft.
