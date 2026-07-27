@@ -1,4 +1,11 @@
-import { applyLineUpserts, reline, splitLineMarker, type LineUpsert } from "../chat/file-edits.js";
+import {
+  applyLineUpserts,
+  reline,
+  splitLineMarker,
+  summarizeAmbiguousLines,
+  type AmbiguousLine,
+  type LineUpsert,
+} from "../chat/file-edits.js";
 import type { Transport } from "./transport/transport.js";
 import type { VisualReaderStore } from "../storage/store.js";
 
@@ -634,16 +641,19 @@ export interface DescriptionEdit {
 export type DescriptionLine = LineUpsert;
 
 /**
- * Apply find/replace edits to a description. Returns the new text plus any `find` that matched
- * NOTHING — a miss means the caller's picture of the text is stale, which is exactly the moment you
- * must not fall back to appending. PURE.
+ * Apply find/replace edits to a description. Returns the new text, any `find` that matched NOTHING,
+ * and any that matched SEVERAL places. Both are refusals, for the same reason: a miss means the
+ * caller's picture of the text is stale, and an ambiguous hit means the caller hasn't said which line
+ * it meant. Guessing either one — appending on a miss, or taking the first of several — is how a
+ * description ends up with the right text in the wrong place. PURE.
  */
 export function applyDescriptionEdits(
   description: string,
   edits: readonly DescriptionEdit[],
-): { text: string; missed: string[] } {
+): { text: string; missed: string[]; ambiguous: AmbiguousLine[] } {
   const lines = description.split("\n");
   const missed: string[] = [];
+  const ambiguous: AmbiguousLine[] = [];
   for (const edit of edits) {
     const find = edit.find.trim();
     if (!find) continue;
@@ -651,22 +661,42 @@ export function applyDescriptionEdits(
     // The bullet is stripped from BOTH sides — a caller copying a line verbatim brings "- " along with
     // it, and matching that against the bare body would silently drop to the substring path instead.
     const findBody = splitLineMarker(find)[1].trim().toLowerCase();
-    const lineIdx = findBody ? lines.findIndex((l) => splitLineMarker(l)[1].trim().toLowerCase() === findBody) : -1;
-    if (lineIdx >= 0) {
-      if (edit.replace.trim()) lines[lineIdx] = reline(lines[lineIdx] ?? "", edit.replace);
-      else lines.splice(lineIdx, 1);
+    const lineHits = findBody
+      ? lines.reduce<number[]>((acc, l, i) => {
+          if (splitLineMarker(l)[1].trim().toLowerCase() === findBody) acc.push(i);
+          return acc;
+        }, [])
+      : [];
+    if (lineHits.length > 1) {
+      ambiguous.push({ match: edit.find, lines: lineHits.map((i) => lines[i] ?? "") });
       continue;
     }
-    // Then as a substring of some line — first occurrence only, so a repeated word can be fixed one
-    // spot at a time rather than all at once.
-    const subIdx = lines.findIndex((l) => l.includes(find));
-    if (subIdx >= 0) {
-      lines[subIdx] = (lines[subIdx] ?? "").replace(find, edit.replace);
+    if (lineHits.length === 1) {
+      const idx = lineHits[0]!;
+      if (edit.replace.trim()) lines[idx] = reline(lines[idx] ?? "", edit.replace);
+      else lines.splice(idx, 1);
+      continue;
+    }
+    // Then as a substring — again only when it identifies ONE line. Two lines containing the same
+    // phrase are two different edits, and the caller has to say which by quoting more of it.
+    const subHits = lines.reduce<number[]>((acc, l, i) => {
+      if (l.includes(find)) acc.push(i);
+      return acc;
+    }, []);
+    if (subHits.length > 1) {
+      ambiguous.push({ match: edit.find, lines: subHits.map((i) => lines[i] ?? "") });
+      continue;
+    }
+    if (subHits.length === 1) {
+      const idx = subHits[0]!;
+      // Within that one line, still the FIRST occurrence only — a repeated word gets fixed one spot at
+      // a time rather than everywhere at once.
+      lines[idx] = (lines[idx] ?? "").replace(find, () => edit.replace);
       continue;
     }
     missed.push(edit.find);
   }
-  return { text: lines.join("\n"), missed };
+  return { text: lines.join("\n"), missed, ambiguous };
 }
 
 /**
@@ -730,9 +760,26 @@ export async function patchEvent(
             `It currently reads:\n${existing || "(empty)"}`,
         );
       }
+      if (result.ambiguous.length > 0) {
+        throw new Error(
+          `${summarizeAmbiguousLines(result.ambiguous)}\nQuote more of the line you mean so it matches only one.`,
+        );
+      }
       text = result.text;
     }
-    if (setLines.length > 0) text = applyDescriptionLines(text, setLines).text;
+    if (setLines.length > 0) {
+      const up = applyDescriptionLines(text, setLines);
+      if (up.ambiguous.length > 0) {
+        // Several lines open the same way — they may well be different facts about the same person
+        // ("Bo: brought chips" / "Bo: allergic to nuts"). Collapsing them is destructive, so it has to
+        // be asked for explicitly after seeing them, never inferred from a vague label.
+        throw new Error(
+          `${summarizeAmbiguousLines(up.ambiguous)}\nUse a longer "match" to name one of them, or pass ` +
+            `"dedupe":true on that entry if they really are duplicates of one entry and the rest should go.`,
+        );
+      }
+      text = up.text;
+    }
     if (patch.appendDescription) text = text.trim() ? `${text.trimEnd()}\n${patch.appendDescription}` : patch.appendDescription;
     body.description = text;
   }

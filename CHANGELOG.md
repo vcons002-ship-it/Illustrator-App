@@ -57,8 +57,14 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 - **Lists inside a document update in place too** — a checklist, an attendance or RSVP list, a status
   per item: a changed answer overwrites that entry where it already sits, ticking its checkbox and
   keeping the list's formatting, rather than adding a second line for the same person further down.
-  Duplicates already in a list get cleaned up when it next touches them. This is the same fix as the
-  calendar one below, now available anywhere the assistant keeps a running list.
+  This is the same fix as the calendar one below, now available anywhere the assistant keeps a
+  running list.
+- **An edit that could mean more than one line changes nothing** — if what the assistant is aiming at
+  matches several lines, it's shown those lines and asked to say which, instead of picking one. Two
+  lines can start the same way without being duplicates ("Bo: brought chips" and "Bo: allergic to
+  nuts"), and the old behaviour rewrote the first and deleted the rest — losing real content. Clearing
+  out genuine duplicates is still possible, but it's now something the assistant does on purpose after
+  reading them, not a side effect of a vague match.
 - **Long documents stop losing their endings** — the assistant only ever held the first 8,000
   characters of the document it was working on (roughly 1,200 words), and the copy it had just
   trailed off with no indication there was more. So on anything longer, "revise this" quietly
@@ -92,9 +98,8 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 - **A list kept on an event gets updated, not duplicated** — when the assistant tracks something on a
   calendar event (who's RSVP'd, what's packed, a status per person), a changed answer now overwrites
   that person's line where it already sits. Before, it could only add text to the bottom, so the event
-  ended up saying both "Bo: ?" and "Bo: yes". Pointing it at an event that already has duplicates
-  cleans them up. It also no longer works from a shortened copy of the event's notes, which is how it
-  came to write the same update in two places.
+  ended up saying both "Bo: ?" and "Bo: yes". It also no longer works from a shortened copy of the
+  event's notes, which is how it came to write the same update in two places.
 
 - **The assistant can now edit calendar events, not just create them** — and in particular it can keep
   adding to one as things firm up. Tell it the confirmation number, the gate, the address, who's

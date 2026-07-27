@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyFileEdits, applyLineUpserts, extractSection, summarizeFileEdits } from "./file-edits.js";
+import { applyFileEdits, applyLineUpserts, extractSection, summarizeAmbiguousLines, summarizeFileEdits } from "./file-edits.js";
 
 describe("applyFileEdits", () => {
   it("applies a single unique edit", () => {
@@ -76,8 +76,46 @@ describe("applyFileEdits", () => {
     expect(applyLineUpserts("- Team\n  - Bo: ?", [{ match: "Bo", line: "Bo: yes" }]).text).toBe("- Team\n  - Bo: yes");
   });
 
-  it("applyLineUpserts: collapses duplicates an earlier blind append left behind", () => {
-    expect(applyLineUpserts("- Bo: ?\n- Cy: yes\n- Bo: yes", [{ match: "Bo", line: "Bo: no" }]).text).toBe("- Bo: no\n- Cy: yes");
+  it("applyLineUpserts: a label matching SEVERAL lines changes nothing and hands them back", () => {
+    // Sharing an opening does not make two lines duplicates. Rewriting the first and deleting the rest
+    // (which it used to do) destroys real content to satisfy a vague match.
+    const doc = "## Expenses\n- Bo: brought chips\n- Bo: allergic to nuts\n- Cy: cake";
+    const r = applyLineUpserts(doc, [{ match: "Bo", line: "Bo: paid $20" }]);
+    expect(r.text).toBe(doc); // untouched — nothing lost
+    expect(r.replaced).toEqual([]);
+    expect(r.added).toEqual([]);
+    expect(r.ambiguous).toEqual([{ match: "Bo", lines: ["- Bo: brought chips", "- Bo: allergic to nuts"] }]);
+    // A longer label singles one out, and only that line changes.
+    expect(applyLineUpserts(doc, [{ match: "Bo: allergic", line: "Bo: allergic to nuts and shellfish" }]).text).toBe(
+      "## Expenses\n- Bo: brought chips\n- Bo: allergic to nuts and shellfish\n- Cy: cake",
+    );
+  });
+
+  it("applyLineUpserts: dedupe is opt-in, and is what heals a genuinely double-entered list", () => {
+    const doubled = "- Bo: ?\n- Cy: yes\n- Bo: yes";
+    expect(applyLineUpserts(doubled, [{ match: "Bo", line: "Bo: no" }]).text).toBe(doubled); // ambiguous by default
+    const healed = applyLineUpserts(doubled, [{ match: "Bo", line: "Bo: no", dedupe: true }]);
+    expect(healed.text).toBe("- Bo: no\n- Cy: yes");
+    expect(healed.ambiguous).toEqual([]);
+  });
+
+  it("applyLineUpserts: one ambiguous entry doesn't block the others in the same call", () => {
+    const doc = "- Bo: chips\n- Bo: nuts\n- Cy: ?";
+    const r = applyLineUpserts(doc, [
+      { match: "Bo", line: "Bo: x" },
+      { match: "Cy", line: "Cy: yes" },
+    ]);
+    expect(r.text).toBe("- Bo: chips\n- Bo: nuts\n- Cy: yes");
+    expect(r.replaced).toEqual(["Cy"]);
+    expect(r.ambiguous.map((a) => a.match)).toEqual(["Bo"]);
+  });
+
+  it("summarizeAmbiguousLines quotes the candidates so the next call can name one", () => {
+    const s = summarizeAmbiguousLines([{ match: "Bo", lines: ["- Bo: chips", "- Bo: nuts"] }]);
+    expect(s).toContain('"Bo" matches 2 lines');
+    expect(s).toContain("Bo: chips");
+    expect(s).toContain("Bo: nuts");
+    expect(summarizeAmbiguousLines([])).toBe("");
   });
 
   it("applyLineUpserts: matches on a word boundary, and handles numbered lists + empty text", () => {

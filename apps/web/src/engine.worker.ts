@@ -54,6 +54,7 @@ import {
   applyFileEdits,
   applyLineUpserts,
   summarizeFileEdits,
+  summarizeAmbiguousLines,
   extractSection,
   buildToolCallFormat,
   type CreatedFileRef,
@@ -3467,7 +3468,20 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         const up = applyLineUpserts(r.content, patch.setLines ?? []);
         const landed = r.applied + up.replaced.length + up.added.length;
         const summary = summarizeFileEdits(doc.title, r);
-        if (landed === 0) return { ok: false, title: doc.title, applied: 0, failures: r.failures.length, words: 0, summary };
+        // A label that hit several lines changed nothing — the lines go back to the model so it can
+        // name one, rather than the first being rewritten and the others quietly deleted.
+        const ambiguous = summarizeAmbiguousLines(up.ambiguous);
+        if (landed === 0) {
+          return {
+            ok: false,
+            title: doc.title,
+            applied: 0,
+            failures: r.failures.length,
+            words: 0,
+            summary,
+            ...(ambiguous ? { ambiguous } : {}),
+          };
+        }
         activeDocument = { title: doc.title, content: up.text };
         const slug =
           (doc.title || "document").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) ||
@@ -3483,7 +3497,15 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           path: `documents/${slug}.md`,
         });
         const words = up.text.trim() ? up.text.trim().split(/\s+/).length : 0;
-        return { ok: true, title: doc.title, applied: landed, failures: r.failures.length, words, summary };
+        return {
+          ok: true,
+          title: doc.title,
+          applied: landed,
+          failures: r.failures.length,
+          words,
+          summary,
+          ...(ambiguous ? { ambiguous } : {}),
+        };
       },
       readDocument: async (section) => {
         if (!activeDocument) return { title: "", text: "", total: 0, found: false };

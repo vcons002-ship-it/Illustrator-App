@@ -79,11 +79,32 @@ export function applyFileEdits(content: string, edits: FileEdit[]): FileEditResu
 /** An upsert of one labelled line — the "make sure the list says this" primitive. */
 export interface LineUpsert {
   /** The label identifying the line, e.g. "Bo" for a line reading "- Bo: ?". Matched case-insensitively
-   * against the start of each line, on a word boundary, so "Bo" won't hit "Bobby". */
+   * against the start of each line, on a word boundary, so "Bo" won't hit "Bobby". It must single one
+   * line out: a label matching several is reported as ambiguous, not resolved by guessing. */
   match: string;
   /** The full line to put there, e.g. "Bo: yes". Any bullet the old line had is kept. When nothing
    * matches, this is inserted into the existing list rather than dropped at the very bottom. */
   line: string;
+  /** Opt IN to collapsing: when the label matches several lines, keep the first (rewritten) and delete
+   * the rest. Only for lines that really are duplicate entries for one thing — it DESTROYS the others,
+   * so it must be a deliberate choice made after seeing them, never a fallback from an ambiguous match. */
+  dedupe?: boolean;
+}
+
+/** A label that matched several lines, with those lines — enough for the caller to pick one precisely. */
+export interface AmbiguousLine {
+  match: string;
+  lines: string[];
+}
+
+export interface LineUpsertResult {
+  text: string;
+  /** Labels whose existing line was rewritten. */
+  replaced: string[];
+  /** Labels that weren't in the text and were added. */
+  added: string[];
+  /** Labels that matched 2+ lines and were therefore SKIPPED — nothing about them was changed. */
+  ambiguous: AmbiguousLine[];
 }
 
 /** Indent, bullet/number, and checkbox are tracked SEPARATELY: a checkbox is state the caller may
@@ -137,18 +158,21 @@ export function reline(oldLine: string, next: string): string {
 }
 
 /**
- * Upsert labelled lines: overwrite the line for that label if it's there, otherwise add it. Any EXTRA
- * lines carrying the same label are dropped, which heals text that a previous blind append already
- * double-entered. New lines are inserted after the last list item rather than at the very bottom, so
- * they join the list instead of trailing behind whatever follows it. PURE.
+ * Upsert labelled lines: overwrite the line for that label if it's there, otherwise add it. New lines
+ * are inserted after the last list item rather than at the very bottom, so they join the list instead
+ * of trailing behind whatever follows it.
+ *
+ * A label matching SEVERAL lines is ambiguous and is skipped, not guessed at — same rule as
+ * {@link applyFileEdits}. Lines can share an opening without being duplicates ("Bo: brought chips" /
+ * "Bo: allergic to nuts"), so rewriting the first and deleting the rest would destroy real content to
+ * satisfy a vague match. The caller gets the matching lines back and can either narrow the label until
+ * it singles one out or, having actually looked at them, pass `dedupe` to collapse them. PURE.
  */
-export function applyLineUpserts(
-  text: string,
-  entries: readonly LineUpsert[],
-): { text: string; replaced: string[]; added: string[] } {
+export function applyLineUpserts(text: string, entries: readonly LineUpsert[]): LineUpsertResult {
   const lines = text ? text.split("\n") : [];
   const replaced: string[] = [];
   const added: string[] = [];
+  const ambiguous: AmbiguousLine[] = [];
   for (const entry of entries) {
     const label = normalizeLabel(entry.match);
     const next = entry.line.trim();
@@ -157,10 +181,14 @@ export function applyLineUpserts(
       if (startsWithLabel(splitLineMarker(l)[1].trim(), label)) acc.push(i);
       return acc;
     }, []);
+    if (hits.length > 1 && !entry.dedupe) {
+      ambiguous.push({ match: entry.match, lines: hits.map((i) => lines[i] ?? "") });
+      continue;
+    }
     if (hits.length > 0) {
       const first = hits[0] ?? 0;
       lines[first] = reline(lines[first] ?? "", next);
-      // Later duplicates go, back-to-front so the earlier indices stay valid.
+      // Deliberate dedupe only: drop the rest back-to-front so the earlier indices stay valid.
       for (const dup of hits.slice(1).reverse()) lines.splice(dup, 1);
       replaced.push(entry.match);
       continue;
@@ -181,7 +209,20 @@ export function applyLineUpserts(
     else lines.push(line);
     added.push(entry.match);
   }
-  return { text: lines.join("\n").replace(/^\n+/, ""), replaced, added };
+  return { text: lines.join("\n").replace(/^\n+/, ""), replaced, added, ambiguous };
+}
+
+/** A model-facing account of labels that matched several lines, quoting them so the next call can name
+ * one exactly. PURE. */
+export function summarizeAmbiguousLines(ambiguous: readonly AmbiguousLine[]): string {
+  if (ambiguous.length === 0) return "";
+  return ambiguous
+    .map(
+      (a) =>
+        `"${a.match}" matches ${a.lines.length} lines, so nothing was changed for it:\n` +
+        a.lines.map((l) => `    ${l.trim()}`).join("\n"),
+    )
+    .join("\n");
 }
 
 /**

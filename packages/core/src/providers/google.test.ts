@@ -439,7 +439,7 @@ describe("applyDescriptionLines (upsert a labelled line)", () => {
 describe("applyDescriptionEdits (find/replace in a description)", () => {
   it("replaces a whole line by its text, keeping the bullet, and reports nothing missed", () => {
     const r = applyDescriptionEdits("- Bo: ?\n- Cy: ?", [{ find: "Bo: ?", replace: "Bo: yes" }]);
-    expect(r).toEqual({ text: "- Bo: yes\n- Cy: ?", missed: [] });
+    expect(r).toEqual({ text: "- Bo: yes\n- Cy: ?", missed: [], ambiguous: [] });
   });
 
   it("deletes the line when the replacement is empty", () => {
@@ -452,7 +452,28 @@ describe("applyDescriptionEdits (find/replace in a description)", () => {
 
   it("reports a miss rather than guessing — the caller must not append instead", () => {
     const r = applyDescriptionEdits("- Bo: ?", [{ find: "- Zed: ?", replace: "- Zed: no" }]);
-    expect(r).toEqual({ text: "- Bo: ?", missed: ["- Zed: ?"] });
+    expect(r).toEqual({ text: "- Bo: ?", missed: ["- Zed: ?"], ambiguous: [] });
+  });
+
+  it("refuses a find that matches several lines instead of silently taking the first", () => {
+    // Two identical lines, or two containing the same phrase, are two different edits — which one was
+    // meant is the caller's to say, not this function's to guess.
+    const dup = applyDescriptionEdits("- Bo: ?\n- Cy: ok\n- Bo: ?", [{ find: "Bo: ?", replace: "Bo: yes" }]);
+    expect(dup.text).toBe("- Bo: ?\n- Cy: ok\n- Bo: ?"); // untouched
+    expect(dup.ambiguous).toEqual([{ match: "Bo: ?", lines: ["- Bo: ?", "- Bo: ?"] }]);
+
+    const sub = applyDescriptionEdits("gate B12 outbound\ngate B12 return", [{ find: "gate B12", replace: "gate C4" }]);
+    expect(sub.text).toBe("gate B12 outbound\ngate B12 return");
+    expect(sub.ambiguous).toHaveLength(1);
+    // Quoting more of the line resolves it, and touches only that line.
+    expect(applyDescriptionEdits("gate B12 outbound\ngate B12 return", [{ find: "gate B12 return", replace: "gate C4 return" }]).text).toBe(
+      "gate B12 outbound\ngate C4 return",
+    );
+  });
+
+  it("inserts a replacement VERBATIM even when it contains $-substitution sequences", () => {
+    // Same hazard applyFileEdits guards: a string replacement makes `$&`/`$1` substitution patterns.
+    expect(applyDescriptionEdits("cost: OLD", [{ find: "OLD", replace: "$100 ($& saved)" }]).text).toBe("cost: $100 ($& saved)");
   });
 });
 
@@ -527,6 +548,24 @@ describe("patchEvent (edit an existing calendar event)", () => {
     ).rejects.toThrow(/"- Zed: \?"[\s\S]*RSVP:/);
     // Nothing was written — a half-applied edit is worse than none.
     expect(t.requests.filter((r) => r.method === "PATCH")).toHaveLength(0);
+  });
+
+  it("refuses a setLines label that hits several lines, naming them, and writes nothing", async () => {
+    const before = "Bring:\n- Bo: chips\n- Bo: allergic to nuts";
+    const t = new SequencedTransport([{ id: "e1", summary: "Party", description: before }]);
+    await expect(patchEvent(t, "tok", "e1", { setLines: [{ match: "Bo", line: "Bo: paid" }] })).rejects.toThrow(
+      /"Bo" matches 2 lines[\s\S]*allergic to nuts[\s\S]*dedupe/,
+    );
+    expect(t.requests.filter((r) => r.method === "PATCH")).toHaveLength(0);
+  });
+
+  it("dedupe:true is honoured once the caller has actually asked for it", async () => {
+    const t = new SequencedTransport([
+      { id: "e1", summary: "Party", description: "RSVP:\n- Bo: ?\n- Cy: yes\n- Bo: yes" },
+      { id: "e1", summary: "Party" },
+    ]);
+    await patchEvent(t, "tok", "e1", { setLines: [{ match: "Bo", line: "Bo: no", dedupe: true }] });
+    expect((t.requests[1]!.body as { description: string }).description).toBe("RSVP:\n- Bo: no\n- Cy: yes");
   });
 
   it("applies edits, then setLines, then append — all in one read/write round-trip", async () => {

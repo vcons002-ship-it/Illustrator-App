@@ -230,7 +230,7 @@ export type BuddyToolCall =
   | {
       tool: "edit_document";
       edits?: { search: string; replace: string }[];
-      setLines?: { match: string; line: string }[];
+      setLines?: { match: string; line: string; dedupe?: boolean }[];
     }
   /** Read the ACTIVE document's real text — the whole thing, or one section by its heading. The copy
    * in the prompt is bounded; this is how you see any part that block didn't show. */
@@ -398,7 +398,7 @@ export type BuddyToolCall =
       description?: string;
       appendDescription?: string;
       editDescription?: { find: string; replace: string }[];
-      setLines?: { match: string; line: string }[];
+      setLines?: { match: string; line: string; dedupe?: boolean }[];
       location?: string;
       calendarId?: string;
     }
@@ -967,8 +967,11 @@ export function buildBuddySystemPrompt(opts: {
       "  · KEEPING RUNNING DETAIL (an RSVP list, a packing list, a status per person) is the main use, and " +
       '"setLines" is the tool for it: each {"match","line"} OVERWRITES the line that starts with that label, or ' +
       "adds it to the list if it isn't there yet. NEVER append an update for someone/something the description " +
-      'already mentions — that\'s how a list ends up saying both "Bo: ?" and "Bo: yes". setLines also cleans up ' +
-      "any duplicate lines it finds for that label, so use it to FIX a list that already double-entered.\n" +
+      'already mentions — that\'s how a list ends up saying both "Bo: ?" and "Bo: yes".\n' +
+      '  · A "match" must pick out ONE line. Matching several changes NOTHING and shows you them, because lines ' +
+      'can share an opening without being duplicates — quote more of the one you mean. Add "dedupe":true only ' +
+      "once you've seen them and they genuinely are duplicates of one entry; it keeps the first and DELETES the " +
+      "rest, which is how you FIX a list that already double-entered.\n" +
       '  · {"editDescription":[{"find":"exact old text","replace":"new text"}]} — change any other specific text ' +
       "in place (an empty \"replace\" deletes that line). If a \"find\" doesn't match, the whole call is refused and " +
       "you're shown what the description actually says — re-read it and retry, don't fall back to appending.\n" +
@@ -1287,10 +1290,14 @@ export function buildBuddySystemPrompt(opts: {
     "the whole document with whatever you re-type, which silently throws away everything you didn't see.\n" +
     '  · For a LIST inside a document — a checklist, an RSVP or attendance list, a status per item — use ' +
     '{"tool":"edit_document","setLines":[{"match":"Bo","line":"- [x] Bo — confirmed"}]} instead. It overwrites the ' +
-    "line that starts with that label wherever it sits (and clears any duplicate lines for it), or adds it to the " +
-    "list if it's new. Use it whenever you're updating an entry that may ALREADY be in the list: unlike \"edits\" it " +
-    "doesn't need you to know what that line currently says, so it can't miss and leave you appending a second " +
-    "entry for the same thing. Both can go in one call — \"edits\" run first, then \"setLines\" on the result.\n" +
+    "line that starts with that label wherever it sits, or adds it to the list if it's new. Use it whenever you're " +
+    'updating an entry that may ALREADY be in the list: unlike "edits" it doesn\'t need you to know what that line ' +
+    "currently says, so it can't miss and leave you appending a second entry for the same thing. Both can go in one " +
+    'call — "edits" run first, then "setLines" on the result.\n' +
+    '  · A "match" must identify ONE line. If it hits several you\'ll be shown them and NOTHING will have changed — ' +
+    "lines can share an opening without being duplicates (\"Bo: brought chips\" / \"Bo: allergic to nuts\"), so " +
+    "quote more of the line you actually mean. Only if you've read them and they really are duplicate entries for " +
+    'one thing should you re-issue with "dedupe":true, which keeps the first and DELETES the others.\n' +
     '- {"tool":"read_document"} — the active document\'s real text, or {"tool":"read_document","section":"Scope"} for ' +
     "one section by heading. The copy in your context is bounded; this is how you read the rest of a long one.\n" +
     storyBlock +
@@ -2226,7 +2233,7 @@ function pairsArg<A extends string, B extends string>(
   a: A,
   b: B,
   trim = true,
-): { [K in A | B]: string }[] {
+): ({ [K in A | B]: string } & { dedupe?: boolean })[] {
   if (!Array.isArray(value)) return [];
   const take = (v: unknown): string => {
     if (typeof v !== "string") return "";
@@ -2235,7 +2242,13 @@ function pairsArg<A extends string, B extends string>(
   };
   return value.slice(0, MAX_EDITS_PER_CALL).map((entry) => {
     const e = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
-    return { [a]: take(e[a]), [b]: take(e[b]) } as { [K in A | B]: string };
+    // `dedupe` is DESTRUCTIVE (it deletes the other matching lines), so it's carried only when
+    // explicitly true — never inferred from a truthy string or a stray non-boolean.
+    return {
+      [a]: take(e[a]),
+      [b]: take(e[b]),
+      ...(e.dedupe === true ? { dedupe: true } : {}),
+    } as { [K in A | B]: string } & { dedupe?: boolean };
   });
 }
 
@@ -3134,6 +3147,8 @@ export interface BuddyToolResultPayload {
     applied: number;
     /** Edits that matched zero or 2+ places (skipped — the document keeps its old text there). */
     failures: number;
+    /** setLines labels that matched SEVERAL lines, quoted — nothing was changed for them. */
+    ambiguous?: string;
     /** Word count after the edits, for the confirmation prose. */
     words: number;
     /** Model-facing detail of what failed and why. */
@@ -3909,12 +3924,28 @@ function formatBuddyToolResultBody(call: BuddyToolCall, result: BuddyToolResultP
     // Two different failures needing two different next moves: no document to edit at all (tell the
     // reader), versus a search that didn't match (re-read and retry — never rewrite the whole thing).
     if (!d || d.error) return `[edit_document failed: ${d?.error ?? result.error ?? "no document is open to edit"}] Tell the reader.`;
+    // An ambiguous label is NOT a failure to retry blindly — the lines are quoted so the next call can
+    // name one exactly. Shown whether or not other edits in the same call landed.
+    const unclear = d.ambiguous
+      ? `\n${d.ambiguous}\nRe-issue those with a longer "match" that hits only the line you mean (quote more of it), ` +
+        'or with "dedupe":true if — having now read them — they really are duplicate entries for one thing and the ' +
+        "others should be deleted."
+      : "";
     if (d.applied === 0) {
       return (
-        `[edit_document changed NOTHING — ${d.summary} The document is untouched.] Call read_document to see the ` +
-        "real text, then retry with a verbatim search. If you're updating an entry in a LIST, use setLines instead — " +
-        "it matches on the label, so it works without knowing what the line currently says. Do NOT fall back to " +
-        "create_document — that would replace the whole document with only the part you can see."
+        `[edit_document changed NOTHING — ${d.summary} The document is untouched.]${unclear}` +
+        (d.ambiguous
+          ? ""
+          : " Call read_document to see the real text, then retry with a verbatim search. If you're updating an " +
+            "entry in a LIST, use setLines instead — it matches on the label, so it works without knowing what the " +
+            "line currently says.") +
+        " Do NOT fall back to create_document — that would replace the whole document with only the part you can see."
+      );
+    }
+    if (unclear) {
+      return (
+        `[edit_document applied ${d.applied} edit(s) to "${d.title}" (now ${d.words} words), but NOT all of them.` +
+        `]${unclear}`
       );
     }
     return (

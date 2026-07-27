@@ -1313,6 +1313,54 @@ describe("edit_document / read_document", () => {
     expect(parseBuddyToolCall(JSON.stringify({ tool: "edit_document", setLines: [] }))).toBeUndefined();
   });
 
+  it("carries dedupe ONLY when it is literally true — it deletes lines", () => {
+    const call = parseBuddyToolCall(
+      JSON.stringify({
+        tool: "edit_document",
+        setLines: [
+          { match: "Bo", line: "Bo: no", dedupe: true },
+          { match: "Cy", line: "Cy: yes", dedupe: "yes" },
+          { match: "Dee", line: "Dee: ?", dedupe: 1 },
+        ],
+      }),
+    );
+    expect(call).toEqual({
+      tool: "edit_document",
+      setLines: [
+        { match: "Bo", line: "Bo: no", dedupe: true },
+        { match: "Cy", line: "Cy: yes" },
+        { match: "Dee", line: "Dee: ?" },
+      ],
+    });
+  });
+
+  it("hands an ambiguous label's lines back so the retry can name one exactly", () => {
+    const ambiguous = '"Bo" matches 2 lines, so nothing was changed for it:\n    - Bo: chips\n    - Bo: nuts';
+    const none = formatBuddyToolResult(
+      { tool: "edit_document", setLines: [{ match: "Bo", line: "Bo: paid" }] },
+      { documentEdit: { ok: false, title: "Notes", applied: 0, failures: 0, words: 0, summary: "", ambiguous } },
+    );
+    expect(none).toContain("- Bo: chips");
+    expect(none).toContain("- Bo: nuts");
+    expect(none).toContain('longer "match"');
+    expect(none).toContain('"dedupe":true');
+    // A partial call must not read as a clean success.
+    const partial = formatBuddyToolResult(
+      { tool: "edit_document", setLines: [{ match: "Bo", line: "Bo: paid" }, { match: "Cy", line: "Cy: yes" }] },
+      { documentEdit: { ok: true, title: "Notes", applied: 1, failures: 0, words: 40, summary: "", ambiguous } },
+    );
+    expect(partial).toContain("NOT all of them");
+    expect(partial).toContain("- Bo: nuts");
+  });
+
+  it("warns that a label must single out one line, on both the document and calendar surfaces", () => {
+    const g = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true });
+    expect(g).toMatch(/must identify ONE line/);
+    expect(g).toMatch(/must pick out ONE line/);
+    // The reason has to be concrete, or the model reads the rule as pedantry and works around it.
+    expect(g).toMatch(/share an opening without being duplicates/);
+  });
+
   it("teaches setLines as the way to update a list entry that may already exist", () => {
     const g = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(g).toContain('"setLines"');
