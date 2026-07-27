@@ -943,7 +943,8 @@ export function buildBuddySystemPrompt(opts: {
       "  · ADDING DETAIL AS IT ARRIVES is the main use: prefer \"appendDescription\" — it ADDS a line to what the " +
       "event already says. Plain \"description\" REPLACES the whole text, so only use it to rewrite/correct.\n" +
       "  · Also takes \"summary\", \"start\", \"end\", \"location\" — for a rescheduled or renamed event (pass BOTH " +
-      "start and end when moving one).\n" +
+      "start and end when moving one). To CONVERT an event between all-day and timed, pass both ends in the new " +
+      'form: bare dates ("2026-07-04") make it all-day, full datetimes make it timed.\n' +
       "  · When the reader tells you something that belongs on an event they already have (a confirmation number, " +
       "an address, who's coming, what to bring, a change of plan), put it ON that event with update_event rather " +
       "than only saying it back — that's what makes the calendar entry actually useful later.\n" +

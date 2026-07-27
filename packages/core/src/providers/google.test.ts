@@ -11,6 +11,7 @@ import {
   toTaskDue,
   patchTask,
   patchEvent,
+  patchTimeField,
   decodeBase64Url,
   exchangeGoogleCode,
   gmailReadEmail,
@@ -404,10 +405,14 @@ describe("patchEvent (edit an existing calendar event)", () => {
   it("sends a bare date as an ALL-DAY date, not a midnight dateTime", async () => {
     const t = new FakeTransport({ id: "e3", summary: "Holiday", start: { date: "2026-07-04" }, end: { date: "2026-07-05" } });
     await patchEvent(t, "tok", "e3", { start: "2026-07-04", end: "2026-07-05" });
-    expect(t.requests[0]!.body).toEqual({ start: { date: "2026-07-04" }, end: { date: "2026-07-05" } });
+    // Shape-explicit (see patchTimeField): the opposite key is nulled so a conversion actually lands.
+    expect(t.requests[0]!.body).toEqual({
+      start: { date: "2026-07-04", dateTime: null },
+      end: { date: "2026-07-05", dateTime: null },
+    });
     const t2 = new FakeTransport({ id: "e3", summary: "Holiday" });
     await patchEvent(t2, "tok", "e3", { start: "2026-07-04T09:00:00-04:00" });
-    expect(t2.requests[0]!.body).toEqual({ start: { dateTime: "2026-07-04T09:00:00-04:00" } });
+    expect(t2.requests[0]!.body).toEqual({ start: { dateTime: "2026-07-04T09:00:00-04:00", date: null } });
   });
 
   it("refuses an empty patch rather than issuing a no-op write", async () => {
@@ -482,6 +487,43 @@ describe("all-day events (bare dates + Google's exclusive end)", () => {
   it("patchEvent applies the same all-day normalisation when moving both ends", async () => {
     const t = new FakeTransport({ id: "e1", summary: "Holiday" });
     await patchEvent(t, "tok", "e1", { start: "2026-07-04", end: "2026-07-04" });
-    expect(t.requests[0]!.body).toEqual({ start: { date: "2026-07-04" }, end: { date: "2026-07-05" } });
+    expect(t.requests[0]!.body).toEqual({
+      start: { date: "2026-07-04", dateTime: null },
+      end: { date: "2026-07-05", dateTime: null },
+    });
+  });
+});
+
+describe("converting an event between all-day and timed", () => {
+  // Calendar's patch MERGES nested objects: sending only the new shape leaves the old key in place,
+  // so the event would carry both `date` and `dateTime` — invalid, and the conversion appears to do
+  // nothing. Each patch must null the shape it's replacing.
+  it("all-day → timed nulls `date` while setting `dateTime`", async () => {
+    const t = new FakeTransport({ id: "e1", summary: "Trip" });
+    await patchEvent(t, "tok", "e1", { start: "2026-07-04T09:00:00-04:00", end: "2026-07-04T10:00:00-04:00" });
+    expect(t.requests[0]!.body).toEqual({
+      start: { dateTime: "2026-07-04T09:00:00-04:00", date: null },
+      end: { dateTime: "2026-07-04T10:00:00-04:00", date: null },
+    });
+  });
+
+  it("timed → all-day nulls `dateTime` while setting `date` (and keeps the exclusive end)", async () => {
+    const t = new FakeTransport({ id: "e1", summary: "Trip" });
+    await patchEvent(t, "tok", "e1", { start: "2026-07-04", end: "2026-07-04" });
+    expect(t.requests[0]!.body).toEqual({
+      start: { date: "2026-07-04", dateTime: null },
+      end: { date: "2026-07-05", dateTime: null },
+    });
+  });
+
+  it("patchTimeField states the shape and nulls the other, both ways", () => {
+    expect(patchTimeField({ date: "2026-07-04" })).toEqual({ date: "2026-07-04", dateTime: null });
+    expect(patchTimeField({ dateTime: "2026-07-04T09:00:00Z" })).toEqual({ dateTime: "2026-07-04T09:00:00Z", date: null });
+  });
+
+  it("a one-ended time patch is still shape-explicit", async () => {
+    const t = new FakeTransport({ id: "e1", summary: "S" });
+    await patchEvent(t, "tok", "e1", { end: "2026-07-04T11:00:00-04:00" });
+    expect(t.requests[0]!.body).toEqual({ end: { dateTime: "2026-07-04T11:00:00-04:00", date: null } });
   });
 });
