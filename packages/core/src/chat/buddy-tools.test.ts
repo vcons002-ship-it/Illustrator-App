@@ -5,6 +5,7 @@ import {
   ACTIVE_DOC_MAX_CHARS,
   activeDocBudget,
   buildActiveDocumentBlock,
+  buildActiveDraftBlock,
   buildBuddySystemPrompt,
   documentOutline,
   buildProjectGuideBlock,
@@ -1404,11 +1405,32 @@ describe("editing a saved draft", () => {
     expect(formatBuddyToolResult({ tool: "list_drafts" }, { drafts: [] })).toContain("no saved drafts");
   });
 
-  it("teaches editing over re-drafting", () => {
+  it("teaches editing over re-drafting, in the routing line as well as the tool entry", () => {
     const g = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true });
     expect(g).toContain('"tool":"edit_draft"');
     expect(g).toContain('"tool":"list_drafts"');
     expect(g).toMatch(/leaves a SECOND draft sitting next to the first/);
+    // The compact routing line is what the model actually follows to pick a tool; it used to say only
+    // "compose → draft_email", which is why a revision came back as a second draft.
+    expect(g).toMatch(/CHANGING one you already drafted → edit_draft/);
+    // And draft_email's own entry has to disclaim the case, not just describe itself.
+    expect(g).toMatch(/ONLY for an email that does NOT exist yet/);
+  });
+
+  it("keeps the draft addressable after history is trimmed", () => {
+    // The draftId otherwise survives only in the tool result that created it. Once that's out of
+    // history the model can't edit the draft, and "make it warmer" becomes a second draft.
+    const block = buildActiveDraftBlock({ id: "d1", to: ["bo@x.com"], subject: "Party" });
+    expect(block).toContain("DRAFT IN PROGRESS");
+    expect(block).toContain("draftId: d1");
+    expect(block).toContain("bo@x.com");
+    expect(block).toContain('{"tool":"edit_draft","draftId":"d1"');
+    expect(block).toMatch(/SECOND draft beside this one/);
+    // Nothing drafted → no block at all (it rides every turn, so it can't be noise when unused).
+    expect(buildActiveDraftBlock(undefined)).toBe("");
+    expect(buildActiveDraftBlock({ id: "", to: [], subject: "" })).toBe("");
+    // A draft with nothing filled in still reads sensibly rather than showing blanks.
+    expect(buildActiveDraftBlock({ id: "d2", to: [], subject: "" })).toContain("(no subject)");
   });
 });
 

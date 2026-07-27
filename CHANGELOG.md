@@ -134,7 +134,9 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   second copy beside the first. It can now change part of a draft in place — the body, the subject,
   the recipients — leaving everything it doesn't mention untouched, and it can list your saved drafts
   to find one from an earlier conversation. Blind-copied recipients survive an edit, which they
-  wouldn't have if the draft were simply rewritten.
+  wouldn't have if the draft were simply rewritten. A draft it has open stays visible to it for the
+  rest of the conversation, so a change asked for much later still edits that draft rather than
+  starting a new one.
 - **The assistant can see who an email was sent to** — To and Cc were never fetched or shown, so it
   could read a thread but not tell you who was on it, and couldn't answer "who hasn't replied yet".
 
