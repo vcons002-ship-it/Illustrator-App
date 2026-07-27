@@ -71,6 +71,7 @@ import {
   countChangedFiles,
   hasConflictMarkers,
   loadScheduledTasks,
+  scheduledRunPrompt,
   stripPersistedDirectives,
   upsertScheduledTask,
   deleteScheduledTask,
@@ -1325,6 +1326,9 @@ export function App() {
   // onExitBook is defined far above onSwitchBuddySession (avoids a TDZ in the dep array).
   const storyReturnSessionRef = useRef<string | undefined>(undefined);
   const switchBuddyRef = useRef<((id: string) => void) | undefined>(undefined);
+  /** openTaskInChat, reachable from the scheduled runner declared above it (same late-binding
+   * pattern as switchBuddyRef) — a task-bound action opens the task's own chat to run in. */
+  const openTaskRef = useRef<((planId: string) => Promise<void>) | undefined>(undefined);
   /** The plan whose execution chat is the active session (the task being "worked"), if any. */
   const activeTaskPlanId = () => resolveActiveTaskPlanId(taskPlansRef.current, activeBuddyIdRef.current);
   const persistSessions = useCallback(
@@ -5924,20 +5928,34 @@ export function App() {
         const tasks = await loadScheduledTasks(libraryStore);
         const due = dueScheduledTasks(tasks);
         if (due.length === 0) return;
-        // Not in the Scheduled chat yet → switch and let the NEXT tick fire it. The switch loads that
-        // session's history asynchronously, and sending before it lands would hand the model the
-        // previous conversation as context — exactly the leak this separation exists to prevent.
-        if (activeBuddyIdRef.current !== SCHEDULED_CHAT_ID) {
-          openScheduledSession();
+        const task = due[0]!;
+        // WHERE this runs. A task-BOUND action runs in that task's own chat, so a recurring job that
+        // accumulates over days (chasing RSVPs, watching for replies) resumes with the task's history
+        // and checklist instead of re-deriving everything from its prompt each time. Everything else
+        // runs in the generic ⏰ Scheduled chat. A bound task that's since been deleted falls back
+        // there rather than being silently dropped.
+        const boundPlan = task.planId ? (await loadTaskPlans(libraryStore)).find((p) => p.id === task.planId) : undefined;
+        const targetId = boundPlan?.sessionId ?? (task.planId && boundPlan ? undefined : SCHEDULED_CHAT_ID);
+        // Not in the target chat yet → open it and let the NEXT tick fire. Loading a session's history
+        // is async, and sending before it lands would hand the model the previous conversation as
+        // context — exactly the bleed this separation exists to prevent.
+        if (!targetId || activeBuddyIdRef.current !== targetId) {
+          if (boundPlan) await openTaskRef.current?.(boundPlan.id); // creates + names the task's chat if needed
+          else openScheduledSession();
           return;
         }
-        const task = due[0]!;
-        // Advance first (so a slow turn can't double-fire), then run it.
+        // Advance first (so a slow turn can't double-fire), then run it. `task` is the PRE-advance
+        // copy, so the prompt quotes the PREVIOUS run as the "what's new since" window.
         await upsertScheduledTask(libraryStore, advanceSchedule(task)).catch(() => {});
         refreshScheduled();
         logActionRef.current("scheduled_run", `Ran scheduled: ${task.title}`);
-        pushToast(`⏰ Running scheduled task “${task.title}” in the Scheduled chat.`, "info");
-        onBuddySendText(`⏰ Scheduled task “${task.title}”. Do this now: ${task.prompt}`);
+        pushToast(
+          boundPlan
+            ? `⏰ Running “${task.title}” on the task “${boundPlan.title}”.`
+            : `⏰ Running scheduled task “${task.title}” in the Scheduled chat.`,
+          "info",
+        );
+        onBuddySendText(scheduledRunPrompt(task));
       })();
     }, 30_000);
     return () => clearInterval(id);
@@ -6313,6 +6331,7 @@ export function App() {
       setFileLedger,
     ],
   );
+  openTaskRef.current = openTaskInChat; // so the scheduled runner (declared above) can open a bound task
 
   // DESKTOP side: run a Tasks/Calendar action the phone relayed (vrcmd:planner). Each maps to the
   // SAME handler the desktop UI uses, so the result persists + re-mirrors to the phone via

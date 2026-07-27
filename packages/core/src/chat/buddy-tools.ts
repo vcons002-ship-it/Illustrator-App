@@ -404,6 +404,9 @@ export type BuddyToolCall =
       time?: string;
       /** One-time only: the calendar day "YYYY-MM-DD" to run on (omit ⇒ the next time `time` comes around). */
       date?: string;
+      /** Bind this action to a task plan: it then runs INSIDE that task's chat, with its history and
+       * checklist loaded, and writes what it finds back onto the task. */
+      planId?: string;
       weekday?: number;
       dayOfMonth?: number;
     }
@@ -1397,7 +1400,13 @@ export function buildBuddySystemPrompt(opts: {
         '  · ONE-TIME — "rule":"once" with "date":"YYYY-MM-DD" for the day it should fire (omit "date" and it runs the next ' +
         'time "time" comes around — today if still ahead, else tomorrow). Use for "remind me on Friday at 5", "tomorrow ' +
         'morning…", "on July 4th…". Resolve the reader\'s words to a REAL date from today\'s date, and say back when it will run.\n' +
-        '  {"tool":"list_scheduled"} to show them; {"tool":"cancel_scheduled","id":"…"} to remove one.\n'
+        '  · KEEPING A TASK UP TO DATE IN THE BACKGROUND — add "planId" to bind the action to a task ' +
+      "(get the id from plan_task / list_task_plans). A bound action runs inside THAT task's own chat, so it " +
+      "sees the task's history and checklist instead of starting cold, and it records what it finds back onto " +
+      "the task. Use this for anything that accumulates over days — chasing RSVPs or replies, watching a " +
+      'price or a shipment, collecting results as they arrive. Each run is told when it last ran, so cover ' +
+      "only what's NEW since then rather than re-reading everything.\n" +
+      '  {"tool":"list_scheduled"} to show them; {"tool":"cancel_scheduled","id":"…"} to remove one.\n'
       : "") +
     (opts.activeTask
       ? `${opts.activeTask}\nThis chat is working the task above. Help the reader finish the CURRENT step — do the ` +
@@ -2509,6 +2518,7 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       rule,
       ...(time ? { time } : {}),
       ...(date && rule === "once" ? { date } : {}),
+      ...(strArg(obj.planId, MAX_ID_CHARS) ? { planId: strArg(obj.planId, MAX_ID_CHARS)! } : {}),
       ...(weekday !== undefined ? { weekday } : {}),
       ...(dayOfMonth !== undefined ? { dayOfMonth } : {}),
     };

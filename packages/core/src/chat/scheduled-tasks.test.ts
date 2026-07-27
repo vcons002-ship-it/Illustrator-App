@@ -4,6 +4,7 @@ import {
   describeSchedule,
   dueScheduledTasks,
   nextDue,
+  scheduledRunPrompt,
   normalizeScheduledTask,
   type ScheduledTask,
 } from "./scheduled-tasks.js";
@@ -131,5 +132,39 @@ describe("normalize + due + advance", () => {
   it("describes the cadence", () => {
     expect(describeSchedule(make({ rule: "daily", time: "09:00" }))).toBe("Daily at 09:00");
     expect(describeSchedule(make({ rule: "weekly", weekday: 5, time: "17:00" }))).toContain("Friday");
+  });
+});
+
+describe("task binding + last-run window", () => {
+  const NOW = new Date("2026-06-16T07:00:00");
+  const make2 = (over: Partial<ScheduledTask> = {}) =>
+    normalizeScheduledTask({ title: "RSVP check", prompt: "check for replies", rule: "daily", time: "09:00", ...over }, NOW);
+
+  it("carries a bound planId through normalise", () => {
+    expect(make2({ planId: "plan-7" }).planId).toBe("plan-7");
+    expect(make2({}).planId).toBeUndefined();
+    expect(make2({ planId: "   " }).planId).toBeUndefined();
+  });
+
+  it("first run says so; later runs carry the previous run's timestamp as the window", () => {
+    const fresh = make2();
+    expect(scheduledRunPrompt(fresh)).toMatch(/first run/i);
+    expect(scheduledRunPrompt(fresh)).toContain("check for replies");
+
+    // advanceSchedule stamps lastRun; the NEXT fire quotes it so the run is incremental.
+    const ran = advanceSchedule(fresh, new Date("2026-06-16T09:00:00"));
+    const prompt = scheduledRunPrompt(ran);
+    expect(prompt).toContain(ran.lastRunIso!);
+    expect(prompt).toMatch(/only what is NEW since then/i);
+    expect(prompt).not.toMatch(/first run/i);
+  });
+
+  it("a bound action is told to write findings back to its task; an unbound one isn't", () => {
+    expect(scheduledRunPrompt(make2({ planId: "plan-7" }))).toMatch(/save_task_context/);
+    expect(scheduledRunPrompt(make2())).not.toMatch(/save_task_context/);
+  });
+
+  it("ignores a corrupt lastRun instead of quoting an invalid window", () => {
+    expect(scheduledRunPrompt(make2({ lastRunIso: "not-a-date" }))).toMatch(/first run/i);
   });
 });

@@ -25,6 +25,11 @@ export interface ScheduledTask {
    * Omitted ⇒ the next time `time` comes around (today if it's still ahead, else tomorrow), which is
    * what "remind me at 5pm" means. Ignored by the recurring rules. */
   date?: string;
+  /** BOUND TASK: the task plan this action maintains. A bound run happens inside that task's own
+   * chat — with its conversation, checklist and files already loaded — instead of the generic
+   * Scheduled chat, so a recurring "keep this up to date" job picks up where it left off rather than
+   * re-deriving the job from a prompt string every time. Unset ⇒ a standalone action. */
+  planId?: string;
   /** Weekly: 0–6 (Sun–Sat). */
   weekday?: number;
   /** Monthly: day-of-month 1–31. */
@@ -139,6 +144,7 @@ export function normalizeScheduledTask(input: Partial<ScheduledTask> & { title: 
     // A calendar day only means anything for a one-shot; drop it on the recurring rules so it can't
     // linger and confuse a later edit.
     ...(rule === "once" && input.date ? { date: input.date.trim() } : {}),
+    ...(input.planId?.trim() ? { planId: input.planId.trim() } : {}),
     ...(input.weekday !== undefined ? { weekday: Math.min(6, Math.max(0, Math.round(input.weekday))) } : {}),
     ...(input.dayOfMonth !== undefined ? { dayOfMonth: Math.min(31, Math.max(1, Math.round(input.dayOfMonth))) } : {}),
     enabled: input.enabled ?? true,
@@ -164,6 +170,31 @@ export function advanceSchedule(task: ScheduledTask, ranAt = new Date()): Schedu
 }
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/**
+ * The message a due scheduled action fires into the chat.
+ *
+ * Carries the LAST-RUN timestamp, which is what makes a repeating watch ("check for RSVP replies")
+ * additive instead of amnesiac: without it every run re-reads the same mail from scratch and
+ * re-reports (or double-counts) things it already handled. `lastRunIso` is already stamped by
+ * `advanceSchedule`, so this needs no extra bookkeeping — it just tells the model the window it
+ * actually has to look at. Call it with the task as it was BEFORE advancing, so the timestamp is the
+ * PREVIOUS run rather than this one.
+ *
+ * A task-bound action also gets told to record what it finds on the task, so the next run (and the
+ * reader) inherits the state rather than it living only in one reply. PURE.
+ */
+export function scheduledRunPrompt(task: ScheduledTask): string {
+  const since = validIso(task.lastRunIso)
+    ? `You last ran this at ${task.lastRunIso} — cover only what is NEW since then, and don't re-report or ` +
+      "re-count anything you already handled on an earlier run."
+    : "This is its first run, so start from what's already there.";
+  const record = task.planId
+    ? " Record what you find on this task (save_task_context) so the next run and the reader both pick it up, " +
+      "and update the task's steps if what you found changes them."
+    : "";
+  return `⏰ Scheduled task “${task.title}”. ${since}${record} Do this now: ${task.prompt}`;
+}
 
 /** A human description of a task's cadence (for the UI). */
 export function describeSchedule(task: ScheduledTask): string {

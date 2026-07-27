@@ -3307,6 +3307,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           rule: call.rule,
           ...(call.time ? { time: call.time } : {}),
           ...(call.date ? { date: call.date } : {}), // one-time run day
+          ...(call.planId ? { planId: call.planId } : {}), // bound task: runs in that task's chat
           ...(call.weekday !== undefined ? { weekday: call.weekday } : {}),
           ...(call.dayOfMonth !== undefined ? { dayOfMonth: call.dayOfMonth } : {}),
         });
