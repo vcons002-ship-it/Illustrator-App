@@ -2055,8 +2055,22 @@ export function App() {
       if (pull.timedOut || pull.code !== 0) {
         return { status: "error", message: `Couldn't download the update: ${trim(pull.stderr || pull.stdout) || "git pull failed"}. Try update.bat.` };
       }
+      // WHICH branch, and what commit it landed on. Without this "You're already on the latest
+      // version" is unfalsifiable: a checkout tracking a branch that never receives the change says
+      // exactly that, forever, while the thing you're waiting for sits on another branch. Comparing
+      // this sha against the one Settings shows also separates "didn't pull" from "didn't rebuild".
+      // Two calls, not one with `&&`: `git rev-parse --abbrev-ref HEAD --short HEAD` looks like it
+      // would give both, but --abbrev-ref applies to every rev after it and returns the branch twice.
+      const branch = (await runCommand("git rev-parse --abbrev-ref HEAD", token, root)).stdout.trim();
+      const head = (await runCommand("git rev-parse --short HEAD", token, root)).stdout.trim();
+      const at = branch && head ? ` (${branch} @ ${head})` : "";
       if (/already up to date/i.test(pull.stdout)) {
-        return { status: "uptodate", message: "You're already on the latest version." };
+        return {
+          status: "uptodate",
+          message:
+            `You're already on the latest version${at}. If you're waiting on a change that isn't here, ` +
+            "check that this is the branch it went to — Settings shows the build this app is actually running.",
+        };
       }
       // What did the pull change? A core/shell (src-tauri) change can't be applied by a reload.
       const diff = await runCommand("git diff --name-only ORIG_HEAD HEAD", token, root);
@@ -2074,12 +2088,12 @@ export function App() {
       if (coreChanged) {
         return {
           status: "needs-restart",
-          message: "Updated! This release also changes the core app — fully close and reopen Visual Reader (run desktop.bat) to finish.",
+          message: `Updated to ${at.trim() || "the latest version"}! This release also changes the core app — fully close and reopen Visual Reader (run desktop.bat) to finish.`,
         };
       }
       onProgress("Reloading…");
       setTimeout(() => window.location.reload(), 1200);
-      return { status: "updated", message: "Updated — reloading the app…" };
+      return { status: "updated", message: `Updated${at} — reloading the app… Settings will show this build once it's back.` };
     },
     [settings.keys],
   );

@@ -11,6 +11,11 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   updates itself, so "this still doesn't work" and "this still doesn't work because you're on an older
   build" looked identical from the outside; twice that has cost several rounds to untangle. Quote the
   build when something seems missing. The assistant knows it too, so you can just ask it.
+- **Updating says what it actually installed** — the branch and commit, on every outcome. "You're
+  already on the latest version" was unfalsifiable: a copy tracking a branch that never receives a
+  change reports exactly that, indefinitely, while the fix you're waiting for sits somewhere else.
+  Comparing the commit it reports against the build shown in Settings also separates "didn't
+  download" from "didn't rebuild".
 
 ### Scheduled actions
 
