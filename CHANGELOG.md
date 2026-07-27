@@ -50,6 +50,10 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   baked into the build settings. Those settings are only read when the app's development server
   starts, and nothing the app can do restarts that server — so anything kept there was beyond the
   update button's reach by construction.
+- **Settings warns when the window is older than your files** — if the code has been pulled and built
+  but this window is still the one loaded beforehand, it now says so under the build number and tells
+  you to reload. Previously the update button reported one build and Settings showed another, with
+  nothing explaining the gap or which of the two was the problem.
 - **Updates that change the build setup still tell you to restart** — that case is now rare rather
   than routine, and it's stated instead of silently not applying.
 

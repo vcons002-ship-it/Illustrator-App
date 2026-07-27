@@ -1224,6 +1224,7 @@ export function App() {
   const [buddyThinking, setBuddyThinking] = useState("");
   /** The running build, read from /build.json once (see build-stamp.ts). */
   const [buildStampLabel, setBuildStampLabel] = useState("");
+  const [checkoutSha, setCheckoutSha] = useState("");
   useEffect(() => {
     void loadBuildStamp().then((s) => setBuildStampLabel(formatBuildStamp(s)));
   }, []);
@@ -2073,6 +2074,20 @@ export function App() {
   });
 
   // In-app software update (desktop): git-pull the latest code, reinstall deps, rebuild the web
+  // What the CHECKOUT is at, read once on the desktop. Settings compares it against the build this
+  // window is actually running: equal means what was pulled is what's loaded; different means the
+  // code arrived but this page predates it. Those two have different fixes and are indistinguishable
+  // without both numbers — which is precisely the confusion this whole thread has been about.
+  useEffect(() => {
+    if (!isDesktop) return;
+    void (async () => {
+      const root = await appRepoRoot().catch(() => undefined);
+      if (!root) return;
+      const r = await runCommand("git rev-parse --short HEAD", undefined, root).catch(() => undefined);
+      const sha = r?.stdout.trim();
+      if (sha && /^[0-9a-f]{6,}$/i.test(sha)) setCheckoutSha(sha);
+    })();
+  }, [isDesktop]);
   // bundle, then reload the window to apply it. The app serves apps/web/dist (or Vite in dev), so a
   // JS/TS update — almost everything — applies on reload without rebuilding the Rust shell; a core
   // (src-tauri) change is detected and the reader is told to fully relaunch to finish it.
@@ -8008,6 +8023,7 @@ export function App() {
             value={settings}
             onChange={onSettingsChange}
             buildStamp={buildStampLabel}
+            {...(checkoutSha ? { checkoutSha } : {})}
             isDesktop={isDesktop}
             remote={isRemoteClient}
             {...(isDesktop

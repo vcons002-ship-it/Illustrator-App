@@ -543,6 +543,10 @@ export interface SettingsPanelProps {
   /** The running bundle's git sha + build time, shown at the top of the panel. The app self-updates,
    * so a stale build and an unfixed bug look identical from outside; this is what tells them apart. */
   buildStamp?: string;
+  /** What the CHECKOUT is at (desktop). Shown only when it differs from the running bundle — that
+   * gap is the difference between "the update didn't download" and "it downloaded but this page is
+   * still the old one", which are otherwise indistinguishable and have different fixes. */
+  checkoutSha?: string;
   /** True when running inside the desktop app (enables the local GPU engine). */
   isDesktop?: boolean;
   /** True when this is a phone LINKED to a desktop: it has no engine of its own, but its edits and
@@ -626,6 +630,7 @@ export function SettingsPanel({
   value,
   onChange,
   buildStamp,
+  checkoutSha,
   isDesktop = false,
   remote = false,
   installedModels = [],
@@ -756,6 +761,17 @@ export function SettingsPanel({
                 title="The build this app is running. Quote it when reporting a problem — it tells a stale build from a real bug."
               >
                 Build {buildStamp}
+              </div>
+            ) : null}
+            {/* The running bundle is NOT what the checkout is at. Almost always: the code was pulled
+                and built, but this page is still the one loaded before that. Said here because the
+                two numbers otherwise only differ somewhere the reader can't see, and the fix depends
+                on which way they differ. */}
+            {buildStamp && checkoutSha && !buildStamp.startsWith(checkoutSha) ? (
+              <div style={{ fontSize: 11, color: "#ffcf8b", marginTop: 3, userSelect: "text" }}>
+                Your files are at {checkoutSha}, but this window is still running the build above.
+                Reload the app to catch up — if it still doesn't match after that, fully close and
+                reopen it (desktop.bat).
               </div>
             ) : null}
             <input
