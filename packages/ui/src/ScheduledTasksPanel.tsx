@@ -159,18 +159,24 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                     <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
                       {t.prompt}
                     </div>
-                    {onBindTask && (taskOptions?.length ?? 0) > 0 ? (
-                      <label
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 6,
-                          fontSize: 11,
-                          opacity: 0.75,
-                          marginTop: 5,
-                        }}
-                      >
-                        Runs on:
+                    {/* WHERE this action runs, on every action, always. Never hidden behind "are there
+                        tasks to pick from" — where an action runs is the single thing that decides
+                        whether it resumes with a task's history or starts cold, and an invisible
+                        control reads as a missing feature. Falls back to plain text when there's
+                        nothing to pick, so the detail still shows. */}
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                        gap: 6,
+                        fontSize: 11,
+                        opacity: 0.75,
+                        marginTop: 5,
+                      }}
+                    >
+                      Runs on:
+                      {onBindTask && (taskOptions?.length ?? 0) > 0 ? (
                         <select
                           value={t.planId ?? ""}
                           onChange={(e) =>
@@ -183,11 +189,11 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                             borderRadius: 5,
                             fontSize: 11,
                             padding: "2px 4px",
-                            maxWidth: 240,
+                            maxWidth: "100%",
                           }}
                         >
                           <option value="">
-                            Nothing — the shared Scheduled chat
+                            Nothing — the shared ⏰ Scheduled chat
                           </option>
                           {taskOptions!.map((o) => (
                             <option key={o.id} value={o.id}>
@@ -195,8 +201,15 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                             </option>
                           ))}
                         </select>
-                      </label>
-                    ) : null}
+                      ) : (
+                        <span style={{ opacity: 0.9 }}>
+                          {t.planId
+                            ? (taskTitles[t.planId] ??
+                              "a task that no longer exists")
+                            : "the shared ⏰ Scheduled chat"}
+                        </span>
+                      )}
+                    </label>
                     <div style={{ fontSize: 11, opacity: 0.5, marginTop: 3 }}>
                       Next:{" "}
                       {t.enabled

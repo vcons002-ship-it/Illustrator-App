@@ -11,9 +11,13 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   own chat, picking up its history and checklist, instead of starting cold in the shared ⏰ Scheduled
   window. Attaching it was previously left entirely to the assistant remembering to, which it usually
   didn't, so almost everything ended up in the one shared chat regardless of what it was for.
-- **You can move an existing action onto a task** — ⏰ Scheduled now has a "Runs on:" picker on each
-  action. Actions created before this stay unattached, because nothing in them reliably says which
-  task they belong to and guessing would be worse; this is how you attach them.
+- **Every scheduled action says where it runs** — ⏰ Scheduled shows a "Runs on:" line on each action,
+  naming the task it belongs to or the shared ⏰ Scheduled chat. It's always shown, including on the
+  phone and when you have no tasks to attach to, so where an action runs is never something you have
+  to infer.
+- **You can move an existing action onto a task** — that "Runs on:" line is a picker. Actions created
+  before this stay unattached, because nothing in them reliably says which task they belong to and
+  guessing would be worse; this is how you attach them.
 - **The assistant is told where an action will run** when it schedules one, so it can say so — and
   notice when something meant for a task isn't attached to one.
 - **Actions on a finished task stop running** — an action attached to a task you've completed, ignored
