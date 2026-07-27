@@ -182,13 +182,17 @@ export const CalendarPanel = memo(function CalendarPanel({
   const [edEnd, setEdEnd] = useState("");
   const [edLocation, setEdLocation] = useState("");
   const [edDescription, setEdDescription] = useState("");
+  const [edAllDay, setEdAllDay] = useState(false);
   const [edBusy, setEdBusy] = useState(false);
   const [edError, setEdError] = useState<string | null>(null);
   const beginEdit = (ev: CalendarEvent): void => {
     setEditId(ev.id ?? null);
     setEdSummary(ev.summary === "(no title)" ? "" : ev.summary);
-    setEdStart(ev.allDay ? "" : clockOf(ev.start));
-    setEdEnd(ev.allDay ? "" : clockOf(ev.end));
+    // An all-day event has no clock times to seed — the defaults below are what it becomes if the
+    // reader converts it to a timed event.
+    setEdStart(ev.allDay ? "09:00" : clockOf(ev.start));
+    setEdEnd(ev.allDay ? "10:00" : clockOf(ev.end));
+    setEdAllDay(!!ev.allDay);
     setEdLocation(ev.location ?? "");
     setEdDescription(ev.description ?? "");
     setEdError(null);
@@ -199,16 +203,26 @@ export const CalendarPanel = memo(function CalendarPanel({
     if (edSummary.trim() && edSummary.trim() !== ev.summary) patch.summary = edSummary.trim();
     if (edLocation !== (ev.location ?? "")) patch.location = edLocation.trim();
     if (edDescription !== (ev.description ?? "")) patch.description = edDescription;
-    if (!ev.allDay && (edStart || edEnd)) {
-      const day = eventStartDay(ev);
-      const s = new Date(`${day}T${edStart || clockOf(ev.start)}`);
-      const e = new Date(`${day}T${edEnd || clockOf(ev.end)}`);
+    const wasAllDay = !!ev.allDay;
+    const kindChanged = wasAllDay !== edAllDay;
+    const day = eventStartDay(ev);
+    if (edAllDay) {
+      // Only rewrite the dates when CONVERTING to all-day. An event that was already all-day keeps its
+      // own span — recomputing it here would silently collapse a multi-day trip to a single day.
+      if (kindChanged) {
+        patch.start = day;
+        patch.end = day; // the API turns this into Google's exclusive next-day end
+      }
+    } else if (edStart || edEnd) {
+      const s = new Date(`${day}T${edStart || "09:00"}`);
+      const e = new Date(`${day}T${edEnd || "10:00"}`);
       if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime()) || e <= s) {
         setEdError("Pick a valid start before end.");
         return;
       }
-      if (clockOf(ev.start) !== edStart || clockOf(ev.end) !== edEnd) {
-        // Google needs both ends when either moves, or the event would be left inverted.
+      // Send both ends when either moves (Google would otherwise leave the event inverted) — and
+      // always on a conversion, since that's the change itself.
+      if (kindChanged || clockOf(ev.start) !== edStart || clockOf(ev.end) !== edEnd) {
         patch.start = s.toISOString();
         patch.end = e.toISOString();
       }
@@ -377,9 +391,11 @@ export const CalendarPanel = memo(function CalendarPanel({
                   editId && ev.id === editId ? (
                     <div key={`se-${i}`} style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", padding: "4px 0" }}>
                       <input autoFocus value={edSummary} onChange={(e) => setEdSummary(e.target.value)} placeholder="Event title" style={evInput} />
-                      {ev.allDay ? (
-                        <span style={{ fontSize: 11, opacity: 0.6 }}>all day</span>
-                      ) : (
+                      <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, opacity: 0.85, cursor: "pointer" }} title="Switch between an all-day event and one with a set time">
+                        <input type="checkbox" checked={edAllDay} onChange={(e) => setEdAllDay(e.target.checked)} />
+                        All day
+                      </label>
+                      {edAllDay ? null : (
                         <>
                           <input type="time" value={edStart} onChange={(e) => setEdStart(e.target.value)} style={evTime} title="Start" />
                           <span style={{ opacity: 0.5 }}>→</span>

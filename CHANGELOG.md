@@ -28,6 +28,10 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   having seen the booking happen. (Events that already happened are findable too, by asking for a
   window that reaches back.) Listed events show their existing details, so it can see what's already
   recorded before adding.
+- **Switch an event between all-day and timed** — the Edit form's "All day" tick box now works both
+  ways on an existing event: give an all-day event a start and end time, or drop the times off a
+  timed one. The assistant can convert an event the same way. An all-day event that spans several
+  days keeps its span when you edit something else about it.
 - **All-day events** — 📅 Calendar's add-event form has an "All day" tick box (a birthday, a holiday,
   a whole-day trip), and the assistant can create or change one by giving plain dates instead of
   times. The fiddly part is handled for you: a one-day all-day event is written the obvious way

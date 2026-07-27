@@ -589,6 +589,20 @@ export function eventTimeField(value: string): { date: string } | { dateTime: st
 }
 
 /**
+ * The same start/end value, but stated as a full PATCH field: the shape being set, and the OTHER one
+ * explicitly `null`.
+ *
+ * Calendar's patch MERGES nested objects, so sending only the new shape when CONVERTING an event
+ * between all-day and timed leaves the old key in place — the event ends up carrying both `date` and
+ * `dateTime`, which is invalid (the API rejects it, or keeps the stale one and appears to ignore the
+ * change). Nulling the other key asserts the intended shape outright. On an event that's already the
+ * target shape it's a harmless no-op, so every patch can use it. PURE.
+ */
+export function patchTimeField(field: { date: string } | { dateTime: string }): { date: string | null; dateTime: string | null } {
+  return "date" in field ? { date: field.date, dateTime: null } : { dateTime: field.dateTime, date: null };
+}
+
+/**
  * Update an existing event in place (PATCH — only the fields given change).
  *
  * `appendDescription` is the "add what we learned to this event" path: Calendar's PATCH REPLACES a
@@ -607,11 +621,11 @@ export async function patchEvent(
   if (patch.start !== undefined && patch.end !== undefined) {
     // Both ends move together → same all-day exclusive-end normalisation as creating one.
     const { start, end } = eventTimeFields(patch.start, patch.end);
-    body.start = start;
-    body.end = end;
+    body.start = patchTimeField(start);
+    body.end = patchTimeField(end);
   } else {
-    if (patch.start !== undefined) body.start = eventTimeField(patch.start);
-    if (patch.end !== undefined) body.end = eventTimeField(patch.end);
+    if (patch.start !== undefined) body.start = patchTimeField(eventTimeField(patch.start));
+    if (patch.end !== undefined) body.end = patchTimeField(eventTimeField(patch.end));
   }
   if (patch.location !== undefined) body.location = patch.location;
   if (patch.description !== undefined) body.description = patch.description;
