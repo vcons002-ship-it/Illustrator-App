@@ -128,6 +128,13 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Email
 
+- **Drafts can be revised instead of re-written** — asking for a change to an email the assistant just
+  drafted ("make it warmer", "add that I'll be late") had nowhere to go: it couldn't edit a draft, and
+  the draft's id was never even handed back, so the only option was drafting again and leaving a
+  second copy beside the first. It can now change part of a draft in place — the body, the subject,
+  the recipients — leaving everything it doesn't mention untouched, and it can list your saved drafts
+  to find one from an earlier conversation. Blind-copied recipients survive an edit, which they
+  wouldn't have if the draft were simply rewritten.
 - **The assistant can see who an email was sent to** — To and Cc were never fetched or shown, so it
   could read a thread but not tell you who was on it, and couldn't answer "who hasn't replied yet".
 

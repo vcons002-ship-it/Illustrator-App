@@ -9,7 +9,8 @@
 
 export interface TransportRequest {
   url: string;
-  method?: "GET" | "POST" | "PATCH";
+  /** PUT is for APIs with no partial update — Gmail drafts replace the whole message. */
+  method?: "GET" | "POST" | "PATCH" | "PUT";
   headers?: Record<string, string>;
   /** JSON-serialisable body. */
   body?: unknown;
