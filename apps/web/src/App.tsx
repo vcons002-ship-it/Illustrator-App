@@ -1793,6 +1793,15 @@ export function App() {
   useEffect(() => {
     refreshScheduled();
   }, [refreshScheduled]);
+  /** Where ✕ "leave this chat" goes, or undefined when there's nowhere to go (we're already home, or
+   * this is the only session). Prefers the general chat, but falls back to ANY other session: keying
+   * it strictly on BUDDY_CHAT_ID meant that if that original session had ever been deleted, the
+   * button silently never appeared — leaving 🗑 as the only way out again, which is the whole thing
+   * this is here to prevent. */
+  const leaveChatTargetId = useMemo(() => {
+    if (activeBuddyId !== BUDDY_CHAT_ID && buddySessions.some((s) => s.id === BUDDY_CHAT_ID)) return BUDDY_CHAT_ID;
+    return buddySessions.find((s) => s.id !== activeBuddyId)?.id;
+  }, [buddySessions, activeBuddyId]);
   /** planId → task title, so ⏰ Scheduled can show WHICH task a bound action maintains rather than
    * listing everything together. Built from the mirrored plans, so it's right on the phone too. */
   const scheduledTaskTitles = useMemo(
@@ -7056,11 +7065,9 @@ export function App() {
       onNewSession={onNewBuddySession}
       onRenameSession={onRenameBuddySession}
       onDeleteSession={onDeleteBuddySession}
-      // Offered only when there's a general chat to go back TO — in the general chat itself there's
-      // nothing to leave, so the button would be a no-op.
-      {...(activeBuddyId !== BUDDY_CHAT_ID && buddySessions.some((s) => s.id === BUDDY_CHAT_ID)
-        ? { onCloseSession: () => onSwitchBuddySession(BUDDY_CHAT_ID) }
-        : {})}
+      // Offered whenever there's somewhere to go back TO (see leaveChatTargetId) — in the only/home
+      // chat there's nothing to leave, so the button would be a no-op.
+      {...(leaveChatTargetId ? { onCloseSession: () => onSwitchBuddySession(leaveChatTargetId) } : {})}
       onSend={onBuddySendWithAttachments}
       onStartStory={() => void startStoryAsYouGo()}
       onAttachFile={onAttachBuddyFile}
