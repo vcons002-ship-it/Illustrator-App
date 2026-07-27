@@ -575,15 +575,22 @@ export async function runBuddyTurn(opts: {
       // Track for the anti-skip guard: only a successful check-off arms it; any other tool is "work".
       lastWasCompleteStep = call.tool === "complete_step" && !result.error;
     }
-    // On the final tool round, append a wrap-up nudge so the model answers now instead of
-    // spending its last round on a tool whose result it can't follow up on.
-    const feedback =
-      feedbacks.join("\n\n") +
+    // The tool RESULTS are the durable record of what happened — they belong in the persisted
+    // transcript. What gets appended after them is TURN-LOCAL steering: "re-issue the deferred host
+    // tool", "write a progress line before your next call", and (on the final round) "Do NOT call
+    // another tool now". Those only mean anything inside the round loop that produced them.
+    //
+    // Persisting them replayed a stale directive as a standing user instruction on EVERY later turn —
+    // most visibly the tool-limit one, which left the model reasoning about why it had been forbidden
+    // from calling tools in a conversation where no limit was in play. Context-ONLY, exactly like the
+    // re-issue and wrap-up nudges above.
+    const results = feedbacks.join("\n\n");
+    const steering =
       (deferred ? "\n\n[Re-issue the remaining host tool (image/command/plan/etc.) now if you still need it.]" : "") +
       progressNudge(round) +
       toolLimitNudge(round, effectiveMax);
-    transcript.push({ role: "user", content: feedback });
-    messages.push({ role: "user", content: feedback });
+    if (results.trim()) transcript.push({ role: "user", content: results });
+    if (results || steering) messages.push({ role: "user", content: results + steering });
   }
 }
 

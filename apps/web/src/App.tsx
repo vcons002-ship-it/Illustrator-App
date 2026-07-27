@@ -3809,7 +3809,7 @@ export function App() {
       buddyStepEvidenceRef.current.toolResults.push({ call, result: { command: r } });
       await advanceWorkflowAfterTurn(
         { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
-        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge, undefined, true),
       );
       return;
     }
@@ -4084,7 +4084,7 @@ export function App() {
       buddyStepEvidenceRef.current.toolResults.push({ call, result: { writeFile: payload } });
       await advanceWorkflowAfterTurn(
         { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
-        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge, undefined, true),
       );
       return;
     }
@@ -4142,7 +4142,7 @@ export function App() {
       buddyStepEvidenceRef.current.toolResults.push({ call, result: { writeFile: { path: call.path, ok: payload.ok, ...(payload.error ? { error: payload.error } : {}) } } });
       await advanceWorkflowAfterTurn(
         { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
-        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge, undefined, true),
       );
       return;
     }
@@ -4208,7 +4208,7 @@ export function App() {
       buddyStepEvidenceRef.current.toolResults.push({ call, result: { command: { stdout: payload.summary, stderr: "", code: payload.ok ? 0 : 1 } } });
       await advanceWorkflowAfterTurn(
         { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
-        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge, undefined, true),
       );
       return;
     }
@@ -4608,7 +4608,7 @@ export function App() {
       });
       await advanceWorkflowAfterTurn(
         { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
-        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge, undefined, true),
       );
       return;
     }
@@ -4728,7 +4728,7 @@ export function App() {
       buddyStepEvidenceRef.current.toolResults.push({ call, result: { video: { ok: Boolean(out.video), ...(out.error ? { error: out.error } : {}) } } });
       await advanceWorkflowAfterTurn(
         { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
-        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge, undefined, true),
       );
       return;
     }
@@ -4830,7 +4830,7 @@ export function App() {
       buddyStepEvidenceRef.current.toolResults.push({ call, result: { video: { ok: Boolean(out.video), ...(out.error ? { error: out.error } : {}) } } });
       await advanceWorkflowAfterTurn(
         { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
-        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge, undefined, true),
       );
       return;
     }
@@ -4937,7 +4937,7 @@ export function App() {
       buddyStepEvidenceRef.current.toolResults.push({ call, result: { video: { ok: Boolean(out.video), ...(out.error ? { error: out.error } : {}) } } });
       await advanceWorkflowAfterTurn(
         { toolResults: buddyStepEvidenceRef.current.toolResults, text: "" },
-        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge),
+        (nudge) => dispatchBuddyTurn([...preHistory, ...pre], nudge, undefined, true),
       );
       return;
     }
@@ -5159,6 +5159,13 @@ export function App() {
     history: ChatTurn[],
     userText: string,
     userBubbleText?: string,
+    /** `userText` is an INTERNAL step directive, not conversation. It steers this turn only and is
+     * kept OUT of the saved turns — the app-managed executor's nudges ("do ONLY step 3 of 5, call its
+     * tool and stop") are control flow, and persisting them replayed them as standing user
+     * instructions on every later turn, in a conversation where no checklist was even running.
+     * Durable tool FEEDBACK (an image rendered, a file was written) is not ephemeral — it's the
+     * record of what happened — so it keeps riding the transcript. */
+    ephemeralDirective?: boolean,
   ): Promise<string | undefined> => {
     const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
     // Make sure the worker has THIS session's current file ledger before the turn builds its prompt
@@ -5571,7 +5578,7 @@ export function App() {
         appendBuddy({
           role: "assistant",
           text: res.text,
-          turns: [{ role: "user", content: userText }, ...res.transcript],
+          turns: ephemeralDirective ? [...res.transcript] : [{ role: "user", content: userText }, ...res.transcript],
           ...(res.thinking ? { thinking: res.thinking } : {}),
           // Cloud "keep going?" checkpoint: the task paused with work remaining (so a long run doesn't
           // burn API calls unattended). Offer a one-tap Continue that re-arms the budget and resumes.
@@ -5585,7 +5592,7 @@ export function App() {
       if (appManagedActive && buddyWorkflowRef.current && !res.paused) {
         const handled = await advanceWorkflowAfterTurn(
           { toolResults: buddyStepEvidenceRef.current.toolResults, text: res.text },
-          (nudge) => dispatchBuddyTurn([...history, { role: "user", content: userText }, ...res.transcript], nudge),
+          (nudge) => dispatchBuddyTurn([...history, { role: "user", content: userText }, ...res.transcript], nudge, undefined, true),
         );
         if (handled) return res.text || undefined;
       }
