@@ -136,7 +136,9 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   to find one from an earlier conversation. Blind-copied recipients survive an edit, which they
   wouldn't have if the draft were simply rewritten. A draft it has open stays visible to it for the
   rest of the conversation, so a change asked for much later still edits that draft rather than
-  starting a new one.
+  starting a new one. And if it reaches for "new draft" anyway when the email is plainly the same one
+  — same people, same subject — the app updates the draft you already have instead of leaving a second
+  copy, and says that's what it did. A genuinely different email still drafts normally.
 - **The assistant can see who an email was sent to** — To and Cc were never fetched or shown, so it
   could read a thread but not tell you who was on it, and couldn't answer "who hasn't replied yet".
 

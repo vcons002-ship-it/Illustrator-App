@@ -12,6 +12,7 @@ import type { ChatCapable, ChatTurn } from "../providers/llm/chat.js";
 import { runBuddyTurn, type BuddyDeps, type BuddyTurnEvent } from "./buddy-session.js";
 import {
   buildBuddySystemPrompt,
+  formatBuddyToolResult,
   parseBuddyToolCall,
   parseBuddyToolCalls,
   type BuddyPlan,
@@ -318,6 +319,39 @@ describe("scenario: chains run in order and each result feeds the next round", (
     expect(outcome.toolResults.map((r) => r.call.tool)).toEqual(["gmail_search", "read_email", "draft_email"]);
     expect(outcome.text).toContain("Drafted");
     expect(llm.calls).toHaveLength(4);
+  });
+
+  it("revising a draft edits the SAME draft — it must never reach draft_email again", async () => {
+    // The whole path, end to end: draft, then a follow-up revision. If edit_draft is unreachable for
+    // any reason (parse, dispatch, deps), this catches it as a second draft instead of an edit.
+    const llm = scriptedLlm([
+      '{"tool":"draft_email","to":["bo@x.com"],"subject":"Party","body":"See you at 6."}',
+      "Drafted it — ready to review.",
+      '{"tool":"edit_draft","draftId":"draft-1","edits":[{"find":"See you at 6.","replace":"See you at 7."}]}',
+      "Updated the draft to 7.",
+    ]);
+    const seq: string[] = [];
+    const deps = baseDeps({
+      draftEmail: async (d) => {
+        seq.push(`draft:${d.subject}`);
+        return { id: "draft-1" };
+      },
+      editDraft: async (id, patch) => {
+        seq.push(`edit:${id}:${patch.edits?.[0]?.replace ?? ""}`);
+        return { id, to: ["bo@x.com"], subject: "Party", body: "See you at 7." };
+      },
+    });
+    const first = await runBuddyTurn({ llm, system: "sys", history: [{ role: "user", content: "email Bo about the party" }], deps });
+    expect(first.toolResults.map((r) => r.call.tool)).toEqual(["draft_email"]);
+    // The id has to come back, or the next turn has nothing to aim at.
+    expect(formatBuddyToolResult(first.toolResults[0]!.call, first.toolResults[0]!.result)).toContain("draftId: draft-1");
+
+    const second = await runBuddyTurn({ llm, system: "sys", history: [{ role: "user", content: "change it to 7" }], deps });
+    expect(second.toolResults.map((r) => r.call.tool)).toEqual(["edit_draft"]);
+    expect(seq).toEqual(["draft:Party", "edit:draft-1:See you at 7."]);
+    // Exactly one draft was ever created.
+    expect(seq.filter((s) => s.startsWith("draft:"))).toHaveLength(1);
+    expect(second.text).toContain("Updated the draft");
   });
 
   it("markets: read the watchlist, quote a symbol, then a gated prep_order suspends for review", async () => {

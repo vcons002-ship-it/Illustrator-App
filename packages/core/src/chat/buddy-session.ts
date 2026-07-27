@@ -143,7 +143,9 @@ export interface BuddyDeps {
   /** Download + read an email attachment's text (auto-run; safe internal "gather" work). */
   readAttachment?: (messageId: string, attachmentId: string) => Promise<{ filename: string; mimeType: string; text?: string; bytesLen: number }>;
   /** Draft an email (saved to Gmail Drafts; auto-run — a draft is reversible). */
-  draftEmail?: (d: { to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[] }) => Promise<{ id?: string }>;
+  /** Save a draft. `updatedExisting` marks the case where this call targeted the draft already open
+   * and so UPDATED it rather than adding a second one — the host's revision guard. */
+  draftEmail?: (d: { to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[] }) => Promise<{ id?: string; updatedExisting?: boolean }>;
   /** The reader's saved Gmail drafts, so one written earlier can be found and edited. */
   listDrafts?: (max?: number) => Promise<{ id: string; to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[] }[]>;
   /** Change a saved draft IN PLACE — read-modify-write, since Gmail replaces the whole message on
@@ -863,7 +865,7 @@ export async function runBuddyTool(
         };
         try {
           const r = await deps.draftEmail(d);
-          return { email: { sent: false, to: call.to, subject: call.subject, ...(r.id ? { id: r.id } : {}) } };
+          return { email: { sent: false, to: call.to, subject: call.subject, ...(r.id ? { id: r.id } : {}), ...(r.updatedExisting ? { updatedExisting: true } : {}) } };
         } catch (err) {
           return { email: { sent: false, to: call.to, subject: call.subject, error: err instanceof Error ? err.message : String(err) } };
         }
