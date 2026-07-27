@@ -1337,6 +1337,8 @@ export function App() {
   /** openTaskInChat, reachable from the scheduled runner declared above it (same late-binding
    * pattern as switchBuddyRef) — a task-bound action opens the task's own chat to run in. */
   const openTaskRef = useRef<((planId: string) => Promise<void>) | undefined>(undefined);
+  /** onNewBuddySession, reachable from onLeaveChat (declared above it) — same late-binding pattern. */
+  const onNewBuddySessionRef = useRef<(() => void) | undefined>(undefined);
   /** The plan whose execution chat is the active session (the task being "worked"), if any. */
   const activeTaskPlanId = () => resolveActiveTaskPlanId(taskPlansRef.current, activeBuddyIdRef.current);
   const persistSessions = useCallback(
@@ -1793,15 +1795,36 @@ export function App() {
   useEffect(() => {
     refreshScheduled();
   }, [refreshScheduled]);
-  /** Where ✕ "leave this chat" goes, or undefined when there's nowhere to go (we're already home, or
-   * this is the only session). Prefers the general chat, but falls back to ANY other session: keying
-   * it strictly on BUDDY_CHAT_ID meant that if that original session had ever been deleted, the
-   * button silently never appeared — leaving 🗑 as the only way out again, which is the whole thing
-   * this is here to prevent. */
+  /** Where ✕ "leave this chat" goes — undefined ONLY when we're already in the general chat.
+   *
+   * Every other case must resolve to something, because a hidden ✕ puts us back where we started:
+   * 🗑 Delete as the only exit from a task's chat. So it prefers the general chat, falls back to any
+   * other session, and finally to re-creating the general chat — keying it strictly on
+   * BUDDY_CHAT_ID *existing* meant the button silently disappeared for anyone who had ever deleted
+   * their original chat. */
   const leaveChatTargetId = useMemo(() => {
-    if (activeBuddyId !== BUDDY_CHAT_ID && buddySessions.some((s) => s.id === BUDDY_CHAT_ID)) return BUDDY_CHAT_ID;
-    return buddySessions.find((s) => s.id !== activeBuddyId)?.id;
+    if (activeBuddyId === BUDDY_CHAT_ID) return undefined; // already home; nothing to leave
+    if (buddySessions.some((s) => s.id === BUDDY_CHAT_ID)) return BUDDY_CHAT_ID;
+    return buddySessions.find((s) => s.id !== activeBuddyId)?.id ?? BUDDY_CHAT_ID;
   }, [buddySessions, activeBuddyId]);
+  /** Leave the current chat, re-creating the general one first if it's no longer in the list (the
+   * target above can name it even when it's gone, precisely so ✕ never has to hide). */
+  const onLeaveChat = useCallback(() => {
+    const target = leaveChatTargetId;
+    if (!target) return;
+    if (!buddySessions.some((s) => s.id === target)) {
+      if (isRemoteClient) {
+        onNewBuddySessionRef.current?.(); // the desktop owns the session list; ask it for a fresh chat
+        return;
+      }
+      setBuddySessions((prev) => {
+        const next = [...prev, { id: target, workingDir: "" }];
+        persistSessions(next);
+        return next;
+      });
+    }
+    switchBuddyRef.current?.(target);
+  }, [leaveChatTargetId, buddySessions, isRemoteClient, persistSessions]);
   /** planId → task title, so ⏰ Scheduled can show WHICH task a bound action maintains rather than
    * listing everything together. Built from the mirrored plans, so it's right on the phone too. */
   const scheduledTaskTitles = useMemo(
@@ -6278,6 +6301,7 @@ export function App() {
     setFileLedger([]);
     void libraryStore.putMemo?.("buddy-active-session", id).catch(() => {});
   }, [isRemoteClient, sendAppSync, libraryStore, persistSessions, resetBuddyView, setFileLedger]);
+  onNewBuddySessionRef.current = onNewBuddySession; // so onLeaveChat (declared earlier) can reach it
   const onDeleteBuddySession = useCallback(
     (id: string) => {
       if (isRemoteClient) {
@@ -7067,7 +7091,7 @@ export function App() {
       onDeleteSession={onDeleteBuddySession}
       // Offered whenever there's somewhere to go back TO (see leaveChatTargetId) — in the only/home
       // chat there's nothing to leave, so the button would be a no-op.
-      {...(leaveChatTargetId ? { onCloseSession: () => onSwitchBuddySession(leaveChatTargetId) } : {})}
+      {...(leaveChatTargetId ? { onCloseSession: onLeaveChat } : {})}
       onSend={onBuddySendWithAttachments}
       onStartStory={() => void startStoryAsYouGo()}
       onAttachFile={onAttachBuddyFile}
