@@ -20,11 +20,13 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   step at a time once you've been idle a few minutes, and gives up after two tries instead of
   retrying forever. It still never submits forms, pays, or sends email.
 
-- **You can close a chat without deleting it** — the chat header had New, Rename and Delete but no
-  way to simply *leave*, so getting out of a task's chat meant hitting 🗑 — which permanently threw
-  away everything you'd worked through on that task (and reopening it then showed only the original
-  plan summary, because the history was gone). There's now a ✕ that takes you back to the general
-  chat and keeps the history. Delete also names what it's about to destroy and points at ✕ instead.
+- **Close a chat without deleting it** — ✕ closes the chat you're in: it drops out of the switcher
+  and everything is kept. It comes back from the "Closed (reopen)" group in the same switcher, or
+  automatically when you open its task again — with the whole conversation intact. Previously the
+  header had only New, Rename and Delete, so getting out of a task's chat meant hitting 🗑, which
+  permanently threw away everything you'd worked through on that task (and reopening the task then
+  showed just the original plan summary, because the history was gone). 🗑 is still there for
+  actually deleting, and now says which chat it's about to destroy and points at ✕ instead.
 - **⏰ Scheduled shows which task each action belongs to** — it was one flat list, so once actions
   started being attached to tasks there was no way to tell what an entry was for. Actions are now
   grouped under the task they maintain, with anything standalone listed separately. An action whose

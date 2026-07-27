@@ -85,7 +85,9 @@ export interface ChatBuddyPanelProps {
    * change to apply when one is picked. Absent → the button/popover don't render. */
   modelMenu?: { groups: ModelMenuGroup[]; onSelect: (patch: Partial<ReaderSettings>) => void };
   /** Multiple chat sessions (each its own history + folder); switch/create/delete. */
-  sessions?: { id: string; label: string }[];
+  /** `closed` sessions are hidden from the picker and offered under a "Closed" group to reopen —
+   * closing keeps a chat's history, unlike deleting it. */
+  sessions?: { id: string; label: string; closed?: boolean }[];
   activeSessionId?: string;
   onSwitchSession?: (id: string) => void;
   onNewSession?: () => void;
@@ -96,6 +98,8 @@ export interface ChatBuddyPanelProps {
    * there's somewhere to go back to (i.e. this isn't already the general chat). Without it the only
    * exit-shaped control was 🗑 Delete, so leaving a task's chat meant destroying its history. */
   onCloseSession?: () => void;
+  /** Bring a closed chat back (picked from the "Closed" group). */
+  onReopenSession?: (id: string) => void;
   onSend: (text: string) => void;
   /** Open the host's "Story as you go" setup modal (workflow + cast + characters). When omitted, the
    * ✍️ Story button falls back to a one-line opening prompt. */
@@ -316,23 +320,42 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <select
               value={props.activeSessionId}
-              onChange={(e) => props.onSwitchSession!(e.target.value)}
+              onChange={(e) => {
+                const picked = props.sessions?.find((x) => x.id === e.target.value);
+                if (picked?.closed && props.onReopenSession) props.onReopenSession(picked.id);
+                else props.onSwitchSession!(e.target.value);
+              }}
               style={sessionSelectStyle}
               title="Switch chat session (each keeps its own history + working folder)"
             >
-              {props.sessions.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.label}
-                </option>
-              ))}
+              {props.sessions
+                .filter((s) => !s.closed || s.id === props.activeSessionId)
+                .map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                  </option>
+                ))}
+              {/* Closed chats stay reachable: picking one reopens it with its history intact. */}
+              {props.onReopenSession && props.sessions.some((s) => s.closed && s.id !== props.activeSessionId) && (
+                <optgroup label="Closed (reopen)">
+                  {props.sessions
+                    .filter((s) => s.closed && s.id !== props.activeSessionId)
+                    .map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.label}
+                      </option>
+                    ))}
+                </optgroup>
+              )}
             </select>
             {/* Always available (not behind the ⋯ tools), because it's the way OUT of this chat —
-                hiding it is what left Delete looking like the only exit. */}
+                hiding it is what left Delete looking like the only exit. CLOSE ≠ DELETE: this drops
+                the chat from the picker and keeps everything; 🗑 below destroys the history. */}
             {props.onCloseSession && (
               <button
                 style={smallButtonStyle}
-                title="Leave this chat and go back to the general one (its history is kept)"
-                aria-label="Leave this chat"
+                title="Close this chat — its history is kept, and it reopens from the list above (or by opening its task)"
+                aria-label="Close this chat"
                 onClick={props.onCloseSession}
               >
                 ✕
@@ -367,7 +390,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                   // the difference between "delete a chat session" and "throw away the work on X" —
                   // and ✕ above is the non-destructive way out.
                   const label = props.sessions?.find((s) => s.id === props.activeSessionId)?.label ?? "this chat";
-                  if (window.confirm(`Delete “${label}”?\n\nIts whole chat history is removed permanently — this can't be undone.\nTo just leave it, use ✕ instead.`)) {
+                  if (window.confirm(`Delete “${label}”?\n\nIts whole chat history is removed permanently — this can't be undone.\nTo just close it and keep the history, use ✕ instead.`)) {
                     props.onDeleteSession!(props.activeSessionId!);
                   }
                 }}

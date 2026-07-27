@@ -337,6 +337,11 @@ interface BuddySession {
   workingDir: string;
   /** A user-set display name; falls back to the folder name, then "Chat N". */
   label?: string;
+  /** CLOSED (✕), not deleted: hidden from the switcher, but its history, plan and file ledger are all
+   * still on disk. Kept in the list rather than dropped so it stays reopenable — from the switcher's
+   * "Closed" group, or automatically when its task is opened again. Deleting (🗑) is the destructive
+   * one and remains separate. */
+  closed?: boolean;
 }
 
 /** Downscale a phone-attached photo before it rides the relay to the desktop. A full-res phone photo
@@ -1339,6 +1344,9 @@ export function App() {
   const openTaskRef = useRef<((planId: string) => Promise<void>) | undefined>(undefined);
   /** onNewBuddySession, reachable from onLeaveChat (declared above it) — same late-binding pattern. */
   const onNewBuddySessionRef = useRef<(() => void) | undefined>(undefined);
+  /** close/reopen, reachable from runChatCommand (declared below them) for the phone's relayed taps. */
+  const onLeaveChatRef = useRef<(() => void) | undefined>(undefined);
+  const onReopenChatRef = useRef<((id: string) => void) | undefined>(undefined);
   /** The plan whose execution chat is the active session (the task being "worked"), if any. */
   const activeTaskPlanId = () => resolveActiveTaskPlanId(taskPlansRef.current, activeBuddyIdRef.current);
   const persistSessions = useCallback(
@@ -1804,27 +1812,55 @@ export function App() {
    * are not trapped here" must not be the thing that disappears, so the chain below always ends
    * somewhere: the general chat, else any other session, else the general chat re-created. */
   const leaveChatTargetId = useMemo(() => {
-    if (activeBuddyId !== BUDDY_CHAT_ID && buddySessions.some((s) => s.id === BUDDY_CHAT_ID)) return BUDDY_CHAT_ID;
-    return buddySessions.find((s) => s.id !== activeBuddyId)?.id ?? BUDDY_CHAT_ID;
+    const open = buddySessions.filter((s) => !s.closed);
+    if (activeBuddyId !== BUDDY_CHAT_ID && open.some((s) => s.id === BUDDY_CHAT_ID)) return BUDDY_CHAT_ID;
+    return open.find((s) => s.id !== activeBuddyId)?.id ?? BUDDY_CHAT_ID;
   }, [buddySessions, activeBuddyId]);
-  /** Leave the current chat, re-creating the general one first if it's no longer in the list (the
-   * target above can name it even when it's gone, precisely so ✕ never has to hide). */
+  /**
+   * CLOSE the current chat: take it out of the switcher and move to another one, WITHOUT deleting
+   * anything. Its history, plan and file ledger all stay on disk, and it stays in the stored list
+   * flagged `closed` so it can be reopened — from the switcher's "Closed" group, or automatically
+   * when its task is opened again (openTaskInChat re-attaches the very same session). 🗑 Delete
+   * remains the destructive one.
+   *
+   * Never closes the last open chat: there'd be nothing left to show.
+   */
   const onLeaveChat = useCallback(() => {
     const target = leaveChatTargetId;
-    if (!target || target === activeBuddyId) return; // only chat open — nothing to leave to
-    if (!buddySessions.some((s) => s.id === target)) {
+    if (!target || target === activeBuddyId) return; // the only open chat — nothing to leave to
+    if (isRemoteClient) {
+      sendAppSync({ type: "vrcmd:chatClose", id: activeBuddyId }); // the desktop owns the session list
+      return;
+    }
+    setBuddySessions((prev) => {
+      const next = prev.some((s) => s.id === target)
+        ? prev.map((s) => (s.id === activeBuddyId ? { ...s, closed: true as const } : s))
+        : // The general chat had been deleted outright at some point — recreate it to land in.
+          [...prev.map((s) => (s.id === activeBuddyId ? { ...s, closed: true as const } : s)), { id: target, workingDir: "" }];
+      persistSessions(next);
+      return next;
+    });
+    switchBuddyRef.current?.(target);
+  }, [leaveChatTargetId, activeBuddyId, buddySessions, isRemoteClient, sendAppSync, persistSessions]);
+  /** Reopen a closed chat (picked from the switcher's "Closed" group) — clears the flag and switches
+   * to it; its saved history loads exactly as it was left. */
+  const onReopenChat = useCallback(
+    (id: string) => {
       if (isRemoteClient) {
-        onNewBuddySessionRef.current?.(); // the desktop owns the session list; ask it for a fresh chat
+        sendAppSync({ type: "vrcmd:chatReopen", id });
         return;
       }
       setBuddySessions((prev) => {
-        const next = [...prev, { id: target, workingDir: "" }];
+        const next = prev.map((s) => (s.id === id ? { ...s, closed: false } : s));
         persistSessions(next);
         return next;
       });
-    }
-    switchBuddyRef.current?.(target);
-  }, [leaveChatTargetId, activeBuddyId, buddySessions, isRemoteClient, persistSessions]);
+      switchBuddyRef.current?.(id);
+    },
+    [isRemoteClient, sendAppSync, persistSessions],
+  );
+  onLeaveChatRef.current = onLeaveChat;
+  onReopenChatRef.current = onReopenChat;
   /** planId → task title, so ⏰ Scheduled can show WHICH task a bound action maintains rather than
    * listing everything together. Built from the mirrored plans, so it's right on the phone too. */
   const scheduledTaskTitles = useMemo(
@@ -2638,7 +2674,12 @@ export function App() {
   // busy flag change — so a phone-triggered turn shows "working…" and then the result, all here.
   const chatMirror = useMemo<ChatMirror>(
     () => ({
-      sessions: buddySessions.map((s) => ({ id: s.id, workingDir: s.workingDir, ...(s.label ? { label: s.label } : {}) })),
+      sessions: buddySessions.map((s) => ({
+        id: s.id,
+        workingDir: s.workingDir,
+        ...(s.label ? { label: s.label } : {}),
+        ...(s.closed ? { closed: true as const } : {}),
+      })),
       activeId: activeBuddyId,
       messages: boundChatHistoryForMirror(buddyMessages),
       persona: buddyPersona,
@@ -2654,7 +2695,14 @@ export function App() {
   // reaches these later-declared setters). The phone never persists/loads chat locally (those effects
   // are gated on isRemoteClient), so this mirror is its only source of chat state.
   const applyChat = useCallback((c: ChatMirror) => {
-    setBuddySessions(c.sessions.map((s) => ({ id: s.id, workingDir: s.workingDir, ...(s.label ? { label: s.label } : {}) })));
+    setBuddySessions(
+      c.sessions.map((s) => ({
+        id: s.id,
+        workingDir: s.workingDir,
+        ...(s.label ? { label: s.label } : {}),
+        ...(s.closed ? { closed: true as const } : {}),
+      })),
+    );
     // Never let an OLDER desktop snapshot erase chat the phone is already showing. A stale vrsync:chat
     // can race a phone-typed message: the desktop re-pushes its pre-send history before it has run the
     // new turn, which used to clobber the phone's in-flight message ("lost the new chat on mobile").
@@ -3403,6 +3451,7 @@ export function App() {
               id: s.id,
               workingDir: typeof s.workingDir === "string" ? s.workingDir : "",
               ...(typeof s.label === "string" && s.label.trim() ? { label: s.label } : {}),
+              ...(s.closed ? { closed: true as const } : {}),
             }));
         }
       } catch {
@@ -6349,7 +6398,7 @@ export function App() {
       if (!plan) return;
       setShowTasks(false);
       let sessionId = plan.sessionId;
-      if (!sessionId || !buddySessions.some((s) => s.id === sessionId)) {
+      if (!sessionId) {
         const sid = `${BUDDY_CHAT_ID}-${Date.now().toString(36)}`;
         sessionId = sid;
         setBuddySessions((prev) => {
@@ -6360,12 +6409,23 @@ export function App() {
         });
         await upsertTaskPlan(libraryStore, { ...plan, sessionId: sid });
         refreshTaskPlans();
+      } else if (!buddySessions.some((s) => s.id === sessionId)) {
+        // The task HAS a chat, it's just not in the switcher — closed (✕), or dropped by an older
+        // build. Re-attach that SAME id rather than minting a new one: its history is still on disk
+        // under it, so reopening the task brings the whole conversation back instead of a blank chat.
+        const sid = sessionId;
+        setBuddySessions((prev) => {
+          const next = [...prev, { id: sid, workingDir: "", label: sessionLabelForPlan(plan) }];
+          persistSessions(next);
+          return next;
+        });
       } else {
-        // Keep the chat's name in step with a renamed task.
+        // Keep the chat's name in step with a renamed task, and REOPEN it if it was closed — opening
+        // a task is exactly the moment its chat should come back into the switcher.
         const label = sessionLabelForPlan(plan);
         setBuddySessions((prev) => {
-          if (prev.some((s) => s.id === sessionId && s.label === label)) return prev;
-          const next = prev.map((s) => (s.id === sessionId ? { ...s, label } : s));
+          if (prev.some((s) => s.id === sessionId && s.label === label && !s.closed)) return prev;
+          const next = prev.map((s) => (s.id === sessionId ? { ...s, label, closed: false } : s));
           persistSessions(next);
           return next;
         });
@@ -6517,6 +6577,14 @@ export function App() {
           break;
         case "vrcmd:chatSwitch":
           onSwitchBuddySession(c.id);
+          break;
+        case "vrcmd:chatClose":
+          // The phone closed a chat — apply it HERE (the desktop owns the session list); the chat
+          // mirror re-pushes the result. Only the ACTIVE chat can be closed, same as on the desktop.
+          if (c.id === activeBuddyIdRef.current) onLeaveChatRef.current?.();
+          break;
+        case "vrcmd:chatReopen":
+          onReopenChatRef.current?.(c.id);
           break;
         case "vrcmd:chatNew":
           onNewBuddySession();
@@ -7083,6 +7151,7 @@ export function App() {
       sessions={buddySessions.map((s, i) => ({
         id: s.id,
         label: s.label || (s.workingDir ? lastPathSegment(s.workingDir) : `Chat ${i + 1}`),
+        ...(s.closed ? { closed: true } : {}),
       }))}
       activeSessionId={activeBuddyId}
       onSwitchSession={onSwitchBuddySession}
@@ -7091,6 +7160,7 @@ export function App() {
       onDeleteSession={onDeleteBuddySession}
       // ALWAYS passed — see leaveChatTargetId. Gating this is what hid the button in real setups.
       onCloseSession={onLeaveChat}
+      onReopenSession={onReopenChat}
       onSend={onBuddySendWithAttachments}
       onStartStory={() => void startStoryAsYouGo()}
       onAttachFile={onAttachBuddyFile}

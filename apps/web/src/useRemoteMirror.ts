@@ -431,6 +431,8 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
             break;
           case "vrcmd:chatSend":
           case "vrcmd:chatSwitch":
+          case "vrcmd:chatClose":
+          case "vrcmd:chatReopen":
           case "vrcmd:chatNew":
           case "vrcmd:chatDelete":
           case "vrcmd:chatDeleteMessage":

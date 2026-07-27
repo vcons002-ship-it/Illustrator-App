@@ -100,6 +100,8 @@ export interface ChatSessionInfo {
   id: string;
   workingDir: string;
   label?: string;
+  /** Closed (hidden from the switcher) but kept — mirrored so the phone hides/reopens the same ones. */
+  closed?: boolean;
 }
 
 /**
@@ -232,6 +234,8 @@ export type CmdToDesktop =
   // its existing buddy handler, and the result flows back via the `vrsync:chat` mirror.
   | { type: "vrcmd:chatSend"; text: string; attachments?: ChatSendAttachment[] } // phone typed a message (+ files) → run the turn on the desktop
   | { type: "vrcmd:chatSwitch"; id: string } // make this session active on the desktop
+  | { type: "vrcmd:chatClose"; id: string } // close (hide, KEEP history) — not a delete
+  | { type: "vrcmd:chatReopen"; id: string } // bring a closed session back into the switcher
   | { type: "vrcmd:chatNew" } // start a fresh chat session on the desktop
   | { type: "vrcmd:chatDelete"; id: string } // delete a session on the desktop
   | { type: "vrcmd:chatDeleteMessage"; index: number } // delete one message from the active session on the desktop (it persists + re-mirrors)
