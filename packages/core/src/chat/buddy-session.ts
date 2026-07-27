@@ -144,6 +144,22 @@ export interface BuddyDeps {
   readAttachment?: (messageId: string, attachmentId: string) => Promise<{ filename: string; mimeType: string; text?: string; bytesLen: number }>;
   /** Draft an email (saved to Gmail Drafts; auto-run — a draft is reversible). */
   draftEmail?: (d: { to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[] }) => Promise<{ id?: string }>;
+  /** The reader's saved Gmail drafts, so one written earlier can be found and edited. */
+  listDrafts?: (max?: number) => Promise<{ id: string; to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[] }[]>;
+  /** Change a saved draft IN PLACE — read-modify-write, since Gmail replaces the whole message on
+   * update. Fields the patch doesn't name are carried through untouched. */
+  editDraft?: (
+    draftId: string,
+    patch: {
+      to?: string[];
+      cc?: string[];
+      bcc?: string[];
+      subject?: string;
+      body?: string;
+      edits?: { find: string; replace: string }[];
+      setLines?: { match: string; line: string; dedupe?: boolean }[];
+    },
+  ) => Promise<{ id: string; to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[] }>;
   /** Send an email directly (ALWAYS approval-gated by the host). */
   sendEmail?: (d: { to: string[]; subject: string; body: string; cc?: string[]; bcc?: string[] }) => Promise<{ id?: string }>;
   /** Search the reader's computer (planner; gated by the autonomous-file-search setting). */
@@ -313,6 +329,10 @@ const AUTO_RETRY_SAFE_TOOLS: ReadonlySet<string> = new Set([
   "gmail_search",
   "read_email",
   "read_attachment",
+  // Reading drafts is safe to retry; edit_draft deliberately is NOT — a timeout can arrive after the
+  // PUT landed, and re-running a body search/replace against already-edited text throws rather than
+  // applying, which would read as a failure on a draft that was in fact changed.
+  "list_drafts",
   "read_file",
   "read",
   "read_skill",
@@ -846,6 +866,26 @@ export async function runBuddyTool(
           return { email: { sent: false, to: call.to, subject: call.subject, ...(r.id ? { id: r.id } : {}) } };
         } catch (err) {
           return { email: { sent: false, to: call.to, subject: call.subject, error: err instanceof Error ? err.message : String(err) } };
+        }
+      }
+      case "list_drafts":
+        if (!deps.listDrafts) return { error: "Google isn't connected (connect it in Settings)." };
+        return { drafts: await deps.listDrafts(call.max) };
+      case "edit_draft": {
+        if (!deps.editDraft) return { error: "Google isn't connected (connect it in Settings)." };
+        try {
+          const d = await deps.editDraft(call.draftId, {
+            ...(call.to ? { to: call.to } : {}),
+            ...(call.cc ? { cc: call.cc } : {}),
+            ...(call.bcc ? { bcc: call.bcc } : {}),
+            ...(call.subject ? { subject: call.subject } : {}),
+            ...(call.body ? { body: call.body } : {}),
+            ...(call.edits?.length ? { edits: call.edits } : {}),
+            ...(call.setLines?.length ? { setLines: call.setLines } : {}),
+          });
+          return { draftEdited: d };
+        } catch (err) {
+          return { draftEdited: { id: call.draftId, to: [], subject: "", body: "", error: err instanceof Error ? err.message : String(err) } };
         }
       }
       case "read_attachment":

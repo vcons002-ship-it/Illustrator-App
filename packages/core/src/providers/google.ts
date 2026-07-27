@@ -217,6 +217,12 @@ async function apiPost<T>(transport: Transport, token: string, url: string, body
   return res.json<T>();
 }
 
+async function apiPut<T>(transport: Transport, token: string, url: string, body: unknown): Promise<T> {
+  const res = await transport.send({ url, method: "PUT", headers: { authorization: `Bearer ${token}` }, body });
+  if (!res.ok) throw new Error(await apiError(res));
+  return res.json<T>();
+}
+
 async function apiError(res: { status: number; json: <T>() => Promise<T> }): Promise<string> {
   const data = await res.json<{ error?: { message?: string } }>().catch(() => undefined);
   return `Google API error ${res.status}${data?.error?.message ? `: ${data.error.message}` : ""}`;
@@ -232,6 +238,9 @@ export interface EmailSummary {
    * thread but not who's on it. */
   to?: string;
   cc?: string;
+  /** Only ever set on a DRAFT (a received message never carries Bcc) — needed so editing a draft
+   * doesn't silently drop its blind recipients. */
+  bcc?: string;
   subject: string;
   date: string;
   snippet: string;
@@ -319,6 +328,7 @@ export function parseGmailMessage(msg: GmailMessage): EmailFull {
     // Only when actually present — an absent header reads as "" and an empty To: is noise.
     ...(header(headers, "To") ? { to: header(headers, "To") } : {}),
     ...(header(headers, "Cc") ? { cc: header(headers, "Cc") } : {}),
+    ...(header(headers, "Bcc") ? { bcc: header(headers, "Bcc") } : {}),
     subject: header(headers, "Subject"),
     date: header(headers, "Date"),
     snippet: msg.snippet ?? "",
@@ -431,6 +441,119 @@ export async function createDraft(
   d: EmailDraft,
 ): Promise<{ id: string; message?: { id?: string; threadId?: string } }> {
   return apiPost(transport, token, `${GMAIL}/drafts`, { message: { raw: buildRawEmail(d) } });
+}
+
+/** A saved draft: its id plus the message as it currently stands, so it can be edited without the
+ * caller having to remember what it wrote. */
+export interface DraftEmail extends EmailDraft {
+  /** The DRAFT id (what update/delete take) — NOT the message id. */
+  id: string;
+}
+
+/** Split a raw recipient header ("A <a@x>, B <b@y>") back into addresses. PURE. */
+function splitRecipients(header: string | undefined): string[] {
+  return (header ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+interface RawDraft {
+  id?: string;
+  message?: GmailMessage;
+}
+
+/** One draft, read back as an editable EmailDraft. */
+export async function getDraft(transport: Transport, token: string, id: string): Promise<DraftEmail> {
+  const raw = await apiGet<RawDraft>(transport, token, `${GMAIL}/drafts/${encodeURIComponent(id)}?format=full`);
+  const msg = raw.message ? parseGmailMessage(raw.message) : undefined;
+  return {
+    id: raw.id ?? id,
+    to: splitRecipients(msg?.to),
+    subject: msg?.subject ?? "",
+    body: msg?.body ?? "",
+    ...(msg?.cc ? { cc: splitRecipients(msg.cc) } : {}),
+    ...(msg?.bcc ? { bcc: splitRecipients(msg.bcc) } : {}),
+  };
+}
+
+/** The reader's saved drafts, newest first — how a later session finds a draft it didn't create. */
+export async function listDrafts(transport: Transport, token: string, max = 10): Promise<DraftEmail[]> {
+  const list = await apiGet<{ drafts?: { id: string }[] }>(
+    transport,
+    token,
+    `${GMAIL}/drafts?maxResults=${Math.min(25, Math.max(1, max))}`,
+  );
+  return Promise.all((list.drafts ?? []).map((d) => getDraft(transport, token, d.id)));
+}
+
+/**
+ * Replace a draft's content (PUT — Gmail has no partial draft update; the whole message is
+ * re-uploaded). Callers that are changing PART of a draft must read it first and send the merged
+ * result, or the fields they didn't mention would be blanked. See `editDraft`.
+ */
+export async function updateDraft(
+  transport: Transport,
+  token: string,
+  id: string,
+  d: EmailDraft,
+): Promise<{ id: string }> {
+  return apiPut(transport, token, `${GMAIL}/drafts/${encodeURIComponent(id)}`, { id, message: { raw: buildRawEmail(d) } });
+}
+
+/**
+ * Edit a saved draft IN PLACE: read it, apply only what the patch names, write it back.
+ *
+ * `edits` / `setLines` change the BODY without re-sending it — the same primitives as documents and
+ * calendar descriptions, and for the same reason: re-typing a body from memory drops whatever the
+ * caller didn't have in front of it. Any field not mentioned is carried through untouched, which is
+ * what makes this safe against Gmail's replace-the-whole-message update. A find that matches nothing,
+ * or a label that matches several lines, refuses the WHOLE edit — nothing is written.
+ */
+export async function editDraft(
+  transport: Transport,
+  token: string,
+  id: string,
+  patch: {
+    to?: string[];
+    cc?: string[];
+    bcc?: string[];
+    subject?: string;
+    body?: string;
+    edits?: readonly DescriptionEdit[];
+    setLines?: readonly DescriptionLine[];
+  },
+): Promise<DraftEmail> {
+  const current = await getDraft(transport, token, id);
+  let body = patch.body ?? current.body;
+  if (patch.edits?.length) {
+    const r = applyDescriptionEdits(body, patch.edits);
+    if (r.missed.length > 0) {
+      throw new Error(
+        `nothing in the draft matched ${r.missed.map((m) => JSON.stringify(m)).join(", ")}. It currently reads:\n${body || "(empty)"}`,
+      );
+    }
+    if (r.ambiguous.length > 0) {
+      throw new Error(`${summarizeAmbiguousLines(r.ambiguous)}\nQuote more of the line you mean so it matches only one.`);
+    }
+    body = r.text;
+  }
+  if (patch.setLines?.length) {
+    const up = applyDescriptionLines(body, patch.setLines);
+    if (up.ambiguous.length > 0) {
+      throw new Error(
+        `${summarizeAmbiguousLines(up.ambiguous)}\nUse a longer "match" to name one of them, or pass "dedupe":true ` +
+          "if they really are duplicates and the rest should go.",
+      );
+    }
+    body = up.text;
+  }
+  const next: EmailDraft = {
+    to: patch.to ?? current.to,
+    subject: patch.subject ?? current.subject,
+    body,
+    ...(patch.cc ?? current.cc ? { cc: patch.cc ?? current.cc! } : {}),
+    ...(patch.bcc ?? current.bcc ? { bcc: patch.bcc ?? current.bcc! } : {}),
+  };
+  await updateDraft(transport, token, id, next);
+  return { id, ...next };
 }
 
 /** SEND an email directly (only when the reader explicitly asks). Needs the gmail.send scope. */

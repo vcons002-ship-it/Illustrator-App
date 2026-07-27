@@ -128,6 +128,8 @@ import {
   createEvent,
   patchEvent,
   createDraft,
+  listDrafts,
+  editDraft,
   sendEmail,
   listTasks,
   listSubtasks,
@@ -3082,6 +3084,8 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             readAttachment: makeReadAttachment(transport, tok),
             // Draft an email (auto-run — a draft just lands in Gmail Drafts for the reader to send).
             draftEmail: async (d) => createDraft(transport, await tok(), d),
+            listDrafts: async (max) => listDrafts(transport, await tok(), max),
+            editDraft: async (draftId, patch) => editDraft(transport, await tok(), draftId, patch),
             listEvents: async (o: { max?: number; timeMin?: string; timeMax?: string; query?: string }) =>
               listEvents(transport, await tok(), o),
             createEvent: async (ev) => createEvent(transport, await tok(), ev),

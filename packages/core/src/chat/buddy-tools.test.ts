@@ -1347,6 +1347,71 @@ describe("read_file line ranges (a file bigger than one read)", () => {
   });
 });
 
+describe("editing a saved draft", () => {
+  it("hands the draftId back on create — without it the draft can't be addressed later", () => {
+    const made = formatBuddyToolResult(
+      { tool: "draft_email", to: ["bo@x.com"], subject: "Party", body: "hi" },
+      { email: { sent: false, to: ["bo@x.com"], subject: "Party", id: "d1" } },
+    );
+    expect(made).toContain("draftId: d1");
+    // Re-drafting is the failure this prevents: it leaves two drafts and edits neither.
+    expect(made).toMatch(/do NOT draft_email again/i);
+  });
+
+  it("parses edit_draft (fields, body edits, list upserts) and rejects a call that changes nothing", () => {
+    expect(
+      parseBuddyToolCall(JSON.stringify({ tool: "edit_draft", draftId: "d1", edits: [{ find: "  keep me\n", replace: "  fixed\n" }] })),
+    ).toEqual({ tool: "edit_draft", draftId: "d1", edits: [{ find: "  keep me\n", replace: "  fixed\n" }] });
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "edit_draft", draftId: "d1", subject: "New", cc: ["dee@x.com"] }))).toEqual({
+      tool: "edit_draft",
+      draftId: "d1",
+      cc: ["dee@x.com"],
+      subject: "New",
+    });
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "edit_draft", draftId: "d1", setLines: [{ match: "Bo", line: "- Bo: yes" }] }))).toEqual({
+      tool: "edit_draft",
+      draftId: "d1",
+      setLines: [{ match: "Bo", line: "- Bo: yes" }],
+    });
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "edit_draft", draftId: "d1" }))).toBeUndefined();
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "edit_draft", subject: "x" }))).toBeUndefined();
+  });
+
+  it("echoes the whole draft back after an edit, and steers a failure away from re-drafting", () => {
+    const ok = formatBuddyToolResult(
+      { tool: "edit_draft", draftId: "d1", edits: [{ find: "6", replace: "7" }] },
+      { draftEdited: { id: "d1", to: ["bo@x.com"], cc: ["dee@x.com"], subject: "Party", body: "See you at 7." } },
+    );
+    expect(ok).toContain("To: bo@x.com");
+    expect(ok).toContain("Cc: dee@x.com");
+    expect(ok).toContain("See you at 7.");
+
+    const bad = formatBuddyToolResult(
+      { tool: "edit_draft", draftId: "d1", edits: [{ find: "nope", replace: "x" }] },
+      { draftEdited: { id: "d1", to: [], subject: "", body: "", error: "nothing in the draft matched" } },
+    );
+    expect(bad).toContain("list_drafts");
+    expect(bad).toMatch(/Do NOT fall back to draft_email/);
+  });
+
+  it("list_drafts surfaces the ids edit_draft needs", () => {
+    const out = formatBuddyToolResult(
+      { tool: "list_drafts" },
+      { drafts: [{ id: "d1", to: ["bo@x.com"], subject: "Party", body: "See you at 6." }] },
+    );
+    expect(out).toContain("draftId=d1");
+    expect(out).toContain("See you at 6.");
+    expect(formatBuddyToolResult({ tool: "list_drafts" }, { drafts: [] })).toContain("no saved drafts");
+  });
+
+  it("teaches editing over re-drafting", () => {
+    const g = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true });
+    expect(g).toContain('"tool":"edit_draft"');
+    expect(g).toContain('"tool":"list_drafts"');
+    expect(g).toMatch(/leaves a SECOND draft sitting next to the first/);
+  });
+});
+
 describe("spreadsheet cell edits from the assistant's own chat", () => {
   it("parses set_cell (value, formula, and clearing) and rejects a cell with nothing to put in it", () => {
     expect(parseBuddyToolCall('{"tool":"set_cell","ref":"B2","value":5}')).toEqual({ tool: "set_cell", ref: "B2", value: 5 });

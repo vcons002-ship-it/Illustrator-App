@@ -16,8 +16,11 @@ import {
   patchTimeField,
   decodeBase64Url,
   exchangeGoogleCode,
+  editDraft,
+  getDraft,
   gmailReadEmail,
   gmailSearch,
+  listDrafts,
   listEvents,
   listAllEvents,
   listTaskTree,
@@ -420,6 +423,79 @@ class SequencedTransport implements Transport {
     });
   }
 }
+
+describe("drafts (read + edit in place)", () => {
+  const draftMessage = (body: string, headers: { name: string; value: string }[]) => ({
+    id: "d1",
+    message: {
+      id: "m1",
+      payload: { headers, mimeType: "text/plain", body: { data: b64url(body) } },
+    },
+  });
+
+  it("reads a draft back as editable fields, Bcc included", async () => {
+    // Bcc only ever exists on a draft — dropping it would silently un-blind a recipient on the next
+    // edit, since Gmail replaces the whole message.
+    const t = new FakeTransport(
+      draftMessage("Hi Bo,\n\nSee you at 6.", [
+        { name: "To", value: "Bo <bo@x.com>, Cy <cy@x.com>" },
+        { name: "Cc", value: "Dee <dee@x.com>" },
+        { name: "Bcc", value: "Eve <eve@x.com>" },
+        { name: "Subject", value: "Party" },
+      ]),
+    );
+    const d = await getDraft(t, "tok", "d1");
+    expect(d).toEqual({
+      id: "d1",
+      to: ["Bo <bo@x.com>", "Cy <cy@x.com>"],
+      cc: ["Dee <dee@x.com>"],
+      bcc: ["Eve <eve@x.com>"],
+      subject: "Party",
+      body: "Hi Bo,\n\nSee you at 6.",
+    });
+  });
+
+  it("editDraft changes only what the patch names, and PUTs the merged message", async () => {
+    const t = new SequencedTransport([
+      draftMessage("Hi Bo,\n\nSee you at 6.", [
+        { name: "To", value: "bo@x.com" },
+        { name: "Cc", value: "dee@x.com" },
+        { name: "Subject", value: "Party" },
+      ]),
+      { id: "d1" },
+    ]);
+    const out = await editDraft(t, "tok", "d1", { edits: [{ find: "See you at 6.", replace: "See you at 7." }] });
+    expect(t.requests[1]!.method).toBe("PUT");
+    expect(t.requests[1]!.url).toContain("/drafts/d1");
+    // Untouched fields survive: Gmail replaces the whole message, so anything not carried through is lost.
+    const raw = (t.requests[1]!.body as { message: { raw: string } }).message.raw;
+    const decoded = atob(raw.replace(/-/g, "+").replace(/_/g, "/"));
+    expect(decoded).toContain("To: bo@x.com");
+    expect(decoded).toContain("Cc: dee@x.com");
+    expect(decoded).toContain("Subject: Party");
+    expect(decoded).toContain("See you at 7.");
+    expect(out.subject).toBe("Party");
+  });
+
+  it("editDraft refuses the whole edit when a find misses or is ambiguous — nothing is written", async () => {
+    const miss = new SequencedTransport([draftMessage("Hi Bo,", [{ name: "To", value: "bo@x.com" }, { name: "Subject", value: "P" }])]);
+    await expect(editDraft(miss, "tok", "d1", { edits: [{ find: "Hi Zed,", replace: "x" }] })).rejects.toThrow(/nothing in the draft matched/);
+    expect(miss.requests.filter((r) => r.method === "PUT")).toHaveLength(0);
+
+    const dup = new SequencedTransport([draftMessage("- Bo: ?\n- Bo: yes", [{ name: "To", value: "b@x" }, { name: "Subject", value: "P" }])]);
+    await expect(editDraft(dup, "tok", "d1", { setLines: [{ match: "Bo", line: "Bo: no" }] })).rejects.toThrow(/matches 2 lines/);
+    expect(dup.requests.filter((r) => r.method === "PUT")).toHaveLength(0);
+  });
+
+  it("listDrafts returns each draft with the id edit_draft needs", async () => {
+    const t = new SequencedTransport([
+      { drafts: [{ id: "d1" }] },
+      draftMessage("body", [{ name: "To", value: "bo@x.com" }, { name: "Subject", value: "Party" }]),
+    ]);
+    const list = await listDrafts(t, "tok");
+    expect(list).toEqual([{ id: "d1", to: ["bo@x.com"], subject: "Party", body: "body" }]);
+  });
+});
 
 describe("applyDescriptionLines (upsert a labelled line)", () => {
   // The line-upsert behaviour itself is covered in file-edits.test.ts — documents share the same
