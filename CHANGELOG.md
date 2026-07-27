@@ -5,6 +5,16 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ## July 2026
 
+### Assistant
+
+- **Internal instructions no longer leak into later conversations** — when a long turn hit its
+  per-turn tool budget, the app told the assistant "don't call another tool now; summarise instead".
+  That was a one-turn instruction, but it was being saved into the conversation — so from then on the
+  assistant kept re-reading it as if you'd said it, and would visibly puzzle over why it wasn't
+  allowed to use tools. The same applied to the app's step-by-step nudges while running a checklist.
+  These now steer only the turn they belong to; what actually happened (results, renders, files
+  written) is still kept.
+
 ### Calendar
 
 - **The assistant can now edit calendar events, not just create them** — and in particular it can keep

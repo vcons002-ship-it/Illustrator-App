@@ -69,6 +69,47 @@ describe("runBuddyTurn — story-mode empty-reply repair", () => {
   });
 });
 
+describe("runBuddyTurn — turn-local steering stays out of the persisted transcript", () => {
+  /** A turn that keeps calling tools until the per-turn round cap trips the "Do NOT call another
+   * tool now" nudge. */
+  const runToToolLimit = async () => {
+    const llm = scriptedLlm([...Array<string>(MAX_BUDDY_TOOL_ROUNDS).fill('{"tool":"search_web","query":"q"}'), "Here's the summary."]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "research this" }],
+      deps: { ...baseDeps, searchWeb: async () => [{ title: "T", link: "http://x.test", snippet: "S" }] },
+    });
+    return { llm, outcome };
+  };
+
+  it("does not persist the tool-limit directive as chat history", async () => {
+    // The transcript is replayed verbatim as history on EVERY later turn. Persisting "Do NOT call
+    // another tool now" made it a standing instruction long after the limit was irrelevant — the
+    // model would then reason about why it was forbidden from calling tools.
+    const { outcome } = await runToToolLimit();
+    const persisted = outcome.transcript.map((t) => t.content).join("\n");
+    expect(persisted).not.toMatch(/Do NOT call another tool/i);
+    expect(persisted).not.toMatch(/tool-call limit/i);
+    expect(persisted).not.toMatch(/Before your NEXT tool call/i);
+    expect(persisted).not.toMatch(/Re-issue the remaining host tool/i);
+  });
+
+  it("still keeps the tool RESULTS in the transcript (the durable record of what happened)", async () => {
+    const { outcome } = await runToToolLimit();
+    const persisted = outcome.transcript.map((t) => t.content).join("\n");
+    expect(persisted).toMatch(/x\.test|search_web/i); // the result line survives
+  });
+
+  it("still SHOWS the model the limit directive during the turn that hit it", async () => {
+    // Dropping it from the transcript must not stop it steering the live turn — otherwise the model
+    // spends its last round on a tool whose result it can never follow up on.
+    const { llm } = await runToToolLimit();
+    const lastSent = llm.calls[llm.calls.length - 1]!.map((t) => t.content).join("\n");
+    expect(lastSent).toMatch(/Do NOT call another tool/i);
+  });
+});
+
 describe("runBuddyTurn — transient-error auto-retry", () => {
   it("retries a read-only tool once, turning the blip into a silent recovery", async () => {
     const llm = scriptedLlm(['{"tool":"search_web","query":"q"}', "Found it."]);
