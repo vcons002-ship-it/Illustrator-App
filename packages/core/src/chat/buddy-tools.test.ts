@@ -1275,6 +1275,76 @@ describe("buildActiveDocumentBlock", () => {
   });
 });
 
+describe("read_file line ranges (a file bigger than one read)", () => {
+  const file = Array.from({ length: 500 }, (_, i) => `line ${i + 1}`).join("\n");
+
+  it("parses from/to (and the aliases a model reaches for)", () => {
+    expect(parseBuddyToolCall('{"tool":"read","source":"file","ref":"a.py","from":10,"to":20}')).toEqual({
+      tool: "read_file",
+      path: "a.py",
+      from: 10,
+      to: 20,
+    });
+    // Numbers written as strings, and start/end, still land.
+    expect(parseBuddyToolCall('{"tool":"read","source":"file","ref":"a.py","start":"5"}')).toEqual({ tool: "read_file", path: "a.py", from: 5 });
+    // Junk is ignored rather than becoming a bogus range.
+    expect(parseBuddyToolCall('{"tool":"read","source":"file","ref":"a.py","from":0,"to":"x"}')).toEqual({ tool: "read_file", path: "a.py" });
+  });
+
+  it("returns exactly the requested lines, and says which of how many", () => {
+    const out = formatBuddyToolResult({ tool: "read_file", path: "a.py", from: 100, to: 102 }, { fileText: file });
+    expect(out).toContain("lines 100–102 of 500");
+    expect(out).toContain("line 100\nline 101\nline 102");
+    expect(out).not.toContain("line 99");
+    expect(out).not.toContain("line 103");
+  });
+
+  it("does NOT prefix line numbers onto the text — edit_file copies it verbatim", () => {
+    // A "100| " gutter would make every search anchor the model builds from this miss.
+    const out = formatBuddyToolResult({ tool: "read_file", path: "a.py", from: 100, to: 100 }, { fileText: file });
+    expect(out).toContain("\nline 100");
+    expect(out).not.toMatch(/100\s*[|:]\s*line 100/);
+  });
+
+  it("tells the model where it stopped and how to continue — the old advice needed run_command", () => {
+    const huge = `${"x".repeat(70_000)}\ntail line`;
+    const out = formatBuddyToolResult({ tool: "read_file", path: "big.txt" }, { fileText: huge });
+    expect(out).toMatch(/stopped at line \d+ of 2/);
+    // Continuing must be a plain read the model can always issue, not a shell command it may not have.
+    expect(out).toContain('"tool":"read","source":"file"');
+    expect(out).toContain('"from":2');
+    expect(out).not.toContain("read a specific part with a command");
+  });
+
+  it("clamps a range that runs past the end instead of erroring", () => {
+    const out = formatBuddyToolResult({ tool: "read_file", path: "a.py", from: 499, to: 900 }, { fileText: file });
+    expect(out).toContain("lines 499–500 of 500");
+    expect(out).toContain("line 500");
+  });
+
+  it("an unranged read of a small file is unchanged — no range noise", () => {
+    const out = formatBuddyToolResult({ tool: "read_file", path: "a.py" }, { fileText: "one\ntwo" });
+    expect(out).toContain("one\ntwo");
+    expect(out).not.toContain("lines 1");
+    expect(out).not.toContain("stopped at line");
+  });
+});
+
+describe("spreadsheet cell edits belong to the data view's chat", () => {
+  it("stops promising set_cell, which the assistant doesn't have here (calls to it vanish silently)", () => {
+    // An unparseable tool name is DROPPED, so telling the model to use set_cell here produced a reply
+    // claiming a cell had changed when nothing had.
+    expect(parseBuddyToolCall('{"tool":"set_cell","ref":"B2","value":5}')).toBeUndefined();
+    const g = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(g).toMatch(/belongs? to the data view's own chat, not to you/);
+    const made = formatBuddyToolResult(
+      { tool: "create_spreadsheet", title: "Budget", columns: [{ name: "Item" }] },
+      { opened: { title: "Budget", chapters: 1, pages: 1, visuals: false } },
+    );
+    expect(made).toContain("You do NOT have those here");
+  });
+});
+
 describe("edit_document / read_document", () => {
   it("parses edit_document WITHOUT trimming the search text", () => {
     // Whitespace is part of a verbatim anchor. Trimming it (as the calendar's line edits do, where the

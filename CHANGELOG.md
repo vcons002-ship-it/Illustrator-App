@@ -74,6 +74,22 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   rather than to the excerpt. How much it holds at once now also scales with the model you're using
   instead of one fixed number.
 
+### Files & editing
+
+- **Big files are now fully editable** — the assistant could only ever see a file's first 60,000
+  characters, and since it edits by matching text exactly, anything past that was unreachable: it
+  couldn't change what it couldn't read. It can now read any stretch of a file by line number, and is
+  told where it stopped and how far the file goes, so it keeps reading until it has the part it needs.
+  The old advice for long files was to run a shell command, which isn't available unless you've
+  enabled it.
+- **The assistant no longer offers to change spreadsheet cells it can't reach** — it was told it could
+  edit cells from the main chat, but those tools only exist in the spreadsheet's own chat in the data
+  view. Calls to them silently did nothing, so it could report a change that never happened. It now
+  builds the sheet as before and points you to the data view for cell-level edits.
+- **A long-running task stops quietly losing its earliest notes** — accumulated task context is capped,
+  and the cap used to cut mid-sentence, leaving a fragment that read like a real note with no sign
+  anything had been lost. It now drops whole notes and says how many.
+
 ### Assistant
 
 - **Old conversations stop repeating stale instructions** — the fix below stopped NEW leakage, but
