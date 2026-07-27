@@ -7056,6 +7056,11 @@ export function App() {
       onNewSession={onNewBuddySession}
       onRenameSession={onRenameBuddySession}
       onDeleteSession={onDeleteBuddySession}
+      // Offered only when there's a general chat to go back TO — in the general chat itself there's
+      // nothing to leave, so the button would be a no-op.
+      {...(activeBuddyId !== BUDDY_CHAT_ID && buddySessions.some((s) => s.id === BUDDY_CHAT_ID)
+        ? { onCloseSession: () => onSwitchBuddySession(BUDDY_CHAT_ID) }
+        : {})}
       onSend={onBuddySendWithAttachments}
       onStartStory={() => void startStoryAsYouGo()}
       onAttachFile={onAttachBuddyFile}

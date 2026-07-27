@@ -92,6 +92,10 @@ export interface ChatBuddyPanelProps {
   /** Rename the active session (empty string clears back to the folder/"Chat N" fallback). */
   onRenameSession?: (id: string, label: string) => void;
   onDeleteSession?: (id: string) => void;
+  /** Leave the current chat and go back to the general one, KEEPING its history. Passed only when
+   * there's somewhere to go back to (i.e. this isn't already the general chat). Without it the only
+   * exit-shaped control was 🗑 Delete, so leaving a task's chat meant destroying its history. */
+  onCloseSession?: () => void;
   onSend: (text: string) => void;
   /** Open the host's "Story as you go" setup modal (workflow + cast + characters). When omitted, the
    * ✍️ Story button falls back to a one-line opening prompt. */
@@ -322,6 +326,18 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 </option>
               ))}
             </select>
+            {/* Always available (not behind the ⋯ tools), because it's the way OUT of this chat —
+                hiding it is what left Delete looking like the only exit. */}
+            {props.onCloseSession && (
+              <button
+                style={smallButtonStyle}
+                title="Leave this chat and go back to the general one (its history is kept)"
+                aria-label="Leave this chat"
+                onClick={props.onCloseSession}
+              >
+                ✕
+              </button>
+            )}
             {toolsOpen && props.onNewSession && (
               <button style={smallButtonStyle} title="New chat session" aria-label="New chat session" onClick={props.onNewSession}>
                 ＋
@@ -347,7 +363,11 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 title="Delete this session (its history is removed)"
                 aria-label="Delete this session"
                 onClick={() => {
-                  if (window.confirm("Delete this chat session? Its history is removed permanently.")) {
+                  // Name what's being destroyed. A task's chat is labelled with the task, so this is
+                  // the difference between "delete a chat session" and "throw away the work on X" —
+                  // and ✕ above is the non-destructive way out.
+                  const label = props.sessions?.find((s) => s.id === props.activeSessionId)?.label ?? "this chat";
+                  if (window.confirm(`Delete “${label}”?\n\nIts whole chat history is removed permanently — this can't be undone.\nTo just leave it, use ✕ instead.`)) {
                     props.onDeleteSession!(props.activeSessionId!);
                   }
                 }}
