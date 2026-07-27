@@ -1795,23 +1795,23 @@ export function App() {
   useEffect(() => {
     refreshScheduled();
   }, [refreshScheduled]);
-  /** Where ✕ "leave this chat" goes — undefined ONLY when we're already in the general chat.
+  /** Where ✕ "leave this chat" goes. ALWAYS resolves — the button is offered in every session, with
+   * no condition on which one you're in.
    *
-   * Every other case must resolve to something, because a hidden ✕ puts us back where we started:
-   * 🗑 Delete as the only exit from a task's chat. So it prefers the general chat, falls back to any
-   * other session, and finally to re-creating the general chat — keying it strictly on
-   * BUDDY_CHAT_ID *existing* meant the button silently disappeared for anyone who had ever deleted
-   * their original chat. */
+   * It was conditional twice (on the general chat existing, then on there being somewhere to go) and
+   * both times the condition silently hid it for real setups, leaving 🗑 Delete as the apparent way
+   * out of a task's chat — the exact thing it exists to prevent. A control whose whole job is "you
+   * are not trapped here" must not be the thing that disappears, so the chain below always ends
+   * somewhere: the general chat, else any other session, else the general chat re-created. */
   const leaveChatTargetId = useMemo(() => {
-    if (activeBuddyId === BUDDY_CHAT_ID) return undefined; // already home; nothing to leave
-    if (buddySessions.some((s) => s.id === BUDDY_CHAT_ID)) return BUDDY_CHAT_ID;
+    if (activeBuddyId !== BUDDY_CHAT_ID && buddySessions.some((s) => s.id === BUDDY_CHAT_ID)) return BUDDY_CHAT_ID;
     return buddySessions.find((s) => s.id !== activeBuddyId)?.id ?? BUDDY_CHAT_ID;
   }, [buddySessions, activeBuddyId]);
   /** Leave the current chat, re-creating the general one first if it's no longer in the list (the
    * target above can name it even when it's gone, precisely so ✕ never has to hide). */
   const onLeaveChat = useCallback(() => {
     const target = leaveChatTargetId;
-    if (!target) return;
+    if (!target || target === activeBuddyId) return; // only chat open — nothing to leave to
     if (!buddySessions.some((s) => s.id === target)) {
       if (isRemoteClient) {
         onNewBuddySessionRef.current?.(); // the desktop owns the session list; ask it for a fresh chat
@@ -1824,7 +1824,7 @@ export function App() {
       });
     }
     switchBuddyRef.current?.(target);
-  }, [leaveChatTargetId, buddySessions, isRemoteClient, persistSessions]);
+  }, [leaveChatTargetId, activeBuddyId, buddySessions, isRemoteClient, persistSessions]);
   /** planId → task title, so ⏰ Scheduled can show WHICH task a bound action maintains rather than
    * listing everything together. Built from the mirrored plans, so it's right on the phone too. */
   const scheduledTaskTitles = useMemo(
@@ -7089,9 +7089,8 @@ export function App() {
       onNewSession={onNewBuddySession}
       onRenameSession={onRenameBuddySession}
       onDeleteSession={onDeleteBuddySession}
-      // Offered whenever there's somewhere to go back TO (see leaveChatTargetId) — in the only/home
-      // chat there's nothing to leave, so the button would be a no-op.
-      {...(leaveChatTargetId ? { onCloseSession: onLeaveChat } : {})}
+      // ALWAYS passed — see leaveChatTargetId. Gating this is what hid the button in real setups.
+      onCloseSession={onLeaveChat}
       onSend={onBuddySendWithAttachments}
       onStartStory={() => void startStoryAsYouGo()}
       onAttachFile={onAttachBuddyFile}
