@@ -6,6 +6,8 @@ import {
   sendEmail,
   decodeBase64UrlBytes,
   createTask,
+  createEvent,
+  nextDayIso,
   toTaskDue,
   patchTask,
   patchEvent,
@@ -441,5 +443,45 @@ describe("listEvents search (finding an event to edit later)", () => {
     const t = new FakeTransport({ items: [] });
     await listEvents(t, "tok", { query: "flight", timeMin: "2020-01-01T00:00:00Z" });
     expect(t.requests[0]!.url).toContain("timeMin=2020-01-01T00%3A00%3A00Z");
+  });
+});
+
+describe("all-day events (bare dates + Google's exclusive end)", () => {
+  it("nextDayIso rolls across month and year ends", () => {
+    expect(nextDayIso("2026-07-04")).toBe("2026-07-05");
+    expect(nextDayIso("2026-07-31")).toBe("2026-08-01");
+    expect(nextDayIso("2026-02-28")).toBe("2026-03-01");
+    expect(nextDayIso("2028-02-28")).toBe("2028-02-29"); // leap year
+    expect(nextDayIso("2026-12-31")).toBe("2027-01-01");
+  });
+
+  it("createEvent sends bare dates as an all-day event, bumping the exclusive end", async () => {
+    // "July 4 → July 4" is how a one-day event is naturally written; Google needs the end to be the
+    // day AFTER, and rejects an end that isn't strictly after the start.
+    const t = new FakeTransport({ id: "e1", summary: "Holiday", start: { date: "2026-07-04" }, end: { date: "2026-07-05" } });
+    const ev = await createEvent(t, "tok", { summary: "Holiday", start: "2026-07-04", end: "2026-07-04" });
+    expect(t.requests[0]!.body).toMatchObject({ start: { date: "2026-07-04" }, end: { date: "2026-07-05" } });
+    expect(ev.allDay).toBe(true);
+  });
+
+  it("createEvent keeps a multi-day all-day span's own end (bumped past the last day)", async () => {
+    const t = new FakeTransport({ id: "e2", summary: "Trip" });
+    await createEvent(t, "tok", { summary: "Trip", start: "2026-07-04", end: "2026-07-08" });
+    expect(t.requests[0]!.body).toMatchObject({ start: { date: "2026-07-04" }, end: { date: "2026-07-08" } });
+  });
+
+  it("createEvent still sends timed events as dateTime (unchanged)", async () => {
+    const t = new FakeTransport({ id: "e3", summary: "Call" });
+    await createEvent(t, "tok", { summary: "Call", start: "2026-06-18T14:00:00-04:00", end: "2026-06-18T15:00:00-04:00" });
+    expect(t.requests[0]!.body).toMatchObject({
+      start: { dateTime: "2026-06-18T14:00:00-04:00" },
+      end: { dateTime: "2026-06-18T15:00:00-04:00" },
+    });
+  });
+
+  it("patchEvent applies the same all-day normalisation when moving both ends", async () => {
+    const t = new FakeTransport({ id: "e1", summary: "Holiday" });
+    await patchEvent(t, "tok", "e1", { start: "2026-07-04", end: "2026-07-04" });
+    expect(t.requests[0]!.body).toEqual({ start: { date: "2026-07-04" }, end: { date: "2026-07-05" } });
   });
 });

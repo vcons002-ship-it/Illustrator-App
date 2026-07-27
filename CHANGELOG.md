@@ -18,6 +18,13 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   having seen the booking happen. (Events that already happened are findable too, by asking for a
   window that reaches back.) Listed events show their existing details, so it can see what's already
   recorded before adding.
+- **All-day events** — 📅 Calendar's add-event form has an "All day" tick box (a birthday, a holiday,
+  a whole-day trip), and the assistant can create or change one by giving plain dates instead of
+  times. The fiddly part is handled for you: a one-day all-day event is written the obvious way
+  ("July 4 to July 4") and stored the way Google requires.
+- **Software update button works again** — updating from Settings failed with a confusing "outside the
+  approved folders" message. The folder scoping added in an earlier security pass didn't make an
+  exception for the app's own folder, which is exactly where the update has to run.
 - **Edit events yourself, in the app** — 📅 Calendar now has an Edit control on each event: change the
   title, time, location, or the details/notes, and it's written straight through to Google. Events
   also show their details inline, so anything the assistant recorded is visible where you'd expect it

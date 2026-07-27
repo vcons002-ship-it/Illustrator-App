@@ -1565,12 +1565,64 @@ fn is_approved_path(app: &AppHandle, path: &Path) -> bool {
     })
 }
 
+/// The app's OWN git checkout, discovered once and cached. `None` when the app isn't running from a
+/// git working copy (a packaged build) — then there's nothing to self-update.
+static APP_REPO_ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Locate the app's own repository root (the folder holding this checkout), from the executable's
+/// directory or the process cwd. Cached — this shells out to git.
+fn app_repo_root_cached() -> Option<PathBuf> {
+    APP_REPO_ROOT
+        .get_or_init(|| {
+            let mut dirs: Vec<PathBuf> = Vec::new();
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(p) = exe.parent() {
+                    dirs.push(p.to_path_buf());
+                }
+            }
+            if let Ok(cwd) = std::env::current_dir() {
+                dirs.push(cwd);
+            }
+            for dir in dirs {
+                let d = dir.to_string_lossy().to_string();
+                if let Ok(r) = git(&d, &["rev-parse", "--show-toplevel"]) {
+                    if r.code == 0 {
+                        let root = r.stdout.trim().to_string();
+                        if !root.is_empty() {
+                            return Some(PathBuf::from(root));
+                        }
+                    }
+                }
+            }
+            None
+        })
+        .clone()
+}
+
+/// Is this the app's own checkout? Compared canonicalized, so `..`/symlink/8.3 spellings still match.
+fn is_app_repo_root(path: &Path) -> bool {
+    let Some(root) = app_repo_root_cached() else {
+        return false;
+    };
+    let (Ok(a), Ok(b)) = (std::fs::canonicalize(path), std::fs::canonicalize(&root)) else {
+        return false;
+    };
+    a == b
+}
+
 /// Resolve the optional `cwd` parameter of run_command / the workspace file ops: an existing
 /// directory must be inside the approved roots (the picked session folder always is); a missing /
 /// not-a-directory value keeps the old silent fallback to the sandbox workspace (`None`).
+///
+/// The app's OWN checkout counts as approved. The in-app updater runs `git pull` / `pnpm install` /
+/// `pnpm -r build` THERE, and that folder is not (and should not become) a reader-picked root — so
+/// without this the Update button failed at the first step with "outside the approved folders". This
+/// widens nothing the model can reach: `cwd` is always supplied by the host (the session or agent
+/// working folder), never taken from a tool call, so the only caller that can name this path is the
+/// app's own updater.
 fn resolve_approved_cwd(app: &AppHandle, cwd: Option<String>) -> Result<Option<PathBuf>, String> {
     match cwd.filter(|c| !c.is_empty()).map(PathBuf::from).filter(|p| p.is_dir()) {
-        Some(p) if is_approved_path(app, &p) => Ok(Some(p)),
+        Some(p) if is_approved_path(app, &p) || is_app_repo_root(&p) => Ok(Some(p)),
         Some(_) => Err(OUTSIDE_APPROVED_ROOTS.to_string()),
         None => Ok(None),
     }
@@ -2529,31 +2581,11 @@ async fn git_repo_root(dir: String) -> Result<Option<String>, String> {
 /// place. None when the app isn't inside a git checkout (e.g. a packaged binary moved elsewhere).
 #[tauri::command]
 async fn app_repo_root() -> Result<Option<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut dirs: Vec<std::path::PathBuf> = Vec::new();
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(p) = exe.parent() {
-                dirs.push(p.to_path_buf());
-            }
-        }
-        if let Ok(cwd) = std::env::current_dir() {
-            dirs.push(cwd);
-        }
-        for dir in dirs {
-            let d = dir.to_string_lossy().to_string();
-            if let Ok(r) = git(&d, &["rev-parse", "--show-toplevel"]) {
-                if r.code == 0 {
-                    let root = r.stdout.trim().to_string();
-                    if !root.is_empty() {
-                        return Ok(Some(root));
-                    }
-                }
-            }
-        }
-        Ok(None)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    // Shares the cache with `resolve_approved_cwd`'s self-update exemption, so the folder the updater
+    // is handed is exactly the one that's allowed to run commands.
+    tauri::async_runtime::spawn_blocking(move || Ok(app_repo_root_cached().map(|p| p.to_string_lossy().to_string())))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Ensure `dir` is a git repo (init + an initial empty commit if not), returning its root —

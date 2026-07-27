@@ -132,22 +132,34 @@ export const CalendarPanel = memo(function CalendarPanel({
   const [evStart, setEvStart] = useState("09:00");
   const [evEnd, setEvEnd] = useState("10:00");
   const [evLocation, setEvLocation] = useState("");
+  const [evAllDay, setEvAllDay] = useState(false);
   const [evBusy, setEvBusy] = useState(false);
   const [evError, setEvError] = useState<string | null>(null);
   const submitEvent = async () => {
     if (!onCreateEvent || !selected || !evSummary.trim()) return;
-    const start = new Date(`${selected}T${evStart || "09:00"}`);
-    const end = new Date(`${selected}T${evEnd || evStart || "10:00"}`);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
-      setEvError("Pick a valid start before end.");
-      return;
+    let startIso: string;
+    let endIso: string;
+    if (evAllDay) {
+      // All-day: send BARE dates. The API layer handles Google's exclusive end date (a one-day event
+      // ends the FOLLOWING day), so the selected day on both ends is exactly right here.
+      startIso = selected;
+      endIso = selected;
+    } else {
+      const start = new Date(`${selected}T${evStart || "09:00"}`);
+      const end = new Date(`${selected}T${evEnd || evStart || "10:00"}`);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+        setEvError("Pick a valid start before end.");
+        return;
+      }
+      startIso = start.toISOString();
+      endIso = end.toISOString();
     }
     setEvBusy(true);
     setEvError(null);
     const res = await onCreateEvent({
       summary: evSummary.trim(),
-      start: start.toISOString(),
-      end: end.toISOString(),
+      start: startIso,
+      end: endIso,
       ...(evLocation.trim() ? { location: evLocation.trim() } : {}),
     });
     setEvBusy(false);
@@ -155,6 +167,7 @@ export const CalendarPanel = memo(function CalendarPanel({
       setAdding(false);
       setEvSummary("");
       setEvLocation("");
+      setEvAllDay(false);
     } else {
       setEvError(res.error ?? "Couldn't create the event.");
     }
@@ -416,9 +429,17 @@ export const CalendarPanel = memo(function CalendarPanel({
               adding ? (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginTop: 8 }}>
                   <input autoFocus value={evSummary} onChange={(e) => setEvSummary(e.target.value)} placeholder="Event title" style={evInput} />
-                  <input type="time" value={evStart} onChange={(e) => setEvStart(e.target.value)} style={evTime} title="Start" />
-                  <span style={{ opacity: 0.5 }}>→</span>
-                  <input type="time" value={evEnd} onChange={(e) => setEvEnd(e.target.value)} style={evTime} title="End" />
+                  <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, opacity: 0.85, cursor: "pointer" }} title="An event with no set time, shown across the whole day">
+                    <input type="checkbox" checked={evAllDay} onChange={(e) => setEvAllDay(e.target.checked)} />
+                    All day
+                  </label>
+                  {evAllDay ? null : (
+                    <>
+                      <input type="time" value={evStart} onChange={(e) => setEvStart(e.target.value)} style={evTime} title="Start" />
+                      <span style={{ opacity: 0.5 }}>→</span>
+                      <input type="time" value={evEnd} onChange={(e) => setEvEnd(e.target.value)} style={evTime} title="End" />
+                    </>
+                  )}
                   <input value={evLocation} onChange={(e) => setEvLocation(e.target.value)} placeholder="Location (optional)" style={evInput} />
                   <button style={btn} onClick={() => void submitEvent()} disabled={evBusy || !evSummary.trim()}>
                     {evBusy ? "Adding…" : "Add"}

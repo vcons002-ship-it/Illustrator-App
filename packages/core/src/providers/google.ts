@@ -538,7 +538,28 @@ export async function listAllEvents(
   return lists.flat();
 }
 
-/** Create an event. `start`/`end` are ISO datetimes (with offset or Z). */
+/** The day after a "YYYY-MM-DD" (calendar-correct across month/year ends). PURE. */
+export function nextDayIso(date: string): string {
+  const [y, m, d] = date.split("-").map(Number);
+  const next = new Date(y ?? 1970, (m ?? 1) - 1, (d ?? 1) + 1);
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-${String(next.getDate()).padStart(2, "0")}`;
+}
+
+/**
+ * Normalise an event's start/end for the API. A bare "YYYY-MM-DD" on BOTH ends means an ALL-DAY
+ * event, where Google's `end.date` is EXCLUSIVE — the day AFTER the last day. Callers (and the model)
+ * naturally write "July 4 → July 4" for a one-day event, which the API rejects for not being strictly
+ * after the start, so the end is bumped to the next day. PURE.
+ */
+export function eventTimeFields(start: string, end: string): { start: { date: string } | { dateTime: string }; end: { date: string } | { dateTime: string } } {
+  const s = eventTimeField(start);
+  let e = eventTimeField(end);
+  if ("date" in s && "date" in e && e.date <= s.date) e = { date: nextDayIso(s.date) };
+  return { start: s, end: e };
+}
+
+/** Create an event. `start`/`end` are ISO datetimes (with offset or Z) — or bare "YYYY-MM-DD" dates
+ * for an ALL-DAY event (see eventTimeFields for the exclusive-end handling). */
 export async function createEvent(
   transport: Transport,
   token: string,
@@ -546,8 +567,7 @@ export async function createEvent(
 ): Promise<CalendarEvent> {
   const body = {
     summary: ev.summary,
-    start: { dateTime: ev.start },
-    end: { dateTime: ev.end },
+    ...eventTimeFields(ev.start, ev.end),
     ...(ev.description ? { description: ev.description } : {}),
     ...(ev.location ? { location: ev.location } : {}),
   };
@@ -584,8 +604,15 @@ export async function patchEvent(
 ): Promise<CalendarEvent> {
   const body: Record<string, unknown> = {};
   if (patch.summary !== undefined) body.summary = patch.summary;
-  if (patch.start !== undefined) body.start = eventTimeField(patch.start);
-  if (patch.end !== undefined) body.end = eventTimeField(patch.end);
+  if (patch.start !== undefined && patch.end !== undefined) {
+    // Both ends move together → same all-day exclusive-end normalisation as creating one.
+    const { start, end } = eventTimeFields(patch.start, patch.end);
+    body.start = start;
+    body.end = end;
+  } else {
+    if (patch.start !== undefined) body.start = eventTimeField(patch.start);
+    if (patch.end !== undefined) body.end = eventTimeField(patch.end);
+  }
   if (patch.location !== undefined) body.location = patch.location;
   if (patch.description !== undefined) body.description = patch.description;
   if (patch.appendDescription) {

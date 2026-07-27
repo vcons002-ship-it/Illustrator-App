@@ -932,7 +932,11 @@ export function buildBuddySystemPrompt(opts: {
       "NOW, so to find an event that ALREADY HAPPENED you must pass an explicit past timeMin. " +
       '- {"tool":"create_event","summary":"…","start":"2026-06-18T14:00:00-04:00",' +
       '"end":"2026-06-18T15:00:00-04:00","description":"…","location":"…"} — add an event (ISO 8601 with offset). ' +
-      "The result includes its eventId — keep it, that's how you edit this event later.\n" +
+      "The result includes its eventId — keep it, that's how you edit this event later. " +
+      'For an ALL-DAY event (a birthday, a holiday, a whole-day trip) pass BARE DATES instead: ' +
+      '{"start":"2026-07-04","end":"2026-07-04"} — no times, no offset. Use the SAME date on both ends for a ' +
+      "single day (the app handles the calendar's exclusive end date); for a multi-day span use the first and " +
+      "LAST day. Same in update_event.\n" +
       '- {"tool":"update_event","eventId":"…","appendDescription":"Confirmation #A1234; gate B12"} — change an ' +
       "EXISTING event. Only the fields you pass change; the rest are untouched. Get the eventId from the " +
       "create_event result or from a list_events line ([eventId: …]).\n" +
