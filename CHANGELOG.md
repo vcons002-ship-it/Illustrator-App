@@ -7,6 +7,19 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Tasks & chats
 
+- **Planning now sets up its own follow-through** — when the assistant plans a task, it can also ask
+  for the recurring checks that task needs to move forward on its own ("check for RSVP replies each
+  morning", "chase whoever hasn't answered on the 9th"). Those become scheduled actions attached to
+  the task, so the plan arrives with its background work already wired up instead of just describing
+  it. Re-planning updates those checks in place rather than piling up duplicates, so each one keeps
+  its history.
+- **The assistant can work tasks while you're away** (off by default) — with "let the Task Assistant
+  work on tasks by itself" enabled, it picks up the next step that's marked as *its* job and does it,
+  rather than leaving it described but undone until you open the task. It only touches steps assigned
+  to it, skips any plan that's waiting on an answer from you or is about to be re-planned, works one
+  step at a time once you've been idle a few minutes, and gives up after two tries instead of
+  retrying forever. It still never submits forms, pays, or sends email.
+
 - **Background jobs that keep a task up to date** — a scheduled action can now be attached to a task,
   and it runs inside that task's own chat instead of the generic Scheduled one. So a recurring job
   picks up with the task's conversation, checklist and files already in front of it, and writes what

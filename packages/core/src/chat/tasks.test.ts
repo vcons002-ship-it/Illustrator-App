@@ -13,6 +13,8 @@ import {
   restoreTaskPlan,
   removeIgnore,
   normalizeRecurrence,
+  nextAutoStep,
+  MAX_WATCHES,
   describeRecurrence,
   shiftIso,
   nextOccurrence,
@@ -611,5 +613,88 @@ describe("ignore list", () => {
     expect(isIgnored(rules, { source: { kind: "scan" }, from: "Deals@Shop.com", title: "x", reason: "" })).toBe(true);
     expect(isIgnored(rules, { source: { kind: "scan" }, title: "Big SALE today", reason: "" })).toBe(true);
     expect(isIgnored(rules, { source: { kind: "scan", emailId: "msg-999" }, from: "boss@work.com", title: "Report due", reason: "" })).toBe(false);
+  });
+});
+
+describe("nextAutoStep — what the assistant may work on unattended", () => {
+  const p = (over: Partial<TaskPlanInput> = {}): TaskPlan =>
+    normalizeTaskPlan({
+      title: "T",
+      source: { kind: "typed", text: "t" },
+      steps: [{ title: "Draft it", actor: "ai_prep", status: "ready" }],
+      ...over,
+    });
+
+  it("picks a ready ai_prep step of an active, planned task", () => {
+    const got = nextAutoStep([p()]);
+    expect(got?.step.title).toBe("Draft it");
+  });
+
+  it("never picks a step the READER has to do", () => {
+    expect(nextAutoStep([p({ steps: [{ title: "Pay the fee", actor: "user_action", status: "ready" }] })])).toBeUndefined();
+  });
+
+  it("waits while the plan is known to be stale (needsReplan) — acting would use superseded steps", () => {
+    expect(nextAutoStep([p({ needsReplan: true })])).toBeUndefined();
+  });
+
+  it("waits while the planner has open questions rather than guessing", () => {
+    expect(nextAutoStep([p({ clarifyingQuestions: ["Which airport?"] })])).toBeUndefined();
+  });
+
+  it("skips stubs, non-active plans, blocked and finished steps", () => {
+    // A real stub is planned:false WITH NO STEPS (normalizeTaskPlan clears the flag once steps exist),
+    // so there's nothing to work from until the sweep plans it.
+    expect(nextAutoStep([p({ planned: false, steps: [] })])).toBeUndefined();
+    expect(nextAutoStep([p({ status: "completed" })])).toBeUndefined();
+    expect(nextAutoStep([p({ steps: [{ title: "Blocked", actor: "ai_prep", status: "blocked" }] })])).toBeUndefined();
+    expect(nextAutoStep([p({ steps: [{ title: "Done", actor: "ai_prep", status: "done" }] })])).toBeUndefined();
+  });
+
+  it("honours skipStepIds so a step that can't be finished alone isn't retried forever", () => {
+    const one = p();
+    expect(nextAutoStep([one], { skipStepIds: new Set([one.steps[0]!.id]) })).toBeUndefined();
+  });
+
+  it("takes the most urgent first — step due date, else the plan's deadline", () => {
+    const soon = p({ title: "Soon", steps: [{ title: "A", actor: "ai_prep", status: "ready", dueIso: "2026-07-01" }] });
+    const later = p({ title: "Later", steps: [{ title: "B", actor: "ai_prep", status: "ready", dueIso: "2026-09-01" }] });
+    const undated = p({ title: "Undated" });
+    expect(nextAutoStep([later, undated, soon])?.plan.title).toBe("Soon");
+    expect(nextAutoStep([undated, later])?.plan.title).toBe("Later"); // undated sorts last
+  });
+});
+
+describe("planner-requested watches", () => {
+  const withWatches = (watches: unknown[]): TaskPlan =>
+    normalizeTaskPlan({
+      title: "Party",
+      source: { kind: "typed", text: "party" },
+      steps: [{ title: "Invite", actor: "user_action" }],
+      watches: watches as NonNullable<TaskPlanInput["watches"]>,
+    });
+
+  it("keeps well-formed watches and caps how many a plan may request", () => {
+    const ok = withWatches([{ title: "RSVP check", prompt: "check replies", rule: "daily", time: "08:00" }]);
+    expect(ok.watches).toEqual([{ title: "RSVP check", prompt: "check replies", rule: "daily", time: "08:00" }]);
+    const many = withWatches(
+      Array.from({ length: 9 }, (_, i) => ({ title: `w${i}`, prompt: "p", rule: "daily" })),
+    );
+    expect(many.watches).toHaveLength(MAX_WATCHES);
+  });
+
+  it("drops a watch with no cadence, title or prompt rather than guessing one", () => {
+    expect(withWatches([{ title: "No rule", prompt: "p" }]).watches).toBeUndefined();
+    expect(withWatches([{ prompt: "p", rule: "daily" }]).watches).toBeUndefined();
+    expect(withWatches([{ title: "t", rule: "daily" }]).watches).toBeUndefined();
+    expect(withWatches([{ title: "t", prompt: "p", rule: "hourly" }]).watches).toBeUndefined();
+  });
+
+  it("clamps weekday/dayOfMonth and only keeps a date on a one-shot", () => {
+    const w = withWatches([{ title: "t", prompt: "p", rule: "weekly", weekday: 99, dayOfMonth: 0, date: "2026-07-04" }]).watches![0]!;
+    expect(w.weekday).toBe(6);
+    expect(w.dayOfMonth).toBe(1);
+    expect(w.date).toBeUndefined(); // not a one-shot
+    expect(withWatches([{ title: "t", prompt: "p", rule: "once", date: "2026-07-04" }]).watches![0]!.date).toBe("2026-07-04");
   });
 });

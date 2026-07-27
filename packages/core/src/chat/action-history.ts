@@ -13,7 +13,8 @@ export const ACTION_HISTORY_KEY = "action-history";
 export const ACTION_HISTORY_VIEWED_KEY = "action-history-viewed-at";
 export const MAX_ACTION_HISTORY = 200;
 
-export type ActionKind = "scan" | "plan" | "create_task" | "scheduled_run" | "calendar" | "other";
+/** `task_auto` = a step the assistant worked on its own (unattended task automation). */
+export type ActionKind = "scan" | "plan" | "create_task" | "scheduled_run" | "task_auto" | "calendar" | "other";
 
 export interface ActionEntry {
   id: string;

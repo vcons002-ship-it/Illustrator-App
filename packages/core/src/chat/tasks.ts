@@ -141,6 +141,30 @@ export interface TaskPlan {
   archivedAt?: number;
   /** An app-managed repeat rule; on completion the task rolls forward to the next occurrence. */
   recurrence?: TaskRecurrence;
+  /** BACKGROUND WATCHES the planner asked for: the recurring/dated checks this task needs in order to
+   * make progress on its own ("check for RSVP replies each morning", "chase non-responders on the
+   * 9th"). The host turns each into a scheduled action BOUND to this task, so it runs in the task's
+   * own chat and writes back to it. Reconciled on re-plan rather than re-created, so a repeating
+   * watch keeps its run history (and therefore its "what's new since last time" window). */
+  watches?: PlannedWatch[];
+}
+
+/** One background check a plan needs. Mirrors the schedulable fields of a ScheduledTask; the host
+ * fills in the binding (`planId`) and the run bookkeeping. */
+export interface PlannedWatch {
+  /** Short name — also the reconcile key across re-plans, so keep it stable. */
+  title: string;
+  /** What to actually do each time it fires (self-contained, like a scheduled action's prompt). */
+  prompt: string;
+  rule: "daily" | "weekly" | "monthly" | "once";
+  /** 24h "HH:MM"; defaults to the scheduler's own default when absent. */
+  time?: string;
+  /** One-time only: the day to run ("YYYY-MM-DD"). */
+  date?: string;
+  /** Weekly: 0–6 (Sun–Sat). */
+  weekday?: number;
+  /** Monthly: 1–31. */
+  dayOfMonth?: number;
 }
 
 /** A possible task the scan surfaced, before the user turns it into a plan. */
@@ -242,6 +266,8 @@ export interface TaskPlanInput {
   sessionId?: string;
   googleTaskId?: string;
   recurrence?: TaskRecurrence;
+  /** Background checks the planner asked for (see PlannedWatch); normalised + capped. */
+  watches?: Partial<PlannedWatch>[];
 }
 
 /** Clean + bound a whole plan (assigns step order, caps step count). */
@@ -279,6 +305,32 @@ export function normalizeTaskPlan(input: TaskPlanInput): TaskPlan {
       const rec = input.recurrence ? normalizeRecurrence(input.recurrence) : undefined;
       return rec ? { recurrence: rec } : {};
     })(),
+    ...(() => {
+      const w = (input.watches ?? []).map(normalizeWatch).filter((x): x is PlannedWatch => !!x).slice(0, MAX_WATCHES);
+      return w.length ? { watches: w } : {};
+    })(),
+  };
+}
+
+/** At most this many background watches per plan — a planner that asks for a dozen recurring checks
+ * would quietly fill the schedule, and nothing legitimate needs more than a few. */
+export const MAX_WATCHES = 4;
+
+/** Validate + clamp one planner-requested watch (no title/prompt, or an unknown rule → dropped). PURE. */
+export function normalizeWatch(w: Partial<PlannedWatch> | undefined): PlannedWatch | undefined {
+  const title = w?.title ? cap(w.title, MAX_TITLE_CHARS) : "";
+  const prompt = w?.prompt ? cap(w.prompt, MAX_DETAIL_CHARS) : "";
+  if (!title || !prompt) return undefined;
+  const rule = w?.rule === "weekly" || w?.rule === "monthly" || w?.rule === "once" ? w.rule : w?.rule === "daily" ? "daily" : undefined;
+  if (!rule) return undefined; // an unstated cadence is not a schedule — don't guess one
+  return {
+    title,
+    prompt,
+    rule,
+    ...(w?.time && /^\d{1,2}:\d{2}$/.test(w.time.trim()) ? { time: w.time.trim() } : {}),
+    ...(rule === "once" && w?.date && /^\d{4}-\d{1,2}-\d{1,2}$/.test(w.date.trim()) ? { date: w.date.trim() } : {}),
+    ...(typeof w?.weekday === "number" && Number.isFinite(w.weekday) ? { weekday: Math.min(6, Math.max(0, Math.round(w.weekday))) } : {}),
+    ...(typeof w?.dayOfMonth === "number" && Number.isFinite(w.dayOfMonth) ? { dayOfMonth: Math.min(31, Math.max(1, Math.round(w.dayOfMonth))) } : {}),
   };
 }
 
@@ -803,6 +855,46 @@ export function taskStubFromCandidate(c: TaskCandidate): TaskPlanInput {
 export function nextReadyStep(plan: TaskPlan): TaskStep | undefined {
   const ordered = [...plan.steps].sort((a, b) => a.order - b.order);
   return ordered.find((s) => s.status === "ready") ?? ordered.find((s) => s.status !== "done");
+}
+
+/** A task step the assistant may attempt unattended, with the plan it belongs to. */
+export interface AutoStepPick {
+  plan: TaskPlan;
+  step: TaskStep;
+}
+
+/**
+ * The next step the assistant may work on ITS OWN, or undefined when there's nothing safe to do.
+ *
+ * This is the gate for unattended execution, so it is deliberately conservative — every exclusion
+ * below is a case where acting alone would be wrong rather than merely unhelpful:
+ *  - only `ai_prep` steps. `user_action` is the reader's to do, by definition.
+ *  - only ACTIVE, already-planned tasks. A stub has no real steps to work from.
+ *  - never while `needsReplan` is set: the plan is known to be out of date and is about to be
+ *    rewritten, so acting now would work from steps that are already superseded.
+ *  - never while `clarifyingQuestions` are outstanding: the planner said out loud that it's missing
+ *    what it needs, and guessing is exactly what it was told not to do.
+ *  - never a `blocked` step, and never one already `done`.
+ *  - `skipStepIds` drops steps the caller has already tried and got nowhere with, so a step that
+ *    can't be finished unattended doesn't get retried forever.
+ *
+ * Most urgent first: the step's own due date, else its plan's deadline; undated work sorts last, ties
+ * broken by plan age so the queue is stable. PURE.
+ */
+export function nextAutoStep(plans: TaskPlan[], opts: { skipStepIds?: ReadonlySet<string> } = {}): AutoStepPick | undefined {
+  const skip = opts.skipStepIds ?? new Set<string>();
+  const candidates: AutoStepPick[] = [];
+  for (const plan of plans) {
+    if (plan.status !== "active" || plan.planned === false) continue;
+    if (plan.needsReplan) continue;
+    if (plan.clarifyingQuestions?.length) continue;
+    const step = nextReadyStep(plan);
+    if (!step || step.actor !== "ai_prep" || step.status === "done" || step.status === "blocked") continue;
+    if (skip.has(step.id)) continue;
+    candidates.push({ plan, step });
+  }
+  const due = (c: AutoStepPick): string => c.step.dueIso ?? c.plan.deadlineIso ?? "9999-12-31";
+  return candidates.sort((a, b) => due(a).localeCompare(due(b)) || a.plan.createdAt - b.plan.createdAt)[0];
 }
 
 /** Compact plan context to prepend to the execution chat's system prompt (carries the
