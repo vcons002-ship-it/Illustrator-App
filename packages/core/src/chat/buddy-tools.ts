@@ -372,9 +372,11 @@ export type BuddyToolCall =
    * event that already happened needs an explicit past `timeMin`. */
   | { tool: "list_events"; max?: number; timeMin?: string; timeMax?: string; query?: string }
   | { tool: "create_event"; summary: string; start: string; end: string; description?: string; location?: string }
-  /** Edit an EXISTING calendar event in place (only the fields given change). `appendDescription` adds
-   * a line to what the event already says — the way details accumulate on an event over time without
-   * overwriting what's there. `eventId` comes from list_events / the create_event result. */
+  /** Edit an EXISTING calendar event in place (only the fields given change). `eventId` comes from
+   * list_events / the create_event result. Three ways to change the description, in the order you
+   * should reach for them: `setLines` upserts a labelled line (the RSVP/checklist case — it overwrites
+   * the entry that's already there instead of writing a second one), `editDescription` find/replaces
+   * exact text, and `appendDescription` only tacks a new note on the end. */
   | {
       tool: "update_event";
       eventId: string;
@@ -383,6 +385,8 @@ export type BuddyToolCall =
       end?: string;
       description?: string;
       appendDescription?: string;
+      editDescription?: { find: string; replace: string }[];
+      setLines?: { match: string; line: string }[];
       location?: string;
       calendarId?: string;
     }
@@ -940,11 +944,19 @@ export function buildBuddySystemPrompt(opts: {
       '{"start":"2026-07-04","end":"2026-07-04"} — no times, no offset. Use the SAME date on both ends for a ' +
       "single day (the app handles the calendar's exclusive end date); for a multi-day span use the first and " +
       "LAST day. Same in update_event.\n" +
-      '- {"tool":"update_event","eventId":"…","appendDescription":"Confirmation #A1234; gate B12"} — change an ' +
+      '- {"tool":"update_event","eventId":"…","setLines":[{"match":"Bo","line":"Bo: yes"}]} — change an ' +
       "EXISTING event. Only the fields you pass change; the rest are untouched. Get the eventId from the " +
       "create_event result or from a list_events line ([eventId: …]).\n" +
-      "  · ADDING DETAIL AS IT ARRIVES is the main use: prefer \"appendDescription\" — it ADDS a line to what the " +
-      "event already says. Plain \"description\" REPLACES the whole text, so only use it to rewrite/correct.\n" +
+      "  · KEEPING RUNNING DETAIL (an RSVP list, a packing list, a status per person) is the main use, and " +
+      '"setLines" is the tool for it: each {"match","line"} OVERWRITES the line that starts with that label, or ' +
+      "adds it to the list if it isn't there yet. NEVER append an update for someone/something the description " +
+      'already mentions — that\'s how a list ends up saying both "Bo: ?" and "Bo: yes". setLines also cleans up ' +
+      "any duplicate lines it finds for that label, so use it to FIX a list that already double-entered.\n" +
+      '  · {"editDescription":[{"find":"exact old text","replace":"new text"}]} — change any other specific text ' +
+      "in place (an empty \"replace\" deletes that line). If a \"find\" doesn't match, the whole call is refused and " +
+      "you're shown what the description actually says — re-read it and retry, don't fall back to appending.\n" +
+      '  · "appendDescription" ONLY for a genuinely new standalone note that updates nothing already there. ' +
+      'Plain "description" REPLACES the whole text, so only use it to rewrite from scratch.\n' +
       "  · Also takes \"summary\", \"start\", \"end\", \"location\" — for a rescheduled or renamed event (pass BOTH " +
       "start and end when moving one). To CONVERT an event between all-day and timed, pass both ends in the new " +
       'form: bare dates ("2026-07-04") make it all-day, full datetimes make it timed.\n' +
@@ -1405,7 +1417,9 @@ export function buildBuddySystemPrompt(opts: {
       "sees the task's history and checklist instead of starting cold, and it records what it finds back onto " +
       "the task. Use this for anything that accumulates over days — chasing RSVPs or replies, watching a " +
       'price or a shipment, collecting results as they arrive. Each run is told when it last ran, so cover ' +
-      "only what's NEW since then rather than re-reading everything.\n" +
+      "only what's NEW since then rather than re-reading everything. When a run keeps a running list on a " +
+      'calendar event, update it with update_event "setLines" so a changed answer OVERWRITES that entry — a ' +
+      "run that appends instead leaves the event saying two different things about the same person.\n" +
       '  {"tool":"list_scheduled"} to show them; {"tool":"cancel_scheduled","id":"…"} to remove one.\n'
       : "") +
     (opts.activeTask
@@ -2127,6 +2141,19 @@ function isUnsafeClipRef(ref: string): boolean {
   return !!scheme && scheme[1]!.length > 1; // 2+ char scheme = protocol; 1 char = a drive letter
 }
 
+/** An array-of-two-string-fields argument (`[{find,replace}]`, `[{match,line}]`) — bounded in both
+ * count and per-string length, with non-strings coerced to "" for the caller to filter out. */
+function pairsArg<A extends string, B extends string>(value: unknown, a: A, b: B): { [K in A | B]: string }[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, MAX_EDITS_PER_CALL).map((entry) => {
+    const e = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+    return {
+      [a]: typeof e[a] === "string" ? (e[a] as string).slice(0, MAX_EDIT_STR_CHARS).trim() : "",
+      [b]: typeof e[b] === "string" ? (e[b] as string).slice(0, MAX_EDIT_STR_CHARS).trim() : "",
+    } as { [K in A | B]: string };
+  });
+}
+
 function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefined {
   const obj = normalizeToolShape(input);
   const tool = obj.tool;
@@ -2456,8 +2483,13 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     const appendDescription = strArg(obj.appendDescription, MAX_GOOGLE_TEXT_CHARS);
     const location = strArg(obj.location, MAX_QUERY_CHARS);
     const calendarId = strArg(obj.calendarId, MAX_ID_CHARS);
+    // A `replace` may legitimately be "" (that deletes the line), so only `find` has to be non-empty.
+    const editDescription = pairsArg(obj.editDescription, "find", "replace").filter((e) => e.find.length > 0);
+    const setLines = pairsArg(obj.setLines, "match", "line").filter((e) => e.match.length > 0 && e.line.length > 0);
     // Nothing to change → not a usable call (the API would reject it anyway).
-    if (!summary && !start && !end && !description && !appendDescription && !location) return undefined;
+    if (!summary && !start && !end && !description && !appendDescription && !location && !editDescription.length && !setLines.length) {
+      return undefined;
+    }
     return {
       tool,
       eventId,
@@ -2466,6 +2498,8 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
       ...(end ? { end } : {}),
       ...(description ? { description } : {}),
       ...(appendDescription ? { appendDescription } : {}),
+      ...(editDescription.length ? { editDescription } : {}),
+      ...(setLines.length ? { setLines } : {}),
       ...(location ? { location } : {}),
       ...(calendarId ? { calendarId } : {}),
     };
@@ -3506,16 +3540,25 @@ function formatBuddyToolResultBody(call: BuddyToolCall, result: BuddyToolResultP
     const window = call.timeMin || call.timeMax ? ` (${call.timeMin ?? "now"} → ${call.timeMax ?? "…"})` : "";
     if (events.length === 0) return `[list_events: nothing on the calendar in that window${window}]`;
     // Each line carries its id — that's what makes an event addressable by update_event (without it
-    // the model can read the calendar but has no way to name which event to change).
+    // the model can read the calendar but has no way to name which event to change). The description
+    // budget is per-event and shrinks as the window gets busier: a running list (RSVPs, packing) has to
+    // arrive WHOLE to be editable — editing against a truncated copy is what writes duplicate lines —
+    // but a month of long descriptions can't all fit either. Truncation is called out when it happens.
+    const budget = Math.max(300, Math.floor(6000 / Math.max(1, events.length)));
     return (
       `[list_events — events${window}]\n` +
       events
-        .map(
-          (e) =>
+        .map((e) => {
+          const desc = e.description
+            ? e.description.length > budget
+              ? ` — ${e.description.slice(0, budget).trim()}… [description CUT — read it in full before editing it]`
+              : ` — ${e.description}`
+            : "";
+          return (
             `· ${e.start} → ${e.end}: ${e.summary}${e.location ? ` @ ${e.location}` : ""}` +
-            `${e.description ? ` — ${e.description.length > 200 ? `${e.description.slice(0, 200).trim()}…` : e.description}` : ""}` +
-            `${e.id ? ` [eventId: ${e.id}]` : ""}`,
-        )
+            `${desc}${e.id ? ` [eventId: ${e.id}]` : ""}`
+          );
+        })
         .join("\n")
     );
   }
@@ -3531,8 +3574,15 @@ function formatBuddyToolResultBody(call: BuddyToolCall, result: BuddyToolResultP
   if (call.tool === "update_event") {
     const ev = result.eventUpdated;
     if (!ev) return "[update_event did nothing]";
-    const what = call.appendDescription ? "added a note to" : "updated";
-    return `[${what} calendar event "${ev.summary}" (${ev.start})] Confirm the change to the reader.`;
+    const what = call.setLines?.length || call.editDescription?.length ? "edited" : call.appendDescription ? "added a note to" : "updated";
+    // Echo the description BACK when it changed. Without it the model is editing text it can't see,
+    // which is how the same update gets written twice — once in place and once at the bottom.
+    const touchedText = call.setLines?.length || call.editDescription?.length || call.appendDescription || call.description;
+    const now =
+      touchedText && ev.description
+        ? `\nIt now reads:\n${ev.description.length > 2000 ? `${ev.description.slice(0, 2000).trim()}…` : ev.description}`
+        : "";
+    return `[${what} calendar event "${ev.summary}" (${ev.start})]${now}\nConfirm the change to the reader.`;
   }
   if (call.tool === "list_tasks") {
     const tasks = result.tasks ?? [];

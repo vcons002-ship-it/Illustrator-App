@@ -828,17 +828,63 @@ describe("buildBuddySystemPrompt", () => {
     expect(created).toMatch(/update_event/);
   });
 
-  it("reports an append distinctly from a plain update", () => {
+  it("parses the in-place description edits (and drops entries missing their required half)", () => {
+    expect(
+      parseBuddyToolCall(
+        JSON.stringify({
+          tool: "update_event",
+          eventId: "e1",
+          setLines: [{ match: "Bo", line: "Bo: yes" }, { match: "", line: "x" }, { match: "Cy" }],
+          editDescription: [{ find: "gate B12", replace: "gate C4" }, { find: "drop me", replace: "" }, { replace: "orphan" }],
+        }),
+      ),
+    ).toEqual({
+      tool: "update_event",
+      eventId: "e1",
+      // An empty `replace` is legitimate — it means "delete that line" — so only `find` is required.
+      editDescription: [{ find: "gate B12", replace: "gate C4" }, { find: "drop me", replace: "" }],
+      setLines: [{ match: "Bo", line: "Bo: yes" }],
+    });
+    // Edits alone are a real change, so the "nothing to change" rejection must not fire.
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "update_event", eventId: "e1", setLines: [] }))).toBeUndefined();
+  });
+
+  it("reports an append distinctly from an in-place edit, and echoes the resulting text back", () => {
     const ev = { id: "e1", summary: "Flight", start: "2026-07-04T09:00", end: "2026-07-04T12:00" };
     expect(formatBuddyToolResult({ tool: "update_event", eventId: "e1", appendDescription: "Gate B12" }, { eventUpdated: ev })).toContain("added a note to");
     expect(formatBuddyToolResult({ tool: "update_event", eventId: "e1", location: "JFK" }, { eventUpdated: ev })).toContain("updated calendar event");
+    const edited = formatBuddyToolResult(
+      { tool: "update_event", eventId: "e1", setLines: [{ match: "Bo", line: "Bo: yes" }] },
+      { eventUpdated: { ...ev, description: "RSVP:\n- Bo: yes" } },
+    );
+    expect(edited).toContain("edited calendar event");
+    // The model must SEE the result — editing text it can't see is what produced duplicate lines.
+    expect(edited).toContain("It now reads:\nRSVP:\n- Bo: yes");
   });
 
-  it("teaches the model to accumulate detail on an existing event", () => {
+  it("shows a running list WHOLE, and says so when it had to cut one", () => {
+    const long = `RSVP:\n${Array.from({ length: 40 }, (_, i) => `- Guest ${i}: yes`).join("\n")}`;
+    const one = formatBuddyToolResult(
+      { tool: "list_events" },
+      { events: [{ id: "e1", summary: "Party", start: "s", end: "e", description: long }] },
+    );
+    expect(one).toContain("- Guest 39: yes"); // a single event's list arrives intact
+    const many = formatBuddyToolResult(
+      { tool: "list_events" },
+      { events: Array.from({ length: 30 }, (_, i) => ({ id: `e${i}`, summary: "Party", start: "s", end: "e", description: long })) },
+    );
+    expect(many).toContain("description CUT"); // a busy window can't, and must admit it
+  });
+
+  it("teaches the model to edit detail IN PLACE rather than pile it at the bottom", () => {
     const g = buildBuddySystemPrompt({ persona: "assistant", library: [], canGoogle: true });
     expect(g).toContain('"tool":"update_event"');
     expect(g).toContain("appendDescription");
     expect(g).toMatch(/REPLACES/); // the append-vs-replace distinction must be explicit
+    expect(g).toContain("setLines");
+    expect(g).toContain("editDescription");
+    // The failure mode has to be named, not just the tool: the model defaulted to appending.
+    expect(g).toMatch(/NEVER append an update for someone\/something the description already mentions/);
   });
 
   it("binds a scheduled action to a task, and teaches the background-keep-up-to-date pattern", () => {

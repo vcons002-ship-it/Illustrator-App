@@ -148,11 +148,21 @@ export interface BuddyDeps {
   openImage?: (path: string) => Promise<{ name: string; mimeType: string; base64: string; observation?: string }>;
   listEvents?: (opts: { max?: number; timeMin?: string; timeMax?: string; query?: string }) => Promise<CalendarEvent[]>;
   createEvent?: (ev: { summary: string; start: string; end: string; description?: string; location?: string }) => Promise<CalendarEvent>;
-  /** Edit an existing event in place — only the given fields change; `appendDescription` adds to what
-   * the event already says (so details can accumulate on it) rather than replacing the text. */
+  /** Edit an existing event in place — only the given fields change. The description can be edited IN
+   * PLACE (`setLines` upserts a labelled line, `editDescription` find/replaces) or merely added to
+   * (`appendDescription`); in-place is what keeps a running list from growing duplicate entries. */
   updateEvent?: (
     eventId: string,
-    patch: { summary?: string; start?: string; end?: string; description?: string; appendDescription?: string; location?: string },
+    patch: {
+      summary?: string;
+      start?: string;
+      end?: string;
+      description?: string;
+      appendDescription?: string;
+      editDescription?: { find: string; replace: string }[];
+      setLines?: { match: string; line: string }[];
+      location?: string;
+    },
     calendarId?: string,
   ) => Promise<CalendarEvent>;
   listTasks?: (max?: number) => Promise<TaskItem[]>;
@@ -852,6 +862,8 @@ export async function runBuddyTool(
               ...(call.end ? { end: call.end } : {}),
               ...(call.description ? { description: call.description } : {}),
               ...(call.appendDescription ? { appendDescription: call.appendDescription } : {}),
+              ...(call.editDescription?.length ? { editDescription: call.editDescription } : {}),
+              ...(call.setLines?.length ? { setLines: call.setLines } : {}),
               ...(call.location ? { location: call.location } : {}),
             },
             call.calendarId,

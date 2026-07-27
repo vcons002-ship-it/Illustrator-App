@@ -7,6 +7,8 @@ import {
   decodeBase64UrlBytes,
   createTask,
   createEvent,
+  applyDescriptionEdits,
+  applyDescriptionLines,
   nextDayIso,
   toTaskDue,
   patchTask,
@@ -419,6 +421,61 @@ class SequencedTransport implements Transport {
   }
 }
 
+describe("applyDescriptionLines (upsert a labelled line)", () => {
+  const rsvp = "Party at 6.\nRSVP:\n- Ada: yes\n- Bo: ?\n- Cy: ?\nBring a dish.";
+
+  it("overwrites the existing entry in place, keeping its bullet", () => {
+    const r = applyDescriptionLines(rsvp, [{ match: "Bo", line: "Bo: yes" }]);
+    expect(r.text).toBe("Party at 6.\nRSVP:\n- Ada: yes\n- Bo: yes\n- Cy: ?\nBring a dish.");
+    expect(r.replaced).toEqual(["Bo"]);
+    expect(r.added).toEqual([]);
+  });
+
+  it("collapses duplicates a previous blind append already created", () => {
+    // Exactly the damage this replaces: the same person answered twice, in two places.
+    const doubled = "RSVP:\n- Bo: ?\n- Cy: yes\n- Bo: yes";
+    const r = applyDescriptionLines(doubled, [{ match: "Bo", line: "Bo: no" }]);
+    expect(r.text).toBe("RSVP:\n- Bo: no\n- Cy: yes");
+  });
+
+  it("adds a new name INTO the list, not after the text that follows it", () => {
+    const r = applyDescriptionLines(rsvp, [{ match: "Dee", line: "Dee: yes" }]);
+    expect(r.text).toBe("Party at 6.\nRSVP:\n- Ada: yes\n- Bo: ?\n- Cy: ?\n- Dee: yes\nBring a dish.");
+    expect(r.added).toEqual(["Dee"]);
+  });
+
+  it("matches on a word boundary and ignores the punctuation people write after a label", () => {
+    expect(applyDescriptionLines("- Bobby: no\n- Bo: ?", [{ match: "Bo:", line: "Bo: yes" }]).text).toBe("- Bobby: no\n- Bo: yes");
+  });
+
+  it("handles numbered lists and an empty description", () => {
+    expect(applyDescriptionLines("1. Ada: yes\n2. Bo: ?", [{ match: "Bo", line: "Bo: yes" }]).text).toBe("1. Ada: yes\n2. Bo: yes");
+    // A new entry can't reuse "2." verbatim, so it falls back to a dash.
+    expect(applyDescriptionLines("1. Ada: yes", [{ match: "Bo", line: "Bo: yes" }]).text).toBe("1. Ada: yes\n- Bo: yes");
+    expect(applyDescriptionLines("", [{ match: "Bo", line: "Bo: yes" }]).text).toBe("Bo: yes");
+  });
+});
+
+describe("applyDescriptionEdits (find/replace in a description)", () => {
+  it("replaces a whole line by its text, keeping the bullet, and reports nothing missed", () => {
+    const r = applyDescriptionEdits("- Bo: ?\n- Cy: ?", [{ find: "Bo: ?", replace: "Bo: yes" }]);
+    expect(r).toEqual({ text: "- Bo: yes\n- Cy: ?", missed: [] });
+  });
+
+  it("deletes the line when the replacement is empty", () => {
+    expect(applyDescriptionEdits("- Bo: ?\n- Cy: ?", [{ find: "- Cy: ?", replace: "" }]).text).toBe("- Bo: ?");
+  });
+
+  it("falls back to a substring, first occurrence only", () => {
+    expect(applyDescriptionEdits("gate B12, gate B12", [{ find: "B12", replace: "C4" }]).text).toBe("gate C4, gate B12");
+  });
+
+  it("reports a miss rather than guessing — the caller must not append instead", () => {
+    const r = applyDescriptionEdits("- Bo: ?", [{ find: "- Zed: ?", replace: "- Zed: no" }]);
+    expect(r).toEqual({ text: "- Bo: ?", missed: ["- Zed: ?"] });
+  });
+});
+
 describe("patchEvent (edit an existing calendar event)", () => {
   it("PATCHes only the fields given, at the event's URL", async () => {
     const t = new FakeTransport({ id: "e1", summary: "Dentist", start: { dateTime: "2026-07-04T17:00:00-04:00" }, end: { dateTime: "2026-07-04T18:00:00-04:00" } });
@@ -467,6 +524,43 @@ describe("patchEvent (edit an existing calendar event)", () => {
     const t2 = new FakeTransport({ id: "e3", summary: "Holiday" });
     await patchEvent(t2, "tok", "e3", { start: "2026-07-04T09:00:00-04:00" });
     expect(t2.requests[0]!.body).toEqual({ start: { dateTime: "2026-07-04T09:00:00-04:00", date: null } });
+  });
+
+  it("setLines overwrites the line already there instead of appending a second one", async () => {
+    const before = "Party at 6.\nRSVP:\n- Ada: yes\n- Bo: ?\n- Cy: ?\nBring a dish.";
+    const t = new SequencedTransport([{ id: "e1", summary: "Party", description: before }, { id: "e1", summary: "Party" }]);
+    await patchEvent(t, "tok", "e1", { setLines: [{ match: "Bo", line: "Bo: yes" }] });
+    expect((t.requests[1]!.body as { description: string }).description).toBe(
+      "Party at 6.\nRSVP:\n- Ada: yes\n- Bo: yes\n- Cy: ?\nBring a dish.",
+    );
+  });
+
+  it("editDescription refuses the WHOLE call when a find misses, and says what the text really is", async () => {
+    const t = new SequencedTransport([{ id: "e1", summary: "Party", description: "RSVP:\n- Bo: ?" }]);
+    await expect(
+      patchEvent(t, "tok", "e1", {
+        editDescription: [
+          { find: "- Bo: ?", replace: "- Bo: yes" },
+          { find: "- Zed: ?", replace: "- Zed: no" },
+        ],
+      }),
+    ).rejects.toThrow(/"- Zed: \?"[\s\S]*RSVP:/);
+    // Nothing was written — a half-applied edit is worse than none.
+    expect(t.requests.filter((r) => r.method === "PATCH")).toHaveLength(0);
+  });
+
+  it("applies edits, then setLines, then append — all in one read/write round-trip", async () => {
+    const t = new SequencedTransport([
+      { id: "e1", summary: "Party", description: "Party at 6.\n- Bo: ?" },
+      { id: "e1", summary: "Party" },
+    ]);
+    await patchEvent(t, "tok", "e1", {
+      editDescription: [{ find: "Party at 6.", replace: "Party at 7." }],
+      setLines: [{ match: "Bo", line: "Bo: yes" }],
+      appendDescription: "Parking out back.",
+    });
+    expect(t.requests.filter((r) => r.method === "GET")).toHaveLength(1); // one read, not three
+    expect((t.requests[1]!.body as { description: string }).description).toBe("Party at 7.\n- Bo: yes\nParking out back.");
   });
 
   it("refuses an empty patch rather than issuing a no-op write", async () => {
