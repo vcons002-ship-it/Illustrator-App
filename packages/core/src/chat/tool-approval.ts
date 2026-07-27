@@ -50,6 +50,38 @@ export type ToolAutoRoute =
  *   full autonomy alone NEVER reaches it (the hard danger floor);
  * - everything else asks.
  */
+/**
+ * The ONLY tools an idle creative run may use: look things up, and write them up.
+ *
+ * An allowlist, not a blocklist, and enforced in the executor rather than by describing limits in the
+ * prompt — an unattended turn nobody is watching is exactly where "it was told not to" is worth
+ * nothing. Anything touching the machine (run_command, write_file, edit_file, delegate_coding_task,
+ * screenshot, find_files), anything outward-facing (send_email, draft_email, calendar/task writes,
+ * prep_order), and anything that spends GPU or money (image/video generation) is absent — including
+ * tools the reader has separately allowed elsewhere. Adding to this list is a deliberate act.
+ */
+export const CREATIVE_IDLE_TOOLS: ReadonlySet<string> = new Set([
+  "search_web",
+  "search_books",
+  "search_images",
+  "read_url",
+  "read",
+  "random_books",
+  "calculate",
+  "wolfram",
+  "create_document",
+  "edit_document",
+  "read_document",
+  // Remembering what it explored is what stops it circling the same topic every time.
+  "remember",
+  "read_skill",
+]);
+
+/** May this tool run in an idle creative turn? PURE. */
+export function allowedInCreativeIdle(tool: string): boolean {
+  return CREATIVE_IDLE_TOOLS.has(tool);
+}
+
 export function routePendingTool(tool: string, f: ToolAutoFlags): ToolAutoRoute {
   switch (tool) {
     case "find_files":

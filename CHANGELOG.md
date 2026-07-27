@@ -5,12 +5,35 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ## July 2026
 
+### The assistant
+
+- **It can potter about on its own** (off by default) — turn on "Let it explore something of its own
+  while you're idle" and, a few times an hour when you're not using the app, it follows its own
+  curiosity: reads around a topic on the web and writes up what it found interesting. It lands in its
+  own **✨ Creative** chat, so it never appears in a conversation you're having, and it remembers what
+  it has already covered so it goes somewhere new each time. While doing this it can only search,
+  read, and write a document — it cannot run commands, touch your files, email anyone, or spend
+  anything, whatever your other permissions allow.
+- **The reasoning bubble stays how you left it** — open it and it stays open; close it and it stays
+  closed, through the next reply and after a restart. It used to spring back open every time the
+  assistant spoke, so closing it only lasted one message.
+
 ### The app itself
 
 - **Settings shows which build you're running** — right under the title, above the search box. The app
   updates itself, so "this still doesn't work" and "this still doesn't work because you're on an older
   build" looked identical from the outside; twice that has cost several rounds to untangle. Quote the
   build when something seems missing. The assistant knows it too, so you can just ask it.
+- **Updating says what it actually installed** — the branch and commit, on every outcome. "You're
+  already on the latest version" was unfalsifiable: a copy tracking a branch that never receives a
+  change reports exactly that, indefinitely, while the fix you're waiting for sits somewhere else.
+  Comparing the commit it reports against the build shown in Settings also separates "didn't
+  download" from "didn't rebuild".
+- **Updates that change the build setup now tell you to restart** — the desktop app is served by a
+  development server that reads its configuration once, when it starts. So a pulled change to that
+  configuration was downloaded, reported as rebuilt, and then quietly not applied, because reloading
+  the page re-fetches from the same already-running server. Those updates now say to close and reopen
+  the app, the way core updates already did.
 
 ### Scheduled actions
 

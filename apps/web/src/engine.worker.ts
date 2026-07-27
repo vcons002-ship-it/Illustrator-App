@@ -222,6 +222,7 @@ import { buildProviders } from "@visual-reader/ui/providers";
 import type { ReaderSettings } from "@visual-reader/ui";
 import type { TaskPlan, TaskStep } from "@visual-reader/core";
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
+import { buildStamp } from "./build-stamp.js";
 import type { EngineVram } from "./remote-sync.js";
 
 /**
@@ -3901,7 +3902,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         now: currentDateTimeLabel(),
         // Which bundle this is, baked in at build time — so "which build are you on?" is answerable
         // and a stale build stops looking like an unfixed bug.
-        buildStamp: __BUILD_STAMP__,
+        buildStamp: buildStamp(),
         ...(activePlan ? { activeTask: tasksIndexBlock(activePlan) } : {}),
         ...(settings?.allowMature ? { allowMature: true } : {}),
         // Desktop only: the find_files tool needs the native filesystem bridge,
@@ -3972,6 +3973,29 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         ...(corsProxyAvailable && parseMcpServers(settings?.mcpServers).length > 0
           ? { mcpServers: parseMcpServers(settings?.mcpServers).map((s) => s.name) }
           : {}),
+        // AN UNATTENDED CREATIVE RUN keeps only "look things up and write them up". LAST in the
+        // object so it overrides every capability decided above, whatever the reader has enabled
+        // elsewhere — the run happens with nobody watching, so its surface is decided here rather
+        // than inherited. This narrows what the model is OFFERED; runBuddyTurn's creativeIdle gate is
+        // what actually stops a call, and neither relies on the other.
+        ...(msg.creativeIdle
+          ? {
+              canSearchFiles: false,
+              canRunCommands: false,
+              canAutonomousWorkspace: false,
+              canDelegateCoding: false,
+              canGenerateVideo: false,
+              canGithub: false,
+              canGoogle: false,
+              canSchwab: false,
+              canTvBridge: false,
+              canAutomateTasks: false,
+              canTaskTools: false,
+              canSubAgents: false,
+              canMarkets: false,
+              mcpServers: [],
+            }
+          : {}),
       }) +
       (memory ? `\n\n${memory}` : "") +
       // selfSoul/userSoul are now injected at the TOP of buildBuddySystemPrompt (see above), not appended here.
@@ -4033,6 +4057,9 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       cachePrefix: setup,
       history,
       maxTokens: budgets.reply,
+      // The hard limit for an unattended creative run — enforced in the loop, independent of what the
+      // prompt above happens to advertise.
+      ...(msg.creativeIdle ? { creativeIdle: true } : {}),
       ...(chatReasoningEffort(settings) ? { reasoningEffort: chatReasoningEffort(settings)! } : {}),
       // Cloud (paid) models pause for a "keep going?" check every so often so a long task doesn't burn
       // many API calls unattended; local/free models run to the backstop (no pauseEvery).

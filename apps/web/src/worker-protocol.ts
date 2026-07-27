@@ -274,6 +274,9 @@ export type MainToWorker =
       /** App-managed-steps mode is ON for this turn (the host decides — setting + weak-model auto-on):
        * the prompt shows only the current step and complete_step is withdrawn (the host advances). */
       appManagedSteps?: boolean;
+      /** This turn is an UNATTENDED creative run: the tool loop refuses everything outside
+       * CREATIVE_IDLE_TOOLS, and the prompt drops the workspace/desktop capabilities entirely. */
+      creativeIdle?: boolean;
     };
 
 export type WorkerToMain =
