@@ -6218,6 +6218,18 @@ export function App() {
       if (Date.now() - lastRequestAt.current < CREATIVE_IDLE_MS) return;
       if (Date.now() - lastCreativeAt.current < CREATIVE_GAP_MS) return;
       void (async () => {
+        // YIELD TO REAL WORK. The scheduled runner and the task-step sweep each switch the active
+        // chat to their own session, exactly as this does — and they become eligible sooner (2 and 5
+        // minutes idle, against 10 here). Left to race, this switches to ✨ Creative, a scheduled tick
+        // 30s later switches away to run something due, this switches back… and neither reaches its
+        // second phase. So the lowest-value work checks first and stands down: daydreaming waits for
+        // the actual jobs, and its long gap means skipping a turn costs nothing.
+        const [scheduled, plans] = await Promise.all([
+          loadScheduledTasks(libraryStore).catch(() => []),
+          loadTaskPlans(libraryStore).catch(() => []),
+        ]);
+        if (runnableScheduledTasks(dueScheduledTasks(scheduled), plans).length > 0) return;
+        if (settings.allowTaskAutomation && nextAutoStep(plans, { skipStepIds: autoStepSkip.current })) return;
         // Two-phase, like the other sweeps: switch first and let the NEXT tick send, so the session's
         // history has landed and the turn doesn't inherit whatever chat was open.
         if (activeBuddyIdRef.current !== CREATIVE_CHAT_ID) {
@@ -6246,7 +6258,7 @@ export function App() {
       })();
     }, 60_000);
     return () => clearInterval(id);
-  }, [isRemoteClient, settings.allowCreativeIdle, openCreativeSession, onBuddySendText]);
+  }, [isRemoteClient, settings.allowCreativeIdle, settings.allowTaskAutomation, libraryStore, openCreativeSession, onBuddySendText]);
   /** Make the ⏰ Scheduled session exist and switch to it (creating it on first use). */
   const openScheduledSession = useCallback(() => {
     setBuddySessions((prev) => {
