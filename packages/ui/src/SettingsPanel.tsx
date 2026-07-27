@@ -535,6 +535,9 @@ export interface InstalledModel {
 export interface SettingsPanelProps {
   value: ReaderSettings;
   onChange: (next: ReaderSettings) => void;
+  /** The running bundle's git sha + build time, shown at the top of the panel. The app self-updates,
+   * so a stale build and an unfixed bug look identical from outside; this is what tells them apart. */
+  buildStamp?: string;
   /** True when running inside the desktop app (enables the local GPU engine). */
   isDesktop?: boolean;
   /** True when this is a phone LINKED to a desktop: it has no engine of its own, but its edits and
@@ -617,6 +620,7 @@ export interface SettingsPanelProps {
 export function SettingsPanel({
   value,
   onChange,
+  buildStamp,
   isDesktop = false,
   remote = false,
   installedModels = [],
@@ -732,6 +736,23 @@ export function SettingsPanel({
                 ✕ Close
               </button>
             </div>
+            {/* Which bundle is actually running. It sits ABOVE the search box and outside the
+                filterable sections on purpose: it's needed exactly when something seems missing,
+                which is when you'd never think to search for it. Selectable so it can be quoted. */}
+            {buildStamp ? (
+              <div
+                style={{
+                  fontSize: 11,
+                  opacity: 0.55,
+                  marginTop: 2,
+                  userSelect: "text",
+                  wordBreak: "break-word",
+                }}
+                title="The build this app is running. Quote it when reporting a problem — it tells a stale build from a real bug."
+              >
+                Build {buildStamp}
+              </div>
+            ) : null}
             <input
               type="search"
               placeholder="Find a setting… (style, key, context, chat, quality)"

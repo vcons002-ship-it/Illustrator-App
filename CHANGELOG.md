@@ -5,6 +5,13 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ## July 2026
 
+### The app itself
+
+- **Settings shows which build you're running** — right under the title, above the search box. The app
+  updates itself, so "this still doesn't work" and "this still doesn't work because you're on an older
+  build" looked identical from the outside; twice that has cost several rounds to untangle. Quote the
+  build when something seems missing. The assistant knows it too, so you can just ask it.
+
 ### Scheduled actions
 
 - **A scheduled action set up while working a task now belongs to that task** — and runs in that task's

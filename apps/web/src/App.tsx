@@ -7842,6 +7842,7 @@ export function App() {
           <SettingsPanel
             value={settings}
             onChange={onSettingsChange}
+            buildStamp={__BUILD_STAMP__}
             isDesktop={isDesktop}
             remote={isRemoteClient}
             {...(isDesktop
