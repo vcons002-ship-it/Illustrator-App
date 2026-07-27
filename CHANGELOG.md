@@ -13,7 +13,9 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   own **✨ Creative** chat, so it never appears in a conversation you're having, and it remembers what
   it has already covered so it goes somewhere new each time. Running one has to bring that chat to the
   front briefly, so it puts you back in the chat you had open when it finishes — unless you've come
-  back and started doing something, in which case it leaves your view alone.
+  back and started doing something, in which case it leaves your view alone. It also waits for the
+  app's real background work — scheduled actions, task steps — to be finished before starting, so it
+  never competes with something that actually matters.
 - **You can talk to it about what it explored** — open the ✨ Creative chat and ask; it's an ordinary
   conversation there, with everything it can normally do. It also knows, in any chat, that exploring
   on its own is something it does, so bringing up a piece it wrote doesn't meet a blank. The
