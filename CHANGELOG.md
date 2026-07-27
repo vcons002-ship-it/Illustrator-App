@@ -54,6 +54,11 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 - **Revising a document changes just that part, instead of rewriting the whole thing** — ask for a
   tightened intro or an extra section and the assistant now edits those lines in place. Before, every
   revision meant re-typing the entire document from scratch.
+- **Lists inside a document update in place too** — a checklist, an attendance or RSVP list, a status
+  per item: a changed answer overwrites that entry where it already sits, ticking its checkbox and
+  keeping the list's formatting, rather than adding a second line for the same person further down.
+  Duplicates already in a list get cleaned up when it next touches them. This is the same fix as the
+  calendar one below, now available anywhere the assistant keeps a running list.
 - **Long documents stop losing their endings** — the assistant only ever held the first 8,000
   characters of the document it was working on (roughly 1,200 words), and the copy it had just
   trailed off with no indication there was more. So on anything longer, "revise this" quietly

@@ -223,10 +223,15 @@ export type BuddyToolCall =
       content: string;
       format?: "pdf" | "docx" | "md" | "html";
     }
-  /** Revise the ACTIVE document in place via search/replace — the way to change part of a document
-   * WITHOUT re-emitting all of it. The edits are applied to the document's FULL stored text, not to
-   * the (bounded) copy in the prompt, so this works on a document far longer than you can see. */
-  | { tool: "edit_document"; edits: { search: string; replace: string }[] }
+  /** Revise the ACTIVE document in place — the way to change part of a document WITHOUT re-emitting
+   * all of it. Applied to the document's FULL stored text, not to the (bounded) copy in the prompt, so
+   * it works on a document far longer than you can see. `edits` search/replaces exact text; `setLines`
+   * upserts a labelled line in a list (the one that can't write a duplicate). */
+  | {
+      tool: "edit_document";
+      edits?: { search: string; replace: string }[];
+      setLines?: { match: string; line: string }[];
+    }
   /** Read the ACTIVE document's real text — the whole thing, or one section by its heading. The copy
    * in the prompt is bounded; this is how you see any part that block didn't show. */
   | { tool: "read_document"; section?: string }
@@ -1280,6 +1285,12 @@ export function buildBuddySystemPrompt(opts: {
     "Each \"search\" must appear EXACTLY ONCE — copy it VERBATIM from the document and add surrounding lines until " +
     "it's unique; an empty \"replace\" deletes the found text. Calling create_document again to \"revise\" REPLACES " +
     "the whole document with whatever you re-type, which silently throws away everything you didn't see.\n" +
+    '  · For a LIST inside a document — a checklist, an RSVP or attendance list, a status per item — use ' +
+    '{"tool":"edit_document","setLines":[{"match":"Bo","line":"- [x] Bo — confirmed"}]} instead. It overwrites the ' +
+    "line that starts with that label wherever it sits (and clears any duplicate lines for it), or adds it to the " +
+    "list if it's new. Use it whenever you're updating an entry that may ALREADY be in the list: unlike \"edits\" it " +
+    "doesn't need you to know what that line currently says, so it can't miss and leave you appending a second " +
+    "entry for the same thing. Both can go in one call — \"edits\" run first, then \"setLines\" on the result.\n" +
     '- {"tool":"read_document"} — the active document\'s real text, or {"tool":"read_document","section":"Scope"} for ' +
     "one section by heading. The copy in your context is bounded; this is how you read the rest of a long one.\n" +
     storyBlock +
@@ -3016,9 +3027,12 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
   }
   if (tool === "edit_document") {
     // Same shape as edit_file (one format for the model to learn) — an empty `replace` deletes the
-    // found text, so only `search` has to be non-empty.
+    // found text, so only `search` has to be non-empty. Search text is NOT trimmed (see pairsArg);
+    // a setLines label is, since the model writes it from memory rather than copying it.
     const edits = pairsArg(obj.edits, "search", "replace", false).filter((e) => e.search.length > 0);
-    return edits.length > 0 ? { tool, edits } : undefined;
+    const setLines = pairsArg(obj.setLines, "match", "line").filter((e) => e.match.length > 0 && e.line.length > 0);
+    if (edits.length === 0 && setLines.length === 0) return undefined;
+    return { tool, ...(edits.length ? { edits } : {}), ...(setLines.length ? { setLines } : {}) };
   }
   if (tool === "read_document") {
     const section = strArg(obj.section ?? obj.heading, MAX_TITLE_CHARS);
@@ -3898,8 +3912,9 @@ function formatBuddyToolResultBody(call: BuddyToolCall, result: BuddyToolResultP
     if (d.applied === 0) {
       return (
         `[edit_document changed NOTHING — ${d.summary} The document is untouched.] Call read_document to see the ` +
-        "real text, then retry with a verbatim search. Do NOT fall back to create_document — that would replace the " +
-        "whole document with only the part you can see."
+        "real text, then retry with a verbatim search. If you're updating an entry in a LIST, use setLines instead — " +
+        "it matches on the label, so it works without knowing what the line currently says. Do NOT fall back to " +
+        "create_document — that would replace the whole document with only the part you can see."
       );
     }
     return (

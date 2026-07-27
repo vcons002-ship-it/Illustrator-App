@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyFileEdits, extractSection, summarizeFileEdits } from "./file-edits.js";
+import { applyFileEdits, applyLineUpserts, extractSection, summarizeFileEdits } from "./file-edits.js";
 
 describe("applyFileEdits", () => {
   it("applies a single unique edit", () => {
@@ -51,6 +51,41 @@ describe("applyFileEdits", () => {
     // `$&` would otherwise re-insert the whole match; confirm it stays the two literal characters.
     const amp = applyFileEdits("X", [{ search: "X", replace: "[$&]" }]);
     expect(amp.content).toBe("[$&]");
+  });
+
+  it("applyLineUpserts: overwrites a checklist entry in place instead of adding a second one", () => {
+    const doc = "## Attendees\n\n- [x] Ada — confirmed\n- [ ] Bo — no reply\n- [ ] Cy — no reply\n\nNotes below.";
+    const r = applyLineUpserts(doc, [{ match: "Bo", line: "[x] Bo — confirmed" }]);
+    expect(r.text).toBe("## Attendees\n\n- [x] Ada — confirmed\n- [x] Bo — confirmed\n- [ ] Cy — no reply\n\nNotes below.");
+    expect(r.replaced).toEqual(["Bo"]);
+  });
+
+  it("applyLineUpserts: a new entry joins the list rather than trailing after the prose under it", () => {
+    const doc = "## Attendees\n\n- [ ] Ada\n\nNotes below.";
+    expect(applyLineUpserts(doc, [{ match: "Bo", line: "[x] Bo" }]).text).toBe("## Attendees\n\n- [ ] Ada\n- [x] Bo\n\nNotes below.");
+  });
+
+  it("applyLineUpserts: a checkbox is STATE (the caller can tick it); the bullet is formatting to keep", () => {
+    // Ticking: the new text brings "[x]", so the box changes but the "- " stays.
+    expect(applyLineUpserts("- [ ] Bo", [{ match: "Bo", line: "[x] Bo — confirmed" }]).text).toBe("- [x] Bo — confirmed");
+    // No box in the new text → the existing one is left exactly as it was.
+    expect(applyLineUpserts("- [x] Bo", [{ match: "Bo", line: "Bo — still in" }]).text).toBe("- [x] Bo — still in");
+    // A bullet in the new text wins, and is never doubled up with the old one.
+    expect(applyLineUpserts("- Bo: ?", [{ match: "Bo", line: "* Bo: yes" }]).text).toBe("* Bo: yes");
+    // Indentation of a nested list item survives.
+    expect(applyLineUpserts("- Team\n  - Bo: ?", [{ match: "Bo", line: "Bo: yes" }]).text).toBe("- Team\n  - Bo: yes");
+  });
+
+  it("applyLineUpserts: collapses duplicates an earlier blind append left behind", () => {
+    expect(applyLineUpserts("- Bo: ?\n- Cy: yes\n- Bo: yes", [{ match: "Bo", line: "Bo: no" }]).text).toBe("- Bo: no\n- Cy: yes");
+  });
+
+  it("applyLineUpserts: matches on a word boundary, and handles numbered lists + empty text", () => {
+    expect(applyLineUpserts("- Bobby: no\n- Bo: ?", [{ match: "Bo:", line: "Bo: yes" }]).text).toBe("- Bobby: no\n- Bo: yes");
+    expect(applyLineUpserts("1. Ada\n2. Bo: ?", [{ match: "Bo", line: "Bo: yes" }]).text).toBe("1. Ada\n2. Bo: yes");
+    // A new entry can't reuse "2." verbatim (it would repeat the number), so it falls back to a dash.
+    expect(applyLineUpserts("1. Ada", [{ match: "Bo", line: "Bo: yes" }]).text).toBe("1. Ada\n- Bo: yes");
+    expect(applyLineUpserts("", [{ match: "Bo", line: "Bo: yes" }]).text).toBe("Bo: yes");
   });
 
   it("extractSection: a heading and everything under it, including deeper subsections", () => {

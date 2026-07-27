@@ -91,9 +91,10 @@ export interface BuddyDeps {
   ) => Promise<NonNullable<BuddyToolResultPayload["document"]>>;
   /** Revise the active document by search/replace against its FULL stored text — the path that lets a
    * document be changed without re-emitting it (and without losing the part the model never saw). */
-  editDocument?: (
-    edits: { search: string; replace: string }[],
-  ) => Promise<NonNullable<BuddyToolResultPayload["documentEdit"]>>;
+  editDocument?: (patch: {
+    edits?: { search: string; replace: string }[];
+    setLines?: { match: string; line: string }[];
+  }) => Promise<NonNullable<BuddyToolResultPayload["documentEdit"]>>;
   /** The active document's real text — the whole thing, or one section by heading. */
   readDocument?: (section?: string) => Promise<NonNullable<BuddyToolResultPayload["documentText"]>>;
   /** Story "as you go": start a new co-written illustrated story, open it, render beat one. */
@@ -739,7 +740,12 @@ export async function runBuddyTool(
         return { document: await deps.createDocument(call) };
       case "edit_document":
         if (!deps.editDocument) return { error: "editing documents isn't available right now" };
-        return { documentEdit: await deps.editDocument(call.edits) };
+        return {
+          documentEdit: await deps.editDocument({
+            ...(call.edits?.length ? { edits: call.edits } : {}),
+            ...(call.setLines?.length ? { setLines: call.setLines } : {}),
+          }),
+        };
       case "read_document":
         if (!deps.readDocument) return { error: "reading the document isn't available right now" };
         return { documentText: await deps.readDocument(call.section) };

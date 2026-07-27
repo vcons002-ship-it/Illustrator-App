@@ -1292,6 +1292,39 @@ describe("edit_document / read_document", () => {
     expect(parseBuddyToolCall(JSON.stringify({ tool: "edit_document" }))).toBeUndefined();
   });
 
+  it("parses setLines for a list inside a document — on its own or alongside edits", () => {
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "edit_document", setLines: [{ match: "Bo", line: "- [x] Bo" }] }))).toEqual({
+      tool: "edit_document",
+      setLines: [{ match: "Bo", line: "- [x] Bo" }],
+    });
+    expect(
+      parseBuddyToolCall(
+        JSON.stringify({
+          tool: "edit_document",
+          edits: [{ search: "draft", replace: "final" }],
+          setLines: [{ match: "Bo", line: "- [x] Bo" }, { match: "Cy" }],
+        }),
+      ),
+    ).toEqual({
+      tool: "edit_document",
+      edits: [{ search: "draft", replace: "final" }],
+      setLines: [{ match: "Bo", line: "- [x] Bo" }],
+    });
+    expect(parseBuddyToolCall(JSON.stringify({ tool: "edit_document", setLines: [] }))).toBeUndefined();
+  });
+
+  it("teaches setLines as the way to update a list entry that may already exist", () => {
+    const g = buildBuddySystemPrompt({ persona: "assistant", library: [] });
+    expect(g).toContain('"setLines"');
+    // The reason it exists has to be stated, or the model reaches for `edits` and misses.
+    expect(g).toMatch(/doesn't need you to know what that line currently says/);
+    const failed = formatBuddyToolResult(
+      { tool: "edit_document", edits: [{ search: "nope", replace: "x" }] },
+      { documentEdit: { ok: false, title: "Notes", applied: 0, failures: 1, words: 0, summary: "x" } },
+    );
+    expect(failed).toContain("use setLines instead");
+  });
+
   it("parses read_document with and without a section", () => {
     expect(parseBuddyToolCall('{"tool":"read_document"}')).toEqual({ tool: "read_document" });
     expect(parseBuddyToolCall('{"tool":"read_document","section":"Scope"}')).toEqual({ tool: "read_document", section: "Scope" });

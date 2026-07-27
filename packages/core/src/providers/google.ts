@@ -1,3 +1,4 @@
+import { applyLineUpserts, reline, splitLineMarker, type LineUpsert } from "../chat/file-edits.js";
 import type { Transport } from "./transport/transport.js";
 import type { VisualReaderStore } from "../storage/store.js";
 
@@ -629,43 +630,8 @@ export interface DescriptionEdit {
   replace: string;
 }
 
-/** An upsert of one labelled line — the "make sure the list says this" primitive. */
-export interface DescriptionLine {
-  /** The label identifying the line, e.g. "Bo" for a line reading "- Bo: ?". Matched case-insensitively
-   * against the start of each line, on a word boundary, so "Bo" won't hit "Bobby". */
-  match: string;
-  /** The full line to put there, e.g. "Bo: yes". Any bullet the old line had is kept. When nothing
-   * matches, this is inserted into the existing list rather than dropped at the very bottom. */
-  line: string;
-}
-
-/** Indent + any bullet/number/checkbox that opens a line, split from the text after it. PURE. */
-function splitMarker(line: string): [marker: string, body: string] {
-  const m = /^(\s*(?:[-*•·+]|\d+[.)])?\s*(?:\[[ xX]?\]\s*)?)(.*)$/.exec(line);
-  return m ? [m[1] ?? "", m[2] ?? ""] : ["", line];
-}
-
-/** Does `body` start with `label` followed by a boundary (": ", " —", end)? PURE. */
-function startsWithLabel(body: string, label: string): boolean {
-  if (!label) return false;
-  const b = body.toLowerCase();
-  const l = label.toLowerCase();
-  if (!b.startsWith(l)) return false;
-  const next = b.charAt(l.length);
-  return next === "" || !/[a-z0-9]/.test(next);
-}
-
-/** A label as written on a line, minus the trailing punctuation people put after it ("Bo:" → "bo"). */
-function normalizeLabel(match: string): string {
-  return match.trim().replace(/[:\-–—=]+$/, "").trim();
-}
-
-/** The replacement text for a line, keeping the old line's bullet unless the new text brings its own. */
-function relineWith(oldLine: string, next: string): string {
-  const [oldMarker] = splitMarker(oldLine);
-  const [newMarker] = splitMarker(next.trim());
-  return newMarker.trim() ? next.trim() : oldMarker + next.trim();
-}
+/** An event description's labelled-line upsert — the shared primitive, which documents use too. */
+export type DescriptionLine = LineUpsert;
 
 /**
  * Apply find/replace edits to a description. Returns the new text plus any `find` that matched
@@ -684,10 +650,10 @@ export function applyDescriptionEdits(
     // Whole-line first: that's the precise case, and it lets an empty `replace` mean "drop this line".
     // The bullet is stripped from BOTH sides — a caller copying a line verbatim brings "- " along with
     // it, and matching that against the bare body would silently drop to the substring path instead.
-    const findBody = splitMarker(find)[1].trim().toLowerCase();
-    const lineIdx = findBody ? lines.findIndex((l) => splitMarker(l)[1].trim().toLowerCase() === findBody) : -1;
+    const findBody = splitLineMarker(find)[1].trim().toLowerCase();
+    const lineIdx = findBody ? lines.findIndex((l) => splitLineMarker(l)[1].trim().toLowerCase() === findBody) : -1;
     if (lineIdx >= 0) {
-      if (edit.replace.trim()) lines[lineIdx] = relineWith(lines[lineIdx] ?? "", edit.replace);
+      if (edit.replace.trim()) lines[lineIdx] = reline(lines[lineIdx] ?? "", edit.replace);
       else lines.splice(lineIdx, 1);
       continue;
     }
@@ -704,46 +670,10 @@ export function applyDescriptionEdits(
 }
 
 /**
- * Upsert labelled lines: overwrite the line for that label if it's there, otherwise add it. Any EXTRA
- * lines carrying the same label are dropped, which heals a description that a previous blind append
- * already double-entered. New lines are inserted after the last list item rather than at the very
- * bottom, so they join the list instead of trailing behind whatever follows it. PURE.
+ * Upsert labelled lines in an event description — {@link applyLineUpserts}, which documents share.
+ * Kept as a named re-export so the calendar's call sites read in calendar terms. PURE.
  */
-export function applyDescriptionLines(
-  description: string,
-  entries: readonly DescriptionLine[],
-): { text: string; replaced: string[]; added: string[] } {
-  const lines = description ? description.split("\n") : [];
-  const replaced: string[] = [];
-  const added: string[] = [];
-  for (const entry of entries) {
-    const label = normalizeLabel(entry.match);
-    const next = entry.line.trim();
-    if (!label || !next) continue;
-    const hits = lines.reduce<number[]>((acc, l, i) => {
-      if (startsWithLabel(splitMarker(l)[1].trim(), label)) acc.push(i);
-      return acc;
-    }, []);
-    if (hits.length > 0) {
-      const first = hits[0] ?? 0;
-      lines[first] = relineWith(lines[first] ?? "", next);
-      // Later duplicates go, back-to-front so the earlier indices stay valid.
-      for (const dup of hits.slice(1).reverse()) lines.splice(dup, 1);
-      replaced.push(entry.match);
-      continue;
-    }
-    // Land it in the list: after the last bulleted line if there is one, else at the end.
-    const lastItem = lines.reduce((acc, l, i) => (splitMarker(l)[0].trim() && splitMarker(l)[1].trim() ? i : acc), -1);
-    const bullet = lastItem >= 0 ? splitMarker(lines[lastItem] ?? "")[0] : "";
-    // A numbered marker can't be reused verbatim (it would repeat the number), so fall back to a dash.
-    const marker = /\d/.test(bullet) ? bullet.replace(/\d+[.)]/, "-") : bullet;
-    const text = splitMarker(next)[0].trim() ? next : marker + next;
-    if (lastItem >= 0) lines.splice(lastItem + 1, 0, text);
-    else lines.push(text);
-    added.push(entry.match);
-  }
-  return { text: lines.join("\n").replace(/^\n+/, ""), replaced, added };
-}
+export const applyDescriptionLines = applyLineUpserts;
 
 /**
  * Update an existing event in place (PATCH — only the fields given change).

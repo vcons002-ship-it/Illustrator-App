@@ -422,37 +422,17 @@ class SequencedTransport implements Transport {
 }
 
 describe("applyDescriptionLines (upsert a labelled line)", () => {
-  const rsvp = "Party at 6.\nRSVP:\n- Ada: yes\n- Bo: ?\n- Cy: ?\nBring a dish.";
-
-  it("overwrites the existing entry in place, keeping its bullet", () => {
+  // The line-upsert behaviour itself is covered in file-edits.test.ts — documents share the same
+  // primitive. This just holds the calendar's end of it: an RSVP list updating in place, not doubling.
+  it("overwrites the entry already in the list rather than appending a second one", () => {
+    const rsvp = "Party at 6.\nRSVP:\n- Ada: yes\n- Bo: ?\n- Cy: ?\nBring a dish.";
     const r = applyDescriptionLines(rsvp, [{ match: "Bo", line: "Bo: yes" }]);
     expect(r.text).toBe("Party at 6.\nRSVP:\n- Ada: yes\n- Bo: yes\n- Cy: ?\nBring a dish.");
     expect(r.replaced).toEqual(["Bo"]);
-    expect(r.added).toEqual([]);
-  });
-
-  it("collapses duplicates a previous blind append already created", () => {
-    // Exactly the damage this replaces: the same person answered twice, in two places.
-    const doubled = "RSVP:\n- Bo: ?\n- Cy: yes\n- Bo: yes";
-    const r = applyDescriptionLines(doubled, [{ match: "Bo", line: "Bo: no" }]);
-    expect(r.text).toBe("RSVP:\n- Bo: no\n- Cy: yes");
-  });
-
-  it("adds a new name INTO the list, not after the text that follows it", () => {
-    const r = applyDescriptionLines(rsvp, [{ match: "Dee", line: "Dee: yes" }]);
-    expect(r.text).toBe("Party at 6.\nRSVP:\n- Ada: yes\n- Bo: ?\n- Cy: ?\n- Dee: yes\nBring a dish.");
-    expect(r.added).toEqual(["Dee"]);
-  });
-
-  it("matches on a word boundary and ignores the punctuation people write after a label", () => {
-    expect(applyDescriptionLines("- Bobby: no\n- Bo: ?", [{ match: "Bo:", line: "Bo: yes" }]).text).toBe("- Bobby: no\n- Bo: yes");
-  });
-
-  it("handles numbered lists and an empty description", () => {
-    expect(applyDescriptionLines("1. Ada: yes\n2. Bo: ?", [{ match: "Bo", line: "Bo: yes" }]).text).toBe("1. Ada: yes\n2. Bo: yes");
-    // A new entry can't reuse "2." verbatim, so it falls back to a dash.
-    expect(applyDescriptionLines("1. Ada: yes", [{ match: "Bo", line: "Bo: yes" }]).text).toBe("1. Ada: yes\n- Bo: yes");
-    expect(applyDescriptionLines("", [{ match: "Bo", line: "Bo: yes" }]).text).toBe("Bo: yes");
+    // A genuinely new name joins the list, ahead of the prose that follows it.
+    expect(applyDescriptionLines(rsvp, [{ match: "Dee", line: "Dee: yes" }]).text).toBe(
+      "Party at 6.\nRSVP:\n- Ada: yes\n- Bo: ?\n- Cy: ?\n- Dee: yes\nBring a dish.",
+    );
   });
 });
 

@@ -52,6 +52,7 @@ import {
   activeDocBudget,
   documentOutline,
   applyFileEdits,
+  applyLineUpserts,
   summarizeFileEdits,
   extractSection,
   buildToolCallFormat,
@@ -3452,7 +3453,7 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         });
         return { ok: true, id, title: call.title, words, path };
       },
-      editDocument: async (edits) => {
+      editDocument: async (patch) => {
         // Edits land on the FULL stored text, NOT on the bounded excerpt the model sees in its prompt.
         // That's the whole point: a document can be revised correctly without the model ever holding
         // all of it, so a long one can no longer lose the part that didn't fit.
@@ -3460,10 +3461,14 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           return { ok: false, title: "", applied: 0, failures: 0, words: 0, summary: "", error: "no document is open" };
         }
         const doc = activeDocument;
-        const r = applyFileEdits(doc.content, edits);
+        const r = applyFileEdits(doc.content, patch.edits ?? []);
+        // Upserts run AFTER the search/replaces, on their result — so a call can fix prose and update a
+        // checklist in one round, and the upsert sees the text the edits just produced.
+        const up = applyLineUpserts(r.content, patch.setLines ?? []);
+        const landed = r.applied + up.replaced.length + up.added.length;
         const summary = summarizeFileEdits(doc.title, r);
-        if (r.applied === 0) return { ok: false, title: doc.title, applied: 0, failures: r.failures.length, words: 0, summary };
-        activeDocument = { title: doc.title, content: r.content };
+        if (landed === 0) return { ok: false, title: doc.title, applied: 0, failures: r.failures.length, words: 0, summary };
+        activeDocument = { title: doc.title, content: up.text };
         const slug =
           (doc.title || "document").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) ||
           "document";
@@ -3474,11 +3479,11 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           requestId: msg.requestId,
           id: `doc-${++documentCounter}-${slug}`,
           title: doc.title,
-          content: r.content,
+          content: up.text,
           path: `documents/${slug}.md`,
         });
-        const words = r.content.trim() ? r.content.trim().split(/\s+/).length : 0;
-        return { ok: true, title: doc.title, applied: r.applied, failures: r.failures.length, words, summary };
+        const words = up.text.trim() ? up.text.trim().split(/\s+/).length : 0;
+        return { ok: true, title: doc.title, applied: landed, failures: r.failures.length, words, summary };
       },
       readDocument: async (section) => {
         if (!activeDocument) return { title: "", text: "", total: 0, found: false };
