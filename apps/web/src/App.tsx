@@ -1224,6 +1224,10 @@ export function App() {
   const [buddyThinking, setBuddyThinking] = useState("");
   /** The running build, read from /build.json once (see build-stamp.ts). */
   const [buildStampLabel, setBuildStampLabel] = useState("");
+  const [checkoutSha, setCheckoutSha] = useState("");
+  /** When the last creative run started, so Settings can say whether it has EVER run — "nothing has
+   * appeared" and "it ran and produced nothing" need different fixes and looked identical. */
+  const [lastCreativeRunLabel, setLastCreativeRunLabel] = useState("");
   useEffect(() => {
     void loadBuildStamp().then((s) => setBuildStampLabel(formatBuildStamp(s)));
   }, []);
@@ -1926,7 +1930,12 @@ export function App() {
   );
   /** The tasks an action can be bound to, for ⏰ Scheduled's picker. */
   const scheduledTaskOptions = useMemo(
-    () => taskPlans.map((p) => ({ id: p.id, title: p.title })),
+    // ACTIVE work only. A finished or discarded task has nothing left to maintain — and the runner
+    // already skips actions bound to one (runnableScheduledTasks) — so offering it here would be
+    // offering to attach an action to something that will never run it. `scheduledTaskTitles` above
+    // deliberately keeps ALL plans, so an action already bound to a finished task still shows that
+    // task's name rather than reading as "the task was deleted".
+    () => taskPlans.filter((p) => p.status !== "completed" && p.status !== "archived").map((p) => ({ id: p.id, title: p.title })),
     [taskPlans],
   );
   /** DESKTOP: run a ⏰ Scheduled action the phone relayed, then re-push the mirrored list. */
@@ -2073,6 +2082,20 @@ export function App() {
   });
 
   // In-app software update (desktop): git-pull the latest code, reinstall deps, rebuild the web
+  // What the CHECKOUT is at, read once on the desktop. Settings compares it against the build this
+  // window is actually running: equal means what was pulled is what's loaded; different means the
+  // code arrived but this page predates it. Those two have different fixes and are indistinguishable
+  // without both numbers — which is precisely the confusion this whole thread has been about.
+  useEffect(() => {
+    if (!isDesktop) return;
+    void (async () => {
+      const root = await appRepoRoot().catch(() => undefined);
+      if (!root) return;
+      const r = await runCommand("git rev-parse --short HEAD", undefined, root).catch(() => undefined);
+      const sha = r?.stdout.trim();
+      if (sha && /^[0-9a-f]{6,}$/i.test(sha)) setCheckoutSha(sha);
+    })();
+  }, [isDesktop]);
   // bundle, then reload the window to apply it. The app serves apps/web/dist (or Vite in dev), so a
   // JS/TS update — almost everything — applies on reload without rebuilding the Rust shell; a core
   // (src-tauri) change is detected and the reader is told to fully relaunch to finish it.
@@ -6191,6 +6214,39 @@ export function App() {
    * the very next tick would restore before anything ran. */
   const pendingReturn = useRef<string | undefined>(undefined);
   const returnToChat = useRef<string | undefined>(undefined);
+  /**
+   * Start a run NOW, skipping the idle and gap waits. Settings calls this.
+   *
+   * Without it the only way to see whether any of this works is to leave the app alone for ten
+   * minutes and hope — so a run that never happens is indistinguishable from one that happened and
+   * produced nothing, and neither is distinguishable from the setting not being on. Everything else
+   * still applies: it's the same two-phase switch, the same unattended tool gate.
+   */
+  const runCreativeNow = useCallback(async () => {
+    if (activeBuddyIdRef.current !== CREATIVE_CHAT_ID) {
+      pendingReturn.current = activeBuddyIdRef.current;
+      openCreativeSession();
+      // Give the switch (which loads that session's history) a moment to land before sending, for the
+      // same reason the timer uses two ticks: sending early would hand the model the previous chat.
+      await new Promise((r) => setTimeout(r, 600));
+    }
+    lastCreativeAt.current = Date.now();
+    setLastCreativeRunLabel(new Date().toLocaleString());
+    returnToChat.current = pendingReturn.current;
+    pendingReturn.current = undefined;
+    const recent = memoriesRef.current
+      .filter((m) => /^explored:/i.test(m.text))
+      .slice(-8)
+      .map((m) => m.text.replace(/^explored:\s*/i, ""));
+    creativeIdleRef.current = true;
+    try {
+      onBuddySendText(buildCreativeIdlePrompt(recent));
+    } finally {
+      setTimeout(() => {
+        creativeIdleRef.current = false;
+      }, 0);
+    }
+  }, [openCreativeSession, onBuddySendText]);
   useEffect(() => {
     if (isRemoteClient || !settings.allowCreativeIdle) return;
     const id = setInterval(() => {
@@ -6238,6 +6294,7 @@ export function App() {
           return;
         }
         lastCreativeAt.current = Date.now();
+        setLastCreativeRunLabel(new Date().toLocaleString());
         returnToChat.current = pendingReturn.current; // arm the restore now that a run is really starting
         pendingReturn.current = undefined;
         // What it already wrote about, from its own memory — so it moves on rather than circling.
@@ -8008,6 +8065,9 @@ export function App() {
             value={settings}
             onChange={onSettingsChange}
             buildStamp={buildStampLabel}
+            {...(checkoutSha ? { checkoutSha } : {})}
+            {...(isDesktop ? { onExploreNow: () => void runCreativeNow() } : {})}
+            {...(lastCreativeRunLabel ? { lastCreativeRun: lastCreativeRunLabel } : {})}
             isDesktop={isDesktop}
             remote={isRemoteClient}
             {...(isDesktop

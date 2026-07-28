@@ -3396,7 +3396,16 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // for it, but nothing enforced it — so actions set up inside a task ran cold in the shared
         // window, without the task's history or checklist. Same fallback as saveTaskContext:
         // planId absent = the chat's active task. An explicit planId still wins.
-        const planId = call.planId ?? msg.taskPlanId;
+        const wantedPlanId = call.planId ?? msg.taskPlanId;
+        // Bind only to a LIVE task. A completed or discarded one has nothing left to maintain, and
+        // the runner skips actions attached to it — so binding here would create an action that
+        // silently never fires. Reachable without the model doing anything wrong: finish a task, then
+        // ask for a recurring check while still in that task's chat, and the default binding would
+        // have attached it to the finished task. Left unbound instead, and SAID so below.
+        const boundPlan = wantedPlanId
+          ? (await loadTaskPlans(store)).find((p) => p.id === wantedPlanId && p.status !== "completed" && p.status !== "archived")
+          : undefined;
+        const planId = boundPlan?.id;
         const task = normalizeScheduledTask({
           title: call.title,
           prompt: call.prompt,
@@ -3409,12 +3418,14 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         });
         await upsertScheduledTask(store, task);
         post({ type: "buddyScheduledChanged", requestId: msg.requestId });
-        const bound = task.planId ? (await loadTaskPlans(store)).find((p) => p.id === task.planId) : undefined;
         return {
           id: task.id,
           title: task.title,
           describe: describeSchedule(task),
-          ...(bound ? { planTitle: bound.title } : {}),
+          ...(boundPlan ? { planTitle: boundPlan.title } : {}),
+          // A planId was asked for and refused — the model should say why rather than report a
+          // binding it didn't get.
+          ...(wantedPlanId && !boundPlan ? { planUnavailable: true } : {}),
         };
       },
       listScheduled: async () =>

@@ -543,6 +543,16 @@ export interface SettingsPanelProps {
   /** The running bundle's git sha + build time, shown at the top of the panel. The app self-updates,
    * so a stale build and an unfixed bug look identical from outside; this is what tells them apart. */
   buildStamp?: string;
+  /** What the CHECKOUT is at (desktop). Shown only when it differs from the running bundle — that
+   * gap is the difference between "the update didn't download" and "it downloaded but this page is
+   * still the old one", which are otherwise indistinguishable and have different fixes. */
+  checkoutSha?: string;
+  /** Start an idle-creative run immediately, ignoring the idle/gap waits. Without a way to trigger it
+   * on demand the only test is to leave the app alone for ten minutes and hope — so "it never ran",
+   * "it ran and produced nothing" and "the setting isn't on" are indistinguishable. */
+  onExploreNow?: () => void;
+  /** When the last creative run started ("" if it hasn't since launch) — the other half of that. */
+  lastCreativeRun?: string;
   /** True when running inside the desktop app (enables the local GPU engine). */
   isDesktop?: boolean;
   /** True when this is a phone LINKED to a desktop: it has no engine of its own, but its edits and
@@ -626,6 +636,9 @@ export function SettingsPanel({
   value,
   onChange,
   buildStamp,
+  checkoutSha,
+  onExploreNow,
+  lastCreativeRun,
   isDesktop = false,
   remote = false,
   installedModels = [],
@@ -756,6 +769,17 @@ export function SettingsPanel({
                 title="The build this app is running. Quote it when reporting a problem — it tells a stale build from a real bug."
               >
                 Build {buildStamp}
+              </div>
+            ) : null}
+            {/* The running bundle is NOT what the checkout is at. Almost always: the code was pulled
+                and built, but this page is still the one loaded before that. Said here because the
+                two numbers otherwise only differ somewhere the reader can't see, and the fix depends
+                on which way they differ. */}
+            {buildStamp && checkoutSha && !buildStamp.startsWith(checkoutSha) ? (
+              <div style={{ fontSize: 11, color: "#ffcf8b", marginTop: 3, userSelect: "text" }}>
+                Your files are at {checkoutSha}, but this window is still running the build above.
+                Reload the app to catch up — if it still doesn't match after that, fully close and
+                reopen it (desktop.bat).
               </div>
             ) : null}
             <input
@@ -2405,7 +2429,7 @@ export function SettingsPanel({
               q={query}
               order={31}
               title="✅ Task automation (permission)"
-              keywords="task automation reminders google calendar tasks without asking"
+              keywords="task automation reminders google calendar tasks without asking creative explore curiosity idle free time"
             >
               <>
                 {onConnectGoogle && (
@@ -2445,6 +2469,27 @@ export function SettingsPanel({
                     </span>
                   </span>
                 </label>
+                {/* Proof it works, without waiting ten minutes to find out. Also the only way to tell
+                    "it has never run" from "it ran and wrote nothing". */}
+                {onExploreNow && (
+                  <div style={{ ...rowStyle, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <button
+                      style={buttonStyle}
+                      disabled={!value.allowCreativeIdle}
+                      title={
+                        value.allowCreativeIdle
+                          ? "Start one now instead of waiting for an idle stretch"
+                          : "Turn the setting above on first"
+                      }
+                      onClick={onExploreNow}
+                    >
+                      ✨ Explore something now
+                    </button>
+                    <span style={{ fontSize: 11, opacity: 0.55 }}>
+                      {lastCreativeRun ? `Last run: ${lastCreativeRun}` : "Hasn't run since the app started"}
+                    </span>
+                  </div>
+                )}
               </>
             </Group>
           )}

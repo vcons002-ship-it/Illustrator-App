@@ -915,6 +915,16 @@ describe("buildBuddySystemPrompt", () => {
     expect(loose).toContain("shared ⏰ Scheduled chat");
     expect(loose).toContain("no task history behind it");
     expect(loose).toContain('"planId"');
+
+    // A binding that was ASKED for and refused reads differently from never having asked — otherwise
+    // the model reports a task binding it didn't get. Reachable without any mistake: finish a task,
+    // then ask for a recurring check while still in its chat.
+    const refused = formatBuddyToolResult(call, {
+      scheduled: { id: "s3", title: "RSVP check", describe: "every day at 08:00", planUnavailable: true },
+    });
+    expect(refused).toContain("could NOT be attached to that task");
+    expect(refused).toContain("finished or gone");
+    expect(refused).not.toMatch(/runs on the task/);
   });
 
   it("parses a list_events search, and teaches how to FIND an event to update", () => {
