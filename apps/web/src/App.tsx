@@ -5459,6 +5459,15 @@ export function App() {
     ephemeralDirective?: boolean,
   ): Promise<string | undefined> => {
     const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
+    // CONSUME the creative-run flag HERE, synchronously, before anything below awaits.
+    //
+    // It used to be read at the buddyChat call far below and cleared by a setTimeout(0) at the call
+    // site. Everything between here and there awaits (the AGENTS.md read, for one), so the timeout
+    // always won: the flag was false by the time it mattered and the unattended tool gate never
+    // engaged AT ALL — those runs had the full tool set, including run_command. A safety limit must
+    // not depend on winning a race with a timer.
+    const creativeTurn = creativeIdleRef.current;
+    creativeIdleRef.current = false;
     // Make sure the worker has THIS session's current file ledger before the turn builds its prompt
     // (ordered before the buddyChat send below), so the model sees what it's written regardless of init
     // timing or a session switch.
@@ -5783,7 +5792,7 @@ export function App() {
           appendBuddy({ role: "tool", text: "🔍 No results." });
         }
       }
-    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive, creativeIdleRef.current);
+    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive, creativeTurn);
     if (buddyTurnSeq.current !== seq) return;
     setBuddyBusy(false);
     setBuddyStreaming("");
@@ -6238,14 +6247,10 @@ export function App() {
       .filter((m) => /^explored:/i.test(m.text))
       .slice(-8)
       .map((m) => m.text.replace(/^explored:\s*/i, ""));
+    // Set it and dispatch; dispatchBuddyTurn consumes it synchronously on entry, so there is no
+    // window in which a later turn could inherit it and no timer to lose a race with.
     creativeIdleRef.current = true;
-    try {
-      onBuddySendText(buildCreativeIdlePrompt(recent));
-    } finally {
-      setTimeout(() => {
-        creativeIdleRef.current = false;
-      }, 0);
-    }
+    onBuddySendText(buildCreativeIdlePrompt(recent));
   }, [openCreativeSession, onBuddySendText]);
   useEffect(() => {
     if (isRemoteClient || !settings.allowCreativeIdle) return;
@@ -6303,15 +6308,7 @@ export function App() {
           .slice(-8)
           .map((m) => m.text.replace(/^explored:\s*/i, ""));
         creativeIdleRef.current = true;
-        try {
-          onBuddySendText(buildCreativeIdlePrompt(recent));
-        } finally {
-          // Cleared on the next tick of the event loop: onBuddySendText reads it synchronously when
-          // it dispatches, and leaving it set would mark the reader's own next message creative.
-          setTimeout(() => {
-            creativeIdleRef.current = false;
-          }, 0);
-        }
+        onBuddySendText(buildCreativeIdlePrompt(recent));
       })();
     }, 60_000);
     return () => clearInterval(id);
