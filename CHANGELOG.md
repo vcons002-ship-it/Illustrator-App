@@ -64,6 +64,11 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Library
 
+- **A book listed in your library always opens** — the list and the open button disagreed about what
+  a book's id was (one read it off the record, the other off the key it was filed under), so a book
+  filed under the wrong key sat in the list and did nothing when clicked, forever. It's now found
+  anyway and quietly re-filed on the first open, so it opens normally from then on; Remove takes it
+  too, instead of leaving the row behind. A book saved without an id of its own opens as well.
 - **A book that won't open now says why** — clicking one that couldn't be opened did nothing at all:
   no message, no error, whatever the reason. Now it tells you, including the case where a book is
   listed but its saved copy isn't actually on the device.
