@@ -189,6 +189,14 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Documents
 
+- **Saving a document from the chat works, and tells you what happened** — the PDF and Word cards on a
+  document from an earlier session had nothing to save: their contents are moved into storage when the
+  chat is written to disk, and only a linked phone ever knew how to fetch them back. On the computer
+  the button quietly wrote an empty file. It now retrieves the real contents; the Markdown card was
+  always fine, since it carries its own text. The card also SAYS what happened now — "✓ Saved to …",
+  or the actual error — where before every outcome, success or failure, looked identical: the chip
+  flickered and nothing else changed. If the contents genuinely can't be found it refuses instead of
+  writing an empty file.
 - **Revising a document changes just that part, instead of rewriting the whole thing** — ask for a
   tightened intro or an extra section and the assistant now edits those lines in place. Before, every
   revision meant re-typing the entire document from scratch.

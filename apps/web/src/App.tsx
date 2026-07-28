@@ -4026,13 +4026,33 @@ export function App() {
     }
   }, [isRemoteClient, buddyMessages, fetchRemoteFileBytes, activeBuddyId, libraryStore, cacheRestoredImage]);
   // Fill in a card's bytes from the desktop when the mirror stripped them (older image on a phone).
+  /**
+   * Put a file card's BYTES back before acting on it.
+   *
+   * A card's bytes are stripped when the chat is persisted (they go to the blob store, keyed by the
+   * card's id) so the history stays small. Only the PHONE ever fetched them back — so on the desktop,
+   * a PDF or Word card from any earlier session had no bytes, no content, and no path, and Save wrote
+   * a ZERO-BYTE file without a word about it. The blob store is right there; the desktop was simply
+   * never asking it, though it has always answered this exact question for the phone.
+   *
+   * Both chats share these actions, so both chat ids are tried: the landing-page chat persists under
+   * the session id, the in-book chat under the book's id.
+   */
   const withFetchedBytes = useCallback(
     async (ref: FileRef): Promise<FileRef> => {
-      if (ref.bytes || ref.path || ref.content || !isRemoteClient || !ref.id) return ref;
-      const bytes = await fetchRemoteFileBytes(ref.id);
-      return bytes ? { ...ref, bytes } : ref;
+      if (ref.bytes || ref.path || !ref.id) return ref;
+      if (isRemoteClient) {
+        const bytes = await fetchRemoteFileBytes(ref.id);
+        return bytes ? { ...ref, bytes } : ref;
+      }
+      for (const chatId of [activeBuddyIdRef.current, bookRef.current?.id]) {
+        if (!chatId) continue;
+        const blob = await libraryStore.getImageBlob?.(chatId, ref.id).catch(() => undefined);
+        if (blob) return { ...ref, bytes: blob.bytes };
+      }
+      return ref;
     },
-    [isRemoteClient, fetchRemoteFileBytes],
+    [isRemoteClient, fetchRemoteFileBytes, libraryStore],
   );
 
   // The universal file-card actions, shared by both chats: Download (save a copy), Open in app
@@ -4048,8 +4068,11 @@ export function App() {
           : ref.bytes
             ? new Uint8Array(ref.bytes)
             : (ref.content ?? "");
+        // Refuse rather than write an empty file. This is what a card whose bytes couldn't be found
+        // used to do silently — you got a 0-byte PDF and no hint that anything had gone wrong.
+        if (data.length === 0) throw new Error(`“${ref.name}” has no content on this device any more`);
         const saved = await saveNamed(ref.name, data, ref.mime || "application/octet-stream", "Save this file");
-        return saved ?? true; // cancel is "handled"
+        return saved; // undefined ⇒ the reader cancelled the name prompt; the card says nothing
       },
       openInApp: (ref) => {
         if (ref.path) void onOpenLocalFile(ref.path);
