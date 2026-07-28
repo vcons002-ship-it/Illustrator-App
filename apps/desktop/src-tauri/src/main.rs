@@ -448,6 +448,152 @@ fn restart_app(app: AppHandle) {
     app.restart();
 }
 
+/// Is this the PACKAGED build (the web UI compiled into the binary), rather than `cargo tauri dev`?
+///
+/// It decides whether an update is finished by `pnpm -r build` + a reload, or needs the Rust binary
+/// rebuilt as well. In dev the page comes from the vite dev server, so rebuilding the web app is
+/// enough; packaged, `frontendDist` was embedded at COMPILE time, so the built bundle changes
+/// nothing until the binary itself is rebuilt — which is the round trip the reader has been making
+/// by hand.
+fn is_packaged_build() -> bool {
+    !tauri::is_dev()
+}
+
+/// Does an update here need the binary rebuilt (packaged) or just a reload (dev)? Asked by the
+/// updater before it decides what "finished" means.
+#[tauri::command]
+fn is_packaged() -> bool {
+    is_packaged_build()
+}
+
+/// Where the running executable lives, and where a rebuild would put its replacement.
+fn running_exe() -> Result<PathBuf, String> {
+    std::env::current_exe().map_err(|e| format!("couldn't locate the running app: {e}"))
+}
+
+/// Delete `*.superseded-*.exe` left beside the executable by a previous self-rebuild.
+///
+/// The old binary can't be deleted while it's the running image, so a rebuild renames it aside and
+/// the NEXT start clears it. Best-effort throughout: a leftover file is untidy, never harmful.
+fn sweep_superseded_binaries() {
+    let Ok(exe) = running_exe() else { return };
+    let Some(dir) = exe.parent() else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.contains(".superseded-") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Rebuild the PACKAGED desktop app from the current checkout and relaunch into it. Never returns
+/// on success — the process is replaced by the freshly built one.
+///
+/// This is the half of "update" that could only be done by hand before: `pnpm -r build` refreshes the
+/// web bundle, but a packaged build embedded that bundle when it was compiled, so nothing the reader
+/// sees changes until `cargo tauri build` runs again. They were remoting in to run desktop-prod.bat
+/// for exactly this.
+///
+/// THE RUNNING BINARY IS THE OBSTACLE: Windows locks an executable's image file, so the linker cannot
+/// write over the app that's asking for the rebuild. It can, however, be RENAMED while running — the
+/// open image handle follows the file, not the path. So: move ourselves aside, let the build write a
+/// fresh binary at the original path, and launch that. On any failure the rename is undone, so a
+/// failed update leaves exactly what was there before.
+#[tauri::command]
+async fn rebuild_desktop_app(app: AppHandle) -> Result<String, String> {
+    if !is_packaged_build() {
+        return Err(
+            "This window is running the development build, where the page comes from the dev server              — rebuilding the binary wouldn't change it. Close and reopen desktop.bat to finish."
+                .to_string(),
+        );
+    }
+    let root = app_repo_root_cached()
+        .ok_or_else(|| "Couldn't find the Visual Reader project folder to build from.".to_string())?;
+    let tauri_dir = root.join("apps").join("desktop").join("src-tauri");
+    if !tauri_dir.is_dir() {
+        return Err(format!("The desktop project folder is missing at {}.", tauri_dir.display()));
+    }
+    let exe = running_exe()?;
+    // A distinct name each time, so a previous failed sweep can't collide with this one.
+    let aside = exe.with_file_name(format!(
+        "{}.superseded-{}.exe",
+        exe.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "visual-reader".into()),
+        std::process::id()
+    ));
+    std::fs::rename(&exe, &aside)
+        .map_err(|e| format!("Couldn't move the running app aside to rebuild over it: {e}"))?;
+
+    let build = tauri::async_runtime::spawn_blocking({
+        let dir = tauri_dir.clone();
+        move || cargo_tauri_build(&dir)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    match build {
+        Ok(tail) if exe.is_file() => {
+            // The new binary is in place. Start it and stand down; the sweep on ITS startup deletes
+            // the copy we renamed aside (we can't, we're still running out of it).
+            let mut launch = quiet_command(&exe);
+            launch.current_dir(exe.parent().unwrap_or(&root));
+            launch.spawn().map_err(|e| {
+                let _ = std::fs::rename(&aside, &exe);
+                format!("Rebuilt, but couldn't start the new app: {e}")
+            })?;
+            app.exit(0);
+            Ok(tail)
+        }
+        Ok(_) => {
+            let _ = std::fs::rename(&aside, &exe);
+            Err("The build reported success but produced no new app. Run desktop-prod.bat to check.".to_string())
+        }
+        Err(e) => {
+            // Put ourselves back: a failed update must leave the install exactly as it was.
+            let _ = std::fs::rename(&aside, &exe);
+            Err(e)
+        }
+    }
+}
+
+/// `cargo tauri build --no-bundle` in the desktop project — the same command desktop-prod.bat runs.
+/// `--no-bundle` because the reader launches the executable directly; building installers as well
+/// would add minutes for something nobody here uses.
+fn cargo_tauri_build(dir: &Path) -> Result<String, String> {
+    let mut cmd = quiet_command("cargo");
+    cmd.current_dir(dir).arg("tauri").arg("build").arg("--no-bundle");
+    // rustup installs to ~/.cargo/bin, which a GUI process doesn't always inherit on PATH — the
+    // .bat files prepend it for the same reason.
+    if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
+        let cargo_bin = PathBuf::from(home).join(".cargo").join("bin");
+        if let Some(path) = std::env::var_os("PATH") {
+            let mut dirs = vec![cargo_bin];
+            dirs.extend(std::env::split_paths(&path));
+            if let Ok(joined) = std::env::join_paths(dirs) {
+                cmd.env("PATH", joined);
+            }
+        }
+    }
+    let out = cmd
+        .output()
+        .map_err(|e| format!("Couldn't run cargo: {e}. Is the Rust toolchain installed (full-install.bat)?"))?;
+    if out.status.success() {
+        return Ok(tail_of(&String::from_utf8_lossy(&out.stdout)));
+    }
+    Err(format!("Rebuilding the app failed: {}", tail_of(&String::from_utf8_lossy(&out.stderr))))
+}
+
+/// The last few hundred characters of build output — the part that names the failure. A full cargo
+/// log is thousands of lines and the error is always at the END.
+fn tail_of(s: &str) -> String {
+    let t = s.trim();
+    if t.chars().count() <= 400 {
+        return t.to_string();
+    }
+    let start = t.char_indices().nth(t.chars().count() - 400).map(|(i, _)| i).unwrap_or(0);
+    format!("…{}", &t[start..])
+}
+
 /// One installed LoRA's name + the leading JSON header of its safetensors file (training
 /// metadata + tensor names), so the UI can detect which base model it was trained for.
 #[derive(Serialize)]
@@ -3388,6 +3534,10 @@ fn main() {
     unsafe {
         SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
     }
+    // A self-rebuild renames the outgoing binary aside (it can't delete the image it's running from);
+    // the next start is the first moment that copy is free. Best-effort, and before anything else so
+    // a stale one never sits next to the app for a whole session.
+    sweep_superseded_binaries();
     tauri::Builder::default()
         .manage(EngineState::default())
         .manage(LlmState::default())
@@ -3398,6 +3548,8 @@ fn main() {
             ensure_llm,
             stop_llm,
             restart_app,
+            rebuild_desktop_app,
+            is_packaged,
             list_models,
             download_model,
             list_loras,

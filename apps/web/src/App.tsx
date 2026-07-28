@@ -290,6 +290,8 @@ import type { ChatLive, ChatMirror, ChatSendAttachment, CmdToDesktop, EngineInve
 import {
   gpuVramUsage,
   restartApp,
+  isPackagedDesktop,
+  rebuildDesktopApp,
   isDesktop,
   captureScreen,
   readLocalFile,
@@ -2308,6 +2310,27 @@ export function App() {
       const build = await runCommand("pnpm -r build", token, root);
       if (build.timedOut || build.code !== 0) {
         return { status: "error", message: `Rebuild failed: ${trim(build.stderr || build.stdout)}. Try update.bat.` };
+      }
+      // PACKAGED BUILD: `pnpm -r build` refreshed the web bundle, but this binary EMBEDDED that
+      // bundle when it was compiled — so nothing on screen changes until the binary is rebuilt.
+      // That's the trip to desktop-prod.bat the reader has been making by hand; do it here. It
+      // renames itself aside, builds, and relaunches into the new binary, so this never returns.
+      if (await isPackagedDesktop()) {
+        onProgress("Rebuilding the app itself (several minutes)…");
+        try {
+          await rebuildDesktopApp();
+          // Reached only if the relaunch didn't take: the build succeeded but the new app didn't
+          // start, and this process is still the old one.
+          return {
+            status: "needs-restart",
+            message: `Updated and rebuilt${at} — start Visual Reader again to finish.`,
+          };
+        } catch (e) {
+          return {
+            status: "error",
+            message: `${e instanceof Error ? e.message : String(e)} The code is updated; run desktop-prod.bat to rebuild.`,
+          };
+        }
       }
       if (coreChanged || buildConfigChanged) {
         return {

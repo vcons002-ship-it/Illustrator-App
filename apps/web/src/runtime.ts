@@ -117,6 +117,34 @@ export function restartApp(): Promise<void> {
   return invoke<void>("restart_app");
 }
 
+/**
+ * Is this the PACKAGED desktop build (web UI compiled into the binary) rather than `cargo tauri dev`?
+ *
+ * It changes what "updated" means. Under the dev server, rebuilding the web app and reloading is the
+ * whole job. Packaged, the bundle was embedded when the binary was compiled, so a rebuilt bundle
+ * changes nothing on screen until the binary is rebuilt too. False on the web, and on an older
+ * desktop build that predates the command (which is the dev-server behaviour anyway).
+ */
+export async function isPackagedDesktop(): Promise<boolean> {
+  if (!isDesktop) return false;
+  try {
+    return await invoke<boolean>("is_packaged");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Rebuild the packaged desktop app from the current checkout and relaunch into it — the round trip
+ * that previously meant remoting in to run desktop-prod.bat.
+ *
+ * Never resolves on success: the process is replaced by the freshly built one. Rejects with a
+ * readable reason when the build fails, and the install is left exactly as it was.
+ */
+export function rebuildDesktopApp(): Promise<string> {
+  return invoke<string>("rebuild_desktop_app");
+}
+
 /** Subscribe to bundled-LLM setup progress (download/launch). Undefined on the web. */
 export function onLlmProgress(handler: (p: EngineProgress) => void): Promise<UnlistenFn> | undefined {
   return tauri()?.event?.listen<EngineProgress>("llm://progress", (e) => handler(e.payload));

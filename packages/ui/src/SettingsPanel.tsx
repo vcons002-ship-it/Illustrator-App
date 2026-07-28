@@ -505,7 +505,16 @@ function SoftwareUpdateRow({
         </button>
       </div>
       {busy && line ? (
-        <span style={{ opacity: 0.75, fontSize: 12 }}>{line}</span>
+        <span style={{ opacity: 0.75, fontSize: 12 }}>
+          {line}
+          {/* A packaged rebuild compiles Rust — minutes, with nothing to show. Say so, or it reads
+              as a hang and gets killed half-way through replacing the binary. */}
+          {/^Rebuilding the app itself/.test(line) ? (
+            <span style={{ display: "block", opacity: 0.75, marginTop: 2 }}>
+              Leave this open — the app closes and reopens by itself when it's finished.
+            </span>
+          ) : null}
+        </span>
       ) : result ? (
         <span style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 12, color }}>{result.message}</span>
@@ -517,7 +526,9 @@ function SoftwareUpdateRow({
         </span>
       ) : (
         <span style={{ opacity: 0.55, fontSize: 11 }}>
-          Pulls the latest version, rebuilds, and reloads. A core update will ask you to fully restart.
+          Pulls the latest version, rebuilds everything, and restarts into it — including the app
+          itself on a packaged build, which takes a few minutes and replaces this window when it's
+          done. Nothing to run by hand.
         </span>
       )}
     </div>
