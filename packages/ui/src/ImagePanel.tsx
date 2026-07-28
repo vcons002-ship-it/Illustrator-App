@@ -25,9 +25,20 @@ export interface ImagePanelProps {
    * underway with "painting…".
    */
   awaitingStart?: boolean;
+  /**
+   * Size the picture to the BOX it's given instead of to the window.
+   *
+   * The default cap is `100dvh - 120px`, which assumes the image has the window to itself minus a
+   * header. In the story view it doesn't: the chat docks beneath the reader, and taller still when
+   * its history is open — so the picture alone could exceed the pane holding it, pushing the prompt
+   * underneath out of reach. With `fit`, the image fills its container and no more, which is what
+   * "the whole picture, as large as it goes" actually means. The container must have a definite
+   * height (a flex column with a max-height) for it to resolve against.
+   */
+  fit?: boolean;
 }
 
-export function ImagePanel({ result, bloom, pageKey, awaitingStart }: ImagePanelProps) {
+export function ImagePanel({ result, bloom, pageKey, awaitingStart, fit }: ImagePanelProps) {
   const imageUrl = useObjectUrl(result);
   // A retrieved figure may be hotlink-only (no downloadable bytes): display it
   // straight from its source URL — an <img src> renders inline regardless of CORS.
@@ -45,11 +56,15 @@ export function ImagePanel({ result, bloom, pageKey, awaitingStart }: ImagePanel
   }
   return (
     <div
-      style={{ position: "relative", cursor: "pointer" }}
+      style={
+        fit
+          ? { position: "relative", cursor: "pointer", flex: "1 1 auto", minHeight: 0, display: "flex" }
+          : { position: "relative", cursor: "pointer" }
+      }
       onClick={() => setManualReveal((r) => !r)}
       title={manualReveal ? "Click to follow your reading again" : "Click to reveal the full image"}
     >
-      <BloomTransition key={pageKey} target={effectiveBloom}>
+      <BloomTransition key={pageKey} target={effectiveBloom} {...(fit ? { fill: true } : {})}>
         <img
           src={displaySrc}
           alt="Illustration of the current passage"
@@ -57,8 +72,9 @@ export function ImagePanel({ result, bloom, pageKey, awaitingStart }: ImagePanel
           style={{
             display: "block",
             width: "100%",
-            height: "auto",
-            maxHeight: "calc(100vh - 120px)",
+            // `height: 100%` + contain is what makes it shrink INTO the pane rather than overflow it.
+            height: fit ? "100%" : "auto",
+            maxHeight: fit ? "100%" : "calc(100dvh - 120px)",
             objectFit: "contain",
             margin: "0 auto",
             borderRadius: 8,

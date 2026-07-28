@@ -8650,6 +8650,7 @@ export function App() {
                     bloom={bloom}
                     pageKey={unitIndex}
                     awaitingStart={!generating}
+                    fit
                   />
                 ))}
               {!isTechnical && imageCaption && (
@@ -10861,7 +10862,7 @@ const styles: Record<string, React.CSSProperties> = {
     margin: 0,
   },
   // "Lock this look" control under a story beat's image: pin it as a character's reference.
-  lockLook: { marginTop: 6, display: "flex", flexDirection: "column", gap: 4 },
+  lockLook: { flexShrink: 0, marginTop: 6, display: "flex", flexDirection: "column", gap: 4 },
   lockLookLabel: { fontSize: 11, opacity: 0.6 },
   lockLookRow: { display: "flex", flexWrap: "wrap", gap: 6 },
   lockLookButton: {
@@ -11070,10 +11071,18 @@ const styles: Record<string, React.CSSProperties> = {
     // only for the first paint.
     top: 0,
     maxHeight: "var(--vr-view-h, calc(100dvh - 96px))",
+    // A COLUMN, so the picture can be told to fit the space left after the caption and the controls
+    // beneath it — rather than sizing itself against the window and pushing them out of reach. The
+    // scroller stays for the multi-panel comic view, which has no single image to fit; with one
+    // image there's now nothing to scroll to.
+    display: "flex",
+    flexDirection: "column",
+    minHeight: 0,
     overflowY: "auto",
     paddingRight: 4,
   },
   imageDescription: {
+    flexShrink: 0, // a footer of the image column — never squeezed out by the picture above it
     marginTop: 10,
     fontSize: 13,
     lineHeight: 1.4,
@@ -11085,7 +11094,7 @@ const styles: Record<string, React.CSSProperties> = {
     overflowY: "auto",
     whiteSpace: "pre-wrap",
   },
-  caption: { marginTop: 6, fontSize: 12, opacity: 0.6, fontFamily: "system-ui, sans-serif" },
+  caption: { flexShrink: 0, marginTop: 6, fontSize: 12, opacity: 0.6, fontFamily: "system-ui, sans-serif" },
   modalOverlay: {
     position: "fixed",
     inset: 0,

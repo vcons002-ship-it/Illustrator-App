@@ -563,3 +563,36 @@ describe("Sato's Synthetic Noodles", () => {
     expect(cast(p, "sato's synthetic noodles")).toEqual(["Mara", "Cass"]);
   });
 });
+
+/**
+ * Attribute bleed between people is the failure the reader keeps hitting, and it worsens with each
+ * person in frame. The obvious remedy — a negative prompt per character — is not available on the
+ * natural-language families: Flux/Flux.2 run at CFG 1 with embedded guidance, so the negative branch
+ * is never evaluated (`resolveNegative` returns "" for them). Naming the binding in the positive is
+ * the lever that remains on an LLM-grade encoder.
+ */
+describe("the reference block binds each description to its own person", () => {
+  const two: SceneTerm[] = [
+    { names: ["Sato"], descriptor: "close-cropped hair, wire glasses", kind: "character" },
+    { names: ["Mara"], descriptor: "red braid", kind: "character" },
+  ];
+
+  it("says the descriptions don't mix once there's more than one person", () => {
+    const block = buildReferenceBlock(two);
+    expect(block).toContain("Sato = close-cropped hair, wire glasses; Mara = red braid.");
+    expect(block).toMatch(/Each description belongs to that person ONLY/);
+    expect(block).toMatch(/do not give one person another's hair, age, build, clothing, or features/);
+  });
+
+  it("stays quiet with a single character — there's nothing to mix", () => {
+    expect(buildReferenceBlock([two[0]!])).not.toMatch(/belongs to that person ONLY/);
+  });
+
+  it("doesn't say it about places or creatures", () => {
+    const block = buildReferenceBlock([
+      { names: ["The Deep"], descriptor: "black water", kind: "location" },
+      { names: ["Hollow"], descriptor: "grey shallows", kind: "location" },
+    ]);
+    expect(block).not.toMatch(/belongs to that person/);
+  });
+});

@@ -48,6 +48,18 @@ export interface TierConfig {
    */
   drawAsComicPage?: boolean;
   /**
+   * Turn OFF per-character regions (see providers/image/regional-conditioning.ts). With more than one
+   * described character in frame, each one's description is scoped to their own patch of canvas so
+   * their features stop bleeding onto each other. Local engines only — it needs a node graph, and a
+   * cloud API takes one prompt string.
+   *
+   * On by default because attribute bleed is the common complaint and the split only applies where it
+   * plausibly helps (2..4 described characters, never a lone figure or a crowd). Off is here because
+   * region conditioning is a composition constraint: it decides who stands where, which is
+   * occasionally not what the scene wants.
+   */
+  disableRegions?: boolean;
+  /**
    * Manual image model-family override for SD prompt formatting (Settings). When
    * unset, the local backends auto-detect from the checkpoint. Cloud providers
    * ignore it (they always use natural language).

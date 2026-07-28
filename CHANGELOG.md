@@ -82,6 +82,11 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
+- **The story picture fits its window, prompt and all** — the image was capped against the whole
+  window, which ignores the chat docked underneath it (taller still with the history open). So the
+  picture alone could be taller than the space it sits in, pushing the prompt and the "lock this look"
+  buttons below the fold with no obvious way down. The picture now sizes itself to the box it's given
+  and shrinks to fit, so everything under it stays put.
 - **One scroll in the reader, and the whole picture on screen** — the illustration pane had its own
   scrollbar next to the page's, and its bottom sat below the window however you scrolled. It was
   positioned by guesswork: pushed down by a fixed 80px inside a region that already starts below the
@@ -117,6 +122,22 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   than routine, and it's stated instead of silently not applying.
 
 ### Stories
+
+- **Each character gets their own part of the picture** (your own engine only) — the real fix for
+  features migrating between people. With two to four described characters in a scene, each one's
+  description is now applied only to the part of the canvas they occupy, side by side, instead of all
+  the descriptions being thrown at the whole image at once. The scene, setting and composition still
+  come from the picture as a whole; the per-character part just says "this person, here". It's on by
+  default and there's a switch in Settings under Images to turn it off if you'd rather the model
+  decide who stands where. A lone character or a crowd of five is left alone — one has nothing to
+  separate from, and slicing a crowd into narrow strips does more harm than the mixing it prevents.
+  Online image services can't do this: it needs control over the render that they don't offer.
+- **A firmer line between characters in the same picture** — with three or more people in frame, one
+  person's hair or clothing could end up on another. The glossary the image model is given now says
+  outright that each description belongs to that person only. This is a nudge, not a cure: mixing up
+  features between subjects is a known weakness of every image model, and it gets worse with each
+  person added. The usual remedy, a negative prompt per character, isn't available on Flux — it runs
+  without the guidance mechanism negative prompts rely on, so anything put there is ignored.
 
 - **A third character's face stops turning up on someone else** — with two characters in a scene, one
   of them could be drawn wearing a third character's features. Two separate causes, both fixed.

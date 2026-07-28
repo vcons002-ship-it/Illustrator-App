@@ -379,7 +379,21 @@ export function buildReferenceBlock(
     const ofKind = terms.filter((t) => t.kind === kind && t.descriptor.trim());
     if (ofKind.length === 0) continue;
     const entries = ofKind.map((t) => `${t.names[0]} = ${t.descriptor}`).join("; ");
-    lines.push(`${KIND_HEADING[kind]}: ${entries}.`);
+    // With SEVERAL people in frame, say plainly that the lists don't mix.
+    //
+    // This is the only lever these models give us. Attribute bleed between subjects is a known
+    // failure of every diffusion text encoder, and it gets worse with each person added; the usual
+    // remedy — a negative prompt per subject — is unavailable on the natural-language families
+    // (Flux and friends run at CFG 1 with embedded guidance, so the negative branch is never
+    // evaluated and `resolveNegative` returns "" for them). What DOES help on an LLM-grade encoder
+    // is naming the binding explicitly, so the glossary reads as a set of separate people rather
+    // than a bag of features. It isn't a guarantee, and nothing text-only can be.
+    const bindingRule =
+      kind === "character" && ofKind.length > 1
+        ? " Each description belongs to that person ONLY — do not give one person another's hair," +
+          " age, build, clothing, or features."
+        : "";
+    lines.push(`${KIND_HEADING[kind]}: ${entries}.${bindingRule}`);
   }
   return lines.join(" ");
 }

@@ -18,10 +18,13 @@ export interface BloomTransitionProps {
   target: number;
   /** Easing factor per frame (0..1). Lower = slower bloom. Default 0.12. */
   easing?: number;
+  /** Fill the parent instead of wrapping the child's natural size — needed when the child is sized
+   * to its container, since this wrapper sits between them and would otherwise collapse to auto. */
+  fill?: boolean;
   children: ReactNode;
 }
 
-export function BloomTransition({ target, easing = 0.12, children }: BloomTransitionProps) {
+export function BloomTransition({ target, easing = 0.12, fill, children }: BloomTransitionProps) {
   const el = useRef<HTMLDivElement | null>(null);
   const valueRef = useRef(0);
   const targetRef = useRef(target);
@@ -75,6 +78,7 @@ export function BloomTransition({ target, easing = 0.12, children }: BloomTransi
         filter: `blur(${(1 - valueRef.current) * 12}px)`,
         transition: "none",
         willChange: "opacity, filter",
+        ...(fill ? { flex: "1 1 auto", minHeight: 0, minWidth: 0, display: "flex" } : {}),
       }}
     >
       {children}

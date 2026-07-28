@@ -26,6 +26,7 @@ import {
   samplerFor,
 } from "../sd-prompt.js";
 import { expandPrompt } from "../bible-injection.js";
+import { REGION_STRENGTH, type CastRegion } from "../regional-conditioning.js";
 import type { LocalEngineBackend, LocalModelDescriptor } from "./backend.js";
 
 /** Default Wan negative prompt — suppresses the common artifacts + a static (non-moving) result.
@@ -1030,6 +1031,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
       ...(ipAdapter ? { ipAdapter } : {}),
       ...(initImage ? { initImage } : {}),
       ...(hires ? { hires } : {}),
+      ...(input.castRegions && input.castRegions.length > 0 ? { regions: input.castRegions } : {}),
     });
 
     // Best-effort live progress: ComfyUI broadcasts per-step `progress` messages
@@ -1416,6 +1418,55 @@ interface WorkflowParams {
   /** Hi-Res two-pass: upscale the first pass's latent to this target size, then refine
    * at `denoise`. The first pass renders at `width`/`height` (the native-safe size). */
   hires?: { width: number; height: number; denoise: number };
+  /** Per-character regions (see regional-conditioning.ts): each character's description scoped to
+   * their own patch of canvas, combined with the whole-scene conditioning. Empty/absent = off. */
+  regions?: readonly CastRegion[];
+}
+
+/**
+ * Scope each character's description to their own rectangle, combined with the whole-scene
+ * conditioning, and return the conditioning to sample from.
+ *
+ * The shape is one `CLIPTextEncode` → `ConditioningSetAreaPercentage` per character, folded into the
+ * base with `ConditioningCombine`. All three are core ComfyUI nodes — no custom pack to install.
+ *
+ * The base conditioning stays underneath and is never replaced: it carries the scene, the setting and
+ * the composition, and the regions only add "this person, here". Dropping it would produce a picture
+ * of N portraits and no scene.
+ *
+ * Node ids are in the 400s — clear of the base graph (2–19), the IP-Adapter chain (20+), and the
+ * video graphs (100s).
+ */
+function addRegionalConditioning(
+  graph: Record<string, unknown>,
+  regions: readonly CastRegion[],
+  clipRef: [string, number],
+  base: [string, number],
+): [string, number] {
+  let combined = base;
+  regions.forEach((r, i) => {
+    const encode = `${400 + i * 3}`;
+    const area = `${401 + i * 3}`;
+    const combine = `${402 + i * 3}`;
+    graph[encode] = { class_type: "CLIPTextEncode", inputs: { text: r.text, clip: clipRef } };
+    graph[area] = {
+      class_type: "ConditioningSetAreaPercentage",
+      inputs: {
+        conditioning: [encode, 0],
+        width: r.width,
+        height: r.height,
+        x: r.x,
+        y: r.y,
+        strength: REGION_STRENGTH,
+      },
+    };
+    graph[combine] = {
+      class_type: "ConditioningCombine",
+      inputs: { conditioning_1: combined, conditioning_2: [area, 0] },
+    };
+    combined = [combine, 0];
+  });
+  return combined;
 }
 
 /**
@@ -1504,12 +1555,18 @@ export function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
       inputs: { width: p.width, height: p.height, batch_size: 1 },
     };
   }
+  // Per-character regions fold into the positive conditioning BEFORE guidance and before the hi-res
+  // pass copies the sampler's inputs — so both passes sample from the same combined conditioning.
+  const conditioned: [string, number] =
+    p.regions && p.regions.length > 0 ? addRegionalConditioning(graph, p.regions, clipRef, ["6", 0]) : ["6", 0];
   if (p.sampler.guidance !== undefined) {
     // Flux embedded guidance — conditioning passes through FluxGuidance before the sampler.
     graph["14"] = {
       class_type: "FluxGuidance",
-      inputs: { conditioning: ["6", 0], guidance: p.sampler.guidance },
+      inputs: { conditioning: conditioned, guidance: p.sampler.guidance },
     };
+  } else if (conditioned[0] !== "6") {
+    (graph["3"] as { inputs: Record<string, unknown> }).inputs.positive = conditioned;
   }
   if (p.lora) {
     if (diffusion) {

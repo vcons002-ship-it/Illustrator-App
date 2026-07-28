@@ -14,7 +14,8 @@ import type { VisualReaderStore } from "../storage/store.js";
 import { resolvePageEntities } from "../visual-bible/bible.js";
 import { anchorSetting, composeScenePrompt, resolveKeyEvent } from "../visual-bible/key-events.js";
 import { actionTextForImage } from "../visual-bible/story-image-text.js";
-import { appendSceneWardrobe, expandPrompt, findBibleTermsInText } from "../providers/image/bible-injection.js";
+import { appendSceneWardrobe, describeCharacterIdentity, expandPrompt, findBibleTermsInText } from "../providers/image/bible-injection.js";
+import { castRegions as buildCastRegions } from "../providers/image/regional-conditioning.js";
 import { getImageStyle } from "../providers/catalog.js";
 import { buildFigureQuery, type RetrievedImage } from "../providers/image/image-search.js";
 import { profileDimensions, qualityProfile } from "../quality.js";
@@ -396,6 +397,19 @@ export class RenderPipeline {
           );
       // Reference images for IP-Adapter — user-uploaded only (auto-capture removed).
       const ipAdapterRefs = await this.referenceImagesFor(present);
+      // PER-CHARACTER REGIONS (local engines only). With several people in frame every diffusion
+      // model mixes their features, and the usual per-subject negative prompt doesn't exist on the
+      // natural-language families (they sample at CFG 1, so the negative branch is never evaluated).
+      // Saying WHERE each description applies does work, and only ComfyUI lets us say it. Uses the
+      // same identity descriptors the prompt does, in the scene's stable present-order; castRegions
+      // declines on its own for a lone character or a crowd, so this is off unless it can help.
+      const castRegions =
+        isLocal && !this.deps.tier.disableRegions
+          ? buildCastRegions(
+              present.map((c) => ({ name: c.name, descriptor: describeCharacterIdentity(c) })),
+              ...(worldStyle ? [{ style: worldStyle }] : []),
+            )
+          : [];
       // Local engines additionally apply a style LoRA/checkpoint when installed. A manual
       // override (Settings) picks any installed LoRA over the style's automatic mapping —
       // or turns it off — so users aren't limited to the curated, model-specific packs.
@@ -429,6 +443,7 @@ export class RenderPipeline {
         ...(isLocal && worldStyle ? { worldStyle } : {}),
         ...(isLocal && request.bookTitle ? { bookTitle: request.bookTitle } : {}),
         ...(ipAdapterRefs.length ? { ipAdapterRefs } : {}),
+        ...(castRegions.length ? { castRegions } : {}),
         ...(onProgress ? { onProgress } : {}),
         ...(signal ? { signal } : {}),
         // A keyEvent may pin a reproducible seed (overrides the character anchor seed).

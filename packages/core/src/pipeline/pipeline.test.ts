@@ -341,6 +341,74 @@ describe("RenderPipeline style LoRA override", () => {
   it("disableStyleLora renders prompt-only (no LoRA)", async () => {
     expect((await renderWithTier({ disableStyleLora: true })).styleLora).toBeUndefined();
   });
+
+  /**
+   * Per-character regions: sent only where they can be honoured (a local engine's node graph) and
+   * only where they help (two to four described characters). castRegions decides the second part;
+   * the pipeline decides the first.
+   */
+  describe("per-character regions", () => {
+    /** Two described characters, both resolved as present on the page. */
+    function twoHander(): ReturnType<typeof bibleWithPrompt> {
+      const bible = bibleWithPrompt("book-1", "Sato and Mara at the counter");
+      bible.characters.push(
+        {
+          id: "char-sato",
+          name: "Sato",
+          aliases: [],
+          appearance: { ...emptyAppearance(), hair: "close-cropped, wire glasses" },
+          persistentTraits: [],
+          clothing: [],
+          anchor: { seed: 1 },
+          firstSeenChapter: 0,
+        },
+        {
+          id: "char-mara",
+          name: "Mara",
+          aliases: [],
+          appearance: { ...emptyAppearance(), hair: "red braid" },
+          persistentTraits: [],
+          clothing: [],
+          anchor: { seed: 2 },
+          firstSeenChapter: 0,
+        },
+      );
+      return bible;
+    }
+
+    async function renderTwoHander(tier: Partial<typeof DEFAULT_TIER_CONFIG>) {
+      const book = oneParagraphBook();
+      book.pages[0]!.pageRange = [0, 0];
+      book.pages[0]!.paragraphs[0]!.text = "Sato and Mara at the counter.";
+      const { provider, last } = inputRecorder();
+      const pipeline = new RenderPipeline({
+        book,
+        getBible: () => twoHander(),
+        llm,
+        image: provider,
+        store: new InMemoryStore(),
+        tier: { ...DEFAULT_TIER_CONFIG, tier: "local", style: "anime", ...tier },
+      });
+      await pipeline.renderPage(0);
+      return last();
+    }
+
+    it("gives each character their own column on a local engine", async () => {
+      const regions = (await renderTwoHander({})).castRegions ?? [];
+      expect(regions.map((r) => r.name)).toEqual(["Sato", "Mara"]);
+      expect(regions[0]!.text).toContain("close-cropped, wire glasses");
+      expect(regions[1]!.text).toContain("red braid");
+      expect(regions[0]!.x).toBe(0);
+    });
+
+    it("sends none when the reader turns it off", async () => {
+      expect((await renderTwoHander({ disableRegions: true })).castRegions).toBeUndefined();
+    });
+
+    it("sends none to a cloud provider — there's no way for it to honour them", async () => {
+      expect((await renderTwoHander({ tier: "cloud" })).castRegions).toBeUndefined();
+    });
+  });
 });
 
 describe("RenderPipeline stored-first prompt fetch", () => {

@@ -1,4 +1,5 @@
 import type { IdentityAnchor } from "../../types/bible.js";
+import type { CastRegion } from "./regional-conditioning.js";
 
 /**
  * Image provider interface. Implementations: FluxProvider (default cloud) and
@@ -105,6 +106,13 @@ export interface ImageGenerationInput {
    * every other provider.
    */
   ipAdapterRefs?: { bytes: ArrayBuffer; mimeType: string; weight: number }[];
+  /**
+   * Per-character REGIONS: each character's description scoped to their own patch of canvas
+   * (see regional-conditioning.ts). ComfyUI only — it's the one target that lets us say WHERE a
+   * piece of conditioning applies; a cloud API takes a single prompt string and every other
+   * provider ignores this.
+   */
+  castRegions?: readonly CastRegion[];
   /**
    * img2img base — photo manipulation. When set, the backend encodes this image to
    * latent and denoises FROM it (transform an existing picture) instead of starting
