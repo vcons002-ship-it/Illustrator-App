@@ -128,6 +128,46 @@ export function appendSceneWardrobe(
 }
 
 /**
+ * Every entity's PRIMARY name, lowercased. A primary name belongs to exactly one entity, so no other
+ * entity's ALIAS may claim it — see {@link ownForms}.
+ */
+function primaryNames(bible: VisualBible): Set<string> {
+  const out = new Set<string>();
+  const add = (n: string | undefined): void => {
+    const k = (n ?? "").trim().toLowerCase();
+    if (k) out.add(k);
+  };
+  for (const c of bible.characters) add(c.name);
+  for (const cr of bible.creatures ?? []) add(cr.name);
+  for (const e of bible.environments) add(e.name);
+  return out;
+}
+
+/**
+ * The surface forms an entity may actually claim: its own name, plus any alias that ISN'T someone
+ * else's primary name.
+ *
+ * Models hand out aliases freely, and they collide with real names — a character called "Rell" gets
+ * the alias "the Captain" while another character IS "The Captain". Left alone, that alias made Rell
+ * match any prompt mentioning the Captain, put Rell in the reference block for a scene he isn't in,
+ * and — in inject mode, where each name is swapped for its descriptor — handed the Captain's name
+ * RELL's face. Two characters in the prompt, a third one's features on one of them.
+ *
+ * A primary name is the specific, deliberate form; an alias that duplicates one is a collision, not a
+ * mention. (The same reasoning as `sameNamedPerson` in extraction, which refuses to merge on shared
+ * aliases for exactly this reason.)
+ */
+function ownForms(entity: { name: string; aliases?: readonly string[] }, primaries: ReadonlySet<string>): string[] {
+  const own = entity.name.trim().toLowerCase();
+  return [entity.name, ...(entity.aliases ?? [])]
+    .filter(Boolean)
+    .filter((f) => {
+      const k = f.trim().toLowerCase();
+      return !!k && (k === own || !primaries.has(k));
+    });
+}
+
+/**
  * Scan a finished prompt for the bible terms it mentions. Characters, creatures, and
  * locations are matched by name/alias. Outfit labels are matched **only when their
  * owning character is also named in the prompt**, so a generic label ("cloak",
@@ -135,9 +175,10 @@ export function appendSceneWardrobe(
  */
 export function findBibleTermsInText(prompt: string, bible: VisualBible): SceneTerm[] {
   const terms: SceneTerm[] = [];
+  const primaries = primaryNames(bible);
 
   for (const c of bible.characters) {
-    const forms = [c.name, ...c.aliases].filter(Boolean);
+    const forms = ownForms(c, primaries);
     if (!forms.some((f) => mentions(prompt, f))) continue;
     terms.push({ names: forms, descriptor: describeCharacterIdentity(c), kind: "character" });
     // Outfit labels only for a character that IS named here.
@@ -157,7 +198,7 @@ export function findBibleTermsInText(prompt: string, bible: VisualBible): SceneT
   }
 
   for (const cr of bible.creatures ?? []) {
-    const forms = [cr.name, ...cr.aliases].filter(Boolean);
+    const forms = ownForms(cr, primaries);
     if (forms.some((f) => mentions(prompt, f))) {
       terms.push({ names: forms, descriptor: describeCreature(cr), kind: "creature" });
     }
@@ -165,7 +206,7 @@ export function findBibleTermsInText(prompt: string, bible: VisualBible): SceneT
 
   for (const e of bible.environments) {
     // Aliases cover indirect references ("the fortress" → Basgiliath's details).
-    const forms = [e.name, ...(e.aliases ?? [])].filter(Boolean);
+    const forms = ownForms(e, primaries);
     if (forms.some((f) => mentions(prompt, f))) {
       terms.push({ names: forms, descriptor: describeLocation(e), kind: "location" });
     }
@@ -177,17 +218,20 @@ export function findBibleTermsInText(prompt: string, bible: VisualBible): SceneT
 /** Build the name→descriptor lookup, longest surface form first (so "Violet
  * Sorrengail" / "flight leathers" win over shorter substrings). */
 function orderedForms(terms: readonly SceneTerm[]): { form: string; descriptor: string }[] {
-  const out: { form: string; descriptor: string }[] = [];
+  const out: { form: string; descriptor: string; primary: boolean }[] = [];
   for (const t of terms) {
-    for (const name of t.names) {
+    t.names.forEach((name, i) => {
       const form = name.trim();
-      if (form && t.descriptor) out.push({ form, descriptor: t.descriptor });
-    }
+      // names[0] is the entity's own name by construction everywhere a SceneTerm is built.
+      if (form && t.descriptor) out.push({ form, descriptor: t.descriptor, primary: i === 0 });
+    });
   }
-  // Longest first; de-dupe identical forms keeping the first (its descriptor).
+  // A name someone OWNS beats another entity's alias for the same string, whatever the lengths —
+  // otherwise the winner of a collision was decided by how many letters it happened to have.
+  // Then longest first, so "Violet Sorrengail" / "flight leathers" win over shorter substrings.
   const seen = new Set<string>();
   return out
-    .sort((a, b) => b.form.length - a.form.length)
+    .sort((a, b) => (a.primary === b.primary ? b.form.length - a.form.length : a.primary ? -1 : 1))
     .filter((x) => {
       const k = x.form.toLowerCase();
       if (seen.has(k)) return false;

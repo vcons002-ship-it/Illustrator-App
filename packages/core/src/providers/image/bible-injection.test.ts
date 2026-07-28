@@ -296,3 +296,63 @@ describe("displayCaption", () => {
     expect(displayCaption(onlyBlock)).toBe(onlyBlock);
   });
 });
+
+/**
+ * "Only two characters in the prompt, but a THIRD one's features are fused into one of them."
+ *
+ * Models hand out aliases freely and they collide with real names: a character called "Rell" picks up
+ * the alias "the Captain" while another character IS "The Captain". Every surface form used to be
+ * claimable by anyone holding it as an alias, and collisions were resolved by string LENGTH — so the
+ * Captain's own name could resolve to Rell's descriptor, and Rell joined a scene he isn't in.
+ */
+describe("a name belongs to the character whose name it IS", () => {
+  const bible = (): VisualBible => ({
+    ...createEmptyBible("b"),
+    characters: [
+      // Listed FIRST, so anything order-dependent picks the wrong one.
+      character({ name: "Rell", aliases: ["the Captain"], appearance: { ...emptyAppearance(), hair: "shaved head" } }),
+      character({ name: "Mara", appearance: { ...emptyAppearance(), hair: "red braid" } }),
+      character({ name: "The Captain", appearance: { ...emptyAppearance(), hair: "white beard" } }),
+    ],
+  });
+
+  it("doesn't pull in a character matched only by an alias that is someone else's name", () => {
+    const terms = findBibleTermsInText("Mara and The Captain stand on the deck.", bible());
+    expect(terms.map((t) => t.names[0])).toEqual(["Mara", "The Captain"]);
+  });
+
+  it("injects each named character's OWN descriptor", () => {
+    const prompt = "Mara and The Captain stand on the deck.";
+    const out = injectBibleTerms(prompt, findBibleTermsInText(prompt, bible()));
+    expect(out).toBe("(red braid) and (white beard) stand on the deck.");
+    expect(out).not.toContain("shaved head"); // Rell isn't in this scene at all
+  });
+
+  it("keeps the absent character out of the reference block too", () => {
+    const prompt = "Mara and The Captain stand on the deck.";
+    const block = buildReferenceBlock(findBibleTermsInText(prompt, bible()));
+    expect(block).toContain("Mara = red braid");
+    expect(block).toContain("The Captain = white beard");
+    expect(block).not.toContain("Rell");
+  });
+
+  it("still resolves an alias that collides with nobody", () => {
+    const b: VisualBible = {
+      ...createEmptyBible("b"),
+      characters: [character({ name: "Rell", aliases: ["the quartermaster"], appearance: { ...emptyAppearance(), hair: "shaved head" } })],
+    };
+    const prompt = "The quartermaster counts the crates.";
+    expect(injectBibleTerms(prompt, findBibleTermsInText(prompt, b))).toBe("(shaved head) counts the crates.");
+  });
+
+  it("a shared alias held by two characters (nobody's real name) still matches both — no information to choose", () => {
+    const b: VisualBible = {
+      ...createEmptyBible("b"),
+      characters: [
+        character({ name: "Rell", aliases: ["the rider"] }),
+        character({ name: "Mara", aliases: ["the rider"] }),
+      ],
+    };
+    expect(findBibleTermsInText("The rider approaches.", b).map((t) => t.names[0])).toEqual(["Rell", "Mara"]);
+  });
+});

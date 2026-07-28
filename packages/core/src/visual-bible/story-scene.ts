@@ -70,12 +70,26 @@ function lc(s: string): string {
  * dedup-preserving). A name with no matching bible entry is simply dropped — the cast
  * is whoever the bible actually knows, so a not-yet-extracted name resolves on a later
  * beat once it's in the bible.
+ *
+ * A name that some character OWNS resolves to that character alone. Models hand out aliases that
+ * collide with real names — a character called "Rell" picking up the alias "the Captain" while
+ * another character IS "The Captain" — and matching aliases blindly put BOTH in the scene. Asking
+ * for two characters returned three, and the extra one's descriptor then rode into the image prompt
+ * as a third face fused into the scene. An alias only counts when it isn't anyone's own name.
  */
 export function namesToCharacterIds(bible: VisualBible, names: readonly string[]): string[] {
   const wanted = new Set(names.map(lc).filter(Boolean));
   if (wanted.size === 0) return [];
+  const owned = new Set(bible.characters.map((c) => lc(c.name)).filter(Boolean));
   return bible.characters
-    .filter((c) => [c.name, ...c.aliases].some((n) => wanted.has(lc(n))))
+    .filter((c) => {
+      const own = lc(c.name);
+      if (wanted.has(own)) return true;
+      return c.aliases.some((a) => {
+        const k = lc(a);
+        return !!k && k !== own && wanted.has(k) && !owned.has(k);
+      });
+    })
     .map((c) => c.id);
 }
 

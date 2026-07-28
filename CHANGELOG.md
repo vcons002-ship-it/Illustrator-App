@@ -105,6 +105,14 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Stories
 
+- **A third character's face stops turning up on someone else** — with two characters in a scene, one
+  of them could be drawn wearing a third character's features. The assistant gives characters nicknames
+  as it writes, and those collide with real names — one character picking up "the Captain" as a nickname
+  while another character IS the Captain. Any nickname could claim any name, and ties were settled by
+  which string was longer, so the Captain's own name could resolve to the other character's
+  appearance — and that character was pulled into scenes they weren't in. A name now belongs to the
+  character whose name it is; a nickname only counts when it isn't somebody else's actual name.
+  Genuinely shared nicknames that nobody owns still work as before.
 - **A story you've already started in the chat can come with you** — "Story as you go" always began
   from a blank page, so a story that had been building up in conversation for half an hour was thrown
   away the moment you turned it into a real one. The setup now offers **"Continue what we've been
