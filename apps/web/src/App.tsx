@@ -1635,6 +1635,30 @@ export function App() {
   // IndexedDB writes must fail loud enough to notice: quota exhaustion (or a private-mode block)
   // means books/chats silently stop persisting — surface it ONCE per session as a status warning
   // instead of letting every save vanish into a bare catch.
+  /**
+   * The scrolling region between the header and the chat dock, measured.
+   *
+   * The sticky illustration pane has to fit EXACTLY this box: it lives inside this container, so its
+   * `top` is relative to it, and any height expressed against the viewport counts the header and dock
+   * that aren't part of it. Guessing (`top: 80`, `100vh - 96px`) was wrong by however tall the header
+   * happened to be that day — with wrapped controls, quite wrong — which is what put a second
+   * scrollbar next to the page's and kept the image's bottom off-screen. Published as a CSS variable
+   * so the style stays declarative, and re-measured on resize (a wrapping header changes it).
+   */
+  const contentScrollRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = contentScrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const apply = (): void => el.style.setProperty("--vr-view-h", `${el.clientHeight}px`);
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    window.addEventListener("resize", apply);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", apply);
+    };
+  });
   const persistWarnedRef = useRef(false);
   const persistWarn = useCallback((err: unknown): void => {
     if (persistWarnedRef.current) return;
@@ -8370,7 +8394,7 @@ export function App() {
       </header>
 
       {/* Everything between the (fixed-height) header and the bottom chat dock scrolls here. */}
-      <div style={styles.contentScroll}>
+      <div style={styles.contentScroll} ref={contentScrollRef}>
 
       {!settings.configured && !isRemoteClient && (
         <FirstRunWizard current={settings} onComplete={setSettings} isDesktop={isDesktop} />
@@ -11037,8 +11061,15 @@ const styles: Record<string, React.CSSProperties> = {
   // overflow is otherwise unreachable ("no scroll" on technical books).
   panel: {
     position: "sticky",
-    top: 80,
-    maxHeight: "calc(100vh - 96px)",
+    // `top` is measured from the top of the SCROLL CONTAINER, which already begins below the header —
+    // so the old `top: 80` pushed the image a header's-worth further down than it needed to be, and
+    // `maxHeight: calc(100vh - 96px)` was measured against the whole VIEWPORT, header and chat dock
+    // included. Together they made the pane taller than the space it sits in: its bottom fell past
+    // the window, its own scrollbar appeared alongside the page's, and the image was never fully in
+    // view. Both now come from the container's real height (--vr-view-h, measured), with the fallback
+    // only for the first paint.
+    top: 0,
+    maxHeight: "var(--vr-view-h, calc(100dvh - 96px))",
     overflowY: "auto",
     paddingRight: 4,
   },

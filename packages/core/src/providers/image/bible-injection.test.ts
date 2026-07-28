@@ -527,3 +527,39 @@ describe("three characters in a place named after the third", () => {
     );
   });
 });
+
+/** The exact shape reported: "Sato's Synthetic Noodles" with Sato himself in the scene, plus two
+ * others. Three characters and a place whose name is one of them. */
+describe("Sato's Synthetic Noodles", () => {
+  const b: VisualBible = {
+    ...createEmptyBible("b"),
+    characters: [
+      character({ name: "Sato", appearance: { ...emptyAppearance(), hair: "close-cropped, wire glasses" } }),
+      character({ name: "Mara", appearance: { ...emptyAppearance(), hair: "red braid" } }),
+      character({ name: "Cass", appearance: { ...emptyAppearance(), hair: "grey beard" } }),
+    ],
+  };
+  const cast = (p: string, loc?: string): string[] =>
+    findBibleTermsInText(p, b, loc).filter((t) => t.kind === "character").map((t) => t.names[0]!);
+
+  it("Sato present with two others: three in the cast, the shop keeps its name", () => {
+    const p = "Sato ladles broth for Mara and Cass at Sato's Synthetic Noodles.";
+    expect(cast(p)).toEqual(["Sato", "Mara", "Cass"]);
+    expect(injectBibleTerms(p, findBibleTermsInText(p, b))).toBe(
+      "(close-cropped, wire glasses) ladles broth for (red braid) and (grey beard) at Sato's Synthetic Noodles.",
+    );
+  });
+
+  it("Sato absent: two in the cast, and none of him anywhere in the prompt", () => {
+    const p = "Mara and Cass slurp noodles at Sato's Synthetic Noodles.";
+    expect(cast(p)).toEqual(["Mara", "Cass"]);
+    const out = injectBibleTerms(p, findBibleTermsInText(p, b));
+    expect(out).toBe("(red braid) and (grey beard) slurp noodles at Sato's Synthetic Noodles.");
+    expect(out).not.toContain("wire glasses");
+  });
+
+  it("lower-cased in the prose, with the beat's location known", () => {
+    const p = "Mara and Cass slurp noodles at sato's synthetic noodles.";
+    expect(cast(p, "sato's synthetic noodles")).toEqual(["Mara", "Cass"]);
+  });
+});

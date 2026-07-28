@@ -82,6 +82,19 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
+- **One scroll in the reader, and the whole picture on screen** — the illustration pane had its own
+  scrollbar next to the page's, and its bottom sat below the window however you scrolled. It was
+  positioned by guesswork: pushed down by a fixed 80px inside a region that already starts below the
+  header, and given a height measured against the whole window rather than the space it actually
+  occupies. With the controls wrapped onto two rows the error grew. It's now measured from the real
+  region and re-measured when the window changes, so the pane fits exactly and only scrolls when its
+  own content is genuinely taller.
+- **Settings scrolls by itself again** — reaching its top or bottom took a nudge of the page behind
+  it. The panel positions itself against the window, but it's opened from a button in the header, and
+  the header's frosted-glass effect quietly makes it the thing "against the window" means — so the
+  panel hung from the header instead, and its height no longer matched the room it had. It's now
+  attached to the page itself, where its own measurements are true.
+
 - **Settings shows which build you're running** — right under the title, above the search box. The app
   updates itself, so "this still doesn't work" and "this still doesn't work because you're on an older
   build" looked identical from the outside; twice that has cost several rounds to untangle. Quote the
@@ -118,7 +131,12 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
     naming him anywhere else in the same scene puts him in it regardless. Where the scene's place is
     written in a way that rule can't see (all lower case, or with no possessive at all), the app now
     passes the place it knows the beat is set in, which settles it outright. (This one applied to any
-    illustrated book, not just stories.)
+    illustrated book, not just stories.) The story's own cast tracker had the same loose name match,
+    and that's the one that made it stick: it decides who is in the scene and CARRIES THAT FORWARD, so
+    a single beat set in "Sato's Synthetic Noodles" put Sato in the picture and kept him there for
+    every beat after it. It uses the same matcher as the rest now, and an existing story repairs
+    itself when you reopen it — the tracked cast is worked out again from the beats rather than
+    trusted from what was saved.
   - **Nicknames could claim other characters' names.** The assistant hands out nicknames as it writes,
     and they collide — one character picking up "the Captain" while another character IS the Captain.
     A name now belongs to the character whose name it is; a nickname only counts when it isn't

@@ -189,6 +189,7 @@ import {
   supportsVision,
   toRenderUnits,
   advanceStoryScene,
+  findBibleTermsInText,
   presentFromScene,
   emptyStoryScene,
   createEmptyBible,
@@ -282,12 +283,19 @@ function storySlug(name: string): string {
 }
 
 /** Bible character names whose name/alias appears in a beat's text (the active-scene "mentioned"
- * signal — the same name match the render's text scan uses, so the tracker never misses one). */
-function bibleNamesInText(text: string, bible: VisualBible): string[] {
-  const hay = text.toLowerCase();
-  return bible.characters
-    .filter((c) => [c.name, ...c.aliases].some((n) => n.length > 0 && hay.includes(n.toLowerCase())))
-    .map((c) => c.name);
+ * signal — the same matcher the render uses, so the tracker never misses one and never invents one).
+ *
+ * This was a bare `text.includes(name)`, and it is why a place named after a character kept putting
+ * that character in the picture even after the render-side fixes: a beat set in "Sato's Synthetic
+ * Noodles" reported SATO as mentioned, the tracker added him to the present cast — and the cast is
+ * CARRIED FORWARD, so once he was wrongly in he stayed in, beat after beat, until something removed
+ * him. findBibleTermsInText applies the same longest-name-wins claim and the possessive rule, and
+ * takes the beat's location so the place takes its own span. */
+function bibleNamesInText(text: string, bible: VisualBible, location?: string): string[] {
+  return findBibleTermsInText(text, bible, location)
+    .filter((t) => t.kind === "character")
+    .map((t) => t.names[0]!)
+    .filter((n): n is string => !!n);
 }
 
 /**
@@ -302,7 +310,7 @@ function storyPresentFor(chapterIndex: number, bible: VisualBible): StoryPresent
   story.scene = advanceStoryScene(
     story.scene,
     bible,
-    { mentionedNames: bibleNamesInText(text, bible), ...(scene?.location ? { location: scene.location } : {}) },
+    { mentionedNames: bibleNamesInText(text, bible, scene?.location), ...(scene?.location ? { location: scene.location } : {}) },
     story.roleplay,
   );
   story.scenes[chapterIndex] = story.scene; // snapshot this beat's tracked scene (persisted below)
@@ -373,9 +381,13 @@ function buildStoryStateBlock(s: StorySessionState): string {
 }
 
 /** Rebuild the story session from a reopened story book (fresh worker / library reopen).
- * Per-beat scene SNAPSHOTS are restored from the book's persisted `storyConfig.scenes` where
- * present (authoritative); any un-persisted tail (at most the latest beat) is replayed from the
- * last known snapshot against the restored bible — so the resumed scene is exact and complete.
+ * Per-beat scene snapshots are RE-DERIVED from the beats + the restored bible, not trusted from
+ * `storyConfig.scenes`. The tracker is a pure function of exactly those inputs, so a replay normally
+ * reproduces the saved snapshots — but it also REPAIRS them, which matters: the old name scan added a
+ * character to the cast whenever a place was named after them, and the cast carries forward, so one
+ * bad beat kept them in every picture from then on. Trusting the snapshot would preserve that
+ * forever. A snapshot's location is kept where the replay can't recover one (its beat's storyboard
+ * entry is gone), since that's the one thing re-derivation can lose.
  * Role-play + cadence are restored from `storyConfig`, so the contract survives, not defaults. */
 function rebuildStoryFromBook(book: BookSource, bible: VisualBible | undefined): StorySessionState {
   const beats = beatsFromBook(book);
@@ -386,18 +398,22 @@ function rebuildStoryFromBook(book: BookSource, bible: VisualBible | undefined):
   let running: StoryScene = emptyStoryScene();
   beats.forEach((text, k) => {
     const snap = persisted[k];
-    if (snap) {
-      running = { presentCharacterIds: [...snap.presentCharacterIds], ...(snap.locationId ? { locationId: snap.locationId } : {}) };
-    } else if (bible) {
-      // Replay the un-persisted tail from the last snapshot (deterministic — same inputs the
-      // live tracker used: this beat's mentioned cast + its scene location + the role-play seed).
+    if (bible) {
+      // Same inputs the live tracker used: this beat's mentioned cast + its scene location + the
+      // role-play seed. Deterministic, so this reproduces a good snapshot and corrects a bad one.
       const s = bible.storyboard.find((x) => x.chapterIndex === k);
       running = advanceStoryScene(
         running,
         bible,
-        { mentionedNames: bibleNamesInText(text, bible), ...(s?.location ? { location: s.location } : {}) },
+        { mentionedNames: bibleNamesInText(text, bible, s?.location), ...(s?.location ? { location: s.location } : {}) },
         roleplay,
       );
+      // Only the location falls back: without this beat's storyboard entry the replay has no place
+      // to move to, and the snapshot remembers where the scene actually was.
+      if (!running.locationId && snap?.locationId) running = { ...running, locationId: snap.locationId };
+    } else if (snap) {
+      // No bible to replay against (not yet analysed) — the snapshot is all there is.
+      running = { presentCharacterIds: [...snap.presentCharacterIds], ...(snap.locationId ? { locationId: snap.locationId } : {}) };
     }
     scenes[k] = running;
   });
