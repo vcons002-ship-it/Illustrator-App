@@ -139,12 +139,62 @@ export class IndexedDbStore implements VisualReaderStore {
 
   async getBook(id: string): Promise<BookSource | undefined> {
     // BookRecord is a BookSource plus addedAt; the extra field is harmless.
-    return this.get<BookRecord>(BOOK_STORE, id);
+    const direct = await this.get<BookRecord>(BOOK_STORE, id);
+    return direct ?? this.rekeyBook(id);
+  }
+
+  /**
+   * Every book record with the KEY it's stored under. listBooks and getBook disagree about what a
+   * book's id is — one reads the record's `id` field, the other the key — so the key has to travel
+   * with the record for the two to be reconciled (see {@link rekeyBook}).
+   */
+  private async allBooks(): Promise<{ key: string; value: BookRecord }[]> {
+    const db = await this.dbPromise;
+    return new Promise((resolve, reject) => {
+      const out: { key: string; value: BookRecord }[] = [];
+      const req = db.transaction(BOOK_STORE, "readonly").objectStore(BOOK_STORE).openCursor();
+      req.onsuccess = () => {
+        const cur = req.result;
+        if (!cur) {
+          resolve(out);
+          return;
+        }
+        const value = cur.value as BookRecord | undefined;
+        if (value && typeof value === "object") out.push({ key: String(cur.key), value });
+        cur.continue();
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  /**
+   * A book the library LISTS but a key lookup MISSES. These two reads have always disagreed about
+   * what a book's id is — listBooks takes each record's own `id` field, getBook takes the key — so a
+   * record stored under a key that isn't its id is listed and un-openable, and the click just fails
+   * with nothing to see. Find it by its own id, then re-store it under that id (and drop the old
+   * key, or the same book would list twice) so every later open is an ordinary hit.
+   *
+   * Returns undefined when the id really isn't in the store — a listed-but-missing book is a
+   * different fault, and this must not disguise it.
+   */
+  private async rekeyBook(id: string): Promise<BookSource | undefined> {
+    const found = (await this.allBooks().catch(() => [])).find((r) => r.value.id === id && r.key !== id);
+    if (!found) return undefined;
+    const db = await this.dbPromise;
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(BOOK_STORE, "readwrite");
+      tx.objectStore(BOOK_STORE).put(found.value, id);
+      tx.objectStore(BOOK_STORE).delete(found.key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    return found.value;
   }
 
   async listBooks(): Promise<BookSummary[]> {
-    const records = await this.getAll<BookRecord>(BOOK_STORE);
-    return records
+    const rows = await this.allBooks();
+    return rows
+      .map(({ key, value }) => ({ ...value, id: value.id || key, addedAt: value.addedAt || 0 }))
       .sort((a, b) => b.addedAt - a.addedAt)
       .map((b) => ({ id: b.id, title: b.title, ...(b.author ? { author: b.author } : {}), addedAt: b.addedAt, type: libraryTypeOf(b) }));
   }
@@ -154,9 +204,13 @@ export class IndexedDbStore implements VisualReaderStore {
     // images (including character reference uploads keyed `${id}:charref:…`) and its
     // Visual Bible, alongside the library record.
     const db = await this.dbPromise;
+    // Delete by key AND by the record's own id: a misfiled book (key ≠ id) is listed under its id,
+    // so "remove it" has to mean the row the reader is actually looking at, or Remove does nothing.
+    const misfiled = (await this.allBooks().catch(() => [])).filter((r) => r.value.id === id && r.key !== id);
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(BOOK_STORE, "readwrite");
       tx.objectStore(BOOK_STORE).delete(id);
+      for (const r of misfiled) tx.objectStore(BOOK_STORE).delete(r.key);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
@@ -254,15 +308,6 @@ export class IndexedDbStore implements VisualReaderStore {
     return new Promise((resolve, reject) => {
       const req = db.transaction(store, "readonly").objectStore(store).get(key);
       req.onsuccess = () => resolve(req.result as T | undefined);
-      req.onerror = () => reject(req.error);
-    });
-  }
-
-  private async getAll<T>(store: string): Promise<T[]> {
-    const db = await this.dbPromise;
-    return new Promise((resolve, reject) => {
-      const req = db.transaction(store, "readonly").objectStore(store).getAll();
-      req.onsuccess = () => resolve((req.result as T[]) ?? []);
       req.onerror = () => reject(req.error);
     });
   }

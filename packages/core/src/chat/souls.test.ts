@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { InMemoryStore } from "../storage/store.js";
 import { loadMemory } from "./reader-memory.js";
 import {
+  type SoulNote,
+  soulNotesForPrompt,
+  SOUL_PROMPT_BUDGET_CHARS,
   SELF_SOUL_KEY,
   ABOUT_YOU_SOUL_KEY,
   MAX_SOUL_NOTES,
@@ -104,5 +107,47 @@ describe("identity souls", () => {
     const you = userSoulPromptBlock([{ text: "bold", at: 1 }], "Alex");
     expect(you).toContain("WHO THE READER IS");
     expect(you).toContain("Name: Alex");
+  });
+});
+
+describe("how many identity notes survive", () => {
+  const note = (text: string, at = 1): SoulNote => ({ text, at });
+
+  it("keeps far more than it shows — storage and prompt budget are separate limits", () => {
+    // The point of raising the cap: the store no longer destroys the character underneath a few
+    // weeks of the assistant's own notes. What rides in every prompt stays bounded regardless.
+    expect(MAX_SOUL_NOTES).toBeGreaterThanOrEqual(200);
+    const many = Array.from({ length: MAX_SOUL_NOTES }, (_, i) => note(`trait number ${i} — a sentence of roughly typical length`));
+    const { shown, omitted } = soulNotesForPrompt(many);
+    expect(shown.length).toBeLessThan(many.length);
+    expect(shown.length + omitted).toBe(many.length);
+    const rendered = shown.map((n) => `- ${n.text}`).join("\n");
+    expect(rendered.length).toBeLessThanOrEqual(SOUL_PROMPT_BUDGET_CHARS);
+  });
+
+  it("keeps the NEWEST when it can't keep everything, in the order they were written", () => {
+    const notes = [note("oldest"), note("middle"), note("newest")];
+    const { shown } = soulNotesForPrompt(notes, 24); // room for about two
+    expect(shown.map((n) => n.text)).toEqual(["middle", "newest"]);
+  });
+
+  it("says how many it left out rather than presenting a partial self as the whole", () => {
+    // 120 notes of ~45 chars is ~5.4k — comfortably past the 4k budget, so some are genuinely left out.
+    const many = Array.from({ length: 120 }, (_, i) => note(`a reasonably wordy identity note number ${i}`));
+    const block = selfSoulPromptBlock(many, "Iris");
+    expect(block).toMatch(/\+ \d+ older notes kept, not shown here/);
+    expect(block).toContain("Name: Iris");
+  });
+
+  it("always shows at least one note, even one longer than the whole budget", () => {
+    const { shown, omitted } = soulNotesForPrompt([note("x".repeat(5000))], 100);
+    expect(shown).toHaveLength(1);
+    expect(omitted).toBe(0);
+  });
+
+  it("is unchanged for a small soul — no budget line, nothing dropped", () => {
+    const block = selfSoulPromptBlock([note("Warm, dry, direct.")]);
+    expect(block).toContain("- Warm, dry, direct.");
+    expect(block).not.toContain("not shown here");
   });
 });

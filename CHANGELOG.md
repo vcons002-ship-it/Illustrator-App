@@ -30,7 +30,10 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   to its own identity notes ("I'm drawn to problems where the obvious answer is wrong", "I find pure
   taxonomy dull"), so its taste is shaped by what it has actually spent time on rather than only by
   what you've told it. It's asked to be sparing, since that list is short and the oldest notes drop
-  off. While exploring alone it can only edit its OWN notes — your memories, and its picture of you,
+  off — though it now keeps 200 rather than 40, so weeks of them no longer quietly delete the
+  character underneath. Roughly the newest forty ride in the assistant's head at any time; the rest
+  stay on disk and in the Soul panel, and it's told how many it isn't currently seeing.
+  While exploring alone it can only edit its OWN notes — your memories, and its picture of you,
   are out of reach.
 - **The reasoning bubble stays how you left it** — open it and it stays open; close it and it stays
   closed, through the next reply and after a restart. It used to spring back open every time the
@@ -58,6 +61,19 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   nothing explaining the gap or which of the two was the problem.
 - **Updates that change the build setup still tell you to restart** — that case is now rare rather
   than routine, and it's stated instead of silently not applying.
+
+### Library
+
+- **A book listed in your library always opens** — the list and the open button disagreed about what
+  a book's id was (one read it off the record, the other off the key it was filed under), so a book
+  filed under the wrong key sat in the list and did nothing when clicked, forever. It's now found
+  anyway and quietly re-filed on the first open, so it opens normally from then on; Remove takes it
+  too, instead of leaving the row behind. A book saved without an id of its own opens as well.
+- **A book that won't open now says why** — clicking one that couldn't be opened did nothing at all:
+  no message, no error, whatever the reason. Now it tells you, including the case where a book is
+  listed but its saved copy isn't actually on the device.
+- **Clicking the book you already have open shows it** instead of doing nothing — which read as the
+  library being broken whenever it was open but hidden behind the chat.
 
 ### Scheduled actions
 

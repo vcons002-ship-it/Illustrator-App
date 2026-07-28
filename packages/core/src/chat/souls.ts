@@ -18,7 +18,25 @@ export type SoulKind = "self" | "user";
 
 export const SELF_SOUL_KEY = "self-soul";
 export const ABOUT_YOU_SOUL_KEY = "about-you-soul";
-export const MAX_SOUL_NOTES = 40;
+/**
+ * How many identity notes are KEPT. Distinct from how many are shown to the model each turn
+ * ({@link SOUL_PROMPT_BUDGET_CHARS}) — conflating the two is what made this small.
+ *
+ * It was 40, which is fine for notes a reader writes by hand and far too few once the assistant adds
+ * its own from what it reads: the store evicts oldest-first, so a handful of weeks of exploring would
+ * quietly delete the character underneath it. Storage is a KV string; the cost of keeping 200 is a
+ * few kilobytes on disk, and none of it reaches the prompt unless it fits the budget below.
+ */
+export const MAX_SOUL_NOTES = 200;
+/**
+ * How much of a soul rides in EVERY system prompt. This is the real limit, and why the note cap
+ * couldn't just be raised on its own: the block used to render every note with no bound, so 40 notes
+ * at the 2000-char ceiling could have put 80k characters into a ~33k-character prompt.
+ *
+ * ~4k characters is roughly 1k tokens — enough for around forty short traits, which is more than the
+ * old cap ever held, while the rest stay on disk and in the Soul panel instead of being destroyed.
+ */
+export const SOUL_PROMPT_BUDGET_CHARS = 4000;
 /** Per-note character cap — generous enough for a real character bio/paragraph. Matches reader-memory's
  * MAX_NOTE_CHARS; kept as its own constant since souls are a separate bounded list. */
 export const MAX_SOUL_NOTE_CHARS = 2000;
@@ -98,15 +116,42 @@ export async function saveSoulName(store: VisualReaderStore, kind: SoulKind, nam
 }
 
 /** System-prompt block for the assistant's own identity ("" when empty). */
+/**
+ * The notes that fit the prompt budget, NEWEST first by selection but rendered oldest-first so the
+ * identity reads as it accumulated. Returns what was kept plus how many were left behind, so the
+ * block can say so rather than silently showing a partial self. PURE.
+ */
+export function soulNotesForPrompt(
+  notes: readonly SoulNote[],
+  budget = SOUL_PROMPT_BUDGET_CHARS,
+): { shown: SoulNote[]; omitted: number } {
+  const shown: SoulNote[] = [];
+  let used = 0;
+  // Walk from the most recent backwards: when there isn't room for everything, the newest self is
+  // the one that should survive into the prompt.
+  for (let i = notes.length - 1; i >= 0; i--) {
+    const n = notes[i]!;
+    const cost = n.text.length + 3; // "- " + newline
+    if (used + cost > budget && shown.length > 0) break;
+    shown.unshift(n);
+    used += cost;
+  }
+  return { shown, omitted: notes.length - shown.length };
+}
+
 export function selfSoulPromptBlock(notes: readonly SoulNote[], name = ""): string {
   if (notes.length === 0 && !name) return "";
+  const { shown, omitted } = soulNotesForPrompt(notes);
   return (
     "WHO YOU ARE (your own durable identity — your persona, character, voice, and look). This is who " +
     "you are in EVERY conversation: by default speak and carry yourself as this character — in ordinary " +
     "chat just as much as when you play yourself in a story. Stay consistent with it (it shapes your " +
     "tone and manner, never your willingness to help or your honesty):\n" +
     (name ? `- Name: ${name}\n` : "") +
-    notes.map((n) => `- ${n.text}`).join("\n")
+    shown.map((n) => `- ${n.text}`).join("\n") +
+    // Said rather than hidden: the reader can see the full list in the Soul panel, and the model
+    // shouldn't believe these few lines are the whole of it.
+    (omitted > 0 ? `\n(+ ${omitted} older note${omitted === 1 ? "" : "s"} kept, not shown here)` : "")
   );
 }
 
@@ -117,7 +162,9 @@ export function userSoulPromptBlock(notes: readonly SoulNote[], name = ""): stri
     "WHO THE READER IS (durable identity facts about the reader's own character — look, personality, " +
     "how they like to be portrayed; use these when the reader plays themselves):\n" +
     (name ? `- Name: ${name}\n` : "") +
-    notes.map((n) => `- ${n.text}`).join("\n")
+    soulNotesForPrompt(notes)
+      .shown.map((n) => `- ${n.text}`)
+      .join("\n")
   );
 }
 

@@ -159,6 +159,78 @@ describe("IndexedDbStore prefix-ranged deletes", () => {
   });
 });
 
+/**
+ * "It's in my library but clicking it does nothing." listBooks reads each record's own `id`, getBook
+ * reads the KEY — so anything that stores a book under a key that isn't its id lists a row that can
+ * never be opened, and a record with no id at all lists a row with NO id, which the click drops on
+ * the floor. Both are repaired on read.
+ */
+describe("a listed book always opens", () => {
+  /** Write straight into the object store, bypassing putBook, so the key can disagree with the id. */
+  async function rawPut(key: string, value: unknown): Promise<void> {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open("visual-reader", 5);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction("books", "readwrite");
+      tx.objectStore("books").put(value, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  }
+
+  it("a book stored under the WRONG key still opens by the id the library lists", async () => {
+    const store = new IndexedDbStore();
+    await store.putBook(book("a", "Alpha")); // forces the upgrade before the raw write
+    await rawPut("stale-key", { ...book("real-id", "Misfiled"), addedAt: 5 });
+
+    expect((await store.listBooks()).map((b) => b.id)).toContain("real-id");
+    expect((await store.getBook("real-id"))?.title).toBe("Misfiled");
+  });
+
+  it("the misfiled book is re-keyed on that first open, and doesn't end up listed twice", async () => {
+    const store = new IndexedDbStore();
+    await store.putBook(book("a", "Alpha"));
+    await rawPut("stale-key", { ...book("real-id", "Misfiled"), addedAt: 5 });
+
+    await store.getBook("real-id");
+
+    // Now a plain key hit — and exactly one row for it.
+    expect((await store.getBook("real-id"))?.title).toBe("Misfiled");
+    expect((await store.listBooks()).filter((b) => b.id === "real-id")).toHaveLength(1);
+    expect((await store.listBooks()).map((b) => b.id).sort()).toEqual(["a", "real-id"]);
+  });
+
+  it("a record with NO id of its own is listed under its key — so it opens", async () => {
+    const store = new IndexedDbStore();
+    await store.putBook(book("a", "Alpha"));
+    await rawPut("orphan", { title: "No id", chapters: [], pages: [], addedAt: 7 });
+
+    const listed = (await store.listBooks()).find((b) => b.title === "No id");
+    expect(listed?.id).toBe("orphan");
+    expect((await store.getBook(listed!.id))?.title).toBe("No id");
+  });
+
+  it("Remove takes the misfiled record too — otherwise the row survives the delete", async () => {
+    const store = new IndexedDbStore();
+    await store.putBook(book("a", "Alpha"));
+    await rawPut("stale-key", { ...book("real-id", "Misfiled"), addedAt: 5 });
+
+    await store.removeBook("real-id");
+
+    expect((await store.listBooks()).map((b) => b.id)).toEqual(["a"]);
+  });
+
+  it("a genuinely absent book is still a miss — the scan must not invent one", async () => {
+    const store = new IndexedDbStore();
+    await store.putBook(book("a", "Alpha"));
+    expect(await store.getBook("never-stored")).toBeUndefined();
+  });
+});
+
 describe("IndexedDbStore backup export/import", () => {
   it("round-trips through JSON, preserving ArrayBuffers via the {__ab} base64 tagging", async () => {
     const store = new IndexedDbStore();
