@@ -486,3 +486,68 @@ describe("shouldRetryPromptSubmit", () => {
     expect(shouldRetryPromptSubmit(200)).toBe(false);
   });
 });
+
+/**
+ * Per-character regions: each character's description scoped to their own patch of canvas and
+ * combined with the whole-scene conditioning. The shape has to be exactly right or ComfyUI rejects
+ * the prompt, so the graph is asserted node by node.
+ */
+describe("buildWorkflow regional conditioning", () => {
+  const regions = [
+    { name: "Sato", text: "Sato, wire glasses", x: 0, y: 0, width: 0.53, height: 1 },
+    { name: "Mara", text: "Mara, red braid", x: 0.47, y: 0, width: 0.53, height: 1 },
+  ];
+
+  it("adds an encode → area → combine chain per character, folded onto the base conditioning", () => {
+    const g = buildWorkflow({ ...base, regions });
+    expect(classOf(g, "400")).toBe("CLIPTextEncode");
+    expect(inputsOf(g, "400").text).toBe("Sato, wire glasses");
+    expect(classOf(g, "401")).toBe("ConditioningSetAreaPercentage");
+    expect(inputsOf(g, "401")).toMatchObject({ conditioning: ["400", 0], x: 0, y: 0, width: 0.53, height: 1 });
+    expect(classOf(g, "402")).toBe("ConditioningCombine");
+    // The FIRST combine folds the region onto the whole-scene conditioning ("6"), which is never
+    // replaced — it carries the scene, the setting and the composition.
+    expect(inputsOf(g, "402")).toMatchObject({ conditioning_1: ["6", 0], conditioning_2: ["401", 0] });
+    // The second character folds onto the first combine, not onto the base again.
+    expect(inputsOf(g, "405")).toMatchObject({ conditioning_1: ["402", 0], conditioning_2: ["404", 0] });
+  });
+
+  it("the sampler's positive is the COMBINED conditioning", () => {
+    const g = buildWorkflow({ ...base, regions });
+    expect(inputsOf(g, "3").positive).toEqual(["405", 0]);
+    expect(inputsOf(g, "3").negative).toEqual(["7", 0]); // untouched
+  });
+
+  it("regions encode with the same CLIP as the scene prompt (LoRA path included)", () => {
+    const g = buildWorkflow({ ...base, regions, lora: { name: "style.safetensors", strength: 0.8 } });
+    expect(inputsOf(g, "400").clip).toEqual(inputsOf(g, "6").clip);
+    expect(inputsOf(g, "400").clip).toEqual(["10", 1]); // the LoRA's CLIP, not the raw checkpoint's
+  });
+
+  it("on Flux the combination passes through FluxGuidance, which the sampler reads", () => {
+    const flux = { ...base, family: "flux" as const, sampler: { ...sampler, cfg: 1, guidance: 3.5 } };
+    const g = buildWorkflow({ ...flux, regions });
+    expect(inputsOf(g, "14").conditioning).toEqual(["405", 0]);
+    expect(inputsOf(g, "3").positive).toEqual(["14", 0]);
+  });
+
+  it("the hi-res second pass samples from the same combined conditioning", () => {
+    const g = buildWorkflow({ ...base, regions, hires: { width: 2048, height: 2048, denoise: 0.4 } });
+    expect(inputsOf(g, "19").positive).toEqual(inputsOf(g, "3").positive);
+    expect(inputsOf(g, "19").positive).toEqual(["405", 0]);
+  });
+
+  it("no regions ⇒ the graph is exactly as before", () => {
+    const g = buildWorkflow(base);
+    expect(inputsOf(g, "3").positive).toEqual(["6", 0]);
+    expect(g["400"]).toBeUndefined();
+  });
+
+  it("node ids stay clear of the base graph, img2img, shift, hi-res and the IP-Adapter chain", () => {
+    const g = buildWorkflow({ ...base, regions });
+    for (const id of Object.keys(g)) {
+      if (Number(id) >= 400) continue;
+      expect(Number(id)).toBeLessThan(100); // nothing regional leaked into the low ids
+    }
+  });
+});
