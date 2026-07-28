@@ -460,17 +460,29 @@ describe("scenario: chains run in order and each result feeds the next round", (
     expect(p).toMatch(/say how you think, not what to write about/);
   });
 
-  it("previous topics are a REFUSAL, and arrive before the subject is chosen", () => {
+  it("what it already wrote rules out REPEATS, not related work — and arrives before the choice", () => {
     const p = buildCreativeIdlePrompt(["tardigrades", "Roman concrete"]);
     expect(p).toMatch(/tardigrades; Roman concrete/);
-    expect(p).toMatch(/do not write about any of these again/i);
-    // "a fresh angle on one" was the loophole every repeat run took.
-    expect(p).toMatch(/not a fresh angle on one either/);
+    expect(p).toMatch(/Don't write any of these again/);
+    // Following a thread is explicitly ALLOWED: a few pieces around one subject is curiosity, and the
+    // first version of this banned it outright, which took away the point of the feature.
+    expect(p).toMatch(/Carrying a thread FORWARD is fine/);
+    expect(p).toMatch(/genuinely new ground rather than the same piece restated/);
     // BEFORE "pick something you're genuinely interested in" — appended at the end, after the brief
     // had already told it to follow its nose, it read as an afterthought and it circled anyway.
-    expect(p.indexOf("ALREADY DONE")).toBeLessThan(p.indexOf("Pick something you're genuinely interested in"));
+    expect(p.indexOf("ALREADY WRITTEN")).toBeLessThan(p.indexOf("Pick something you're genuinely interested in"));
     // Nothing explored yet ⇒ no list at all, rather than an empty "you've written about: ".
-    expect(buildCreativeIdlePrompt()).not.toMatch(/ALREADY DONE/);
+    expect(buildCreativeIdlePrompt()).not.toMatch(/ALREADY WRITTEN/);
+  });
+
+  it("only asks for a change of subject once it has been on one thread a while", () => {
+    const topics = ["tardigrades", "Roman concrete"];
+    expect(buildCreativeIdlePrompt(topics, false)).not.toMatch(/same area/);
+    const nudged = buildCreativeIdlePrompt(topics, true);
+    expect(nudged).toMatch(/last few pieces have all been in the same area/);
+    expect(nudged).toMatch(/something unrelated/);
+    // Still a nudge, not a ban — the thread is explicitly left open to come back to.
+    expect(nudged).toMatch(/thread will still be there/);
   });
 
   it("markets: read the watchlist, quote a symbol, then a gated prep_order suspends for review", async () => {

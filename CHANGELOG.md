@@ -35,12 +35,15 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   stay on disk and in the Soul panel, and it's told how many it isn't currently seeing.
   While exploring alone it can only edit its OWN notes — your memories, and its picture of you,
   are out of reach.
-- **It stops circling the same subject** — every piece it wrote alone kept coming back to its first
-  interest. It was being asked to keep its own list of what it had already covered, and mostly didn't,
-  so each run started with no history and picked its favourite again. The app now records the topic
-  itself, from the piece that was actually written, and the next run is told plainly not to write
-  about any of them again — nor a fresh angle on one — before it's asked to pick anything. It's also
-  told that its identity notes describe how it thinks, not a subject to keep returning to.
+- **It stops circling the same subject — without being stopped from following a thread** — every piece
+  it wrote alone kept coming back to its first interest. It was being asked to keep its own list of
+  what it had already covered, and mostly didn't, so each run started with no history and picked its
+  favourite again. The app now records the topic itself, from the piece that was actually written, and
+  shows it that list before asking it to choose. What's ruled out is only writing the same piece
+  twice: carrying a thread forward onto new ground is explicitly fine, and after three pieces in a row
+  in one area it's asked — not forced — to give the next one to something else, with the thread left
+  open to come back to. It's also told that its identity notes describe how it thinks, not a subject
+  to keep returning to.
 - **Exploring no longer eats what it knows about you** — those "already covered" notes were being kept
   in the same 40-note memory as your preferences, which evicts the oldest, so a couple of days of
   exploring would quietly delete real memories. They now live in their own list (120 of them), and any

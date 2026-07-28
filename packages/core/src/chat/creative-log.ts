@@ -55,6 +55,58 @@ export function recentTopics(entries: readonly CreativeEntry[], limit = RECENT_T
   return entries.slice(-limit).map((e) => e.text);
 }
 
+/**
+ * How many pieces in a row have stayed on the same thread — used to nudge, NOT to forbid.
+ *
+ * Reading on around something for a few pieces is what following a thread looks like, and the point
+ * of the feature is that it gets to. What isn't interesting is never leaving: this counts the run so
+ * the brief can ask for a change of scene once it's gone on a while, and say nothing until then.
+ */
+export const MAX_THREAD_RUN = 3;
+/** Shortest word worth matching on — below this it's grammar, not subject. */
+const MIN_WORD = 4;
+const STOPWORDS = new Set([
+  "about", "after", "again", "against", "because", "been", "before", "being", "between", "both", "does",
+  "down", "during", "each", "from", "further", "have", "having", "here", "into", "just", "more", "most",
+  "once", "only", "other", "over", "same", "some", "such", "than", "that", "their", "them", "then",
+  "there", "these", "they", "this", "those", "through", "under", "until", "very", "were", "what", "when",
+  "where", "which", "while", "with", "your",
+]);
+
+/** The subject-bearing words of a topic, lowercased. PURE. */
+export function topicWords(topic: string): string[] {
+  return topic
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .filter((w) => w.length >= MIN_WORD && !STOPWORDS.has(w));
+}
+
+/**
+ * Whether two topics are plainly on the same thread: they share a subject word, counting one word as
+ * a match for another it prefixes ("marsh"/"marshes", "tuning"/"tunings"). Deliberately crude — it
+ * decides whether to add one sentence of encouragement to move on, so a false positive costs nothing
+ * and a stemmer would be more machinery than the job needs. PURE.
+ */
+export function sameThread(a: string, b: string): boolean {
+  const wordsB = topicWords(b);
+  return topicWords(a).some((x) => wordsB.some((y) => x.startsWith(y) || y.startsWith(x)));
+}
+
+/**
+ * How many topics at the END of the list are on the same thread as the newest one (1 when the last
+ * piece stands alone, 0 for an empty list). PURE.
+ */
+export function threadRun(topics: readonly string[]): number {
+  const last = topics[topics.length - 1];
+  if (!last) return 0;
+  let run = 1;
+  for (let i = topics.length - 2; i >= 0; i--) {
+    if (!sameThread(last, topics[i]!)) break;
+    run++;
+  }
+  return run;
+}
+
 /** True for a note the old build wrote into reader memory as its explore ledger. */
 export function isExploredNote(text: string): boolean {
   return /^explored:/i.test(text.trim());

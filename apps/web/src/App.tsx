@@ -204,6 +204,8 @@ import {
   loadCreativeLog,
   recordExplored,
   recentTopics,
+  threadRun,
+  MAX_THREAD_RUN,
   migrateExploredNotes,
 } from "@visual-reader/core";
 import {
@@ -6289,7 +6291,15 @@ export function App() {
    * whether or not the model cooperates. (See creative-log.ts; old notes are migrated on startup.)
    */
   const recentCreativeTopics = useCallback(
-    (): Promise<string[]> => loadCreativeLog(libraryStore).then(recentTopics).catch(() => []),
+    (): Promise<{ recent: string[]; switchNow: boolean }> =>
+      loadCreativeLog(libraryStore)
+        .then((log) => {
+          const recent = recentTopics(log);
+          // Following a thread for a few pieces is the point; never leaving it isn't. Ask for a
+          // change of scene only once it's actually been in one place for a while.
+          return { recent, switchNow: threadRun(recent) >= MAX_THREAD_RUN };
+        })
+        .catch(() => ({ recent: [], switchNow: false })),
     [libraryStore],
   );
   const lastCreativeAt = useRef(0);
@@ -6327,11 +6337,11 @@ export function App() {
     setLastCreativeRunLabel(new Date().toLocaleString());
     returnToChat.current = pendingReturn.current;
     pendingReturn.current = undefined;
-    const recent = await recentCreativeTopics();
+    const { recent, switchNow } = await recentCreativeTopics();
     // Set it and dispatch; dispatchBuddyTurn consumes it synchronously on entry, so there is no
     // window in which a later turn could inherit it and no timer to lose a race with.
     creativeIdleRef.current = true;
-    onBuddySendText(buildCreativeIdlePrompt(recent));
+    onBuddySendText(buildCreativeIdlePrompt(recent, switchNow));
   }, [openCreativeSession, onBuddySendText, recentCreativeTopics]);
   useEffect(() => {
     if (isRemoteClient || !settings.allowCreativeIdle) return;
@@ -6384,9 +6394,9 @@ export function App() {
         returnToChat.current = pendingReturn.current; // arm the restore now that a run is really starting
         pendingReturn.current = undefined;
         // What it has already explored — so it moves on rather than circling.
-        const recent = await recentCreativeTopics();
+        const { recent, switchNow } = await recentCreativeTopics();
         creativeIdleRef.current = true;
-        onBuddySendText(buildCreativeIdlePrompt(recent));
+        onBuddySendText(buildCreativeIdlePrompt(recent, switchNow));
       })();
     }, 60_000);
     return () => clearInterval(id);

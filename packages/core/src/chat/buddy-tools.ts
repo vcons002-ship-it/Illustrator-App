@@ -1729,16 +1729,30 @@ export function buildProjectGuideBlock(text: string): string {
  */
 export const CREATIVE_IDLE_MARKER = "[exploring on my own]";
 
-export function buildCreativeIdlePrompt(recent: string[] = []): string {
+/**
+ * The already-written list, and how firmly to push for a change of subject.
+ *
+ * `switchNow` is set when several pieces in a row have stayed on one thread (see `threadRun`). It's a
+ * nudge with a bound, not a ban: following a thread for a few pieces IS curiosity, and forbidding it
+ * outright — which the first version of this did — takes away the thing the feature is for. What has
+ * to be ruled out is only writing the SAME piece again.
+ */
+export function buildCreativeIdlePrompt(recent: string[] = [], switchNow = false): string {
   // FIRST, not last. This used to be appended after "don't ask the reader anything", where it read as
   // an afterthought to a brief that had already said "pick something you're genuinely interested in"
   // — and what it was genuinely interested in was, every time, the thing it was interested in last
   // time. The constraint has to arrive before the choice it constrains.
   const avoid = recent.length
-    ? "ALREADY DONE — do not write about any of these again, and not a fresh angle on one either: " +
-      `${recent.join("; ")}.\n` +
-      "Go somewhere genuinely else: a different field entirely, not the next question along. If the " +
-      "subject you're about to pick would sit naturally beside that list, it's the wrong pick.\n\n"
+    ? `ALREADY WRITTEN: ${recent.join("; ")}.\n` +
+      "Don't write any of these again — a second piece that says what one of them already said is " +
+      "worth nothing. Carrying a thread FORWARD is fine, though: if one of them left a real question " +
+      "open and you want to keep pulling at it, do — as long as what you write is genuinely new " +
+      "ground rather than the same piece restated.\n" +
+      (switchNow
+        ? "That said, the last few pieces have all been in the same area. Give this one to something " +
+          "unrelated — a different field entirely. The thread will still be there next time.\n"
+        : "") +
+      "\n"
     : "";
   return (
     `${CREATIVE_IDLE_MARKER}\n` +

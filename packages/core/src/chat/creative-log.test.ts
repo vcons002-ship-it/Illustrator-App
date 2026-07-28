@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 import { InMemoryStore } from "../storage/store.js";
 import {
   MAX_CREATIVE_LOG,
+  MAX_THREAD_RUN,
   RECENT_TOPICS_SHOWN,
   isExploredNote,
   loadCreativeLog,
   migrateExploredNotes,
   recentTopics,
   recordExplored,
+  sameThread,
+  threadRun,
 } from "./creative-log.js";
 import { MAX_MEMORY_NOTES, loadMemory, rememberNote } from "./reader-memory.js";
 
@@ -41,6 +44,39 @@ describe("the creative log", () => {
 
   it("an empty log yields no topics (a first run has nothing to avoid)", async () => {
     expect(recentTopics(await loadCreativeLog(new InMemoryStore()))).toEqual([]);
+  });
+});
+
+/**
+ * Reading around one subject for a few pieces IS following a thread, and the feature exists so it
+ * can. This only measures how long it has stayed there, so the brief can suggest a change of scene
+ * once it has gone on a while — and say nothing at all until then.
+ */
+describe("noticing a thread", () => {
+  it("matches topics sharing a subject word, including plurals and derived forms", () => {
+    expect(sameThread("Salt marshes and carbon", "How a salt marsh migrates")).toBe(true);
+    expect(sameThread("Tuning systems before equal temperament", "Just intonation and tuning")).toBe(true);
+    expect(sameThread("Salt marshes and carbon", "Roman concrete in seawater")).toBe(false);
+  });
+
+  it("doesn't call two topics related on grammar alone", () => {
+    // Both are full of shared short/common words; neither shares a SUBJECT.
+    expect(sameThread("What happens when these break down", "Where those have been before")).toBe(false);
+  });
+
+  it("counts only the unbroken run at the end of the list", () => {
+    expect(threadRun([])).toBe(0);
+    expect(threadRun(["Roman concrete"])).toBe(1);
+    expect(threadRun(["Salt marshes", "Roman concrete"])).toBe(1);
+    expect(threadRun(["Roman concrete", "Concrete in seawater"])).toBe(2);
+    // An older piece on the same subject doesn't count — the run was already broken by the marshes.
+    expect(threadRun(["Roman concrete", "Salt marshes", "Concrete in seawater"])).toBe(1);
+  });
+
+  it("MAX_THREAD_RUN leaves room for a real thread before nudging", () => {
+    const thread = ["Roman concrete", "Concrete in seawater", "Concrete and volcanic ash"];
+    expect(threadRun(thread.slice(0, 2)) >= MAX_THREAD_RUN).toBe(false); // two in a row: left alone
+    expect(threadRun(thread) >= MAX_THREAD_RUN).toBe(true); // three: time to look elsewhere
   });
 });
 
