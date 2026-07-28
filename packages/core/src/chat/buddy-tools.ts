@@ -6,6 +6,7 @@ import { IMAGE_STYLES } from "../providers/catalog.js";
 import { MAX_SUBJECT_CHARS } from "../providers/image/video-continuity.js";
 import type { BookSummary } from "../storage/store.js";
 import { POLISH_CHAT_GUIDANCE } from "./document-polish.js";
+import { STORY_SO_FAR_MAX_CHARS } from "./story-state.js";
 import { MAX_SKILL_BODY_CHARS, MAX_SKILL_DESC_CHARS, MAX_SKILL_NAME_CHARS } from "./skills.js";
 import { MAX_NOTE_CHARS } from "./reader-memory.js";
 import { formatSetupGuide, type SetupGuide } from "./setup-guides.js";
@@ -264,6 +265,11 @@ export type BuddyToolCall =
        * the one YOU (the assistant) play. "me and you" / "us" means the reader and the
        * assistant ARE the two characters. */
       roleplay?: { you?: string; me?: string };
+      /** The conversation this story has already been growing in, when the reader chose to bring it
+       * with them (the Story setup's "continue from this chat"). Set by the APP from the chat it was
+       * started in — never written by the model. The opening beat then continues that story instead
+       * of opening a new one. */
+      soFar?: string;
     }
   /** Advance the OPEN story by one beat: append this prose as the next span and (per the
    * current cadence) illustrate the scene since the last image. Write a vivid, FULL-SCENE
@@ -3335,7 +3341,10 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
   }
   if (tool === "start_story") {
     const opening = strArg(obj.opening, MAX_PASTE_CHARS);
-    if (!opening) return undefined;
+    // A premise is required UNLESS the story is being carried in from a chat — there the story
+    // already exists, and demanding a fresh one-line pitch for it is busywork.
+    const carried = strArg(obj.soFar, STORY_SO_FAR_MAX_CHARS);
+    if (!opening && !carried) return undefined;
     // Each cast entry is a bare name OR {name, description?} (description seeds the look).
     const characters = Array.isArray(obj.characters)
       ? obj.characters
@@ -3358,10 +3367,11 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     return {
       tool,
       title: strArg(obj.title, MAX_TITLE_CHARS) ?? "Our Story",
-      opening,
+      opening: opening ?? "",
       ...(strArg(obj.style, MAX_NAME_CHARS) ? { style: strArg(obj.style, MAX_NAME_CHARS)! } : {}),
       ...(characters && characters.length ? { characters } : {}),
       ...(roleplay ? { roleplay } : {}),
+      ...(carried ? { soFar: carried } : {}),
     };
   }
   if (tool === "continue_story") {

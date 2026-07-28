@@ -103,6 +103,17 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 - **Updates that change the build setup still tell you to restart** — that case is now rare rather
   than routine, and it's stated instead of silently not applying.
 
+### Stories
+
+- **A story you've already started in the chat can come with you** — "Story as you go" always began
+  from a blank page, so a story that had been building up in conversation for half an hour was thrown
+  away the moment you turned it into a real one. The setup now offers **"Continue what we've been
+  telling in this chat"** (ticked by default when there's a conversation to carry), and the first beat
+  picks up where you left off — same characters, same place, no recap and no rewind. The idea box
+  becomes optional when you're carrying: that conversation is the premise. Untick it to begin
+  something fresh, exactly as before. The chat you started from is untouched, and leaving the story
+  returns you to it.
+
 ### Library
 
 - **A book listed in your library always opens** — the list and the open button disagreed about what

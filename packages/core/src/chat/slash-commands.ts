@@ -165,8 +165,13 @@ export function parseBuddySlashCommand(
           return usage(info);
         }
         const opening = typeof payload.opening === "string" ? payload.opening : "";
-        if (!opening.trim()) return usage(info);
-        const title = typeof payload.title === "string" && payload.title.trim() ? payload.title : titleFrom(opening);
+        const soFar = typeof payload.soFar === "string" ? payload.soFar.trim() : "";
+        // With a chat carried in, the premise is optional — that conversation IS the premise.
+        if (!opening.trim() && !soFar) return usage(info);
+        const title =
+          typeof payload.title === "string" && payload.title.trim()
+            ? payload.title
+            : titleFrom(opening.trim() || soFar);
         const call = viaParser(parseBuddyToolCall, {
           tool: "start_story",
           title,
@@ -174,6 +179,8 @@ export function parseBuddySlashCommand(
           ...(typeof payload.style === "string" ? { style: payload.style } : {}),
           ...(Array.isArray(payload.characters) ? { characters: payload.characters } : {}),
           ...(payload.roleplay && typeof payload.roleplay === "object" ? { roleplay: payload.roleplay } : {}),
+          // The chat the story has already been told in, when the reader chose to bring it along.
+          ...(typeof payload.soFar === "string" ? { soFar: payload.soFar } : {}),
         });
         return call ? { call } : usage(info);
       }

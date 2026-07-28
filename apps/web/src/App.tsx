@@ -204,6 +204,7 @@ import {
   loadCreativeLog,
   recordExplored,
   recentTopics,
+  storySoFarFromChat,
   stripIdentityRecital,
   threadRun,
   MAX_THREAD_RUN,
@@ -6098,9 +6099,11 @@ export function App() {
       if (story.startsWith("/story ")) {
         let bubble = "✍️ Starting a story…";
         try {
-          const payload = JSON.parse(story.slice("/story ".length)) as { opening?: string };
+          const payload = JSON.parse(story.slice("/story ".length)) as { opening?: string; soFar?: string };
           const op = typeof payload.opening === "string" ? payload.opening : "";
-          if (op) bubble = `✍️ Starting a story — ${op.slice(0, 80)}${op.length > 80 ? "…" : ""}`;
+          const carried = typeof payload.soFar === "string" && payload.soFar.trim().length > 0;
+          if (op) bubble = `${carried ? "✍️ Continuing our story" : "✍️ Starting a story"} — ${op.slice(0, 80)}${op.length > 80 ? "…" : ""}`;
+          else if (carried) bubble = "✍️ Continuing our story here — carrying this conversation into it.";
         } catch {
           /* malformed payload — the generic bubble is fine; the worker reports the parse error */
         }
@@ -6172,6 +6175,8 @@ export function App() {
   // "Story as you go": open the setup modal (workflow + cast + characters), seeded from the souls so
   // a "You & me" story already knows the played names + looks. Replaces the old window.prompt.
   const [showStorySetup, setShowStorySetup] = useState(false);
+  /** The chat rendered as text when the Story setup opened — "" when there's nothing worth carrying. */
+  const [storySoFar, setStorySoFar] = useState("");
   const [storySetupSeed, setStorySetupSeed] = useState<{ self: { name: string; note?: string }; user: { name: string; note?: string } }>({
     self: { name: "" },
     user: { name: "" },
@@ -6187,6 +6192,9 @@ export function App() {
       self: { name: selfName, ...(selfNotes[0]?.text ? { note: selfNotes.map((n) => n.text).join("; ").slice(0, 200) } : {}) },
       user: { name: userName, ...(userNotes[0]?.text ? { note: userNotes.map((n) => n.text).join("; ").slice(0, 200) } : {}) },
     });
+    // The chat this is being started FROM. A story often begins as ordinary conversation and only
+    // becomes a Story-as-you-go once it's running; the setup can now offer to bring it along.
+    setStorySoFar(storySoFarFromChat(buddyMessagesRef.current));
     setShowStorySetup(true);
   }, [libraryStore]);
   // Dispatch the setup as a deterministic /story call (carrying the cast/roleplay as JSON) through the
@@ -6195,7 +6203,11 @@ export function App() {
     (payload: StoryStartPayload) => {
       setShowStorySetup(false);
       setShowChat(true);
-      const bubble = `✍️ Starting a story — ${payload.opening.slice(0, 80)}${payload.opening.length > 80 ? "…" : ""}`;
+      // Carrying the chat with no premise typed is a CONTINUATION, and saying "starting a story" over
+      // a conversation the reader is mid-way through reads as though it threw their story away.
+      const bubble = payload.opening.trim()
+        ? `${payload.soFar ? "✍️ Continuing our story" : "✍️ Starting a story"} — ${payload.opening.slice(0, 80)}${payload.opening.length > 80 ? "…" : ""}`
+        : "✍️ Continuing our story here — carrying this conversation into it.";
       const command = `/story ${JSON.stringify(payload)}`;
       // Remember where we came from so exiting the story returns us there (history intact).
       storyReturnSessionRef.current = activeBuddyIdRef.current;
@@ -6212,7 +6224,7 @@ export function App() {
       // makes the model reliably reply with beat prose — which the worker then lands in the book —
       // instead of conversational filler inherited from whatever chat we were just in.
       const sid = `${BUDDY_CHAT_ID}-${Date.now().toString(36)}`;
-      const label = `Story · ${payload.title || payload.opening.slice(0, 24)}`.slice(0, 60);
+      const label = `Story · ${payload.title || payload.opening.slice(0, 24) || "continued"}`.slice(0, 60);
       resetBuddyView();
       setBuddySessions((prev) => {
         const next = [...prev, { id: sid, workingDir: "", label }];
@@ -8979,6 +8991,7 @@ export function App() {
         <StorySetupModal
           self={storySetupSeed.self}
           user={storySetupSeed.user}
+          {...(storySoFar ? { chatSoFar: storySoFar } : {})}
           onStart={startStoryFromSetup}
           onClose={() => setShowStorySetup(false)}
         />
