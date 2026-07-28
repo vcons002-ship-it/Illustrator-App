@@ -436,11 +436,14 @@ describe("scenario: chains run in order and each result feeds the next round", (
     expect(refused?.result.error).toMatch(/can't run while you're exploring on your own/);
   });
 
-  it("the creative brief asks for research, a written-up document, and a topic note", () => {
+  it("the creative brief asks for research and a written-up document", () => {
     const p = buildCreativeIdlePrompt();
     expect(p).toContain("create_document");
     expect(p).toMatch(/several sources/);
-    expect(p).toContain("explored:"); // the marker the next run reads back
+    // It is NOT asked to keep its own "explored:" ledger any more: the host records the topic from
+    // the document that was actually created, so the list exists even when a run forgets — and each
+    // note it used to write evicted one of the reader's own 40 memories.
+    expect(p).not.toContain("explored:");
     expect(p).toMatch(/don't ask the reader anything/i); // nobody is there to answer
     // Told what it can't do, so it doesn't burn the run finding out.
     expect(p).toMatch(/No commands, no files, no email/);
@@ -452,8 +455,34 @@ describe("scenario: chains run in order and each result feeds the next round", (
     expect(p).toMatch(/Be sparing/);
     expect(p).toMatch(/forget the old one first/);
     expect(p).toMatch(/Never write to the reader's memories about themselves here/);
-    // Previous topics steer it somewhere new.
-    expect(buildCreativeIdlePrompt(["tardigrades", "Roman concrete"])).toMatch(/tardigrades; Roman concrete/);
+    // Its identity notes are in this same prompt; without this they read as a standing instruction to
+    // keep writing about whatever it once said it was drawn to.
+    expect(p).toMatch(/say how you think, not what to write about/);
+  });
+
+  it("what it already wrote rules out REPEATS, not related work — and arrives before the choice", () => {
+    const p = buildCreativeIdlePrompt(["tardigrades", "Roman concrete"]);
+    expect(p).toMatch(/tardigrades; Roman concrete/);
+    expect(p).toMatch(/Don't write any of these again/);
+    // Following a thread is explicitly ALLOWED: a few pieces around one subject is curiosity, and the
+    // first version of this banned it outright, which took away the point of the feature.
+    expect(p).toMatch(/Carrying a thread FORWARD is fine/);
+    expect(p).toMatch(/genuinely new ground rather than the same piece restated/);
+    // BEFORE "pick something you're genuinely interested in" — appended at the end, after the brief
+    // had already told it to follow its nose, it read as an afterthought and it circled anyway.
+    expect(p.indexOf("ALREADY WRITTEN")).toBeLessThan(p.indexOf("Pick something you're genuinely interested in"));
+    // Nothing explored yet ⇒ no list at all, rather than an empty "you've written about: ".
+    expect(buildCreativeIdlePrompt()).not.toMatch(/ALREADY WRITTEN/);
+  });
+
+  it("only asks for a change of subject once it has been on one thread a while", () => {
+    const topics = ["tardigrades", "Roman concrete"];
+    expect(buildCreativeIdlePrompt(topics, false)).not.toMatch(/same area/);
+    const nudged = buildCreativeIdlePrompt(topics, true);
+    expect(nudged).toMatch(/last few pieces have all been in the same area/);
+    expect(nudged).toMatch(/something unrelated/);
+    // Still a nudge, not a ban — the thread is explicitly left open to come back to.
+    expect(nudged).toMatch(/thread will still be there/);
   });
 
   it("markets: read the watchlist, quote a symbol, then a gated prep_order suspends for review", async () => {
