@@ -1930,7 +1930,12 @@ export function App() {
   );
   /** The tasks an action can be bound to, for ⏰ Scheduled's picker. */
   const scheduledTaskOptions = useMemo(
-    () => taskPlans.map((p) => ({ id: p.id, title: p.title })),
+    // ACTIVE work only. A finished or discarded task has nothing left to maintain — and the runner
+    // already skips actions bound to one (runnableScheduledTasks) — so offering it here would be
+    // offering to attach an action to something that will never run it. `scheduledTaskTitles` above
+    // deliberately keeps ALL plans, so an action already bound to a finished task still shows that
+    // task's name rather than reading as "the task was deleted".
+    () => taskPlans.filter((p) => p.status !== "completed" && p.status !== "archived").map((p) => ({ id: p.id, title: p.title })),
     [taskPlans],
   );
   /** DESKTOP: run a ⏰ Scheduled action the phone relayed, then re-push the mirrored list. */

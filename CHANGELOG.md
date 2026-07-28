@@ -72,6 +72,13 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 - **You can move an existing action onto a task** — that "Runs on:" line is a picker. Actions created
   before this stay unattached, because nothing in them reliably says which task they belong to and
   guessing would be worse; this is how you attach them.
+- **Only live tasks are offered to attach an action to** — the "Runs on:" picker listed every task
+  ever created, including completed and deleted ones. Attaching an action to a finished task produces
+  one that never runs. An action already attached to a finished task now says so in the picker
+  instead of appearing unattached. The assistant is held to the same rule: if it tries to attach a
+  new action to a task that's already done — easy to do by asking for a recurring check while still
+  in that task's chat — it's left unattached and it tells you, rather than quietly creating something
+  that will never fire.
 - **The assistant is told where an action will run** when it schedules one, so it can say so — and
   notice when something meant for a task isn't attached to one.
 - **Actions on a finished task stop running** — an action attached to a task you've completed, ignored

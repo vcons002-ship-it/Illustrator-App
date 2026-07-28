@@ -200,6 +200,17 @@ export const ScheduledTasksPanel = memo(function ScheduledTasksPanel({
                               {o.title}
                             </option>
                           ))}
+                          {/* Bound to a task that's since been finished or discarded. The picker only
+                              offers ACTIVE tasks, so without this entry the select would fall back to
+                              showing "Nothing" — reading as unattached when it isn't, and quietly
+                              re-binding on the next change. Shown, labelled, and still selectable so
+                              it can be moved off deliberately. */}
+                          {t.planId && !taskOptions!.some((o) => o.id === t.planId) ? (
+                            <option value={t.planId}>
+                              {taskTitles[t.planId] ?? "a task that no longer exists"} (finished — it
+                              won't run)
+                            </option>
+                          ) : null}
                         </select>
                       ) : (
                         <span style={{ opacity: 0.9 }}>
