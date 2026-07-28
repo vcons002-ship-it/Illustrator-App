@@ -123,15 +123,16 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Stories
 
-- **Each character gets their own part of the picture** (your own engine only) — the real fix for
-  features migrating between people. With two to four described characters in a scene, each one's
-  description is now applied only to the part of the canvas they occupy, side by side, instead of all
-  the descriptions being thrown at the whole image at once. The scene, setting and composition still
-  come from the picture as a whole; the per-character part just says "this person, here". It's on by
-  default and there's a switch in Settings under Images to turn it off if you'd rather the model
-  decide who stands where. A lone character or a crowd of five is left alone — one has nothing to
-  separate from, and slicing a crowd into narrow strips does more harm than the mixing it prevents.
-  Online image services can't do this: it needs control over the render that they don't offer.
+- **Each character can be weighted to their own part of the picture** — an experimental option (off
+  by default, in Settings under Images, your own engine only) aimed at features migrating between
+  people. With two to four described characters, each one's description is weighted towards the part
+  of the canvas they occupy instead of all the descriptions being thrown at the whole image at once.
+  The scene, setting and composition still come from the picture as a whole.
+  The first version of this **made pictures worse** — figures came out misshapen and at mismatched
+  sizes — because it cut the picture into boxes and drew each character to fill their box, so a whole
+  person was being composed inside a narrow strip. It now weights the description towards an area
+  instead of cutting anything, and it's off unless you ask for it. Try it on a scene you can compare
+  against; if figures come out oddly proportioned, turn it back off and say so.
 - **A firmer line between characters in the same picture** — with three or more people in frame, one
   person's hair or clothing could end up on another. The glossary the image model is given now says
   outright that each description belongs to that person only. This is a nudge, not a cure: mixing up

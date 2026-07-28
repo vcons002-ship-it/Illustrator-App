@@ -393,20 +393,20 @@ describe("RenderPipeline style LoRA override", () => {
       return last();
     }
 
-    it("gives each character their own column on a local engine", async () => {
-      const regions = (await renderTwoHander({})).castRegions ?? [];
+    it("gives each character their own column when the reader turns it on", async () => {
+      const regions = (await renderTwoHander({ perCharacterRegions: true })).castRegions ?? [];
       expect(regions.map((r) => r.name)).toEqual(["Sato", "Mara"]);
       expect(regions[0]!.text).toContain("close-cropped, wire glasses");
       expect(regions[1]!.text).toContain("red braid");
       expect(regions[0]!.x).toBe(0);
     });
 
-    it("sends none when the reader turns it off", async () => {
-      expect((await renderTwoHander({ disableRegions: true })).castRegions).toBeUndefined();
+    it("sends none by default — it's opt-in, and it constrains the composition", async () => {
+      expect((await renderTwoHander({})).castRegions).toBeUndefined();
     });
 
-    it("sends none to a cloud provider — there's no way for it to honour them", async () => {
-      expect((await renderTwoHander({ tier: "cloud" })).castRegions).toBeUndefined();
+    it("sends none to a cloud provider, even when asked — there's no way for it to honour them", async () => {
+      expect((await renderTwoHander({ tier: "cloud", perCharacterRegions: true })).castRegions).toBeUndefined();
     });
   });
 });

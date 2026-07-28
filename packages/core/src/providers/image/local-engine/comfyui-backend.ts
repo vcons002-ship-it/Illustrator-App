@@ -1424,45 +1424,82 @@ interface WorkflowParams {
 }
 
 /**
- * Scope each character's description to their own rectangle, combined with the whole-scene
- * conditioning, and return the conditioning to sample from.
+ * Weight each character's description towards their own part of the canvas, combined with the
+ * whole-scene conditioning, and return the conditioning to sample from.
  *
- * The shape is one `CLIPTextEncode` → `ConditioningSetAreaPercentage` per character, folded into the
- * base with `ConditioningCombine`. All three are core ComfyUI nodes — no custom pack to install.
+ * NOT `ConditioningSetArea`/`SetAreaPercentage`, which is what this first used and what made every
+ * figure come out misshapen and at a different scale from its neighbours. Those nodes CROP the
+ * sampler to the rectangle and render the conditioning to FILL it — so a full-height, one-third-wide
+ * column gets a complete figure composed inside a 341×1024 strip, at an effective scale nothing else
+ * in the picture shares. Narrow tall boxes are the worst possible shape for it.
+ *
+ * `ConditioningSetMask` with `set_cond_area: "default"` samples the WHOLE latent and only weights the
+ * conditioning spatially. No crop, no rescale — a bias towards a part of the frame rather than a
+ * separate little render inside it. The mask is a plain rectangle: a zero mask the size of the canvas
+ * with a solid patch composited onto it (`SolidMask` + `MaskComposite`, both core nodes).
+ *
+ * Strength is below 1 for the same reason: this is meant to nudge where a description lands, not to
+ * overrule the composition.
  *
  * The base conditioning stays underneath and is never replaced: it carries the scene, the setting and
- * the composition, and the regions only add "this person, here". Dropping it would produce a picture
- * of N portraits and no scene.
+ * the composition, and the regions only add "this person, mostly here". Dropping it would produce a
+ * picture of N portraits and no scene.
  *
  * Node ids are in the 400s — clear of the base graph (2–19), the IP-Adapter chain (20+), and the
- * video graphs (100s).
+ * video graphs (100s). "399" is the shared empty canvas mask.
  */
 function addRegionalConditioning(
   graph: Record<string, unknown>,
   regions: readonly CastRegion[],
   clipRef: [string, number],
   base: [string, number],
+  canvas: { width: number; height: number },
 ): [string, number] {
+  // One empty full-canvas mask, shared: each region composites its own patch onto a copy.
+  graph["399"] = {
+    class_type: "SolidMask",
+    inputs: { value: 0, width: canvas.width, height: canvas.height },
+  };
   let combined = base;
   regions.forEach((r, i) => {
-    const encode = `${400 + i * 3}`;
-    const area = `${401 + i * 3}`;
-    const combine = `${402 + i * 3}`;
+    const encode = `${400 + i * 5}`;
+    const patch = `${401 + i * 5}`;
+    const mask = `${402 + i * 5}`;
+    const setMask = `${403 + i * 5}`;
+    const combine = `${404 + i * 5}`;
     graph[encode] = { class_type: "CLIPTextEncode", inputs: { text: r.text, clip: clipRef } };
-    graph[area] = {
-      class_type: "ConditioningSetAreaPercentage",
+    graph[patch] = {
+      class_type: "SolidMask",
+      inputs: {
+        value: 1,
+        width: Math.max(1, Math.round(r.width * canvas.width)),
+        height: Math.max(1, Math.round(r.height * canvas.height)),
+      },
+    };
+    graph[mask] = {
+      class_type: "MaskComposite",
+      inputs: {
+        destination: ["399", 0],
+        source: [patch, 0],
+        x: Math.round(r.x * canvas.width),
+        y: Math.round(r.y * canvas.height),
+        operation: "add",
+      },
+    };
+    graph[setMask] = {
+      class_type: "ConditioningSetMask",
       inputs: {
         conditioning: [encode, 0],
-        width: r.width,
-        height: r.height,
-        x: r.x,
-        y: r.y,
+        mask: [mask, 0],
         strength: REGION_STRENGTH,
+        // "default" = weight the conditioning over the whole latent. "mask bounds" would crop to the
+        // rectangle and reintroduce exactly the rescaling this replaced.
+        set_cond_area: "default",
       },
     };
     graph[combine] = {
       class_type: "ConditioningCombine",
-      inputs: { conditioning_1: combined, conditioning_2: [area, 0] },
+      inputs: { conditioning_1: combined, conditioning_2: [setMask, 0] },
     };
     combined = [combine, 0];
   });
@@ -1558,7 +1595,9 @@ export function buildWorkflow(p: WorkflowParams): Record<string, unknown> {
   // Per-character regions fold into the positive conditioning BEFORE guidance and before the hi-res
   // pass copies the sampler's inputs — so both passes sample from the same combined conditioning.
   const conditioned: [string, number] =
-    p.regions && p.regions.length > 0 ? addRegionalConditioning(graph, p.regions, clipRef, ["6", 0]) : ["6", 0];
+    p.regions && p.regions.length > 0
+      ? addRegionalConditioning(graph, p.regions, clipRef, ["6", 0], { width: p.width, height: p.height })
+      : ["6", 0];
   if (p.sampler.guidance !== undefined) {
     // Flux embedded guidance — conditioning passes through FluxGuidance before the sampler.
     graph["14"] = {

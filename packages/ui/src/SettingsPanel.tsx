@@ -151,8 +151,8 @@ export interface ReaderSettings {
    * manga styles only). Independent of `panelsPerView`. Off by default.
    */
   drawAsComicPage?: boolean;
-  /** Turn OFF per-character regions (on by default; see TierConfig.disableRegions). */
-  disableRegions?: boolean;
+  /** Per-character regions — opt-in; see TierConfig.perCharacterRegions. */
+  perCharacterRegions?: boolean;
   /**
    * When to start illustrating: "book" reads the whole book first so prompts have
    * full context (best images, slower start); "chapter" starts as each chapter is
@@ -1560,16 +1560,17 @@ export function SettingsPanel({
           <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8 }}>
             <input
               type="checkbox"
-              checked={!(value.disableRegions ?? false)}
-              onChange={(e) => set({ disableRegions: !e.target.checked })}
+              checked={value.perCharacterRegions ?? false}
+              onChange={(e) => set({ perCharacterRegions: e.target.checked })}
             />
             <span>
-              Give each character their own part of the picture
+              Give each character their own part of the picture (experimental)
               <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
-                With two to four described characters in a scene, each one's description is applied
-                only where they stand, so their features stop bleeding onto each other. Your own
-                engine only — it needs control of the render that online image services don't offer.
-                Turn it off if you'd rather the model decide who stands where.
+                With two to four described characters in a scene, each one's description is weighted
+                towards the part of the canvas they occupy, so their features are less likely to end
+                up on each other. Your own engine only. It's a real constraint on the composition, so
+                try it on a scene you can compare — if figures come out oddly proportioned, turn it
+                back off.
               </span>
             </span>
           </label>

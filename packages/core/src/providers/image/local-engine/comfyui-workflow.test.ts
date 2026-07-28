@@ -498,24 +498,51 @@ describe("buildWorkflow regional conditioning", () => {
     { name: "Mara", text: "Mara, red braid", x: 0.47, y: 0, width: 0.53, height: 1 },
   ];
 
-  it("adds an encode → area → combine chain per character, folded onto the base conditioning", () => {
+  it("MASKS each description rather than cropping the sampler to a box", () => {
     const g = buildWorkflow({ ...base, regions });
     expect(classOf(g, "400")).toBe("CLIPTextEncode");
     expect(inputsOf(g, "400").text).toBe("Sato, wire glasses");
-    expect(classOf(g, "401")).toBe("ConditioningSetAreaPercentage");
-    expect(inputsOf(g, "401")).toMatchObject({ conditioning: ["400", 0], x: 0, y: 0, width: 0.53, height: 1 });
-    expect(classOf(g, "402")).toBe("ConditioningCombine");
-    // The FIRST combine folds the region onto the whole-scene conditioning ("6"), which is never
-    // replaced — it carries the scene, the setting and the composition.
-    expect(inputsOf(g, "402")).toMatchObject({ conditioning_1: ["6", 0], conditioning_2: ["401", 0] });
+    // The rectangle is a MASK composited onto an empty canvas-sized one...
+    expect(classOf(g, "399")).toBe("SolidMask");
+    expect(inputsOf(g, "399")).toMatchObject({ value: 0, width: 1024, height: 1024 });
+    expect(classOf(g, "401")).toBe("SolidMask");
+    expect(inputsOf(g, "401")).toMatchObject({ value: 1, width: 543, height: 1024 }); // 0.53 × 1024
+    expect(classOf(g, "402")).toBe("MaskComposite");
+    expect(inputsOf(g, "402")).toMatchObject({ destination: ["399", 0], source: ["401", 0], x: 0, y: 0 });
+    // ...and applied with set_cond_area "default", which samples the WHOLE latent and only weights
+    // the conditioning. "mask bounds" would crop to the rectangle, which is what produced misshapen
+    // figures at mismatched scales when this used ConditioningSetAreaPercentage.
+    expect(classOf(g, "403")).toBe("ConditioningSetMask");
+    expect(inputsOf(g, "403")).toMatchObject({ conditioning: ["400", 0], mask: ["402", 0], set_cond_area: "default" });
+    expect(inputsOf(g, "403").strength).toBeLessThan(1); // a nudge, not an override
+    expect(g["401"]).not.toMatchObject({ class_type: "ConditioningSetAreaPercentage" });
+  });
+
+  it("never uses an area/crop node — that shape is the bug this replaced", () => {
+    const g = buildWorkflow({ ...base, regions });
+    const classes = Object.values(g).map((n) => (n as { class_type?: string }).class_type);
+    expect(classes).not.toContain("ConditioningSetArea");
+    expect(classes).not.toContain("ConditioningSetAreaPercentage");
+  });
+
+  it("folds each region onto the whole-scene conditioning, which is never replaced", () => {
+    const g = buildWorkflow({ ...base, regions });
+    expect(classOf(g, "404")).toBe("ConditioningCombine");
+    expect(inputsOf(g, "404")).toMatchObject({ conditioning_1: ["6", 0], conditioning_2: ["403", 0] });
     // The second character folds onto the first combine, not onto the base again.
-    expect(inputsOf(g, "405")).toMatchObject({ conditioning_1: ["402", 0], conditioning_2: ["404", 0] });
+    expect(inputsOf(g, "409")).toMatchObject({ conditioning_1: ["404", 0], conditioning_2: ["408", 0] });
   });
 
   it("the sampler's positive is the COMBINED conditioning", () => {
     const g = buildWorkflow({ ...base, regions });
-    expect(inputsOf(g, "3").positive).toEqual(["405", 0]);
+    expect(inputsOf(g, "3").positive).toEqual(["409", 0]);
     expect(inputsOf(g, "3").negative).toEqual(["7", 0]); // untouched
+  });
+
+  it("the mask is placed in PIXELS at the region's offset", () => {
+    const g = buildWorkflow({ ...base, regions, width: 1216, height: 832 });
+    expect(inputsOf(g, "406")).toMatchObject({ value: 1, width: Math.round(0.53 * 1216), height: 832 });
+    expect(inputsOf(g, "407")).toMatchObject({ x: Math.round(0.47 * 1216), y: 0 });
   });
 
   it("regions encode with the same CLIP as the scene prompt (LoRA path included)", () => {
@@ -527,14 +554,14 @@ describe("buildWorkflow regional conditioning", () => {
   it("on Flux the combination passes through FluxGuidance, which the sampler reads", () => {
     const flux = { ...base, family: "flux" as const, sampler: { ...sampler, cfg: 1, guidance: 3.5 } };
     const g = buildWorkflow({ ...flux, regions });
-    expect(inputsOf(g, "14").conditioning).toEqual(["405", 0]);
+    expect(inputsOf(g, "14").conditioning).toEqual(["409", 0]);
     expect(inputsOf(g, "3").positive).toEqual(["14", 0]);
   });
 
   it("the hi-res second pass samples from the same combined conditioning", () => {
     const g = buildWorkflow({ ...base, regions, hires: { width: 2048, height: 2048, denoise: 0.4 } });
     expect(inputsOf(g, "19").positive).toEqual(inputsOf(g, "3").positive);
-    expect(inputsOf(g, "19").positive).toEqual(["405", 0]);
+    expect(inputsOf(g, "19").positive).toEqual(["409", 0]);
   });
 
   it("no regions ⇒ the graph is exactly as before", () => {
@@ -546,7 +573,7 @@ describe("buildWorkflow regional conditioning", () => {
   it("node ids stay clear of the base graph, img2img, shift, hi-res and the IP-Adapter chain", () => {
     const g = buildWorkflow({ ...base, regions });
     for (const id of Object.keys(g)) {
-      if (Number(id) >= 400) continue;
+      if (Number(id) >= 399) continue;
       expect(Number(id)).toBeLessThan(100); // nothing regional leaked into the low ids
     }
   });
