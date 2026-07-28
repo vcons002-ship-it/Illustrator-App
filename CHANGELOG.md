@@ -111,8 +111,12 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
     Tavern" was read as a mention of Rell: he was resolved into the scene, listed among the characters
     for the picture, and his appearance went into it. Every name is now matched longest-first and each
     piece of the text belongs to the longest name covering it — so the tavern takes its own name, and
-    Rell is only present when he's actually named. (This one applied to any illustrated book, not just
-    stories.)
+    Rell is only present when he's actually named. That works once the app knows the place, which it
+    usually doesn't yet on the beat you first walk into it, so the phrasing itself is now read too: a
+    name followed by 's and a capitalised word ("in Rell's Tavern") is naming somewhere, not someone.
+    An ordinary possessive — "Rell's hand", "Rell's coat" — still means he's there, as it should, and
+    naming him anywhere else in the same scene puts him in it regardless. (This one applied to any
+    illustrated book, not just stories.)
   - **Nicknames could claim other characters' names.** The assistant hands out nicknames as it writes,
     and they collide — one character picking up "the Captain" while another character IS the Captain.
     A name now belongs to the character whose name it is; a nickname only counts when it isn't

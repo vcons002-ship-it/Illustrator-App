@@ -110,10 +110,26 @@ export function resolvePageEntities(
     claimed.add(name);
     rest = rest.split(name).join(" "); // a space, not nothing — never fuse the neighbours into a new match
   }
-  const matches = (names: string[]): boolean => names.some((n) => n.length > 0 && claimed.has(n.toLowerCase()));
+  // The place usually ISN'T in the bible yet on the page that first walks into it (extraction runs
+  // behind the render), so longest-first can't rule it out there. A possessive followed by a proper
+  // noun — "in Rell's Tavern" — has that shape regardless: it names somewhere, not someone. Tested
+  // against the ORIGINAL text, since the capitalisation is the whole signal and `haystack` is
+  // lower-cased. Only suppresses those occurrences: named anywhere else, the character is present.
+  const original = page.paragraphs.map((p) => p.text).join(" ");
+  const onlyNamesSomewhere = (name: string): boolean => {
+    const re = new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
+    let seen = false;
+    for (const m of original.matchAll(re)) {
+      seen = true;
+      if (!/^['’]s\s+\p{Lu}/u.test(original.slice((m.index ?? 0) + m[0].length))) return false;
+    }
+    return seen;
+  };
+  const matches = (names: string[], asPerson = false): boolean =>
+    names.some((n) => n.length > 0 && claimed.has(n.toLowerCase()) && !(asPerson && onlyNamesSomewhere(n)));
 
   const characterIds = bible.characters
-    .filter((c) => matches([c.name, ...c.aliases]))
+    .filter((c) => matches([c.name, ...c.aliases], true))
     .map((c) => c.id);
   const environmentIds = bible.environments
     .filter((e) => matches([e.name]))

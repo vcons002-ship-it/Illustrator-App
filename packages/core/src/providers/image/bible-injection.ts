@@ -177,15 +177,39 @@ function ownForms(entity: { name: string; aliases?: readonly string[] }, primari
  * `injectBibleTerms` uses to substitute, so what a prompt is judged to mention and what gets replaced
  * in it can't disagree.
  *
- * Returns the set of forms (lowercased) that won a span.
+ * Returns two sets of forms (lowercased): every one that won a span, and the subset that won one
+ * NAMING ITSELF rather than something named after it — see {@link namesSomethingElse}.
  */
-function claimedForms(prompt: string, forms: readonly { form: string }[]): Set<string> {
-  const claimed = new Set<string>();
-  if (forms.length === 0) return claimed;
+function claimedForms(prompt: string, forms: readonly { form: string }[]): { any: Set<string>; itself: Set<string> } {
+  const any = new Set<string>();
+  const itself = new Set<string>();
+  if (forms.length === 0) return { any, itself };
   const alt = forms.map((f) => escapeRegExp(f.form)).join("|");
   const re = new RegExp(`(^|[^\\p{L}\\p{N}(])(${alt})(['’]s)?(?=[^\\p{L}\\p{N}]|$)`, "giu");
-  for (const m of prompt.matchAll(re)) claimed.add((m[2] ?? "").toLowerCase());
-  return claimed;
+  for (const m of prompt.matchAll(re)) {
+    const form = (m[2] ?? "").toLowerCase();
+    any.add(form);
+    const rest = prompt.slice((m.index ?? 0) + m[0].length);
+    if (!(m[3] && namesSomethingElse(rest))) itself.add(form);
+  }
+  return { any, itself };
+}
+
+/**
+ * After a possessive, does a CAPITALISED word follow — "Rell's **T**avern", "Mara's **D**iner"?
+ *
+ * That's the shape of a proper name for something else, and it's how a place named after somebody put
+ * that person in the picture. Longest-first matching only rules it out once the place is in the
+ * bible, and it usually ISN'T yet: extraction runs in the background while the new beat's image is
+ * pushed to the front of the queue, so the beat that first walks into Rell's Tavern renders before
+ * the Tavern exists as an entity. This catches that beat.
+ *
+ * Only the possessive-plus-capital form. "Rell's hand trembled" is lower-case and stays a mention of
+ * Rell — as it should be, he's plainly there. And this only suppresses an occurrence, never the
+ * character: named anywhere else in the same prompt, they're present as usual.
+ */
+function namesSomethingElse(rest: string): boolean {
+  return /^\s+\p{Lu}/u.test(rest);
 }
 
 /**
@@ -216,12 +240,16 @@ export function findBibleTermsInText(prompt: string, bible: VisualBible): SceneT
   // Longest first: that ordering IS the rule that gives an enclosing name the span.
   all.sort((a, b) => b.form.length - a.form.length);
   const claimed = claimedForms(prompt, all);
-  const claims = (forms: readonly string[]): boolean => forms.some((f) => claimed.has(f.trim().toLowerCase()));
+  const claims = (forms: readonly string[], from: ReadonlySet<string>): boolean =>
+    forms.some((f) => from.has(f.trim().toLowerCase()));
 
   const terms: SceneTerm[] = [];
   bible.characters.forEach((c, i) => {
     const forms = charForms[i]!;
-    if (!claims(forms)) return;
+    // A CHARACTER needs an occurrence that names them — not just one inside "<their name>'s Somewhere".
+    // Drawing a person into a room merely because it carries their name is the failure this prevents;
+    // for places and creatures the same shape is harmless, so they take any occurrence.
+    if (!claims(forms, claimed.itself)) return;
     terms.push({ names: forms, descriptor: describeCharacterIdentity(c), kind: "character" });
     // Outfit labels only for a character that IS named here.
     let matched = false;
@@ -240,12 +268,12 @@ export function findBibleTermsInText(prompt: string, bible: VisualBible): SceneT
   });
 
   (bible.creatures ?? []).forEach((cr, i) => {
-    if (claims(creatureForms[i]!)) terms.push({ names: creatureForms[i]!, descriptor: describeCreature(cr), kind: "creature" });
+    if (claims(creatureForms[i]!, claimed.any)) terms.push({ names: creatureForms[i]!, descriptor: describeCreature(cr), kind: "creature" });
   });
 
   // Aliases cover indirect references ("the fortress" → Basgiliath's details).
   bible.environments.forEach((e, i) => {
-    if (claims(envForms[i]!)) terms.push({ names: envForms[i]!, descriptor: describeLocation(e), kind: "location" });
+    if (claims(envForms[i]!, claimed.any)) terms.push({ names: envForms[i]!, descriptor: describeLocation(e), kind: "location" });
   });
 
   return terms;
@@ -291,9 +319,13 @@ export function injectBibleTerms(prompt: string, terms: readonly SceneTerm[]): s
   const alt = forms.map((f) => escapeRegExp(f.form)).join("|");
   // Whole-word, case-insensitive, optional possessive; skip a match already opened by "(".
   const re = new RegExp(`(^|[^\\p{L}\\p{N}(])(${alt})(['’]s)?(?=[^\\p{L}\\p{N}]|$)`, "giu");
-  return prompt.replace(re, (_m, lead: string, name: string, poss: string | undefined) => {
+  return prompt.replace(re, (m: string, lead: string, name: string, poss: string | undefined, offset: number, whole: string) => {
     const descriptor = byForm.get(name.toLowerCase());
-    if (!descriptor) return `${lead}${name}${poss ?? ""}`;
+    // "Rell's Tavern" keeps its name even when Rell IS in the scene — the place is called that, and
+    // swapping in his face there says the tavern looks like a man.
+    if (!descriptor || (poss && namesSomethingElse(whole.slice(offset + m.length)))) {
+      return `${lead}${name}${poss ?? ""}`;
+    }
     return `${lead}(${descriptor})${poss ?? ""}`;
   });
 }

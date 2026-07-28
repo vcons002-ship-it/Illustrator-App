@@ -76,6 +76,20 @@ describe("resolvePageEntities", () => {
     expect(without.environmentIds).toContain("env-rest");
     expect(without.characterIds).toEqual([]);
   });
+
+  /**
+   * And the same page BEFORE the place has been extracted — which is the usual state on the page that
+   * first walks into it, since extraction runs behind the render. With no longer name in the bible to
+   * win the span, the possessive-plus-proper-noun shape is what rules the character out.
+   */
+  it("...even when the place isn't in the bible yet", () => {
+    const b = bibleWith(); // no "Aria's Rest" environment
+    expect(resolvePageEntities(b, page("A stranger waited in Aria's Rest.")).characterIds).toEqual([]);
+    // She's still resolved when the page actually mentions her.
+    expect(resolvePageEntities(b, page("Aria waited in Aria's Rest.")).characterIds).toContain("char-aria");
+    // An ordinary possessive is a mention — she's plainly there.
+    expect(resolvePageEntities(b, page("A stranger took Aria's hand.")).characterIds).toContain("char-aria");
+  });
 });
 
 describe("shouldRevealImage", () => {

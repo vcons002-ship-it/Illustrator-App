@@ -411,3 +411,43 @@ describe("a place named after a character isn't a mention of the character", () 
     );
   });
 });
+
+/**
+ * The place is named after someone AND ISN'T IN THE BIBLE YET — the common case, not an edge one:
+ * extraction runs in the background while the new beat's image is pushed to the front of the queue,
+ * so the beat that first walks into Rell's Tavern renders before the Tavern exists as an entity.
+ * Longest-first can't help there (there's no longer name to win), so the possessive-plus-proper-noun
+ * SHAPE is what rules it out.
+ */
+describe("a place named after a character that the bible hasn't learned yet", () => {
+  const b = (): VisualBible => ({
+    ...createEmptyBible("b"),
+    characters: [
+      character({ name: "Rell", appearance: { ...emptyAppearance(), hair: "shaved head" } }),
+      character({ name: "Mara", appearance: { ...emptyAppearance(), hair: "red braid" } }),
+    ],
+  });
+
+  it("doesn't put him in the scene, and leaves the place's name alone", () => {
+    const prompt = "Mara sits alone in Rell's Tavern.";
+    expect(findBibleTermsInText(prompt, b()).map((t) => t.names[0])).toEqual(["Mara"]);
+    expect(injectBibleTerms(prompt, findBibleTermsInText(prompt, b()))).toBe("(red braid) sits alone in Rell's Tavern.");
+  });
+
+  it("an ordinary possessive is still him — he's plainly there", () => {
+    const prompt = "Mara grips Rell's hand.";
+    expect(findBibleTermsInText(prompt, b()).map((t) => t.names[0])).toEqual(["Rell", "Mara"]);
+    expect(injectBibleTerms(prompt, findBibleTermsInText(prompt, b()))).toBe("(red braid) grips (shaved head)'s hand.");
+  });
+
+  it("named anywhere else in the same prompt, he's present — and the place keeps its name", () => {
+    const prompt = "Rell wipes the bar in Rell's Tavern.";
+    expect(findBibleTermsInText(prompt, b()).map((t) => t.names[0])).toEqual(["Rell"]);
+    expect(injectBibleTerms(prompt, findBibleTermsInText(prompt, b()))).toBe("(shaved head) wipes the bar in Rell's Tavern.");
+  });
+
+  it("a bare possessive followed by a new sentence is a mention, not a place", () => {
+    const prompt = "They spoke of Rell's. The door opened.";
+    expect(findBibleTermsInText(prompt, b()).map((t) => t.names[0])).toEqual(["Rell"]);
+  });
+});
