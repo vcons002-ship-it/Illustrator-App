@@ -93,11 +93,43 @@ export function resolvePageEntities(
   page: Page,
 ): { characterIds: string[]; environmentIds: string[]; creatureIds: string[]; spoilerIds: string[] } {
   const haystack = pageHaystack(page);
-  const matches = (names: string[]): boolean =>
-    names.some((n) => n.length > 0 && haystack.includes(n.toLowerCase()));
+  // LONGEST name first, and each occurrence belongs to the longest name covering it. Without that, a
+  // place named after someone ("Rell's Tavern") counted as a mention of the character — so they were
+  // resolved as present on the page, and their look went into the illustration for a scene they're
+  // not in. Claimed spans are blanked out so a shorter name can't re-use the same text.
+  const claimed = new Set<string>();
+  const every = [
+    ...bible.characters.flatMap((c) => [c.name, ...c.aliases]),
+    ...bible.environments.map((e) => e.name),
+    ...(bible.creatures ?? []).flatMap((cr) => [cr.name, ...cr.aliases]),
+    ...bible.spoilers.map((sp) => sp.label),
+  ];
+  let rest = haystack;
+  for (const name of [...new Set(every.map((n) => n.toLowerCase()).filter(Boolean))].sort((a, b) => b.length - a.length)) {
+    if (!rest.includes(name)) continue;
+    claimed.add(name);
+    rest = rest.split(name).join(" "); // a space, not nothing — never fuse the neighbours into a new match
+  }
+  // The place usually ISN'T in the bible yet on the page that first walks into it (extraction runs
+  // behind the render), so longest-first can't rule it out there. A possessive followed by a proper
+  // noun — "in Rell's Tavern" — has that shape regardless: it names somewhere, not someone. Tested
+  // against the ORIGINAL text, since the capitalisation is the whole signal and `haystack` is
+  // lower-cased. Only suppresses those occurrences: named anywhere else, the character is present.
+  const original = page.paragraphs.map((p) => p.text).join(" ");
+  const onlyNamesSomewhere = (name: string): boolean => {
+    const re = new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu");
+    let seen = false;
+    for (const m of original.matchAll(re)) {
+      seen = true;
+      if (!/^['’]s\s+\p{Lu}/u.test(original.slice((m.index ?? 0) + m[0].length))) return false;
+    }
+    return seen;
+  };
+  const matches = (names: string[], asPerson = false): boolean =>
+    names.some((n) => n.length > 0 && claimed.has(n.toLowerCase()) && !(asPerson && onlyNamesSomewhere(n)));
 
   const characterIds = bible.characters
-    .filter((c) => matches([c.name, ...c.aliases]))
+    .filter((c) => matches([c.name, ...c.aliases], true))
     .map((c) => c.id);
   const environmentIds = bible.environments
     .filter((e) => matches([e.name]))

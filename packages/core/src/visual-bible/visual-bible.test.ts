@@ -57,6 +57,39 @@ describe("resolvePageEntities", () => {
     expect(result.environmentIds).toEqual([]);
     expect(result.spoilerIds).toEqual([]);
   });
+
+  /**
+   * A place named after someone: the page is set in "Aria's Rest", so Aria's NAME is in the text
+   * without Aria being in the scene. She used to resolve as present, and her look then went into the
+   * illustration — a character drawn into a room she isn't in. Each occurrence belongs to the longest
+   * bible name covering it.
+   */
+  it("a place named after a character isn't a mention of the character", () => {
+    const b = bibleWith();
+    b.environments.push({ id: "env-rest", name: "aria's rest", description: ["a low tavern"], firstSeenChapter: 0 });
+    const result = resolvePageEntities(b, page("The captain waited in Aria's Rest."));
+    expect(result.environmentIds).toContain("env-rest");
+    // "the captain" is her alias, so she IS here — via the alias, not via the place's name.
+    expect(result.characterIds).toContain("char-aria");
+
+    const without = resolvePageEntities(b, page("A stranger waited in Aria's Rest."));
+    expect(without.environmentIds).toContain("env-rest");
+    expect(without.characterIds).toEqual([]);
+  });
+
+  /**
+   * And the same page BEFORE the place has been extracted — which is the usual state on the page that
+   * first walks into it, since extraction runs behind the render. With no longer name in the bible to
+   * win the span, the possessive-plus-proper-noun shape is what rules the character out.
+   */
+  it("...even when the place isn't in the bible yet", () => {
+    const b = bibleWith(); // no "Aria's Rest" environment
+    expect(resolvePageEntities(b, page("A stranger waited in Aria's Rest.")).characterIds).toEqual([]);
+    // She's still resolved when the page actually mentions her.
+    expect(resolvePageEntities(b, page("Aria waited in Aria's Rest.")).characterIds).toContain("char-aria");
+    // An ordinary possessive is a mention — she's plainly there.
+    expect(resolvePageEntities(b, page("A stranger took Aria's hand.")).characterIds).toContain("char-aria");
+  });
 });
 
 describe("shouldRevealImage", () => {

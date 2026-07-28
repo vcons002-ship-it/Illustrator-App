@@ -106,13 +106,23 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 ### Stories
 
 - **A third character's face stops turning up on someone else** — with two characters in a scene, one
-  of them could be drawn wearing a third character's features. The assistant gives characters nicknames
-  as it writes, and those collide with real names — one character picking up "the Captain" as a nickname
-  while another character IS the Captain. Any nickname could claim any name, and ties were settled by
-  which string was longer, so the Captain's own name could resolve to the other character's
-  appearance — and that character was pulled into scenes they weren't in. A name now belongs to the
-  character whose name it is; a nickname only counts when it isn't somebody else's actual name.
-  Genuinely shared nicknames that nobody owns still work as before.
+  of them could be drawn wearing a third character's features. Two separate causes, both fixed.
+  - **A place named after somebody counted as that person being there.** A scene set in "Rell's
+    Tavern" was read as a mention of Rell: he was resolved into the scene, listed among the characters
+    for the picture, and his appearance went into it. Every name is now matched longest-first and each
+    piece of the text belongs to the longest name covering it — so the tavern takes its own name, and
+    Rell is only present when he's actually named. That works once the app knows the place, which it
+    usually doesn't yet on the beat you first walk into it, so the phrasing itself is now read too: a
+    name followed by 's and a capitalised word ("in Rell's Tavern") is naming somewhere, not someone.
+    An ordinary possessive — "Rell's hand", "Rell's coat" — still means he's there, as it should, and
+    naming him anywhere else in the same scene puts him in it regardless. Where the scene's place is
+    written in a way that rule can't see (all lower case, or with no possessive at all), the app now
+    passes the place it knows the beat is set in, which settles it outright. (This one applied to any
+    illustrated book, not just stories.)
+  - **Nicknames could claim other characters' names.** The assistant hands out nicknames as it writes,
+    and they collide — one character picking up "the Captain" while another character IS the Captain.
+    A name now belongs to the character whose name it is; a nickname only counts when it isn't
+    somebody else's actual name. Genuinely shared nicknames that nobody owns still work as before.
 - **A story you've already started in the chat can come with you** — "Story as you go" always began
   from a blank page, so a story that had been building up in conversation for half an hour was thrown
   away the moment you turned it into a real one. The setup now offers **"Continue what we've been

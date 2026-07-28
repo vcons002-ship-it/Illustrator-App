@@ -356,3 +356,174 @@ describe("a name belongs to the character whose name it IS", () => {
     expect(findBibleTermsInText("The rider approaches.", b).map((t) => t.names[0])).toEqual(["Rell", "Mara"]);
   });
 });
+
+/**
+ * The scene is a restaurant named after someone. "Mara sits alone in Rell's Tavern" mentions Mara and
+ * the Tavern — it does NOT mention Rell, and Rell's face has no business in the picture. Each name
+ * claims its span longest-first, so a name enclosed by a longer bible name never sees that text.
+ */
+describe("a place named after a character isn't a mention of the character", () => {
+  const tavern = (over: Partial<VisualBible> = {}): VisualBible => ({
+    ...createEmptyBible("b"),
+    characters: [
+      character({ name: "Rell", appearance: { ...emptyAppearance(), hair: "shaved head" } }),
+      character({ name: "Mara", appearance: { ...emptyAppearance(), hair: "red braid" } }),
+    ],
+    environments: [
+      { id: "env-tavern", name: "Rell's Tavern", aliases: [], description: ["low beams, copper lamps"], firstSeenChapter: 0 },
+    ],
+    ...over,
+  });
+
+  it("leaves the character out of the terms entirely", () => {
+    const terms = findBibleTermsInText("Mara sits alone in Rell's Tavern.", tavern());
+    expect(terms.map((t) => t.names[0])).toEqual(["Mara", "Rell's Tavern"]);
+  });
+
+  it("injects the PLACE for the place, not the character it's named after", () => {
+    const prompt = "Mara sits alone in Rell's Tavern.";
+    const out = injectBibleTerms(prompt, findBibleTermsInText(prompt, tavern()));
+    expect(out).toBe("(red braid) sits alone in (low beams, copper lamps).");
+    expect(out).not.toContain("shaved head");
+  });
+
+  it("keeps him out of the reference block, where he'd read as part of the cast", () => {
+    const prompt = "Mara sits alone in Rell's Tavern.";
+    expect(buildReferenceBlock(findBibleTermsInText(prompt, tavern()))).not.toContain("Rell =");
+  });
+
+  it("works when the enclosing name is an ALIAS of the place — length decides, not ownership", () => {
+    const b = tavern({
+      environments: [
+        { id: "env-tavern", name: "The Tavern", aliases: ["Rell's old tavern"], description: ["low beams"], firstSeenChapter: 0 },
+      ],
+    });
+    const prompt = "Mara sits alone in Rell's old tavern.";
+    expect(injectBibleTerms(prompt, findBibleTermsInText(prompt, b))).toBe("(red braid) sits alone in (low beams).");
+  });
+
+  it("but a real mention of him in the SAME prompt still counts", () => {
+    const prompt = "Rell watches as Mara sits alone in Rell's Tavern.";
+    const terms = findBibleTermsInText(prompt, tavern());
+    expect(terms.map((t) => t.names[0])).toEqual(["Rell", "Mara", "Rell's Tavern"]);
+    expect(injectBibleTerms(prompt, terms)).toBe(
+      "(shaved head) watches as (red braid) sits alone in (low beams, copper lamps).",
+    );
+  });
+});
+
+/**
+ * The place is named after someone AND ISN'T IN THE BIBLE YET — the common case, not an edge one:
+ * extraction runs in the background while the new beat's image is pushed to the front of the queue,
+ * so the beat that first walks into Rell's Tavern renders before the Tavern exists as an entity.
+ * Longest-first can't help there (there's no longer name to win), so the possessive-plus-proper-noun
+ * SHAPE is what rules it out.
+ */
+describe("a place named after a character that the bible hasn't learned yet", () => {
+  const b = (): VisualBible => ({
+    ...createEmptyBible("b"),
+    characters: [
+      character({ name: "Rell", appearance: { ...emptyAppearance(), hair: "shaved head" } }),
+      character({ name: "Mara", appearance: { ...emptyAppearance(), hair: "red braid" } }),
+    ],
+  });
+
+  it("doesn't put him in the scene, and leaves the place's name alone", () => {
+    const prompt = "Mara sits alone in Rell's Tavern.";
+    expect(findBibleTermsInText(prompt, b()).map((t) => t.names[0])).toEqual(["Mara"]);
+    expect(injectBibleTerms(prompt, findBibleTermsInText(prompt, b()))).toBe("(red braid) sits alone in Rell's Tavern.");
+  });
+
+  it("an ordinary possessive is still him — he's plainly there", () => {
+    const prompt = "Mara grips Rell's hand.";
+    expect(findBibleTermsInText(prompt, b()).map((t) => t.names[0])).toEqual(["Rell", "Mara"]);
+    expect(injectBibleTerms(prompt, findBibleTermsInText(prompt, b()))).toBe("(red braid) grips (shaved head)'s hand.");
+  });
+
+  it("named anywhere else in the same prompt, he's present — and the place keeps its name", () => {
+    const prompt = "Rell wipes the bar in Rell's Tavern.";
+    expect(findBibleTermsInText(prompt, b()).map((t) => t.names[0])).toEqual(["Rell"]);
+    expect(injectBibleTerms(prompt, findBibleTermsInText(prompt, b()))).toBe("(shaved head) wipes the bar in Rell's Tavern.");
+  });
+
+  it("a bare possessive followed by a new sentence is a mention, not a place", () => {
+    const prompt = "They spoke of Rell's. The door opened.";
+    expect(findBibleTermsInText(prompt, b()).map((t) => t.names[0])).toEqual(["Rell"]);
+  });
+});
+
+/**
+ * THREE characters in a place named after one of them — every combination, with and without the place
+ * in the bible, and with and without the beat's location to hand. This is the shape that was reported
+ * (a restaurant named after a character, whose features kept turning up on the others), so it's
+ * pinned whole rather than by mechanism.
+ */
+describe("three characters in a place named after the third", () => {
+  const cast = [
+    character({ name: "Rell", appearance: { ...emptyAppearance(), hair: "shaved head" } }),
+    character({ name: "Mara", appearance: { ...emptyAppearance(), hair: "red braid" } }),
+    character({ name: "Cass", appearance: { ...emptyAppearance(), hair: "grey beard" } }),
+  ];
+  const known: VisualBible = {
+    ...createEmptyBible("b"),
+    characters: cast,
+    environments: [
+      { id: "env-tavern", name: "Rell's Tavern", aliases: [], description: ["low beams, copper lamps"], firstSeenChapter: 0 },
+    ],
+  };
+  const unknown: VisualBible = { ...createEmptyBible("b"), characters: cast };
+  const namesOf = (b: VisualBible, p: string, loc?: string): string[] =>
+    findBibleTermsInText(p, b, loc).filter((t) => t.kind === "character").map((t) => t.names[0]!);
+
+  it("all three present, place known: each gets their OWN face, the place gets its own look", () => {
+    const p = "Rell pours for Mara and Cass in Rell's Tavern.";
+    expect(namesOf(known, p)).toEqual(["Rell", "Mara", "Cass"]);
+    expect(injectBibleTerms(p, findBibleTermsInText(p, known))).toBe(
+      "(shaved head) pours for (red braid) and (grey beard) in (low beams, copper lamps).",
+    );
+  });
+
+  it("all three present, place NOT in the bible yet: the place keeps its name, nobody is mangled", () => {
+    const p = "Rell pours for Mara and Cass in Rell's Tavern.";
+    expect(namesOf(unknown, p)).toEqual(["Rell", "Mara", "Cass"]);
+    expect(injectBibleTerms(p, findBibleTermsInText(p, unknown))).toBe(
+      "(shaved head) pours for (red braid) and (grey beard) in Rell's Tavern.",
+    );
+  });
+
+  it("the third is ABSENT: two characters, and his face nowhere — place known or not", () => {
+    const p = "Mara and Cass wait in Rell's Tavern.";
+    expect(namesOf(known, p)).toEqual(["Mara", "Cass"]);
+    expect(namesOf(unknown, p)).toEqual(["Mara", "Cass"]);
+    expect(injectBibleTerms(p, findBibleTermsInText(p, unknown))).not.toContain("shaved head");
+    expect(buildReferenceBlock(findBibleTermsInText(p, known))).not.toContain("Rell =");
+  });
+
+  it("absent at first, arriving later in the same beat: he's in it, the place still isn't him", () => {
+    const p = "Mara and Cass wait in Rell's Tavern until Rell shoulders the door open.";
+    expect(namesOf(unknown, p)).toEqual(["Rell", "Mara", "Cass"]);
+    expect(injectBibleTerms(p, findBibleTermsInText(p, unknown))).toBe(
+      "(red braid) and (grey beard) wait in Rell's Tavern until (shaved head) shoulders the door open.",
+    );
+  });
+
+  /** Lower-case, or no possessive at all — the capitalisation rule can't see these, so the beat's
+   * own location (from extraction) supplies the span instead. */
+  it("a lower-case or unpossessed place name is still a place, given the beat's location", () => {
+    const lower = "Mara and Cass wait in rell's tavern.";
+    expect(namesOf(unknown, lower, "rell's tavern")).toEqual(["Mara", "Cass"]);
+    expect(injectBibleTerms(lower, findBibleTermsInText(lower, unknown, "rell's tavern"), "rell's tavern")).toBe(
+      "(red braid) and (grey beard) wait in rell's tavern.",
+    );
+
+    const bare = "Mara and Cass wait in the Rell Tavern.";
+    expect(namesOf(unknown, bare, "the Rell Tavern")).toEqual(["Mara", "Cass"]);
+
+    // And with him genuinely present, he's in the cast while the place keeps its name.
+    const both = "Rell pours for Mara and Cass in the Rell Tavern.";
+    expect(namesOf(unknown, both, "the Rell Tavern")).toEqual(["Rell", "Mara", "Cass"]);
+    expect(injectBibleTerms(both, findBibleTermsInText(both, unknown, "the Rell Tavern"), "the Rell Tavern")).toBe(
+      "(shaved head) pours for (red braid) and (grey beard) in the Rell Tavern.",
+    );
+  });
+});
