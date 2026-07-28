@@ -113,6 +113,14 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   change reports exactly that, indefinitely, while the fix you're waiting for sits somewhere else.
   Comparing the commit it reports against the build shown in Settings also separates "didn't
   download" from "didn't rebuild".
+- **The update button finishes the job on a packaged build** — if you run the built app (the one
+  desktop-prod.bat makes) rather than the development one, updating used to get you halfway: it
+  pulled the code and rebuilt the web app, but the built app has that web app *compiled into it*, so
+  nothing you could see actually changed until someone ran desktop-prod.bat again. Which meant
+  remoting in. It now rebuilds the app itself and restarts into the new one — several minutes, with a
+  note on screen telling you to leave it alone, and the window closes and reopens by itself at the
+  end. If the rebuild fails, the app you had is put back exactly as it was and the message says what
+  went wrong.
 - **The update button now applies the build number by itself** — no closing and reopening. The build
   is recorded to a small file each time the app is built and read when it starts, instead of being
   baked into the build settings. Those settings are only read when the app's development server
