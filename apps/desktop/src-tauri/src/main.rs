@@ -1537,8 +1537,23 @@ fn unique_path(dir: &Path, filename: &str) -> PathBuf {
 static APPROVED_ROOTS: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
 
 /// The reader-facing refusal, shared by every approved-roots check so the fix is always named.
-const OUTSIDE_APPROVED_ROOTS: &str =
-    "outside the approved folders — pick the folder first (📁) or search for the file, then retry.";
+const OUTSIDE_APPROVED_ROOTS: &str = "outside the folders this app is allowed to touch.";
+/// The same refusal for reading a FILE, where the model can resolve it ITSELF.
+///
+/// This used to say "pick the folder first (📁) or search for the file, then retry" — advice aimed
+/// at the reader but delivered to the MODEL, which cannot see the screen. It relayed the instruction
+/// and filled the gaps with a permissions dialog that does not exist: click the folder icon, a window
+/// pops up asking which folders it may access, approve it. The reader had to say it was invented
+/// before the model tried the other half of the sentence — searching — which worked first time,
+/// because a search approves each hit’s folder.
+///
+/// So: name the tool, say what it achieves, and rule the fabrication out explicitly.
+const OUTSIDE_APPROVED_ROOTS_FILE: &str = concat!(
+    "outside the folders this app is allowed to touch. Resolve it yourself: call find_files with the ",
+    "file’s name, then read the path it returns — finding a file approves its folder. Do NOT ask the ",
+    "reader to grant access or to click anything; there is no permissions dialog. (If the search finds ",
+    "nothing, say so — they can point the assistant at a folder with Browse… beside the chat box.)"
+);
 
 fn approved_roots(app: &AppHandle) -> &'static Mutex<Vec<PathBuf>> {
     APPROVED_ROOTS.get_or_init(|| Mutex::new(vec![workspace_dir(app), engine_root(app)]))
@@ -1888,7 +1903,7 @@ async fn read_file(app: AppHandle, path: String) -> Result<ReadFileResult, Strin
         use base64::Engine as _;
         let p = PathBuf::from(&path);
         if !is_approved_path(&app, &p) {
-            return Err(OUTSIDE_APPROVED_ROOTS.to_string());
+            return Err(OUTSIDE_APPROVED_ROOTS_FILE.to_string());
         }
         let meta = std::fs::metadata(&p).map_err(|e| e.to_string())?;
         if !meta.is_file() {

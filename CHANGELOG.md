@@ -222,6 +222,16 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Files & editing
 
+- **No more invented instructions for buttons that don't exist** — a file outside the folders the app
+  may touch was refused with "pick the folder first (📁) or search for the file", which is advice for
+  YOU but was being handed to the assistant, which can't see your screen. It passed it on and filled
+  in the rest from imagination: click the folder icon, approve the folder in the window that pops up.
+  There is no such window. Two changes: that refusal now tells the assistant to find the file itself —
+  searching for a file approves its folder, which is exactly what it did, successfully, the moment it
+  was told the instructions were made up — and it's now a standing rule that it must never walk you
+  through clicking something it hasn't been told exists. When it can't fix something, it says what
+  failed instead of inventing a fix.
+
 - **Big files are now fully editable** — the assistant could only ever see a file's first 60,000
   characters, and since it edits by matching text exactly, anything past that was unreachable: it
   couldn't change what it couldn't read. It can now read any stretch of a file by line number, and is

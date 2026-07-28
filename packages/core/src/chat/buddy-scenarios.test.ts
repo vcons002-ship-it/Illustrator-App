@@ -175,6 +175,21 @@ describe("scenario: the system prompt instructs the natural-language → tool ma
     expect(prompt).toContain("wants a REAL image → search_images");
     expect(prompt).toContain("wants NEW art → generate_image");
   });
+  /**
+   * A refused file read was relayed to the reader as a walkthrough of a permissions dialog that has
+   * never existed — click the folder icon, approve the folder in the window that pops up. The screen
+   * is the one thing the model can't check, so this has to be a standing rule rather than something
+   * each refusal message has to defend against.
+   */
+  it("it is told it can't see the screen, and must not invent UI to click", () => {
+    expect(prompt).toContain("You CANNOT see the app's screen");
+    expect(prompt).toMatch(/NEVER walk the reader through clicking something/);
+    expect(prompt).toMatch(/that you have not been explicitly told exists/);
+    // And what to do INSTEAD of inventing: re-read the refusal and use what it names.
+    expect(prompt).toMatch(/When a tool refuses, FIRST re-read what it said and do what it names/);
+    expect(prompt).toMatch(/find_files, whose result approves the folder/);
+    expect(prompt).toMatch(/say plainly what failed and what you'd need — do not invent the fix/);
+  });
   it("calculate vs wolfram: 'use calculate for pure math' is present", () => {
     expect(prompt).toContain("use calculate for pure math");
   });
