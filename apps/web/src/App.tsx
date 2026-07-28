@@ -1683,21 +1683,39 @@ export function App() {
 
   const onPickBook = useCallback(
     async (id: string) => {
-      if (!id || id === book?.id) return;
+      if (!id) return;
+      // Already the open book: SHOW it rather than doing nothing. A silent no-op here reads as "the
+      // library is broken" whenever `book` state holds something the reader isn't currently looking
+      // at — after a chat created one, say, with the chat still in front.
+      if (id === book?.id) {
+        setShowChat(false);
+        return;
+      }
       // On a linked phone, opening happens on the DESKTOP (which then pushes the book back).
       if (isRemoteClient) {
         phoneExitedBookId.current = undefined; // an explicit re-open clears the "closed it" guard
         sendAppSync({ type: "vrcmd:open", bookId: id });
         return;
       }
+      // EVERY failure below used to be swallowed — `if (source)` with no else, inside `catch {}`. A
+      // click that couldn't open simply did nothing, with no message anywhere, which is precisely why
+      // "books aren't opening" can't be diagnosed from the outside. Say what went wrong instead.
       try {
         const source = await libraryStore.getBook(id);
-        if (source) openBook(source);
-      } catch {
-        /* ignore */
+        if (source) {
+          openBook(source);
+          return;
+        }
+        const title = library.find((b) => b.id === id)?.title ?? "That book";
+        setLocalError(
+          `“${title}” is listed in your library but its saved copy isn't on this device — the list and ` +
+            "the stored books disagree. Reload the page; if it's still listed and still won't open, remove it and add it again.",
+        );
+      } catch (err) {
+        setLocalError(`Couldn't open that book: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-    [book, libraryStore, openBook, isRemoteClient, sendAppSync],
+    [book, library, libraryStore, openBook, isRemoteClient, sendAppSync],
   );
 
   const onRemoveBook = useCallback(

@@ -62,6 +62,14 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 - **Updates that change the build setup still tell you to restart** — that case is now rare rather
   than routine, and it's stated instead of silently not applying.
 
+### Library
+
+- **A book that won't open now says why** — clicking one that couldn't be opened did nothing at all:
+  no message, no error, whatever the reason. Now it tells you, including the case where a book is
+  listed but its saved copy isn't actually on the device.
+- **Clicking the book you already have open shows it** instead of doing nothing — which read as the
+  library being broken whenever it was open but hidden behind the chat.
+
 ### Scheduled actions
 
 - **A scheduled action set up while working a task now belongs to that task** — and runs in that task's
