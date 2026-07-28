@@ -3794,7 +3794,12 @@ const closeButtonStyle = {
   fontSize: 12,
 } as const;
 
-const panelStyle = {
+/**
+ * The floating settings card. EXPORTED so its self-sufficiency can be asserted: it renders through a
+ * portal, detached from the app's tree, so every appearance property it would otherwise inherit has
+ * to be spelled out here (see the note on colour/font below).
+ */
+export const panelStyle = {
   // Floats OVER the page instead of pushing the header/reader down. Anchored to the
   // VIEWPORT's top-right (not the button) so it can never clip off-screen when the
   // button-heavy header wraps and the Settings button lands mid-row.
@@ -3811,6 +3816,17 @@ const panelStyle = {
   borderRadius: 8,
   width: "min(340px, calc(100vw - 16px))",
   background: "#16181d",
+  // Its OWN typography and text colour, not the app shell's.
+  //
+  // These used to be inherited: the panel rendered inside the header, which sits inside the app
+  // shell (colour #e7e7ee, Georgia), and the button's wrapper supplied the 13px. Portalling the
+  // panel to document.body — so `position: fixed` would mean the viewport rather than the
+  // backdrop-filtered header — cut every one of those. It landed on a bare <body>: black UA text on
+  // this near-black card, at UA size, in Times. Anything that floats free of the tree it was written
+  // in has to carry its own appearance.
+  color: "#e7e7ee",
+  fontFamily: "Georgia, 'Iowan Old Style', serif",
+  fontSize: 13,
   boxShadow: "0 12px 40px rgba(0,0,0,0.55)",
   // Own scrollbar instead of overflowing the screen. `dvh` (dynamic viewport height) tracks the
   // visible area on phones where the browser's address bar shows/hides — `vh` is taller than what's

@@ -94,6 +94,10 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   occupies. With the controls wrapped onto two rows the error grew. It's now measured from the real
   region and re-measured when the window changes, so the pane fits exactly and only scrolls when its
   own content is genuinely taller.
+- **Settings looks like itself again** — moving the panel so it measures against the window (see
+  below) also detached it from the app's own styling, and it came out as black text on a near-black
+  card in the wrong font. It now carries its own colours and typography instead of borrowing the
+  page's.
 - **Settings scrolls by itself again** — reaching its top or bottom took a nudge of the page behind
   it. The panel positions itself against the window, but it's opened from a button in the header, and
   the header's frosted-glass effect quietly makes it the thing "against the window" means — so the
