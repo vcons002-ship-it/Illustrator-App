@@ -201,6 +201,10 @@ import {
   type ToolCall,
   type ToolResultPayload,
   buildCreativeIdlePrompt,
+  loadCreativeLog,
+  recordExplored,
+  recentTopics,
+  migrateExploredNotes,
 } from "@visual-reader/core";
 import {
   bookFromText,
@@ -811,17 +815,52 @@ export function App() {
   const setSoulNotes = (kind: SoulKind, n: SoulNote[]) => (kind === "self" ? setSelfSoulNotes(n) : setUserSoulNotes(n));
   const setSoulName = (kind: SoulKind, n: string) => (kind === "self" ? setSelfSoulName(n) : setUserSoulName(n));
   const setSoulImagesState = (kind: SoulKind, im: SoulImage[]) => (kind === "self" ? setSelfSoulImages(im) : setUserSoulImages(im));
-  const openSoul = useCallback(
+  /** Load a soul from the store into state. NOT on the phone: it owns no store, and reading its own
+   * empty one would clobber the desktop's mirrored soul with blanks — the same guard as Memory/Tasks. */
+  const refreshSoul = useCallback(
     async (kind: SoulKind) => {
+      if (isRemoteClient) return;
       await Promise.all([
         loadSoul(libraryStore, kind).then((n) => setSoulNotes(kind, n)),
         loadSoulName(libraryStore, kind).then((n) => setSoulName(kind, n)),
         loadSoulImages(libraryStore, kind).then((im) => setSoulImagesState(kind, im)),
       ]).catch(() => {});
+    },
+    [libraryStore, isRemoteClient],
+  );
+  const openSoul = useCallback(
+    async (kind: SoulKind) => {
+      await refreshSoul(kind);
       setShowSoul(kind);
     },
-    [libraryStore],
+    [refreshSoul],
   );
+  /** PHONE: adopt a soul pushed down by the desktop (which owns the store the assistant reads). */
+  const applySoul = useCallback((kind: SoulKind, name: string, notes: SoulNote[]) => {
+    if (kind === "self") {
+      setSelfSoulName(name);
+      setSelfSoulNotes(notes);
+    } else {
+      setUserSoulName(name);
+      setUserSoulNotes(notes);
+    }
+  }, []);
+  // Memoised: this is a mirror-push dependency, and a fresh object each render would re-send both
+  // souls down the relay on every render.
+  const souls = useMemo(
+    () => ({
+      self: { name: selfSoulName, notes: selfSoulNotes },
+      user: { name: userSoulName, notes: userSoulNotes },
+    }),
+    [selfSoulName, selfSoulNotes, userSoulName, userSoulNotes],
+  );
+  // Load BOTH souls at startup, like memories/skills/tasks. They used to load only when the panel was
+  // opened, which meant a desktop that never opened it mirrored an EMPTY soul to the phone — and the
+  // phone's Soul panel showed nothing at all, however much identity the assistant had accumulated.
+  useEffect(() => {
+    void refreshSoul("self");
+    void refreshSoul("user");
+  }, [refreshSoul]);
   // A skill the buddy distilled from a recurring task, awaiting the reader's Keep/Dismiss.
   const [pendingSkill, setPendingSkill] = useState<{ name: string; description: string; body: string } | null>(null);
   const keepPendingSkill = useCallback(async () => {
@@ -860,6 +899,17 @@ export function App() {
     refreshTaskPlans();
     refreshSkills();
   }, [refreshMemories, refreshTaskPlans, refreshSkills]);
+  // Take the old build's "explored: …" notes OUT of reader memory and into the creative log. They
+  // were never reader memories: memory holds 40 notes and evicts the oldest, so one per creative run
+  // was steadily deleting what the assistant knows about the reader. Idempotent — a no-op once done.
+  useEffect(() => {
+    if (isRemoteClient) return;
+    void migrateExploredNotes(libraryStore)
+      .then((moved) => {
+        if (moved > 0) refreshMemories();
+      })
+      .catch(() => {});
+  }, [isRemoteClient, libraryStore, refreshMemories]);
   // On a linked phone, Tasks/Calendar actions are RELAYED to the desktop (which owns the data and
   // re-mirrors the result). Each handler below early-returns through this when isRemoteClient.
   const sendPlanner = useCallback(
@@ -2024,6 +2074,7 @@ export function App() {
     engineInventory,
     memories,
     skills,
+    souls,
     scheduled: scheduledTasks,
     book,
     bible,
@@ -2033,6 +2084,8 @@ export function App() {
     applyInventory,
     setMemories,
     setSkills,
+    applySoul,
+    refreshSoul,
     setScheduled: setScheduledTasks,
     setBook,
     setBible,
@@ -5690,6 +5743,10 @@ export function App() {
         // workspace so the buddy can read_file / revise it. The reader opens only on the card's button.
         setBuddyActivity("");
         const doc = e;
+        // A creative run's document IS the record of where it went. Written here, from what was
+        // actually produced, rather than asked of the model — an instruction to keep its own ledger
+        // was silently skipped most runs, and the next run then had nothing to steer away from.
+        if (creativeTurn && doc.title) void recordExplored(libraryStore, doc.title).catch(() => {});
         void (async () => {
           const blocks = markdownToBlocks(doc.content);
           const stem =
@@ -6222,10 +6279,19 @@ export function App() {
    * work in the app and yields to everything else.
    */
   const creativeIdleRef = useRef(false);
-  // Read inside the interval without making it a dependency (which would restart the timer whenever
-  // a memory is saved).
-  const memoriesRef = useRef(memories);
-  memoriesRef.current = memories;
+  /**
+   * What it has already explored, newest last — the "go somewhere else" list.
+   *
+   * This used to be built by grepping reader memory for notes the model was asked to write itself
+   * ("explored: …"). When it didn't write one — which was most runs — the list came back EMPTY, so
+   * every run re-read the same brief with no history and picked the same first interest again. The
+   * ledger is now written by the HOST from the document each run actually produced, so it exists
+   * whether or not the model cooperates. (See creative-log.ts; old notes are migrated on startup.)
+   */
+  const recentCreativeTopics = useCallback(
+    (): Promise<string[]> => loadCreativeLog(libraryStore).then(recentTopics).catch(() => []),
+    [libraryStore],
+  );
   const lastCreativeAt = useRef(0);
   const openCreativeSession = useCallback(() => {
     setBuddySessions((prev) => {
@@ -6261,15 +6327,12 @@ export function App() {
     setLastCreativeRunLabel(new Date().toLocaleString());
     returnToChat.current = pendingReturn.current;
     pendingReturn.current = undefined;
-    const recent = memoriesRef.current
-      .filter((m) => /^explored:/i.test(m.text))
-      .slice(-8)
-      .map((m) => m.text.replace(/^explored:\s*/i, ""));
+    const recent = await recentCreativeTopics();
     // Set it and dispatch; dispatchBuddyTurn consumes it synchronously on entry, so there is no
     // window in which a later turn could inherit it and no timer to lose a race with.
     creativeIdleRef.current = true;
     onBuddySendText(buildCreativeIdlePrompt(recent));
-  }, [openCreativeSession, onBuddySendText]);
+  }, [openCreativeSession, onBuddySendText, recentCreativeTopics]);
   useEffect(() => {
     if (isRemoteClient || !settings.allowCreativeIdle) return;
     const id = setInterval(() => {
@@ -6320,17 +6383,22 @@ export function App() {
         setLastCreativeRunLabel(new Date().toLocaleString());
         returnToChat.current = pendingReturn.current; // arm the restore now that a run is really starting
         pendingReturn.current = undefined;
-        // What it already wrote about, from its own memory — so it moves on rather than circling.
-        const recent = memoriesRef.current
-          .filter((m) => /^explored:/i.test(m.text))
-          .slice(-8)
-          .map((m) => m.text.replace(/^explored:\s*/i, ""));
+        // What it has already explored — so it moves on rather than circling.
+        const recent = await recentCreativeTopics();
         creativeIdleRef.current = true;
         onBuddySendText(buildCreativeIdlePrompt(recent));
       })();
     }, 60_000);
     return () => clearInterval(id);
-  }, [isRemoteClient, settings.allowCreativeIdle, settings.allowTaskAutomation, libraryStore, openCreativeSession, onBuddySendText]);
+  }, [
+    isRemoteClient,
+    settings.allowCreativeIdle,
+    settings.allowTaskAutomation,
+    libraryStore,
+    openCreativeSession,
+    onBuddySendText,
+    recentCreativeTopics,
+  ]);
   /** Make the ⏰ Scheduled session exist and switch to it (creating it on first use). */
   const openScheduledSession = useCallback(() => {
     setBuddySessions((prev) => {
@@ -8719,21 +8787,41 @@ export function App() {
           notes={showSoul === "self" ? selfSoulNotes : userSoulNotes}
           images={showSoul === "self" ? selfSoulImages : userSoulImages}
           limits={{ note: MAX_SOUL_NOTE_CHARS, max: MAX_SOUL_NOTES, name: MAX_SOUL_NAME_CHARS }}
+          // On a linked phone the DESKTOP owns the store the assistant actually reads its identity
+          // from, so an edit here is relayed there and comes back as a vrsync:soul push — saving
+          // locally would have written to the phone's own store, where nothing ever reads it.
           onSaveNotes={async (notes) => {
             const kind = showSoul;
+            if (isRemoteClient) {
+              setSoulNotes(kind, notes); // optimistic; the desktop's push confirms it
+              sendAppSync({ type: "vrcmd:soulSave", kind, notes });
+              return;
+            }
             const saved = await saveSoul(libraryStore, kind, notes);
             setSoulNotes(kind, saved);
           }}
           onSaveName={async (name) => {
             const kind = showSoul;
+            const trimmed = name.trim().slice(0, MAX_SOUL_NAME_CHARS);
+            if (isRemoteClient) {
+              setSoulName(kind, trimmed);
+              sendAppSync({ type: "vrcmd:soulName", kind, name: trimmed });
+              return;
+            }
             await saveSoulName(libraryStore, kind, name);
-            setSoulName(kind, name.trim().slice(0, MAX_SOUL_NAME_CHARS));
+            setSoulName(kind, trimmed);
           }}
-          onSaveImages={async (imgs) => {
-            const kind = showSoul;
-            await saveSoulImages(libraryStore, kind, imgs);
-            setSoulImagesState(kind, imgs);
-          }}
+          // Reference PHOTOS stay on the computer that holds them: they're base64 and mirroring them
+          // would put megabytes into every snapshot. The panel hides the section when it can't save.
+          {...(isRemoteClient
+            ? {}
+            : {
+                onSaveImages: async (imgs: SoulImage[]) => {
+                  const kind = showSoul;
+                  await saveSoulImages(libraryStore, kind, imgs);
+                  setSoulImagesState(kind, imgs);
+                },
+              })}
           onClose={() => setShowSoul(undefined)}
         />
       )}

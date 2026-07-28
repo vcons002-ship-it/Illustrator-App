@@ -5,6 +5,8 @@ import {
   forgetSkill,
   saveMemory,
   saveSkill,
+  saveSoul,
+  saveSoulName,
   type BookSource,
   type BookSummary,
   type BuddyToolCall,
@@ -12,6 +14,8 @@ import {
   type MemoryNote,
   type ScheduledTask,
   type Skill,
+  type SoulKind,
+  type SoulNote,
   type StoredChatMessage,
   type VisualBible,
   type VisualReaderStore,
@@ -66,6 +70,8 @@ export interface RemoteMirrorDeps {
   engineInventory: EngineInventory;
   memories: MemoryNote[];
   skills: Skill[];
+  /** The two identity souls (notes + name) mirrored down to the phone's Soul panels. */
+  souls: Record<SoulKind, { name: string; notes: SoulNote[] }>;
   /** The desktop's scheduled/periodic tasks (mirrored down; the phone has no scheduler of its own). */
   scheduled: ScheduledTask[];
   book: BookSource | undefined;
@@ -78,6 +84,9 @@ export interface RemoteMirrorDeps {
   applyInventory: (inv: EngineInventory) => void;
   setMemories: (notes: MemoryNote[]) => void;
   setSkills: (skills: Skill[]) => void;
+  /** PHONE: adopt a desktop soul push. DESKTOP: re-read the saved soul after a phone edit. */
+  applySoul: (kind: SoulKind, name: string, notes: SoulNote[]) => void;
+  refreshSoul: (kind: SoulKind) => void;
   /** PHONE: adopt the desktop's scheduled tasks (the phone has no scheduler of its own). */
   setScheduled: (tasks: ScheduledTask[]) => void;
   setBook: (book: BookSource | undefined) => void;
@@ -120,6 +129,7 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
     engineInventory,
     memories,
     skills,
+    souls,
     scheduled,
     book,
     bible,
@@ -129,6 +139,8 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
     applyInventory,
     setMemories,
     setSkills,
+    applySoul,
+    refreshSoul,
     setScheduled,
     setBook,
     setBible,
@@ -240,12 +252,16 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
         ...(effectiveVram ? { vram: effectiveVram } : {}),
       },
       { type: "vrsync:chat", ...chatMirrorRef.current },
+      // Their own frames rather than fields on vrsync:state — souls are small, but the state frame is
+      // already the one carrying everything else, and a soul is worth landing even if that one is lost.
+      { type: "vrsync:soul", kind: "self", name: souls.self.name, notes: souls.self.notes },
+      { type: "vrsync:soul", kind: "user", name: souls.user.name, notes: souls.user.notes },
       // ALWAYS sent, even with nothing open: a re-sync must be able to CLEAR a book the phone still
       // shows but the desktop has since closed (the old combined snapshot carried `book: undefined`
       // for that; omitting the frame entirely would strand the stale book on the phone).
       { type: "vrsync:book", ...(book ? { book } : {}), ...(bible ? { bible } : {}) },
     ],
-    [library, settings, engineInventory, book, bible, memories, skills, effectiveVram],
+    [library, settings, engineInventory, book, bible, memories, skills, souls, effectiveVram],
   );
   const snapshotFramesRef = useRef(snapshotFrames);
   snapshotFramesRef.current = snapshotFrames;
@@ -297,6 +313,9 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
             break;
           case "vrsync:skills":
             setSkills(msg.skills);
+            break;
+          case "vrsync:soul":
+            applySoul(msg.kind, msg.name, msg.notes);
             break;
           case "vrsync:scheduled":
             setScheduled(msg.scheduled);
@@ -433,6 +452,14 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
             break;
           case "vrcmd:skillDelete":
             void forgetSkill(libraryStore, msg.name).then(() => refreshSkills()).catch(() => {});
+            break;
+          case "vrcmd:soulSave":
+            // The phone edited a Soul panel; save it HERE. This store is the one the assistant reads
+            // its identity from — a phone-local write would have changed nothing about it.
+            void saveSoul(libraryStore, msg.kind, msg.notes).then(() => refreshSoul(msg.kind)).catch(() => {});
+            break;
+          case "vrcmd:soulName":
+            void saveSoulName(libraryStore, msg.kind, msg.name).then(() => refreshSoul(msg.kind)).catch(() => {});
             break;
           case "vrcmd:chatSend":
           case "vrcmd:chatSwitch":
@@ -588,6 +615,13 @@ export function useRemoteMirror(deps: RemoteMirrorDeps) {
     // Mirror the assistant's saved skills to a linked phone so its Skills panel isn't empty.
     if (!isRemoteClient) sendAppSync({ type: "vrsync:skills", skills });
   }, [isRemoteClient, sendAppSync, skills]);
+  useEffect(() => {
+    // Mirror both identity souls so the phone's Soul panels show what the assistant actually is,
+    // rather than the phone's own (always empty) store.
+    if (isRemoteClient) return;
+    sendAppSync({ type: "vrsync:soul", kind: "self", name: souls.self.name, notes: souls.self.notes });
+    sendAppSync({ type: "vrsync:soul", kind: "user", name: souls.user.name, notes: souls.user.notes });
+  }, [isRemoteClient, sendAppSync, souls]);
   useEffect(() => {
     // Mirror the desktop's scheduled tasks so the phone's ⏰ Scheduled panel isn't empty — it has no
     // scheduler of its own (the desktop owns the store AND fires them), so this push is its only source.

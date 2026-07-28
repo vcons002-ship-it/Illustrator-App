@@ -1711,8 +1711,8 @@ export function buildProjectGuideBlock(text: string): string {
  *
  * Deliberately not a task. The reader asked for the assistant to follow its own curiosity while idle,
  * so this gives it latitude about WHAT and a firm shape for HOW — read around, then leave one document
- * behind. `recent` is what it already covered (from its own memory), so it moves on instead of
- * circling the same subject.
+ * behind. `recent` is what it already covered (the creative log, written by the HOST from what was
+ * actually created), so it moves on instead of circling the same subject.
  *
  * The tool limits are stated because a model that understands the boundary works within it usefully,
  * rather than wasting the run discovering it — but the boundary itself is enforced in the loop
@@ -1730,23 +1730,31 @@ export function buildProjectGuideBlock(text: string): string {
 export const CREATIVE_IDLE_MARKER = "[exploring on my own]";
 
 export function buildCreativeIdlePrompt(recent: string[] = []): string {
+  // FIRST, not last. This used to be appended after "don't ask the reader anything", where it read as
+  // an afterthought to a brief that had already said "pick something you're genuinely interested in"
+  // — and what it was genuinely interested in was, every time, the thing it was interested in last
+  // time. The constraint has to arrive before the choice it constrains.
   const avoid = recent.length
-    ? `\n\nYou've recently written about: ${recent.slice(0, 8).join("; ")}. Pick something different — a new field, ` +
-      "a different angle, or a question those left open."
+    ? "ALREADY DONE — do not write about any of these again, and not a fresh angle on one either: " +
+      `${recent.join("; ")}.\n` +
+      "Go somewhere genuinely else: a different field entirely, not the next question along. If the " +
+      "subject you're about to pick would sit naturally beside that list, it's the wrong pick.\n\n"
     : "";
   return (
     `${CREATIVE_IDLE_MARKER}\n` +
     "You have some free time and nobody is waiting on you. Follow your own curiosity.\n\n" +
+    avoid +
     "Pick something you're genuinely interested in — an idea, a question, an odd corner of history or " +
     "science or craft, something you noticed and want to understand better. Search the web and read " +
     "around it properly (several sources, not one). Then write it up with create_document: what you " +
     "went looking for, what you actually found, and what you make of it. Aim for something worth the " +
     "reader's five minutes — specific, sourced, and with a point of view. A piece that only says " +
     "\"here are some facts\" isn't worth writing.\n\n" +
-    // The "explored:" prefix is what the next run greps for to build `recent` — without it the note
-    // is indistinguishable from everything else the assistant remembers about the reader.
-    'Then call remember with the note "explored: <the topic, in a few words>" — that exact prefix, so ' +
-    "next time you can see where you've already been and go somewhere new.\n\n" +
+    // Written because the soul notes ARE in this prompt, above: "I'm drawn to X" is a description of
+    // how it thinks, but it reads as an instruction about what to write next, and that feedback loop
+    // is most of why every piece came back the same shape.
+    "Your identity notes say how you think, not what to write about. A note that you're drawn to some " +
+    "subject is not a reason to return to it — take the turn of mind and point it at something new.\n\n" +
     // Taste is identity: this is the reader's explicit intent that exploring change who it is, not
     // just what it has read. Bounded because the self-soul is a small list that evicts the oldest —
     // a note per run would gradually push out everything that makes it itself.
@@ -1761,8 +1769,11 @@ export function buildCreativeIdlePrompt(recent: string[] = []): string {
     "In this mode you can ONLY search, read, write a document, and keep your own notes. No commands, " +
     "no files, no email, no calendar, no images — those are off here regardless of other settings, " +
     "and trying them just wastes the run. Work within it.\n\n" +
-    "Finish in one go: don't ask the reader anything — they aren't here." +
-    avoid
+    // No "remember this as explored: …" instruction any more: the host records the topic from the
+    // document that was actually created (see creative-log.ts). Asking the model to keep its own
+    // ledger meant no ledger at all whenever it forgot, and each note it did write evicted one of
+    // the reader's own memories.
+    "Finish in one go: don't ask the reader anything — they aren't here."
   );
 }
 

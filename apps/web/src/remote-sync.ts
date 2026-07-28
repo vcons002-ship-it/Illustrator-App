@@ -10,7 +10,7 @@
  * stream back over the same relay, so no model or data ever needs to live on the phone.
  */
 
-import type { BookSource, BookSummary, BuddyPersona, BuddyPlan, BuddyToolCall, BuddyToolResultPayload, CalendarEvent, ContextUsage, MemoryNote, ScheduledTask, Skill, StoredChatMessage, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
+import type { BookSource, BookSummary, BuddyPersona, BuddyPlan, BuddyToolCall, BuddyToolResultPayload, CalendarEvent, ContextUsage, MemoryNote, ScheduledTask, Skill, SoulKind, SoulNote, StoredChatMessage, TaskPlan, TaskRecurrence, VisualBible } from "@visual-reader/core";
 import type { InstalledModel, ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
 
 /**
@@ -202,6 +202,9 @@ export type SyncToPhone =
   | ({ type: "vrsync:chatLive" } & ChatLive)
   | { type: "vrsync:memories"; memories: MemoryNote[] } // the assistant's remembered notes → phone Memory panel
   | { type: "vrsync:skills"; skills: Skill[] } // the assistant's saved skills/playbooks → phone Skills panel
+  // The two identity souls → the phone's Soul panels. Notes + name only: the reference PHOTOS are
+  // base64 and would put megabytes into a snapshot frame, so they stay on the computer that owns them.
+  | { type: "vrsync:soul"; kind: SoulKind; name: string; notes: SoulNote[] }
   | { type: "vrsync:scheduled"; scheduled: ScheduledTask[] } // the desktop's scheduled tasks → phone ⏰ Scheduled panel
   | { type: "vrsync:vram"; vram?: EngineVram } // desktop GPU VRAM tick → phone status-bar indicator (frequent, lightweight; not folded into the heavier inventory push)
   | { type: "vrsync:book"; book?: BookSource; bible?: VisualBible }
@@ -250,6 +253,10 @@ export type CmdToDesktop =
   | { type: "vrcmd:memory"; notes: MemoryNote[] } // phone edited the Memory panel → save the whole list on the desktop (it owns the store + re-mirrors)
   | { type: "vrcmd:skillSave"; name: string; description: string; body: string } // phone saved a skill → save on the desktop (it owns the store + re-mirrors vrsync:skills)
   | { type: "vrcmd:skillDelete"; name: string } // phone deleted a skill → forget it on the desktop
+  // Phone edited a Soul panel → save on the desktop (it owns the store the assistant actually reads,
+  // so a phone-local write would change nothing and be clobbered by the next vrsync:soul).
+  | { type: "vrcmd:soulSave"; kind: SoulKind; notes: SoulNote[] }
+  | { type: "vrcmd:soulName"; kind: SoulKind; name: string }
   | { type: "vrcmd:chatRename"; id: string; label: string } // rename a session (empty ⇒ reset label)
   | { type: "vrcmd:chatPersona"; persona: BuddyPersona } // change the active session's persona
   | { type: "vrcmd:chatClear" } // clear the active session's history on the desktop

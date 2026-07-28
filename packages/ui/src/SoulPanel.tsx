@@ -32,8 +32,9 @@ export interface SoulPanelProps {
   onSaveName: (name: string) => Promise<void>;
   /** Reference photos (base64) the model uses when drawing this character. */
   images: SoulImage[];
-  /** Persist the WHOLE reference-photo list (capped at MAX_SOUL_IMAGES). */
-  onSaveImages: (images: SoulImage[]) => Promise<void>;
+  /** Persist the WHOLE reference-photo list (capped at MAX_SOUL_IMAGES). ABSENT on a linked phone,
+   * where the photos live on the computer that owns them — the section is then hidden entirely. */
+  onSaveImages?: (images: SoulImage[]) => Promise<void>;
   onClose: () => void;
   limits: { note: number; max: number; name: number };
 }
@@ -145,6 +146,7 @@ export const SoulPanel = memo(function SoulPanel({
     setBusy(true);
     setError("");
     try {
+      if (!onSaveImages) return;
       await onSaveImages(next);
       setPics(next);
     } catch (e) {
@@ -304,6 +306,9 @@ export const SoulPanel = memo(function SoulPanel({
           </div>
         )}
 
+        {/* Hidden when the host can't save photos — on a linked phone they live on the computer,
+            and an upload button that quietly discarded the picture would be worse than no button. */}
+        {onSaveImages ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 6, borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: 10 }}>
           <div style={{ fontSize: 12, opacity: 0.85, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span>📷 Reference photos</span>
@@ -348,6 +353,7 @@ export const SoulPanel = memo(function SoulPanel({
             }}
           />
         </div>
+        ) : null}
 
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, opacity: 0.5 }}>
           <span>
