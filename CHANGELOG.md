@@ -64,6 +64,13 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   somewhere nothing ever reads. Both souls are now mirrored from the computer, and edits are saved
   there. (Reference photos stay on the computer — they're too large to mirror — so that section is
   hidden on the phone rather than pretending to save.)
+- **The reasoning bubble shows the reasoning, not the preamble** — it opened by restating who it is
+  and who you are almost every turn, which is the same paragraph each time and pushed the part you
+  actually wanted out of view. It's told not to bother restating it (it still has it, and still acts
+  on it), and anything that does get restated at the start is trimmed from the bubble before you see
+  it. Only the opening is ever cut, it's matched against your actual identity notes rather than
+  guessed at, and it gives up rather than risk swallowing real thinking — so a thought that mentions
+  something about you mid-way through is left alone.
 - **The reasoning bubble stays how you left it** — open it and it stays open; close it and it stays
   closed, through the next reply and after a restart. It used to spring back open every time the
   assistant spoke, so closing it only lasted one message.

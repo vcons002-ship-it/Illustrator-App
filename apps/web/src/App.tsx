@@ -204,6 +204,7 @@ import {
   loadCreativeLog,
   recordExplored,
   recentTopics,
+  stripIdentityRecital,
   threadRun,
   MAX_THREAD_RUN,
   migrateExploredNotes,
@@ -876,6 +877,16 @@ export function App() {
       setUserSoulNotes(notes);
     }
   }, []);
+  /**
+   * The identity text as the model was given it, for the thinking-bubble filter (see
+   * stripIdentityRecital). Held in a ref because the streaming handler is inside a long-lived turn
+   * closure — and this is display-only, so it must never be a reason to re-run a turn.
+   */
+  const identityRef = useRef<{ notes: string[]; names: string[] }>({ notes: [], names: [] });
+  identityRef.current = {
+    notes: [...selfSoulNotes, ...userSoulNotes].map((n) => n.text),
+    names: [selfSoulName, userSoulName].filter(Boolean),
+  };
   // Memoised: this is a mirror-push dependency, and a fresh object each render would re-send both
   // souls down the relay on every render.
   const souls = useMemo(
@@ -3463,7 +3474,7 @@ export function App() {
           if (e.kind === "token") {
             setChatStreaming((prev) => prev + e.text);
             setChatActivity(""); // visible text replaces any "Reasoning…" status
-          } else if (e.kind === "thinking") setChatThinking(e.text);
+          } else if (e.kind === "thinking") setChatThinking(stripIdentityRecital(e.text, identityRef.current));
           else if (e.kind === "activity") setChatActivity(e.text);
           else if (e.kind === "usage") setChatUsage(e.usage);
           else if (e.kind === "tool")
@@ -5636,7 +5647,7 @@ export function App() {
         buddyStreamingRef.current += e.text;
         setBuddyStreaming(buddyStreamingRef.current);
         setBuddyActivity(""); // visible text replaces any "Reasoning…" status
-      } else if (e.kind === "thinking") setBuddyThinking(e.text);
+      } else if (e.kind === "thinking") setBuddyThinking(stripIdentityRecital(e.text, identityRef.current));
       else if (e.kind === "activity") setBuddyActivity(e.text);
       else if (e.kind === "usage") setBuddyUsage(e.usage);
       else if (e.kind === "plan") {
@@ -5998,12 +6009,15 @@ export function App() {
       // A plain-text settle ON a tool step is the model narrating instead of acting ("I already did
       // X…") — hide it (the advance/retry below still runs from evidence). Answer steps + the final
       // wrap-up (no active step) show their text as the deliverable.
+      const trimmedThinking = res.thinking ? stripIdentityRecital(res.thinking, identityRef.current) : "";
       if (!suppressProse) {
         appendBuddy({
           role: "assistant",
           text: res.text,
           turns: ephemeralDirective ? [...res.transcript] : [{ role: "user", content: userText }, ...res.transcript],
-          ...(res.thinking ? { thinking: res.thinking } : {}),
+          // Trimmed on the way in, like the live stream: the saved bubble is read back long after the
+          // turn, when a page of restated identity is even less use than it was at the time.
+          ...(trimmedThinking ? { thinking: trimmedThinking } : {}),
           // Cloud "keep going?" checkpoint: the task paused with work remaining (so a long run doesn't
           // burn API calls unattended). Offer a one-tap Continue that re-arms the budget and resumes.
           ...(res.paused ? { actions: [{ label: "▶ Continue", send: "continue" }] } : {}),
