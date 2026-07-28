@@ -356,3 +356,58 @@ describe("a name belongs to the character whose name it IS", () => {
     expect(findBibleTermsInText("The rider approaches.", b).map((t) => t.names[0])).toEqual(["Rell", "Mara"]);
   });
 });
+
+/**
+ * The scene is a restaurant named after someone. "Mara sits alone in Rell's Tavern" mentions Mara and
+ * the Tavern — it does NOT mention Rell, and Rell's face has no business in the picture. Each name
+ * claims its span longest-first, so a name enclosed by a longer bible name never sees that text.
+ */
+describe("a place named after a character isn't a mention of the character", () => {
+  const tavern = (over: Partial<VisualBible> = {}): VisualBible => ({
+    ...createEmptyBible("b"),
+    characters: [
+      character({ name: "Rell", appearance: { ...emptyAppearance(), hair: "shaved head" } }),
+      character({ name: "Mara", appearance: { ...emptyAppearance(), hair: "red braid" } }),
+    ],
+    environments: [
+      { id: "env-tavern", name: "Rell's Tavern", aliases: [], description: ["low beams, copper lamps"], firstSeenChapter: 0 },
+    ],
+    ...over,
+  });
+
+  it("leaves the character out of the terms entirely", () => {
+    const terms = findBibleTermsInText("Mara sits alone in Rell's Tavern.", tavern());
+    expect(terms.map((t) => t.names[0])).toEqual(["Mara", "Rell's Tavern"]);
+  });
+
+  it("injects the PLACE for the place, not the character it's named after", () => {
+    const prompt = "Mara sits alone in Rell's Tavern.";
+    const out = injectBibleTerms(prompt, findBibleTermsInText(prompt, tavern()));
+    expect(out).toBe("(red braid) sits alone in (low beams, copper lamps).");
+    expect(out).not.toContain("shaved head");
+  });
+
+  it("keeps him out of the reference block, where he'd read as part of the cast", () => {
+    const prompt = "Mara sits alone in Rell's Tavern.";
+    expect(buildReferenceBlock(findBibleTermsInText(prompt, tavern()))).not.toContain("Rell =");
+  });
+
+  it("works when the enclosing name is an ALIAS of the place — length decides, not ownership", () => {
+    const b = tavern({
+      environments: [
+        { id: "env-tavern", name: "The Tavern", aliases: ["Rell's old tavern"], description: ["low beams"], firstSeenChapter: 0 },
+      ],
+    });
+    const prompt = "Mara sits alone in Rell's old tavern.";
+    expect(injectBibleTerms(prompt, findBibleTermsInText(prompt, b))).toBe("(red braid) sits alone in (low beams).");
+  });
+
+  it("but a real mention of him in the SAME prompt still counts", () => {
+    const prompt = "Rell watches as Mara sits alone in Rell's Tavern.";
+    const terms = findBibleTermsInText(prompt, tavern());
+    expect(terms.map((t) => t.names[0])).toEqual(["Rell", "Mara", "Rell's Tavern"]);
+    expect(injectBibleTerms(prompt, terms)).toBe(
+      "(shaved head) watches as (red braid) sits alone in (low beams, copper lamps).",
+    );
+  });
+});

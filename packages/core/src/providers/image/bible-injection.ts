@@ -168,18 +168,60 @@ function ownForms(entity: { name: string; aliases?: readonly string[] }, primari
 }
 
 /**
+ * Which of these forms actually CLAIM a piece of the prompt.
+ *
+ * One greedy left-to-right pass with the forms ordered longest-first, so an enclosing name takes the
+ * span and the shorter name inside it never sees it. This is what stops a character being counted as
+ * present because the scene happens to be set in a place named after them: "Mara sits alone in Rell's
+ * Tavern" mentions Mara and the Tavern — not Rell. It's the SAME scan (and the same ordering) that
+ * `injectBibleTerms` uses to substitute, so what a prompt is judged to mention and what gets replaced
+ * in it can't disagree.
+ *
+ * Returns the set of forms (lowercased) that won a span.
+ */
+function claimedForms(prompt: string, forms: readonly { form: string }[]): Set<string> {
+  const claimed = new Set<string>();
+  if (forms.length === 0) return claimed;
+  const alt = forms.map((f) => escapeRegExp(f.form)).join("|");
+  const re = new RegExp(`(^|[^\\p{L}\\p{N}(])(${alt})(['’]s)?(?=[^\\p{L}\\p{N}]|$)`, "giu");
+  for (const m of prompt.matchAll(re)) claimed.add((m[2] ?? "").toLowerCase());
+  return claimed;
+}
+
+/**
  * Scan a finished prompt for the bible terms it mentions. Characters, creatures, and
- * locations are matched by name/alias. Outfit labels are matched **only when their
- * owning character is also named in the prompt**, so a generic label ("cloak",
- * "armor") never over-triggers from incidental prose.
+ * locations are matched by name/alias — each name claiming its span longest-first, so a name that
+ * only occurs INSIDE a longer one (a place named after someone) isn't a mention of the shorter.
+ * Outfit labels are matched **only when their owning character is also named in the prompt**, so a
+ * generic label ("cloak", "armor") never over-triggers from incidental prose.
  */
 export function findBibleTermsInText(prompt: string, bible: VisualBible): SceneTerm[] {
-  const terms: SceneTerm[] = [];
   const primaries = primaryNames(bible);
+  // EVERY entity's forms first, so the claim pass can see the long ones — a term can only be ruled
+  // out by a longer name that's also in the bible, and that name has to be in the running to do it.
+  const charForms = bible.characters.map((c) => ownForms(c, primaries));
+  const creatureForms = (bible.creatures ?? []).map((cr) => ownForms(cr, primaries));
+  const envForms = bible.environments.map((e) => ownForms(e, primaries));
+  const seen = new Set<string>();
+  const all: { form: string }[] = [];
+  for (const forms of [...charForms, ...creatureForms, ...envForms]) {
+    for (const raw of forms) {
+      const form = raw.trim();
+      const k = form.toLowerCase();
+      if (!form || seen.has(k)) continue;
+      seen.add(k);
+      all.push({ form });
+    }
+  }
+  // Longest first: that ordering IS the rule that gives an enclosing name the span.
+  all.sort((a, b) => b.form.length - a.form.length);
+  const claimed = claimedForms(prompt, all);
+  const claims = (forms: readonly string[]): boolean => forms.some((f) => claimed.has(f.trim().toLowerCase()));
 
-  for (const c of bible.characters) {
-    const forms = ownForms(c, primaries);
-    if (!forms.some((f) => mentions(prompt, f))) continue;
+  const terms: SceneTerm[] = [];
+  bible.characters.forEach((c, i) => {
+    const forms = charForms[i]!;
+    if (!claims(forms)) return;
     terms.push({ names: forms, descriptor: describeCharacterIdentity(c), kind: "character" });
     // Outfit labels only for a character that IS named here.
     let matched = false;
@@ -195,22 +237,16 @@ export function findBibleTermsInText(prompt: string, bible: VisualBible): SceneT
       const guess = c.outfits!.length === 1 ? c.outfits![0]! : c.outfits!.find((o) => outfitDescribedIn(prompt, o));
       if (guess) terms.push({ names: [guess.label], descriptor: describeOutfit(guess), kind: "outfit" });
     }
-  }
+  });
 
-  for (const cr of bible.creatures ?? []) {
-    const forms = ownForms(cr, primaries);
-    if (forms.some((f) => mentions(prompt, f))) {
-      terms.push({ names: forms, descriptor: describeCreature(cr), kind: "creature" });
-    }
-  }
+  (bible.creatures ?? []).forEach((cr, i) => {
+    if (claims(creatureForms[i]!)) terms.push({ names: creatureForms[i]!, descriptor: describeCreature(cr), kind: "creature" });
+  });
 
-  for (const e of bible.environments) {
-    // Aliases cover indirect references ("the fortress" → Basgiliath's details).
-    const forms = ownForms(e, primaries);
-    if (forms.some((f) => mentions(prompt, f))) {
-      terms.push({ names: forms, descriptor: describeLocation(e), kind: "location" });
-    }
-  }
+  // Aliases cover indirect references ("the fortress" → Basgiliath's details).
+  bible.environments.forEach((e, i) => {
+    if (claims(envForms[i]!)) terms.push({ names: envForms[i]!, descriptor: describeLocation(e), kind: "location" });
+  });
 
   return terms;
 }
@@ -226,12 +262,14 @@ function orderedForms(terms: readonly SceneTerm[]): { form: string; descriptor: 
       if (form && t.descriptor) out.push({ form, descriptor: t.descriptor, primary: i === 0 });
     });
   }
-  // A name someone OWNS beats another entity's alias for the same string, whatever the lengths —
-  // otherwise the winner of a collision was decided by how many letters it happened to have.
-  // Then longest first, so "Violet Sorrengail" / "flight leathers" win over shorter substrings.
+  // LONGEST first — "Violet Sorrengail" beats "Violet", and "Rell's Tavern" beats the "Rell" inside
+  // it. Ordering primaries ahead of aliases outright (as this briefly did) breaks exactly that: a
+  // character's own short name then won against a longer place ALIAS containing it, and the place got
+  // the character's face. Ownership is only the tie-break, for two entities laying claim to the SAME
+  // string — which is the collision it was added for.
   const seen = new Set<string>();
   return out
-    .sort((a, b) => (a.primary === b.primary ? b.form.length - a.form.length : a.primary ? -1 : 1))
+    .sort((a, b) => (b.form.length !== a.form.length ? b.form.length - a.form.length : a.primary === b.primary ? 0 : a.primary ? -1 : 1))
     .filter((x) => {
       const k = x.form.toLowerCase();
       if (seen.has(k)) return false;

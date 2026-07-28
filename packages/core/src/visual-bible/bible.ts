@@ -93,8 +93,24 @@ export function resolvePageEntities(
   page: Page,
 ): { characterIds: string[]; environmentIds: string[]; creatureIds: string[]; spoilerIds: string[] } {
   const haystack = pageHaystack(page);
-  const matches = (names: string[]): boolean =>
-    names.some((n) => n.length > 0 && haystack.includes(n.toLowerCase()));
+  // LONGEST name first, and each occurrence belongs to the longest name covering it. Without that, a
+  // place named after someone ("Rell's Tavern") counted as a mention of the character — so they were
+  // resolved as present on the page, and their look went into the illustration for a scene they're
+  // not in. Claimed spans are blanked out so a shorter name can't re-use the same text.
+  const claimed = new Set<string>();
+  const every = [
+    ...bible.characters.flatMap((c) => [c.name, ...c.aliases]),
+    ...bible.environments.map((e) => e.name),
+    ...(bible.creatures ?? []).flatMap((cr) => [cr.name, ...cr.aliases]),
+    ...bible.spoilers.map((sp) => sp.label),
+  ];
+  let rest = haystack;
+  for (const name of [...new Set(every.map((n) => n.toLowerCase()).filter(Boolean))].sort((a, b) => b.length - a.length)) {
+    if (!rest.includes(name)) continue;
+    claimed.add(name);
+    rest = rest.split(name).join(" "); // a space, not nothing — never fuse the neighbours into a new match
+  }
+  const matches = (names: string[]): boolean => names.some((n) => n.length > 0 && claimed.has(n.toLowerCase()));
 
   const characterIds = bible.characters
     .filter((c) => matches([c.name, ...c.aliases]))
