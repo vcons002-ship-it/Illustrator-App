@@ -3620,14 +3620,19 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // opening beat and propose a title from it (grounded in the cast/roleplay). Best-effort —
         // if chat is unavailable or the reply doesn't parse, fall back to the typed text + title.
         let title = call.title?.trim() || "Our Story";
-        let opening = call.opening;
-        if (supportsChat(llm) && call.opening.trim()) {
+        // With a chat carried in and no premise typed, the carried story is what beat one falls back
+        // to — an empty first beat would open the reader on a blank page.
+        let opening = call.opening.trim() || (call.soFar ?? "").split("\n").slice(-2).join(" ").trim();
+        if (supportsChat(llm) && (call.opening.trim() || call.soFar?.trim())) {
           try {
             post({ type: "buddyActivity", requestId: msg.requestId, text: "Writing the opening scene…" });
             const { system, user } = storyOpeningRequest(call.opening, {
               characters: cast,
               mode: isRoleplay ? "roleplay" : "direct",
               ...(isRoleplay && call.roleplay ? { play: call.roleplay } : {}),
+              // Carried in from the chat this was started in — the opening then CONTINUES that
+              // story rather than opening a fresh one.
+              ...(call.soFar ? { soFar: call.soFar } : {}),
             });
             const reply = (await llm.chat([{ role: "system", content: system }, { role: "user", content: user }], { maxTokens: 600 })).trim();
             const parsed = parseStoryOpening(reply);

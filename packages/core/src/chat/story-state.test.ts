@@ -4,6 +4,8 @@ import {
   synopsisRequest,
   storyOpeningRequest,
   parseStoryOpening,
+  storySoFarFromChat,
+  STORY_SO_FAR_MAX_CHARS,
   STORY_STATE_MAX_CHARS,
 } from "./story-state.js";
 
@@ -29,6 +31,76 @@ describe("storyOpeningRequest", () => {
     expect(system).toMatch(/do NOT act, speak, or decide/i);
     expect(user).toContain("The reader plays Ada");
     expect(user).toContain("you voice Vex");
+  });
+
+  /**
+   * Carrying a chat in is the difference between "start a story" and "make a story of the one we're
+   * already telling". The brief has to change with it, or the model opens a fresh scene over the top
+   * of a conversation the reader is mid-way through.
+   */
+  it("CONTINUES the story when the chat is carried in, instead of opening a new one", () => {
+    const soFar = "Reader: I duck behind the crates.\nAssistant: The lantern swings past, inches away.";
+    const { system, user } = storyOpeningRequest("", { soFar, mode: "direct" });
+    expect(system).toMatch(/ALREADY been telling/i);
+    expect(system).toMatch(/CONTINUES from where the conversation left off/);
+    expect(system).toMatch(/Do not recap, re-introduce anyone, or rewind/);
+    expect(system).not.toMatch(/establishes the setting/); // that's the fresh-start brief
+    expect(user).toContain("THE STORY SO FAR");
+    expect(user).toContain("The lantern swings past");
+    expect(user).toMatch(/continuing the story above, not restarting it/);
+  });
+
+  it("keeps a typed premise as STEERING alongside the carried chat, not as the whole idea", () => {
+    const { system, user } = storyOpeningRequest("bring the storm in", { soFar: "Reader: we set sail." });
+    expect(user).toContain("The reader also says:\nbring the storm in");
+    expect(user).toContain("we set sail");
+    expect(system).toMatch(/ALREADY been telling/i);
+  });
+
+  it("is unchanged when nothing is carried", () => {
+    const { system, user } = storyOpeningRequest("two rivals in a lighthouse", {});
+    expect(system).toMatch(/OPENING BEAT/);
+    expect(user).not.toContain("THE STORY SO FAR");
+    expect(user).toContain("Reader's idea for the story");
+  });
+});
+
+describe("storySoFarFromChat", () => {
+  const msg = (role: string, text: string) => ({ role, text });
+
+  it("renders the conversation with speakers, oldest first", () => {
+    expect(
+      storySoFarFromChat([msg("user", "I open the door."), msg("assistant", "Cold air pours in.")]),
+    ).toBe("Reader: I open the door.\nAssistant: Cold air pours in.");
+  });
+
+  it("leaves out tool notes and empty messages — the story is what's carried, not the app's chatter", () => {
+    const out = storySoFarFromChat([
+      msg("user", "I open the door."),
+      msg("tool", "📄 Report is ready"),
+      msg("assistant", ""),
+      msg("assistant", "Cold air pours in."),
+    ]);
+    expect(out).toBe("Reader: I open the door.\nAssistant: Cold air pours in.");
+  });
+
+  it("drops the OLDEST at the budget — the end of the conversation is where the story is", () => {
+    const out = storySoFarFromChat([msg("user", "A".repeat(80)), msg("assistant", "B".repeat(80))], 100);
+    expect(out).toBe(`Assistant: ${"B".repeat(80)}`); // the older "A" turn didn't fit and was dropped
+  });
+
+  it("keeps at least the newest message even when it alone exceeds the budget", () => {
+    const out = storySoFarFromChat([msg("assistant", "B".repeat(500))], 100);
+    expect(out).toContain("B".repeat(500));
+  });
+
+  it("is empty when there's nothing worth carrying", () => {
+    expect(storySoFarFromChat([])).toBe("");
+    expect(storySoFarFromChat([msg("tool", "⚙ something")])).toBe("");
+  });
+
+  it("has a budget big enough for a scene or two", () => {
+    expect(STORY_SO_FAR_MAX_CHARS).toBeGreaterThanOrEqual(2000);
   });
 });
 

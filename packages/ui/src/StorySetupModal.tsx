@@ -19,6 +19,8 @@ export interface StoryStartPayload {
   title?: string;
   characters?: { name: string; description?: string }[];
   roleplay?: { me?: string; you?: string };
+  /** The conversation so far, when the reader chose to bring this chat into the story. */
+  soFar?: string;
 }
 
 export interface StorySetupModalProps {
@@ -26,6 +28,10 @@ export interface StorySetupModalProps {
   self: { name: string; note?: string };
   /** The reader's identity (from the You panel) — prefilled as the character they play. */
   user: { name: string; note?: string };
+  /** The chat this was opened from, rendered as text — absent (or empty) when there's nothing worth
+   * carrying. When present the reader is offered "continue what we've been telling", which hands it
+   * to the story so the first beat carries on instead of opening a scene they've already left. */
+  chatSoFar?: string;
   onStart: (payload: StoryStartPayload) => void;
   onClose: () => void;
 }
@@ -33,8 +39,12 @@ export interface StorySetupModalProps {
 type Workflow = "roleplay" | "direct";
 type Cast = "you-and-me" | "custom";
 
-export const StorySetupModal = memo(function StorySetupModal({ self, user, onStart, onClose }: StorySetupModalProps) {
+export const StorySetupModal = memo(function StorySetupModal({ self, user, chatSoFar, onStart, onClose }: StorySetupModalProps) {
   const [opening, setOpening] = useState("");
+  const canCarry = !!chatSoFar?.trim();
+  // Defaults ON when there IS a conversation: opening this from a chat that's already telling a story
+  // and having it start something unrelated is the surprise worth avoiding.
+  const [carry, setCarry] = useState(canCarry);
   const [workflow, setWorkflow] = useState<Workflow>("roleplay");
   const [cast, setCast] = useState<Cast>("you-and-me");
   const [chars, setChars] = useState<StoryCharacterDraft[]>([{ name: "", description: "" }]);
@@ -46,7 +56,9 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, onSta
   const [youIdx, setYouIdx] = useState(1);
 
   const namedChars = useMemo(() => chars.filter((c) => c.name.trim()), [chars]);
-  const canStart = opening.trim().length > 0 && (cast === "you-and-me" || namedChars.length > 0);
+  const carrying = canCarry && carry;
+  // Carrying the chat, the idea box is optional — that conversation is the premise.
+  const canStart = (carrying || opening.trim().length > 0) && (cast === "you-and-me" || namedChars.length > 0);
 
   const setChar = (i: number, patch: Partial<StoryCharacterDraft>) =>
     setChars((cs) => cs.map((c, k) => (k === i ? { ...c, ...patch } : c)));
@@ -56,6 +68,7 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, onSta
   const start = () => {
     if (!canStart) return;
     const payload: StoryStartPayload = { opening: opening.trim() };
+    if (carrying) payload.soFar = chatSoFar!.trim();
     if (cast === "you-and-me") {
       const me = (meName.trim() || "Me");
       const you = (youName.trim() || "You");
@@ -84,12 +97,34 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, onSta
           </button>
         </div>
 
+        {canCarry ? (
+          <label style={{ ...panel, flexDirection: "row", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={carry}
+              onChange={(e) => setCarry(e.target.checked)}
+              style={{ marginTop: 2 }}
+            />
+            <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              <span style={{ fontSize: 13 }}>Continue what we've been telling in this chat</span>
+              <span style={hint}>
+                Brings the conversation with you, so the first beat picks up where you left off instead of
+                starting a new scene. Untick to begin something fresh.
+              </span>
+            </span>
+          </label>
+        ) : null}
+
         <label style={field}>
-          <span style={label}>Your story idea</span>
+          <span style={label}>{carrying ? "Where to take it (optional)" : "Your story idea"}</span>
           <textarea
             style={textarea}
             value={opening}
-            placeholder="A sentence or two about the premise — the setting, who's there, the mood. The assistant writes the title and opening scene from this, then you co-write and illustrate each beat."
+            placeholder={
+              carrying
+                ? "Anything to steer the next beat — a turn you want, a mood, somewhere it should head. Leave it blank to just carry on."
+                : "A sentence or two about the premise — the setting, who's there, the mood. The assistant writes the title and opening scene from this, then you co-write and illustrate each beat."
+            }
             onChange={(e) => setOpening(e.target.value)}
             autoFocus
           />

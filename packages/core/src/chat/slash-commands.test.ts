@@ -112,6 +112,28 @@ describe("parseBuddySlashCommand", () => {
     expect(parseBuddySlashCommand("/story {bad json", library)).toMatchObject({ error: expect.stringContaining("Usage: /story") });
   });
 
+  /**
+   * "Bring this chat into the story": the conversation rides the payload as TEXT rather than as chat
+   * turns, so the writer's own context stays empty (which is what makes it answer in beat prose)
+   * while what was already told comes along. With it, the premise box is optional — that
+   * conversation IS the premise — and the title is derived from it when none was typed.
+   */
+  it("/story carries the chat so far, and then needs no premise of its own", () => {
+    const soFar = "Reader: I duck behind the crates.\nAssistant: The lantern swings past, inches away.";
+    const r = parseBuddySlashCommand(`/story ${JSON.stringify({ opening: "", soFar })}`, library);
+    expect(r).toMatchObject({ call: { tool: "start_story", soFar } });
+    expect((r as { call: { title: string } }).call.title).toBeTruthy();
+
+    // A premise typed ALONGSIDE it is kept — it steers the next beat rather than replacing the story.
+    const both = parseBuddySlashCommand(`/story ${JSON.stringify({ opening: "bring the storm in", soFar })}`, library);
+    expect(both).toMatchObject({ call: { opening: "bring the storm in", soFar } });
+
+    // Without either, there's nothing to start from — still the usage hint.
+    expect(parseBuddySlashCommand(`/story ${JSON.stringify({ opening: "" })}`, library)).toMatchObject({
+      error: expect.stringContaining("Usage: /story"),
+    });
+  });
+
   it("opens URLs with an optional trailing mode flag", () => {
     expect(parseBuddySlashCommand("/open https://example.org/paper", library)).toEqual({
       call: { tool: "open_web_text", url: "https://example.org/paper", mode: "fiction", visuals: false },

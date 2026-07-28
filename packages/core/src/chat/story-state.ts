@@ -71,15 +71,27 @@ export function storyOpeningRequest(
     characters?: { name: string; description?: string }[];
     mode?: "direct" | "roleplay";
     play?: { me?: string; you?: string };
+    /** The conversation this story has ALREADY been growing in (see {@link storySoFarFromChat}).
+     * Present when the reader chose to carry the chat in — the opening then CONTINUES what's there
+     * rather than starting over, which is the whole point of offering it. */
+    soFar?: string;
   } = {},
 ): { system: string; user: string } {
   const cast = (opts.characters ?? []).filter((c) => c.name.trim());
   const roleplay = opts.mode === "roleplay";
+  const soFar = opts.soFar?.trim();
   const system =
-    "You are opening a collaborative, illustrated story from the reader's idea. Write the OPENING " +
-    "BEAT: vivid, full-scene narrative PROSE (about 2 short paragraphs) that establishes the setting, " +
-    "mood, and the characters present, and ends on a hook that invites the reader's first move. Refer " +
-    "to characters by their established names. " +
+    (soFar
+      ? "You are turning a story the reader has ALREADY been telling you in conversation into a proper " +
+        "illustrated story. Write the next BEAT: vivid, full-scene narrative PROSE (about 2 short " +
+        "paragraphs) that CONTINUES from where the conversation left off — same characters, same place, " +
+        "same situation, carrying on rather than starting over. Do not recap, re-introduce anyone, or " +
+        "rewind to the beginning; pick it up as if no break had happened, and end on a hook that invites " +
+        "the reader's next move. Refer to characters by the names already used. "
+      : "You are opening a collaborative, illustrated story from the reader's idea. Write the OPENING " +
+        "BEAT: vivid, full-scene narrative PROSE (about 2 short paragraphs) that establishes the setting, " +
+        "mood, and the characters present, and ends on a hook that invites the reader's first move. Refer " +
+        "to characters by their established names. ") +
     (roleplay
       ? "This is ROLEPLAY — set the scene and bring the cast on stage, but do NOT act, speak, or decide " +
         "for the reader's own character; leave them room to respond. "
@@ -93,8 +105,51 @@ export function storyOpeningRequest(
     roleplay && opts.play
       ? `The reader plays ${opts.play.me || "their character"}; you voice ${opts.play.you || "the other character(s)"}.\n`
       : "";
-  const user = `Reader's idea for the story:\n${premise.trim()}\n\n${castLine}${playLine}Write the title and opening beat now.`;
+  const soFarBlock = soFar ? `THE STORY SO FAR (from the chat — continue from the END of this):\n${soFar}\n\n` : "";
+  const premiseLine = premise.trim()
+    ? `${soFar ? "The reader also says" : "Reader's idea for the story"}:\n${premise.trim()}\n\n`
+    : "";
+  const user =
+    `${soFarBlock}${premiseLine}${castLine}${playLine}` +
+    (soFar
+      ? "Write the title and the NEXT beat now — continuing the story above, not restarting it."
+      : "Write the title and opening beat now.");
   return { system, user };
+}
+
+/** How much of the conversation is carried into a story started from it. Enough for a scene or two
+ * of back-and-forth; the tail is what matters, since that's where the story actually is. */
+export const STORY_SO_FAR_MAX_CHARS = 4000;
+
+/**
+ * Render the tail of a chat as "the story so far" for {@link storyOpeningRequest}.
+ *
+ * A story often starts as ordinary conversation and only becomes a Story-as-you-go once it's already
+ * running. Starting one used to throw that away — a deliberately EMPTY writer context, which is what
+ * makes the model reliably answer in beat prose, but also what made it open on a scene nobody had
+ * been in. Carrying the text (rather than the turns) keeps both: the writer's own context stays
+ * clean, and what was already told comes with it.
+ *
+ * Newest-last, oldest dropped first at the budget, tool/system chatter left out — it's the story
+ * that matters, not the app's own notes. Returns "" when there's nothing worth carrying. PURE.
+ */
+export function storySoFarFromChat(
+  messages: readonly { role: string; text?: string }[],
+  budget = STORY_SO_FAR_MAX_CHARS,
+): string {
+  const lines: string[] = [];
+  let used = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role !== "user" && m.role !== "assistant") continue; // tool notes/cards aren't the story
+    const text = (m.text ?? "").trim();
+    if (!text) continue;
+    const line = `${m.role === "user" ? "Reader" : "Assistant"}: ${text}`;
+    if (used + line.length + 1 > budget && lines.length > 0) break;
+    lines.unshift(line);
+    used += line.length + 1;
+  }
+  return lines.join("\n");
 }
 
 /** Parse the model's reply to {@link storyOpeningRequest}: tolerant of code fences / stray prose. */

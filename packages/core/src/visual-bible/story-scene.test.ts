@@ -149,3 +149,38 @@ describe("presentFromScene", () => {
     });
   });
 });
+
+/**
+ * The scene's cast decides whose descriptor rides into the image prompt, so a phantom extra here is
+ * an extra FACE in the picture. Aliases collide with real names ("Rell" holding "the Captain" while
+ * another character IS "The Captain"), and matching them blindly meant asking for two characters and
+ * getting three.
+ */
+describe("a requested name resolves to the character who owns it", () => {
+  const bible = bibleWith({
+    characters: [
+      { name: "Rell", aliases: ["the Captain"] }, // listed first, so order can't rescue it
+      { name: "Mara" },
+      { name: "The Captain" },
+    ],
+  });
+
+  it("doesn't also return the character holding that name as an ALIAS", () => {
+    expect(namesToCharacterIds(bible, ["Mara", "The Captain"])).toEqual(["char-mara", "char-the captain"]);
+  });
+
+  it("an alias that collides with nobody still resolves", () => {
+    const b = bibleWith({ characters: [{ name: "Rell", aliases: ["the quartermaster"] }] });
+    expect(namesToCharacterIds(b, ["the quartermaster"])).toEqual(["char-rell"]);
+  });
+
+  it("a shared alias nobody owns as a name still returns both — there's nothing to choose between", () => {
+    const b = bibleWith({ characters: [{ name: "Rell", aliases: ["the rider"] }, { name: "Mara", aliases: ["the rider"] }] });
+    expect(namesToCharacterIds(b, ["the rider"])).toEqual(["char-rell", "char-mara"]);
+  });
+
+  it("the scene tracker therefore keeps the third character out of the beat", () => {
+    const scene = advanceStoryScene(emptyStoryScene(), bible, { mentionedNames: ["Mara", "The Captain"] });
+    expect(scene.presentCharacterIds).toEqual(["char-mara", "char-the captain"]);
+  });
+});
