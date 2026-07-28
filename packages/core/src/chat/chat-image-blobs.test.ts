@@ -30,6 +30,32 @@ describe("externalizeChatImages", () => {
     expect((message.attachments?.[0] as { bytes?: ArrayBuffer }).bytes).toBeUndefined();
   });
 
+  /**
+   * A created document's PDF/Word cards go through here too. Their bytes are stripped like any other,
+   * and the ONLY way back to them is the id kept on the card — nothing re-inlines a non-image
+   * attachment. The host looks the bytes up by that id when Save is pressed; if the id were dropped
+   * here, Save would have nothing to find and would write an empty file.
+   */
+  it("keeps the id on a DOCUMENT card while dropping its bytes, so Save can find them again", () => {
+    const pdf = bytesOf(4, 5, 6);
+    const msg: StoredChatMessage = {
+      role: "tool",
+      text: "📄 Report is ready",
+      at: 9,
+      attachments: [
+        { id: "doc-1-report-pdf", name: "report.pdf", mime: "application/pdf", kind: "export", bytes: pdf },
+        { id: "doc-1-report-md", name: "report.md", mime: "text/markdown", kind: "doc", content: "# Report" },
+      ],
+    };
+    const { message, blobs } = externalizeChatImages(msg, () => "unused");
+
+    expect(blobs).toEqual([{ id: "doc-1-report-pdf", bytes: pdf, mimeType: "application/pdf" }]);
+    expect(message.attachments?.[0]).toMatchObject({ id: "doc-1-report-pdf", name: "report.pdf" });
+    expect((message.attachments?.[0] as { bytes?: ArrayBuffer }).bytes).toBeUndefined();
+    // The Markdown card carries its own text, so it survives a reload without needing the blob store.
+    expect(message.attachments?.[1]).toMatchObject({ content: "# Report" });
+  });
+
   it("mints a stable id for an inline-only image (no attachment)", () => {
     const msg: StoredChatMessage = {
       role: "user",

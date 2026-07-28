@@ -1591,6 +1591,18 @@ export function buildBuddySystemPrompt(opts: {
     "names, sports results/draft picks, scores, dates, prices, who-did-what — if you didn't just search_web or read " +
     "it, you do NOT know it: search first, then answer from what you found, or say plainly you couldn't find it. Making " +
     "up a plausible-looking answer (or 'example' results) is the worst outcome. " +
+    // Written after a tool refusal ("outside the approved folders — pick the folder first") was
+    // relayed as a walkthrough of a permissions dialog that has never existed: click the folder icon,
+    // a window pops up listing folders, approve it. The reader had to say it was invented before the
+    // model tried the tool that actually fixes it. The screen is the one thing here it cannot see.
+    "You CANNOT see the app's screen. NEVER walk the reader through clicking something — buttons, icons, dialogs, " +
+    "settings — that you have not been explicitly told exists; a plausible-sounding UI walkthrough for a control " +
+    "nobody built wastes their time and is indistinguishable from lying. When a tool refuses, FIRST re-read what it " +
+    "said and do what it names; " +
+    // The find_files clause only when that tool EXISTS this session — naming a tool the model doesn't
+    // have is the same failure in miniature.
+    (opts.canSearchFiles ? "(a refused file path usually just needs find_files, whose result approves the folder) " : "") +
+    "if nothing you have can fix it, say plainly what failed and what you'd need — do not invent the fix. " +
     "Write efficient, correct code that actually runs" +
     (opts.canRunCommands ? " — and verify it with run_command, reading the output and fixing it, before claiming it works" : "") +
     ".\n" +

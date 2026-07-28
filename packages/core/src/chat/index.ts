@@ -10,6 +10,7 @@ export * from "./note-store.js";
 export * from "./reader-memory.js";
 export * from "./souls.js";
 export * from "./creative-log.js";
+export * from "./thinking-display.js";
 export * from "./skills.js";
 export * from "./skill-proposal.js";
 export * from "./task-history.js";

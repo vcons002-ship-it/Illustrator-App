@@ -102,8 +102,10 @@ export interface FileRef {
 /** The four universal file-card actions, wired once by the app and reused for every surfaced file.
  * Each is optional; the card only renders the ones provided (and the ones that fit the file/platform). */
 export interface FileActions {
-  /** Save a copy — a browser download on the web, the exports folder on desktop (returns the path). */
-  download?: (file: FileRef) => Promise<string | true>;
+  /** Save a copy — a browser download on the web, the exports folder on desktop. Returns the PATH it
+   * wrote (desktop), `true` for a browser download, or `undefined` when the reader cancelled the
+   * name prompt — the bar reports each of those differently, and "cancelled" must not read as saved. */
+  download?: (file: FileRef) => Promise<string | true | undefined>;
   /** Open the file's content/path in the reader (import → open). */
   openInApp?: (file: FileRef) => void;
   /** Add it to the library and open it. */
@@ -454,6 +456,10 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
               {...(props.onDownloadData ? { onDownloadData: props.onDownloadData } : {})}
               {...(props.fileActions ? { fileActions: props.fileActions } : {})}
               {...(props.desktop ? { desktop: props.desktop } : {})}
+              {...(props.thinkingOpen !== undefined && i === props.messages.length - 1
+                ? { thinkingOpen: props.thinkingOpen }
+                : {})}
+              {...(props.onThinkingOpenChange ? { onThinkingOpenChange: props.onThinkingOpenChange } : {})}
               onAction={props.onSend}
             />
             );
@@ -697,6 +703,8 @@ export const MessageBubble = memo(function MessageBubble({
   onDownloadData,
   fileActions,
   desktop,
+  thinkingOpen,
+  onThinkingOpenChange,
 }: {
   message: ChatMessageVM;
   index?: number;
@@ -719,6 +727,11 @@ export const MessageBubble = memo(function MessageBubble({
   fileActions?: FileActions;
   /** Desktop build — enables the Open-on-PC action. */
   desktop?: boolean;
+  /** Whether this message's saved reasoning is expanded. The reader's ONE choice, shared with the
+   * live block: it used to be hardcoded closed here, so the moment a turn finished its reasoning
+   * collapsed under someone who had deliberately opened it. Defaults closed for older history. */
+  thinkingOpen?: boolean;
+  onThinkingOpenChange?: (open: boolean) => void;
 }) {
   const isUser = message.role === "user";
   const url = useMessageImageUrl(message.image);
@@ -748,7 +761,14 @@ export const MessageBubble = memo(function MessageBubble({
           ✕
         </button>
       )}
-      {!isUser && message.thinking ? <ThinkingBlock text={message.thinking} open={false} label="💭 Reasoning" /> : null}
+      {!isUser && message.thinking ? (
+        <ThinkingBlock
+          text={message.thinking}
+          open={thinkingOpen ?? false}
+          label="💭 Reasoning"
+          {...(onThinkingOpenChange ? { onOpenChange: onThinkingOpenChange } : {})}
+        />
+      ) : null}
       {blocks
         ? blocks.map((b, i) =>
             b.type === "code" ? (
@@ -980,6 +1000,12 @@ export function FileActionBar({
   label?: boolean;
 }) {
   const [busy, setBusy] = useState<string | undefined>();
+  /** What the last action did, shown under the bar. Saving a document used to report NOTHING —
+   * not where it went, not that it had happened, and not why it hadn't: the click set the chip to
+   * "…" and then put it back, which from the outside is a button that does nothing whether it
+   * worked or threw. Every other Save in the app says "✓ Saved to …"; this one is where the
+   * assistant's own documents come out, so it's the one that most needed to. */
+  const [note, setNote] = useState<{ ok: boolean; text: string } | undefined>();
   const [readOpen, setReadOpen] = useState(false);
   // The "⋯ More" menu is a native <details> — collapse it after a pick, or it stays open covering the
   // chat until the reader clicks the summary again (U5).
@@ -991,7 +1017,12 @@ export function FileActionBar({
   // text/Markdown card that carries its content. Reuses the same block model as the PDF/Word export.
   const canReadInline = !!file.content && (file.mime === "text/markdown" || /\.(md|markdown|txt)$/i.test(file.name));
   const runFor: Record<FileActionKey, () => void | Promise<unknown>> = {
-    dl: () => actions.download!(file),
+    dl: async () => {
+      const saved = await actions.download!(file);
+      // undefined = the reader cancelled the name prompt. Nothing happened, so say nothing.
+      if (saved === undefined) return;
+      setNote({ ok: true, text: saved === true ? "✓ Saved (check your downloads)" : `✓ Saved to ${saved}` });
+    },
     app: () => actions.openInApp!(file),
     lib: () => actions.openInLibrary!(file),
     pc: () => actions.openOnPC!(file),
@@ -1004,10 +1035,14 @@ export function FileActionBar({
   if (items.length === 0) return null;
   const fire = async (it: FileActionItem) => {
     setBusy(it.key);
+    setNote(undefined);
     try {
       await it.run();
-    } catch {
-      /* the app surfaces its own error note */
+    } catch (e) {
+      // NOT swallowed. This used to be an empty catch trusting "the app surfaces its own error note",
+      // which for a failed save it doesn't — so the one visible sign of a broken Save was the chip
+      // going back to normal.
+      setNote({ ok: false, text: `⚠ ${it.label} failed: ${e instanceof Error ? e.message : String(e)}` });
     } finally {
       setBusy(undefined);
     }
@@ -1069,6 +1104,11 @@ export function FileActionBar({
         </details>
       ) : null}
     </div>
+    {note ? (
+      <div style={{ fontSize: 11, marginTop: 4, opacity: note.ok ? 0.7 : 1, color: note.ok ? undefined : DANGER_RED }}>
+        {note.text}
+      </div>
+    ) : null}
     {canReadInline && readOpen ? (
       <div
         style={{
@@ -1175,6 +1215,11 @@ function ImageGallery({ items }: { items: { thumb: string; full: string; title?:
  * A thinking model's live reasoning, shown dimmed and auto-scrolling while it works
  * (so a long reason-before-answering reads as visible progress, not a frozen hang).
  * Collapsible — the reasoning isn't the answer, so it stays out of the way.
+ *
+ * The SAME choice governs the live block and the finished message's saved reasoning — those are one
+ * disclosure as far as the reader is concerned, and having the saved one hardcoded shut meant it
+ * collapsed the instant a turn ended, under someone who had just opened it. Only the newest reply
+ * follows the preference; older history stays collapsed, or scrolling back would be a wall of it.
  *
  * `onOpenChange` reports the reader opening or closing it, so the HOST can remember that choice and
  * feed it back as `open` next time. Without that the block is re-created on every reply and springs

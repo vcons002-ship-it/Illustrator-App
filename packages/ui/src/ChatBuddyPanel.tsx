@@ -519,6 +519,10 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             {...(props.onBuildDocument ? { onBuildDocument: props.onBuildDocument } : {})}
             {...(props.fileActions ? { fileActions: props.fileActions } : {})}
             {...(props.desktop ? { desktop: props.desktop } : {})}
+            {...(props.thinkingOpen !== undefined && i === props.messages.length - 1
+              ? { thinkingOpen: props.thinkingOpen }
+              : {})}
+            {...(props.onThinkingOpenChange ? { onThinkingOpenChange: props.onThinkingOpenChange } : {})}
             onAction={props.onSend}
           />
           );

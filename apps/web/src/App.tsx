@@ -204,6 +204,7 @@ import {
   loadCreativeLog,
   recordExplored,
   recentTopics,
+  stripIdentityRecital,
   threadRun,
   MAX_THREAD_RUN,
   migrateExploredNotes,
@@ -334,8 +335,37 @@ const CREATIVE_CHAT_ID = `${BUDDY_CHAT_ID}-creative`;
 /** How long the reader must be idle before a creative run may start. Longer than the scheduled/task
  * sweeps: this is the lowest-priority work in the app and must never look like an interruption. */
 const CREATIVE_IDLE_MS = 10 * 60_000;
-/** Minimum gap between creative runs — "a few times an hour", not a treadmill. */
-const CREATIVE_GAP_MS = 18 * 60_000;
+/**
+ * Minimum quiet between creative runs, measured from when the last one FINISHED.
+ *
+ * It was 18 minutes from when a run STARTED, which is not the same thing: a run takes several minutes
+ * of searching and writing, so the real gap was nearer ten — three or four an hour, against the "a few
+ * minutes an hour" this was asked for. Timed from the end, at this length, it's about one an hour.
+ */
+const CREATIVE_GAP_MS = 45 * 60_000;
+/** Where the last run's end is remembered. Kept OUT of the component: `lastCreativeAt` was a ref
+ * starting at 0, so every reload/restart forgot the gap entirely and handed out a free run — on a
+ * desktop that restarts to update itself, that alone made it feel constant. */
+const CREATIVE_LAST_RUN_KEY = "vr-creative-last-run";
+/** The persisted end-of-last-run stamp (0 when never run / unreadable). */
+function readCreativeLastRun(): number {
+  try {
+    const n = Number(localStorage.getItem(CREATIVE_LAST_RUN_KEY));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+/**
+ * How long creative work stands down after any OTHER background sweep has touched the chat.
+ *
+ * The scheduled runner and the task-step sweep both open a chat on one tick and send on a later one.
+ * Between those two ticks there is a window where nothing is "due" any more and nothing is busy yet —
+ * and creative work, which switches the active chat, could land squarely in it and take the screen
+ * from a scheduled task that was mid-way through appearing. Standing down for a few minutes after any
+ * sign of their activity costs a daydream and protects the thing the reader actually asked for.
+ */
+const CREATIVE_YIELD_MS = 5 * 60_000;
 /** localStorage key for whether the reasoning disclosure is left open (see thinkingOpen). */
 const THINKING_OPEN_KEY = "vr-thinking-open";
 /** How long the reader must be idle before a due scheduled task is allowed to fire. Firing switches
@@ -847,6 +877,16 @@ export function App() {
       setUserSoulNotes(notes);
     }
   }, []);
+  /**
+   * The identity text as the model was given it, for the thinking-bubble filter (see
+   * stripIdentityRecital). Held in a ref because the streaming handler is inside a long-lived turn
+   * closure — and this is display-only, so it must never be a reason to re-run a turn.
+   */
+  const identityRef = useRef<{ notes: string[]; names: string[] }>({ notes: [], names: [] });
+  identityRef.current = {
+    notes: [...selfSoulNotes, ...userSoulNotes].map((n) => n.text),
+    names: [selfSoulName, userSoulName].filter(Boolean),
+  };
   // Memoised: this is a mirror-push dependency, and a fresh object each render would re-send both
   // souls down the relay on every render.
   const souls = useMemo(
@@ -883,6 +923,19 @@ export function App() {
     lastRequestAt.current = Date.now();
   }, []);
   const processActiveRef = useRef(false);
+  /**
+   * When a background sweep that OWNS the screen last did anything — the scheduled runner or the
+   * task-step runner, at either phase (opening its chat, or sending its turn).
+   *
+   * Only idle creative work reads it, and only to stand down. Those two are the reader's actual work;
+   * creative work is the lowest-value thing in the app, and "nothing is due this instant" was too weak
+   * a test to keep it out of their way — a two-phase sweep spends a whole tick in a state where its
+   * task no longer looks due and its turn hasn't started.
+   */
+  const backgroundSweepAt = useRef(0);
+  const markBackgroundSweep = useCallback(() => {
+    backgroundSweepAt.current = Date.now();
+  }, []);
   // The last per-task plan's outcome (success/steps, or the actual error) — shown in the Tasks
   // panel so clicking "Plan" is never a silent no-op.
   const [planMessage, setPlanMessage] = useState<string | undefined>();
@@ -1279,7 +1332,12 @@ export function App() {
   const [checkoutSha, setCheckoutSha] = useState("");
   /** When the last creative run started, so Settings can say whether it has EVER run — "nothing has
    * appeared" and "it ran and produced nothing" need different fixes and looked identical. */
-  const [lastCreativeRunLabel, setLastCreativeRunLabel] = useState("");
+  // Seeded from the persisted stamp so Settings still reports the last run after a restart — it was
+  // in-memory only, so every relaunch claimed it had never run.
+  const [lastCreativeRunLabel, setLastCreativeRunLabel] = useState(() => {
+    const at = readCreativeLastRun();
+    return at ? new Date(at).toLocaleString() : "";
+  });
   useEffect(() => {
     void loadBuildStamp().then((s) => setBuildStampLabel(formatBuildStamp(s)));
   }, []);
@@ -3416,7 +3474,7 @@ export function App() {
           if (e.kind === "token") {
             setChatStreaming((prev) => prev + e.text);
             setChatActivity(""); // visible text replaces any "Reasoning…" status
-          } else if (e.kind === "thinking") setChatThinking(e.text);
+          } else if (e.kind === "thinking") setChatThinking(stripIdentityRecital(e.text, identityRef.current));
           else if (e.kind === "activity") setChatActivity(e.text);
           else if (e.kind === "usage") setChatUsage(e.usage);
           else if (e.kind === "tool")
@@ -3968,13 +4026,33 @@ export function App() {
     }
   }, [isRemoteClient, buddyMessages, fetchRemoteFileBytes, activeBuddyId, libraryStore, cacheRestoredImage]);
   // Fill in a card's bytes from the desktop when the mirror stripped them (older image on a phone).
+  /**
+   * Put a file card's BYTES back before acting on it.
+   *
+   * A card's bytes are stripped when the chat is persisted (they go to the blob store, keyed by the
+   * card's id) so the history stays small. Only the PHONE ever fetched them back — so on the desktop,
+   * a PDF or Word card from any earlier session had no bytes, no content, and no path, and Save wrote
+   * a ZERO-BYTE file without a word about it. The blob store is right there; the desktop was simply
+   * never asking it, though it has always answered this exact question for the phone.
+   *
+   * Both chats share these actions, so both chat ids are tried: the landing-page chat persists under
+   * the session id, the in-book chat under the book's id.
+   */
   const withFetchedBytes = useCallback(
     async (ref: FileRef): Promise<FileRef> => {
-      if (ref.bytes || ref.path || ref.content || !isRemoteClient || !ref.id) return ref;
-      const bytes = await fetchRemoteFileBytes(ref.id);
-      return bytes ? { ...ref, bytes } : ref;
+      if (ref.bytes || ref.path || !ref.id) return ref;
+      if (isRemoteClient) {
+        const bytes = await fetchRemoteFileBytes(ref.id);
+        return bytes ? { ...ref, bytes } : ref;
+      }
+      for (const chatId of [activeBuddyIdRef.current, bookRef.current?.id]) {
+        if (!chatId) continue;
+        const blob = await libraryStore.getImageBlob?.(chatId, ref.id).catch(() => undefined);
+        if (blob) return { ...ref, bytes: blob.bytes };
+      }
+      return ref;
     },
-    [isRemoteClient, fetchRemoteFileBytes],
+    [isRemoteClient, fetchRemoteFileBytes, libraryStore],
   );
 
   // The universal file-card actions, shared by both chats: Download (save a copy), Open in app
@@ -3990,8 +4068,11 @@ export function App() {
           : ref.bytes
             ? new Uint8Array(ref.bytes)
             : (ref.content ?? "");
+        // Refuse rather than write an empty file. This is what a card whose bytes couldn't be found
+        // used to do silently — you got a 0-byte PDF and no hint that anything had gone wrong.
+        if (data.length === 0) throw new Error(`“${ref.name}” has no content on this device any more`);
         const saved = await saveNamed(ref.name, data, ref.mime || "application/octet-stream", "Save this file");
-        return saved ?? true; // cancel is "handled"
+        return saved; // undefined ⇒ the reader cancelled the name prompt; the card says nothing
       },
       openInApp: (ref) => {
         if (ref.path) void onOpenLocalFile(ref.path);
@@ -5589,7 +5670,7 @@ export function App() {
         buddyStreamingRef.current += e.text;
         setBuddyStreaming(buddyStreamingRef.current);
         setBuddyActivity(""); // visible text replaces any "Reasoning…" status
-      } else if (e.kind === "thinking") setBuddyThinking(e.text);
+      } else if (e.kind === "thinking") setBuddyThinking(stripIdentityRecital(e.text, identityRef.current));
       else if (e.kind === "activity") setBuddyActivity(e.text);
       else if (e.kind === "usage") setBuddyUsage(e.usage);
       else if (e.kind === "plan") {
@@ -5951,12 +6032,15 @@ export function App() {
       // A plain-text settle ON a tool step is the model narrating instead of acting ("I already did
       // X…") — hide it (the advance/retry below still runs from evidence). Answer steps + the final
       // wrap-up (no active step) show their text as the deliverable.
+      const trimmedThinking = res.thinking ? stripIdentityRecital(res.thinking, identityRef.current) : "";
       if (!suppressProse) {
         appendBuddy({
           role: "assistant",
           text: res.text,
           turns: ephemeralDirective ? [...res.transcript] : [{ role: "user", content: userText }, ...res.transcript],
-          ...(res.thinking ? { thinking: res.thinking } : {}),
+          // Trimmed on the way in, like the live stream: the saved bubble is read back long after the
+          // turn, when a page of restated identity is even less use than it was at the time.
+          ...(trimmedThinking ? { thinking: trimmedThinking } : {}),
           // Cloud "keep going?" checkpoint: the task paused with work remaining (so a long run doesn't
           // burn API calls unattended). Offer a one-tap Continue that re-arms the budget and resumes.
           ...(res.paused ? { actions: [{ label: "▶ Continue", send: "continue" }] } : {}),
@@ -6302,7 +6386,25 @@ export function App() {
         .catch(() => ({ recent: [], switchNow: false })),
     [libraryStore],
   );
-  const lastCreativeAt = useRef(0);
+  /**
+   * When the last creative run ENDED (0 = never). Persisted, because this was a plain ref starting at
+   * 0: every reload and every self-update restart forgot the gap and let a run fire as soon as the
+   * reader had been idle ten minutes, however recently one had happened.
+   */
+  const lastCreativeAt = useRef(readCreativeLastRun());
+  const stampCreativeRun = useCallback((at: number) => {
+    lastCreativeAt.current = at;
+    setLastCreativeRunLabel(new Date(at).toLocaleString());
+    try {
+      localStorage.setItem(CREATIVE_LAST_RUN_KEY, String(at));
+    } catch {
+      /* private mode / quota — the in-memory ref still holds for this session */
+    }
+  }, []);
+  /** A run is in flight: the gap is re-stamped from the moment it ENDS, not from when it started. A
+   * run takes minutes, and counting those minutes as part of the quiet period is what made "a few
+   * times an hour" behave like a treadmill. */
+  const creativeRunning = useRef(false);
   const openCreativeSession = useCallback(() => {
     setBuddySessions((prev) => {
       if (prev.some((s) => s.id === CREATIVE_CHAT_ID)) return prev;
@@ -6333,20 +6435,31 @@ export function App() {
       // same reason the timer uses two ticks: sending early would hand the model the previous chat.
       await new Promise((r) => setTimeout(r, 600));
     }
-    lastCreativeAt.current = Date.now();
-    setLastCreativeRunLabel(new Date().toLocaleString());
+    stampCreativeRun(Date.now()); // re-stamped when it finishes; this holds the gap meanwhile
+    creativeRunning.current = true;
     returnToChat.current = pendingReturn.current;
     pendingReturn.current = undefined;
     const { recent, switchNow } = await recentCreativeTopics();
     // Set it and dispatch; dispatchBuddyTurn consumes it synchronously on entry, so there is no
     // window in which a later turn could inherit it and no timer to lose a race with.
     creativeIdleRef.current = true;
-    onBuddySendText(buildCreativeIdlePrompt(recent, switchNow));
-  }, [openCreativeSession, onBuddySendText, recentCreativeTopics]);
+    // Awaited (not fire-and-forget) purely to re-stamp the gap when the turn actually ENDS. The idle
+    // sweep does the same from its own tick, which also covers a turn that suspends and resumes.
+    void onBuddySend(buildCreativeIdlePrompt(recent, switchNow)).finally(() => {
+      creativeRunning.current = false;
+      stampCreativeRun(Date.now());
+    });
+  }, [openCreativeSession, onBuddySend, recentCreativeTopics, stampCreativeRun]);
   useEffect(() => {
     if (isRemoteClient || !settings.allowCreativeIdle) return;
     const id = setInterval(() => {
       if (buddyBusyRef.current || buddyPendingToolRef.current || processActiveRef.current) return;
+      // The run has ENDED (this tick found nothing in flight) — start the quiet period from here
+      // rather than from when it was dispatched several minutes ago.
+      if (creativeRunning.current) {
+        creativeRunning.current = false;
+        stampCreativeRun(Date.now());
+      }
       // PUT THE READER'S CHAT BACK once the run is done. Dispatching a turn requires making that
       // session active, so a creative run necessarily moves the visible chat — and leaving it there
       // means coming back to the computer and finding a different conversation open, which is exactly
@@ -6369,6 +6482,16 @@ export function App() {
       }
       if (Date.now() - lastRequestAt.current < CREATIVE_IDLE_MS) return;
       if (Date.now() - lastCreativeAt.current < CREATIVE_GAP_MS) return;
+      // Phase 1 has already MOVED the view when any of the guards below stands the run down — leaving
+      // the reader parked in ✨ Creative with nothing running, and (worse) sitting on top of whatever
+      // a scheduled task was about to open. Standing down means giving the screen back.
+      const standDown = (): void => {
+        const back = pendingReturn.current;
+        pendingReturn.current = undefined;
+        if (back && back !== CREATIVE_CHAT_ID && activeBuddyIdRef.current === CREATIVE_CHAT_ID) {
+          switchBuddyRef.current?.(back);
+        }
+      };
       void (async () => {
         // YIELD TO REAL WORK. The scheduled runner and the task-step sweep each switch the active
         // chat to their own session, exactly as this does — and they become eligible sooner (2 and 5
@@ -6380,8 +6503,12 @@ export function App() {
           loadScheduledTasks(libraryStore).catch(() => []),
           loadTaskPlans(libraryStore).catch(() => []),
         ]);
-        if (runnableScheduledTasks(dueScheduledTasks(scheduled), plans).length > 0) return;
-        if (settings.allowTaskAutomation && nextAutoStep(plans, { skipStepIds: autoStepSkip.current })) return;
+        if (runnableScheduledTasks(dueScheduledTasks(scheduled), plans).length > 0) return standDown();
+        if (settings.allowTaskAutomation && nextAutoStep(plans, { skipStepIds: autoStepSkip.current })) return standDown();
+        // "Nothing due this instant" isn't enough: those sweeps open a chat on one tick and send on a
+        // later one, and in between their task no longer reads as due while their turn hasn't started.
+        // Stand well clear of anything they've touched recently.
+        if (Date.now() - backgroundSweepAt.current < CREATIVE_YIELD_MS) return standDown();
         // Two-phase, like the other sweeps: switch first and let the NEXT tick send, so the session's
         // history has landed and the turn doesn't inherit whatever chat was open.
         if (activeBuddyIdRef.current !== CREATIVE_CHAT_ID) {
@@ -6389,14 +6516,17 @@ export function App() {
           openCreativeSession();
           return;
         }
-        lastCreativeAt.current = Date.now();
-        setLastCreativeRunLabel(new Date().toLocaleString());
+        stampCreativeRun(Date.now()); // re-stamped at the END of the run; this holds the gap meanwhile
+        creativeRunning.current = true;
         returnToChat.current = pendingReturn.current; // arm the restore now that a run is really starting
         pendingReturn.current = undefined;
         // What it has already explored — so it moves on rather than circling.
         const { recent, switchNow } = await recentCreativeTopics();
         creativeIdleRef.current = true;
-        onBuddySendText(buildCreativeIdlePrompt(recent, switchNow));
+        void onBuddySend(buildCreativeIdlePrompt(recent, switchNow)).finally(() => {
+          creativeRunning.current = false;
+          stampCreativeRun(Date.now());
+        });
       })();
     }, 60_000);
     return () => clearInterval(id);
@@ -6406,8 +6536,9 @@ export function App() {
     settings.allowTaskAutomation,
     libraryStore,
     openCreativeSession,
-    onBuddySendText,
+    onBuddySend,
     recentCreativeTopics,
+    stampCreativeRun,
   ]);
   /** Make the ⏰ Scheduled session exist and switch to it (creating it on first use). */
   const openScheduledSession = useCallback(() => {
@@ -6446,6 +6577,9 @@ export function App() {
         // is async, and sending before it lands would hand the model the previous conversation as
         // context — exactly the bleed this separation exists to prevent.
         if (!targetId || activeBuddyIdRef.current !== targetId) {
+          // Claim the screen for the whole open-then-send, so idle creative work can't switch away in
+          // the gap between the two ticks (see backgroundSweepAt).
+          markBackgroundSweep();
           if (boundPlan) await openTaskRef.current?.(boundPlan.id); // creates + names the task's chat if needed
           else openScheduledSession();
           return;
@@ -6461,11 +6595,12 @@ export function App() {
             : `⏰ Running scheduled task “${task.title}” in the Scheduled chat.`,
           "info",
         );
+        markBackgroundSweep();
         onBuddySendText(scheduledRunPrompt(task));
       })();
     }, 30_000);
     return () => clearInterval(id);
-  }, [libraryStore, onBuddySendText, refreshScheduled, isRemoteClient, openScheduledSession, pushToast]);
+  }, [libraryStore, onBuddySendText, refreshScheduled, isRemoteClient, openScheduledSession, pushToast, markBackgroundSweep]);
 
   // AUTONOMOUS TASK WORK: while you're away, pick up the next step the assistant is allowed to do
   // ITSELF and attempt it in that task's own chat. This is the half the background sweep never had —
@@ -6490,6 +6625,7 @@ export function App() {
         // loading a session's history is async, and sending early would hand the model the previous
         // conversation as context).
         if (activeBuddyIdRef.current !== pick.plan.sessionId) {
+          markBackgroundSweep(); // same claim as the scheduled runner: hold the screen across both phases
           await openTaskRef.current?.(pick.plan.id);
           return;
         }
@@ -6501,6 +6637,7 @@ export function App() {
         }
         logActionRef.current("task_auto", `Working “${pick.step.title}” on ${pick.plan.title}`);
         pushToast(`🤖 Working “${pick.step.title}” on “${pick.plan.title}”.`, "info");
+        markBackgroundSweep();
         onBuddySendText(
           `[Working this task on my own while you're away.] Do ONLY this step of “${pick.plan.title}”: ` +
             `${pick.step.title}${pick.step.detail ? ` — ${pick.step.detail}` : ""}. ` +
@@ -6512,7 +6649,7 @@ export function App() {
       })();
     }, 60_000);
     return () => clearInterval(id);
-  }, [isRemoteClient, settings.allowTaskAutomation, libraryStore, onBuddySendText, pushToast]);
+  }, [isRemoteClient, settings.allowTaskAutomation, libraryStore, onBuddySendText, pushToast, markBackgroundSweep]);
 
   // Remote bus (phone↔Google↔desktop): when enabled + Google's connected, poll the user's
   // Google Tasks for "VR:" commands they added from their phone, run each through the buddy,
@@ -8610,6 +8747,8 @@ export function App() {
           messages={chatPanelMessages}
           {...(chatStreaming ? { streamingText: chatStreaming } : {})}
           {...(chatThinking ? { thinking: chatThinking } : {})}
+          thinkingOpen={thinkingOpen}
+          onThinkingOpenChange={setThinkingOpen}
           busy={chatBusy}
           {...(chatActivity ? { activity: chatActivity } : {})}
           {...(chatPendingTool ? { pendingTool: chatPendingTool } : {})}

@@ -35,6 +35,17 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   stay on disk and in the Soul panel, and it's told how many it isn't currently seeing.
   While exploring alone it can only edit its OWN notes — your memories, and its picture of you,
   are out of reach.
+- **It explores about once an hour, not three or four times** — the gap between runs was counted from
+  when one *started*, so the minutes it spent searching and writing came out of the quiet period. It's
+  now counted from when a run finishes, and it's longer. The last-run time is also remembered across
+  restarts: it was held in memory only, so every relaunch — including the app's own self-updates —
+  forgot the gap and let a run start as soon as you'd been idle ten minutes.
+- **It gets out of the way of scheduled tasks** — a scheduled action opens its chat on one tick and
+  sends on the next, and in that gap nothing reads as due and nothing is running yet. Idle exploring
+  could step into exactly that window and take the screen from a task that was half-way through
+  appearing. It now stands down for a few minutes after any sign of scheduled or task work — and if it
+  had already switched to its own chat before standing down, it hands the screen back instead of
+  leaving you parked there.
 - **It stops circling the same subject — without being stopped from following a thread** — every piece
   it wrote alone kept coming back to its first interest. It was being asked to keep its own list of
   what it had already covered, and mostly didn't, so each run started with no history and picked its
@@ -53,9 +64,21 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   somewhere nothing ever reads. Both souls are now mirrored from the computer, and edits are saved
   there. (Reference photos stay on the computer — they're too large to mirror — so that section is
   hidden on the phone rather than pretending to save.)
+- **The reasoning bubble shows the reasoning, not the preamble** — it opened by restating who it is
+  and who you are almost every turn, which is the same paragraph each time and pushed the part you
+  actually wanted out of view. It's told not to bother restating it (it still has it, and still acts
+  on it), and anything that does get restated at the start is trimmed from the bubble before you see
+  it. Only the opening is ever cut, it's matched against your actual identity notes rather than
+  guessed at, and it gives up rather than risk swallowing real thinking — so a thought that mentions
+  something about you mid-way through is left alone.
 - **The reasoning bubble stays how you left it** — open it and it stays open; close it and it stays
   closed, through the next reply and after a restart. It used to spring back open every time the
-  assistant spoke, so closing it only lasted one message.
+  assistant spoke, so closing it only lasted one message. Two gaps in that are now closed: the
+  in-book chat never received the setting at all, so its reasoning always expanded while it worked;
+  and the finished reply's reasoning was hardcoded shut, so it collapsed the instant the turn ended
+  even if you'd deliberately opened it. It's one choice now, covering the live block and the reply it
+  becomes. Older replies in the history stay collapsed regardless — otherwise scrolling back would be
+  a wall of reasoning.
 
 ### The app itself
 
@@ -166,6 +189,14 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Documents
 
+- **Saving a document from the chat works, and tells you what happened** — the PDF and Word cards on a
+  document from an earlier session had nothing to save: their contents are moved into storage when the
+  chat is written to disk, and only a linked phone ever knew how to fetch them back. On the computer
+  the button quietly wrote an empty file. It now retrieves the real contents; the Markdown card was
+  always fine, since it carries its own text. The card also SAYS what happened now — "✓ Saved to …",
+  or the actual error — where before every outcome, success or failure, looked identical: the chip
+  flickered and nothing else changed. If the contents genuinely can't be found it refuses instead of
+  writing an empty file.
 - **Revising a document changes just that part, instead of rewriting the whole thing** — ask for a
   tightened intro or an extra section and the assistant now edits those lines in place. Before, every
   revision meant re-typing the entire document from scratch.
@@ -190,6 +221,16 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   instead of one fixed number.
 
 ### Files & editing
+
+- **No more invented instructions for buttons that don't exist** — a file outside the folders the app
+  may touch was refused with "pick the folder first (📁) or search for the file", which is advice for
+  YOU but was being handed to the assistant, which can't see your screen. It passed it on and filled
+  in the rest from imagination: click the folder icon, approve the folder in the window that pops up.
+  There is no such window. Two changes: that refusal now tells the assistant to find the file itself —
+  searching for a file approves its folder, which is exactly what it did, successfully, the moment it
+  was told the instructions were made up — and it's now a standing rule that it must never walk you
+  through clicking something it hasn't been told exists. When it can't fix something, it says what
+  failed instead of inventing a fix.
 
 - **Big files are now fully editable** — the assistant could only ever see a file's first 60,000
   characters, and since it edits by matching text exactly, anything past that was unreachable: it

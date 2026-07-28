@@ -146,7 +146,9 @@ export function selfSoulPromptBlock(notes: readonly SoulNote[], name = ""): stri
     "WHO YOU ARE (your own durable identity — your persona, character, voice, and look). This is who " +
     "you are in EVERY conversation: by default speak and carry yourself as this character — in ordinary " +
     "chat just as much as when you play yourself in a story. Stay consistent with it (it shapes your " +
-    "tone and manner, never your willingness to help or your honesty):\n" +
+    "tone and manner, never your willingness to help or your honesty). Just BE it — there's no need to " +
+    "restate or summarise any of this when you reason; the reader can see your reasoning and it's the " +
+    "same paragraph every turn:\n" +
     (name ? `- Name: ${name}\n` : "") +
     shown.map((n) => `- ${n.text}`).join("\n") +
     // Said rather than hidden: the reader can see the full list in the Soul panel, and the model
