@@ -151,8 +151,8 @@ export interface ReaderSettings {
    * manga styles only). Independent of `panelsPerView`. Off by default.
    */
   drawAsComicPage?: boolean;
-  /** Turn OFF per-character regions (on by default; see TierConfig.disableRegions). */
-  disableRegions?: boolean;
+  /** Per-character regions — opt-in; see TierConfig.perCharacterRegions. */
+  perCharacterRegions?: boolean;
   /**
    * When to start illustrating: "book" reads the whole book first so prompts have
    * full context (best images, slower start); "chapter" starts as each chapter is
@@ -1560,16 +1560,17 @@ export function SettingsPanel({
           <label style={{ ...rowStyle, flexDirection: "row", alignItems: "center", gap: 8 }}>
             <input
               type="checkbox"
-              checked={!(value.disableRegions ?? false)}
-              onChange={(e) => set({ disableRegions: !e.target.checked })}
+              checked={value.perCharacterRegions ?? false}
+              onChange={(e) => set({ perCharacterRegions: e.target.checked })}
             />
             <span>
-              Give each character their own part of the picture
+              Give each character their own part of the picture (experimental)
               <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
-                With two to four described characters in a scene, each one's description is applied
-                only where they stand, so their features stop bleeding onto each other. Your own
-                engine only — it needs control of the render that online image services don't offer.
-                Turn it off if you'd rather the model decide who stands where.
+                With two to four described characters in a scene, each one's description is weighted
+                towards the part of the canvas they occupy, so their features are less likely to end
+                up on each other. Your own engine only. It's a real constraint on the composition, so
+                try it on a scene you can compare — if figures come out oddly proportioned, turn it
+                back off.
               </span>
             </span>
           </label>
@@ -3793,7 +3794,12 @@ const closeButtonStyle = {
   fontSize: 12,
 } as const;
 
-const panelStyle = {
+/**
+ * The floating settings card. EXPORTED so its self-sufficiency can be asserted: it renders through a
+ * portal, detached from the app's tree, so every appearance property it would otherwise inherit has
+ * to be spelled out here (see the note on colour/font below).
+ */
+export const panelStyle = {
   // Floats OVER the page instead of pushing the header/reader down. Anchored to the
   // VIEWPORT's top-right (not the button) so it can never clip off-screen when the
   // button-heavy header wraps and the Settings button lands mid-row.
@@ -3810,6 +3816,17 @@ const panelStyle = {
   borderRadius: 8,
   width: "min(340px, calc(100vw - 16px))",
   background: "#16181d",
+  // Its OWN typography and text colour, not the app shell's.
+  //
+  // These used to be inherited: the panel rendered inside the header, which sits inside the app
+  // shell (colour #e7e7ee, Georgia), and the button's wrapper supplied the 13px. Portalling the
+  // panel to document.body — so `position: fixed` would mean the viewport rather than the
+  // backdrop-filtered header — cut every one of those. It landed on a bare <body>: black UA text on
+  // this near-black card, at UA size, in Times. Anything that floats free of the tree it was written
+  // in has to carry its own appearance.
+  color: "#e7e7ee",
+  fontFamily: "Georgia, 'Iowan Old Style', serif",
+  fontSize: 13,
   boxShadow: "0 12px 40px rgba(0,0,0,0.55)",
   // Own scrollbar instead of overflowing the screen. `dvh` (dynamic viewport height) tracks the
   // visible area on phones where the browser's address bar shows/hides — `vh` is taller than what's

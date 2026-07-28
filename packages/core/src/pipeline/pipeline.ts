@@ -404,7 +404,7 @@ export class RenderPipeline {
       // same identity descriptors the prompt does, in the scene's stable present-order; castRegions
       // declines on its own for a lone character or a crowd, so this is off unless it can help.
       const castRegions =
-        isLocal && !this.deps.tier.disableRegions
+        isLocal && this.deps.tier.perCharacterRegions
           ? buildCastRegions(
               present.map((c) => ({ name: c.name, descriptor: describeCharacterIdentity(c) })),
               ...(worldStyle ? [{ style: worldStyle }] : []),

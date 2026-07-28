@@ -189,7 +189,7 @@ export function buildProviders(
         ? { localScheduler: settings.localScheduler }
         : {}),
       ...(settings.drawAsComicPage ? { drawAsComicPage: true } : {}),
-      ...(settings.disableRegions ? { disableRegions: true } : {}),
+      ...(settings.perCharacterRegions ? { perCharacterRegions: true } : {}),
       ...(settings.imageModelFamily && settings.imageModelFamily !== "auto"
         ? { imageModelFamily: settings.imageModelFamily }
         : {}),

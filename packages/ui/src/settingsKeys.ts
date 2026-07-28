@@ -17,7 +17,7 @@ export const TUNING_FIELDS = [
   "aspectRatio",
   "drawAsComicPage",
   // Per-character regions: read when the next image is composed, so toggling it must not rebuild.
-  "disableRegions",
+  "perCharacterRegions",
   "imageModelFamily",
   "localSteps",
   "localCfg",

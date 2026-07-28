@@ -9,21 +9,30 @@
  * `resolveNegative`). Anything written there is inert.
  *
  * What DOES bind an attribute to a person is telling the sampler WHERE that person's description
- * applies. ComfyUI's `ConditioningSetAreaPercentage` scopes a piece of conditioning to a rectangle of
- * the canvas; combined with the whole-scene conditioning, each character's own description is only
- * active where they stand. That is a real mechanism rather than a wording trick, and it needs no
- * custom nodes.
+ * applies. The graph half (see `addRegionalConditioning`) weights each description towards its own
+ * rectangle with a MASK, leaving the sampler working across the whole canvas.
+ *
+ * It emphatically must not CROP to the rectangle. The first version used
+ * `ConditioningSetAreaPercentage`, which does exactly that — it renders each region's conditioning to
+ * fill its box — and the result was every figure misshapen and at a different scale from its
+ * neighbours, because a whole person was being composed inside a one-third-wide strip. That is the
+ * failure this module's shape is designed around.
+ *
+ * OFF BY DEFAULT, and it should stay that way until it's shown to help on a real box: it is a
+ * composition constraint on a process that is already doing its own composing, and it made things
+ * worse once already.
  *
  * This module is the PURE half: given the cast, work out the rectangles and the text for each. The
  * graph half lives in the ComfyUI backend, and every other provider ignores it (a cloud API takes one
  * prompt string and offers no way to say this).
  */
 
-/** One character's patch of canvas, in fractions of the whole (0..1). */
+/** One character's patch of canvas, in fractions of the whole (0..1) — where their description is
+ * weighted, NOT a box the picture is cut into. */
 export interface CastRegion {
   /** Who it's for — used for tests, logging, and the caption; never sent as prompt text. */
   name: string;
-  /** The conditioning text active inside this rectangle. */
+  /** The conditioning text weighted towards this rectangle. */
   text: string;
   x: number;
   y: number;
@@ -32,19 +41,23 @@ export interface CastRegion {
 }
 
 /**
- * Beyond this many people, columns are too narrow to hold a figure and the split does more harm than
- * the bleed it prevents — a crowd scene is left to the whole-scene prompt. (Four across a 1024-wide
- * canvas is already only ~256px per person.)
+ * Beyond this many people the columns are too narrow to mean anything and the split does more harm
+ * than the bleed it prevents — a crowd scene is left to the whole-scene prompt. (Four across a
+ * 1024-wide canvas is already only ~256px each.)
  */
 export const MAX_REGIONS = 4;
 /**
- * How much neighbouring columns overlap, as a fraction of the canvas. A hard seam between regions
- * shows up as a visible join down the picture; a little overlap lets the sampler blend across it.
+ * How much neighbouring columns overlap, as a fraction of the canvas. Masks with hard edges meeting
+ * exactly can leave a visible join down the picture; a little overlap blends across it.
  */
 export const REGION_OVERLAP = 0.06;
-/** Conditioning strength inside a region. The whole-scene conditioning is still present underneath,
- * so this is an emphasis within it, not a replacement. */
-export const REGION_STRENGTH = 1;
+/**
+ * Conditioning strength inside a region. The whole-scene conditioning is still present underneath, so
+ * this is an emphasis within it, not a replacement — and deliberately below 1: at full strength the
+ * region competes with the scene for what that part of the canvas is, rather than saying who's
+ * standing in it.
+ */
+export const REGION_STRENGTH = 0.75;
 
 /**
  * Lay the cast out left-to-right across the canvas, one column each.
