@@ -41,6 +41,8 @@ export const TUNING_FIELDS = [
   "commandShell",
   "autoResolveConflicts",
   "allowTaskAutomation",
+  // Read by the idle-creative runner only; toggling it must not dispose the engine + reopen the book.
+  "allowCreativeIdle",
   "allowTradingViewBridge",
   // Read when building the buddy prompt (gate the markets / sub-agent tool groups); toggling must
   // not rebuild the engine.

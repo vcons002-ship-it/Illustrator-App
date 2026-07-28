@@ -17,7 +17,9 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   app's real background work — scheduled actions, task steps — to be finished before starting, so it
   never competes with something that actually matters. While exploring it can only search, read, and
   write a document: it cannot run commands, touch your files, email anyone, or spend anything,
-  whatever your other permissions allow.
+  whatever your other permissions allow. Settings has an **✨ Explore something now** button and shows
+  when it last ran, so you can see it work immediately instead of leaving the app alone for ten
+  minutes to find out.
 - **You can talk to it about what it explored** — open the ✨ Creative chat and ask; it's an ordinary
   conversation there, with everything it can normally do. It also knows, in any chat, that exploring
   on its own is something it does, so bringing up a piece it wrote doesn't meet a blank. The
