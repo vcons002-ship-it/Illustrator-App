@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useNarrow } from "./useMediaQuery.js";
 import { ACCENT_BLUE, DANGER_RED, SUCCESS_GREEN } from "./tokens.js";
 import {
@@ -742,7 +743,7 @@ export function SettingsPanel({
       <button onClick={() => setOpen((o) => !o)} style={buttonStyle}>
         {open ? "Hide settings" : "Settings"}
       </button>
-      {open && (
+      {open && portalled(
         <div style={narrow ? { ...panelStyle, left: 8, width: "auto" } : panelStyle}>
           {/* The panel floats at the viewport's top-right, over the Settings button —
               so it needs its OWN always-visible close control. On a narrow screen it spans
@@ -2907,10 +2908,26 @@ export function SettingsPanel({
           <p style={{ opacity: 0.6, margin: "4px 0 0" }}>
             Keys are stored encrypted on this device only.
           </p>
-        </div>
+        </div>,
       )}
     </div>
   );
+}
+
+/**
+ * Render the settings panel at the top of the document instead of where the button is.
+ *
+ * The panel is `position: fixed` to the VIEWPORT's top-right — but the button lives in the app
+ * header, and that header has a `backdrop-filter`. A filtered element becomes the containing block
+ * for fixed descendants, so "fixed" quietly meant "fixed to the header": the panel hung from the
+ * header's box instead of the window's, its `100dvh` height no longer matched the space it had, and
+ * reaching its top or bottom needed a nudge of the page behind it. A portal puts it back on the
+ * viewport, where its own measurements are true.
+ *
+ * No document (SSR / a test renderer without one) → render in place, as before.
+ */
+function portalled(node: ReactNode): ReactNode {
+  return typeof document === "undefined" ? node : createPortal(node, document.body);
 }
 
 function GoogleConnectBlock({

@@ -184,3 +184,45 @@ describe("a requested name resolves to the character who owns it", () => {
     expect(scene.presentCharacterIds).toEqual(["char-mara", "char-the captain"]);
   });
 });
+
+/**
+ * The reported case, at the layer that made it STICK: the worker fed the tracker a bare
+ * `text.includes(name)` scan, so a beat set in "Sato's Synthetic Noodles" reported Sato as mentioned
+ * — and the present cast CARRIES FORWARD, so one bad beat kept him in every picture afterwards. The
+ * worker now feeds it findBibleTermsInText (same matcher as the render). These tests cover the
+ * tracker's half: given a correct mention list, the cast is right; given a bad one, it persists.
+ */
+describe("a place named after a character doesn't join the cast", () => {
+  const bible = bibleWith({
+    characters: [{ name: "Sato" }, { name: "Mara" }, { name: "Cass" }],
+    environments: [{ name: "Sato's Synthetic Noodles" }],
+  });
+
+  it("three in the scene, place named after a FOURTH: only the three", () => {
+    const scene = advanceStoryScene(emptyStoryScene(), bible, {
+      mentionedNames: ["Mara", "Cass"],
+      location: "Sato's Synthetic Noodles",
+    });
+    expect(scene.presentCharacterIds).toEqual(["char-mara", "char-cass"]);
+    expect(scene.locationId).toBe("env-sato's-synthetic-noodles");
+  });
+
+  it("and when Sato IS there, he's there — the place doesn't remove him", () => {
+    const scene = advanceStoryScene(emptyStoryScene(), bible, {
+      mentionedNames: ["Sato", "Mara", "Cass"],
+      location: "Sato's Synthetic Noodles",
+    });
+    expect(scene.presentCharacterIds).toEqual(["char-sato", "char-mara", "char-cass"]);
+  });
+
+  it("shows why it mattered: a cast is CARRIED FORWARD, so one wrong beat is every later beat", () => {
+    // A bad mention list (what the old bare-substring scan produced) on beat one...
+    const beat1 = advanceStoryScene(emptyStoryScene(), bible, {
+      mentionedNames: ["Sato", "Mara", "Cass"],
+      location: "Sato's Synthetic Noodles",
+    });
+    // ...and beat two mentions nobody, as chat beats often don't.
+    const beat2 = advanceStoryScene(beat1, bible, {});
+    expect(beat2.presentCharacterIds).toContain("char-sato"); // still there, and would stay
+  });
+});
