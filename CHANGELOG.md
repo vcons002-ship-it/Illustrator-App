@@ -73,7 +73,12 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   something about you mid-way through is left alone.
 - **The reasoning bubble stays how you left it** — open it and it stays open; close it and it stays
   closed, through the next reply and after a restart. It used to spring back open every time the
-  assistant spoke, so closing it only lasted one message.
+  assistant spoke, so closing it only lasted one message. Two gaps in that are now closed: the
+  in-book chat never received the setting at all, so its reasoning always expanded while it worked;
+  and the finished reply's reasoning was hardcoded shut, so it collapsed the instant the turn ended
+  even if you'd deliberately opened it. It's one choice now, covering the live block and the reply it
+  becomes. Older replies in the history stay collapsed regardless — otherwise scrolling back would be
+  a wall of reasoning.
 
 ### The app itself
 

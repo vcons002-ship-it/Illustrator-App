@@ -8724,6 +8724,8 @@ export function App() {
           messages={chatPanelMessages}
           {...(chatStreaming ? { streamingText: chatStreaming } : {})}
           {...(chatThinking ? { thinking: chatThinking } : {})}
+          thinkingOpen={thinkingOpen}
+          onThinkingOpenChange={setThinkingOpen}
           busy={chatBusy}
           {...(chatActivity ? { activity: chatActivity } : {})}
           {...(chatPendingTool ? { pendingTool: chatPendingTool } : {})}

@@ -454,6 +454,10 @@ export const ChatPanel = memo(function ChatPanel(props: ChatPanelProps) {
               {...(props.onDownloadData ? { onDownloadData: props.onDownloadData } : {})}
               {...(props.fileActions ? { fileActions: props.fileActions } : {})}
               {...(props.desktop ? { desktop: props.desktop } : {})}
+              {...(props.thinkingOpen !== undefined && i === props.messages.length - 1
+                ? { thinkingOpen: props.thinkingOpen }
+                : {})}
+              {...(props.onThinkingOpenChange ? { onThinkingOpenChange: props.onThinkingOpenChange } : {})}
               onAction={props.onSend}
             />
             );
@@ -697,6 +701,8 @@ export const MessageBubble = memo(function MessageBubble({
   onDownloadData,
   fileActions,
   desktop,
+  thinkingOpen,
+  onThinkingOpenChange,
 }: {
   message: ChatMessageVM;
   index?: number;
@@ -719,6 +725,11 @@ export const MessageBubble = memo(function MessageBubble({
   fileActions?: FileActions;
   /** Desktop build — enables the Open-on-PC action. */
   desktop?: boolean;
+  /** Whether this message's saved reasoning is expanded. The reader's ONE choice, shared with the
+   * live block: it used to be hardcoded closed here, so the moment a turn finished its reasoning
+   * collapsed under someone who had deliberately opened it. Defaults closed for older history. */
+  thinkingOpen?: boolean;
+  onThinkingOpenChange?: (open: boolean) => void;
 }) {
   const isUser = message.role === "user";
   const url = useMessageImageUrl(message.image);
@@ -748,7 +759,14 @@ export const MessageBubble = memo(function MessageBubble({
           ✕
         </button>
       )}
-      {!isUser && message.thinking ? <ThinkingBlock text={message.thinking} open={false} label="💭 Reasoning" /> : null}
+      {!isUser && message.thinking ? (
+        <ThinkingBlock
+          text={message.thinking}
+          open={thinkingOpen ?? false}
+          label="💭 Reasoning"
+          {...(onThinkingOpenChange ? { onOpenChange: onThinkingOpenChange } : {})}
+        />
+      ) : null}
       {blocks
         ? blocks.map((b, i) =>
             b.type === "code" ? (
@@ -1175,6 +1193,11 @@ function ImageGallery({ items }: { items: { thumb: string; full: string; title?:
  * A thinking model's live reasoning, shown dimmed and auto-scrolling while it works
  * (so a long reason-before-answering reads as visible progress, not a frozen hang).
  * Collapsible — the reasoning isn't the answer, so it stays out of the way.
+ *
+ * The SAME choice governs the live block and the finished message's saved reasoning — those are one
+ * disclosure as far as the reader is concerned, and having the saved one hardcoded shut meant it
+ * collapsed the instant a turn ended, under someone who had just opened it. Only the newest reply
+ * follows the preference; older history stays collapsed, or scrolling back would be a wall of it.
  *
  * `onOpenChange` reports the reader opening or closing it, so the HOST can remember that choice and
  * feed it back as `open` next time. Without that the block is re-created on every reply and springs
