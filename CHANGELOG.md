@@ -35,6 +35,17 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   stay on disk and in the Soul panel, and it's told how many it isn't currently seeing.
   While exploring alone it can only edit its OWN notes — your memories, and its picture of you,
   are out of reach.
+- **It explores about once an hour, not three or four times** — the gap between runs was counted from
+  when one *started*, so the minutes it spent searching and writing came out of the quiet period. It's
+  now counted from when a run finishes, and it's longer. The last-run time is also remembered across
+  restarts: it was held in memory only, so every relaunch — including the app's own self-updates —
+  forgot the gap and let a run start as soon as you'd been idle ten minutes.
+- **It gets out of the way of scheduled tasks** — a scheduled action opens its chat on one tick and
+  sends on the next, and in that gap nothing reads as due and nothing is running yet. Idle exploring
+  could step into exactly that window and take the screen from a task that was half-way through
+  appearing. It now stands down for a few minutes after any sign of scheduled or task work — and if it
+  had already switched to its own chat before standing down, it hands the screen back instead of
+  leaving you parked there.
 - **It stops circling the same subject — without being stopped from following a thread** — every piece
   it wrote alone kept coming back to its first interest. It was being asked to keep its own list of
   what it had already covered, and mostly didn't, so each run started with no history and picked its
