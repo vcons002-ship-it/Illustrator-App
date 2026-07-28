@@ -115,7 +115,9 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
     usually doesn't yet on the beat you first walk into it, so the phrasing itself is now read too: a
     name followed by 's and a capitalised word ("in Rell's Tavern") is naming somewhere, not someone.
     An ordinary possessive — "Rell's hand", "Rell's coat" — still means he's there, as it should, and
-    naming him anywhere else in the same scene puts him in it regardless. (This one applied to any
+    naming him anywhere else in the same scene puts him in it regardless. Where the scene's place is
+    written in a way that rule can't see (all lower case, or with no possessive at all), the app now
+    passes the place it knows the beat is set in, which settles it outright. (This one applied to any
     illustrated book, not just stories.)
   - **Nicknames could claim other characters' names.** The assistant hands out nicknames as it writes,
     and they collide — one character picking up "the Captain" while another character IS the Captain.

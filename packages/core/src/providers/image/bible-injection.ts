@@ -216,10 +216,12 @@ function namesSomethingElse(rest: string): boolean {
  * Scan a finished prompt for the bible terms it mentions. Characters, creatures, and
  * locations are matched by name/alias — each name claiming its span longest-first, so a name that
  * only occurs INSIDE a longer one (a place named after someone) isn't a mention of the shorter.
+ * `sceneLocation` is the beat's place as extraction named it: claimable, so it takes its own span
+ * even before it's a bible entity, but never a term in its own right.
  * Outfit labels are matched **only when their owning character is also named in the prompt**, so a
  * generic label ("cloak", "armor") never over-triggers from incidental prose.
  */
-export function findBibleTermsInText(prompt: string, bible: VisualBible): SceneTerm[] {
+export function findBibleTermsInText(prompt: string, bible: VisualBible, sceneLocation?: string): SceneTerm[] {
   const primaries = primaryNames(bible);
   // EVERY entity's forms first, so the claim pass can see the long ones — a term can only be ruled
   // out by a longer name that's also in the bible, and that name has to be in the running to do it.
@@ -228,6 +230,15 @@ export function findBibleTermsInText(prompt: string, bible: VisualBible): SceneT
   const envForms = bible.environments.map((e) => ownForms(e, primaries));
   const seen = new Set<string>();
   const all: { form: string }[] = [];
+  // The beat's LOCATION as extraction wrote it, even when it isn't a bible entity yet — it usually
+  // isn't on the beat that first walks in. Claimable but never a term of its own: it exists here only
+  // to take its own span, so "in rell's tavern" (lower-case, or with no possessive at all) can't be
+  // read as a mention of Rell. This is a fact from extraction, not a guess about the phrasing.
+  const place = (sceneLocation ?? "").trim();
+  if (place) {
+    seen.add(place.toLowerCase());
+    all.push({ form: place });
+  }
   for (const forms of [...charForms, ...creatureForms, ...envForms]) {
     for (const raw of forms) {
       const form = raw.trim();
@@ -312,11 +323,20 @@ function orderedForms(terms: readonly SceneTerm[]): { form: string; descriptor: 
  * sorted longest-first, so an inserted descriptor is never re-scanned. Possessives are
  * preserved ("Violet's" → "(…)'s").
  */
-export function injectBibleTerms(prompt: string, terms: readonly SceneTerm[]): string {
+export function injectBibleTerms(prompt: string, terms: readonly SceneTerm[], sceneLocation?: string): string {
   const forms = orderedForms(terms);
   if (forms.length === 0) return prompt;
   const byForm = new Map(forms.map((f) => [f.form.toLowerCase(), f.descriptor]));
-  const alt = forms.map((f) => escapeRegExp(f.form)).join("|");
+  // The beat's place is in the alternation but NOT in byForm, so it consumes its own span and comes
+  // back unchanged. Without it, a character who IS in the scene still had their descriptor spliced
+  // into the place named after them — "in the (shaved head) Tavern", which tells the image model the
+  // tavern is a man. Longest-first ordering is what gives it the span over the name inside it.
+  const place = (sceneLocation ?? "").trim();
+  const scan =
+    place && !byForm.has(place.toLowerCase())
+      ? [...forms, { form: place, descriptor: "" }].sort((a, b) => b.form.length - a.form.length)
+      : forms;
+  const alt = scan.map((f) => escapeRegExp(f.form)).join("|");
   // Whole-word, case-insensitive, optional possessive; skip a match already opened by "(".
   const re = new RegExp(`(^|[^\\p{L}\\p{N}(])(${alt})(['’]s)?(?=[^\\p{L}\\p{N}]|$)`, "giu");
   return prompt.replace(re, (m: string, lead: string, name: string, poss: string | undefined, offset: number, whole: string) => {
@@ -424,12 +444,14 @@ export function expandPrompt(
   nameHandling: "inject" | "reference",
   worldStyle?: string,
   bookTitle?: string,
+  /** The beat's place, so a name inside it is never swapped for a character's face. */
+  sceneLocation?: string,
 ): string {
   if (nameHandling === "reference") {
     const block = buildReferenceBlock(terms, worldStyle, bookTitle);
     return block ? `${block}\n\n${prompt}` : prompt;
   }
-  const injected = injectBibleTerms(prompt, terms);
+  const injected = injectBibleTerms(prompt, terms, sceneLocation);
   const style = worldStyleClause(worldStyle);
   return style ? `${injected}\n\nStyle: ${style}` : injected;
 }

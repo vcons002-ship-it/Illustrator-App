@@ -377,7 +377,9 @@ export class RenderPipeline {
       const sceneBase = appendSceneWardrobe(named, keyEvent?.cast, bible);
       // Bible terms mentioned in the prompt (names → descriptors). Local backends expand them
       // family-aware; for cloud we pre-expand here (cloud providers don't know the bible).
-      const terms = findBibleTermsInText(sceneBase, bible);
+      // The beat's location rides along so a place named after a character can't be read as that
+      // character — it holds even before the place is a bible entity, which on a new beat it isn't.
+      const terms = findBibleTermsInText(sceneBase, bible, keyEvent?.location);
       const isLocal = this.deps.tier.tier === "local";
       // The bible's world style only rides along for the "auto" art style — an explicitly
       // chosen style WINS, instead of the prompt carrying two competing "Style:" directives.
@@ -390,6 +392,7 @@ export class RenderPipeline {
             cloudNameHandling(this.deps.image.id),
             worldStyle,
             request.bookTitle,
+            keyEvent?.location,
           );
       // Reference images for IP-Adapter — user-uploaded only (auto-capture removed).
       const ipAdapterRefs = await this.referenceImagesFor(present);
