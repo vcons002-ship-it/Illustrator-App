@@ -487,6 +487,34 @@ fn sweep_superseded_binaries() {
     }
 }
 
+/// Start the freshly-built app as an INDEPENDENT process, so it survives this one exiting.
+///
+/// A plain spawn makes the new app a child that inherits this process's console and standard
+/// handles — and this process is about to die. On Windows that is how a relaunch turns into "the
+/// app closed and never came back": the child is tied to a console that goes away, or to a job
+/// object the parent belonged to (anything launched from a terminal, a script, or a build tool can
+/// carry one), and it is killed with the parent instead of replacing it.
+///
+/// `DETACHED_PROCESS` gives it no console at all, `CREATE_NEW_PROCESS_GROUP` takes it out of this
+/// one's group, and null stdio leaves it holding no handle of ours. The working directory is the
+/// REPO ROOT, not `target/release`, because that's where `desktop-prod.bat` starts it from — the
+/// relaunch should reproduce the launch that's known to work, not a subtly different one.
+fn launch_detached(exe: &Path, root: &Path) -> std::io::Result<std::process::Child> {
+    let mut cmd = Command::new(exe);
+    cmd.current_dir(root)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+    cmd.spawn()
+}
+
 /// Rebuild the PACKAGED desktop app from the current checkout and relaunch into it. Never returns
 /// on success — the process is replaced by the freshly built one.
 ///
@@ -535,14 +563,42 @@ async fn rebuild_desktop_app(app: AppHandle) -> Result<String, String> {
         Ok(tail) if exe.is_file() => {
             // The new binary is in place. Start it and stand down; the sweep on ITS startup deletes
             // the copy we renamed aside (we can't, we're still running out of it).
-            let mut launch = quiet_command(&exe);
-            launch.current_dir(exe.parent().unwrap_or(&root));
-            launch.spawn().map_err(|e| {
+            let child = launch_detached(&exe, &root).map_err(|e| {
                 let _ = std::fs::rename(&aside, &exe);
                 format!("Rebuilt, but couldn't start the new app: {e}")
             })?;
-            app.exit(0);
-            Ok(tail)
+            // DON'T exit into nothing. Spawning only proves the process was CREATED; a new binary
+            // that dies on startup used to take the old one with it — the app vanished and never
+            // came back, with no message anywhere, because we had already called app.exit(0). Wait
+            // for it to get past its own startup, off the async runtime so the UI stays responsive.
+            let outcome = tauri::async_runtime::spawn_blocking(move || {
+                let mut child = child;
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                // Ok(None) = still running. An error means we can't tell, which is not evidence of
+                // failure — treat "unknown" as alive rather than tearing down a good update.
+                match child.try_wait() {
+                    Ok(Some(status)) => Some(status.to_string()),
+                    _ => None,
+                }
+            })
+            .await
+            .unwrap_or(None);
+            match outcome {
+                Some(status) => {
+                    // It started and stopped. Put the working binary back and stay up to say so —
+                    // an app still running to deliver the bad news beats one that's simply gone.
+                    let _ = std::fs::remove_file(&exe);
+                    let _ = std::fs::rename(&aside, &exe);
+                    Err(format!(
+                        "Rebuilt, but the new app closed immediately ({status}). The previous version has been \
+                         put back and is still running. Run desktop-prod.bat to see what it printed."
+                    ))
+                }
+                None => {
+                    app.exit(0);
+                    Ok(tail)
+                }
+            }
         }
         Ok(_) => {
             let _ = std::fs::rename(&aside, &exe);
