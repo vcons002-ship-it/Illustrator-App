@@ -88,6 +88,14 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
+- **Imported chats become real illustrated chapters** — Bringing a conversation into Story as you
+  go no longer collapses the entire transcript into one analysis/render unit. Each assistant story
+  response (paired with the reader turn that prompted it) becomes a chapter, and explicit Chapter /
+  Part headings inside a response split it further, so every section gets its own prompt and
+  renderable image. The complete conversation is still preserved. The reader character's exact
+  physical description from **You** is now stored as appearance data and remains in image prompts
+  after analysis adds structured details; long foundational appearance notes are retained instead
+  of being dropped.
 - **Restart no longer strands a linked phone** — Update already handed the phone-link port to a
   detached replacement app and checked that replacement survived startup. The separate Restart
   button used the framework's generic relaunch instead, which could start the new process while the

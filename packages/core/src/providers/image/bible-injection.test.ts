@@ -220,6 +220,35 @@ describe("describeCharacterIdentity", () => {
     const bare = character({ name: "Bo", persistentTraits: ["wiry", "one-eyed"] });
     expect(describeCharacterIdentity(bare)).toBe("wiry, one-eyed");
   });
+
+  it("keeps imported You appearance notes after analysis adds structured details", () => {
+    const c = character({
+      name: "Alex",
+      appearance: {
+        ...emptyAppearance(),
+        eyes: "green",
+        height: "six feet tall",
+        notes: "broad-shouldered, auburn hair, freckled olive skin, scar through the left eyebrow",
+      },
+    });
+    const out = describeCharacterIdentity(c);
+    expect(out).toContain("six feet tall");
+    expect(out).toContain("green eyes");
+    expect(out).toContain("broad-shouldered");
+    expect(out).toContain("auburn hair");
+  });
+
+  it("keeps legacy imported persistent traits alongside newly extracted fields", () => {
+    const c = character({
+      name: "Alex",
+      appearance: { ...emptyAppearance(), eyes: "green" },
+      persistentTraits: ["tall, broad-shouldered, auburn hair, freckled olive skin"],
+    });
+    const out = describeCharacterIdentity(c);
+    expect(out).toContain("green eyes");
+    expect(out).toContain("broad-shouldered");
+    expect(out).toContain("auburn hair");
+  });
 });
 
 describe("sanitizeWorldStyle", () => {

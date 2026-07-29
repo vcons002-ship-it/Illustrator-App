@@ -93,6 +93,7 @@ export function describeCharacterIdentity(c: Character): string {
     for (const [v, noun] of [
       [a.gender, ""],
       [a.age, ""],
+      [a.height, ""],
       [a.hair, "hair"],
       [a.distinguishingMarks, ""],
       [a.eyes, "eyes"],
@@ -100,14 +101,17 @@ export function describeCharacterIdentity(c: Character): string {
       // bust"), and anchoring it produced "…ample bust build".
       [a.build, ""],
       [a.skinTone, "skin"],
+      // Free-form notes are where an exact appearance imported from the reader's "You" data lives.
+      // It must remain drawable even after story analysis fills one or two structured fields.
+      [a.notes, ""],
     ] as const) {
       const named = anchorField(v, noun);
       if (named) fields.push(named);
     }
   }
-  if (fields.length === 0) {
-    for (const t of c.persistentTraits) if (t && t.trim()) fields.push(t.trim());
-  }
+  // Older story imports seeded the "You" description here. Include it alongside structured fields
+  // rather than only as an all-or-nothing fallback, so re-analysis cannot hide that stored look.
+  for (const t of c.persistentTraits) if (t && t.trim()) fields.push(t.trim());
   return capBodyDescriptor(dedupeFragments(fields.length ? fields : ["person"]), MAX_CHARACTER_DESCRIPTOR_CHARS);
 }
 

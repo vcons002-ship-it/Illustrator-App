@@ -216,6 +216,25 @@ describe("visualSoulNotes", () => {
     expect(out.endsWith("unkempt")).toBe(true);
   });
 
+  it("keeps a word-safe prefix when the foundational physical description exceeds the budget", () => {
+    const description =
+      "Physical description: tall and broad-shouldered, with shoulder-length auburn hair, green eyes, " +
+      "freckled olive skin, a narrow scar over the left eyebrow, and a weathered charcoal coat " +
+      "with silver clasps that reaches nearly to the ankles.";
+    const out = visualSoulNotes([note(description)], 120);
+    expect(out).toBeTruthy();
+    expect(out.length).toBeLessThanOrEqual(120);
+    expect(out).toContain("Physical description");
+    expect(out).toContain("auburn hair");
+    expect(description.startsWith(out)).toBe(true);
+  });
+
+  it("recognises an explicitly labelled appearance note", () => {
+    expect(visualSoulNotes([note("Appearance: angular and imposing")])).toBe(
+      "Appearance: angular and imposing",
+    );
+  });
+
   it("recognises clothing, colouring, build and age as description", () => {
     expect(visualSoulNotes([note("wears wire-rimmed glasses")])).toBeTruthy();
     expect(visualSoulNotes([note("auburn braid")])).toBeTruthy();

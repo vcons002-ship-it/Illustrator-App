@@ -3704,10 +3704,13 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         };
         // Pre-seed the named cast into the bible BEFORE the open, so the active-scene tracker resolves
         // + keeps them present from beat one even if the opening prose doesn't name them — closing the
-        // "setting-only opening" gap. A cast entry's `description` seeds its LOOK (persistentTraits) so
+        // "setting-only opening" gap. A cast entry's `description` seeds its LOOK (appearance notes) so
         // the first image isn't arbitrary. Extraction UPSERTS by name on the first beat that describes
-        // them, enriching this same entry (no duplicate). Written to the shared store so openBook
-        // restores it. The played pair is added (name-only) when not already in `characters`.
+        // them, enriching this same entry (no duplicate). A setup description belongs in the
+        // appearance `notes` field, not the fallback-only persistent-trait bucket: analysis can then
+        // add structured hair/eyes/etc. without making the exact "You" description disappear from
+        // image prompts. Written to the shared store so openBook restores it. The played pair is
+        // added (name-only) when not already in `characters`.
         if (cast.length) {
           await store.putBible({
             ...createEmptyBible(id),
@@ -3715,8 +3718,11 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
               id: `char-${storySlug(c.name)}`,
               name: c.name.trim(),
               aliases: [],
-              appearance: emptyAppearance(),
-              persistentTraits: c.description ? [c.description] : [],
+              appearance: {
+                ...emptyAppearance(),
+                ...(c.description ? { notes: c.description } : {}),
+              },
+              persistentTraits: [],
               clothing: [],
               anchor: { seed: deterministicSeed(c.name) },
               firstSeenChapter: 0,

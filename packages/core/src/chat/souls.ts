@@ -200,7 +200,7 @@ export function userSoulPromptBlock(notes: readonly SoulNote[], name = ""): stri
  * worn, and colour — the things an image model can draw.
  */
 const LOOK_WORDS =
-  /\b(hair|eyes?|eyebrows?|beard|moustache|stubble|skin|complexion|freckles?|scars?|tattoos?|build|tall|short|slim|slender|stocky|broad|wiry|lean|heavyset|young|old|middle-aged|teenage|twenties|thirties|forties|fifties|sixties|face|jaw|cheekbones?|nose|lips|hands?|posture|wears?|wearing|dressed|dress|coat|jacket|cloak|robes?|armou?r|uniform|shirt|trousers|jeans|boots?|shoes?|hat|cap|hood|scarf|gloves?|glasses|spectacles|mask|jewell?ery|ring|necklace|braid|ponytail|shaved|bald|curly|straight|wavy|silver|grey|gray|blonde?|brunette|auburn|ginger|red|black|white|brown|blue|green|hazel|amber|olive|pale|dark|tanned|freckled)\b/i;
+  /\b(appearance|physical(?:\s+description|ly)?|looks?\s+like|physique|body|height|hair|eyes?|eyebrows?|beard|moustache|stubble|skin|complexion|freckles?|scars?|tattoos?|build|shoulders?|tall|short|slim|slender|stocky|broad|wiry|lean|heavyset|young|old|middle-aged|teenage|twenties|thirties|forties|fifties|sixties|woman|man|female|male|androgynous|face|jaw|cheekbones?|nose|lips|hands?|posture|wears?|wearing|dressed|dress|coat|jacket|cloak|robes?|armou?r|uniform|shirt|trousers|jeans|boots?|shoes?|hat|cap|hood|scarf|gloves?|glasses|spectacles|mask|jewell?ery|ring|necklace|braid|ponytail|shaved|bald|curly|straight|wavy|silver|grey|gray|blonde?|brunette|auburn|ginger|red|black|white|brown|blue|green|hazel|amber|olive|pale|dark|tanned|freckled)\b/i;
 
 function isLookNote(text: string): boolean {
   return LOOK_WORDS.test(text);
@@ -220,9 +220,10 @@ function isLookNote(text: string): boolean {
  * once extraction had read a beat or two and filled in real appearance fields — which is exactly why
  * the opening image was poor and a later re-render was fine.
  *
- * Whole notes only, oldest first, up to `budget` characters. Returns "" when nothing looks like a
- * description — better a character the model renders neutrally than one it renders from a personality
- * note. PURE.
+ * Whole notes only, oldest first, up to `budget` characters, except that one foundational
+ * description longer than the entire budget is retained as a word-safe prefix rather than dropped.
+ * Returns "" when nothing looks like a description — better a character the model renders neutrally
+ * than one it renders from a personality note. PURE.
  */
 export const SOUL_LOOK_BUDGET_CHARS = MAX_CHARACTER_DESCRIPTOR_CHARS;
 
@@ -233,7 +234,17 @@ export function visualSoulNotes(notes: readonly SoulNote[], budget = SOUL_LOOK_B
     const text = n.text.trim();
     if (!text || !isLookNote(text)) continue;
     const cost = text.length + (kept.length ? 2 : 0); // "; "
-    if (used + cost > budget) break; // whole notes only — never a sentence cut mid-word
+    // A comprehensive physical description is commonly the FIRST soul entry and may be longer than
+    // the image descriptor budget. Returning "" in that case loses the reader's entire appearance.
+    // Keep a word-safe prefix of that one foundational note; once something is kept, skip oversized
+    // notes and continue looking for shorter details that still fit.
+    if (used + cost > budget) {
+      if (kept.length === 0 && budget > 0) {
+        const prefix = text.slice(0, budget + 1).replace(/\s+\S*$/, "").replace(/[;,:\s]+$/, "");
+        return prefix || text.slice(0, budget);
+      }
+      continue;
+    }
     kept.push(text);
     used += cost;
   }
