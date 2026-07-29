@@ -111,8 +111,10 @@ export function stopLocalLlm(): Promise<void> {
   return invoke<void>("stop_llm");
 }
 
-/** Fully relaunch the desktop app (kills the bundled engine/LLM children on the way out). The call
- * never resolves — the process restarts. No-op on the web. */
+/** Fully relaunch the desktop app through the same detached, checked handoff used by self-update.
+ * The phone relay is released before launch and restored by the successor with its persisted
+ * token/port, while bundled engine/LLM children are killed on the old process's exit. The call never
+ * resolves on success. No-op on the web. */
 export function restartApp(): Promise<void> {
   return invoke<void>("restart_app");
 }

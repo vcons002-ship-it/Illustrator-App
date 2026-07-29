@@ -88,6 +88,13 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
+- **Restart no longer strands a linked phone** — Update already handed the phone-link port to a
+  detached replacement app and checked that replacement survived startup. The separate Restart
+  button used the framework's generic relaunch instead, which could start the new process while the
+  old relay still owned its port and leave mobile disconnected. Restart now uses the same checked
+  handoff as Update: release the relay, launch independently, confirm startup, then exit; the new app
+  restores the persisted address and pairing token. A failed relaunch leaves the old app running and
+  restores its relay.
 - **The text encoder you picked is the one that's used** — choosing an exact encoder or VAE in
   Settings → Local model was treated as a strong hint rather than an instruction: if the name stopped
   matching what the engine lists, the app quietly went back to detecting one itself, which is the
