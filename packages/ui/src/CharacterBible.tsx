@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import type { Character, CharacterAppearance, Outfit, VisualBible } from "@visual-reader/core";
 import { MAX_CHARACTER_REFS, referenceIdsOf } from "@visual-reader/core";
+import { RemovedBibleEntries } from "./RemovedBibleEntries.js";
 import { SUCCESS_GREEN } from "./tokens.js";
 
 /**
@@ -38,6 +39,10 @@ export interface CharacterBibleProps {
   onRemoveReference?: (characterId: string, refId: string) => void;
   /** Fetch a reference image's bytes for its thumbnail. */
   getReferenceImage?: (refId: string) => Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined>;
+  /** Delete a character outright. Remembered, so re-reading the book can't put them back. */
+  onRemove?: (characterId: string) => void;
+  /** Undo a deletion — the character returns with everything they had. */
+  onRestore?: (characterId: string) => void;
   onClose: () => void;
 }
 
@@ -60,9 +65,15 @@ export function CharacterBible({
   onAddReference,
   onRemoveReference,
   getReferenceImage,
+  onRemove,
+  onRestore,
   onClose,
 }: CharacterBibleProps) {
   const characters = bible?.characters ?? [];
+  const removed = useMemo(
+    () => (bible?.removed ?? []).filter((r) => r.kind === "character"),
+    [bible?.removed],
+  );
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
   // Each character's searchable haystack, built once per bible update — not per
@@ -119,9 +130,17 @@ export function CharacterBible({
                 {...(onAddReference ? { onAddReference } : {})}
                 {...(onRemoveReference ? { onRemoveReference } : {})}
                 {...(getReferenceImage ? { getReferenceImage } : {})}
+                {...(onRemove ? { onRemove } : {})}
               />
             ))}
           </div>
+        )}
+        {onRestore && removed.length > 0 && (
+          <RemovedBibleEntries
+            entries={removed.map((r) => ({ id: r.entity.id, name: r.entity.name }))}
+            what="character"
+            onRestore={onRestore}
+          />
         )}
       </div>
     </div>
@@ -150,12 +169,14 @@ const CharacterCard = memo(function CharacterCard({
   onAddReference,
   onRemoveReference,
   getReferenceImage,
+  onRemove,
 }: {
   character: Character;
   onSave: (characterId: string, patch: CharacterEdit) => void;
   onAddReference?: (characterId: string, image: { bytes: ArrayBuffer; mimeType: string }) => void;
   onRemoveReference?: (characterId: string, refId: string) => void;
   getReferenceImage?: (refId: string) => Promise<{ bytes: ArrayBuffer; mimeType: string } | undefined>;
+  onRemove?: (characterId: string) => void;
 }) {
   const [appearance, setAppearance] = useState<CharacterAppearance>(character.appearance);
   const [outfits, setOutfits] = useState<Outfit[]>(() => initialOutfits(character));
@@ -280,6 +301,23 @@ const CharacterCard = memo(function CharacterCard({
       )}
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
         {saved && <span style={{ color: SUCCESS_GREEN, fontSize: 12 }}>✓ saved</span>}
+        {onRemove && (
+          <button
+            style={dangerButtonStyle}
+            title="Remove this person from the bible entirely — for a duplicate, or something the reader mistook for a person"
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Delete “${character.name}” from the bible?\n\nThey stop appearing in new images, and reading on won't add them back. Existing images are kept. You can undo this from “Deleted” at the bottom of this list.`,
+                )
+              ) {
+                onRemove(character.id);
+              }
+            }}
+          >
+            Delete
+          </button>
+        )}
         <button style={buttonStyle} disabled={!dirty} onClick={save}>
           Save
         </button>
@@ -498,6 +536,13 @@ const smallButtonStyle = {
   padding: "2px 8px",
   fontSize: 12,
 } as const;
+
+const dangerButtonStyle = {
+  ...buttonStyle,
+  borderColor: "rgba(255,120,120,0.45)",
+  color: "#ffb0b0",
+} as const;
+
 
 const thumbStyle = {
   position: "relative",

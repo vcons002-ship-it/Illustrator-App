@@ -799,6 +799,35 @@ describe("Engine", () => {
     expect(persisted!.environments.find((e) => e.id === "env-1")!.aliases).toEqual(["the tavern"]);
   });
 
+  it("removeBibleEntry deletes, persists, and survives re-reading; restoreBibleEntry undoes it", async () => {
+    // Editing an entry can't say "this shouldn't exist", and the entries worth deleting — a
+    // duplicate, a costume read as a person — are named over and over in the prose, so the deletion
+    // has to be remembered or the next chapter puts it straight back.
+    const store = new InMemoryStore();
+    const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    await engine.whenBibleReady();
+
+    const aria = engine.getBible()!.characters.find((c) => c.name === "Aria")!;
+    await engine.removeBibleEntry("character", aria.id);
+
+    expect(engine.getBible()!.characters.find((c) => c.id === aria.id)).toBeUndefined();
+    const persisted = await store.getBible("book-1");
+    expect(persisted!.characters.find((c) => c.id === aria.id)).toBeUndefined();
+    expect(persisted!.removed).toHaveLength(1);
+
+    // Re-analysing the whole book re-runs extraction over every chapter — the deleted character
+    // must not reappear, even though every other extracted thing is rewritten from scratch.
+    await engine.regenerateStoryboard();
+    await engine.whenBibleReady();
+    expect(engine.getBible()!.characters.find((c) => c.name === "Aria")).toBeUndefined();
+
+    await engine.restoreBibleEntry("character", aria.id);
+    expect(engine.getBible()!.characters.find((c) => c.id === aria.id)).toMatchObject({ name: "Aria" });
+    expect(engine.getBible()!.removed).toEqual([]);
+  });
+
   it("does NOT auto-capture a reference image; user uploads add/remove them", async () => {
     const store = new InMemoryStore();
     const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });

@@ -13,6 +13,7 @@ import type {
   Indicators,
   PageText,
   BusCommand,
+  BibleEntityKind,
   CharacterPatch,
   CreaturePatch,
   EnvironmentPatch,
@@ -92,6 +93,10 @@ export type MainToWorker =
   | { type: "updateCharacter"; characterId: string; patch: CharacterPatch }
   | { type: "updateCreature"; creatureId: string; patch: CreaturePatch }
   | { type: "updateEnvironment"; environmentId: string; patch: EnvironmentPatch }
+  /** Delete a bible entry (character / creature / place); remembered so re-extraction can't undo it. */
+  | { type: "removeBibleEntry"; kind: BibleEntityKind; id: string }
+  /** Put a deleted bible entry back, exactly as it was. */
+  | { type: "restoreBibleEntry"; kind: BibleEntityKind; id: string }
   | { type: "addCharacterReference"; characterId: string; image: { bytes: ArrayBuffer; mimeType: string } }
   | { type: "removeCharacterReference"; characterId: string; refId: string }
   /** Fetch a reference image's bytes for a UI thumbnail (answered by `characterReference`). */

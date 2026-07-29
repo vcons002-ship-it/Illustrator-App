@@ -241,6 +241,19 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   unrelated material found its way into the prose. Each story now owns a chat, remembered across
   restarts and returned to whenever you open the book; and while a story is open, nothing in the
   background takes the chat away from it (anything due simply waits until you close the story).
+- **You can delete a bible entry, and it stays deleted** — characters, creatures and places can now be
+  removed outright, not just corrected. Some of what the reader writes down isn't a thing at all: the
+  same person recorded twice under two names, a costume identity or a title promoted to a person of
+  their own, a passing simile filed as a creature. There was no way to say so — you could rewrite an
+  entry, never delete it — and while one exists it goes into your pictures, which is where stray
+  extra figures come from. Each entry now has a **Delete** button. The deletion is remembered rather
+  than just applied, because it has to be: the reader works through the book chapter by chapter and
+  adds what it finds by name, so an entry merely taken off the list walks straight back on the next
+  time the story mentions it — and the entries worth deleting are exactly the ones mentioned over and
+  over. It holds through reading on, and through a full re-analysis. Existing images are kept, as
+  with any bible edit; the change applies to new or re-rendered ones, and deleting a person also
+  takes them out of the cast of any scene still waiting to be drawn. Nothing is lost: a **Deleted**
+  list at the bottom of each panel restores an entry exactly as it was, description and all.
 - **Places and Creatures have their own windows now** — the Visual Bible keeps three lists and only
   the characters could be looked at, let alone corrected. The other two shape every picture just as
   surely: a place's description is what a scene set there is drawn from, and it's where the look and
