@@ -13,6 +13,7 @@ import {
   panelGroup,
   paragraphIndexFromId,
   parseImportedBible,
+  referenceIdsOf,
   resolveKeyEvent,
   resolvePageEntities,
   spoilerRevealPoint,
@@ -8730,11 +8731,20 @@ export function App() {
                 <div style={styles.lockLook}>
                   <span style={styles.lockLookLabel}>📌 Lock this look as:</span>
                   <div style={styles.lockLookRow}>
-                    {bible.characters.map((c) => (
+                    {bible.characters.map((c) => {
+                      // How many looks are already locked for them. Shown ON the button so the
+                      // capture confirms itself here — you shouldn't have to open the Character
+                      // Bible and squint at a thumbnail to find out whether the click did anything.
+                      const locked = referenceIdsOf(c.anchor).length;
+                      return (
                       <button
                         key={c.id}
                         style={styles.lockLookButton}
-                        title={`Use this image as ${c.name}'s reference — future beats will match it (regenerate a beat to re-illustrate with it)`}
+                        title={
+                          locked
+                            ? `${c.name} has ${locked} locked look${locked === 1 ? "" : "s"} (see them in Characters). Click to add this image as another.`
+                            : `Use this image as ${c.name}'s reference — future beats will match it (regenerate a beat to re-illustrate with it)`
+                        }
                         onClick={() => {
                           void (async () => {
                             const img = results.get(unitIndex)?.image;
@@ -8747,9 +8757,10 @@ export function App() {
                           })();
                         }}
                       >
-                        {c.name}
+                        {locked ? `📌 ${c.name} (${locked})` : c.name}
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}

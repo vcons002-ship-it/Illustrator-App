@@ -17,7 +17,7 @@ import type { VisualRequest } from "../../types/content.js";
 import { deterministicSeed } from "./mock-llm-provider.js";
 import { resolveKeyEvent } from "../../visual-bible/key-events.js";
 import { recentArcLine } from "../../visual-bible/story-digest.js";
-import { sanitizeWorldStyle } from "../image/bible-injection.js";
+import { sanitizeWorldStyle, stripWeather } from "../image/bible-injection.js";
 
 /**
  * Shared building blocks for the cloud LLM providers (Claude / Gemini / OpenAI).
@@ -1076,7 +1076,18 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
   // Grounding citations ("References (chapter N)" = bare source URLs) are kept in the
   // glossary for the bible/export, but they're useless to a prompt writer — and one
   // accrues per chapter, so they'd grow every image-prompt request for nothing.
-  const facts = (bible.glossary ?? []).filter((g) => !g.term.startsWith("References (chapter"));
+  //
+  // WEATHER is stripped for a different reason. The block below tells the prompt writer to apply
+  // these facts AS DEFAULTS to every image, which is right for the things it's meant to hold —
+  // customary attire, technology level, materials, social norms. It is catastrophic for weather: a
+  // story that opens in the rain gets a "world fact" about rain, and from then on EVERY prompt for
+  // the whole book is written with rain in it, indoor scenes included. A premise is supposed to set
+  // the opening scene, not the permanent conditions of the world. Weather that matters to a
+  // particular beat comes from that beat's own passage, which the writer is reading anyway.
+  const facts = (bible.glossary ?? [])
+    .filter((g) => !g.term.startsWith("References (chapter"))
+    .map((g) => ({ term: stripWeather(g.term), definition: stripWeather(g.definition) }))
+    .filter((g) => g.term.trim() && g.definition.trim());
   const scene = (bible.storyboard ?? []).find((s) => s.chapterIndex === request.chapterIndex);
   // Beat-level setting: this unit's stored keyEvent (if any) knows where ITS moment
   // happens — more exact than the chapter's single location when the chapter moves.
