@@ -18,6 +18,10 @@ import { deterministicSeed } from "./mock-llm-provider.js";
 import { resolveKeyEvent } from "../../visual-bible/key-events.js";
 import { isRemovedEntity } from "../../visual-bible/removals.js";
 import { recentArcLine } from "../../visual-bible/story-digest.js";
+import {
+  durableCharacterDetails,
+  sanitizeAppearanceDetails,
+} from "../../visual-bible/character-details.js";
 import { sanitizeWorldStyle } from "../image/bible-injection.js";
 
 /**
@@ -120,7 +124,12 @@ export const EXTRACTION_SYSTEM =
   "'Hawk', 'Wren', or 'Fox' is a human character, NOT an animal. For each character fill the structured 'appearance' fields " +
   "(hair, eyes, gender, build/physique, height, skinTone, age, distinguishingMarks; use " +
   "an empty string for anything the text doesn't state) and put extra persistent details " +
-  "in persistentTraits. Capture each DISTINCT outfit a character is described wearing as a " +
+  "in persistentTraits. DURABILITY RULE: appearance and persistentTraits are only facts that " +
+  "remain true across scenes. NEVER put a momentary facial expression, emotion, pose, gesture, " +
+  "or state (such as a grin, smile, frown, tears, blush, raised eyebrow, crossed arms, or clenched " +
+  "fists) there unless the text explicitly says it is a permanent or habitual defining feature. " +
+  "Keep momentary expressions and poses only in the relevant keyEvent action, mood, or composition. " +
+  "Capture each DISTINCT outfit a character is described wearing as a " +
   "separate entry in 'outfits' — a short 'label' and a detailed 'description' (garments, fabric, " +
   "colour, accessories, era/style), e.g. label 'flight leathers', description 'fitted black hide " +
   "with buckled straps'. Add new outfits as they appear across chapters; do NOT merge different " +
@@ -860,7 +869,14 @@ export function mergeExtraction(
 ): VisualBible {
   const bible: VisualBible = {
     ...existing,
-    characters: [...existing.characters],
+    characters: existing.characters.map((character) => ({
+      ...character,
+      appearance: {
+        ...emptyAppearance(),
+        ...sanitizeAppearanceDetails(character.appearance),
+      },
+      persistentTraits: durableCharacterDetails(character.persistentTraits),
+    })),
     environments: [...existing.environments],
     creatures: [...(existing.creatures ?? [])],
     spoilers: [...existing.spoilers],
@@ -887,8 +903,11 @@ export function mergeExtraction(
         id: `char-${slug(c.name)}`,
         name: c.name,
         aliases: c.aliases,
-        appearance: { ...emptyAppearance(), ...(c.appearance ?? {}) },
-        persistentTraits: c.persistentTraits,
+        appearance: {
+          ...emptyAppearance(),
+          ...sanitizeAppearanceDetails(c.appearance ?? {}),
+        },
+        persistentTraits: durableCharacterDetails(c.persistentTraits),
         clothing: c.clothing ?? [],
         outfits: dedupeOutfits(c.outfits ?? []),
         anchor: { seed: deterministicSeed(c.name) },
@@ -1206,11 +1225,15 @@ function accumulateAppearance(
   base: CharacterAppearance,
   extra: Partial<CharacterAppearance> | undefined,
 ): CharacterAppearance {
-  if (!extra) return base;
-  const out = { ...base };
+  const out = {
+    ...emptyAppearance(),
+    ...sanitizeAppearanceDetails(base),
+  };
+  if (!extra) return out;
+  const cleanExtra = sanitizeAppearanceDetails(extra);
   (Object.keys(out) as (keyof CharacterAppearance)[]).forEach((k) => {
     const cur = out[k].trim();
-    const add = (extra[k] ?? "").trim();
+    const add = (cleanExtra[k] ?? "").trim();
     if (!add) return;
     if (!cur) {
       out[k] = add;
@@ -1256,7 +1279,10 @@ function mergeRawIntoCharacter(ex: Character, raw: RawExtraction["characters"][n
       (a) => a.toLowerCase() !== ex.name.toLowerCase(),
     ),
     appearance: accumulateAppearance(ex.appearance, raw.appearance),
-    persistentTraits: unionStrings(ex.persistentTraits, raw.persistentTraits),
+    persistentTraits: unionStrings(
+      durableCharacterDetails(ex.persistentTraits),
+      durableCharacterDetails(raw.persistentTraits),
+    ),
     clothing: unionStrings(ex.clothing, raw.clothing ?? []),
     outfits: unionOutfits(ex.outfits, raw.outfits ?? []),
   };
@@ -1270,7 +1296,10 @@ function mergeCharacters(canon: Character, other: Character): Character {
       (a) => a.toLowerCase() !== canon.name.toLowerCase(),
     ),
     appearance: accumulateAppearance(canon.appearance, other.appearance),
-    persistentTraits: unionStrings(canon.persistentTraits, other.persistentTraits),
+    persistentTraits: unionStrings(
+      durableCharacterDetails(canon.persistentTraits),
+      durableCharacterDetails(other.persistentTraits),
+    ),
     clothing: unionStrings(canon.clothing, other.clothing),
     outfits: unionOutfits(canon.outfits, other.outfits),
     firstSeenChapter: Math.min(canon.firstSeenChapter, other.firstSeenChapter),

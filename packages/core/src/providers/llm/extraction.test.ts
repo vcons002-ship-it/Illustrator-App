@@ -45,6 +45,71 @@ describe("stripThink", () => {
   });
 });
 
+describe("mergeExtraction transient character states", () => {
+  it("keeps expressions in the scene beat but out of reusable character identity", () => {
+    const bible = mergeExtraction(
+      createEmptyBible("b"),
+      {
+        characters: [
+          {
+            name: "Mara",
+            aliases: [],
+            appearance: {
+              hair: "auburn",
+              notes: "freckled skin; a broad grin",
+              distinguishingMarks: "smirking expression",
+            },
+            persistentTraits: ["wiry", "always grinning in this scene", "one-eyed"],
+          },
+        ],
+        environments: [],
+        spoilers: [],
+        keyEvents: [
+          {
+            subject: "Mara",
+            action: "Mara grins as she opens the door",
+            environment: "a dark hall",
+            mood: "relieved",
+            composition: "close-up",
+          },
+        ],
+      },
+      0,
+      [[0, 0]],
+    );
+
+    expect(bible.characters[0]!.appearance.hair).toBe("auburn");
+    expect(bible.characters[0]!.appearance.notes).toBe("freckled skin");
+    expect(bible.characters[0]!.appearance.distinguishingMarks).toBe("");
+    expect(bible.characters[0]!.persistentTraits).toEqual(["wiry", "one-eyed"]);
+    expect(bible.storyboard[0]!.keyEvents![0]!.imagePrompt.action).toContain("grins");
+  });
+
+  it("cleans transient details already stored by an older analysis", () => {
+    const existing = createEmptyBible("b");
+    existing.characters.push(
+      char("Mara", {
+        appearance: {
+          ...emptyAppearance(),
+          hair: "auburn",
+          notes: "a broad grin",
+        },
+        persistentTraits: ["arms crossed", "one-eyed"],
+      }),
+    );
+
+    const bible = mergeExtraction(
+      existing,
+      { characters: [], environments: [], spoilers: [] },
+      1,
+    );
+
+    expect(bible.characters[0]!.appearance.notes).toBe("");
+    expect(bible.characters[0]!.appearance.hair).toBe("auburn");
+    expect(bible.characters[0]!.persistentTraits).toEqual(["one-eyed"]);
+  });
+});
+
 describe("mergeExtraction keyEvents (folded prompts)", () => {
   it("maps ordered keyEvents onto the chapter's unit page ranges", () => {
     let bible = createEmptyBible("b");

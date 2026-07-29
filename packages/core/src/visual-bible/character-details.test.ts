@@ -1,0 +1,47 @@
+import { describe, expect, it } from "vitest";
+import {
+  durableCharacterDetails,
+  isTransientCharacterDetail,
+  sanitizeAppearanceDetails,
+  stripTransientCharacterDetails,
+} from "./character-details.js";
+
+describe("transient character details", () => {
+  it("recognises momentary expressions, gestures, and emotional states", () => {
+    for (const detail of [
+      "a broad grin",
+      "smiling warmly",
+      "her brow furrowed",
+      "eyes narrowed",
+      "arms crossed",
+      "clenched fists",
+      "tearful and flushed",
+    ]) {
+      expect(isTransientCharacterDetail(detail), detail).toBe(true);
+    }
+  });
+
+  it("keeps explicitly durable expressions and expression-shaped marks", () => {
+    expect(isTransientCharacterDetail("a habitual crooked grin")).toBe(false);
+    expect(isTransientCharacterDetail("a permanently fixed scowl")).toBe(false);
+    expect(isTransientCharacterDetail("a smile-shaped scar")).toBe(false);
+    expect(isTransientCharacterDetail("auburn hair and a scar over one eyebrow")).toBe(false);
+  });
+
+  it("removes only the transient clauses from mixed extracted prose", () => {
+    expect(stripTransientCharacterDetails("auburn hair; a broad grin")).toBe("auburn hair");
+    expect(stripTransientCharacterDetails("green eyes, smiling warmly, freckled skin")).toBe(
+      "green eyes, freckled skin",
+    );
+    expect(durableCharacterDetails(["wiry", "grinning", "one-eyed"])).toEqual([
+      "wiry",
+      "one-eyed",
+    ]);
+    expect(
+      sanitizeAppearanceDetails({
+        hair: "black",
+        notes: "scar over her eyebrow; arms crossed",
+      }),
+    ).toEqual({ hair: "black", notes: "scar over her eyebrow" });
+  });
+});
