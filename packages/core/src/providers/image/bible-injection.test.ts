@@ -877,3 +877,76 @@ describe("an outfit label is not a name for the person wearing it", () => {
     expect(terms.find((t) => t.kind === "character")?.names).toContain("Vi");
   });
 });
+
+describe("one person is described once, whichever of their names is used", () => {
+  const bible = (): VisualBible => {
+    const rell: Character = {
+      id: "char-rell",
+      name: "Rell",
+      aliases: ["the Captain"],
+      appearance: { ...emptyAppearance(), gender: "male", hair: "grey beard" },
+      persistentTraits: [],
+      clothing: [],
+      anchor: { seed: 1 },
+      firstSeenChapter: 0,
+    };
+    return { ...createEmptyBible("b"), characters: [rell] };
+  };
+
+  it("describes them at the first mention and never again — by name then nickname", () => {
+    // Keying this on the matched WORD meant a name plus a nickname described the same person twice,
+    // which reads as two people and is drawn as two people.
+    const prompt = "Rell pours a drink. The Captain wipes the bar.";
+    const out = expandPrompt(prompt, findBibleTermsInText(prompt, bible()), "appositive");
+    expect(out.match(/grey beard/g)).toHaveLength(1);
+    expect(out).toContain("Rell (male, grey beard)");
+    expect(out).toContain("The Captain wipes the bar.");
+  });
+
+  it("…and nickname first, then name", () => {
+    const prompt = "The Captain pours a drink. Rell wipes the bar.";
+    const out = expandPrompt(prompt, findBibleTermsInText(prompt, bible()), "appositive");
+    expect(out.match(/grey beard/g)).toHaveLength(1);
+    expect(out).toContain("The Captain (male, grey beard)");
+    expect(out).toContain("Rell wipes the bar.");
+  });
+
+  it("still describes two DIFFERENT people", () => {
+    const b = bible();
+    b.characters.push({
+      id: "char-mara",
+      name: "Mara",
+      aliases: [],
+      appearance: { ...emptyAppearance(), gender: "female", hair: "red braid" },
+      persistentTraits: [],
+      clothing: [],
+      anchor: { seed: 2 },
+      firstSeenChapter: 0,
+    });
+    const prompt = "Rell pours for Mara.";
+    const out = expandPrompt(prompt, findBibleTermsInText(prompt, b), "appositive");
+    expect(out).toContain("Rell (male, grey beard)");
+    expect(out).toContain("Mara (female, red braid)");
+  });
+
+  it("an outfit label can't be claimed by ANOTHER character's nickname either", () => {
+    // Reserved globally: the collision doesn't have to be with the wearer.
+    const b = bible();
+    b.characters[0]!.aliases = ["Ghost Broker"];
+    b.characters.push({
+      id: "char-lyra",
+      name: "Lyra",
+      aliases: [],
+      appearance: { ...emptyAppearance(), gender: "female" },
+      persistentTraits: [],
+      clothing: [],
+      outfits: [{ label: "Ghost Broker", description: "a long grey coat", context: "" }],
+      anchor: { seed: 3 },
+      firstSeenChapter: 0,
+    });
+    const prompt = "Lyra wears her Ghost Broker outfit.";
+    const terms = findBibleTermsInText(prompt, b);
+    expect(terms.find((t) => t.names.includes("Ghost Broker"))?.kind).toBe("outfit");
+    expect(terms.some((t) => t.kind === "character" && t.names.includes("Rell"))).toBe(false);
+  });
+});

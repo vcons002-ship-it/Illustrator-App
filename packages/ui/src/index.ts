@@ -20,6 +20,7 @@ export * from "./DataTablePreview.js";
 export * from "./JsonTreeView.js";
 export * from "./TechnicalSupport.js";
 export * from "./CharacterBible.js";
+export * from "./WorldBible.js";
 export * from "./LibraryPanel.js";
 export * from "./CreationsPanel.js";
 export * from "./Toast.js";

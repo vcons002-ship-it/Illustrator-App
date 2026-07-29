@@ -14,6 +14,8 @@ import type {
   PageText,
   BusCommand,
   CharacterPatch,
+  CreaturePatch,
+  EnvironmentPatch,
   ChatTurn,
   ContextUsage,
   ImageResult,
@@ -88,6 +90,8 @@ export type MainToWorker =
   /** Fill gaps (missing prompts + failed/un-rendered units) without discarding finished images. */
   | { type: "completeBook" }
   | { type: "updateCharacter"; characterId: string; patch: CharacterPatch }
+  | { type: "updateCreature"; creatureId: string; patch: CreaturePatch }
+  | { type: "updateEnvironment"; environmentId: string; patch: EnvironmentPatch }
   | { type: "addCharacterReference"; characterId: string; image: { bytes: ArrayBuffer; mimeType: string } }
   | { type: "removeCharacterReference"; characterId: string; refId: string }
   /** Fetch a reference image's bytes for a UI thumbnail (answered by `characterReference`). */

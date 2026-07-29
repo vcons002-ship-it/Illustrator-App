@@ -97,6 +97,21 @@ export interface CharacterPatch {
   appearance?: Partial<CharacterAppearance>;
 }
 
+/** A user correction to one creature. Same "save only" contract as {@link CharacterPatch}. */
+export interface CreaturePatch {
+  name?: string;
+  aliases?: string[];
+  kind?: string;
+  description?: string[];
+}
+
+/** A user correction to one place. Same "save only" contract as {@link CharacterPatch}. */
+export interface EnvironmentPatch {
+  name?: string;
+  aliases?: string[];
+  description?: string[];
+}
+
 export class Engine {
   private readonly store: VisualReaderStore;
   private readonly tier: TierConfig;
@@ -918,6 +933,46 @@ export class Engine {
         : c,
     );
     this.bible = { ...this.bible, characters };
+    await this.store.putBible(this.bible);
+    this.opts.onBibleUpdate?.(this.bible);
+  }
+
+  /**
+   * Apply a user correction to one creature. Same contract as {@link updateCharacter}: saved
+   * immediately, existing images untouched, the edit lands on the next render.
+   */
+  async updateCreature(creatureId: string, patch: CreaturePatch): Promise<void> {
+    if (!this.bible) return;
+    const creatures = (this.bible.creatures ?? []).map((c) =>
+      c.id === creatureId
+        ? {
+            ...c,
+            ...(patch.name !== undefined ? { name: patch.name } : {}),
+            ...(patch.aliases !== undefined ? { aliases: patch.aliases } : {}),
+            ...(patch.kind !== undefined ? { kind: patch.kind } : {}),
+            ...(patch.description !== undefined ? { description: patch.description } : {}),
+          }
+        : c,
+    );
+    this.bible = { ...this.bible, creatures };
+    await this.store.putBible(this.bible);
+    this.opts.onBibleUpdate?.(this.bible);
+  }
+
+  /** Apply a user correction to one place. See {@link updateCreature}. */
+  async updateEnvironment(environmentId: string, patch: EnvironmentPatch): Promise<void> {
+    if (!this.bible) return;
+    const environments = this.bible.environments.map((e) =>
+      e.id === environmentId
+        ? {
+            ...e,
+            ...(patch.name !== undefined ? { name: patch.name } : {}),
+            ...(patch.aliases !== undefined ? { aliases: patch.aliases } : {}),
+            ...(patch.description !== undefined ? { description: patch.description } : {}),
+          }
+        : e,
+    );
+    this.bible = { ...this.bible, environments };
     await this.store.putBible(this.bible);
     this.opts.onBibleUpdate?.(this.bible);
   }
