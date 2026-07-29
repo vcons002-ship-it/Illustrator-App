@@ -341,6 +341,32 @@ const BUDDY_CHAT_ID = "__buddy__";
 const SCHEDULED_CHAT_ID = `${BUDDY_CHAT_ID}-scheduled`;
 /** The assistant's own chat for idle creative work — separate so it never lands in a conversation. */
 const CREATIVE_CHAT_ID = `${BUDDY_CHAT_ID}-creative`;
+/**
+ * Which chat belongs to which story book.
+ *
+ * A story's chat IS the story: what the reader types there becomes the next beat, and the model
+ * writes that beat from the conversation it can see. So the two must be bound. They weren't — the
+ * dock simply showed whichever session happened to be active, and the background sweeps (a
+ * scheduled task, a task step, idle exploring) all switch the active session to their own. Come back
+ * to a story with one of those in front and the next thing you write is composed against ITS
+ * history, which is how unrelated material ended up in the prose.
+ */
+const STORY_CHATS_KEY = "vr-story-chats";
+function readStoryChats(): Record<string, string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(STORY_CHATS_KEY) ?? "{}") as unknown;
+    return raw && typeof raw === "object" ? (raw as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+function rememberStoryChat(bookId: string, sessionId: string): void {
+  try {
+    localStorage.setItem(STORY_CHATS_KEY, JSON.stringify({ ...readStoryChats(), [bookId]: sessionId }));
+  } catch {
+    /* private mode — the binding is then per-session only */
+  }
+}
 /** How long the reader must be idle before a creative run may start. Longer than the scheduled/task
  * sweeps: this is the lowest-priority work in the app and must never look like an interruption. */
 const CREATIVE_IDLE_MS = 10 * 60_000;
@@ -1510,6 +1536,9 @@ export function App() {
   // came from so exiting the story book returns there. The switch fn is held in a ref because
   // onExitBook is defined far above onSwitchBuddySession (avoids a TDZ in the dep array).
   const storyReturnSessionRef = useRef<string | undefined>(undefined);
+  /** The dedicated chat a just-started story is running in, bound to its book once the worker
+   * creates it (the book has no id before then). See STORY_CHATS_KEY. */
+  const pendingStoryChat = useRef<string | undefined>(undefined);
   const switchBuddyRef = useRef<((id: string) => void) | undefined>(undefined);
   /** openTaskInChat, reachable from the scheduled runner declared above it (same late-binding
    * pattern as switchBuddyRef) — a task-bound action opens the task's own chat to run in. */
@@ -1839,6 +1868,52 @@ export function App() {
   useEffect(() => {
     void libraryStore.listBooks().then(setLibrary).catch(() => {});
   }, [libraryStore]);
+
+  /**
+   * A STORY OWNS ITS CHAT. Whenever a story book is open, the dock runs that book's own session —
+   * created on first open, remembered across restarts, and switched back to here.
+   *
+   * This is the half that was missing. Starting a story already made a fresh, empty chat for it, for
+   * exactly the right reason: a clean writer context is what makes the model reply with beat prose
+   * instead of conversational filler inherited from wherever you'd been. But nothing kept it there.
+   * Reopen the story from the library and you got whichever chat was last active; leave it running
+   * and a scheduled task, a task step or an idle exploration would switch the active session to its
+   * own. Whatever you then typed was composed against THAT history — which is how material from
+   * elsewhere turned up in the prose.
+   *
+   * Runs on the book's identity, so every route in is covered: the setup, the library, a chat that
+   * opened it, a phone mirror.
+   */
+  useEffect(() => {
+    if (isRemoteClient || !book || book.kind !== "story") return;
+    const bound = pendingStoryChat.current ?? readStoryChats()[book.id];
+    pendingStoryChat.current = undefined;
+    if (bound) {
+      rememberStoryChat(book.id, bound);
+      // Already there (the usual case straight after the setup) — don't re-enter and reload history.
+      if (activeBuddyIdRef.current !== bound) {
+        setBuddySessions((prev) => {
+          if (prev.some((x) => x.id === bound)) return prev;
+          // The session was deleted; recreate it under the same id so the book keeps its chat.
+          const next = [...prev, { id: bound, workingDir: "", label: `Story · ${book.title}`.slice(0, 60) }];
+          persistSessions(next);
+          return next;
+        });
+        switchBuddyRef.current?.(bound);
+      }
+      return;
+    }
+    // An older story with no binding (or one whose binding was lost): give it a dedicated chat now
+    // rather than adopting whatever happens to be open, which is the very thing this prevents.
+    const sid = `${BUDDY_CHAT_ID}-${Date.now().toString(36)}`;
+    rememberStoryChat(book.id, sid);
+    setBuddySessions((prev) => {
+      const next = [...prev, { id: sid, workingDir: "", label: `Story · ${book.title}`.slice(0, 60) }];
+      persistSessions(next);
+      return next;
+    });
+    switchBuddyRef.current?.(sid);
+  }, [book, isRemoteClient, persistSessions]);
 
   const onPickBook = useCallback(
     async (id: string) => {
@@ -6301,6 +6376,9 @@ export function App() {
       // instead of conversational filler inherited from whatever chat we were just in.
       const sid = `${BUDDY_CHAT_ID}-${Date.now().toString(36)}`;
       const label = `Story · ${payload.title || payload.opening.slice(0, 24) || "continued"}`.slice(0, 60);
+      // The book doesn't exist yet (the worker creates it), so the binding is completed when it
+      // arrives — see the story-chat effect.
+      pendingStoryChat.current = sid;
       resetBuddyView();
       setBuddySessions((prev) => {
         const next = [...prev, { id: sid, workingDir: "", label }];
@@ -6542,6 +6620,9 @@ export function App() {
     if (isRemoteClient || !settings.allowCreativeIdle) return;
     const id = setInterval(() => {
       if (buddyBusyRef.current || buddyPendingToolRef.current || processActiveRef.current) return;
+      // A STORY OWNS THE CHAT while it's open: what's in the dock is what the next beat is written
+      // from, so a background sweep switching the session away is a leak, not an inconvenience.
+      if (bookRef.current?.kind === "story") return;
       // The run has ENDED (this tick found nothing in flight) — start the quiet period from here
       // rather than from when it was dispatched several minutes ago.
       if (creativeRunning.current) {
@@ -6643,6 +6724,10 @@ export function App() {
     const id = setInterval(() => {
       if (buddyBusyRef.current) return;
       if (buddyPendingToolRef.current) return; // an approval is on screen — don't switch out from under it
+      // A STORY OWNS THE CHAT while it's open: what's in the dock is what the next beat is written
+      // from, so a background sweep switching the session away is a leak, not an inconvenience.
+      // Due tasks stay due and fire once the story is closed.
+      if (bookRef.current?.kind === "story") return;
       if (Date.now() - lastRequestAt.current < SCHEDULED_IDLE_MS) return; // mid-conversation: defer, stay due
       void (async () => {
         const tasks = await loadScheduledTasks(libraryStore);
@@ -6705,6 +6790,9 @@ export function App() {
     if (isRemoteClient || !settings.allowTaskAutomation) return;
     const id = setInterval(() => {
       if (buddyBusyRef.current || buddyPendingToolRef.current || processActiveRef.current) return;
+      // A STORY OWNS THE CHAT while it's open: what's in the dock is what the next beat is written
+      // from, so a background sweep switching the session away is a leak, not an inconvenience.
+      if (bookRef.current?.kind === "story") return;
       if (Date.now() - lastRequestAt.current < AUTO_TASK_IDLE_MS) return;
       void (async () => {
         const pick = nextAutoStep(await loadTaskPlans(libraryStore), { skipStepIds: autoStepSkip.current });

@@ -232,6 +232,15 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   testing it has come out noticeably more consistent than the default on Flux.2. The choice applies
   to every book and every image provider, so it can't quietly behave one way on one book and another
   way on the next.
+- **A story keeps its own chat, and keeps it to itself** — what you type in the chat under a story
+  becomes its next beat, and the assistant writes that beat from the conversation it can see. So the
+  two have to be the same thing, and they weren't: starting a story made a fresh, clean chat for it,
+  but nothing kept it there. Reopen the story from your library and you got whichever chat was last
+  open; leave it running and a scheduled task, a task step or an idle exploration would switch the
+  chat to its own. Whatever you wrote next was composed against THAT conversation — which is how
+  unrelated material found its way into the prose. Each story now owns a chat, remembered across
+  restarts and returned to whenever you open the book; and while a story is open, nothing in the
+  background takes the chat away from it (anything due simply waits until you close the story).
 - **Places and Creatures have their own windows now** — the Visual Bible keeps three lists and only
   the characters could be looked at, let alone corrected. The other two shape every picture just as
   surely: a place's description is what a scene set there is drawn from, and it's where the look and
