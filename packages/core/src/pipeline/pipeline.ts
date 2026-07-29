@@ -376,7 +376,11 @@ export class RenderPipeline {
       // Deterministic wardrobe: append each present character's storyboard-tagged outfit LABEL
       // (KeyEvent.cast) so the right clothes inject regardless of how the render LLM worded the
       // scene — the fix for outfits dropping when the model paraphrases/omits the label.
-      const sceneBase = appendSceneWardrobe(named, keyEvent?.cast, bible);
+      const wardrobed = appendSceneWardrobe(named, keyEvent?.cast, bible);
+      // How many subjects to draw, stated up front (see countSceneSubjects). Skipped for a comic
+      // PAGE: the count would be read per panel, and a page of 4–6 panels each showing the cast is
+      // exactly the case where "exactly two people" is the wrong instruction.
+      const sceneBase = comicPage ? wardrobed : countSceneSubjects(wardrobed, present, presentCreatures);
       // Bible terms mentioned in the prompt (names → descriptors). Local backends expand them
       // family-aware; for cloud we pre-expand here (cloud providers don't know the bible).
       // The beat's location rides along so a place named after a character can't be read as that
@@ -612,6 +616,72 @@ export function nameActiveScene(
     .filter(Boolean)
     .join(" ");
   return clause ? `${prompt.replace(/[\s.]+$/, "")}. Scene continuity: ${clause}.` : prompt;
+}
+
+/**
+ * How many subjects the picture should contain, stated in words at the front of the SCENE.
+ *
+ * Immediately before the scene description, so the count frames the composition. (Under `reference`
+ * name handling a glossary block precedes it: that block defines who the names are, and the count
+ * belongs with the scene it constrains rather than ahead of the definitions.)
+ *
+ * Nothing in a prompt ever said how many bodies to draw, so the model inferred it from how many
+ * person-shaped noun phrases it could find — and a descriptor block that refers to someone more than
+ * once reads as more than one person. That is where a spurious extra figure comes from: a duplicate
+ * of a character standing in the frame, described correctly, simply too many times. A count gives the
+ * model something to check itself against.
+ *
+ * It is the only lever available on the natural-language families. They sample at CFG 1 with embedded
+ * guidance, so the negative branch is never evaluated and "no extra people" cannot be expressed there
+ * at all. A positive statement of cardinality can.
+ *
+ * Three things make it safe rather than merely emphatic:
+ *
+ * - It counts bible ENTITIES, not noun phrases in the text. A person with a nickname is one entity,
+ *   so "Lyra (the Ghost Broker)" counts once — counting the prose would assert the very duplicate
+ *   this is meant to prevent. Same-named leftovers from an un-consolidated extraction collapse too.
+ * - It constrains the SUBJECTS, not the population of the frame. A scene set in a packed bar or a
+ *   formation of riders must not be emptied because the bible knows two people by name, so the
+ *   count is about who is in focus and the background is left to the scene description.
+ * - It stops asserting a number it can't be believed on. Diffusion counting is reliable at one to
+ *   three and noise above that, so past {@link MAX_EXACT_SUBJECTS} it says "several" and no number.
+ *   An ignored instruction is harmless; a wrong one that is half-obeyed is worse than silence.
+ *
+ * Pure; returns the prompt unchanged when the bible knows of no subject in this frame.
+ */
+export function countSceneSubjects(
+  prompt: string,
+  characters: { name: string }[],
+  creatures: { name: string }[],
+): string {
+  const people = distinctNames(characters);
+  const beasts = distinctNames(creatures);
+  if (people + beasts === 0) return prompt;
+  const parts = [
+    people ? subjectCount(people, "person", "people") : "",
+    beasts ? subjectCount(beasts, "creature", "creatures") : "",
+  ].filter(Boolean);
+  // "Exactly" only when every group carries a real number — it would be a lie over a "several".
+  const exact = people <= MAX_EXACT_SUBJECTS && beasts <= MAX_EXACT_SUBJECTS;
+  const clause = parts.join(" and ");
+  const lead = exact ? `Exactly ${clause}` : clause.charAt(0).toUpperCase() + clause.slice(1);
+  return `${lead} in focus. ${prompt}`;
+}
+
+/** Above this many of a kind, a count is noise to a diffusion model — say "several" instead. */
+const MAX_EXACT_SUBJECTS = 3;
+
+/** Small numbers as WORDS: a text encoder binds "two" to a quantity far better than "2". */
+const NUMBER_WORDS = ["zero", "one", "two", "three"] as const;
+
+function subjectCount(n: number, singular: string, plural: string): string {
+  if (n > MAX_EXACT_SUBJECTS) return `several ${plural}`;
+  return `${NUMBER_WORDS[n]} ${n === 1 ? singular : plural}`;
+}
+
+/** Entities by distinct name — the count must not double someone the bible lists twice. */
+function distinctNames(entities: { name: string }[]): number {
+  return new Set(entities.map((e) => e.name.trim().toLowerCase()).filter(Boolean)).size;
 }
 
 /** Skip note when no verified figure exists — names the concept so the UI can say so. */

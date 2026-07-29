@@ -88,6 +88,20 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
+- **Pictures are told how many people to draw** — nothing in a prompt ever said how many bodies a
+  scene contains, so the image model worked it out from how many person-shaped phrases it could find,
+  and a description that referred to someone more than once read as more than one person. That is
+  where a stray duplicate figure comes from: a second copy of a character standing in the frame,
+  described perfectly, just counted twice. Every prompt now opens with the number — "exactly two
+  people in focus" — taken from the cast the app already tracks for that scene. It's the only lever
+  there is on the local Flux models: they ignore the "don't draw this" half of a prompt entirely, so
+  saying the number positively is the whole toolkit. Three things keep it honest: it counts the
+  *people* the bible knows, not the names in the sentence, so someone with a nickname counts once; it
+  constrains who is in focus rather than the population of the frame, so a scene set in a packed bar
+  doesn't get emptied; and past three it says "several" and drops the number, because counting past
+  three is something these models are simply bad at, and a wrong number half-obeyed is worse than
+  none at all. Comic-page mode skips it, since a page of six panels would read the count six times
+  over.
 - **Roleplay now weaves your contribution into the story** — A roleplay turn is treated as source
   material for the next illustrated beat, not a line addressed to the assistant's character. Your
   stated action and dialogue are placed on the page and elaborated in the story's established
