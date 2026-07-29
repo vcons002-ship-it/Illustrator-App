@@ -205,6 +205,8 @@ import {
   buildCreativeIdlePrompt,
   loadCreativeLog,
   recordExplored,
+  sanitizeLastRun,
+  creativeGapElapsed,
   recentTopics,
   storySoFarFromChat,
   stripIdentityRecital,
@@ -353,11 +355,19 @@ const CREATIVE_GAP_MS = 45 * 60_000;
  * starting at 0, so every reload/restart forgot the gap entirely and handed out a free run — on a
  * desktop that restarts to update itself, that alone made it feel constant. */
 const CREATIVE_LAST_RUN_KEY = "vr-creative-last-run";
-/** The persisted end-of-last-run stamp (0 when never run / unreadable). */
+/**
+ * The persisted end-of-last-run stamp (0 when never run / unreadable).
+ *
+ * A stamp in the FUTURE is discarded. The gap check is `now - lastRun < GAP`, so a stamp ahead of
+ * the clock makes that difference negative — smaller than the gap forever. Since the stamp is
+ * persisted, that would switch creative work off permanently, across restarts, with nothing to
+ * show for it. The clock genuinely does move backwards: an NTP correction, a dual-boot machine
+ * writing local time to the RTC, or simply fixing a wrong date. Nothing that depends on wall-clock
+ * time may assume it only goes forwards.
+ */
 function readCreativeLastRun(): number {
   try {
-    const n = Number(localStorage.getItem(CREATIVE_LAST_RUN_KEY));
-    return Number.isFinite(n) && n > 0 ? n : 0;
+    return sanitizeLastRun(localStorage.getItem(CREATIVE_LAST_RUN_KEY), Date.now());
   } catch {
     return 0;
   }
@@ -3098,11 +3108,8 @@ export function App() {
   // per-task "Plan" button, so a manual scan is fast and never kicks off long LLM work.
   const scanningNowRef = useRef(false);
   const [scanningNow, setScanningNow] = useState(false);
-  // Mirror the "a process is in flight" signals into a ref the idle sweep reads each tick: a chat
-  // turn, planning, a manual scan, or image generation. While any is true the app is NOT idle.
-  useEffect(() => {
-    processActiveRef.current = buddyBusy || planningCount > 0 || scanningNow || generating;
-  }, [buddyBusy, planningCount, scanningNow, generating]);
+  // ("A process is in flight" is mirrored into `processActiveRef` further down, where the
+  // illustration engine's real state is known — see `engineWorking`.)
   // A short outcome line shown under the Scan button so a manual scan never looks like it "did
   // nothing": it reports what it found/synced, or surfaces the actual Google error instead of
   // failing silently.
@@ -6550,7 +6557,7 @@ export function App() {
         return;
       }
       if (Date.now() - lastRequestAt.current < CREATIVE_IDLE_MS) return;
-      if (Date.now() - lastCreativeAt.current < CREATIVE_GAP_MS) return;
+      if (!creativeGapElapsed(lastCreativeAt.current, Date.now(), CREATIVE_GAP_MS)) return;
       // Phase 1 has already MOVED the view when any of the guards below stands the run down — leaving
       // the reader parked in ✨ Creative with nothing running, and (worse) sitting on top of whatever
       // a scheduled task was about to open. Standing down means giving the screen back.
@@ -7422,6 +7429,34 @@ export function App() {
     [results],
   );
   const totalUnits = units?.unitCount ?? (book?.pages.length ?? 0);
+  /**
+   * Does the illustration engine actually have work left?
+   *
+   * NOT the same as `generating`, which only records that the reader pressed ▶ Start illustrating.
+   * Nothing ever sets it false again except closing or opening a book — so once you illustrate
+   * anything, it stays true for the rest of the session. That flag was feeding the app's "is a
+   * process in flight" signal, which is what the idle sweeps gate on, so illustrating one book
+   * silently switched OFF every idle behaviour — creative runs above all — until the app was
+   * restarted. It looked exactly like the feature quietly expiring.
+   *
+   * Real work is: analysis or prompts still outstanding, or units not yet settled. An errored unit
+   * counts as settled — it won't retry on its own, and treating it as pending would keep the app
+   * "busy" forever over one failure, which is the same bug in a different costume.
+   */
+  const engineWorking = useMemo(() => {
+    if (!generating) return false;
+    if (workflow.bibleDone < workflow.bibleTotal) return true;
+    if (workflow.promptsDone < workflow.promptsTotal) return true;
+    const finished = [...results.values()].filter(
+      (r) => r.status === "ready" || r.status === "skipped" || r.status === "error",
+    ).length;
+    return finished < totalUnits;
+  }, [generating, workflow, results, totalUnits]);
+  // Mirror the "a process is in flight" signals into the ref the idle sweeps read each tick: a chat
+  // turn, planning, a manual scan, or genuine illustration work. While any is true the app is NOT idle.
+  useEffect(() => {
+    processActiveRef.current = buddyBusy || planningCount > 0 || scanningNow || engineWorking;
+  }, [buddyBusy, planningCount, scanningNow, engineWorking]);
   // Rough ETA for the remaining images (two render concurrently in the buffer).
   const remainingEta =
     avgRenderMs > 0 && totalUnits > settledCount
