@@ -190,6 +190,7 @@ export function buildProviders(
         : {}),
       ...(settings.drawAsComicPage ? { drawAsComicPage: true } : {}),
       ...(settings.perCharacterRegions ? { perCharacterRegions: true } : {}),
+      ...(settings.promptNameStyle ? { promptNameStyle: settings.promptNameStyle } : {}),
       ...(settings.imageModelFamily && settings.imageModelFamily !== "auto"
         ? { imageModelFamily: settings.imageModelFamily }
         : {}),

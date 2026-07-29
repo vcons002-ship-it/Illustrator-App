@@ -18,6 +18,7 @@ export const TUNING_FIELDS = [
   "drawAsComicPage",
   // Per-character regions: read when the next image is composed, so toggling it must not rebuild.
   "perCharacterRegions",
+  "promptNameStyle",
   "imageModelFamily",
   "localSteps",
   "localCfg",

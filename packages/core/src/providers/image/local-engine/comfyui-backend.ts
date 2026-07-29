@@ -938,7 +938,8 @@ export class ComfyUIBackend implements LocalEngineBackend {
     const expanded = expandPrompt(
       input.prompt,
       input.terms ?? [],
-      nameHandlingFor(family),
+      // The reader's explicit choice wins; otherwise the shape this family's encoder suits.
+      input.nameHandling ?? nameHandlingFor(family),
       input.worldStyle,
       input.bookTitle,
     );

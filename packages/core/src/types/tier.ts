@@ -60,6 +60,15 @@ export interface TierConfig {
    */
   perCharacterRegions?: boolean;
   /**
+   * Override how a prompt names the people it depicts (see `expandPrompt`'s `NameHandling`).
+   * Unset — the default — lets each model family use the shape that suits its text encoder.
+   *
+   * Exists because "which shape binds an attribute to the right person" is an empirical question
+   * per model that no amount of reasoning settles, and the reader has the GPU. Local engines only:
+   * a cloud API is handed one finished string and the pipeline picks the shape for it.
+   */
+  promptNameStyle?: "reference" | "inject" | "appositive";
+  /**
    * Manual image model-family override for SD prompt formatting (Settings). When
    * unset, the local backends auto-detect from the checkpoint. Cloud providers
    * ignore it (they always use natural language).

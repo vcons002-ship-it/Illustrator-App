@@ -192,6 +192,21 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Stories
 
+- **…and not in the story's title either** — the last place it was hiding, and the one that explains
+  why it survived everything else: the title goes into every prompt the book ever renders, and a
+  story titled from its opening premise carries that premise's weather with it. "A Rainy Night in
+  Blackwater" rained on every later picture, indoors and months of story later, from a line nobody
+  thinks of as a prompt at all. The weather word is removed and the rest of the title kept, so the
+  picture still knows which world it's in.
+- **You can choose how character descriptions reach the image model** (Settings → images) — where
+  each person's appearance sits in the prompt changes how likely the model is to put one person's
+  features on another, and which shape works best depends on the model. **Names + a description
+  list** keeps the sentence clean with a glossary above it ("Nico = a man with a beard") and is the
+  default for Flux.2 and friends. **Names with their description beside them** writes "Nico (a man
+  with a beard) and Lyra (a woman with red hair) sit at a bar", so nothing has to be looked up.
+  **Descriptions instead of names** drops the names entirely, and is the default for Stable
+  Diffusion. If features keep landing on the wrong character, the middle one is the one to try. Your
+  own engine only.
 - **…and not in anyone's description either** — the same accumulation happens to people, not just
   places: a character first described in a downpour keeps "rain-plastered hair" in their appearance,
   an outfit recorded outdoors keeps "beaded with rain", and both then go into every picture they

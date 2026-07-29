@@ -1,4 +1,5 @@
 import type { IdentityAnchor } from "../../types/bible.js";
+import type { NameHandling } from "./bible-injection.js";
 import type { CastRegion } from "./regional-conditioning.js";
 
 /**
@@ -57,8 +58,9 @@ export interface ImageGenerationInput {
    * pre-expands cloud prompts, so cloud providers ignore this.
    */
   terms?: { names: string[]; descriptor: string; kind: "character" | "creature" | "outfit" | "location" }[];
-  /** How a local backend should expand `terms` (resolved from the model family). */
-  nameHandling?: "inject" | "reference";
+  /** How a local backend should expand `terms`. Unset → the backend picks the shape its model
+   * family suits (see `expandPrompt`); the reader can override it in Settings. */
+  nameHandling?: NameHandling;
   /**
    * Manual overrides for a split-file model's components (Flux.2 / Z-Image / Qwen-Image)
    * when auto-detection picks the wrong file: the exact text-encoder and/or VAE filename

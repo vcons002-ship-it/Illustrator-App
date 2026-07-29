@@ -153,6 +153,8 @@ export interface ReaderSettings {
   drawAsComicPage?: boolean;
   /** Per-character regions — opt-in; see TierConfig.perCharacterRegions. */
   perCharacterRegions?: boolean;
+  /** How descriptions reach the prompt — see TierConfig.promptNameStyle. Unset = per-family default. */
+  promptNameStyle?: "reference" | "inject" | "appositive";
   /**
    * When to start illustrating: "book" reads the whole book first so prompts have
    * full context (best images, slower start); "chapter" starts as each chapter is
@@ -1583,6 +1585,37 @@ export function SettingsPanel({
                 try it on a scene you can compare — if figures come out oddly proportioned, turn it
                 back off.
               </span>
+            </span>
+          </label>
+
+          <label style={rowStyle}>
+            <span>How character descriptions reach the image model</span>
+            <select
+              value={value.promptNameStyle ?? "auto"}
+              onChange={(e) => {
+                // "Automatic" REMOVES the key rather than storing undefined — the per-family
+                // default is the absence of a choice, not a choice of nothing.
+                if (e.target.value === "auto") {
+                  const { promptNameStyle: _auto, ...rest } = value;
+                  onChange(rest);
+                  return;
+                }
+                set({ promptNameStyle: e.target.value as "reference" | "inject" | "appositive" });
+              }}
+            >
+              <option value="auto">Automatic (suits your model)</option>
+              <option value="reference">Names + a description list</option>
+              <option value="appositive">Names with their description beside them</option>
+              <option value="inject">Descriptions instead of names</option>
+            </select>
+            <span style={{ display: "block", opacity: 0.55, fontSize: 11 }}>
+              Where each person&rsquo;s appearance sits in the prompt. <b>List</b> keeps the sentence
+              clean and puts the descriptions in a glossary above it (&ldquo;Nico = a man with a beard&rdquo;)
+              — the default for natural-language models like Flux.2. <b>Beside them</b> writes
+              &ldquo;Nico (a man with a beard) and Lyra (a woman with red hair) sit at a bar&rdquo;, so each
+              description touches the person it belongs to. <b>Instead of names</b> drops the names
+              entirely — the default for Stable Diffusion. If features keep landing on the wrong
+              character, the middle option is the one to try. Your own engine only.
             </span>
           </label>
 
