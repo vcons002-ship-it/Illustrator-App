@@ -156,6 +156,11 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Stories
 
+- **…and not in anyone's description either** — the same accumulation happens to people, not just
+  places: a character first described in a downpour keeps "rain-plastered hair" in their appearance,
+  an outfit recorded outdoors keeps "beaded with rain", and both then go into every picture they
+  appear in. Weather is now filtered out of every kind of description the app keeps — people,
+  creatures, outfits and places — through the one function they all share.
 - **A rainy opening no longer rains for the whole story** — the app keeps a list of "world facts" it
   applies to every illustration by default. That's right for the things it's for (what people
   customarily wear, the technology level, the materials) and wrong for weather: a story that opened
