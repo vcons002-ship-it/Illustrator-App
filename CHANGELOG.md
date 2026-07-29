@@ -209,11 +209,20 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   testing it has come out noticeably more consistent than the default on Flux.2. The choice applies
   to every book and every image provider, so it can't quietly behave one way on one book and another
   way on the next.
-- **…and not in anyone's description either** — the same accumulation happens to people, not just
-  places: a character first described in a downpour keeps "rain-plastered hair" in their appearance,
-  an outfit recorded outdoors keeps "beaded with rain", and both then go into every picture they
-  appear in. Weather is now filtered out of every kind of description the app keeps — people,
-  creatures, outfits and places — through the one function they all share.
+- **The world keeps its weather; people don't carry it around** — the first pass at the rain problem
+  went too far and took the atmosphere with it: a beat whose prose is all dialogue had nothing left
+  to say what the light and air were like, so consecutive pictures stopped agreeing about the world
+  they were in. Weather now stays where it's genuinely a fact and is already scoped — a **place's**
+  description (which only reaches a picture when that place is in it) and the **world facts** the
+  app applies as defaults. What the world facts were missing wasn't the weather but the rest of the
+  instruction: conditions are now described as reaching only as far as a scene can actually show
+  them, so a rainy world reaches an indoor scene through a window and no further, and a passage that
+  states its own conditions still wins. Weather is still removed from the things that follow a
+  person around whatever the scene — appearance, outfits, the art-direction line, the title.
+- **…and not in anyone's description either** — the same accumulation happens to people: a character
+  first described in a downpour keeps "rain-plastered hair" in their appearance, an outfit recorded
+  outdoors keeps "beaded with rain", and both then go into every picture they appear in, wherever
+  it's set. Those are filtered.
 - **A rainy opening no longer rains for the whole story** — the app keeps a list of "world facts" it
   applies to every illustration by default. That's right for the things it's for (what people
   customarily wear, the technology level, the materials) and wrong for weather: a story that opened

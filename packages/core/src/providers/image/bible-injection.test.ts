@@ -653,10 +653,11 @@ describe("a character's descriptor has room for a person", () => {
   });
 });
 
-describe("weather never lives in a permanent descriptor", () => {
-  it("cuts a weather clause out of a place's description, keeping the rest", () => {
-    // A place's description accumulates across chapters, so one wet afternoon would otherwise rain
-    // in that room for the rest of the book.
+describe("weather belongs to places and the world, not to people", () => {
+  it("KEEPS a place's weather — that's where a world's atmosphere lives", () => {
+    // A place's description only reaches a picture when that place is in it, so this is scoped
+    // already. Stripping it was an over-correction: a beat whose prose is all dialogue then has
+    // nothing to say what the light and air are like, and consecutive pictures stop agreeing.
     const env: Environment = {
       id: "env-tavern",
       name: "the Bell",
@@ -665,9 +666,8 @@ describe("weather never lives in a permanent descriptor", () => {
       firstSeenChapter: 0,
     };
     const out = describeLocation(env);
-    expect(out).not.toMatch(/rain/i);
+    expect(out).toContain("rain drumming on the roof");
     expect(out).toContain("low stone taproom");
-    expect(out).toContain("warm firelight");
     expect(out).toContain("long oak bar");
   });
 
