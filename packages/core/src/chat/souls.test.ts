@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MAX_CHARACTER_DESCRIPTOR_CHARS } from "../providers/image/bible-injection.js";
 import { InMemoryStore } from "../storage/store.js";
 import { loadMemory } from "./reader-memory.js";
 import {
@@ -17,6 +18,8 @@ import {
   selfSoulPromptBlock,
   userSoulPromptBlock,
   selfPortraitPrompt,
+  visualSoulNotes,
+  SOUL_LOOK_BUDGET_CHARS,
 } from "./souls.js";
 
 describe("selfPortraitPrompt", () => {
@@ -149,5 +152,78 @@ describe("how many identity notes survive", () => {
     const block = selfSoulPromptBlock([note("Warm, dry, direct.")]);
     expect(block).toContain("- Warm, dry, direct.");
     expect(block).not.toContain("not shown here");
+  });
+});
+
+/**
+ * Seeding a played character's LOOK from the soul.
+ *
+ * The soul is a mixed bag, and since the assistant started adding its own notes from what it reads
+ * it's mostly personality. The story setup used to join every note and cut at 200 characters, so the
+ * played character's visual description became "I'm drawn to problems where the obvious answer is
+ * wrong; I find pure taxo" — and at beat one that's the ONLY thing the image model has, because
+ * extraction hasn't read the prose yet. It's why the opening picture of a story came out poor and a
+ * later re-render didn't.
+ */
+describe("visualSoulNotes", () => {
+  const note = (text: string, at = 1): SoulNote => ({ text, at });
+
+  it("keeps the notes that describe a look and drops the ones that don't", () => {
+    const notes = [
+      note("I'm drawn to problems where the obvious answer is wrong"),
+      note("Warm, dry wit; silver hair; wears a long coat"),
+      note("I find pure taxonomy dull"),
+      note("Tall, with a jagged scar across one eyebrow"),
+    ];
+    expect(visualSoulNotes(notes)).toBe(
+      "Warm, dry wit; silver hair; wears a long coat; Tall, with a jagged scar across one eyebrow",
+    );
+  });
+
+  it("returns nothing when the soul is all personality — better neutral than misleading", () => {
+    const notes = [
+      note("I'm drawn to problems where the obvious answer is wrong"),
+      note("I find pure taxonomy dull"),
+    ];
+    expect(visualSoulNotes(notes)).toBe("");
+  });
+
+  it("never cuts a note in half — whole notes only, up to the budget", () => {
+    const long = note("silver hair that falls past the shoulders, always slightly unkempt");
+    const out = visualSoulNotes([long, note("wears a long grey coat")], 70);
+    expect(out).toBe(long.text); // the second didn't fit, so it isn't there at all
+    expect(out.endsWith("unkempt")).toBe(true);
+  });
+
+  it("recognises clothing, colouring, build and age as description", () => {
+    expect(visualSoulNotes([note("wears wire-rimmed glasses")])).toBeTruthy();
+    expect(visualSoulNotes([note("auburn braid")])).toBeTruthy();
+    expect(visualSoulNotes([note("stocky, broad across the shoulders")])).toBeTruthy();
+    expect(visualSoulNotes([note("somewhere in her forties")])).toBeTruthy();
+  });
+
+  it("is empty for an empty soul", () => {
+    expect(visualSoulNotes([])).toBe("");
+  });
+
+  /**
+   * The budget is deliberately the same number the image prompt will accept for one character, so
+   * the soul is never the tighter of the two. It used to be 200 against a 160-character descriptor
+   * cap — two different arbitrary limits, with the smaller one silently winning downstream.
+   */
+  it("has the same budget the picture will actually accept", () => {
+    expect(SOUL_LOOK_BUDGET_CHARS).toBe(MAX_CHARACTER_DESCRIPTOR_CHARS);
+  });
+
+  it("fits a real description of a person, not a fragment", () => {
+    const notes = [
+      note("silver hair falling past the shoulders, always slightly unkempt"),
+      note("sharp grey eyes, deep-set, and a jagged scar through the left eyebrow"),
+      note("lean and rangy, stands very straight; weathered olive skin"),
+      note("wears a long charcoal coat over a high-collared shirt"),
+    ];
+    const out = visualSoulNotes(notes);
+    expect(out.length).toBeGreaterThan(200); // the old ceiling
+    expect(out).toContain("charcoal coat"); // the LAST note still makes it in
   });
 });

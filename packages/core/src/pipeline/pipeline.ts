@@ -16,6 +16,7 @@ import { anchorSetting, composeScenePrompt, resolveKeyEvent } from "../visual-bi
 import { actionTextForImage } from "../visual-bible/story-image-text.js";
 import { appendSceneWardrobe, describeCharacterIdentity, expandPrompt, findBibleTermsInText } from "../providers/image/bible-injection.js";
 import { castRegions as buildCastRegions } from "../providers/image/regional-conditioning.js";
+import { unitSeed } from "./unit-seed.js";
 import { getImageStyle } from "../providers/catalog.js";
 import { buildFigureQuery, type RetrievedImage } from "../providers/image/image-search.js";
 import { profileDimensions, qualityProfile } from "../quality.js";
@@ -446,8 +447,22 @@ export class RenderPipeline {
         ...(castRegions.length ? { castRegions } : {}),
         ...(onProgress ? { onProgress } : {}),
         ...(signal ? { signal } : {}),
-        // A keyEvent may pin a reproducible seed (overrides the character anchor seed).
-        ...(typeof keyEvent?.seed === "number" ? { seed: keyEvent.seed } : {}),
+        // THE SEED for this image. A keyEvent pins one after a re-roll (Redo); otherwise it's the
+        // cast's anchor seed MIXED WITH THIS UNIT'S INDEX.
+        //
+        // The mix is the point. Without it the backends fall back to `anchors[0].seed` — a hash of
+        // the first character's name, and therefore the same number for every picture in the book.
+        // One draw from the lottery for the whole thing: when it's a poor draw, every first render
+        // is poor in the same way and the only escape is re-rolling each image by hand (Redo writes
+        // a random seed, which is why it always looked better). Mixing keeps what the anchor was
+        // really buying — the same book renders the same way twice — while giving each image its own
+        // noise. Identity comes from the bible descriptors and locked reference images, not from
+        // sharing one noise pattern.
+        ...(typeof keyEvent?.seed === "number"
+          ? { seed: keyEvent.seed }
+          : anchors[0] !== undefined
+            ? { seed: unitSeed(anchors[0]!.seed, request.pageIndex) }
+            : {}),
       };
       // Quality level → steps + aspect-aware resolution (more pages/image = higher
       // quality; the canvas orientation comes from the user's aspect setting).

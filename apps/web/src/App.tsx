@@ -51,6 +51,7 @@ import {
   loadSoul,
   saveSoul,
   loadSoulName,
+  visualSoulNotes,
   saveSoulName,
   loadSoulImages,
   saveSoulImages,
@@ -6235,9 +6236,16 @@ export function App() {
       loadSoulName(libraryStore, "user"),
       loadSoul(libraryStore, "user"),
     ]).catch(() => ["", [], "", []] as [string, SoulNote[], string, SoulNote[]]);
+    // Only the notes that describe a LOOK. This used to join every note and cut at 200 characters,
+    // so a soul full of "I'm drawn to problems where the obvious answer is wrong" became the played
+    // character's visual description — and, at beat one, the ONLY thing the image model had to go on
+    // (extraction hasn't read the prose yet, so the real appearance fields are still empty). It's
+    // why the first picture of a story was poor and a re-render, once the bible had filled in, wasn't.
+    const selfLook = visualSoulNotes(selfNotes);
+    const userLook = visualSoulNotes(userNotes);
     setStorySetupSeed({
-      self: { name: selfName, ...(selfNotes[0]?.text ? { note: selfNotes.map((n) => n.text).join("; ").slice(0, 200) } : {}) },
-      user: { name: userName, ...(userNotes[0]?.text ? { note: userNotes.map((n) => n.text).join("; ").slice(0, 200) } : {}) },
+      self: { name: selfName, ...(selfLook ? { note: selfLook } : {}) },
+      user: { name: userName, ...(userLook ? { note: userLook } : {}) },
     });
     // The chat this is being started FROM. A story often begins as ordinary conversation and only
     // becomes a Story-as-you-go once it's running; the setup can now offer to bring it along.
