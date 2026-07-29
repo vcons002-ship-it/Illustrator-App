@@ -82,6 +82,18 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
+- **The book's tools are their own group** — everything that acts on the open book (illustrating,
+  ↻ Redo, characters, data, export, import) now sits in its own fenced, tinted block behind a
+  **▾ Book** caret, separated from the app-wide tools by a divider. In one long wrapping row the two
+  kinds were indistinguishable, and on a narrow window the book's own controls ended up buried among
+  tools that have nothing to do with it. Each collapses independently, so you can put the whole book
+  workflow away and keep the rest, or the other way round.
+- **Minimising the chat now actually gives the room back** — hiding the message history still left
+  three rows of chat above the text box (the session/tools header, the working folder, the context
+  meter), so collapsing the dock reclaimed far less of the page than it looked like it should. With
+  the history away you get just a way back and somewhere to type; the reader and its illustration
+  take everything else. If the assistant is waiting on your approval for something, that is never
+  hidden — a line appears with a button to bring it up.
 - **Illustrating a book no longer switches off everything that waits for you to be idle** — pressing
   ▶ Start illustrating set a flag that nothing ever cleared: not finishing the book, not the queue
   emptying, only closing and reopening. That flag fed the app's "something is running" signal, which

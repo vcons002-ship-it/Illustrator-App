@@ -1601,6 +1601,10 @@ export function App() {
   // Top toolbar's big button row collapses behind a "Tools" caret — default collapsed on phones
   // to reclaim vertical space; the title + Exit book + mode badge stay visible regardless.
   const [toolbarOpen, setToolbarOpen] = useState(() => !narrow);
+  // The book's own tools (illustrate, redo, characters, export…) are a fenced-off group with their
+  // own caret, so the reader can put the whole book workflow away without losing the app's tools —
+  // or keep it and collapse everything else. Default collapsed on phones, like the toolbar.
+  const [bookToolsOpen, setBookToolsOpen] = useState(() => !narrow);
   // The bottom chat dock keeps its input bar always visible; its message history expands/collapses.
   // Default expanded on desktop, collapsed on phones (the reader gets the room).
   const [chatHistoryOpen, setChatHistoryOpen] = useState(() => !narrow);
@@ -8161,6 +8165,25 @@ export function App() {
               Chat
             </button>
           )}
+          {/* BOOK TOOLS — everything that acts on the open book, fenced off from the app-wide tools
+              beside them and collapsible on its own. Flat in one long wrapping row, the two kinds
+              were indistinguishable, and on a narrow window the book's own controls were buried
+              among tools that have nothing to do with it. */}
+          {book && (
+            <>
+              <span style={styles.toolDivider} aria-hidden="true" />
+              <button
+                style={bookToolsOpen ? { ...styles.button, borderColor: "rgba(120,180,255,0.6)", color: "#cfe2ff" } : styles.button}
+                onClick={() => setBookToolsOpen((v) => !v)}
+                aria-expanded={bookToolsOpen}
+                title="Show or hide the tools that act on this book — illustrating, redoing, characters, export"
+              >
+                {bookToolsOpen ? "▾ Book" : "▸ Book"}
+              </button>
+            </>
+          )}
+          {book && bookToolsOpen && (
+          <div style={styles.bookTools}>
           {book && viewAs === "story" && !generating && (
             <button
               style={styles.buttonPrimary}
@@ -8410,6 +8433,8 @@ export function App() {
             >
               ⤒ Import bible
             </button>
+          )}
+          </div>
           )}
           <SettingsPanel
             value={settings}
@@ -10764,6 +10789,26 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 16,
   },
   headerControls: { display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" },
+  // The book's tools, fenced into their own tinted group so they read as one thing rather than more
+  // buttons in the same undifferentiated row.
+  bookTools: {
+    display: "flex",
+    gap: 8,
+    alignItems: "flex-start",
+    flexWrap: "wrap",
+    padding: "4px 8px",
+    border: "1px solid rgba(120,180,255,0.28)",
+    borderRadius: 8,
+    background: "rgba(96,170,255,0.06)",
+  },
+  /** A hairline between the app's tools and the book's — the group's left edge, before its caret. */
+  toolDivider: {
+    width: 1,
+    alignSelf: "stretch",
+    minHeight: 24,
+    background: "rgba(255,255,255,0.18)",
+    margin: "0 2px",
+  },
   // --- always-visible workflow strip (inside the sticky header) ---
   workflowBar: {
     display: "flex",
