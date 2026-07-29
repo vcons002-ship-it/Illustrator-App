@@ -141,6 +141,31 @@ export interface Creature {
   firstSeenChapter: number;
 }
 
+/** Which of the bible's three entity lists a removal refers to. */
+export type BibleEntityKind = "character" | "creature" | "environment";
+
+/**
+ * An entry the reader deleted from the bible.
+ *
+ * A deletion has to be REMEMBERED, not just applied. The extractor reads the book chapter by
+ * chapter and upserts what it finds by name, so an entry simply spliced out of the list walks
+ * straight back in the next time its name appears in the prose — and the entries most worth
+ * deleting (a duplicate of someone already tracked, a costume or a title mistaken for a person)
+ * are precisely the ones the text keeps saying. So the removal is kept and consulted on every
+ * merge: `names` is the entry's name plus its aliases, lowercased at the moment of deletion, and
+ * anything the extractor offers under one of those names is dropped instead of re-added.
+ *
+ * `entity` is the whole record, so Restore is a true undo — it puts back the description that was
+ * built up over the whole book rather than an empty shell waiting to be re-extracted.
+ */
+export interface RemovedEntity {
+  kind: BibleEntityKind;
+  /** The removed entry's name + aliases, lowercased — what re-extraction is matched against. */
+  names: string[];
+  /** The removed record itself, so it can be restored exactly as it was. */
+  entity: Character | Creature | Environment;
+}
+
 /**
  * A reveal that would spoil the narrative if shown too early. The UI keeps any
  * image containing this entity blurred until the reader's scroll depth passes
@@ -306,6 +331,13 @@ export interface VisualBible {
   /** Named/notable non-human creatures (dragons, beasts…), kept consistent. */
   creatures: Creature[];
   spoilers: SpoilerEntity[];
+  /**
+   * Entries the reader deleted, kept so the deletion sticks against re-extraction and can be
+   * undone. Only ever written by a user action — never by the extractor — so no schema bump is
+   * needed for it: a bible cached before this field existed is a valid one with no removals, and
+   * bumping would only force a pointless re-analysis. Absent means "nothing removed".
+   */
+  removed?: RemovedEntity[];
   /** Per-chapter storyboard (events + key moment), keyed by chapterIndex. */
   storyboard: ChapterScene[];
   /** Recurring world facts applied as defaults in every image prompt. */

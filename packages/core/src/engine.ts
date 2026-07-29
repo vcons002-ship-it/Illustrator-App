@@ -1,5 +1,12 @@
 import { isNonFiction, type BookSource } from "./types/book.js";
-import type { ChapterScene, CharacterAppearance, IdentityAnchor, Outfit, VisualBible } from "./types/bible.js";
+import type {
+  BibleEntityKind,
+  ChapterScene,
+  CharacterAppearance,
+  IdentityAnchor,
+  Outfit,
+  VisualBible,
+} from "./types/bible.js";
 import { MAX_CHARACTER_REFS, referenceIdsOf } from "./types/bible.js";
 import type { ImageResult } from "./types/content.js";
 import type { TierConfig } from "./types/tier.js";
@@ -18,6 +25,7 @@ import { RenderPipeline } from "./pipeline/pipeline.js";
 import { RenderBuffer } from "./render-buffer/render-buffer.js";
 import { createEmptyBible, migrateBible } from "./visual-bible/bible.js";
 import { addKeyEvent, clearKeyEvents, resolveKeyEvent, resolveKeyEventIn } from "./visual-bible/key-events.js";
+import { pruneRemovedEntities, removeBibleEntity, restoreBibleEntity } from "./visual-bible/removals.js";
 import {
   carryReferenceImages,
   exportBible,
@@ -587,7 +595,9 @@ export class Engine {
         // so a reference image the user uploaded mid-extraction would be clobbered here.
         // Extraction never owns reference images, so re-apply the CURRENT bible's uploads
         // onto the result (matched by id/name/alias, surviving any consolidate/rename).
-        this.bible = carryReferenceImages(this.bible!, next);
+        // …and drop anything the reader deleted that the provider handed back anyway, so the
+        // deletion holds whatever the provider does with its own merge.
+        this.bible = pruneRemovedEntities(carryReferenceImages(this.bible!, next));
         // Story mode: the active-scene tracker (host) resolves THIS beat's present cast +
         // location from the just-grown bible and pins it on the pipeline BEFORE refresh
         // releases the unit — so a terse beat still illustrates the tracked scene.
@@ -978,6 +988,41 @@ export class Engine {
   }
 
   /**
+   * Delete one entry from the bible — a character, a creature, or a place.
+   *
+   * The counterpart to editing, and needed for the same reason: the bible is written by a model
+   * reading the prose, and some of what it writes down isn't a thing at all (the same person under
+   * two names, a costume or a title read as a person, a simile read as a beast). No amount of
+   * correcting an entry says "this shouldn't exist", and while it exists it goes into pictures.
+   *
+   * The deletion is REMEMBERED — see {@link removeBibleEntity} — so a later chapter that names it
+   * again doesn't quietly put it back. Same save-only contract as the edits: existing images are
+   * untouched and the change lands on the next render. Reversible via {@link restoreBibleEntry}.
+   */
+  async removeBibleEntry(kind: BibleEntityKind, id: string): Promise<void> {
+    if (!this.bible) return;
+    const next = removeBibleEntity(this.bible, kind, id);
+    if (!next) return; // already gone — don't write or broadcast
+    // The removed record keeps the entity's reference-image ids so Restore is a true undo, but the
+    // pipeline's per-id byte cache must not serve them meanwhile.
+    if (kind === "character") this.pipeline?.clearReferenceCache();
+    this.bible = next;
+    await this.store.putBible(this.bible);
+    this.opts.onBibleUpdate?.(this.bible);
+  }
+
+  /** Put a deleted bible entry back, exactly as it was, and let extraction see its names again. */
+  async restoreBibleEntry(kind: BibleEntityKind, id: string): Promise<void> {
+    if (!this.bible) return;
+    const next = restoreBibleEntity(this.bible, kind, id);
+    if (!next) return;
+    if (kind === "character") this.pipeline?.clearReferenceCache();
+    this.bible = next;
+    await this.store.putBible(this.bible);
+    this.opts.onBibleUpdate?.(this.bible);
+  }
+
+  /**
    * "Paint forward": repaint the book FROM a unit onward with the current settings,
    * keeping everything before it. Discards the cached image of every story unit at
    * or after `fromUnit`; the in-order buffer then repaints them front to back.
@@ -1054,8 +1099,13 @@ export class Engine {
    */
   async regenerateStoryboard(): Promise<void> {
     if (!this.book) return;
+    // Deletions are carried over. Everything else here is model output being thrown away and
+    // rewritten, but a removal is a reader's decision ABOUT that output — and a re-analysis is the
+    // one moment the whole book is read again, so dropping them would resurrect every entry the
+    // reader had said isn't a thing. They stay listed under "Deleted" and can still be restored.
+    const removed = this.bible?.removed ?? [];
     await this.store.deleteBible?.(this.book.id);
-    this.bible = createEmptyBible(this.book.id);
+    this.bible = { ...createEmptyBible(this.book.id), ...(removed.length ? { removed } : {}) };
     this.opts.onBibleUpdate?.(this.bible);
     this.biblePaused = false;
     this.imagePaused = false;

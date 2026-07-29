@@ -1317,6 +1317,14 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "updateEnvironment":
       void engine?.updateEnvironment(msg.environmentId, msg.patch);
       break;
+    case "removeBibleEntry":
+      // Save-only like the edits, and remembered: the engine records the deletion so a later
+      // chapter naming the same entry doesn't re-add it.
+      void engine?.removeBibleEntry(msg.kind, msg.id);
+      break;
+    case "restoreBibleEntry":
+      void engine?.restoreBibleEntry(msg.kind, msg.id);
+      break;
     case "addCharacterReference":
       // User-uploaded IP-Adapter reference (multi-view; the engine enforces the cap).
       void engine?.addCharacterReference(msg.characterId, msg.image);

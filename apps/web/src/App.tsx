@@ -714,6 +714,8 @@ export function App() {
     updateCharacter,
     updateCreature,
     updateEnvironment,
+    removeBibleEntry,
+    restoreBibleEntry,
     addCharacterReference,
     removeCharacterReference,
     getCharacterReference,
@@ -8985,6 +8987,8 @@ export function App() {
           initialTab={showWorld}
           onSaveCreature={(id, patch) => updateCreature(id, patch)}
           onSavePlace={(id, patch) => updateEnvironment(id, patch)}
+          onRemove={removeBibleEntry}
+          onRestore={restoreBibleEntry}
           onClose={() => setShowWorld("")}
         />
       )}
@@ -8993,6 +8997,8 @@ export function App() {
         <CharacterBible
           bible={bible}
           onSave={(id, patch) => updateCharacter(id, patch)}
+          onRemove={(id) => removeBibleEntry("character", id)}
+          onRestore={(id) => restoreBibleEntry("character", id)}
           onAddReference={addCharacterReference}
           onRemoveReference={removeCharacterReference}
           getReferenceImage={getCharacterReference}

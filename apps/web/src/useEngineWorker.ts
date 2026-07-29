@@ -20,6 +20,7 @@ import type {
   BuddyPlan,
   BuddyToolCall,
   BuddyToolResultPayload,
+  BibleEntityKind,
   CharacterPatch,
   CreaturePatch,
   EnvironmentPatch,
@@ -220,6 +221,10 @@ export interface EngineWorkerApi {
   /** Save a correction to one creature / place in the bible (same save-only contract). */
   updateCreature: (creatureId: string, patch: CreaturePatch) => void;
   updateEnvironment: (environmentId: string, patch: EnvironmentPatch) => void;
+  /** Delete a bible entry. Remembered, so a later chapter naming it again can't re-add it. */
+  removeBibleEntry: (kind: BibleEntityKind, id: string) => void;
+  /** Undo a deletion — the entry comes back exactly as it was. */
+  restoreBibleEntry: (kind: BibleEntityKind, id: string) => void;
   /** Add a user-uploaded IP-Adapter reference image (multi-view, capped per character). */
   addCharacterReference: (characterId: string, image: { bytes: ArrayBuffer; mimeType: string }) => void;
   /** Remove one of a character's reference images (deletes its stored bytes). */
@@ -1585,6 +1590,14 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       send({ type: "updateEnvironment", environmentId, patch }),
     [],
   );
+  const removeBibleEntry = useCallback(
+    (kind: BibleEntityKind, id: string) => send({ type: "removeBibleEntry", kind, id }),
+    [],
+  );
+  const restoreBibleEntry = useCallback(
+    (kind: BibleEntityKind, id: string) => send({ type: "restoreBibleEntry", kind, id }),
+    [],
+  );
   const addCharacterReference = useCallback(
     (characterId: string, image: { bytes: ArrayBuffer; mimeType: string }) =>
       send({ type: "addCharacterReference", characterId, image }),
@@ -2365,6 +2378,8 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     updateCharacter,
     updateCreature,
     updateEnvironment,
+    removeBibleEntry,
+    restoreBibleEntry,
     addCharacterReference,
     removeCharacterReference,
     getCharacterReference,

@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useState } from "react";
-import type { Creature, Environment, VisualBible } from "@visual-reader/core";
+import type { BibleEntityKind, Creature, Environment, VisualBible } from "@visual-reader/core";
+import { RemovedBibleEntries } from "./RemovedBibleEntries.js";
 import { SUCCESS_GREEN } from "./tokens.js";
 
 /**
@@ -36,12 +37,24 @@ export interface WorldBibleProps {
   bible: VisualBible | undefined;
   onSaveCreature: (creatureId: string, patch: CreatureEdit) => void;
   onSavePlace: (environmentId: string, patch: EnvironmentEdit) => void;
+  /** Delete an entry outright. Remembered, so reading on can't put it back. */
+  onRemove?: (kind: BibleEntityKind, id: string) => void;
+  /** Undo a deletion — the entry returns with everything it had. */
+  onRestore?: (kind: BibleEntityKind, id: string) => void;
   /** Which list to show first — the button the reader pressed. */
   initialTab?: "creatures" | "places";
   onClose: () => void;
 }
 
-export function WorldBible({ bible, onSaveCreature, onSavePlace, initialTab, onClose }: WorldBibleProps) {
+export function WorldBible({
+  bible,
+  onSaveCreature,
+  onSavePlace,
+  onRemove,
+  onRestore,
+  initialTab,
+  onClose,
+}: WorldBibleProps) {
   const creatures = bible?.creatures ?? [];
   const places = bible?.environments ?? [];
   const [tab, setTab] = useState<"creatures" | "places">(initialTab ?? "places");
@@ -57,6 +70,12 @@ export function WorldBible({ bible, onSaveCreature, onSavePlace, initialTab, onC
   }, [tab, q, creatures, places]);
 
   const total = tab === "creatures" ? creatures.length : places.length;
+  // Each tab shows only its OWN deletions: a place and a creature can share a name, and a footnote
+  // that mixed them would say nothing about which list an entry is missing from.
+  const removed = useMemo(
+    () => (bible?.removed ?? []).filter((r) => r.kind === (tab === "creatures" ? "creature" : "environment")),
+    [bible?.removed, tab],
+  );
   return (
     <div style={overlayStyle} onClick={onClose}>
       <div style={panelStyle} onClick={(e) => e.stopPropagation()}>
@@ -99,9 +118,30 @@ export function WorldBible({ bible, onSaveCreature, onSavePlace, initialTab, onC
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {tab === "creatures"
-              ? (shown as Creature[]).map((c) => <CreatureCard key={c.id} creature={c} onSave={onSaveCreature} />)
-              : (shown as Environment[]).map((e) => <PlaceCard key={e.id} place={e} onSave={onSavePlace} />)}
+              ? (shown as Creature[]).map((c) => (
+                  <CreatureCard
+                    key={c.id}
+                    creature={c}
+                    onSave={onSaveCreature}
+                    {...(onRemove ? { onRemove: () => onRemove("creature", c.id) } : {})}
+                  />
+                ))
+              : (shown as Environment[]).map((e) => (
+                  <PlaceCard
+                    key={e.id}
+                    place={e}
+                    onSave={onSavePlace}
+                    {...(onRemove ? { onRemove: () => onRemove("environment", e.id) } : {})}
+                  />
+                ))}
           </div>
+        )}
+        {onRestore && (
+          <RemovedBibleEntries
+            entries={removed.map((r) => ({ id: r.entity.id, name: r.entity.name }))}
+            what={tab === "creatures" ? "creature" : "place"}
+            onRestore={(id) => onRestore(tab === "creatures" ? "creature" : "environment", id)}
+          />
         )}
       </div>
     </div>
@@ -120,9 +160,11 @@ function textToLines(text: string): string[] {
 const CreatureCard = memo(function CreatureCard({
   creature,
   onSave,
+  onRemove,
 }: {
   creature: Creature;
   onSave: (creatureId: string, patch: CreatureEdit) => void;
+  onRemove?: () => void;
 }) {
   const [name, setName] = useState(creature.name);
   const [kind, setKind] = useState(creature.kind);
@@ -173,6 +215,7 @@ const CreatureCard = memo(function CreatureCard({
           setSaved(true);
           setTimeout(() => setSaved(false), 1500);
         }}
+        {...(onRemove ? { onDelete: () => confirmDelete(creature.name, "creature", onRemove) } : {})}
       />
     </div>
   );
@@ -181,9 +224,11 @@ const CreatureCard = memo(function CreatureCard({
 const PlaceCard = memo(function PlaceCard({
   place,
   onSave,
+  onRemove,
 }: {
   place: Environment;
   onSave: (environmentId: string, patch: EnvironmentEdit) => void;
+  onRemove?: () => void;
 }) {
   const [name, setName] = useState(place.name);
   const [aliases, setAliases] = useState(() => (place.aliases ?? []).join(", "));
@@ -224,6 +269,7 @@ const PlaceCard = memo(function PlaceCard({
           setSaved(true);
           setTimeout(() => setSaved(false), 1500);
         }}
+        {...(onRemove ? { onDelete: () => confirmDelete(place.name, "place", onRemove) } : {})}
       />
     </div>
   );
@@ -273,10 +319,38 @@ function DescriptionField({
   );
 }
 
-function SaveRow({ saved, dirty, onSave }: { saved: boolean; dirty: boolean; onSave: () => void }) {
+/** The model writes down things that aren't entries at all — a simile read as a beast, a metaphor
+ * read as a place — and while one exists it goes into pictures. Deleting says so; the wording says
+ * what deleting actually does, including that it survives reading on and can be undone. */
+function confirmDelete(name: string, what: string, onRemove: () => void): void {
+  if (
+    window.confirm(
+      `Delete “${name}” from the bible?\n\nThis ${what} stops appearing in new images, and reading on won't add it back. Existing images are kept. You can undo this from “Deleted” at the bottom of this list.`,
+    )
+  ) {
+    onRemove();
+  }
+}
+
+function SaveRow({
+  saved,
+  dirty,
+  onSave,
+  onDelete,
+}: {
+  saved: boolean;
+  dirty: boolean;
+  onSave: () => void;
+  onDelete?: () => void;
+}) {
   return (
     <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, alignItems: "center" }}>
       {saved && <span style={{ color: SUCCESS_GREEN, fontSize: 12 }}>✓ saved</span>}
+      {onDelete && (
+        <button style={dangerButtonStyle} onClick={onDelete}>
+          Delete
+        </button>
+      )}
       <button style={buttonStyle} disabled={!dirty} onClick={onSave}>
         Save
       </button>
@@ -341,6 +415,12 @@ const buttonStyle = {
   padding: "4px 10px",
   fontSize: 13,
   cursor: "pointer",
+} as const;
+
+const dangerButtonStyle = {
+  ...buttonStyle,
+  borderColor: "rgba(255,120,120,0.45)",
+  color: "#ffb0b0",
 } as const;
 
 const searchStyle = {

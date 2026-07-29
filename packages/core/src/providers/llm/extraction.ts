@@ -16,6 +16,7 @@ import type { EntityExtractionInput } from "./llm-provider.js";
 import type { VisualRequest } from "../../types/content.js";
 import { deterministicSeed } from "./mock-llm-provider.js";
 import { resolveKeyEvent } from "../../visual-bible/key-events.js";
+import { isRemovedEntity } from "../../visual-bible/removals.js";
 import { recentArcLine } from "../../visual-bible/story-digest.js";
 import { sanitizeWorldStyle } from "../image/bible-injection.js";
 
@@ -872,6 +873,10 @@ export function mergeExtraction(
   const knownTerms = new Set(bible.glossary.map((g) => g.term.toLowerCase()));
 
   for (const c of raw.characters) {
+    // A person the reader DELETED is not re-added by a later chapter that mentions them. Without
+    // this the delete button would be a no-op on exactly the entries worth deleting: a duplicate,
+    // or a costume/title the model read as a person, is named again and again in the prose.
+    if (isRemovedEntity(bible, "character", [c.name, ...c.aliases])) continue;
     // Upsert by exact name (accumulating aliases/appearance on a re-mention); the
     // consolidation pass below collapses alias/partial-name duplicates.
     const at = bible.characters.findIndex((ex) => ex.name.toLowerCase() === c.name.toLowerCase());
@@ -901,6 +906,7 @@ export function mergeExtraction(
   for (const e of raw.environments) {
     const key = e.name.toLowerCase();
     const rawAliases = (e.aliases ?? []).map((a) => a.trim()).filter(Boolean);
+    if (isRemovedEntity(bible, "environment", [e.name, ...rawAliases])) continue;
     // Match by canonical name OR alias, in both directions — a later chapter
     // re-extracting "the fortress" must merge into Basgiliath, not fork it.
     const allNames = (env: (typeof bible.environments)[number]) =>
@@ -950,6 +956,7 @@ export function mergeExtraction(
   for (const cr of raw.creatures ?? []) {
     const name = cr.name.trim();
     if (!name) continue;
+    if (isRemovedEntity(bible, "creature", [name, ...cr.aliases])) continue;
     const key = name.toLowerCase();
     const at = bible.creatures.findIndex((x) => x.name.toLowerCase() === key);
     if (at >= 0) {
