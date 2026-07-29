@@ -8165,25 +8165,71 @@ export function App() {
               Chat
             </button>
           )}
-          {/* BOOK TOOLS — everything that acts on the open book, fenced off from the app-wide tools
-              beside them and collapsible on its own. Flat in one long wrapping row, the two kinds
-              were indistinguishable, and on a narrow window the book's own controls were buried
-              among tools that have nothing to do with it. */}
-          {book && (
-            <>
-              <span style={styles.toolDivider} aria-hidden="true" />
-              <button
-                style={bookToolsOpen ? { ...styles.button, borderColor: "rgba(120,180,255,0.6)", color: "#cfe2ff" } : styles.button}
-                onClick={() => setBookToolsOpen((v) => !v)}
-                aria-expanded={bookToolsOpen}
-                title="Show or hide the tools that act on this book — illustrating, redoing, characters, export"
-              >
-                {bookToolsOpen ? "▾ Book" : "▸ Book"}
-              </button>
-            </>
+          <SettingsPanel
+            value={settings}
+            onChange={onSettingsChange}
+            buildStamp={buildStampLabel}
+            {...(checkoutSha ? { checkoutSha } : {})}
+            {...(isDesktop ? { onExploreNow: () => void runCreativeNow() } : {})}
+            {...(lastCreativeRunLabel ? { lastCreativeRun: lastCreativeRunLabel } : {})}
+            isDesktop={isDesktop}
+            remote={isRemoteClient}
+            {...(isDesktop
+              ? { onSoftwareUpdate }
+              : isRemoteClient
+                ? { onSoftwareUpdate: onSoftwareUpdateRemote }
+                : {})}
+            {...(isDesktop ? { onRestartApp } : isRemoteClient ? { onRestartApp: onRestartAppRemote } : {})}
+            {...(!isRemoteClient ? { onExportData, onImportData } : {})}
+            installedModels={installedModels}
+            installedTextEncoders={installedTextEncoders}
+            installedVaes={installedVaes}
+            installedDiffusionModels={installedDiffusionModels}
+            installedUpscalers={installedUpscalers}
+            installedLtxTextEncoders={installedLtxTextEncoders}
+            onDownloadModel={onDownloadModel}
+            onDownloadModelUrl={onDownloadModelUrl}
+            onDownloadVideoModel={onDownloadVideoModel}
+            onDownloadFfmpeg={onDownloadFfmpeg}
+            downloadProgress={modelProgress}
+            downloadStage={downloadStage}
+            engineStatus={engineStatus}
+            installedLoras={installedLoras}
+            loraFamilies={loraFamilyMap}
+            onDownloadStyleLora={onDownloadStyleLora}
+            onConnectLocalServer={onConnectLocalServer}
+            connectingLocal={connectingLocal}
+            textModels={textModels}
+            {...(textModelContext ? { textModelContext } : {})}
+            onConnectLocalTextServer={onConnectLocalTextServer}
+            connectingLocalText={connectingLocalText}
+            onPullTextModel={onPullTextModel}
+            pullProgress={pullProgress}
+            onTestSubAgentEndpoint={onTestSubAgentEndpoint}
+            googleConnected={googleConnected}
+            {...(googleEmail ? { googleEmail } : {})}
+            onConnectGoogle={onConnectGoogle}
+            onDisconnectGoogle={onDisconnectGoogle}
+          />
+          </>
           )}
-          {book && bookToolsOpen && (
-          <div style={styles.bookTools}>
+        </div>
+        </div>
+        {/* THE BOOK'S OWN TOOLBAR — a separate bar with its own caret, not a section of the app's
+            toolbar. Sharing that caret meant putting the app's tools away took the book's with them,
+            and the two kinds sat indistinguishable in one wrapping row. */}
+        {book && (
+          <div style={styles.bookBar}>
+            <button
+              style={styles.bookBarToggle}
+              onClick={() => setBookToolsOpen((v) => !v)}
+              aria-expanded={bookToolsOpen}
+              title="Show or hide this book's tools — illustrating, redoing, characters, export"
+            >
+              {bookToolsOpen ? "▾ Book tools" : "▸ Book tools"}
+            </button>
+            {bookToolsOpen && (
+              <>
           {book && viewAs === "story" && !generating && (
             <button
               style={styles.buttonPrimary}
@@ -8434,58 +8480,10 @@ export function App() {
               ⤒ Import bible
             </button>
           )}
+              </>
+            )}
           </div>
-          )}
-          <SettingsPanel
-            value={settings}
-            onChange={onSettingsChange}
-            buildStamp={buildStampLabel}
-            {...(checkoutSha ? { checkoutSha } : {})}
-            {...(isDesktop ? { onExploreNow: () => void runCreativeNow() } : {})}
-            {...(lastCreativeRunLabel ? { lastCreativeRun: lastCreativeRunLabel } : {})}
-            isDesktop={isDesktop}
-            remote={isRemoteClient}
-            {...(isDesktop
-              ? { onSoftwareUpdate }
-              : isRemoteClient
-                ? { onSoftwareUpdate: onSoftwareUpdateRemote }
-                : {})}
-            {...(isDesktop ? { onRestartApp } : isRemoteClient ? { onRestartApp: onRestartAppRemote } : {})}
-            {...(!isRemoteClient ? { onExportData, onImportData } : {})}
-            installedModels={installedModels}
-            installedTextEncoders={installedTextEncoders}
-            installedVaes={installedVaes}
-            installedDiffusionModels={installedDiffusionModels}
-            installedUpscalers={installedUpscalers}
-            installedLtxTextEncoders={installedLtxTextEncoders}
-            onDownloadModel={onDownloadModel}
-            onDownloadModelUrl={onDownloadModelUrl}
-            onDownloadVideoModel={onDownloadVideoModel}
-            onDownloadFfmpeg={onDownloadFfmpeg}
-            downloadProgress={modelProgress}
-            downloadStage={downloadStage}
-            engineStatus={engineStatus}
-            installedLoras={installedLoras}
-            loraFamilies={loraFamilyMap}
-            onDownloadStyleLora={onDownloadStyleLora}
-            onConnectLocalServer={onConnectLocalServer}
-            connectingLocal={connectingLocal}
-            textModels={textModels}
-            {...(textModelContext ? { textModelContext } : {})}
-            onConnectLocalTextServer={onConnectLocalTextServer}
-            connectingLocalText={connectingLocalText}
-            onPullTextModel={onPullTextModel}
-            pullProgress={pullProgress}
-            onTestSubAgentEndpoint={onTestSubAgentEndpoint}
-            googleConnected={googleConnected}
-            {...(googleEmail ? { googleEmail } : {})}
-            onConnectGoogle={onConnectGoogle}
-            onDisconnectGoogle={onDisconnectGoogle}
-          />
-          </>
-          )}
-        </div>
-        </div>
+        )}
         {book && viewAs === "story" && (
           <WorkflowBar
             stage={stage}
@@ -10789,25 +10787,34 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 16,
   },
   headerControls: { display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" },
-  // The book's tools, fenced into their own tinted group so they read as one thing rather than more
-  // buttons in the same undifferentiated row.
-  bookTools: {
+  /**
+   * The book's OWN toolbar — a separate bar under the app's, not a section of it.
+   *
+   * Tinted and outlined so it reads as one thing at a glance: everything in here acts on the book
+   * you have open, and nothing outside it does. Its own caret lives inside it, so collapsing the
+   * app's tools and collapsing the book's are independent decisions.
+   */
+  bookBar: {
     display: "flex",
     gap: 8,
-    alignItems: "flex-start",
+    alignItems: "center",
     flexWrap: "wrap",
-    padding: "4px 8px",
-    border: "1px solid rgba(120,180,255,0.28)",
+    padding: "5px 8px",
+    border: "1px solid rgba(120,180,255,0.25)",
     borderRadius: 8,
     background: "rgba(96,170,255,0.06)",
   },
-  /** A hairline between the app's tools and the book's — the group's left edge, before its caret. */
-  toolDivider: {
-    width: 1,
-    alignSelf: "stretch",
-    minHeight: 24,
-    background: "rgba(255,255,255,0.18)",
-    margin: "0 2px",
+  bookBarToggle: {
+    background: "transparent",
+    color: "#cfe2ff",
+    border: "1px solid rgba(120,180,255,0.5)",
+    borderRadius: 6,
+    padding: "3px 9px",
+    cursor: "pointer",
+    fontSize: 12,
+    fontWeight: 600,
+    fontFamily: "system-ui, sans-serif",
+    whiteSpace: "nowrap",
   },
   // --- always-visible workflow strip (inside the sticky header) ---
   workflowBar: {

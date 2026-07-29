@@ -721,3 +721,53 @@ describe("weather never lives in a permanent descriptor", () => {
     expect(sanitizeWorldStyle("torrential rain, thunder")).toBe("");
   });
 });
+
+describe("appositive naming (names kept, description beside them)", () => {
+  const terms: SceneTerm[] = [
+    { names: ["Nico"], descriptor: "a man with a beard", kind: "character" },
+    { names: ["Lyra"], descriptor: "a woman with red hair", kind: "character" },
+  ];
+
+  it("puts each description next to the person it belongs to, keeping the name", () => {
+    expect(expandPrompt("Nico and Lyra sit at a bar.", terms, "appositive")).toBe(
+      "Nico (a man with a beard) and Lyra (a woman with red hair) sit at a bar.",
+    );
+  });
+
+  it("describes only the FIRST mention — repeating it reads as a second person", () => {
+    const out = expandPrompt("Nico pours. Lyra laughs. Nico pours again.", terms, "appositive");
+    expect(out.match(/a man with a beard/g)).toHaveLength(1);
+    expect(out).toContain("Nico pours again.");
+  });
+
+  it("appends the world style like the inject mode, with no glossary block", () => {
+    const out = expandPrompt("Nico waits.", terms, "appositive", "moody cinematic");
+    expect(out).toContain("Nico (a man with a beard) waits.");
+    expect(out).toContain("Style: moody cinematic");
+    expect(out).not.toContain("Characters:");
+  });
+
+  it("still won't rename a place called after someone in the scene", () => {
+    const out = expandPrompt("Nico waits in Nico's Bar.", terms, "appositive", undefined, undefined, "Nico's Bar");
+    expect(out).toContain("Nico's Bar");
+  });
+});
+
+describe("the book title is a permanent statement too", () => {
+  const terms: SceneTerm[] = [{ names: ["Nico"], descriptor: "a man with a beard", kind: "character" }];
+
+  it("strips weather from the title, which rides into every prompt of the book", () => {
+    // A story titled from its opening premise carries that premise's weather into every later
+    // picture — from a line nobody thinks of as a prompt at all.
+    const out = expandPrompt("Nico waits.", terms, "reference", undefined, "A Rainy Night in Blackwater");
+    expect(out).not.toMatch(/rain/i);
+    // Word by word, not clause by clause: a title is one clause, so the ordinary strip would take
+    // the whole thing — and the title is the line that says which world this is.
+    expect(out).toContain("Title: A Night in Blackwater.");
+  });
+
+  it("leaves a title with no weather in it exactly as written", () => {
+    const out = expandPrompt("Nico waits.", terms, "reference", undefined, "The Glass Harbour");
+    expect(out).toContain("Title: The Glass Harbour.");
+  });
+});

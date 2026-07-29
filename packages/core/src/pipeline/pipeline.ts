@@ -433,6 +433,7 @@ export class RenderPipeline {
         ...(styleLora ? { styleLora } : {}),
         ...(local?.checkpoint ? { styleCheckpoint: local.checkpoint } : {}),
         ...(this.deps.tier.imageModelFamily ? { modelFamily: this.deps.tier.imageModelFamily } : {}),
+        ...(isLocal && this.deps.tier.promptNameStyle ? { nameHandling: this.deps.tier.promptNameStyle } : {}),
         ...(isLocal && this.deps.tier.localTextEncoder ? { textEncoder: this.deps.tier.localTextEncoder } : {}),
         ...(isLocal && this.deps.tier.localVae ? { vae: this.deps.tier.localVae } : {}),
         ...(isLocal && this.deps.tier.localSteps ? { stepsOverride: this.deps.tier.localSteps } : {}),

@@ -398,7 +398,14 @@ function orderedForms(terms: readonly SceneTerm[]): { form: string; descriptor: 
  * sorted longest-first, so an inserted descriptor is never re-scanned. Possessives are
  * preserved ("Violet's" → "(…)'s").
  */
-export function injectBibleTerms(prompt: string, terms: readonly SceneTerm[], sceneLocation?: string): string {
+export function injectBibleTerms(
+  prompt: string,
+  terms: readonly SceneTerm[],
+  sceneLocation?: string,
+  /** Keep the name and add the descriptor beside it ("Nico (a man with a beard)") instead of
+   * replacing it. See the `appositive` mode in {@link expandPrompt}. */
+  opts: { keepName?: boolean } = {},
+): string {
   const forms = orderedForms(terms);
   if (forms.length === 0) return prompt;
   const byForm = new Map(forms.map((f) => [f.form.toLowerCase(), f.descriptor]));
@@ -411,6 +418,7 @@ export function injectBibleTerms(prompt: string, terms: readonly SceneTerm[], sc
     place && !byForm.has(place.toLowerCase())
       ? [...forms, { form: place, descriptor: "" }].sort((a, b) => b.form.length - a.form.length)
       : forms;
+  const described = new Set<string>();
   const alt = scan.map((f) => escapeRegExp(f.form)).join("|");
   // Whole-word, case-insensitive, optional possessive; skip a match already opened by "(".
   const re = new RegExp(`(^|[^\\p{L}\\p{N}(])(${alt})(['’]s)?(?=[^\\p{L}\\p{N}]|$)`, "giu");
@@ -421,8 +429,34 @@ export function injectBibleTerms(prompt: string, terms: readonly SceneTerm[], sc
     if (!descriptor || (poss && namesSomethingElse(whole.slice(offset + m.length)))) {
       return `${lead}${name}${poss ?? ""}`;
     }
+    // Only the FIRST mention gets the descriptor in keepName mode — repeating it at every mention
+    // reads as two different people and is the bleed we're trying to avoid.
+    if (opts.keepName) {
+      if (described.has(name.toLowerCase())) return `${lead}${name}${poss ?? ""}`;
+      described.add(name.toLowerCase());
+      return `${lead}${name}${poss ?? ""} (${descriptor})`;
+    }
     return `${lead}(${descriptor})${poss ?? ""}`;
   });
+}
+
+/** How a prompt names the entities it depicts — see {@link expandPrompt}. */
+export type NameHandling = "inject" | "reference" | "appositive";
+
+/**
+ * A book title with its weather taken out, WORD by word rather than clause by clause.
+ *
+ * A title is a label, not prose: "A Rainy Night in Blackwater" is a single clause, so the ordinary
+ * clause-level {@link stripWeather} would delete the whole thing and lose Blackwater with it — and
+ * the title is the one line in the block that says which world this is. Removing just the weather
+ * word keeps that.
+ */
+export function titleWithoutWeather(title: string): string {
+  return (title ?? "")
+    .replace(new RegExp(WEATHER.source, "gi"), " ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/^[\s,;.–—-]+|[\s,;.–—-]+$/g, "")
+    .trim();
 }
 
 /** Title-case a term kind for the reference block heading. */
@@ -448,7 +482,12 @@ export function buildReferenceBlock(
   // A title on its own isn't worth a block — only add context when there are terms or a style.
   if (!hasTerms && !style) return "";
   const lines: string[] = [];
-  if (bookTitle && bookTitle.trim()) lines.push(`Title: ${bookTitle.trim()}.`);
+  // The title rides into EVERY prompt this book ever renders, which makes it the same kind of
+  // permanent statement as the world style — and a story titled from its opening premise carries
+  // that premise's weather with it. "A Rainy Night in Blackwater" rained on every later picture,
+  // indoors and months of story later, from a line nobody thought of as a prompt at all.
+  const title = titleWithoutWeather(bookTitle ?? "");
+  if (title) lines.push(`Title: ${title}.`);
   if (style) lines.push(`Style: ${style}.`);
   for (const kind of ["character", "creature", "outfit", "location"] as const) {
     const ofKind = terms.filter((t) => t.kind === kind && t.descriptor.trim());
@@ -528,19 +567,38 @@ export function displayCaption(prompt: string): string {
 }
 
 /**
- * Expand a prompt for a target, given its `nameHandling`. `inject` replaces terms in
- * place and appends the world-style clause; `reference` keeps names and prepends the
- * reference block. Used by the local backends and by the pipeline's cloud pre-expansion.
+ * Expand a prompt for a target, given its `nameHandling`. Three shapes, and which one binds an
+ * attribute to the right person is a property of the ENCODER, not of the prompt:
+ *
+ *  - `inject` — the name is REPLACED: "(a man with a beard) and (a woman with red hair) sit at a
+ *    bar". Every attribute sits adjacent to its subject, which is where a CLIP/T5 encoder's
+ *    attention actually binds, so this is the default for SD and Flux.1. It costs the names, so a
+ *    later mention in the same prompt has nothing to refer back to.
+ *  - `reference` — the names STAY and a glossary is prepended ("Characters: Nico = a man with a
+ *    beard; …"). LLM-grade encoders (Flux.2, Z-Image, Qwen, HiDream, and the cloud multimodals)
+ *    resolve that indirection well, it keeps the scene sentence readable at any cast size, and it's
+ *    the only shape with room for the explicit "these lists don't mix" instruction.
+ *  - `appositive` — the names stay AND carry their descriptor at first mention: "Nico (a man with a
+ *    beard) and Lyra (a woman with red hair) sit at a bar". Neither indirection nor lost names.
+ *    Offered because the glossary form is the one shape where a description is not adjacent to the
+ *    person it belongs to, which is a plausible source of the attribute mixing that survives
+ *    everything else — but it is an empirical question per model, so it's a setting rather than a
+ *    new default. Only the first mention is expanded; repeating it reads as two different people.
  */
 export function expandPrompt(
   prompt: string,
   terms: readonly SceneTerm[],
-  nameHandling: "inject" | "reference",
+  nameHandling: NameHandling,
   worldStyle?: string,
   bookTitle?: string,
   /** The beat's place, so a name inside it is never swapped for a character's face. */
   sceneLocation?: string,
 ): string {
+  if (nameHandling === "appositive") {
+    const named = injectBibleTerms(prompt, terms, sceneLocation, { keepName: true });
+    const style = worldStyleClause(worldStyle);
+    return style ? `${named}\n\nStyle: ${style}` : named;
+  }
   if (nameHandling === "reference") {
     const block = buildReferenceBlock(terms, worldStyle, bookTitle);
     return block ? `${block}\n\n${prompt}` : prompt;
