@@ -250,7 +250,7 @@ export type BuddyToolCall =
    * and generate the first image. Each later beat
    * (continue_story) adds prose + an image while the Visual Bible accumulates the cast/
    * places. `style` sets the art look; `characters` seeds the known cast; `roleplay`
-   * assigns the played characters (`you` = the reader plays, `me` = you play) so both stay
+   * assigns the played characters (`me` = the reader plays, `you` = you play) so both stay
    * present by default. */
   | {
       tool: "start_story";
@@ -261,7 +261,7 @@ export type BuddyToolCall =
        * Each entry's optional `description` seeds that character's LOOK (e.g. the reader's
        * remembered appearance for a "me and you" story) so the first image isn't arbitrary. */
       characters?: { name: string; description?: string }[];
-      /** Role-play: the played characters. `you` = the character the READER plays, `me` =
+      /** Role-play: the played characters. `me` = the character the READER plays, `you` =
        * the one YOU (the assistant) play. "me and you" / "us" means the reader and the
        * assistant ARE the two characters. */
       roleplay?: { you?: string; me?: string };
@@ -273,8 +273,9 @@ export type BuddyToolCall =
     }
   /** Advance the OPEN story by one beat: append this prose as the next span and (per the
    * current cadence) illustrate the scene since the last image. Write a vivid, FULL-SCENE
-   * beat; keep continuity with the bible's established names. In role-play, write only
-   * YOUR character's part and end on a beat that invites the reader's next move. */
+   * beat; keep continuity with the bible's established names. In role-play, weave the
+   * reader's supplied action/dialogue into narration, then continue the scene without
+   * inventing a further choice for their character. */
   | { tool: "continue_story"; text: string }
   /** Illustrate a chosen part of the open story ON DEMAND (manual cadence, or "draw the
    * last bit"): render an image for beats `from`..`to` (1-based beat numbers; default =
@@ -1242,11 +1243,14 @@ export function buildBuddySystemPrompt(opts: {
   const play = opts.storyPlay ?? {};
   const roleplayLine =
     opts.storyMode === "roleplay"
-      ? `This is ROLEPLAY: the reader plays ${play.me || "their character"}, and you voice ${
+      ? `This is COLLABORATIVE NARRATED ROLEPLAY: the reader plays ${play.me || "their character"}, and you voice ${
           play.you || "your character"
-        } and everyone else. The reader's message is ${play.me || "their character"}'s action/line — narrate what ` +
-        "happens next for the WHOLE scene (their character included), in flowing prose, referring to everyone by " +
-        "their established names. Never decide the reader's intentions for them; respond to what they did.\n"
+        } and everyone else. The reader's message is SOURCE MATERIAL for the next beat, not dialogue addressed ` +
+        `to you: put ${play.me || "their character"}'s supplied action and spoken words ON THE PAGE, polish and ` +
+        "elaborate them in the established narrative voice, then continue with the scene's immediate consequences " +
+        `and everyone else's response. Do not merely answer from ${play.you || "your character"}'s perspective, ` +
+        "and do not skip straight past the reader's contribution. Never invent additional choices, intentions, " +
+        `actions, or dialogue for ${play.me || "the reader's character"} beyond what the reader supplied.\n`
       : "This is DIRECT WRITING: the reader's message tells you what should happen (or asks for more); you write " +
         "the next stretch of narrative.\n";
   const storyBlock = opts.storyActive

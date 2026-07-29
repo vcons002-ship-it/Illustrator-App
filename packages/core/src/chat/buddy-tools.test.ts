@@ -1737,6 +1737,11 @@ describe("story as you go tools", () => {
     expect(rp).toMatch(/ROLEPLAY/i);
     expect(rp).toContain("Toll");
     expect(rp).toContain("Mira");
+    expect(rp).toMatch(/SOURCE MATERIAL for the next beat/i);
+    expect(rp).toMatch(/put Toll's supplied action and spoken words ON THE PAGE/i);
+    expect(rp).toMatch(/Do not merely answer from Mira's perspective/i);
+    expect(rp).toMatch(/do not skip straight past the reader's contribution/i);
+    expect(rp).toMatch(/Never invent additional choices.*actions.*dialogue for Toll/i);
   });
 
   it("parses continue_story / render_scene / set_story_cadence", () => {

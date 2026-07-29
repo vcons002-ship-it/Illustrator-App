@@ -56,6 +56,37 @@ export function storyStatePromptBlock(input: StoryStateInput): string {
   return block;
 }
 
+/**
+ * Turn-local roleplay brief placed around the reader's raw contribution.
+ *
+ * The standing system prompt says to "weave in" the steer, but a roleplay-trained model can still
+ * read a bare `I draw my sword` as dialogue addressed to its own character and answer from that
+ * character's perspective. This makes the writing operation concrete: the supplied action/dialogue
+ * must appear ON THE PAGE first, elaborated in the story's established narrative voice, and only
+ * then may the beat continue. It also draws the authorship boundary precisely — expand what the
+ * reader chose, but do not invent their next choice. PURE.
+ */
+export function roleplayStoryTurnPrompt(
+  contribution: string,
+  play: { me?: string; you?: string } = {},
+): string {
+  const text = contribution.trim();
+  if (!text) return "";
+  const readerCharacter = play.me?.trim() || "the reader's character";
+  const assistantCharacter = play.you?.trim() || "your character";
+  return (
+    `READER'S STORY CONTRIBUTION for ${readerCharacter} (source material to put into the story, ` +
+    `NOT a chat message for ${assistantCharacter} to answer):\n---\n${text}\n---\n\n` +
+    "WRITE THE NEXT ILLUSTRATED BEAT. Begin by rendering that contribution on the page: preserve every " +
+    "concrete action and spoken line the reader supplied, and elaborate it with setting, sensory detail, " +
+    "body language, pacing, and story texture. Use the story's established narrative person and tense " +
+    "(default to third-person narration); do not answer in conversational first person from your " +
+    `character's perspective. Then continue into the immediate consequences and the other characters' ` +
+    "responses. You may deepen how the stated action unfolds, but do not give the reader's character any " +
+    "additional dialogue, decision, intention, or action they did not provide. Output only the finished prose beat."
+  );
+}
+
 /** Refresh the synopsis every N beats (the only part of STORY STATE that costs an LLM call). */
 export const SYNOPSIS_REFRESH_EVERY = 6;
 export const MAX_SYNOPSIS_CHARS = 900;

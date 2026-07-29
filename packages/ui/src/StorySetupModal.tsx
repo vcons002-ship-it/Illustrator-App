@@ -135,7 +135,7 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, chatS
           <label style={{ ...field, flex: 1 }}>
             <span style={label}>Workflow</span>
             <select style={select} value={workflow} onChange={(e) => setWorkflow(e.target.value as Workflow)}>
-              <option value="roleplay">Roleplay — you steer, the assistant plays the scene</option>
+              <option value="roleplay">Roleplay — your input is woven into the narrated scene</option>
               <option value="direct">Direct writing — you direct, the assistant narrates</option>
             </select>
           </label>
