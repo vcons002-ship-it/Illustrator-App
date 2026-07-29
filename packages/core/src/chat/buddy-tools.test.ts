@@ -1710,6 +1710,13 @@ describe("story as you go tools", () => {
     expect(parseBuddyToolCall('{"tool":"start_story","title":"x"}')).toBeUndefined();
   });
 
+  it("keeps the complete carried chat instead of truncating it to the last 4k characters", () => {
+    const soFar = `Reader: ${"A".repeat(3_000)}\nAssistant: ${"B".repeat(3_000)}`;
+    expect(
+      parseBuddyToolCall(JSON.stringify({ tool: "start_story", title: "The Long Road", opening: "", soFar })),
+    ).toMatchObject({ tool: "start_story", soFar });
+  });
+
   it("switches into story-writing mode once a story is open (prose, not tools)", () => {
     const idle = buildBuddySystemPrompt({ persona: "assistant", library: [] });
     expect(idle).not.toMatch(/STORY MODE/);

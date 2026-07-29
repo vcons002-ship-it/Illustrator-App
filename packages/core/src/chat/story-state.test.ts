@@ -5,7 +5,6 @@ import {
   storyOpeningRequest,
   parseStoryOpening,
   storySoFarFromChat,
-  STORY_SO_FAR_MAX_CHARS,
   STORY_STATE_MAX_CHARS,
 } from "./story-state.js";
 
@@ -74,6 +73,13 @@ describe("storySoFarFromChat", () => {
     ).toBe("Reader: I open the door.\nAssistant: Cold air pours in.");
   });
 
+  it("carries the full conversation by default, even when it is longer than the old 4k tail", () => {
+    const beginning = "A".repeat(3_000);
+    const ending = "B".repeat(3_000);
+    const out = storySoFarFromChat([msg("user", beginning), msg("assistant", ending)]);
+    expect(out).toBe(`Reader: ${beginning}\nAssistant: ${ending}`);
+  });
+
   it("leaves out tool notes and empty messages — the story is what's carried, not the app's chatter", () => {
     const out = storySoFarFromChat([
       msg("user", "I open the door."),
@@ -99,9 +105,6 @@ describe("storySoFarFromChat", () => {
     expect(storySoFarFromChat([msg("tool", "⚙ something")])).toBe("");
   });
 
-  it("has a budget big enough for a scene or two", () => {
-    expect(STORY_SO_FAR_MAX_CHARS).toBeGreaterThanOrEqual(2000);
-  });
 });
 
 describe("parseStoryOpening", () => {

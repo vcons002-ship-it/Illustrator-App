@@ -106,10 +106,10 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, chatS
               style={{ marginTop: 2 }}
             />
             <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-              <span style={{ fontSize: 13 }}>Continue what we've been telling in this chat</span>
+              <span style={{ fontSize: 13 }}>Bring the full conversation into this story</span>
               <span style={hint}>
-                Brings the conversation with you, so the first beat picks up where you left off instead of
-                starting a new scene. Untick to begin something fresh.
+                Includes every reader and assistant message, so the first beat picks up where you left
+                off instead of starting a new scene. Untick to begin something fresh.
               </span>
             </span>
           </label>

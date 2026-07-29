@@ -215,6 +215,12 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Stories
 
+- **A chat can now come into a story whole** — the story setup already offered to carry the current
+  conversation, but silently kept only its last 4,000 characters. A long final reply could therefore
+  make the new story look as though it had pulled only the latest message. The option now says
+  explicitly that it brings the full conversation and includes every reader and assistant message;
+  untick it to start fresh.
+
 - **…and not in the story's title either** — the last place it was hiding, and the one that explains
   why it survived everything else: the title goes into every prompt the book ever renders, and a
   story titled from its opening premise carries that premise's weather with it. "A Rainy Night in
