@@ -96,6 +96,16 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   next run was never due again, permanently, with nothing on screen to say so. A stamp in the future
   is now discarded, and a clock that moves backwards counts as "long enough ago" rather than "just
   ran".
+- **The phone link comes back after an update** — the app restarted correctly but the phone got a
+  host error, because the link's port was still held by the copy of the app that was shutting down:
+  the new one couldn't open it, and its link died on arrival. The outgoing app now hands the port
+  over before starting its replacement, and the link retries for a few seconds if something is still
+  holding it — so the handover works from either end.
+- **…and it says so when it can't start** — the phone link reported itself as running the instant it
+  was asked to start, before it knew whether the port had opened. So a link that never came up looked
+  live: the address and QR code were shown, the desktop connected to a port with nothing behind it,
+  and the only sign of trouble was an error on the phone. It now waits to find out, and tells you
+  what went wrong instead.
 - **Update no longer closes the app without bringing it back** — the update finishes by building a
   new app and starting it, and starting it was the fragile part. The new app was launched as a child
   of the one about to shut down, sharing its console and standard handles, which on Windows is how a

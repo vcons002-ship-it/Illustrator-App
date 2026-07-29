@@ -563,6 +563,13 @@ async fn rebuild_desktop_app(app: AppHandle) -> Result<String, String> {
         Ok(tail) if exe.is_file() => {
             // The new binary is in place. Start it and stand down; the sweep on ITS startup deletes
             // the copy we renamed aside (we can't, we're still running out of it).
+            // HAND THE PHONE-LINK PORT OVER FIRST. The successor restores the link during its own
+            // startup, and it can't bind a port this process is still holding — and this process
+            // deliberately stays alive for a few seconds below to check the successor survived. The
+            // app restarted fine and the phone got a host error, which is a miserable thing to
+            // debug. (The relay also retries its bind, so this is belt AND braces; if we end up
+            // restoring the old binary below, the reader can reopen the link from Settings.)
+            stop_remote_server(app.state::<RemoteServerState>());
             let child = launch_detached(&exe, &root).map_err(|e| {
                 let _ = std::fs::rename(&aside, &exe);
                 format!("Rebuilt, but couldn't start the new app: {e}")
@@ -1096,11 +1103,31 @@ async fn start_remote_server(
     let url = format!("http://{host}:{port}/#vrlink={token}");
     let stop = std::sync::Arc::new(tokio::sync::Notify::new());
 
-    // Replace any prior server (signal the old one to stop first).
+    // Replace any prior server (signal the old one to stop first) — it must release the port before
+    // the bind below, so this happens first even though the handle is only recorded on success.
     if let Ok(mut guard) = state.inner.lock() {
         if let Some(prev) = guard.take() {
             prev.stop.notify_waiters();
         }
+    }
+
+    // BIND BEFORE CLAIMING SUCCESS. This used to spawn the loop and return `running: true`
+    // immediately, so a bind that failed was reported as a working link: the UI showed the QR/URL
+    // and the desktop bridged to a port nobody was listening on, and the phone got a host error
+    // with nothing anywhere saying why.
+    let listener = match bind_relay(port).await {
+        Ok(l) => l,
+        Err(e) => {
+            return Ok(RemoteServerStatus {
+                running: false,
+                url: None,
+                token: Some(token),
+                port: Some(port),
+                error: Some(e),
+            })
+        }
+    };
+    if let Ok(mut guard) = state.inner.lock() {
         *guard = Some(RemoteHandle {
             stop: stop.clone(),
             url: url.clone(),
@@ -1109,10 +1136,9 @@ async fn start_remote_server(
         });
     }
 
-    let bind = format!("0.0.0.0:{port}");
     let token_for_loop = token.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = run_remote_server(bind, token_for_loop, stop, app).await {
+        if let Err(e) = run_remote_server(listener, token_for_loop, stop, app).await {
             eprintln!("remote relay stopped: {e}");
         }
     });
@@ -1124,6 +1150,40 @@ async fn start_remote_server(
         port: Some(port),
         error: None,
     })
+}
+
+/// How long to keep retrying a relay bind that reports the port busy.
+///
+/// The self-update hands over between two copies of the app, and for a moment BOTH are alive: the
+/// outgoing one waits to confirm its successor survived startup (see `rebuild_desktop_app`) while
+/// the successor is already restoring the phone link. Windows refuses the second bind outright while
+/// the first socket is open, so the new app's relay died on arrival and the phone got a host error —
+/// the app itself having restarted perfectly. Waiting a few seconds costs nothing on a cold start,
+/// where the first attempt succeeds.
+const RELAY_BIND_RETRY_MS: u64 = 8_000;
+
+/// Bind the relay's listening socket, retrying while the port is still held by someone else.
+async fn bind_relay(port: u16) -> Result<tokio::net::TcpListener, String> {
+    let addr = format!("0.0.0.0:{port}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(RELAY_BIND_RETRY_MS);
+    let last;
+    loop {
+        match tokio::net::TcpListener::bind(&addr).await {
+            Ok(listener) => return Ok(listener),
+            Err(e) => {
+                let msg = e.to_string();
+                // Anything other than "someone has this port" won't fix itself by waiting.
+                if e.kind() != std::io::ErrorKind::AddrInUse || std::time::Instant::now() >= deadline {
+                    last = msg;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+        }
+    }
+    Err(format!(
+        "Couldn't open the phone-link port {port}: {last}. Another program (or an older copy of this app) is using it."
+    ))
 }
 
 #[tauri::command]
@@ -1266,13 +1326,12 @@ impl Drop for RelayConnGuard {
 /// no dev server, no cloud). `peek` doesn't consume the stream, so the WS handshake still
 /// reads cleanly afterwards.
 async fn run_remote_server(
-    bind: String,
+    listener: tokio::net::TcpListener,
     token: String,
     stop: std::sync::Arc<tokio::sync::Notify>,
     app: AppHandle,
 ) -> Result<(), String> {
     use futures_util::{SinkExt, StreamExt};
-    let listener = tokio::net::TcpListener::bind(&bind).await.map_err(|e| e.to_string())?;
     let (tx, _rx) = tokio::sync::broadcast::channel::<(u64, String)>(256);
     let mut next_id: u64 = 0;
     // Live WS-peer count (see MAX_RELAY_WS_CONNS) — HTTP asset requests aren't counted (they're short).
