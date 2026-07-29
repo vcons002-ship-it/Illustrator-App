@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   storyStatePromptBlock,
+  roleplayStoryTurnPrompt,
   synopsisRequest,
   storyOpeningRequest,
   parseStoryOpening,
@@ -8,6 +9,33 @@ import {
   storyStartBeats,
   STORY_STATE_MAX_CHARS,
 } from "./story-state.js";
+
+describe("roleplayStoryTurnPrompt", () => {
+  it("makes the reader's exact contribution source material for the narrated beat", () => {
+    const contribution = 'I draw the old sword and say, "Then we finish this together."';
+    const prompt = roleplayStoryTurnPrompt(contribution, { me: "Ada", you: "Vex" });
+    expect(prompt).toContain(contribution);
+    expect(prompt).toContain("for Ada");
+    expect(prompt).toMatch(/source material to put into the story/i);
+    expect(prompt).toMatch(/preserve every concrete action and spoken line/i);
+    expect(prompt).toMatch(/setting, sensory detail, body language, pacing/i);
+    expect(prompt).toMatch(/do not answer in conversational first person/i);
+    expect(prompt).toContain("Vex");
+  });
+
+  it("allows elaboration but forbids inventing the reader character's next choice", () => {
+    const prompt = roleplayStoryTurnPrompt("I step through the gate.", { me: "Mara" });
+    expect(prompt).toMatch(/immediate consequences/i);
+    expect(prompt).toMatch(/other characters' responses/i);
+    expect(prompt).toMatch(/do not give the reader's character any additional dialogue, decision, intention, or action/i);
+  });
+
+  it("uses safe role labels when character names are unavailable and returns empty for no input", () => {
+    expect(roleplayStoryTurnPrompt("I listen.")).toContain("the reader's character");
+    expect(roleplayStoryTurnPrompt("I listen.")).toContain("your character");
+    expect(roleplayStoryTurnPrompt("   ")).toBe("");
+  });
+});
 
 describe("storyOpeningRequest", () => {
   it("asks for a title + opening beat as JSON, grounded in the premise and cast", () => {

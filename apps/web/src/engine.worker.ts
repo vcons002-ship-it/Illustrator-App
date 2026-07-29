@@ -88,6 +88,7 @@ import {
   storyStatePromptBlock,
   synopsisRequest,
   storyOpeningRequest,
+  roleplayStoryTurnPrompt,
   parseStoryOpening,
   storyStartBeats,
   SYNOPSIS_REFRESH_EVERY,
@@ -2101,8 +2102,16 @@ async function handleChat(msg: Extract<MainToWorker, { type: "chat" }>): Promise
       // selfSoul/userSoul are now the FIRST section (above), not appended here.
       (skills ? `\n\n${skills}` : "") +
       (note ? `\n\n${note}` : "");
+    // A bare roleplay line ("I draw my sword") looks like chat addressed to the assistant's
+    // character, even though the desired product is a narrated story beat. Wrap ONLY the model-facing
+    // current turn in an explicit writing brief: the UI/history still stores the reader's exact text,
+    // while the model must place it on the page before continuing the scene.
+    const modelFacingUserText =
+      story?.mode === "roleplay"
+        ? roleplayStoryTurnPrompt(msg.userText, story.play)
+        : msg.userText;
     const history = trimChatHistory(
-      [...msg.history, { role: "user", content: msg.userText }],
+      [...msg.history, { role: "user", content: modelFacingUserText }],
       budgets.history,
     );
     // Where the context is going, for the usage donut — posted before the turn.
@@ -4085,8 +4094,14 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
       // selfSoul/userSoul are now injected at the TOP of buildBuddySystemPrompt (see above), not appended here.
       (skills ? `\n\n${skills}` : "") +
       (note ? `\n\n${note}` : "");
+    // Same roleplay contract as the reader-side chat path above. This is the dedicated story-buddy
+    // path used by Story as you go (including linked-mobile turns); keep the wrapper model-only.
+    const modelFacingUserText =
+      story?.mode === "roleplay"
+        ? roleplayStoryTurnPrompt(msg.userText, story.play)
+        : msg.userText;
     const history = trimChatHistory(
-      [...msg.history, { role: "user", content: msg.userText }],
+      [...msg.history, { role: "user", content: modelFacingUserText }],
       budgets.history,
     );
     post({

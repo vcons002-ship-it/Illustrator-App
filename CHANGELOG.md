@@ -88,6 +88,12 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
+- **Roleplay now weaves your contribution into the story** — A roleplay turn is treated as source
+  material for the next illustrated beat, not a line addressed to the assistant's character. Your
+  stated action and dialogue are placed on the page and elaborated in the story's established
+  narrative voice before the scene continues into consequences and the other characters' responses.
+  The narrator still does not invent an additional choice, intention, action, or line for your
+  character.
 - **Imported chats become real illustrated chapters** — Bringing a conversation into Story as you
   go no longer collapses the entire transcript into one analysis/render unit. Each assistant story
   response (paired with the reader turn that prompted it) becomes a chapter, and explicit Chapter /
