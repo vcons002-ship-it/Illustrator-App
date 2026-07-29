@@ -225,6 +225,18 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   testing it has come out noticeably more consistent than the default on Flux.2. The choice applies
   to every book and every image provider, so it can't quietly behave one way on one book and another
   way on the next.
+- **A character's description says what each part of it describes, once** — two things in how those
+  descriptions were built were quietly working against keeping people apart. They were stored as bare
+  adjectives and joined into a list — "male, short brown, beard" — where nothing says *what* is short
+  and brown; meanwhile a phrase that does carry its noun, like "cybernetic eye", becomes the most
+  attachable thing in the sentence and lands on whichever face the model finds most prominent. Each
+  part now names its own subject ("short brown hair", "wide, expectant eyes") unless it already does,
+  so a beard stays a beard rather than becoming "beard hair". And a feature recorded in two fields —
+  "cybernetic eye" in one, "one cybernetic eye that whirs as it focuses" in the other — was being
+  said twice, doubling its pull; it's now said once, in the more specific wording.
+- **A name that owns something keeps its description on the right side of it** — "Nico's (a man with
+  a beard) wrist" put the description between the owner and the thing owned, where it reads as
+  describing the wrist. It's now "Nico (a man with a beard)'s wrist".
 - **The world keeps its weather; people don't carry it around** — the first pass at the rain problem
   went too far and took the atmosphere with it: a beat whose prose is all dialogue had nothing left
   to say what the light and air were like, so consecutive pictures stopped agreeing about the world

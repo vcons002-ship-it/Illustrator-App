@@ -66,20 +66,95 @@ function capBodyDescriptor(parts: readonly string[], budget = MAX_DESCRIPTOR_CHA
   return capDescriptor(parts.map(stripWeather), budget);
 }
 
-/** Identity-only descriptor for a character (no outfit — that's a separate term). */
+/**
+ * Identity-only descriptor for a character (no outfit — that's a separate term).
+ *
+ * Two things here exist to stop one person's features landing on another, which is what this
+ * descriptor is FOR and what it was quietly undermining:
+ *
+ * ANCHOR THE ADJECTIVES. The fields are stored bare — hair is "short brown", eyes are "wide,
+ * expectant" — and joining them gave "male, short brown, beard, wide, expectant": a bag of loose
+ * adjectives, none of which say what they describe. Meanwhile a phrase that DOES carry its noun
+ * ("cybernetic eye") is the most bindable thing in the sentence, so the model attaches it to
+ * whichever face it finds most salient rather than to its owner. Each field now names its own
+ * subject unless the text already does.
+ *
+ * SAY IT ONCE. `distinguishingMarks` and `eyes` routinely overlap — "cybernetic eye" in one and
+ * "one cybernetic eye that whirs as it focuses" in the other — and repeating a feature doubles its
+ * weight in a prompt where every other person is competing for it. The more specific wording wins
+ * and the duplicate goes.
+ */
 export function describeCharacterIdentity(c: Character): string {
   const a = c.appearance;
   const fields: string[] = [];
   if (a) {
-    // Identity-defining fields in priority order (mirrors the old buildSubject).
-    for (const v of [a.gender, a.age, a.hair, a.distinguishingMarks, a.eyes, a.build, a.skinTone]) {
-      if (v && v.trim()) fields.push(v.trim());
+    // Identity-defining fields in priority order (mirrors the old buildSubject), each with the noun
+    // it describes when it needs one.
+    for (const [v, noun] of [
+      [a.gender, ""],
+      [a.age, ""],
+      [a.hair, "hair"],
+      [a.distinguishingMarks, ""],
+      [a.eyes, "eyes"],
+      // Build is left alone: it's already stored as a body phrase ("petite but voluptuous, ample
+      // bust"), and anchoring it produced "…ample bust build".
+      [a.build, ""],
+      [a.skinTone, "skin"],
+    ] as const) {
+      const named = anchorField(v, noun);
+      if (named) fields.push(named);
     }
   }
   if (fields.length === 0) {
     for (const t of c.persistentTraits) if (t && t.trim()) fields.push(t.trim());
   }
-  return capBodyDescriptor(fields.length ? fields : ["person"], MAX_CHARACTER_DESCRIPTOR_CHARS);
+  return capBodyDescriptor(dedupeFragments(fields.length ? fields : ["person"]), MAX_CHARACTER_DESCRIPTOR_CHARS);
+}
+
+/**
+ * Words that already say what part of a person is being described. A field containing any of them
+ * is left exactly as written.
+ *
+ * The check is deliberately across ALL of them rather than per-field, because the fields are not
+ * kept as tidily as their names suggest: `hair` routinely holds "grey beard", "shaved head" or
+ * "close-cropped, wire glasses". Appending the field's own noun to those gives "grey beard hair",
+ * which is worse than the bare adjectives it was meant to fix.
+ */
+const APPEARANCE_NOUNS =
+  /\b(hairs?|beards?|moustaches?|mustaches?|braids?|plaits?|ponytails?|buns?|locs|dreadlocks?|afro|bald|shaved|buzzcut|heads?|curls?|fringe|bangs|sideburns|stubble|topknot|undercut|mohawk|glasses|spectacles|eyes?|gaze|stare|pupils?|patch|scars?|skin|complexion|tanned?|freckles?|faces?|jaw|brows?|nose)\b/i;
+
+/**
+ * A stored appearance field with its subject attached — "short brown" → "short brown hair" — unless
+ * the text already names a part of the body ({@link APPEARANCE_NOUNS}). "" for a blank field. PURE.
+ */
+function anchorField(value: string, noun: string): string {
+  const v = (value ?? "").trim().replace(/[.,;]+$/, "");
+  if (!v || !noun || APPEARANCE_NOUNS.test(v)) return v;
+  return `${v} ${noun}`;
+}
+
+/**
+ * Drop fragments already said by another, keeping the more specific wording in the earlier
+ * position. Containment either way counts: "cybernetic eye" and "one cybernetic eye that whirs as
+ * it focuses" are one feature described twice, and saying it twice is what makes it travel. PURE.
+ */
+function dedupeFragments(parts: readonly string[]): string[] {
+  const kept: string[] = [];
+  for (const raw of parts) {
+    const part = raw.trim();
+    if (!part) continue;
+    const key = part.toLowerCase();
+    const covers = kept.findIndex((k) => {
+      const other = k.toLowerCase();
+      return other.includes(key) || key.includes(other);
+    });
+    if (covers === -1) {
+      kept.push(part);
+    } else if (part.length > kept[covers]!.length) {
+      kept[covers] = part; // the longer wording is the more specific one — keep it, in place
+    }
+  }
+  return kept;
 }
 
 /** Descriptor for a creature: kind + accumulated visual description. */
@@ -449,7 +524,10 @@ export function injectBibleTerms(
     if (opts.keepName) {
       if (described.has(name.toLowerCase())) return `${lead}${name}${poss ?? ""}`;
       described.add(name.toLowerCase());
-      return `${lead}${name}${poss ?? ""} (${descriptor})`;
+      // BEFORE the possessive: "Nico (a man with a beard)'s wrist". After it — "Nico's (a man with
+      // a beard) wrist" — the description sits between the owner and the thing owned, where it
+      // reads as describing the WRIST.
+      return `${lead}${name} (${descriptor})${poss ?? ""}`;
     }
     return `${lead}(${descriptor})${poss ?? ""}`;
   });
