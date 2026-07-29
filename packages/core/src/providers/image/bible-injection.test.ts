@@ -3,18 +3,20 @@ import {
   appendSceneWardrobe,
   buildReferenceBlock,
   describeCharacterIdentity,
+  describeLocation,
   displayCaption,
   expandPrompt,
   findBibleTermsInText,
   injectBibleTerms,
   sanitizeWorldStyle,
+  stripWeather,
   worldStyleClause,
   type SceneTerm,
   MAX_CHARACTER_DESCRIPTOR_CHARS,
 } from "./bible-injection.js";
 import { createEmptyBible } from "../../visual-bible/bible.js";
 import { emptyAppearance } from "../../types/bible.js";
-import type { Character, Creature, VisualBible } from "../../types/bible.js";
+import type { Character, Creature, Environment, VisualBible } from "../../types/bible.js";
 
 function character(over: Partial<Character> & { name: string }): Character {
   return {
@@ -647,5 +649,49 @@ describe("a character's descriptor has room for a person", () => {
     const b: VisualBible = { ...createEmptyBible("b"), environments: [wordy] };
     const term = findBibleTermsInText("They reach The Keep.", b)[0]!;
     expect(term.descriptor.length).toBeLessThanOrEqual(160);
+  });
+});
+
+describe("weather never lives in a permanent descriptor", () => {
+  it("cuts a weather clause out of a place's description, keeping the rest", () => {
+    // A place's description accumulates across chapters, so one wet afternoon would otherwise rain
+    // in that room for the rest of the book.
+    const env: Environment = {
+      id: "env-tavern",
+      name: "the Bell",
+      aliases: [],
+      description: ["a low stone taproom, rain drumming on the roof, warm firelight", "long oak bar"],
+      firstSeenChapter: 0,
+    };
+    const out = describeLocation(env);
+    expect(out).not.toMatch(/rain/i);
+    expect(out).toContain("low stone taproom");
+    expect(out).toContain("warm firelight");
+    expect(out).toContain("long oak bar");
+  });
+
+  it("drops a description line that was only weather", () => {
+    expect(stripWeather("Rain lashes the windows.")).toBe("");
+    expect(stripWeather("Snow is falling. The keep sits on a black crag.")).toBe(
+      "The keep sits on a black crag.",
+    );
+  });
+
+  it("keeps a book's art direction but not its weather", () => {
+    expect(sanitizeWorldStyle("rain-slicked neon streets, moody cinematic sci-fi")).toBe(
+      "moody cinematic sci-fi",
+    );
+    // Nothing to do when there's no weather in it.
+    expect(sanitizeWorldStyle("moody cinematic sci-fi")).toBe("moody cinematic sci-fi");
+  });
+
+  it("leaves ordinary words that merely contain a weather word alone", () => {
+    expect(stripWeather("a raincoat on a hook, stormlanterns above the bar")).toBe(
+      "a raincoat on a hook, stormlanterns above the bar",
+    );
+  });
+
+  it("returns nothing when a style was ONLY weather, rather than a stray comma", () => {
+    expect(sanitizeWorldStyle("torrential rain, thunder")).toBe("");
   });
 });

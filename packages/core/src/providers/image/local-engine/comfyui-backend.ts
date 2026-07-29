@@ -26,7 +26,7 @@ import {
   samplerFor,
 } from "../sd-prompt.js";
 import { expandPrompt } from "../bible-injection.js";
-import { REGION_STRENGTH, type CastRegion } from "../regional-conditioning.js";
+import { REGION_STRENGTH, regionPixels, type CastRegion } from "../regional-conditioning.js";
 import type { LocalEngineBackend, LocalModelDescriptor } from "./backend.js";
 
 /** Default Wan negative prompt — suppresses the common artifacts + a static (non-moving) result.
@@ -1467,12 +1467,16 @@ function addRegionalConditioning(
     const mask = `${402 + i * 5}`;
     const setMask = `${403 + i * 5}`;
     const combine = `${404 + i * 5}`;
+    // Columns in pixels, derived from the shared boundaries — rounding each width on its own is
+    // how a one-pixel overlap creeps back in, and an overlapping pixel carries both people's
+    // conditioning at once. See `regionPixels`.
+    const column = regionPixels(r, canvas.width);
     graph[encode] = { class_type: "CLIPTextEncode", inputs: { text: r.text, clip: clipRef } };
     graph[patch] = {
       class_type: "SolidMask",
       inputs: {
         value: 1,
-        width: Math.max(1, Math.round(r.width * canvas.width)),
+        width: column.width,
         height: Math.max(1, Math.round(r.height * canvas.height)),
       },
     };
@@ -1481,7 +1485,7 @@ function addRegionalConditioning(
       inputs: {
         destination: ["399", 0],
         source: [patch, 0],
-        x: Math.round(r.x * canvas.width),
+        x: column.x,
         y: Math.round(r.y * canvas.height),
         operation: "add",
       },

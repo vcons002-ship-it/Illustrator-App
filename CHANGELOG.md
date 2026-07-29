@@ -147,6 +147,19 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Stories
 
+- **The weather stays in the scene it belongs to** — it was raining in every picture, indoors
+  included, because one beat happened to mention rain. A place's description is built up chapter by
+  chapter and the book's art-direction line is applied to every image, so "rain lashing the windows"
+  became a permanent fact about the tavern, and "rain-slicked" sitting in the style line rained on
+  the whole book. Nothing ever took it back out. Weather is now stripped from both — it lives in the
+  scene's own description, where the assistant puts it anyway, so a scene that IS in the rain still
+  renders in the rain.
+- **Character regions no longer overlap** (experimental per-character weighting) — neighbouring
+  columns were deliberately given a 6% overlap to blend the join between them. That band was the one
+  place both characters' descriptions applied to the same pixels, which is the exact mixing the
+  feature exists to prevent, sitting where two figures are most likely to meet — masculine and
+  feminine features fused along the seam. The columns now tile exactly, in whole pixels, and if that
+  can't be arranged the picture is rendered normally instead.
 - **A story keeps its analysis, its prompts and its pictures when you reload** — sometimes a story
   came back from a reload with none of it. Each beat you send starts the assistant reading the one
   before it, and starting that reading cancelled whatever reading was already underway — which, in a
