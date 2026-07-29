@@ -82,6 +82,15 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
+- **Update no longer closes the app without bringing it back** — the update finishes by building a
+  new app and starting it, and starting it was the fragile part. The new app was launched as a child
+  of the one about to shut down, sharing its console and standard handles, which on Windows is how a
+  relaunch turns into a disappearance: a program tied to a window that's closing, or to a group its
+  parent belonged to, gets closed with it rather than replacing it. It's now started as a genuinely
+  independent program, from the same folder the desktop-prod.bat launcher starts it from, so the
+  relaunch reproduces the way that's known to work. And the old app no longer shuts down on faith: it
+  waits for the new one to get through its own startup, and if it stops, the previous version is put
+  back and the app you're looking at stays open to tell you — instead of vanishing with no message.
 - **The ↻ Redo and ⤓ Export menus stay on screen on a phone** — both dropped a fixed-width panel
   straight down from their button, which broke in a different way in each orientation. Held upright,
   the toolbar wraps and the button can sit near the left of the screen; the panel, which lines its
@@ -147,6 +156,11 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Stories
 
+- **…and not in anyone's description either** — the same accumulation happens to people, not just
+  places: a character first described in a downpour keeps "rain-plastered hair" in their appearance,
+  an outfit recorded outdoors keeps "beaded with rain", and both then go into every picture they
+  appear in. Weather is now filtered out of every kind of description the app keeps — people,
+  creatures, outfits and places — through the one function they all share.
 - **A rainy opening no longer rains for the whole story** — the app keeps a list of "world facts" it
   applies to every illustration by default. That's right for the things it's for (what people
   customarily wear, the technology level, the materials) and wrong for weather: a story that opened

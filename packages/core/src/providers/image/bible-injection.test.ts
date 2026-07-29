@@ -4,6 +4,7 @@ import {
   buildReferenceBlock,
   describeCharacterIdentity,
   describeLocation,
+  describeOutfit,
   displayCaption,
   expandPrompt,
   findBibleTermsInText,
@@ -668,6 +669,31 @@ describe("weather never lives in a permanent descriptor", () => {
     expect(out).toContain("low stone taproom");
     expect(out).toContain("warm firelight");
     expect(out).toContain("long oak bar");
+  });
+
+  it("keeps weather out of a PERSON's description too — the same accumulation happens to people", () => {
+    // A character first described in a downpour would otherwise carry it into every later picture,
+    // indoors included, because their descriptor is injected wherever they appear.
+    const soaked: Character = {
+      id: "char-mara",
+      name: "Mara",
+      aliases: [],
+      appearance: { ...emptyAppearance(), gender: "woman", age: "30s", hair: "red braid, rain-plastered to her scalp" },
+      persistentTraits: [],
+      clothing: [],
+      anchor: { seed: 1 },
+      firstSeenChapter: 0,
+    };
+    const out = describeCharacterIdentity(soaked);
+    expect(out).not.toMatch(/rain/i);
+    expect(out).toContain("woman");
+    expect(out).toContain("30s");
+  });
+
+  it("keeps weather out of an outfit", () => {
+    expect(describeOutfit({ label: "courier coat", description: "oiled canvas coat, beaded with rain", context: "" })).toBe(
+      "oiled canvas coat",
+    );
   });
 
   it("drops a description line that was only weather", () => {

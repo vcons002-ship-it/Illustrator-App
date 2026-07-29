@@ -52,7 +52,13 @@ export const MAX_CHARACTER_DESCRIPTOR_CHARS = 320;
 
 function capDescriptor(parts: readonly string[], budget = MAX_DESCRIPTOR_CHARS): string {
   const joined = parts
-    .map((p) => p.trim())
+    // Every descriptor this builds is a PERMANENT statement about an entity, injected into every
+    // picture it appears in — so weather cannot be in any of them (see `stripWeather`). Places were
+    // filtered first, but the same accumulation happens to people: a character first described in a
+    // downpour keeps "rain-soaked hair" in their appearance, an outfit recorded outdoors keeps
+    // "beaded with rain", and both then ride into every later image — indoors included. Filtering
+    // here covers all four builders at once, which is the point of them sharing this funnel.
+    .map((p) => stripWeather(p).trim())
     .filter(Boolean)
     .join(", ");
   return joined.length <= budget ? joined : `${joined.slice(0, budget).replace(/,?\s+\S*$/, "")}`;
@@ -84,9 +90,10 @@ export function describeOutfit(o: Outfit): string {
   return capDescriptor([o.description || o.label]);
 }
 
-/** Condensed descriptor for a location, with any weather stripped out — see {@link stripWeather}. */
+/** Condensed descriptor for a location. (Weather is stripped by `capDescriptor`, as for every
+ * descriptor — see {@link stripWeather}.) */
 export function describeLocation(e: Environment): string {
-  return capDescriptor(e.description.map(stripWeather).filter((d) => d.trim()));
+  return capDescriptor(e.description);
 }
 
 /**
