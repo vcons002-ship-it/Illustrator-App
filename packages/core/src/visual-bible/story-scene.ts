@@ -34,6 +34,18 @@ export interface StoryBeatSignal {
   exits?: string[];
   /** The location NAME this beat takes place in (extraction `location`); moves the scene. */
   location?: string;
+  /**
+   * The COMPLETE cast of this beat, as the storyboard names it (`keyEvent.cast` — extraction is
+   * required to fill it: "the characters PRESENT in that scene"). Authoritative when set: it
+   * REPLACES the carried-forward cast rather than adding to it.
+   *
+   * Without this the present set only ever grew. `exits` is the field that was supposed to shrink it
+   * and nothing has ever populated it, so every character named in any beat stayed in the cast of
+   * every later picture — name appended to the prompt, description injected — and by a dozen beats in
+   * the scene was competing with a cast list that never stopped growing. The model that wrote the
+   * beat already knows who is in it; this asks it rather than accumulating guesses.
+   */
+  castNames?: string[];
 }
 
 /**
@@ -119,11 +131,14 @@ export function locationToEnvironmentId(
 
 /**
  * Advance the active scene by one beat. Rules (in order):
- *  1. Carry forward the prior present cast.
+ *  1. The storyboard's cast for this beat REPLACES the carried-forward one when it has it
+ *     (`castNames`); otherwise the prior cast carries forward, as before — a terse beat naming
+ *     nobody must not empty the picture.
  *  2. Role-play seed: the played characters are always present (a standing cast).
  *  3. Add anyone newly mentioned or explicitly entering this beat.
  *  4. Remove anyone explicitly exiting this beat.
- *  5. Location: move to this beat's location when it resolves, else carry the prior one.
+ *  5. Location: move to this beat's location when it resolves. When the beat NAMES a place that
+ *     doesn't resolve, the scene has still moved — drop the old one rather than carry it.
  * Pure — returns a fresh scene, never mutates `prev`.
  */
 export function advanceStoryScene(
@@ -132,7 +147,11 @@ export function advanceStoryScene(
   signal: StoryBeatSignal,
   roleplay?: StoryRoleplay,
 ): StoryScene {
-  const present = new Set(prev.presentCharacterIds);
+  // (1) The storyboard's own cast for this beat is authoritative — it's the model saying who is in
+  // the scene it just described, so it REPLACES what came before rather than adding to it. Only when
+  // it has nothing to say does the prior cast carry forward.
+  const declared = namesToCharacterIds(bible, signal.castNames ?? []);
+  const present = new Set(declared.length > 0 ? declared : prev.presentCharacterIds);
   // (2) Played characters are present by default every beat.
   for (const id of namesToCharacterIds(bible, roleplay?.playedCharacterNames ?? [])) present.add(id);
   // (3) Newly mentioned / entering.
@@ -141,9 +160,13 @@ export function advanceStoryScene(
   }
   // (4) Exits (after adds, so an enter+exit in the same beat nets out to absent).
   for (const id of namesToCharacterIds(bible, signal.exits ?? [])) present.delete(id);
-  // (5) Location: move when this beat's place resolves, else keep the prior place.
+  // (5) Location. A beat that NAMES a place has moved the scene, even when that place isn't in the
+  // bible yet — which is the normal state the first time the story walks into it, since extraction
+  // runs behind the render. Carrying the old environment there is how the previous scene's setting
+  // kept being injected into a picture of somewhere else.
   const moved = locationToEnvironmentId(bible, signal.location);
-  const locationId = moved ?? prev.locationId;
+  const named = (signal.location ?? "").trim().length > 0;
+  const locationId = moved ?? (named ? undefined : prev.locationId);
   // Preserve a STABLE order: prior present cast first (in their existing order), then
   // any newcomers in bible order — so the present set doesn't churn between beats.
   const ordered = [
