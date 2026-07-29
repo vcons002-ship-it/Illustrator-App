@@ -491,12 +491,18 @@ export class RenderPipeline {
           throw new Error(`${msg} (already retried at lower "${down}" quality after running out of GPU memory)`);
         }
       }
-      await this.deps.store.putImage(requestId, output.bytes, output.mimeType, prompt);
+      // Persist the text the PROVIDER sent when it did its own expansion (every local backend
+      // does: descriptors injected or a reference block prepended, quality tags, LoRA trigger).
+      // Storing our pre-expansion `prompt` there meant the reader's "Full prompt (as sent to the
+      // model)" showed something that had never been sent, and — because the two differed only by
+      // the style suffix — often nothing worth expanding at all.
+      const sent = output.prompt?.trim() || prompt;
+      await this.deps.store.putImage(requestId, output.bytes, output.mimeType, sent);
       return {
         requestId,
         pageId: request.pageId,
         status: "ready",
-        prompt,
+        prompt: sent,
         image: { bytes: output.bytes, mimeType: output.mimeType },
       };
     } catch (err) {

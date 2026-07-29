@@ -293,6 +293,46 @@ describe("promptUserContent", () => {
     expect(text).toContain("Ana fights.");
   });
 
+  it("never lets weather become a standing world fact — a rainy opening must not rain all book", () => {
+    // "World facts" are applied AS DEFAULTS to every image prompt, which is right for attire or
+    // technology level and catastrophic for weather: a story that opens in a downpour got a fact
+    // about rain, and every later prompt — indoor scenes included — was written with it.
+    let bible = createEmptyBible("b");
+    bible = mergeExtraction(
+      bible,
+      {
+        characters: [],
+        environments: [],
+        spoilers: [],
+        glossary: [
+          { term: "Climate", definition: "the city is under near-constant rain" },
+          { term: "Dress", definition: "couriers wear oiled canvas coats, rain beading off them" },
+          { term: "Technology", definition: "brass clockwork, no electricity" },
+        ],
+        summary: "",
+        keyMoment: "",
+      },
+      0,
+    );
+    const req: VisualRequest = {
+      kind: "scene_illustration",
+      bookId: "b",
+      pageId: "u-0",
+      pageIndex: 0,
+      chapterIndex: 0,
+      sourceText: "indoors, by the fire",
+      characterIds: [],
+      environmentIds: [],
+      creatureIds: [],
+      spoilerIds: [],
+    };
+    const text = promptUserContent(req, bible);
+    expect(text).not.toMatch(/rain/i);
+    // The genuinely permanent facts survive — including the non-weather half of a mixed one.
+    expect(text).toContain("brass clockwork, no electricity");
+    expect(text).toContain("couriers wear oiled canvas coats");
+  });
+
   it("gives two units of the same chapter different content (their own passages)", () => {
     let bible = createEmptyBible("b");
     bible = mergeExtraction(

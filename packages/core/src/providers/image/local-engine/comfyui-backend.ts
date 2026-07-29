@@ -1076,7 +1076,9 @@ export class ComfyUIBackend implements LocalEngineBackend {
       });
       if (!view.ok) throw new Error(`ComfyUI view failed with status ${view.status}`);
       input.onProgress?.(1);
-      return { bytes: await view.arrayBuffer(), mimeType: "image/png" };
+      // `prompt` is what actually went to the encoder — expanded, tagged, LoRA-triggered — so
+      // the reader's "as sent to the model" is true rather than the pre-expansion text.
+      return { bytes: await view.arrayBuffer(), mimeType: "image/png", prompt };
     } finally {
       socket?.close();
       signal?.removeEventListener("abort", onAbort);

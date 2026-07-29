@@ -322,7 +322,15 @@ function ReferenceGallery({
   );
 }
 
-/** One reference thumbnail (bytes fetched lazily) with its remove button. */
+/**
+ * One reference thumbnail (bytes fetched lazily) with its remove button.
+ *
+ * Three states, deliberately distinguishable. It used to show a dim "…" both while the bytes were
+ * being fetched AND when they never arrived — so a reference whose picture couldn't be loaded was
+ * indistinguishable from one still loading, and both looked exactly like "the capture didn't work".
+ * That is the whole reason locking a look felt like it did nothing: there was no way to tell. A
+ * failure now says so and offers a retry, so the answer is always definite.
+ */
 function ReferenceThumb({
   refId,
   getReferenceImage,
@@ -333,26 +341,50 @@ function ReferenceThumb({
   onRemove?: () => void;
 }) {
   const [url, setUrl] = useState<string | undefined>();
+  const [state, setState] = useState<"loading" | "ready" | "missing">("loading");
+  // Bumped by the retry button to re-run the fetch.
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    if (!getReferenceImage) return;
+    if (!getReferenceImage) {
+      setState("missing");
+      return;
+    }
     let objectUrl: string | undefined;
     let cancelled = false;
-    void getReferenceImage(refId).then((img) => {
-      if (!img || cancelled) return;
-      objectUrl = URL.createObjectURL(new Blob([img.bytes], { type: img.mimeType }));
-      setUrl(objectUrl);
-    });
+    setState("loading");
+    void getReferenceImage(refId)
+      .then((img) => {
+        if (cancelled) return;
+        if (!img) {
+          setState("missing");
+          return;
+        }
+        objectUrl = URL.createObjectURL(new Blob([img.bytes], { type: img.mimeType }));
+        setUrl(objectUrl);
+        setState("ready");
+      })
+      .catch(() => {
+        if (!cancelled) setState("missing");
+      });
     return () => {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [refId, getReferenceImage]);
+  }, [refId, getReferenceImage, attempt]);
   return (
-    <span style={thumbStyle}>
-      {url ? (
+    <span style={thumbStyle} title={state === "missing" ? `Couldn't load ${refId}` : refId}>
+      {state === "ready" && url ? (
         <img src={url} alt="character reference" decoding="async" style={thumbImgStyle} />
-      ) : (
+      ) : state === "loading" ? (
         <span style={{ opacity: 0.4, fontSize: 11 }}>…</span>
+      ) : (
+        <button
+          style={thumbRetryStyle}
+          title={`This reference is saved, but its picture couldn't be loaded (${refId}). Click to try again; if it keeps failing, remove it and capture again.`}
+          onClick={() => setAttempt((n) => n + 1)}
+        >
+          ⚠︎ retry
+        </button>
       )}
       {onRemove && (
         <button style={thumbRemoveStyle} title="Remove this reference" onClick={onRemove}>
@@ -462,6 +494,17 @@ const thumbImgStyle = {
   width: "100%",
   height: "100%",
   objectFit: "cover",
+} as const;
+
+const thumbRetryStyle = {
+  background: "transparent",
+  border: "none",
+  color: "#ffd479",
+  fontSize: 10,
+  lineHeight: 1.2,
+  padding: 2,
+  cursor: "pointer",
+  textAlign: "center",
 } as const;
 
 const thumbRemoveStyle = {

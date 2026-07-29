@@ -13,6 +13,7 @@ import {
   panelGroup,
   paragraphIndexFromId,
   parseImportedBible,
+  referenceIdsOf,
   resolveKeyEvent,
   resolvePageEntities,
   spoilerRevealPoint,
@@ -7354,16 +7355,20 @@ export function App() {
   // with it, so it never shifts as the bible grows — and doubles as prompt
   // troubleshooting). Until the render lands, fall back to the unit's STORED scene
   // prompt from the bible — also static once written. Never live-resolved names.
-  const imageCaption = useMemo(() => {
+  //
+  // `rendered` says WHICH of the two this is, so the disclosure below can name it. The
+  // two read alike but aren't: only the rendered one has the descriptors, world style and
+  // quality tags that actually went to the model.
+  const imageCaption = useMemo((): { text: string; rendered: boolean } | undefined => {
     const rendered = results.get(unitIndex)?.prompt?.trim();
-    if (rendered) return rendered;
+    if (rendered) return { text: rendered, rendered: true };
     if (!bible || !units || !book) return undefined;
     const unitPage = units.book.pages[unitIndex];
     if (!unitPage) return undefined;
     const chapterIdx = book.chapters.find((c) => c.id === unitPage.chapterId)?.index ?? 0;
     const ev = resolveKeyEvent(bible, chapterIdx, unitPage.pageRange ?? [unitIndex, unitIndex]);
     const stored = ev ? composeScenePrompt(ev.imagePrompt) : "";
-    return stored || undefined;
+    return stored ? { text: stored, rendered: false } : undefined;
   }, [results, unitIndex, book, bible, units]);
 
   // Bloom target: reveal the illustration only as the reader progresses through the
@@ -8699,15 +8704,22 @@ export function App() {
                 ))}
               {!isTechnical && imageCaption && (
                 <div style={styles.imageDescription}>
-                  {displayCaption(imageCaption)}
-                  {displayCaption(imageCaption) !== imageCaption && (
-                    <details style={{ marginTop: 4 }}>
-                      <summary style={{ cursor: "pointer", fontSize: 11, opacity: 0.6 }}>
-                        Full prompt (as sent to the model)
-                      </summary>
-                      <div style={{ fontSize: 11, opacity: 0.7 }}>{imageCaption}</div>
-                    </details>
-                  )}
+                  {displayCaption(imageCaption.text)}
+                  {/* Always offered, for EVERY image. It used to appear only when hiding the
+                      scaffolding actually shortened the caption, so whether you could see an
+                      image's prompt depended on what happened to be in it — and on a local
+                      engine, where the descriptors are added inside the backend, that was
+                      usually nothing. A control that comes and goes reads as a missing feature. */}
+                  <details style={{ marginTop: 4 }}>
+                    <summary style={{ cursor: "pointer", fontSize: 11, opacity: 0.6 }}>
+                      {imageCaption.rendered
+                        ? "Full prompt (as sent to the model)"
+                        : "Scene prompt (not illustrated yet)"}
+                    </summary>
+                    <div style={{ fontSize: 11, opacity: 0.7, whiteSpace: "pre-wrap" }}>
+                      {imageCaption.text}
+                    </div>
+                  </details>
                 </div>
               )}
               {/* Story "lock the look": pin THIS beat's image as a character's IP-Adapter
@@ -8719,11 +8731,20 @@ export function App() {
                 <div style={styles.lockLook}>
                   <span style={styles.lockLookLabel}>📌 Lock this look as:</span>
                   <div style={styles.lockLookRow}>
-                    {bible.characters.map((c) => (
+                    {bible.characters.map((c) => {
+                      // How many looks are already locked for them. Shown ON the button so the
+                      // capture confirms itself here — you shouldn't have to open the Character
+                      // Bible and squint at a thumbnail to find out whether the click did anything.
+                      const locked = referenceIdsOf(c.anchor).length;
+                      return (
                       <button
                         key={c.id}
                         style={styles.lockLookButton}
-                        title={`Use this image as ${c.name}'s reference — future beats will match it (regenerate a beat to re-illustrate with it)`}
+                        title={
+                          locked
+                            ? `${c.name} has ${locked} locked look${locked === 1 ? "" : "s"} (see them in Characters). Click to add this image as another.`
+                            : `Use this image as ${c.name}'s reference — future beats will match it (regenerate a beat to re-illustrate with it)`
+                        }
                         onClick={() => {
                           void (async () => {
                             const img = results.get(unitIndex)?.image;
@@ -8736,9 +8757,10 @@ export function App() {
                           })();
                         }}
                       >
-                        {c.name}
+                        {locked ? `📌 ${c.name} (${locked})` : c.name}
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}

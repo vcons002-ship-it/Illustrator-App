@@ -147,6 +147,28 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Stories
 
+- **A rainy opening no longer rains for the whole story** — the app keeps a list of "world facts" it
+  applies to every illustration by default. That's right for the things it's for (what people
+  customarily wear, the technology level, the materials) and wrong for weather: a story that opened
+  in a downpour got rain recorded as a standing fact about its world, and from then on every prompt
+  was written with rain in it, indoor scenes included. The setting you describe at the start now sets
+  the opening scene, not the permanent conditions — weather that matters to a beat comes from that
+  beat's own writing, as it should. (This is the third and last place weather was getting stuck; the
+  other two were fixed alongside it.)
+- **You can tell whether "lock this look" worked** — the button now shows a 📌 and a count once a
+  character has locked looks, so the capture confirms itself where you click instead of sending you
+  to the Character Bible to check. And in the Bible, a reference whose picture can't be loaded now
+  says so with a retry, instead of showing the same dim "…" it shows while loading — which was
+  indistinguishable from the capture having silently failed.
+- **Every illustration will show you its prompt** — the "Full prompt" expander under a picture only
+  appeared when hiding the machine scaffolding actually shortened the caption, so whether you could
+  see an image's prompt depended on what happened to be in it. It's now always there. It also shows
+  something truer: on a local engine the character descriptions, world style and quality tags are
+  added inside the engine, *after* the app records the prompt — so what was labelled "as sent to the
+  model" had never been sent, and was usually identical to the caption above it, which is why the
+  expander so often wasn't offered. The engine now hands back the text it really used. (Pictures
+  already painted keep the prompt they were saved with; repaint one to record the full version.) A
+  page whose picture hasn't been painted yet says so, instead of quietly offering nothing.
 - **"Scene continuity" no longer adds people to a picture that already knows its cast** — when a beat
   is too terse to name anyone ("she nods"), the app appends who and where to the illustration
   request, or the picture would be of strangers in nowhere. But it was doing that even when the
