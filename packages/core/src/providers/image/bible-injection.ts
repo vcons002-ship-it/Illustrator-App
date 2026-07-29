@@ -84,9 +84,62 @@ export function describeOutfit(o: Outfit): string {
   return capDescriptor([o.description || o.label]);
 }
 
-/** Condensed descriptor for a location. */
+/** Condensed descriptor for a location, with any weather stripped out — see {@link stripWeather}. */
 export function describeLocation(e: Environment): string {
-  return capDescriptor(e.description);
+  return capDescriptor(e.description.map(stripWeather).filter((d) => d.trim()));
+}
+
+/**
+ * Precipitation and storms: transient conditions, never permanent facts about a place or a book.
+ *
+ * WHY. A place's description ACCUMULATES across chapters (see `mergeExtraction`) and a book's
+ * `worldStyle` is applied to EVERY image. Weather ends up in both — a beat where rain lashes the
+ * tavern windows adds "rain lashing the windows" to the tavern's permanent description, and a
+ * chapter that opens in a downpour can leave "rain-slicked" sitting in the book's art direction.
+ * From then on it rains in every picture, including the ones set indoors, because nothing ever
+ * takes it back out. Weather changes; a descriptor that outlives the scene must not claim it does.
+ *
+ * This does NOT touch the beat's own scene prompt, which is where weather belongs and where the
+ * writing model puts it — so a scene that IS in the rain still renders in the rain. It only stops
+ * one wet afternoon from raining on the rest of the book.
+ */
+const WEATHER =
+  /\b(rain|rains|raining|rainy|rainfall|raindrops?|downpour|drizzle|drizzling|storm|storms|storming|stormy|thunderstorms?|thunder|thundering|lightning|snow|snows|snowing|snowy|snowfall|snowdrifts?|blizzard|sleet|hail|hailstones?|monsoon|torrential|squall|deluge)\b/i;
+
+/**
+ * Drop the clauses of `text` that describe weather, keeping the rest. A sentence that was ONLY
+ * weather goes entirely; a clause inside one ("a low stone tavern, rain drumming on the roof, warm
+ * firelight") is cut out and its neighbours kept. Returns "" when nothing survives. PURE.
+ *
+ * A clause that mixes weather with something else ("the streets are rain-slicked and neon-lit")
+ * loses both — clause-level is as fine-grained as this can be without parsing English. That trade is
+ * deliberate: the neon comes back the moment a scene is actually set on those streets, whereas the
+ * rain, left in, follows the book indoors forever.
+ */
+export function stripWeather(text: string): string {
+  if (!text || !WEATHER.test(text)) return text ?? "";
+  // Split into sentences by scanning, not by lookbehind — not every engine this ships to has it.
+  const sentences: string[] = [];
+  let buf = "";
+  for (const ch of text) {
+    buf += ch;
+    if (ch === "." || ch === "!" || ch === "?") {
+      sentences.push(buf);
+      buf = "";
+    }
+  }
+  if (buf.trim()) sentences.push(buf);
+  const kept = sentences
+    .map((sentence) => {
+      const stop = /[.!?]+\s*$/.exec(sentence)?.[0]?.trim() ?? "";
+      const body = stop ? sentence.slice(0, sentence.length - stop.length) : sentence;
+      const clauses = body
+        .split(/\s*[;,]\s*/)
+        .filter((c) => c.trim() && !WEATHER.test(c));
+      return clauses.length > 0 ? `${clauses.join(", ").trim()}${stop}` : "";
+    })
+    .filter((s) => s.trim());
+  return kept.join(" ").replace(/\s{2,}/g, " ").trim();
 }
 
 /** Regex-escape a literal term. */
@@ -419,13 +472,18 @@ export function buildReferenceBlock(
  * contaminated with a model filename or id (e.g. "SD_XL_Base_1_0", "flux1-dev.safetensors"),
  * which then rides into EVERY image prompt as a `Style:` clause and looks like the chosen
  * model changed. This removes filenames (`*.safetensors/.ckpt/.gguf/.pt/.bin`) and bare
- * base-model ids (sd_xl_base_1.0, sdxl, sd15, flux1-dev, …), leaving real style words. Pure;
- * returns "" if nothing usable remains. Applied at both read time (fixes existing books
+ * base-model ids (sd_xl_base_1.0, sdxl, sd15, flux1-dev, …), leaving real style words.
+ *
+ * It also strips WEATHER ({@link stripWeather}). A style line is applied to every image in the book,
+ * so a downpour that got into it rains on the indoor scenes too — see that function for why weather
+ * can't live in anything that outlives a scene.
+ *
+ * Pure; returns "" if nothing usable remains. Applied at both read time (fixes existing books
  * without re-extraction) and write time (extraction).
  */
 export function sanitizeWorldStyle(worldStyle?: string): string {
   if (!worldStyle) return "";
-  const out = worldStyle
+  const out = stripWeather(worldStyle)
     // checkpoint/model weight filenames
     .replace(/\b[\w.-]*\.(safetensors|ckpt|gguf|pt|bin)\b/gi, " ")
     // bare base-model ids commonly echoed by a model: sd_xl_base_1.0, SD_XL_Base_1_0, sdxl_base
