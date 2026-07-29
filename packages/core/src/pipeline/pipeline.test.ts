@@ -4,6 +4,7 @@ import { InMemoryStore } from "../storage/store.js";
 import { createEmptyBible } from "../visual-bible/bible.js";
 import { DEFAULT_TIER_CONFIG } from "../types/tier.js";
 import { emptyAppearance } from "../types/bible.js";
+import { unitSeed } from "./unit-seed.js";
 import type { BookSource } from "../types/book.js";
 import type { Character, VisualBible } from "../types/bible.js";
 import type { LLMProvider } from "../providers/llm/llm-provider.js";
@@ -336,6 +337,49 @@ describe("RenderPipeline style LoRA override", () => {
   it("a manual override forces any installed LoRA over the style mapping", async () => {
     const input = await renderWithTier({ styleLoraOverride: "my-custom-lora.safetensors" });
     expect(input.styleLora?.name).toBe("my-custom-lora.safetensors");
+  });
+
+  /**
+   * Every image used to be sampled from ONE seed — `anchors[0].seed`, a hash of the first
+   * character's name — because extraction never writes a per-unit seed and the backends fall back to
+   * the anchor. A whole book on one draw: when the draw is poor, every first render is poor, and
+   * Redo (which writes a random seed) is the only render that escapes it.
+   */
+  describe("per-unit seeds", () => {
+    it("mixes the unit index in, so two units of the same book differ", async () => {
+      const book = oneParagraphBook();
+      book.pages[0]!.pageRange = [0, 0];
+      book.pages[0]!.paragraphs[0]!.text = "Aria stood by the window."; // so she resolves as present
+      const bible = bibleWithPrompt(book.id, "a knight by a window");
+      bible.characters.push({
+        id: "char-a",
+        name: "Aria",
+        aliases: [],
+        appearance: emptyAppearance(),
+        persistentTraits: [],
+        clothing: [],
+        anchor: { seed: 4242 },
+        firstSeenChapter: 0,
+      });
+      const { provider, last } = inputRecorder();
+      const pipeline = new RenderPipeline({
+        book,
+        getBible: () => bible,
+        llm,
+        image: provider,
+        store: new InMemoryStore(),
+        tier: { ...DEFAULT_TIER_CONFIG, tier: "local", style: "anime" },
+      });
+      await pipeline.renderPage(0);
+      const seed = last().seed;
+      // A seed IS sent now — the backend's "fall back to the anchor for everything" path is gone.
+      expect(typeof seed).toBe("number");
+      expect(seed).not.toBe(4242);
+      expect(seed).toBe(unitSeed(4242, 0));
+      // And it's stable: the same unit renders the same way again.
+      await pipeline.renderPage(0);
+      expect(last().seed).toBe(seed);
+    });
   });
 
   it("disableStyleLora renders prompt-only (no LoRA)", async () => {

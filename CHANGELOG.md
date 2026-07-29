@@ -137,6 +137,16 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Stories
 
+- **Every picture gets its own seed, instead of the whole book sharing one** — the reason a redo was
+  reliably better than the first attempt. Each character carries a fixed number derived from their
+  name, meant to keep them looking consistent, and that same number was being used as the random seed
+  for *every* image they appear in — so a book was one draw from the lottery. A poor draw meant every
+  first render was poor in the same way, and re-rolling each image by hand was the only escape:
+  Redo picks a fresh random seed, which is exactly why it kept looking better. Each image now mixes
+  its own position into that number. Re-rendering the same image still gives you the same picture, so
+  nothing became unpredictable — but one unlucky number can't spoil a whole book any more. (Character
+  consistency doesn't depend on this; it comes from the descriptions in the Visual Bible and from any
+  look you've pinned with 📌.)
 - **The first picture of a story is no longer the worst one** — it was being drawn from your soul
   notes, all of them, joined together and cut off at 200 characters: "I'm drawn to problems where the
   obvious answer is wrong; I find pure taxo" as a description of what someone LOOKS like. At the
