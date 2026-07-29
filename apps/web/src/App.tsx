@@ -234,6 +234,7 @@ import {
 import { IMPORT_ACCEPT, importBookFile, type FileHandler } from "./import-file.js";
 import {
   CharacterBible,
+  WorldBible,
   ChatBuddyPanel,
   ChatPanel,
   buildModelMenu,
@@ -685,6 +686,8 @@ export function App() {
     completeBook,
     rebuildPrompts,
     updateCharacter,
+    updateCreature,
+    updateEnvironment,
     addCharacterReference,
     removeCharacterReference,
     getCharacterReference,
@@ -1605,6 +1608,8 @@ export function App() {
   // own caret, so the reader can put the whole book workflow away without losing the app's tools —
   // or keep it and collapse everything else. Default collapsed on phones, like the toolbar.
   const [bookToolsOpen, setBookToolsOpen] = useState(() => !narrow);
+  /** Which world-bible list is open ("" = closed) — the Places / Creatures buttons. */
+  const [showWorld, setShowWorld] = useState<"" | "places" | "creatures">("");
   // The bottom chat dock keeps its input bar always visible; its message history expands/collapses.
   // Default expanded on desktop, collapsed on phones (the reader gets the room).
   const [chatHistoryOpen, setChatHistoryOpen] = useState(() => !narrow);
@@ -8409,6 +8414,27 @@ export function App() {
               Characters{bible ? ` (${bible.characters.length})` : ""}
             </button>
           )}
+          {/* The other two lists the Visual Bible keeps. They shape every picture as surely as the
+              cast does — a place's description is where a world's atmosphere lives — and until now
+              there was no way to read, let alone correct, either of them. */}
+          {book && !isTechnical && (
+            <button
+              style={styles.button}
+              onClick={() => setShowWorld("places")}
+              title="View and correct each place's description in the Visual Bible — the look and atmosphere used whenever a scene is set there"
+            >
+              Places{bible ? ` (${bible.environments.length})` : ""}
+            </button>
+          )}
+          {book && !isTechnical && (bible?.creatures?.length ?? 0) > 0 && (
+            <button
+              style={styles.button}
+              onClick={() => setShowWorld("creatures")}
+              title="View and correct each creature's description in the Visual Bible"
+            >
+              Creatures ({bible!.creatures!.length})
+            </button>
+          )}
           {book && isTechnical && (
             <button
               style={styles.button}
@@ -8859,6 +8885,16 @@ export function App() {
           {storyControlsRow}
           {renderBuddyChat(true, !chatHistoryOpen, () => setChatHistoryOpen((v) => !v))}
         </section>
+      )}
+
+      {showWorld && (
+        <WorldBible
+          bible={bible}
+          initialTab={showWorld}
+          onSaveCreature={(id, patch) => updateCreature(id, patch)}
+          onSavePlace={(id, patch) => updateEnvironment(id, patch)}
+          onClose={() => setShowWorld("")}
+        />
       )}
 
       {showCharacters && (

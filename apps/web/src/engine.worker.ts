@@ -1310,6 +1310,12 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       // images are left as-is until the user re-renders.
       void engine?.updateCharacter(msg.characterId, msg.patch);
       break;
+    case "updateCreature":
+      void engine?.updateCreature(msg.creatureId, msg.patch);
+      break;
+    case "updateEnvironment":
+      void engine?.updateEnvironment(msg.environmentId, msg.patch);
+      break;
     case "addCharacterReference":
       // User-uploaded IP-Adapter reference (multi-view; the engine enforces the cap).
       void engine?.addCharacterReference(msg.characterId, msg.image);

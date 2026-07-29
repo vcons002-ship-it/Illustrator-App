@@ -760,6 +760,45 @@ describe("Engine", () => {
     expect(persisted!.characters.find((c) => c.id === aria.id)!.appearance.hair).toBe("silver");
   });
 
+  it("updateCreature / updateEnvironment apply and persist, like updateCharacter", async () => {
+    // The other two Visual Bible lists had no way in at all — no window, no edit path — even though
+    // a place's description is what every scene set there is drawn from.
+    const store = new InMemoryStore();
+    const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    await engine.whenBibleReady();
+
+    // Seed one of each (the mock extractor produces characters only).
+    const seeded = {
+      ...engine.getBible()!,
+      creatures: [
+        { id: "cr-1", name: "Vess", aliases: [], kind: "drake", description: ["bronze scales"], anchor: { seed: 9 }, firstSeenChapter: 0 },
+      ],
+      environments: [{ id: "env-1", name: "the Bell", aliases: [], description: ["low taproom"], firstSeenChapter: 0 }],
+    };
+    await store.putBible(seeded);
+    await engine.openBook(sampleBook()); // reload so the engine holds the seeded bible
+
+    await engine.updateCreature("cr-1", { kind: "wyvern", aliases: ["the drake"], description: ["bronze scales", "torn left wing"] });
+    await engine.updateEnvironment("env-1", { aliases: ["the tavern"], description: ["low taproom", "long oak bar"] });
+
+    const bible = engine.getBible()!;
+    expect(bible.creatures!.find((c) => c.id === "cr-1")).toMatchObject({
+      kind: "wyvern",
+      aliases: ["the drake"],
+      description: ["bronze scales", "torn left wing"],
+      name: "Vess", // untouched fields survive
+    });
+    expect(bible.environments.find((e) => e.id === "env-1")).toMatchObject({
+      aliases: ["the tavern"],
+      description: ["low taproom", "long oak bar"],
+    });
+    // Persisted, so the correction survives a reopen.
+    const persisted = await store.getBible("book-1");
+    expect(persisted!.environments.find((e) => e.id === "env-1")!.aliases).toEqual(["the tavern"]);
+  });
+
   it("does NOT auto-capture a reference image; user uploads add/remove them", async () => {
     const store = new InMemoryStore();
     const engine = new Engine({ llm: new MockLLMProvider(), image: new MockImageProvider(), store });

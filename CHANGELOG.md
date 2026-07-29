@@ -232,6 +232,13 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   testing it has come out noticeably more consistent than the default on Flux.2. The choice applies
   to every book and every image provider, so it can't quietly behave one way on one book and another
   way on the next.
+- **Places and Creatures have their own windows now** — the Visual Bible keeps three lists and only
+  the characters could be looked at, let alone corrected. The other two shape every picture just as
+  surely: a place's description is what a scene set there is drawn from, and it's where the look and
+  atmosphere of your world live. **Places** and **Creatures** buttons sit beside Characters in the
+  book's toolbar, with the same search-and-fix panel — name, other names it's known by, and its
+  description a detail per line. Saved instantly; existing images are kept until you re-render, same
+  as characters. (Creatures only appears when the story has any.)
 - **A person is described once, whichever of their names is used** — the description was attached per
   *word*, not per person, so someone mentioned by name and then by nickname ("Rell… the Captain",
   "Lyra… her Ghost Broker outfit") got their full head-to-toe description twice in one sentence.

@@ -21,6 +21,8 @@ import type {
   BuddyToolCall,
   BuddyToolResultPayload,
   CharacterPatch,
+  CreaturePatch,
+  EnvironmentPatch,
   ChatTurn,
   CreatedFileRef,
   ContextUsage,
@@ -215,6 +217,9 @@ export interface EngineWorkerApi {
   rebuildPrompts: () => void;
   /** Save a user correction to a character (persisted; existing images unchanged). */
   updateCharacter: (characterId: string, patch: CharacterPatch) => void;
+  /** Save a correction to one creature / place in the bible (same save-only contract). */
+  updateCreature: (creatureId: string, patch: CreaturePatch) => void;
+  updateEnvironment: (environmentId: string, patch: EnvironmentPatch) => void;
   /** Add a user-uploaded IP-Adapter reference image (multi-view, capped per character). */
   addCharacterReference: (characterId: string, image: { bytes: ArrayBuffer; mimeType: string }) => void;
   /** Remove one of a character's reference images (deletes its stored bytes). */
@@ -1571,6 +1576,15 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       send({ type: "updateCharacter", characterId, patch }),
     [],
   );
+  const updateCreature = useCallback(
+    (creatureId: string, patch: CreaturePatch) => send({ type: "updateCreature", creatureId, patch }),
+    [],
+  );
+  const updateEnvironment = useCallback(
+    (environmentId: string, patch: EnvironmentPatch) =>
+      send({ type: "updateEnvironment", environmentId, patch }),
+    [],
+  );
   const addCharacterReference = useCallback(
     (characterId: string, image: { bytes: ArrayBuffer; mimeType: string }) =>
       send({ type: "addCharacterReference", characterId, image }),
@@ -2349,6 +2363,8 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     setActiveUnit,
     carryOverBible,
     updateCharacter,
+    updateCreature,
+    updateEnvironment,
     addCharacterReference,
     removeCharacterReference,
     getCharacterReference,
