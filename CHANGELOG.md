@@ -82,6 +82,16 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
+- **The ↻ Redo and ⤓ Export menus stay on screen on a phone** — both dropped a fixed-width panel
+  straight down from their button, which broke in a different way in each orientation. Held upright,
+  the toolbar wraps and the button can sit near the left of the screen; the panel, which lines its
+  right edge up with the button, then hung off the left side of the display with nothing to scroll to
+  reach it. Turned sideways, the toolbar takes most of the height and the menu was taller than what
+  was left, so the last item or two fell off the bottom — and the toolbar doesn't scroll, so they were
+  simply unreachable. Both menus now measure the screen when you open them: the panel is kept inside
+  the edges, narrows on a small screen, opens upwards when there's more room above, and scrolls inside
+  itself if it still doesn't fit. They re-measure when you rotate the phone, and close on Escape or a
+  tap outside.
 - **The story picture fits its window, prompt and all** — the image was capped against the whole
   window, which ignores the chat docked underneath it (taller still with the history open). So the
   picture alone could be taller than the space it sits in, pushing the prompt and the "lock this look"
@@ -137,6 +147,27 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Stories
 
+- **A story keeps its analysis, its prompts and its pictures when you reload** — sometimes a story
+  came back from a reload with none of it. Each beat you send starts the assistant reading the one
+  before it, and starting that reading cancelled whatever reading was already underway — which, in a
+  story, is the previous beat, since the model writing the prose and the model doing the reading are
+  the same one and queue behind each other. So a beat sent while the last one was still being read
+  threw that work away and started again from the oldest unread beat. Keep talking at a normal pace
+  and it never catches up: nothing gets read, so nothing is written down, and a reload finds a story
+  with no scene breakdown, no illustration prompts and no images. New beats now join the reading
+  already in progress instead of restarting it. (Re-reading the book on purpose — ↻ Redo → Story
+  analysis — still cancels and starts over, which is what it's for.)
+- **Being mentioned isn't being in the room** — a character merely *named* in a beat ("she remembered
+  Rell's cybernetic eye") was added to the scene's cast even when the assistant's own record of that
+  scene said they weren't there. Their description then went into the picture, where the image model
+  attached their features to whoever actually was in frame — and because the cast carries forward
+  through terse beats, one passing mention rode along scene after scene. Now only the scene's real
+  cast counts, plus anyone the beat says explicitly *arrives*. When the assistant hasn't recorded a
+  cast for a beat, mentions still stand in, since they're all there is to go on. The same now goes
+  for the two characters being played in a role-play: they were held present in every beat on the
+  grounds that chat dialogue rarely restates who's in the room, but that put them into pictures of
+  scenes they'd walked out of. They're still assumed present through a beat the assistant hasn't
+  described — just no longer in spite of one it has.
 - **A scene's cast is who's actually in it, not everyone who has ever appeared** — the tracked cast
   only ever grew. It was built by adding whoever a beat mentioned, and the mechanism meant to remove
   people was never used by anything, so a character who walked past in beat three was still being

@@ -9,6 +9,8 @@ export * from "./imageStatus.js";
 export * from "./ChatPanel.js";
 export * from "./ChatBuddyPanel.js";
 export * from "./model-menu.js";
+export * from "./popover-position.js";
+export * from "./AnchoredMenu.js";
 export * from "./ContextUsageDonut.js";
 export * from "./DocumentPolishPanel.js";
 export * from "./DocBlocksView.js";

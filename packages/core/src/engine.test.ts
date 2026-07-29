@@ -1060,6 +1060,51 @@ describe("Engine", () => {
     expect(engine.getBible()!.processedChapters).toContain(1);
   });
 
+  it("appendChapter doesn't cancel the extraction in flight — a beat arriving mid-analysis costs nothing", async () => {
+    // Beats routinely land while the previous one is still being analysed: in story mode the
+    // writing model and the extraction model are the same local LLM, so they queue behind each
+    // other. Re-arming the bible loop on every append aborted the in-flight call and restarted
+    // from the oldest pending chapter — so with beats arriving faster than extraction, nothing
+    // was ever analysed, nothing was persisted, and a reload found the story with no storyboard,
+    // no prompts and no images.
+    let release = (): void => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const chapters: number[] = [];
+    class GatedLLM extends MockLLMProvider {
+      override async extractEntities(input: Parameters<MockLLMProvider["extractEntities"]>[0]) {
+        chapters.push(input.chapterIndex);
+        if (input.chapterIndex === 0) await gate; // hold chapter 0 open across the append
+        return super.extractEntities(input);
+      }
+    }
+    const engine = new Engine({ llm: new GatedLLM(), image: new MockImageProvider() });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    await vi.waitFor(() => expect(chapters).toEqual([0])); // chapter 0 is mid-flight
+
+    const grown: BookSource = {
+      ...sampleBook(),
+      chapters: [...sampleBook().chapters, { id: "c2", index: 1, title: "Two" }],
+      pages: [
+        ...sampleBook().pages,
+        { id: "pg-2", index: 2, chapterId: "c2", pageRange: [2, 2], paragraphs: [{ id: "pg-2-0", index: 0, text: "Aria reached the bridge." }] },
+      ],
+    };
+    await engine.appendChapter(grown);
+    release();
+
+    await vi.waitFor(() => {
+      expect(engine.getBible()!.processedChapters).toContain(0);
+      expect(engine.getBible()!.processedChapters).toContain(1);
+    });
+    // Each chapter analysed exactly once: chapter 0's held call was allowed to finish and count,
+    // and the running loop picked the appended chapter up on its next sweep. A restart would show
+    // chapter 0 twice — its first analysis thrown away.
+    expect(chapters).toEqual([0, 1]);
+  });
+
   it("appendChapter with illustrate:false defers the image; renderScene draws it on demand", async () => {
     const image = new MockImageProvider();
     const genSpy = vi.spyOn(image, "generate");
