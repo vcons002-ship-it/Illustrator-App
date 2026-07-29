@@ -205,8 +205,10 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   default for Flux.2 and friends. **Names with their description beside them** writes "Nico (a man
   with a beard) and Lyra (a woman with red hair) sit at a bar", so nothing has to be looked up.
   **Descriptions instead of names** drops the names entirely, and is the default for Stable
-  Diffusion. If features keep landing on the wrong character, the middle one is the one to try. Your
-  own engine only.
+  Diffusion. If features keep landing on the wrong character, the middle one is the one to try — in
+  testing it has come out noticeably more consistent than the default on Flux.2. The choice applies
+  to every book and every image provider, so it can't quietly behave one way on one book and another
+  way on the next.
 - **…and not in anyone's description either** — the same accumulation happens to people, not just
   places: a character first described in a downpour keeps "rain-plastered hair" in their appearance,
   an outfit recorded outdoors keeps "beaded with rain", and both then go into every picture they

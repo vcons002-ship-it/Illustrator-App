@@ -64,8 +64,9 @@ export interface TierConfig {
    * Unset — the default — lets each model family use the shape that suits its text encoder.
    *
    * Exists because "which shape binds an attribute to the right person" is an empirical question
-   * per model that no amount of reasoning settles, and the reader has the GPU. Local engines only:
-   * a cloud API is handed one finished string and the pipeline picks the shape for it.
+   * per model that no amount of reasoning settles, and the reader has the GPU. Applies to EVERY
+   * target: a local engine expands the prompt itself, and the pipeline pre-expands for cloud —
+   * both honour this, so the same choice behaves the same way whichever provider a book renders on.
    */
   promptNameStyle?: "reference" | "inject" | "appositive";
   /**

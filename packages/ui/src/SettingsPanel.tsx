@@ -1615,7 +1615,8 @@ export function SettingsPanel({
               &ldquo;Nico (a man with a beard) and Lyra (a woman with red hair) sit at a bar&rdquo;, so each
               description touches the person it belongs to. <b>Instead of names</b> drops the names
               entirely — the default for Stable Diffusion. If features keep landing on the wrong
-              character, the middle option is the one to try. Your own engine only.
+              character, the middle option is the one to try — it has tested noticeably more
+              consistent than the default on Flux.2. Applies to every book and every image provider.
             </span>
           </label>
 
