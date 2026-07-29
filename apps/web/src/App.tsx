@@ -2445,16 +2445,20 @@ export function App() {
     [settings.keys],
   );
 
-  // Settings → Restart app (and the "Restart now" button after a core update). restartApp() never
-  // resolves on success (the process relaunches); it REJECTS only when the running build exposes
-  // no `restart_app` command yet (an older shell that hasn't been rebuilt) — then guide the reader.
+  // Settings → Restart app (and the "Restart now" button after a core update). The native command
+  // uses the SAME detached, checked handoff as packaged self-update, including releasing the phone
+  // relay before launch so the successor restores the persisted link cleanly. It never resolves on
+  // success; it rejects on an older shell or if the replacement fails its startup check.
   const onRestartApp = useCallback(async () => {
     try {
       await restartApp();
-    } catch {
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : typeof e === "string" ? e : "";
       window.alert(
-        "Couldn't restart automatically — this build doesn't have the restart command yet. " +
-          "Fully close and reopen Visual Reader (run desktop.bat) to finish updating.",
+        detail
+          ? `${detail}\n\nThe current app is still running.`
+          : "Couldn't restart automatically — this build may not have the restart command yet. " +
+              "Fully close and reopen Visual Reader (run desktop.bat) to finish updating.",
       );
     }
   }, []);

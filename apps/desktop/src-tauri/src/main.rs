@@ -441,13 +441,6 @@ fn nvidia_vram_usage_csv() -> Option<String> {
     }
 }
 
-/// Fully relaunch the app (Settings → Restart app). The bundled engine/LLM children are killed on
-/// exit (see `RunEvent::ExitRequested`), so nothing is left holding the GPU. Never returns.
-#[tauri::command]
-fn restart_app(app: AppHandle) {
-    app.restart();
-}
-
 /// Is this the PACKAGED build (the web UI compiled into the binary), rather than `cargo tauri dev`?
 ///
 /// It decides whether an update is finished by `pnpm -r build` + a reload, or needs the Rust binary
@@ -515,6 +508,69 @@ fn launch_detached(exe: &Path, root: &Path) -> std::io::Result<std::process::Chi
     cmd.spawn()
 }
 
+/// Launch a detached successor and make sure it survives long enough to have completed startup.
+///
+/// Both ordinary Restart and the packaged self-updater use this exact handoff. Keeping two relaunch
+/// implementations is what let Restart regress to `app.restart()`: that path spawned differently and
+/// raced the outgoing phone relay for its port, while Update explicitly detached and verified the
+/// successor. This helper does not stop services or exit the current app; callers own rollback.
+async fn launch_detached_checked(exe: &Path, root: &Path) -> Result<(), String> {
+    let child = launch_detached(exe, root)
+        .map_err(|e| format!("couldn't start the replacement app: {e}"))?;
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let mut child = child;
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        // Ok(None) = still running. An error means we can't tell, which is not evidence of failure —
+        // treat "unknown" as alive rather than tearing down a good relaunch.
+        match child.try_wait() {
+            Ok(Some(status)) => Some(status.to_string()),
+            _ => None,
+        }
+    })
+    .await
+    .unwrap_or(None);
+    match outcome {
+        Some(status) => Err(format!(
+            "the replacement app closed during startup ({status})"
+        )),
+        None => Ok(()),
+    }
+}
+
+/// Fully relaunch the app (Settings → Restart app) through the SAME detached, checked handoff used
+/// after a packaged update. The phone relay is released before the successor starts, so it can bind
+/// the persisted port/token and the already-paired phone reconnects instead of losing its link.
+///
+/// On a failed launch the current app stays alive and its relay is restored best-effort.
+#[tauri::command]
+async fn restart_app(app: AppHandle) -> Result<(), String> {
+    let exe = running_exe()?;
+    let root = app_repo_root_cached()
+        .or_else(|| exe.parent().map(Path::to_path_buf))
+        .ok_or_else(|| "couldn't determine a working folder for the replacement app".to_string())?;
+    let relay = remote_server_status(app.state::<RemoteServerState>());
+    stop_remote_server(app.state::<RemoteServerState>());
+
+    if let Err(e) = launch_detached_checked(&exe, &root).await {
+        if relay.running {
+            if let (Some(token), port) = (relay.token, relay.port) {
+                let _ = start_remote_server(
+                    app.clone(),
+                    StartRemoteRequest { token, port },
+                    app.state::<RemoteServerState>(),
+                )
+                .await;
+            }
+        }
+        return Err(format!("Couldn't restart: {e}"));
+    }
+
+    // ExitRequested performs the shared engine/LLM cleanup. The successor is already independent,
+    // alive, and free to restore the phone relay.
+    app.exit(0);
+    Ok(())
+}
+
 /// Rebuild the PACKAGED desktop app from the current checkout and relaunch into it. Never returns
 /// on success — the process is replaced by the freshly built one.
 ///
@@ -570,38 +626,20 @@ async fn rebuild_desktop_app(app: AppHandle) -> Result<String, String> {
             // debug. (The relay also retries its bind, so this is belt AND braces; if we end up
             // restoring the old binary below, the reader can reopen the link from Settings.)
             stop_remote_server(app.state::<RemoteServerState>());
-            let child = launch_detached(&exe, &root).map_err(|e| {
-                let _ = std::fs::rename(&aside, &exe);
-                format!("Rebuilt, but couldn't start the new app: {e}")
-            })?;
-            // DON'T exit into nothing. Spawning only proves the process was CREATED; a new binary
-            // that dies on startup used to take the old one with it — the app vanished and never
-            // came back, with no message anywhere, because we had already called app.exit(0). Wait
-            // for it to get past its own startup, off the async runtime so the UI stays responsive.
-            let outcome = tauri::async_runtime::spawn_blocking(move || {
-                let mut child = child;
-                std::thread::sleep(std::time::Duration::from_secs(3));
-                // Ok(None) = still running. An error means we can't tell, which is not evidence of
-                // failure — treat "unknown" as alive rather than tearing down a good update.
-                match child.try_wait() {
-                    Ok(Some(status)) => Some(status.to_string()),
-                    _ => None,
-                }
-            })
-            .await
-            .unwrap_or(None);
-            match outcome {
-                Some(status) => {
-                    // It started and stopped. Put the working binary back and stay up to say so —
-                    // an app still running to deliver the bad news beats one that's simply gone.
+            // DON'T exit into nothing. Spawning only proves the process was CREATED; wait until the
+            // successor gets through startup, using the same checked handoff as ordinary Restart.
+            match launch_detached_checked(&exe, &root).await {
+                Err(e) => {
+                    // Put the working binary back and stay up to say so — an app still running to
+                    // deliver the bad news beats one that's simply gone.
                     let _ = std::fs::remove_file(&exe);
                     let _ = std::fs::rename(&aside, &exe);
                     Err(format!(
-                        "Rebuilt, but the new app closed immediately ({status}). The previous version has been \
-                         put back and is still running. Run desktop-prod.bat to see what it printed."
+                        "Rebuilt, but {e}. The previous version has been put back and is still running. \
+                         Run desktop-prod.bat to see what it printed."
                     ))
                 }
-                None => {
+                Ok(()) => {
                     app.exit(0);
                     Ok(tail)
                 }
