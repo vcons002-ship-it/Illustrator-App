@@ -6,7 +6,6 @@ import { IMAGE_STYLES } from "../providers/catalog.js";
 import { MAX_SUBJECT_CHARS } from "../providers/image/video-continuity.js";
 import type { BookSummary } from "../storage/store.js";
 import { POLISH_CHAT_GUIDANCE } from "./document-polish.js";
-import { STORY_SO_FAR_MAX_CHARS } from "./story-state.js";
 import { MAX_SKILL_BODY_CHARS, MAX_SKILL_DESC_CHARS, MAX_SKILL_NAME_CHARS } from "./skills.js";
 import { MAX_NOTE_CHARS } from "./reader-memory.js";
 import { formatSetupGuide, type SetupGuide } from "./setup-guides.js";
@@ -3343,7 +3342,10 @@ function parseToolObject(input: Record<string, unknown>): BuddyToolCall | undefi
     const opening = strArg(obj.opening, MAX_PASTE_CHARS);
     // A premise is required UNLESS the story is being carried in from a chat — there the story
     // already exists, and demanding a fresh one-line pitch for it is busywork.
-    const carried = strArg(obj.soFar, STORY_SO_FAR_MAX_CHARS);
+    // `soFar` comes from the app's explicit "bring the full conversation" choice. Do not run it
+    // through a small generic tool-argument cap: doing that silently reduced a long chat to its last
+    // message before the story writer ever saw it.
+    const carried = typeof obj.soFar === "string" ? obj.soFar.trim() || undefined : undefined;
     if (!opening && !carried) return undefined;
     // Each cast entry is a bare name OR {name, description?} (description seeds the look).
     const characters = Array.isArray(obj.characters)

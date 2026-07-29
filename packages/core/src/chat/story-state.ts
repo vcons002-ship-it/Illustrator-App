@@ -117,12 +117,8 @@ export function storyOpeningRequest(
   return { system, user };
 }
 
-/** How much of the conversation is carried into a story started from it. Enough for a scene or two
- * of back-and-forth; the tail is what matters, since that's where the story actually is. */
-export const STORY_SO_FAR_MAX_CHARS = 4000;
-
 /**
- * Render the tail of a chat as "the story so far" for {@link storyOpeningRequest}.
+ * Render a chat as "the story so far" for {@link storyOpeningRequest}.
  *
  * A story often starts as ordinary conversation and only becomes a Story-as-you-go once it's already
  * running. Starting one used to throw that away — a deliberately EMPTY writer context, which is what
@@ -130,12 +126,14 @@ export const STORY_SO_FAR_MAX_CHARS = 4000;
  * been in. Carrying the text (rather than the turns) keeps both: the writer's own context stays
  * clean, and what was already told comes with it.
  *
- * Newest-last, oldest dropped first at the budget, tool/system chatter left out — it's the story
- * that matters, not the app's own notes. Returns "" when there's nothing worth carrying. PURE.
+ * The user-facing carry option promises the whole conversation, so the default is deliberately
+ * unbounded. A caller may still provide a budget for a constrained surface; when it does, oldest
+ * turns are dropped first. Tool/system chatter is left out — it's the story that matters, not the
+ * app's own notes. Returns "" when there's nothing worth carrying. PURE.
  */
 export function storySoFarFromChat(
   messages: readonly { role: string; text?: string }[],
-  budget = STORY_SO_FAR_MAX_CHARS,
+  budget = Number.POSITIVE_INFINITY,
 ): string {
   const lines: string[] = [];
   let used = 0;
