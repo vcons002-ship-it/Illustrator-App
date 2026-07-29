@@ -16,6 +16,10 @@ export interface CharacterEdit {
   appearance?: Partial<CharacterAppearance>;
   clothing?: string[];
   outfits?: Outfit[];
+  /** Other names this person answers to. Editable because a wrong one is invisible in its effect:
+   * an alias is what makes a word in a prompt resolve to this character, so a costume identity or a
+   * title recorded as a nickname puts their whole description wherever it appears. */
+  aliases?: string[];
 }
 
 /** Seed the outfit editor: existing outfits, else migrate the legacy clothing list. */
@@ -155,12 +159,14 @@ const CharacterCard = memo(function CharacterCard({
 }) {
   const [appearance, setAppearance] = useState<CharacterAppearance>(character.appearance);
   const [outfits, setOutfits] = useState<Outfit[]>(() => initialOutfits(character));
+  const [aliases, setAliases] = useState(() => character.aliases.join(", "));
   const [saved, setSaved] = useState(false);
 
   // Re-sync local edits if the bible changes underneath (e.g. a rebuild).
   useEffect(() => {
     setAppearance(character.appearance);
     setOutfits(initialOutfits(character));
+    setAliases(character.aliases.join(", "));
   }, [character]);
 
   const cleanOutfits = useMemo(
@@ -172,11 +178,16 @@ const CharacterCard = memo(function CharacterCard({
   );
   // The stringify round-trips ran on EVERY render of every card; keyed on the
   // actual edit state they run once per real change.
+  const cleanAliases = useMemo(
+    () => aliases.split(",").map((a) => a.trim()).filter(Boolean),
+    [aliases],
+  );
   const dirty = useMemo(
     () =>
       JSON.stringify(appearance) !== JSON.stringify(character.appearance) ||
-      JSON.stringify(cleanOutfits) !== JSON.stringify(initialOutfits(character)),
-    [appearance, cleanOutfits, character],
+      JSON.stringify(cleanOutfits) !== JSON.stringify(initialOutfits(character)) ||
+      JSON.stringify(cleanAliases) !== JSON.stringify(character.aliases),
+    [appearance, cleanOutfits, cleanAliases, character],
   );
 
   const setOutfit = (i: number, patch: Partial<Outfit>) =>
@@ -185,7 +196,7 @@ const CharacterCard = memo(function CharacterCard({
   const removeOutfit = (i: number) => setOutfits((list) => list.filter((_, k) => k !== i));
 
   const save = () => {
-    onSave(character.id, { appearance, outfits: cleanOutfits });
+    onSave(character.id, { appearance, outfits: cleanOutfits, aliases: cleanAliases });
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
   };
@@ -194,10 +205,21 @@ const CharacterCard = memo(function CharacterCard({
     <div style={cardStyle}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
         <strong>{character.name}</strong>
-        {character.aliases.length > 0 && (
-          <span style={{ opacity: 0.55, fontSize: 12 }}>aka {character.aliases.join(", ")}</span>
-        )}
       </div>
+      {/* EDITABLE, not just displayed. An alias is what makes a name in a prompt resolve to this
+          person, so a wrong one — the model records costume identities and titles as nicknames —
+          quietly puts their whole description wherever that word appears. It was shown as small
+          "aka" text with no way to remove it, which is the worst of both: visible enough to worry
+          about, impossible to act on. */}
+      <label style={fieldStyle}>
+        <span style={labelStyle}>Also known as (comma-separated — other names for this person)</span>
+        <input
+          style={inputStyle}
+          value={aliases}
+          placeholder="e.g. the Captain, Vi"
+          onChange={(e) => setAliases(e.target.value)}
+        />
+      </label>
       <div style={gridStyle}>
         {APPEARANCE_FIELDS.map(({ key, label }) => (
           <label key={key} style={fieldStyle}>

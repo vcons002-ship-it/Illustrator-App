@@ -322,13 +322,24 @@ function primaryNames(bible: VisualBible): Set<string> {
  * mention. (The same reasoning as `sameNamedPerson` in extraction, which refuses to merge on shared
  * aliases for exactly this reason.)
  */
-function ownForms(entity: { name: string; aliases?: readonly string[] }, primaries: ReadonlySet<string>): string[] {
+function ownForms(
+  entity: { name: string; aliases?: readonly string[]; outfits?: readonly { label: string }[] },
+  primaries: ReadonlySet<string>,
+): string[] {
   const own = entity.name.trim().toLowerCase();
+  // An alias that is also one of this character's OUTFIT labels names the clothes, not the person.
+  // Extraction hands out aliases freely and will happily record a costume identity — "Ghost Broker"
+  // — as both. Left in, "Lyra wears her Ghost Broker outfit" put a full head-to-toe description of
+  // LYRA inside the clothing clause: a second complete woman in the sentence, which the image model
+  // duly drew. The outfit entry describes the garments and is the right thing to find there.
+  const wardrobe = new Set(
+    (entity.outfits ?? []).map((o) => o.label.trim().toLowerCase()).filter(Boolean),
+  );
   return [entity.name, ...(entity.aliases ?? [])]
     .filter(Boolean)
     .filter((f) => {
       const k = f.trim().toLowerCase();
-      return !!k && (k === own || !primaries.has(k));
+      return !!k && (k === own || (!primaries.has(k) && !wardrobe.has(k)));
     });
 }
 
