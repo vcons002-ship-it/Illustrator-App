@@ -143,6 +143,18 @@ export interface ImageGenerationOutput {
   /** Raw image bytes; the caller turns this into an object URL and caches it. */
   bytes: ArrayBuffer;
   mimeType: string;
+  /**
+   * The EXACT text this provider sent to the model, when it isn't `input.prompt`.
+   *
+   * A local backend does its own prompt work — it expands the bible terms per its text
+   * encoder's grade (descriptors injected in place for CLIP/T5, a reference block for
+   * LLM-grade), appends the world style, adds the family's quality tags, and prepends any
+   * style-LoRA trigger. None of that was ever recorded, so what got persisted with the image
+   * as "the prompt" was the text BEFORE all of it, and the reader's "Full prompt (as sent to
+   * the model)" showed something that had never been sent. Return the real one here and the
+   * caller persists it instead. Omit when the provider sent `input.prompt` unchanged.
+   */
+  prompt?: string;
 }
 
 /** Files a Wan2.2 two-expert image-to-video graph needs (a high/low-noise pair + encoder + VAE).

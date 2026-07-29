@@ -942,3 +942,59 @@ describe("nameActiveScene (story 'as you go')", () => {
     expect(nameActiveScene("An empty road.", [], [], [])).toBe("An empty road.");
   });
 });
+
+describe("the persisted prompt is what was actually sent", () => {
+  /** A provider that expands the prompt itself, the way every local backend does. */
+  function expandingImage(): ImageProvider {
+    return {
+      id: "local-ish",
+      generate: async (input: ImageGenerationInput): Promise<ImageGenerationOutput> => ({
+        bytes: new ArrayBuffer(1),
+        mimeType: "image/png",
+        prompt: `${input.prompt}\n\nCharacters: Mara = red braid.`,
+      }),
+    };
+  }
+
+  it("stores the provider's own expansion, not the text handed to it", async () => {
+    // A local backend injects descriptors / prepends a reference block AFTER the pipeline hands
+    // it the prompt. Persisting the pre-expansion text made the reader's "Full prompt (as sent
+    // to the model)" a description of something that was never sent.
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a knight by a window");
+    const store = new InMemoryStore();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: expandingImage(),
+      store,
+      tier: { ...DEFAULT_TIER_CONFIG, style: "anime" },
+    });
+
+    const result = await pipeline.renderPage(0);
+    expect(result.prompt).toContain("Characters: Mara = red braid.");
+    // …and it survives the reload, so a reopened book shows the same thing.
+    expect((await store.getImage(result.requestId))?.prompt).toContain("Characters: Mara = red braid.");
+    expect((await pipeline.cachedResult(0))?.prompt).toContain("Characters: Mara = red braid.");
+  });
+
+  it("keeps the pipeline's own prompt when the provider sent it unchanged", async () => {
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithPrompt(book.id, "a knight by a window");
+    const { provider, lastPrompt } = recordingImage();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: { ...DEFAULT_TIER_CONFIG, style: "anime" },
+    });
+
+    const result = await pipeline.renderPage(0);
+    expect(result.prompt).toBe(lastPrompt());
+  });
+});

@@ -197,7 +197,9 @@ export class Automatic1111Backend implements LocalEngineBackend {
       unloadedCheckpoints.delete(this.baseUrl);
       // Some builds prefix with "data:image/png;base64,"; strip it if present.
       const clean = b64.includes(",") ? b64.slice(b64.indexOf(",") + 1) : b64;
-      return { bytes: base64ToBytes(clean), mimeType: "image/png" };
+      // `prompt` is what actually went to A1111 — expanded, tagged, with the LoRA tag — so the
+      // reader's "as sent to the model" is true rather than the pre-expansion text.
+      return { bytes: base64ToBytes(clean), mimeType: "image/png", prompt };
     } finally {
       signal?.removeEventListener("abort", onAbort);
     }
