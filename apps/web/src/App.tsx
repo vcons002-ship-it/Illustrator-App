@@ -270,6 +270,7 @@ import {
   ConceptText,
   DocBlocksView,
   HtmlParagraph,
+  AnchoredMenu,
   ARTICLE_HTML_STYLE,
   InlineFigure,
   SupportRow,
@@ -7423,12 +7424,6 @@ export function App() {
       : "";
 
   // ---- Workflow bar: what the app is working on right now (always visible) ----
-  // The "Redo…" dropdown (a native <details>); close it after picking an item.
-  const redoMenuRef = useRef<HTMLDetailsElement | null>(null);
-  const closeRedoMenu = useCallback(() => {
-    if (redoMenuRef.current) redoMenuRef.current.open = false;
-  }, []);
-
   // "Paint forward": ask which page to start from, then repaint from there to the
   // end with the CURRENT settings — everything before the chosen page is kept.
   const onPaintForward = useCallback(() => {
@@ -7453,7 +7448,6 @@ export function App() {
   }, [book, units, activePageIndex, paintForward, noteAction, remainingEta]);
 
   // ---- Export an illustrated copy -------------------------------------------
-  const exportMenuRef = useRef<HTMLDetailsElement | null>(null);
   // How many units actually have a rendered illustration (drives the menu state).
   const illustratedCount = useMemo(
     // `evicted` units ARE rendered (bytes just dropped from memory to bound RAM) — count them.
@@ -7501,7 +7495,6 @@ export function App() {
   const onExport = useCallback(
     async (format: "html" | "epub") => {
       if (!book) return;
-      if (exportMenuRef.current) exportMenuRef.current.open = false;
       try {
         const images = await gatherExportImages();
         const styleNote = `Illustrated with Visual Reader · ${getImageStyle(settings.imageStyle).label} style · ${images.size} image${images.size === 1 ? "" : "s"}`;
@@ -8211,72 +8204,76 @@ export function App() {
             </>
           )}
           {book && (generating || results.get(unitIndex)?.status === "ready") && (
-            <details style={styles.menu} ref={redoMenuRef}>
-              <summary style={styles.menuSummary} title="Redo part of the workflow — each option says exactly what it redoes and what it keeps">
-                ↻ Redo…
-              </summary>
-              <div style={styles.menuList}>
-                <button
-                  style={styles.menuItem}
-                  onClick={() => {
-                    closeRedoMenu();
-                    regenerateImage(unitIndex);
-                    noteAction(`✓ Repainting this illustration (image ${unitIndex + 1}) — everything else untouched.`);
-                  }}
-                >
-                  <b>This image</b>
-                  <small>Repaint only the illustration you’re on. Keeps everything else.</small>
-                </button>
-                <button
-                  style={styles.menuItem}
-                  onClick={() => {
-                    if (!confirm("Repaint EVERY illustration in the book?\n\nKeeps: story analysis + prompts.\nRedoes: all images (uses the current image model/style/quality).")) return;
-                    closeRedoMenu();
-                    regenerateAllImages();
-                    noteAction("✓ Repainting all illustrations — story analysis and prompts kept.");
-                  }}
-                >
-                  <b>All images</b>
-                  <small>Repaint every illustration with the current image settings. Keeps analysis + prompts.</small>
-                </button>
-                <button
-                  style={styles.menuItem}
-                  onClick={() => {
-                    closeRedoMenu();
-                    rebuildPrompts();
-                    noteAction("✓ Rewriting illustration prompts — analysis kept; images stay until repainted.");
-                  }}
-                >
-                  <b>Prompts</b>
-                  <small>Rewrite the illustration prompts (e.g. after editing characters). Keeps analysis; images stay until repainted.</small>
-                </button>
-                <button
-                  style={styles.menuItem}
-                  onClick={() => {
-                    if (!confirm("Re-read the WHOLE book?\n\nKeeps: existing images (until you repaint).\nRedoes: story analysis (characters, places, world style) AND all prompts — uses the current text model.")) return;
-                    closeRedoMenu();
-                    regenerateStoryboard();
-                    noteAction("✓ Re-reading the book — analysis and prompts rebuilt; images kept until repainted.");
-                  }}
-                >
-                  <b>Story analysis (re-read book)</b>
-                  <small>Re-run the whole text analysis + prompts with the current text model. Keeps images.</small>
-                </button>
-                <button
-                  style={styles.menuItem}
-                  onClick={() => {
-                    closeRedoMenu();
-                    onPaintForward();
-                  }}
-                >
-                  <b>Paint forward…</b>
-                  <small>
-                    Repaint from a page you choose to the end with the current settings — everything
-                    before it is kept. (For new settings without redoing finished pages.)
-                  </small>
-                </button>
-              </div>
-            </details>
+            <AnchoredMenu
+              label="↻ Redo…"
+              title="Redo part of the workflow — each option says exactly what it redoes and what it keeps"
+              buttonStyle={styles.menuSummary}
+              panelStyle={styles.menuList}
+            >
+              {(closeRedoMenu) => (
+                <>
+                  <button
+                    style={styles.menuItem}
+                    onClick={() => {
+                      closeRedoMenu();
+                      regenerateImage(unitIndex);
+                      noteAction(`✓ Repainting this illustration (image ${unitIndex + 1}) — everything else untouched.`);
+                    }}
+                  >
+                    <b>This image</b>
+                    <small>Repaint only the illustration you’re on. Keeps everything else.</small>
+                  </button>
+                  <button
+                    style={styles.menuItem}
+                    onClick={() => {
+                      if (!confirm("Repaint EVERY illustration in the book?\n\nKeeps: story analysis + prompts.\nRedoes: all images (uses the current image model/style/quality).")) return;
+                      closeRedoMenu();
+                      regenerateAllImages();
+                      noteAction("✓ Repainting all illustrations — story analysis and prompts kept.");
+                    }}
+                  >
+                    <b>All images</b>
+                    <small>Repaint every illustration with the current image settings. Keeps analysis + prompts.</small>
+                  </button>
+                  <button
+                    style={styles.menuItem}
+                    onClick={() => {
+                      closeRedoMenu();
+                      rebuildPrompts();
+                      noteAction("✓ Rewriting illustration prompts — analysis kept; images stay until repainted.");
+                    }}
+                  >
+                    <b>Prompts</b>
+                    <small>Rewrite the illustration prompts (e.g. after editing characters). Keeps analysis; images stay until repainted.</small>
+                  </button>
+                  <button
+                    style={styles.menuItem}
+                    onClick={() => {
+                      if (!confirm("Re-read the WHOLE book?\n\nKeeps: existing images (until you repaint).\nRedoes: story analysis (characters, places, world style) AND all prompts — uses the current text model.")) return;
+                      closeRedoMenu();
+                      regenerateStoryboard();
+                      noteAction("✓ Re-reading the book — analysis and prompts rebuilt; images kept until repainted.");
+                    }}
+                  >
+                    <b>Story analysis (re-read book)</b>
+                    <small>Re-run the whole text analysis + prompts with the current text model. Keeps images.</small>
+                  </button>
+                  <button
+                    style={styles.menuItem}
+                    onClick={() => {
+                      closeRedoMenu();
+                      onPaintForward();
+                    }}
+                  >
+                    <b>Paint forward…</b>
+                    <small>
+                      Repaint from a page you choose to the end with the current settings — everything
+                      before it is kept. (For new settings without redoing finished pages.)
+                    </small>
+                  </button>
+                </>
+              )}
+            </AnchoredMenu>
           )}
           {book && (
             <button
@@ -8310,44 +8307,60 @@ export function App() {
             </button>
           )}
           {book && (
-            <details style={styles.menu} ref={exportMenuRef}>
-              <summary
-                style={styles.menuSummary}
-                title="Keep a copy of this illustrated book (text + the images rendered so far)"
-              >
-                ⤓ Export…
-              </summary>
-              <div style={styles.menuList}>
-                <button
-                  style={styles.menuItem}
-                  disabled={illustratedCount === 0}
-                  onClick={() => void onExport("html")}
-                >
-                  <b>Illustrated HTML{illustratedCount ? ` (${illustratedCount})` : ""}</b>
-                  <small>One self-contained web page — text with the images inline. Opens anywhere.</small>
-                </button>
-                <button
-                  style={styles.menuItem}
-                  disabled={illustratedCount === 0}
-                  onClick={() => void onExport("epub")}
-                >
-                  <b>EPUB ebook{illustratedCount ? ` (${illustratedCount})` : ""}</b>
-                  <small>A real ebook with the illustrations embedded — for e-readers / Apple Books.</small>
-                </button>
-                <button
-                  style={styles.menuItem}
-                  disabled={results.get(unitIndex)?.status !== "ready" || !results.get(unitIndex)?.image}
-                  onClick={() => void onSaveCurrentImage()}
-                >
-                  <b>Save this image</b>
-                  <small>Save the illustration you’re looking at as a picture file.</small>
-                </button>
-                <button style={styles.menuItem} onClick={() => { if (exportMenuRef.current) exportMenuRef.current.open = false; exportBible(); }}>
-                  <b>Visual Bible (JSON)</b>
-                  <small>The analysis + AI rules, for editing or reuse on another book.</small>
-                </button>
-              </div>
-            </details>
+            <AnchoredMenu
+              label="⤓ Export…"
+              title="Keep a copy of this illustrated book (text + the images rendered so far)"
+              buttonStyle={styles.menuSummary}
+              panelStyle={styles.menuList}
+            >
+              {(closeExportMenu) => (
+                <>
+                  <button
+                    style={styles.menuItem}
+                    disabled={illustratedCount === 0}
+                    onClick={() => {
+                      closeExportMenu();
+                      void onExport("html");
+                    }}
+                  >
+                    <b>Illustrated HTML{illustratedCount ? ` (${illustratedCount})` : ""}</b>
+                    <small>One self-contained web page — text with the images inline. Opens anywhere.</small>
+                  </button>
+                  <button
+                    style={styles.menuItem}
+                    disabled={illustratedCount === 0}
+                    onClick={() => {
+                      closeExportMenu();
+                      void onExport("epub");
+                    }}
+                  >
+                    <b>EPUB ebook{illustratedCount ? ` (${illustratedCount})` : ""}</b>
+                    <small>A real ebook with the illustrations embedded — for e-readers / Apple Books.</small>
+                  </button>
+                  <button
+                    style={styles.menuItem}
+                    disabled={results.get(unitIndex)?.status !== "ready" || !results.get(unitIndex)?.image}
+                    onClick={() => {
+                      closeExportMenu();
+                      void onSaveCurrentImage();
+                    }}
+                  >
+                    <b>Save this image</b>
+                    <small>Save the illustration you’re looking at as a picture file.</small>
+                  </button>
+                  <button
+                    style={styles.menuItem}
+                    onClick={() => {
+                      closeExportMenu();
+                      exportBible();
+                    }}
+                  >
+                    <b>Visual Bible (JSON)</b>
+                    <small>The analysis + AI rules, for editing or reuse on another book.</small>
+                  </button>
+                </>
+              )}
+            </AnchoredMenu>
           )}
           {book && (
             <button
@@ -10658,7 +10671,7 @@ function WorkflowBar({
 
 const KEYFRAMES =
   `@keyframes vr-pulse { 0%,100% { opacity: 0.55 } 50% { opacity: 0.9 } }\n` +
-  // The "Redo…" dropdown uses a native <details>; hide its default triangle marker.
+  // The collapsible sections use a native <details>; hide its default triangle marker.
   `details > summary { list-style: none; }\n` +
   `details > summary::-webkit-details-marker { display: none; }`;
 
@@ -10722,30 +10735,29 @@ const styles: Record<string, React.CSSProperties> = {
   workflowNow: { marginLeft: 8, opacity: 0.9 },
   actionNote: { marginLeft: "auto", color: "#9fdfa1", fontSize: 12 },
   workflowDetail: { fontSize: 11, opacity: 0.6 },
-  // --- the "Redo…" dropdown ---
-  menu: { position: "relative" },
+  // --- the "Redo…" / "Export…" dropdowns ---
+  // Position and size come from `AnchoredMenu`, which measures the viewport — these are only the
+  // look. (The panel used to be absolutely positioned here with a fixed min-width, which put it
+  // off the left edge in portrait and off the bottom in landscape.)
   menuSummary: {
-    listStyle: "none",
+    background: "transparent",
+    color: "inherit",
     border: "1px solid rgba(255,255,255,0.3)",
     borderRadius: 6,
     padding: "4px 10px",
     cursor: "pointer",
     fontSize: 13,
+    fontFamily: "inherit",
     userSelect: "none",
   },
   menuList: {
-    position: "absolute",
-    right: 0,
-    top: "calc(100% + 4px)",
-    zIndex: 30,
     display: "flex",
     flexDirection: "column",
-    minWidth: 320,
     background: "#1b1e2a",
+    color: "#e7e7ee",
     border: "1px solid rgba(255,255,255,0.15)",
     borderRadius: 8,
     boxShadow: "0 8px 30px rgba(0,0,0,0.5)",
-    overflow: "hidden",
   },
   menuItem: {
     display: "flex",
@@ -10761,6 +10773,8 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: "left",
     fontSize: 13,
     fontFamily: "system-ui, sans-serif",
+    // The panel scrolls when the screen is short; without this the items would squash instead.
+    flexShrink: 0,
   },
   upload: {
     border: "1px solid rgba(255,255,255,0.3)",

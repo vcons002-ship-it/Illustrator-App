@@ -82,6 +82,16 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
+- **The ↻ Redo and ⤓ Export menus stay on screen on a phone** — both dropped a fixed-width panel
+  straight down from their button, which broke in a different way in each orientation. Held upright,
+  the toolbar wraps and the button can sit near the left of the screen; the panel, which lines its
+  right edge up with the button, then hung off the left side of the display with nothing to scroll to
+  reach it. Turned sideways, the toolbar takes most of the height and the menu was taller than what
+  was left, so the last item or two fell off the bottom — and the toolbar doesn't scroll, so they were
+  simply unreachable. Both menus now measure the screen when you open them: the panel is kept inside
+  the edges, narrows on a small screen, opens upwards when there's more room above, and scrolls inside
+  itself if it still doesn't fit. They re-measure when you rotate the phone, and close on Escape or a
+  tap outside.
 - **The story picture fits its window, prompt and all** — the image was capped against the whole
   window, which ignores the chat docked underneath it (taller still with the history open). So the
   picture alone could be taller than the space it sits in, pushing the prompt and the "lock this look"
