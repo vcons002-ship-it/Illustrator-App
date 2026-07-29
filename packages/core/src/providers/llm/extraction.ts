@@ -17,7 +17,7 @@ import type { VisualRequest } from "../../types/content.js";
 import { deterministicSeed } from "./mock-llm-provider.js";
 import { resolveKeyEvent } from "../../visual-bible/key-events.js";
 import { recentArcLine } from "../../visual-bible/story-digest.js";
-import { sanitizeWorldStyle, stripWeather } from "../image/bible-injection.js";
+import { sanitizeWorldStyle } from "../image/bible-injection.js";
 
 /**
  * Shared building blocks for the cloud LLM providers (Claude / Gemini / OpenAI).
@@ -1077,17 +1077,14 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
   // glossary for the bible/export, but they're useless to a prompt writer — and one
   // accrues per chapter, so they'd grow every image-prompt request for nothing.
   //
-  // WEATHER is stripped for a different reason. The block below tells the prompt writer to apply
-  // these facts AS DEFAULTS to every image, which is right for the things it's meant to hold —
-  // customary attire, technology level, materials, social norms. It is catastrophic for weather: a
-  // story that opens in the rain gets a "world fact" about rain, and from then on EVERY prompt for
-  // the whole book is written with rain in it, indoor scenes included. A premise is supposed to set
-  // the opening scene, not the permanent conditions of the world. Weather that matters to a
-  // particular beat comes from that beat's own passage, which the writer is reading anyway.
-  const facts = (bible.glossary ?? [])
-    .filter((g) => !g.term.startsWith("References (chapter"))
-    .map((g) => ({ term: stripWeather(g.term), definition: stripWeather(g.definition) }))
-    .filter((g) => g.term.trim() && g.definition.trim());
+  // Weather is KEPT here, unlike in the descriptors that follow a person around (see
+  // `stripWeather`). This block is the one place a standing condition belongs: it is explicitly a
+  // set of DEFAULTS the passage overrides, and it is where a world's atmosphere lives — a beat that
+  // is all dialogue has nothing else to say what the light and air are like, and without it
+  // consecutive pictures stopped agreeing about the world they were in. What made it rain indoors
+  // wasn't its presence but its framing, which said "apply as defaults" and stopped there; the
+  // clause below is the missing half.
+  const facts = (bible.glossary ?? []).filter((g) => !g.term.startsWith("References (chapter"));
   const scene = (bible.storyboard ?? []).find((s) => s.chapterIndex === request.chapterIndex);
   // Beat-level setting: this unit's stored keyEvent (if any) knows where ITS moment
   // happens — more exact than the chapter's single location when the chapter moves.
@@ -1124,7 +1121,11 @@ export function promptUserContent(request: VisualRequest, bible: VisualBible): s
     facts.length
       ? `World facts (apply as defaults unless the passage says otherwise):\n${facts
           .map((g) => `- ${g.term}: ${g.definition}`)
-          .join("\n")}`
+          .join("\n")}\n` +
+        `Conditions among these — weather, season, time of day — hold for the world, but depict them ` +
+        `only as far as THIS scene could actually show them: a scene set indoors shows them through a ` +
+        `window or an open door and no further, and never as falling weather in the room. Where the ` +
+        `passage states its own conditions, the passage wins.`
       : "",
     scene?.summary
       ? `This chapter (continuity only — illustrate the passage, not this): ${scene.summary}`

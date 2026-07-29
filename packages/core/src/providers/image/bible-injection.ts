@@ -52,16 +52,18 @@ export const MAX_CHARACTER_DESCRIPTOR_CHARS = 320;
 
 function capDescriptor(parts: readonly string[], budget = MAX_DESCRIPTOR_CHARS): string {
   const joined = parts
-    // Every descriptor this builds is a PERMANENT statement about an entity, injected into every
-    // picture it appears in — so weather cannot be in any of them (see `stripWeather`). Places were
-    // filtered first, but the same accumulation happens to people: a character first described in a
-    // downpour keeps "rain-soaked hair" in their appearance, an outfit recorded outdoors keeps
-    // "beaded with rain", and both then ride into every later image — indoors included. Filtering
-    // here covers all four builders at once, which is the point of them sharing this funnel.
-    .map((p) => stripWeather(p).trim())
+    .map((p) => p.trim())
     .filter(Boolean)
     .join(", ");
   return joined.length <= budget ? joined : `${joined.slice(0, budget).replace(/,?\s+\S*$/, "")}`;
+}
+
+/**
+ * The same, with weather taken out — for descriptors where weather is never a fact about the thing
+ * being described. See {@link stripWeather} for which those are and why.
+ */
+function capBodyDescriptor(parts: readonly string[], budget = MAX_DESCRIPTOR_CHARS): string {
+  return capDescriptor(parts.map(stripWeather), budget);
 }
 
 /** Identity-only descriptor for a character (no outfit — that's a separate term). */
@@ -77,38 +79,51 @@ export function describeCharacterIdentity(c: Character): string {
   if (fields.length === 0) {
     for (const t of c.persistentTraits) if (t && t.trim()) fields.push(t.trim());
   }
-  return capDescriptor(fields.length ? fields : ["person"], MAX_CHARACTER_DESCRIPTOR_CHARS);
+  return capBodyDescriptor(fields.length ? fields : ["person"], MAX_CHARACTER_DESCRIPTOR_CHARS);
 }
 
 /** Descriptor for a creature: kind + accumulated visual description. */
 export function describeCreature(c: Creature): string {
-  return capDescriptor([c.kind, ...c.description].filter((t) => t && t.trim()));
+  return capBodyDescriptor([c.kind, ...c.description].filter((t) => t && t.trim()));
 }
 
 /** Descriptor for an outfit: its garment description. */
 export function describeOutfit(o: Outfit): string {
-  return capDescriptor([o.description || o.label]);
+  return capBodyDescriptor([o.description || o.label]);
 }
 
-/** Condensed descriptor for a location. (Weather is stripped by `capDescriptor`, as for every
- * descriptor — see {@link stripWeather}.) */
+/**
+ * Condensed descriptor for a location — weather KEPT.
+ *
+ * A place is the one entity weather is genuinely about, and it only reaches a picture when that
+ * place is in it. Stripping it here is what cost the world its atmosphere: a beat whose prose is all
+ * dialogue has nothing else to say what the light and air are like, and the pictures stopped
+ * agreeing with each other about the world they were in.
+ */
 export function describeLocation(e: Environment): string {
   return capDescriptor(e.description);
 }
 
 /**
- * Precipitation and storms: transient conditions, never permanent facts about a place or a book.
+ * Precipitation and storms. Weather belongs to some things and not others, and the line between
+ * them is what this module gets right or wrong.
  *
- * WHY. A place's description ACCUMULATES across chapters (see `mergeExtraction`) and a book's
- * `worldStyle` is applied to EVERY image. Weather ends up in both — a beat where rain lashes the
- * tavern windows adds "rain lashing the windows" to the tavern's permanent description, and a
- * chapter that opens in a downpour can leave "rain-slicked" sitting in the book's art direction.
- * From then on it rains in every picture, including the ones set indoors, because nothing ever
- * takes it back out. Weather changes; a descriptor that outlives the scene must not claim it does.
+ * WEATHER IS KEPT for a PLACE (`describeLocation`) and for the world facts the prompt writer is
+ * given (`promptUserContent`). Those are the two things weather is actually about, and both are
+ * SCOPED: a place's description reaches a picture only when that place is in it, and world facts
+ * are explicitly "defaults unless the passage says otherwise". This is where a book's atmosphere
+ * lives — take it away and a beat that is all dialogue has nothing to say what the light and air
+ * are like, and consecutive pictures stop agreeing about the world they are in. That regression is
+ * exactly why this doc is worded so emphatically.
  *
- * This does NOT touch the beat's own scene prompt, which is where weather belongs and where the
- * writing model puts it — so a scene that IS in the rain still renders in the rain. It only stops
- * one wet afternoon from raining on the rest of the book.
+ * WEATHER IS STRIPPED from anything that follows a subject around regardless of where they are:
+ * a character's appearance, a creature's, an outfit, the book's art-direction line (`worldStyle`)
+ * and its TITLE. Those go into every picture. A character first described in a downpour otherwise
+ * keeps "rain-plastered hair" forever; a story titled from a rainy premise rains indoors months of
+ * story later. Nothing ever takes it back out, because nothing else ever revisits those fields.
+ *
+ * Neither case touches the beat's own scene prompt, which is where a particular scene's weather
+ * belongs and where the writing model puts it.
  */
 const WEATHER =
   /\b(rain|rains|raining|rainy|rainfall|raindrops?|downpour|drizzle|drizzling|storm|storms|storming|stormy|thunderstorms?|thunder|thundering|lightning|snow|snows|snowing|snowy|snowfall|snowdrifts?|blizzard|sleet|hail|hailstones?|monsoon|torrential|squall|deluge)\b/i;

@@ -293,10 +293,12 @@ describe("promptUserContent", () => {
     expect(text).toContain("Ana fights.");
   });
 
-  it("never lets weather become a standing world fact — a rainy opening must not rain all book", () => {
-    // "World facts" are applied AS DEFAULTS to every image prompt, which is right for attire or
-    // technology level and catastrophic for weather: a story that opens in a downpour got a fact
-    // about rain, and every later prompt — indoor scenes included — was written with it.
+  it("keeps standing conditions, but tells the writer they only reach where the scene can show them", () => {
+    // Weather here is the world's atmosphere, and it belongs: it's explicitly a DEFAULT the passage
+    // overrides, and it's what keeps consecutive pictures agreeing about the world when a beat's
+    // prose is all dialogue. Stripping it (an earlier over-correction) cost exactly that. What makes
+    // it safe is the qualifier — the earlier framing said "apply as defaults" and stopped, which is
+    // how a rainy world ended up raining INSIDE the tavern.
     let bible = createEmptyBible("b");
     bible = mergeExtraction(
       bible,
@@ -327,10 +329,11 @@ describe("promptUserContent", () => {
       spoilerIds: [],
     };
     const text = promptUserContent(req, bible);
-    expect(text).not.toMatch(/rain/i);
-    // The genuinely permanent facts survive — including the non-weather half of a mixed one.
+    expect(text).toContain("the city is under near-constant rain");
     expect(text).toContain("brass clockwork, no electricity");
-    expect(text).toContain("couriers wear oiled canvas coats");
+    // …and the qualifier that keeps it out of the room itself.
+    expect(text).toMatch(/indoors shows them through a window or an open door/i);
+    expect(text).toMatch(/the passage wins/i);
   });
 
   it("gives two units of the same chapter different content (their own passages)", () => {

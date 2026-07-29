@@ -386,16 +386,15 @@ export class RenderPipeline {
       // The bible's world style only rides along for the "auto" art style — an explicitly
       // chosen style WINS, instead of the prompt carrying two competing "Style:" directives.
       const worldStyle = this.deps.tier.style && this.deps.tier.style !== "auto" ? undefined : bible.worldStyle;
+      // How the names + descriptions are shaped. The reader's choice applies to EVERY target, local
+      // or cloud: it's a property of how well a text encoder binds an attribute to a person, not of
+      // where the encoder runs, and having it work on one book and silently not on another
+      // (different provider, same setting) is the kind of inconsistency that's impossible to
+      // diagnose from the pictures. Unset — the default — keeps each family's own shape.
+      const nameHandling = this.deps.tier.promptNameStyle ?? cloudNameHandling(this.deps.image.id);
       const prompt = isLocal
         ? sceneBase
-        : expandPrompt(
-            sceneBase,
-            terms,
-            cloudNameHandling(this.deps.image.id),
-            worldStyle,
-            request.bookTitle,
-            keyEvent?.location,
-          );
+        : expandPrompt(sceneBase, terms, nameHandling, worldStyle, request.bookTitle, keyEvent?.location);
       // Reference images for IP-Adapter — user-uploaded only (auto-capture removed).
       const ipAdapterRefs = await this.referenceImagesFor(present);
       // PER-CHARACTER REGIONS (local engines only). With several people in frame every diffusion

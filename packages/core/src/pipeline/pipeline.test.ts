@@ -998,3 +998,68 @@ describe("the persisted prompt is what was actually sent", () => {
     expect(result.prompt).toBe(lastPrompt());
   });
 });
+
+describe("the naming shape applies to every provider", () => {
+  /** A bible with one described character, so a term exists to expand. */
+  function bibleWithCharacter(bookId: string, promptText: string): VisualBible {
+    const bible = bibleWithPrompt(bookId, promptText);
+    const nico: Character = {
+      id: "char-nico",
+      name: "Nico",
+      aliases: [],
+      appearance: { ...emptyAppearance(), gender: "a man", hair: "with a beard" },
+      persistentTraits: [],
+      clothing: [],
+      anchor: { seed: 7 },
+      firstSeenChapter: 0,
+    };
+    return { ...bible, characters: [nico] };
+  }
+
+  /** A CLOUD provider (id ≠ "local"), which the pipeline pre-expands for. */
+  function cloudImage(): { provider: ImageProvider; lastPrompt: () => string } {
+    let seen = "";
+    return {
+      provider: {
+        id: "gemini",
+        generate: async (input: ImageGenerationInput): Promise<ImageGenerationOutput> => {
+          seen = input.prompt;
+          return { bytes: new ArrayBuffer(1), mimeType: "image/png" };
+        },
+      },
+      lastPrompt: () => seen,
+    };
+  }
+
+  async function renderCloudWith(promptNameStyle?: "reference" | "inject" | "appositive") {
+    const book = oneParagraphBook("Nico waits.");
+    book.pages[0]!.pageRange = [0, 0];
+    const bible = bibleWithCharacter(book.id, "Nico waits at the bar.");
+    const { provider, lastPrompt } = cloudImage();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: { ...DEFAULT_TIER_CONFIG, tier: "cloud", ...(promptNameStyle ? { promptNameStyle } : {}) },
+    });
+    await pipeline.renderPage(0);
+    return lastPrompt();
+  }
+
+  it("uses the provider's default shape when the reader hasn't chosen", async () => {
+    // Gemini is LLM-grade → the glossary block, names left in the sentence.
+    const prompt = await renderCloudWith();
+    expect(prompt).toContain("Characters: Nico =");
+    expect(prompt).toContain("Nico waits at the bar.");
+  });
+
+  it("honours the reader's choice on a CLOUD provider too", async () => {
+    // The setting used to reach local engines only, so the same choice behaved differently
+    // depending on which provider a book happened to render on — invisible from the pictures.
+    const prompt = await renderCloudWith("appositive");
+    expect(prompt).toContain("Nico (a man, with a beard) waits at the bar.");
+    expect(prompt).not.toContain("Characters:");
+  });
+});
