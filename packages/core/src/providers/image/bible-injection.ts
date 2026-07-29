@@ -305,6 +305,13 @@ function primaryNames(bible: VisualBible): Set<string> {
   for (const c of bible.characters) add(c.name);
   for (const cr of bible.creatures ?? []) add(cr.name);
   for (const e of bible.environments) add(e.name);
+  // OUTFIT LABELS TOO. An outfit is an entity with a name of its own, and that name belongs to the
+  // clothes. Extraction records a costume identity as both an outfit and a nickname — "Ghost
+  // Broker" — and left claimable, "Lyra wears her Ghost Broker outfit" put a full head-to-toe
+  // description of LYRA inside the clothing clause: a second whole person in the sentence, which
+  // the image model duly drew. Reserved globally rather than per-character, so it holds when the
+  // colliding nickname belongs to somebody ELSE too.
+  for (const c of bible.characters) for (const o of c.outfits ?? []) add(o.label);
   return out;
 }
 
@@ -323,23 +330,15 @@ function primaryNames(bible: VisualBible): Set<string> {
  * aliases for exactly this reason.)
  */
 function ownForms(
-  entity: { name: string; aliases?: readonly string[]; outfits?: readonly { label: string }[] },
+  entity: { name: string; aliases?: readonly string[] },
   primaries: ReadonlySet<string>,
 ): string[] {
   const own = entity.name.trim().toLowerCase();
-  // An alias that is also one of this character's OUTFIT labels names the clothes, not the person.
-  // Extraction hands out aliases freely and will happily record a costume identity — "Ghost Broker"
-  // — as both. Left in, "Lyra wears her Ghost Broker outfit" put a full head-to-toe description of
-  // LYRA inside the clothing clause: a second complete woman in the sentence, which the image model
-  // duly drew. The outfit entry describes the garments and is the right thing to find there.
-  const wardrobe = new Set(
-    (entity.outfits ?? []).map((o) => o.label.trim().toLowerCase()).filter(Boolean),
-  );
   return [entity.name, ...(entity.aliases ?? [])]
     .filter(Boolean)
     .filter((f) => {
       const k = f.trim().toLowerCase();
-      return !!k && (k === own || (!primaries.has(k) && !wardrobe.has(k)));
+      return !!k && (k === own || !primaries.has(k));
     });
 }
 
@@ -468,13 +467,15 @@ export function findBibleTermsInText(prompt: string, bible: VisualBible, sceneLo
 
 /** Build the name→descriptor lookup, longest surface form first (so "Violet
  * Sorrengail" / "flight leathers" win over shorter substrings). */
-function orderedForms(terms: readonly SceneTerm[]): { form: string; descriptor: string }[] {
-  const out: { form: string; descriptor: string; primary: boolean }[] = [];
+function orderedForms(terms: readonly SceneTerm[]): { form: string; descriptor: string; owner: string }[] {
+  const out: { form: string; descriptor: string; primary: boolean; owner: string }[] = [];
   for (const t of terms) {
+    // names[0] is the entity's own name by construction everywhere a SceneTerm is built — so it
+    // identifies the ENTITY, whichever of its names a given occurrence used.
+    const owner = (t.names[0] ?? "").trim().toLowerCase();
     t.names.forEach((name, i) => {
       const form = name.trim();
-      // names[0] is the entity's own name by construction everywhere a SceneTerm is built.
-      if (form && t.descriptor) out.push({ form, descriptor: t.descriptor, primary: i === 0 });
+      if (form && t.descriptor) out.push({ form, descriptor: t.descriptor, primary: i === 0, owner });
     });
   }
   // LONGEST first — "Violet Sorrengail" beats "Violet", and "Rell's Tavern" beats the "Rell" inside
@@ -509,7 +510,7 @@ export function injectBibleTerms(
 ): string {
   const forms = orderedForms(terms);
   if (forms.length === 0) return prompt;
-  const byForm = new Map(forms.map((f) => [f.form.toLowerCase(), f.descriptor]));
+  const byForm = new Map(forms.map((f) => [f.form.toLowerCase(), f]));
   // The beat's place is in the alternation but NOT in byForm, so it consumes its own span and comes
   // back unchanged. Without it, a character who IS in the scene still had their descriptor spliced
   // into the place named after them — "in the (shaved head) Tavern", which tells the image model the
@@ -517,24 +518,28 @@ export function injectBibleTerms(
   const place = (sceneLocation ?? "").trim();
   const scan =
     place && !byForm.has(place.toLowerCase())
-      ? [...forms, { form: place, descriptor: "" }].sort((a, b) => b.form.length - a.form.length)
+      ? [...forms, { form: place, descriptor: "", owner: "" }].sort((a, b) => b.form.length - a.form.length)
       : forms;
   const described = new Set<string>();
   const alt = scan.map((f) => escapeRegExp(f.form)).join("|");
   // Whole-word, case-insensitive, optional possessive; skip a match already opened by "(".
   const re = new RegExp(`(^|[^\\p{L}\\p{N}(])(${alt})(['’]s)?(?=[^\\p{L}\\p{N}]|$)`, "giu");
   return prompt.replace(re, (m: string, lead: string, name: string, poss: string | undefined, offset: number, whole: string) => {
-    const descriptor = byForm.get(name.toLowerCase());
+    const hit = byForm.get(name.toLowerCase());
+    const descriptor = hit?.descriptor;
     // "Rell's Tavern" keeps its name even when Rell IS in the scene — the place is called that, and
     // swapping in his face there says the tavern looks like a man.
     if (!descriptor || (poss && namesSomethingElse(whole.slice(offset + m.length)))) {
       return `${lead}${name}${poss ?? ""}`;
     }
-    // Only the FIRST mention gets the descriptor in keepName mode — repeating it at every mention
-    // reads as two different people and is the bleed we're trying to avoid.
+    // ONE PERSON, ONE DESCRIPTION — keyed by the ENTITY, not by the word used for them. Keying it
+    // on the matched form meant a character mentioned once by name and once by nickname ("Lyra …
+    // her Ghost Broker outfit", "Rell … the Captain") was described in full TWICE, which reads as
+    // two people and is drawn as two people. Whichever of their names comes first carries the
+    // description; every later mention, by any name, is just the name.
     if (opts.keepName) {
-      if (described.has(name.toLowerCase())) return `${lead}${name}${poss ?? ""}`;
-      described.add(name.toLowerCase());
+      if (described.has(hit!.owner)) return `${lead}${name}${poss ?? ""}`;
+      described.add(hit!.owner);
       // BEFORE the possessive: "Nico (a man with a beard)'s wrist". After it — "Nico's (a man with
       // a beard) wrist" — the description sits between the owner and the thing owned, where it
       // reads as describing the WRIST.
