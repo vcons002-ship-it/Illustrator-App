@@ -89,6 +89,7 @@ import {
   synopsisRequest,
   storyOpeningRequest,
   parseStoryOpening,
+  storyStartBeats,
   SYNOPSIS_REFRESH_EVERY,
   MAX_SYNOPSIS_CHARS,
   seedStarterSkills,
@@ -3662,9 +3663,10 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         // opening beat and propose a title from it (grounded in the cast/roleplay). Best-effort —
         // if chat is unavailable or the reply doesn't parse, fall back to the typed text + title.
         let title = call.title?.trim() || "Our Story";
-        // With a chat carried in and no premise typed, the carried story is what beat one falls back
-        // to — an empty first beat would open the reader on a blank page.
-        let opening = call.opening.trim() || (call.soFar ?? "").split("\n").slice(-2).join(" ").trim();
+        // A carried chat is stored as the book's first beat below. `opening` is therefore only the
+        // newly generated continuation; leave it empty on generation failure instead of replacing
+        // the entire chat with its final two lines.
+        let opening = call.soFar?.trim() ? "" : call.opening.trim();
         if (supportsChat(llm) && (call.opening.trim() || call.soFar?.trim())) {
           try {
             post({ type: "buddyActivity", requestId: msg.requestId, text: "Writing the opening scene…" });
@@ -3681,15 +3683,17 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             if (parsed.opening) opening = parsed.opening;
             if (!call.title?.trim() && parsed.title) title = parsed.title;
           } catch {
-            // Generation is best-effort — keep the typed premise as the opening beat.
+            // Generation is best-effort. A fresh story keeps its typed premise; a carried story
+            // still opens with the complete transcript via storyStartBeats below.
           }
         }
+        const initialBeats = storyStartBeats(opening, call.soFar);
         const id = `story-${storyCounter++}-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24)}`;
         story = {
           bookId: id,
           title,
           author: "Story with the chat buddy",
-          beats: [opening],
+          beats: initialBeats,
           scene: emptyStoryScene(),
           scenes: [],
           ...(played.length ? { roleplay: { playedCharacterNames: played } } : {}),

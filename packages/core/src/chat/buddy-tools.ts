@@ -246,7 +246,8 @@ export type BuddyToolCall =
    * in the prompt is bounded; this is how you see any part that block didn't show. */
   | { tool: "read_document"; section?: string }
   /** Start co-writing an illustrated STORY with the reader: create the story book from the
-   * opening beat, open it in the reader, and generate the first image. Each later beat
+   * opening beat (or the complete carried chat plus its continuation), open it in the reader,
+   * and generate the first image. Each later beat
    * (continue_story) adds prose + an image while the Visual Bible accumulates the cast/
    * places. `style` sets the art look; `characters` seeds the known cast; `roleplay`
    * assigns the played characters (`you` = the reader plays, `me` = you play) so both stay
@@ -266,8 +267,8 @@ export type BuddyToolCall =
       roleplay?: { you?: string; me?: string };
       /** The conversation this story has already been growing in, when the reader chose to bring it
        * with them (the Story setup's "continue from this chat"). Set by the APP from the chat it was
-       * started in — never written by the model. The opening beat then continues that story instead
-       * of opening a new one. */
+       * started in — never written by the model. It is stored as the book's first beat, and the
+       * generated continuation follows it instead of replacing it. */
       soFar?: string;
     }
   /** Advance the OPEN story by one beat: append this prose as the next span and (per the

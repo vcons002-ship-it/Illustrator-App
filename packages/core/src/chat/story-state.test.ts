@@ -5,6 +5,7 @@ import {
   storyOpeningRequest,
   parseStoryOpening,
   storySoFarFromChat,
+  storyStartBeats,
   STORY_STATE_MAX_CHARS,
 } from "./story-state.js";
 
@@ -120,6 +121,25 @@ describe("parseStoryOpening", () => {
   });
   it("returns empty on unparseable input (caller falls back to the premise)", () => {
     expect(parseStoryOpening("sorry, I can't do that")).toEqual({});
+  });
+});
+
+describe("storyStartBeats", () => {
+  it("stores the complete carried chat before the generated continuation", () => {
+    const soFar = `Reader: ${"A".repeat(3_000)}\nAssistant: ${"B".repeat(3_000)}`;
+    expect(storyStartBeats("The door opened onto the sea.", soFar)).toEqual([
+      soFar,
+      "The door opened onto the sea.",
+    ]);
+  });
+
+  it("still stores the complete chat when continuation generation fails", () => {
+    const soFar = "Reader: I follow the light.\nAssistant: It leads beneath the hill.";
+    expect(storyStartBeats("", soFar)).toEqual([soFar]);
+  });
+
+  it("keeps the ordinary one-beat start when no chat is carried", () => {
+    expect(storyStartBeats("The lamp guttered.")).toEqual(["The lamp guttered."]);
   });
 });
 

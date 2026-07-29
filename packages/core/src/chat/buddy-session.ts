@@ -805,7 +805,10 @@ export async function runBuddyTool(
         return { documentText: await deps.readDocument(call.section) };
       case "start_story":
         if (!deps.startStory) return { error: "story mode isn't available right now" };
-        return { opened: await deps.startStory(call), story: { beats: 1, illustrated: true } };
+        {
+          const opened = await deps.startStory(call);
+          return { opened, story: { beats: opened.chapters, illustrated: true } };
+        }
       case "continue_story": {
         if (!deps.continueStory) return { error: "no story is open — start one with start_story" };
         const { beats, illustrated, ...opened } = await deps.continueStory(call);
