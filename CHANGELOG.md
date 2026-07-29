@@ -82,12 +82,12 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
-- **The book's tools are their own group** — everything that acts on the open book (illustrating,
-  ↻ Redo, characters, data, export, import) now sits in its own fenced, tinted block behind a
-  **▾ Book** caret, separated from the app-wide tools by a divider. In one long wrapping row the two
-  kinds were indistinguishable, and on a narrow window the book's own controls ended up buried among
-  tools that have nothing to do with it. Each collapses independently, so you can put the whole book
-  workflow away and keep the rest, or the other way round.
+- **The book gets its own toolbar** — everything that acts on the open book (illustrating, ↻ Redo,
+  characters, data, export, import) is now a separate bar of its own beneath the app's toolbar, with
+  its own **▾ Book tools** caret, outlined and tinted so it's clear at a glance that everything in it
+  acts on the book you have open and nothing outside it does. Before, the two kinds sat mixed
+  together in one long wrapping row, and hiding the app's tools took the book's with them. The two
+  collapse independently now.
 - **Minimising the chat now actually gives the room back** — hiding the message history still left
   three rows of chat above the text box (the session/tools header, the working folder, the context
   meter), so collapsing the dock reclaimed far less of the page than it looked like it should. With
