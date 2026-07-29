@@ -125,10 +125,13 @@ describe("parseStoryOpening", () => {
 });
 
 describe("storyStartBeats", () => {
-  it("stores the complete carried chat before the generated continuation", () => {
-    const soFar = `Reader: ${"A".repeat(3_000)}\nAssistant: ${"B".repeat(3_000)}`;
+  it("stores every carried exchange as its own image-capable beat before the continuation", () => {
+    const first = "A".repeat(3_000);
+    const second = "B".repeat(3_000);
+    const soFar = `Reader: ${first}\nAssistant: ${second}\nReader: Cross the bridge.\nAssistant: The bridge groans.`;
     expect(storyStartBeats("The door opened onto the sea.", soFar)).toEqual([
-      soFar,
+      `Reader: ${first}\nAssistant: ${second}`,
+      "Reader: Cross the bridge.\nAssistant: The bridge groans.",
       "The door opened onto the sea.",
     ]);
   });
@@ -136,6 +139,28 @@ describe("storyStartBeats", () => {
   it("still stores the complete chat when continuation generation fails", () => {
     const soFar = "Reader: I follow the light.\nAssistant: It leads beneath the hill.";
     expect(storyStartBeats("", soFar)).toEqual([soFar]);
+  });
+
+  it("splits explicitly headed chapters inside one assistant response", () => {
+    const soFar =
+      "Reader: Tell the whole tale.\n" +
+      "Assistant: # Chapter One\nThe gate opened.\n\n# Chapter Two\nThe mountain answered.\n\n# Chapter Three\nDawn broke.";
+    expect(storyStartBeats("", soFar)).toEqual([
+      "Reader: Tell the whole tale.\nAssistant: # Chapter One\nThe gate opened.",
+      "Assistant: # Chapter Two\nThe mountain answered.",
+      "Assistant: # Chapter Three\nDawn broke.",
+    ]);
+  });
+
+  it("keeps a final unanswered reader turn as a beat", () => {
+    expect(storyStartBeats("", "Reader: I open the door.\nAssistant: Snow blows in.\nReader: I step outside.")).toEqual([
+      "Reader: I open the door.\nAssistant: Snow blows in.",
+      "Reader: I step outside.",
+    ]);
+  });
+
+  it("preserves an unlabelled legacy carried payload as one beat", () => {
+    expect(storyStartBeats("", "Long ago, beneath the hill…")).toEqual(["Long ago, beneath the hill…"]);
   });
 
   it("keeps the ordinary one-beat start when no chat is carried", () => {

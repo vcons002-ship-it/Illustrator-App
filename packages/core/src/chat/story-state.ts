@@ -154,15 +154,80 @@ export function storySoFarFromChat(
  * Build the initial stored beats for a story started from chat.
  *
  * The carried transcript must be a real part of the book, not merely hidden context for the model
- * that writes the next beat. Keeping it as one beat lets the normal story segmenter preserve every
- * paragraph without treating each chat message as a separate chapter. A generated continuation is
- * appended as beat two when available; if generation fails, the complete transcript still opens.
+ * that writes the next beat. Each assistant story response becomes an internal beat/chapter, paired
+ * with the reader message(s) that led to it. Explicit chapter headings inside one response split it
+ * further. Story rendering is one image per beat, so collapsing a seven-response story into one beat
+ * made analysis write one prompt and left six requested images with no render unit to attach to.
+ *
+ * The speaker labels and every character of message text remain in the book; only the internal
+ * extraction boundaries change. A generated continuation is appended after the carried beats.
  */
 export function storyStartBeats(opening: string, soFar?: string): string[] {
   const carried = soFar?.trim() ?? "";
   const next = opening.trim();
-  if (carried) return [carried, ...(next ? [next] : [])];
+  if (carried) return [...carriedStoryBeats(carried), ...(next ? [next] : [])];
   return next ? [next] : [];
+}
+
+type CarriedTurn = { role: "Reader" | "Assistant"; text: string };
+
+/** Parse the exact text format emitted by {@link storySoFarFromChat}. */
+function carriedTurns(transcript: string): CarriedTurn[] {
+  const marker = /^(Reader|Assistant):[ \t]*/gm;
+  const matches = [...transcript.matchAll(marker)];
+  if (matches.length === 0 || matches[0]!.index !== 0) return [];
+  return matches.map((m, i) => {
+    const start = m.index! + m[0].length;
+    const end = matches[i + 1]?.index ?? transcript.length;
+    return {
+      role: m[1] as CarriedTurn["role"],
+      text: transcript.slice(start, end).replace(/\n$/, "").trimEnd(),
+    };
+  });
+}
+
+const CARRIED_CHAPTER_HEADING =
+  /^(?:#{1,3}\s+\S.*|(?:chapter|part|book)\s+(?:[0-9]+|[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten)\b.{0,80})$/i;
+
+/** One assistant response may itself contain several explicitly headed chapters. */
+function assistantSections(text: string): string[] {
+  const lines = text.split("\n");
+  const headings = lines
+    .map((line, i) => (CARRIED_CHAPTER_HEADING.test(line.trim()) ? i : -1))
+    .filter((i) => i >= 0);
+  if (headings.length === 0) return [text];
+
+  const sections: string[] = [];
+  const prefix = lines.slice(0, headings[0]!).join("\n").trim();
+  for (let i = 0; i < headings.length; i++) {
+    const body = lines.slice(headings[i]!, headings[i + 1] ?? lines.length).join("\n").trim();
+    if (!body) continue;
+    sections.push(i === 0 && prefix ? `${prefix}\n${body}` : body);
+  }
+  return sections.length ? sections : [text];
+}
+
+function carriedStoryBeats(transcript: string): string[] {
+  const turns = carriedTurns(transcript);
+  if (turns.length === 0) return [transcript]; // legacy/unlabelled payload: preserve it byte-for-byte
+
+  const beats: string[] = [];
+  let readerTurns: string[] = [];
+  for (const turn of turns) {
+    if (turn.role === "Reader") {
+      readerTurns.push(`Reader: ${turn.text}`);
+      continue;
+    }
+    const sections = assistantSections(turn.text);
+    sections.forEach((section, i) => {
+      const lead = i === 0 ? readerTurns : [];
+      beats.push([...lead, `Assistant: ${section}`].join("\n"));
+    });
+    readerTurns = [];
+  }
+  // A final reader turn still belongs to the imported story even if the assistant had not answered.
+  if (readerTurns.length) beats.push(readerTurns.join("\n"));
+  return beats.length ? beats : [transcript];
 }
 
 /** Parse the model's reply to {@link storyOpeningRequest}: tolerant of code fences / stray prose. */

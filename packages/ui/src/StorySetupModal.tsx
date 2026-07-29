@@ -109,7 +109,8 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, chatS
               <span style={{ fontSize: 13 }}>Bring the full conversation into this story</span>
               <span style={hint}>
                 Includes every reader and assistant message, so the first beat picks up where you left
-                off instead of starting a new scene. Untick to begin something fresh.
+                off instead of starting a new scene. Story responses and explicit chapter headings
+                become separate illustrated sections. Untick to begin something fresh.
               </span>
             </span>
           </label>
