@@ -24,6 +24,15 @@ describe("the settings card is self-sufficient", () => {
     expect(panelStyle.background).toBe("#16181d");
   });
 
+  /**
+   * Most of the dropdowns and inputs in the panel carry no colours of their own, so the browser draws
+   * them — from the LIGHT palette unless told otherwise. That puts white boxes with black text on a
+   * near-black card, and opens dropdown lists white behind the panel's pale text.
+   */
+  it("tells the browser to draw native controls dark, like everything around them", () => {
+    expect(panelStyle.colorScheme).toBe("dark");
+  });
+
   it("stays fixed to the viewport and scrolls itself within it", () => {
     expect(panelStyle.position).toBe("fixed");
     expect(panelStyle.overflowY).toBe("auto");

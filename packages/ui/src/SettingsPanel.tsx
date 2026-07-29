@@ -3838,6 +3838,17 @@ export const panelStyle = {
   color: "#e7e7ee",
   fontFamily: "Georgia, 'Iowan Old Style', serif",
   fontSize: 13,
+  /**
+   * Render NATIVE controls dark too.
+   *
+   * Two dozen of the dropdowns and inputs in here carry no colours of their own, so the browser
+   * styles them — and without this it does so from the LIGHT palette, whatever the app looks like:
+   * white boxes with black text sitting on a near-black card, and dropdown lists that open white
+   * with the panel's pale text in them, which is unreadable the other way round. One declaration
+   * switches every one of them, and their popups, to the dark palette. (TasksPanel already does this
+   * for its date picker — same reason.)
+   */
+  colorScheme: "dark" as const,
   boxShadow: "0 12px 40px rgba(0,0,0,0.55)",
   // Own scrollbar instead of overflowing the screen. `dvh` (dynamic viewport height) tracks the
   // visible area on phones where the browser's address bar shows/hides — `vh` is taller than what's
