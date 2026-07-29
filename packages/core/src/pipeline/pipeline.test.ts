@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { RenderPipeline, nameActiveScene } from "./pipeline.js";
+import { RenderPipeline, countSceneSubjects, nameActiveScene } from "./pipeline.js";
 import { InMemoryStore } from "../storage/store.js";
 import { createEmptyBible } from "../visual-bible/bible.js";
 import { DEFAULT_TIER_CONFIG } from "../types/tier.js";
@@ -940,6 +940,129 @@ describe("nameActiveScene (story 'as you go')", () => {
 
   it("has nothing to say when the scene is empty", () => {
     expect(nameActiveScene("An empty road.", [], [], [])).toBe("An empty road.");
+  });
+});
+
+describe("RenderPipeline subject count reaches the provider", () => {
+  /** Two described characters, both resolved as present on the page. */
+  function twoHanderBible() {
+    const bible = bibleWithPrompt("book-1", "Sato and Mara at the counter");
+    bible.characters.push(
+      {
+        id: "char-sato",
+        name: "Sato",
+        aliases: [],
+        appearance: { ...emptyAppearance(), hair: "close-cropped, wire glasses" },
+        persistentTraits: [],
+        clothing: [],
+        anchor: { seed: 1 },
+        firstSeenChapter: 0,
+      },
+      {
+        id: "char-mara",
+        name: "Mara",
+        aliases: [],
+        appearance: { ...emptyAppearance(), hair: "red braid" },
+        persistentTraits: [],
+        clothing: [],
+        anchor: { seed: 2 },
+        firstSeenChapter: 0,
+      },
+    );
+    return bible;
+  }
+
+  async function renderWith(tier: Partial<typeof DEFAULT_TIER_CONFIG>) {
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    book.pages[0]!.paragraphs[0]!.text = "Sato and Mara at the counter.";
+    const { provider, lastPrompt } = recordingImage();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => twoHanderBible(),
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: { ...DEFAULT_TIER_CONFIG, ...tier },
+    });
+    await pipeline.renderPage(0);
+    return lastPrompt();
+  }
+
+  it("leads the scene description with the count of the resolved cast", async () => {
+    // Immediately before the scene, so the count frames the composition. In `reference` name
+    // handling a glossary header precedes it — that block defines who the names are, and the
+    // count belongs with the scene it constrains, not ahead of the definitions.
+    expect(await renderWith({})).toContain("Exactly two people in focus. Sato and Mara at the counter");
+  });
+
+  it("is skipped for a comic PAGE, where the count would be read per panel", async () => {
+    // 4–6 panels each showing the cast is exactly the case where "exactly two people" is wrong.
+    const prompt = await renderWith({ style: "comic", drawAsComicPage: true });
+    expect(prompt).toContain("comic page");
+    expect(prompt).not.toContain("in focus");
+  });
+});
+
+describe("countSceneSubjects (how many bodies to draw)", () => {
+  const mara = { name: "Mara" };
+  const cass = { name: "Cass" };
+  const drake = { name: "Vess" };
+
+  it("states the count in words at the front", () => {
+    // Leading, because the first tokens carry the most weight in both encoder families — and the
+    // count has to frame the composition before any descriptor arrives.
+    expect(countSceneSubjects("Mara and Cass argue.", [mara, cass], [])).toBe(
+      "Exactly two people in focus. Mara and Cass argue.",
+    );
+  });
+
+  it("says it for a LONE character — the case a duplicate figure ruins", () => {
+    // The reported failure: one person in the beat, two drawn. Nothing had ever said "one".
+    expect(countSceneSubjects("Nico waits.", [{ name: "Nico" }], [])).toBe(
+      "Exactly one person in focus. Nico waits.",
+    );
+  });
+
+  it("counts people and creatures separately — a drake is not one of the people", () => {
+    expect(countSceneSubjects("Vess circles.", [mara], [drake])).toBe(
+      "Exactly one person and one creature in focus. Vess circles.",
+    );
+  });
+
+  it("counts a person with a nickname ONCE, however the prompt refers to them", () => {
+    // The whole reason it counts bible entities and not noun phrases: counting the prose would
+    // read "Lyra (the Ghost Broker)" as two people and assert the very duplicate this prevents.
+    const lyra = { name: "Lyra" };
+    expect(countSceneSubjects("Lyra, the Ghost Broker, leans in.", [lyra], [])).toBe(
+      "Exactly one person in focus. Lyra, the Ghost Broker, leans in.",
+    );
+  });
+
+  it("collapses a same-named leftover from an un-consolidated extraction", () => {
+    expect(countSceneSubjects("They talk.", [mara, { name: "mara" }, cass], [])).toBe(
+      "Exactly two people in focus. They talk.",
+    );
+  });
+
+  it("drops the number past three, where diffusion counting is noise", () => {
+    // An ignored instruction is harmless; a wrong one that is half-obeyed is worse than silence.
+    const out = countSceneSubjects("The squad forms up.", [mara, cass, drake, { name: "Rell" }], []);
+    expect(out).toBe("Several people in focus. The squad forms up.");
+    expect(out).not.toContain("Exactly");
+    expect(out).not.toContain("four");
+  });
+
+  it("never claims 'exactly' when either group had to go soft", () => {
+    const many = [mara, cass, drake, { name: "Rell" }, { name: "Toll" }];
+    expect(countSceneSubjects("A gathering.", many, [{ name: "Sgaeyl" }])).toBe(
+      "Several people and one creature in focus. A gathering.",
+    );
+  });
+
+  it("says nothing when the bible knows of no subject in the frame", () => {
+    // A landscape must not be told it contains people.
+    expect(countSceneSubjects("An empty road at dusk.", [], [])).toBe("An empty road at dusk.");
   });
 });
 
