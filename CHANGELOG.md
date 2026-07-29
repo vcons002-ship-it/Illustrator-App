@@ -147,6 +147,14 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Stories
 
+- **"Scene continuity" no longer adds people to a picture that already knows its cast** — when a beat
+  is too terse to name anyone ("she nods"), the app appends who and where to the illustration
+  request, or the picture would be of strangers in nowhere. But it was doing that even when the
+  illustration request already named people — adding everyone else it believed was in the scene, and
+  those extra names got drawn. The tracked cast is who's in the *room* over the course of a beat; the
+  request is who's in the *frame*, written by the part of the app that actually read the prose. The
+  frame now wins: the names are only supplied when none were given. The setting is still always
+  supplied, since naming who is present says nothing about where they are.
 - **The weather stays in the scene it belongs to** — it was raining in every picture, indoors
   included, because one beat happened to mention rain. A place's description is built up chapter by
   chapter and the book's art-direction line is applied to every image, so "rain lashing the windows"

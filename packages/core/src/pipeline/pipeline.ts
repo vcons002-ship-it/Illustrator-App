@@ -572,12 +572,22 @@ function unique(ids: string[]): string[] {
  * Story "as you go": ensure the tracked present cast + location are NAMED in the prompt
  * (active-scene carry-forward). A terse chat beat often names no one, so the scene's
  * keyEvent prompt wouldn't mention the people/place that the tracker knows are present —
- * naming them here (only those not already in the prompt) makes bible-term injection
- * expand their descriptors AND tells the image model who/where to depict. Pure; returns
- * the prompt unchanged when everyone is already named (so a fully-specified beat is a
- * no-op). Used ONLY for story books — the book illustrator's prompts are not augmented.
+ * naming them here makes bible-term injection expand their descriptors AND tells the image
+ * model who/where to depict. Pure; returns the prompt unchanged when there's nothing to add.
+ * Used ONLY for story books — the book illustrator's prompts are not augmented.
+ *
+ * A RESCUE, NOT AN OVERRIDE. The people half applies only when the prompt names NONE of the
+ * tracked cast. A prompt that names some of them is the prompt-writer saying who is in this
+ * shot, having read the beat — so adding the rest is second-guessing the one source that
+ * actually looked at the prose. It read as a character being conjured into a picture they
+ * weren't in ("Scene continuity: featuring <someone not in the scene>"), which is exactly what
+ * it was doing: the tracked cast is who is in the ROOM across the beat, and the prompt is who
+ * is in the FRAME. They are not the same set, and the frame wins.
+ *
+ * The place half is unconditional: naming who is present says nothing about where, so a prompt
+ * that names people but no setting still needs its location supplied.
  */
-function nameActiveScene(
+export function nameActiveScene(
   prompt: string,
   characters: { name: string }[],
   creatures: { name: string }[],
@@ -585,8 +595,10 @@ function nameActiveScene(
 ): string {
   const lc = prompt.toLowerCase();
   const has = (n: string): boolean => n.length > 0 && lc.includes(n.toLowerCase());
-  const people = [...characters, ...creatures].map((c) => c.name).filter((n) => !has(n));
-  const places = environments.map((e) => e.name).filter((n) => !has(n));
+  const cast = [...characters, ...creatures].map((c) => c.name).filter(Boolean);
+  // Only rescue a prompt that names nobody. One name is enough to show it knows its own cast.
+  const people = cast.some(has) ? [] : cast;
+  const places = environments.map((e) => e.name).filter((n) => n && !has(n));
   const clause = [
     people.length ? `featuring ${people.join(", ")}` : "",
     places.length ? `at ${places.join(", ")}` : "",
