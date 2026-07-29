@@ -82,6 +82,14 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
+- **A "needs a text encoder" error no longer sticks for the session** — the app asks the engine which
+  model files it has and remembers the answer, because installed files don't change while you work.
+  But an empty list is a perfectly successful answer, and the engine gives one while it's still
+  starting up and scanning its models folder. Remembered, that turned a few seconds of bad timing
+  into every image failing with "needs a text encoder" while the files sat on disk — and the app
+  restarting itself to update is exactly when it can come back before the engine is ready. It now
+  forgets what it read when a lookup comes up empty, so simply trying the image again picks up the
+  truth. The message also says so, instead of only offering to download files you already have.
 - **The book gets its own toolbar** — everything that acts on the open book (illustrating, ↻ Redo,
   characters, data, export, import) is now a separate bar of its own beneath the app's toolbar, with
   its own **▾ Book tools** caret, outlined and tinted so it's clear at a glance that everything in it

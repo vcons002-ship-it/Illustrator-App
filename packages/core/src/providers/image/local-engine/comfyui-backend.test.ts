@@ -318,3 +318,32 @@ describe("ComfyUIBackend.generateVideo VRAM residency (long-form warmBatch)", ()
     expect(urls()).not.toContain(`${BASE}/free`);
   });
 });
+
+describe("a split-file model's component lookup recovers from a not-yet-ready engine", () => {
+  /** `/object_info/<node>` shaped as ComfyUI returns it: a combo input is `[[...options], meta]`. */
+  const nodeInfo = (node: string, key: string, options: string[]) =>
+    res({ [node]: { input: { required: { [key]: [options, {}] } } } });
+
+  it("re-reads the file lists after a failure instead of failing all session", async () => {
+    // An EMPTY list is a successful response, so it was cached like any other — and the engine
+    // reports empty while it is still scanning its models folder. A few seconds of bad timing
+    // (the app relaunching itself to update is exactly that) turned into a whole session of
+    // "needs a text encoder" with the files sitting on disk.
+    let ready = false;
+    const { transport } = routedTransport({
+      "/object_info/CLIPLoader": () =>
+        nodeInfo("CLIPLoader", "clip_name", ready ? ["mistral_small_flux2.safetensors"] : []),
+      "/object_info/VAELoader": () =>
+        nodeInfo("VAELoader", "vae_name", ready ? ["flux2-vae.safetensors"] : []),
+      "/object_info/UNETLoader": () => nodeInfo("UNETLoader", "unet_name", ["flux2-dev.safetensors"]),
+      "/object_info/CheckpointLoaderSimple": () => nodeInfo("CheckpointLoaderSimple", "ckpt_name", []),
+    });
+    const backend = new ComfyUIBackend({ baseUrl: BASE, transport });
+    const input = { ...INPUT, modelFamily: "flux2" as const };
+
+    await expect(backend.generate(input, "flux2-dev.safetensors")).rejects.toThrow(/text encoder/i);
+    // The engine finishes starting; the very next attempt must see the files.
+    ready = true;
+    await expect(backend.generate(input, "flux2-dev.safetensors")).rejects.not.toThrow(/text encoder/i);
+  });
+});

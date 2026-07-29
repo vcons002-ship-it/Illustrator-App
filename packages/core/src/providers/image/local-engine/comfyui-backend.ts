@@ -590,6 +590,11 @@ export class ComfyUIBackend implements LocalEngineBackend {
   }
 
   /** A node's `/object_info` schema, cached per session (failures evicted). */
+  /** Drop cached `/object_info` for these nodes so the next read goes back to the engine. */
+  private forgetNodeInfo(...nodes: string[]): void {
+    for (const n of nodes) this.nodeInfoCache.delete(n);
+  }
+
   private nodeInfo(node: string): Promise<NodeSchema | undefined> {
     const cached = this.nodeInfoCache.get(node);
     if (cached) return cached;
@@ -770,6 +775,15 @@ export class ComfyUIBackend implements LocalEngineBackend {
     const encoder = pickComponentAsset(clips, overrides?.textEncoder ?? wantedEncoder, encoderPatterns, []);
     const vae = pickComponentAsset(vaes, overrides?.vae ?? wantedVae, [], h.vae);
     if (!encoder || !vae) {
+      // FORGET what we read. A node's file list is cached for the session on the assumption that
+      // installed files don't change mid-session — true, except that an EMPTY list is also a
+      // perfectly successful response, and the engine reports empty while it is still starting up
+      // or re-scanning its models folder. Cached, that turns a few seconds of bad timing into a
+      // session where every render fails with "needs a text encoder" and the files are right there
+      // on disk. The app now relaunches itself to update, which is exactly when it can come back
+      // before the engine is ready, so this stopped being hypothetical. Dropping the entry costs
+      // one HTTP round trip and lets the next attempt see the truth.
+      this.forgetNodeInfo("CLIPLoader", "DualCLIPLoader", "QuadrupleCLIPLoader", "VAELoader");
       const what = entry?.label ?? h.what;
       const hint = [
         ...(encoder ? [] : [`a text encoder${wantedEncoder ? ` like ${wantedEncoder}` : ""} (models/text_encoders)`]),
@@ -778,7 +792,9 @@ export class ComfyUIBackend implements LocalEngineBackend {
       throw new Error(
         `${what} needs ${hint} installed in ComfyUI (a same-family variant filename is fine). ` +
           "Use the Download button in Settings → Local model to fetch all its files, or pick an " +
-          "all-in-one SD/SDXL checkpoint. (If you just added the files, restart the engine.)",
+          "all-in-one SD/SDXL checkpoint. (If the files ARE installed, the engine was probably still " +
+          "starting up when this was asked — it reports an empty list until it has scanned its models " +
+          "folder. Try the image again.)",
       );
     }
     return {
