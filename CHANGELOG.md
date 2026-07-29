@@ -137,6 +137,17 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Stories
 
+- **The first picture of a story is no longer the worst one** — it was being drawn from your soul
+  notes, all of them, joined together and cut off at 200 characters: "I'm drawn to problems where the
+  obvious answer is wrong; I find pure taxo" as a description of what someone LOOKS like. At the
+  opening beat that's the only thing the image model has, because the assistant hasn't read enough of
+  the story yet to work out anyone's appearance — which is why re-rendering the same picture a bit
+  later came out so much better. Only the notes that actually describe a look are used now, whole
+  notes rather than a sentence cut in half, and if none of them do, the character is left neutral
+  instead of being drawn from a personality note. (This also explains why the experimental
+  per-character option seemed to make things worse: it was concentrating that same noise into each
+  character's own part of the canvas.)
+
 - **Each character can be weighted to their own part of the picture** — an experimental option (off
   by default, in Settings under Images, your own engine only) aimed at features migrating between
   people. With two to four described characters, each one's description is weighted towards the part

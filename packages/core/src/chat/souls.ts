@@ -170,6 +170,45 @@ export function userSoulPromptBlock(notes: readonly SoulNote[], name = ""): stri
   );
 }
 
+/**
+ * Vocabulary that marks a note as describing how someone LOOKS. Deliberately about the body, what's
+ * worn, and colour — the things an image model can draw.
+ */
+const LOOK_WORDS =
+  /\b(hair|eyes?|eyebrows?|beard|moustache|stubble|skin|complexion|freckles?|scars?|tattoos?|build|tall|short|slim|slender|stocky|broad|wiry|lean|heavyset|young|old|middle-aged|teenage|twenties|thirties|forties|fifties|sixties|face|jaw|cheekbones?|nose|lips|hands?|posture|wears?|wearing|dressed|dress|coat|jacket|cloak|robes?|armou?r|uniform|shirt|trousers|jeans|boots?|shoes?|hat|cap|hood|scarf|gloves?|glasses|spectacles|mask|jewell?ery|ring|necklace|braid|ponytail|shaved|bald|curly|straight|wavy|silver|grey|gray|blonde?|brunette|auburn|ginger|red|black|white|brown|blue|green|hazel|amber|olive|pale|dark|tanned|freckled)\b/i;
+
+/**
+ * The soul notes that describe an APPEARANCE, for seeding a played character's look.
+ *
+ * A soul is a mixed bag — how someone looks, how they speak, what they care about — and only the
+ * first kind is any use to an image model. Handing it the lot is worse than handing it nothing:
+ * "I'm drawn to problems where the obvious answer is wrong" as a visual descriptor is pure noise the
+ * model still tries to draw, and with per-character regions on, that noise gets concentrated into
+ * that character's own patch of canvas.
+ *
+ * That was the first beat of every story: the setup joined EVERY note, cut the result at 200
+ * characters (mid-word, often), and seeded it as the character's look. It only stopped mattering
+ * once extraction had read a beat or two and filled in real appearance fields — which is exactly why
+ * the opening image was poor and a later re-render was fine.
+ *
+ * Whole notes only, oldest first, up to `budget` characters. Returns "" when nothing looks like a
+ * description — better a character the model renders neutrally than one it renders from a personality
+ * note. PURE.
+ */
+export function visualSoulNotes(notes: readonly SoulNote[], budget = 200): string {
+  const kept: string[] = [];
+  let used = 0;
+  for (const n of notes) {
+    const text = n.text.trim();
+    if (!text || !LOOK_WORDS.test(text)) continue;
+    const cost = text.length + (kept.length ? 2 : 0); // "; "
+    if (used + cost > budget) break; // whole notes only — never a sentence cut mid-word
+    kept.push(text);
+    used += cost;
+  }
+  return kept.join("; ");
+}
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

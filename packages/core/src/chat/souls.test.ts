@@ -17,6 +17,7 @@ import {
   selfSoulPromptBlock,
   userSoulPromptBlock,
   selfPortraitPrompt,
+  visualSoulNotes,
 } from "./souls.js";
 
 describe("selfPortraitPrompt", () => {
@@ -149,5 +150,57 @@ describe("how many identity notes survive", () => {
     const block = selfSoulPromptBlock([note("Warm, dry, direct.")]);
     expect(block).toContain("- Warm, dry, direct.");
     expect(block).not.toContain("not shown here");
+  });
+});
+
+/**
+ * Seeding a played character's LOOK from the soul.
+ *
+ * The soul is a mixed bag, and since the assistant started adding its own notes from what it reads
+ * it's mostly personality. The story setup used to join every note and cut at 200 characters, so the
+ * played character's visual description became "I'm drawn to problems where the obvious answer is
+ * wrong; I find pure taxo" — and at beat one that's the ONLY thing the image model has, because
+ * extraction hasn't read the prose yet. It's why the opening picture of a story came out poor and a
+ * later re-render didn't.
+ */
+describe("visualSoulNotes", () => {
+  const note = (text: string, at = 1): SoulNote => ({ text, at });
+
+  it("keeps the notes that describe a look and drops the ones that don't", () => {
+    const notes = [
+      note("I'm drawn to problems where the obvious answer is wrong"),
+      note("Warm, dry wit; silver hair; wears a long coat"),
+      note("I find pure taxonomy dull"),
+      note("Tall, with a jagged scar across one eyebrow"),
+    ];
+    expect(visualSoulNotes(notes)).toBe(
+      "Warm, dry wit; silver hair; wears a long coat; Tall, with a jagged scar across one eyebrow",
+    );
+  });
+
+  it("returns nothing when the soul is all personality — better neutral than misleading", () => {
+    const notes = [
+      note("I'm drawn to problems where the obvious answer is wrong"),
+      note("I find pure taxonomy dull"),
+    ];
+    expect(visualSoulNotes(notes)).toBe("");
+  });
+
+  it("never cuts a note in half — whole notes only, up to the budget", () => {
+    const long = note("silver hair that falls past the shoulders, always slightly unkempt");
+    const out = visualSoulNotes([long, note("wears a long grey coat")], 70);
+    expect(out).toBe(long.text); // the second didn't fit, so it isn't there at all
+    expect(out.endsWith("unkempt")).toBe(true);
+  });
+
+  it("recognises clothing, colouring, build and age as description", () => {
+    expect(visualSoulNotes([note("wears wire-rimmed glasses")])).toBeTruthy();
+    expect(visualSoulNotes([note("auburn braid")])).toBeTruthy();
+    expect(visualSoulNotes([note("stocky, broad across the shoulders")])).toBeTruthy();
+    expect(visualSoulNotes([note("somewhere in her forties")])).toBeTruthy();
+  });
+
+  it("is empty for an empty soul", () => {
+    expect(visualSoulNotes([])).toBe("");
   });
 });
