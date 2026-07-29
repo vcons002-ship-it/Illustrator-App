@@ -150,6 +150,21 @@ export function storySoFarFromChat(
   return lines.join("\n");
 }
 
+/**
+ * Build the initial stored beats for a story started from chat.
+ *
+ * The carried transcript must be a real part of the book, not merely hidden context for the model
+ * that writes the next beat. Keeping it as one beat lets the normal story segmenter preserve every
+ * paragraph without treating each chat message as a separate chapter. A generated continuation is
+ * appended as beat two when available; if generation fails, the complete transcript still opens.
+ */
+export function storyStartBeats(opening: string, soFar?: string): string[] {
+  const carried = soFar?.trim() ?? "";
+  const next = opening.trim();
+  if (carried) return [carried, ...(next ? [next] : [])];
+  return next ? [next] : [];
+}
+
 /** Parse the model's reply to {@link storyOpeningRequest}: tolerant of code fences / stray prose. */
 export function parseStoryOpening(text: string): { title?: string; opening?: string } {
   const raw = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
