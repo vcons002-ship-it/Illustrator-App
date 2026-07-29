@@ -120,25 +120,47 @@ export async function saveSoulName(store: VisualReaderStore, kind: SoulKind, nam
 
 /** System-prompt block for the assistant's own identity ("" when empty). */
 /**
- * The notes that fit the prompt budget, NEWEST first by selection but rendered oldest-first so the
- * identity reads as it accumulated. Returns what was kept plus how many were left behind, so the
- * block can say so rather than silently showing a partial self. PURE.
+ * The notes that fit the prompt budget. Appearance notes are reserved first regardless of age, then
+ * the remaining space is filled newest-first; the result is rendered in stored order so the identity
+ * reads as it accumulated.
+ *
+ * Recency alone is wrong for identity: a physical description is commonly one of the first entries
+ * and remains true while newer experiences accumulate. Selecting only the tail left that description
+ * visible in the Soul panel but absent from every model prompt. Returns what was kept plus how many
+ * were left behind, so the block can say so rather than silently showing a partial self. PURE.
  */
 export function soulNotesForPrompt(
   notes: readonly SoulNote[],
   budget = SOUL_PROMPT_BUDGET_CHARS,
 ): { shown: SoulNote[]; omitted: number } {
-  const shown: SoulNote[] = [];
+  const selected = new Set<number>();
   let used = 0;
-  // Walk from the most recent backwards: when there isn't room for everything, the newest self is
-  // the one that should survive into the prompt.
-  for (let i = notes.length - 1; i >= 0; i--) {
-    const n = notes[i]!;
-    const cost = n.text.length + 3; // "- " + newline
-    if (used + cost > budget && shown.length > 0) break;
-    shown.unshift(n);
+
+  const keep = (i: number): boolean => {
+    if (selected.has(i)) return true;
+    const cost = notes[i]!.text.length + 3; // "- " + newline
+    // Preserve the existing guarantee that a non-empty soul always contributes at least one note,
+    // even when that single note is longer than the nominal budget.
+    if (used + cost > budget && selected.size > 0) return false;
+    selected.add(i);
     used += cost;
+    return true;
+  };
+
+  // A soul's durable LOOK must not age out of the prompt. Walk oldest-first so the foundational
+  // description wins if someone has somehow accumulated more appearance text than the whole budget.
+  for (let i = 0; i < notes.length; i++) {
+    if (isLookNote(notes[i]!.text)) keep(i);
   }
+
+  // Spend the rest on the newest identity/personality notes.
+  for (let i = notes.length - 1; i >= 0; i--) {
+    if (!keep(i) && used >= budget) break;
+  }
+
+  const shown = [...selected]
+    .sort((a, b) => a - b)
+    .map((i) => notes[i]!);
   return { shown, omitted: notes.length - shown.length };
 }
 
@@ -156,7 +178,7 @@ export function selfSoulPromptBlock(notes: readonly SoulNote[], name = ""): stri
     shown.map((n) => `- ${n.text}`).join("\n") +
     // Said rather than hidden: the reader can see the full list in the Soul panel, and the model
     // shouldn't believe these few lines are the whole of it.
-    (omitted > 0 ? `\n(+ ${omitted} older note${omitted === 1 ? "" : "s"} kept, not shown here)` : "")
+    (omitted > 0 ? `\n(+ ${omitted} other stored note${omitted === 1 ? "" : "s"} kept, not shown here)` : "")
   );
 }
 
@@ -179,6 +201,10 @@ export function userSoulPromptBlock(notes: readonly SoulNote[], name = ""): stri
  */
 const LOOK_WORDS =
   /\b(hair|eyes?|eyebrows?|beard|moustache|stubble|skin|complexion|freckles?|scars?|tattoos?|build|tall|short|slim|slender|stocky|broad|wiry|lean|heavyset|young|old|middle-aged|teenage|twenties|thirties|forties|fifties|sixties|face|jaw|cheekbones?|nose|lips|hands?|posture|wears?|wearing|dressed|dress|coat|jacket|cloak|robes?|armou?r|uniform|shirt|trousers|jeans|boots?|shoes?|hat|cap|hood|scarf|gloves?|glasses|spectacles|mask|jewell?ery|ring|necklace|braid|ponytail|shaved|bald|curly|straight|wavy|silver|grey|gray|blonde?|brunette|auburn|ginger|red|black|white|brown|blue|green|hazel|amber|olive|pale|dark|tanned|freckled)\b/i;
+
+function isLookNote(text: string): boolean {
+  return LOOK_WORDS.test(text);
+}
 
 /**
  * The soul notes that describe an APPEARANCE, for seeding a played character's look.
@@ -205,7 +231,7 @@ export function visualSoulNotes(notes: readonly SoulNote[], budget = SOUL_LOOK_B
   let used = 0;
   for (const n of notes) {
     const text = n.text.trim();
-    if (!text || !LOOK_WORDS.test(text)) continue;
+    if (!text || !isLookNote(text)) continue;
     const cost = text.length + (kept.length ? 2 : 0); // "; "
     if (used + cost > budget) break; // whole notes only — never a sentence cut mid-word
     kept.push(text);

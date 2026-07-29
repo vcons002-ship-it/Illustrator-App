@@ -7,6 +7,12 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The assistant
 
+- **Its appearance no longer fades from its own memory** — Soul keeps far more notes than can fit in
+  every prompt, and prompt selection preferred the newest ones. Because a physical description is
+  usually written near the beginning, it could remain plainly visible in the Soul panel while the
+  assistant itself could no longer see it. Appearance notes are now reserved first regardless of age,
+  with the remaining prompt space filled by its newest personality and experience notes. The same
+  rule protects the reader's appearance in the You soul.
 - **It can potter about on its own** (off by default) — turn on "Let it explore something of its own
   while you're idle" and, a few times an hour when you're not using the app, it follows its own
   curiosity: reads around a topic on the web and writes up what it found interesting. It lands in its
