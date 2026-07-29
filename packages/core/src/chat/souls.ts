@@ -1,5 +1,8 @@
 import type { VisualReaderStore } from "../storage/store.js";
 import { type NoteEntry, type NoteStoreSpec, loadNotes, saveNotes, rememberIn, forgetIn } from "./note-store.js";
+// The soul's look-budget is deliberately the SAME number the image prompt will accept for a
+// character, so the soul is never the tighter of the two and nothing is trimmed twice.
+import { MAX_CHARACTER_DESCRIPTOR_CHARS } from "../providers/image/bible-injection.js";
 
 /**
  * The two identity "souls" — durable notes, separate from reader-memory, that capture
@@ -195,7 +198,9 @@ const LOOK_WORDS =
  * description — better a character the model renders neutrally than one it renders from a personality
  * note. PURE.
  */
-export function visualSoulNotes(notes: readonly SoulNote[], budget = 200): string {
+export const SOUL_LOOK_BUDGET_CHARS = MAX_CHARACTER_DESCRIPTOR_CHARS;
+
+export function visualSoulNotes(notes: readonly SoulNote[], budget = SOUL_LOOK_BUDGET_CHARS): string {
   const kept: string[] = [];
   let used = 0;
   for (const n of notes) {

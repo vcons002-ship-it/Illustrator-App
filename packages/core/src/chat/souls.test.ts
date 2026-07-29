@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MAX_CHARACTER_DESCRIPTOR_CHARS } from "../providers/image/bible-injection.js";
 import { InMemoryStore } from "../storage/store.js";
 import { loadMemory } from "./reader-memory.js";
 import {
@@ -18,6 +19,7 @@ import {
   userSoulPromptBlock,
   selfPortraitPrompt,
   visualSoulNotes,
+  SOUL_LOOK_BUDGET_CHARS,
 } from "./souls.js";
 
 describe("selfPortraitPrompt", () => {
@@ -202,5 +204,26 @@ describe("visualSoulNotes", () => {
 
   it("is empty for an empty soul", () => {
     expect(visualSoulNotes([])).toBe("");
+  });
+
+  /**
+   * The budget is deliberately the same number the image prompt will accept for one character, so
+   * the soul is never the tighter of the two. It used to be 200 against a 160-character descriptor
+   * cap — two different arbitrary limits, with the smaller one silently winning downstream.
+   */
+  it("has the same budget the picture will actually accept", () => {
+    expect(SOUL_LOOK_BUDGET_CHARS).toBe(MAX_CHARACTER_DESCRIPTOR_CHARS);
+  });
+
+  it("fits a real description of a person, not a fragment", () => {
+    const notes = [
+      note("silver hair falling past the shoulders, always slightly unkempt"),
+      note("sharp grey eyes, deep-set, and a jagged scar through the left eyebrow"),
+      note("lean and rangy, stands very straight; weathered olive skin"),
+      note("wears a long charcoal coat over a high-collared shirt"),
+    ];
+    const out = visualSoulNotes(notes);
+    expect(out.length).toBeGreaterThan(200); // the old ceiling
+    expect(out).toContain("charcoal coat"); // the LAST note still makes it in
   });
 });

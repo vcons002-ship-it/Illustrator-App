@@ -30,17 +30,32 @@ export interface SceneTerm {
   kind: "character" | "creature" | "outfit" | "location";
 }
 
-/** Cap a descriptor so accumulated multi-chapter detail can't bloat the prompt. */
+/**
+ * Cap a descriptor so accumulated multi-chapter detail can't bloat the prompt.
+ *
+ * A creature, an outfit or a place is a phrase — "massive, black, scarred wings", "crimson silk
+ * gown", "cramped, blinking consoles". This bound is comfortable for those.
+ */
 const MAX_DESCRIPTOR_CHARS = 160;
+/**
+ * A PERSON gets more room. 160 characters is under two lines: "silver hair falling past the
+ * shoulders, sharp grey eyes, late forties, lean, wears a long charcoal coat" is already at the
+ * limit before you reach a scar, a build, or a skin tone — so the detail the Visual Bible spent
+ * chapters accumulating was being cut off before it reached the picture, silently.
+ *
+ * ~320 characters is roughly 80 tokens: one CLIP chunk for a single character on an SD checkpoint,
+ * and nothing at all to the natural-language encoders (Flux, Z-Image, Qwen-Image, HiDream), which
+ * read hundreds of tokens comfortably. It stays a cap rather than becoming unbounded, because a
+ * scene with a full cast injects one of these PER PERSON.
+ */
+export const MAX_CHARACTER_DESCRIPTOR_CHARS = 320;
 
-function capDescriptor(parts: readonly string[]): string {
+function capDescriptor(parts: readonly string[], budget = MAX_DESCRIPTOR_CHARS): string {
   const joined = parts
     .map((p) => p.trim())
     .filter(Boolean)
     .join(", ");
-  return joined.length <= MAX_DESCRIPTOR_CHARS
-    ? joined
-    : `${joined.slice(0, MAX_DESCRIPTOR_CHARS).replace(/,?\s+\S*$/, "")}`;
+  return joined.length <= budget ? joined : `${joined.slice(0, budget).replace(/,?\s+\S*$/, "")}`;
 }
 
 /** Identity-only descriptor for a character (no outfit — that's a separate term). */
@@ -56,7 +71,7 @@ export function describeCharacterIdentity(c: Character): string {
   if (fields.length === 0) {
     for (const t of c.persistentTraits) if (t && t.trim()) fields.push(t.trim());
   }
-  return capDescriptor(fields.length ? fields : ["person"]);
+  return capDescriptor(fields.length ? fields : ["person"], MAX_CHARACTER_DESCRIPTOR_CHARS);
 }
 
 /** Descriptor for a creature: kind + accumulated visual description. */

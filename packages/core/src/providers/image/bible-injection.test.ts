@@ -10,6 +10,7 @@ import {
   sanitizeWorldStyle,
   worldStyleClause,
   type SceneTerm,
+  MAX_CHARACTER_DESCRIPTOR_CHARS,
 } from "./bible-injection.js";
 import { createEmptyBible } from "../../visual-bible/bible.js";
 import { emptyAppearance } from "../../types/bible.js";
@@ -594,5 +595,57 @@ describe("the reference block binds each description to its own person", () => {
       { names: ["Hollow"], descriptor: "grey shallows", kind: "location" },
     ]);
     expect(block).not.toMatch(/belongs to that person/);
+  });
+});
+
+/**
+ * How much of a character's look reaches the picture.
+ *
+ * 160 characters — the cap every descriptor shared — is under two lines: "silver hair falling past
+ * the shoulders, sharp grey eyes, late forties, lean, wears a long charcoal coat" is already at it,
+ * before any scar or skin tone. So detail the Visual Bible had spent chapters accumulating was cut
+ * off before it reached the image, with nothing to say so. People get their own, larger budget now;
+ * places and outfits are phrases and keep the tighter one.
+ */
+describe("a character's descriptor has room for a person", () => {
+  const long = character({
+    name: "Wren",
+    appearance: {
+      ...emptyAppearance(),
+      gender: "woman",
+      age: "late forties",
+      hair: "silver, falling past the shoulders, always slightly unkempt",
+      distinguishingMarks: "a jagged scar through the left eyebrow and a burn across the right hand",
+      eyes: "sharp grey, deep-set",
+      build: "lean and rangy, stands very straight",
+      skinTone: "weathered olive",
+    },
+  });
+
+  it("keeps far more than the old 160 characters", () => {
+    const d = describeCharacterIdentity(long);
+    expect(d.length).toBeGreaterThan(160);
+    expect(d).toContain("weathered olive"); // the LAST field — it used to be cut off entirely
+  });
+
+  it("is still bounded — a full cast injects one of these each", () => {
+    expect(describeCharacterIdentity(long).length).toBeLessThanOrEqual(MAX_CHARACTER_DESCRIPTOR_CHARS);
+  });
+
+  it("never ends mid-word when it does have to cut", () => {
+    const huge = character({
+      name: "Wren",
+      appearance: { ...emptyAppearance(), hair: "silver ".repeat(200) },
+    });
+    const d = describeCharacterIdentity(huge);
+    expect(d.length).toBeLessThanOrEqual(MAX_CHARACTER_DESCRIPTOR_CHARS);
+    expect(d.endsWith("silver")).toBe(true);
+  });
+
+  it("a place is still capped tighter — it's a phrase, not a person", () => {
+    const wordy = { id: "e", name: "The Keep", aliases: [], description: ["cramped ".repeat(60)], firstSeenChapter: 0 };
+    const b: VisualBible = { ...createEmptyBible("b"), environments: [wordy] };
+    const term = findBibleTermsInText("They reach The Keep.", b)[0]!;
+    expect(term.descriptor.length).toBeLessThanOrEqual(160);
   });
 });

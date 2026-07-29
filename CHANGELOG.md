@@ -154,7 +154,12 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   the story yet to work out anyone's appearance — which is why re-rendering the same picture a bit
   later came out so much better. Only the notes that actually describe a look are used now, whole
   notes rather than a sentence cut in half, and if none of them do, the character is left neutral
-  instead of being drawn from a personality note. (This also explains why the experimental
+  instead of being drawn from a personality note. There's also more room than there was: a character's
+  description used to be cut at 160 characters — under two lines, so "silver hair falling past the
+  shoulders, sharp grey eyes, late forties, lean, wears a long charcoal coat" already filled it before
+  reaching a scar or a skin tone, and the rest was dropped without a word. People now get twice that,
+  and the soul's own limit matches it exactly, so nothing is trimmed twice by two different numbers.
+  (Places and outfits keep the tighter limit — they're phrases.) (This also explains why the experimental
   per-character option seemed to make things worse: it was concentrating that same noise into each
   character's own part of the canvas.)
 
