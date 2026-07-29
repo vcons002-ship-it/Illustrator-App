@@ -147,6 +147,23 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Stories
 
+- **A story keeps its analysis, its prompts and its pictures when you reload** — sometimes a story
+  came back from a reload with none of it. Each beat you send starts the assistant reading the one
+  before it, and starting that reading cancelled whatever reading was already underway — which, in a
+  story, is the previous beat, since the model writing the prose and the model doing the reading are
+  the same one and queue behind each other. So a beat sent while the last one was still being read
+  threw that work away and started again from the oldest unread beat. Keep talking at a normal pace
+  and it never catches up: nothing gets read, so nothing is written down, and a reload finds a story
+  with no scene breakdown, no illustration prompts and no images. New beats now join the reading
+  already in progress instead of restarting it. (Re-reading the book on purpose — ↻ Redo → Story
+  analysis — still cancels and starts over, which is what it's for.)
+- **Being mentioned isn't being in the room** — a character merely *named* in a beat ("she remembered
+  Rell's cybernetic eye") was added to the scene's cast even when the assistant's own record of that
+  scene said they weren't there. Their description then went into the picture, where the image model
+  attached their features to whoever actually was in frame — and because the cast carries forward
+  through terse beats, one passing mention rode along scene after scene. Now only the scene's real
+  cast counts, plus anyone the beat says explicitly *arrives*. When the assistant hasn't recorded a
+  cast for a beat, mentions still stand in, since they're all there is to go on.
 - **A scene's cast is who's actually in it, not everyone who has ever appeared** — the tracked cast
   only ever grew. It was built by adding whoever a beat mentioned, and the mechanism meant to remove
   people was never used by anything, so a character who walked past in beat three was still being

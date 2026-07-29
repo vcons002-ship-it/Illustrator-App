@@ -26,7 +26,14 @@ export interface StoryScene {
  * simply carries forward.
  */
 export interface StoryBeatSignal {
-  /** Character names/aliases mentioned or acting in THIS beat (extraction + text scan). */
+  /**
+   * Character names/aliases whose name appears in THIS beat's text.
+   *
+   * A FALLBACK signal, not evidence of presence: prose names absent people constantly ("she thought
+   * of Kade's eye", "the message was from Rell"). It is only used when {@link castNames} has nothing
+   * to say, because being named in a sentence is the weakest possible reason to paint someone into
+   * the picture — and the cast carries forward, so one wrong add rides along for every later beat.
+   */
   mentionedNames?: string[];
   /** Characters explicitly ENTERING the scene this beat (added to present). */
   enters?: string[];
@@ -135,7 +142,8 @@ export function locationToEnvironmentId(
  *     (`castNames`); otherwise the prior cast carries forward, as before — a terse beat naming
  *     nobody must not empty the picture.
  *  2. Role-play seed: the played characters are always present (a standing cast).
- *  3. Add anyone newly mentioned or explicitly entering this beat.
+ *  3. Add anyone explicitly entering this beat — and, ONLY when the storyboard declared no cast,
+ *     anyone merely named in the text.
  *  4. Remove anyone explicitly exiting this beat.
  *  5. Location: move to this beat's location when it resolves. When the beat NAMES a place that
  *     doesn't resolve, the scene has still moved — drop the old one rather than carry it.
@@ -154,10 +162,16 @@ export function advanceStoryScene(
   const present = new Set(declared.length > 0 ? declared : prev.presentCharacterIds);
   // (2) Played characters are present by default every beat.
   for (const id of namesToCharacterIds(bible, roleplay?.playedCharacterNames ?? [])) present.add(id);
-  // (3) Newly mentioned / entering.
-  for (const id of namesToCharacterIds(bible, [...(signal.mentionedNames ?? []), ...(signal.enters ?? [])])) {
-    present.add(id);
-  }
+  // (3) Entering, always — that's an explicit statement of arrival. MENTIONS only when the
+  // storyboard declared no cast. Replacing the cast in (1) and then adding everyone the prose
+  // happens to name puts the two rules straight back in conflict: a beat where one character
+  // merely THINKS about another ("she remembered Kade's cybernetic eye") added Kade to the
+  // present set even though the storyboard's cast said he wasn't there — and since the cast
+  // carries forward through every beat that declares none, his description then rode into every
+  // later picture, where the sampler duly hung his eye on whoever WAS in frame. Being named in a
+  // sentence is not being in the room.
+  const adds = declared.length > 0 ? (signal.enters ?? []) : [...(signal.mentionedNames ?? []), ...(signal.enters ?? [])];
+  for (const id of namesToCharacterIds(bible, adds)) present.add(id);
   // (4) Exits (after adds, so an enter+exit in the same beat nets out to absent).
   for (const id of namesToCharacterIds(bible, signal.exits ?? [])) present.delete(id);
   // (5) Location. A beat that NAMES a place has moved the scene, even when that place isn't in the

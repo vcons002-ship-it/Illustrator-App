@@ -127,6 +127,20 @@ export class Engine {
   /** Aborts the in-flight chapter extraction so a pause/book-switch frees the GPU at once. */
   private bibleAbort?: AbortController;
   /**
+   * Whether an extraction loop is currently working through pending chapters.
+   *
+   * Starting a run CANCELS the one in flight — right for a book switch or a re-analysis, and wrong
+   * for a story append, which is the one case where the running loop is doing work we still want.
+   * A story appends a chapter per beat, and beats routinely arrive while the previous one is still
+   * being extracted (the writing model and the extraction model are the same local LLM, so they
+   * queue behind each other). Re-arming on every append aborted each beat's extraction mid-call and
+   * restarted from the oldest pending chapter, so with beats arriving faster than extraction the
+   * queue never drained: no storyboard, no prompts, nothing renderable, and nothing persisted — a
+   * reload found the story with none of it. `appendChapter` now checks this and lets the running
+   * loop pick the new chapter up on its next sweep instead.
+   */
+  private bibleLoopActive = false;
+  /**
    * Identity token for the active render buffer. A buffer replaced on `openBook`
    * keeps any in-flight render (≤ maxConcurrent) alive; tagging updates with the
    * epoch lets us drop late results from a stale buffer so they never leak into the
@@ -419,12 +433,61 @@ export class Engine {
     this.bibleAbort?.abort();
     const ac = new AbortController();
     this.bibleAbort = ac;
-    const bookId = this.book.id;
     // `cancelled`: a newer run/book took over → discard, never touch shared state.
     // `stop`: also stop when paused, but only when DECIDING to start the next chapter
     // (an already-completed extraction is still committed so in-flight work isn't wasted).
     const cancelled = (): boolean => this.bibleRun !== myRun;
     const stop = (): boolean => this.biblePaused || cancelled();
+    this.bibleLoopActive = true;
+    try {
+      // Sweep until nothing is pending. Re-checking matters because the book GROWS while this
+      // runs: a story appends a chapter per beat, and a chapter appended mid-sweep has to be
+      // picked up by THIS run — starting another one would abort the extraction in flight.
+      // See `bibleLoopActive` and `appendChapter`.
+      let first = true;
+      while (await this.extractPendingChapters(myRun, ac, first)) {
+        first = false; // later sweeps are a re-check, not a fresh start — don't re-announce progress
+      }
+    } finally {
+      // Release before the prompt sweep below, so a beat appended during the sweep can start a
+      // run of its own; the sweep only fills gaps and a new run re-runs it, so restarting it is
+      // safe. If a newer run has already claimed the flag, leave it alone.
+      if (!cancelled()) this.bibleLoopActive = false;
+    }
+    // Illustration prompts are produced BY extraction (folded into each chapter's call).
+    // A final sweep writes a prompt for any unit the extraction didn't emit (a count
+    // mismatch / gap) so no story unit is left un-illustratable; it skips units that
+    // already have one, so it's a cheap no-op when extraction covered everything.
+    if (!stop()) await this.buildPromptsForUnits(myRun, ac.signal);
+    // The LLM phase is over. A unit STILL without a prompt (its prompt write failed)
+    // would otherwise sit silently queued forever behind the canRender gate — surface
+    // an explicit, regenerable error instead so the failure is visible.
+    if (!stop()) this.failUnpromptedUnits();
+    // Rendering reads prompts straight from the Bible — the LLM isn't needed again
+    // until chat / re-analysis. Free its VRAM/RAM so an on-GPU local model (WebLLM,
+    // or Ollama on the same card) stops fighting the image engine for the GPU, which
+    // is what made ComfyUI re-allocate/offload memory each render. Cloud providers
+    // no-op; a later call reloads lazily. Best-effort — never block on it.
+    if (!stop()) void this.opts.llm.unload?.().catch(() => {});
+  }
+
+  /**
+   * One sweep of `buildBibleInBackground`: extract every chapter the bible hasn't processed yet,
+   * in order, persisting and releasing renders as each lands.
+   *
+   * Returns whether it extracted anything — the caller sweeps again when it did, because the book
+   * may have grown in the meantime. Returns false when nothing was pending or the run was paused
+   * or superseded, which is what ends the loop.
+   *
+   * `first` marks the run's opening sweep, which is the only one that announces where it's starting
+   * from; a re-check reports nothing of its own, so listeners see one progress sequence per run
+   * rather than a fresh 0-of-N every time the book grows.
+   */
+  private async extractPendingChapters(myRun: number, ac: AbortController, first: boolean): Promise<boolean> {
+    if (!this.book || !this.bible) return false;
+    const cancelled = (): boolean => this.bibleRun !== myRun;
+    const stop = (): boolean => this.biblePaused || cancelled();
+    const bookId = this.book.id;
     const textByChapter = chapterText(this.book); // story chapters only
     const storyIndices = [...textByChapter.keys()];
     const total = storyIndices.length;
@@ -435,12 +498,17 @@ export class Engine {
     // Progress is reported against ALL story chapters (not just pending), so a
     // fully-cached re-open shows 100% rather than 0/0.
     let done = total - pending.length;
-    this.opts.onBibleProgress?.(done, total);
-    this.opts.onBibleUpdate?.(this.bible);
+    if (first) {
+      this.opts.onBibleProgress?.(done, total);
+      this.opts.onBibleUpdate?.(this.bible);
+    }
     // A fully-cached book: nothing pending, but its pages are already renderable.
-    if (pending.length === 0) this.buffer?.refresh();
+    if (pending.length === 0) {
+      this.buffer?.refresh();
+      return false;
+    }
     for (const [chapterIndex, text] of pending) {
-      if (stop()) return; // paused, or a newer run/book took over → stop before next chapter
+      if (stop()) return false; // paused, or a newer run/book took over → stop before next chapter
       // Provider-agnostic grounding (technical books): web-search this chapter's topic and
       // inject the snippets so ANY reader — local LLM included — grounds its facts; the
       // sources are cited in the glossary below. Best-effort: any failure just skips it.
@@ -457,13 +525,13 @@ export class Engine {
           }
         }
       }
-      if (cancelled()) return;
+      if (cancelled()) return false;
       // Extraction has no timeout (a slow-but-working LLM is never cut off). On a
       // transient failure, retry ONCE; only if it still fails do we mark the
       // chapter processed (so pages aren't gated forever) and surface a note.
       let next: VisualBible | undefined;
       for (let attempt = 0; attempt < 2 && !next; attempt++) {
-        if (stop()) return;
+        if (stop()) return false;
         try {
           next = await this.opts.llm.extractEntities({
             bookId,
@@ -498,7 +566,7 @@ export class Engine {
       // mutating any shared state so we never clobber the newly-opened book's bible.
       // (Note: a mere PAUSE does NOT discard — the completed extraction is committed so
       // in-flight work isn't wasted; the loop then stops at the next iteration's `stop()`.)
-      if (cancelled()) return;
+      if (cancelled()) return false;
       if (next) {
         // `next` was derived from the bible SNAPSHOT taken before this (long) LLM call —
         // so a reference image the user uploaded mid-extraction would be clobbered here.
@@ -514,10 +582,10 @@ export class Engine {
         this.bible = markChapterProcessed(this.bible!, chapterIndex);
         this.opts.onBibleNote?.(`Chapter ${chapterIndex + 1} analysis failed — continuing.`);
       }
-      await this.store.putBible(this.bible);
-      if (cancelled()) return; // re-check after the async persist, before notifying
+      await this.store.putBible(this.bible!);
+      if (cancelled()) return false; // re-check after the async persist, before notifying
       this.opts.onBibleProgress?.(++done, total);
-      this.opts.onBibleUpdate?.(this.bible);
+      this.opts.onBibleUpdate?.(this.bible!);
       // Extraction folded this chapter's illustration prompts into the bible (keyEvents),
       // so its units are already renderable — release any that were gated on this chapter.
       // Image generation then runs purely from those stored prompts (no LLM at render).
@@ -528,21 +596,9 @@ export class Engine {
       // waiting for the rest of the book.
       if (!stop()) await this.writePromptsForUnits(this.unitIndicesForChapter(chapterIndex), myRun, ac.signal);
     }
-    // Illustration prompts are produced BY extraction (folded into each chapter's call).
-    // A final sweep writes a prompt for any unit the extraction didn't emit (a count
-    // mismatch / gap) so no story unit is left un-illustratable; it skips units that
-    // already have one, so it's a cheap no-op when extraction covered everything.
-    if (!stop()) await this.buildPromptsForUnits(myRun, ac.signal);
-    // The LLM phase is over. A unit STILL without a prompt (its prompt write failed)
-    // would otherwise sit silently queued forever behind the canRender gate — surface
-    // an explicit, regenerable error instead so the failure is visible.
-    if (!stop()) this.failUnpromptedUnits();
-    // Rendering reads prompts straight from the Bible — the LLM isn't needed again
-    // until chat / re-analysis. Free its VRAM/RAM so an on-GPU local model (WebLLM,
-    // or Ollama on the same card) stops fighting the image engine for the GPU, which
-    // is what made ComfyUI re-allocate/offload memory each render. Cloud providers
-    // no-op; a later call reloads lazily. Best-effort — never block on it.
-    if (!stop()) void this.opts.llm.unload?.().catch(() => {});
+    // Everything that was pending at the top of this sweep is done — but the book may have grown
+    // while we worked, so ask the caller to sweep again (unless we're stopping anyway).
+    return !stop();
   }
 
   /** Mark every story unit that never got a prompt as an error (visible + actionable). */
@@ -1083,10 +1139,12 @@ export class Engine {
       const page = renderBook.pages[firstNewUnit]!;
       this.buffer.seed(firstNewUnit, { requestId: `page-${firstNewUnit}`, pageId: page.id, status: "skipped" });
     }
-    // The new chapter isn't in processedChapters → automatically pending. Re-arm the bible
-    // loop exactly like rebuildPrompts/regenerateStoryboard: it cancels any in-flight prior
-    // run (run-token), then extracts ONLY the new chapter (prior ones are processed/skipped).
-    if (this.generationStarted && !this.biblePaused) {
+    // The new chapter isn't in processedChapters → automatically pending. Arm the bible loop, but
+    // ONLY when one isn't already running: unlike rebuildPrompts/regenerateStoryboard, an append
+    // has no reason to cancel the work in flight, and doing so is what stopped fast-arriving beats
+    // from ever being extracted (see `bibleLoopActive`). A running loop re-reads the book's pending
+    // chapters after each sweep, so it picks this one up by itself.
+    if (this.generationStarted && !this.biblePaused && !this.bibleLoopActive) {
       this.biblePromise = this.buildBibleInBackground();
     }
     // Jump the new beat's image ahead of the strict in-order schedule — it's what the

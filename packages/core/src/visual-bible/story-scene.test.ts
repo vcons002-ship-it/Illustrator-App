@@ -268,6 +268,39 @@ describe("the storyboard's cast decides who is in the beat", () => {
     expect(scene.presentCharacterIds).toContain("char-rell");
   });
 
+  it("someone merely NAMED in the prose isn't added to a cast the storyboard already declared", () => {
+    // The leak: a beat where one character thinks about an absent one ("she remembered Rell's
+    // cybernetic eye") reported Rell as mentioned, which put him in the present set despite the
+    // storyboard's cast saying otherwise — and his description then went into the picture.
+    const scene = advanceStoryScene(emptyStoryScene(), bible, {
+      castNames: ["Mara", "Cass"],
+      mentionedNames: ["Mara", "Cass", "Rell"],
+    });
+    expect(scene.presentCharacterIds).toEqual(["char-mara", "char-cass"]);
+  });
+
+  it("…and doesn't then ride along in every later beat", () => {
+    let scene = advanceStoryScene(emptyStoryScene(), bible, {
+      castNames: ["Mara"],
+      mentionedNames: ["Mara", "Rell"],
+    });
+    scene = advanceStoryScene(scene, bible, {}); // a terse beat: the cast carries forward
+    expect(scene.presentCharacterIds).toEqual(["char-mara"]);
+  });
+
+  it("but an explicit ENTRANCE still joins a declared cast — that's a statement of arrival", () => {
+    const scene = advanceStoryScene(emptyStoryScene(), bible, {
+      castNames: ["Mara"],
+      enters: ["Rell"],
+    });
+    expect(scene.presentCharacterIds).toEqual(["char-mara", "char-rell"]);
+  });
+
+  it("mentions still count when the storyboard declared no cast — they're all there is to go on", () => {
+    const scene = advanceStoryScene(emptyStoryScene(), bible, { mentionedNames: ["Mara", "Rell"] });
+    expect(scene.presentCharacterIds).toEqual(["char-mara", "char-rell"]);
+  });
+
   it("a name the bible doesn't know yet is ignored, not treated as 'nobody is here'", () => {
     let scene = advanceStoryScene(emptyStoryScene(), bible, { castNames: ["Mara"] });
     scene = advanceStoryScene(scene, bible, { castNames: ["Someone Unextracted"] });
