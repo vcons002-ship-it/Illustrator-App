@@ -163,7 +163,11 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   attached their features to whoever actually was in frame — and because the cast carries forward
   through terse beats, one passing mention rode along scene after scene. Now only the scene's real
   cast counts, plus anyone the beat says explicitly *arrives*. When the assistant hasn't recorded a
-  cast for a beat, mentions still stand in, since they're all there is to go on.
+  cast for a beat, mentions still stand in, since they're all there is to go on. The same now goes
+  for the two characters being played in a role-play: they were held present in every beat on the
+  grounds that chat dialogue rarely restates who's in the room, but that put them into pictures of
+  scenes they'd walked out of. They're still assumed present through a beat the assistant hasn't
+  described — just no longer in spite of one it has.
 - **A scene's cast is who's actually in it, not everyone who has ever appeared** — the tracked cast
   only ever grew. It was built by adding whoever a beat mentioned, and the mechanism meant to remove
   people was never used by anything, so a character who walked past in beat three was still being

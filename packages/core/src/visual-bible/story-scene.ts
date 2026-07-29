@@ -56,9 +56,13 @@ export interface StoryBeatSignal {
 }
 
 /**
- * Role-play configuration: the characters being PLAYED (the user's + the buddy's). In a
- * 2-hander both are assumed present every beat unless a beat says one leaves — chat
- * dialogue rarely re-states "X and Y are here", so the played cast is a standing seed.
+ * Role-play configuration: the characters being PLAYED (the user's + the buddy's).
+ *
+ * A standing seed for beats the storyboard hasn't described: chat dialogue rarely re-states "X and Y
+ * are here", so without it a terse 2-hander beat would resolve to nobody. It is only a seed, though
+ * — see {@link advanceStoryScene} rule 2. When the beat's own cast is known it wins, because a
+ * played character can leave the room like anyone else, and forcing them present anyway put their
+ * description into pictures they weren't in.
  */
 export interface StoryRoleplay {
   playedCharacterNames: string[];
@@ -141,7 +145,8 @@ export function locationToEnvironmentId(
  *  1. The storyboard's cast for this beat REPLACES the carried-forward one when it has it
  *     (`castNames`); otherwise the prior cast carries forward, as before — a terse beat naming
  *     nobody must not empty the picture.
- *  2. Role-play seed: the played characters are always present (a standing cast).
+ *  2. Role-play seed: the played characters are present by default — but only when the storyboard
+ *     declared no cast, since a beat that says who is in it says it about them too.
  *  3. Add anyone explicitly entering this beat — and, ONLY when the storyboard declared no cast,
  *     anyone merely named in the text.
  *  4. Remove anyone explicitly exiting this beat.
@@ -160,8 +165,13 @@ export function advanceStoryScene(
   // it has nothing to say does the prior cast carry forward.
   const declared = namesToCharacterIds(bible, signal.castNames ?? []);
   const present = new Set(declared.length > 0 ? declared : prev.presentCharacterIds);
-  // (2) Played characters are present by default every beat.
-  for (const id of namesToCharacterIds(bible, roleplay?.playedCharacterNames ?? [])) present.add(id);
+  // (2) Played characters are present by default — but only where nothing better is known. They're
+  // a standing seed for terse dialogue that never says who's in the room, not a guarantee: the two
+  // leads of a role-play walk out of scenes like anyone else, and holding them present through a
+  // beat whose cast says otherwise put their descriptions into pictures they weren't in.
+  if (declared.length === 0) {
+    for (const id of namesToCharacterIds(bible, roleplay?.playedCharacterNames ?? [])) present.add(id);
+  }
   // (3) Entering, always — that's an explicit statement of arrival. MENTIONS only when the
   // storyboard declared no cast. Replacing the cast in (1) and then adding everyone the prose
   // happens to name puts the two rules straight back in conflict: a beat where one character

@@ -260,12 +260,19 @@ describe("the storyboard's cast decides who is in the beat", () => {
     expect(scene.presentCharacterIds).toEqual(["char-mara", "char-cass"]);
   });
 
-  it("the played pair is present even when the storyboard's cast omits them", () => {
+  it("the declared cast wins over the played pair — leads leave scenes too", () => {
+    // The seed exists for terse dialogue that never says who's in the room. A beat that DOES say
+    // is saying it about the played characters as well, and holding them present regardless put
+    // their descriptions into pictures they weren't in.
     const rp = { playedCharacterNames: ["Mara", "Cass"] };
-    const scene = advanceStoryScene(emptyStoryScene(), bible, { castNames: ["Rell"] }, rp);
-    expect(scene.presentCharacterIds).toContain("char-mara");
-    expect(scene.presentCharacterIds).toContain("char-cass");
-    expect(scene.presentCharacterIds).toContain("char-rell");
+    const scene = advanceStoryScene(emptyStoryScene(), bible, { castNames: ["Mara", "Rell"] }, rp);
+    expect(scene.presentCharacterIds).toEqual(["char-mara", "char-rell"]);
+  });
+
+  it("but the played pair still seeds a beat the storyboard says nothing about", () => {
+    const rp = { playedCharacterNames: ["Mara", "Cass"] };
+    const scene = advanceStoryScene(emptyStoryScene(), bible, {}, rp); // "she nods"
+    expect(scene.presentCharacterIds).toEqual(["char-mara", "char-cass"]);
   });
 
   it("someone merely NAMED in the prose isn't added to a cast the storyboard already declared", () => {
