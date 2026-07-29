@@ -92,6 +92,12 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   message at once; an engine reporting nothing at all — no models, no encoders, no anything — hasn't
   started yet, so the app waits for it (up to about a minute) instead of blaming your install. Either
   way it no longer holds on to the empty answer, so a retry always asks again.
+- **On a narrow window, every picture is with its own scene** — in one column you only ever saw one
+  illustration, sitting under the entire book: the two-column layout puts the picture in a pane
+  beside the text, and that pane is the second column, so when the layout collapses it lands at the
+  very bottom showing whichever passage you were last on. Every other picture was simply never on the
+  page. Each unit's illustration is now drawn in the reading flow, at the end of the passage it
+  illustrates, with its description under it. Pictures not yet painted leave no gap.
 - **The book gets its own toolbar** — everything that acts on the open book (illustrating, ↻ Redo,
   characters, data, export, import) is now a separate bar of its own beneath the app's toolbar, with
   its own **▾ Book tools** caret, outlined and tinted so it's clear at a glance that everything in it

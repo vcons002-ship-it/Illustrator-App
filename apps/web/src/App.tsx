@@ -2639,6 +2639,9 @@ export function App() {
   const viewAs: BookViewCategory = book ? resolveViewAs(book) : "document";
   // --- Reading-companion chat ------------------------------------------------
   const isTechnical = isNonFiction(book?.contentMode);
+  /** Single column → each unit's picture is drawn in the reading flow instead of in the side pane
+   * (which, with one column, lands beneath the whole book). See ReaderColumn's `inlineResults`. */
+  const inlineImages = narrow && viewAs === "story" && !isTechnical;
   // Load this book's chat history; reset transient chat state on book change.
   // A buddy-initiated open seeds the history with the handed-off landing
   // conversation, then the stored history is PREPENDED when it loads (it's
@@ -8731,14 +8734,18 @@ export function App() {
             saveNamed={saveNamed}
             {...(technicalSupport ? { technical: technicalSupport } : {})}
             layoutHtml={articleLayout}
+            {...(inlineImages ? { inlineResults: results } : {})}
           />
 
           {viewAs === "story" && (
           <aside style={styles.aside}>
             <div style={styles.panel}>
               {/* The illustration window — Story view only. (A Document/Text/Data/Code view renders
-                  full-screen without it; see the document branch above.) */}
-              {!isTechnical &&
+                  full-screen without it; see the document branch above.)
+                  SKIPPED in a single column, where every unit's picture is already in the flow next
+                  to its own text (`inlineResults`) — this pane would repeat the current one at the
+                  very bottom of the book, which is what it looked like when it was the ONLY one. */}
+              {!isTechnical && !inlineImages &&
                 (panelsPerView > 1 && units ? (
                   <PanelGrid
                     panels={panelGroup(
@@ -8760,7 +8767,7 @@ export function App() {
                     fit
                   />
                 ))}
-              {!isTechnical && imageCaption && (
+              {!isTechnical && !inlineImages && imageCaption && (
                 <div style={styles.imageDescription}>
                   {displayCaption(imageCaption.text)}
                   {/* Always offered, for EVERY image. It used to appear only when hiding the
@@ -9586,6 +9593,7 @@ const ReaderColumn = memo(function ReaderColumn({
   saveNamed,
   technical,
   layoutHtml,
+  inlineResults,
 }: {
   book: BookSource;
   pageToUnit: number[] | undefined;
@@ -9613,6 +9621,9 @@ const ReaderColumn = memo(function ReaderColumn({
   technical?: TechnicalSupportData;
   /** Render web-article paragraphs in their original (sanitized) HTML layout. */
   layoutHtml?: boolean;
+  /** Single-column layouts only: each unit's rendered image, drawn inline at the end of its text.
+   * Undefined in the two-column layout, where the sticky side pane shows them instead. */
+  inlineResults?: Map<number, DisplayResult>;
 }) {
   const chaptersById = useMemo(() => new Map(book.chapters.map((c) => [c.id, c])), [book]);
   // Multi-sheet workbook: let the reader pick which tab to view/chart/download.
@@ -9773,6 +9784,8 @@ const ReaderColumn = memo(function ReaderColumn({
         const pageUnit = pageToUnit?.[i] ?? i;
         const isActiveUnit = pageUnit === unitIndex;
         const next = book.pages[i + 1];
+        // Last page of this render unit — where its illustration goes in a single column.
+        const endsUnit = next === undefined || (pageToUnit?.[i + 1] ?? i + 1) !== pageUnit;
         // "Page N" dividers between pages of the same chapter (chapter
         // boundaries are marked by the heading). Hidden in whole-chapter mode.
         const showPageDivider =
@@ -9842,6 +9855,15 @@ const ReaderColumn = memo(function ReaderColumn({
                 );
               })}
             </section>
+            {/* SINGLE COLUMN: the illustration belongs with the passage it illustrates. The
+                two-column layout puts it in a sticky pane beside the text, but that pane is the
+                grid's second child — so when the grid collapses to one column it lands BELOW the
+                whole book, showing only whichever unit you were last on. Every other picture was
+                simply never on the page. Rendered at the END of a unit, where its scene has just
+                been read. */}
+            {inlineResults && endsUnit && (
+              <InlineUnitImage result={inlineResults.get(pageUnit)} unitIndex={pageUnit} />
+            )}
             {showPageDivider && (
               <div style={styles.pageDivider}>
                 <span style={styles.pageDividerLabel}>Page {i + 1}</span>
@@ -9851,6 +9873,45 @@ const ReaderColumn = memo(function ReaderColumn({
         );
       })}
     </article>
+  );
+});
+
+/**
+ * One unit's finished illustration, in the reading flow (single-column layouts only).
+ *
+ * Only a READY result renders: a placeholder for every not-yet-painted unit would turn a partly
+ * illustrated book into a column of grey boxes. The caption is the prompt stored WITH the image, so
+ * it needs nothing from the app's state — which is what lets this stay a leaf component that a long
+ * book can render many of.
+ */
+const InlineUnitImage = memo(function InlineUnitImage({
+  result,
+  unitIndex,
+}: {
+  result: DisplayResult | undefined;
+  unitIndex: number;
+}) {
+  if (!result || result.status !== "ready") return null;
+  const caption = result.prompt?.trim();
+  return (
+    <figure style={styles.inlineFigure}>
+      {/* Fully revealed: you reach it by reading past the scene it depicts, so the progress-driven
+          bloom the side pane uses has nothing left to withhold. */}
+      <ImagePanel result={result} bloom={1} pageKey={`inline-${unitIndex}`} />
+      {caption && (
+        <figcaption style={styles.inlineFigureCaption}>
+          {displayCaption(caption)}
+          {displayCaption(caption) !== caption && (
+            <details style={{ marginTop: 4 }}>
+              <summary style={{ cursor: "pointer", fontSize: 11, opacity: 0.6 }}>
+                Full prompt (as sent to the model)
+              </summary>
+              <div style={{ fontSize: 11, opacity: 0.7, whiteSpace: "pre-wrap" }}>{caption}</div>
+            </details>
+          )}
+        </figcaption>
+      )}
+    </figure>
   );
 });
 
@@ -11027,6 +11088,21 @@ const styles: Record<string, React.CSSProperties> = {
     padding: "3px 10px",
     fontSize: 12,
     cursor: "pointer",
+  },
+  /** An illustration in the reading flow (single column). Full width of the column, with breathing
+   * room above and below so it reads as the scene's picture rather than an interruption. */
+  inlineFigure: {
+    margin: "18px 0 6px",
+    padding: 0,
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+  },
+  inlineFigureCaption: {
+    fontSize: 12,
+    lineHeight: 1.5,
+    opacity: 0.7,
+    fontFamily: "system-ui, sans-serif",
   },
   reader: {
     display: "grid",
