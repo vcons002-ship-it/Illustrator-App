@@ -318,3 +318,67 @@ describe("ComfyUIBackend.generateVideo VRAM residency (long-form warmBatch)", ()
     expect(urls()).not.toContain(`${BASE}/free`);
   });
 });
+
+describe("a split-file model's component lookup recovers from a not-yet-ready engine", () => {
+  /** `/object_info/<node>` shaped as ComfyUI returns it: a combo input is `[[...options], meta]`. */
+  const nodeInfo = (node: string, key: string, options: string[]) =>
+    res({ [node]: { input: { required: { [key]: [options, {}] } } } });
+
+  it("waits for an engine that reports nothing at all, then renders", async () => {
+    // "No encoders AND no VAEs" isn't a state a split-file family can render from, so it means the
+    // engine hasn't finished scanning — not that the files are missing. Failing there reported two
+    // folders whose contents were on disk the whole time.
+    vi.useFakeTimers();
+    try {
+      let ready = false;
+      // A cold engine reports NOTHING anywhere — no checkpoints, no UNETs, no encoders, no VAEs.
+      // That's the signature this waits on; an engine that can name its models has scanned.
+      const { transport } = routedTransport({
+        "/object_info/CLIPLoader": () =>
+          nodeInfo("CLIPLoader", "clip_name", ready ? ["mistral_small_flux2.safetensors"] : []),
+        "/object_info/VAELoader": () =>
+          nodeInfo("VAELoader", "vae_name", ready ? ["flux2-vae.safetensors"] : []),
+        "/object_info/UNETLoader": () =>
+          nodeInfo("UNETLoader", "unet_name", ready ? ["flux2-dev.safetensors"] : []),
+        "/object_info/CheckpointLoaderSimple": () => nodeInfo("CheckpointLoaderSimple", "ckpt_name", []),
+      });
+      const backend = new ComfyUIBackend({ baseUrl: BASE, transport });
+      const attempt = backend
+        .generate({ ...INPUT, modelFamily: "flux2" as const }, "flux2-dev.safetensors")
+        .catch((e: unknown) => e);
+      // Engine finishes starting while we're waiting.
+      await vi.advanceTimersByTimeAsync(4_000);
+      ready = true;
+      await vi.advanceTimersByTimeAsync(4_000);
+      const err = await attempt;
+      // It got past the component lookup (and then failed on the unrouted /prompt submit).
+      expect(String(err)).not.toMatch(/text encoder/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-reads the file lists after a failure instead of failing all session", async () => {
+    // An EMPTY list is a successful response, so it was cached like any other — and the engine
+    // reports empty while it is still scanning its models folder. A few seconds of bad timing
+    // (the app relaunching itself to update is exactly that) turned into a whole session of
+    // "needs a text encoder" with the files sitting on disk.
+    let ready = false;
+    const { transport } = routedTransport({
+      // A NON-empty VAE list throughout: the engine is up and scanned, it's the encoder that's
+      // missing — a real configuration error, which must fail fast rather than wait.
+      "/object_info/CLIPLoader": () =>
+        nodeInfo("CLIPLoader", "clip_name", ready ? ["mistral_small_flux2.safetensors"] : []),
+      "/object_info/VAELoader": () => nodeInfo("VAELoader", "vae_name", ["flux2-vae.safetensors"]),
+      "/object_info/UNETLoader": () => nodeInfo("UNETLoader", "unet_name", ["flux2-dev.safetensors"]),
+      "/object_info/CheckpointLoaderSimple": () => nodeInfo("CheckpointLoaderSimple", "ckpt_name", []),
+    });
+    const backend = new ComfyUIBackend({ baseUrl: BASE, transport });
+    const input = { ...INPUT, modelFamily: "flux2" as const };
+
+    await expect(backend.generate(input, "flux2-dev.safetensors")).rejects.toThrow(/text encoder/i);
+    // The engine finishes starting; the very next attempt must see the files.
+    ready = true;
+    await expect(backend.generate(input, "flux2-dev.safetensors")).rejects.not.toThrow(/text encoder/i);
+  });
+});

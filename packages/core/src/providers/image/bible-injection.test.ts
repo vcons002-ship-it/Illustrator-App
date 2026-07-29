@@ -771,3 +771,62 @@ describe("the book title is a permanent statement too", () => {
     expect(out).toContain("Title: The Glass Harbour.");
   });
 });
+
+describe("a descriptor says what each part of it describes, once", () => {
+  const person = (a: Partial<ReturnType<typeof emptyAppearance>>): Character => ({
+    id: "char-x",
+    name: "X",
+    aliases: [],
+    appearance: { ...emptyAppearance(), ...a },
+    persistentTraits: [],
+    clothing: [],
+    anchor: { seed: 1 },
+    firstSeenChapter: 0,
+  });
+
+  it("says a feature ONCE, keeping the more specific wording", () => {
+    // Real case: `distinguishingMarks` and `eyes` both held the eye, so "cybernetic eye" appeared
+    // twice — doubling its weight in a prompt where two other people were competing for it, and it
+    // landed on the wrong man.
+    const sato = person({
+      gender: "male",
+      age: "older",
+      distinguishingMarks: "cybernetic eye",
+      eyes: "one cybernetic eye that whirs as it focuses",
+      skinTone: "weathered",
+    });
+    const out = describeCharacterIdentity(sato);
+    expect(out.match(/cybernetic eye/gi)).toHaveLength(1);
+    expect(out).toContain("one cybernetic eye that whirs as it focuses"); // the specific wording won
+    expect(out).toContain("older");
+  });
+
+  it("gives loose adjectives the noun they describe", () => {
+    // "male, short brown, beard" is a bag of adjectives that name nothing. The one phrase carrying
+    // its own noun is then the most bindable thing in the sentence — and it binds to whoever.
+    const out = describeCharacterIdentity(person({ gender: "male", hair: "short brown", eyes: "wide, expectant" }));
+    expect(out).toContain("short brown hair");
+    expect(out).toContain("wide, expectant eyes");
+  });
+
+  it("doesn't repeat a noun the field already carries", () => {
+    const out = describeCharacterIdentity(person({ hair: "shoulder-length black hair", eyes: "one glass eye" }));
+    expect(out).toContain("shoulder-length black hair");
+    expect(out).not.toMatch(/hair hair/i);
+    expect(out).toContain("one glass eye");
+    expect(out).not.toMatch(/eye eyes/i);
+  });
+
+  it("leaves the build phrase alone — it already reads as one", () => {
+    const out = describeCharacterIdentity(person({ build: "petite but voluptuous, ample bust" }));
+    expect(out).toBe("petite but voluptuous, ample bust");
+  });
+
+  it("puts an appositive BEFORE the possessive, not between owner and owned", () => {
+    // "Nico's (a man with a beard) wrist" describes the WRIST.
+    const terms: SceneTerm[] = [{ names: ["Nico"], descriptor: "a man with a beard", kind: "character" }];
+    expect(expandPrompt("Lyra grips Nico's wrist.", terms, "appositive")).toBe(
+      "Lyra grips Nico (a man with a beard)'s wrist.",
+    );
+  });
+});

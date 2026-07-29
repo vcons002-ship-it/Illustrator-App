@@ -82,6 +82,22 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
+- **"Needs a text encoder" when the files are right there** — the app asks the engine which model
+  files it has, and remembers the answer because installed files don't change while you work. But an
+  empty list is a perfectly successful answer, and the engine gives one while it's still starting up.
+  Remembered, that turned a few seconds of bad timing into every image failing with "needs a text
+  encoder and a VAE" while both sat on disk — and the app restarting itself to update is exactly when
+  it can come back before the engine is ready. It now tells the two situations apart: an engine that
+  can name the models it has HAS scanned, so anything else it says is the truth and you get the real
+  message at once; an engine reporting nothing at all — no models, no encoders, no anything — hasn't
+  started yet, so the app waits for it (up to about a minute) instead of blaming your install. Either
+  way it no longer holds on to the empty answer, so a retry always asks again.
+- **On a narrow window, every picture is with its own scene** — in one column you only ever saw one
+  illustration, sitting under the entire book: the two-column layout puts the picture in a pane
+  beside the text, and that pane is the second column, so when the layout collapses it lands at the
+  very bottom showing whichever passage you were last on. Every other picture was simply never on the
+  page. Each unit's illustration is now drawn in the reading flow, at the end of the passage it
+  illustrates, with its description under it. Pictures not yet painted leave no gap.
 - **The book gets its own toolbar** — everything that acts on the open book (illustrating, ↻ Redo,
   characters, data, export, import) is now a separate bar of its own beneath the app's toolbar, with
   its own **▾ Book tools** caret, outlined and tinted so it's clear at a glance that everything in it
@@ -209,6 +225,18 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   testing it has come out noticeably more consistent than the default on Flux.2. The choice applies
   to every book and every image provider, so it can't quietly behave one way on one book and another
   way on the next.
+- **A character's description says what each part of it describes, once** — two things in how those
+  descriptions were built were quietly working against keeping people apart. They were stored as bare
+  adjectives and joined into a list — "male, short brown, beard" — where nothing says *what* is short
+  and brown; meanwhile a phrase that does carry its noun, like "cybernetic eye", becomes the most
+  attachable thing in the sentence and lands on whichever face the model finds most prominent. Each
+  part now names its own subject ("short brown hair", "wide, expectant eyes") unless it already does,
+  so a beard stays a beard rather than becoming "beard hair". And a feature recorded in two fields —
+  "cybernetic eye" in one, "one cybernetic eye that whirs as it focuses" in the other — was being
+  said twice, doubling its pull; it's now said once, in the more specific wording.
+- **A name that owns something keeps its description on the right side of it** — "Nico's (a man with
+  a beard) wrist" put the description between the owner and the thing owned, where it reads as
+  describing the wrist. It's now "Nico (a man with a beard)'s wrist".
 - **The world keeps its weather; people don't carry it around** — the first pass at the rain problem
   went too far and took the atmosphere with it: a beat whose prose is all dialogue had nothing left
   to say what the light and air were like, so consecutive pictures stopped agreeing about the world
