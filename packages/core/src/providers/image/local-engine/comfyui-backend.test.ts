@@ -382,3 +382,46 @@ describe("a split-file model's component lookup recovers from a not-yet-ready en
     await expect(backend.generate(input, "flux2-dev.safetensors")).rejects.not.toThrow(/text encoder/i);
   });
 });
+
+describe("an explicit component choice is honoured or reported, never quietly replaced", () => {
+  const nodeInfo2 = (node: string, key: string, options: string[]) =>
+    res({ [node]: { input: { required: { [key]: [options, {}] } } } });
+
+  /** Two Flux.2 encoders installed: the auto-detected one and the one the reader switched TO. */
+  const twoEncoders = (extra: Record<string, () => TransportResponse> = {}) =>
+    routedTransport({
+      "/object_info/CLIPLoader": () =>
+        nodeInfo2("CLIPLoader", "clip_name", ["mistral_small_flux2.safetensors", "mistral_small_flux2_fp8.safetensors"]),
+      "/object_info/VAELoader": () => nodeInfo2("VAELoader", "vae_name", ["flux2-vae.safetensors"]),
+      "/object_info/UNETLoader": () => nodeInfo2("UNETLoader", "unet_name", ["flux2-dev.safetensors"]),
+      "/object_info/CheckpointLoaderSimple": () => nodeInfo2("CheckpointLoaderSimple", "ckpt_name", []),
+      "/prompt": () => res({ prompt_id: "p1" }),
+      ...extra,
+    });
+
+  it("uses the chosen file, not the one the family pattern would have picked", async () => {
+    const { transport, calls } = twoEncoders();
+    const backend = new ComfyUIBackend({ baseUrl: BASE, transport, pollIntervalMs: 0, idleTimeoutMs: 1 });
+    await backend
+      .generate(
+        { ...INPUT, modelFamily: "flux2" as const, textEncoder: "mistral_small_flux2_fp8.safetensors" },
+        "flux2-dev.safetensors",
+      )
+      .catch(() => undefined); // the render itself is unrouted past /prompt; only the graph matters
+    const submitted = calls.find((c) => c.url.endsWith("/prompt"));
+    expect(JSON.stringify(submitted?.body)).toContain("mistral_small_flux2_fp8.safetensors");
+  });
+
+  it("says so when the chosen file isn't there, instead of falling back to detection", async () => {
+    // The silent fallback is the dangerous one: Settings still shows the reader's choice while the
+    // render quietly uses the file they switched AWAY from.
+    const { transport } = twoEncoders();
+    const backend = new ComfyUIBackend({ baseUrl: BASE, transport, pollIntervalMs: 0, idleTimeoutMs: 1 });
+    await expect(
+      backend.generate(
+        { ...INPUT, modelFamily: "flux2" as const, textEncoder: "qwen_3_8b.safetensors" },
+        "flux2-dev.safetensors",
+      ),
+    ).rejects.toThrow(/qwen_3_8b\.safetensors.*Settings/s);
+  });
+});

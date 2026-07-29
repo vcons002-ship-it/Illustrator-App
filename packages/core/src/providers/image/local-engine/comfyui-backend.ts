@@ -812,10 +812,35 @@ export class ComfyUIBackend implements LocalEngineBackend {
     // Klein uses Qwen-3-8B (a mismatch → "shapes cannot be multiplied"). Order the patterns
     // by the diffusion model's name so the right one is auto-picked when both are installed.
     const encoderPatterns = family === "flux2" ? flux2EncoderPatterns(model) : [h.clip];
-    // A manual override (the user picked the exact file) takes precedence over the
-    // catalog's wanted name; the family pattern/hints still backstop a near miss.
-    const encoder = pickComponentAsset(clips, overrides?.textEncoder ?? wantedEncoder, encoderPatterns, []);
-    const vae = pickComponentAsset(vaes, overrides?.vae ?? wantedVae, [], h.vae);
+    // A MANUAL OVERRIDE IS NOT A HINT. When the reader has picked an exact file in Settings, it is
+    // resolved on its own — exact name, or the same file under a different quant/precision suffix —
+    // with NO pattern fallback. Letting it fall through to the family patterns meant a choice that
+    // stopped matching (a renamed file, a re-scanned engine, a variant that no longer stem-matches)
+    // silently became auto-detection again, quietly picking the encoder the reader had switched
+    // AWAY from. That is invisible from the outside: the setting still shows their choice, and the
+    // render fails downstream — or worse, succeeds wrongly. An explicit choice either resolves or
+    // says so.
+    const encoder = overrides?.textEncoder
+      ? pickComponentAsset(clips, overrides.textEncoder)
+      : pickComponentAsset(clips, wantedEncoder, encoderPatterns, []);
+    const vae = overrides?.vae
+      ? pickComponentAsset(vaes, overrides.vae)
+      : pickComponentAsset(vaes, wantedVae, [], h.vae);
+    const chosenMissing = [
+      ...(overrides?.textEncoder && !encoder
+        ? [`text encoder “${overrides.textEncoder}” (ComfyUI lists: ${listOrNone(clips)})`]
+        : []),
+      ...(overrides?.vae && !vae ? [`VAE “${overrides.vae}” (ComfyUI lists: ${listOrNone(vaes)})`] : []),
+    ];
+    if (chosenMissing.length > 0) {
+      this.forgetNodeInfo("CLIPLoader", "VAELoader");
+      throw new Error(
+        `The ${chosenMissing.join(" and the ")} you chose in Settings → Local model isn't among the ` +
+          "files the engine reports. Pick one of the listed files, or clear the choice to let the app " +
+          "detect one. (It is NOT falling back to automatic detection on its own — that would quietly " +
+          "use the file you switched away from.)",
+      );
+    }
     if (!encoder || !vae) {
       // FORGET what we read. A node's file list is cached for the session on the assumption that
       // installed files don't change mid-session — true, except that an EMPTY list is also a
@@ -1865,6 +1890,12 @@ export function resolveAssetName(available: ReadonlySet<string>, wanted: string)
  * because a truly empty install must still reach its error message. */
 const ENGINE_FILES_TIMEOUT_MS = 45_000;
 const ENGINE_FILES_POLL_MS = 3_000;
+
+/** A short, readable rendering of what the engine says it has — for an error that must let the
+ * reader pick a real filename instead of guessing again. */
+function listOrNone(names: readonly string[]): string {
+  return names.length === 0 ? "nothing" : names.slice(0, 8).join(", ") + (names.length > 8 ? ", …" : "");
+}
 
 function delay(ms: number): Promise<void> {
   return ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve();

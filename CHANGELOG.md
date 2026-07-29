@@ -82,6 +82,13 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
+- **The text encoder you picked is the one that's used** — choosing an exact encoder or VAE in
+  Settings → Local model was treated as a strong hint rather than an instruction: if the name stopped
+  matching what the engine lists, the app quietly went back to detecting one itself, which is the
+  file you switched away from. Nothing said so — Settings still showed your choice, and the failure
+  turned up later as a broken render. An explicit choice is now either used or reported, with the
+  engine's actual file list in the message so you can pick a real name. Automatic detection still
+  behaves as before when you haven't chosen.
 - **"Needs a text encoder" when the files are right there** — the app asks the engine which model
   files it has, and remembers the answer because installed files don't change while you work. But an
   empty list is a perfectly successful answer, and the engine gives one while it's still starting up.
