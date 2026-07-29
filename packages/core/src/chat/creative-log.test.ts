@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { InMemoryStore } from "../storage/store.js";
 import {
   MAX_CREATIVE_LOG,
+  creativeGapElapsed,
   MAX_THREAD_RUN,
   RECENT_TOPICS_SHOWN,
   isExploredNote,
@@ -10,6 +11,7 @@ import {
   recentTopics,
   recordExplored,
   sameThread,
+  sanitizeLastRun,
   threadRun,
 } from "./creative-log.js";
 import { MAX_MEMORY_NOTES, loadMemory, rememberNote } from "./reader-memory.js";
@@ -136,5 +138,36 @@ describe("migrating the old explored: notes out of reader memory", () => {
     expect(isExploredNote("  Explored: salt marshes")).toBe(true);
     expect(isExploredNote("has explored: salt marshes")).toBe(false);
     expect(isExploredNote("wants to explore salt marshes")).toBe(false);
+  });
+});
+
+describe("the run gap can't be poisoned by the clock", () => {
+  const NOW = 1_700_000_000_000;
+
+  it("keeps a sane stamp", () => {
+    expect(sanitizeLastRun(NOW - 60_000, NOW)).toBe(NOW - 60_000);
+  });
+
+  it("discards a stamp from the future, which would block runs forever", () => {
+    // `now - lastRun` goes negative, which is less than any gap — and the stamp is persisted, so
+    // this survives restarts. That's the feature switching itself off with nothing to show for it.
+    expect(sanitizeLastRun(NOW + 60_000, NOW)).toBe(0);
+  });
+
+  it("discards junk", () => {
+    expect(sanitizeLastRun(null, NOW)).toBe(0);
+    expect(sanitizeLastRun("not a number", NOW)).toBe(0);
+    expect(sanitizeLastRun(0, NOW)).toBe(0);
+    expect(sanitizeLastRun(-5, NOW)).toBe(0);
+  });
+
+  it("is due when never run, and not until the gap has passed", () => {
+    expect(creativeGapElapsed(0, NOW, 45 * 60_000)).toBe(true);
+    expect(creativeGapElapsed(NOW - 44 * 60_000, NOW, 45 * 60_000)).toBe(false);
+    expect(creativeGapElapsed(NOW - 45 * 60_000, NOW, 45 * 60_000)).toBe(true);
+  });
+
+  it("treats a backwards clock as elapsed, not as 'it just ran'", () => {
+    expect(creativeGapElapsed(NOW + 60 * 60_000, NOW, 45 * 60_000)).toBe(true);
   });
 });

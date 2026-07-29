@@ -82,6 +82,20 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
+- **Illustrating a book no longer switches off everything that waits for you to be idle** — pressing
+  ▶ Start illustrating set a flag that nothing ever cleared: not finishing the book, not the queue
+  emptying, only closing and reopening. That flag fed the app's "something is running" signal, which
+  is what every idle behaviour checks before it does anything — so from the moment you illustrated
+  anything, exploring on its own, scheduled actions and task steps all stopped for the rest of the
+  session. It looked exactly like the feature quietly expiring after a while. The app now asks
+  whether there is actually work left — analysis, prompts, or unfinished pictures — rather than
+  whether you ever pressed the button.
+- **A wrong clock can't switch off idle exploring for good** — the wait between runs is measured
+  against the last one, and that time is remembered across restarts. If it ever ended up ahead of the
+  current time — an internet time correction, a dual-boot machine, or just fixing a wrong date — the
+  next run was never due again, permanently, with nothing on screen to say so. A stamp in the future
+  is now discarded, and a clock that moves backwards counts as "long enough ago" rather than "just
+  ran".
 - **Update no longer closes the app without bringing it back** — the update finishes by building a
   new app and starting it, and starting it was the fragile part. The new app was launched as a child
   of the one about to shut down, sharing its console and standard handles, which on Windows is how a

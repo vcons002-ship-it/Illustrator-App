@@ -139,3 +139,33 @@ export async function migrateExploredNotes(store: VisualReaderStore): Promise<nu
   await saveMemory(store, memory.filter((n) => !isExploredNote(n.text)));
   return stale.length;
 }
+
+/**
+ * A persisted "when did the last creative run finish" stamp, sanitised. Returns 0 (meaning "never
+ * ran") for anything unusable — including a stamp in the FUTURE.
+ *
+ * The future case is the important one. Eligibility is decided by `now - lastRun >= gap`, so a
+ * stamp ahead of the clock makes that difference negative and the run is never due again. The stamp
+ * is persisted, so that state survives restarts: creative work switches itself off permanently and
+ * silently, which is indistinguishable from the feature having been temporary. Clocks do move
+ * backwards — an NTP correction, a dual-boot machine writing local time to the RTC, or someone
+ * simply fixing a wrong date — so nothing keyed to wall-clock time may assume they only go
+ * forwards. PURE.
+ */
+export function sanitizeLastRun(stamp: unknown, now: number): number {
+  const n = Number(stamp);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n > now ? 0 : n;
+}
+
+/**
+ * Has the quiet period between creative runs elapsed? Never-run (0) is always eligible, and a
+ * stamp the clock has moved behind counts as elapsed rather than blocking forever — for the same
+ * reason as {@link sanitizeLastRun}, but for a stamp already read into memory this session. PURE.
+ */
+export function creativeGapElapsed(lastRunAt: number, now: number, gapMs: number): boolean {
+  if (lastRunAt <= 0) return true;
+  const since = now - lastRunAt;
+  if (since < 0) return true; // the clock went backwards — don't treat that as "just ran"
+  return since >= gapMs;
+}
