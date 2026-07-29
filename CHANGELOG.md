@@ -82,14 +82,16 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
-- **A "needs a text encoder" error no longer sticks for the session** — the app asks the engine which
-  model files it has and remembers the answer, because installed files don't change while you work.
-  But an empty list is a perfectly successful answer, and the engine gives one while it's still
-  starting up and scanning its models folder. Remembered, that turned a few seconds of bad timing
-  into every image failing with "needs a text encoder" while the files sat on disk — and the app
-  restarting itself to update is exactly when it can come back before the engine is ready. It now
-  forgets what it read when a lookup comes up empty, so simply trying the image again picks up the
-  truth. The message also says so, instead of only offering to download files you already have.
+- **"Needs a text encoder" when the files are right there** — the app asks the engine which model
+  files it has, and remembers the answer because installed files don't change while you work. But an
+  empty list is a perfectly successful answer, and the engine gives one while it's still starting up.
+  Remembered, that turned a few seconds of bad timing into every image failing with "needs a text
+  encoder and a VAE" while both sat on disk — and the app restarting itself to update is exactly when
+  it can come back before the engine is ready. It now tells the two situations apart: an engine that
+  can name the models it has HAS scanned, so anything else it says is the truth and you get the real
+  message at once; an engine reporting nothing at all — no models, no encoders, no anything — hasn't
+  started yet, so the app waits for it (up to about a minute) instead of blaming your install. Either
+  way it no longer holds on to the empty answer, so a retry always asks again.
 - **The book gets its own toolbar** — everything that acts on the open book (illustrating, ↻ Redo,
   characters, data, export, import) is now a separate bar of its own beneath the app's toolbar, with
   its own **▾ Book tools** caret, outlined and tinted so it's clear at a glance that everything in it

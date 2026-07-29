@@ -335,6 +335,9 @@ export interface ComfyUIBackendOptions {
   /** Sustained-outage backstop: fail only after ComfyUI is UNREACHABLE for this long (it likely
    * crashed). A slow-but-working render is never failed — only the reader's cancel stops it. */
   idleTimeoutMs?: number;
+  /** How long to wait for an engine reporting no model files at all (see `awaitComponentFiles`).
+   * Injectable so tests don't spend it. */
+  engineFilesTimeoutMs?: number;
 }
 
 interface LoraObjectInfo {
@@ -483,6 +486,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
   private readonly clientId: string;
   private readonly pollIntervalMs: number;
   private readonly idleTimeoutMs: number;
+  private readonly engineFilesTimeoutMs: number;
   private lorasCache?: Promise<Set<string>>;
   private ipAdapterCache?: Promise<IpAdapterCaps | null>;
   private warnedNoIpAdapter = false;
@@ -509,6 +513,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
     this.clientId = opts.clientId ?? "visual-reader";
     this.pollIntervalMs = opts.pollIntervalMs ?? 1000;
     this.idleTimeoutMs = opts.idleTimeoutMs ?? 180000; // 3 min of ComfyUI being UNREACHABLE
+    this.engineFilesTimeoutMs = opts.engineFilesTimeoutMs ?? ENGINE_FILES_TIMEOUT_MS;
   }
 
   async listModels(): Promise<LocalModelDescriptor[]> {
@@ -595,6 +600,41 @@ export class ComfyUIBackend implements LocalEngineBackend {
     for (const n of nodes) this.nodeInfoCache.delete(n);
   }
 
+  /**
+   * Wait for an engine that reports NO FILES AT ALL — of any kind.
+   *
+   * The distinction that matters: an engine which can name the diffusion models on its disk has
+   * finished scanning, so empty encoder/VAE lists from it are the truth and must fail immediately
+   * with the real message. An engine that reports nothing anywhere — no checkpoints, no UNETs, no
+   * encoders, no VAEs — is either still starting up or not answering yet, and its "nothing" is not
+   * an answer about the reader's install at all.
+   *
+   * Telling those apart is the whole point. Waiting on the first kind would make a genuine
+   * misconfiguration take a minute to report; failing on the second produced the worst report there
+   * is — an error naming two folders whose contents were sitting on disk the whole time. That became
+   * routine when the app started relaunching itself to update: the engine goes down with the old
+   * process and the new one asks the instant it comes back.
+   *
+   * Costs one extra read on a warm engine and returns immediately.
+   */
+  private async awaitComponentFiles(signal?: AbortSignal): Promise<void> {
+    const deadline = Date.now() + this.engineFilesTimeoutMs;
+    for (;;) {
+      const [vaes, clips, unets, ckpts] = await Promise.all([
+        this.enumValues("VAELoader", "vae_name"),
+        this.enumValues("CLIPLoader", "clip_name"),
+        this.enumValues("UNETLoader", "unet_name"),
+        this.enumValues("CheckpointLoaderSimple", "ckpt_name"),
+      ]);
+      // Anything at all → the engine has scanned; whatever it says about encoders is real.
+      if (vaes.length + clips.length + unets.length + ckpts.length > 0) return;
+      if (signal?.aborted || Date.now() >= deadline) return;
+      // Cached, an empty list would be re-read forever — drop it so the retry sees the engine.
+      this.forgetNodeInfo("CLIPLoader", "DualCLIPLoader", "QuadrupleCLIPLoader", "VAELoader", "UNETLoader", "CheckpointLoaderSimple");
+      await delay(ENGINE_FILES_POLL_MS);
+    }
+  }
+
   private nodeInfo(node: string): Promise<NodeSchema | undefined> {
     const cached = this.nodeInfoCache.get(node);
     if (cached) return cached;
@@ -668,7 +708,9 @@ export class ComfyUIBackend implements LocalEngineBackend {
     model: string,
     overrides?: { textEncoder?: string; vae?: string },
     lowVram?: boolean,
+    signal?: AbortSignal,
   ): Promise<DiffusionComponents> {
+    await this.awaitComponentFiles(signal);
     const vaes = await this.enumValues("VAELoader", "vae_name");
 
     // HiDream: FOUR text encoders (clip_l + clip_g + t5xxl + llama_3.1_8b) bundled by a
@@ -1016,6 +1058,7 @@ export class ComfyUIBackend implements LocalEngineBackend {
               ...(input.vae ? { vae: input.vae } : {}),
             },
             input.lowVram,
+            input.signal,
           )
         : undefined;
 
@@ -1816,6 +1859,12 @@ export function resolveAssetName(available: ReadonlySet<string>, wanted: string)
   }
   return undefined;
 }
+
+/** How long to wait for an engine that reports no model files at all — see `awaitComponentFiles`.
+ * Generous because a cold ComfyUI scanning a large models folder is genuinely slow, and bounded
+ * because a truly empty install must still reach its error message. */
+const ENGINE_FILES_TIMEOUT_MS = 45_000;
+const ENGINE_FILES_POLL_MS = 3_000;
 
 function delay(ms: number): Promise<void> {
   return ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve();

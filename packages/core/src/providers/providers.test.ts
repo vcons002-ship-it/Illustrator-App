@@ -1518,7 +1518,13 @@ describe("ComfyUI prompt formatting by family", () => {
   });
 
   it("a catalog model with components missing names the exact files + the Download button", async () => {
-    const t = new FakeTransport(() => ({ json: {} })); // nothing installed
+    // Components missing, but the engine HAS scanned (it lists the diffusion model) — so this is a
+    // real "you haven't downloaded them" and reports at once.
+    const t = new FakeTransport((req) =>
+      req.url.endsWith("/object_info/UNETLoader")
+        ? { json: { UNETLoader: { input: { required: { unet_name: [["z_image_turbo_bf16.safetensors"]] } } } } }
+        : { json: {} },
+    );
     const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
     await expect(backend.generate(imageInput, "z_image_turbo_bf16.safetensors")).rejects.toThrow(
       /qwen_3_4b\.safetensors.*ae\.safetensors.*Download button/s,
@@ -1645,7 +1651,13 @@ describe("ComfyUI prompt formatting by family", () => {
   });
 
   it("Flux.2 with no Mistral encoder / VAE installed throws an actionable error", async () => {
-    const t = new FakeTransport(() => ({ json: {} })); // no enums available
+    // The engine is UP and has scanned (it can name the diffusion model) — the encoder and VAE are
+    // genuinely absent, so this must fail at once rather than wait for a cold engine that isn't.
+    const t = new FakeTransport((req) =>
+      req.url.endsWith("/object_info/UNETLoader")
+        ? { json: { UNETLoader: { input: { required: { unet_name: [["flux2-dev.safetensors"]] } } } } }
+        : { json: {} },
+    );
     const backend = new ComfyUIBackend({ baseUrl: "http://127.0.0.1:8188", transport: t, pollIntervalMs: 0 });
     await expect(backend.generate({ ...imageInput, modelFamily: "flux2" }, "flux2-dev.safetensors")).rejects.toThrow(
       /Flux\.2 needs/i,
