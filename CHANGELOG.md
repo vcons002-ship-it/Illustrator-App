@@ -137,6 +137,20 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### Stories
 
+- **A scene's cast is who's actually in it, not everyone who has ever appeared** — the tracked cast
+  only ever grew. It was built by adding whoever a beat mentioned, and the mechanism meant to remove
+  people was never used by anything, so a character who walked past in beat three was still being
+  drawn into beat thirty — name in the prompt, description and all. A dozen beats in, the picture was
+  mostly a cast list and the actual scene had to compete with it. The assistant already records who is
+  present in each scene when it plans the illustration; that's now what decides it, so people come and
+  go with the story. A terse beat that names nobody still carries the previous cast forward, which was
+  the point of the original design.
+- **The setting moves when the story moves** — the current place was carried forward whenever the new
+  one wasn't recognised yet, which is exactly what happens the first time you walk somewhere new: the
+  assistant hasn't finished reading the beat that introduces it. So the previous location was being
+  described into a picture of somewhere else. Naming a new place now clears the old one even before
+  it's known, rather than quietly keeping it.
+
 - **Every picture gets its own seed, instead of the whole book sharing one** — the reason a redo was
   reliably better than the first attempt. Each character carries a fixed number derived from their
   name, meant to keep them looking consistent, and that same number was being used as the random seed

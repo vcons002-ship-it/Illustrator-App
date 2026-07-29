@@ -226,3 +226,81 @@ describe("a place named after a character doesn't join the cast", () => {
     expect(beat2.presentCharacterIds).toContain("char-sato"); // still there, and would stay
   });
 });
+
+/**
+ * The carry-forward has to LET GO. Nothing ever populated `exits`, so the present set only grew:
+ * every character named in any beat stayed in the cast of every later picture, name appended to the
+ * prompt and description injected. That is most of "prompts from earlier images bleed into this one",
+ * and it's why a well-described setting stopped coming through — the scene was competing with a cast
+ * list that never stopped growing.
+ */
+describe("the storyboard's cast decides who is in the beat", () => {
+  const bible = bibleWith({
+    characters: [{ name: "Mara" }, { name: "Cass" }, { name: "Rell" }],
+    environments: [{ name: "the tavern" }, { name: "the docks" }],
+  });
+
+  it("REPLACES the carried cast rather than adding to it — people can leave", () => {
+    let scene = advanceStoryScene(emptyStoryScene(), bible, { castNames: ["Mara", "Cass"] });
+    expect(scene.presentCharacterIds).toEqual(["char-mara", "char-cass"]);
+    scene = advanceStoryScene(scene, bible, { castNames: ["Mara"] }); // Cass has gone
+    expect(scene.presentCharacterIds).toEqual(["char-mara"]);
+  });
+
+  it("a walk-on doesn't join the cast for the rest of the story", () => {
+    let scene = advanceStoryScene(emptyStoryScene(), bible, { castNames: ["Mara"] });
+    scene = advanceStoryScene(scene, bible, { castNames: ["Mara", "Rell"] }); // Rell passes through
+    scene = advanceStoryScene(scene, bible, { castNames: ["Mara"] });
+    expect(scene.presentCharacterIds).toEqual(["char-mara"]);
+  });
+
+  it("still carries the cast forward when the storyboard says nothing — a terse beat names no one", () => {
+    let scene = advanceStoryScene(emptyStoryScene(), bible, { castNames: ["Mara", "Cass"] });
+    scene = advanceStoryScene(scene, bible, {}); // "she nods"
+    expect(scene.presentCharacterIds).toEqual(["char-mara", "char-cass"]);
+  });
+
+  it("the played pair is present even when the storyboard's cast omits them", () => {
+    const rp = { playedCharacterNames: ["Mara", "Cass"] };
+    const scene = advanceStoryScene(emptyStoryScene(), bible, { castNames: ["Rell"] }, rp);
+    expect(scene.presentCharacterIds).toContain("char-mara");
+    expect(scene.presentCharacterIds).toContain("char-cass");
+    expect(scene.presentCharacterIds).toContain("char-rell");
+  });
+
+  it("a name the bible doesn't know yet is ignored, not treated as 'nobody is here'", () => {
+    let scene = advanceStoryScene(emptyStoryScene(), bible, { castNames: ["Mara"] });
+    scene = advanceStoryScene(scene, bible, { castNames: ["Someone Unextracted"] });
+    expect(scene.presentCharacterIds).toEqual(["char-mara"]); // carried, not emptied
+  });
+});
+
+describe("the setting moves with the story", () => {
+  const bible = bibleWith({
+    characters: [{ name: "Mara" }],
+    environments: [{ name: "the tavern" }],
+  });
+
+  it("carries the place through a beat that names none — the scene hasn't moved", () => {
+    let scene = advanceStoryScene(emptyStoryScene(), bible, { mentionedNames: ["Mara"], location: "the tavern" });
+    expect(scene.locationId).toBe("env-the-tavern");
+    scene = advanceStoryScene(scene, bible, { mentionedNames: ["Mara"] });
+    expect(scene.locationId).toBe("env-the-tavern");
+  });
+
+  it("LETS GO when the beat names somewhere the bible hasn't learned yet", () => {
+    // The usual state the first time a story walks somewhere new: extraction runs behind the render,
+    // so the place isn't an entity yet. Carrying the tavern here is how the last scene's setting kept
+    // being injected into a picture of somewhere else.
+    let scene = advanceStoryScene(emptyStoryScene(), bible, { mentionedNames: ["Mara"], location: "the tavern" });
+    scene = advanceStoryScene(scene, bible, { mentionedNames: ["Mara"], location: "the salt flats" });
+    expect(scene.locationId).toBeUndefined();
+  });
+
+  it("picks the new place up once the bible knows it", () => {
+    const later = bibleWith({ characters: [{ name: "Mara" }], environments: [{ name: "the tavern" }, { name: "the salt flats" }] });
+    let scene = advanceStoryScene(emptyStoryScene(), later, { mentionedNames: ["Mara"], location: "the tavern" });
+    scene = advanceStoryScene(scene, later, { mentionedNames: ["Mara"], location: "the salt flats" });
+    expect(scene.locationId).toBe("env-the-salt-flats");
+  });
+});

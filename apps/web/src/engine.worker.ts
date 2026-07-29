@@ -299,6 +299,16 @@ function bibleNamesInText(text: string, bible: VisualBible, location?: string): 
 }
 
 /**
+ * The names the storyboard says are in this beat's scene (`keyEvent.cast` — extraction is required
+ * to fill it). Deduped across the chapter's keyEvents; [] when the bible predates it or the model
+ * left it out, in which case the tracker falls back to carrying the previous cast forward.
+ */
+function castOfScene(scene: { keyEvents?: { cast?: { name: string }[] }[] } | undefined): string[] {
+  const names = (scene?.keyEvents ?? []).flatMap((e) => (e.cast ?? []).map((c) => c.name?.trim() ?? ""));
+  return [...new Set(names.filter(Boolean))];
+}
+
+/**
  * The engine's per-beat active-scene hook: advance the tracked scene from this beat's
  * extraction (named cast + location) and return the render present-set override. Only fires
  * for the open story; a no-op for ordinary books.
@@ -310,7 +320,13 @@ function storyPresentFor(chapterIndex: number, bible: VisualBible): StoryPresent
   story.scene = advanceStoryScene(
     story.scene,
     bible,
-    { mentionedNames: bibleNamesInText(text, bible, scene?.location), ...(scene?.location ? { location: scene.location } : {}) },
+    {
+      mentionedNames: bibleNamesInText(text, bible, scene?.location),
+      ...(scene?.location ? { location: scene.location } : {}),
+      // The storyboard's own cast for this beat, when extraction gave one — authoritative, so the
+      // tracked cast follows the story instead of only ever growing.
+      ...(castOfScene(scene).length ? { castNames: castOfScene(scene) } : {}),
+    },
     story.roleplay,
   );
   story.scenes[chapterIndex] = story.scene; // snapshot this beat's tracked scene (persisted below)
@@ -405,7 +421,11 @@ function rebuildStoryFromBook(book: BookSource, bible: VisualBible | undefined):
       running = advanceStoryScene(
         running,
         bible,
-        { mentionedNames: bibleNamesInText(text, bible, s?.location), ...(s?.location ? { location: s.location } : {}) },
+        {
+          mentionedNames: bibleNamesInText(text, bible, s?.location),
+          ...(s?.location ? { location: s.location } : {}),
+          ...(castOfScene(s).length ? { castNames: castOfScene(s) } : {}),
+        },
         roleplay,
       );
       // Only the location falls back: without this beat's storyboard entry the replay has no place
