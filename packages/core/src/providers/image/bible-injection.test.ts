@@ -249,6 +249,23 @@ describe("describeCharacterIdentity", () => {
     expect(out).toContain("broad-shouldered");
     expect(out).toContain("auburn hair");
   });
+
+  it("does not inject legacy momentary expressions or poses into every image", () => {
+    const c = character({
+      name: "Alex",
+      appearance: {
+        ...emptyAppearance(),
+        hair: "auburn",
+        notes: "freckled skin; a broad grin",
+      },
+      persistentTraits: ["one-eyed", "arms crossed", "smiling warmly"],
+    });
+    const out = describeCharacterIdentity(c);
+    expect(out).toContain("auburn hair");
+    expect(out).toContain("freckled skin");
+    expect(out).toContain("one-eyed");
+    expect(out).not.toMatch(/\b(?:grin|smiling|arms crossed)\b/i);
+  });
 });
 
 describe("sanitizeWorldStyle", () => {

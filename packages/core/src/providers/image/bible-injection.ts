@@ -1,4 +1,8 @@
 import type { Character, Creature, Environment, Outfit, VisualBible } from "../../types/bible.js";
+import {
+  durableCharacterDetails,
+  stripTransientCharacterDetails,
+} from "../../visual-bible/character-details.js";
 
 /**
  * Bible-term expansion for image prompts.
@@ -105,13 +109,13 @@ export function describeCharacterIdentity(c: Character): string {
       // It must remain drawable even after story analysis fills one or two structured fields.
       [a.notes, ""],
     ] as const) {
-      const named = anchorField(v, noun);
+      const named = anchorField(stripTransientCharacterDetails(v), noun);
       if (named) fields.push(named);
     }
   }
   // Older story imports seeded the "You" description here. Include it alongside structured fields
   // rather than only as an all-or-nothing fallback, so re-analysis cannot hide that stored look.
-  for (const t of c.persistentTraits) if (t && t.trim()) fields.push(t.trim());
+  for (const t of durableCharacterDetails(c.persistentTraits)) fields.push(t);
   return capBodyDescriptor(dedupeFragments(fields.length ? fields : ["person"]), MAX_CHARACTER_DESCRIPTOR_CHARS);
 }
 
