@@ -318,9 +318,15 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
     </button>
   );
 
+  // MINIMIZED means minimized. Hiding the message list alone still left three rows of chrome above
+  // the input — the session/tools header, the working-folder bar and the context-usage disclosure —
+  // so collapsing the dock reclaimed far less of the reader than it looked like it should. When the
+  // history is away, everything except a way back and somewhere to type goes with it.
+  const minimized = props.historyCollapsed === true;
+  const showTools = toolsOpen && !minimized;
   return (
     <div style={props.fill ? { ...panelStyle, width: "100%", height: "100%" } : panelStyle}>
-      <div style={headerStyle}>
+      <div style={minimized ? { ...headerStyle, paddingBottom: 0 } : headerStyle}>
         {props.sessions && props.onSwitchSession ? (
           <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <select
@@ -356,7 +362,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
             {/* Always available (not behind the ⋯ tools), because it's the way OUT of this chat —
                 hiding it is what left Delete looking like the only exit. CLOSE ≠ DELETE: this drops
                 the chat from the picker and keeps everything; 🗑 below destroys the history. */}
-            {props.onCloseSession && (
+            {props.onCloseSession && !minimized && (
               <button
                 style={smallButtonStyle}
                 title="Close this chat — its history is kept, and it reopens from the list above (or by opening its task)"
@@ -366,12 +372,12 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 ✕
               </button>
             )}
-            {toolsOpen && props.onNewSession && (
+            {showTools && props.onNewSession && (
               <button style={smallButtonStyle} title="New chat session" aria-label="New chat session" onClick={props.onNewSession}>
                 ＋
               </button>
             )}
-            {toolsOpen && props.onRenameSession && props.activeSessionId && (
+            {showTools && props.onRenameSession && props.activeSessionId && (
               <button
                 style={smallButtonStyle}
                 title="Rename this chat"
@@ -385,7 +391,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
                 ✎
               </button>
             )}
-            {toolsOpen && props.onDeleteSession && props.sessions.length > 1 && props.activeSessionId && (
+            {showTools && props.onDeleteSession && props.sessions.length > 1 && props.activeSessionId && (
               <button
                 style={smallButtonStyle}
                 title="Delete this session (its history is removed)"
@@ -408,8 +414,8 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           <strong style={{ fontSize: 14 }}>Chat</strong>
         )}
         <span style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
-          {toolsOpen && <span style={personaGroupStyle}>{planToggle}</span>}
-          {toolsOpen && props.onLoadModel && (
+          {showTools && <span style={personaGroupStyle}>{planToggle}</span>}
+          {showTools && props.onLoadModel && (
             <button
               style={smallButtonStyle}
               onClick={() => {
@@ -424,7 +430,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               {loadingModel ? "Loading…" : "⟳ Model"}
             </button>
           )}
-          {toolsOpen && props.onCompact && props.messages.length > 4 && (
+          {showTools && props.onCompact && props.messages.length > 4 && (
             <button
               style={smallButtonStyle}
               onClick={props.onCompact}
@@ -434,7 +440,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               Compact
             </button>
           )}
-          {toolsOpen && (
+          {showTools && (
             <button
               style={smallButtonStyle}
               onClick={() => setShowHelp((h) => !h)}
@@ -444,7 +450,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               ?
             </button>
           )}
-          {toolsOpen && props.messages.length > 0 && (
+          {showTools && props.messages.length > 0 && (
             <button
               style={smallButtonStyle}
               onClick={() => {
@@ -455,7 +461,9 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
               Clear
             </button>
           )}
-          {/* Small ⋯ toggle that reveals/hides the secondary controls above — saves header space. */}
+          {/* Small ⋯ toggle that reveals/hides the secondary controls above — saves header space.
+              Gone while minimized: the controls it reveals are hidden anyway, so it would do nothing. */}
+          {!minimized && (
           <button
             style={toolsOpen ? { ...smallButtonStyle, borderColor: "rgba(120,160,255,0.6)", color: "#acc4ff" } : smallButtonStyle}
             onClick={() => setToolsOpen((v) => !v)}
@@ -465,6 +473,7 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
           >
             ⋯
           </button>
+          )}
           {props.onToggleHistory && (
             <button
               style={smallButtonStyle}
@@ -478,15 +487,15 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         </span>
       </div>
 
-      {props.onSetWorkingDir && (
+      {props.onSetWorkingDir && !minimized && (
         <WorkingFolderBar
           workingDir={props.workingDir ?? ""}
           onSet={props.onSetWorkingDir}
           {...(props.onPickFolder ? { onPick: props.onPickFolder } : {})}
         />
       )}
-      {props.contextUsage && <UsageDisclosure usage={props.contextUsage} />}
-      {showHelp && (
+      {props.contextUsage && !minimized && <UsageDisclosure usage={props.contextUsage} />}
+      {showHelp && !minimized && (
         <CommandHelp
           commands={commands}
           intro="Tell me what you want in plain language — I'll use these tools when they help. You can also run any of them directly by typing the command:"
@@ -834,6 +843,20 @@ export const ChatBuddyPanel = memo(function ChatBuddyPanel(props: ChatBuddyPanel
         )}
       </div>
 
+      {/* An approval lives INSIDE the message list, which is hidden while minimized — so a run that
+          stopped to ask permission looked like a run that had simply hung, with the button to
+          unblock it off-screen. Never hide a prompt that's blocking work: say so, and offer the way
+          to it. (Cheap to render, and only appears when something is actually waiting.) */}
+      {minimized && (props.pendingTool || (props.agentApprovals?.length ?? 0) > 0) && (
+        <div style={{ ...approvalStyle, margin: "0 10px 6px", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 12 }}>⚠ Waiting for your approval.</span>
+          {props.onToggleHistory && (
+            <button style={smallButtonStyle} onClick={props.onToggleHistory}>
+              Show it
+            </button>
+          )}
+        </div>
+      )}
       {modelsOpen && props.modelMenu && (
         <ModelMenuPopover
           menuRef={modelMenuRef}
