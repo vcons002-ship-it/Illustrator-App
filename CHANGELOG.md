@@ -232,6 +232,16 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
   testing it has come out noticeably more consistent than the default on Flux.2. The choice applies
   to every book and every image provider, so it can't quietly behave one way on one book and another
   way on the next.
+- **An outfit's name no longer summons a second copy of its wearer** — the assistant records costume
+  identities as nicknames as well as outfits, so "Lyra wears her Ghost Broker outfit" was putting a
+  complete head-to-toe description of Lyra inside the clothing clause: a second whole woman in the
+  sentence, which the image model duly drew (and which crowded out whoever else was in the scene). A
+  nickname that is also one of that character's own outfit names is now understood as the clothes —
+  the outfit's own description appears there instead, which is what it was for.
+- **You can edit a character's nicknames** — they were shown as small "aka" text with no way to
+  change them, which is the worst of both: visible enough to worry about, impossible to act on. A
+  nickname is what makes a word in a prompt mean that person, so a wrong one silently puts their
+  whole description wherever it appears. Character bible → the field under each name.
 - **A character's description says what each part of it describes, once** — two things in how those
   descriptions were built were quietly working against keeping people apart. They were stored as bare
   adjectives and joined into a list — "male, short brown, beard" — where nothing says *what* is short

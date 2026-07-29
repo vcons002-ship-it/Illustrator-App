@@ -830,3 +830,50 @@ describe("a descriptor says what each part of it describes, once", () => {
     );
   });
 });
+
+describe("an outfit label is not a name for the person wearing it", () => {
+  /** Extraction recorded the costume identity BOTH as one of Lyra's outfits and as an alias. */
+  function bibleWithCostumeAlias(): VisualBible {
+    const lyra: Character = {
+      id: "char-lyra",
+      name: "Lyra",
+      aliases: ["Ghost Broker"],
+      appearance: { ...emptyAppearance(), gender: "female", hair: "long auburn" },
+      persistentTraits: [],
+      clothing: [],
+      outfits: [{ label: "Ghost Broker", description: "a long grey coat, mirrored visor", context: "working" }],
+      anchor: { seed: 1 },
+      firstSeenChapter: 0,
+    };
+    return { ...createEmptyBible("b"), characters: [lyra] };
+  }
+
+  it("finds the OUTFIT at its label, not a second copy of the character", () => {
+    // "Lyra wears her Ghost Broker outfit" was putting a complete head-to-toe description of Lyra
+    // inside the clothing clause — a second whole woman in the sentence, which the model drew.
+    const bible = bibleWithCostumeAlias();
+    const prompt = "Lyra leans on the counter. Lyra wears her Ghost Broker outfit.";
+    const terms = findBibleTermsInText(prompt, bible);
+    const ghost = terms.find((t) => t.names.includes("Ghost Broker"));
+    expect(ghost?.kind).toBe("outfit");
+    expect(ghost?.descriptor).toContain("mirrored visor");
+    // …and the character term no longer answers to it.
+    const person = terms.find((t) => t.kind === "character");
+    expect(person?.names).not.toContain("Ghost Broker");
+  });
+
+  it("injects the garments there, not the wearer", () => {
+    const bible = bibleWithCostumeAlias();
+    const prompt = "Lyra wears her Ghost Broker outfit.";
+    const out = expandPrompt(prompt, findBibleTermsInText(prompt, bible), "appositive");
+    expect(out).toContain("Ghost Broker (a long grey coat, mirrored visor)");
+    expect(out).not.toMatch(/Ghost Broker \(female/);
+  });
+
+  it("leaves an ordinary alias alone", () => {
+    const bible = bibleWithCostumeAlias();
+    bible.characters[0]!.aliases = ["Vi"];
+    const terms = findBibleTermsInText("Vi leans on the counter.", bible);
+    expect(terms.find((t) => t.kind === "character")?.names).toContain("Vi");
+  });
+});
