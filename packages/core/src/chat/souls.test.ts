@@ -134,11 +134,32 @@ describe("how many identity notes survive", () => {
     expect(shown.map((n) => n.text)).toEqual(["middle", "newest"]);
   });
 
+  it("always reserves an early physical description before filling the budget with recent notes", () => {
+    const appearance = note("silver hair, grey eyes, lean build, and a long charcoal coat", 1);
+    const recent = Array.from({ length: 20 }, (_, i) =>
+      note(`curiosity number ${i} about an abstract topic`, i + 2),
+    );
+    const { shown, omitted } = soulNotesForPrompt([appearance, ...recent], 180);
+    expect(shown).toContainEqual(appearance);
+    expect(shown.at(-1)?.text).toContain("curiosity number 19");
+    expect(omitted).toBeGreaterThan(0);
+  });
+
+  it("keeps an old appearance visible in both self and reader prompt blocks", () => {
+    const oldLook = note("auburn braid, green eyes, and a jagged scar through one eyebrow", 1);
+    const newer = Array.from({ length: 120 }, (_, i) =>
+      note(`a newer personality observation number ${i}`, i + 2),
+    );
+    const notes = [oldLook, ...newer];
+    expect(selfSoulPromptBlock(notes, "Sage")).toContain(oldLook.text);
+    expect(userSoulPromptBlock(notes, "Alex")).toContain(oldLook.text);
+  });
+
   it("says how many it left out rather than presenting a partial self as the whole", () => {
     // 120 notes of ~45 chars is ~5.4k — comfortably past the 4k budget, so some are genuinely left out.
     const many = Array.from({ length: 120 }, (_, i) => note(`a reasonably wordy identity note number ${i}`));
     const block = selfSoulPromptBlock(many, "Iris");
-    expect(block).toMatch(/\+ \d+ older notes kept, not shown here/);
+    expect(block).toMatch(/\+ \d+ other stored notes kept, not shown here/);
     expect(block).toContain("Name: Iris");
   });
 
