@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { RenderPipeline } from "./pipeline.js";
+import { RenderPipeline, nameActiveScene } from "./pipeline.js";
 import { InMemoryStore } from "../storage/store.js";
 import { createEmptyBible } from "../visual-bible/bible.js";
 import { DEFAULT_TIER_CONFIG } from "../types/tier.js";
@@ -892,5 +892,53 @@ describe("RenderPipeline reference images (IP-Adapter)", () => {
     await pipeline.renderPage(0);
     expect(lastInput().ipAdapterRefs).toHaveLength(1);
     expect(lastInput().ipAdapterRefs![0]!.weight).toBeCloseTo(0.5);
+  });
+});
+
+describe("nameActiveScene (story 'as you go')", () => {
+  const mara = { name: "Mara" };
+  const cass = { name: "Cass" };
+  const rell = { name: "Rell" };
+  const tavern = { name: "the Bell" };
+
+  it("rescues a terse beat that names nobody", () => {
+    // "She nods." carries no names, so nothing would inject and the picture would be of
+    // strangers. This is the case the clause exists for.
+    const out = nameActiveScene("She nods, slowly.", [mara, cass], [], [tavern]);
+    expect(out).toBe("She nods, slowly. Scene continuity: featuring Mara, Cass at the Bell.");
+  });
+
+  it("does NOT add the rest of the cast to a prompt that already names someone", () => {
+    // The prompt-writer read the beat and chose who is in the shot. The tracked cast is who is
+    // in the ROOM; the prompt is who is in the FRAME. Adding Rell here conjured a third person
+    // into a two-person picture.
+    const out = nameActiveScene("Mara and Cass argue by the bar.", [mara, cass, rell], [], []);
+    expect(out).toBe("Mara and Cass argue by the bar.");
+    expect(out).not.toContain("Rell");
+  });
+
+  it("still supplies the setting to a prompt that names people but no place", () => {
+    // Naming who is present says nothing about where they are.
+    const out = nameActiveScene("Mara sets down the glass.", [mara, rell], [], [tavern]);
+    expect(out).toBe("Mara sets down the glass. Scene continuity: at the Bell.");
+    expect(out).not.toContain("Rell");
+  });
+
+  it("leaves a fully-specified prompt alone", () => {
+    expect(nameActiveScene("Mara waits at the Bell.", [mara], [], [tavern])).toBe(
+      "Mara waits at the Bell.",
+    );
+  });
+
+  it("counts creatures as cast for the same test", () => {
+    const drake = { name: "Vess" };
+    // The beat names the creature, so the prompt knows its cast — Mara isn't added.
+    expect(nameActiveScene("Vess circles overhead.", [mara], [drake], [])).toBe(
+      "Vess circles overhead.",
+    );
+  });
+
+  it("has nothing to say when the scene is empty", () => {
+    expect(nameActiveScene("An empty road.", [], [], [])).toBe("An empty road.");
   });
 });

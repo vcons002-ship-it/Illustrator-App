@@ -324,16 +324,26 @@ describe("story as you go — Tier-1 methodology", () => {
       const gotSeeds = new Set((input!.anchors ?? []).map((a) => a.seed));
       expect(gotSeeds, `beat ${k} present cast = ${beat.present.join(",")}`).toEqual(expectedSeeds);
 
-      // (2) Every present character + the current location is NAMED in the prompt (so the
-      // image model is told who/where — carried forward even on terse, name-less beats).
-      for (const n of beat.present) {
-        expect(input!.prompt, `beat ${k} names ${n}`).toContain(n);
+      // (2) The prompt tells the image model who and where.
+      //
+      // A beat whose prose names NOBODY is rescued with the whole tracked cast — that's the
+      // carry-forward reaching the image, and it's the case the rescue exists for. A beat that
+      // names someone is left to speak for itself: the tracked cast is who's in the ROOM across
+      // the beat, the prompt is who's in the FRAME, and the frame wins. (Overriding it drew
+      // people into pictures they weren't in.) The location is always supplied — naming who is
+      // present says nothing about where.
+      const inPrompt = beat.present.filter((n) => input!.prompt.includes(n));
+      if (beat.mentioned.length === 0) {
+        for (const n of beat.present) {
+          expect(input!.prompt, `terse beat ${k} is rescued with ${n}`).toContain(n);
+        }
       }
+      expect(inPrompt.length, `beat ${k} names at least one of its cast`).toBeGreaterThan(0);
       expect(input!.prompt, `beat ${k} names location ${beat.expectLocation}`).toContain(beat.expectLocation);
 
-      // (3) Bible terms (descriptor injection) cover every present character + the location.
+      // (3) Bible terms (descriptor injection) cover everyone the prompt names + the location.
       const termNames = (input!.terms ?? []).flatMap((t) => t.names);
-      for (const n of beat.present) {
+      for (const n of inPrompt) {
         expect(termNames, `beat ${k} injects ${n}'s descriptor`).toContain(n);
       }
       expect(termNames, `beat ${k} injects ${beat.expectLocation}'s descriptor`).toContain(beat.expectLocation);
