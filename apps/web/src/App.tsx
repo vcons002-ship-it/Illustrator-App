@@ -1492,6 +1492,16 @@ export function App() {
   const chatRenderingRef = useRef(false);
   // Landing-page buddy (persisted under its own key; finds + opens books via tools).
   const [buddyMessages, setBuddyMessages] = useState<StoredChatMessage[]>([]);
+  /**
+   * Has the desktop's conversation reached this phone yet?
+   *
+   * A linked phone keeps no chat of its own by design — the desktop owns it and mirrors it — so an
+   * empty list on the phone is ambiguous: it means "nothing said yet" OR "not handed over yet", and
+   * the chat panel was rendering the fresh-conversation intro for both. Telling someone their chat is
+   * empty when it is merely still in transit is what "everything is lost on reload" felt like. The
+   * desktop is always synced with itself.
+   */
+  const [chatSynced, setChatSynced] = useState(!isRemoteClient);
   // The desktop keeps the FULL history (with image bytes) here; a linked phone fetches a stripped
   // card's bytes back by id from this (see the vrcmd:fetchFile handler). Ref so the handler isn't
   // re-bound on every message.
@@ -3238,6 +3248,8 @@ export function App() {
   // reaches these later-declared setters). The phone never persists/loads chat locally (those effects
   // are gated on isRemoteClient), so this mirror is its only source of chat state.
   const applyChat = useCallback((c: ChatMirror) => {
+    setChatSynced(true); // the desktop's conversation has arrived — an empty list now means empty
+
     setBuddySessions(
       c.sessions.map((s) => ({
         id: s.id,
@@ -8097,6 +8109,7 @@ export function App() {
       {...(historyCollapsed !== undefined ? { historyCollapsed } : {})}
       {...(onToggleHistory ? { onToggleHistory } : {})}
       messages={buddyPanelMessages}
+      {...(chatSynced ? {} : { awaitingSync: true })}
       {...(buddyStreaming ? { streamingText: buddyStreaming } : {})}
       {...(buddyThinking ? { thinking: buddyThinking } : {})}
       thinkingOpen={thinkingOpen}

@@ -7,6 +7,28 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The assistant
 
+- **A phone that reloads gets its conversation back** — the chat on a linked phone lives on the
+  desktop, not the phone, so after a reload the phone asks the desktop to send it over. Two things
+  stopped that arriving. The phone treated *any* message from the desktop as proof it had been heard —
+  but the desktop also pushes things unprompted, so a status tick landing first made the phone stop
+  asking with the conversation never sent. And it gave up entirely after thirty seconds, so a desktop
+  that was asleep, restarting, or simply on a laptop nobody had opened yet left the phone blank for
+  good. Now only the conversation itself counts as an answer, and the phone keeps asking — backing off
+  to about once a minute rather than giving up, so whenever the desktop appears, so does the chat.
+- **And it says it's waiting, instead of looking empty** — a phone that hadn't received the
+  conversation yet showed the same "ask me anything" greeting as a brand-new chat, which reads as
+  *your conversation is gone*. It now says it's waiting for the desktop, and that nothing has been
+  lost — the chat lives there, not on the phone.
+- **It can see the conversation you're actually having** — the assistant was forgetting things said a
+  couple of messages ago, and the cause was a budget, not a bug: the space reserved for the
+  conversation was a fixed 30% of what the model can hold, with the other 70% set aside for book text.
+  That split makes sense while you're reading a book. In the ordinary chat there IS no book, so most
+  of the room was being held back for something that didn't exist, and on a typical local model the
+  conversation was capped at about 4,400 characters — two or three exchanges. Everything before that
+  was dropped before the assistant ever saw it. The space is now measured rather than guessed: the
+  instructions take what they need and the conversation gets all the rest, which on the same model is
+  roughly **three times** as much history, and more on a larger one. Reading a book is unchanged —
+  there the book section really is most of the prompt, so the arithmetic comes out where it always did.
 - **It can read a document that doesn't fit — a contract, a manual, a whole report** — ask it to find
   every deadline in a three-hundred-page file and it now works through the entire thing section by
   section and comes back with the answers, each with the line it was found on. The document never

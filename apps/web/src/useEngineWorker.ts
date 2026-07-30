@@ -5,8 +5,11 @@ import {
   decodeFrame,
   deserializeFromRemote,
   encodeFrame,
+  HELLO_RETRY_START_MS,
   isAppSyncMessage,
   isLocalOnlyMessage,
+  isSnapshotAnswer,
+  nextHelloDelay,
   parseLinkToken,
   serializeForRemote,
   type RemoteMode,
@@ -1454,9 +1457,9 @@ export function useEngineWorker(
       // its `vrcmd:hello` into a relay with nobody behind it — it's dropped, and the phone would sit
       // on an empty chat until the reader happened to send something, which is what finally reached
       // the by-then-attached desktop and made everything appear at once.
-      let helloTimer: ReturnType<typeof setInterval> | undefined;
+      let helloTimer: ReturnType<typeof setTimeout> | undefined;
       const stopHelloRetry = (): void => {
-        if (helloTimer) clearInterval(helloTimer);
+        if (helloTimer) clearTimeout(helloTimer);
         helloTimer = undefined;
       };
       const connect = (): void => {
@@ -1472,14 +1475,22 @@ export function useEngineWorker(
           flushPhonePending(ws);
           answered = false;
           stopHelloRetry();
-          let tries = 0;
-          helloTimer = setInterval(() => {
-            if (answered || stopped || ws.readyState !== WebSocket.OPEN || ++tries > 15) {
+          // Keep asking until the snapshot actually lands. It used to stop after fifteen tries — a
+          // desktop that took longer than thirty seconds to attach (a laptop waking, a slow start)
+          // left the phone on an empty chat permanently, with nothing saying so. Backs off to a
+          // one-minute heartbeat instead of giving up: a phone whose desktop is asleep costs one
+          // frame a minute, and the moment the desktop appears the conversation does too.
+          let waited = 0;
+          const askAgain = (): void => {
+            if (answered || stopped || ws.readyState !== WebSocket.OPEN) {
               stopHelloRetry();
               return;
             }
             ws.send(encodeFrame(remote.token, { type: "vrcmd:hello" }));
-          }, 2000);
+            waited = nextHelloDelay(waited);
+            helloTimer = setTimeout(askAgain, waited);
+          };
+          helloTimer = setTimeout(askAgain, HELLO_RETRY_START_MS);
         };
         ws.onclose = () => {
           if (phoneWsRef.current === ws) phoneWsRef.current = undefined;
@@ -1501,8 +1512,14 @@ export function useEngineWorker(
           // App-sync state pushes (library/book/bible/settings) go to App; everything else is an
           // engine message streamed from the desktop's worker.
           if (isAppSyncMessage(msg)) {
-            answered = true; // the desktop is attached and talking — stop re-asking
-            stopHelloRetry();
+            // Only the SNAPSHOT counts as an answer. Any app-sync frame used to stop the retry, but
+            // the desktop pushes on its own initiative too — a live-turn tick or a library change
+            // arriving first proved it was talking, not that it had heard the hello, and the phone
+            // stopped asking with the chat it was waiting for never having been sent.
+            if (isSnapshotAnswer((msg as AppSyncMessage).type)) {
+              answered = true;
+              stopHelloRetry();
+            }
             appSyncRef.current?.(msg as AppSyncMessage);
           } else if (!isLocalOnlyMessage(msg)) handleMsg(msg as WorkerToMain);
         };
