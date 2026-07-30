@@ -153,6 +153,12 @@ function anchorField(value: string, noun: string): string {
  * Drop fragments already said by another, keeping the more specific wording in the earlier
  * position. Containment either way counts: "cybernetic eye" and "one cybernetic eye that whirs as
  * it focuses" are one feature described twice, and saying it twice is what makes it travel. PURE.
+ *
+ * Containment alone was not enough. Two chapters describing the same feature in their own words —
+ * "cybernetic eye that whirs as it focuses" and "a whirring cybernetic eye" — contain neither, so
+ * both survived and the feature arrived at DOUBLE weight in a prompt where every other face is
+ * competing for it. That is the mechanism that put Sato's eye on Nico. So a shared body part plus a
+ * shared describing word is also one feature: see {@link sameFeature}.
  */
 function dedupeFragments(parts: readonly string[]): string[] {
   const kept: string[] = [];
@@ -162,7 +168,7 @@ function dedupeFragments(parts: readonly string[]): string[] {
     const key = part.toLowerCase();
     const covers = kept.findIndex((k) => {
       const other = k.toLowerCase();
-      return other.includes(key) || key.includes(other);
+      return other.includes(key) || key.includes(other) || sameFeature(key, other);
     });
     if (covers === -1) {
       kept.push(part);
@@ -171,6 +177,39 @@ function dedupeFragments(parts: readonly string[]): string[] {
     }
   }
   return kept;
+}
+
+/** Words too common to make two fragments about the same thing. */
+const FEATURE_STOPWORDS = new Set([
+  "a", "an", "the", "and", "or", "of", "with", "that", "which", "as", "it", "its", "is", "are",
+  "her", "his", "their", "one", "two", "both", "in", "on", "to", "for", "by", "has", "have",
+]);
+
+/**
+ * Whether two fragments describe the SAME feature in different words: they name the same body part
+ * ({@link APPEARANCE_NOUNS}) and share at least one other meaningful word.
+ *
+ * Both conditions matter. The shared part alone would merge "grey eyes" with "one blind eye", which
+ * are two facts about two eyes; the shared adjective alone would merge "dark hair" with "dark skin".
+ * Together they mean the fragments agree on both what is being described and something about it —
+ * which is what a re-wording is. PURE.
+ */
+function sameFeature(a: string, b: string): boolean {
+  const partA = a.match(APPEARANCE_NOUNS)?.[0]?.toLowerCase();
+  const partB = b.match(APPEARANCE_NOUNS)?.[0]?.toLowerCase();
+  if (!partA || !partB || partA !== partB) return false;
+  const words = (t: string): Set<string> =>
+    new Set(
+      t
+        .toLowerCase()
+        .split(/[^\p{L}\p{N}]+/u)
+        .filter((w) => w.length > 2 && w !== partA && !FEATURE_STOPWORDS.has(w))
+        // "whirring" and "whirs" are the same word for this purpose; a crude stem is enough.
+        .map((w) => w.replace(/(?:ing|ed|es|s)$/u, "")),
+    );
+  const wa = words(a);
+  for (const w of words(b)) if (wa.has(w)) return true;
+  return false;
 }
 
 /** Descriptor for a creature: kind + accumulated visual description. */

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { RenderPipeline, countSceneSubjects, nameActiveScene } from "./pipeline.js";
+import { RenderPipeline, countSceneSubjects, nameActiveScene, namedInPrompt } from "./pipeline.js";
 import { InMemoryStore } from "../storage/store.js";
 import { createEmptyBible } from "../visual-bible/bible.js";
 import { DEFAULT_TIER_CONFIG } from "../types/tier.js";
@@ -1027,11 +1027,67 @@ describe("RenderPipeline subject count reaches the provider", () => {
     expect(lastPrompt()).not.toContain("two people");
   });
 
+  it("says NOTHING when the prompt's subject isn't people — the reported bad case", async () => {
+    // A close-up of a map projection on a table, with three people tracked as present in the diner.
+    // It used to open "Exactly three people in focus", a headcount fighting the composition the same
+    // prompt specified — and the models obey the count, so a macro shot grew three faces.
+    const book = oneParagraphBook();
+    book.pages[0]!.pageRange = [0, 0];
+    book.pages[0]!.paragraphs[0]!.text = "Sato and Mara lean over the table.";
+    const bible = twoHanderBible();
+    bible.storyboard = [
+      {
+        chapterIndex: 0,
+        summary: "",
+        keyMoment: "",
+        location: "",
+        locationChange: "",
+        keyEvents: [
+          {
+            pageRange: [0, 0],
+            imagePrompt: { text: "the amber map projection pulsing across a scarred metal table" },
+          },
+        ],
+      },
+    ];
+    const { provider, lastPrompt } = recordingImage();
+    const pipeline = new RenderPipeline({
+      book,
+      getBible: () => bible,
+      llm,
+      image: provider,
+      store: new InMemoryStore(),
+      tier: DEFAULT_TIER_CONFIG,
+    });
+    await pipeline.renderPage(0);
+    expect(lastPrompt()).toContain("amber map projection");
+    expect(lastPrompt()).not.toContain("in focus");
+  });
+
   it("is skipped for a comic PAGE, where the count would be read per panel", async () => {
     // 4–6 panels each showing the cast is exactly the case where "exactly two people" is wrong.
     const prompt = await renderWith({ style: "comic", drawAsComicPage: true });
     expect(prompt).toContain("comic page");
     expect(prompt).not.toContain("in focus");
+  });
+});
+
+describe("namedInPrompt (the frame, not the scene)", () => {
+  const cast = [{ name: "Lyra" }, { name: "Nico" }, { name: "Sato" }];
+
+  it("is only the people the prompt's own subject includes", () => {
+    expect(namedInPrompt("Lyra slides into the booth opposite Sato.", cast).map((c) => c.name)).toEqual([
+      "Lyra",
+      "Sato",
+    ]);
+  });
+
+  it("is empty for a prompt about a thing — which is what stops a headcount there", () => {
+    expect(namedInPrompt("the amber map projection across a scarred metal table", cast)).toEqual([]);
+  });
+
+  it("matches case-insensitively and ignores a blank name", () => {
+    expect(namedInPrompt("NICO waits.", [...cast, { name: "  " }]).map((c) => c.name)).toEqual(["Nico"]);
   });
 });
 

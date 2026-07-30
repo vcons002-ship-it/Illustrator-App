@@ -88,6 +88,52 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The app itself
 
+- **The visual bible holds what someone looks like; the scene holds what the light is doing** — this
+  was the line that had gone blurry, and everything downstream got worse for it. A character's entry
+  had collected "the iridescent purple of the broth reflects in her eyes", "her silhouette is
+  highlighted by neon light", "moves with grace", "intense hunger in her gaze" — every one of them true
+  of a single moment in a single room, and every one of them then injected into every later picture of
+  her, dragging a diner's neon into a daylight street. The bible now keeps physical characteristics
+  only: what a person looks like standing in an empty white room with no scene, no lighting and no mood
+  around them. Lighting, reflections, gaze, bearing and manner of movement are all genuinely worth
+  illustrating — they belong to the scene description, which is written fresh for each image, and
+  that's where they go now. The analysis instructions say this at length with examples, and a
+  deterministic filter enforces it whatever the model writes, so existing entries clean themselves up
+  the next time they're used. That example went from 281 characters to 66.
+- **A feature is described once, not once per chapter that mentioned it** — "cybernetic eye that whirs
+  as it focuses" and "a whirring cybernetic eye" are one eye, written down twice by two chapters. Only
+  exact repetition was being caught, so the eye reached the picture at double weight — and a feature at
+  double weight in a crowded prompt is how it ended up on the wrong character. Two descriptions that
+  name the same body part and agree on something about it are now recognised as one, with the more
+  specific wording kept. Two genuinely different facts are safe: "grey eyes" and "one blind eye" stay
+  separate, as do "dark hair" and "dark skin".
+- **The people-count no longer argues with the picture** — it was counting everyone the scene knew
+  about, so a close-up of a glowing map lying on a table opened with "exactly three people in focus"
+  because three characters were sitting in that diner. The image models obey a count, so a macro shot
+  grew three faces. The count now follows the prompt's own subject: the people it actually names. When
+  a prompt is about an object, a room, or a view — it names nobody — nothing is claimed about a
+  headcount at all.
+- **Field values read like field values** — the analysis was writing sentences into them ("She has
+  auburn hair.", "possesses a lean frame"), which is prose wrapped around the one useful phrase. The
+  wrapper comes off and "Her hair is auburn" becomes "auburn hair", which also lets duplicates be
+  spotted: two entries that share nothing as sentences share everything once unwrapped.
+- **"Chapter 7 analysis failed" now says why it failed** — the message told you something had gone
+  wrong and withheld the only part worth knowing, even though the component that failed had written a
+  perfectly good explanation: the response was cut off at its length limit, the local server ran out
+  of memory, there's no model by that name. All of it was being thrown away and logged nowhere, so the
+  one message you did see couldn't answer the only question it raises. The reason now travels with the
+  note — "Chapter 7 analysis failed — continuing. Local LLM server request failed with status 500:
+  out of memory" — which is the difference between a mystery and a fix.
+- **A retry now actually re-tries** — a chapter that fails gets one more attempt, but the two ran
+  back to back with no pause between them. On a single-GPU machine the commonest transient cause is
+  the text model being unable to load while image generation is holding the graphics memory, and that
+  takes seconds to clear — so the retry hit the same wall a millisecond later and could never help
+  with the very thing it exists for. It now waits a few seconds first, and a pause during that wait
+  stops immediately instead of sitting out the delay.
+- **Pausing no longer quietly costs you a chapter** — stopping analysis mid-chapter was treated as
+  that chapter having failed: it was marked as done, so nothing ever went back to it, and you were
+  told its analysis had failed when all you'd done was press pause. A cut-off chapter now stays in the
+  queue and is analysed when you resume, and says nothing.
 - **Descriptions stopped dragging everything about a person into the picture** — a character's entry
   accumulates across a whole book, and all of it was being handed to the image model. One reported
   prompt described a man as "male, blond hair, arctic blue; icy-blue; evil; glacial blue eyes, stocky,

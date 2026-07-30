@@ -380,12 +380,16 @@ export class RenderPipeline {
       // How many subjects to draw, stated up front (see countSceneSubjects). Skipped for a comic
       // PAGE: the count would be read per panel, and a page of 4–6 panels each showing the cast is
       // exactly the case where "exactly two people" is the wrong instruction.
-      // Count the beat's DECLARED cast when it has one — who is in the shot, not who is in the room
-      // (see castSubjects). `present` is the fallback for beats with no recorded cast.
+      // Who the SCENE PROMPT itself names, out of the people the beat knows about. That is the frame:
+      // the prompt-writer read the beat and chose the subject, which is the same principle
+      // nameActiveScene already runs on. Counting anyone else produced "Exactly three people in
+      // focus" on a close-up of a map projection lying on a table — a headcount fighting the
+      // composition, which is worse than no headcount. Measured against `basePrompt`, BEFORE the
+      // continuity rescue appends the names it just found missing.
       const declaredCast = castSubjects(keyEvent?.cast, bible);
-      const sceneBase = comicPage
-        ? wardrobed
-        : countSceneSubjects(wardrobed, declaredCast.length ? declaredCast : present, presentCreatures);
+      const framed = namedInPrompt(basePrompt, declaredCast.length ? declaredCast : present);
+      const framedCreatures = namedInPrompt(basePrompt, presentCreatures);
+      const sceneBase = comicPage ? wardrobed : countSceneSubjects(wardrobed, framed, framedCreatures);
       // Bible terms mentioned in the prompt (names → descriptors). Local backends expand them
       // family-aware; for cloud we pre-expand here (cloud providers don't know the bible).
       // The beat's location rides along so a place named after a character can't be read as that
@@ -576,6 +580,24 @@ export class RenderPipeline {
 function retrievedCaption(query: string, found: RetrievedImage): string {
   const source = found.contextLink ? `\n\nSource: ${found.title ? `${found.title} — ` : ""}${found.contextLink}` : "";
   return `Retrieved figure for “${query}”${source}`;
+}
+
+/**
+ * The subjects a prompt actually names — the FRAME, as distinct from the scene.
+ *
+ * A stored scene prompt is written by a model that had the prose in front of it and chose what the
+ * picture is of. When it names nobody, the picture is not of people: it is a close-up of an object, a
+ * view of a room, a map on a table. Asserting a headcount over that fights the composition the same
+ * prompt just specified, and the models obey the count — which is how a macro shot of a glowing table
+ * acquired three faces. So the count follows the prompt's own subject and says nothing when the
+ * prompt's subject is not people. PURE.
+ */
+export function namedInPrompt<T extends { name: string }>(prompt: string, subjects: readonly T[]): T[] {
+  const lc = prompt.toLowerCase();
+  return subjects.filter((s) => {
+    const name = s.name.trim().toLowerCase();
+    return name.length > 0 && lc.includes(name);
+  });
 }
 
 /** Order-preserving de-duplication (small id lists; a Set keeps first-seen order). */

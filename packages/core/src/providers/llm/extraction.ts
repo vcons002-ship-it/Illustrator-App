@@ -124,11 +124,31 @@ export const EXTRACTION_SYSTEM =
   "'Hawk', 'Wren', or 'Fox' is a human character, NOT an animal. For each character fill the structured 'appearance' fields " +
   "(hair, eyes, gender, build/physique, height, skinTone, age, distinguishingMarks; use " +
   "an empty string for anything the text doesn't state) and put extra persistent details " +
-  "in persistentTraits. DURABILITY RULE: appearance and persistentTraits are only facts that " +
-  "remain true across scenes. NEVER put a momentary facial expression, emotion, pose, gesture, " +
-  "or state (such as a grin, smile, frown, tears, blush, raised eyebrow, crossed arms, or clenched " +
-  "fists) there unless the text explicitly says it is a permanent or habitual defining feature. " +
-  "Keep momentary expressions and poses only in the relevant keyEvent action, mood, or composition. " +
+  "in persistentTraits. " +
+  "DURABILITY RULE — the single most important rule here. 'appearance' and 'persistentTraits' hold " +
+  "PHYSICAL CHARACTERISTICS ONLY: what this person looks like standing in an empty white room, with " +
+  "no scene, no lighting, and no mood around them. They are injected into EVERY future illustration " +
+  "of this person, so anything belonging to one moment poisons all the others. Never put any of the " +
+  "following there: " +
+  "(a) a momentary expression, emotion, pose, gesture or state — a grin, smile, frown, tears, blush, " +
+  "raised eyebrow, crossed arms, clenched fists; " +
+  "(b) GAZE, BEARING or MANNER — 'intense gaze', 'a look of quiet intensity', 'hunger in her eyes', " +
+  "'moves with grace', 'carries herself confidently'. The eyes themselves are physical ('wide, grey'); " +
+  "what the eyes are DOING is not; " +
+  "(c) LIGHTING or anything the scene does to them — 'the purple broth reflects in her eyes', 'her " +
+  "silhouette is highlighted by neon light', 'lit from below', 'catches the firelight'. A reflection " +
+  "is a fact about a room, not about a face; " +
+  "(d) personality, morality, reputation, rank or biography — 'vicious', 'cowardly', 'top cadet of " +
+  "her year', 'daughter of the disgraced colonel'. None of it can be drawn; " +
+  "(e) comparisons to other people — 'taller than most', 'as broad as her brother'. There is no other " +
+  "figure to measure against, and naming someone else here makes their features leak onto this person. " +
+  "Every one of (a)-(c) is genuinely worth illustrating — put it in the relevant keyEvent's action, " +
+  "mood, or composition, which is written fresh for each image and is exactly where it belongs. " +
+  "Write each field as a SHORT NOUN PHRASE, not a sentence: 'auburn hair, loose to the shoulders', " +
+  "never 'She has auburn hair.' or 'possesses auburn hair'. No leading pronouns, no verbs like " +
+  "has/is/possesses/displays, no full stops. " +
+  "Give ONE answer per field: if a later chapter re-describes eyes you already recorded, either omit " +
+  "the field or give the single best wording — do not offer alternatives. " +
   "Capture each DISTINCT outfit a character is described wearing as a " +
   "separate entry in 'outfits' — a short 'label' and a detailed 'description' (garments, fabric, " +
   "colour, accessories, era/style), e.g. label 'flight leathers', description 'fitted black hide " +

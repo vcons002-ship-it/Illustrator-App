@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { Engine } from "./engine.js";
+import { Engine, chapterFailureNote } from "./engine.js";
 import { MockLLMProvider } from "./providers/llm/mock-llm-provider.js";
 import { MockImageProvider } from "./providers/image/mock-image-provider.js";
 import { InMemoryStore } from "./storage/store.js";
@@ -1206,25 +1206,89 @@ describe("Engine", () => {
     expect(genSpy.mock.calls.length).toBe(callsBefore + 1);
   });
 
-  it("retries a failed chapter once, then continues with a note", async () => {
+  it("retries a failed chapter once, then continues with a note that says WHY", async () => {
     const llm = new MockLLMProvider();
     let calls = 0;
     vi.spyOn(llm, "extractEntities").mockImplementation(async () => {
       calls++;
-      throw new Error("transient");
+      throw new Error("Local LLM extraction was truncated at the response limit.");
     });
     const notes: string[] = [];
     const engine = new Engine({
       llm,
       image: new MockImageProvider(),
       onBibleNote: (m) => notes.push(m),
+      extractionRetryDelayMs: 0,
     });
     await engine.openBook(sampleBook()); // 1 story chapter
     engine.startGeneration();
     await engine.whenBibleReady();
     expect(calls).toBe(2); // initial + one retry
+    // The provider's own diagnosis reaches the reader. Without it the one message they see can't
+    // answer the only question it raises.
+    expect(notes.some((n) => n.includes("truncated at the response limit"))).toBe(true);
     expect(notes.some((n) => /failed/i.test(n))).toBe(true);
     expect(engine.getBible()!.processedChapters).toContain(0); // not gated forever
+  });
+
+  it("waits between the two attempts, and doesn't wait out a pause", async () => {
+    // The commonest transient cause on one GPU is the LLM unable to load while a render holds VRAM;
+    // back-to-back attempts hit that a millisecond apart, so the retry couldn't help with it.
+    const llm = new MockLLMProvider();
+    const at: number[] = [];
+    vi.spyOn(llm, "extractEntities").mockImplementation(async () => {
+      at.push(Date.now());
+      throw new Error("server busy");
+    });
+    const engine = new Engine({ llm, image: new MockImageProvider(), extractionRetryDelayMs: 120 });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    await engine.whenBibleReady();
+    expect(at).toHaveLength(2);
+    expect(at[1]! - at[0]!).toBeGreaterThanOrEqual(100);
+  });
+
+  it("an ABORTED chapter stays pending and is not reported as a failure", async () => {
+    // A pause cut the call. Retiring the chapter meant nobody ever analysed it, and the note
+    // blamed a failure on a stop the reader had just asked for.
+    const llm = new MockLLMProvider();
+    const notes: string[] = [];
+    vi.spyOn(llm, "extractEntities").mockImplementation(async () => {
+      const err = new Error("The operation was aborted.");
+      err.name = "AbortError";
+      throw err;
+    });
+    const engine = new Engine({
+      llm,
+      image: new MockImageProvider(),
+      onBibleNote: (m) => notes.push(m),
+      extractionRetryDelayMs: 0,
+    });
+    await engine.openBook(sampleBook());
+    engine.startGeneration();
+    await engine.whenBibleReady();
+    expect(notes.some((n) => /failed/i.test(n))).toBe(false);
+    expect(engine.getBible()!.processedChapters).not.toContain(0);
+  });
+});
+
+describe("chapterFailureNote", () => {
+  it("carries the provider's reason, one-lined", () => {
+    const note = chapterFailureNote(6, new Error("Local LLM server request failed with status 500:\n  out of memory"));
+    expect(note).toBe(
+      "Chapter 7 analysis failed — continuing. Local LLM server request failed with status 500: out of memory",
+    );
+  });
+
+  it("caps a runaway reason rather than filling the status line", () => {
+    const note = chapterFailureNote(0, new Error("x".repeat(500)));
+    expect(note.length).toBeLessThan(300);
+    expect(note.endsWith("…")).toBe(true);
+  });
+
+  it("falls back to the bare note when there is no message to carry", () => {
+    expect(chapterFailureNote(2, undefined)).toBe("Chapter 3 analysis failed — continuing.");
+    expect(chapterFailureNote(2, new Error("   "))).toBe("Chapter 3 analysis failed — continuing.");
   });
 });
 
