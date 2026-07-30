@@ -3,6 +3,7 @@ import { type NoteEntry, type NoteStoreSpec, loadNotes, saveNotes, rememberIn, f
 // The soul's look-budget is deliberately the SAME number the image prompt will accept for a
 // character, so the soul is never the tighter of the two and nothing is trimmed twice.
 import { MAX_CHARACTER_DESCRIPTOR_CHARS } from "../providers/image/bible-injection.js";
+import { repairTruncatedJson } from "../providers/llm/extraction.js";
 import { stripTransientCharacterDetailsExact } from "../visual-bible/character-details.js";
 
 /**
@@ -303,7 +304,12 @@ function essenceJsonShape(kind: SoulKind, sourceFingerprint: string): string {
 export function soulEssenceJsonSchema(
   kind: SoulKind,
   sourceFingerprint: string,
+  sourceIds: readonly string[] = [],
 ): Record<string, unknown> {
+  const sourceId = {
+    type: "string",
+    ...(sourceIds.length > 0 ? { enum: [...sourceIds] } : {}),
+  };
   const facet = {
     type: "object",
     additionalProperties: false,
@@ -311,7 +317,7 @@ export function soulEssenceJsonSchema(
       text: { type: "string" },
       sourceIds: {
         type: "array",
-        items: { type: "string" },
+        items: sourceId,
       },
     },
     required: ["text", "sourceIds"],
@@ -339,7 +345,7 @@ export function soulEssenceJsonSchema(
           additionalProperties: false,
           properties: {
             text: { type: "string" },
-            sourceIds: { type: "array", items: { type: "string" } },
+            sourceIds: { type: "array", items: sourceId },
           },
           required: ["text", "sourceIds"],
         },
@@ -478,6 +484,27 @@ function parseJsonObject(raw: string): Record<string, unknown> | undefined {
       } catch {
         // Try the next tolerant envelope.
       }
+    }
+  }
+  return undefined;
+}
+
+/** Model-only envelope parse: storage remains strict and is never silently reconstructed. */
+function parseGeneratedJsonObject(raw: string): Record<string, unknown> | undefined {
+  const parsed = parseJsonObject(raw);
+  if (parsed) return parsed;
+  const trimmed = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  // A local model can hit its response ceiling after completing the whole required shape but before
+  // writing the final brackets. Close only fully emitted values; required-facet validation below
+  // rejects a repair that stopped before the complete semantic payload arrived.
+  const repaired = repairTruncatedJson(trimmed);
+  if (repaired) {
+    try {
+      const parsed = JSON.parse(repaired) as unknown;
+      const record = objectRecord(parsed);
+      if (record) return record;
+    } catch {
+      // A cutoff inside a string/key is intentionally not guessed at.
     }
   }
   return undefined;
@@ -722,6 +749,178 @@ export function parseSoulEssence(
 }
 
 /**
+ * Parse an untrusted MODEL response.
+ *
+ * The request already owns kind/version/fingerprint, and the caller verifies that the authoritative
+ * notes did not change before saving. Making a small model copy those bookkeeping fields perfectly
+ * adds failure modes without adding trust. Generated appearance is likewise ignored completely and
+ * reconstructed source-exact by `normaliseSoulEssence`, just like personality directions. Stored
+ * essences continue to use the strict `parseSoulEssence` path above.
+ */
+export function parseGeneratedSoulEssence(
+  raw: string,
+  kind: SoulKind,
+  notes: readonly SoulNote[],
+  generatedAt?: number,
+): SoulEssence | undefined {
+  const parsed = parseGeneratedJsonObject(raw);
+  const record = generatedEssenceRecord(parsed);
+  if (!record || !hasCompleteGeneratedFacets(record)) return undefined;
+  const knownIds = new Set(soulNoteSources(notes).map((source) => source.id));
+  const rawFacets = objectRecord(record.facets);
+  const facets = rawFacets
+    ? Object.fromEntries(
+        Object.entries(rawFacets).map(([key, value]) => {
+          const facet = objectRecord(value);
+          if (!facet) return [key, value];
+          const ids = facet.sourceIds ?? facet.evidence;
+          if (!Array.isArray(ids)) return [key, value];
+          // A stray invented ID must never enter the essence, but it also need not poison a facet
+          // that carries at least one real citation. Unknown-only text still fails below.
+          return [
+            key,
+            {
+              ...facet,
+              sourceIds: ids.filter(
+                (id): id is string => typeof id === "string" && knownIds.has(id),
+              ),
+            },
+          ];
+        }),
+      )
+    : record.facets;
+  return normaliseSoulEssence(
+    {
+      ...record,
+      schemaVersion: SOUL_ESSENCE_SCHEMA_VERSION,
+      kind,
+      sourceFingerprint: soulSourceFingerprint(notes),
+      facets,
+      exactAppearance: [],
+    },
+    kind,
+    notes,
+    generatedAt,
+  );
+}
+
+/** Common wrappers emitted by local instruction models despite a top-level-object request. */
+function generatedEssenceRecord(
+  parsed: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!parsed) return undefined;
+  if (objectRecord(parsed.facets)) return parsed;
+  for (const key of ["essence", "result", "data", "output"] as const) {
+    const nested = objectRecord(parsed[key]);
+    if (nested && objectRecord(nested.facets)) return nested;
+  }
+  return parsed;
+}
+
+function hasCompleteGeneratedFacets(record: Record<string, unknown>): boolean {
+  const facets = objectRecord(record.facets);
+  return (
+    !!facets &&
+    SOUL_ESSENCE_FACETS.every((key) => !!objectRecord(facets[key]))
+  );
+}
+
+/**
+ * Explain a failed leaf response in terms a temperature-zero local model can actually correct.
+ * This stays strict about invented evidence and uncovered ordinary notes; only bookkeeping and
+ * exact-source fields are canonicalized outside the model.
+ */
+export function soulEssenceRepairFeedback(
+  raw: string,
+  kind: SoulKind,
+  notes: readonly SoulNote[],
+): string {
+  if (parseGeneratedSoulEssence(raw, kind, notes)) return "";
+  const parsed = parseGeneratedJsonObject(raw);
+  const record = generatedEssenceRecord(parsed);
+  if (!record) {
+    return "The response was not one complete JSON object with a facets object.";
+  }
+  const rawFacets = objectRecord(record.facets);
+  if (!rawFacets) {
+    return "The response did not contain a facets object.";
+  }
+
+  const sources = soulNoteSources(notes);
+  const knownIds = new Set(sources.map((source) => source.id));
+  const covered = new Set<string>();
+  for (let index = 0; index < notes.length; index++) {
+    const source = sources[index]!;
+    if (
+      isPersonalityDirectionNote(notes[index]!.text) ||
+      visualSoulFragments(notes[index]!.text).length > 0
+    ) {
+      covered.add(source.id);
+    }
+  }
+
+  const issues: string[] = [];
+  const missingFacetKeys = SOUL_ESSENCE_FACETS.filter(
+    (key) => !objectRecord(rawFacets[key]),
+  );
+  if (missingFacetKeys.length > 0) {
+    issues.push(
+      `The response is missing complete facet objects for: ${JSON.stringify(missingFacetKeys)}.`,
+    );
+  }
+  for (const key of SOUL_ESSENCE_FACETS) {
+    if (key === "personalityDirections") continue;
+    const rawFacet = rawFacets[key];
+    if (rawFacet === undefined || rawFacet === null) continue;
+    const facet = objectRecord(rawFacet);
+    if (!facet) {
+      issues.push(`facets.${key} must be an object with text and sourceIds.`);
+      continue;
+    }
+    const text =
+      typeof facet.text === "string"
+        ? facet.text.trim()
+        : typeof facet.summary === "string"
+          ? facet.summary.trim()
+          : "";
+    const rawIds = facet.sourceIds ?? facet.evidence;
+    if (!Array.isArray(rawIds)) {
+      if (text) issues.push(`facets.${key} has text but sourceIds is not an array.`);
+      continue;
+    }
+    const validIds: string[] = [];
+    const unknownIds: string[] = [];
+    for (const item of rawIds) {
+      if (typeof item === "string" && knownIds.has(item)) validIds.push(item);
+      else unknownIds.push(String(item));
+    }
+    if (unknownIds.length > 0) {
+      issues.push(
+        `facets.${key} cites unknown source IDs: ${JSON.stringify([...new Set(unknownIds)])}.`,
+      );
+    }
+    if (text && validIds.length === 0) {
+      issues.push(`facets.${key} has meaningful text but no valid source ID.`);
+    }
+    if (text) {
+      for (const id of validIds) covered.add(id);
+    }
+  }
+
+  const uncovered = sources.filter((source) => !covered.has(source.id));
+  if (uncovered.length > 0) {
+    issues.push(
+      "These authoritative source IDs were not cited by any non-empty facet: " +
+        JSON.stringify(uncovered.map((source) => source.id)) +
+        ". Find each ID in the supplied sources, integrate that source's broad meaning into an appropriate facet, and cite the exact ID.",
+    );
+  }
+  return issues.length > 0
+    ? issues.join("\n")
+    : "The response was structurally close but failed grounded facet validation. Return every facet as {text, sourceIds}, use only supplied IDs, and cite every ordinary source.";
+}
+
+/**
  * Parse a hierarchical merge while restoring its evidence links from the already-validated child
  * digests. The merge model handles meaning only; it never has to echo hundreds of opaque IDs. PURE.
  */
@@ -732,16 +931,9 @@ export function parseSoulEssenceMerge(
   digests: readonly SoulEssenceDigestInput[],
   generatedAt?: number,
 ): SoulEssence | undefined {
-  const envelope = parseJsonObject(raw);
-  const record = objectRecord(envelope?.essence) ?? envelope;
-  if (!record) return undefined;
-  if (
-    record.schemaVersion !== SOUL_ESSENCE_SCHEMA_VERSION ||
-    record.kind !== kind ||
-    record.sourceFingerprint !== soulSourceFingerprint(notes)
-  ) {
-    return undefined;
-  }
+  const envelope = parseGeneratedJsonObject(raw);
+  const record = generatedEssenceRecord(envelope);
+  if (!record || !hasCompleteGeneratedFacets(record)) return undefined;
   const rawFacets = objectRecord(record.facets);
   if (!rawFacets) return undefined;
   const rebased = rebaseSoulDigestFacets(notes, digests);
@@ -781,6 +973,50 @@ export function parseSoulEssenceMerge(
     notes,
     generatedAt,
   );
+}
+
+/** Targeted feedback for a semantic merge, whose evidence IDs are restored from child digests. */
+export function soulEssenceMergeRepairFeedback(
+  raw: string,
+  kind: SoulKind,
+  notes: readonly SoulNote[],
+  digests: readonly SoulEssenceDigestInput[],
+): string {
+  if (parseSoulEssenceMerge(raw, kind, notes, digests)) return "";
+  const record = generatedEssenceRecord(parseGeneratedJsonObject(raw));
+  const rawFacets = objectRecord(record?.facets);
+  if (!rawFacets) {
+    return "The response was not one complete JSON object with every required facet.";
+  }
+  const rebased = rebaseSoulDigestFacets(notes, digests);
+  const issues: string[] = [];
+  const missingFacetKeys = SOUL_ESSENCE_FACETS.filter(
+    (key) => !objectRecord(rawFacets[key]),
+  );
+  if (missingFacetKeys.length > 0) {
+    issues.push(
+      `The response is missing complete facet objects for: ${JSON.stringify(missingFacetKeys)}.`,
+    );
+  }
+  for (const key of SOUL_ESSENCE_FACETS) {
+    if (key === "personalityDirections") continue;
+    const rawFacet = objectRecord(rawFacets[key]);
+    const text =
+      typeof rawFacet?.text === "string"
+        ? rawFacet.text.trim()
+        : typeof rawFacet?.summary === "string"
+          ? rawFacet.summary.trim()
+          : "";
+    const childHasMeaning = rebased.some((digest) => !!digest[key].text);
+    if (childHasMeaning && !text) {
+      issues.push(`facets.${key} became empty even though a child digest contains meaning there.`);
+    } else if (text && !childHasMeaning) {
+      issues.push(`facets.${key} invented meaning even though every child digest is empty there.`);
+    }
+  }
+  return issues.length > 0
+    ? issues.join("\n")
+    : "The merge failed validation. Preserve every populated child facet in that same facet, leave genuinely empty facets empty, and return sourceIds as empty arrays.";
 }
 
 /** Load only a current, supported essence. Stale/corrupt memo values behave as absent. */

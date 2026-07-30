@@ -29,8 +29,11 @@ import {
   partitionSoulNotes,
   buildSoulEssenceDistillationPrompt,
   buildSoulEssenceMergePrompt,
+  soulEssenceJsonSchema,
   parseSoulEssence,
+  parseGeneratedSoulEssence,
   parseSoulEssenceMerge,
+  soulEssenceRepairFeedback,
   validateSoulEssence,
   loadSoulEssence,
   saveSoulEssence,
@@ -204,6 +207,93 @@ describe("Soul Essence derivation", () => {
       expect(built.user).toContain(source.id);
       expect(built.user).toContain(source.text);
     }
+  });
+
+  it("constrains generated citations to the authoritative source IDs", () => {
+    const notes = [
+      note("Patient and precise.", 1),
+      note("Values difficult honesty.", 2),
+    ];
+    const ids = soulNoteSources(notes).map((source) => source.id);
+    const schema = soulEssenceJsonSchema("self", soulSourceFingerprint(notes), ids) as {
+      properties: {
+        facets: {
+          properties: {
+            coreDisposition: {
+              properties: { sourceIds: { items: { enum: string[] } } };
+            };
+          };
+        };
+      };
+    };
+    expect(
+      schema.properties.facets.properties.coreDisposition.properties.sourceIds.items.enum,
+    ).toEqual(ids);
+  });
+
+  it("canonicalizes model-owned metadata and exact appearance while filtering stray citations", () => {
+    const notes = [
+      note("Physical description: silver hair and grey eyes.", 1),
+      note("Patiently connects ideas across difficult systems.", 2),
+    ];
+    const sources = soulNoteSources(notes);
+    const raw = payload("self", notes);
+    raw.schemaVersion = "1";
+    raw.kind = "SELF";
+    raw.sourceFingerprint = "mistyped";
+    raw.exactAppearance = [
+      { text: "grey-haired", sourceIds: [sources[0]!.id] },
+    ];
+    const facets = raw.facets as Record<string, { text: string; sourceIds: string[] }>;
+    facets.coreDisposition = {
+      text: "Patient and systems-minded.",
+      sourceIds: [sources[1]!.id, "sn_invented"],
+    };
+
+    const parsed = parseGeneratedSoulEssence(JSON.stringify(raw), "self", notes)!;
+    expect(parsed.schemaVersion).toBe(SOUL_ESSENCE_SCHEMA_VERSION);
+    expect(parsed.kind).toBe("self");
+    expect(parsed.sourceFingerprint).toBe(soulSourceFingerprint(notes));
+    expect(parsed.facets.coreDisposition.sourceIds).toEqual([sources[1]!.id]);
+    expect(parsed.exactAppearance).toEqual([
+      { text: notes[0]!.text, sourceIds: [sources[0]!.id] },
+    ]);
+  });
+
+  it("salvages a generated final-brace cutoff without making stored essence parsing tolerant", () => {
+    const notes = [note("Patient and precise.", 1)];
+    const truncated = JSON.stringify(payload("self", notes)).slice(0, -1);
+
+    expect(parseGeneratedSoulEssence(truncated, "self", notes)).toBeDefined();
+    expect(parseSoulEssence(truncated, "self", notes)).toBeUndefined();
+  });
+
+  it("rejects a safely closed cutoff when later required facets never arrived", () => {
+    const notes = [note("Patient and precise.", 1)];
+    const complete = JSON.stringify(payload("self", notes));
+    const cutoff = complete.indexOf(',"conversationalVoice"');
+    expect(cutoff).toBeGreaterThan(0);
+    const partial = complete.slice(0, cutoff);
+
+    expect(parseGeneratedSoulEssence(partial, "self", notes)).toBeUndefined();
+    expect(soulEssenceRepairFeedback(partial, "self", notes)).toContain(
+      "conversationalVoice",
+    );
+  });
+
+  it("returns exact missing-source feedback for a semantic repair", () => {
+    const notes = [
+      note("Patient and precise.", 1),
+      note("Values difficult honesty.", 2),
+    ];
+    const sources = soulNoteSources(notes);
+    const raw = payload("self", notes);
+    const facets = raw.facets as Record<string, { text: string; sourceIds: string[] }>;
+    facets.coreDisposition!.sourceIds = [sources[0]!.id];
+    const feedback = soulEssenceRepairFeedback(JSON.stringify(raw), "self", notes);
+    expect(feedback).toContain(sources[1]!.id);
+    expect(feedback).toMatch(/not cited/i);
+    expect(feedback).not.toContain(notes[1]!.text);
   });
 
   it("partitions oversized source sets without dropping or splitting a note, then merges digests", () => {

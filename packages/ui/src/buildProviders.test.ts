@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { supportsChat } from "@visual-reader/core";
 import { buildProviders } from "./buildProviders.js";
 import { DEFAULT_SETTINGS, type ReaderSettings } from "./SettingsPanel.js";
 
@@ -28,6 +29,44 @@ describe("buildProviders bundled text model (desktop)", () => {
     );
     expect(built.llm.id).toBe("local-server");
     expect(built.diagnostics.llm.mock).toBe(false);
+  });
+
+  it("marks the bundled server as llama.cpp so utility jobs receive its schema grammar", async () => {
+    let body: { response_format?: unknown } = {};
+    const fetchImpl = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body ?? "{}")) as typeof body;
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: '{"summary":"ok"}' } }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const built = buildProviders(
+      settings({
+        textProvider: "local",
+        localTextBackend: "bundled",
+        localServerTextUrl: "http://127.0.0.1:11435/v1",
+        localServerTextModel: "Llama-3.2-3B-Instruct",
+      }),
+      { fetch: fetchImpl },
+    );
+    expect(supportsChat(built.llm)).toBe(true);
+    if (!supportsChat(built.llm)) throw new Error("expected chat provider");
+    const schema = {
+      type: "object",
+      properties: { summary: { type: "string" } },
+      required: ["summary"],
+      additionalProperties: false,
+    };
+    await built.llm.chat([{ role: "user", content: "summarize" }], {
+      responseFormat: "json",
+      jsonSchema: schema,
+    });
+    expect(body.response_format).toEqual({
+      type: "json_object",
+      schema,
+    });
   });
 
   it("falls back to mock with a 'starting' note before the bundled server is up", () => {

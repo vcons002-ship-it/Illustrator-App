@@ -85,6 +85,105 @@ describe("LocalServerLLMProvider streaming merge (/v1 SSE)", () => {
     });
   });
 
+  it("sends the supplied schema grammar to the bundled llama.cpp streaming endpoint", async () => {
+    const frames = contentFrame('{"summary":"local"}') + "data: [DONE]\n\n";
+    const { fetchImpl, requests } = streamingFetch([frames]);
+    const p = new LocalServerLLMProvider({
+      baseUrl: "http://x/v1",
+      model: "m",
+      serverType: "llamacpp",
+      fetchImpl,
+    });
+    await p.chat([{ role: "user", content: "summarize" }], {
+      onToken: () => {},
+      responseFormat: "json",
+      jsonSchema: JSON_SCHEMA,
+    });
+    expect(requests[0]!.body).toMatchObject({
+      response_format: { type: "json_object", schema: JSON_SCHEMA },
+    });
+  });
+
+  it("falls back to generic JSON only after a llama.cpp request-shape rejection", async () => {
+    const requests: unknown[] = [];
+    let call = 0;
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      requests.push(JSON.parse(String(init?.body ?? "{}")));
+      call += 1;
+      if (call === 1) return new Response("unsupported schema", { status: 400 });
+      return new Response(
+        contentFrame('{"summary":"fallback"}') + "data: [DONE]\n\n",
+        { status: 200 },
+      );
+    };
+    const p = new LocalServerLLMProvider({
+      baseUrl: "http://x/v1",
+      model: "m",
+      serverType: "llamacpp",
+      fetchImpl,
+    });
+
+    await expect(
+      p.chat([{ role: "user", content: "summarize" }], {
+        onToken: () => {},
+        responseFormat: "json",
+        jsonSchema: JSON_SCHEMA,
+      }),
+    ).resolves.toBe('{"summary":"fallback"}');
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toMatchObject({
+      response_format: { type: "json_object", schema: JSON_SCHEMA },
+    });
+    expect(requests[1]).toMatchObject({
+      response_format: { type: "json_object" },
+    });
+    expect(requests[1]).not.toMatchObject({
+      response_format: { schema: expect.anything() },
+    });
+  });
+
+  it("does not retry or drop the schema after a server failure", async () => {
+    const fetchImpl = vi.fn(async () => new Response("out of memory", { status: 500 })) as
+      unknown as typeof fetch;
+    const p = new LocalServerLLMProvider({
+      baseUrl: "http://x/v1",
+      model: "m",
+      serverType: "llamacpp",
+      fetchImpl,
+    });
+
+    await expect(
+      p.chat([{ role: "user", content: "summarize" }], {
+        onToken: () => {},
+        responseFormat: "json",
+        jsonSchema: JSON_SCHEMA,
+      }),
+    ).rejects.toThrow(/status 500/);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry or drop the schema after cancellation", async () => {
+    const aborted = Object.assign(new Error("cancelled"), { name: "AbortError" });
+    const fetchImpl = vi.fn(async () => {
+      throw aborted;
+    }) as unknown as typeof fetch;
+    const p = new LocalServerLLMProvider({
+      baseUrl: "http://x/v1",
+      model: "m",
+      serverType: "llamacpp",
+      fetchImpl,
+    });
+
+    await expect(
+      p.chat([{ role: "user", content: "summarize" }], {
+        onToken: () => {},
+        responseFormat: "json",
+        jsonSchema: JSON_SCHEMA,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it("merges content deltas and tool-call argument fragments split across events and chunks", async () => {
     const frames = [
       contentFrame("On "),

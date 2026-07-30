@@ -346,6 +346,51 @@ describe("provider chat()", () => {
     });
   });
 
+  it("bundled llama.cpp buffered chat receives the supplied schema grammar", async () => {
+    const t = new FakeTransport({
+      choices: [{ message: { content: '{"summary":"local"}' } }],
+    });
+    const p = new LocalServerLLMProvider({
+      baseUrl: "http://x/v1",
+      model: "m",
+      serverType: "llamacpp",
+      transport: t,
+    });
+    await p.chat(turns, { responseFormat: "json", jsonSchema: JSON_SCHEMA });
+    expect(t.requests[0]!.body).toMatchObject({
+      response_format: { type: "json_object", schema: JSON_SCHEMA },
+    });
+  });
+
+  it("reports a buffered local max-token cutoff without hiding the partial reply", async () => {
+    const t = new FakeTransport({
+      choices: [
+        {
+          message: { content: '{"summary":"partial"' },
+          finish_reason: "length",
+        },
+      ],
+    });
+    const p = new LocalServerLLMProvider({
+      baseUrl: "http://x/v1",
+      model: "m",
+      serverType: "llamacpp",
+      transport: t,
+    });
+    let completion: { truncated: boolean } | undefined;
+
+    await expect(
+      p.chat(turns, {
+        responseFormat: "json",
+        jsonSchema: JSON_SCHEMA,
+        onComplete: (meta) => {
+          completion = meta;
+        },
+      }),
+    ).resolves.toBe('{"summary":"partial"');
+    expect(completion).toEqual({ truncated: true });
+  });
+
   it("native Ollama buffered chat uses the supplied schema as its format grammar", async () => {
     const t = new FakeTransport({ message: { content: '{"summary":"ollama"}' } });
     const p = new LocalServerLLMProvider({
@@ -451,6 +496,94 @@ describe("provider chat()", () => {
     expect(await p.chat(turns, { responseFormat: "json", jsonSchema: JSON_SCHEMA })).toBe(
       '{"summary":"web"}',
     );
+  });
+
+  it("webllm forwards completion metadata through the injected provider seam", async () => {
+    const p = new WebLLMProvider({
+      complete: async (_messages, opts) => {
+        opts.onComplete?.({ truncated: true });
+        return '{"summary":"partial"';
+      },
+    });
+    let completion: { truncated: boolean } | undefined;
+
+    await p.chat(turns, {
+      responseFormat: "json",
+      onComplete: (meta) => {
+        completion = meta;
+      },
+    });
+    expect(completion).toEqual({ truncated: true });
+  });
+
+  it("webllm reports a streamed max-token cutoff through onComplete", async () => {
+    const engine = {
+      interruptGenerate: vi.fn(),
+      chat: {
+        completions: {
+          create: async () => ({
+            async *[Symbol.asyncIterator]() {
+              yield {
+                choices: [
+                  { delta: { content: '{"partial":' }, finish_reason: null },
+                ],
+              };
+              yield {
+                choices: [{ delta: { content: "" }, finish_reason: "length" }],
+              };
+            },
+          }),
+        },
+      },
+    } as unknown as Parameters<typeof completeWithWebLlm>[0];
+    let completion: { truncated: boolean } | undefined;
+    await completeWithWebLlm(
+      engine,
+      [{ role: "user", content: "integrate my Soul" }],
+      {
+        json: true,
+        onComplete: (meta) => {
+          completion = meta;
+        },
+      },
+    );
+    expect(completion).toEqual({ truncated: true });
+  });
+
+  it("webllm reports a buffered fallback cutoff through onComplete", async () => {
+    const engine = {
+      interruptGenerate: vi.fn(),
+      chat: {
+        completions: {
+          create: async (request: { stream?: boolean }) => {
+            if (request.stream) throw new Error("streaming unsupported");
+            return {
+              choices: [
+                {
+                  message: { content: '{"summary":"partial"' },
+                  finish_reason: "length",
+                },
+              ],
+            };
+          },
+        },
+      },
+    } as unknown as Parameters<typeof completeWithWebLlm>[0];
+    let completion: { truncated: boolean } | undefined;
+
+    await expect(
+      completeWithWebLlm(
+        engine,
+        [{ role: "user", content: "integrate my Soul" }],
+        {
+          json: true,
+          onComplete: (meta) => {
+            completion = meta;
+          },
+        },
+      ),
+    ).resolves.toBe('{"summary":"partial"');
+    expect(completion).toEqual({ truncated: true });
   });
 
   it("webllm does not start a buffered retry when a streamed completion is cancelled", async () => {

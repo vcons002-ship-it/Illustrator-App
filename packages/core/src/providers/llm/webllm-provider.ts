@@ -53,6 +53,8 @@ export interface WebLLMCompletionOptions {
   jsonSchema?: Record<string, unknown>;
   onToken?: (count: number) => void;
   onText?: (delta: string) => void;
+  /** Whether WebLLM stopped because it exhausted max_tokens. */
+  onComplete?: (meta: { truncated: boolean }) => void;
   signal?: AbortSignal;
   maxTokens?: number;
 }
@@ -199,6 +201,7 @@ export async function completeWithWebLlm(
     });
     let text = "";
     let tokens = 0;
+    let truncated = false;
     const iterator = stream[Symbol.asyncIterator]();
     while (true) {
       // Starting next() first matters when Abort landed in the tiny gap after create(): WebLLM
@@ -211,6 +214,7 @@ export async function completeWithWebLlm(
       if (step.done) break;
       if (cancelled) continue;
       const chunk = step.value;
+      if (chunk.choices[0]?.finish_reason === "length") truncated = true;
       const delta = chunk.choices[0]?.delta?.content ?? "";
       if (delta) {
         text += delta;
@@ -219,6 +223,7 @@ export async function completeWithWebLlm(
       }
     }
     if (cancelled) throw webLlmAbortError();
+    opts.onComplete?.({ truncated });
     return text;
   } catch (error) {
     if (
@@ -241,6 +246,9 @@ export async function completeWithWebLlm(
     // WebLLM's buffered request does not expose an AbortSignal option. Refuse
     // to consume a result if cancellation arrived while that fallback ran.
     throwIfWebLlmAborted(opts.signal);
+    opts.onComplete?.({
+      truncated: res.choices[0]?.finish_reason === "length",
+    });
     return res.choices[0]?.message?.content ?? "";
   } finally {
     opts.signal?.removeEventListener("abort", interrupt);
@@ -325,6 +333,7 @@ export class WebLLMProvider implements LLMProvider, ChatCapable {
       ...(opts.jsonSchema ? { jsonSchema: opts.jsonSchema } : {}),
       maxTokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
       ...(opts.onToken ? { onText } : {}),
+      ...(opts.onComplete ? { onComplete: opts.onComplete } : {}),
       ...(opts.signal ? { signal: opts.signal } : {}),
     });
     return stripThink(text).trim();
