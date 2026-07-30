@@ -83,7 +83,8 @@ export function roleplayStoryTurnPrompt(
     "(default to third-person narration); do not answer in conversational first person from your " +
     `character's perspective. Then continue into the immediate consequences and the other characters' ` +
     "responses. You may deepen how the stated action unfolds, but do not give the reader's character any " +
-    "additional dialogue, decision, intention, or action they did not provide. Output only the finished prose beat."
+    "additional dialogue, decision, intention, or action they did not provide. Output only the finished prose beat. " +
+    "Never use transcript or screenplay labels such as Reader:, User:, Assistant:, or character-name labels."
   );
 }
 
@@ -190,14 +191,40 @@ export function storySoFarFromChat(
  * further. Story rendering is one image per beat, so collapsing a seven-response story into one beat
  * made analysis write one prompt and left six requested images with no render unit to attach to.
  *
- * The speaker labels and every character of message text remain in the book; only the internal
- * extraction boundaries change. A generated continuation is appended after the carried beats.
+ * Direct-mode imports retain their transcript labels. Roleplay imports instead store the assistant's
+ * already-woven narrative response as the beat: retaining the raw steer would duplicate its action,
+ * while retaining "Reader:" / "Assistant:" makes extraction mistake transport roles for characters.
+ * An unanswered final steer is kept without a label only when no generated continuation replaced it.
  */
-export function storyStartBeats(opening: string, soFar?: string): string[] {
+export function storyStartBeats(
+  opening: string,
+  soFar?: string,
+  opts: { mode?: "direct" | "roleplay" } = {},
+): string[] {
   const carried = soFar?.trim() ?? "";
-  const next = opening.trim();
-  if (carried) return [...carriedStoryBeats(carried), ...(next ? [next] : [])];
+  const next = opts.mode === "roleplay" ? naturalStoryProse(opening) : opening.trim();
+  if (carried) {
+    return [
+      ...carriedStoryBeats(carried, {
+        roleplay: opts.mode === "roleplay",
+        hasContinuation: !!next,
+      }),
+      ...(next ? [next] : []),
+    ];
+  }
   return next ? [next] : [];
+}
+
+/**
+ * Remove generic chat-role prefixes from prose before it becomes book text. This is intentionally
+ * narrow: names and ordinary colons are story content, while "Reader" / "Assistant" are transport
+ * metadata that extraction can otherwise mistake for recurring characters. PURE.
+ */
+export function naturalStoryProse(text: string): string {
+  return text
+    .trim()
+    .replace(/^(?:Reader|User|Assistant|AI Assistant|ChatGPT):[ \t]*/gim, "")
+    .trim();
 }
 
 type CarriedTurn = { role: "Reader" | "Assistant"; text: string };
@@ -238,7 +265,10 @@ function assistantSections(text: string): string[] {
   return sections.length ? sections : [text];
 }
 
-function carriedStoryBeats(transcript: string): string[] {
+function carriedStoryBeats(
+  transcript: string,
+  opts: { roleplay: boolean; hasContinuation: boolean },
+): string[] {
   const turns = carriedTurns(transcript);
   if (turns.length === 0) return [transcript]; // legacy/unlabelled payload: preserve it byte-for-byte
 
@@ -246,19 +276,38 @@ function carriedStoryBeats(transcript: string): string[] {
   let readerTurns: string[] = [];
   for (const turn of turns) {
     if (turn.role === "Reader") {
-      readerTurns.push(`Reader: ${turn.text}`);
+      readerTurns.push(turn.text);
       continue;
     }
-    const sections = assistantSections(turn.text);
+    const assistantText = opts.roleplay ? naturalStoryProse(turn.text) : turn.text;
+    const sections = assistantSections(assistantText);
     sections.forEach((section, i) => {
-      const lead = i === 0 ? readerTurns : [];
-      beats.push([...lead, `Assistant: ${section}`].join("\n"));
+      if (opts.roleplay) {
+        // The roleplay writer has already woven the reader's contribution into this finished prose.
+        // Storing the raw steer too duplicates the action and leaves transcript metadata in the book.
+        if (section.trim()) beats.push(section.trim());
+      } else {
+        const lead = i === 0 ? readerTurns.map((text) => `Reader: ${text}`) : [];
+        beats.push([...lead, `Assistant: ${section}`].join("\n"));
+      }
     });
     readerTurns = [];
   }
   // A final reader turn still belongs to the imported story even if the assistant had not answered.
-  if (readerTurns.length) beats.push(readerTurns.join("\n"));
-  return beats.length ? beats : [transcript];
+  if (readerTurns.length && (!opts.roleplay || !opts.hasContinuation)) {
+    beats.push(
+      opts.roleplay
+        ? readerTurns.map(naturalStoryProse).filter(Boolean).join("\n\n")
+        : readerTurns.map((text) => `Reader: ${text}`).join("\n"),
+    );
+  }
+  if (beats.length) return beats;
+  if (opts.roleplay) {
+    if (opts.hasContinuation) return [];
+    const fallback = naturalStoryProse(transcript);
+    return fallback ? [fallback] : [];
+  }
+  return [transcript];
 }
 
 /** Parse the model's reply to {@link storyOpeningRequest}: tolerant of code fences / stray prose. */

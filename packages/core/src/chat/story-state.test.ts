@@ -7,6 +7,7 @@ import {
   parseStoryOpening,
   storySoFarFromChat,
   storyStartBeats,
+  naturalStoryProse,
   STORY_STATE_MAX_CHARS,
 } from "./story-state.js";
 
@@ -20,6 +21,7 @@ describe("roleplayStoryTurnPrompt", () => {
     expect(prompt).toMatch(/preserve every concrete action and spoken line/i);
     expect(prompt).toMatch(/setting, sensory detail, body language, pacing/i);
     expect(prompt).toMatch(/do not answer in conversational first person/i);
+    expect(prompt).toMatch(/Never use transcript or screenplay labels/i);
     expect(prompt).toContain("Vex");
   });
 
@@ -193,6 +195,47 @@ describe("storyStartBeats", () => {
 
   it("keeps the ordinary one-beat start when no chat is carried", () => {
     expect(storyStartBeats("The lamp guttered.")).toEqual(["The lamp guttered."]);
+  });
+
+  it("stores carried roleplay as natural prose without Reader or Assistant labels", () => {
+    const soFar =
+      "Reader: I draw my sword.\n" +
+      "Assistant: Mara drew the old sword, steel whispering against leather.\n" +
+      "Reader: I tell Vex to run.\n" +
+      "Assistant: “Run,” Mara told Vex as the gate began to buckle.";
+    expect(
+      storyStartBeats("Reader: The tower shuddered around them.", soFar, { mode: "roleplay" }),
+    ).toEqual([
+      "Mara drew the old sword, steel whispering against leather.",
+      "“Run,” Mara told Vex as the gate began to buckle.",
+      "The tower shuddered around them.",
+    ]);
+  });
+
+  it("keeps an unanswered roleplay contribution as an unlabeled fallback when generation fails", () => {
+    expect(
+      storyStartBeats("", "Reader: I step through the gate.", { mode: "roleplay" }),
+    ).toEqual(["I step through the gate."]);
+  });
+
+  it("lets generated prose replace an unanswered raw steer instead of duplicating it", () => {
+    expect(
+      storyStartBeats(
+        "Mara stepped through the gate into a wash of winter light.",
+        "Reader: I step through the gate.",
+        { mode: "roleplay" },
+      ),
+    ).toEqual(["Mara stepped through the gate into a wash of winter light."]);
+  });
+});
+
+describe("naturalStoryProse", () => {
+  it("removes chat transport labels without touching narrative names or colons", () => {
+    expect(
+      naturalStoryProse(
+        "Reader: I open the door.\nAssistant: Mara answered: “Then we go.”\nVex: silent in the doorway.",
+      ),
+    ).toBe("I open the door.\nMara answered: “Then we go.”\nVex: silent in the doorway.");
   });
 });
 
