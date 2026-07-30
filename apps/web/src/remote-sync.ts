@@ -276,7 +276,14 @@ export type CmdToDesktop =
   // working folder), so the phone never runs a turn locally: it relays the intent, the desktop runs
   // its existing buddy handler, and the result flows back via the `vrsync:chat` mirror.
   | { type: "vrcmd:chatSend"; text: string; attachments?: ChatSendAttachment[] } // phone typed a message (+ files) → run the turn on the desktop
-  | { type: "vrcmd:storyStart"; command: string; bubble: string; label: string } // atomically create/bind a clean desktop story chat, then dispatch /story
+  | {
+      type: "vrcmd:storyStart";
+      command: string;
+      bubble: string;
+      label: string;
+      /** Trusted UI mapping; deliberately separate from the slash-command JSON. */
+      storySoulCast?: { self: string; user: string };
+    } // atomically create/bind a clean desktop story chat, then dispatch /story
   | { type: "vrcmd:chatSwitch"; id: string } // make this session active on the desktop
   | { type: "vrcmd:chatClose"; id: string } // close (hide, KEEP history) — not a delete
   | { type: "vrcmd:chatReopen"; id: string } // bring a closed session back into the switcher

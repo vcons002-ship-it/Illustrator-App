@@ -8,8 +8,142 @@ import {
   storySoFarFromChat,
   storyStartBeats,
   naturalStoryProse,
+  createStorySoulCast,
+  normalizeStorySoulCast,
+  validateStorySoulCastAgainstCharacters,
+  STORY_SOUL_CAST_SOURCE,
   STORY_STATE_MAX_CHARS,
 } from "./story-state.js";
+
+describe("Story Soul cast provenance", () => {
+  it("creates a complete persisted mapping only from trusted setup control data", () => {
+    expect(createStorySoulCast({ self: " Mira ", user: " Toll " })).toEqual({
+      self: "Mira",
+      user: "Toll",
+      source: STORY_SOUL_CAST_SOURCE,
+    });
+  });
+
+  it("rejects partial, empty, same-character, and malformed mappings", () => {
+    expect(createStorySoulCast({ self: "Mira" })).toBeUndefined();
+    expect(createStorySoulCast({ self: "", user: "" })).toBeUndefined();
+    expect(createStorySoulCast({ self: "Mira", user: "mira" })).toBeUndefined();
+    expect(createStorySoulCast({ self: 42, user: "Alex" })).toBeUndefined();
+    expect(createStorySoulCast("Mira/Alex")).toBeUndefined();
+  });
+
+  it("loads only mappings bearing the app-owned provenance marker", () => {
+    expect(normalizeStorySoulCast({ self: "Mira" })).toBeUndefined();
+    expect(
+      normalizeStorySoulCast({
+        self: "Mira",
+        user: "Toll",
+        source: STORY_SOUL_CAST_SOURCE,
+      }),
+    ).toEqual({ self: "Mira", user: "Toll", source: STORY_SOUL_CAST_SOURCE });
+    expect(
+      normalizeStorySoulCast({
+        self: "Mira",
+        user: "Toll",
+        source: "forged-old-marker",
+      }),
+    ).toBeUndefined();
+    expect(
+      normalizeStorySoulCast({
+        self: 42,
+        user: "Toll",
+        source: STORY_SOUL_CAST_SOURCE,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("revalidates a persisted mapping against both restored canonical cast names", () => {
+    const persisted = {
+      self: "Mira",
+      user: "Toll",
+      source: STORY_SOUL_CAST_SOURCE,
+    };
+    expect(
+      validateStorySoulCastAgainstCharacters(persisted, [
+        { name: "mira" },
+        { name: "TOLL" },
+        { name: "Someone Else" },
+      ]),
+    ).toEqual(persisted);
+    expect(validateStorySoulCastAgainstCharacters(persisted, undefined)).toBeUndefined();
+    expect(validateStorySoulCastAgainstCharacters(persisted, [])).toBeUndefined();
+  });
+
+  it("keeps a valid reopen when consolidation promoted setup names into aliases", () => {
+    const persisted = {
+      self: "Mira",
+      user: "Toll",
+      source: STORY_SOUL_CAST_SOURCE,
+    };
+    expect(
+      validateStorySoulCastAgainstCharacters(persisted, [
+        { name: "Mira Sol", aliases: ["Mira"] },
+        { name: "Toll Ward", aliases: ["Toll"] },
+      ]),
+    ).toEqual(persisted);
+  });
+
+  it("requires the two mappings to resolve unambiguously to distinct character entries", () => {
+    const persisted = {
+      self: "Mira",
+      user: "Toll",
+      source: STORY_SOUL_CAST_SOURCE,
+    };
+    expect(
+      validateStorySoulCastAgainstCharacters(persisted, [
+        { name: "Mira Toll", aliases: ["Mira", "Toll"] },
+      ]),
+    ).toBeUndefined();
+    expect(
+      validateStorySoulCastAgainstCharacters(persisted, [
+        { name: "Mira Sol", aliases: ["Mira"] },
+        { name: "Another Mira", aliases: ["Mira"] },
+        { name: "Toll" },
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("lets an exact primary name own its spelling over another entry's generic alias", () => {
+    const persisted = {
+      self: "Mira",
+      user: "Toll",
+      source: STORY_SOUL_CAST_SOURCE,
+    };
+    expect(
+      validateStorySoulCastAgainstCharacters(persisted, [
+        { name: "Mira", aliases: [] },
+        { name: "Toll", aliases: ["Mira"] },
+      ]),
+    ).toEqual(persisted);
+  });
+
+  it("rejects forged provenance and stale or malformed restored cast evidence", () => {
+    const cast = [{ name: "Mira" }, { name: "Toll" }];
+    expect(
+      validateStorySoulCastAgainstCharacters(
+        { self: "Mira", user: "Toll", source: "forged-marker" },
+        cast,
+      ),
+    ).toBeUndefined();
+    expect(
+      validateStorySoulCastAgainstCharacters(
+        { self: "Mira", user: "Missing", source: STORY_SOUL_CAST_SOURCE },
+        cast,
+      ),
+    ).toBeUndefined();
+    expect(
+      validateStorySoulCastAgainstCharacters(
+        { self: "Mira", user: "Toll", source: STORY_SOUL_CAST_SOURCE },
+        [{ name: "Mira" }, { name: 42 }, null],
+      ),
+    ).toBeUndefined();
+  });
+});
 
 describe("roleplayStoryTurnPrompt", () => {
   it("makes the reader's exact contribution source material for the narrated beat", () => {

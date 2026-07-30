@@ -1030,6 +1030,7 @@ export function App() {
   const essenceIdentityText = [selfSoulEssence, userSoulEssence].flatMap((essence) =>
     essence
       ? [
+          essence.generalizedEssence.text,
           ...Object.values(essence.facets).map((facet) => facet.text),
           ...essence.exactAppearance.map((fact) => fact.text),
           ...essence.exactPersonalityDirections.map((fact) => fact.text),
@@ -5921,9 +5922,11 @@ export function App() {
      * kept OUT of the saved turns — the app-managed executor's nudges ("do ONLY step 3 of 5, call its
      * tool and stop") are control flow, and persisting them replayed them as standing user
      * instructions on every later turn, in a conversation where no checklist was even running.
-     * Durable tool FEEDBACK (an image rendered, a file was written) is not ephemeral — it's the
-     * record of what happened — so it keeps riding the transcript. */
+    * Durable tool FEEDBACK (an image rendered, a file was written) is not ephemeral — it's the
+    * record of what happened — so it keeps riding the transcript. */
     ephemeralDirective?: boolean,
+    /** Trusted Story-setup mapping, never serialized into the user/model-authored `/story` text. */
+    storySoulCast?: { self: string; user: string },
   ): Promise<string | undefined> => {
     const seq = ++buddyTurnSeq.current; // guard: ignore if Clear/cancel supersedes it
     // CONSUME the creative-run flag HERE, synchronously, before anything below awaits.
@@ -6267,7 +6270,7 @@ export function App() {
           appendBuddy({ role: "tool", text: "🔍 No results." });
         }
       }
-    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive, creativeTurn, activeBuddyIdRef.current === CREATIVE_CHAT_ID);
+    }, buddyWorkingDir || undefined, activeTaskPlanId(), openCodeContext(), buddyPlanRef.current, appManagedActive, creativeTurn, activeBuddyIdRef.current === CREATIVE_CHAT_ID, storySoulCast);
     if (buddyTurnSeq.current !== seq) return;
     setBuddyBusy(false);
     setBuddyStreaming("");
@@ -6543,7 +6546,8 @@ export function App() {
       const bubble = payload.opening.trim()
         ? `${payload.soFar ? "✍️ Continuing our story" : "✍️ Starting a story"} — ${payload.opening.slice(0, 80)}${payload.opening.length > 80 ? "…" : ""}`
         : "✍️ Continuing our story here — carrying this conversation into it.";
-      const command = `/story ${JSON.stringify(payload)}`;
+      const { soulCast: storySoulCast, ...commandPayload } = payload;
+      const command = `/story ${JSON.stringify(commandPayload)}`;
       const label = `Story · ${payload.title || payload.opening.slice(0, 24) || "continued"}`.slice(0, 60);
       // Remember where we came from so exiting the story returns us there (history intact).
       storyReturnSessionRef.current = activeBuddyIdRef.current;
@@ -6552,7 +6556,13 @@ export function App() {
       // opened book + each beat back): make a fresh session, then send the /story command into it. This
       // gives mobile the same clean dedicated chat as desktop, and the book/beats sync back via vrsync.
       if (isRemoteClient) {
-        sendAppSync({ type: "vrcmd:storyStart", command, bubble, label });
+        sendAppSync({
+          type: "vrcmd:storyStart",
+          command,
+          bubble,
+          label,
+          ...(storySoulCast ? { storySoulCast } : {}),
+        });
         return;
       }
       // Open the story in a FRESH, dedicated book-only chat. A clean (empty) writer context is what
@@ -6574,7 +6584,7 @@ export function App() {
       createdFilesRef.current = [];
       setFileLedger([]);
       void libraryStore.putMemo?.("buddy-active-session", sid).catch(() => {});
-      void dispatchBuddyTurn([], command, bubble); // empty history → clean story context
+      void dispatchBuddyTurn([], command, bubble, undefined, storySoulCast); // empty history → clean story context
     },
     // resetBuddyView is intentionally omitted — it's defined later in this component; referencing it
     // in the dep array would evaluate before initialization (TDZ). It's stable, so this is safe.
@@ -7503,7 +7513,7 @@ export function App() {
           createdFilesRef.current = [];
           setFileLedger([]);
           void libraryStore.putMemo?.("buddy-active-session", sid).catch(() => {});
-          void dispatchBuddyTurn([], c.command, c.bubble);
+          void dispatchBuddyTurn([], c.command, c.bubble, undefined, c.storySoulCast);
           break;
         }
         case "vrcmd:chatSwitch":

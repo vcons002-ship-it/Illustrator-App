@@ -19,9 +19,9 @@ export interface StoryStartPayload {
   title?: string;
   characters?: { name: string; description?: string }[];
   roleplay?: { me?: string; you?: string };
-  /** App-owned marker: this cast is the stored You + Me pair, so story generation may use both
-   * complete Soul documents for characterization. Never set for a custom cast. */
-  soulCast?: true;
+  /** App-owned mapping for the stored You + Me pair. The host removes it from the `/story` JSON and
+   * relays it to the worker as trusted control data; custom casts never set it. */
+  soulCast?: { self: string; user: string };
   /** The conversation so far, when the reader chose to bring this chat into the story. */
   soFar?: string;
 }
@@ -60,8 +60,14 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, chatS
 
   const namedChars = useMemo(() => chars.filter((c) => c.name.trim()), [chars]);
   const carrying = canCarry && carry;
+  const resolvedMeName = meName.trim() || "Me";
+  const resolvedYouName = youName.trim() || "You";
+  const distinctYouAndMe =
+    resolvedMeName.localeCompare(resolvedYouName, undefined, { sensitivity: "accent" }) !== 0;
   // Carrying the chat, the idea box is optional — that conversation is the premise.
-  const canStart = (carrying || opening.trim().length > 0) && (cast === "you-and-me" || namedChars.length > 0);
+  const canStart =
+    (carrying || opening.trim().length > 0) &&
+    (cast === "you-and-me" ? distinctYouAndMe : namedChars.length > 0);
 
   const setChar = (i: number, patch: Partial<StoryCharacterDraft>) =>
     setChars((cs) => cs.map((c, k) => (k === i ? { ...c, ...patch } : c)));
@@ -73,9 +79,9 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, chatS
     const payload: StoryStartPayload = { opening: opening.trim() };
     if (carrying) payload.soFar = chatSoFar!.trim();
     if (cast === "you-and-me") {
-      const me = (meName.trim() || "Me");
-      const you = (youName.trim() || "You");
-      payload.soulCast = true;
+      const me = resolvedMeName;
+      const you = resolvedYouName;
+      payload.soulCast = { self: you, user: me };
       payload.characters = [
         { name: you, ...(self.note ? { description: self.note } : {}) },
         { name: me, ...(user.note ? { description: user.note } : {}) },
@@ -170,6 +176,11 @@ export const StorySetupModal = memo(function StorySetupModal({ self, user, chatS
             <span style={hint}>
               Tip: fill in your look/personality under 🪞 Soul and 👤 You so the illustrations match.
             </span>
+            {!distinctYouAndMe ? (
+              <span role="alert" style={{ ...hint, color: "#ff9a9a", opacity: 0.9 }}>
+                You and the assistant need distinct character names.
+              </span>
+            ) : null}
           </div>
         ) : (
           <div style={panel}>

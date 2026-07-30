@@ -22,6 +22,89 @@ export interface StoryStateInput {
   synopsis?: string;
 }
 
+/** The two explicitly Soul-backed characters in a "You & me" story. */
+export const STORY_SOUL_CAST_SOURCE = "you-and-me-setup-v1" as const;
+
+export interface StorySoulCast {
+  self: string;
+  user: string;
+  source: typeof STORY_SOUL_CAST_SOURCE;
+}
+
+function storySoulCastNames(value: unknown): { self: string; user: string } | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const self = typeof record.self === "string" ? record.self.trim() : "";
+  const user = typeof record.user === "string" ? record.user.trim() : "";
+  if (!self || !user || self.localeCompare(user, undefined, { sensitivity: "accent" }) === 0) {
+    return undefined;
+  }
+  return { self, user };
+}
+
+/** Turn trusted, out-of-band setup control data into the only persistable Soul-cast shape. */
+export function createStorySoulCast(value: unknown): StorySoulCast | undefined {
+  const names = storySoulCastNames(value);
+  return names ? { ...names, source: STORY_SOUL_CAST_SOURCE } : undefined;
+}
+
+/**
+ * Validate persisted/imported state. Missing provenance, malformed fields, partial pairs, and
+ * same-character mappings all fail closed rather than attaching a Soul to a custom story.
+ */
+export function normalizeStorySoulCast(value: unknown): StorySoulCast | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record.source !== STORY_SOUL_CAST_SOURCE) return undefined;
+  return createStorySoulCast(record);
+}
+
+/**
+ * Re-authorize persisted/imported Soul ownership only when the restored story Bible contains both
+ * mapped characters as distinct cast entries. Consolidation may promote a fuller canonical name and
+ * retain the setup name as an alias, so either form counts; ambiguous aliases and mappings that now
+ * collapse onto one entry fail closed. A provenance tag alone is not evidence: it is portable backup
+ * data and can be stale or edited.
+ */
+export function validateStorySoulCastAgainstCharacters(
+  value: unknown,
+  characters: unknown,
+): StorySoulCast | undefined {
+  const mapped = normalizeStorySoulCast(value);
+  if (!mapped || !Array.isArray(characters)) return undefined;
+  const entries = characters
+    .map((character) => {
+      if (!character || typeof character !== "object" || Array.isArray(character)) return undefined;
+      const record = character as Record<string, unknown>;
+      const name = typeof record.name === "string" ? record.name.trim() : "";
+      if (!name) return undefined;
+      const aliases = Array.isArray(record.aliases)
+        ? record.aliases
+            .map((alias) => (typeof alias === "string" ? alias.trim() : ""))
+            .filter(Boolean)
+        : [];
+      return { name, aliases };
+    })
+    .filter((entry): entry is { name: string; aliases: string[] } => !!entry);
+  const sameName = (a: string, b: string) =>
+    a.localeCompare(b, undefined, { sensitivity: "accent" }) === 0;
+  const resolveEntry = (target: string): number | undefined => {
+    // A canonical name owns its spelling even if another character picked it up as a generic alias.
+    const primary = entries.flatMap((entry, index) => (sameName(entry.name, target) ? [index] : []));
+    if (primary.length === 1) return primary[0];
+    if (primary.length > 1) return undefined;
+    const aliases = entries.flatMap((entry, index) =>
+      entry.aliases.some((alias) => sameName(alias, target)) ? [index] : [],
+    );
+    return aliases.length === 1 ? aliases[0] : undefined;
+  };
+  const selfEntry = resolveEntry(mapped.self);
+  const userEntry = resolveEntry(mapped.user);
+  return selfEntry !== undefined && userEntry !== undefined && selfEntry !== userEntry
+    ? mapped
+    : undefined;
+}
+
 export const STORY_STATE_MAX_CHARS = 4000;
 const MAX_BEAT_CHARS = 700;
 

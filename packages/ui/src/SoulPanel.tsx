@@ -424,8 +424,9 @@ export const SoulPanel = memo(function SoulPanel({
             ) : null}
           </div>
           <p style={{ fontSize: 11, opacity: 0.68, margin: 0, lineHeight: 1.45 }}>
-            Ordinary chat uses this integrated identity. The original notes below remain authoritative,
-            and creative work or a specific identity question can still consult those sources.
+            Everyday chat uses this generalized identity. Stories use it as a subtle baseline alongside
+            the character&apos;s exact visual identity. The Creative window and explicit identity questions
+            may consult the authoritative originals.
           </p>
 
           {essenceStatusText ? (
@@ -481,20 +482,26 @@ export const SoulPanel = memo(function SoulPanel({
 
           {shownEssence ? (
             <>
-              <dl style={{ display: "grid", gap: 7, margin: 0 }}>
-                {SOUL_ESSENCE_FACETS.map((key) => {
-                  if (key === "personalityDirections") return null;
-                  const text = shownEssence.facets[key].text.trim();
-                  return text ? (
-                    <div key={key}>
-                      <dt style={{ fontSize: 11, fontWeight: 600, opacity: 0.78 }}>
-                        {ESSENCE_FACET_LABELS[key]}
-                      </dt>
-                      <dd style={{ fontSize: 12, margin: "2px 0 0", lineHeight: 1.4 }}>{text}</dd>
-                    </div>
-                  ) : null;
-                })}
-              </dl>
+              {shownEssence.generalizedEssence.text ? (
+                <p
+                  aria-label="Generalized everyday essence"
+                  style={{
+                    fontSize: 14,
+                    fontWeight: 500,
+                    lineHeight: 1.55,
+                    margin: 0,
+                    padding: "9px 10px",
+                    borderRadius: 7,
+                    background: "rgba(130,170,255,0.1)",
+                  }}
+                >
+                  {shownEssence.generalizedEssence.text}
+                </p>
+              ) : (
+                <span style={{ fontSize: 11, opacity: 0.58 }}>
+                  No generalized personality traits; exact identity details remain below.
+                </span>
+              )}
               {shownEssence.exactPersonalityDirections.length ? (
                 <div
                   style={{
@@ -535,11 +542,40 @@ export const SoulPanel = memo(function SoulPanel({
                   <span style={{ fontSize: 11, opacity: 0.58 }}>No physical appearance notes yet.</span>
                 )}
               </div>
+              <details
+                style={{
+                  paddingTop: 7,
+                  borderTop: "1px solid rgba(255,255,255,0.09)",
+                  fontSize: 11,
+                }}
+              >
+                <summary style={{ cursor: "pointer", opacity: 0.68 }}>
+                  Grounding details
+                </summary>
+                <p style={{ margin: "6px 0 8px", opacity: 0.58, lineHeight: 1.4 }}>
+                  Supporting synthesis retained for provenance and explicit identity questions.
+                </p>
+                <dl style={{ display: "grid", gap: 7, margin: 0 }}>
+                  {SOUL_ESSENCE_FACETS
+                    .filter((key) => key !== "personalityDirections")
+                    .map((key) => {
+                    const text = shownEssence.facets[key].text.trim();
+                    return text ? (
+                      <div key={key}>
+                        <dt style={{ fontSize: 11, fontWeight: 600, opacity: 0.78 }}>
+                          {ESSENCE_FACET_LABELS[key]}
+                        </dt>
+                        <dd style={{ fontSize: 12, margin: "2px 0 0", lineHeight: 1.4 }}>{text}</dd>
+                      </div>
+                    ) : null;
+                    })}
+                </dl>
+              </details>
             </>
           ) : (
             <span style={{ fontSize: 11, opacity: 0.58 }}>
               {list.length
-                ? "Generate an everyday essence now. Small Souls may also be integrated automatically by a local text model."
+                ? "Generate the generalized everyday essence now (or regenerate once after an app update). Until then, ordinary chat uses only source-exact identity details—not the raw interests/thought list."
                 : "Add source notes before generating an essence."}
             </span>
           )}

@@ -1,6 +1,9 @@
 import {
   parseGeneratedSoulEssence,
+  parseSoulEssenceAbstraction,
   parseSoulEssenceMerge,
+  soulEssenceAbstractionJsonSchema,
+  soulEssenceAbstractionRepairFeedback,
   soulEssenceJsonSchema,
   soulEssenceMergeRepairFeedback,
   soulEssenceRepairFeedback,
@@ -32,6 +35,8 @@ export interface CompleteSoulEssenceOptions {
   maxTokens: number;
   signal?: AbortSignal;
   digests?: readonly SoulEssenceDigestInput[];
+  /** Grounded integrated result carried forward during the minimal final abstraction pass. */
+  abstractionBase?: SoulEssence;
   onToken?: (delta: string) => void;
   onRepair?: (feedback: string, truncated: boolean) => void;
 }
@@ -70,6 +75,7 @@ export async function completeSoulEssenceWithRepair(
   for (let attempt = 0; attempt < 2; attempt++) {
     throwIfAborted(opts.signal);
     if (attempt > 0) opts.onRepair?.(feedback, wasTruncated);
+    const abstraction = !!opts.abstractionBase;
     const repairBlock =
       attempt === 0
         ? ""
@@ -77,11 +83,15 @@ export async function completeSoulEssenceWithRepair(
             "",
             "REPAIR ATTEMPT: The prior response reached the app but failed grounded validation.",
             wasTruncated
-              ? "The provider also reported that the response hit its output limit. Use shorter facet text so the complete JSON object fits."
+              ? abstraction
+                ? "The provider reported an output cutoff. Return only the short generalizedEssence object."
+                : "The provider also reported that the response hit its output limit. Use shorter facet text so the complete JSON object fits."
               : "",
             "Correct these exact problems:",
             feedback,
-            "Return one complete JSON object only. Use only supplied valid IDs, and do not leave any listed ordinary source uncovered.",
+            abstraction
+              ? "Return one complete generalizedEssence JSON object only. Choose only non-empty supplied supportFacetKeys."
+              : "Return one complete JSON object only. Use only supplied valid IDs, and do not leave any listed ordinary source uncovered.",
           ]
             .filter(Boolean)
             .join("\n");
@@ -95,11 +105,13 @@ export async function completeSoulEssenceWithRepair(
         maxTokens: opts.maxTokens,
         reasoningEffort: "none",
         responseFormat: "json",
-        jsonSchema: soulEssenceJsonSchema(
-          opts.kind,
-          opts.prompt.sourceFingerprint,
-          opts.digests ? [] : sourceIds,
-        ),
+        jsonSchema: abstraction
+          ? soulEssenceAbstractionJsonSchema()
+          : soulEssenceJsonSchema(
+              opts.kind,
+              opts.prompt.sourceFingerprint,
+              opts.digests ? [] : sourceIds,
+            ),
         onComplete: (meta) => {
           truncated = meta.truncated;
         },
@@ -108,15 +120,30 @@ export async function completeSoulEssenceWithRepair(
       },
     );
     throwIfAborted(opts.signal);
-    const essence = opts.digests
-      ? parseSoulEssenceMerge(raw, opts.kind, opts.notes, opts.digests, Date.now())
-      : parseGeneratedSoulEssence(raw, opts.kind, opts.notes, Date.now());
+    const essence = opts.abstractionBase
+      ? parseSoulEssenceAbstraction(
+          raw,
+          opts.kind,
+          opts.notes,
+          opts.abstractionBase,
+          Date.now(),
+        )
+      : opts.digests
+        ? parseSoulEssenceMerge(raw, opts.kind, opts.notes, opts.digests, Date.now())
+        : parseGeneratedSoulEssence(raw, opts.kind, opts.notes, Date.now());
     if (essence) return { essence };
 
     wasTruncated = truncated;
-    const semanticFeedback = opts.digests
-      ? soulEssenceMergeRepairFeedback(raw, opts.kind, opts.notes, opts.digests)
-      : soulEssenceRepairFeedback(raw, opts.kind, opts.notes);
+    const semanticFeedback = opts.abstractionBase
+      ? soulEssenceAbstractionRepairFeedback(
+          raw,
+          opts.kind,
+          opts.notes,
+          opts.abstractionBase,
+        )
+      : opts.digests
+        ? soulEssenceMergeRepairFeedback(raw, opts.kind, opts.notes, opts.digests)
+        : soulEssenceRepairFeedback(raw, opts.kind, opts.notes);
     feedback = [
       ...(truncated
         ? ["The response ended at the provider's output-token limit before validation completed."]

@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   SOUL_ESSENCE_FACETS,
   SOUL_ESSENCE_SCHEMA_VERSION,
+  SOUL_GENERALIZED_TRAIT_VOCABULARY,
   LocalServerLLMProvider,
+  buildSoulEssenceAbstractionPrompt,
   buildSoulEssenceDistillationPrompt,
+  parseSoulEssence,
   soulNoteSources,
   soulSourceFingerprint,
   type ChatOptions,
@@ -26,6 +29,10 @@ function payload(sourceIds = soulNoteSources(notes).map((source) => source.id)):
     schemaVersion: SOUL_ESSENCE_SCHEMA_VERSION,
     kind: "self",
     sourceFingerprint: soulSourceFingerprint(notes),
+    generalizedEssence: {
+      text: "Patient, intellectually curious, and candid.",
+      sourceIds,
+    },
     facets: Object.fromEntries(
       SOUL_ESSENCE_FACETS.map((key) => [
         key,
@@ -93,6 +100,93 @@ describe("completeSoulEssenceWithRepair", () => {
     expect(
       schema.properties.facets.properties.coreDisposition.properties.sourceIds.items.enum,
     ).toEqual(sources.map((source) => source.id));
+  });
+
+  it("gives a local model targeted feedback when the generalized essence is missing", async () => {
+    let calls = 0;
+    const onRepair = vi.fn();
+    const result = await completeSoulEssenceWithRepair({
+      llm: fakeLlm(async () => {
+        calls += 1;
+        if (calls > 1) return JSON.stringify(payload());
+        const missing = payload();
+        delete missing.generalizedEssence;
+        return JSON.stringify(missing);
+      }),
+      kind: "self",
+      notes,
+      prompt: buildSoulEssenceDistillationPrompt("self", notes),
+      maxTokens: 1400,
+      onRepair,
+    });
+
+    expect(result.essence?.generalizedEssence.text).toMatch(/curious/i);
+    expect(calls).toBe(2);
+    expect(onRepair).toHaveBeenCalledWith(
+      expect.stringContaining("generalizedEssence"),
+      false,
+    );
+  });
+
+  it("uses the minimal schema for the final abstraction and carries grounded support forward", async () => {
+    const integrated = parseSoulEssence(
+      JSON.stringify(payload()),
+      "self",
+      notes,
+    )!;
+    const calls: Array<{ messages: ChatTurn[]; opts: ChatOptions }> = [];
+    const onRepair = vi.fn();
+    const result = await completeSoulEssenceWithRepair({
+      llm: fakeLlm(async (messages, opts) => {
+        calls.push({ messages, opts });
+        return JSON.stringify({
+          generalizedEssence: {
+            text:
+              calls.length === 1
+                ? "Curious about forgotten railway control systems and infrastructure ethics."
+                : "Affectionate; humorous; serene; stoic",
+            supportFacetKeys: ["coreDisposition"],
+          },
+        });
+      }),
+      kind: "self",
+      notes,
+      prompt: buildSoulEssenceAbstractionPrompt("self", notes, integrated),
+      abstractionBase: integrated,
+      maxTokens: 384,
+      onRepair,
+    });
+
+    expect(result.essence?.generalizedEssence.text).toBe(
+      "Affectionate; humorous; serene; stoic",
+    );
+    expect(result.essence?.facets).toEqual(integrated.facets);
+    expect(calls).toHaveLength(2);
+    expect(onRepair).toHaveBeenCalledWith(
+      expect.stringMatching(/higher-order traits|source-specific/i),
+      false,
+    );
+    const schema = calls[0]!.opts.jsonSchema as {
+      required: string[];
+      properties: {
+        generalizedEssence: {
+          required: string[];
+        };
+      };
+    };
+    expect(schema.required).toEqual(["generalizedEssence"]);
+    expect(Object.keys(schema.properties)).toEqual(["generalizedEssence"]);
+    expect(schema.properties.generalizedEssence.required).toEqual([
+      "text",
+      "supportFacetKeys",
+    ]);
+    const completeVocabulary = SOUL_GENERALIZED_TRAIT_VOCABULARY.join(", ");
+    expect(calls[0]!.messages[0]!.content).toContain(completeVocabulary);
+    expect(calls[1]!.messages[0]!.content).toContain(completeVocabulary);
+    expect(onRepair).toHaveBeenCalledWith(
+      expect.stringContaining(completeVocabulary),
+      false,
+    );
   });
 
   it("repairs a safely truncated JSON envelope before spending a second model call", async () => {

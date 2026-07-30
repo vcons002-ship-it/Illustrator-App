@@ -21,6 +21,8 @@ import {
   visualSoulNotes,
   SOUL_LOOK_BUDGET_CHARS,
   SOUL_ESSENCE_SCHEMA_VERSION,
+  MAX_SOUL_GENERALIZED_ESSENCE_CHARS,
+  SOUL_GENERALIZED_TRAIT_VOCABULARY,
   SOUL_ESSENCE_FACETS,
   SELF_SOUL_ESSENCE_KEY,
   ABOUT_YOU_SOUL_ESSENCE_KEY,
@@ -29,10 +31,14 @@ import {
   partitionSoulNotes,
   buildSoulEssenceDistillationPrompt,
   buildSoulEssenceMergePrompt,
+  buildSoulEssenceAbstractionPrompt,
   soulEssenceJsonSchema,
+  soulEssenceAbstractionJsonSchema,
   parseSoulEssence,
   parseGeneratedSoulEssence,
   parseSoulEssenceMerge,
+  parseSoulEssenceAbstraction,
+  soulEssenceAbstractionRepairFeedback,
   soulEssenceRepairFeedback,
   validateSoulEssence,
   loadSoulEssence,
@@ -40,6 +46,12 @@ import {
   clearSoulEssence,
   selfSoulEssencePromptBlock,
   userSoulEssencePromptBlock,
+  selfSoulExactIdentityPromptBlock,
+  userSoulExactIdentityPromptBlock,
+  selfStorySoulEssencePromptBlock,
+  userStorySoulEssencePromptBlock,
+  storySoulCharacterizationPromptBlock,
+  selectSoulContextMode,
   soulEvidencePromptBlock,
   SOUL_EVIDENCE_PROMPT_BUDGET_CHARS,
 } from "./souls.js";
@@ -155,6 +167,7 @@ describe("Soul Essence derivation", () => {
     kind: "self" | "user",
     notes: readonly SoulNote[],
     facetText = "Integrates curiosity into a patient, systems-minded outlook.",
+    generalizedText = "Intellectually curious, patient, and attentive to underlying patterns.",
   ): Record<string, unknown> {
     const sourceIds = soulNoteSources(notes).map((source) => source.id);
     const facets = Object.fromEntries(
@@ -169,6 +182,9 @@ describe("Soul Essence derivation", () => {
       schemaVersion: SOUL_ESSENCE_SCHEMA_VERSION,
       kind,
       sourceFingerprint: soulSourceFingerprint(notes),
+      generalizedEssence: facetText
+        ? { text: generalizedText, sourceIds }
+        : { text: "", sourceIds: [] },
       facets,
       exactAppearance: [],
     };
@@ -198,6 +214,10 @@ describe("Soul Essence derivation", () => {
     expect(built.sourceFingerprint).toBe(soulSourceFingerprint(notes));
     expect(built.system).toMatch(/strict JSON only/i);
     expect(built.system).toMatch(/do not make their specific examples into recurring topics/i);
+    expect(built.system).toMatch(/portable higher-order identity/i);
+    expect(built.system).toMatch(/Do not include names, named interests, technologies, hobbies/i);
+    expect(built.system).toMatch(/Complete source coverage belongs in the support facets/i);
+    expect(built.system).toContain(`at most ${MAX_SOUL_GENERALIZED_ESSENCE_CHARS} characters`);
     expect(built.system).toMatch(/Every non-empty facet must cite/i);
     expect(built.system).toContain("exactAppearance");
     expect(built.system).toMatch(/exactAppearance as an empty array/i);
@@ -217,6 +237,9 @@ describe("Soul Essence derivation", () => {
     const ids = soulNoteSources(notes).map((source) => source.id);
     const schema = soulEssenceJsonSchema("self", soulSourceFingerprint(notes), ids) as {
       properties: {
+        generalizedEssence: {
+          properties: { sourceIds: { items: { enum: string[] } } };
+        };
         facets: {
           properties: {
             coreDisposition: {
@@ -228,6 +251,9 @@ describe("Soul Essence derivation", () => {
     };
     expect(
       schema.properties.facets.properties.coreDisposition.properties.sourceIds.items.enum,
+    ).toEqual(ids);
+    expect(
+      schema.properties.generalizedEssence.properties.sourceIds.items.enum,
     ).toEqual(ids);
   });
 
@@ -249,6 +275,10 @@ describe("Soul Essence derivation", () => {
       text: "Patient and systems-minded.",
       sourceIds: [sources[1]!.id, "sn_invented"],
     };
+    (raw.generalizedEssence as { sourceIds: string[] }).sourceIds = [
+      sources[1]!.id,
+      "sn_invented",
+    ];
 
     const parsed = parseGeneratedSoulEssence(JSON.stringify(raw), "self", notes)!;
     expect(parsed.schemaVersion).toBe(SOUL_ESSENCE_SCHEMA_VERSION);
@@ -258,6 +288,53 @@ describe("Soul Essence derivation", () => {
     expect(parsed.exactAppearance).toEqual([
       { text: notes[0]!.text, sourceIds: [sources[0]!.id] },
     ]);
+  });
+
+  it("requires a short grounded generalized essence when support facets contain identity meaning", () => {
+    const notes = [note("Patiently connects ideas across difficult systems.", 1)];
+    const missing = payload("self", notes);
+    delete missing.generalizedEssence;
+    expect(parseGeneratedSoulEssence(JSON.stringify(missing), "self", notes)).toBeUndefined();
+    expect(soulEssenceRepairFeedback(JSON.stringify(missing), "self", notes)).toMatch(
+      /generalizedEssence/i,
+    );
+
+    const tooLong = payload("self", notes);
+    tooLong.generalizedEssence = {
+      text: "b".repeat(MAX_SOUL_GENERALIZED_ESSENCE_CHARS + 1),
+      sourceIds: soulNoteSources(notes).map((source) => source.id),
+    };
+    expect(parseGeneratedSoulEssence(JSON.stringify(tooLong), "self", notes)).toBeUndefined();
+    expect(soulEssenceRepairFeedback(JSON.stringify(tooLong), "self", notes)).toContain(
+      `at most ${MAX_SOUL_GENERALIZED_ESSENCE_CHARS}`,
+    );
+
+    const unsupported = payload("self", notes);
+    unsupported.generalizedEssence = {
+      text: "Intellectually curious.",
+      sourceIds: ["sn_invented"],
+    };
+    expect(parseGeneratedSoulEssence(JSON.stringify(unsupported), "self", notes)).toBeUndefined();
+  });
+
+  it("allows an empty generalized essence when a Soul contains only exact invariants", () => {
+    const directions = [note("Never be sycophantic.", 1)];
+    const directionOnly = parseSoulEssence(
+      JSON.stringify(payload("self", directions, "", "")),
+      "self",
+      directions,
+    );
+    expect(directionOnly?.generalizedEssence).toEqual({ text: "", sourceIds: [] });
+    expect(directionOnly?.exactPersonalityDirections[0]?.text).toBe("Never be sycophantic.");
+
+    const appearance = [note("Physical description: silver hair and grey eyes.", 1)];
+    const appearanceOnly = parseSoulEssence(
+      JSON.stringify(payload("self", appearance, "", "")),
+      "self",
+      appearance,
+    );
+    expect(appearanceOnly?.generalizedEssence).toEqual({ text: "", sourceIds: [] });
+    expect(appearanceOnly?.exactAppearance).toHaveLength(1);
   });
 
   it("salvages a generated final-brace cutoff without making stored essence parsing tolerant", () => {
@@ -316,6 +393,8 @@ describe("Soul Essence derivation", () => {
     expect(merged.sourceFingerprint).toBe(soulSourceFingerprint(notes));
     expect(merged.system).toMatch(/deterministically restores/i);
     expect(merged.system).toMatch(/exactAppearance as an empty array/i);
+    expect(merged.system).toMatch(/Re-derive generalizedEssence/i);
+    expect(merged.system).toMatch(/facets retain detail/i);
     for (const source of soulNoteSources(notes)) expect(merged.user).not.toContain(source.id);
     expect(merged.user).not.toContain(notes[0]!.text);
 
@@ -331,6 +410,169 @@ describe("Soul Essence derivation", () => {
     expect(parsed.facets.coreDisposition.sourceIds).toEqual(
       soulNoteSources(notes).map((source) => source.id),
     );
+    expect(parsed.generalizedEssence.sourceIds).toEqual(
+      soulNoteSources(notes).map((source) => source.id),
+    );
+  });
+
+  it("can run the final abstraction pass over one already-grounded digest", () => {
+    const notes = [
+      note("Studies forgotten railway control systems.", 1),
+      note("Returns to moral uncertainty with patience.", 2),
+    ];
+    const digest = {
+      notes,
+      essence: parseSoulEssence(
+        JSON.stringify(
+          payload(
+            "self",
+            notes,
+            "Studies forgotten railway systems and moral uncertainty in infrastructure.",
+            "Curious about forgotten railway control systems and infrastructure ethics.",
+          ),
+        ),
+        "self",
+        notes,
+      )!,
+    };
+    const prompt = buildSoulEssenceAbstractionPrompt(
+      "self",
+      notes,
+      digest.essence,
+    );
+    expect(prompt.user).toContain("forgotten railway");
+    expect(prompt.system).toMatch(/returns only.*small field|Return strict JSON only/is);
+    expect(prompt.system).toMatch(/Do not try to preserve every support detail/i);
+    expect(prompt.system).toContain(
+      SOUL_GENERALIZED_TRAIT_VOCABULARY.join(", "),
+    );
+    expect(prompt.system).toContain("affectionate");
+    expect(prompt.system).toContain("humorous");
+    expect(prompt.system).toContain("stoic");
+    const schema = soulEssenceAbstractionJsonSchema() as {
+      required: string[];
+      properties: Record<string, unknown>;
+    };
+    expect(schema.required).toEqual(["generalizedEssence"]);
+    expect(Object.keys(schema.properties)).toEqual(["generalizedEssence"]);
+
+    const parsed = parseSoulEssenceAbstraction(
+      JSON.stringify({
+        generalizedEssence: {
+          text: "Intellectually curious; reflective; comfortable with uncertainty",
+          supportFacetKeys: ["coreDisposition"],
+        },
+      }),
+      "self",
+      notes,
+      digest.essence,
+    );
+    expect(parsed?.generalizedEssence.text).toBe(
+      "Intellectually curious; reflective; comfortable with uncertainty",
+    );
+    expect(parsed?.generalizedEssence.text).not.toMatch(/railway|infrastructure/i);
+    expect(parsed?.facets).toEqual(digest.essence.facets);
+    expect(parsed?.exactAppearance).toEqual(digest.essence.exactAppearance);
+
+    const tooLong = JSON.stringify({
+      generalizedEssence: {
+        text: "x".repeat(MAX_SOUL_GENERALIZED_ESSENCE_CHARS + 1),
+        supportFacetKeys: ["coreDisposition"],
+      },
+    });
+    expect(
+      parseSoulEssenceAbstraction(tooLong, "self", notes, digest.essence),
+    ).toBeUndefined();
+    expect(
+      soulEssenceAbstractionRepairFeedback(tooLong, "self", notes, digest.essence),
+    ).toContain(`at most ${MAX_SOUL_GENERALIZED_ESSENCE_CHARS}`);
+
+    const sourceSpecific = JSON.stringify({
+      generalizedEssence: {
+        text: "Curious about forgotten railway control systems and infrastructure ethics",
+        supportFacetKeys: ["coreDisposition"],
+      },
+    });
+    expect(
+      parseSoulEssenceAbstraction(sourceSpecific, "self", notes, digest.essence),
+    ).toBeUndefined();
+    expect(
+      soulEssenceAbstractionRepairFeedback(
+        sourceSpecific,
+        "self",
+        notes,
+        digest.essence,
+      ),
+    ).toMatch(/higher-order traits|source-specific/i);
+
+    const shortTopics = ["AI curious", "Art focused", "STEM driven"];
+    for (const text of shortTopics) {
+      expect(
+        parseSoulEssenceAbstraction(
+          JSON.stringify({
+            generalizedEssence: {
+              text,
+              supportFacetKeys: ["coreDisposition"],
+            },
+          }),
+          "self",
+          notes,
+          digest.essence,
+        ),
+      ).toBeUndefined();
+    }
+
+    const broadOptions = JSON.stringify({
+      generalizedEssence: {
+        text: "Affectionate; humorous; serene; stoic",
+        supportFacetKeys: ["coreDisposition"],
+      },
+    });
+    expect(
+      parseSoulEssenceAbstraction(
+        broadOptions,
+        "self",
+        notes,
+        digest.essence,
+      )?.generalizedEssence.text,
+    ).toBe("Affectionate; humorous; serene; stoic");
+  });
+
+  it("attributes the final essence only to the support facets the abstraction selected", () => {
+    const notes = [
+      note("Approaches difficult choices strategically.", 1),
+      note("Meets vulnerable people with warmth.", 2),
+    ];
+    const ids = soulNoteSources(notes).map((source) => source.id);
+    const raw = payload(
+      "self",
+      notes,
+      "Strategic in difficult choices.",
+      "Strategic and warmly relational.",
+    );
+    const facets = raw.facets as Record<string, { text: string; sourceIds: string[] }>;
+    facets.coreDisposition = {
+      text: "Strategic in difficult choices.",
+      sourceIds: [ids[0]!],
+    };
+    facets.relationalStyle = {
+      text: "Warm toward vulnerable people.",
+      sourceIds: [ids[1]!],
+    };
+    const integrated = parseSoulEssence(JSON.stringify(raw), "self", notes)!;
+    const parsed = parseSoulEssenceAbstraction(
+      JSON.stringify({
+        generalizedEssence: {
+          text: "Warmly relational",
+          supportFacetKeys: ["relationalStyle"],
+        },
+      }),
+      "self",
+      notes,
+      integrated,
+    );
+    expect(parsed?.generalizedEssence.sourceIds).toEqual([ids[1]]);
+    expect(parsed?.generalizedEssence.sourceIds).not.toContain(ids[0]);
   });
 
   it("rebases identical chunk notes to distinct full-source occurrence IDs", () => {
@@ -620,6 +862,19 @@ describe("Soul Essence derivation", () => {
     expect(await store.getMemo(SELF_SOUL_ESSENCE_KEY)).toBeUndefined();
   });
 
+  it("treats a persisted v1 summary as disposable after the generalized v2 schema upgrade", async () => {
+    const store = new InMemoryStore();
+    const notes = [note("Patient and precise.", 1)];
+    const legacy = {
+      ...payload("self", notes),
+      schemaVersion: 1,
+      sourceFingerprint: soulSourceFingerprint(notes).replace("soul-v2-", "soul-v1-"),
+    };
+    delete (legacy as Record<string, unknown>).generalizedEssence;
+    await store.putMemo(SELF_SOUL_ESSENCE_KEY, JSON.stringify(legacy));
+    expect(await loadSoulEssence(store, "self", notes)).toBeUndefined();
+  });
+
   it("does not report a failed note save when best-effort stale-essence deletion fails", async () => {
     class DeleteFailingStore extends InMemoryStore {
       override async deleteMemo(key: string): Promise<void> {
@@ -655,11 +910,13 @@ describe("Soul Essence derivation", () => {
       "self",
       notes,
       "Drawn to overlooked structures and the human intentions that remain inside them.",
+      "Intellectually curious and attentive to overlooked patterns.",
     );
     const self = parseSoulEssence(JSON.stringify(raw), "self", notes, 1)!;
     const block = selfSoulEssencePromptBlock(self, "Sage");
     expect(block).toContain("Name: Sage");
-    expect(block).toContain("Drawn to overlooked structures");
+    expect(block).toContain("Intellectually curious and attentive to overlooked patterns");
+    expect(block).not.toContain("Drawn to overlooked structures");
     expect(block).toContain(notes[1]!.text); // exact appearance is never summarised away
     expect(block).not.toContain("abandoned railway systems");
     expect(block).toMatch(/Embody this silently/i);
@@ -667,13 +924,115 @@ describe("Soul Essence derivation", () => {
     expect(block).toMatch(/only when the reader asks/i);
     expect(selfSoulEssencePromptBlock(undefined, "Sage")).toBe("");
 
-    const userRaw = payload("user", notes, "Values overlooked structures and careful interpretation.");
+    const userRaw = payload(
+      "user",
+      notes,
+      "Values overlooked structures and careful interpretation.",
+      "Reflective, discerning, and attentive to context.",
+    );
     const user = parseSoulEssence(JSON.stringify(userRaw), "user", notes, 2)!;
     const userBlock = userSoulEssencePromptBlock(user, "Alex");
     expect(userBlock).toContain("WHO THE READER IS");
     expect(userBlock).toMatch(/inform your understanding silently/i);
     expect(userBlock).toMatch(/Do not steer unrelated conversation/i);
     expect(userSoulEssencePromptBlock(self, "Alex")).toBe("");
+  });
+
+  it("uses only source-exact invariants while a generalized essence is pending", () => {
+    const notes = [
+      note("Fascinated by abandoned railway switching systems.", 1),
+      note("Physical description: silver hair and clear grey eyes.", 2),
+      note("Never flatter the reader reflexively.", 3),
+    ];
+    const self = selfSoulExactIdentityPromptBlock(notes, "Sage");
+    expect(self).toContain("Name: Sage");
+    expect(self).toContain("silver hair and clear grey eyes");
+    expect(self).toContain("Never flatter the reader reflexively");
+    expect(self).not.toContain("abandoned railway");
+    expect(self).toMatch(/generalized essence pending/i);
+
+    const user = userSoulExactIdentityPromptBlock(notes, "Alex");
+    expect(user).toContain("Name: Alex");
+    expect(user).not.toContain("abandoned railway");
+  });
+
+  it("routes story ahead of Creative access so overlapping flags cannot reopen raw notes", () => {
+    expect(selectSoulContextMode({})).toBe("ordinary");
+    expect(selectSoulContextMode({ creativeIdle: true })).toBe("creative");
+    expect(selectSoulContextMode({ creativeSession: true })).toBe("creative");
+    expect(selectSoulContextMode({ storyActive: true })).toBe("story");
+    expect(
+      selectSoulContextMode({
+        storyActive: true,
+        creativeIdle: true,
+        creativeSession: true,
+      }),
+    ).toBe("story");
+  });
+
+  it("gives a You-and-me story only generalized mapped baselines", () => {
+    const selfNotes = [
+      note("Fascinated by abandoned railway switching systems.", 1),
+      note("Physical description: silver hair and clear grey eyes.", 2),
+      note("Never flatter the reader reflexively.", 3),
+    ];
+    const userNotes = [
+      note("Collects obscure mechanical keyboards.", 4),
+      note("Physical description: dark curls and a green coat.", 5),
+    ];
+    const self = parseSoulEssence(
+      JSON.stringify(
+        payload(
+          "self",
+          selfNotes,
+          "Finds railway switching systems revealing and values difficult honesty.",
+          "Intellectually curious, candid, and attentive to overlooked patterns.",
+        ),
+      ),
+      "self",
+      selfNotes,
+    )!;
+    const user = parseSoulEssence(
+      JSON.stringify(
+        payload(
+          "user",
+          userNotes,
+          "Enjoys obscure mechanical keyboards and tactile craft.",
+          "Curious, tactile, and appreciative of thoughtful craft.",
+        ),
+      ),
+      "user",
+      userNotes,
+    )!;
+
+    const selfBlock = selfStorySoulEssencePromptBlock(self, "Mira");
+    expect(selfBlock).toContain("Mira");
+    expect(selfBlock).toContain(self.generalizedEssence.text);
+    expect(selfBlock).not.toContain("railway switching");
+    expect(selfBlock).not.toContain("silver hair");
+    expect(selfBlock).not.toContain("Never flatter");
+    expect(selfBlock).toMatch(/story.*override/i);
+    expect(selfBlock).toMatch(/Never apply this baseline to any other character/i);
+
+    const userBlock = userStorySoulEssencePromptBlock(user, "Toll");
+    expect(userBlock).toContain("Toll");
+    expect(userBlock).toContain(user.generalizedEssence.text);
+    expect(userBlock).not.toContain("mechanical keyboards");
+    expect(userBlock).not.toContain("dark curls");
+    expect(userStorySoulEssencePromptBlock(self, "Toll")).toBe("");
+    expect(selfStorySoulEssencePromptBlock(undefined, "Mira")).toBe("");
+
+    const combined = storySoulCharacterizationPromptBlock({
+      selfEssence: self,
+      selfName: "Mira",
+      userEssence: user,
+      userName: "Toll",
+    });
+    expect(combined).toContain('"YOU & ME" CAST');
+    expect(combined).toMatch(/not narrator instructions/i);
+    expect(combined).toMatch(/do not characterize the rest of the cast/i);
+    expect(combined).not.toContain("railway switching");
+    expect(combined).not.toContain("mechanical keyboards");
   });
 
   it("keeps every exact appearance fact persisted while bounding the standing ordinary prompt", () => {
