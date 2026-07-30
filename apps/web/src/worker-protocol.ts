@@ -38,7 +38,7 @@ import type {
   WebSearchHit,
 } from "@visual-reader/core";
 import type { ProvidersDiagnostics, ReaderSettings } from "@visual-reader/ui";
-import type { EngineVram } from "./remote-sync.js";
+import type { EngineVram, SoulEssenceJobProgress } from "./remote-sync.js";
 
 /**
  * Message protocol between the main thread and the engine Web Worker. The engine
@@ -192,6 +192,8 @@ export type MainToWorker =
   | { type: "summarize"; requestId: number; turns: ChatTurn[] }
   /** Rebuild one derived Soul Essence from its complete authoritative note list. */
   | { type: "soulEssenceRefresh"; requestId: number; kind: SoulKind }
+  /** Cancel that exact manual rebuild without touching ordinary chat or the authoritative notes. */
+  | { type: "soulEssenceCancel"; requestId: number }
   /** Finish Google OAuth: exchange the consent code (worker has the CORS proxy + store). */
   | { type: "googleConnect"; requestId: number; code: string; redirectUri: string; codeVerifier: string }
   /** Plan a task: research it, produce a structured TaskPlan, and persist it (worker has
@@ -256,8 +258,18 @@ export type MainToWorker =
   /** Reply to a worker `hostFile` (local-file search/read + PDF text extraction — main thread
    * owns the Tauri bridge + pdfjs). */
   | { type: "hostFileResult"; callId: number; ok: boolean; files?: { name: string; path: string }[]; text?: string; imageBase64?: string; mimeType?: string; name?: string; error?: string }
-  /** Ack for a worker `llmVram` (the stop/ensure ran on the main thread). */
-  | { type: "llmVramResult"; callId: number }
+  /** Progress from a worker-requested bundled-LLM launch/download. */
+  | { type: "llmVramProgress"; callId: number; message: string; percent?: number }
+  /** Result of a worker `llmVram` request. `ensure` also returns the live provider address/model. */
+  | {
+      type: "llmVramResult";
+      callId: number;
+      action: "stop" | "ensure";
+      ok: boolean;
+      baseUrl?: string;
+      model?: string;
+      error?: string;
+    }
   /**
    * Landing-page buddy: one user message BEFORE any book is open. `library` is the
    * reader's book list (for open_library_book); `persona` picks the entertainment
@@ -478,6 +490,10 @@ export type WorkerToMain =
   | { type: "summarized"; requestId: number; ok: boolean; text?: string; error?: string }
   /** Reply to `soulEssenceRefresh`. */
   | { type: "soulEssenceRefreshed"; requestId: number; ok: boolean; essence?: SoulEssence; error?: string }
+  /** Visible progress for a manual, potentially multi-pass Soul Essence rebuild. */
+  | { type: "soulEssenceProgress"; requestId: number; kind: SoulKind; progress: SoulEssenceJobProgress }
+  /** Whether cancellation took effect, or arrived after the validated save commit began. */
+  | { type: "soulEssenceCancelResult"; requestId: number; accepted: boolean }
   /** A current derived essence was persisted (automatic or manual), with its exact source revision. */
   | { type: "soulEssenceUpdated"; kind: SoulKind; notes: SoulNote[]; essence: SoulEssence }
   | { type: "googleConnected"; requestId: number; ok: boolean; email?: string; error?: string }

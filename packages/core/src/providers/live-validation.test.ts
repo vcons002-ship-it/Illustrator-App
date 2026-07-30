@@ -187,7 +187,7 @@ describe.runIf(GEMINI_KEY)("LIVE Gemini grounding", () => {
     "grounded technical extraction (JSON mode + search tool) cites sources in the glossary",
     async () => {
       // End-to-end through the real provider: this is the risky model/mode combination
-      // (tools alongside responseSchema). If the API rejects it, the provider silently
+      // (tools alongside responseJsonSchema). If the API rejects it, the provider silently
       // retries ungrounded and NO References entry appears — which is exactly the silent
       // degradation this suite exists to surface, so the assertion is strict.
       const provider = new GeminiLLMProvider({

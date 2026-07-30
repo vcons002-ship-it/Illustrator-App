@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GeminiLLMProvider } from "./gemini-provider.js";
 import { OpenAILLMProvider } from "./openai-provider.js";
 import { LocalServerLLMProvider } from "./local-server-provider.js";
-import { WebLLMProvider } from "./webllm-provider.js";
+import { completeWithWebLlm, WebLLMProvider } from "./webllm-provider.js";
 import { MockLLMProvider } from "./mock-llm-provider.js";
 import { ClaudeProvider } from "./claude-provider.js";
 import {
@@ -13,6 +13,7 @@ import {
   type ChatTurn,
 } from "./chat.js";
 import type { Transport, TransportRequest, TransportResponse } from "../transport/transport.js";
+import { soulEssenceJsonSchema } from "../../chat/souls.js";
 
 class FakeTransport implements Transport {
   readonly requests: TransportRequest[] = [];
@@ -35,6 +36,14 @@ const turns: ChatTurn[] = [
   { role: "assistant", content: "hello" },
   { role: "user", content: "what now?" },
 ];
+
+const JSON_SCHEMA = {
+  type: "object",
+  properties: { summary: { type: "string" } },
+  required: ["summary"],
+  additionalProperties: false,
+};
+const SOUL_JSON_SCHEMA = soulEssenceJsonSchema("self", "soul-v1-test");
 
 describe("Gemini mature-mode safetySettings", () => {
   it("sends BLOCK_NONE safetySettings on chat only when allowMature is set", async () => {
@@ -277,6 +286,42 @@ describe("provider chat()", () => {
     expect(body.response_format).toBeUndefined(); // chat is prose, never JSON-mode
   });
 
+  it("openai constrains a buffered utility reply with the supplied JSON Schema", async () => {
+    const t = new FakeTransport({ choices: [{ message: { content: '{"summary":"ok"}' } }] });
+    const p = new OpenAILLMProvider({ apiKey: "k", transport: t });
+    expect(await p.chat(turns, { responseFormat: "json", jsonSchema: JSON_SCHEMA })).toBe(
+      '{"summary":"ok"}',
+    );
+    expect((t.requests[0]!.body as { response_format?: unknown }).response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "chat_response", strict: true, schema: JSON_SCHEMA },
+    });
+  });
+
+  it("openai carries the JSON Schema on a streaming utility reply", async () => {
+    let body: { response_format?: unknown } = {};
+    const fetchImpl = (async (_url: unknown, init?: { body?: unknown }) => {
+      body = JSON.parse(String(init!.body)) as typeof body;
+      return new Response(
+        `data: ${JSON.stringify({ choices: [{ delta: { content: '{"summary":"stream"}' } }] })}\n\n` +
+          "data: [DONE]\n\n",
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    }) as unknown as typeof fetch;
+    const p = new OpenAILLMProvider({ apiKey: "k", fetchImpl });
+    expect(
+      await p.chat(turns, {
+        responseFormat: "json",
+        jsonSchema: JSON_SCHEMA,
+        onToken: () => {},
+      }),
+    ).toBe('{"summary":"stream"}');
+    expect(body.response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "chat_response", strict: true, schema: JSON_SCHEMA },
+    });
+  });
+
   it("local server maps turns 1:1 and strips a thinking preamble", async () => {
     const t = new FakeTransport({
       choices: [{ message: { content: "<think>hmm</think>real answer" } }],
@@ -285,6 +330,38 @@ describe("provider chat()", () => {
     expect(await p.chat(turns)).toBe("real answer");
     const body = t.requests[0]!.body as { messages: ChatTurn[] };
     expect(body.messages).toEqual(turns);
+  });
+
+  it("local OpenAI-compatible buffered chat requests generic JSON mode", async () => {
+    const t = new FakeTransport({
+      choices: [{ message: { content: '{"summary":"local"}' } }],
+    });
+    const p = new LocalServerLLMProvider({ baseUrl: "http://x/v1", model: "m", transport: t });
+    expect(await p.chat(turns, { responseFormat: "json", jsonSchema: JSON_SCHEMA })).toBe(
+      '{"summary":"local"}',
+    );
+    expect(t.requests[0]!.body).toMatchObject({
+      temperature: 0,
+      response_format: { type: "json_object" },
+    });
+  });
+
+  it("native Ollama buffered chat uses the supplied schema as its format grammar", async () => {
+    const t = new FakeTransport({ message: { content: '{"summary":"ollama"}' } });
+    const p = new LocalServerLLMProvider({
+      baseUrl: "http://x/v1",
+      model: "m",
+      numCtx: 4096,
+      transport: t,
+    });
+    expect(await p.chat(turns, { responseFormat: "json", jsonSchema: JSON_SCHEMA })).toBe(
+      '{"summary":"ollama"}',
+    );
+    expect(t.requests[0]!.body).toMatchObject({
+      stream: false,
+      format: JSON_SCHEMA,
+      options: { temperature: 0 },
+    });
   });
 
   it("streams with reasoning_effort, retrying WITHOUT it when a strict server rejects it", async () => {
@@ -334,6 +411,21 @@ describe("provider chat()", () => {
     expect(body.contents.map((c) => c.role)).toEqual(["user", "model", "user"]);
   });
 
+  it("gemini sends JSON MIME type and schema for a utility reply", async () => {
+    const t = new FakeTransport({
+      candidates: [{ content: { parts: [{ text: '{"summary":"gm"}' }] } }],
+    });
+    const p = new GeminiLLMProvider({ apiKey: "k", transport: t });
+    expect(await p.chat(turns, { responseFormat: "json", jsonSchema: JSON_SCHEMA })).toBe(
+      '{"summary":"gm"}',
+    );
+    expect((t.requests[0]!.body as { generationConfig?: unknown }).generationConfig).toEqual({
+      maxOutputTokens: 1024,
+      responseMimeType: "application/json",
+      responseJsonSchema: JSON_SCHEMA,
+    });
+  });
+
   it("webllm streams text deltas through onToken", async () => {
     const p = new WebLLMProvider({
       complete: async (messages, opts) => {
@@ -346,6 +438,93 @@ describe("provider chat()", () => {
     const deltas: string[] = [];
     expect(await p.chat(turns, { onToken: (d) => deltas.push(d) })).toBe("hello");
     expect(deltas).toEqual(["hel", "lo"]);
+  });
+
+  it("webllm forwards JSON mode and its schema to the completion seam", async () => {
+    const p = new WebLLMProvider({
+      complete: async (_messages, opts) => {
+        expect(opts.json).toBe(true);
+        expect(opts.jsonSchema).toEqual(JSON_SCHEMA);
+        return '{"summary":"web"}';
+      },
+    });
+    expect(await p.chat(turns, { responseFormat: "json", jsonSchema: JSON_SCHEMA })).toBe(
+      '{"summary":"web"}',
+    );
+  });
+
+  it("webllm does not start a buffered retry when a streamed completion is cancelled", async () => {
+    const controller = new AbortController();
+    const requests: { stream?: boolean }[] = [];
+    const interruptGenerate = vi.fn();
+    const engine = {
+      interruptGenerate,
+      chat: {
+        completions: {
+          create: async (request: { stream?: boolean }) => {
+            requests.push(request);
+            if (request.stream) {
+              return {
+                async *[Symbol.asyncIterator]() {
+                  controller.abort();
+                  yield { choices: [{ delta: { content: "must not be consumed" } }] };
+                },
+              };
+            }
+            return { choices: [{ message: { content: "hidden buffered retry" } }] };
+          },
+        },
+      },
+    } as unknown as Parameters<typeof completeWithWebLlm>[0];
+
+    await expect(
+      completeWithWebLlm(engine, [{ role: "user", content: "integrate my Soul" }], {
+        json: true,
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.stream).toBe(true);
+    expect(interruptGenerate).toHaveBeenCalled();
+    expect(interruptGenerate.mock.calls.length).toBeLessThanOrEqual(2);
+  });
+
+  it("webllm buffered cancellation does not poison the next completion", async () => {
+    const controller = new AbortController();
+    let bufferedCalls = 0;
+    let poisoned = false;
+    const interruptGenerate = vi.fn(() => {
+      poisoned = true;
+    });
+    const engine = {
+      interruptGenerate,
+      chat: {
+        completions: {
+          create: async (request: { stream?: boolean }) => {
+            if (request.stream) throw new Error("streaming unsupported");
+            bufferedCalls += 1;
+            if (bufferedCalls === 1) {
+              controller.abort();
+              return { choices: [{ message: { content: "cancelled result" } }] };
+            }
+            return {
+              choices: [{ message: { content: poisoned ? "" : "next completion works" } }],
+            };
+          },
+        },
+      },
+    } as unknown as Parameters<typeof completeWithWebLlm>[0];
+
+    await expect(
+      completeWithWebLlm(engine, [{ role: "user", content: "first" }], {
+        json: false,
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(interruptGenerate).not.toHaveBeenCalled();
+    await expect(
+      completeWithWebLlm(engine, [{ role: "user", content: "second" }], { json: false }),
+    ).resolves.toBe("next completion works");
   });
 
   it("the mock answers deterministically (keyless demo mode)", async () => {
@@ -389,6 +568,34 @@ describe("provider chat()", () => {
     await p.chat([{ role: "system", content: "be helpful" }, { role: "user", content: "hi" }]);
     expect(body.system).toHaveLength(1);
     expect(body.system![0]!.cache_control).toBeUndefined();
+  });
+
+  it("claude accepts the full provider-safe Soul schema as native structured output", async () => {
+    let body: { output_config?: unknown } = {};
+    const fetchImpl = (async (_url: unknown, init?: { body?: unknown }) => {
+      body = JSON.parse(String(init!.body)) as typeof body;
+      return new Response(
+        JSON.stringify({
+          id: "msg_json",
+          type: "message",
+          role: "assistant",
+          model: "claude-haiku-4-5",
+          content: [{ type: "text", text: '{"summary":"claude"}' }],
+          stop_reason: "end_turn",
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    const p = new ClaudeProvider({ apiKey: "k", fetch: fetchImpl });
+    expect(await p.chat(turns, { responseFormat: "json", jsonSchema: SOUL_JSON_SCHEMA })).toBe(
+      '{"summary":"claude"}',
+    );
+    expect(body.output_config).toEqual({
+      format: { type: "json_schema", schema: SOUL_JSON_SCHEMA },
+    });
+    expect(JSON.stringify(SOUL_JSON_SCHEMA)).not.toMatch(/maxLength|maxItems|uniqueItems/);
   });
 
   it("supportsChat guards every in-repo provider", () => {

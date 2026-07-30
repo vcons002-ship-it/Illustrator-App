@@ -28,7 +28,7 @@ import {
  * Cloud LLM provider backed by Google Gemini, for users who bring a Gemini key.
  *
  * Uses the REST `generateContent` API through the injectable `Transport` seam
- * (no SDK needed): extraction asks for JSON via `responseSchema`; prompt building
+ * (no SDK needed): extraction asks for JSON via `responseJsonSchema`; prompt building
  * is a plain completion. Behaviour matches ClaudeProvider via the shared
  * `extraction` helpers, so swapping providers does not change results.
  */
@@ -163,7 +163,15 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable, VisionCapabl
         role: t.role === "assistant" ? "model" : "user",
         parts: [{ text: t.content }],
       })),
-      generationConfig: { maxOutputTokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS },
+      generationConfig: {
+        maxOutputTokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
+        ...(opts.responseFormat === "json"
+          ? {
+              responseMimeType: "application/json",
+              ...(opts.jsonSchema ? { responseJsonSchema: opts.jsonSchema } : {}),
+            }
+          : {}),
+      },
       ...(this.safetySettings ? { safetySettings: this.safetySettings } : {}),
     };
     // STREAMING path (SSE via raw fetch — Transport buffers) when tokens are wanted.
@@ -241,7 +249,7 @@ export class GeminiLLMProvider implements LLMProvider, ChatCapable, VisionCapabl
       systemInstruction: { parts: [{ text: opts.system }] },
       contents: [{ role: "user", parts: [{ text: userText }] }],
       generationConfig: opts.json
-        ? { responseMimeType: "application/json", responseSchema: EXTRACTION_JSON_SCHEMA }
+        ? { responseMimeType: "application/json", responseJsonSchema: EXTRACTION_JSON_SCHEMA }
         : {},
       ...(withTool ? { tools: [{ google_search: {} }] } : {}),
       ...(this.safetySettings ? { safetySettings: this.safetySettings } : {}),

@@ -73,6 +73,34 @@ export interface EngineVram {
   device?: string;
 }
 
+/** Live state for a user-requested Soul Essence distillation. The text model may need several
+ * bounded passes for a large Soul, so this is mirrored to the phone instead of leaving Generate
+ * looking inert while the desktop does the work. */
+export type SoulEssenceJobPhase =
+  | "queued"
+  | "loading"
+  | "analyzing"
+  | "merging"
+  | "validating"
+  | "saving";
+
+export interface SoulEssenceJobProgress {
+  phase: SoulEssenceJobPhase;
+  message: string;
+  /** One-based completed/current model pass. */
+  pass?: number;
+  /** Best current estimate; it can grow when a merge round is discovered. */
+  total?: number;
+  /** Approximate generated-token count across all passes. */
+  tokens?: number;
+  /** Epoch milliseconds, owned by the desktop worker for a stable elapsed timer. */
+  startedAt: number;
+}
+
+/** Phone-owned correlation token. It includes a per-page nonce so a reload cannot reuse an ID that
+ * the desktop still associates with an older, finishing generation. */
+export type SoulEssenceRelayRequestId = string;
+
 export interface EngineInventory {
   installedModels: InstalledModel[];
   installedTextEncoders: string[];
@@ -207,7 +235,8 @@ export type SyncToPhone =
   | { type: "vrsync:soul"; kind: SoulKind; name: string; notes: SoulNote[]; essence?: SoulEssence }
   // Result of an explicit Essence rebuild requested on the PHONE. The desktop owns both the Soul
   // store and the text model, so the phone cannot correctly run this operation in its own worker.
-  | { type: "vrsync:soulEssenceResult"; requestId: number; kind: SoulKind; essence?: SoulEssence; error?: string }
+  | { type: "vrsync:soulEssenceProgress"; requestId: SoulEssenceRelayRequestId; kind: SoulKind; progress: SoulEssenceJobProgress }
+  | { type: "vrsync:soulEssenceResult"; requestId: SoulEssenceRelayRequestId; kind: SoulKind; essence?: SoulEssence; error?: string }
   | { type: "vrsync:scheduled"; scheduled: ScheduledTask[] } // the desktop's scheduled tasks → phone ⏰ Scheduled panel
   | { type: "vrsync:vram"; vram?: EngineVram } // desktop GPU VRAM tick → phone status-bar indicator (frequent, lightweight; not folded into the heavier inventory push)
   | { type: "vrsync:book"; book?: BookSource; bible?: VisualBible }
@@ -261,7 +290,8 @@ export type CmdToDesktop =
   // so a phone-local write would change nothing and be clobbered by the next vrsync:soul).
   | { type: "vrcmd:soulSave"; kind: SoulKind; notes: SoulNote[] }
   | { type: "vrcmd:soulName"; kind: SoulKind; name: string }
-  | { type: "vrcmd:soulEssenceRefresh"; requestId: number; kind: SoulKind }
+  | { type: "vrcmd:soulEssenceRefresh"; requestId: SoulEssenceRelayRequestId; kind: SoulKind }
+  | { type: "vrcmd:soulEssenceCancel"; requestId: SoulEssenceRelayRequestId; kind: SoulKind }
   | { type: "vrcmd:chatRename"; id: string; label: string } // rename a session (empty ⇒ reset label)
   | { type: "vrcmd:chatPersona"; persona: BuddyPersona } // change the active session's persona
   | { type: "vrcmd:chatClear" } // clear the active session's history on the desktop

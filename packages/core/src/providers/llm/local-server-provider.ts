@@ -224,6 +224,7 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
     // num_ctx set ⇒ talk to Ollama natively so the model LOADS at this window (the OpenAI
     // `/v1` endpoint can't set num_ctx). Streams NDJSON instead of SSE.
     if (this.numCtx !== undefined) return this.chatViaOllama(messages, opts);
+    const json = opts.responseFormat === "json";
     if (opts.onToken) {
       let emittedAny = false;
       // Native tool calling on the OpenAI `/v1` path: send the schemas when supported and accumulate
@@ -242,13 +243,17 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
           body: {
             model: this.model,
             messages,
-            temperature: 0.7,
+            temperature: json ? 0 : 0.7,
             max_tokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
             keep_alive: "30m",
             stream: true,
             // Thinking level for reasoning models (Qwen3, etc.). Unsupported servers ignore it.
             ...(effort ? { reasoning_effort: effort } : {}),
             ...(withTools && opts.tools ? { tools: opts.tools } : {}),
+            // OpenAI-compatible local servers consistently support json_object;
+            // strict json_schema support varies, so the prompt remains responsible
+            // for the optional schema's exact shape on this path.
+            ...(json ? { response_format: { type: "json_object" } } : {}),
           },
           ...(opts.signal ? { signal: opts.signal } : {}),
           onEvent: (e) => {
@@ -307,8 +312,10 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
     // Non-streaming path (no onToken) — used rarely; the chat/buddy loop always streams, so
     // continuation (onComplete) rides the streaming branch above.
     const text = await this.complete(messages, {
-      json: false,
+      json,
+      ...(opts.jsonSchema ? { jsonSchema: opts.jsonSchema } : {}),
       maxTokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
+      noThink: opts.reasoningEffort === "none",
       ...(opts.signal ? { signal: opts.signal } : {}),
     });
     return stripThink(text).trim();
@@ -359,7 +366,13 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
 
   private async complete(
     messages: { role: "system" | "user" | "assistant"; content: string }[],
-    opts: { json: boolean; signal?: AbortSignal; maxTokens?: number; noThink?: boolean },
+    opts: {
+      json: boolean;
+      jsonSchema?: Record<string, unknown>;
+      signal?: AbortSignal;
+      maxTokens?: number;
+      noThink?: boolean;
+    },
   ): Promise<string> {
     // num_ctx set ⇒ Ollama native, so extraction/prompt calls LOAD at the same window as chat
     // (no reload thrash between opening a book and chatting).
@@ -488,7 +501,8 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
     if (!opts.onToken) {
       // No streaming sink — reuse the buffered native path and return the text.
       return this.completeViaOllama(messages as { role: "system" | "user" | "assistant"; content: string }[], {
-        json: false,
+        json: opts.responseFormat === "json",
+        ...(opts.jsonSchema ? { jsonSchema: opts.jsonSchema } : {}),
         ...(opts.signal ? { signal: opts.signal } : {}),
         ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
         noThink: opts.reasoningEffort === "none",
@@ -498,12 +512,14 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
     let thinking = "";
     let emitted = 0;
     let truncated = false;
+    const json = opts.responseFormat === "json";
     const wantsThink = this.ollamaThink(opts.reasoningEffort);
     // Native tool calling: when the model supports it, hand it the tool schemas so it emits structured
     // tool_calls (reliable) instead of having to type the text protocol. We collect them and append the
     // serialized calls to the reply so the buddy parser runs them.
     const withTools = await this.nativeToolsEnabled(opts);
     const toolCalls: NativeToolCall[] = [];
+    const format = opts.toolFormat ?? (json ? (opts.jsonSchema ?? "json") : undefined);
     await streamOllamaLines(
       this.fetchImpl,
       `${ollamaRoot(this.baseUrl)}/api/chat`,
@@ -512,13 +528,13 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
         messages,
         stream: true,
         keep_alive: "30m",
-        options: this.ollamaOptions(opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS, 0.7),
+        options: this.ollamaOptions(opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS, json ? 0 : 0.7),
         ...(wantsThink !== undefined ? { think: wantsThink } : {}),
         // GRAMMAR-CONSTRAINED tool call wins over native `tools`: `format` forces the text-protocol call
         // into `content` (which parseBuddyToolCalls reads), whereas `tools` would put it in `tool_calls`
         // with empty content — the two can't both apply. So when a call is REQUIRED, use the grammar.
-        ...(opts.toolFormat
-          ? { format: opts.toolFormat }
+        ...(format
+          ? { format }
           : withTools && opts.tools
             ? { tools: opts.tools }
             : {}),
@@ -558,7 +574,13 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
   /** Buffered native `/api/chat` (stream:false) — the num_ctx-aware twin of `complete()`. */
   private async completeViaOllama(
     messages: { role: "system" | "user" | "assistant"; content: string }[],
-    opts: { json: boolean; signal?: AbortSignal; maxTokens?: number; noThink?: boolean },
+    opts: {
+      json: boolean;
+      jsonSchema?: Record<string, unknown>;
+      signal?: AbortSignal;
+      maxTokens?: number;
+      noThink?: boolean;
+    },
   ): Promise<string> {
     const res = await this.transport.send({
       url: `${ollamaRoot(this.baseUrl)}/api/chat`,
@@ -572,7 +594,7 @@ export class LocalServerLLMProvider implements LLMProvider, ChatCapable, VisionC
         keep_alive: "30m",
         options: this.ollamaOptions(opts.maxTokens ?? (opts.json ? 12288 : 512), opts.json ? 0 : 0.7),
         ...(opts.noThink ? { think: false } : {}),
-        ...(opts.json ? { format: "json" } : {}),
+        ...(opts.json ? { format: opts.jsonSchema ?? "json" } : {}),
       },
     });
     if (!res.ok) {

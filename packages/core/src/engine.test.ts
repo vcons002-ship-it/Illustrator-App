@@ -374,6 +374,32 @@ describe("Engine", () => {
     await vi.waitFor(() => expect(engine.resultFor(1)?.status).toBe("ready"));
   });
 
+  it("execution holds block nested generation commands without changing reader pause intent", async () => {
+    const llm = new MockLLMProvider();
+    const extractSpy = vi.spyOn(llm, "extractEntities");
+    const image = new MockImageProvider();
+    const generateSpy = vi.spyOn(image, "generate");
+    const engine = new Engine({ llm, image });
+    await engine.openBook(sampleBook());
+
+    const release = engine.acquireExecutionHold({ bible: true, images: true });
+    engine.startGeneration();
+    engine.resumeGeneration();
+    await engine.completeBook(); // a nested Engine command must not bypass the foreground hold
+
+    expect(engine.isBiblePaused()).toBe(false);
+    expect(engine.isImagePaused()).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(extractSpy).not.toHaveBeenCalled();
+    expect(generateSpy).not.toHaveBeenCalled();
+
+    release();
+    await engine.whenBibleReady();
+    expect(extractSpy).toHaveBeenCalled();
+    await vi.waitFor(() => expect(engine.resultFor(0)?.status).toBe("ready"));
+    expect(generateSpy).toHaveBeenCalled();
+  });
+
   it("setImagePaused halts new renders while the Visual Bible keeps building", async () => {
     let releaseCh1: (() => void) | undefined;
     const llm = new MockLLMProvider();

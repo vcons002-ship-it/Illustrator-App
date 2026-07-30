@@ -3529,12 +3529,9 @@ struct LlmInfo {
 /// call reuses the first's result.
 #[tauri::command]
 async fn ensure_llm(app: AppHandle, state: State<'_, LlmState>) -> Result<LlmInfo, String> {
-    if let (Some(base_url), Some(model)) = (
-        state.base_url.lock().unwrap().clone(),
-        state.model.lock().unwrap().clone(),
-    ) {
-        return Ok(LlmInfo { base_url, model });
-    }
+    // Stop and ensure share one native lifecycle lock. The renderer and worker can both request
+    // startup during app hydration; checking outside the lock lets stop observe an empty child,
+    // return, and then have the still-running ensure publish a new process beside an image model.
     let _setup = state.setup.lock().await;
     if let (Some(base_url), Some(model)) = (
         state.base_url.lock().unwrap().clone(),
@@ -3556,9 +3553,11 @@ async fn ensure_llm(app: AppHandle, state: State<'_, LlmState>) -> Result<LlmInf
 
 /// Stop the bundled text model to free its VRAM (e.g. for a burst of local image renders on the
 /// same GPU). Kills the managed child and clears the cached URL, so the next `ensure_llm`
-/// relaunches it cold. A no-op when nothing is running. Safe to call repeatedly.
+/// relaunches it cold. A no-op when nothing is running. Safe to call repeatedly and serialized
+/// against setup so a late ensure cannot resurrect the process after this command returns.
 #[tauri::command]
 async fn stop_llm(state: State<'_, LlmState>) -> Result<(), String> {
+    let _setup = state.setup.lock().await;
     let child = state.child.lock().unwrap().take();
     if let Some(mut child) = child {
         kill_tree(&mut child);

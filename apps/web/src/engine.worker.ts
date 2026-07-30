@@ -85,6 +85,7 @@ import {
   userSoulEssencePromptBlock,
   buildSoulEssenceDistillationPrompt,
   buildSoulEssenceMergePrompt,
+  soulEssenceJsonSchema,
   partitionSoulNotes,
   parseSoulEssence,
   parseSoulEssenceMerge,
@@ -244,7 +245,7 @@ import type { ReaderSettings } from "@visual-reader/ui";
 import type { TaskPlan, TaskStep } from "@visual-reader/core";
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
 import { formatBuildStamp, loadBuildStamp } from "./build-stamp.js";
-import type { EngineVram } from "./remote-sync.js";
+import type { EngineVram, SoulEssenceJobPhase, SoulEssenceJobProgress } from "./remote-sync.js";
 
 /**
  * Engine host. Runs the Visual Bible extraction, render pipeline, and JIT buffer
@@ -262,10 +263,22 @@ let currentBook: BookSource | undefined;
 let currentBible: VisualBible | undefined;
 /** The book's built providers, reused by chat when no chat override applies. */
 let bookProviders:
-  | { llm: LLMProvider; image: ImageProvider; tier: TierConfig; imageSearch: FigureSearch; llmMock: boolean; imageMock: boolean }
+  | {
+      llm: LLMProvider;
+      image: ImageProvider;
+      tier: TierConfig;
+      imageSearch: FigureSearch;
+      llmMock: boolean;
+      llmLabel: string;
+      imageMock: boolean;
+    }
   | undefined;
 /** In-flight chat rounds, aborted by `chatCancel`. */
 const chatAborts = new Map<number, AbortController>();
+/** Manual Soul Essence jobs have their own cancellation scope: stopping one must not stop chat. */
+const soulEssenceAborts = new Map<number, AbortController>();
+/** The validated essence is crossing its atomic persistence boundary; cancellation waits for success. */
+const soulEssenceCommits = new Set<number>();
 
 /**
  * Story "as you go" session — the OPEN story (one at a time). `beats` is every beat's prose
@@ -503,7 +516,9 @@ async function handleAssessImage(
         ? `Answer this specifically and concisely: ${question}`
         : "Describe what's on screen and whether anything looks broken or like an error.") +
       " Be concrete about what you can and cannot see.";
-    const text = await llm.describeImage({ bytes: image.bytes, mimeType: image.mimeType, prompt });
+    const text = await withChatPriority(llm.id, () =>
+      llm.describeImage({ bytes: image.bytes, mimeType: image.mimeType, prompt }),
+    );
     post({ type: "imageAssessed", requestId, text });
   } catch (err) {
     post({ type: "imageAssessed", requestId, error: err instanceof Error ? err.message : String(err) });
@@ -557,24 +572,184 @@ function readUrlText(signal: AbortSignal): (url: string) => Promise<{ title?: st
  * promptly (it re-extracts on resume, in order); the build resumes the moment
  * the turn finishes. Cloud chat models don't contend, so they never pause it.
  */
-async function withChatPriority<T>(llmId: string, fn: () => Promise<T>): Promise<T> {
-  // Hand the idle image model's VRAM back (if a render evicted the LLM) AND evict any OTHER resident
-  // local model, THEN reload the chat LLM into the freed VRAM. See prepareChatLlmLoad.
-  await prepareChatLlmLoad();
-  // If we freed the bundled LLM for an image burst, relaunch it before this chat turn needs it.
-  await restoreChatLlm();
-  const eng = engine;
-  const yieldBible =
-    (llmId === "local-server" || llmId === "local" || llmId === "webllm") &&
-    eng !== undefined &&
-    bibleActive &&
-    !eng.isBiblePaused();
-  if (yieldBible) eng.setBiblePaused(true);
+let localTextQueueTail: Promise<void> = Promise.resolve();
+let localTextQueueDepth = 0;
+
+function abortError(): DOMException {
+  return new DOMException("The operation was cancelled.", "AbortError");
+}
+
+async function waitForLocalTextTurn(previous: Promise<void>, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    await previous;
+    return;
+  }
+  if (signal.aborted) throw abortError();
+  await new Promise<void>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(abortError());
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void previous.then(
+      () => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function waitForForegroundChat(
+  signal?: AbortSignal,
+  onQueued: () => void = () => {},
+): Promise<void> {
+  if (chatAborts.size === 0) return;
+  onQueued();
+  const heartbeat = setInterval(onQueued, 30_000);
   try {
+    while (chatAborts.size > 0) {
+      if (signal?.aborted) throw abortError();
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(done, 100);
+        function done(): void {
+          signal?.removeEventListener("abort", aborted);
+          resolve();
+        }
+        function aborted(): void {
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", aborted);
+          reject(abortError());
+        }
+        signal?.addEventListener("abort", aborted, { once: true });
+      });
+    }
+  } finally {
+    clearInterval(heartbeat);
+  }
+}
+
+interface LocalModelLease {
+  holdCurrentEngine(): void;
+  release(): void;
+}
+
+async function acquireLocalModelLease(opts: {
+  signal?: AbortSignal;
+  onQueued?: () => void;
+  engineHold: { bible: boolean; images: boolean };
+}): Promise<LocalModelLease> {
+  if (opts.signal?.aborted) throw abortError();
+  // Every owner of the shared local-model FIFO (text, image, video, or book-open) must establish
+  // its Engine hold BEFORE waiting. Adjacent owners then overlap their holds, so resolving slot A
+  // cannot synchronously restart background extraction/rendering before slot B's continuation.
+  const engineHolds: Array<{ target: Engine; release: () => void }> = [];
+  const holdCurrentEngine = (): void => {
+    const target = engine;
+    if (
+      target === undefined ||
+      engineHolds.some((held) => held.target === target)
+    ) {
+      return;
+    }
+    engineHolds.push({
+      target,
+      release: target.acquireExecutionHold(opts.engineHold),
+    });
+  };
+  const releaseEngineHolds = (): void => {
+    for (const held of engineHolds) held.release();
+    if (engineHolds.some((held) => engine === held.target)) postPaused();
+  };
+  holdCurrentEngine();
+  const previous = localTextQueueTail.catch(() => {});
+  const queued = localTextQueueDepth > 0;
+  localTextQueueDepth += 1;
+  let releaseCurrent!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  localTextQueueTail = previous.then(() => current);
+  if (queued) opts.onQueued?.();
+  const heartbeat =
+    queued && opts.onQueued
+      ? setInterval(opts.onQueued, 30_000)
+      : undefined;
+  try {
+    await waitForLocalTextTurn(previous, opts.signal);
+  } catch (error) {
+    releaseCurrent();
+    localTextQueueDepth = Math.max(0, localTextQueueDepth - 1);
+    releaseEngineHolds();
+    throw error;
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+  }
+  // A book-open slot ahead of us may have replaced the Engine while we waited.
+  holdCurrentEngine();
+  let released = false;
+  return {
+    holdCurrentEngine,
+    release: () => {
+      if (released) return;
+      released = true;
+      // Resolve the FIFO first; the next owner already established its overlapping hold at entry.
+      releaseCurrent();
+      localTextQueueDepth = Math.max(0, localTextQueueDepth - 1);
+      releaseEngineHolds();
+    },
+  };
+}
+
+async function withChatPriority<T>(
+  llmId: string,
+  fn: () => Promise<T>,
+  opts: {
+    signal?: AbortSignal;
+    onQueued?: () => void;
+    onAcquired?: () => void;
+    forceBundledEnsure?: boolean;
+    onModelProgress?: (message: string, percent?: number) => void;
+  } = {},
+): Promise<T> {
+  const isLocal = llmId === "local-server" || llmId === "local" || llmId === "webllm";
+  if (opts.signal?.aborted) throw abortError();
+  // Establish the Engine hold when the job ENTERS the FIFO, not after it reaches the front.
+  // That makes adjacent foreground jobs overlap their holds: finishing job A cannot briefly
+  // restart extraction/rendering before queued job B acquires the shared local model.
+  const handoffImage = isLocal && shouldHandImageModelToChat();
+  let lease: LocalModelLease | undefined;
+  try {
+    if (isLocal) {
+      lease = await acquireLocalModelLease({
+        ...(opts.signal ? { signal: opts.signal } : {}),
+        ...(opts.onQueued ? { onQueued: opts.onQueued } : {}),
+        engineHold: { bible: true, images: handoffImage },
+      });
+    }
+    if (opts.signal?.aborted) throw abortError();
+    opts.onAcquired?.();
+    const ensureBundled =
+      opts.forceBundledEnsure === true || (isLocal && bundledLocalSelected());
+    // Hand the idle image model's VRAM back (if a render evicted the LLM) AND evict any OTHER resident
+    // local model, THEN reload the chat LLM into the freed VRAM. See prepareChatLlmLoad.
+    // Stop new local renders before unloading their model, then launch the text model into the
+    // released VRAM. RenderBuffer aborts an in-flight render and requeues it for the resume below.
+    await prepareChatLlmLoad(handoffImage);
+    await restoreChatLlm({
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      ...(ensureBundled ? { forceBundledEnsure: true } : {}),
+      ...(opts.onModelProgress ? { onProgress: opts.onModelProgress } : {}),
+      allowBookFallback: isLocal,
+    });
+    if (opts.signal?.aborted) throw abortError();
     return await fn();
   } finally {
-    // Resume only the engine WE paused — the book may have been closed mid-turn.
-    if (yieldBible && engine === eng) eng.setBiblePaused(false);
+    lease?.release();
   }
 }
 
@@ -783,7 +958,18 @@ function runHostToolViaMain(
 
 // Free/relaunch the bundled chat LLM's VRAM via the main thread (Tauri lives there). Used to give
 // a burst of local image renders the whole GPU; the model is relaunched after the burst settles.
-const llmVramPending = new Map<number, () => void>();
+interface LlmVramRuntime {
+  baseUrl?: string;
+  model?: string;
+}
+
+interface PendingLlmVramCall {
+  action: "stop" | "ensure";
+  progress: (message: string, percent?: number) => void;
+  settle: (result: Extract<MainToWorker, { type: "llmVramResult" }>) => void;
+}
+
+const llmVramPending = new Map<number, PendingLlmVramCall>();
 let nextLlmVramId = 1;
 /** True while we've stopped the bundled chat LLM to free VRAM/RAM for image renders — so any later
  * LLM use (a chat turn, opening a book) knows to relaunch it first. */
@@ -809,18 +995,96 @@ let lastDraft: { id: string; to: string[]; subject: string } | undefined;
  * the per-turn excerpt, so it can be generous: it's paid once, when the model actually asks. */
 const MAX_DOCUMENT_READ_CHARS = 60_000;
 let documentCounter = 0;
-function llmVramOp(action: "stop" | "ensure"): Promise<void> {
-  return new Promise((resolve) => {
+function llmVramOp(
+  action: "stop" | "ensure",
+  opts: {
+    signal?: AbortSignal;
+    onProgress?: (message: string, percent?: number) => void;
+  } = {},
+): Promise<LlmVramRuntime> {
+  return new Promise((resolve, reject) => {
     const callId = nextLlmVramId++;
-    const to = setTimeout(() => {
-      if (llmVramPending.delete(callId)) resolve();
-    }, 30_000);
-    llmVramPending.set(callId, () => {
-      clearTimeout(to);
-      resolve();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      llmVramPending.delete(callId);
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const resetTimer = () => {
+      if (action === "ensure") return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(
+        () => {
+          fail(new Error("Stopping the bundled text model timed out."));
+        },
+        30_000,
+      );
+    };
+    if (opts.signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+    // Native setup cannot be interrupted. Once posted, keep the model lease until main replies;
+    // the caller checks its AbortSignal immediately afterward and never enters generation.
+    llmVramPending.set(callId, {
+      action,
+      progress: (message, percent) => {
+        if (settled) return;
+        resetTimer();
+        opts.onProgress?.(message, percent);
+      },
+      settle: (result) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (!result.ok) {
+          reject(
+            new Error(
+              result.error ||
+                (action === "ensure"
+                  ? "The bundled text model could not start."
+                  : "The bundled text model could not stop."),
+            ),
+          );
+          return;
+        }
+        resolve({
+          ...(result.baseUrl ? { baseUrl: result.baseUrl } : {}),
+          ...(result.model ? { model: result.model } : {}),
+        });
+      },
     });
+    resetTimer();
     post({ type: "llmVram", callId, action });
   });
+}
+
+const bundledLlmEnsuresInFlight = new Set<Promise<LlmVramRuntime>>();
+
+function ensureBundledLlm(
+  opts: {
+    signal?: AbortSignal;
+    onProgress?: (message: string, percent?: number) => void;
+  } = {},
+): Promise<LlmVramRuntime> {
+  const pending = llmVramOp("ensure", opts);
+  bundledLlmEnsuresInFlight.add(pending);
+  void pending.then(
+    () => bundledLlmEnsuresInFlight.delete(pending),
+    () => bundledLlmEnsuresInFlight.delete(pending),
+  );
+  return pending;
+}
+
+async function waitForBundledLlmEnsure(): Promise<void> {
+  if (bundledLlmEnsuresInFlight.size === 0) return;
+  await Promise.allSettled([...bundledLlmEnsuresInFlight]);
 }
 
 /** Whether it's SAFE + worth freeing the chat LLM for a render. Covers the local-server backends
@@ -833,9 +1097,15 @@ function llmVramOp(action: "stop" | "ensure"): Promise<void> {
  * via withChatPriority; opening/analysing a book restores it via handleOpen. */
 function canFreeChatLlm(): boolean {
   if (!settings || (settings.localTextBackend !== "bundled" && settings.localTextBackend !== "server")) return false;
-  // Never free mid-bible-build (active chapter, or a run with chapters still pending) — the engine
-  // would lose the LLM it's extracting with.
-  if (bibleActive || (bibleRunTotal > 0 && bibleRunDone < bibleRunTotal)) return false;
+  // Never free during either half of the Engine's text phase. The final prompt gap-fill and an
+  // explicit prompt rebuild still call the LLM after chapter extraction has reached N/N.
+  if (
+    engine?.isGenerating() &&
+    !engine.isBiblePaused() &&
+    !engine.isLlmPhaseComplete()
+  ) {
+    return false;
+  }
   const cs = chatSettingsOf(settings);
   if (cs.imageProvider !== "local" && settings.imageProvider !== "local") return false;
   // A1111 is now coordinated like ComfyUI: it can unload its checkpoint (POST /sdapi/v1/unload-checkpoint,
@@ -869,10 +1139,18 @@ function canFreeChatLlm(): boolean {
 /** Before a STANDALONE image render (no book open): stop the bundled chat LLM so ComfyUI gets the
  * whole GPU AND its model stops squatting system RAM. Once per burst; relaunched only on demand. */
 async function freeChatLlmForRender(): Promise<void> {
+  // A cancelled first-use launch still has to finish its native invoke. Never begin loading the
+  // diffusion model during that tail; once it settles, the normal state check below can stop it.
+  await waitForBundledLlmEnsure();
   if (chatLlmFreed || !canFreeChatLlm()) return;
   chatLlmFreed = true;
   if (settings?.localTextBackend === "bundled") {
-    await llmVramOp("stop"); // we own the bundled process — kill it to free its RAM/VRAM
+    try {
+      await llmVramOp("stop"); // we own the bundled process — kill it to free its RAM/VRAM
+    } catch {
+      // Keep the state truthful if the native stop failed; the next render may still have to share.
+      chatLlmFreed = false;
+    }
   } else {
     // "server" backend (Ollama): we don't own the process, but Ollama evicts the model on a
     // keep_alive:0 request (no-op for non-Ollama servers like LM Studio). It reloads lazily.
@@ -886,12 +1164,92 @@ async function freeChatLlmForRender(): Promise<void> {
 
 /** Relaunch the bundled chat LLM after it was freed — called ON DEMAND (a chat turn, opening a
  * book), NOT after every render, so a pure image session leaves it unloaded (no RAM/VRAM held). */
-async function restoreChatLlm(): Promise<void> {
+function bundledLocalSelected(scope: "chat" | "book" = "chat"): boolean {
+  if (!settings || !corsProxyAvailable || settings.localTextBackend !== "bundled") return false;
+  return (scope === "book" ? settings : chatSettingsOf(settings)).textProvider === "local";
+}
+
+function applyBundledLlmRuntime(
+  runtime: LlmVramRuntime,
+  scope: "chat" | "book" = "chat",
+): void {
+  // Provider choices can change while a first-use download is awaiting native setup. Never let that
+  // late result overwrite a newly selected Ollama/external-server endpoint.
+  if (!settings || !bundledLocalSelected(scope) || !runtime.baseUrl || !runtime.model) return;
+  settings = {
+    ...settings,
+    localServerTextUrl: runtime.baseUrl,
+    localServerTextModel: runtime.model,
+    chatLocalModel: runtime.model,
+  };
+}
+
+async function reconcileBundledLlmRuntime(
+  runtime: LlmVramRuntime,
+  preferredScope: "chat" | "book",
+): Promise<void> {
+  const alternateScope = preferredScope === "chat" ? "book" : "chat";
+  const activeScope = bundledLocalSelected(preferredScope)
+    ? preferredScope
+    : bundledLocalSelected(alternateScope)
+      ? alternateScope
+      : undefined;
+  if (activeScope) {
+    applyBundledLlmRuntime(runtime, activeScope);
+    chatLlmFreed = false;
+    return;
+  }
+  // The provider changed while setup was downloading. If no other worker ensure now owns the
+  // process, release the orphan so cloud/Ollama plus local image work do not inherit its VRAM.
+  await Promise.resolve();
+  if (
+    bundledLlmEnsuresInFlight.size === 0 &&
+    !bundledLocalSelected("chat") &&
+    !bundledLocalSelected("book")
+  ) {
+    try {
+      await llmVramOp("stop");
+      chatLlmFreed = true;
+    } catch {
+      chatLlmFreed = false;
+    }
+  }
+}
+
+async function restoreChatLlm(
+  opts: {
+    signal?: AbortSignal;
+    forceBundledEnsure?: boolean;
+    onProgress?: (message: string, percent?: number) => void;
+    bundledScope?: "chat" | "book";
+    allowBookFallback?: boolean;
+  } = {},
+): Promise<void> {
+  const bundledScope = opts.bundledScope ?? "chat";
+  const activeBundledScope = bundledLocalSelected(bundledScope)
+    ? bundledScope
+    : opts.allowBookFallback && bundledScope === "chat" && bundledLocalSelected("book")
+      ? "book"
+      : undefined;
+  if (opts.forceBundledEnsure && activeBundledScope) {
+    const runtime = await ensureBundledLlm({
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),
+    });
+    await reconcileBundledLlmRuntime(runtime, activeBundledScope);
+    return;
+  }
   if (!chatLlmFreed) return;
-  chatLlmFreed = false;
   // Only the bundled server needs an explicit relaunch. An Ollama ("server") model reloads
   // lazily on the next chat request (which is what triggered this restore), so nothing to start.
-  if (settings?.localTextBackend === "bundled") await llmVramOp("ensure");
+  if (settings?.localTextBackend === "bundled" && activeBundledScope) {
+    const runtime = await ensureBundledLlm({
+      ...(opts.signal ? { signal: opts.signal } : {}),
+      ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),
+    });
+    await reconcileBundledLlmRuntime(runtime, activeBundledScope);
+  }
+  if (settings?.localTextBackend !== "bundled") chatLlmFreed = false;
 }
 
 /** The REVERSE hand-off of freeChatLlmForRender: unload the idle LOCAL image model so the chat LLM can
@@ -902,25 +1260,73 @@ async function restoreChatLlm(): Promise<void> {
  * lowVram / proven-tight self-check here is a belt-and-suspenders mirror of canFreeChatLlm (the gate
  * that set `chatLlmFreed` in the first place). Once per chat burst (imageModelFreed); reset at the next
  * render start. The image engine reloads lazily on the next generate(), so this is safe to do eagerly. */
-async function freeImageModelForChat(): Promise<void> {
-  if (imageModelFreed || !settings) return;
+function localModelsNeedExclusiveVram(scope: "chat" | "book" = "chat"): boolean {
+  if (!settings) return false;
   const cs = chatSettingsOf(settings);
-  if (cs.imageProvider !== "local" && settings.imageProvider !== "local") return;
-  // A1111 now releases VRAM too (Automatic1111Backend.freeMemory → /sdapi/v1/unload-checkpoint), so the
-  // reverse hand-off works for it as well as ComfyUI — no A1111 skip here. (It reloads on the next render.)
   if (!settings.lowVram) {
     const imageGb = imageModelVramCostGb(settings.localModel ?? "");
     const chatGb =
       settings.localTextBackend === "bundled"
         ? BUNDLED_LLM_VRAM_GB
-        : serverModelVramCostGb(cs.localServerTextModel ?? settings.localServerTextModel ?? "");
-    // Keep the image model hot UNLESS we can prove both can't fit (a cold reload of the diffusion
-    // model is the expensive part — never pay it on a guess). "fit"/"unknown" → leave it loaded.
-    if (chatImageVramFit({ gpuVramMb: settings.gpuVramMb, imageGb, chatGb }) !== "nofit") return;
+        : serverModelVramCostGb(
+            scope === "book"
+              ? (settings.localServerTextModel ?? "")
+              : (cs.localServerTextModel ?? settings.localServerTextModel ?? ""),
+          );
+    if (chatImageVramFit({ gpuVramMb: settings.gpuVramMb, imageGb, chatGb }) !== "nofit") {
+      return false;
+    }
   }
+  return true;
+}
+
+function shouldHandImageModelToChat(scope: "chat" | "book" = "chat"): boolean {
+  if (!settings) return false;
+  const cs = chatSettingsOf(settings);
+  const activeBookUsesLocalImages =
+    engine !== undefined &&
+    bookProviders !== undefined &&
+    bookProviders.image.id === "local";
+  // Either configured scope can have left a checkpoint resident on the shared image backend.
+  // The scope selects the text-model size used for fit math, not which resident image is relevant.
+  if (
+    settings.imageProvider !== "local" &&
+    cs.imageProvider !== "local" &&
+    !activeBookUsesLocalImages
+  ) {
+    return false;
+  }
+  return localModelsNeedExclusiveVram(scope);
+}
+
+async function freeImageModelForChat(
+  force = false,
+  scope: "chat" | "book" = "chat",
+): Promise<void> {
+  // A forced hand-off follows an Engine pause/abort. The Engine may have lazily reloaded its
+  // checkpoint since the previous chat burst without passing through renderFromText(), so the
+  // cached flag is not authoritative here: establish a fresh, awaited /free boundary every time.
+  if ((!force && imageModelFreed) || !shouldHandImageModelToChat(scope)) return;
   imageModelFreed = true;
   try {
-    await chatProviders().image.freeMemory?.();
+    const cs = chatSettingsOf(settings!);
+    // Prefer the provider owned by the paused book Engine: a cloud chat-image override must not
+    // redirect this unload away from the local checkpoint that is actually holding VRAM. Both
+    // local scopes share the same configured backend, so one call also covers chat-made images.
+    const image =
+      engine !== undefined &&
+      bookProviders !== undefined &&
+      bookProviders.image.id === "local"
+        ? bookProviders.image
+        : scope === "book" && settings!.imageProvider === "local"
+          ? (() => {
+              const cf = corsFetch();
+              return buildProviders(settings!, cf ? { corsFetch: cf } : {}).image;
+            })()
+        : cs.imageProvider === "local"
+          ? chatProviders().image
+          : undefined;
+    await image?.freeMemory?.();
   } catch {
     /* best-effort — the image model just stays warm if the engine can't free right now */
   }
@@ -986,11 +1392,24 @@ async function freeStaleA1111ForComfy(): Promise<void> {
  *     a model switch, or a vision/assess model left loaded ("two models in `ollama ps`"). Ollama-only;
  *     a non-Ollama / cloud backend is a silent no-op.
  */
-async function prepareChatLlmLoad(): Promise<void> {
-  if (chatLlmFreed) await freeImageModelForChat();
+async function prepareChatLlmLoad(
+  forceImageHandoff = false,
+  scope: "chat" | "book" = "chat",
+): Promise<void> {
+  if (chatLlmFreed || forceImageHandoff) {
+    await freeImageModelForChat(forceImageHandoff, scope);
+  }
   if (!settings?.lowVram) return; // ample VRAM: leave co-resident models alone (no churn)
   try {
-    const { llm } = chatProviders();
+    // Opening a book must preserve its selected model, which may differ from the chat override.
+    // Evict around the provider that is actually about to load instead of always preserving chat.
+    const llm =
+      scope === "book"
+        ? (() => {
+            const cf = corsFetch();
+            return buildProviders(settings!, cf ? { corsFetch: cf } : {}).llm;
+          })()
+        : chatProviders().llm;
     if (llm.id === "local-server") await llm.evictOtherModels?.();
   } catch {
     /* best-effort — leave VRAM as-is if the server can't be queried */
@@ -1015,11 +1434,23 @@ function postPaused(): void {
   if (!bibleActive) post({ type: "status", message: imagesPaused ? "Image generation paused" : "" });
 }
 
+function setBiblePauseIntent(paused: boolean, broadcast = true): void {
+  engine?.setBiblePaused(paused);
+  if (broadcast) postPaused();
+}
+
+function setImagePauseIntent(paused: boolean, broadcast = true): void {
+  engine?.setImagePaused(paused);
+  if (broadcast) postPaused();
+}
+
 /** True while `handleOpen` is mid-flight (the engine object exists but its book
  * isn't loaded yet). A `start` that arrives in this window must NOT call
  * startGeneration() — `openBook` resets generationStarted afterwards, swallowing
  * it — so it defers via pendingStart, which handleOpen replays once open resolves. */
 let opening = false;
+/** Supersedes slow async opens. Close and every newer open invalidate all older continuations. */
+let openEpoch = 0;
 
 /** Begin generation now if the engine is up AND idle, else remember to start. */
 function beginGeneration(): void {
@@ -1261,28 +1692,26 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       beginGeneration();
       break;
     case "pause":
-      engine?.pauseGeneration();
+      setBiblePauseIntent(true, false);
+      setImagePauseIntent(true, false);
       postPaused();
       break;
     case "resume":
-      engine?.resumeGeneration();
+      setBiblePauseIntent(false, false);
+      setImagePauseIntent(false, false);
       postPaused();
       break;
     case "pauseBible":
-      engine?.setBiblePaused(true);
-      postPaused();
+      setBiblePauseIntent(true);
       break;
     case "resumeBible":
-      engine?.setBiblePaused(false);
-      postPaused();
+      setBiblePauseIntent(false);
       break;
     case "pauseImages":
-      engine?.setImagePaused(true);
-      postPaused();
+      setImagePauseIntent(true);
       break;
     case "resumeImages":
-      engine?.setImagePaused(false);
-      postPaused();
+      setImagePauseIntent(false);
       break;
     case "regenerateStoryboard":
       void engine?.regenerateStoryboard();
@@ -1406,6 +1835,14 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
     case "soulEssenceRefresh":
       void handleSoulEssenceRefresh(msg);
       break;
+    case "soulEssenceCancel": {
+      const accepted = !soulEssenceCommits.has(msg.requestId);
+      if (accepted) {
+        soulEssenceAborts.get(msg.requestId)?.abort();
+      }
+      post({ type: "soulEssenceCancelResult", requestId: msg.requestId, accepted });
+      break;
+    }
     case "googleConnect":
       void handleGoogleConnect(msg);
       break;
@@ -1498,10 +1935,17 @@ ctx.onmessage = (event: MessageEvent<MainToWorker>) => {
       resolve?.(msg);
       break;
     }
+    case "llmVramProgress": {
+      llmVramPending.get(msg.callId)?.progress(msg.message, msg.percent);
+      break;
+    }
     case "llmVramResult": {
-      const resolve = llmVramPending.get(msg.callId);
-      llmVramPending.delete(msg.callId);
-      resolve?.();
+      // Keep residency state truthful even if a native response lands after its UI request was
+      // cancelled. The exact waiter applies URL/model only if its provider selection is still current.
+      if (msg.action === "ensure" && msg.ok) {
+        chatLlmFreed = false;
+      }
+      llmVramPending.get(msg.callId)?.settle(msg);
       break;
     }
   }
@@ -1583,6 +2027,14 @@ async function renderFromText(
     signal?: AbortSignal;
   } = {},
 ): Promise<{ bytes: ArrayBuffer; mimeType: string; prompt: string }> {
+  const isLocal = tier.tier === "local";
+  const localModelLease = isLocal
+    ? await acquireLocalModelLease({
+        ...(opts.signal ? { signal: opts.signal } : {}),
+        engineHold: { bible: true, images: true },
+      })
+    : undefined;
+  try {
   // Standalone render (playground / chat generate_image): free the bundled chat LLM's VRAM first so
   // ComfyUI gets the whole GPU. Once per burst (gated to safe cases); relaunched after the burst by
   // the debounced warm or the next chat. The book's bible-illustration path doesn't come through
@@ -1609,7 +2061,6 @@ async function renderFromText(
       : level
         ? profileDimensions(level, tier.aspectRatio)
         : undefined;
-  const isLocal = tier.tier === "local";
   const styleLora = !isLocal || !applyStyle
     ? undefined
     : tier.disableStyleLora
@@ -1644,6 +2095,9 @@ async function renderFromText(
     ...(opts.signal ? { signal: opts.signal } : {}),
   });
   return { bytes: out.bytes, mimeType: out.mimeType, prompt };
+  } finally {
+    localModelLease?.release();
+  }
 }
 
 /**
@@ -1687,20 +2141,26 @@ function warmChatModel(): void {
  * loads it (cold) for both backends. After a render burst this restores it even in a pure image
  * session, so the reader's next chat is ready instead of waiting on a cold load. */
 async function doWarmChatModel(): Promise<void> {
+  if (chatAborts.size > 0) return;
   // Same pre-load as a chat turn: hand the image model's VRAM back (low-VRAM, if a render freed the LLM)
   // and evict any other resident model BEFORE warming, so the warm reload lands into freed VRAM and
   // doesn't end up co-resident with the image model or a stale LLM.
-  await prepareChatLlmLoad();
-  if (chatLlmFreed) await restoreChatLlm();
   try {
-    const { llm } = chatProviders();
-    if (
-      !supportsChat(llm) ||
-      (llm.id !== "local-server" && llm.id !== "local" && llm.id !== "webllm")
-    ) {
-      return;
-    }
-    await llm.chat([{ role: "user", content: "ok" }], { maxTokens: 1 }).catch(() => {});
+    const queueId = bundledLocalSelected() ? "local-server" : chatProviders().llm.id;
+    await withChatPriority(
+      queueId,
+      async () => {
+        const { llm } = chatProviders();
+        if (
+          !supportsChat(llm) ||
+          (llm.id !== "local-server" && llm.id !== "local" && llm.id !== "webllm")
+        ) {
+          return;
+        }
+        await llm.chat([{ role: "user", content: "ok" }], { maxTokens: 1 }).catch(() => {});
+      },
+      { forceBundledEnsure: true },
+    );
   } catch {
     /* no chat provider yet / not initialised — nothing to warm */
   }
@@ -1750,14 +2210,28 @@ function chatSettingsOf(s: ReaderSettings): ReaderSettings {
  * book's provider when an override resolves to the mock but the book's is real —
  * "default to local" must not mean placeholder answers when local isn't set up.
  */
-function chatProviders(): { llm: LLMProvider; image: ImageProvider; tier: TierConfig; imageSearch: FigureSearch } {
+function chatProviders(opts: {
+  onLocalStatus?: (text: string) => void;
+  onLocalActivity?: (activity: { phase: "bible" | "prompt"; tokens: number }) => void;
+} = {}): {
+  llm: LLMProvider;
+  image: ImageProvider;
+  tier: TierConfig;
+  imageSearch: FigureSearch;
+  llmDiagnostic: { label: string; mock: boolean; reason?: string };
+} {
   if (!settings) throw new Error("Settings not initialised yet.");
   const cf = corsFetch();
-  const built = buildProviders(chatSettingsOf(settings), cf ? { corsFetch: cf } : {});
-  const llm =
+  const built = buildProviders(chatSettingsOf(settings), {
+    ...(cf ? { corsFetch: cf } : {}),
+    ...(opts.onLocalStatus ? { onLocalStatus: opts.onLocalStatus } : {}),
+    ...(opts.onLocalActivity ? { onLocalActivity: opts.onLocalActivity } : {}),
+  });
+  const fallbackBookLlm =
     built.diagnostics.llm.mock && bookProviders && !bookProviders.llmMock
-      ? bookProviders.llm
-      : built.llm;
+      ? bookProviders
+      : undefined;
+  const llm = fallbackBookLlm?.llm ?? built.llm;
   const image =
     built.diagnostics.image.mock && bookProviders && !bookProviders.imageMock
       ? bookProviders.image
@@ -1766,7 +2240,10 @@ function chatProviders(): { llm: LLMProvider; image: ImageProvider; tier: TierCo
     built.diagnostics.image.mock && bookProviders && !bookProviders.imageMock
       ? bookProviders.tier
       : built.tier;
-  return { llm, image, tier, imageSearch: built.imageSearch };
+  const llmDiagnostic = fallbackBookLlm
+    ? { label: fallbackBookLlm.llmLabel, mock: false }
+    : built.diagnostics.llm;
+  return { llm, image, tier, imageSearch: built.imageSearch, llmDiagnostic };
 }
 
 /**
@@ -1776,7 +2253,10 @@ function chatProviders(): { llm: LLMProvider; image: ImageProvider; tier: TierCo
  * adding another invisible LLM call to every later message. Transient failures can still recover;
  * changing notes or models changes the key immediately.
  */
-const soulEssenceInFlight = new Map<string, Promise<SoulEssence | undefined>>();
+const soulEssenceInFlight = new Map<
+  string,
+  { promise: Promise<SoulEssence | undefined> }
+>();
 const soulEssenceFailedUntil = new Map<string, number>();
 const SOUL_ESSENCE_RETRY_MS = 10 * 60_000;
 const SOUL_ESSENCE_MAX_TOKENS = 1_400;
@@ -1790,6 +2270,12 @@ const SOUL_DIGEST_CACHE_KEY: Record<SoulKind, string> = {
   self: "self-soul-essence-digests-v1",
   user: "about-you-soul-essence-digests-v1",
 };
+
+type SoulEssenceProgressCallback = (
+  phase: SoulEssenceJobPhase,
+  message: string,
+  progress?: { pass?: number; total?: number },
+) => void;
 
 interface SoulDigestCacheEntry {
   fingerprint: string;
@@ -1902,9 +2388,13 @@ async function completeSoulEssence(
   maxTokens: number,
   signal?: AbortSignal,
   digests?: readonly SoulEssenceDigestInput[],
+  onToken?: (delta: string) => void,
+  onRepair?: () => void,
 ): Promise<SoulEssence | undefined> {
   if (!supportsChat(llm)) return undefined;
   for (let attempt = 0; attempt < 2; attempt++) {
+    if (signal?.aborted) throw abortError();
+    if (attempt > 0) onRepair?.();
     const system = attempt === 0
       ? prompt.system
       : `${prompt.system}\n\nREPAIR ATTEMPT: The prior response failed strict validation. Re-read every requirement, copy the exact fingerprint/kind/schema, obey the prompt's evidence-link rules, preserve every required facet, and return one complete JSON object.`;
@@ -1916,9 +2406,15 @@ async function completeSoulEssence(
       {
         maxTokens,
         reasoningEffort: "none",
+        responseFormat: "json",
+        jsonSchema: soulEssenceJsonSchema(kind, prompt.sourceFingerprint),
+        ...(onToken ? { onToken } : {}),
         ...(signal ? { signal } : {}),
       },
     );
+    // Some OpenAI-compatible servers do not stop an HTTP response immediately. Cancellation still
+    // must prevent that late response from being parsed, cached, or saved.
+    if (signal?.aborted) throw abortError();
     const parsed = digests
       ? parseSoulEssenceMerge(raw, kind, notes, digests, Date.now())
       : parseSoulEssence(raw, kind, notes, Date.now());
@@ -1968,11 +2464,16 @@ async function distillSoulEssence(
   outputBudget: number,
   reuseCache: boolean,
   signal?: AbortSignal,
+  onProgress?: SoulEssenceProgressCallback,
+  onToken?: (delta: string) => void,
 ): Promise<SoulEssence | undefined> {
   const modelKey = soulEssenceModelKey(llm);
   const cache = await loadSoulDigestCache(kind, modelKey);
   const rootFingerprint = soulSourceFingerprint(notes);
   let cacheDirty = false;
+  let activePhase: SoulEssenceJobPhase = "analyzing";
+  let activePass = 0;
+  let activeTotal = 0;
   const digest = async (
     scopeNotes: readonly SoulNote[],
     prompt: ReturnType<typeof buildSoulEssenceDistillationPrompt>,
@@ -2000,6 +2501,13 @@ async function distillSoulEssence(
       outputBudget,
       signal,
       children,
+      onToken,
+      () =>
+        onProgress?.(
+          "validating",
+          `The model returned invalid structured data; repairing pass ${activePass}…`,
+          { pass: activePass, total: activeTotal },
+        ),
     );
     if (essence && fingerprint !== rootFingerprint) {
       // Appearance/directions are reconstructed deterministically from scopeNotes during cache
@@ -2026,7 +2534,21 @@ async function distillSoulEssence(
 
   try {
     let digests: SoulEssenceDigestInput[] = [];
-    for (const chunk of partitionSoulNotes(notes, sourceBudget)) {
+    const chunks = partitionSoulNotes(notes, sourceBudget);
+    let completed = 0;
+    let total = chunks.length;
+    for (let index = 0; index < chunks.length; index++) {
+      const chunk = chunks[index]!;
+      activePhase = "analyzing";
+      activePass = completed + 1;
+      activeTotal = total;
+      onProgress?.(
+        activePhase,
+        chunks.length === 1
+          ? "Analyzing the complete Soul…"
+          : `Analyzing Soul section ${index + 1} of ${chunks.length}…`,
+        { pass: activePass, total: activeTotal },
+      );
       const essence = await digest(
         chunk,
         buildSoulEssenceDistillationPrompt(kind, chunk),
@@ -2035,16 +2557,32 @@ async function distillSoulEssence(
         return undefined;
       }
       digests.push({ notes: chunk, essence });
+      completed += 1;
     }
     await flushCache();
 
     while (digests.length > 1) {
       const next: SoulEssenceDigestInput[] = [];
-      for (const group of groupSoulDigests(digests, sourceBudget)) {
+      const groups = groupSoulDigests(digests, sourceBudget);
+      const mergeCount = groups.filter((group) => group.length > 1).length;
+      total += mergeCount;
+      let mergeIndex = 0;
+      for (const group of groups) {
         if (group.length === 1) {
           next.push(group[0]!);
           continue;
         }
+        mergeIndex += 1;
+        activePhase = "merging";
+        activePass = completed + 1;
+        activeTotal = total;
+        onProgress?.(
+          activePhase,
+          mergeCount === 1
+            ? "Integrating the Soul into one everyday identity…"
+            : `Integrating Soul summary ${mergeIndex} of ${mergeCount}…`,
+          { pass: activePass, total: activeTotal },
+        );
         const scopeNotes = group.flatMap((digest) => [...digest.notes]);
         const essence = await digest(
           scopeNotes,
@@ -2055,11 +2593,16 @@ async function distillSoulEssence(
           return undefined;
         }
         next.push({ notes: scopeNotes, essence });
+        completed += 1;
       }
       await flushCache();
       digests = next;
     }
     await flushCache();
+    onProgress?.("validating", "Validating every synthesis against its source notes…", {
+      pass: completed,
+      total,
+    });
     return digests[0]?.essence;
   } finally {
     // Abort between leaves/merges still persists every completed child digest, so the next idle or
@@ -2079,8 +2622,11 @@ async function ensureSoulEssence(
     contextTokens?: number;
     sourceBudget?: number;
     outputBudget?: number;
+    onProgress?: SoulEssenceProgressCallback;
+    onToken?: (delta: string) => void;
   } = {},
 ): Promise<SoulEssence | undefined> {
+  if (opts.signal?.aborted) throw abortError();
   if (
     notes.length === 0 ||
     !supportsChat(llm) ||
@@ -2109,10 +2655,22 @@ async function ensureSoulEssence(
   const retryAt = soulEssenceFailedUntil.get(key) ?? 0;
   if (retryAt > Date.now()) return undefined;
   soulEssenceFailedUntil.delete(key);
-  const running = soulEssenceInFlight.get(key);
-  if (running) return running;
+  let running = soulEssenceInFlight.get(key)?.promise;
+  while (running) {
+    if (!opts.force) return running;
+    // Cancel resolves the panel immediately, while a provider may need another event-loop turn to
+    // reject its request and release this key. A retry waits for that exact predecessor, ignores its
+    // outcome, then starts a genuinely new forced rebuild instead of inheriting the cancelled one.
+    opts.onProgress?.("queued", "Waiting for the previous Soul Essence job to stop…");
+    await waitForLocalTextTurn(running.then(() => undefined, () => undefined), opts.signal);
+    if (opts.signal?.aborted) throw abortError();
+    running = soulEssenceInFlight.get(key)?.promise;
+  }
 
+  const entry = { promise: Promise.resolve<SoulEssence | undefined>(undefined) };
   const work = (async (): Promise<SoulEssence | undefined> => {
+    // Let the ownership entry land before any synchronous provider callback can fail this job.
+    await Promise.resolve();
     let activityTimer: ReturnType<typeof setInterval> | undefined;
     try {
       opts.onActivity?.();
@@ -2125,31 +2683,50 @@ async function ensureSoulEssence(
         opts.outputBudget ?? soulDistillationOutputBudget(),
         true,
         opts.signal,
+        opts.onProgress,
+        opts.onToken,
       );
+      if (opts.signal?.aborted) throw abortError();
       if (!essence) {
         soulEssenceFailedUntil.set(key, Date.now() + SOUL_ESSENCE_RETRY_MS);
+        if (opts.force) {
+          throw new Error(
+            "The text model returned data that did not satisfy the grounded Soul Essence format after a repair attempt.",
+          );
+        }
         return undefined;
       }
       const fingerprint = soulSourceFingerprint(notes);
-      if (soulSourceFingerprint(await loadSoul(store, kind)) !== fingerprint) return undefined;
+      if (soulSourceFingerprint(await loadSoul(store, kind)) !== fingerprint) {
+        if (opts.force) throw new Error("The Soul notes changed while the essence was being generated. Try again.");
+        return undefined;
+      }
+      if (opts.signal?.aborted) throw abortError();
+      // From this point through save + broadcast, the validated commit is atomic/non-cancellable.
+      opts.onProgress?.("saving", "Saving the validated Soul Essence…");
       const saved = await saveSoulEssence(store, kind, essence, notes);
       // A note may have changed while storage was committing. Never let an in-flight turn embody an
       // essence from a revision that is no longer authoritative.
-      if (soulSourceFingerprint(await loadSoul(store, kind)) !== fingerprint) return undefined;
+      if (soulSourceFingerprint(await loadSoul(store, kind)) !== fingerprint) {
+        if (opts.force) throw new Error("The Soul notes changed while the essence was being saved. Try again.");
+        return undefined;
+      }
       post({ type: "soulEssenceUpdated", kind, notes: [...notes], essence: saved });
       return saved;
     } catch (error) {
       const aborted =
         opts.signal?.aborted === true ||
-        (error instanceof DOMException && error.name === "AbortError");
+        (error instanceof Error && error.name === "AbortError");
       if (!aborted) soulEssenceFailedUntil.set(key, Date.now() + SOUL_ESSENCE_RETRY_MS);
+      if (opts.force) throw error;
       return undefined;
     } finally {
       if (activityTimer) clearInterval(activityTimer);
-      soulEssenceInFlight.delete(key);
+      if (soulEssenceInFlight.get(key) === entry) soulEssenceInFlight.delete(key);
     }
   })();
-  soulEssenceInFlight.set(key, work);
+  entry.promise = work;
+  soulEssenceInFlight.set(key, entry);
   return work;
 }
 
@@ -2935,16 +3512,21 @@ async function handlePlanTask(msg: Extract<MainToWorker, { type: "planTask" }>):
       removeLibraryBook: notUsed,
       setVisualStyle: notUsed,
     };
-    const plan = await runTaskPlanning({
-      llm,
-      research,
-      source: msg.source,
-      sourceText: msg.sourceText,
-      todayIso: new Date().toISOString().slice(0, 10),
-      signal: ac.signal,
-      onPhase: (phase, note) =>
-        post({ type: "planProgress", requestId: msg.requestId, phase, ...(note ? { note } : {}) }),
-    });
+    const plan = await withChatPriority(
+      llm.id,
+      () =>
+        runTaskPlanning({
+          llm,
+          research,
+          source: msg.source,
+          sourceText: msg.sourceText,
+          todayIso: new Date().toISOString().slice(0, 10),
+          signal: ac.signal,
+          onPhase: (phase, note) =>
+            post({ type: "planProgress", requestId: msg.requestId, phase, ...(note ? { note } : {}) }),
+        }),
+      { signal: ac.signal },
+    );
     if (!plan) throw new Error("Couldn't produce a usable plan — try rephrasing the task.");
     // Re-planning an existing task (a scan stub, or a refresh) keeps its id + chat session so the
     // planned version REPLACES the stub in place instead of adding a duplicate — and PRESERVES its
@@ -3082,7 +3664,12 @@ async function handleScanInbox(msg: Extract<MainToWorker, { type: "scanInbox" }>
       post({ type: "scanned", requestId: msg.requestId, ok: true, candidates: [] });
       return;
     }
-    const reply = await llm.chat(buildScanPrompt(emails, events, now.toISOString().slice(0, 10), focusIds), { maxTokens: 1024 });
+    await waitForForegroundChat();
+    const reply = await withChatPriority(llm.id, () =>
+      llm.chat(buildScanPrompt(emails, events, now.toISOString().slice(0, 10), focusIds), {
+        maxTokens: 1024,
+      }),
+    );
     const candidates = dedupeCandidates(
       parseCandidates(reply, emails, events),
       await loadTaskPlans(store),
@@ -3418,19 +4005,21 @@ async function handleSummarize(msg: Extract<MainToWorker, { type: "summarize" }>
       throw new Error(`The "${llm.id}" text provider doesn't support chat yet.`);
     }
     const transcript = msg.turns.map((t) => `${t.role.toUpperCase()}: ${t.content}`).join("\n\n");
-    const text = await llm.chat(
-      [
-        {
-          role: "system",
-          content:
-            "Compress this conversation transcript into a brief that lets the SAME assistant continue " +
-            "seamlessly. Preserve: decisions made, facts established, names/numbers/links, the reader's " +
-            "stated preferences, anything opened or generated, and open questions. Terse bullet points; " +
-            "no preamble, no meta-commentary.",
-        },
-        { role: "user", content: transcript.slice(-120_000) },
-      ],
-      { maxTokens: 1024 },
+    const text = await withChatPriority(llm.id, () =>
+      llm.chat(
+        [
+          {
+            role: "system",
+            content:
+              "Compress this conversation transcript into a brief that lets the SAME assistant continue " +
+              "seamlessly. Preserve: decisions made, facts established, names/numbers/links, the reader's " +
+              "stated preferences, anything opened or generated, and open questions. Terse bullet points; " +
+              "no preamble, no meta-commentary.",
+          },
+          { role: "user", content: transcript.slice(-120_000) },
+        ],
+        { maxTokens: 1024 },
+      ),
     );
     const trimmed = text.trim();
     if (!trimmed) throw new Error("the model returned an empty summary");
@@ -3448,30 +4037,121 @@ async function handleSummarize(msg: Extract<MainToWorker, { type: "summarize" }>
 async function handleSoulEssenceRefresh(
   msg: Extract<MainToWorker, { type: "soulEssenceRefresh" }>,
 ): Promise<void> {
+  const ac = new AbortController();
+  soulEssenceAborts.get(msg.requestId)?.abort();
+  soulEssenceAborts.set(msg.requestId, ac);
+  const startedAt = Date.now();
+  let tokens = 0;
+  let lastTokenPost = 0;
+  let tokenTimer: ReturnType<typeof setTimeout> | undefined;
+  let current: SoulEssenceJobProgress = {
+    phase: "queued",
+    message: "Soul Essence generation queued…",
+    startedAt,
+  };
+  const postCurrent = () => {
+    lastTokenPost = Date.now();
+    post({
+      type: "soulEssenceProgress",
+      requestId: msg.requestId,
+      kind: msg.kind,
+      progress: { ...current, tokens },
+    });
+  };
+  const report: SoulEssenceProgressCallback = (phase, message, progress = {}) => {
+    if (tokenTimer) {
+      clearTimeout(tokenTimer);
+      tokenTimer = undefined;
+    }
+    current = {
+      ...current,
+      phase,
+      message,
+      ...("pass" in progress ? { pass: progress.pass } : {}),
+      ...("total" in progress ? { total: progress.total } : {}),
+    };
+    if (phase === "saving") soulEssenceCommits.add(msg.requestId);
+    postCurrent();
+  };
+  const onToken = (delta: string) => {
+    tokens += Math.max(1, Math.ceil(delta.length / CHARS_PER_TOKEN));
+    const wait = 250 - (Date.now() - lastTokenPost);
+    if (wait <= 0) {
+      postCurrent();
+      return;
+    }
+    if (!tokenTimer) {
+      tokenTimer = setTimeout(() => {
+        tokenTimer = undefined;
+        postCurrent();
+      }, wait);
+    }
+  };
+  // Some providers buffer a whole response (no token callbacks), and a healthy local queue/video
+  // wait can exceed the UI watchdog. Re-post the current phase so desktop and phone distinguish a
+  // live foreground job from a genuinely stalled model.
+  const jobHeartbeat = setInterval(postCurrent, 30_000);
   try {
-    const { llm } = chatProviders();
+    report("loading", "Preparing the chat text model…");
     const store = memoryStore();
     const notes = await loadSoul(store, msg.kind);
     if (notes.length === 0) {
       post({ type: "soulEssenceRefreshed", requestId: msg.requestId, ok: true });
       return;
     }
-    const contextTokens = await localContextTokens(llm.id);
-    const budgets = contextBudgets(llm.id, contextTokens);
-    if (!soulDistillationFitsContext(budgets.maxTokens)) {
-      throw new Error(
-        `Soul Essence generation needs at least a ${MIN_SOUL_DISTILLATION_CONTEXT_TOKENS.toLocaleString()}-token text-model context window. Increase the local context setting; the original Soul notes remain intact.`,
-      );
-    }
-    const sourceBudget = soulDistillationSourceBudget(budgets.maxTokens);
-    const outputBudget = soulDistillationOutputBudget(budgets.maxTokens);
-    const essence = await withChatPriority(llm.id, () =>
-      ensureSoulEssence(llm, msg.kind, notes, {
-        force: true,
-        ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
-        sourceBudget,
-        outputBudget,
-      }),
+    // A manual multi-pass rebuild is deliberately lower priority than a conversation already in
+    // flight, including the small gap between that turn's identity-prep and reply leases.
+    await waitForForegroundChat(ac.signal, () =>
+      report("queued", "Waiting for the active chat-model turn to finish…"),
+    );
+    const queueId = bundledLocalSelected() ? "local-server" : chatProviders().llm.id;
+    const essence = await withChatPriority(
+      queueId,
+      async () => {
+        // Build only after the worker-owned VRAM hand-off and bundled launch returned its live URL.
+        const { llm, llmDiagnostic } = chatProviders({
+          onLocalStatus: (message) => {
+            if (message) report("loading", message);
+          },
+        });
+        if (llm.id === "mock" || !supportsChat(llm)) {
+          throw new Error(
+            llmDiagnostic.reason
+              ? `The chat text model is not available: ${llmDiagnostic.reason}`
+              : "The chat text model is not available. Choose or start a text model in Settings.",
+          );
+        }
+        report("loading", `Activating ${llmDiagnostic.label || "the chat text model"}…`);
+        const contextTokens = await localContextTokens(llm.id);
+        const budgets = contextBudgets(llm.id, contextTokens);
+        if (!soulDistillationFitsContext(budgets.maxTokens)) {
+          throw new Error(
+            `Soul Essence generation needs at least a ${MIN_SOUL_DISTILLATION_CONTEXT_TOKENS.toLocaleString()}-token text-model context window. Increase the local context setting; the original Soul notes remain intact.`,
+          );
+        }
+        const sourceBudget = soulDistillationSourceBudget(budgets.maxTokens);
+        const outputBudget = soulDistillationOutputBudget(budgets.maxTokens);
+        return ensureSoulEssence(llm, msg.kind, notes, {
+          force: true,
+          signal: ac.signal,
+          ...(budgets.maxTokens ? { contextTokens: budgets.maxTokens } : {}),
+          sourceBudget,
+          outputBudget,
+          onProgress: report,
+          onToken,
+        });
+      },
+      {
+        signal: ac.signal,
+        onQueued: () => report("queued", "Waiting for the active chat-model turn to finish…"),
+        onAcquired: () => report("loading", "Preparing the chat text model…"),
+        forceBundledEnsure: true,
+        onModelProgress: (message, percent) =>
+          report(
+            "loading",
+            percent !== undefined ? `${message} ${Math.round(percent)}%` : message,
+          ),
+      },
     );
     if (!essence) throw new Error("the text model could not produce a grounded Soul Essence");
     post({
@@ -3481,12 +4161,22 @@ async function handleSoulEssenceRefresh(
       essence,
     });
   } catch (err) {
+    const cancelled = ac.signal.aborted || (err instanceof Error && err.name === "AbortError");
     post({
       type: "soulEssenceRefreshed",
       requestId: msg.requestId,
       ok: false,
-      error: err instanceof Error ? err.message : String(err),
+      error: cancelled
+        ? "Soul Essence generation was cancelled."
+        : err instanceof Error
+          ? err.message
+          : String(err),
     });
+  } finally {
+    clearInterval(jobHeartbeat);
+    if (tokenTimer) clearTimeout(tokenTimer);
+    soulEssenceCommits.delete(msg.requestId);
+    if (soulEssenceAborts.get(msg.requestId) === ac) soulEssenceAborts.delete(msg.requestId);
   }
 }
 
@@ -3506,18 +4196,24 @@ async function handlePolish(msg: Extract<MainToWorker, { type: "polish" }>): Pro
     }
     const base = { freeText: msg.freeText, source: msg.source, ...(msg.mode ? { mode: msg.mode } : {}) };
     if (msg.stage === "understand") {
-      const raw = await llm.chat(buildUnderstandPrompt(base), { maxTokens: 512, signal: ac.signal });
+      const raw = await withChatPriority(
+        llm.id,
+        () => llm.chat(buildUnderstandPrompt(base), { maxTokens: 512, signal: ac.signal }),
+        { signal: ac.signal },
+      );
       const { plan, question } = parseUnderstanding(raw);
       post({ type: "polished", requestId: msg.requestId, stage: "understand", ok: true, plan, question });
       return;
     }
-    const text = await llm.chat(
-      buildProducePrompt({ ...base, confirmedPlan: msg.confirmedPlan ?? "" }),
-      {
-        maxTokens: 4096,
-        signal: ac.signal,
-        onToken: (delta) => post({ type: "polishToken", requestId: msg.requestId, text: delta }),
-      },
+    const text = await withChatPriority(
+      llm.id,
+      () =>
+        llm.chat(buildProducePrompt({ ...base, confirmedPlan: msg.confirmedPlan ?? "" }), {
+          maxTokens: 4096,
+          signal: ac.signal,
+          onToken: (delta) => post({ type: "polishToken", requestId: msg.requestId, text: delta }),
+        }),
+      { signal: ac.signal },
     );
     const trimmed = text.trim();
     if (!trimmed) throw new Error("the model returned an empty result");
@@ -3631,25 +4327,30 @@ async function handleCodingAgents(msg: Extract<MainToWorker, { type: "runCodingA
             : `Coding agents finished (${total}/${total}) — merging…`,
       });
     announce();
-    const results = await mapWithConcurrency(msg.agents, concurrency, async (agent, idx) => {
-      try {
-        const out = await runBuddyTurn({
-          llm: agentLlm,
-          system: buildCodingAgentPrompt({ title: agent.title, instructions: agent.instructions }, agent.dir),
-          history: [{ role: "user", content: "Complete your subtask in your worktree, verify it, and report what you changed." }],
-          deps,
-          runHostTool: (call) => runHostToolViaMain(msg.runId, idx, call, agent.dir),
-          maxTokens: budgets.reply,
-          signal: ac.signal,
-        });
-        return { title: agent.title, result: out.text || "(no summary returned)" };
-      } catch (e) {
-        return { title: agent.title, result: `(agent failed: ${e instanceof Error ? e.message : String(e)})` };
-      } finally {
-        done++;
-        announce();
-      }
-    });
+    const runAgents = () =>
+      mapWithConcurrency(msg.agents, concurrency, async (agent, idx) => {
+        try {
+          const out = await runBuddyTurn({
+            llm: agentLlm,
+            system: buildCodingAgentPrompt({ title: agent.title, instructions: agent.instructions }, agent.dir),
+            history: [{ role: "user", content: "Complete your subtask in your worktree, verify it, and report what you changed." }],
+            deps,
+            runHostTool: (call) => runHostToolViaMain(msg.runId, idx, call, agent.dir),
+            maxTokens: budgets.reply,
+            signal: ac.signal,
+          });
+          return { title: agent.title, result: out.text || "(no summary returned)" };
+        } catch (e) {
+          return { title: agent.title, result: `(agent failed: ${e instanceof Error ? e.message : String(e)})` };
+        } finally {
+          done++;
+          announce();
+        }
+      });
+    const results =
+      agentLlm === llm
+        ? await withChatPriority(llm.id, runAgents, { signal: ac.signal })
+        : await runAgents();
     post({ type: "codingAgentsDone", requestId: msg.requestId, results });
   } catch (e) {
     post({ type: "codingAgentsDone", requestId: msg.requestId, results: [], error: e instanceof Error ? e.message : String(e) });
@@ -3675,7 +4376,8 @@ async function handleResolveConflicts(msg: Extract<MainToWorker, { type: "resolv
       return;
     }
     const budgets = contextBudgets(llm.id, await localContextTokens(llm.id));
-    const resolved = await mapWithConcurrency(msg.files, 1, async (f) => {
+    const resolved = await withChatPriority(llm.id, () =>
+      mapWithConcurrency(msg.files, 1, async (f) => {
       const reply = await llm.chat(
         [
           { role: "system", content: "You resolve git merge conflicts. Output ONLY the final merged file — no prose, no fences, no conflict markers." },
@@ -3687,7 +4389,8 @@ async function handleResolveConflicts(msg: Extract<MainToWorker, { type: "resolv
         { maxTokens: budgets.reply },
       );
       return { file: f.file, content: unfenceFile(reply) };
-    });
+      }),
+    );
     post({ type: "conflictsResolved", requestId: msg.requestId, files: resolved });
   } catch (e) {
     post({ type: "conflictsResolved", requestId: msg.requestId, files: [], error: e instanceof Error ? e.message : String(e) });
@@ -4312,10 +5015,14 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
             const openingSystem = soulCharacterization
               ? `${system}\n\n${soulCharacterization}`
               : system;
-            const reply = (await llm.chat(
-              [{ role: "system", content: openingSystem }, { role: "user", content: user }],
-              { maxTokens: 600 },
-            )).trim();
+            // start_story runs inside runBuddyTurn's outer local-model lease, so this call is
+            // intentionally direct; taking a nested lease would deadlock that same queue.
+            const reply = (
+              await llm.chat(
+                [{ role: "system", content: openingSystem }, { role: "user", content: user }],
+                { maxTokens: 600 },
+              )
+            ).trim();
             const parsed = parseStoryOpening(reply);
             if (parsed.opening) opening = parsed.opening;
             if (!call.title?.trim() && parsed.title) title = parsed.title;
@@ -4407,8 +5114,14 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
           void (async () => {
             try {
               const { system, user } = synopsisRequest(beatsSnapshot, prev);
+              await waitForForegroundChat();
               const text = (
-                await chatLlm.chat([{ role: "system", content: system }, { role: "user", content: user }], { maxTokens: 320 })
+                await withChatPriority(chatLlm.id, () =>
+                  chatLlm.chat(
+                    [{ role: "system", content: system }, { role: "user", content: user }],
+                    { maxTokens: 320 },
+                  ),
+                )
               ).trim();
               if (text && story && story.bookId === forBook) {
                 story.synopsis = text.slice(0, MAX_SYNOPSIS_CHARS);
@@ -4548,7 +5261,15 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         post({ type: "buddyDone", requestId: msg.requestId, text: "Ask me in chat to split the work — I'll fan it out to parallel sub-agents.", transcript: [] });
         return;
       }
-      const result = await runBuddyTool(slash.call, deps);
+      // start_story may write an opening with the main LLM. Model-driven tool calls already run
+      // inside the outer buddy lease; the one-shot slash path does not, so acquire it here only.
+      const slashCall = slash.call;
+      const result =
+        slashCall.tool === "start_story"
+          ? await withChatPriority(llm.id, () => runBuddyTool(slashCall, deps), {
+              signal: ac.signal,
+            })
+          : await runBuddyTool(slashCall, deps);
       post({
         type: "buddyToolResult",
         requestId: msg.requestId,
@@ -4928,7 +5649,11 @@ async function handleBuddyChat(msg: Extract<MainToWorker, { type: "buddyChat" }>
         await recordTask(store, msg.userText);
         if (recurred) {
           post({ type: "buddyThinking", requestId: msg.requestId, text: "Reflecting on what I learned…" });
-          const candidate = await runSkillProposal(llm, { goal: msg.userText, transcript: outcome.transcript, signal: ac.signal });
+          const candidate = await withChatPriority(
+            llm.id,
+            () => runSkillProposal(llm, { goal: msg.userText, transcript: outcome.transcript, signal: ac.signal }),
+            { signal: ac.signal },
+          );
           if (candidate && !isDuplicateSkill(candidate, await loadSkills(store))) {
             post({ type: "buddySkillProposed", requestId: msg.requestId, skill: candidate });
           }
@@ -5110,6 +5835,7 @@ async function handleChatVideo(
   keepResident?: boolean,
 ): Promise<void> {
   const ac = new AbortController();
+  let localModelLease: LocalModelLease | undefined;
   chatAborts.set(requestId, ac);
   try {
     if (!settings) throw new Error("Settings not initialised yet.");
@@ -5124,6 +5850,10 @@ async function handleChatVideo(
     if (!comfyUrl) {
       throw new Error("Video needs ComfyUI running — connect or auto-start ComfyUI in Settings (it runs alongside AUTOMATIC1111).");
     }
+    localModelLease = await acquireLocalModelLease({
+      signal: ac.signal,
+      engineHold: { bible: true, images: true },
+    });
     const cfTool = corsFetch();
     const backend = new ComfyUIBackend({ baseUrl: comfyUrl, ...(cfTool ? { transport: new DirectTransport(cfTool) } : {}) });
     // Hand the GPU to the (large) video model: free the chat LLM first, same as a render.
@@ -5185,6 +5915,7 @@ async function handleChatVideo(
       error: aborted ? "Video generation stopped." : err instanceof Error ? err.message : String(err),
     });
   } finally {
+    localModelLease?.release();
     chatAborts.delete(requestId);
     warmChatModel();
   }
@@ -5217,6 +5948,7 @@ async function installedModelNames(s: ReaderSettings): Promise<string[]> {
  * keeps running or leaks into the next book. The main thread clears its own view.
  */
 function handleClose(): void {
+  openEpoch++;
   engine?.dispose();
   engine = undefined;
   currentBook = undefined;
@@ -5245,19 +5977,69 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     post({ type: "error", message: "Worker received open before init" });
     return;
   }
+  const epoch = ++openEpoch;
+  const isCurrentOpen = (): boolean => epoch === openEpoch;
+  // Clear only stale intent from the previous book. A start arriving after `opening = true`
+  // belongs to this open and must survive every awaited setup/download below.
+  pendingStart = false;
   opening = true;
+  const openNeedsLocalLease =
+    settings.textProvider === "local" ||
+    settings.imageProvider === "local";
+  let localModelLease: LocalModelLease | undefined;
+  let nextEngine: Engine | undefined;
   // Opening a book means the engine's bible-build will need the LLM — relaunch it if a prior image
   // session had freed it (otherwise extraction would hit a stopped server).
-  await restoreChatLlm();
   try {
-    // A NEW engine is built per book — stop the previous one FIRST, or its bible loop
-    // and renders keep running and its callbacks mingle the old book's characters and
-    // status lines into the new book's UI.
+    if (openNeedsLocalLease) {
+      localModelLease = await acquireLocalModelLease({
+        engineHold: { bible: true, images: true },
+      });
+    }
+    if (!isCurrentOpen()) return;
+    // Stop the previous Engine before any VRAM hand-off. Its RenderBuffer is not a participant in
+    // the model lease, so leaving it live here lets an in-flight render reload while /free runs.
+    const previousProviders = bookProviders;
+    const bookUsesLocalText = settings.textProvider === "local";
+    const configuredImageNeedsHandoff =
+      bookUsesLocalText && shouldHandImageModelToChat("book");
+    const previousImageNeedsHandoff =
+      bookUsesLocalText &&
+      previousProviders?.image.id === "local" &&
+      localModelsNeedExclusiveVram("book");
     engine?.dispose();
+    engine = undefined;
+    bookProviders = undefined;
+    const bookUsesBundledLocal =
+      corsProxyAvailable &&
+      settings.localTextBackend === "bundled" &&
+      settings.textProvider === "local";
+    // Free the exact provider owned by the disposed Engine when local text/image cannot coexist.
+    // This applies to bundled llama.cpp and external Ollama/LM Studio alike, while ample-VRAM
+    // configurations retain their no-churn behavior.
+    if (previousImageNeedsHandoff) {
+      try {
+        await previousProviders!.image.freeMemory?.();
+        imageModelFreed = true;
+      } catch {
+        /* best-effort — native text setup still reports a useful failure if VRAM stays occupied */
+      }
+    }
+    if (!isCurrentOpen()) return;
+    // If the prior Engine already freed the shared local backend, do not issue a duplicate /free.
+    await prepareChatLlmLoad(
+      configuredImageNeedsHandoff && !previousImageNeedsHandoff,
+      "book",
+    );
+    if (!isCurrentOpen()) return;
+    await restoreChatLlm({
+      ...(bookUsesBundledLocal ? { forceBundledEnsure: true } : {}),
+      bundledScope: "book",
+    });
+    if (!isCurrentOpen()) return;
     post({ type: "status", message: "" });
     post({ type: "generating", value: false });
     post({ type: "paused", bible: false, images: false });
-    pendingStart = false; // fresh open; the hook re-sends "start" if it should resume
     lastProgressPct.clear(); // page indices are book-relative
     bibleActive = false;
     bibleRunStartMs = 0;
@@ -5273,8 +6055,13 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     const openCf = corsFetch();
     const { llm, image, tier, diagnostics, imageSearch, webSearch } = buildProviders(settings, {
       ...(openCf ? { corsFetch: openCf } : {}),
-      onLocalStatus: (message) => post({ type: "status", message: message || "Building the Visual Bible…" }),
+      onLocalStatus: (message) => {
+        if (isCurrentOpen()) {
+          post({ type: "status", message: message || "Building the Visual Bible…" });
+        }
+      },
       onLocalActivity: (activity) => {
+        if (!isCurrentOpen()) return;
         // Live token count during on-device generation. Bible tokens enrich the
         // bible status line; prompt-writing tokens show only when the bible isn't
         // claiming the line (so the two never fight over it).
@@ -5303,9 +6090,10 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
       tier,
       imageSearch,
       llmMock: diagnostics.llm.mock,
+      llmLabel: diagnostics.llm.label,
       imageMock: diagnostics.image.mock,
     };
-    engine = new Engine({
+    nextEngine = new Engine({
       llm,
       image,
       tier,
@@ -5313,6 +6101,7 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
       ...(webSearch ? { webSearch } : {}),
       store: new IndexedDbStore(),
       onUpdate: (pageIndex, result) => {
+        if (!isCurrentOpen() || engine !== nextEngine) return;
         // Per-step progress: forward only when the whole percent moves (that's all
         // the UI displays) — otherwise every diffusion step crosses the boundary.
         if (result.status === "rendering" && result.progress !== undefined) {
@@ -5335,26 +6124,42 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
           post({ type: "status", message: "" });
         }
       },
-      onBibleProgress: (done, total) => setBibleChapter(done, total),
-      onPromptProgress: (done, total) => setPromptProgress(done, total),
+      onBibleProgress: (done, total) => {
+        if (isCurrentOpen() && engine === nextEngine) setBibleChapter(done, total);
+      },
+      onPromptProgress: (done, total) => {
+        if (isCurrentOpen() && engine === nextEngine) setPromptProgress(done, total);
+      },
       // The bible builds in the background; relay each growth so the UI's
       // character/spoiler context (and the panel) stay current — and refresh the
       // live status line so the character count grows in real time.
       onBibleUpdate: (bible) => {
+        if (!isCurrentOpen() || engine !== nextEngine) return;
         bibleCharacters = bible.characters.length;
         currentBible = bible; // the chat reads the live bible
         post({ type: "opened", bible });
         renderBibleStatus();
       },
-      onBibleNote: (message) => post({ type: "status", message }),
+      onBibleNote: (message) => {
+        if (isCurrentOpen() && engine === nextEngine) {
+          post({ type: "status", message });
+        }
+      },
       // Story "as you go": illustrate as each beat (chapter) is read — the first image
       // appears right after beat one, not after the whole "book". Ordinary books keep the
       // user's setting (default whole-book for the best art).
       illustrateAfter: book.kind === "story" ? "chapter" : (settings.illustrateAfter ?? "book"),
       // Story active-scene hook (no-op for ordinary books): pin the tracked present cast +
       // location per beat so terse beats still illustrate the right scene.
-      onChapterExtracted: storyPresentFor,
+      onChapterExtracted: (chapterIndex, bible) =>
+        isCurrentOpen() && engine === nextEngine
+          ? storyPresentFor(chapterIndex, bible)
+          : undefined,
     });
+    engine = nextEngine;
+    // This lease entered while the previous Engine (or none) was current. Keep the newly created
+    // Engine under the same queue-wide hold through openBook and the lease handoff.
+    localModelLease?.holdCurrentEngine();
     // A story renders ONE image per beat (chapter), independent of the global pages-per-image
     // cadence; ordinary books use the chosen granularity. The UI maps the reader's position to
     // the same units via toRenderUnits, so the two never drift.
@@ -5368,14 +6173,22 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     if (reopenedStory) story = rebuildStoryFromBook(book, undefined);
     // Loads the book + restores cached bible/images, but does NOT generate. The
     // user triggers generation via the "start" message ("Begin generating book").
-    await engine.openBook(renderBook);
+    await nextEngine.openBook(renderBook);
+    if (!isCurrentOpen()) {
+      nextEngine.dispose();
+      if (engine === nextEngine) {
+        engine = undefined;
+        bookProviders = undefined;
+      }
+      return;
+    }
     // On a reopen, restore the per-beat scene snapshots (persisted, replay-filled) and PUSH
     // each into the engine — nothing re-extracts on a cached reopen, so this is what makes
     // render_scene of a PAST beat use that beat's exact tracked cast/location, and a
     // post-reopen append carry the correct scene forward. (No-op for live starts.)
-    if (reopenedStory && engine.getBible()) {
-      story = rebuildStoryFromBook(book, engine.getBible());
-      story.scenes.forEach((sc, k) => engine!.setStoryPresent(k, presentFromScene(sc)));
+    if (reopenedStory && nextEngine.getBible()) {
+      story = rebuildStoryFromBook(book, nextEngine.getBible());
+      story.scenes.forEach((sc, k) => nextEngine!.setStoryPresent(k, presentFromScene(sc)));
     }
     // Open is complete — now a deferred start can actually run (and `beginGeneration`
     // below sees `opening === false`). Replaying covers a `start` that arrived during
@@ -5383,10 +6196,29 @@ async function handleOpen(book: import("@visual-reader/core").BookSource): Promi
     opening = false;
     if (pendingStart) {
       pendingStart = false;
-      beginGeneration();
+      if (localModelLease) {
+        // This open owns the current local-model FIFO slot. Queue the deferred start behind every
+        // foreground job already waiting for it (notably a Soul job requested during bundled-model
+        // startup), so the fresh Engine cannot extract before that job binds its execution hold.
+        const startAfterForeground = localTextQueueTail.catch(() => {});
+        void startAfterForeground.then(() => {
+          if (isCurrentOpen() && engine === nextEngine && !opening) beginGeneration();
+        });
+      } else {
+        beginGeneration();
+      }
     }
   } catch (err) {
-    opening = false;
-    post({ type: "error", message: err instanceof Error ? err.message : String(err) });
+    nextEngine?.dispose();
+    if (engine === nextEngine) {
+      engine = undefined;
+      bookProviders = undefined;
+    }
+    if (isCurrentOpen()) {
+      opening = false;
+      post({ type: "error", message: err instanceof Error ? err.message : String(err) });
+    }
+  } finally {
+    localModelLease?.release();
   }
 }

@@ -32,7 +32,6 @@ import {
   downloadModel,
   ensureA1111,
   ensureEngine,
-  ensureLocalLlm,
   gpuVramMb,
   isDesktop,
   listLocalModels,
@@ -63,6 +62,7 @@ export interface LocalEngineDeps {
   bookRef: MutableRefObject<BookSource | undefined>;
   /** Hand a freshly-started engine's URL straight to the worker (no wait on the settings sync). */
   applyEngineConfig: (baseUrl: string, backend?: LocalBackendId) => void;
+  warmLlm: () => void;
   setEngineStatus: (status: string) => void;
   setLocalError: (text: string) => void;
   setModelProgress: Dispatch<SetStateAction<Record<string, number>>>;
@@ -108,6 +108,7 @@ export function useLocalEngine(deps: LocalEngineDeps) {
     book,
     bookRef,
     applyEngineConfig,
+    warmLlm,
     setEngineStatus,
     setLocalError,
     setModelProgress,
@@ -170,47 +171,47 @@ export function useLocalEngine(deps: LocalEngineDeps) {
     };
   }, []);
 
-  // Desktop: when text is set to the BUILT-IN model, make sure the bundled
-  // llama-server is running (downloads/launches on first use) and point the
-  // local-server provider at it — mirrors the image-engine setup above.
+  // Desktop first-use setup for the built-in model goes through the worker's foreground model
+  // lane. That lane owns image hand-off + cancellation and reports the live runtime back to App;
+  // a renderer-side ensure could otherwise relaunch behind a worker stop while diffusion loads.
   useEffect(() => {
+    const chatChoice = settings.chatTextProvider ?? "local";
+    const chatUsesLocal =
+      chatChoice === "local" || (chatChoice === "default" && settings.textProvider === "local");
     if (
       !isDesktop ||
-      settings.textProvider !== "local" ||
+      (settings.textProvider !== "local" && !chatUsesLocal) ||
       settings.localTextBackend !== "bundled" ||
-      settings.localServerTextUrl
+      // On restart the saved endpoint is enough to build the provider; the worker verifies/relaunches
+      // it immediately before the next local turn.
+      Boolean(settings.localServerTextUrl)
     )
       return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        setEngineStatus("Starting the built-in model…");
-        const { baseUrl, model } = await ensureLocalLlm();
-        if (cancelled) return;
-        setEngineStatus("");
-        // List the running model so the picker isn't empty — and so a LINKED PHONE sees it via the
-        // inventory mirror (the phone has no local server to query). The bundled server reports this
-        // one model id; without this, textModels stayed [] and the phone showed "connect locally".
-        setTextModels([{ id: model, label: BUNDLED_LLM.label }]);
-        setSettings((s) => ({ ...s, localServerTextUrl: baseUrl, localServerTextModel: model }));
-      } catch (err) {
-        if (!cancelled) {
-          setEngineStatus("");
-          setLocalError(`Built-in model failed to start: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [settings.textProvider, settings.localTextBackend, settings.localServerTextUrl]);
+    // Populate desktop/phone pickers before the first download finishes; the worker-ready callback
+    // replaces this with the exact runtime id and persists its endpoint.
+    setTextModels([{ id: BUNDLED_LLM.model, label: BUNDLED_LLM.label }]);
+    warmLlm();
+  }, [
+    settings.textProvider,
+    settings.chatTextProvider,
+    settings.localTextBackend,
+    settings.localServerTextUrl,
+    warmLlm,
+  ]);
 
   // Desktop: when the text provider is a LOCAL SERVER (Ollama / LM Studio / llama.cpp) with a saved
   // URL, list its models on load so the picker is populated without a manual reconnect — and so a
   // linked phone (which can't reach the desktop's localhost server) sees the list via the inventory
   // mirror. Best-effort; a wedged/offline server just leaves the list as-is.
   useEffect(() => {
-    if (!isDesktop || settings.textProvider !== "local" || settings.localTextBackend !== "server") return;
+    const chatChoice = settings.chatTextProvider ?? "local";
+    const chatUsesLocal =
+      chatChoice === "local" || (chatChoice === "default" && settings.textProvider === "local");
+    if (
+      !isDesktop ||
+      (settings.textProvider !== "local" && !chatUsesLocal) ||
+      settings.localTextBackend !== "server"
+    ) return;
     const url =
       settings.localServerTextUrl?.trim() ||
       LOCAL_TEXT_SERVER_DEFAULT_URL[settings.localTextServer ?? DEFAULT_LOCAL_TEXT_SERVER];
@@ -224,7 +225,13 @@ export function useLocalEngine(deps: LocalEngineDeps) {
     return () => {
       cancelled = true;
     };
-  }, [settings.textProvider, settings.localTextBackend, settings.localServerTextUrl, settings.localTextServer]);
+  }, [
+    settings.textProvider,
+    settings.chatTextProvider,
+    settings.localTextBackend,
+    settings.localServerTextUrl,
+    settings.localTextServer,
+  ]);
 
   // Start (or reuse) the app-managed ComfyUI and load its inventory; point the ACTIVE engine at it
   // (always ComfyUI). Returns `true` on success, or a reason string (`"unavailable"` off the desktop)

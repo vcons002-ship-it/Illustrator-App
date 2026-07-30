@@ -31,6 +31,20 @@ export interface ChatOptions {
   /** Response budget; defaults per provider (~1024). */
   maxTokens?: number;
   /**
+   * Ask the provider to constrain this reply to a JSON object. Intended for
+   * ephemeral utility jobs (summaries, classifiers, planners), not ordinary
+   * reader chat. Providers use their native JSON mode where available (and a
+   * JSON-only instruction otherwise); normal chat is unchanged when omitted.
+   */
+  responseFormat?: "json";
+  /**
+   * Optional JSON Schema for `responseFormat: "json"`. Providers with native
+   * schema-constrained output use it; providers that only support generic JSON
+   * mode still request a JSON object and rely on the prompt for its exact shape.
+   * The schema should describe a top-level object.
+   */
+  jsonSchema?: Record<string, unknown>;
+  /**
    * Called once when the reply finishes, reporting whether the model was CUT OFF at the token
    * budget (`truncated: true` ⇒ finish_reason "length"). The chat/buddy loop uses this to AUTO-
    * CONTINUE a long answer in further passes and stitch them together, so a big document isn't

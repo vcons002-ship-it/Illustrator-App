@@ -66,7 +66,7 @@ export interface ImportResult {
   error?: string;
 }
 import type { MainToWorker, WorkerToMain } from "./worker-protocol.js";
-import type { AppSyncMessage, EngineVram } from "./remote-sync.js";
+import type { AppSyncMessage, EngineVram, SoulEssenceJobProgress } from "./remote-sync.js";
 import {
   desktopHttpFetch,
   mcpStdioExchange,
@@ -75,6 +75,7 @@ import {
   readLocalFile,
   stopLocalLlm,
   ensureLocalLlm,
+  onLlmProgress,
 } from "./runtime.js";
 import { pdfToText } from "./import-file.js";
 
@@ -92,6 +93,9 @@ import { pdfToText } from "./import-file.js";
  * own (which count from 1) in the shared worker's routing tables (H2). Also the marker the host-bridge
  * mirror uses to tell a phone-owned reply from a desktop-owned one (H5). */
 const PHONE_REQUEST_ID_BASE = 1_000_000_000;
+/** A healthy multi-pass Essence can run for hours on a small local model. Only a lack of any
+ * load/pass/token progress is considered stuck; each progress event rearms this watchdog. */
+const SOUL_ESSENCE_STALL_TIMEOUT_MS = 10 * 60_000;
 
 function initRemoteMode(): RemoteMode | undefined {
   if (typeof window === "undefined") return undefined;
@@ -340,7 +344,17 @@ export interface EngineWorkerApi {
   /** Rebuild one derived everyday Soul Essence from its complete authoritative note list. */
   refreshSoulEssence: (
     kind: SoulKind,
+    onProgress?: (progress: SoulEssenceJobProgress) => void,
+    onRequestId?: (requestId: number) => void,
   ) => Promise<{ essence?: SoulEssence; error?: string }>;
+  /** Cancel the active manual essence rebuild for this Soul, without cancelling chat. */
+  cancelSoulEssence: (kind: SoulKind) => void;
+  /** Cancel one exact rebuild (used to correlate a linked phone's request safely). */
+  cancelSoulEssenceRequest: (requestId: number) => void;
+  /** Live state for the visible foreground essence-generation job. */
+  soulEssenceProgress:
+    | ({ active: true; requestId: number; kind: SoulKind } & SoulEssenceJobProgress)
+    | undefined;
   /** Most recent automatic/manual persisted essence, including the exact source-note revision. */
   soulEssenceUpdate:
     | { kind: SoulKind; notes: SoulNote[]; essence: SoulEssence }
@@ -532,8 +546,14 @@ export interface ImageReadStore {
   getImage(requestId: string): Promise<{ bytes: ArrayBuffer; mimeType: string; prompt?: string } | undefined>;
 }
 
-export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageReadStore): EngineWorkerApi {
+export function useEngineWorker(
+  settings: ReaderSettings,
+  imageStore?: ImageReadStore,
+  onBundledLlmReady?: (runtime: { baseUrl: string; model: string }) => void,
+): EngineWorkerApi {
   const workerRef = useRef<Worker | undefined>(undefined);
+  const onBundledLlmReadyRef = useRef(onBundledLlmReady);
+  onBundledLlmReadyRef.current = onBundledLlmReady;
   const lastBook = useRef<BookSource | undefined>(undefined);
   // Whether the user has begun generating the current book. Survives the
   // settings-driven re-open (which builds a fresh engine) so generation resumes
@@ -570,6 +590,9 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   const [importResult, setImportResult] = useState<ImportResult | undefined>();
   const [soulEssenceUpdate, setSoulEssenceUpdate] = useState<
     { kind: SoulKind; notes: SoulNote[]; essence: SoulEssence } | undefined
+  >();
+  const [soulEssenceProgress, setSoulEssenceProgress] = useState<
+    ({ active: true; requestId: number; kind: SoulKind } & SoulEssenceJobProgress) | undefined
   >();
   // In-flight getCharacterReference requests, resolved by `characterReference` replies.
   const refRequests = useRef<
@@ -630,8 +653,17 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
   );
   // In-flight manual Soul-Essence rebuilds, resolved by `soulEssenceRefreshed`.
   const soulEssenceRequests = useRef<
-    Map<number, (r: { essence?: SoulEssence; error?: string }) => void>
+    Map<
+      number,
+      {
+        kind: SoulKind;
+        onProgress?: (progress: SoulEssenceJobProgress) => void;
+        resetWatchdog: () => void;
+        finish: (r: { essence?: SoulEssence; error?: string }) => void;
+      }
+    >
   >(new Map());
+  const activeSoulEssenceRequests = useRef(new Map<SoulKind, number>());
   // In-flight Google OAuth exchanges, resolved by `googleConnected`.
   const googleConnectRequests = useRef<Map<number, (r: { ok: boolean; email?: string; error?: string }) => void>>(
     new Map(),
@@ -686,7 +718,9 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     drain(chatToolRequests, (r) => r.resolve({ error }));
     drain(buddyRequests, (r) => r.resolve({ text: "", transcript: [], error }));
     drain(summarizeRequests, (resolve) => resolve({ error }));
-    drain(soulEssenceRequests, (resolve) => resolve({ error }));
+    drain(soulEssenceRequests, (request) => request.finish({ error }));
+    activeSoulEssenceRequests.current.clear();
+    setSoulEssenceProgress(undefined);
     drain(googleConnectRequests, (resolve) => resolve({ ok: false, error }));
     drain(schwabConnectRequests, (resolve) => resolve({ ok: false, error }));
     drain(schwabOrderRequests, (resolve) => resolve({ ok: false, error }));
@@ -896,13 +930,47 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           // here. On the web / when nothing's running these are no-ops; we always ack so the worker
           // proceeds. The worker has gated this to the safe (bundled, local-image, no-bible) case.
           void (async () => {
+            const unlisten =
+              msg.action === "ensure"
+                ? onLlmProgress((event) => {
+                    send({
+                      type: "llmVramProgress",
+                      callId: msg.callId,
+                      message: event.message,
+                      ...(event.percent !== undefined ? { percent: event.percent } : {}),
+                    });
+                  })
+                : undefined;
             try {
-              if (msg.action === "stop") await stopLocalLlm();
-              else await ensureLocalLlm();
-            } catch {
-              /* not desktop / nothing to do */
+              if (msg.action === "stop") {
+                await stopLocalLlm();
+                send({ type: "llmVramResult", callId: msg.callId, action: msg.action, ok: true });
+                return;
+              }
+              const runtime = await ensureLocalLlm();
+              onBundledLlmReadyRef.current?.(runtime);
+              send({
+                type: "llmVramResult",
+                callId: msg.callId,
+                action: msg.action,
+                ok: true,
+                baseUrl: runtime.baseUrl,
+                model: runtime.model,
+              });
+            } catch (error) {
+              send({
+                type: "llmVramResult",
+                callId: msg.callId,
+                action: msg.action,
+                ok: false,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            } finally {
+              void unlisten?.then(
+                (stop) => stop(),
+                () => undefined,
+              );
             }
-            send({ type: "llmVramResult", callId: msg.callId });
           })();
           break;
         }
@@ -1207,10 +1275,35 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
           resolve?.(msg.ok && msg.text ? { text: msg.text } : { error: msg.error ?? "Summarize failed." });
           break;
         }
+        case "soulEssenceProgress": {
+          const request = soulEssenceRequests.current.get(msg.requestId);
+          if (!request) break;
+          request.resetWatchdog();
+          request.onProgress?.(msg.progress);
+          if (activeSoulEssenceRequests.current.get(msg.kind) === msg.requestId) {
+            setSoulEssenceProgress({
+              active: true,
+              requestId: msg.requestId,
+              kind: msg.kind,
+              ...msg.progress,
+            });
+          }
+          break;
+        }
+        case "soulEssenceCancelResult": {
+          const request = soulEssenceRequests.current.get(msg.requestId);
+          if (!request) break;
+          if (msg.accepted) {
+            request.finish({ error: "Soul Essence generation was cancelled." });
+          } else {
+            // Saving is an atomic commit. Keep the request correlated until its success reply.
+            request.resetWatchdog();
+          }
+          break;
+        }
         case "soulEssenceRefreshed": {
-          const resolve = soulEssenceRequests.current.get(msg.requestId);
-          soulEssenceRequests.current.delete(msg.requestId);
-          resolve?.(
+          const request = soulEssenceRequests.current.get(msg.requestId);
+          request?.finish(
             msg.ok
               ? { ...(msg.essence ? { essence: msg.essence } : {}) }
               : { error: msg.error ?? "Soul Essence refresh failed." },
@@ -2072,24 +2165,109 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
       }),
     [],
   );
+  const cancelSoulEssenceRequest = useCallback((requestId: number): void => {
+    const request = soulEssenceRequests.current.get(requestId);
+    if (!request) return;
+    // The worker owns the cancellation boundary. Keep this request correlated until it replies:
+    // native setup and the final IndexedDB commit are intentionally non-interruptible safe points.
+    send({ type: "soulEssenceCancel", requestId });
+    request.resetWatchdog();
+  }, []);
   const refreshSoulEssence = useCallback(
-    (kind: SoulKind): Promise<{ essence?: SoulEssence; error?: string }> =>
-      new Promise((resolve) => {
-        const requestId = nextRefRequestId.current++;
-        const timeout = setTimeout(() => {
-          if (soulEssenceRequests.current.delete(requestId)) {
-            resolve({ error: "Soul Essence refresh timed out — try again." });
+    (
+      kind: SoulKind,
+      onProgress?: (progress: SoulEssenceJobProgress) => void,
+      onRequestId?: (requestId: number) => void,
+    ): Promise<{ essence?: SoulEssence; error?: string }> => {
+      // This is one foreground utility lane (and usually one local model). Starting another Soul
+      // rebuild supersedes any older one, even for the other panel, so progress/cancel never point
+      // at two competing jobs.
+      for (const previous of [...activeSoulEssenceRequests.current.values()]) {
+        cancelSoulEssenceRequest(previous);
+      }
+      // Old requests remain privately correlated until their exact cancellation acknowledgement,
+      // but they no longer own the one visible foreground-progress lane.
+      activeSoulEssenceRequests.current.clear();
+
+      const requestId = nextRefRequestId.current++;
+      onRequestId?.(requestId);
+      const startedAt = Date.now();
+      activeSoulEssenceRequests.current.set(kind, requestId);
+      const initialProgress: SoulEssenceJobProgress = {
+        phase: "loading",
+        message: "Preparing the chat text model…",
+        startedAt,
+        tokens: 0,
+      };
+      onProgress?.(initialProgress);
+      setSoulEssenceProgress({
+        active: true,
+        requestId,
+        kind,
+        ...initialProgress,
+      });
+
+      return new Promise((resolve) => {
+        let settled = false;
+        let watchdog: ReturnType<typeof setTimeout> | undefined;
+        let request!: {
+          kind: SoulKind;
+          onProgress?: (progress: SoulEssenceJobProgress) => void;
+          resetWatchdog: () => void;
+          finish: (result: { essence?: SoulEssence; error?: string }) => void;
+        };
+        const finish = (result: { essence?: SoulEssence; error?: string }): void => {
+          if (settled) return;
+          settled = true;
+          if (watchdog) clearTimeout(watchdog);
+          if (soulEssenceRequests.current.get(requestId) === request) {
+            soulEssenceRequests.current.delete(requestId);
           }
-        // A maximum-size Soul is deliberately distilled through several bounded passes. On a local
-        // model that can take longer than an ordinary one-shot request without being stuck.
-        }, 600_000);
-        soulEssenceRequests.current.set(requestId, (result) => {
-          clearTimeout(timeout);
+          if (activeSoulEssenceRequests.current.get(kind) === requestId) {
+            activeSoulEssenceRequests.current.delete(kind);
+          }
+          setSoulEssenceProgress((progress) =>
+            progress?.requestId === requestId ? undefined : progress,
+          );
           resolve(result);
-        });
-        send({ type: "soulEssenceRefresh", requestId, kind });
-      }),
-    [],
+        };
+        const resetWatchdog = (): void => {
+          if (settled) return;
+          if (watchdog) clearTimeout(watchdog);
+          watchdog = setTimeout(() => {
+            send({ type: "soulEssenceCancel", requestId });
+            finish({
+              error:
+                "Soul Essence generation stopped because the text model made no progress for 10 minutes. " +
+                "Check the model/server and try again.",
+            });
+          }, SOUL_ESSENCE_STALL_TIMEOUT_MS);
+        };
+        request = {
+          kind,
+          ...(onProgress ? { onProgress } : {}),
+          resetWatchdog,
+          finish,
+        };
+        soulEssenceRequests.current.set(requestId, request);
+        resetWatchdog();
+
+        // The worker owns queueing and the low-VRAM hand-off. It frees the image model first, then
+        // asks this main thread to launch the bundled LLM and relays that launch's progress back here.
+        if (soulEssenceRequests.current.get(requestId) === request) {
+          resetWatchdog();
+          send({ type: "soulEssenceRefresh", requestId, kind });
+        }
+      });
+    },
+    [cancelSoulEssenceRequest],
+  );
+  const cancelSoulEssence = useCallback(
+    (kind: SoulKind): void => {
+      const requestId = activeSoulEssenceRequests.current.get(kind);
+      if (requestId !== undefined) cancelSoulEssenceRequest(requestId);
+    },
+    [cancelSoulEssenceRequest],
   );
   const googleConnect = useCallback(
     (args: { code: string; redirectUri: string; codeVerifier: string }): Promise<{ ok: boolean; email?: string; error?: string }> =>
@@ -2460,6 +2638,9 @@ export function useEngineWorker(settings: ReaderSettings, imageStore?: ImageRead
     buddyCancel,
     summarize,
     refreshSoulEssence,
+    cancelSoulEssence,
+    cancelSoulEssenceRequest,
+    soulEssenceProgress,
     soulEssenceUpdate,
     googleConnect,
     schwabConnect,

@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import type { VisualBible } from "../../types/bible.js";
 import type { VisualRequest } from "../../types/content.js";
@@ -161,7 +161,7 @@ export class ClaudeProvider implements LLMProvider, ChatCapable, VisionCapable {
   }
 
   async extractEntities(input: EntityExtractionInput): Promise<VisualBible> {
-    const response = await this.client.beta.messages.parse(
+    const response = await this.client.messages.parse(
       {
         model: this.model,
         // Parity with the local extraction path (local-server-provider uses 12288 for JSON output):
@@ -178,7 +178,9 @@ export class ClaudeProvider implements LLMProvider, ChatCapable, VisionCapable {
           },
         ],
         messages: [{ role: "user", content: extractionUserContent(input) }],
-        output_format: betaZodOutputFormat(CLAUDE_EXTRACTION_SCHEMA),
+        output_config: {
+          format: zodOutputFormat(CLAUDE_EXTRACTION_SCHEMA),
+        },
       },
       input.signal ? { signal: input.signal } : undefined,
     );
@@ -201,7 +203,16 @@ export class ClaudeProvider implements LLMProvider, ChatCapable, VisionCapable {
 
   /** Reading-companion chat (buffered; `onToken` unused — the seam allows that). */
   async chat(messages: ChatTurn[], opts: ChatOptions = {}): Promise<string> {
-    const { system, turns } = splitSystem(messages);
+    const { system: sourceSystem, turns } = splitSystem(messages);
+    // Anthropic's native structured-output mode requires a schema. For callers
+    // that only request generic JSON, retain provider-neutral behavior with a
+    // narrow JSON-only instruction rather than inventing a schema that could
+    // discard fields.
+    const jsonInstruction =
+      opts.responseFormat === "json" && !opts.jsonSchema
+        ? "Return only one valid JSON object. Do not use markdown fences or add prose."
+        : "";
+    const system = [sourceSystem, jsonInstruction].filter(Boolean).join("\n\n");
     // Mark a cache breakpoint after the stable prefix (tool defs + guard) so a
     // multi-turn conversation re-reads it instead of re-prefilling the whole system
     // prompt each turn. Sent as text blocks; the volatile book/bible tail trails it
@@ -211,18 +222,29 @@ export class ClaudeProvider implements LLMProvider, ChatCapable, VisionCapable {
         ? { type: "text" as const, text: b.text, cache_control: { type: "ephemeral" as const } }
         : { type: "text" as const, text: b.text },
     );
-    const response = await this.client.messages.create(
-      {
-        model: this.model,
-        max_tokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
-        ...(system ? { system: systemBlocks } : {}),
-        messages: turns,
-      },
-      opts.signal ? { signal: opts.signal } : undefined,
-    );
+    const request = {
+      model: this.model,
+      max_tokens: opts.maxTokens ?? DEFAULT_CHAT_MAX_TOKENS,
+      ...(system ? { system: systemBlocks } : {}),
+      messages: turns,
+    };
+    const response =
+      opts.responseFormat === "json" && opts.jsonSchema
+        ? await this.client.messages.create(
+            {
+              ...request,
+              output_config: {
+                format: { type: "json_schema", schema: opts.jsonSchema },
+              },
+            },
+            opts.signal ? { signal: opts.signal } : undefined,
+          )
+        : await this.client.messages.create(
+            request,
+            opts.signal ? { signal: opts.signal } : undefined,
+          );
     return response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
+      .map((b) => (b.type === "text" ? b.text : ""))
       .join("")
       .trim();
   }

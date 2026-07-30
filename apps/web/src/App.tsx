@@ -1,5 +1,6 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  BUNDLED_LLM,
   IndexedDbStore,
   LocalServerLLMProvider,
   computeBloomTarget,
@@ -686,6 +687,26 @@ export function App() {
   const [library, setLibrary] = useState<BookSummary[]>([]);
   const libraryStore = useMemo(() => new IndexedDbStore(), []);
   const hydrated = useRef(false);
+  const onBundledLlmReady = useCallback(
+    ({ baseUrl, model }: { baseUrl: string; model: string }) => {
+      const current = settingsRef.current;
+      const chatChoice = current.chatTextProvider ?? "local";
+      const stillUsesBundled =
+        current.localTextBackend === "bundled" &&
+        (current.textProvider === "local" || chatChoice === "local");
+      if (!stillUsesBundled) return;
+      setTextModels([{ id: model, label: BUNDLED_LLM.label }]);
+      setSettings((value) => ({
+        ...value,
+        localServerTextUrl: baseUrl,
+        localServerTextModel: model,
+        ...((value.chatTextProvider ?? "local") === "local"
+          ? { chatLocalModel: model }
+          : {}),
+      }));
+    },
+    [],
+  );
   const {
     bible,
     results,
@@ -746,6 +767,9 @@ export function App() {
     buddyCancel,
     summarize,
     refreshSoulEssence,
+    cancelSoulEssence,
+    cancelSoulEssenceRequest,
+    soulEssenceProgress,
     soulEssenceUpdate,
     googleConnect,
     planTask,
@@ -771,7 +795,7 @@ export function App() {
     setActiveUnit,
     polishText,
     polishCancel,
-  } = useEngineWorker(settings, libraryStore);
+  } = useEngineWorker(settings, libraryStore, onBundledLlmReady);
   // The VRAM the status bar shows: prefer the whole-GPU nvidia-smi reading (includes the LLM) when
   // available, else the worker's engine /system_stats reading (image-model context only).
   const effectiveVram = gpuVram ?? vram;
@@ -2355,6 +2379,8 @@ export function App() {
     fileFetchSeq,
     hostToolReqId,
     requestSoulEssenceRefresh,
+    cancelSoulEssenceRefresh,
+    soulEssenceProgress: remoteSoulEssenceProgress,
     onSettingsChange,
   } = useRemoteMirror({
     isRemoteClient,
@@ -2379,6 +2405,7 @@ export function App() {
     applySoul,
     refreshSoul,
     generateSoulEssence: refreshSoulEssence,
+    cancelSoulEssenceRequest,
     setScheduled: setScheduledTasks,
     setBook,
     setBible,
@@ -2424,6 +2451,7 @@ export function App() {
     book,
     bookRef,
     applyEngineConfig,
+    warmLlm,
     setEngineStatus,
     setLocalError,
     setModelProgress,
@@ -9414,6 +9442,10 @@ export function App() {
           name={showSoul === "self" ? selfSoulName : userSoulName}
           notes={showSoul === "self" ? selfSoulNotes : userSoulNotes}
           essence={showSoul === "self" ? selfSoulEssence : userSoulEssence}
+          essenceProgress={(() => {
+            const progress = isRemoteClient ? remoteSoulEssenceProgress : soulEssenceProgress;
+            return progress?.kind === showSoul ? progress : undefined;
+          })()}
           images={showSoul === "self" ? selfSoulImages : userSoulImages}
           limits={{ note: MAX_SOUL_NOTE_CHARS, max: MAX_SOUL_NOTES, name: MAX_SOUL_NAME_CHARS }}
           // On a linked phone the DESKTOP owns the store the assistant actually reads its identity
@@ -9449,7 +9481,12 @@ export function App() {
             const result = isRemoteClient
               ? await requestSoulEssenceRefresh(kind)
               : await refreshSoulEssence(kind);
-            if (result.error) throw new Error(result.error);
+            if (result.error) {
+              if (/cancelled/i.test(result.error)) {
+                throw new DOMException(result.error, "AbortError");
+              }
+              throw new Error(result.error);
+            }
             const currentNotes = kind === "self" ? selfSoulNotes : userSoulNotes;
             if (
               result.essence &&
@@ -9459,6 +9496,11 @@ export function App() {
             }
             setSoulEssence(kind, result.essence);
             return result.essence;
+          }}
+          onCancelEssence={() => {
+            const kind = showSoul;
+            if (isRemoteClient) cancelSoulEssenceRefresh(kind);
+            else cancelSoulEssence(kind);
           }}
           onSaveName={async (name) => {
             const kind = showSoul;
