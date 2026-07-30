@@ -7,6 +7,20 @@ User-facing changes, newest first. (Started July 2026; earlier history lives in 
 
 ### The assistant
 
+- **It stops losing the thread after reading something big** — the assistant would read a file and
+  then, immediately, no longer know what it had been asked to do; twice in a row, and eventually it
+  forgot an explicit request to create a calendar invite. It wasn't weighting old messages over new
+  ones — it genuinely no longer had the instruction. The conversation was measured and trimmed to fit
+  before a turn started, and then anything the assistant fetched *during* the turn was added on top
+  with no limit at all: one file read can be 60,000 characters, which on a typical local model is
+  several times the entire space available for input. The model server then does the only thing it
+  can and cuts the prompt from the front — and the front is where the system instructions and your
+  original request live. Everything a turn sends is now measured as it goes, and the two things that
+  must never be dropped are pinned: who the assistant is, and what you asked for. What gets shed is
+  the middle — older chatter first, then the oldest tool results. The newest result is kept even when
+  it alone is too big, cut in the middle with a note saying so, because answering "read this file"
+  with nothing is not an improvement. The assistant is also told that trimming happened, so it can
+  ask rather than assume the conversation began there.
 - **Its appearance no longer fades from its own memory** — Soul keeps far more notes than can fit in
   every prompt, and prompt selection preferred the newest ones. Because a physical description is
   usually written near the beginning, it could remain plainly visible in the Soul panel while the

@@ -23,7 +23,7 @@ import { buildTradingScript, scriptLanguage } from "./trading-scripts.js";
 import { parseSettingChange } from "./settings-control.js";
 import { evaluateExpression, formatCalcResult } from "./calculator.js";
 import { evaluateMath } from "./math-engine.js";
-import { jsonGatedTokenSink } from "./chat-session.js";
+import { jsonGatedTokenSink, trimTurnMessages } from "./chat-session.js";
 import { allowedInCreativeIdle } from "./tool-approval.js";
 
 /**
@@ -353,6 +353,13 @@ export async function runBuddyTurn(opts: {
   cachePrefix?: string;
   /** Prior turns + the new user message (caller appends it before calling). */
   history: ChatTurn[];
+  /**
+   * Total characters the model can take (system + conversation + tool results). The turn's messages
+   * are re-bounded against this before EVERY call — see {@link trimTurnMessages} — because tool
+   * results arrive mid-turn and are what actually overflows a window. Unset = no bound (sub-agents
+   * and tests, which run a round or two on small inputs).
+   */
+  contextChars?: number;
   deps: BuddyDeps;
   /** Response budget (tokens); unset = the provider's default. */
   maxTokens?: number;
@@ -440,7 +447,13 @@ export async function runBuddyTurn(opts: {
     const noteContent = () => {
       sawContent = true;
     };
-    const settled = opts.llm.chat(messages, {
+    // Re-bound before every call: the loop below appends tool results, and a single large
+    // one can exceed the whole window. Pins the system prompt and the request that started
+    // the turn, which is what a plain drop-oldest policy would delete first.
+    const sent = opts.contextChars
+      ? trimTurnMessages(messages, opts.history.length, opts.contextChars)
+      : messages;
+    const settled = opts.llm.chat(sent, {
       ...(opts.onEvent
         ? {
             onToken: jsonGatedTokenSink((text) => {

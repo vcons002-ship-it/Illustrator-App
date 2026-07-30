@@ -37,6 +37,44 @@ describe("nonEmptyAnswer", () => {
   });
 });
 
+describe("runBuddyTurn — a huge tool result doesn't cost the assistant its instructions", () => {
+  it("still shows the model the system prompt and the request, after a 60k-char read", async () => {
+    // The reported failure. A file read appends up to 60,000 characters mid-turn, which on a small
+    // local window is several times the whole input allowance — the server then truncates from the
+    // FRONT, taking the system prompt and the request with it. So it reads a file and immediately
+    // doesn't know what it was doing.
+    const llm = scriptedLlm(['{"tool":"read_file","path":"big.txt"}', "Done — invite created."]);
+    const outcome = await runBuddyTurn({
+      llm,
+      system: "SYSTEM: you can create calendar invites.",
+      history: [
+        { role: "user", content: "OLD: unrelated chatter" },
+        { role: "assistant", content: "OLD: sure" },
+        { role: "user", content: "GOAL: read big.txt then create the calendar invite." },
+      ],
+      contextChars: 4_000,
+      deps: { ...baseDeps, readFile: async () => "x".repeat(60_000) },
+    });
+    expect(outcome.text).toContain("invite created");
+    // The SECOND call is the one made after the file landed in the context.
+    const afterRead = llm.calls[1]!;
+    expect(afterRead[0]!.content).toContain("SYSTEM: you can create calendar invites.");
+    expect(afterRead.some((m) => m.content.includes("GOAL: read big.txt"))).toBe(true);
+    expect(afterRead.reduce((n, m) => n + m.content.length, 0)).toBeLessThanOrEqual(4_000);
+  });
+
+  it("sends everything when no budget is set — sub-agents and tests are unaffected", async () => {
+    const llm = scriptedLlm(['{"tool":"read_file","path":"big.txt"}', "Done."]);
+    await runBuddyTurn({
+      llm,
+      system: "sys",
+      history: [{ role: "user", content: "go" }],
+      deps: { ...baseDeps, readFile: async () => "x".repeat(60_000) },
+    });
+    expect(llm.calls[1]!.reduce((n, m) => n + m.content.length, 0)).toBeGreaterThan(50_000);
+  });
+});
+
 describe("runBuddyTurn — story-mode empty-reply repair", () => {
   it("re-prompts for the next BEAT (not a meta wrap-up) and returns the recovered prose", async () => {
     const llm = scriptedLlm(["", "She steps into the rain, and the door clicks shut behind her."]);
